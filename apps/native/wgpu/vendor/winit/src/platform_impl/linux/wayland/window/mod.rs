@@ -275,6 +275,10 @@ impl Window {
         self.window_state.lock().unwrap().can_redraw()
     }
 
+    pub fn take_file_drop_batches(&self) -> Vec<crate::platform::wayland::FileDropBatch> {
+        std::mem::take(&mut self.window_state.lock().unwrap().file_drop_batches)
+    }
+
     #[inline]
     pub fn outer_position(&self) -> Result<PhysicalPosition<i32>, NotSupportedError> {
         Err(NotSupportedError::new())

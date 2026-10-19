@@ -801,6 +801,9 @@ impl WgpuWinitRunning<'_> {
         };
 
         if !show_ui {
+            integration.egui_ctx.data_mut(|data| {
+                data.remove::<Vec<crate::FileDropBatch>>(egui::Id::unique(viewport_id))
+            });
             // Nothing will be shown, so we run no egui pass at all.
             // That way all ui state is left untouched, and is still there
             // when this viewport becomes visible again.
@@ -858,6 +861,10 @@ impl WgpuWinitRunning<'_> {
         // Runs the update, which could call immediate viewports,
         // so make sure we hold no locks here!
         let full_output = integration.update(app.as_mut(), viewport_ui_cb.as_deref(), raw_input);
+        // Like raw dropped files, unread batches expire after this UI pass.
+        integration.egui_ctx.data_mut(|data| {
+            data.remove::<Vec<crate::FileDropBatch>>(egui::Id::unique(viewport_id))
+        });
 
         // ------------------------------------------------------------
 
@@ -882,7 +889,13 @@ impl WgpuWinitRunning<'_> {
 
         pending_deltas.append(textures_delta);
 
-        remove_viewports_not_in(viewports, painter, viewport_from_window, &viewport_output);
+        remove_viewports_not_in(
+            &integration.egui_ctx,
+            viewports,
+            painter,
+            viewport_from_window,
+            &viewport_output,
+        );
 
         let Some(viewport) = viewports.get_mut(&viewport_id) else {
             return Ok(EventResult::Wait);
@@ -1125,6 +1138,33 @@ impl WgpuWinitRunning<'_> {
         let event_response = viewport_id
             .and_then(|viewport_id| {
                 let viewport = shared.viewports.get_mut(&viewport_id)?;
+                #[cfg(target_os = "linux")]
+                if matches!(event, winit::event::WindowEvent::DroppedFile(_)) {
+                    use winit::platform::wayland::WindowExtWayland;
+                    let window = viewport.window.as_deref()?;
+                    if let Some(batches) = window.take_file_drop_batches() {
+                        let ppp = egui_winit::pixels_per_point(&integration.egui_ctx, window);
+                        let points_per_logical_pixel = window.scale_factor() as f32 / ppp;
+                        integration.egui_ctx.data_mut(|data| {
+                            let queue = data.get_temp_mut_or_default::<Vec<crate::FileDropBatch>>(
+                                egui::Id::unique(viewport_id),
+                            );
+                            queue.extend(batches.into_iter().map(|batch| crate::FileDropBatch {
+                                paths: batch.paths,
+                                position: egui::pos2(
+                                    batch.position.x as f32 * points_per_logical_pixel,
+                                    batch.position.y as f32 * points_per_logical_pixel,
+                                ),
+                            }));
+                        });
+                        // Suppress every per-file duplicate, including later
+                        // events after the first has drained this batch queue.
+                        return Some(egui_winit::EventResponse {
+                            consumed: true,
+                            repaint: true,
+                        });
+                    }
+                }
                 Some(integration.on_window_event(
                     viewport.window.as_deref()?,
                     viewport.egui_winit.as_mut()?,
@@ -1190,6 +1230,10 @@ impl Viewport {
         match egui_winit::create_window(egui_ctx, event_loop, &builder) {
             Ok(window) => {
                 windows_id.insert(window.id(), viewport_id);
+                // Viewport IDs may be reused after a window is closed/recreated.
+                egui_ctx.data_mut(|data| {
+                    data.remove::<Vec<crate::FileDropBatch>>(egui::Id::unique(viewport_id))
+                });
 
                 let window = Arc::new(window);
 
@@ -1349,6 +1393,7 @@ fn render_immediate_viewport(
     } = egui_ctx.run_ui(input, |ui| {
         viewport_ui_cb(ui);
     });
+    egui_ctx.data_mut(|data| data.remove::<Vec<crate::FileDropBatch>>(egui::Id::unique(ids.this)));
 
     // ------------------------------------------
 
@@ -1416,6 +1461,7 @@ fn render_immediate_viewport(
 }
 
 pub(crate) fn remove_viewports_not_in(
+    egui_ctx: &egui::Context,
     viewports: &mut Viewports,
     painter: &mut egui_wgpu::winit::Painter,
     viewport_from_window: &mut HashMap<WindowId, ViewportId>,
@@ -1423,8 +1469,15 @@ pub(crate) fn remove_viewports_not_in(
 ) {
     let active_viewports_ids: ViewportIdSet = viewport_output.keys().copied().collect();
 
-    // Prune dead viewports:
-    viewports.retain(|id, _| active_viewports_ids.contains(id));
+    // Prune dead viewports and their unconsumed native drops.
+    viewports.retain(|id, _| {
+        let live = active_viewports_ids.contains(id);
+        if !live {
+            egui_ctx
+                .data_mut(|data| data.remove::<Vec<crate::FileDropBatch>>(egui::Id::unique(*id)));
+        }
+        live
+    });
     viewport_from_window.retain(|_, id| active_viewports_ids.contains(id));
     painter.gc_viewports(&active_viewports_ids);
 }
@@ -1475,7 +1528,13 @@ fn handle_viewport_output(
         }
     }
 
-    remove_viewports_not_in(viewports, painter, viewport_from_window, viewport_output);
+    remove_viewports_not_in(
+        egui_ctx,
+        viewports,
+        painter,
+        viewport_from_window,
+        viewport_output,
+    );
 }
 
 fn initialize_or_update_viewport<'a>(

@@ -6,6 +6,9 @@ publish = false
 
 [workspace]
 
+[patch.crates-io]
+smithay-client-toolkit = { path = "../wgpu/vendor/sctk" }
+
 [dependencies]
 softbuffer = "0.4.8"
 tempfile = "3"

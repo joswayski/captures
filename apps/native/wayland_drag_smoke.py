@@ -66,7 +66,7 @@ def ipc(env, command):
 
 
 def drag(env, binary, source_output, expected_uri, outcome):
-    options = ["--reject"] if outcome == "reject" else ["--no-finish"] if outcome in ("timeout", "disappear") else []
+    options = ["--reject"] if outcome == "reject" else ["--no-finish"] if outcome in ("timeout", "disappear", "incoming") else []
     receiver = subprocess.Popen(
         ["/usr/bin/python3", str(RECEIVER), *options],
         env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -80,13 +80,40 @@ def drag(env, binary, source_output, expected_uri, outcome):
         time.sleep(.5)
         injector = subprocess.Popen([binary, "inject", "reject" if outcome == "cancel" else "accept"], env=env)
         source_output.wait("STARTED")
+        pending_start = len(source_output.seen)
         received = None if outcome == "cancel" else output.wait("RECEIVED")
         if received:
             assert json.loads(received.removeprefix("RECEIVED ")) == expected_uri, received
             assert output.wait("BYTES ") == "BYTES " + bytes(range(256)).hex()
         if outcome == "disappear":
             stop(receiver)
-        finished = source_output.wait("FINISHED")
+        if outcome == "incoming":
+            # An unrelated source can enter while our old outbound COPY is
+            # waiting for acknowledgement. Sway cancels the old source when
+            # the new drag starts; other compositors may retain it to timeout.
+            injector.wait(timeout=5)
+            with tempfile.TemporaryDirectory(prefix="captures-incoming-") as temporary:
+                incoming = Path(temporary) / "distinct.bin"
+                incoming.write_bytes(b"independent incoming drop")
+                external = subprocess.Popen(
+                    ["/usr/bin/python3", str(ROOT / "wayland_drag_source.py"), str(incoming)],
+                    env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                )
+                try:
+                    external_output = Output(external)
+                    external_output.wait("READY")
+                    ipc(env, '[title="editor-drag-source"] floating enable, move position 440 40')
+                    time.sleep(.3)
+                    subprocess.run([binary, "inject", "reverse"], env=env, check=True, timeout=5)
+                    received = source_output.wait("DROPPED target=source ")
+                    assert received == f"DROPPED target=source path={incoming} bytes={incoming.read_bytes().hex()}", received
+                    external_output.wait("SENT ")
+                    external_output.wait("FINISHED")
+                    source_output.seen.remove(received)
+                finally:
+                    stop(external)
+        finished = next((line for line in source_output.seen[pending_start:] if line.startswith("FINISHED")), None)
+        finished = finished or source_output.wait("FINISHED")
         injector.wait(timeout=5)
         return finished
     finally:
@@ -140,6 +167,7 @@ def main():
             cancelled = drag(env, binary, source_output, expected_uri, "cancel")
             timed_out = drag(env, binary, source_output, expected_uri, "timeout")
             disappeared = drag(env, binary, source_output, expected_uri, "disappear")
+            incoming = drag(env, binary, source_output, expected_uri, "incoming")
             subprocess.run([binary, "inject", "self"], env=env, check=True, timeout=5)
             source_output.wait("STARTED")
             self_drop = source_output.wait("FINISHED")
@@ -162,7 +190,7 @@ def main():
             accepted2 = drag(env, binary, source_output, expected_uri, "accept")
             assert accepted1 == accepted2 == "FINISHED accepted=true own=false"
             assert rejected == cancelled == "FINISHED accepted=false own=false"
-            assert timed_out == disappeared == "FINISHED accepted=false own=false"
+            assert timed_out == disappeared == incoming == "FINISHED accepted=false own=false"
             print(json.dumps({"independent_receiver": "GTK3", "same_source_process": True, "exact_payload_bytes": 256, "exact_uri": expected_uri, "accept_results": [accepted1, accepted2], "reject_result": rejected, "cancel_result": cancelled, "timeout_result": timed_out, "disappeared_result": disappeared, "self_drop": self_drop, "own_window_drop": own_drop, "own_window_received_bytes": 256}, indent=2))
         finally:
             stop(source)

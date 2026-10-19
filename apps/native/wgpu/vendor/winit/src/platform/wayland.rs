@@ -23,6 +23,15 @@ use crate::window::{Window, WindowAttributes};
 
 pub use crate::window::Theme;
 
+/// A complete COPY drop with the position frozen when the button was released.
+#[derive(Debug)]
+pub struct FileDropBatch {
+    /// Local paths in source order.
+    pub paths: Vec<std::path::PathBuf>,
+    /// Surface coordinates, independent of output-scale changes during transfer.
+    pub position: crate::dpi::LogicalPosition<f64>,
+}
+
 /// Image/file formats advertised by the focused seat's clipboard selection.
 #[derive(Debug, Default)]
 pub struct ClipboardOffer {
@@ -141,6 +150,10 @@ pub trait WindowExtWayland {
     /// hiding is requested, while `is_visible` waits for acknowledged unmapping.
     /// Returns None for an X11 window.
     fn is_surface_ready(&self) -> Option<bool>;
+
+    /// Drain complete drops instead of grouping individual `DroppedFile` events.
+    /// Returns None on X11. Consume on `DroppedFile`; all per-file events still fire.
+    fn take_file_drop_batches(&self) -> Option<Vec<FileDropBatch>>;
 }
 
 impl WindowExtWayland for Window {
@@ -161,6 +174,15 @@ impl WindowExtWayland for Window {
             crate::platform_impl::Window::X(_) => None,
             #[cfg(wayland_platform)]
             crate::platform_impl::Window::Wayland(window) => Some(window.is_surface_ready()),
+        }
+    }
+
+    fn take_file_drop_batches(&self) -> Option<Vec<FileDropBatch>> {
+        match &self.window {
+            #[cfg(x11_platform)]
+            crate::platform_impl::Window::X(_) => None,
+            #[cfg(wayland_platform)]
+            crate::platform_impl::Window::Wayland(window) => Some(window.take_file_drop_batches()),
         }
     }
 }

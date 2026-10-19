@@ -4628,6 +4628,17 @@ layer or Undo step, preserves Redo, and permits retry. Shared tests cover all fo
 edges and stacked placement; native controller/worker regressions cover picker and
 drop batching, one Undo/Redo and failures. Physical file dialogs, drag/drop,
 clipboard managers, IME and accessibility acceptance remain open on every OS.
+External Wayland COPY offers now reach that batch path through the core data-device
+protocol. Previously only same-client source drags delivered files. The destination
+prefetches URI lists for hover feedback using nonblocking reads, with a 1 MiB payload,
+two-second absolute receive deadline and at most eight retained transfers. It keeps
+each dropped offer alive across leave/new enter, freezes its release position and
+checks the original window identity before delivery. Only a complete valid local
+file list with negotiated COPY is finished; malformed/remote paths, MOVE, cancellation
+and timeout import nothing. Eframe preserves offer boundaries per viewport instead
+of combining delayed per-file events with the latest pointer. The shared Windows/X11
+raw-file path and AppKit implementation remain unchanged. Physical compositor,
+mixed-DPI and assistive-input acceptance are still open.
 AppKit compares a private pasteboard token; Windows uses a registered private
 format and OS sequence; X11 serves a private selection with owner identity.
 Wayland uses the existing vendored winit/SCTK queue and focused input serial,

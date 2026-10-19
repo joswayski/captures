@@ -501,6 +501,7 @@ impl<T: 'static> EventLoop<T> {
                 if window_requests.get(window_id).unwrap().take_closed() {
                     mem::drop(window_requests.remove(window_id));
                     mem::drop(state.windows.get_mut().remove(window_id));
+                    state.cancel_window_drags(*window_id);
                     return Some(WindowEvent::Destroyed);
                 }
 
@@ -512,6 +513,9 @@ impl<T: 'static> EventLoop<T> {
                     .lock()
                     .unwrap();
 
+                // Metadata is valid during this dispatch's DroppedFile callbacks.
+                // Consumers using only ordinary events must not retain it forever.
+                window.file_drop_batches.clear();
                 if !window.can_redraw() {
                     return None;
                 }
@@ -785,6 +789,8 @@ impl ActiveEventLoop {
         drag.start_drag(seat.0, &surface, None, seat.1);
         state.outbound_drag = Some(super::outbound_drag::OutboundDrag {
             source: drag,
+            device: seat.0.inner().clone(),
+            own_offer: None,
             source_window: source,
             uri: super::outbound_drag::uri_list(&path),
             path,

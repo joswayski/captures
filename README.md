@@ -894,6 +894,10 @@ X11 file-list paste accepts incremental clipboard transfers within the existing
 1 MiB/two-second transfer limits; incomplete or invalid transfers import nothing.
 On Wayland, clipboard pixels require compositor data-control support; editable
 layer ownership and local-file paste use the core selection protocol.
+External Wayland file drops also use the core protocol, accepting COPY-only local
+file lists without blocking input. Each completed offer retains its release position
+and its own Undo step; cancelled, malformed or incomplete transfers import nothing.
+Disposable Sway/GTK checks cover this path; physical GNOME/KDE acceptance remains open.
 **Copy image** remains the separate pixel-copy action. These are opt-in native
 source features, not a change to the public Tauri app or video editor.
 Closing the editor or discarding its draft clears the internal layer clipboard.

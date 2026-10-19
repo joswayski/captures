@@ -5,6 +5,7 @@ Reuses the real-window/virtual-input host fixture. DISPLAY is unset: no X11
 fallback, installed profile, global clipboard or physical acceptance is involved.
 """
 import json
+from pathlib import Path
 import select
 import subprocess
 import time
@@ -12,6 +13,7 @@ import time
 from gi.repository import GLib
 
 from instance_smoke import png
+from wayland_drag_smoke import Output
 from wayland_keyboard_smoke import KEYS
 from wayland_native_capture_smoke import wait, windows
 from wayland_screenshot_smoke import ready, stop
@@ -48,7 +50,7 @@ def cases(binary, pointer, root, env, bus):
             with host_log.open("w") as log:
                 app = subprocess.Popen([binary, "--live", "--open-media", str(source),
                     "--settings-file", str(settings), "--history-root", str(history),
-                    "--quit-after", "120"], env=env, stdout=log, stderr=log)
+                    "--quit-after", "180"], env=env, stdout=log, stderr=log)
                 try:
                     def window():
                         assert app.poll() is None, host_log.read_text()
@@ -229,6 +231,142 @@ def cases(binary, pointer, root, env, bus):
                     pick([image, second])
                     assert [layer["name"] for layer in count(9)[-2:]] == [image.name, second.name]
                     shot("picker-batch-retried")
+
+                    # Restore the original canvas before exercising a separate
+                    # GTK client's core Wayland drag offer (not clipboard paste).
+                    click(28, 430)
+                    while len(layers()) > 1:
+                        previous_count = len(layers())
+                        key("z", "ctrl")
+                        wait(lambda: len(layers()) < previous_count, "undo before external drop")
+                    # Undo back to the untouched original removes the draft;
+                    # the rendered original still counts as one UI layer.
+                    assert not draft.exists(), "undo must restore the untouched original"
+                    unchanged_layers = layers()
+
+                    def drop(paths, name, options=(), destination="accept", move_after=False,
+                             during_receive=None, settle=True):
+                        client = subprocess.Popen(["/usr/bin/python3",
+                            str(Path(__file__).with_name("wayland_drag_source.py")),
+                            *options, *map(str, paths)], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                        output = Output(client)
+                        try:
+                            output.wait("READY")
+                            source_window = wait(lambda: next((node for node in windows(env)
+                                if node["pid"] == client.pid), None), "external GTK drag source")
+                            subprocess.run(["swaymsg", f'[con_id={source_window["id"]}] '
+                                'resize set 200 150, move position 160 160, focus'],
+                                env=env, check=True, stdout=subprocess.DEVNULL)
+                            time.sleep(.3)
+                            # The existing probe's normalized drag moves from
+                            # (256,270) in GTK to (811,270) on this 1280x900 output.
+                            subprocess.run([pointer.args[0], "inject", destination],
+                                           env=env, check=True, timeout=5)
+                            if move_after:
+                                click(28, 430)
+                            if during_receive:
+                                during_receive()
+                            output.wait("STARTED")
+                            sent = output.wait("SENT ")
+                            assert json.loads(sent.removeprefix("SENT ")) == [path.as_uri() for path in paths]
+                            output.wait("FINISHED")
+                            (profile / f"{name}-protocol.json").write_text(json.dumps(output.seen, indent=2) + "\n")
+                        finally:
+                            stop(client)
+                        if settle:
+                            click(28, 430)
+                            time.sleep(.8)
+
+                    drop([image, second], "drop-batch")
+                    dropped = count(3)
+                    assert [layer["name"] for layer in dropped[-2:]] == [image.name, second.name]
+                    shot("drop-batch-imported")
+                    key("z", "ctrl")
+                    wait(lambda: not draft.exists(), "one Undo removes the complete drop")
+                    shot("drop-batch-undone")
+                    for name, invalid in [("decode", corrupt), ("render", tall)]:
+                        unchanged_status = status_pixels()
+                        drop([image, invalid], f"drop-batch-{name}")
+                        assert layers() == unchanged_layers, f"late drop {name} failure published partial layers"
+                        assert status_pixels() != unchanged_status, f"late drop {name} failure must report an error"
+                        shot(f"drop-batch-{name}-error")
+                    key("z", "ctrl+shift")
+                    assert count(3) == dropped, "failed drops must preserve Redo"
+                    key("z", "ctrl")
+                    wait(lambda: not draft.exists(), "undo before retry")
+                    drop([image, second], "drop-batch-retry")
+                    retried = count(3)
+                    assert [layer["name"] for layer in retried[-2:]] == [image.name, second.name]
+                    shot("drop-batch-retried")
+                    key("z", "ctrl")
+                    wait(lambda: not draft.exists(), "undo before transfer rejection cases")
+                    for name, payload in [
+                        ("remote", image.as_uri().encode() + b"\r\nfile://remote/tmp/a.png\r\n"),
+                        ("malformed", image.as_uri().encode() + b"\r\nfile:///tmp/bad%Q0.png\r\n"),
+                        ("nul", b"file:///tmp/bad%00.png\r\n"),
+                        ("empty", b"# comment only\r\n"),
+                        ("oversized", b"#" + b"x" * (1024 * 1024) + b"\r\n"),
+                    ]:
+                        raw = profile / f"{name}.uri-list"
+                        raw.write_bytes(payload)
+                        drop([image], f"drop-reject-{name}", ["--payload", str(raw)])
+                        assert not draft.exists(), f"{name} transfer must not import even its valid prefix"
+                    drop([image], "drop-reject-move", ["--action", "move"])
+                    assert not draft.exists(), "COPY-only receiver must reject MOVE"
+                    drop([image], "drop-cancel-hover", destination="cancel-hover")
+                    assert not draft.exists(), "leaving a valid hover must not import"
+                    drop([image], "drop-timeout", ["--delay", "3"])
+                    assert not draft.exists(), "late receive must not import after timeout"
+                    key("z", "ctrl+shift")
+                    assert count(3) == retried, "protocol rejection must preserve the entire Redo document"
+                    key("z", "ctrl")
+                    wait(lambda: not draft.exists(), "undo before delayed drop")
+                    drop([image], "drop-delayed-center", ["--delay", "1"], destination="center", move_after=True)
+                    delayed = count(2)[-1]
+                    assert 0 < delayed["y"] < 360 - 43, "delayed drop must stack at release, not the later rail pointer"
+                    assert 0 < delayed["x"] < 640 - 90
+                    shot("drop-delayed-center")
+                    key("z", "ctrl")
+                    wait(lambda: not draft.exists(), "undo before overlapping offers")
+
+                    def second_offer():
+                        drop([second], "drop-overlap-fast", settle=False)
+
+                    drop([image], "drop-overlap-slow", ["--delay", "1.8"], destination="center",
+                         during_receive=second_offer)
+                    overlapping = count(3)
+                    assert [layer["name"] for layer in overlapping[-2:]] == [second.name, image.name]
+                    assert overlapping[-2]["y"] == 360
+                    assert 0 < overlapping[-1]["y"] < 360 - 43
+                    key("z", "ctrl")
+                    remaining = count(2)
+                    assert [layer["name"] for layer in remaining] == ["Original screenshot", second.name]
+                    assert (remaining[-1]["x"], remaining[-1]["y"]) == (305, 360)
+                    key("z", "ctrl+shift")
+                    assert count(3) == overlapping, "overlapping offers must retain independent Undo/Redo steps"
+                    key("z", "ctrl")
+                    count(2)
+                    key("z", "ctrl")
+                    wait(lambda: not draft.exists(), "undo second independent offer")
+                    escaped = profile / "drop-é%#\n.png"
+                    escaped.write_bytes(image.read_bytes())
+                    uri_list = profile / "escaped.uri-list"
+                    uri_list.write_bytes(("# local files\r\n" + escaped.as_uri().replace(
+                        "file://", "file://localhost", 1) + "\r\n" + second.as_uri() + "\r\n").encode())
+                    drop([escaped, second], "drop-escaped-paths", ["--payload", str(uri_list)])
+                    assert [layer["name"] for layer in count(3)[-2:]] == [escaped.name, second.name]
+                    key("z", "ctrl")
+                    wait(lambda: not draft.exists(), "undo escaped-path batch")
+
+                    def close_during_receive():
+                        subprocess.run(["swaymsg", f'[con_id={window()["id"]}] kill'],
+                                       env=env, check=True, stdout=subprocess.DEVNULL)
+                        wait(lambda: window() is None, "close destination before transfer finishes")
+
+                    drop([image], "drop-closed-window", ["--delay", "1.8"],
+                         during_receive=close_during_receive, settle=False)
+                    assert not draft.exists() and window() is None, "late transfer must not restore a closed editor"
+                    assert source.read_bytes() == original
                     (profile / "result.json").write_text(json.dumps({"passed": True,
                         "appearance": appearance, "private_offer": types[0].decode(),
                         "checks": ["PNG-pixels", "private-MIME-no-text", "24px-layer-offset",
@@ -238,8 +376,14 @@ def cases(binary, pointer, root, env, bus):
                             "failed-batch-preserves-Redo", "batch-retry",
                             "picker-one-undo-per-batch", "picker-late-decode-render-failure-atomic",
                             "picker-failure-preserves-Redo", "picker-retry",
+                            "external-GTK-drop-one-undo-per-batch", "drop-late-decode-render-failure-atomic",
+                            "drop-failure-preserves-Redo", "drop-retry",
+                            "URI-rejection-atomic", "COPY-only", "hover-cancel", "receive-timeout",
+                            "delayed-drop-frozen-position", "recovery-after-rejected-transfers",
+                            "overlapping-offers-independent-targets-and-undo",
+                            "percent-encoded-localhost-URI-order", "closed-destination-cancels-transfer",
                             "CRLF-file-order", "source-cancellation", "reclaim-after-cancel", "original-unchanged"]}, indent=2) + "\n")
-                    print(f"PASS {appearance}: Wayland clipboard image/file input, ownership replacement/cancellation", flush=True)
+                    print(f"PASS {appearance}: Wayland clipboard, picker and external GTK batch drops", flush=True)
                 except Exception:
                     subprocess.run(["grim", str(profile / "failed-desktop.png")], env=env, check=True, timeout=5)
                     raise

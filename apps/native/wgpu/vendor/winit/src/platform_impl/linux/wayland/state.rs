@@ -68,6 +68,7 @@ pub struct WinitState {
     pub outbound_drag_manager: Option<DataDeviceManagerState>,
     pub outbound_drag: Option<super::outbound_drag::OutboundDrag>,
     pub clipboard_marker: Option<super::outbound_drag::ClipboardMarker>,
+    pub inbound_drags: super::inbound_drag::InboundDrags,
 
     /// The shm for software buffers, such as cursors.
     pub shm: Shm,
@@ -182,6 +183,7 @@ impl WinitState {
             outbound_drag_manager: DataDeviceManagerState::bind(globals, queue_handle).ok(),
             outbound_drag: None,
             clipboard_marker: None,
+            inbound_drags: Default::default(),
             shm,
             custom_cursor_pool,
 
