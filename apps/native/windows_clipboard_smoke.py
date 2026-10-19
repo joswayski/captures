@@ -235,8 +235,8 @@ def main():
     finally:
         if hwnd:
             api(user, "DestroyWindow", w.BOOL, w.HWND)(hwnd)
-        check(set_desktop(original_desktop))
         check(set_station(original_station))
+        check(set_desktop(original_desktop))
         if desktop:
             api(user, "CloseDesktop", w.BOOL, w.HANDLE)(desktop)
         api(user, "CloseWindowStation", w.BOOL, w.HANDLE)(station)
