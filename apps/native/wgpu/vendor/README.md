@@ -145,7 +145,7 @@ license retained. Archive SHA-256:
 3457dea1f0eb631b4034d61d4d8c32074caa6cd1ab2d59f2327bd8461e2c0016
 ```
 
-Only `src/data_device_manager/data_device.rs` changes: `take_drag_offer` transfers
+`src/data_device_manager/data_device.rs` adds `take_drag_offer`, which transfers
 ownership to the destination. Upstream snapshots cannot survive a new enter, which
 destroys even the previous dropped offer; an ordinary leave destroys an undropped
 offer. Detached offers still receive action callbacks, while the caller tracks
@@ -154,6 +154,10 @@ its existing own-source and clipboard paths retain SCTK ownership. Both isolated
 native manifests patch this version; root Cargo/Tauri do not. To update, compare
 against the verified archive and reapply this method only if upstream still needs
 it. Do not copy `.cargo-ok` or vendor checksum metadata for modified sources.
+Five existing signatures also have compiler-suggested, behavior-neutral syntax
+updates for Rust 1.95's warnings-as-errors gate: redundant trait-object parentheses
+in `src/compositor.rs`, `src/shell/xdg/mod.rs` and `src/shm/raw.rs`, and explicit
+lifetimes in `src/data_device_manager/write_pipe.rs` and `src/registry.rs`.
 Run the editor clipboard/picker/external-GTK drop smoke and outbound drag smoke
 after every ownership/backend update; physical compositor acceptance remains open.
 
