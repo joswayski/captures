@@ -1643,6 +1643,50 @@ impl MediaToolchain {
         attempt: &VideoAttempt,
         cancel: &CancelToken,
     ) -> Result<(), MediaToolError> {
+        match self.run_videotoolbox_encode(
+            input,
+            output,
+            edit,
+            spec,
+            attempt,
+            attempt.video_bitrate,
+            cancel,
+        ) {
+            // Constant quality (-q:v) needs the Apple Silicon hardware encoder.
+            // When that is busy, -allow_sw falls back to the software encoder,
+            // which rejects the quality property. Retry once at the preset's
+            // equivalent bitrate, which both encoders accept.
+            Err(MediaToolError::Process(message))
+                if attempt.video_bitrate.is_none()
+                    && videotoolbox_rejected_rate_control(&message) =>
+            {
+                let _ = fs::remove_file(output);
+                self.run_videotoolbox_encode(
+                    input,
+                    output,
+                    edit,
+                    spec,
+                    attempt,
+                    Some(preset_video_bitrate(attempt, spec)),
+                    cancel,
+                )
+            }
+            result => result,
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[allow(clippy::too_many_arguments)]
+    fn run_videotoolbox_encode(
+        &self,
+        input: &Path,
+        output: &Path,
+        edit: &EditSpec,
+        spec: &ExportSpec,
+        attempt: &VideoAttempt,
+        video_bitrate: Option<u64>,
+        cancel: &CancelToken,
+    ) -> Result<(), MediaToolError> {
         let mut command = media_command(&self.ffmpeg);
         command.args(["-hide_banner", "-loglevel", "error", "-y"]);
         if edit.trim_start_ms > 0 {
@@ -1665,7 +1709,7 @@ impl MediaToolchain {
         // software fallback keeps exports working in VMs and when the hardware
         // encoder is temporarily busy without changing the H.264 container.
         command.args(["-c:v", "h264_videotoolbox", "-allow_sw", "1"]);
-        if let Some(video_bitrate) = attempt.video_bitrate {
+        if let Some(video_bitrate) = video_bitrate {
             command.args([
                 "-b:v",
                 &video_bitrate.to_string(),
@@ -2351,11 +2395,16 @@ const fn mp4_attempt_dimensions(attempt: &VideoAttempt) -> (u32, u32) {
 /// Windows/Linux capture masters use 12% bits-per-pixel (`recording_bitrate`
 /// in captures-recording-xcap). Compress re-encodes must stay at or below
 /// that so a quality preset cannot enlarge the file.
-#[cfg(any(target_os = "windows", target_os = "linux"))]
 const CAPTURE_MASTER_BITS_PER_PIXEL_PERCENT: u64 = 12;
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 fn openh264_bitrate(attempt: &VideoAttempt, spec: &ExportSpec) -> u32 {
+    u32::try_from(preset_video_bitrate(attempt, spec)).unwrap_or(50_000_000)
+}
+
+/// The attempt's size-target bitrate, or a bits-per-pixel estimate for its
+/// quality preset when the encoder needs a rate instead of constant quality.
+fn preset_video_bitrate(attempt: &VideoAttempt, spec: &ExportSpec) -> u64 {
     let bits_per_pixel_percent = match spec.quality {
         QualityPreset::Preserve => CAPTURE_MASTER_BITS_PER_PIXEL_PERCENT,
         // Modest cut under the capture master. Must stay below 12% or Highest
@@ -2372,7 +2421,14 @@ fn openh264_bitrate(attempt: &VideoAttempt, spec: &ExportSpec) -> u32 {
         .saturating_mul(bits_per_pixel_percent)
         / 100;
     let bitrate = attempt.video_bitrate.unwrap_or(estimated);
-    u32::try_from(bitrate.clamp(250_000, 50_000_000)).unwrap_or(50_000_000)
+    bitrate.clamp(250_000, 50_000_000)
+}
+
+/// FFmpeg reports a VideoToolbox session that rejects its quality or bitrate
+/// property (kVTPropertyNotSupportedErr) with this message in either mode.
+#[cfg(target_os = "macos")]
+fn videotoolbox_rejected_rate_control(message: &str) -> bool {
+    message.contains("Error setting bitrate property")
 }
 
 fn apply_aac_encoder(command: &mut Command, bitrate: &str, mono: bool) {
@@ -3200,8 +3256,6 @@ fn ebml_size(bytes: &[u8]) -> Option<(usize, usize)> {
 mod tests {
     #[cfg(unix)]
     use super::MediaPlayback;
-    #[cfg(target_os = "macos")]
-    use super::TimelineSpriteSpec;
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     use super::{
         CAPTURE_MASTER_BITS_PER_PIXEL_PERCENT, MediaToolError, RecordingAssemblyKind,
@@ -3212,10 +3266,13 @@ mod tests {
         aac_centered_stereo_layout_filter, aac_output_layout_filter, accepted_audio_is_audible,
         audio_edit_is_identity, audio_filter, commit_temporary, escape_concat_path,
         export_attempts, export_preserves_source_bytes, fit_even, fit_playback_dimensions,
-        gif_export_filter, gif_filter, preview_dimensions, preview_video_filter,
-        read_bounded_diagnostics, read_complete_frame, recording_segment_audio_graph, seconds,
-        validate_edit_spec, visual_edit_is_identity, webm_header,
+        gif_export_filter, gif_filter, preset_video_bitrate, preview_dimensions,
+        preview_video_filter, read_bounded_diagnostics, read_complete_frame,
+        recording_segment_audio_graph, seconds, validate_edit_spec, visual_edit_is_identity,
+        webm_header,
     };
+    #[cfg(target_os = "macos")]
+    use super::{TimelineSpriteSpec, videotoolbox_rejected_rate_control};
     use crate::{
         AudioEdit, CropRect, EditSpec, ExportFormat, ExportSpec, MediaKind, MediaMetadata,
         QualityPreset, toolchain::ProbeResult,
@@ -3623,7 +3680,6 @@ mod tests {
         assert!(attempts[3].force_mono);
     }
 
-    #[cfg(any(target_os = "windows", target_os = "linux"))]
     fn bitrate_probe_attempt() -> VideoAttempt {
         VideoAttempt {
             width: 1_920,
@@ -3640,7 +3696,6 @@ mod tests {
         }
     }
 
-    #[cfg(any(target_os = "windows", target_os = "linux"))]
     fn bitrate_spec(quality: QualityPreset) -> ExportSpec {
         ExportSpec {
             format: ExportFormat::Mp4,
@@ -3649,6 +3704,32 @@ mod tests {
             frames_per_second: Some(30),
             gif_max_colors: None,
         }
+    }
+
+    #[test]
+    fn preset_bitrate_estimates_quality_exports_and_keeps_size_targets() {
+        let mut attempt = bitrate_probe_attempt();
+        let high = preset_video_bitrate(&attempt, &bitrate_spec(QualityPreset::High));
+        assert_eq!(high, 1_920 * 1_080 * 30 * 8 / 100);
+        assert!(preset_video_bitrate(&attempt, &bitrate_spec(QualityPreset::Tiny)) < high);
+
+        attempt.video_bitrate = Some(3_000_000);
+        assert_eq!(
+            preset_video_bitrate(&attempt, &bitrate_spec(QualityPreset::High)),
+            3_000_000
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn recognizes_videotoolbox_rate_control_rejection() {
+        assert!(videotoolbox_rejected_rate_control(
+            "[h264_videotoolbox @ 0x8b0c54a80] Error setting bitrate property: -12900\n\
+             [vost#0:0/h264_videotoolbox @ 0x8b0ce4000] Error while opening encoder"
+        ));
+        assert!(!videotoolbox_rejected_rate_control(
+            "input.mp4: Invalid data found when processing input"
+        ));
     }
 
     #[cfg(any(target_os = "windows", target_os = "linux"))]
