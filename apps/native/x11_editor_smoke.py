@@ -1353,6 +1353,35 @@ def main():
             # and a later transfer may incrementally advertise TARGETS too.
             paste_incremental("exact-limit")
             paste_incremental(targets=True)
+
+            # The same X11 owner can replace its selection during either read.
+            # Never combine the old format list with the replacement's PNG.
+            replacement = output / "Replacement.png"
+            run("convert", "-size", "31x17", "xc:#268752", "-strip", "PNG32:" + str(replacement))
+            transfer_payload.write_bytes(b"")
+            for mime in ("text/uri-list", "image/png"):
+                name = "clipboard-replaced-" + mime.split("/")[1]
+                log = output / f"{name}-protocol.jsonl"
+                assert spawn(name, ["/usr/bin/python3",
+                    str(Path(__file__).with_name("x11_clipboard_source.py")),
+                    "--payload", str(transfer_payload), "--log", str(log), "--png", str(png),
+                    "--replacement-png", str(replacement), "--replace-on", mime], announce=True) == "ready"
+                unchanged_layers = layers()
+                unchanged_status = status_pixels()
+                run("xdotool", "key", "ctrl+v", "sleep", ".8")
+                settled_draft()
+                events = [json.loads(line) for line in log.read_text().splitlines()]
+                assert {"event": "replaced", "same_owner": True} in events
+                assert layers() == unchanged_layers, "paste silently switched to the replacement clipboard"
+                assert status_pixels() != unchanged_status, "a changed selection must report an error"
+                shot(editor, f"{name}-rejected")
+                run("xdotool", "key", "ctrl+v", "sleep", ".3")
+                retried = save_layers(lambda values: len(values) == 7, "explicit paste of replacement")[-1]
+                assert (retried["naturalWidth"], retried["naturalHeight"]) == (31, 17)
+                asset_pixel(retried, 30, 16, (38, 135, 82, 255))
+                shot(editor, f"{name}-retried")
+                run("xdotool", "key", "ctrl+z", "sleep", ".3")
+                assert save_layers(lambda values: len(values) == 6, "replacement Undo") == unchanged_layers
             recording.send_signal(signal.SIGINT)
             recording.wait(timeout=10)
             png.unlink(); second.unlink()
@@ -1379,6 +1408,7 @@ def main():
                            "late-decode-and-render-failure-atomic", "failed-batch-preserves-Redo", "batch-retry",
                            "INCR-URI-and-TARGETS", "split-URI-escapes-and-CRLF", "INCR-exact-1MiB",
                            "INCR-errors-no-partial-import", "INCR-absolute-deadline", "INCR-error-retry-and-undo",
+                           "same-owner-replacement-rejected", "explicit-replacement-retry-and-undo",
                            "URL-text-no-fetch", "session-local-layer-copy", "original-unchanged"],
             }, indent=2) + "\n")
             print("PASS native clipboard: image pixels, OS ownership, fields, file order, undo and owned drafts")
