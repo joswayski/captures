@@ -260,7 +260,7 @@ describe("ScreenshotEditor", () => {
     document.getElementById("captures-editor-paint-canvas-host")?.remove();
   });
 
-  it("restores a saved editor draft and can discard it", async () => {
+  it("dismisses the restored-draft notice without losing edits", async () => {
     window.history.replaceState(
       {},
       "",
@@ -310,14 +310,15 @@ describe("ScreenshotEditor", () => {
     expect(screen.getByLabelText("Canvas width")).toHaveValue(1_200);
     expect(screen.getByText("Draft note")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+    expect(screen.queryByRole("button", { name: "Discard" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss restored-edits notice" }));
 
     await waitFor(() => {
       expect(screen.queryByText("Restored unsaved edits from last time.")).not.toBeInTheDocument();
     });
-    expect(screen.getByLabelText("Canvas width")).toHaveValue(1_440);
-    expect(screen.queryByText("Draft note")).not.toBeInTheDocument();
-    expect(invoke).toHaveBeenCalledWith("discard_screenshot_editor_draft", {
+    expect(screen.getByLabelText("Canvas width")).toHaveValue(1_200);
+    expect(screen.getByText("Draft note")).toBeInTheDocument();
+    expect(invoke).not.toHaveBeenCalledWith("discard_screenshot_editor_draft", {
       artifactId: "original-window",
     });
     expect(invoke).toHaveBeenCalledWith("load_screenshot_editor_draft", {

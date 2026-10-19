@@ -2292,30 +2292,6 @@ export function ScreenshotEditor() {
     flushEditorDraftRef.current = flushEditorDraft;
   }, [flushEditorDraft]);
 
-  const discardRestoredDraft = useCallback(() => {
-    if (!artifact) return;
-    imageImportGenerationRef.current += 1;
-    layerClipboardRef.current = null;
-    const next = createScreenshotDocument(
-      artifact.full_url,
-      artifact.width,
-      artifact.height,
-      artifact.id,
-    );
-    ensureImage(artifact.full_url);
-    baselineDocumentRef.current = next;
-    setUndoStack([]);
-    setRedoStack([]);
-    replaceDocument(next);
-    setDraftRestored(false);
-    setSelectedId(null);
-    setEditingTextId(null);
-    clearSuccess();
-    setError("");
-    draftSaveGenerationRef.current += 1;
-    if (draftArtifactId) void discardEditorDraft(draftArtifactId).catch(() => undefined);
-  }, [artifact, clearSuccess, discardEditorDraft, draftArtifactId, ensureImage, replaceDocument]);
-
   const editorPresenceId = draftArtifactId ? `screenshot-editor-${draftArtifactId}` : null;
   const lastEmittedPresenceRef = useRef<string[] | null>(null);
 
@@ -5502,9 +5478,6 @@ export function ScreenshotEditor() {
           <div className="screenshot-editor-draft-banner" role="status">
             <span>Restored unsaved edits from last time.</span>
             <div className="screenshot-editor-draft-banner-actions">
-              <button type="button" onClick={discardRestoredDraft}>
-                Discard
-              </button>
               <button
                 type="button"
                 className="screenshot-editor-draft-banner-dismiss"
