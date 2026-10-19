@@ -877,9 +877,14 @@ final class ScreenshotEditorTests: XCTestCase {
             // A draft found at open shows shipping's restored-edits banner above the header.
             XCTAssertTrue(controller.draftRestored)
             XCTAssertEqual(header.frame.minY, 40)
+            XCTAssertFalse(descendants(in: controller.root).compactMap { $0 as? CaptureButton }
+                .contains { $0.title == "Discard" })
             try render(controller.root, name: "screenshot-editor-draft-restored-\(appearance)")
             try press("Dismiss restored-edits notice", in: controller.root)
             XCTAssertFalse(controller.draftRestored)
+            XCTAssertEqual(controller.state.snapshot, original, "Dismiss preserves the restored edits")
+            XCTAssertTrue(worker.requests.isEmpty)
+            try render(controller.root, name: "screenshot-editor-draft-dismissed-\(appearance)")
             XCTAssertEqual(header.frame, NSRect(x: 0, y: 0, width: controller.root.bounds.width, height: 52))
             // The export bar adds 80pt below the historical 1000×700 layout,
             // but a display whose visible frame is shorter keeps the whole
@@ -1444,7 +1449,7 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertNil(state.artifactID)
     }
 
-    func testCloseFlushesTheDraftWithoutAskingAndRestoredDraftDiscardIsExplicit() throws {
+    func testCloseFlushesTheDraftWithoutAskingAndDismissPreservesRestoredEdits() throws {
         _ = NSApplication.shared
         let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true, draft: true))
         let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
@@ -1461,22 +1466,23 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertFalse(worker.requests.contains { $0["operation"] as? String == "discard_draft" })
         XCTAssertFalse(worker.requests.contains { $0["operation"] as? String == "save_draft" })
 
-        // Only the restored-draft notice discards, as in shipping.
-        let discardWorker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: false, draft: true))
-        let discardController = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: discardWorker)
-        defer { discardController.window.orderOut(nil) }
-        discardController.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
-        XCTAssertTrue(discardController.draftRestored)
-        XCTAssertTrue(descendants(in: discardController.root).compactMap { $0 as? CaptureButton }
+        // Dismiss hides the notice but keeps the already-saved restored edits.
+        let restored = snapshot(id: "shot", width: 713, height: 419, unsaved: false, draft: true)
+        let restoredWorker = FakeEditorWorker(snapshot: restored)
+        let restoredController = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: restoredWorker)
+        defer { restoredController.window.orderOut(nil) }
+        restoredController.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        XCTAssertTrue(restoredController.draftRestored)
+        XCTAssertTrue(descendants(in: restoredController.root).compactMap { $0 as? CaptureButton }
             .allSatisfy { $0.accessibilityLabel() != "Draft actions" }, "no header draft menu")
-        try button("Discard", in: discardController.root).performClick(nil)
-        XCTAssertNil(discardController.window.attachedSheet)
-        waitUntil { discardWorker.requests.contains { $0["operation"] as? String == "discard_draft" } }
-        XCTAssertFalse(discardController.draftRestored)
+        try press("Dismiss restored-edits notice", in: restoredController.root)
+        XCTAssertFalse(restoredController.draftRestored)
+        XCTAssertEqual(restoredController.state.snapshot, restored)
+        XCTAssertTrue(restoredWorker.requests.isEmpty)
         // A saved session closes without writing anything.
-        XCTAssertFalse(discardController.windowShouldClose(discardController.window))
-        XCTAssertEqual(discardWorker.autosaves, 0)
-        XCTAssertEqual(discardWorker.closeCount, 1)
+        XCTAssertFalse(restoredController.windowShouldClose(restoredController.window))
+        XCTAssertEqual(restoredWorker.autosaves, 0)
+        XCTAssertEqual(restoredWorker.closeCount, 1)
     }
 
     func testAutosaveRunsInTheBackgroundAndFailuresStayQuiet() throws {

@@ -14,6 +14,7 @@ from pathlib import Path
 import random
 import re
 import select
+import shutil
 import signal
 import subprocess
 import threading
@@ -102,6 +103,8 @@ def main():
                         help="Exercise tool and document keys without stealing text input")
     parser.add_argument("--clipboard-only", action="store_true",
                         help="Exercise real image/file clipboard paste, layer ownership and draft pixels")
+    parser.add_argument("--restored-notice-only", action="store_true",
+                        help="Dismiss a restored-edits notice without changing its document or saved draft")
     parser.add_argument("--combine-only", action="store_true",
                         help="Exercise real-input layer merging, flattening, history and output pixels")
     parser.add_argument("--text-draft-only", action="store_true",
@@ -688,8 +691,7 @@ def main():
     # Widths below are measured under the token fonts.
     ADD_IMAGES_WIDTH = 116
     HEADER_Y = 26
-    # The restored-draft notice's Discard and Dismiss, from the window's right edge.
-    DRAFT_DISCARD_RIGHT = 110
+    # The restored-draft notice's sole Dismiss action, from the window's right edge.
     DRAFT_DISMISS_RIGHT = 42
     # Top-left of the background card's swatch grid relative to its trigger-derived
     # left edge, and the first tile row's centre.
@@ -862,10 +864,6 @@ def main():
         # Preset menu rows, 44px apart from y=64, right-aligned to the preset.
         return header_controls(editor_width())[0]["zoom"] + 10
 
-    def discard_restored(window):
-        # Shipping's restored-draft notice above the header: Discard, then Dismiss.
-        click(window, editor_width_of(window) - DRAFT_DISCARD_RIGHT, 20)
-
     def blur_click():
         # Empty rail space below the tools: takes focus from fields, edits nothing.
         click(editor, 28, 52 + 8 + 7 * 40 + 30)
@@ -998,8 +996,10 @@ def main():
             "display_shortcut": "Ctrl+Shift+F9", "new_capture_shortcut": "Ctrl+Shift+F10",
             "auto_copy_to_clipboard": False, "show_mini_previews": False,
         }))
+        # The full software-rendered suite can exceed ten minutes; its final
+        # quit-recovery assertions must run before the app's safety timeout.
         app_command = [str(binary), "--live", "--open-history", "--history-root", str(history),
-                       "--settings-file", str(settings), "--quit-after", "600"]
+                       "--settings-file", str(settings), "--quit-after", "900"]
         open_arguments = []
         if args.external_image_only:
             source_png = output / "External image é.png"
@@ -1138,22 +1138,21 @@ def main():
             time.sleep(.6)
             if restored:
                 # A restored draft shows shipping's banner above the header; keep
-                # the authored layout by dismissing it unless Discard follows.
+                # the authored layout by dismissing it unless testing the notice.
                 shot(window, "restored-draft-banner")
                 if not keep_banner:
                     click(window, editor_width_of(window) - DRAFT_DISMISS_RIGHT, 20)
             return window
 
-        def discard_draft(description):
-            # Shipping discards only from the restored-draft notice: close (the
-            # draft flushes), reopen at the same size, then Discard.
+        def reset_draft_fixture(description):
+            # Reset only this disposable fixture between independent scenarios.
+            # The product's restored-edits notice no longer discards documents.
             size = window_size()
             close(editor)
             wait(lambda: not windows("Captures Screenshot Editor"), f"{description}: editor closes")
             assert draft.exists(), f"{description}: closing keeps the autosaved draft"
-            window = reopen(keep_banner=True)
-            discard_restored(window)
-            wait(lambda: not draft.exists(), description)
+            shutil.rmtree(draft.parent)
+            window = reopen()
             run("xdotool", "windowsize", "--sync", window, *map(str, size), "sleep", ".3")
             return window
 
@@ -1177,6 +1176,53 @@ def main():
             if expected is not None:
                 assert actual == bytes(expected), (x, y, actual, expected)
             return actual
+
+        if args.restored_notice_only:
+            canvas_field("width", 510)
+            save(510, 360, 0, 0)
+            close(editor)
+            wait(lambda: not windows("Captures Screenshot Editor"), "edited editor closes")
+            saved_draft = draft_bytes()
+            assert saved_draft is not None
+            editor = reopen(keep_banner=True)
+            recording = spawn("restored-notice-recording", ["ffmpeg", "-y", "-loglevel", "error",
+                "-f", "x11grab", "-framerate", "20", "-video_size", "1400x1200",
+                "-i", env["DISPLAY"], "-c:v", "libx264", "-preset", "veryfast",
+                "-crf", "23", "-pix_fmt", "yuv420p", str(output / "restored-notice.mp4")])
+            time.sleep(1)
+            shot(editor, "restored-notice")
+            # The former second-action area is inert, not a hidden destructive button.
+            width = editor_width()
+            for x, y in [(width - 190, 20), (width - 150, 20), (width - 110, 20)]:
+                run("xdotool", "mousemove", "--sync", "--window", editor, str(x), str(y), "sleep", ".2")
+            click(editor, width - 110, 20)
+            assert draft_bytes() == saved_draft, "the notice must not discard restored edits"
+            for x, y in [(width - 80, 20), (width - 42, 20), (width - 90, 66),
+                         (width - 180, 66), (width - 80, 20), (width - 42, 20)]:
+                run("xdotool", "mousemove", "--sync", "--window", editor, str(x), str(y), "sleep", ".2")
+            click(editor, width - DRAFT_DISMISS_RIGHT, 20)
+            shot(editor, "restored-notice-dismissed")
+            assert draft_bytes() == saved_draft and saved(510, 360, 0, 0)
+            time.sleep(1)
+            recording.send_signal(signal.SIGINT)
+            recording.wait(timeout=10)
+            # FFmpeg returns 255 when it finalizes a recording after SIGINT.
+            assert recording.returncode in (0, 255)
+            close(editor)
+            wait(lambda: not windows("Captures Screenshot Editor"), "dismissed editor closes")
+            editor = reopen(keep_banner=True)
+            assert draft_bytes() == saved_draft and saved(510, 360, 0, 0)
+            assert (artifact / "capture.png").read_bytes() == original
+            close(root)
+            wait(lambda: app.poll() is not None, "restored notice fixture quits")
+            assert app.returncode == 0
+            (output / "result.json").write_text(json.dumps({
+                "passed": True, "appearance": args.appearance,
+                "checks": ["former-discard-area-inert", "dismiss-preserves-draft-bytes",
+                           "dismissed-edits-survive-reopen", "original-unchanged"],
+            }, indent=2) + "\n")
+            print("PASS restored notice: Dismiss preserves document, draft and reopened edits")
+            return
 
         if args.clipboard_only:
             resize_editor(1100, 800)
@@ -2632,7 +2678,7 @@ def main():
                 ("curve", (380, 290), (380, 250), [(330, 270, (255, 59, 92))],
                  [(330, 270, (40, 110, 166))]),
             ]:
-                editor = discard_draft(f"fresh {name} cancellation")
+                editor = reset_draft_fixture(f"fresh {name} cancellation")
                 resize_editor(1200, 701)
                 draw_tool("line" if name == "curve" else "rectangle")
                 if name == "curve":
@@ -4541,7 +4587,7 @@ def main():
         fixture_pixel("freehand-reopened", 141, 254, (255, 59, 92))
         assert layers()[1]["id"] == curve["id"] and layers()[1]["points"] == curve["points"]
         assert (artifact / "capture.png").read_bytes() == original
-        editor = discard_draft("discard freehand edits")
+        editor = reset_draft_fixture("reset freehand fixture")
 
         resize_editor(942, 701)
         toolbar_click("draw")
@@ -4597,7 +4643,7 @@ def main():
         fixture_pixel("open-shape-reopened", 435, 255, (255, 59, 92))
         assert layers()[-1]["id"] == arrow["id"]
         assert (artifact / "capture.png").read_bytes() == original
-        editor = discard_draft("discard open-shape edits")
+        editor = reset_draft_fixture("reset open-shape fixture")
 
         # Leave room below the annotation form for rotation-snap controls, and
         # above it for the Layers section, so the bottom-scrolled form fits in
@@ -4716,7 +4762,7 @@ def main():
         fixture_pixel("annotation-reopened", 279, 310, (212, 132, 60), tolerance=1)
         assert layers()[-1]["style"] == styled["style"]
         assert (artifact / "capture.png").read_bytes() == original
-        editor = discard_draft("discard annotation edits")
+        editor = reset_draft_fixture("reset annotation fixture")
         resize_editor(1000, 701)
 
         # These synthetic hex colors are sRGB. Keep the fixture untagged rather
@@ -4744,8 +4790,7 @@ def main():
         # Each later file stacks below the previous import.
         assert batch_layers[2]["y"] >= batch_layers[1]["y"] + batch_layers[1]["height"]
         shot(editor, "import-multi-select")
-        # Drafts autosave: discard through the restored-draft notice (#852).
-        editor = discard_draft("discard multi-select import")
+        editor = reset_draft_fixture("reset multi-select fixture")
         chooser.selected = imported_path
         toolbar_click("import")
         wait(lambda: chooser.pending, "image file picker opened")
@@ -4898,8 +4943,8 @@ def main():
         assert layers()[-1]["id"] == imported_id
         assert math.isclose(layers()[-1]["rotation"], math.pi / 6, abs_tol=1e-12)
         assert saved(640, 440, 0, 0)
-        # Discard returns to the original capture, without deleting exports or source data.
-        editor = discard_draft("discard imported draft")
+        # Reset this fixture without deleting exports or source data.
+        editor = reset_draft_fixture("reset imported fixture")
         chooser.selected = artifact / "capture.png"
         toolbar_click("import")
         wait(lambda: chooser.pending, "picker before close")
@@ -5110,7 +5155,7 @@ def main():
         shot(editor, "layers-empty")
         toolbar_click("undo")
         save_layers(lambda values: [value["id"] for value in values] == [copy_id], "undo empty document")
-        editor = discard_draft("discard layer edits")
+        editor = reset_draft_fixture("reset layer fixture")
         toolbar_click("geometry")  # Geometry has an independent scroll position.
 
         # Odd height keeps the centered 1:1 document origin pixel-aligned.
@@ -5171,7 +5216,7 @@ def main():
         assert saved(640, expected_height, 0, 0)
         shot(editor, "shape-outside-expanded")
         assert (artifact / "capture.png").read_bytes() == original
-        editor = discard_draft("discard shape edits")
+        editor = reset_draft_fixture("reset shape fixture")
         toolbar_click("geometry")  # The Crop tool starts a crop selection.
 
         drag((638, 359), (278, 119))  # Reverse drag: 40,30 with size 360x240.
@@ -5400,9 +5445,11 @@ def main():
         wait(lambda: saved(510, 300, -40, -30), "closing flushes the latest edit")
         editor = reopen(keep_banner=True)
         shot(editor, "editor-restored-draft-notice")
-        discard_restored(editor)
-        wait(lambda: not draft.exists(), "restored-draft Discard removes the saved draft")
-        shot(editor, "editor-discarded")
+        restored_draft = draft_bytes()
+        click(editor, editor_width() - DRAFT_DISMISS_RIGHT, 20)
+        assert draft_bytes() == restored_draft and saved(510, 300, -40, -30)
+        shot(editor, "editor-notice-dismissed")
+        editor = reset_draft_fixture("fresh autosave failure fixture")
 
         # Force a genuine filesystem failure without replacing a user's data.
         drafts = output / "editor-drafts"
@@ -5447,7 +5494,7 @@ def main():
                        "image-import-owned-draft-reopen", "image-picker-stale-close-result",
                        "layer-resize-guides-commit-undo-draft-reopen-pixels",
                        "layer-rotation-free-cancel-shift-snap", "layer-rotation-undo-draft-reopen-pixels",
-                       "close-flushes-draft", "restored-draft-discard", "autosave-failure-quiet",
+                       "close-flushes-draft", "restored-draft-dismiss-preserves-edits", "autosave-failure-quiet",
                        "quit-error-retry", "original-unchanged",
                        "layer-duplicate-rename-move", "layer-canvas-click-drag-escape",
                        "layer-canvas-snap-edge-pixels-undo-reopen",

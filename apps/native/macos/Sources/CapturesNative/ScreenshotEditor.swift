@@ -1464,7 +1464,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private let railTip = EditorPassthroughLabel(labelWithString: "")
     private let draftBanner = Surface()
     private let draftBannerLabel = NSTextField(labelWithString: EditorChrome.text("header", "draft_restored"))
-    private var draftDiscardButton: CaptureButton!
     private var draftDismissButton: CaptureButton!
     /// Shipping's "Restored unsaved edits" notice for a draft found at open.
     private(set) var draftRestored = false
@@ -2057,11 +2056,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let dismissWidth = titleWidth(draftDismissButton.title) + 2 * tokens.number("s-4")
         draftDismissButton.frame = NSRect(x: width - pad - dismissWidth, y: bannerButtonY,
                                           width: dismissWidth, height: tokens.number("h-sm"))
-        let discardWidth = titleWidth(draftDiscardButton.title) + 2 * tokens.number("s-4")
-        draftDiscardButton.frame = NSRect(x: draftDismissButton.frame.minX - tokens.number("s-3") - discardWidth,
-                                          y: bannerButtonY, width: discardWidth, height: tokens.number("h-sm"))
         draftBannerLabel.frame = NSRect(x: pad, y: (bannerHeight - 17) / 2,
-                                        width: max(0, draftDiscardButton.frame.minX - 2 * pad), height: 17)
+                                        width: max(0, draftDismissButton.frame.minX - 2 * pad), height: 17)
 
         let height = EditorChrome.metric("header_height")
         headerBar.frame = NSRect(x: 0, y: bannerHeight, width: width, height: height)
@@ -2576,9 +2572,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         draftBannerLabel.font = .systemFont(ofSize: tokens.number("text-sm"), weight: .medium)
         draftBannerLabel.lineBreakMode = .byTruncatingTail
         draftBanner.addSubview(draftBannerLabel)
-        draftDiscardButton = button(EditorChrome.text("header", "draft_discard"), frame: .zero,
-                                    parent: draftBanner) { [weak self] in self?.discardRestoredDraft() }
-        draftDiscardButton.textSize = tokens.number("text-sm")
         draftDismissButton = button(EditorChrome.text("header", "draft_dismiss"), frame: .zero,
                                     parent: draftBanner) { [weak self] in
             self?.draftRestored = false; self?.layoutEditor()
@@ -2761,14 +2754,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private func redoDocument() {
         guard state.snapshot?.canRedo == true, !state.busy, inlineTextInput == nil else { return }
         command(["operation": "redo"], message: "Redoing…")
-    }
-
-    /// Shipping's banner Discard resets immediately, without confirmation.
-    private func discardRestoredDraft() {
-        guard state.snapshot != nil, !state.busy, inlineTextInput == nil else { return }
-        draftRestored = false
-        layoutEditor()
-        discardEdits()
     }
 
     /// Shipping rail tip: fixed glass beside the button, shown at once on hover
@@ -6539,11 +6524,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 message: "Changing canvas background…")
     }
 
-    private func discardEdits() {
-        autosaveWork?.cancel(); autosaveWork = nil
-        command(["operation": "discard_draft"], message: "Discarding edits…", resetCrop: true)
-    }
-
     /// Restart shipping's autosave timer after an accepted change.
     private func scheduleAutosave(_ snapshot: NativeEditorSnapshot) {
         autosaveSerial += 1
@@ -6724,7 +6704,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
         undoButton?.isEnabled = ready && state.snapshot?.canUndo == true
         redoButton?.isEnabled = ready && state.snapshot?.canRedo == true
-        draftDiscardButton?.isEnabled = ready
         addImagesButton?.isEnabled = acceptsImageImports
         addLayerButton?.isEnabled = acceptsImageImports
         sectionControl?.isEnabled = ready
@@ -7086,7 +7065,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         layerTable?.reloadData()
         let controls: [CaptureButton?] = [trimButton, backgroundButton, undoButton, redoButton, fitButton,
                                           zoomOutButton, zoomInButton, addImagesButton,
-                                          recenterButton, draftDiscardButton, draftDismissButton, addLayerButton]
+                                          recenterButton, draftDismissButton, addLayerButton]
         for control in controls.compactMap({ $0 }) { control.tokens = tokens; control.needsDisplay = true }
     }
 
