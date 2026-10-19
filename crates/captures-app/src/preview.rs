@@ -249,6 +249,10 @@ impl ThumbnailVisibility {
         true
     }
 
+    pub fn is_waiting_for_artifact(&self, artifact_id: &str) -> bool {
+        self.pending_artifact_id.as_deref() == Some(artifact_id)
+    }
+
     pub fn restore_capture(&mut self, capture_generation: u64) -> bool {
         if self.suppressed_capture_generation != Some(capture_generation) {
             return false;
@@ -1558,6 +1562,26 @@ mod tests {
         assert!(visibility.is_suppressed());
         assert!(visibility.mark_artifact_ready("second"));
         assert!(!visibility.is_suppressed());
+    }
+
+    #[test]
+    fn only_the_current_artifact_counts_as_waiting() {
+        let mut visibility = ThumbnailVisibility::default();
+
+        let first = visibility
+            .begin_capture()
+            .expect("first capture should start");
+        assert!(!visibility.is_waiting_for_artifact("first"));
+        assert!(visibility.wait_for_artifact(first, "first".to_owned()));
+        assert!(visibility.is_waiting_for_artifact("first"));
+
+        let second = visibility
+            .begin_capture()
+            .expect("second capture should start");
+        assert!(!visibility.is_waiting_for_artifact("first"));
+        assert!(visibility.wait_for_artifact(second, "second".to_owned()));
+        assert!(visibility.mark_artifact_ready("second"));
+        assert!(!visibility.is_waiting_for_artifact("second"));
     }
 
     #[test]

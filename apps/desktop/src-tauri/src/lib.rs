@@ -3769,7 +3769,9 @@ async fn finish_capture(
             .thumbnail_visibility
             .lock()
             .wait_for_artifact(thumbnail_capture_generation, artifact.id.clone());
-        if !waiting {
+        if waiting {
+            watch_thumbnail_ready(app, artifact.id.clone());
+        } else {
             eprintln!(
                 "capture preview {} arrived after its visibility generation was replaced",
                 artifact.id
@@ -6804,6 +6806,45 @@ fn begin_thumbnail_capture(state: &Arc<AppState>) -> Result<u64, AppError> {
         .lock()
         .begin_capture()
         .ok_or(AppError::CaptureInProgress)
+}
+
+/// The stack stays hidden until the thumbnail WebView reports the new card's
+/// image loaded. If that WebView stopped responding (for example, a WebView2
+/// renderer lost across sleep or a runtime update), every later preview would
+/// stay hidden until Captures restarts. Reload it once per stuck capture; the
+/// fresh page loads the cards and reports ready through the normal path.
+const THUMBNAIL_READY_TIMEOUT: Duration = Duration::from_secs(3);
+
+fn watch_thumbnail_ready(app: &AppHandle, artifact_id: String) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(THUMBNAIL_READY_TIMEOUT).await;
+        let state = app.state::<Arc<AppState>>().inner().clone();
+        {
+            let mut visibility = state.thumbnail_visibility.lock();
+            if !visibility.is_waiting_for_artifact(&artifact_id) {
+                return;
+            }
+            // A reloaded page starts expanded; keep the backend in step.
+            visibility.expand();
+        }
+        eprintln!(
+            "capture preview {artifact_id} was not ready after {THUMBNAIL_READY_TIMEOUT:?}; reloading the mini-preview window"
+        );
+        recover_thumbnail_window(&app);
+    });
+}
+
+fn recover_thumbnail_window(app: &AppHandle) {
+    let Some(window) = app.get_webview_window("thumbnail") else {
+        if let Err(error) = create_thumbnail_window(app, false) {
+            eprintln!("failed to recreate capture thumbnail stack: {error}");
+        }
+        return;
+    };
+    if let Err(error) = window.reload() {
+        eprintln!("failed to reload capture thumbnail stack: {error}");
+    }
 }
 
 #[tauri::command]
