@@ -66,10 +66,8 @@ pub mod header {
     pub const ZOOM_PRESETS: [f64; 3] = [50., 100., 200.];
     pub const ADD_IMAGES: &str = "Add images";
     pub const RECENTER: &str = "Recenter";
-    /// Drafts autosave (`editor_session::DraftAutosave`), as in shipping;
-    /// only the restored-draft notice offers Discard.
+    /// Dismissing the restored-draft notice preserves the autosaved edits.
     pub const DRAFT_RESTORED: &str = "Restored unsaved edits from last time.";
-    pub const DRAFT_DISCARD: &str = "Discard";
     pub const DRAFT_DISMISS: &str = "Dismiss";
     pub const DRAFT_DISMISS_LABEL: &str = "Dismiss restored-edits notice";
 }

@@ -948,13 +948,6 @@ impl View {
         true
     }
 
-    /// The restored-draft notice's Discard: back to the original capture.
-    fn discard_draft(&mut self, tx: &Sender<Job>) {
-        self.draft_restored = false;
-        self.autosave.cancel();
-        self.submit(tx, Request::DiscardDraft);
-    }
-
     fn receive(&mut self, ctx: &egui::Context, result: Result<Presented, String>) {
         if self.closed {
             return;
@@ -2277,7 +2270,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
         .frame(egui::Frame::NONE.fill(tokens.color("surface-raised")))
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
-            chrome::show_banners(ui, tokens, view, tx);
+            chrome::show_banners(ui, tokens, view);
             chrome::show_header(ui, tokens, view, tx);
         });
     if view.section != previous_section {
@@ -7224,12 +7217,32 @@ mod tests {
         ] {
             find(&output, label);
         }
+        assert!(
+            output
+                .platform_output
+                .accesskit_update
+                .as_ref()
+                .unwrap()
+                .nodes
+                .iter()
+                .all(|(_, node)| node.label() != Some("Discard"))
+        );
+        let before =
+            serde_json::to_value(view.presented.as_ref().unwrap().document.as_ref()).unwrap();
+        let pixels = view.presented.as_ref().unwrap().pixels.clone();
         let dismiss = find(&output, "Dismiss restored-edits notice");
         click(&mut view, dismiss);
         assert!(
             !view.draft_restored && rx.try_recv().is_err(),
             "Dismiss only hides the notice"
         );
+        let restored = view.presented.as_ref().unwrap();
+        assert_eq!(
+            serde_json::to_value(restored.document.as_ref()).unwrap(),
+            before
+        );
+        assert_eq!(restored.pixels, pixels);
+        assert!(restored.has_draft);
 
         // Row quick actions target their own layer; the eye does not select it.
         let output = frame(&mut view, vec![]);
@@ -13099,14 +13112,6 @@ mod tests {
         let presented = view.presented.as_ref().unwrap();
         assert!(!presented.unsaved && presented.has_draft);
         assert!(view.autosave_rx.is_none() && view.autosave.deadline().is_none());
-        // Discarding the restored draft cancels a pending save.
-        view.autosave.edited(Instant::now());
-        view.discard_draft(&tx);
-        assert!(view.autosave.deadline().is_none());
-        assert!(matches!(
-            rx.try_recv(),
-            Ok(Job::Apply(Request::DiscardDraft))
-        ));
     }
 
     fn canvas_view(

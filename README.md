@@ -937,9 +937,9 @@ restores that tool's controls. Like shipping, the header holds the canvas W × H
 fields, Trim edges and the canvas background, then Undo/Redo (hidden at 1040 points
 and narrower), the zoom group and Add images. Like shipping, both hosts autosave
 the edit draft 700 ms after each change and flush it when the editor closes,
-without a save prompt. Reopening a
-draft shows a restored-edits notice with Discard in the native candidates; the
-shipping Tauri notice offers only Dismiss, which preserves edits. Recenter
+without a save prompt. Reopening a draft shows a restored-edits notice with only
+Dismiss in both native hosts and shipping Tauri; dismissing it preserves the
+restored document and saved edits. Recenter
 appears only while the canvas is panned mostly off screen.
 The zoom menu offers Fit, 50%, 100% and 200% and displays the current custom zoom.
 Both hosts also provide a logarithmic 5–800% zoom slider. It tracks the actual Fit

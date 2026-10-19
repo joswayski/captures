@@ -118,7 +118,7 @@ fn copy() -> Value {
             "zoom_presets": h::ZOOM_PRESETS,
             "add_images": h::ADD_IMAGES, "recenter": h::RECENTER,
             "draft_restored": h::DRAFT_RESTORED,
-            "draft_discard": h::DRAFT_DISCARD, "draft_dismiss": h::DRAFT_DISMISS,
+            "draft_dismiss": h::DRAFT_DISMISS,
             "draft_dismiss_label": h::DRAFT_DISMISS_LABEL,
         },
         "colors": {
@@ -442,7 +442,7 @@ mod tests {
         assert_eq!(result["layers"]["menu"], "Layer settings and actions");
         assert_eq!(result["metrics"]["compact_width"], 1040.);
         assert_eq!(result["metrics"]["draft_autosave_ms"], 700);
-        assert_eq!(result["header"]["draft_discard"], "Discard");
+        assert_eq!(result["header"]["draft_dismiss"], "Dismiss");
         assert!(result["header"].get("save_draft").is_none());
         let colors = &result["colors"];
         assert_eq!(colors["swatches"], json!(chrome::colors::SWATCHES));

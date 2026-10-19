@@ -161,7 +161,8 @@ privacy against disposable loopback servers. Physical input/AT acceptance remain
 A screenshot History card's Edit opens a worker-owned crop/canvas/draft editor. Like
 shipping, the draft autosaves in the background 700 ms after each change and closing
 flushes it without a prompt; the original capture and exports stay unchanged, and a
-restored draft's notice offers Discard. The shipping header also holds the canvas W × H fields, Trim edges,
+restored draft's notice offers only Dismiss, which preserves the document and saved
+edits. The shipping header also holds the canvas W × H fields, Trim edges,
 the canvas background, the zoom group and Add images; the rail chooses the inspector.
 The Crop tool selects on the preview, including reverse and outside-image
 drags. Free, 1:1, 4:3, 3:2 and 16:9 presets use shared Rust geometry; hold Shift

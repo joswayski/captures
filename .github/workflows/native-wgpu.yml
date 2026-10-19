@@ -624,6 +624,7 @@ jobs:
         if: matrix.suite == 'screenshot' && matrix.shard == 1
         run: |
           for appearance in "$APPEARANCE"; do
+            /usr/bin/python3 apps/native/x11_editor_smoke.py --restored-notice-only --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-restored-notice-$appearance"
             /usr/bin/python3 apps/native/x11_editor_smoke.py --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-editor-$appearance"
             /usr/bin/python3 apps/native/x11_editor_smoke.py --background-only --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-background-$appearance"
             /usr/bin/python3 apps/native/x11_editor_smoke.py --wand-only --appearance "$appearance" --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output "native-x11-wand-$appearance"

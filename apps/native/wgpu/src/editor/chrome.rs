@@ -91,12 +91,10 @@ pub(super) struct Header {
 
 /// Banners above the header row: the restored-draft notice. Errors use the
 /// export status line, as in shipping.
-pub(super) fn show_banners(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
+pub(super) fn show_banners(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View) {
     if view.draft_restored {
-        let mut discard = false;
-        // Actions lay out right to left: add them in reverse reading order.
         banner(ui, tokens, "caution", copy::DRAFT_RESTORED, |ui| {
-            let dismiss = banner_button(ui, tokens, copy::DRAFT_DISMISS, true, false);
+            let dismiss = banner_button(ui, tokens, copy::DRAFT_DISMISS);
             accessible(
                 &dismiss,
                 egui::WidgetType::Button,
@@ -106,13 +104,7 @@ pub(super) fn show_banners(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, 
             if dismiss.clicked() {
                 view.draft_restored = false;
             }
-            discard =
-                banner_button(ui, tokens, copy::DRAFT_DISCARD, edit_enabled(view), true).clicked();
         });
-        if discard {
-            // Shipping discards the restored draft immediately.
-            view.discard_draft(tx);
-        }
     }
 }
 
@@ -177,15 +169,8 @@ fn banner(
     );
 }
 
-/// Banner action: a small control button (`min-height: var(--h-sm)`), or a
-/// transparent one for dismissive actions.
-fn banner_button(
-    ui: &mut egui::Ui,
-    tokens: &Tokens,
-    label: &str,
-    enabled: bool,
-    filled: bool,
-) -> egui::Response {
+/// Transparent dismiss action (`min-height: var(--h-sm)`).
+fn banner_button(ui: &mut egui::Ui, tokens: &Tokens, label: &str) -> egui::Response {
     let text = galley(
         ui,
         label,
@@ -197,40 +182,19 @@ fn banner_button(
         tokens.number("h-sm"),
     );
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    let response = if enabled {
-        response
-    } else {
-        ui.interact(rect, response.id, Sense::hover())
-    };
-    let hovered = enabled && response.hovered();
     let radius = tokens.number("r-md");
-    if filled {
-        ui.painter().rect(
-            rect,
-            radius,
-            tokens.color(if hovered { "control-hover" } else { "control" }),
-            Stroke::new(1., tokens.color("control-border")),
-            StrokeKind::Inside,
-        );
-    } else if hovered {
+    if response.hovered() {
         ui.painter()
             .rect_filled(rect, radius, tokens.color("surface-hover"));
     }
-    let ink = if filled {
-        tokens.color("text")
-    } else {
-        ui.visuals()
-            .override_text_color
-            .unwrap_or(tokens.color("text"))
-    };
+    let ink = ui
+        .visuals()
+        .override_text_color
+        .unwrap_or(tokens.color("text"));
     ui.painter()
-        .galley(rect.center() - text.size() / 2., text, dim(ink, enabled));
+        .galley(rect.center() - text.size() / 2., text, ink);
     accessible(&response, egui::WidgetType::Button, false, label);
-    if enabled {
-        response
-    } else {
-        response.on_hover_cursor(egui::CursorIcon::Default)
-    }
+    response
 }
 
 /// The 52 px header row: the Canvas toolbar on the left; Undo, Redo, the zoom
