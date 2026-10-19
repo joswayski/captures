@@ -2529,6 +2529,86 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: originalURL), original)
     }
 
+    func testRepeatedImageImportsQueueOwnedClipboardPickerAndDropBatches() throws {
+        _ = NSApplication.shared
+        let fixture = try makeHistoryFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let originalURL = fixture.history.appendingPathComponent(fixture.id).appendingPathComponent("capture.png")
+        let original = try Data(contentsOf: originalURL)
+        let first = fixture.root.appendingPathComponent("First.tiff")
+        let second = fixture.root.appendingPathComponent("Second.tiff")
+        let corrupt = fixture.root.appendingPathComponent("Corrupt.png")
+        let tall = fixture.root.appendingPathComponent("Tall.tiff")
+        let colorSpace = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
+        try writeTiff(url: first, width: 3, height: 2,
+            bytes: Array(repeating: [31, 70, 133, 255], count: 6).flatMap { $0 },
+            colorSpace: colorSpace, bitsPerPixel: 32, alpha: .last)
+        try writeTiff(url: second, width: 1, height: 4,
+            bytes: Array(repeating: [219, 19, 53, 255], count: 4).flatMap { $0 },
+            colorSpace: colorSpace, bitsPerPixel: 32, alpha: .last)
+        try writeTiff(url: tall, width: 1, height: 16_384,
+            bytes: Array(repeating: [53, 127, 19, 255], count: 16_384).flatMap { $0 },
+            colorSpace: colorSpace, bitsPerPixel: 32, alpha: .last)
+        try Data("not an image".utf8).write(to: corrupt)
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("es.captures.tests.\(UUID())"))
+        defer { pasteboard.releaseGlobally() }
+        let started = DispatchSemaphore(value: 0)
+        let resume = DispatchSemaphore(value: 0)
+        defer { resume.signal() }
+        let worker = EditorWorker()
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!,
+            worker: worker,
+            imagePicker: { _, completion in completion([first]) },
+            imageDecoder: { url in
+                if url == second {
+                    started.signal()
+                    guard resume.wait(timeout: .now() + 10) == .success else {
+                        throw AppBridgeError.backend("Test decoder was not released")
+                    }
+                }
+                return try EditorImageDecoder.decode(url)
+            }, layerPasteboard: pasteboard)
+        defer { controller.window.orderOut(nil); worker.close(); EditorWorker.flush() }
+        controller.present(artifact: artifact(id: fixture.id), historyRoot: fixture.history.path)
+        waitUntil { controller.state.snapshot != nil && !controller.state.busy }
+        func shortcut(_ key: String, _ code: UInt16) throws {
+            XCTAssertTrue(controller.window.performKeyEquivalent(with: try keyEvent(
+                window: controller.window, keyCode: code, characters: key, modifiers: .command)))
+        }
+        // Hold the first batch mid-decode. All later input must be accepted
+        // without cancelling it, losing a batch or rereading the clipboard.
+        XCTAssertTrue(controller.handleFileDrop(.drop, urls: [first, second], at: .zero))
+        XCTAssertEqual(started.wait(timeout: .now() + 2), .success)
+        XCTAssertTrue(controller.handleFileDrop(.drop, urls: [first, corrupt], at: .zero))
+        XCTAssertTrue(controller.handleFileDrop(.drop, urls: [tall], at: .zero))
+        try showLayers(in: controller.root)
+        let add = try button("Add image layer", in: controller.root)
+        XCTAssertTrue(add.isEnabled)
+        add.performClick(nil)
+        // Picker completion uses the main queue; drain it before the next paste.
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        pasteboard.clearContents(); XCTAssertTrue(pasteboard.setData(original, forType: .png))
+        try shortcut("v", 9)
+        pasteboard.clearContents(); XCTAssertTrue(pasteboard.setString("replacement", forType: .string))
+        resume.signal()
+        waitUntil(timeout: 5) { controller.state.snapshot?.layers.count == 5 && !controller.state.busy }
+        let imported = try XCTUnwrap(controller.state.snapshot)
+        XCTAssertEqual(imported.layers.prefix(4).map(\.name), ["Clipboard image", "First", "Second", "First"])
+        XCTAssertEqual(imported.width, 7); XCTAssertEqual(imported.height, 14)
+        let frame = try canvasPreviewImage(in: controller.root)
+        XCTAssertEqual(rgba(frame, x: 2, y: 3), [31, 70, 133, 255])
+        XCTAssertEqual(rgba(frame, x: 3, y: 8), [219, 19, 53, 255])
+        XCTAssertEqual(rgba(frame, x: 2, y: 9), [31, 70, 133, 255])
+        XCTAssertEqual(rgba(frame, x: 2, y: 12), [62, 71, 19, 255])
+        // Decode and render failures contribute neither pixels nor Undo steps.
+        for count in [4, 3, 1] {
+            try shortcut("z", 6)
+            waitUntil { controller.state.snapshot?.layers.count == count && !controller.state.busy }
+        }
+        XCTAssertFalse(controller.state.snapshot?.canUndo == true)
+        XCTAssertEqual(try Data(contentsOf: originalURL), original)
+    }
+
     func testRealClipboardBatchIsAtomicAcrossDecodeFailureUndoAndOwnedDraftReopen() throws {
         _ = NSApplication.shared
         let fixture = try makeHistoryFixture()
@@ -2954,10 +3034,10 @@ final class ScreenshotEditorTests: XCTestCase {
         let late = ScreenshotEditorController(
             tokens: Tokens.variants["dark-mustard"]!, worker: lateWorker,
             imagePicker: { _, completion in lateCompletion = completion },
-            imageDecoder: { _ in
+            imageDecoder: { url in
                 lateStarted.signal(); _ = allowLate.wait(timeout: .now() + 2)
                 return EditorDecodedImage(data: Data(repeating: 0xff, count: 4),
-                                          width: 1, height: 1, bytesPerRow: 4, name: "Late")
+                                          width: 1, height: 1, bytesPerRow: 4, name: url.lastPathComponent)
             })
         defer { late.window.orderOut(nil) }
         late.present(artifact: artifact(id: "late"), historyRoot: "/native/History")
@@ -2966,10 +3046,19 @@ final class ScreenshotEditorTests: XCTestCase {
         lateCompletion?([URL(fileURLWithPath: "/tmp/late.png")])
         RunLoop.current.run(until: Date().addingTimeInterval(0.05))
         XCTAssertEqual(lateStarted.wait(timeout: .now() + 2), .success)
+        XCTAssertTrue(late.handleFileDrop(.drop, urls: [URL(fileURLWithPath: "/tmp/queued.png")], at: .zero))
         XCTAssertFalse(late.windowShouldClose(late.window))
         allowLate.signal()
         RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         XCTAssertTrue(lateWorker.imports.isEmpty, "a closed editor rejects late decoded pixels")
+        late.present(artifact: artifact(id: "late"), historyRoot: "/native/History")
+        lateCompletion?([URL(fileURLWithPath: "/tmp/stale-picker.png")])
+        allowLate.signal()
+        XCTAssertTrue(late.handleFileDrop(.drop, urls: [URL(fileURLWithPath: "/tmp/new.png")], at: .zero))
+        waitUntil { lateWorker.imports.count == 1 && !late.state.busy }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        XCTAssertEqual(lateWorker.imports.count, 1, "reopening cannot revive queued imports or an old picker")
+        XCTAssertEqual(lateWorker.imports.first?.image.name, "new.png")
     }
 
     func testLayerSnapshotOrderAndCommandsUseStableIDs() throws {
