@@ -145,6 +145,15 @@ impl Dispatch<WlKeyboard, KeyboardData, WinitState> for WinitState {
                     key,
                     ElementState::Pressed,
                     false,
+                    |window_id, event| {
+                        retain_clipboard_paste(
+                            state.windows.borrow().get(&window_id),
+                            seat_state.modifiers,
+                            seat_state.data_device.as_ref(),
+                            seat_state.clipboard_offer_marker.as_ref(),
+                            event,
+                        );
+                    },
                 );
 
                 let delay = match keyboard_state.repeat_info {
@@ -197,6 +206,15 @@ impl Dispatch<WlKeyboard, KeyboardData, WinitState> for WinitState {
                             repeat_keycode,
                             ElementState::Pressed,
                             true,
+                            |window_id, event| {
+                                retain_clipboard_paste(
+                                    state.windows.borrow().get(&window_id),
+                                    seat_state.modifiers,
+                                    seat_state.data_device.as_ref(),
+                                    seat_state.clipboard_offer_marker.as_ref(),
+                                    event,
+                                );
+                            },
                         );
 
                         // NOTE: the gap could change dynamically while repeat is going.
@@ -217,6 +235,7 @@ impl Dispatch<WlKeyboard, KeyboardData, WinitState> for WinitState {
                     key,
                     ElementState::Released,
                     false,
+                    |_, _| {},
                 );
 
                 if keyboard_state.repeat_info != RepeatInfo::Disable
@@ -369,6 +388,7 @@ fn key_input(
     keycode: u32,
     state: ElementState,
     repeat: bool,
+    before_delivery: impl FnOnce(WindowId, &crate::event::KeyEvent),
 ) {
     let window_id = match *data.window_id.lock().unwrap() {
         Some(window_id) => window_id,
@@ -378,7 +398,26 @@ fn key_input(
     let device_id = crate::event::DeviceId(crate::platform_impl::DeviceId::Wayland(DeviceId));
     if let Some(mut key_context) = keyboard_state.xkb_context.key_context() {
         let event = key_context.process_key_event(keycode, state, repeat);
+        before_delivery(window_id, &event);
         let event = WindowEvent::KeyboardInput { device_id, event, is_synthetic: false };
         event_sink.push_window_event(event, window_id);
+    }
+}
+
+fn retain_clipboard_paste(
+    window: Option<&std::sync::Arc<Mutex<super::super::window::WindowState>>>,
+    modifiers: ModifiersState,
+    device: Option<&sctk::data_device_manager::data_device::DataDevice>,
+    marker: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    event: &crate::event::KeyEvent,
+) {
+    let Some(window) = window else { return };
+    let mut window = window.lock().unwrap();
+    if window.clipboard_paste_retention.is_some_and(|predicate| predicate(event, modifiers)) {
+        // Request both pipes now, before the protocol queue can replace this seat's
+        // selection. Even empty/error outcomes must stay aligned with input events.
+        window.clipboard_pastes.push_back(
+            super::super::outbound_drag::clipboard_offer(device, marker).map_err(str::to_owned),
+        );
     }
 }

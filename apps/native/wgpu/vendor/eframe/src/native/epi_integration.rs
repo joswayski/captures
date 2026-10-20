@@ -193,7 +193,8 @@ pub struct EpiIntegration {
     pending_full_output: egui::FullOutput,
 
     /// Per-window modifiers at native dispatch, before the next egui frame.
-    paste_modifiers: std::collections::HashMap<winit::window::WindowId, egui::Modifiers>,
+    paste_modifiers:
+        std::collections::HashMap<winit::window::WindowId, winit::keyboard::ModifiersState>,
 
     /// When set, it is time to close the native window.
     close: bool,
@@ -301,21 +302,7 @@ impl EpiIntegration {
 
         match event {
             WindowEvent::ModifiersChanged(value) => {
-                let value = value.state();
-                self.paste_modifiers.insert(
-                    window.id(),
-                    egui::Modifiers {
-                        alt: value.alt_key(),
-                        ctrl: value.control_key(),
-                        shift: value.shift_key(),
-                        mac_cmd: cfg!(target_os = "macos") && value.super_key(),
-                        command: if cfg!(target_os = "macos") {
-                            value.super_key()
-                        } else {
-                            value.control_key()
-                        },
-                    },
-                );
+                self.paste_modifiers.insert(window.id(), value.state());
             }
             WindowEvent::Focused(false) | WindowEvent::Destroyed => {
                 self.paste_modifiers.remove(&window.id());
@@ -338,9 +325,7 @@ impl EpiIntegration {
                 .get(&window.id())
                 .copied()
                 .unwrap_or_default();
-            if event.state == ElementState::Pressed
-                && modifiers.command
-                && matches!(&event.logical_key, winit::keyboard::Key::Character(key) if key.eq_ignore_ascii_case("v"))
+            if crate::is_paste_key(event, modifiers)
                 && !egui_winit.egui_input().events[start..].iter().any(|event| {
                     matches!(
                         event,
@@ -350,8 +335,19 @@ impl EpiIntegration {
                     )
                 })
             {
+                let modifiers = egui::Modifiers {
+                    alt: modifiers.alt_key(),
+                    ctrl: modifiers.control_key(),
+                    shift: modifiers.shift_key(),
+                    mac_cmd: cfg!(target_os = "macos") && modifiers.super_key(),
+                    command: if cfg!(target_os = "macos") {
+                        modifiers.super_key()
+                    } else {
+                        modifiers.control_key()
+                    },
+                };
                 egui_winit.egui_input_mut().events.push(egui::Event::Key {
-                    key: egui::Key::V,
+                    key: egui::Key::Paste,
                     physical_key: None,
                     pressed: true,
                     repeat: event.repeat,

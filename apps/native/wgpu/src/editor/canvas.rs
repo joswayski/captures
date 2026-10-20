@@ -19,13 +19,21 @@ use eframe::egui::{Color32, FontFamily, FontId, Stroke, StrokeKind, pos2, vec2};
 
 /// Queued dropped batches and the live hover state. Batches import one at a time
 /// through the worker, preserving the one-in-flight edit contract.
+pub(super) enum ImportSource {
+    Files(Vec<PathBuf>),
+    Clipboard {
+        result: Receiver<crate::editor_clipboard::Decoded>,
+        after_id: Option<String>,
+    },
+}
+
 #[derive(Default)]
 pub(super) struct DropState {
     pub hovering: bool,
     /// `input.time` when the current hover began: the drop guide's bloom,
     /// edge pulse and particles run from here.
     pub since: Option<f64>,
-    pub queue: std::collections::VecDeque<(Vec<PathBuf>, Option<Point>)>,
+    pub queue: std::collections::VecDeque<(ImportSource, Option<Point>)>,
 }
 
 fn accent(tokens: &Tokens, alpha: f32) -> Color32 {
@@ -126,7 +134,9 @@ pub(super) fn receive_drops(ctx: &egui::Context, view: &mut View, preview: Optio
             view.error = Some(DROP_UNSUPPORTED.into());
             continue;
         }
-        view.drop.queue.push_back((paths, point));
+        view.drop
+            .queue
+            .push_back((ImportSource::Files(paths), point));
     }
 }
 
@@ -139,17 +149,33 @@ pub(super) fn drain_drops(view: &mut View, tx: &Sender<Job>) -> bool {
     if view.pending || view.inline.is_some() {
         return false;
     }
-    let Some((paths, point)) = view.drop.queue.pop_front() else {
+    let Some((source, _)) = view.drop.queue.front() else {
         return false;
     };
-    view.submit_job(
-        tx,
-        Job::Import {
+    let images = if let ImportSource::Clipboard { result, .. } = source {
+        match result.try_recv() {
+            Ok(images) => Some(images),
+            Err(mpsc::TryRecvError::Empty) => return false,
+            Err(mpsc::TryRecvError::Disconnected) => Some(Err(
+                "Clipboard image acquisition stopped. Paste again to retry.".into(),
+            )),
+        }
+    } else {
+        None
+    };
+    let (source, point) = view.drop.queue.pop_front().unwrap();
+    let job = match source {
+        ImportSource::Files(paths) => Job::Import {
             paths,
             selected_id: view.selected_layer.clone(),
             point,
         },
-    )
+        ImportSource::Clipboard { after_id, .. } => Job::PasteImages {
+            images: images.unwrap(),
+            after_id,
+        },
+    };
+    view.submit_job(tx, job)
 }
 
 /// The live guide for the current pointer sample.

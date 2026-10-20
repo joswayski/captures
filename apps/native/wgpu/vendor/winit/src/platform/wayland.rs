@@ -39,7 +39,13 @@ pub struct ClipboardOffer {
     pub png: Option<std::os::fd::OwnedFd>,
     /// Advertised local-file transfer, to be read with bounds off the event loop.
     pub uri_list: Option<std::os::fd::OwnedFd>,
+    /// Exact private layer identity advertised by this offer on its data device.
+    /// This retained token may later become false; it never authorizes reading a newer selection.
+    pub marker: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
+
+/// The host's clipboard shortcut predicate, shared with its input translator.
+pub type ClipboardPastePredicate = fn(&crate::event::KeyEvent, crate::keyboard::ModifiersState) -> bool;
 
 /// Additional methods on [`ActiveEventLoop`] that are specific to Wayland.
 pub trait ActiveEventLoopExtWayland {
@@ -154,9 +160,36 @@ pub trait WindowExtWayland {
     /// Drain complete drops instead of grouping individual `DroppedFile` events.
     /// Returns None on X11. Consume on `DroppedFile`; all per-file events still fire.
     fn take_file_drop_batches(&self) -> Option<Vec<FileDropBatch>>;
+
+    /// Opt into input-time clipboard transfers for host-recognized presses and repeats.
+    /// Disabled by default; disabling drops all unconsumed transfers. No-op on X11.
+    fn set_clipboard_paste_retention(&self, predicate: Option<ClipboardPastePredicate>);
+
+    /// Pop one input-time occurrence when handling its matching native Ctrl+V event.
+    /// Empty offers and errors also occupy one occurrence. None means no retained
+    /// occurrence (including on X11). The caller must bound pipe reads off the event loop.
+    fn take_clipboard_paste(&self) -> Option<Result<ClipboardOffer, String>>;
 }
 
 impl WindowExtWayland for Window {
+    fn set_clipboard_paste_retention(&self, predicate: Option<ClipboardPastePredicate>) {
+        match &self.window {
+            #[cfg(x11_platform)]
+            crate::platform_impl::Window::X(_) => {},
+            #[cfg(wayland_platform)]
+            crate::platform_impl::Window::Wayland(window) => window.set_clipboard_paste_retention(predicate),
+        }
+    }
+
+    fn take_clipboard_paste(&self) -> Option<Result<ClipboardOffer, String>> {
+        match &self.window {
+            #[cfg(x11_platform)]
+            crate::platform_impl::Window::X(_) => None,
+            #[cfg(wayland_platform)]
+            crate::platform_impl::Window::Wayland(window) => window.take_clipboard_paste(),
+        }
+    }
+
     #[inline]
     fn xdg_toplevel(&self) -> Option<NonNull<c_void>> {
         #[allow(clippy::single_match)]

@@ -897,8 +897,12 @@ Both native hosts retain accepted copied-layer pastes while an edit is running:
 each keeps its copied contents and insertion target, even if another Copy or an
 external clipboard replacement occurs before it runs. Each successful paste has
 its own Undo step; closing or resetting the editor cancels waiting pastes.
-Windows/Linux external-image paste retention while busy remains incomplete;
-the copied-layer queue does not change when external clipboard data is acquired.
+Windows/Linux also retain external-image Paste acquisitions at native input,
+before a busy editor can defer mutation. Decoding starts independently; accepted
+external batches keep their insertion target and queue alongside file imports,
+even when a later acquisition finishes first. Each successful batch has its own
+Undo, and close/reset cancels waiting imports. Wayland captures the key event's
+seat offer before later selection events; X11 starts watched transfers immediately.
 Outside text fields, an empty or text/HTML-only clipboard is ignored; unreadable
 image data still reports an error without changing the document.
 Windows acquires file paths and fallback PNG/DIBV5 bytes under one clipboard lock,

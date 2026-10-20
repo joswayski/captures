@@ -4,6 +4,187 @@
 use captures_app::editor_render::{MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS};
 use image::RgbaImage;
 
+pub type Decoded = Result<Vec<(String, RgbaImage)>, String>;
+
+/// Start consuming transports immediately, independently of the editor's busy
+/// mutation worker. A queue holds the result, never a request to read a later OS selection.
+pub fn decode_async(
+    snapshot: Result<Snapshot, String>,
+    ctx: &eframe::egui::Context,
+    viewport: eframe::egui::ViewportId,
+) -> std::sync::mpsc::Receiver<Decoded> {
+    let (send, receive) = std::sync::mpsc::channel();
+    let ctx = ctx.clone();
+    std::thread::spawn(move || {
+        let _ = send.send(snapshot.and_then(Snapshot::decode));
+        ctx.request_repaint_of(viewport);
+    });
+    receive
+}
+
+/// Menu activation occurs on the native event loop. Enqueue the Wayland offer
+/// request before returning to it, rather than waiting for a worker to do so.
+pub fn capture_menu(ctx: &eframe::egui::Context) -> std::sync::mpsc::Receiver<Decoded> {
+    let viewport = ctx.viewport_id();
+    #[cfg(target_os = "linux")]
+    if WAYLAND.load(std::sync::atomic::Ordering::Acquire) {
+        let (reply, receive) = std::sync::mpsc::sync_channel(1);
+        OFFER_READS.lock().unwrap().push(reply);
+        let (send, result) = std::sync::mpsc::channel();
+        let ctx = ctx.clone();
+        ctx.request_repaint_of(eframe::egui::ViewportId::ROOT);
+        std::thread::spawn(move || {
+            let decoded = receive
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .map_err(|_| "Clipboard offer read did not reach the native event loop.".to_owned())
+                .and_then(|offer| offer)
+                .and_then(|offer| Snapshot::from_wayland(offer).decode());
+            let _ = send.send(decoded);
+            ctx.request_repaint_of(viewport);
+        });
+        return result;
+    }
+    decode_async(capture_native(), ctx, viewport)
+}
+
+/// An owned, single-use clipboard acquisition. No external file is opened until decode.
+pub struct Snapshot {
+    #[cfg(target_os = "windows")]
+    files: Vec<std::path::PathBuf>,
+    #[cfg(target_os = "windows")]
+    bitmap: Result<Option<(u32, Vec<u8>)>, String>,
+    #[cfg(target_os = "linux")]
+    source: LinuxSource,
+}
+
+#[cfg(target_os = "linux")]
+enum LinuxSource {
+    X11(Box<x11_marker::Offer>),
+    Wayland(winit::platform::wayland::ClipboardOffer),
+}
+
+impl Snapshot {
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    pub fn decode(self) -> Decoded {
+        Err("Retained clipboard acquisition uses the AppKit host on macOS.".into())
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn from_wayland(offer: winit::platform::wayland::ClipboardOffer) -> Self {
+        Self {
+            source: LinuxSource::Wayland(offer),
+        }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    pub fn decode(self) -> Result<Vec<(String, RgbaImage)>, String> {
+        #[cfg(target_os = "windows")]
+        let (files, bitmap) = (self.files, self.bitmap);
+        #[cfg(target_os = "linux")]
+        let (files, png) = match self.source {
+            LinuxSource::X11(offer) => offer.read().map_err(|error| error.to_string())?,
+            LinuxSource::Wayland(offer) => {
+                let png = offer.png.map_or(LinuxPng::Absent, LinuxPng::Wayland);
+                let bytes = match offer.uri_list {
+                    Some(fd) => read_transfer(fd, 1024 * 1024, "Clipboard file list")?,
+                    None => Vec::new(),
+                };
+                (parse_files(&bytes)?, png)
+            }
+        };
+        let files: Vec<_> = files
+            .into_iter()
+            .filter(|path| {
+                path.is_absolute()
+                    && path.is_file()
+                    && captures_app::editor_session::is_supported_image_path(path)
+            })
+            .collect();
+        if !files.is_empty() {
+            return captures_app::editor_image_decode::decode_imports(files);
+        }
+        #[cfg(target_os = "windows")]
+        let bytes = {
+            let Some((format, bytes)) = bitmap? else {
+                return Ok(Vec::new());
+            };
+            if format == clipboard_win::formats::CF_DIBV5 {
+                return captures_app::editor_image_decode::decode_clipboard_dib(bytes)
+                    .map(|pixels| vec![("Clipboard image".into(), pixels)]);
+            }
+            bytes
+        };
+        #[cfg(target_os = "linux")]
+        let bytes = match png {
+            LinuxPng::Absent => return Ok(Vec::new()),
+            LinuxPng::Wayland(fd) => read_transfer(
+                fd,
+                captures_history::editor_draft::MAX_IMAGE_BYTES,
+                "Clipboard image",
+            )?,
+            LinuxPng::Encoded(bytes) => bytes?,
+        };
+        if !matches!(image::guess_format(&bytes), Ok(image::ImageFormat::Png)) {
+            return Err("Could not decode clipboard PNG. Copy it again and retry.".into());
+        }
+        let pixels =
+            captures_app::editor_image_decode::decode_import_bytes(&bytes, "Clipboard image")?;
+        Ok(vec![("Clipboard image".into(), pixels)])
+    }
+}
+
+/// Call at native input, before enqueueing work to the editor worker.
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+pub fn capture_native() -> Result<Snapshot, String> {
+    Err("Retained clipboard acquisition uses the AppKit host on macOS.".into())
+}
+
+#[cfg(target_os = "linux")]
+pub fn capture_native() -> Result<Snapshot, String> {
+    if WAYLAND.load(std::sync::atomic::Ordering::Acquire) {
+        return Err("Wayland acquisition requires the native event loop clipboard offer.".into());
+    }
+    x11_marker::capture()
+        .map(|offer| Snapshot {
+            source: LinuxSource::X11(Box::new(offer)),
+        })
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "windows")]
+pub fn capture_native() -> Result<Snapshot, String> {
+    let _guard = clipboard_win::Clipboard::new_attempts(10)
+        .map_err(|error| format!("Could not open clipboard: {error}"))?;
+    let mut files = Vec::new();
+    if clipboard_win::raw::is_format_avail(clipboard_win::formats::CF_HDROP) {
+        clipboard_win::raw::get_file_list_path(&mut files)
+            .map_err(|error| format!("Could not read clipboard files: {error}"))?;
+    }
+    let bitmap = (|| -> Result<_, String> {
+        let png = clipboard_win::register_format("PNG")
+            .ok_or("Could not register clipboard PNG format.")?
+            .get();
+        let format = if clipboard_win::raw::is_format_avail(png) {
+            png
+        } else if clipboard_win::raw::is_format_avail(clipboard_win::formats::CF_DIBV5) {
+            clipboard_win::formats::CF_DIBV5
+        } else {
+            return Ok(None);
+        };
+        let size = clipboard_win::raw::size(format)
+            .ok_or("Could not read clipboard image size.")?
+            .get();
+        if size > captures_history::editor_draft::MAX_IMAGE_BYTES {
+            return Err("Clipboard image exceeds the encoded-byte limit.".into());
+        }
+        let mut bytes = Vec::new();
+        clipboard_win::raw::get_vec(format, &mut bytes)
+            .map_err(|error| format!("Could not read clipboard image: {error}"))?;
+        Ok(Some((format, bytes)))
+    })();
+    Ok(Snapshot { files, bitmap })
+}
+
 #[derive(Default)]
 pub struct Clipboard {
     marker: Option<std::sync::Arc<Marker>>,
@@ -15,6 +196,29 @@ impl Clipboard {
     pub fn claim_layer(&mut self, ctx: &eframe::egui::Context) -> Result<(), String> {
         self.marker = None;
         self.marker = Some(std::sync::Arc::new(Marker::claim(ctx)?));
+        Ok(())
+    }
+
+    pub fn claim_copy(
+        &mut self,
+        ctx: &eframe::egui::Context,
+        layer: std::sync::Arc<captures_app::editor_session::CopiedLayer>,
+        copies: &std::sync::Arc<std::sync::Mutex<Copies>>,
+    ) -> Result<(), String> {
+        #[cfg(target_os = "linux")]
+        if WAYLAND.load(std::sync::atomic::Ordering::Acquire) {
+            self.marker = None;
+            self.marker = Some(std::sync::Arc::new(Marker::claim_wayland(
+                ctx,
+                Some((copies.clone(), layer)),
+            )?));
+            return Ok(());
+        }
+        // Only platforms that do not need the UI event loop may hold this lock
+        // while claiming. Input sees the marker and payload as one publication.
+        let mut copies = copies.lock().unwrap();
+        self.claim_layer(ctx)?;
+        copies.publish(self.published(layer));
         Ok(())
     }
 
@@ -36,47 +240,30 @@ impl Clipboard {
         &mut self,
         ctx: &eframe::egui::Context,
     ) -> Result<Vec<(String, RgbaImage)>, String> {
-        #[cfg(target_os = "linux")]
-        let (files, png) = linux_files(ctx)?;
-        #[cfg(target_os = "windows")]
-        let (files, bitmap) = {
-            let _guard = clipboard_win::Clipboard::new_attempts(10)
-                .map_err(|error| format!("Could not open clipboard: {error}"))?;
-            let mut files = Vec::new();
-            if clipboard_win::raw::is_format_avail(clipboard_win::formats::CF_HDROP) {
-                // arboard maps both missing HDROP and failed reads to the
-                // same error. Check availability while holding the clipboard.
-                clipboard_win::raw::get_file_list_path(&mut files)
-                    .map_err(|error| format!("Could not read clipboard files: {error}"))?;
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        {
+            #[cfg(target_os = "linux")]
+            if WAYLAND.load(std::sync::atomic::Ordering::Acquire) {
+                let (reply, receive) = std::sync::mpsc::sync_channel(1);
+                OFFER_READS.lock().unwrap().push(reply);
+                ctx.request_repaint_of(eframe::egui::ViewportId::ROOT);
+                let offer = receive
+                    .recv_timeout(std::time::Duration::from_secs(2))
+                    .map_err(|_| "Clipboard offer read did not reach the native event loop.")??;
+                return Snapshot::from_wayland(offer).decode();
             }
-            // Own both alternatives before unlocking. Delayed rendering may
-            // legitimately change the sequence number while this lock is held.
-            // Defer fallback failures: usable files still take precedence.
-            let bitmap = (|| -> Result<_, String> {
-                let png = clipboard_win::register_format("PNG")
-                    .ok_or("Could not register clipboard PNG format.")?
-                    .get();
-                let format = if clipboard_win::raw::is_format_avail(png) {
-                    png
-                } else if clipboard_win::raw::is_format_avail(clipboard_win::formats::CF_DIBV5) {
-                    clipboard_win::formats::CF_DIBV5
-                } else {
-                    return Ok(None);
-                };
-                let size = clipboard_win::raw::size(format)
-                    .ok_or("Could not read clipboard image size.")?
-                    .get();
-                if size > captures_history::editor_draft::MAX_IMAGE_BYTES {
-                    return Err("Clipboard image exceeds the encoded-byte limit.".into());
-                }
-                let mut bytes = Vec::new();
-                clipboard_win::raw::get_vec(format, &mut bytes)
-                    .map_err(|error| format!("Could not read clipboard image: {error}"))?;
-                Ok(Some((format, bytes)))
-            })();
-            (files, bitmap)
-        };
+            let _ = ctx;
+            capture_native()?.decode()
+        }
         #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        self.other_images(ctx)
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    fn other_images(
+        &mut self,
+        ctx: &eframe::egui::Context,
+    ) -> Result<Vec<(String, RgbaImage)>, String> {
         let files = {
             if self.images.is_none() {
                 self.images = Some(arboard::Clipboard::new().map_err(|error| error.to_string())?);
@@ -101,41 +288,6 @@ impl Clipboard {
             .collect();
         if !files.is_empty() {
             return captures_app::editor_image_decode::decode_imports(files);
-        }
-        #[cfg(target_os = "windows")]
-        {
-            let Some((format, bytes)) = bitmap? else {
-                return Ok(Vec::new());
-            };
-            let pixels = if format == clipboard_win::formats::CF_DIBV5 {
-                captures_app::editor_image_decode::decode_clipboard_dib(bytes)?
-            } else {
-                if !matches!(image::guess_format(&bytes), Ok(image::ImageFormat::Png)) {
-                    return Err("Could not decode clipboard PNG. Copy it again and retry.".into());
-                }
-                captures_app::editor_image_decode::decode_import_bytes(&bytes, "Clipboard image")?
-            };
-            Ok(vec![("Clipboard image".into(), pixels)])
-        }
-        #[cfg(target_os = "linux")]
-        {
-            // Retain encoded PNG metadata until the shared decoder has applied
-            // its color, orientation, dimension and pixel checks.
-            let bytes = match png {
-                LinuxPng::Absent => return Ok(Vec::new()),
-                LinuxPng::Wayland(fd) => read_transfer(
-                    fd,
-                    captures_history::editor_draft::MAX_IMAGE_BYTES,
-                    "Clipboard image",
-                )?,
-                LinuxPng::X11(offer) => offer.read().map_err(|error| error.to_string())?,
-            };
-            if !matches!(image::guess_format(&bytes), Ok(image::ImageFormat::Png)) {
-                return Err("Could not decode clipboard PNG. Copy it again and retry.".into());
-            }
-            let pixels =
-                captures_app::editor_image_decode::decode_import_bytes(&bytes, "Clipboard image")?;
-            Ok(vec![("Clipboard image".into(), pixels)])
         }
         #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         {
@@ -178,6 +330,46 @@ pub struct Published {
 impl Published {
     pub fn retained(&self) -> Option<std::sync::Arc<captures_app::editor_session::CopiedLayer>> {
         self.marker.matches().then(|| self.layer.clone())
+    }
+}
+
+/// Keep old Wayland generations only while a protocol-time occurrence (or its
+/// active source) holds the token. A later Copy cannot substitute its payload.
+#[derive(Default)]
+pub struct Copies(Vec<Published>);
+
+impl Copies {
+    pub fn publish(&mut self, copy: Published) {
+        self.0.retain(|copy| {
+            #[cfg(target_os = "linux")]
+            if let Marker::Wayland(token) = copy.marker.as_ref() {
+                return std::sync::Arc::strong_count(token) > 1;
+            }
+            let _ = copy;
+            false
+        });
+        self.0.push(copy);
+    }
+
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    pub fn retained(&self) -> Option<std::sync::Arc<captures_app::editor_session::CopiedLayer>> {
+        self.0.last().and_then(Published::retained)
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn find_marker(
+        &self,
+        token: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> Option<std::sync::Arc<captures_app::editor_session::CopiedLayer>> {
+        self.0.iter().find_map(|copy| match copy.marker.as_ref() {
+            Marker::Wayland(owned) if std::sync::Arc::ptr_eq(owned, token) => {
+                Some(copy.layer.clone())
+            }
+            _ => None,
+        })
     }
 }
 
@@ -252,6 +444,10 @@ struct WaylandClaim {
     mime: String,
     owned: std::sync::Arc<std::sync::atomic::AtomicBool>,
     reply: std::sync::mpsc::SyncSender<Result<(), String>>,
+    publication: Option<(
+        std::sync::Arc<std::sync::Mutex<Copies>>,
+        std::sync::Arc<captures_app::editor_session::CopiedLayer>,
+    )>,
 }
 
 #[cfg(target_os = "linux")]
@@ -268,59 +464,44 @@ pub fn service(event_loop: &winit::event_loop::ActiveEventLoop) {
     use std::sync::atomic::Ordering;
     use winit::platform::wayland::ActiveEventLoopExtWayland;
     WAYLAND.store(event_loop.is_wayland(), Ordering::Release);
+    // Menu Paste accepted the current offer during the redraw that just ended.
+    // Acquire it before publishing any worker Copy that completed meanwhile.
+    for reply in std::mem::take(&mut *OFFER_READS.lock().unwrap()) {
+        let _ = reply.send(event_loop.clipboard_offer().map_err(str::to_owned));
+    }
     for claim in std::mem::take(&mut *CLAIMS.lock().unwrap()) {
         // A timed-out/closed worker dropped its reply. Don't publish late.
         if std::sync::Arc::strong_count(&claim.owned) == 1 {
             continue;
         }
+        let owned = claim.owned.clone();
         let result = event_loop
             .set_clipboard_marker(claim.mime, claim.owned)
             .map_err(str::to_owned);
+        if result.is_ok()
+            && let Some((copies, layer)) = claim.publication
+        {
+            copies.lock().unwrap().publish(Published {
+                marker: std::sync::Arc::new(Marker::Wayland(owned)),
+                layer,
+            });
+        }
         let _ = claim.reply.send(result);
-    }
-    for reply in std::mem::take(&mut *OFFER_READS.lock().unwrap()) {
-        let _ = reply.send(event_loop.clipboard_offer().map_err(str::to_owned));
     }
 }
 
 #[cfg(target_os = "linux")]
 enum LinuxPng {
     Absent,
-    X11(Box<x11_marker::Png>),
+    Encoded(Result<Vec<u8>, String>),
     Wayland(std::os::fd::OwnedFd),
 }
 
 #[cfg(target_os = "linux")]
-fn linux_files(ctx: &eframe::egui::Context) -> Result<(Vec<std::path::PathBuf>, LinuxPng), String> {
-    use std::{sync::atomic::Ordering, time::Duration};
-    let (png, bytes) = if WAYLAND.load(Ordering::Acquire) {
-        let (reply, receive) = std::sync::mpsc::sync_channel(1);
-        OFFER_READS.lock().unwrap().push(reply);
-        ctx.request_repaint_of(eframe::egui::ViewportId::ROOT);
-        let offer = receive
-            .recv_timeout(Duration::from_secs(2))
-            .map_err(|_| "Clipboard offer read did not reach the native event loop.")??;
-        let png = offer.png.map_or(LinuxPng::Absent, LinuxPng::Wayland);
-        let bytes = match offer.uri_list {
-            Some(fd) => read_transfer(fd, 1024 * 1024, "Clipboard file list")?,
-            None => Vec::new(),
-        };
-        (png, bytes)
-    } else {
-        let (has_png, bytes, offer) =
-            x11_marker::offered_files().map_err(|error| error.to_string())?;
-        (
-            if has_png {
-                LinuxPng::X11(Box::new(offer))
-            } else {
-                LinuxPng::Absent
-            },
-            bytes,
-        )
-    };
+fn parse_files(bytes: &[u8]) -> Result<Vec<std::path::PathBuf>, String> {
     // Parse lines before percent decoding: encoded CR/LF belong to filenames,
     // but literal CRLF belongs to the URI-list transport. Never fetch URLs.
-    let text = std::str::from_utf8(&bytes).map_err(|_| "Invalid clipboard file list.")?;
+    let text = std::str::from_utf8(bytes).map_err(|_| "Invalid clipboard file list.")?;
     let files = text
         .lines()
         .filter(|line| {
@@ -329,7 +510,7 @@ fn linux_files(ctx: &eframe::egui::Context) -> Result<(Vec<std::path::PathBuf>, 
         })
         .map(|line| captures_app::preview_channel::local_media_path(line.into()))
         .collect::<Result<_, _>>()?;
-    Ok((files, png))
+    Ok(files)
 }
 
 #[cfg(target_os = "linux")]
@@ -368,14 +549,20 @@ fn read_transfer(fd: std::os::fd::OwnedFd, maximum: usize, label: &str) -> Resul
 #[cfg(target_os = "linux")]
 impl Marker {
     fn claim(ctx: &eframe::egui::Context) -> Result<Self, String> {
-        use std::sync::{
-            Arc,
-            atomic::{AtomicBool, Ordering},
-            mpsc,
-        };
-        if !WAYLAND.load(Ordering::Acquire) {
+        if !WAYLAND.load(std::sync::atomic::Ordering::Acquire) {
             return x11_marker::Marker::claim().map(Self::X11);
         }
+        Self::claim_wayland(ctx, None)
+    }
+
+    fn claim_wayland(
+        ctx: &eframe::egui::Context,
+        publication: Option<(
+            std::sync::Arc<std::sync::Mutex<Copies>>,
+            std::sync::Arc<captures_app::editor_session::CopiedLayer>,
+        )>,
+    ) -> Result<Self, String> {
+        use std::sync::{Arc, atomic::AtomicBool, mpsc};
         let owned = Arc::new(AtomicBool::new(false));
         let (reply, receive) = mpsc::sync_channel(1);
         CLAIMS.lock().unwrap().push(WaylandClaim {
@@ -385,6 +572,7 @@ impl Marker {
             ),
             owned: owned.clone(),
             reply,
+            publication,
         });
         ctx.request_repaint_of(eframe::egui::ViewportId::ROOT);
         receive
@@ -418,22 +606,19 @@ mod x11_marker {
         wrapper::ConnectionExt as _,
     };
 
-    pub(super) struct Png {
+    pub(super) struct Transfer {
         connection: RustConnection,
         window: Window,
         selection: Atom,
         property: Atom,
         target: Atom,
+        deadline: std::time::Instant,
     }
 
-    impl Png {
+    impl Transfer {
         pub(super) fn read(self) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
             let bytes = read_selection(
-                &self.connection,
-                self.window,
-                self.selection,
-                self.target,
-                self.property,
+                &self,
                 (self.target, 8),
                 captures_history::editor_draft::MAX_IMAGE_BYTES,
             )?
@@ -443,7 +628,66 @@ mod x11_marker {
         }
     }
 
-    pub(super) fn offered_files() -> Result<(bool, Vec<u8>, Png), Box<dyn std::error::Error>> {
+    pub(super) struct Offer {
+        targets: Transfer,
+        uri: Transfer,
+        png: Transfer,
+    }
+
+    pub(super) fn capture() -> Result<Offer, Box<dyn std::error::Error>> {
+        // Separate connections prevent a reader from consuming another target's
+        // SelectionNotify/PropertyNotify events. The first watch remains alive
+        // until every relevant acquisition has completed.
+        let targets = start(b"TARGETS")?;
+        let uri = start(b"text/uri-list")?;
+        let png = start(b"image/png")?;
+        Ok(Offer { targets, uri, png })
+    }
+
+    impl Offer {
+        pub(super) fn read(
+            self,
+        ) -> Result<(Vec<std::path::PathBuf>, super::LinuxPng), Box<dyn std::error::Error>>
+        {
+            let t = &self.targets;
+            let formats = read_selection(t, (AtomEnum::ATOM.into(), 32), 1024 * 1024)?;
+            let Some(formats) = formats else {
+                if t.connection
+                    .get_selection_owner(t.selection)?
+                    .reply()?
+                    .owner
+                    == 0
+                {
+                    ensure_unchanged(&t.connection)?;
+                    return Ok((Vec::new(), super::LinuxPng::Absent));
+                }
+                return Err("Clipboard offer became unavailable.".into());
+            };
+            let atoms: Vec<_> = formats
+                .chunks_exact(4)
+                .map(|bytes| u32::from_ne_bytes(bytes.try_into().expect("four-byte atom")))
+                .collect();
+            let u = &self.uri;
+            let bytes = if atoms.contains(&u.target) {
+                read_selection(u, (u.target, 8), 1024 * 1024)?
+                    .ok_or("Clipboard offer became unavailable.")?
+            } else {
+                Vec::new()
+            };
+            let files = super::parse_files(&bytes)?;
+            // Finish PNG before dropping the first watch, but defer its failures
+            // so usable local files still win. Unsupported targets are ignored.
+            let png = if atoms.contains(&self.png.target) {
+                super::LinuxPng::Encoded(self.png.read().map_err(|error| error.to_string()))
+            } else {
+                super::LinuxPng::Absent
+            };
+            ensure_unchanged(&t.connection)?;
+            Ok((files, png))
+        }
+    }
+
+    fn start(name: &[u8]) -> Result<Transfer, Box<dyn std::error::Error>> {
         let (connection, screen) = x11rb::connect(None)?;
         let window = connection.generate_id()?;
         connection
@@ -474,64 +718,25 @@ mod x11_marker {
                     | SelectionEventMask::SELECTION_CLIENT_CLOSE,
             )?
             .check()?;
-        let target = connection
-            .intern_atom(false, b"text/uri-list")?
-            .reply()?
-            .atom;
+        let target = connection.intern_atom(false, name)?.reply()?.atom;
         let property = connection
             .intern_atom(false, b"CAPTURES_EDITOR_URI_LIST")?
             .reply()?
             .atom;
-        let targets = connection.intern_atom(false, b"TARGETS")?.reply()?.atom;
-        let png = connection.intern_atom(false, b"image/png")?.reply()?.atom;
-        let offer = Png {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        connection
+            .convert_selection(window, selection, target, property, x11rb::CURRENT_TIME)?
+            .check()?;
+        connection.flush()?;
+        let offer = Transfer {
             connection,
             window,
             selection,
             property,
-            target: png,
+            target,
+            deadline,
         };
-        let connection = &offer.connection;
-        let Some(formats) = read_selection(
-            connection,
-            window,
-            selection,
-            targets,
-            property,
-            (AtomEnum::ATOM.into(), 32),
-            1024 * 1024,
-        )?
-        else {
-            if connection.get_selection_owner(selection)?.reply()?.owner == 0 {
-                ensure_unchanged(connection)?;
-                return Ok((false, Vec::new(), offer));
-            }
-            return Err("Clipboard offer became unavailable.".into());
-        };
-        let atoms: Vec<_> = formats
-            .chunks_exact(4)
-            .map(|bytes| u32::from_ne_bytes(bytes.try_into().expect("four-byte atom")))
-            .collect();
-        let has_png = atoms.contains(&png);
-        let bytes = if atoms.contains(&target) {
-            read_selection(
-                connection,
-                window,
-                selection,
-                target,
-                property,
-                (target, 8),
-                1024 * 1024,
-            )?
-            .ok_or("Clipboard offer became unavailable.")?
-        } else {
-            Vec::new()
-        };
-        ensure_unchanged(connection)?;
-        // This dedicated connection owns the requestor window. Every exit,
-        // including an abandoned INCR transfer, destroys it and its properties.
-        // Keep it alive through the fallback PNG read's ownership check.
-        Ok((has_png, bytes, offer))
+        Ok(offer)
     }
 
     fn ensure_unchanged(connection: &RustConnection) -> Result<(), Box<dyn std::error::Error>> {
@@ -550,21 +755,20 @@ mod x11_marker {
     /// Read one bounded selection, directly or through ICCCM's INCR handshake.
     /// The size hint is only a lower bound; only a typed empty chunk ends INCR.
     fn read_selection(
-        connection: &RustConnection,
-        window: Window,
-        selection: Atom,
-        target: Atom,
-        property: Atom,
+        transfer: &Transfer,
         expected: (Atom, u8),
         maximum: usize,
     ) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error>> {
+        let Transfer {
+            ref connection,
+            window,
+            selection,
+            target,
+            property,
+            deadline,
+        } = *transfer;
         let (expected_type, expected_format) = expected;
         let incr = connection.intern_atom(false, b"INCR")?.reply()?.atom;
-        connection
-            .convert_selection(window, selection, target, property, x11rb::CURRENT_TIME)?
-            .check()?;
-        connection.flush()?;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         let mut incremental = false;
         let mut bytes = Vec::new();
         loop {
@@ -786,5 +990,52 @@ impl Marker {
     }
     fn matches(&self) -> bool {
         false
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod snapshot_tests {
+    use super::Snapshot;
+    use std::{io::Write, os::fd::OwnedFd, os::unix::net::UnixStream};
+    use winit::platform::wayland::ClipboardOffer;
+
+    fn transfer(bytes: &[u8]) -> OwnedFd {
+        let (mut writer, reader) = UnixStream::pair().unwrap();
+        writer.write_all(bytes).unwrap();
+        drop(writer);
+        reader.into()
+    }
+
+    #[test]
+    fn retained_offer_is_send_and_ignores_nonlocal_files() {
+        fn assert_send<T: Send>() {}
+        assert_send::<Snapshot>();
+        let snapshot = Snapshot::from_wayland(ClipboardOffer {
+            uri_list: Some(transfer(
+                b"https://example.com/image.png\r\nfile://remote/image.png\r\n",
+            )),
+            ..Default::default()
+        });
+        assert!(
+            std::thread::spawn(move || snapshot.decode())
+                .join()
+                .unwrap()
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn retained_png_uses_the_png_validation_path() {
+        let snapshot = Snapshot::from_wayland(ClipboardOffer {
+            png: Some(transfer(b"not a PNG")),
+            ..Default::default()
+        });
+        assert!(
+            snapshot
+                .decode()
+                .unwrap_err()
+                .contains("Could not decode clipboard PNG")
+        );
     }
 }
