@@ -933,6 +933,9 @@ def main():
         thread.start()
         spawn("openbox", ["openbox", "--sm-disable"])
         time.sleep(.5)
+        if args.overwrite_only:
+            spawn("picom", ["picom", "--config", "/dev/null", "--backend", "xrender"])
+            time.sleep(.5)
         history = output / "history"
         artifact_id = "10d309cf-83ec-4d45-aab8-87e70948cdea"
         artifact = history / artifact_id
@@ -996,7 +999,7 @@ def main():
             "output_directory": str(output / "exports"), "launch_at_login": False,
             "region_shortcut": "Ctrl+Shift+F7", "window_shortcut": "Ctrl+Shift+F8",
             "display_shortcut": "Ctrl+Shift+F9", "new_capture_shortcut": "Ctrl+Shift+F10",
-            "auto_copy_to_clipboard": False, "show_mini_previews": False,
+            "auto_copy_to_clipboard": False, "show_mini_previews": args.overwrite_only,
         }))
         # The full software-rendered suite can exceed ten minutes; its final
         # quit-recovery assertions must run before the app's safety timeout.
@@ -2251,6 +2254,7 @@ def main():
             export_click("save")
             wait(lambda: source_export.read_bytes() != original, "original file replaced")
             wait(lambda: (artifact / "capture.png").read_bytes() != original, "same History image replaced")
+            wait(lambda: not windows("Captures Mini Preview"), "overwritten original preview invalidated")
             # As in shipping, every Save then shows the saved file in its folder.
             wait(lambda: file_manager.revealed == [source_export], "overwrite reveals the saved file")
             shot(editor, "overwrite-saved")
@@ -2283,6 +2287,13 @@ def main():
             copy_entry = next(entry for entry in entries if entry["id"] != artifact_id)
             assert copy_entry["saved_path"] == str(copy_path)
             shot(editor, "overwrite-new-file-saved")
+            recording = spawn("adopted-preview-recording", ["ffmpeg", "-y", "-loglevel", "error",
+                "-f", "x11grab", "-framerate", "20", "-video_size", "1400x1200",
+                "-i", env["DISPLAY"], "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+                "-pix_fmt", "yuv420p", str(output / "adopted-preview.mp4")])
+            click(root, 255, 453)  # Newest History card: Restore the adopted saved copy.
+            wait(lambda: windows("Captures Mini Preview"), "adopted saved-copy preview restored")
+            shot("root", "adopted-preview-restored")
             # The saved copy becomes the file Save overwrites, as in the shipping app.
             toolbar_click("undo")
             save_layers(lambda values: len(values) == 1, "undo before saving the adopted copy")
@@ -2291,6 +2302,12 @@ def main():
             wait(lambda: copy_path.read_bytes() != copied_before, "adopted copy overwritten")
             wait(lambda: file_manager.revealed == [source_export, copy_path, copy_path],
                  "adopted overwrite revealed")
+            wait(lambda: not windows("Captures Mini Preview"), "adopted preview invalidated, not draft owner")
+            time.sleep(1)  # Keep the completed state visible in the recording.
+            shot("root", "adopted-preview-invalidated")
+            recording.send_signal(signal.SIGINT)
+            recording.wait(timeout=10)
+            assert recording.returncode in (0, 255)
             assert not opened_folders.exists(), "ShowItems selected the file; no folder fallback"
             assert run("convert", str(copy_path), "-crop", "1x1+162+221", "-depth", "8", "rgb:-") == bytes((40, 110, 166))
             assert source_export.read_bytes() == replaced
@@ -2316,6 +2333,7 @@ def main():
                            "exact-file-pixels", "same-history-id-date", "draft-preserved",
                            "undo-redo-preserved", "save-as-new-file-keeps-source",
                            "saved-copy-becomes-overwrite-target", "every-save-reveals-file",
+                           "adopted-copy-preview-invalidated",
                            "minimum-controls",
                            "editable-draft-reopen"],
             }, indent=2) + "\n")

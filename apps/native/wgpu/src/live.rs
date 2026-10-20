@@ -3805,11 +3805,11 @@ impl Live {
             request_hidden_root_paint(ctx);
         }
         self.recording_editors.retain(|_, editor| !editor.closed());
-        for (id, editor) in &self.editors {
+        for editor in self.editors.values() {
             editor.receive(ctx);
             editor_history_changed |= editor.take_history_changed();
-            if editor.take_original_replaced() {
-                self.previews.remove(id);
+            if let Some(id) = editor.take_original_replaced() {
+                self.previews.remove(&id);
             }
         }
         self.editors.retain(|_, editor| !editor.retired());
