@@ -70,6 +70,10 @@ pub struct WindowState {
     /// Completed URI-list offers, preserving drop boundaries and positions.
     pub file_drop_batches: Vec<crate::platform::wayland::FileDropBatch>,
 
+    /// Input-time transfers, one entry per recognized native press/repeat.
+    pub clipboard_paste_retention: Option<crate::platform::wayland::ClipboardPastePredicate>,
+    pub clipboard_pastes: std::collections::VecDeque<Result<crate::platform::wayland::ClipboardOffer, String>>,
+
     /// Client-side mapping lifecycle. Wayland has no compositor visibility query; this tracks
     /// whether content may currently be attached to the surface.
     mapping: MappingState,
@@ -216,6 +220,8 @@ impl WindowState {
             ime_purpose: ImePurpose::Normal,
             last_configure: None,
             file_drop_batches: Vec::new(),
+            clipboard_paste_retention: None,
+            clipboard_pastes: Default::default(),
             mapping: MappingState::AwaitingConfigure,
             mapping_generation: 0,
             initially_configured: false,

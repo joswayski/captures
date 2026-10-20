@@ -34,6 +34,32 @@ impl Drop for ClipboardMarker {
     }
 }
 
+/// Start transfers while the caller's exact seat selection is still current.
+pub fn clipboard_offer(
+    device: Option<&sctk::data_device_manager::data_device::DataDevice>,
+    marker: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
+) -> Result<crate::platform::wayland::ClipboardOffer, &'static str> {
+    let device = device.ok_or("Clipboard Paste has no input data device.")?;
+    let Some(offer) = device.data().selection_offer() else {
+        return Ok(Default::default());
+    };
+    let (has_png, has_files) = offer.with_mime_types(|types| {
+        (
+            types.iter().any(|mime| mime == "image/png"),
+            types.iter().any(|mime| mime == "text/uri-list"),
+        )
+    });
+    let uri_list = if has_files {
+        Some(offer.receive("text/uri-list".into())
+            .map_err(|_| "Could not receive clipboard files")?.into())
+    } else { None };
+    let png = if has_png {
+        Some(offer.receive("image/png".into())
+            .map_err(|_| "Could not receive clipboard image")?.into())
+    } else { None };
+    Ok(crate::platform::wayland::ClipboardOffer { png, uri_list, marker: marker.cloned() })
+}
+
 pub struct OutboundDrag {
     pub source: DragSource,
     pub device: WlDataDevice,
@@ -256,11 +282,20 @@ impl DataDeviceHandler for WinitState {
         }
     }
     fn selection(&mut self, _: &Connection, _: &QueueHandle<Self>, device: &WlDataDevice) {
+        let mut offer_marker = None;
         if let Some(marker) = self.clipboard_marker.as_ref().filter(|marker| &marker.device == device) {
             let matches = device.data::<sctk::data_device_manager::data_device::DataDeviceData>()
                 .and_then(|data| data.selection_offer())
                 .is_some_and(|offer| offer.with_mime_types(|types| types.contains(&marker.mime)));
             marker.owned.store(matches, std::sync::atomic::Ordering::Release);
+            if matches {
+                offer_marker = Some(marker.owned.clone());
+            }
+        }
+        if let Some(seat) = self.seats.values_mut().find(|seat| {
+            seat.data_device.as_ref().is_some_and(|value| value.inner() == device)
+        }) {
+            seat.clipboard_offer_marker = offer_marker;
         }
     }
     fn drop_performed(&mut self, _: &Connection, _: &QueueHandle<Self>, device: &WlDataDevice) {

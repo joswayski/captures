@@ -70,13 +70,13 @@ def cases(binary, pointer, root, env, bus):
                     artifact = wait(lambda: next(iter(history.glob("*/metadata.json")), None), "artifact").parent
                     draft = profile / "editor-drafts" / artifact.name / "manifest.json"
 
-                    def key(name, modifiers="none"):
+                    def key(name, modifiers="none", delay=.2):
                         code = KEYS[name]
                         keyboard.stdin.write(f"{code} {modifiers}\n".encode())
                         keyboard.stdin.flush()
                         assert select.select([keyboard.stdout], [], [], 5)[0], "keyboard stalled"
                         assert keyboard.stdout.readline().strip() == f"KEYED {code} {modifiers}".encode()
-                        time.sleep(.2)
+                        time.sleep(delay)
 
                     def click(x, y):
                         rect = window()["rect"]
@@ -145,6 +145,16 @@ def cases(binary, pointer, root, env, bus):
                     imported = count(2)[-1]
                     assert (imported["naturalWidth"], imported["naturalHeight"], imported["y"]) == (90, 43, 360)
                     shot("clipboard-image-imported")
+                    for _ in range(3):
+                        key("v", "ctrl", delay=0)
+                    rapid = count(5)
+                    assert all((layer["naturalWidth"], layer["naturalHeight"]) == (90, 43)
+                               for layer in rapid[2:])
+                    shot("clipboard-rapid-external-pastes")
+                    for size in (4, 3, 2):
+                        key("z", "ctrl")
+                        count(size)
+                    click(window()["rect"]["width"] - 200, 149)
                     key("c", "ctrl")
                     def marker_types():
                         types = subprocess.check_output(["wl-paste", "--list-types"], env=env, timeout=5).splitlines()
@@ -444,6 +454,7 @@ def cases(binary, pointer, root, env, bus):
                     (profile / "result.json").write_text(json.dumps({"passed": True,
                         "appearance": appearance, "private_offer": types[0].decode(),
                         "checks": ["PNG-pixels", "private-MIME-no-text", "24px-layer-offset",
+                            "rapid-external-pastes", "individual-Undo-for-external-pastes",
                             "text-html-empty-cleared-silent-noop", "corrupt-image-error-and-recovery",
                             "external-selection-replacement", "external-image-precedence", "Undo-Redo",
                             "PNG-fallback-retains-offer-across-selection-replacement",

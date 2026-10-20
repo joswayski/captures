@@ -1281,7 +1281,18 @@ def main():
             asset_pixel(imported, 0, 0, (213, 62, 85, 255))
             asset_pixel(imported, 89, 42, (60, 179, 113, 255))
             shot(editor, "clipboard-image-imported")
-            # The imported layer is selected without a tool/selection click.
+            run("xdotool", "key", "--delay", "1", "ctrl+v", "ctrl+v", "ctrl+v")
+            rapid_external = save_layers(lambda values: len(values) == 5, "three rapid external pastes")
+            for value in rapid_external[2:]:
+                assert (value["naturalWidth"], value["naturalHeight"]) == (90, 43)
+                asset_pixel(value, 0, 0, (213, 62, 85, 255))
+                asset_pixel(value, 89, 42, (60, 179, 113, 255))
+            shot(editor, "clipboard-rapid-external-pastes")
+            for count in (4, 3, 2):
+                run("xdotool", "key", "ctrl+z")
+                save_layers(lambda values: len(values) == count, "one Undo per external paste")
+            # Select the restored original after Undo before testing layer Copy.
+            layer_click(0)
             run("xdotool", "key", "ctrl+c", "sleep", ".3")
             targets = run("xclip", "-selection", "clipboard", "-t", "TARGETS", "-o")
             assert b"application/x-captures-editor-layer" in targets
@@ -1518,6 +1529,7 @@ def main():
                            "INCR-PNG-above-1MiB-color-managed", "INCR-PNG-oversized-hint-rejected",
                            "Add-images-placement-expansion", "Select-last-image",
                            "rapid-retained-layer-pastes", "individual-Undo-for-retained-pastes",
+                           "rapid-external-image-pastes", "individual-Undo-for-external-pastes",
                            "private-OS-marker-no-text", "24px-layer-offset", "external-text-invalidates-layer",
                            "text-html-empty-silent-noop", "corrupt-image-error-and-recovery",
                            "filename-text-paste", "external-image-replaces-layer", "Undo-Redo",

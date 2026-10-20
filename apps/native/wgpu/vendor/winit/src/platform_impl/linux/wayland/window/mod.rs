@@ -279,6 +279,18 @@ impl Window {
         std::mem::take(&mut self.window_state.lock().unwrap().file_drop_batches)
     }
 
+    pub fn set_clipboard_paste_retention(&self, predicate: Option<crate::platform::wayland::ClipboardPastePredicate>) {
+        let mut state = self.window_state.lock().unwrap();
+        state.clipboard_paste_retention = predicate;
+        if predicate.is_none() {
+            state.clipboard_pastes.clear();
+        }
+    }
+
+    pub fn take_clipboard_paste(&self) -> Option<Result<crate::platform::wayland::ClipboardOffer, String>> {
+        self.window_state.lock().unwrap().clipboard_pastes.pop_front()
+    }
+
     #[inline]
     pub fn outer_position(&self) -> Result<PhysicalPosition<i32>, NotSupportedError> {
         Err(NotSupportedError::new())
@@ -733,6 +745,7 @@ impl Window {
 
 impl Drop for Window {
     fn drop(&mut self) {
+        self.set_clipboard_paste_retention(None);
         self.window_requests.closed.store(true, Ordering::Relaxed);
         self.event_loop_awakener.ping();
     }

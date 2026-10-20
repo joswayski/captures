@@ -155,6 +155,37 @@ compile_error!("`accesskit` feature is only available with `android-game-activit
 // Re-export all useful libraries:
 pub use {egui, egui::emath, egui::epaint};
 
+/// The native presses egui-winit treats as Paste, including repeat occurrences.
+/// Clipboard transports use the same predicate before input reaches a redraw.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn is_paste_key(
+    event: &winit::event::KeyEvent,
+    modifiers: winit::keyboard::ModifiersState,
+) -> bool {
+    use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
+    let v = match &event.logical_key {
+        Key::Character(value) => egui::Key::from_name(value).map(|key| key == egui::Key::V),
+        Key::Dead(_) | Key::Unidentified(_) => None,
+        _ => Some(false),
+    }
+    .unwrap_or(matches!(
+        event.physical_key,
+        PhysicalKey::Code(KeyCode::KeyV)
+    ));
+    let command = if cfg!(target_os = "macos") {
+        modifiers.super_key()
+    } else {
+        modifiers.control_key()
+    };
+    event.state == winit::event::ElementState::Pressed
+        && ((command && v)
+            || matches!(&event.logical_key, Key::Named(NamedKey::Paste))
+            || (cfg!(target_os = "windows")
+                && modifiers.shift_key()
+                && !modifiers.control_key()
+                && matches!(&event.logical_key, Key::Named(NamedKey::Insert))))
+}
+
 /// One native file offer, preserving its boundary and release position even
 /// when the transfer completes after the pointer has moved. Wayland/wgpu only;
 /// other backends continue to populate `RawInput::dropped_files`.

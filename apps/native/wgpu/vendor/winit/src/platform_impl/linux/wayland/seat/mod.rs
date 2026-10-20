@@ -40,6 +40,8 @@ pub struct WinitSeatState {
     pub(crate) data_device: Option<DataDevice>,
     pub(crate) clipboard_serial: Option<u32>,
     pub(crate) clipboard_focus: bool,
+    /// Identity of the offer delivered to this seat, not a newer pending Copy.
+    pub(crate) clipboard_offer_marker: Option<Arc<std::sync::atomic::AtomicBool>>,
 
     /// The touch bound on the seat.
     touch: Option<WlTouch>,

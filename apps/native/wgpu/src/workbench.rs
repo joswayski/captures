@@ -1783,7 +1783,7 @@ impl eframe::App for Workbench {
                 "viewportIds":input.viewports.keys().map(|id| format!("{id:?}")).collect::<Vec<_>>(),
             })
         });
-        self.paste_input.publish(ctx);
+        self.paste_input.publish(ctx, input.viewport_id);
         let window = ctx.data(|data| {
             data.get_temp::<std::sync::Weak<winit::window::Window>>(egui::Id::unique((
                 "eframe-winit-window",
