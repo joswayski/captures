@@ -1949,8 +1949,11 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         guard let field = obj.object as? NSTextField else { return }
         if field.identifier?.rawValue.hasPrefix("custom.") == true {
             var custom = settings["custom_theme"] as? [String: Any] ?? [:]
-            guard let normalized = Self.normalizeHex(field.stringValue) else { field.stringValue = custom.string(String(field.identifier!.rawValue.dropFirst(7))); return }
-            field.stringValue = normalized; custom[String(field.identifier!.rawValue.dropFirst(7))] = normalized
+            let key = String(field.identifier!.rawValue.dropFirst(7))
+            guard let normalized = Self.normalizeHex(field.stringValue) else { field.stringValue = custom.string(key).uppercased(); return }
+            field.stringValue = normalized
+            guard normalized != Self.normalizeHex(custom.string(key)) else { return }
+            custom[key] = normalized
             settings["custom_theme"] = custom; changed(rerender: true)
         } else if field.identifier?.rawValue == "setting.output_directory" {
             set(field.stringValue, for: "output_directory", rerender: false)
@@ -2155,6 +2158,16 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        if commandSelector == #selector(NSResponder.cancelOperation(_:)),
+           let field = control as? NSTextField,
+           let identifier = field.identifier?.rawValue, identifier.hasPrefix("custom."),
+           !textView.hasMarkedText() {
+            let custom = settings["custom_theme"] as? [String: Any] ?? [:]
+            let saved = custom.string(String(identifier.dropFirst(7))).uppercased()
+            textView.string = saved; field.stringValue = saved
+            field.window?.makeFirstResponder(nil)
+            return true
+        }
         guard control.identifier?.rawValue == "find" else { return false }
         if commandSelector == #selector(NSResponder.cancelOperation(_:)), findBar != nil { closeFind(); return true }
         if commandSelector == #selector(NSResponder.insertNewline(_:)) {

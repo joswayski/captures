@@ -137,6 +137,71 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertNil(PreferencesController.normalizeHex("#12"))
     }
 
+    func testCustomColorEscapeDiscardsDraftButEnterCommitsAndFindStaysOpen() throws {
+        _ = NSApplication.shared
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("settings.json")
+        let bridge = SettingsBridge()
+        var settings = try XCTUnwrap(bridge.request(["operation": "load", "path": file.path])["settings"] as? [String: Any])
+        settings["theme"] = "custom"
+        settings["custom_theme"] = ["accent": "#12AB34", "signal": "#9876FE"]
+        _ = try bridge.request(["operation": "save", "path": file.path, "settings": settings])
+        let store = try SettingsStore(path: file.path, debounceInterval: 60)
+        let frame = NSRect(x: 0, y: 0, width: 1000, height: 700)
+        let window = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let root = Surface(frame: frame)
+        window.contentView = root
+        let tokens = try XCTUnwrap(Tokens.variants["light-mustard"])
+        let controller = PreferencesController(root: root, store: store, tokens: { tokens },
+            appearanceChanged: { _, _, _ in }, showHistory: {})
+        defer { withExtendedLifetime(controller) {} }
+        let deadline = Date().addingTimeInterval(3)
+        while controller.shortcutCard() == nil && Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        controller.showFind()
+        func field(_ id: String) throws -> NSTextField {
+            try XCTUnwrap(KeyViewLoop.candidates(in: root).first {
+                $0.identifier?.rawValue == id
+            } as? NSTextField)
+        }
+        func press(_ editor: NSTextView, key: UInt16, text: String) throws {
+            let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero,
+                modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                context: nil, characters: text, charactersIgnoringModifiers: text,
+                isARepeat: false, keyCode: key))
+            editor.keyDown(with: event)
+        }
+        for (key, original) in [("accent", "#12AB34"), ("signal", "#9876FE")] {
+            for draft in ["#FEDCBA", "#badhex"] {
+                let before = try Data(contentsOf: file)
+                let find = try field("find")
+                let color = try field("custom.\(key)")
+                color.selectText(nil)
+                let editor = try XCTUnwrap(color.currentEditor() as? NSTextView)
+                editor.insertText(draft, replacementRange: editor.selectedRange())
+                try press(editor, key: 53, text: "\u{1b}")
+                store.flush()
+                XCTAssertEqual(color.stringValue, original)
+                XCTAssertNil(color.currentEditor(), "Escape leaves the color field")
+                XCTAssertTrue(try field("find") === find, "Escape must not close or rebuild Find")
+                XCTAssertEqual(try Data(contentsOf: file), before, "cancelled drafts do not change persisted settings")
+            }
+            let color = try field("custom.\(key)")
+            color.selectText(nil)
+            let editor = try XCTUnwrap(color.currentEditor() as? NSTextView)
+            editor.insertText("#abc", replacementRange: editor.selectedRange())
+            try press(editor, key: 36, text: "\r")
+            store.flush()
+            let saved = try XCTUnwrap(bridge.request(["operation": "load", "path": file.path])["settings"] as? [String: Any])
+            XCTAssertEqual((saved["custom_theme"] as? [String: String])?[key], "#AABBCC")
+            XCTAssertNotNil(try field("find"))
+        }
+    }
+
     func testThemeResponseMergesAllDerivedTokens() {
         let transport = RecordingTransport()
         let base = Tokens.variants["light-mustard"]!
