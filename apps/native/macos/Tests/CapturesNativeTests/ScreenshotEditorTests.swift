@@ -2512,6 +2512,12 @@ final class ScreenshotEditorTests: XCTestCase {
         let pasted = try XCTUnwrap(controller.state.snapshot?.layers.first)
         XCTAssertEqual(pasted.x, imported.x + 24); XCTAssertEqual(pasted.y, imported.y + 24)
 
+        // Redo restores the document, not the pasted layer's selection. Select
+        // that row explicitly before checking external-image placement below it.
+        try table("Screenshot layers", in: controller.root)
+            .selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        XCTAssertEqual(controller.selectionOverlay.selectedLayerID, pasted.id)
+
         // External replacement must import pixels, not reuse the old snapshot's
         // next 48px offset. Text/HTML-only copying must not paste that snapshot.
         pasteboard.clearContents(); XCTAssertTrue(pasteboard.setString("ordinary text", forType: .string))
