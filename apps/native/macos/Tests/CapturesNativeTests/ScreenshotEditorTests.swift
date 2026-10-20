@@ -3508,7 +3508,7 @@ final class ScreenshotEditorTests: XCTestCase {
                     controller.tableViewSelectionDidChange(Notification(name: NSTableView.selectionDidChangeNotification,
                                                                           object: table))
                 }
-                let expectedID = cropping ? nil : middle.id
+                let expectedID: String? = cropping ? nil : "middle"
                 worker.failOperation = operation
                 let accepted = controller.state.snapshot
                 try press(title, in: controller.root)
