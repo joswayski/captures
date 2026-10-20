@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 @testable import CapturesNative
 
@@ -68,6 +69,53 @@ final class SettingsStoreTests: XCTestCase {
         store.flush()
         XCTAssertEqual(transport.operations(), ["save"])
         XCTAssertEqual((transport.requests.last?["settings"] as? [String: String])?["output_directory"], "/recent text")
+    }
+
+    func testCaptureFolderTypingPersistsWithoutLeavingTheField() throws {
+        _ = NSApplication.shared
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("settings.json").path
+        let store = try SettingsStore(path: path, debounceInterval: 0.03)
+        let frame = NSRect(x: 0, y: 0, width: 1000, height: 700)
+        let window = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let root = Surface(frame: frame)
+        window.contentView = root
+        let tokens = try XCTUnwrap(Tokens.variants["light-mustard"])
+        let saved = expectation(description: "typing persisted while the field remains focused")
+        let finalFolder = directory.appendingPathComponent("Edited captures").path
+        var latestFolder = ""
+        let controller = PreferencesController(root: root, store: store, tokens: { tokens },
+            appearanceChanged: { _, _, _ in },
+            settingsChanged: { latestFolder = $0.string("output_directory") },
+            settingsPersisted: { if $0.string("output_directory") == finalFolder { saved.fulfill() } },
+            showHistory: {})
+        defer { withExtendedLifetime(controller) {} }
+        let deadline = Date().addingTimeInterval(3)
+        while controller.shortcutCard() == nil && Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        let field = try XCTUnwrap(KeyViewLoop.candidates(in: root).first {
+            $0.identifier?.rawValue == "setting.output_directory"
+        } as? NSTextField)
+        field.selectText(nil)
+        let editor = try XCTUnwrap(field.currentEditor() as? NSTextView)
+        editor.insertText(directory.appendingPathComponent("captures").path,
+                          replacementRange: editor.selectedRange())
+        let insertion = (directory.path as NSString).length + 1
+        editor.setSelectedRange(NSRange(location: insertion, length: 0))
+        editor.insertText("Edited ", replacementRange: editor.selectedRange())
+        let caret = editor.selectedRange()
+        XCTAssertEqual(latestFolder, finalFolder, "capture settings change before focus leaves the input")
+        wait(for: [saved], timeout: 3)
+        let reopened = try XCTUnwrap(SettingsBridge().request(["operation": "load", "path": path])["settings"] as? [String: Any])
+        XCTAssertEqual(reopened.string("output_directory"), finalFolder)
+        XCTAssertTrue(window.firstResponder === editor)
+        XCTAssertTrue(field.currentEditor() === editor, "autosave must not replace the active input")
+        XCTAssertEqual(editor.selectedRange(), caret)
+        XCTAssertEqual(field.stringValue, finalFolder)
     }
 
     func testLoadAndPersistenceErrorsCrossTransportBoundary() throws {
