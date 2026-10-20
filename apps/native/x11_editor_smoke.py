@@ -16,10 +16,12 @@ import re
 import select
 import shutil
 import signal
+import struct
 import subprocess
 import threading
 import time
 from urllib.parse import unquote, urlparse
+import zlib
 
 import dbus
 import dbus.service
@@ -1245,6 +1247,31 @@ def main():
                                input=data, env=env, stdout=subprocess.DEVNULL,
                                stderr=subprocess.DEVNULL, check=True, timeout=10)
 
+            # Linear samples must be converted to sRGB, without changing alpha.
+            # An explicit sRGB chunk overrides gAMA and must not convert twice.
+            def tagged_png(srgb, width=90, height=43, compression=-1):
+                def chunk(kind, data):
+                    return (struct.pack(">I", len(data)) + kind + data
+                            + struct.pack(">I", zlib.crc32(kind + data)))
+                row = (b"\0" + bytes((64, 128, 192, 73)) * (width // 2)
+                       + bytes((255, 0, 32, 201)) * (width - width // 2))
+                return (b"\x89PNG\r\n\x1a\n"
+                    + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
+                    + chunk(b"gAMA", struct.pack(">I", 100_000))
+                    + (chunk(b"sRGB", b"\0") if srgb else b"")
+                    + chunk(b"IDAT", zlib.compress(row * height, compression)) + chunk(b"IEND", b""))
+
+            for srgb, expected in [(False, [(137, 188, 225, 73), (255, 0, 99, 201)]),
+                                   (True, [(64, 128, 192, 73), (255, 0, 32, 201)])]:
+                publish(tagged_png(srgb), "image/png")
+                run("xdotool", "key", "ctrl+v", "sleep", ".3")
+                tagged = save_layers(lambda values: len(values) == 2, "tagged clipboard PNG")[-1]
+                asset_pixel(tagged, 0, 0, expected[0])
+                asset_pixel(tagged, 89, 42, expected[1])
+                shot(editor, "clipboard-srgb-override" if srgb else "clipboard-linear-converted")
+                run("xdotool", "key", "ctrl+z", "sleep", ".3")
+                save_layers(lambda values: len(values) == 1, "tagged clipboard Undo")
+
             publish(png.read_bytes(), "image/png")
             run("xdotool", "key", "ctrl+v", "sleep", ".3")
             imported = save_layers(lambda values: len(values) == 2, "clipboard PNG imported")[-1]
@@ -1400,6 +1427,32 @@ def main():
             paste_incremental("exact-limit")
             paste_incremental(targets=True)
 
+            # PNG uses the image byte cap, not the smaller URI-list cap. Keep
+            # the stream uncompressed so this valid fixture exceeds 1 MiB.
+            large_png = output / "Linear incremental.png"
+            large_png.write_bytes(tagged_png(False, 640, 520, compression=0))
+            assert large_png.stat().st_size > 1024 * 1024
+            for mode in ("oversized-hint", "normal"):
+                log = output / f"png-incr-{mode}-protocol.jsonl"
+                assert spawn(f"png-incr-{mode}", ["/usr/bin/python3",
+                    str(Path(__file__).with_name("x11_clipboard_source.py")),
+                    "--payload", str(transfer_payload), "--log", str(log),
+                    "--png", str(large_png), "--png-incr", "--mode", mode], announce=True) == "ready"
+                run("xdotool", "key", "ctrl+v", "sleep", ".8")
+                if mode == "oversized-hint":
+                    settled_draft()
+                    assert layers() == unchanged_layers
+                    assert status_pixels() != clean_status, "oversized PNG hint must report an error"
+                    continue
+                transferred = save_layers(lambda values: len(values) == 7, "incremental PNG paste")[-1]
+                asset_pixel(transferred, 0, 0, (137, 188, 225, 73))
+                asset_pixel(transferred, 639, 519, (255, 0, 99, 201))
+                events = [json.loads(line) for line in log.read_text().splitlines()]
+                assert {"event": "chunk", "target": "image/png", "count": 0} in events
+                shot(editor, "clipboard-incremental-color-managed")
+                run("xdotool", "key", "ctrl+z", "sleep", ".3")
+                assert save_layers(lambda values: len(values) == 6, "incremental PNG Undo") == unchanged_layers
+
             # The same X11 owner can replace its selection during either read.
             # Never combine the old format list with the replacement's PNG.
             replacement = output / "Replacement.png"
@@ -1446,7 +1499,9 @@ def main():
             assert app.returncode == 0
             (output / "result.json").write_text(json.dumps({
                 "passed": True, "appearance": args.appearance,
-                "checks": ["real-PNG-paste-pixels", "Add-images-placement-expansion", "Select-last-image",
+                "checks": ["real-PNG-paste-pixels", "linear-PNG-to-sRGB-alpha", "sRGB-overrides-gamma",
+                           "INCR-PNG-above-1MiB-color-managed", "INCR-PNG-oversized-hint-rejected",
+                           "Add-images-placement-expansion", "Select-last-image",
                            "private-OS-marker-no-text", "24px-layer-offset", "external-text-invalidates-layer",
                            "text-html-empty-silent-noop", "corrupt-image-error-and-recovery",
                            "filename-text-paste", "external-image-replaces-layer", "Undo-Redo",
