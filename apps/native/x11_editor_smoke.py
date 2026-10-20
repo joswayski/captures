@@ -2997,6 +2997,7 @@ def main():
             shot(editor, "expand-applied")
             toolbar_click("undo")
             save_until(lambda: document_json()["width"] == 640, "Expand canvas is one undo step")
+            layer_click(0)  # The overflow action belongs to the selected hanging line.
             # Hovering the action arms the ghost: its crossed right side carries
             # shipping's pulsing accent bar, with the bloom and particles beyond.
             run("xdotool", "mousemove", "--sync", "--window", editor, str(right + 22), str(center_y),
