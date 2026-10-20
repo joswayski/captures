@@ -119,6 +119,16 @@ final class OpenImageTests: XCTestCase {
         XCTAssertFalse(editor.isVisible)
         controller.restoreUpdateSession(restart)
         try waitUntil { editor.isVisible && cropped() }
+        // Visibility and retained field values precede the asynchronous render.
+        // Require the restored crop's pixels, not just a reopened empty window.
+        try waitUntil {
+            self.descendants(controls).compactMap { $0 as? NSImageView }.contains {
+                guard $0.accessibilityLabel() == "Edited screenshot preview",
+                      let image = $0.image?.cgImage(forProposedRect: nil, context: nil, hints: nil)
+                else { return false }
+                return image.width == 120 && image.height == 80
+            }
+        }
         XCTAssertEqual(controller.snapshotUpdateWindows().first?["artifact_id"] as? String, id)
         XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: media)), before)
         if let output = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"],
