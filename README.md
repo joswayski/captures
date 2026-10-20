@@ -902,6 +902,9 @@ and use the shared dimension, pixel and color-management checks. Windows physica
 clipboard and rapid-paste ordering acceptance remain open.
 X11 file-list paste accepts incremental clipboard transfers within the existing
 1 MiB/two-second transfer limits; incomplete or invalid transfers import nothing.
+X11 PNG paste retains color metadata for the shared decoder, matching Windows
+and Wayland color management while preserving alpha. Direct and incremental PNG
+transfers use the 256 MiB encoded-image limit and a two-second transfer deadline.
 X11 paste uses XFixes selection notifications to reject clipboard replacement
 during a transfer, including replacement by the same owner, instead of importing
 a newer PNG accidentally. Paste again to explicitly use the new selection.

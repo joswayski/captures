@@ -1,13 +1,13 @@
 //! Screenshot editor clipboard input. Editable snapshots stay in the session;
 //! only an opaque private marker is published, never text or document JSON.
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
 use captures_app::editor_render::{MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS};
 use image::RgbaImage;
 
 #[derive(Default)]
 pub struct Clipboard {
     marker: Option<Marker>,
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     images: Option<arboard::Clipboard>,
 }
 
@@ -107,33 +107,28 @@ impl Clipboard {
             };
             Ok(vec![("Clipboard image".into(), pixels)])
         }
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(target_os = "linux")]
         {
-            // Linux's image reader can report both absent formats and real
-            // transfer failures as ContentNotAvailable. Inspect the actual offer
-            // instead of swallowing errors or probing an unsupported PNG target.
-            #[cfg(target_os = "linux")]
-            match png {
+            // Retain encoded PNG metadata until the shared decoder has applied
+            // its color, orientation, dimension and pixel checks.
+            let bytes = match png {
                 LinuxPng::Absent => return Ok(Vec::new()),
-                LinuxPng::Wayland(fd) => {
-                    let bytes = read_transfer(
-                        fd,
-                        captures_history::editor_draft::MAX_IMAGE_BYTES,
-                        "Clipboard image",
-                    )?;
-                    if !matches!(image::guess_format(&bytes), Ok(image::ImageFormat::Png)) {
-                        return Err(
-                            "Could not decode clipboard PNG. Copy it again and retry.".into()
-                        );
-                    }
-                    let pixels = captures_app::editor_image_decode::decode_import_bytes(
-                        &bytes,
-                        "Clipboard image",
-                    )?;
-                    return Ok(vec![("Clipboard image".into(), pixels)]);
-                }
-                LinuxPng::X11(_) => {}
+                LinuxPng::Wayland(fd) => read_transfer(
+                    fd,
+                    captures_history::editor_draft::MAX_IMAGE_BYTES,
+                    "Clipboard image",
+                )?,
+                LinuxPng::X11(offer) => offer.read().map_err(|error| error.to_string())?,
+            };
+            if !matches!(image::guess_format(&bytes), Ok(image::ImageFormat::Png)) {
+                return Err("Could not decode clipboard PNG. Copy it again and retry.".into());
             }
+            let pixels =
+                captures_app::editor_image_decode::decode_import_bytes(&bytes, "Clipboard image")?;
+            Ok(vec![("Clipboard image".into(), pixels)])
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        {
             if self.images.is_none() {
                 self.images = Some(arboard::Clipboard::new().map_err(|error| error.to_string())?);
             }
@@ -144,12 +139,6 @@ impl Clipboard {
                 }
                 Err(error) => return Err(format!("Could not read clipboard image: {error}")),
             };
-            #[cfg(target_os = "linux")]
-            if let LinuxPng::X11(connection) = png {
-                // arboard opens a separate requestor. Retain our selection watch
-                // across that read so its pixels cannot come from a newer offer.
-                x11_marker::ensure_unchanged(&connection).map_err(|error| error.to_string())?;
-            }
             let width = u32::try_from(image.width).map_err(|_| "Clipboard image is too wide.")?;
             let height = u32::try_from(image.height).map_err(|_| "Clipboard image is too tall.")?;
             if width == 0
@@ -275,7 +264,7 @@ pub fn service(event_loop: &winit::event_loop::ActiveEventLoop) {
 #[cfg(target_os = "linux")]
 enum LinuxPng {
     Absent,
-    X11(Box<x11rb::rust_connection::RustConnection>),
+    X11(Box<x11_marker::Png>),
     Wayland(std::os::fd::OwnedFd),
 }
 
@@ -296,11 +285,11 @@ fn linux_files(ctx: &eframe::egui::Context) -> Result<(Vec<std::path::PathBuf>, 
         };
         (png, bytes)
     } else {
-        let (has_png, bytes, connection) =
+        let (has_png, bytes, offer) =
             x11_marker::offered_files().map_err(|error| error.to_string())?;
         (
             if has_png {
-                LinuxPng::X11(Box::new(connection))
+                LinuxPng::X11(Box::new(offer))
             } else {
                 LinuxPng::Absent
             },
@@ -407,8 +396,32 @@ mod x11_marker {
         wrapper::ConnectionExt as _,
     };
 
-    pub(super) fn offered_files()
-    -> Result<(bool, Vec<u8>, RustConnection), Box<dyn std::error::Error>> {
+    pub(super) struct Png {
+        connection: RustConnection,
+        window: Window,
+        selection: Atom,
+        property: Atom,
+        target: Atom,
+    }
+
+    impl Png {
+        pub(super) fn read(self) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+            let bytes = read_selection(
+                &self.connection,
+                self.window,
+                self.selection,
+                self.target,
+                self.property,
+                (self.target, 8),
+                captures_history::editor_draft::MAX_IMAGE_BYTES,
+            )?
+            .ok_or("Clipboard offer became unavailable.")?;
+            ensure_unchanged(&self.connection)?;
+            Ok(bytes)
+        }
+    }
+
+    pub(super) fn offered_files() -> Result<(bool, Vec<u8>, Png), Box<dyn std::error::Error>> {
         let (connection, screen) = x11rb::connect(None)?;
         let window = connection.generate_id()?;
         connection
@@ -449,19 +462,27 @@ mod x11_marker {
             .atom;
         let targets = connection.intern_atom(false, b"TARGETS")?.reply()?.atom;
         let png = connection.intern_atom(false, b"image/png")?.reply()?.atom;
+        let offer = Png {
+            connection,
+            window,
+            selection,
+            property,
+            target: png,
+        };
+        let connection = &offer.connection;
         let Some(formats) = read_selection(
-            &connection,
+            connection,
             window,
             selection,
             targets,
             property,
-            AtomEnum::ATOM.into(),
-            32,
+            (AtomEnum::ATOM.into(), 32),
+            1024 * 1024,
         )?
         else {
             if connection.get_selection_owner(selection)?.reply()?.owner == 0 {
-                ensure_unchanged(&connection)?;
-                return Ok((false, Vec::new(), connection));
+                ensure_unchanged(connection)?;
+                return Ok((false, Vec::new(), offer));
             }
             return Err("Clipboard offer became unavailable.".into());
         };
@@ -471,23 +492,28 @@ mod x11_marker {
             .collect();
         let has_png = atoms.contains(&png);
         let bytes = if atoms.contains(&target) {
-            read_selection(&connection, window, selection, target, property, target, 8)?
-                .ok_or("Clipboard offer became unavailable.")?
+            read_selection(
+                connection,
+                window,
+                selection,
+                target,
+                property,
+                (target, 8),
+                1024 * 1024,
+            )?
+            .ok_or("Clipboard offer became unavailable.")?
         } else {
             Vec::new()
         };
-        ensure_unchanged(&connection)?;
+        ensure_unchanged(connection)?;
         // This dedicated connection owns the requestor window. Every exit,
         // including an abandoned INCR transfer, destroys it and its properties.
         // Keep it alive through the fallback PNG read's ownership check.
-        Ok((has_png, bytes, connection))
+        Ok((has_png, bytes, offer))
     }
 
-    pub(super) fn ensure_unchanged(
-        connection: &RustConnection,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        // A server round trip collects notifications preceding completion of
-        // the read, including reads made through arboard's other connection.
+    fn ensure_unchanged(connection: &RustConnection) -> Result<(), Box<dyn std::error::Error>> {
+        // A server round trip collects notifications preceding completion of the read.
         connection.get_input_focus()?.reply()?;
         while let Some(event) = connection.poll_for_event()? {
             if matches!(event, Event::XfixesSelectionNotify(_)) {
@@ -507,10 +533,10 @@ mod x11_marker {
         selection: Atom,
         target: Atom,
         property: Atom,
-        expected_type: Atom,
-        expected_format: u8,
+        expected: (Atom, u8),
+        maximum: usize,
     ) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error>> {
-        const MAX_BYTES: usize = 1024 * 1024;
+        let (expected_type, expected_format) = expected;
         let incr = connection.intern_atom(false, b"INCR")?.reply()?.atom;
         connection
             .convert_selection(window, selection, target, property, x11rb::CURRENT_TIME)?
@@ -521,7 +547,7 @@ mod x11_marker {
         let mut bytes = Vec::new();
         loop {
             if std::time::Instant::now() >= deadline {
-                return Err("Clipboard file transfer timed out.".into());
+                return Err("Clipboard transfer timed out.".into());
             }
             let Some(event) = connection.poll_for_event()? else {
                 std::thread::sleep(std::time::Duration::from_millis(10));
@@ -557,14 +583,7 @@ mod x11_marker {
             // ANY lets delete=true acknowledge an INCR header as well as data.
             // Never delete twice: that could discard the owner's next chunk.
             let result = connection
-                .get_property(
-                    true,
-                    window,
-                    property,
-                    AtomEnum::ANY,
-                    0,
-                    MAX_BYTES as u32 / 4,
-                )?
+                .get_property(true, window, property, AtomEnum::ANY, 0, maximum as u32 / 4)?
                 .reply()?;
             if !incremental && result.type_ == incr {
                 if result.format != 32 || result.value.len() != 4 || result.bytes_after != 0 {
@@ -574,8 +593,10 @@ mod x11_marker {
                     .value32()
                     .and_then(|mut sizes| sizes.next())
                     .ok_or("Clipboard incremental transfer has an invalid header.")?;
-                if hint > MAX_BYTES as u32 {
-                    return Err("Clipboard file list exceeds 1 MiB.".into());
+                if hint > maximum as u32 {
+                    return Err(
+                        format!("Clipboard data exceeds {} MiB.", maximum / (1024 * 1024)).into(),
+                    );
                 }
                 incremental = true;
                 continue;
@@ -593,8 +614,10 @@ mod x11_marker {
             if result.value.is_empty() {
                 return Ok(Some(bytes));
             }
-            if result.value.len() > MAX_BYTES - bytes.len() {
-                return Err("Clipboard file list exceeds 1 MiB.".into());
+            if result.value.len() > maximum - bytes.len() {
+                return Err(
+                    format!("Clipboard data exceeds {} MiB.", maximum / (1024 * 1024)).into(),
+                );
             }
             bytes.extend_from_slice(&result.value);
         }

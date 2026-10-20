@@ -18,6 +18,8 @@ def main():
     parser.add_argument("--payload", type=Path, required=True)
     parser.add_argument("--log", type=Path, required=True)
     parser.add_argument("--png", type=Path)
+    parser.add_argument("--png-incr", action="store_true",
+                        help="Offer only PNG and transfer it through INCR")
     parser.add_argument("--replacement-png", type=Path)
     parser.add_argument("--replace-on", choices=("text/uri-list", "image/png"), default="text/uri-list",
                         help="Reacquire the same owner window during this format's read")
@@ -34,7 +36,9 @@ def main():
     payload = args.payload.read_bytes()
     png = args.png.read_bytes() if args.png else None
     replaced = False
-    formats = [atoms["TARGETS"], atoms["text/uri-list"]]
+    formats = [atoms["TARGETS"]]
+    if not args.png_incr:
+        formats.append(atoms["text/uri-list"])
     if png is not None:
         # Keep egui's eager text read from consuming the URI offer first.
         formats.extend([atoms["image/png"], atoms["UTF8_STRING"]])
@@ -78,23 +82,26 @@ def main():
                         record("replaced", same_owner=True)
                     if event.target == atoms["TARGETS"] and not args.targets_incr:
                         event.requestor.change_property(property_, Xatom.ATOM, 32, formats)
-                    elif png is not None and event.target == atoms["image/png"]:
+                    elif png is not None and event.target == atoms["image/png"] and not args.png_incr:
                         event.requestor.change_property(property_, atoms["image/png"], 8, png)
                         record("png", replaced=replaced)
                     elif png is not None and event.target == atoms["UTF8_STRING"]:
                         event.requestor.change_property(property_, atoms["UTF8_STRING"], 8, b"")
-                    elif event.target in (atoms["TARGETS"], atoms["text/uri-list"]):
+                    elif event.target in (atoms["TARGETS"], atoms["text/uri-list"]) or (
+                            args.png_incr and png is not None and event.target == atoms["image/png"]):
                         targets = event.target == atoms["TARGETS"]
-                        values = formats if targets else payload
+                        is_png = event.target == atoms["image/png"]
+                        values = formats if targets else png if is_png else payload
                         event.requestor.change_attributes(event_mask=X.PropertyChangeMask | X.StructureNotifyMask)
-                        transfers[(event.requestor.id, property_)] = (values, 0, targets)
+                        transfers[(event.requestor.id, property_)] = (values, 0, event.target)
                         if args.mode == "malformed-header" and not targets:
                             event.requestor.change_property(property_, atoms["INCR"], 8, b"bad")
                         else:
                             # Zero is a valid lower bound, not the final byte count.
-                            hint = 1024 * 1024 + 1 if args.mode == "oversized-hint" and not targets else 0
+                            maximum = (256 if is_png else 1) * 1024 * 1024
+                            hint = maximum + 1 if args.mode == "oversized-hint" and not targets else 0
                             event.requestor.change_property(property_, atoms["INCR"], 32, [hint])
-                        record("incr", target="TARGETS" if targets else "text/uri-list")
+                        record("incr", target="TARGETS" if targets else "image/png" if is_png else "text/uri-list")
                     else:
                         property_ = X.NONE
                     connection.send_event(event.requestor, protocol.event.SelectionNotify(
@@ -105,10 +112,12 @@ def main():
                     key = event.window.id, event.atom
                     if key not in transfers:
                         continue
-                    values, offset, targets = transfers[key]
+                    values, offset, target = transfers[key]
+                    targets = target == atoms["TARGETS"]
+                    is_png = target == atoms["image/png"]
                     # Force escape/CRLF boundaries independently of path lengths.
                     # Large cap probes finish well inside the deadline instead.
-                    size = 1 if targets else (65536 if args.mode in ("exact-limit", "overflow") else 13)
+                    size = 1 if targets else (65536 if is_png or args.mode in ("exact-limit", "overflow") else 13)
                     end = offset + size
                     if not targets and size == 13:
                         for separator in (b"%", b"\r"):
@@ -122,17 +131,17 @@ def main():
                     if args.mode == "slow" and not targets:
                         # Progress must not reset the app's absolute deadline.
                         time.sleep(.35)
-                    type_ = Xatom.ATOM if targets else atoms["text/uri-list"]
+                    type_ = Xatom.ATOM if targets else target
                     if not targets and (args.mode == "wrong-type"
                                         or (not chunk and args.mode == "wrong-terminator")):
                         type_ = atoms["UTF8_STRING"]
                     event.window.change_property(event.atom, type_, 32 if targets else 8, chunk)
                     connection.flush()
-                    record("chunk", target="TARGETS" if targets else "text/uri-list", count=len(chunk))
-                    if not targets and chunk and chunk[-1:] in (b"%", b"\r"):
+                    record("chunk", target="TARGETS" if targets else "image/png" if is_png else "text/uri-list", count=len(chunk))
+                    if not targets and not is_png and chunk and chunk[-1:] in (b"%", b"\r"):
                         record("split", kind="escape" if chunk[-1:] == b"%" else "CRLF")
                     if chunk:
-                        transfers[key] = values, offset + len(chunk), targets
+                        transfers[key] = values, offset + len(chunk), target
                     else:
                         del transfers[key]
             select.select([connection.display.socket], [], [], .05)
