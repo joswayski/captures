@@ -1783,7 +1783,7 @@ impl eframe::App for Workbench {
                 "viewportIds":input.viewports.keys().map(|id| format!("{id:?}")).collect::<Vec<_>>(),
             })
         });
-        self.paste_input.append(input);
+        self.paste_input.publish(ctx);
         let window = ctx.data(|data| {
             data.get_temp::<std::sync::Weak<winit::window::Window>>(egui::Id::unique((
                 "eframe-winit-window",
@@ -1793,13 +1793,6 @@ impl eframe::App for Workbench {
         });
         self.selector_input
             .publish(ctx, input, window.map(|window| window.id()));
-        #[cfg(target_os = "linux")]
-        ctx.data_mut(|data| {
-            data.insert_temp(
-                egui::Id::unique(crate::clipboard_input::FOCUS_EPOCH),
-                self.paste_input.focus_epoch(),
-            )
-        });
     }
 
     fn clear_color(&self, _: &egui::Visuals) -> [f32; 4] {

@@ -1650,6 +1650,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private let layerPasteboard: NSPasteboard
     private static let layerClipboardType = NSPasteboard.PasteboardType("es.captur.editor-clipboard-layer")
     private var layerClipboardToken: String?
+    private var layerClipboard: NativeEditorLayerClipboard?
+    private var pendingLayerPastes: [(clipboard: NativeEditorLayerClipboard, request: [String: Any], id: String)] = []
     private static let imageDecodeQueue = DispatchQueue(label: "es.captures.native.editor-image-decode",
                                                         qos: .userInitiated)
     private var importToken = 0
@@ -6213,6 +6215,13 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     private func submitPendingImportIfReady() {
+        if !pendingLayerPastes.isEmpty {
+            guard !state.busy, acceptsImageImports else { return }
+            let next = pendingLayerPastes.removeFirst()
+            command(next.request, message: "Pasting layer…", preferredSelection: next.id,
+                    selectToolOnSuccess: true, pastedClipboard: next.clipboard)
+            return
+        }
         guard let pendingImport else { return }
         guard pendingImport.generation == state.generation,
               pendingImport.artifactID == state.artifactID, state.snapshot != nil else {
@@ -6240,12 +6249,16 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 guard self.state.fail(generation: generation) else { return }
                 self.showError("Couldn’t import image: \(error.localizedDescription)")
             }
+            self.submitPendingImportIfReady()
             self.startNextImport()
             self.updateControls()
         }
     }
 
     private func cancelPendingImport() {
+        pendingLayerPastes.removeAll()
+        layerClipboard = nil
+        layerClipboardToken = nil
         importToken += 1
         importLoading = false
         pendingImport = nil
@@ -6305,17 +6318,16 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private func pasteLayer(after id: String?) {
         guard acceptsImageImports, let snapshot = state.snapshot else { return }
         guard id == nil || snapshot.layers.contains(where: { $0.id == id }) else { return }
-        guard snapshot.canPasteLayer && ownsLayerClipboard else {
+        guard ownsLayerClipboard, let clipboard = layerClipboard else {
             pasteClipboardImages()
             return
         }
-        guard layerActionsReady else { return }
         let newID = UUID().uuidString.lowercased()
-        var request: [String: Any] = ["operation": "paste_layer", "new_id": newID]
+        var request: [String: Any] = ["new_id": newID]
         if let id { request["after_id"] = id }
         cancelDrawing(); cancelViewportPan()
-        command(request, message: "Pasting layer…", preferredSelection: newID,
-                selectToolOnSuccess: true)
+        pendingLayerPastes.append((clipboard, request, newID))
+        submitPendingImportIfReady()
     }
 
     private func pasteClipboardImages() {
@@ -6367,7 +6379,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             add("Copy layer", #selector(copyLayerFromMenu(_:)), enabled: ready, id: target.id)
         }
         add("Paste layer", #selector(pasteLayerFromMenu(_:)),
-            enabled: snapshot.canPasteLayer && ownsLayerClipboard ? ready : acceptsImageImports, id: targetID)
+            enabled: acceptsImageImports, id: targetID)
         if let target {
             menu.addItem(.separator())
             add("Duplicate", #selector(duplicateLayerFromMenu(_:)), enabled: ready, id: target.id)
@@ -6571,7 +6583,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                          preserveStagedTextOnFailure: Bool = false,
                          preserveOutputAndStatus: Bool = false,
                          selectToolOnSuccess: Bool = false,
-                         copiedLayerToken: String? = nil) {
+                         copiedLayerToken: String? = nil,
+                         pastedClipboard: NativeEditorLayerClipboard? = nil) {
         guard inlineTextInput == nil else {
             showError("Finish or cancel inline text before another editor action.")
             return
@@ -6583,16 +6596,19 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         preferredLayerID = preferredSelection
         if !preserveOutputAndStatus { editorError = nil }
         updateControls()
-        worker.request(object) { [weak self] result in
+        var copiedClipboard: NativeEditorLayerClipboard?
+        let completion: (Result<EditorPresentation, Error>) -> Void = { [weak self] result in
             guard let self else { return }
             switch result {
             case .success(let presentation):
                 guard self.state.complete(presentation.snapshot, generation: generation) else { return }
                 if let copiedLayerToken, self.layerPasteboard.changeCount == clipboardChange {
                     self.layerClipboardToken = nil
+                    self.layerClipboard = nil
                     self.layerPasteboard.clearContents()
                     if self.layerPasteboard.setString(copiedLayerToken, forType: Self.layerClipboardType) {
                         self.layerClipboardToken = copiedLayerToken
+                        self.layerClipboard = copiedClipboard
                     } else { self.showError("Couldn’t claim the layer clipboard.") }
                 }
                 if let createdLayerExistingIDs {
@@ -6619,6 +6635,18 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             self.textApplyPending = false
             self.updateControls()
             self.submitPendingImportIfReady()
+        }
+        if copiedLayerToken != nil {
+            worker.copyLayer(object) { result in
+                completion(result.map { copied in
+                    copiedClipboard = copied.1
+                    return copied.0
+                })
+            }
+        } else if let pastedClipboard {
+            worker.pasteLayer(pastedClipboard, request: object, completion: completion)
+        } else {
+            worker.request(object, completion: completion)
         }
     }
 

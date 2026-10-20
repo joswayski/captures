@@ -10,7 +10,8 @@ use captures_app::{
     editor_canvas as canvas,
     editor_render::{MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS},
     editor_session::{
-        EditorSession, ExportOptions, ImportImage, OpenRequest, Request, image_drop_guide,
+        CopiedLayer, EditorSession, ExportOptions, ImportImage, OpenRequest, Request,
+        image_drop_guide,
     },
     editor_viewport::{Viewport, wheel_zoom_factor, zoom_from_slider, zoom_slider_position},
     selection::Point as AbiPoint,
@@ -1163,6 +1164,80 @@ pub unsafe extern "C" fn captures_editor_request_v1(
             .map_err(|error| error.to_string())?;
         let session = unsafe { handle.as_mut() }.ok_or("editor handle is null")?;
         session.execute(request)?;
+        session.refresh_layer_thumbnails();
+        Ok::<_, String>(json!(session.snapshot()))
+    }))
+    .unwrap_or_else(|_| Err("internal panic".into()));
+    response(match result {
+        Ok(snapshot) => json!({"ok":true,"result":snapshot}),
+        Err(error) => json!({"ok":false,"error":error}),
+    })
+}
+
+/// Retain the current copied contents independently of subsequent Copy commands.
+/// Null means no copied layer. The retained handle may outlive the session, but
+/// can only be pasted into that same, non-reset session.
+///
+/// # Safety
+/// Non-null session is live and not accessed/freed concurrently. Release the
+/// returned handle exactly once with captures_editor_layer_clipboard_free_v1.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_editor_layer_clipboard_v1(
+    session: *const EditorSession,
+) -> *const CopiedLayer {
+    // SAFETY: caller retains a live serialized session.
+    unsafe { session.as_ref() }
+        .and_then(EditorSession::copied_layer)
+        .map_or(ptr::null(), Arc::into_raw)
+}
+
+/// # Safety
+/// Null or a live owned handle returned by captures_editor_layer_clipboard_v1.
+/// Release exactly once, after all calls using it finish, on any thread.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_editor_layer_clipboard_free_v1(clipboard: *const CopiedLayer) {
+    if !clipboard.is_null() {
+        // SAFETY: caller transfers one retained strong reference.
+        drop(unsafe { Arc::from_raw(clipboard) });
+    }
+}
+
+/// Paste retained contents, without consulting the current clipboard. Request
+/// JSON contains new_id and optional after_id; returns the usual snapshot JSON.
+///
+/// # Safety
+/// Session is live and exclusively owned for the call. Clipboard is a live
+/// retained handle; neither handle may be freed concurrently. Input is readable
+/// NUL-terminated UTF-8. Free the returned JSON with captures_settings_free_v1.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_editor_paste_layer_v1(
+    session: *mut EditorSession,
+    clipboard: *const CopiedLayer,
+    request_json: *const c_char,
+) -> *mut c_char {
+    #[derive(Deserialize)]
+    struct Paste {
+        new_id: String,
+        after_id: Option<String>,
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: caller retains readable input and exclusive session ownership.
+        let request = serde_json::from_str::<Paste>(unsafe { text(request_json) }?)
+            .map_err(|error| error.to_string())?;
+        let session = unsafe { session.as_mut() }.ok_or("editor handle is null")?;
+        if clipboard.is_null() {
+            return Err("copied layer handle is null".into());
+        }
+        // SAFETY: retain a separate reference to the caller's live Arc handle.
+        let clipboard = unsafe {
+            Arc::increment_strong_count(clipboard);
+            Arc::from_raw(clipboard)
+        };
+        session.execute(Request::PasteRetainedLayer {
+            clipboard,
+            new_id: request.new_id,
+            after_id: request.after_id,
+        })?;
         session.refresh_layer_thumbnails();
         Ok::<_, String>(json!(session.snapshot()))
     }))
@@ -3032,7 +3107,22 @@ mod tests {
             let mut output = ptr::null_mut();
             let session = captures_editor_open_v1(request.as_ptr(), &mut output);
             assert!(!session.is_null());
-            assert_eq!(take_json(output)["ok"], true);
+            let opened = take_json(output);
+            assert_eq!(opened["ok"], true);
+            let copy = CString::new(
+                json!({
+                    "operation": "copy_layer",
+                    "id": opened["result"]["document"]["elements"][0]["id"],
+                })
+                .to_string(),
+            )
+            .unwrap();
+            assert_eq!(
+                take_json(captures_editor_request_v1(session, copy.as_ptr()))["ok"],
+                true
+            );
+            let clipboard = captures_editor_layer_clipboard_v1(session);
+            assert!(!clipboard.is_null());
             let old = captures_editor_frame_v1(session);
             let request =
                 c"{\"operation\":\"crop\",\"rect\":{\"x\":1,\"y\":0,\"width\":2,\"height\":1}}";
@@ -3068,6 +3158,24 @@ mod tests {
                 assert_eq!(take_json(output)["ok"], false);
                 assert_eq!(take_json(captures_editor_request_v1(session, c"{\"operation\":\"snapshot\"}".as_ptr())), before);
             }
+            let pasted = take_json(captures_editor_paste_layer_v1(
+                session,
+                clipboard,
+                c"{\"new_id\":\"retained\"}".as_ptr(),
+            ));
+            assert_eq!(pasted["ok"], true);
+            assert_eq!(
+                pasted["result"]["document"]["elements"][1]["id"],
+                "retained"
+            );
+            assert_eq!(pasted["result"]["document"]["elements"][1]["x"], 24.);
+            assert_eq!(
+                take_json(captures_editor_request_v1(
+                    session,
+                    c"{\"operation\":\"undo\"}".as_ptr(),
+                ))["result"]["document"],
+                before["result"]["document"]
+            );
             assert_eq!(
                 take_json(captures_editor_request_v1(
                     session,
@@ -3076,6 +3184,7 @@ mod tests {
                 true
             );
             captures_editor_free_v1(session);
+            captures_editor_layer_clipboard_free_v1(clipboard);
             let mut bytes = EditorBytes {
                 data: ptr::null(),
                 length: 0,
@@ -3121,6 +3230,16 @@ mod tests {
     fn null_handles_and_bad_open_have_owned_errors_and_leave_pixel_output_unchanged() {
         // SAFETY: null pointers are explicitly accepted; output lives throughout.
         unsafe {
+            assert!(captures_editor_layer_clipboard_v1(ptr::null()).is_null());
+            captures_editor_layer_clipboard_free_v1(ptr::null());
+            assert_eq!(
+                take_json(captures_editor_paste_layer_v1(
+                    ptr::null_mut(),
+                    ptr::null(),
+                    c"{\"new_id\":\"paste\"}".as_ptr(),
+                ))["ok"],
+                false
+            );
             assert!(captures_editor_open_v1(ptr::null(), ptr::null_mut()).is_null());
             let mut output = ptr::null_mut();
             assert!(captures_editor_encode_v1(ptr::null(), ptr::null(), ptr::null_mut()).is_null());

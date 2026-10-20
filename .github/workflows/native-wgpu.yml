@@ -72,6 +72,9 @@ jobs:
       - run: uv run --no-project python -m unittest discover -s apps/native -p 'test_*.py'
       - run: cargo +1.95.0 fmt --manifest-path apps/native/wgpu/Cargo.toml --all -- --check
       - run: cargo +1.95.0 test --manifest-path apps/native/wgpu/Cargo.toml --locked
+      - name: Retain accepted layer pastes across a concurrent Copy
+        if: runner.os == 'Linux'
+        run: xvfb-run -a cargo +1.95.0 test --manifest-path apps/native/wgpu/Cargo.toml --locked retained_pastes_accept_a_during_copy_b_and_undo_individually -- --ignored
       - run: cargo +1.95.0 clippy --manifest-path apps/native/wgpu/Cargo.toml --locked --all-targets -- -D warnings
       - name: Verify frozen screenshot cursor previews and final capture pixels
         env:

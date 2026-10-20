@@ -893,6 +893,12 @@ in arrival order, applying each batch to the latest document. A failed batch doe
 not block later imports; closing or replacing the document cancels waiting batches.
 Windows/Linux queue completed picker selections alongside file drops even while
 an edit is running, so later drops cannot overtake an already completed selection.
+Both native hosts retain accepted copied-layer pastes while an edit is running:
+each keeps its copied contents and insertion target, even if another Copy or an
+external clipboard replacement occurs before it runs. Each successful paste has
+its own Undo step; closing or resetting the editor cancels waiting pastes.
+Windows/Linux external-image paste retention while busy remains incomplete;
+the copied-layer queue does not change when external clipboard data is acquired.
 Outside text fields, an empty or text/HTML-only clipboard is ignored; unreadable
 image data still reports an error without changing the document.
 Windows acquires file paths and fallback PNG/DIBV5 bytes under one clipboard lock,

@@ -184,7 +184,6 @@ impl ApplicationHandler<eframe::UserEvent> for InputApplication<'_> {
         preferences_window::during_window_event(|| {
             self.inner.window_event(event_loop, window_id, event);
         });
-        self.paste_input.end_event();
         self.outbound_drag.end_event();
         self.outbound_drag.service(event_loop);
         #[cfg(target_os = "linux")]
@@ -311,13 +310,10 @@ impl InputApplication<'_> {
             return;
         };
         diagnostics::event("preferences-root-pass", || json!({}));
-        self.paste_input
-            .begin_event(root, &WindowEvent::RedrawRequested);
         preferences_window::during_window_event(|| {
             self.inner
                 .window_event(event_loop, root, WindowEvent::RedrawRequested);
         });
-        self.paste_input.end_event();
     }
 
     #[cfg(any(target_os = "windows", target_os = "linux"))]
@@ -373,13 +369,10 @@ impl InputApplication<'_> {
                 "root-repaint-fallback",
                 || json!({"pass":ctx.cumulative_pass_nr_for(egui::ViewportId::ROOT)}),
             );
-            self.paste_input
-                .begin_event(window.id(), &WindowEvent::RedrawRequested);
             preferences_window::during_window_event(|| {
                 self.inner
                     .window_event(event_loop, window.id(), WindowEvent::RedrawRequested);
             });
-            self.paste_input.end_event();
             self.root_repaints
                 .prune(ctx.cumulative_pass_nr_for(egui::ViewportId::ROOT));
         }

@@ -924,6 +924,13 @@ final class NativeEditorFrame {
     }
 }
 
+/// Independently retained Copy generation, like an immutable editor frame.
+final class NativeEditorLayerClipboard {
+    fileprivate let handle: OpaquePointer?
+    init(handle: OpaquePointer? = nil) { self.handle = handle }
+    deinit { if let handle { captures_editor_layer_clipboard_free_v1(handle) } }
+}
+
 private final class NativeEditorSession {
     private let handle: OpaquePointer
 
@@ -958,6 +965,22 @@ private final class NativeEditorSession {
         let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
         let response = String(decoding: data, as: UTF8.self).withCString {
             captures_editor_request_v1(handle, $0)
+        }
+        guard let response else { throw AppBridgeError.invalidResponse }
+        defer { captures_settings_free_v1(response) }
+        let result = try AppBridge.decode(Data(bytes: response, count: strlen(response)))
+        guard let snapshot = NativeEditorSnapshot(result) else { throw AppBridgeError.invalidResponse }
+        return snapshot
+    }
+
+    func layerClipboard() -> NativeEditorLayerClipboard? {
+        captures_editor_layer_clipboard_v1(handle).map { NativeEditorLayerClipboard(handle: $0) }
+    }
+
+    func pasteLayer(_ clipboard: NativeEditorLayerClipboard, request: [String: Any]) throws -> NativeEditorSnapshot {
+        let data = try JSONSerialization.data(withJSONObject: request, options: [.sortedKeys])
+        let response = String(decoding: data, as: UTF8.self).withCString {
+            captures_editor_paste_layer_v1(handle, clipboard.handle, $0)
         }
         guard let response else { throw AppBridgeError.invalidResponse }
         defer { captures_settings_free_v1(response) }
@@ -1124,6 +1147,9 @@ private final class NativeEditorSession {
 }
 
 protocol EditorWorking: AnyObject {
+    func copyLayer(_ request: [String: Any], completion: @escaping (Result<(EditorPresentation, NativeEditorLayerClipboard), Error>) -> Void)
+    func pasteLayer(_ clipboard: NativeEditorLayerClipboard, request: [String: Any],
+                    completion: @escaping (Result<EditorPresentation, Error>) -> Void)
     func open(historyRoot: String, draftsRoot: String, artifactID: String,
               completion: @escaping (Result<EditorPresentation, Error>) -> Void)
     func request(_ object: [String: Any],
@@ -1169,6 +1195,34 @@ extension EditorWorking {
 /// The opaque mutable session never leaves this queue. Frame ownership is split
 /// before delivery to AppKit and remains valid independently of the session.
 final class EditorWorker: EditorWorking {
+    func copyLayer(_ request: [String: Any], completion: @escaping (Result<(EditorPresentation, NativeEditorLayerClipboard), Error>) -> Void) {
+        let storage = storage
+        Self.queue.async {
+            let result = Result { () throws -> (EditorPresentation, NativeEditorLayerClipboard) in
+                guard let session = storage.session else { throw AppBridgeError.invalidResponse }
+                let snapshot = try session.request(request)
+                guard let clipboard = session.layerClipboard() else { throw AppBridgeError.invalidResponse }
+                storage.snapshot = snapshot
+                return (try session.presentation(snapshot), clipboard)
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    func pasteLayer(_ clipboard: NativeEditorLayerClipboard, request: [String: Any],
+                    completion: @escaping (Result<EditorPresentation, Error>) -> Void) {
+        let storage = storage
+        Self.queue.async {
+            let result = Result { () throws -> EditorPresentation in
+                guard let session = storage.session else { throw AppBridgeError.invalidResponse }
+                let snapshot = try session.pasteLayer(clipboard, request: request)
+                storage.snapshot = snapshot
+                return try session.presentation(snapshot)
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
     private static let queue = DispatchQueue(label: "es.captures.native.editor",
                                              qos: .userInitiated)
     /// Size estimates encode retained frames here, never on the session queue.

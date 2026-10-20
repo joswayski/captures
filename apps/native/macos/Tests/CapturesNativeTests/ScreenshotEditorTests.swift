@@ -2499,6 +2499,15 @@ final class ScreenshotEditorTests: XCTestCase {
         waitUntil { !controller.state.busy && controller.state.snapshot?.canPasteLayer == true }
         XCTAssertNil(pasteboard.string(forType: .string), "no visible clipboard token")
         try shortcut("v", 9)
+        try shortcut("v", 9) // Accepted before the first worker completion.
+        waitUntil { controller.state.snapshot?.layers.count == 4 && !controller.state.busy }
+        let twice = try XCTUnwrap(controller.state.snapshot?.layers.first { $0.x == imported.x + 48 })
+        XCTAssertEqual(twice.x, imported.x + 48); XCTAssertEqual(twice.y, imported.y + 48)
+        try shortcut("z", 6)
+        waitUntil { controller.state.snapshot?.layers.count == 3 && !controller.state.busy }
+        try shortcut("z", 6)
+        waitUntil { controller.state.snapshot?.layers.count == 2 && !controller.state.busy }
+        try shortcut("z", 6, shift: true)
         waitUntil { controller.state.snapshot?.layers.count == 3 && !controller.state.busy }
         let pasted = try XCTUnwrap(controller.state.snapshot?.layers.first)
         XCTAssertEqual(pasted.x, imported.x + 24); XCTAssertEqual(pasted.y, imported.y + 24)
@@ -2984,6 +2993,37 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(panel.message, "Choose images to add as new layers")
         XCTAssertTrue(panel.canChooseFiles); XCTAssertFalse(panel.canChooseDirectories)
         XCTAssertTrue(panel.allowsMultipleSelection, "shipping's file input is multiple")
+    }
+
+    func testInternalPasteDoesNotWaitForExternalDecodeAndExternalBatchesStayFIFO() throws {
+        _ = NSApplication.shared
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("es.captures.tests.\(UUID())"))
+        defer { pasteboard.releaseGlobally() }
+        let source = layer(id: "source", name: "Source", x: 0, y: 0,
+                           visible: true, locked: false, opacity: 100)
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [source], canPaste: true))
+        let started = DispatchSemaphore(value: 0), allowDecode = DispatchSemaphore(value: 0)
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!,
+            worker: worker, imageDecoder: { url in
+                if url.lastPathComponent == "first.png" {
+                    started.signal(); _ = allowDecode.wait(timeout: .now() + 5)
+                }
+                return EditorDecodedImage(data: Data(repeating: 0xff, count: 4),
+                    width: 1, height: 1, bytesPerRow: 4, name: url.lastPathComponent)
+            }, layerPasteboard: pasteboard)
+        defer { allowDecode.signal(); controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        let menu = try XCTUnwrap(controller.layerContextMenu(row: 0))
+        menu.performActionForItem(at: try XCTUnwrap(menu.items.firstIndex { $0.title == "Copy layer" }))
+        XCTAssertTrue(controller.handleFileDrop(.drop, urls: [URL(fileURLWithPath: "/tmp/first.png")], at: .zero))
+        XCTAssertEqual(started.wait(timeout: .now() + 2), .success)
+        XCTAssertTrue(controller.handleFileDrop(.drop, urls: [URL(fileURLWithPath: "/tmp/second.png")], at: .zero))
+        menu.performActionForItem(at: try XCTUnwrap(menu.items.firstIndex { $0.title == "Paste layer" }))
+        XCTAssertEqual(worker.pastedClipboards.count, 1, "free mutation slot is independent of the external decoder")
+        XCTAssertTrue(worker.imports.isEmpty)
+        allowDecode.signal()
+        waitUntil { worker.imports.count == 2 && !controller.state.busy }
+        XCTAssertEqual(worker.imports.map { $0.image.name }, ["first.png", "second.png"])
     }
 
     func testDecodedImportWaitsBehindAcceptedEditAndLateOrCancelledPickerRepliesAreIgnored() throws {
@@ -5503,6 +5543,58 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(worker.compares.count, 2)
     }
 
+    func testBusyLayerPasteRetainsPublishedGenerationTargetAndSurvivesClipboardReplacement() throws {
+        _ = NSApplication.shared
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("es.captures.tests.\(UUID())"))
+        defer { pasteboard.releaseGlobally() }
+        let source = layer(id: "source", name: "Source", x: 10, y: 20,
+                           visible: true, locked: false, opacity: 100)
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [source], canPaste: true))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!,
+            worker: worker, layerPasteboard: pasteboard)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        func menuAction(_ title: String) throws {
+            let menu = try XCTUnwrap(controller.layerContextMenu(row: 0))
+            menu.performActionForItem(at: try XCTUnwrap(menu.items.firstIndex { $0.title == title }))
+        }
+        try menuAction("Copy layer")
+        let a = try XCTUnwrap(worker.copiedClipboards.first)
+        let marker = pasteboard.pasteboardItems?.first?.types.first.flatMap { pasteboard.string(forType: $0) }
+        worker.deferRequests = true
+        try menuAction("Copy layer") // B has not published; A remains available.
+        XCTAssertEqual(worker.copiedClipboards.count, 1)
+        try menuAction("Paste layer")
+        try menuAction("Paste layer")
+        XCTAssertTrue(worker.pastedClipboards.isEmpty)
+        XCTAssertEqual(pasteboard.pasteboardItems?.first?.types.first.flatMap { pasteboard.string(forType: $0) }, marker)
+        worker.completePending(with: worker.snapshot)
+        XCTAssertEqual(worker.copiedClipboards.count, 2)
+        XCTAssertTrue(worker.pastedClipboards.first === a)
+        let first = try XCTUnwrap(worker.requests.last)
+        XCTAssertEqual(first["after_id"] as? String, "source")
+        pasteboard.clearContents()
+        pasteboard.setString("replacement", forType: .string)
+        worker.completePending(with: worker.snapshot)
+        XCTAssertEqual(worker.pastedClipboards.count, 2)
+        XCTAssertTrue(worker.pastedClipboards.last === a)
+        XCTAssertEqual(worker.requests.last?["after_id"] as? String, "source")
+        XCTAssertNotEqual(first["new_id"] as? String, worker.requests.last?["new_id"] as? String)
+        worker.completePending(with: worker.snapshot)
+        XCTAssertFalse(controller.state.busy)
+
+        // A fresh published copy can queue, but close discards every waiter.
+        worker.deferRequests = false
+        try menuAction("Copy layer")
+        worker.deferRequests = true
+        try menuAction("Paste layer")
+        try menuAction("Paste layer")
+        let count = worker.pastedClipboards.count
+        controller.window.performClose(nil)
+        worker.completePending(with: worker.snapshot)
+        XCTAssertEqual(worker.pastedClipboards.count, count)
+    }
+
     func testLayerShortcutsRespectFocusedControlPendingRejectedAndClosedStates() throws {
         _ = NSApplication.shared
         let pasteboard = NSPasteboard(name: NSPasteboard.Name("es.captures.tests.\(UUID())"))
@@ -5534,7 +5626,9 @@ final class ScreenshotEditorTests: XCTestCase {
             window: controller.window, keyCode: 9, characters: "v", modifiers: .command))
         _ = controller.window.performKeyEquivalent(with: try keyEvent(
             window: controller.window, keyCode: 9, characters: "v", modifiers: .command))
-        XCTAssertEqual(worker.requests.count, 1, "one in-flight command rejects another shortcut")
+        XCTAssertEqual(worker.requests.count, 1, "busy paste waits for the mutation slot")
+        worker.completePending(with: snapshot(id: "shot", layers: [source], canPaste: true))
+        XCTAssertEqual(worker.requests.count, 2, "accepted busy paste runs exactly once")
         worker.completePending(with: snapshot(id: "shot", layers: [source], canPaste: true))
         worker.deferRequests = false; worker.failOperation = "paste_layer"
         try showDraw(in: controller.root)
@@ -8956,6 +9050,27 @@ private final class ScriptedCurveSliderCell: NSSliderCell {
 }
 
 private final class FakeEditorWorker: EditorWorking {
+    var copiedClipboards: [NativeEditorLayerClipboard] = []
+    var pastedClipboards: [NativeEditorLayerClipboard] = []
+
+    func copyLayer(_ object: [String: Any], completion: @escaping (Result<(EditorPresentation, NativeEditorLayerClipboard), Error>) -> Void) {
+        let clipboard = NativeEditorLayerClipboard()
+        request(object) { result in
+            completion(result.map { presentation in
+                self.copiedClipboards.append(clipboard)
+                return (presentation, clipboard)
+            })
+        }
+    }
+
+    func pasteLayer(_ clipboard: NativeEditorLayerClipboard, request object: [String: Any],
+                    completion: @escaping (Result<EditorPresentation, Error>) -> Void) {
+        pastedClipboards.append(clipboard)
+        var object = object
+        object["operation"] = "paste_layer"
+        request(object, completion: completion)
+    }
+
     var snapshot: NativeEditorSnapshot
     var requests: [[String: Any]] = []
     /// Undo keys of live requests, in order (their inner requests are in `requests`).
