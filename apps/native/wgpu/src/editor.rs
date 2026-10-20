@@ -111,6 +111,7 @@ struct Presented {
     image_assets: BTreeMap<String, Arc<RgbaImage>>,
     pixels: Arc<RgbaImage>,
     original_export_path: Option<PathBuf>,
+    source_artifact_id: Option<String>,
     initial_text_size: f64,
     font_families: BTreeMap<String, String>,
     text_style_presets: Vec<TextStylePreset>,
@@ -155,6 +156,7 @@ impl Presented {
             image_assets: session.visible_image_assets(),
             pixels: session.pixels(),
             original_export_path: snapshot.original_export_path.map(Path::to_owned),
+            source_artifact_id: snapshot.source_artifact_id.map(str::to_owned),
             initial_text_size: snapshot.initial_text_size,
             font_families: snapshot.font_families.cloned().unwrap_or_default(),
             text_style_presets: snapshot.text_style_presets,
@@ -1198,7 +1200,11 @@ impl View {
             .original_export_path
             .clone()
             .map(|path| ExportSource {
-                artifact_id: self.artifact_id.clone(),
+                artifact_id: presented
+                    .source_artifact_id
+                    .as_ref()
+                    .unwrap_or(&self.artifact_id)
+                    .clone(),
                 path,
             });
         let target = ExportTarget::new(source, &self.default_directory, &self.default_stem);
@@ -1903,12 +1909,27 @@ impl Editor {
         mode: CaptureMode,
         copy: impl Fn(Arc<RgbaImage>) -> Result<(), String> + Send + 'static,
     ) -> Self {
+        Self::open_restored(ctx, root, artifact_id, None, output_directory, mode, copy)
+    }
+
+    pub fn open_restored(
+        ctx: &egui::Context,
+        root: PathBuf,
+        artifact_id: String,
+        source_artifact_id: Option<String>,
+        output_directory: PathBuf,
+        mode: CaptureMode,
+        copy: impl Fn(Arc<RgbaImage>) -> Result<(), String> + Send + 'static,
+    ) -> Self {
         let viewport = egui::ViewportId::from_hash_of(("screenshot-editor", &artifact_id));
         let default_stem = format!(
             "Captures_{}_edited",
             chrono::Local::now().format("%Y-%m-%d_%H-%M-%S")
         );
-        let original_bytes = export::original_size_bytes(&root, &artifact_id);
+        let original_bytes = export::original_size_bytes(
+            &root,
+            source_artifact_id.as_deref().unwrap_or(&artifact_id),
+        );
         let view_artifact_id = artifact_id.clone();
         let (tx, jobs) = mpsc::channel();
         let (out, rx) = mpsc::channel();
@@ -1921,6 +1942,7 @@ impl Editor {
                     drafts_root: root.with_file_name("editor-drafts"),
                     history_root: root.clone(),
                     artifact_id,
+                    source_artifact_id,
                 },
                 Some(captures_app::editor_fonts::bundled()),
             );
@@ -2139,6 +2161,20 @@ impl Editor {
 
     pub fn closed(&self) -> bool {
         self.view.lock().unwrap().window_closed(Instant::now())
+    }
+
+    pub fn restart_window(&self) -> Option<captures_app::updater::RestartCaptureWindow> {
+        let view = self.view.lock().unwrap();
+        (!view.window_closed(Instant::now())).then(|| {
+            captures_app::updater::RestartCaptureWindow::ScreenshotEditor {
+                artifact_id: view.artifact_id.clone(),
+                source_artifact_id: view
+                    .export_target
+                    .as_ref()
+                    .and_then(|target| target.source.as_ref())
+                    .map(|source| source.artifact_id.clone()),
+            }
+        })
     }
 
     pub fn closing(&self) -> bool {
@@ -9524,6 +9560,7 @@ mod tests {
             image_assets: BTreeMap::new(),
             pixels: Arc::new(RgbaImage::new(7, 3)),
             original_export_path: None,
+            source_artifact_id: None,
             initial_text_size: 24.,
             font_families: captures_app::editor_fonts::bundled().families,
             text_style_presets: captures_app::editor_text::TEXT_STYLE_PRESETS.into(),
@@ -12269,6 +12306,7 @@ mod tests {
             history_root: data.path().join("history"),
             drafts_root: data.path().join("editor-drafts"),
             artifact_id: id,
+            source_artifact_id: None,
         })
         .unwrap();
         assert_eq!(
@@ -13213,6 +13251,7 @@ mod tests {
                 history_root: data.path().join("history"),
                 drafts_root: data.path().join("editor-drafts"),
                 artifact_id: id,
+                source_artifact_id: None,
             })
             .unwrap();
             assert_eq!(reopened.pixels().dimensions(), (4, 2));
@@ -14807,6 +14846,7 @@ mod tests {
                 drafts_root: data.path().join("editor-drafts"),
                 history_root: data.path().join("history"),
                 artifact_id,
+                source_artifact_id: None,
             },
             Some(captures_app::editor_fonts::bundled()),
         )
@@ -15138,6 +15178,7 @@ mod tests {
             history_root: data.path().join("history"),
             drafts_root: data.path().join("editor-drafts"),
             artifact_id: id,
+            source_artifact_id: None,
         })
         .unwrap();
         assert_eq!(reopened.pixels().dimensions(), (4, 2));
@@ -15182,6 +15223,7 @@ mod tests {
             history_root: data.path().join("history"),
             drafts_root: data.path().join("editor-drafts"),
             artifact_id: id,
+            source_artifact_id: None,
         })
         .unwrap();
         assert_eq!(reopened.pixels().dimensions(), (4, 2));
@@ -15194,6 +15236,7 @@ mod tests {
             history_root: data.path().join("history"),
             drafts_root: data.path().join("editor-drafts"),
             artifact_id: id.clone(),
+            source_artifact_id: None,
         };
         let bundled = captures_app::editor_fonts::bundled();
         let mut legacy = bundled.clone();
@@ -15833,6 +15876,7 @@ mod tests {
             history_root: data.path().join("history"),
             drafts_root: data.path().join("editor-drafts"),
             artifact_id: id,
+            source_artifact_id: None,
         })
         .unwrap();
         assert_eq!(reopened.pixels().dimensions(), (4, 2));

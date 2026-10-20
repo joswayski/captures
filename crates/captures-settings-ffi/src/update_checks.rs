@@ -52,7 +52,7 @@ enum Request {
     },
     InstallPreview {
         show_changelog: Option<bool>,
-        preferences_visible: bool,
+        restart: captures_app::updater::RestartIntent,
     },
 }
 
@@ -63,7 +63,7 @@ struct ShutdownRequest {
     history_root: PathBuf,
     settings_file: PathBuf,
     status: Option<captures_app::updater::checks::CheckStatus>,
-    preferences_visible: Option<bool>,
+    restart: Option<captures_app::updater::RestartIntent>,
     install_session: Option<String>,
 }
 
@@ -102,12 +102,16 @@ pub unsafe extern "C" fn captures_update_shutdown_intent_v1(
                 .map(str::parse)
                 .transpose()
                 .map_err(|_| "Invalid installation session.".to_owned())?;
-            let written = match (request.status, request.preferences_visible) {
+            let written = match (request.status, request.restart) {
                 (None, None) if session.is_none() => false,
-                (Some(status), Some(visible)) => destination
-                    .write(&status, visible, session)
+                (Some(status), Some(restart)) => destination
+                    .write(&status, restart, session)
                     .map_err(|error| error.to_string())?,
-                _ => return Err("Shutdown intent needs both staged status and visibility.".into()),
+                _ => {
+                    return Err(
+                        "Shutdown intent needs both staged status and restart intent.".into(),
+                    );
+                }
             };
             Ok(json!({"written":written}))
         })();
@@ -209,8 +213,8 @@ pub unsafe extern "C" fn captures_update_checks_request_v1(
             }
             // SAFETY: Caller upholds the exclusive handle/string contracts.
             let bytes = unsafe { CStr::from_ptr(request_json) }.to_bytes();
-            if bytes.len() > 64 * 1024 {
-                return Err("Update-check request exceeds 64 KiB.");
+            if bytes.len() > 256 * 1024 {
+                return Err("Update-check request exceeds 256 KiB.");
             }
             let request = serde_json::from_slice::<Request>(bytes)
                 .map_err(|_| "Invalid update-check command.")?;
@@ -234,11 +238,8 @@ pub unsafe extern "C" fn captures_update_checks_request_v1(
                 Request::DownloadVerify { .. } => worker.download(),
                 Request::CancelDownload { .. } => worker.cancel_download(),
                 Request::Poll { .. } => false,
-                Request::InstallPreview {
-                    preferences_visible,
-                    ..
-                } => {
-                    worker.launch_preview_install(preferences_visible).map_err(
+                Request::InstallPreview { restart, .. } => {
+                    worker.launch_preview_install(restart).map_err(
                         |_| "Could not start the verified Preview installer; check again.",
                     )?;
                     true

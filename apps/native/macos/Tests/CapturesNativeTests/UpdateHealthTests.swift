@@ -43,11 +43,15 @@ final class UpdateHealthTests: XCTestCase {
             try options.takeUpdateRestartIntent()
             XCTAssertEqual(options.scene, "idle")
             XCTAssertEqual(options.nativeUpdateRestorePreferences, visible)
+            XCTAssertNotNil(options.nativeUpdateRestart, "legacy preferences-only marker is still a restart")
+            XCTAssertTrue((options.nativeUpdateRestart?["capture_windows"] as? [[String: Any]] ?? []).isEmpty,
+                          "old markers need no editor entries")
             XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path))
             var next = try Options(arguments)
             try next.takeUpdateRestartIntent()
             XCTAssertEqual(next.scene, "preferences", "absent intent keeps ordinary launch behavior")
             XCTAssertFalse(next.nativeUpdateRestorePreferences)
+            XCTAssertNil(next.nativeUpdateRestart)
         }
         try Data().write(to: marker)
         var legacy = try Options(arguments)
@@ -55,6 +59,22 @@ final class UpdateHealthTests: XCTestCase {
         XCTAssertEqual(legacy.scene, "idle")
         XCTAssertFalse(legacy.nativeUpdateRestorePreferences)
         XCTAssertEqual(try Data(contentsOf: fixture.file), Data(), "intent is not readiness")
+
+        let restart: [String: Any] = ["restore_preferences": false,
+            "preview_artifact_ids": ["older", "newer"],
+            "capture_windows": [["kind": "screenshot_editor", "artifact_id": "owner", "source_artifact_id": "copy"],
+                                ["kind": "recording_editor", "artifact_id": "movie"]]]
+        try JSONSerialization.data(withJSONObject: restart).write(to: marker)
+        var restored = try Options(arguments)
+        try restored.takeUpdateRestartIntent()
+        XCTAssertEqual(restored.scene, "idle")
+        XCTAssertEqual(restored.nativeUpdateRestart?["preview_artifact_ids"] as? [String], ["older", "newer"])
+        let windows = try XCTUnwrap(restored.nativeUpdateRestart?["capture_windows"] as? [[String: Any]])
+        XCTAssertEqual(windows.count, 2)
+        XCTAssertEqual(windows[0]["artifact_id"] as? String, "owner")
+        XCTAssertEqual(windows[0]["source_artifact_id"] as? String, "copy")
+        XCTAssertEqual(windows[1]["kind"] as? String, "recording_editor")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path))
     }
 
     func testAcknowledgementWritesExactBytesOnlyOnce() throws {

@@ -961,6 +961,16 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             guard let self, (self.options.previewChannel || self.options.nativeUpdateInstallSession != nil),
                   !self.terminationPending, !self.terminating, !self.installUpdateRequested
             else { return false }
+            let windows = self.liveController?.snapshotUpdateWindows() ?? []
+            do {
+                try self.liveController?.validateUpdateRestart([
+                    "preview_artifact_ids": self.miniPreviews?.restartArtifactIDs ?? [],
+                    "capture_windows": self.liveController?.resolveUpdateWindows(windows) ?? windows,
+                ])
+            } catch {
+                self.presentHostError(title: "Couldn’t Restart Captures", message: error.localizedDescription)
+                return false
+            }
             self.installUpdateRequested = true
             requestApplicationTermination()
             return true
@@ -1118,23 +1128,41 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         guard !terminationPending else { return .terminateLater }
         terminationPending = true
         terminating = true
+        // Preparation closes editor session state. Preserve open owner IDs first.
+        let updateWindows = liveController?.snapshotUpdateWindows() ?? []
         // Reply only after returning .terminateLater, even with no live editor.
         // The main queue must keep running to submit Save queued during Copy.
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             let finished: (Bool) -> Void = { [weak self] accepted in
                 guard let self, self.terminationPending else { return }
+                let restart: [String: Any] = [
+                    "restore_preferences": self.appWindows.window(.preferences)?.isVisible == true,
+                    "preview_artifact_ids": self.miniPreviews?.restartArtifactIDs ?? [],
+                    "capture_windows": self.liveController?.resolveUpdateWindows(updateWindows) ?? updateWindows,
+                ]
                 guard accepted else {
+                    let installing = self.installUpdateRequested
                     self.installUpdateRequested = false
                     self.terminating = false; self.terminationPending = false
+                    if installing { self.liveController?.restoreUpdateSession(restart) }
                     sender.reply(toApplicationShouldTerminate: false); return
                 }
-                // Snapshot only after the editor veto, before capture/window
-                // teardown can change visibility. A non-key window still counts.
+                if self.installUpdateRequested {
+                    do { try self.liveController?.validateUpdateRestart(restart) }
+                    catch {
+                        self.installUpdateRequested = false
+                        self.terminating = false; self.terminationPending = false
+                        self.liveController?.restoreUpdateSession(restart)
+                        sender.reply(toApplicationShouldTerminate: false)
+                        self.presentHostError(title: "Couldn’t Restart Captures", message: error.localizedDescription)
+                        return
+                    }
+                }
                 if var intent = self.options.nativeUpdateShutdownIntent,
                    let status = self.options.nativeUpdateChecks?.stagedShutdownStatus() {
                     intent["status"] = status
-                    intent["preferences_visible"] = self.appWindows.window(.preferences)?.isVisible == true
+                    intent["restart"] = restart
                     if self.installUpdateRequested, let session = self.options.nativeUpdateInstallSession {
                         intent["install_session"] = session
                     }
@@ -1142,10 +1170,12 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                 }
                 if self.installUpdateRequested && self.options.previewChannel {
                     do { try self.options.nativeUpdateChecks?.launchPreviewInstall(
-                        preferencesVisible: self.appWindows.window(.preferences)?.isVisible == true) }
+                        restart: restart) }
                     catch {
+                        self.shutdownUpdateIntent = nil
                         self.installUpdateRequested = false
                         self.terminating = false; self.terminationPending = false
+                        self.liveController?.restoreUpdateSession(restart)
                         sender.reply(toApplicationShouldTerminate: false)
                         self.presentHostError(title: "Couldn’t Restart Captures", message: error.localizedDescription)
                         return
@@ -1154,6 +1184,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                 if self.installUpdateRequested && !self.options.previewChannel && self.shutdownUpdateIntent == nil {
                     self.installUpdateRequested = false
                     self.terminating = false; self.terminationPending = false
+                    self.liveController?.restoreUpdateSession(restart)
                     sender.reply(toApplicationShouldTerminate: false)
                     self.presentHostError(title: "Couldn’t Restart Captures", message: "The verified update is no longer available. Check again before requesting installation.")
                     return
@@ -1388,6 +1419,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             NSApp.activate(ignoringOtherApps: true)
         }
         drainOpenImages()
+        if let restart = options.nativeUpdateRestart { liveController?.restoreUpdateSession(restart) }
         if let retry { liveController?.retryCaptureAfterRestart(retry) }
     }
 

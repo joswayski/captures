@@ -24,6 +24,7 @@ fn open(root: &Path, id: &str) -> Result<EditorSession, String> {
         history_root: root.join("history"),
         drafts_root: root.join("drafts"),
         artifact_id: id.into(),
+        source_artifact_id: None,
     })
 }
 
@@ -3469,6 +3470,88 @@ fn failed_save_and_missing_original_discard_do_not_claim_persistence_or_destroy_
 }
 
 #[test]
+fn adopted_saved_source_retains_owner_draft_and_overwrites_only_the_source() {
+    let (data, owner, _) = setup();
+    let root = data.path().join("history");
+    let source_pixels = RgbaImage::from_pixel(5, 4, Rgba([17, 83, 129, 255]));
+    let mut source =
+        captures_app::persist_screenshot(&root, &source_pixels, CaptureMode::Region).unwrap();
+    let destination = data.path().join("saved-copy.png");
+    fs::copy(&source.image_path, &destination).unwrap();
+    source.entry.saved_path = Some(destination.to_string_lossy().into_owned());
+    captures_history::update_metadata(&root, &source.entry).unwrap();
+    let owner_metadata = fs::read(
+        root.join(&owner)
+            .join(captures_history::HISTORY_METADATA_FILE),
+    )
+    .unwrap();
+    let mut editor = open(data.path(), &owner).unwrap();
+    editor.execute(crop()).unwrap();
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 123 })
+        .unwrap();
+    let draft_pixels = editor.pixels();
+    drop(editor);
+    let request = || OpenRequest {
+        history_root: root.clone(),
+        drafts_root: data.path().join("drafts"),
+        artifact_id: owner.clone(),
+        source_artifact_id: Some(source.entry.id.clone()),
+    };
+    let mut reopened = EditorSession::open(request()).unwrap();
+    assert_eq!(reopened.snapshot().artifact_id, owner);
+    assert_eq!(
+        reopened.snapshot().source_artifact_id,
+        Some(source.entry.id.as_str())
+    );
+    assert_eq!(
+        reopened.snapshot().original_export_path,
+        Some(destination.as_path())
+    );
+    assert!(reopened.snapshot().has_draft);
+    assert_eq!(reopened.pixels(), draft_pixels);
+    reopened.execute(Request::DiscardDraft).unwrap();
+    assert_eq!(reopened.pixels().as_ref(), &source_pixels);
+    assert!(!data.path().join("drafts").join(&owner).exists());
+    // A source-backed, draft-free open must also use the adopted pixels.
+    assert_eq!(
+        EditorSession::open(request()).unwrap().pixels().as_ref(),
+        &source_pixels
+    );
+    // Restore the owner draft to exercise overwrite with its edited pixels.
+    editor = open(data.path(), &owner).unwrap();
+    editor.execute(crop()).unwrap();
+    editor
+        .execute(Request::SaveDraft { updated_at_ms: 124 })
+        .unwrap();
+    reopened = EditorSession::open(request()).unwrap();
+    assert!(
+        reopened
+            .save_original_export(&data.path().join("wrong.png"), png_export_options())
+            .is_err()
+    );
+    reopened
+        .save_original_export(&destination, png_export_options())
+        .unwrap();
+    assert_eq!(image::open(&destination).unwrap().to_rgba8(), *draft_pixels);
+    assert_eq!(
+        fs::read(
+            root.join(&owner)
+                .join(captures_history::HISTORY_METADATA_FILE)
+        )
+        .unwrap(),
+        owner_metadata
+    );
+    reopened.execute(Request::DiscardDraft).unwrap();
+    assert_eq!(reopened.pixels(), draft_pixels);
+    assert!(!data.path().join("drafts").join(&owner).exists());
+    assert_eq!(
+        EditorSession::open(request()).unwrap().pixels(),
+        draft_pixels
+    );
+}
+
+#[test]
 fn draft_paths_and_hidden_original_sources_cannot_escape_owned_assets() {
     let (data, id, _) = setup();
     let mut editor = open(data.path(), &id).unwrap();
@@ -3553,6 +3636,7 @@ fn open_text(
             history_root: root.join("history"),
             drafts_root: root.join("drafts"),
             artifact_id: id.into(),
+            source_artifact_id: None,
         },
         Some(fonts),
         PlatformFonts::None,

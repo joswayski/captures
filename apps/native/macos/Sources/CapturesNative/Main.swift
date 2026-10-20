@@ -17,6 +17,7 @@ struct Options {
     var nativeUpdateReadyFile: String?
     var nativeUpdateReadyToken: String?
     var nativeUpdateRestorePreferences = false
+    var nativeUpdateRestart: [String: Any]?
     var nativeUpdateChecks: UpdateCheckModel?
     var previewChannel = false
     var nativeUpdateShutdownIntent: [String: Any]?
@@ -163,9 +164,10 @@ struct Options {
     mutating func takeUpdateRestartIntent(transport: SettingsTransport = SettingsBridge()) throws {
         guard let file = nativeUpdateReadyFile else { return }
         let reply = try transport.request(["operation": "update_restart_take", "ready_file": file])
-        if let visible = reply["restore_preferences"] as? Bool {
+        if let restart = reply["restart"] as? [String: Any] {
             scene = "idle"
-            nativeUpdateRestorePreferences = visible
+            nativeUpdateRestart = restart
+            nativeUpdateRestorePreferences = restart["restore_preferences"] as? Bool ?? false
         }
     }
 

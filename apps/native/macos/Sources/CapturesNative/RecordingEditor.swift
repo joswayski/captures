@@ -1266,6 +1266,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
 
     var activeArtifactID: String? { window.isVisible ? artifactID : nil }
+    var presentArtifactID: String? { window.isVisible || window.isMiniaturized ? artifactID : nil }
 
     func prepareForTermination() -> Bool {
         trimTimeline.endDrag()

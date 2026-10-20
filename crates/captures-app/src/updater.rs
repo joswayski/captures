@@ -20,7 +20,30 @@ mod installation;
 pub mod preview;
 mod shutdown_intent;
 mod staging;
-pub use health::{HealthAcknowledgement, take_restart_preferences};
+pub use health::{HealthAcknowledgement, take_restart_intent};
+
+/// Windows to restore after an authenticated update restart.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RestartIntent {
+    pub restore_preferences: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub preview_artifact_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capture_windows: Vec<RestartCaptureWindow>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RestartCaptureWindow {
+    ScreenshotEditor {
+        artifact_id: String,
+        #[serde(default)]
+        source_artifact_id: Option<String>,
+    },
+    RecordingEditor {
+        artifact_id: String,
+    },
+}
 pub use installation::{LaunchFailure, PackageUse, PendingInstallation, recover_installation};
 pub use shutdown_intent::{ShutdownIntent, ShutdownIntentDestination};
 pub use staging::StagedUpdate;

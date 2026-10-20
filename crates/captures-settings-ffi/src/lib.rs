@@ -451,8 +451,8 @@ fn response(request: *const c_char) -> Value {
                 .unwrap_or_else(|error| json!({"ok":false,"error":error}))
         }
         Ok(Request::UpdateRestartTake { ready_file }) => {
-            captures_app::updater::take_restart_preferences(Path::new(&ready_file))
-                .map(|intent| json!({"ok":true,"restore_preferences":intent}))
+            captures_app::updater::take_restart_intent(Path::new(&ready_file))
+                .map(|intent| json!({"ok":true,"restart":intent}))
                 .unwrap_or_else(|error| json!({"ok":false,"error":error.to_string()}))
         }
         Ok(Request::PermissionRecoveryReset { path, bundle_id }) => {
@@ -669,14 +669,31 @@ mod tests {
             std::fs::write(ready.with_extension("restart.json"), bytes).unwrap();
             assert_eq!(
                 settings_request(request.clone()),
-                json!({"ok":true,"restore_preferences":expected})
+                json!({"ok":true,"restart":{"restore_preferences":expected}})
             );
             assert_eq!(
                 settings_request(request.clone()),
-                json!({"ok":true,"restore_preferences":null})
+                json!({"ok":true,"restart":null})
             );
             assert!(std::fs::read(&ready).unwrap().is_empty());
         }
+        let restart = json!({
+            "restore_preferences":false,
+            "preview_artifact_ids":["second", "first"],
+            "capture_windows":[
+                {"kind":"screenshot_editor","artifact_id":"owner","source_artifact_id":"saved"},
+                {"kind":"recording_editor","artifact_id":"recording"}
+            ]
+        });
+        std::fs::write(ready.with_extension("restart.json"), restart.to_string()).unwrap();
+        assert_eq!(
+            settings_request(request.clone()),
+            json!({"ok":true,"restart":restart})
+        );
+        assert_eq!(
+            settings_request(request.clone()),
+            json!({"ok":true,"restart":null})
+        );
         std::fs::write(ready.with_extension("restart.json"), b"invalid").unwrap();
         assert_eq!(settings_request(request)["ok"], false);
         assert_eq!(

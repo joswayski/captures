@@ -301,6 +301,99 @@ final class LiveCaptureController: NSObject {
     private var deleteAllButton: HistoryButton!
     private var deleteAllCancelButton: HistoryButton!
     private var historyLoaded = false
+    private var pendingUpdateRestart: [String: Any]?
+
+    func snapshotUpdateWindows() -> [[String: Any]] {
+        var windows: [[String: Any]] = []
+        if let id = screenshotEditor?.presentArtifactID {
+            windows.append(["kind": "screenshot_editor", "artifact_id": id])
+        }
+        if let id = recordingEditor?.presentArtifactID {
+            windows.append(["kind": "recording_editor", "artifact_id": id])
+        }
+        return windows
+    }
+
+    func resolveUpdateWindows(_ windows: [[String: Any]]) -> [[String: Any]] {
+        windows.map { window in
+            var resolved = window
+            if window["kind"] as? String == "screenshot_editor" {
+                resolved["source_artifact_id"] = screenshotEditor?.restartSourceArtifactID
+            }
+            return resolved
+        }
+    }
+
+    /// Re-read History, rather than trusting the UI cache, before closing for install.
+    func validateUpdateRestart(_ restart: [String: Any]) throws {
+        guard !historyBusy, pendingOpenImages.isEmpty else {
+            throw AppBridgeError.backend("Finish capture and wait for accepted media operations before installing the update.")
+        }
+        let screenshots = try transport.request(["operation": "history", "root": historyRoot])["artifacts"] as? [[String: Any]] ?? []
+        let recordings = try NativeRecordingInfo.request(["operation": "history", "root": historyRoot])["recordings"] as? [[String: Any]] ?? []
+        let recoverable = Set((screenshots + recordings).compactMap(CaptureArtifact.init).filter {
+            FileManager.default.isReadableFile(atPath: $0.mediaPath ?? $0.imagePath)
+        }.map(\.id))
+        let windows = restart["capture_windows"] as? [[String: Any]] ?? []
+        let ids = (restart["preview_artifact_ids"] as? [String] ?? []) + windows.flatMap {
+            [$0["artifact_id"] as? String, $0["source_artifact_id"] as? String].compactMap { $0 }
+        }
+        guard ids.allSatisfy(recoverable.contains) else {
+            throw AppBridgeError.backend("An open capture is no longer recoverable from History. Save or close it before installing the update.")
+        }
+    }
+
+    func restoreUpdateSession(_ restart: [String: Any]) {
+        pendingUpdateRestart = restart
+        // A failed installer can return here after a queued Save adopted a new
+        // History entry. Refresh before resolving that source; startup already loads.
+        if historyLoaded { loadHistory() }
+    }
+
+    private func restorePendingUpdateSession() {
+        guard let restart = pendingUpdateRestart else { return }
+        pendingUpdateRestart = nil
+        let previews = restart["preview_artifact_ids"] as? [String] ?? []
+        let windows = restart["capture_windows"] as? [[String: Any]] ?? []
+        func restoreWindow(_ index: Int) {
+            guard index < windows.count else { return }
+            let entry = windows[index]
+            if let owner = entry["artifact_id"] as? String,
+               (entry["kind"] as? String == "screenshot_editor" && screenshotEditor?.presentArtifactID == owner)
+                || (entry["kind"] as? String == "recording_editor" && recordingEditor?.presentArtifactID == owner) {
+                restoreWindow(index + 1); return
+            }
+            guard let owner = entry["artifact_id"] as? String,
+                  let source = artifacts.first(where: { $0.id == (entry["source_artifact_id"] as? String ?? owner) }),
+                  let artifact = CaptureArtifact([
+                    "entry": ["id": owner, "kind": source.kind, "width": source.width,
+                              "height": source.height, "created_at": source.createdAt,
+                              "mode": source.mode, "size_bytes": source.sizeBytes,
+                              "saved_path": source.availableSavedPath ?? ""],
+                    "image_path": source.imagePath, "preview_path": source.previewPath,
+                    "media_path": source.mediaPath ?? source.imagePath,
+                  ]),
+                  entry["kind"] as? String == (artifact.isRecording ? "recording_editor" : "screenshot_editor") else {
+                restoreWindow(index + 1); return
+            }
+            let open = {
+                self.presentEditor(artifact, requiresCurrentSelection: false,
+                                   sourceArtifactID: entry["source_artifact_id"] as? String) {
+                    restoreWindow(index + 1)
+                }
+            }
+            if !source.isRecording, let miniPreviews {
+                restore(source, with: miniPreviews) { _ in open() }
+            } else { open() }
+        }
+        func restorePreview(_ index: Int) {
+            guard index < previews.count else { restoreWindow(0); return }
+            guard let artifact = artifacts.first(where: { $0.id == previews[index] }),
+                  !artifact.isRecording, let miniPreviews else { restorePreview(index + 1); return }
+            restore(artifact, with: miniPreviews) { _ in restorePreview(index + 1) }
+        }
+        restorePreview(0)
+    }
     /// Shared card presentation and bounded thumbnail residency, by artifact ID.
     private var cards: [String: HistoryCard] = [:]
     private var thumbnails: [String: NSImage] = [:]
@@ -965,6 +1058,7 @@ final class LiveCaptureController: NSObject {
                 self.miniPreviews?.reconcileHistory(ids: Set(values.map(\.id)))
             case .failure(let error): self.artifacts = []; self.reloadHistorySelection(nil); self.showHistoryError("Couldn’t load capture history", error) }
             self.updateActions(); completion?()
+            self.restorePendingUpdateSession()
         }
     }
 
@@ -3268,6 +3362,7 @@ final class LiveCaptureController: NSObject {
 
     private func presentEditor(_ artifact: CaptureArtifact, outputDirectory: String? = nil,
                                requiresCurrentSelection: Bool = true,
+                               sourceArtifactID: String? = nil,
                                completion: (() -> Void)? = nil) {
         guard !editorTerminationPending else { completion?(); return }
         run({ [settingsPath] in
@@ -3330,7 +3425,7 @@ final class LiveCaptureController: NSObject {
                     }
                 }
                 self.screenshotEditor?.present(artifact: artifact, historyRoot: self.historyRoot,
-                    outputDirectory: outputDirectory, completion: completion.map { finished in
+                    outputDirectory: outputDirectory, sourceArtifactID: sourceArtifactID, completion: completion.map { finished in
                         { [weak self] accepted in
                             if !accepted {
                                 self?.externalOpenErrors.append("\(artifact.id): screenshot editor could not open; the History item remains available.")

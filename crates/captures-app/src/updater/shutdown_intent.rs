@@ -69,7 +69,7 @@ impl ShutdownIntentDestination {
     pub fn write(
         &self,
         status: &CheckStatus,
-        preferences_visible: bool,
+        restart: super::RestartIntent,
         install_session: Option<uuid::Uuid>,
     ) -> Result<bool, Error> {
         let CheckStatus::Staged { release, sha256 } = status else {
@@ -90,7 +90,9 @@ impl ShutdownIntentDestination {
             profile: self.profile.clone(),
             release: release.clone(),
             sha256: sha256.clone(),
-            preferences_visible,
+            preferences_visible: restart.restore_preferences,
+            preview_artifact_ids: restart.preview_artifact_ids,
+            capture_windows: restart.capture_windows,
             install_session,
         };
         let bytes = serde_json::to_vec(&record).map_err(std::io::Error::other)?;
@@ -116,6 +118,10 @@ pub struct ShutdownIntent {
     release: ReleaseInfo,
     sha256: String,
     preferences_visible: bool,
+    #[serde(default)]
+    preview_artifact_ids: Vec<String>,
+    #[serde(default)]
+    capture_windows: Vec<super::RestartCaptureWindow>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     install_session: Option<uuid::Uuid>,
 }
@@ -152,7 +158,7 @@ impl ShutdownIntent {
         path: &Path,
         profile: &Path,
         update: &PendingUpdate,
-    ) -> Result<bool, Error> {
+    ) -> Result<super::RestartIntent, Error> {
         Self::take(path, profile, update, None)
     }
 
@@ -163,7 +169,7 @@ impl ShutdownIntent {
         profile: &Path,
         update: &PendingUpdate,
         session: uuid::Uuid,
-    ) -> Result<bool, Error> {
+    ) -> Result<super::RestartIntent, Error> {
         Self::take(path, profile, update, Some(session))
     }
 
@@ -172,7 +178,7 @@ impl ShutdownIntent {
         profile: &Path,
         update: &PendingUpdate,
         session: Option<uuid::Uuid>,
-    ) -> Result<bool, Error> {
+    ) -> Result<super::RestartIntent, Error> {
         let record = Self::read(path, profile)?;
         let info = update.info();
         if session.is_some_and(|expected| record.install_session != Some(expected))
@@ -187,7 +193,11 @@ impl ShutdownIntent {
             ));
         }
         fs::remove_file(path)?;
-        Ok(record.preferences_visible)
+        Ok(super::RestartIntent {
+            restore_preferences: record.preferences_visible,
+            preview_artifact_ids: record.preview_artifact_ids,
+            capture_windows: record.capture_windows,
+        })
     }
 
     fn read(path: &Path, profile: &Path) -> Result<Self, Error> {
@@ -282,13 +292,37 @@ mod tests {
                 message: "failed".into(),
             },
         ] {
-            assert!(!destination.write(&status, true, None).unwrap());
+            assert!(
+                !destination
+                    .write(
+                        &status,
+                        super::super::RestartIntent {
+                            restore_preferences: true,
+                            ..Default::default()
+                        },
+                        None
+                    )
+                    .unwrap()
+            );
             assert!(!output.exists());
         }
         for visible in [true, false] {
-            assert!(destination.write(&status, visible, None).unwrap());
+            let restart = super::super::RestartIntent {
+                restore_preferences: visible,
+                preview_artifact_ids: vec!["second".into(), "first".into()],
+                capture_windows: vec![
+                    super::super::RestartCaptureWindow::ScreenshotEditor {
+                        artifact_id: "owner".into(),
+                        source_artifact_id: Some("saved".into()),
+                    },
+                    super::super::RestartCaptureWindow::RecordingEditor {
+                        artifact_id: "recording".into(),
+                    },
+                ],
+            };
+            assert!(destination.write(&status, restart.clone(), None).unwrap());
             let original = fs::read(&output).unwrap();
-            assert!(destination.write(&status, !visible, None).is_err());
+            assert!(destination.write(&status, restart.clone(), None).is_err());
             assert_eq!(fs::read(&output).unwrap(), original);
             let session = uuid::Uuid::new_v4();
             assert!(!ShutdownIntent::install_requested(&output, &profile, session).unwrap());
@@ -330,13 +364,43 @@ mod tests {
             fs::write(&output, &original).unwrap();
             assert_eq!(
                 ShutdownIntent::take_matching(&output, &profile, &update).unwrap(),
-                visible
+                restart
             );
             assert!(ShutdownIntent::take_matching(&output, &profile, &update).is_err());
+            let mut legacy: serde_json::Value = serde_json::from_slice(&original).unwrap();
+            legacy
+                .as_object_mut()
+                .unwrap()
+                .remove("preview_artifact_ids");
+            legacy.as_object_mut().unwrap().remove("capture_windows");
+            fs::write(&output, serde_json::to_vec(&legacy).unwrap()).unwrap();
+            assert_eq!(
+                ShutdownIntent::take_matching(&output, &profile, &update).unwrap(),
+                super::super::RestartIntent {
+                    restore_preferences: visible,
+                    ..Default::default()
+                }
+            );
+        }
+        let oversized = super::super::RestartIntent {
+            preview_artifact_ids: vec!["x".repeat(LIMIT as usize)],
+            ..Default::default()
+        };
+        assert!(destination.write(&status, oversized, None).is_err());
+        assert!(!output.exists());
+        for malformed in [b"invalid".to_vec(), vec![b' '; LIMIT as usize + 1]] {
+            fs::write(&output, &malformed).unwrap();
+            assert!(ShutdownIntent::take_matching(&output, &profile, &update).is_err());
+            assert_eq!(fs::read(&output).unwrap(), malformed);
+            fs::remove_file(&output).unwrap();
         }
         let session = uuid::Uuid::new_v4();
         assert!(!ShutdownIntent::install_requested(&output, &profile, session).unwrap());
-        assert!(destination.write(&status, false, Some(session)).unwrap());
+        assert!(
+            destination
+                .write(&status, Default::default(), Some(session))
+                .unwrap()
+        );
         let original = fs::read(&output).unwrap();
         let other = uuid::Uuid::new_v4();
         assert!(ShutdownIntent::install_requested(&output, &profile, other).is_err());
@@ -352,7 +416,9 @@ mod tests {
         assert!(output.exists());
         fs::write(&output, original).unwrap();
         assert!(
-            !ShutdownIntent::take_install_matching(&output, &profile, &update, session).unwrap()
+            !ShutdownIntent::take_install_matching(&output, &profile, &update, session)
+                .unwrap()
+                .restore_preferences
         );
         assert!(!output.exists());
         assert!(

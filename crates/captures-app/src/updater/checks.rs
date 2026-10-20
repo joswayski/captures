@@ -359,7 +359,7 @@ impl CheckWorker {
 
     /// Call after the host's editor/recording veto, before shutting this worker
     /// down. The copied helper cannot install until every package-use guard exits.
-    pub fn launch_preview_install(&mut self, preferences_visible: bool) -> Result<(), Error> {
+    pub fn launch_preview_install(&mut self, restart: super::RestartIntent) -> Result<(), Error> {
         if !self.preview
             || !self.install_request_enabled
             || !matches!(self.status, CheckStatus::Staged { .. })
@@ -378,7 +378,7 @@ impl CheckWorker {
             .ok_or(Error::Installation(
                 "verified Preview package is no longer available",
             ))?;
-        if let Err(error) = package.launch(preferences_visible) {
+        if let Err(error) = package.launch(restart) {
             if let CheckStatus::Staged { release, .. } = &self.status {
                 self.status = CheckStatus::DownloadError {
                     release: release.clone(),

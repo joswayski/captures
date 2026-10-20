@@ -9,7 +9,7 @@ import subprocess
 import time
 import uuid
 
-from history_fixture import write_completed_settings
+from history_fixture import write_completed_settings, write_history
 from instance_smoke import png
 
 
@@ -73,7 +73,8 @@ def main():
                     if not path.parent.name.startswith(".")]
 
         try:
-            server = spawn(["Xvfb", "-displayfd", "1", "-screen", "0", "1280x900x24", "-nolisten", "tcp"], True)
+            screen = "1600x1200x24" if args.update_restart_only else "1280x900x24"
+            server = spawn(["Xvfb", "-displayfd", "1", "-screen", "0", screen, "-nolisten", "tcp"], True)
             env["DISPLAY"] = ":" + server.stdout.readline().decode().strip()
             run("xdpyinfo")
             spawn(["openbox", "--sm-disable"])
@@ -458,6 +459,92 @@ def update_restart_launch(binary, output, env, spawn, wait, windows, run):
             again.terminate()
             again.wait(timeout=20)
         print(f"PASS {label}: primary consumption, launch priority, readiness and no repeated restore", flush=True)
+
+    for appearance in ("dark", "light"):
+        profile = output / f"captures-{appearance}"
+        history = profile / "history"
+        write_history(history)
+        owner = next(history.iterdir())
+        saved = history / str(uuid.uuid4())
+        shutil.copytree(owner, saved)
+        metadata = json.loads((saved / "metadata.json").read_text())
+        metadata.update(id=saved.name, width=17, height=11)
+        source = png(17, 11)
+        (saved / "capture.png").write_bytes(source)
+        (saved / "preview.png").write_bytes(source)
+        exported = profile / "adopted.png"
+        exported.write_bytes(source)
+        metadata.update(size_bytes=len(source), saved_path=str(exported))
+        (saved / "metadata.json").write_text(json.dumps(metadata))
+        recording = history / str(uuid.uuid4())
+        recording.mkdir()
+        media = recording / "media.mp4"
+        run("ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+            "testsrc2=size=320x180:rate=10:duration=1", "-c:v", "mpeg4", str(media))
+        run("ffmpeg", "-v", "error", "-i", str(media), "-frames:v", "1", str(recording / "preview.png"))
+        recording_metadata = {**metadata, "id": recording.name, "kind": "video",
+            "width": 320, "height": 180, "size_bytes": media.stat().st_size,
+            "saved_path": str(media), "mime_type": "video/mp4", "duration_ms": 1000,
+            "target": {"type": "display", "display_id": "fixture"},
+            "has_system_audio": False, "has_microphone_audio": False, "dropped_frames": 0}
+        (recording / "metadata.json").write_text(json.dumps(recording_metadata))
+        settings = profile / "settings.json"
+        write_completed_settings(settings)
+        ready = profile / "ready"
+        ready.write_bytes(b"")
+        marker = ready.with_suffix(".restart.json")
+        marker.write_text(json.dumps({"restore_preferences": False,
+            "preview_artifact_ids": [saved.name, "missing", owner.name],
+            "capture_windows": [
+                {"kind": "screenshot_editor", "artifact_id": "missing"},
+                {"kind": "screenshot_editor", "artifact_id": owner.name,
+                 "source_artifact_id": saved.name},
+                {"kind": "recording_editor", "artifact_id": recording.name},
+            ]}))
+        token = str(uuid.uuid4())
+        common = [str(binary), "--live", "--history-root", str(history),
+                  "--settings-file", str(settings), "--appearance", appearance]
+        app = spawn(common + ["--native-update-ready-file", str(ready), "--native-update-ready-token", token])
+        wait(lambda: ready.read_bytes() == f"{token}\n".encode(), "capture restart health")
+        editor = wait(lambda: windows(app.pid, "^Captures Screenshot Editor$"), "restored screenshot editor after missing entry")[0]
+        recording_editor = wait(lambda: windows(app.pid, "^Captures Editor$"), "restored recording editor")[0]
+        wait(lambda: windows(app.pid, "^Captures Mini Preview$"), "restored screenshot previews")
+        assert not marker.exists() and not windows(app.pid, "^Captures Preferences$")
+        wait(lambda: not windows(app.pid, "^Captures is running$"), "restart notice expires")
+        # Keep floating previews out of the editor capture: XGetImage returns
+        # undefined pixels where another native window obscures its drawable.
+        run("xdotool", "windowmove", recording_editor, "450", "60",
+            "windowactivate", "--sync", recording_editor, "mousemove", "1590", "1190", "sleep", "1")
+        run("import", "-window", recording_editor, str(output / f"restart-recording-{appearance}.png"))
+        run("xdotool", "windowmove", editor, "450", "60", "windowactivate", "--sync", editor, "sleep", "1")
+        run("import", "-window", editor, str(output / f"restart-editor-{appearance}.png"))
+        run("import", "-window", "root", str(output / f"restart-captures-{appearance}.png"))
+        # Quit through the real tray: editor viewports do not own Ctrl+Q.
+        for panel in run("xdotool", "search", "--onlyvisible", "--class", "xfce4-panel").decode().split():
+            geometry = dict(line.split("=", 1) for line in
+                run("xdotool", "getwindowgeometry", "--shell", panel).decode().splitlines())
+            if int(geometry["WIDTH"]) >= 24:
+                run("xdotool", "mousemove", "--window", panel, str(int(geometry["WIDTH"]) // 2),
+                    str(int(geometry["HEIGHT"]) // 2), "click", "3")
+                break
+
+        def popup():
+            return any(b"_MENU" in run("xprop", "-id", window, "_NET_WM_WINDOW_TYPE")
+                for window in run("xdotool", "search", "--onlyvisible", "--class", ".*").decode().split())
+
+        wait(popup, "real tray Quit menu")
+        run("xdotool", "key", "--delay", "60", "End", "Return")
+        assert app.wait(timeout=20) == 0
+        assert exported.read_bytes() == source, "restart changed the adopted export"
+        assert (owner / "capture.png").exists(), "restart removed the draft owner's capture"
+        again = spawn(common + ["--scene", "idle"])
+        wait(lambda: windows(again.pid, "^Captures is running$"), "ordinary launch after capture restoration")
+        time.sleep(1)
+        assert not windows(again.pid, "^Captures Screenshot Editor$") and not windows(again.pid, "^Captures Mini Preview$")
+        assert not windows(again.pid, "^Captures Editor$"), "recording restoration repeated"
+        again.terminate()
+        again.wait(timeout=20)
+        print(f"PASS {appearance}: capture windows/previews restore past missing entries exactly once", flush=True)
 
     profile = output / "secondary"
     profile.mkdir()

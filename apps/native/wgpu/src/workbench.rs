@@ -169,7 +169,10 @@ pub struct Workbench {
     action_error: Option<String>,
     quitting: bool,
     install_update_requested: bool,
-    shutdown_update_intent: Option<(captures_app::updater::checks::CheckStatus, bool)>,
+    shutdown_update_intent: Option<(
+        captures_app::updater::checks::CheckStatus,
+        captures_app::updater::RestartIntent,
+    )>,
     update_notice: crate::update_notice::Host,
     crash: Option<Arc<captures_app::crash::Session>>,
     crash_review_pending: bool,
@@ -577,7 +580,10 @@ impl Workbench {
             onboarding_complete,
             self.launched_quietly,
             self.launched_with_media,
-            std::mem::take(&mut self.options.native_update_restore_preferences),
+            self.options
+                .native_update_restart
+                .as_ref()
+                .is_some_and(|restart| restart.restore_preferences),
         );
         emit(
             "launch",
@@ -903,22 +909,40 @@ impl Workbench {
         // Editor failure vetoes Quit above. Snapshot the native window before
         // capture drain/hide can change it; focus and update-click origin do not
         // establish visibility. Publish only after every accepted worker drains.
+        let restart = self.preferences.shutdown_visibility(ctx).map(|visible| {
+            self.live.as_ref().map_or_else(
+                || captures_app::updater::RestartIntent {
+                    restore_preferences: visible,
+                    ..Default::default()
+                },
+                |live| live.snapshot_update_restart(visible),
+            )
+        });
+        if self.install_update_requested
+            && let Some(live) = &self.live
+            && let Some(restart) = &restart
+            && let Err(error) = live.validate_update_restart(restart)
+        {
+            self.install_update_requested = false;
+            self.action_error = Some(format!("Restart cancelled: {error}"));
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            return;
+        }
         if self.options.native_update_shutdown_intent.is_some() {
             self.shutdown_update_intent = self
                 .preferences_state
                 .update_check_status()
-                .zip(self.preferences.shutdown_visibility(ctx));
+                .zip(restart.clone());
         }
         let preview_install =
             self.install_update_requested && self.preferences_state.has_preview_updates();
         if preview_install {
-            let result = self
-                .preferences
-                .shutdown_visibility(ctx)
+            let result = restart
                 .ok_or_else(|| "Preferences visibility is unavailable".to_owned())
-                .and_then(|visible| self.preferences_state.launch_preview_install(visible));
+                .and_then(|restart| self.preferences_state.launch_preview_install(restart));
             if let Err(error) = result {
                 self.install_update_requested = false;
+                self.shutdown_update_intent = None;
                 self.action_error = Some(format!("Restart cancelled: {error}"));
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 return;
@@ -967,10 +991,10 @@ impl Workbench {
         }
         self.preferences_state.flush();
         if let Some(destination) = &self.options.native_update_shutdown_intent
-            && let Some((status, visible)) = self.shutdown_update_intent.take()
+            && let Some((status, restart)) = self.shutdown_update_intent.take()
             && let Err(error) = destination.write(
                 &status,
-                visible,
+                restart,
                 self.options
                     .native_update_install_session
                     .filter(|_| self.install_update_requested),
@@ -1909,6 +1933,14 @@ impl eframe::App for Workbench {
             }
             live.set_recording_restore_available(self.tray.is_some(), ctx);
             live.logic(ctx, frame);
+            if onboarding_complete
+                && self.launch_decided
+                && live.history_loaded()
+                && let Ok(settings) = self.preferences_state.snapshot()
+                && let Some(restart) = self.options.native_update_restart.take()
+            {
+                live.restore_update_session(ctx, frame, restart, &settings);
+            }
             // Open Preferences only after the cancelled menu has restored the
             // root, so that restoration cannot hide it again.
             if live.preference_target_pending() {

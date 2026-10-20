@@ -43,6 +43,7 @@ fn editor(root: &Path, id: &str) -> EditorSession {
         history_root: root.into(),
         drafts_root: root.with_file_name("editor-drafts"),
         artifact_id: id.into(),
+        source_artifact_id: None,
     })
     .unwrap()
 }

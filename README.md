@@ -549,8 +549,17 @@ profile, an explicitly imported isolated copy, or an existing enrolled developme
 profile with a retained pre-update data snapshot. It can also recover a failed
 package replacement after all app processes stop; package recovery does not restore
 profile data. It does not update installed copies or reuse their profiles.
-An opt-in development GUI shutdown record can carry actual Preferences visibility
-and the verified target digest to that external helper. An explicit
+The native development helper and macOS/AppImage update handoffs retain Preferences
+visibility, open screenshot and recording editors, and the ordered screenshot
+preview stack. The installed Windows NSIS relaunch does not yet carry this session.
+Screenshot drafts keep their
+original owner when the editor has adopted a saved copy. Unsaved recording edits
+still block restart; window geometry and undo history are not restored. Missing
+captures do not prevent the other windows from reopening. Wayland restores editors
+without floating previews. This does not apply to manual reinstalls or authorize
+native promotion; physical cross-platform update acceptance remains open.
+An opt-in development GUI shutdown record carries this session and the verified
+target digest to the external helper. An explicit
 [supervised development launch](apps/native/README.md#supervised-development-gui-installation)
 also enables **Restart and install** after verification: the external parent waits
 for an accepted, drained shutdown, authenticates/reacquires the exact package,

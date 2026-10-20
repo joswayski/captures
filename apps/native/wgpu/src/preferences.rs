@@ -742,11 +742,14 @@ impl Preferences {
             .is_some_and(|checker| checker.is_preview())
     }
 
-    pub fn launch_preview_install(&mut self, preferences_visible: bool) -> Result<(), String> {
+    pub fn launch_preview_install(
+        &mut self,
+        restart: captures_app::updater::RestartIntent,
+    ) -> Result<(), String> {
         self.update_checks
             .as_mut()
             .ok_or("Preview updater is unavailable")?
-            .launch_preview_install(preferences_visible)
+            .launch_preview_install(restart)
             .map_err(|e| e.to_string())
     }
 

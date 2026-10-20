@@ -763,6 +763,7 @@ mod tests {
                 history_root: data.join("capture-history"),
                 drafts_root: data.join("screenshot-editor-drafts"),
                 artifact_id: capture_id.clone(),
+                source_artifact_id: None,
             })
             .unwrap();
             editor
@@ -952,6 +953,7 @@ mod tests {
             history_root: fixture.destination.join("history"),
             drafts_root: fixture.destination.join("editor-drafts"),
             artifact_id: fixture.capture_id.clone(),
+            source_artifact_id: None,
         })
         .unwrap();
         assert_eq!(editor.pixels().dimensions(), (4, 2));

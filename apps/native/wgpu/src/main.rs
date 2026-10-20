@@ -519,10 +519,10 @@ fn main() -> eframe::Result {
     };
     // A forwarded secondary must never consume the primary's restart intent.
     if let Some(health) = &options.native_update_health {
-        match health.take_restart_preferences() {
-            Ok(Some(visible)) => {
+        match health.take_restart_intent() {
+            Ok(Some(restart)) => {
                 options.scene = Scene::Idle;
-                options.native_update_restore_preferences = visible;
+                options.native_update_restart = Some(restart);
             }
             Ok(None) => {}
             Err(error) => {
