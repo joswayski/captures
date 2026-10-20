@@ -2750,12 +2750,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private func undoDocument() {
         guard state.snapshot?.canUndo == true, !state.busy, inlineTextInput == nil else { return }
-        command(["operation": "undo"], message: "Undoing…")
+        command(["operation": "undo"], message: "Undoing…", resetCrop: true, clearSelectionOnSuccess: true)
     }
 
     private func redoDocument() {
         guard state.snapshot?.canRedo == true, !state.busy, inlineTextInput == nil else { return }
-        command(["operation": "redo"], message: "Redoing…")
+        command(["operation": "redo"], message: "Redoing…", resetCrop: true, clearSelectionOnSuccess: true)
     }
 
     /// Shipping rail tip: fixed glass beside the button, shown at once on hover
@@ -6578,6 +6578,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     private func command(_ object: [String: Any], message: String, resetCrop: Bool = false,
+                         clearSelectionOnSuccess: Bool = false,
                          preferredSelection: String? = nil,
                          createdLayerExistingIDs: Set<String>? = nil,
                          preserveStagedTextOnFailure: Bool = false,
@@ -6602,6 +6603,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             switch result {
             case .success(let presentation):
                 guard self.state.complete(presentation.snapshot, generation: generation) else { return }
+                // History clears selection only after an accepted response, before
+                // publish can retain a surviving ID or choose a deletion fallback.
+                if clearSelectionOnSuccess { self.selectedLayerID = nil }
                 if let copiedLayerToken, self.layerPasteboard.changeCount == clipboardChange {
                     self.layerClipboardToken = nil
                     self.layerClipboard = nil

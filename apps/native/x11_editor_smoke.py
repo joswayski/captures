@@ -1985,9 +1985,34 @@ def main():
             resize_editor(1000, 901, "sleep", ".3")
             properties_start()
             blur_click()
+            recording = spawn("history-selection-recording", ["ffmpeg", "-y", "-loglevel", "error",
+                "-f", "x11grab", "-framerate", "20", "-video_size", "1400x1200",
+                "-i", env["DISPLAY"], "-c:v", "libx264", "-preset", "veryfast",
+                "-crf", "26", "-pix_fmt", "yuv420p", str(output / "history-selection.mp4")])
+            time.sleep(1)
+            for y in (80, 120, 160, 200, 260, 340, 430):
+                window_move((28, y), "sleep", ".15")
+            shot(editor, "history-selected-before-undo")
             run("xdotool", "key", "ctrl+z", "sleep", ".3")
             assert save_layers(lambda values: values[-1] == arrow, "selected style undo")[-1] == arrow
+            before_history_shortcuts = draft_bytes()
+            run("xdotool", "key", "Right", "ctrl+d", "sleep", "1")
+            assert draft_bytes() == before_history_shortcuts, "Undo clears a surviving layer's shortcut target"
+            shot(editor, "history-undo-clears-selection")
+            layer_click(0)  # Redo must also clear a selection made after Undo.
+            window_move((28, 430), "sleep", ".2")  # Separate hover feedback from selection in captures.
+            run("xdotool", "key", "ctrl+shift+z", "sleep", ".3")
+            assert save_layers(lambda values: values[-1] == recolored, "selected style redo")[-1] == recolored
+            before_history_shortcuts = draft_bytes()
+            run("xdotool", "key", "Right", "ctrl+d", "sleep", "1")
+            assert draft_bytes() == before_history_shortcuts, "Redo restores content, not layer selection"
+            shot(editor, "history-redo-clears-selection")
+            recording.send_signal(signal.SIGINT)
+            recording.wait(timeout=10)
+            run("xdotool", "key", "ctrl+z", "sleep", ".3")
+            assert save_layers(lambda values: values[-1] == arrow, "restore style fixture")[-1] == arrow
             for owner in ("field", "context-menu", "layer-settings"):
+                layer_click(0)  # History clears selection; Escape ownership needs an explicit target.
                 if owner == "field":
                     canvas_click("width")
                 elif owner == "context-menu":
@@ -2186,6 +2211,7 @@ def main():
                 "passed": True, "appearance": args.appearance,
                 "checks": ["open-no-selection", "explicit-layer-selection",
                            "keyboard-undo", "keyboard-redo-exact-layer", "field-undo-focus", "field-redo-focus",
+                           "undo-clears-surviving-selection", "redo-clears-surviving-selection",
                            "confirmation-focus", "shortcut-restored-after-dialog", "original-unchanged",
                            "duplicate-offset-fresh-id", "field-layer-shortcuts", "delete-selected-copy",
                            "backspace-selected-copy", "locked-delete-guard", "arrow-1px", "shift-arrow-10px",
@@ -2677,10 +2703,6 @@ def main():
             shot(editor, "shape-active-moved")
             document_pixel("shape-active-moved", 350, 190, (255, 59, 92))
             document_pixel("shape-active-moved", 300, 120, (40, 110, 166))
-            toolbar_click("undo")
-            save_until(lambda: rectangle_is(260, 110, 380, 210), "body move is one undo step")
-            toolbar_click("redo")
-            save_until(lambda: rectangle_is(297, 141, 417, 241), "body move redo")
 
             # Shipping scales the padded selection box affinely: 130x110
             # becomes 150x130. Endpoints lie 5px inside that original box.
@@ -2691,10 +2713,6 @@ def main():
             save_until(lambda: rectangle_is(*resized), "active Rectangle resizes")
             shot(editor, "shape-active-resized")
             pixel("shape-active-resized", 14, rail_point("shapes")[1], (255, 202, 40))
-            toolbar_click("undo")
-            save_until(lambda: rectangle_is(297, 141, 417, 241), "resize is one undo step")
-            toolbar_click("redo")
-            save_until(lambda: rectangle_is(*resized), "resize redo")
 
             # Center (347,181), padded top near 117, grip 28px above it.
             # The release vector is (31,-73), independently deriving the angle.
@@ -2706,8 +2724,18 @@ def main():
             shot(editor, "shape-active-rotated")
             pixel("shape-active-rotated", 14, rail_point("shapes")[1], (255, 202, 40))
             document_pixel("shape-active-rotated", 347, 181, (255, 59, 92))
+            # History clears selection. Exercise the freshly-created active-tool
+            # gestures together, then verify each remains its own history step.
             toolbar_click("undo")
             save_layers(lambda values: values[-1].get("rotation", 0) == 0, "rotation single undo")
+            toolbar_click("undo")
+            save_until(lambda: rectangle_is(297, 141, 417, 241), "resize is one undo step")
+            toolbar_click("undo")
+            save_until(lambda: rectangle_is(260, 110, 380, 210), "body move is one undo step")
+            toolbar_click("redo")
+            save_until(lambda: rectangle_is(297, 141, 417, 241), "body move redo")
+            toolbar_click("redo")
+            save_until(lambda: rectangle_is(*resized), "resize redo")
             toolbar_click("redo")
             save_layers(lambda values: math.isclose(values[-1].get("rotation", 0), angle,
                 abs_tol=1e-12), "rotation redo")
@@ -2874,6 +2902,7 @@ def main():
             assert straight == dict(locked, controls=[])
             toolbar_click("undo")
             assert save_layers(lambda values: values[-1] == locked, "locked Straighten is one undo step")[-1] == locked
+            layer_click(0)  # History clears selection before further Properties edits.
             properties_end()
             end_click(80, 82)
             save_layers(lambda values: values[-1]["controls"] == [], "straighten before bending")
@@ -2917,6 +2946,7 @@ def main():
                 toolbar_click("redo")
                 save_layers(lambda values: values[-1] == dict(locked, controls=[{"x": 380, "y": 50}]),
                             "whole first drag redo")
+                layer_click(0)
                 properties_end()
                 move_curve(0.375)
                 run("xdotool", "mousedown", "1")
@@ -2929,6 +2959,7 @@ def main():
                     toolbar_click("undo")
                     save_layers(lambda values: values[-1] == dict(locked, controls=controls),
                                 "each pointer gesture is its own undo step")
+                layer_click(0)
             resize_editor(1200, 701)
             properties_end()
             shot(editor, "locked-curve-slider")
@@ -2966,6 +2997,7 @@ def main():
             shot(editor, "expand-applied")
             toolbar_click("undo")
             save_until(lambda: document_json()["width"] == 640, "Expand canvas is one undo step")
+            layer_click(0)  # The overflow action belongs to the selected hanging line.
             # Hovering the action arms the ghost: its crossed right side carries
             # shipping's pulsing accent bar, with the bloom and particles beyond.
             run("xdotool", "mousemove", "--sync", "--window", editor, str(right + 22), str(center_y),
@@ -3727,6 +3759,7 @@ def main():
             toolbar_click("redo")
             save_layers(lambda values: values[-1] == serif, "font and corners redo together")
             # Choosing Rounded alone does not recreate the preset's corner flag.
+            layer_click(0)
             prop_click(60, TEXT["font"])
             prop_click(40, TEXT["font"] + 125)
             round_face = save_layers(lambda values: values[-1]["fontFamily"] == "rounded",
@@ -3740,6 +3773,7 @@ def main():
             save_layers(lambda values: values[-1] == rounded, "boxed font change undone")
             toolbar_click("undo")
             save_layers(lambda values: values[-1] == created, "Rounded Box preset undone")
+            layer_click(0)
             prop_click(60, TEXT["font"])
             shot(editor, f"text-font-menu-{args.appearance}")
             # The token Font listbox opens below: Sans serif, Serif, Monospace,
@@ -3806,6 +3840,7 @@ def main():
             toolbar_click("redo")
             save_layers(lambda values: values[-1]["background"] is not None, "redo shadowed plate")
             # Like shipping, outline is a style (Outlined), not its own control.
+            layer_click(0)
             prop_click(95, TEXT["style"])
             prop_click(60, TEXT_STYLE_ROWS["outlined"])
             save_layers(lambda values: values[-1]["outlined"] and values[-1]["background"] is None
@@ -3815,6 +3850,7 @@ def main():
             toolbar_click("undo")
             save_layers(lambda values: not values[-1]["outlined"]
                         and values[-1]["background"] is not None, "undo outlined style")
+            layer_click(0)
             prop_click(95, TEXT["style"])
             shot(editor, "text-style-menu-edited")
             prop_click(60, TEXT_STYLE_ROWS["mono-box"])  # Mono Box, preserving the accepted plate color.
@@ -3935,12 +3971,14 @@ def main():
             shot(editor, "text-moved")
             toolbar_click("undo")
             save_layers(lambda values: (values[1]["x"], values[1]["y"]) == (250, 40), "text move undone")
+            layer_click(0)
             drag((697, 229), (737, 229))
             save_layers(lambda values: math.isclose(values[1]["width"], 220.2, abs_tol=1e-4)
                         and values[1]["fontSize"] == 80, "text fixed-width side resize")
             shot(editor, "text-resized")
             toolbar_click("undo")
             save_layers(lambda values: values[1]["width"] == 180, "text resize undone")
+            layer_click(0)
             # The top rotation handle would be outside the canvas; use the lower one.
             drag((578, 375), (428, 229), shift=True)
             save_layers(lambda values: math.isclose(values[1].get("rotation", 0), math.pi / 2, abs_tol=1e-6),
@@ -4787,6 +4825,8 @@ def main():
         save_layers(lambda values: values[-1]["style"]["fill"] == "#ff3b5c", "one-step style undo")
         toolbar_click("redo")
         save_layers(lambda values: values[-1]["style"]["fill"] == "#36c96b", "style redo")
+        layer_click(0)
+        scroll_inspector_end()
         annotation_click(15, A["stroke"], A["end"])  # Enable stroke.
         scroll_inspector_end()
         shot(editor, "annotation-stroke-fields")
@@ -4934,7 +4974,7 @@ def main():
         save(640, 440, 0, 0)
         assert layers()[-1]["id"] == imported_id
 
-        layer_click(0)  # Redo retained the original's selection; pick the imported row.
+        layer_click(0)  # Redo clears selection; pick the imported row.
         resize_before = draft_bytes()
         resize_start = fixture_point((387, 489))
         resize_end = fixture_point((423, 489))
