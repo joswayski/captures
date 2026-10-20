@@ -504,6 +504,14 @@ jobs:
         run: |
           /usr/bin/python3 apps/native/x11_onboarding_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-onboarding
           /usr/bin/python3 apps/native/x11_onboarding_smoke.py --preferences-find-only --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-preferences-find
+      - name: Restore native editors and previews from one-shot update intent on private X11
+        if: matrix.suite == 'capture' && matrix.shard == 1
+        run: |
+          # Exercise startup health and restoration, not installed-package acceptance.
+          mkdir -p apps/native/wgpu/target/release/binaries
+          ln -s "$(command -v ffmpeg)" apps/native/wgpu/target/release/binaries/ffmpeg-x86_64-unknown-linux-gnu
+          ln -s "$(command -v ffprobe)" apps/native/wgpu/target/release/binaries/ffprobe-x86_64-unknown-linux-gnu
+          /usr/bin/python3 apps/native/x11_onboarding_smoke.py --update-restart-only --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-update-restart
       - name: Render and drive the stub-backed update notice on private X11
         if: matrix.suite == 'capture' && matrix.shard == 1
         run: python apps/native/x11_update_notice_smoke.py --binary apps/native/wgpu/target/release/captures-wgpu-workbench --output native-x11-update-notice

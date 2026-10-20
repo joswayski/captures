@@ -102,6 +102,31 @@ final class OpenImageTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(AppBridge().request([
             "operation": "history", "root": history.path])["artifacts"] as? [[String: Any]]).count, 1)
 
+        // Update shutdown closes the session; restoration must reopen its draft,
+        // skip unavailable windows, and leave the external source untouched.
+        let restart: [String: Any] = [
+            "preview_artifact_ids": [],
+            "capture_windows": [["kind": "screenshot_editor", "artifact_id": "missing"]]
+                + controller.resolveUpdateWindows(controller.snapshotUpdateWindows()),
+        ]
+        XCTAssertThrowsError(try controller.validateUpdateRestart(restart))
+        let drained = expectation(description: "update editor drain")
+        controller.prepareEditorForTermination { accepted in
+            XCTAssertTrue(accepted)
+            drained.fulfill()
+        }
+        wait(for: [drained], timeout: 5)
+        XCTAssertFalse(editor.isVisible)
+        controller.restoreUpdateSession(restart)
+        try waitUntil { editor.isVisible && cropped() }
+        XCTAssertEqual(controller.snapshotUpdateWindows().first?["artifact_id"] as? String, id)
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: media)), before)
+        if let output = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"],
+           let content = editor.contentView {
+            try capture(content, to: URL(fileURLWithPath: output)
+                .appendingPathComponent("update-restored-dark-editor.png"))
+        }
+
         // Shipping closes without a prompt (the draft autosaves); reopening the
         // closed source reloads it and drops that draft.
         editor.performClose(nil)

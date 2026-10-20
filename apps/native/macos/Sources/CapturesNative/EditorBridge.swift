@@ -492,6 +492,7 @@ struct NativeFontFamilyOption: Equatable {
 
 struct NativeEditorSnapshot: Equatable {
     let artifactID: String
+    let sourceArtifactID: String?
     let originalExportPath: String?
     let initialTextSize: Double
     let initialAnnotationStyle: NativeDrawingStyle?
@@ -578,6 +579,7 @@ struct NativeEditorSnapshot: Equatable {
             return nil
         }
         self.artifactID = artifactID
+        self.sourceArtifactID = value["source_artifact_id"] as? String
         self.originalExportPath = originalExportPath
         self.initialTextSize = initialTextSize.doubleValue
         if let style = value["initial_annotation_style"] as? [String: Any] {
@@ -938,11 +940,13 @@ private final class NativeEditorSession {
     deinit { captures_editor_free_v1(handle) }
 
     static func open(historyRoot: String, draftsRoot: String,
-                     artifactID: String) throws -> (NativeEditorSession, NativeEditorSnapshot) {
-        let data = try JSONSerialization.data(withJSONObject: [
+                     artifactID: String, sourceArtifactID: String? = nil) throws -> (NativeEditorSession, NativeEditorSnapshot) {
+        var request: [String: Any] = [
             "history_root": historyRoot, "drafts_root": draftsRoot,
             "artifact_id": artifactID,
-        ], options: [.sortedKeys])
+        ]
+        request["source_artifact_id"] = sourceArtifactID
+        let data = try JSONSerialization.data(withJSONObject: request, options: [.sortedKeys])
         var response: UnsafeMutablePointer<CChar>?
         let handle = String(decoding: data, as: UTF8.self).withCString {
             captures_editor_open_v1($0, &response)
@@ -1152,6 +1156,8 @@ protocol EditorWorking: AnyObject {
                     completion: @escaping (Result<EditorPresentation, Error>) -> Void)
     func open(historyRoot: String, draftsRoot: String, artifactID: String,
               completion: @escaping (Result<EditorPresentation, Error>) -> Void)
+    func open(historyRoot: String, draftsRoot: String, artifactID: String, sourceArtifactID: String?,
+              completion: @escaping (Result<EditorPresentation, Error>) -> Void)
     func request(_ object: [String: Any],
                  completion: @escaping (Result<EditorPresentation, Error>) -> Void)
     func previewDrawing(_ object: [String: Any],
@@ -1186,6 +1192,10 @@ protocol EditorWorking: AnyObject {
 }
 
 extension EditorWorking {
+    func open(historyRoot: String, draftsRoot: String, artifactID: String, sourceArtifactID: String?,
+              completion: @escaping (Result<EditorPresentation, Error>) -> Void) {
+        open(historyRoot: historyRoot, draftsRoot: draftsRoot, artifactID: artifactID, completion: completion)
+    }
     /// Workers without a session (test fixtures) show no loupe.
     func wandLoupe(at point: CGPoint, completion: @escaping (NativeWandLoupe?) -> Void) {
         completion(nil)
@@ -1241,12 +1251,19 @@ final class EditorWorker: EditorWorking {
 
     func open(historyRoot: String, draftsRoot: String, artifactID: String,
               completion: @escaping (Result<EditorPresentation, Error>) -> Void) {
+        open(historyRoot: historyRoot, draftsRoot: draftsRoot, artifactID: artifactID,
+             sourceArtifactID: nil, completion: completion)
+    }
+
+    func open(historyRoot: String, draftsRoot: String, artifactID: String, sourceArtifactID: String?,
+              completion: @escaping (Result<EditorPresentation, Error>) -> Void) {
         let storage = storage
         Self.queue.async {
             let result = Result { () throws -> EditorPresentation in
                 storage.session = nil; storage.snapshot = nil
                 let (session, snapshot) = try NativeEditorSession.open(
-                    historyRoot: historyRoot, draftsRoot: draftsRoot, artifactID: artifactID)
+                    historyRoot: historyRoot, draftsRoot: draftsRoot, artifactID: artifactID,
+                    sourceArtifactID: sourceArtifactID)
                 storage.session = session; storage.snapshot = snapshot
                 return try session.presentation(snapshot)
             }

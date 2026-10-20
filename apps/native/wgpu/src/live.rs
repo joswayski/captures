@@ -2265,11 +2265,13 @@ impl Live {
             controls_error: None,
             permission_recovery_visible: false,
         };
-        live.load_history();
+        // The worker preserves request order. Startup restoration needs display
+        // placement (or its failure) settled before History becomes ready.
         if ctx.data(|data| data.get_temp::<bool>(egui::Id::unique("wayland-surface"))) != Some(true)
         {
             live.send(Request::Displays);
         }
+        live.load_history();
         live
     }
 
@@ -3567,6 +3569,151 @@ impl Live {
             },
             texture,
         );
+    }
+
+    pub fn history_loaded(&self) -> bool {
+        self.history_loaded
+    }
+
+    pub fn snapshot_update_restart(
+        &self,
+        restore_preferences: bool,
+    ) -> captures_app::updater::RestartIntent {
+        use captures_app::updater::{RestartCaptureWindow, RestartIntent};
+        let mut editors = self.editors.iter().collect::<Vec<_>>();
+        editors.sort_by_key(|(id, _)| *id);
+        let mut recordings = self.recording_editors.iter().collect::<Vec<_>>();
+        recordings.sort_by_key(|(id, _)| *id);
+        RestartIntent {
+            restore_preferences,
+            preview_artifact_ids: self.previews.stack.ids().to_vec(),
+            capture_windows: editors
+                .into_iter()
+                .filter_map(|(_, editor)| editor.restart_window())
+                .chain(
+                    recordings
+                        .into_iter()
+                        .filter(|(_, editor)| !editor.closed())
+                        .map(|(id, _)| RestartCaptureWindow::RecordingEditor {
+                            artifact_id: id.clone(),
+                        }),
+                )
+                .collect(),
+        }
+    }
+
+    pub fn validate_update_restart(
+        &self,
+        restart: &captures_app::updater::RestartIntent,
+    ) -> Result<(), String> {
+        use captures_app::updater::RestartCaptureWindow;
+        if self.is_capturing()
+            || self.opening_media
+            || !self.open_media.is_empty()
+            || self.pending > 0
+        {
+            return Err("Finish capture and wait for accepted media operations before installing the update.".into());
+        }
+        let artifacts = load_history(&self.root)?;
+        let recoverable = |id: &str| {
+            artifacts.iter().any(|artifact| {
+                artifact.entry.id == id
+                    && if artifact.entry.kind.is_recording() {
+                        artifact
+                            .entry
+                            .recording_media_path(&self.root)
+                            .is_some_and(|path| path.is_file())
+                    } else {
+                        artifact.image_path.is_file()
+                    }
+            })
+        };
+        let windows_ready = restart.capture_windows.iter().all(|window| match window {
+            RestartCaptureWindow::ScreenshotEditor {
+                artifact_id,
+                source_artifact_id,
+            } => recoverable(artifact_id) && source_artifact_id.as_deref().is_none_or(recoverable),
+            RestartCaptureWindow::RecordingEditor { artifact_id } => recoverable(artifact_id),
+        });
+        if !windows_ready
+            || !restart
+                .preview_artifact_ids
+                .iter()
+                .all(|id| recoverable(id))
+        {
+            return Err("An open capture is no longer recoverable from History. Save or close it before installing the update.".into());
+        }
+        Ok(())
+    }
+
+    pub fn restore_update_session(
+        &mut self,
+        ctx: &egui::Context,
+        frame: &eframe::Frame,
+        restart: captures_app::updater::RestartIntent,
+        settings: &AppSettings,
+    ) {
+        use captures_app::updater::RestartCaptureWindow;
+        let target = capture_target(frame, &self.displays, self.display_id.as_deref());
+        // Stack membership is inserted synchronously before decoding; asynchronous
+        // replies cannot reorder these IDs. Wayland retains its no-floating-preview policy.
+        for id in restart.preview_artifact_ids {
+            self.restore(ctx, &id, settings, target);
+        }
+        for window in restart.capture_windows {
+            match window {
+                RestartCaptureWindow::ScreenshotEditor {
+                    artifact_id,
+                    source_artifact_id,
+                } => {
+                    let source = source_artifact_id.as_deref().unwrap_or(&artifact_id);
+                    let Some(entry) = self
+                        .artifacts
+                        .iter()
+                        .find(|artifact| {
+                            artifact.entry.id == source && !artifact.entry.kind.is_recording()
+                        })
+                        .map(|artifact| artifact.entry.clone())
+                    else {
+                        continue;
+                    };
+                    // A missing preview must not prevent recovering the editable draft.
+                    let _ = self.restore_for_edit(ctx, source, settings, target);
+                    let clipboard = self.tx.clone();
+                    let editor = crate::editor::Editor::open_restored(
+                        ctx,
+                        self.root.clone(),
+                        artifact_id.clone(),
+                        source_artifact_id,
+                        settings.output_directory.clone().into(),
+                        entry.mode.unwrap_or(captures_capture::CaptureMode::Region),
+                        move |pixels| {
+                            let (reply, rx) = mpsc::channel();
+                            clipboard
+                                .send(Job::CopyPixels { pixels, reply })
+                                .map_err(|_| "Clipboard worker stopped.".to_owned())?;
+                            rx.recv()
+                                .map_err(|_| "Clipboard worker stopped.".to_owned())?
+                        },
+                    );
+                    editor.focus(ctx);
+                    self.editors.insert(artifact_id, editor);
+                }
+                RestartCaptureWindow::RecordingEditor { artifact_id } => {
+                    if self.artifacts.iter().any(|artifact| {
+                        artifact.entry.id == artifact_id && artifact.entry.kind.is_recording()
+                    }) {
+                        self.open_recording_editor(
+                            ctx,
+                            artifact_id,
+                            settings.output_directory.clone().into(),
+                        );
+                    }
+                }
+            }
+        }
+        request_hidden_root_ui(ctx);
+        ctx.request_repaint();
     }
 
     pub fn flush_editors(&self, ctx: &egui::Context) -> Result<(), String> {
@@ -13483,6 +13630,59 @@ mod tests {
         results.send(decoded(generation, &id)).unwrap();
         live.logic(&ctx, &mut frame);
         assert!(live.previews.cards[&id].saved_path.is_none());
+        live.flush();
+    }
+
+    #[test]
+    fn update_restart_retains_preview_order_and_adopted_editor_identity() {
+        use captures_app::updater::{RestartCaptureWindow, RestartIntent};
+        let profile = tempfile::tempdir().unwrap();
+        let root = profile.path().join("history");
+        let owner = preview_artifact(&root, [210, 20, 30, 255]);
+        let mut saved = preview_artifact(&root, [30, 20, 210, 255]);
+        let destination = profile.path().join("saved.png");
+        std::fs::copy(&saved.image_path, &destination).unwrap();
+        saved.entry.saved_path = Some(destination.to_string_lossy().into_owned());
+        captures_history::update_metadata(&root, &saved.entry).unwrap();
+        let ctx = egui::Context::default();
+        let frame = eframe::Frame::_new_kittest();
+        let mut live = Live::new(ctx.clone(), Some(root.clone()));
+        live.flush();
+        live.artifacts = load_history(&root).unwrap();
+        live.pending = 0;
+        let settings = AppSettings {
+            show_mini_previews: false,
+            ..Default::default()
+        };
+        let restart = RestartIntent {
+            restore_preferences: false,
+            preview_artifact_ids: vec![saved.entry.id.clone(), owner.entry.id.clone()],
+            capture_windows: vec![RestartCaptureWindow::ScreenshotEditor {
+                artifact_id: owner.entry.id.clone(),
+                source_artifact_id: Some(saved.entry.id.clone()),
+            }],
+        };
+        live.validate_update_restart(&restart).unwrap();
+        let mut with_missing = restart.clone();
+        with_missing
+            .preview_artifact_ids
+            .insert(1, "missing".into());
+        with_missing.capture_windows.insert(
+            0,
+            RestartCaptureWindow::RecordingEditor {
+                artifact_id: "missing".into(),
+            },
+        );
+        assert!(live.validate_update_restart(&with_missing).is_err());
+        ctx.begin_pass(Default::default());
+        live.restore_update_session(&ctx, &frame, with_missing, &settings);
+        // Final flush waits for real editor opening, not only map insertion.
+        live.editors[&owner.entry.id].flush(&ctx).unwrap();
+        assert_eq!(live.snapshot_update_restart(false), restart);
+        assert_eq!(live.editors.len(), 1);
+        std::fs::remove_file(&saved.image_path).unwrap();
+        assert!(live.validate_update_restart(&restart).is_err());
+        ctx.end_pass().textures_delta.clear();
         live.flush();
     }
 

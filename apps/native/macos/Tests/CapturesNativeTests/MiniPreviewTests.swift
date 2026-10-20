@@ -1340,9 +1340,13 @@ final class MiniPreviewTests: XCTestCase {
             artifact(id: $0, previewPath: "/\($0).png", savedPath: "/exports/\($0).png")
         }
         for captured in captures {
-            controller.restore(captured, on: screenID(), settings: settings) { _ in }
+            var completed = false
+            controller.restore(captured, on: screenID(), settings: settings) { _ in completed = true }
+            try waitUntil { completed }
             try waitUntil { controller.decodedArtifactIDs.contains(captured.id) }
         }
+        XCTAssertEqual(controller.restartArtifactIDs, ["older", "restore", "trash"],
+                       "restart order is stack order after ordered restore completions, not decode scheduling")
         XCTAssertEqual(controller.dismiss("restore", exit: .dust), 2.9, accuracy: 0.01)
         XCTAssertEqual(try XCTUnwrap(controller.beginTrash("trash")), 2.9, accuracy: 0.01)
         controller.restore(captures[1], on: screenID(), settings: settings) { _ in }

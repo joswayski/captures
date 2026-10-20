@@ -15,8 +15,11 @@ verification and a stopped-process helper, separately from the opt-in developmen
 updater. macOS/AppImage replacement keeps the previous package until renderer/settings/media startup
 acknowledgement; a failed acknowledgement retains recovery files and does not
 automatically roll back a possibly running application. Windows uses NSIS; Debian
-uses manual package installation. Open editor-window restoration across this
-cutover is not connected. See [release recovery](releases.md#native-preview-packaging-and-recovery).
+uses manual package installation. The development helper on all hosts and native
+macOS/AppImage updates now carry open editors and ordered screenshot previews
+through the existing one-shot readiness marker. The installed Windows NSIS relaunch
+does not yet carry this session. This does not restore windows across a Tauri/native cutover or manual
+reinstall. See [release recovery](releases.md#native-preview-packaging-and-recovery).
 
 ## Progress dashboard
 
@@ -25,6 +28,20 @@ We are delivering stage 4 workflow slices and stage 5 editor slices.
 do not replace physical macOS/Windows/Linux, accessibility or mixed-DPI checks.
 The detailed checklist below remains the release gate; unchecked does not mean
 unimplemented. Later slice notes supersede earlier notes about missing behavior.
+
+Native update restart snapshots include Preferences visibility, screenshot draft
+owners and adopted saved-copy sources, recording editors, and ordered preview IDs.
+Both hosts snapshot before teardown and preserve the editor veto. Restart refuses
+captures missing from History; startup skips missing entries without stopping the
+remaining restores. AppKit resolves adopted sources after queued exports drain and
+reopens closed editors if installation is cancelled. wgpu waits for startup History
+and display enumeration before restoring. Wayland keeps its no-floating-preview
+policy and reopens normal editors. Window placement, undo stacks and unsaved
+recording edits are not persisted. The private helper transports remain bounded,
+one-shot and target/session-bound; old Preferences-only records still work.
+Shared Rust/FFI and native host regressions cover these contracts. Hosted macOS,
+Windows, private X11/Wayland runtime checks and physical acceptance are distinct;
+this implementation does not close the update/distribution acceptance gate.
 
 Native History replaces “On this device” with the shipping ghost **Back to
 Preferences** button and shared left-chevron path. It stays available in loading

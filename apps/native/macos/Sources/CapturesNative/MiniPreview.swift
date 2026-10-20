@@ -2596,6 +2596,7 @@ final class MiniPreviewController {
 
     private let policy: NativePreviewPolicy
     private let stack: NativePreviewStack
+    var restartArtifactIDs: [String] { stack.ids }
     private let tokens: Tokens
     private let imageLoader: (String) throws -> NSImage
     private let screenProvider: () -> [NSScreen]

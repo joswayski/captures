@@ -1,5 +1,5 @@
 //! One-shot startup acknowledgement through a helper-owned private file.
-use super::Error;
+use super::{Error, RestartIntent};
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File},
@@ -7,22 +7,19 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[derive(Default, Deserialize, Serialize)]
-struct RestartIntent {
-    restore_preferences: bool,
-}
+const LIMIT: u64 = 256 * 1024;
 
-pub(super) fn write_restart_preferences(ready_file: &Path, visible: bool) -> Result<(), Error> {
+pub(super) fn write_restart_intent(ready_file: &Path, intent: &RestartIntent) -> Result<(), Error> {
+    let bytes =
+        serde_json::to_vec(intent).map_err(|_| Error::Configuration("invalid restart intent"))?;
+    if bytes.len() as u64 > LIMIT {
+        return Err(Error::MetadataTooLarge);
+    }
     let mut file = File::options()
         .write(true)
         .create_new(true)
         .open(ready_file.with_extension("restart.json"))?;
-    file.write_all(
-        &serde_json::to_vec(&RestartIntent {
-            restore_preferences: visible,
-        })
-        .map_err(|_| Error::Configuration("invalid restart intent"))?,
-    )?;
+    file.write_all(&bytes)?;
     file.sync_all()?;
     Ok(())
 }
@@ -31,7 +28,7 @@ pub(super) fn write_restart_preferences(ready_file: &Path, visible: bool) -> Res
 /// election and only for a helper-provided health launch. An absent marker
 /// preserves ordinary launch routing; an empty legacy marker means tray-only.
 /// No installed profile or global marker is discovered. Invalid input is retained.
-pub fn take_restart_preferences(ready_file: &Path) -> Result<Option<bool>, Error> {
+pub fn take_restart_intent(ready_file: &Path) -> Result<Option<RestartIntent>, Error> {
     if !ready_file.is_absolute() {
         return Err(Error::Configuration(
             "restart intent requires an absolute health file",
@@ -44,14 +41,14 @@ pub fn take_restart_preferences(ready_file: &Path) -> Result<Option<bool>, Error
         Err(error) => return Err(error.into()),
     };
     let ready = fs::symlink_metadata(ready_file)?;
-    if !metadata.is_file() || metadata.len() > 128 || !ready.is_file() || ready.len() != 0 {
+    if !metadata.is_file() || metadata.len() > LIMIT || !ready.is_file() || ready.len() != 0 {
         return Err(Error::Configuration(
             "restart intent requires a small regular marker and empty health file",
         ));
     }
     let mut bytes = Vec::new();
-    File::open(&path)?.take(129).read_to_end(&mut bytes)?;
-    if bytes.len() > 128 {
+    File::open(&path)?.take(LIMIT + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > LIMIT {
         return Err(Error::Configuration(
             "restart intent exceeds its size limit",
         ));
@@ -63,7 +60,7 @@ pub fn take_restart_preferences(ready_file: &Path) -> Result<Option<bool>, Error
             .map_err(|_| Error::Configuration("invalid restart intent"))?
     };
     fs::remove_file(path)?;
-    Ok(Some(intent.restore_preferences))
+    Ok(Some(intent))
 }
 
 /// Used by an elected native primary after its renderer, persisted settings
@@ -94,8 +91,8 @@ impl HealthAcknowledgement {
     }
 
     /// Call only as the elected primary, before deciding which windows to show.
-    pub fn take_restart_preferences(&self) -> Result<Option<bool>, Error> {
-        take_restart_preferences(&self.file)
+    pub fn take_restart_intent(&self) -> Result<Option<RestartIntent>, Error> {
+        take_restart_intent(&self.file)
     }
 
     /// Publish exactly UTF-8 `<canonical UUIDv4>\n`, once. The parent retains
@@ -123,6 +120,64 @@ impl HealthAcknowledgement {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn write_restart_preferences(ready: &Path, visible: bool) -> Result<(), Error> {
+        write_restart_intent(
+            ready,
+            &RestartIntent {
+                restore_preferences: visible,
+                ..Default::default()
+            },
+        )
+    }
+
+    fn take_restart_preferences(ready: &Path) -> Result<Option<bool>, Error> {
+        Ok(take_restart_intent(ready)?.map(|intent| intent.restore_preferences))
+    }
+
+    #[test]
+    fn bounded_session_roundtrip_preserves_order_and_rejects_before_publication() {
+        use super::super::RestartCaptureWindow;
+        let directory = tempfile::tempdir().unwrap();
+        let ready = directory.path().join("ready");
+        fs::write(&ready, []).unwrap();
+        let intent = RestartIntent {
+            restore_preferences: true,
+            preview_artifact_ids: vec!["second".into(), "first".into()],
+            capture_windows: vec![
+                RestartCaptureWindow::ScreenshotEditor {
+                    artifact_id: "draft-owner".into(),
+                    source_artifact_id: Some("saved-copy".into()),
+                },
+                RestartCaptureWindow::RecordingEditor {
+                    artifact_id: "recording".into(),
+                },
+            ],
+        };
+        write_restart_intent(&ready, &intent).unwrap();
+        assert_eq!(take_restart_intent(&ready).unwrap(), Some(intent));
+        assert_eq!(take_restart_intent(&ready).unwrap(), None);
+        let oversized = RestartIntent {
+            preview_artifact_ids: vec!["x".repeat(LIMIT as usize)],
+            ..Default::default()
+        };
+        assert!(write_restart_intent(&ready, &oversized).is_err());
+        assert!(!ready.with_extension("restart.json").exists());
+        for visible in [true, false] {
+            fs::write(
+                ready.with_extension("restart.json"),
+                format!("{{\"restore_preferences\":{visible}}}"),
+            )
+            .unwrap();
+            assert_eq!(
+                take_restart_intent(&ready).unwrap(),
+                Some(RestartIntent {
+                    restore_preferences: visible,
+                    ..Default::default()
+                })
+            );
+        }
+    }
 
     #[test]
     fn restart_visibility_is_one_shot_and_legacy_empty_means_closed() {
@@ -156,7 +211,7 @@ mod tests {
         for bytes in [
             b"invalid".to_vec(),
             b"{\"restore_preferences\":1}".to_vec(),
-            vec![b' '; 129],
+            vec![b' '; LIMIT as usize + 1],
         ] {
             fs::write(&marker, &bytes).unwrap();
             assert!(take_restart_preferences(&ready).is_err());

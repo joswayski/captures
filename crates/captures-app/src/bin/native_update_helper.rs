@@ -107,7 +107,10 @@ fn run(arguments: impl Iterator<Item = String>) -> Result<(), String> {
                 source_data = Some(PathBuf::from(value))
             }
             "--restore-preferences" if restore_preferences.is_none() => {
-                restore_preferences = Some(value.parse::<bool>().map_err(|_| USAGE)?);
+                restore_preferences = Some(captures_app::updater::RestartIntent {
+                    restore_preferences: value.parse::<bool>().map_err(|_| USAGE)?,
+                    ..Default::default()
+                });
             }
             "--shutdown-intent-file" if shutdown_intent.is_none() => {
                 shutdown_intent = Some(PathBuf::from(value));
@@ -363,7 +366,7 @@ fn run(arguments: impl Iterator<Item = String>) -> Result<(), String> {
         .replace(&destination, &cancel)
         .map_err(|error| retained_error(error.to_string()))?;
     let pending = match restore_preferences {
-        Some(visible) => pending.with_restart_preferences(visible),
+        Some(intent) => pending.with_restart_intent(intent),
         None => pending,
     };
     let launched = if let Some(prepared) = &prepared {

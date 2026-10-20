@@ -126,8 +126,8 @@ impl PendingInstallation {
         let mut ready = tempfile::NamedTempFile::new_in(channel.path())?;
         let token = uuid::Uuid::new_v4().to_string();
         let expected = format!("{token}\n").into_bytes();
-        if let Some(visible) = self.restore_preferences {
-            super::super::health::write_restart_preferences(ready.path(), visible)?;
+        if let Some(intent) = &self.restore_preferences {
+            super::super::health::write_restart_intent(ready.path(), intent)?;
         }
         let log = File::options()
             .write(true)

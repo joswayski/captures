@@ -662,6 +662,8 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(plan["kind"] as? String, "new_file")
         XCTAssertEqual(plan["path"] as? String, copyURL.path)
         XCTAssertEqual(copies, 1); XCTAssertTrue(replaced.isEmpty)
+        XCTAssertEqual(controller.presentArtifactID, "shot", "draft ownership stays with the open window")
+        XCTAssertEqual(controller.restartSourceArtifactID, "copy-id", "restart follows the adopted History source")
         XCTAssertEqual(newFile.state, .off, "the saved copy becomes the file Save overwrites")
         XCTAssertEqual(filename.stringValue, "Shot-edited")
         XCTAssertEqual(revealed.map(\.path), [copyURL.path], "Save reveals the new file")
@@ -690,6 +692,17 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(plan["kind"] as? String, "new_file")
         XCTAssertEqual(plan["path"] as? String, folder.appendingPathComponent("Renamed.webp").path)
         XCTAssertEqual((worker.exportSaves.last?["options"] as? [String: Any])?["format"] as? String, "webp")
+        let owner = controller.presentArtifactID
+        let source = controller.restartSourceArtifactID
+        let drained = expectation(description: "accepted update drain")
+        controller.prepareForTermination { accepted in
+            XCTAssertTrue(accepted)
+            XCTAssertEqual(owner, "shot", "snapshot the owner before draining")
+            XCTAssertNil(controller.presentArtifactID, "closed session cannot supply the owner afterward")
+            XCTAssertEqual(controller.restartSourceArtifactID, source, "adopted export identity survives the drain")
+            drained.fulfill()
+        }
+        wait(for: [drained], timeout: 5)
     }
 
     func testSaveFailuresAndHistoryWarningsStayRecoverableInTheExportBar() throws {
@@ -2339,6 +2352,7 @@ final class ScreenshotEditorTests: XCTestCase {
             worker.completePendingExportSave()
             wait(for: [finished], timeout: 5)
             XCTAssertEqual(replies, [false])
+            XCTAssertEqual(controller.presentArtifactID, "shot", "a veto retains the open owner for a later snapshot")
             XCTAssertEqual(historyChanges, 1, "accepted Save retains its History callback")
             XCTAssertTrue(controller.window.isVisible)
             XCTAssertEqual(controller.state.artifactID, "shot")
@@ -4122,6 +4136,21 @@ final class ScreenshotEditorTests: XCTestCase {
         }
         XCTAssertEqual(error.localizedDescription, "edited.png already exists. Choose another filename.")
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: fixture.history.path).count, 2)
+
+        worker.close(); EditorWorker.flush()
+        let restored = expectation(description: "restored adopted source under stable draft owner")
+        worker.open(historyRoot: fixture.history.path, draftsRoot: fixture.drafts.path,
+                    artifactID: fixture.id, sourceArtifactID: artifactID) { result in
+            switch result {
+            case .success(let presentation):
+                XCTAssertEqual(presentation.snapshot.artifactID, fixture.id)
+                XCTAssertEqual(presentation.snapshot.sourceArtifactID, artifactID)
+                XCTAssertEqual(presentation.snapshot.originalExportPath, output.path)
+            case .failure(let error): XCTFail(error.localizedDescription)
+            }
+            restored.fulfill()
+        }
+        wait(for: [restored], timeout: 5)
     }
 
     func testImageIODecoderAppliesExifOrientationAndProducesStraightSrgbRgba() throws {

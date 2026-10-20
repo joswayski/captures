@@ -92,6 +92,9 @@ pub struct OpenRequest {
     pub history_root: PathBuf,
     pub drafts_root: PathBuf,
     pub artifact_id: String,
+    /// Adopted saved copy; the original artifact continues to own the draft.
+    #[serde(default)]
+    pub source_artifact_id: Option<String>,
 }
 
 /// One decoded image supplied by a native host. Hosts own file picking and
@@ -364,6 +367,9 @@ pub struct FontFamilyOption {
 #[derive(Debug, Serialize)]
 pub struct Snapshot<'a> {
     pub artifact_id: &'a str,
+    /// When present, initialize the export target with this History artifact,
+    /// not the stable draft owner in `artifact_id`.
+    pub source_artifact_id: Option<&'a str>,
     pub original_export_path: Option<&'a Path>,
     /// Shipping's initial placement size, pinned to the capture rather than the
     /// editable canvas. Hosts adopt it once and retain subsequent user choices.
@@ -435,6 +441,7 @@ pub struct EditorSession {
     history_root: PathBuf,
     drafts_root: PathBuf,
     original_export_path: Option<PathBuf>,
+    source_artifact_id: Option<String>,
     initial_text_size: f64,
     history: DocumentHistory,
     original_path: PathBuf,
@@ -646,16 +653,19 @@ impl EditorSession {
         platform: PlatformFonts,
     ) -> Result<Self, String> {
         let mut host = None;
-        let directory =
-            captures_history::entry_directory(&request.history_root, &request.artifact_id)
-                .map_err(|error| error.to_string())?;
+        let source_id = request
+            .source_artifact_id
+            .as_deref()
+            .unwrap_or(&request.artifact_id);
+        let directory = captures_history::entry_directory(&request.history_root, source_id)
+            .map_err(|error| error.to_string())?;
         let metadata = read_bounded(
             &directory.join(captures_history::HISTORY_METADATA_FILE),
             MAX_METADATA_BYTES,
         )?;
         let entry: HistoryEntry =
             serde_json::from_slice(&metadata).map_err(|error| error.to_string())?;
-        if entry.id != request.artifact_id || entry.kind != ArtifactKind::Screenshot {
+        if entry.id != source_id || entry.kind != ArtifactKind::Screenshot {
             return Err("Select a screenshot from History to edit.".into());
         }
         let original_export_path = entry.saved_path.as_deref().map(PathBuf::from);
@@ -690,7 +700,7 @@ impl EditorSession {
                 }
                 document
             }
-            None => original_document(&original_path, &request.artifact_id, &mut assets)?,
+            None => original_document(&original_path, source_id, &mut assets)?,
         };
         let mut fonts = fonts
             .map(|assets| SessionFonts::new(assets, host, platform))
@@ -706,6 +716,7 @@ impl EditorSession {
             history_root: request.history_root,
             drafts_root: request.drafts_root,
             original_export_path,
+            source_artifact_id: request.source_artifact_id,
             initial_text_size: (f64::from(entry.width.min(entry.height)) * 0.055)
                 .round()
                 .clamp(24., 72.),
@@ -765,6 +776,7 @@ impl EditorSession {
             .count();
         Snapshot {
             artifact_id: &self.artifact_id,
+            source_artifact_id: self.source_artifact_id.as_deref(),
             original_export_path: self.original_export_path.as_deref(),
             initial_text_size: self.initial_text_size,
             initial_annotation_style: ElementStyle::default(),
@@ -929,7 +941,9 @@ impl EditorSession {
         }
         crate::editor_output::save_original_export(
             &self.history_root,
-            &self.artifact_id,
+            self.source_artifact_id
+                .as_deref()
+                .unwrap_or(&self.artifact_id),
             expected,
             &self.pixels,
             options,
@@ -1912,7 +1926,13 @@ impl EditorSession {
         // Prepare the replacement before deleting anything; a missing original
         // must not destroy the only surviving draft.
         let mut assets = BTreeMap::new();
-        let original = original_document(&self.original_path, &self.artifact_id, &mut assets)?;
+        let original = original_document(
+            &self.original_path,
+            self.source_artifact_id
+                .as_deref()
+                .unwrap_or(&self.artifact_id),
+            &mut assets,
+        )?;
         let pixels = render_frame(&original, &assets, self.fonts.as_mut())?;
         editor_draft::discard(&self.drafts_root, &self.artifact_id)
             .map_err(|error| error.to_string())?;

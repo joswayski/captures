@@ -11,9 +11,11 @@ final class UpdateChecksTests: XCTestCase {
         var shutdowns = 0
         var acquisition: [String: Any]?
         var rawStatus: [String: Any] = ["state": "idle"]
+        var installRestart: [String: Any]?
         func request(_ object: [String: Any]) throws -> [String: Any] {
             let operation = object.string("operation")
             operations.append(operation)
+            if operation == "install_preview" { installRestart = object["restart"] as? [String: Any] }
             if operation == "poll" && pollError { throw AppBridgeError.invalidResponse }
             if operation == "check" { checking = true; status = "Checking signed metadata…" }
             if operation == "download_verify" {
@@ -30,6 +32,15 @@ final class UpdateChecksTests: XCTestCase {
                     "detail": "No installation or update channel is enabled.", "acquisition": acquisition ?? [:]]]
         }
         func shutdown(completion: @escaping () -> Void) { shutdowns += 1; completion() }
+    }
+
+    func testPreviewInstallPassesCompleteRestartWithoutLosingOwnerSourceIdentity() throws {
+        let transport = Transport(), model = try UpdateCheckModel(transport: transport)
+        let restart: [String: Any] = ["restore_preferences": true,
+            "preview_artifact_ids": ["older", "newer"],
+            "capture_windows": [["kind": "screenshot_editor", "artifact_id": "owner", "source_artifact_id": "copy"]]]
+        try model.launchPreviewInstall(restart: restart)
+        XCTAssertTrue(NSDictionary(dictionary: try XCTUnwrap(transport.installRestart)).isEqual(to: restart))
     }
 
     func testShutdownSnapshotRequiresAStagedPackageAndSurvivesWorkerCleanup() throws {

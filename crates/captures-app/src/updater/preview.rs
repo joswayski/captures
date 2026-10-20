@@ -110,6 +110,10 @@ struct InstallRequest {
     executable: PathBuf,
     preferences_visible: bool,
     #[serde(default)]
+    preview_artifact_ids: Vec<String>,
+    #[serde(default)]
+    capture_windows: Vec<super::RestartCaptureWindow>,
+    #[serde(default)]
     recovery: Option<recovery::InstallationCheck>,
 }
 
@@ -294,6 +298,8 @@ impl Pending {
                 installation: self.installation.clone(),
                 executable: std::env::current_exe()?,
                 preferences_visible: false,
+                preview_artifact_ids: Vec::new(),
+                capture_windows: Vec::new(),
                 recovery: None,
             },
         })
@@ -384,11 +390,17 @@ impl Download {
     /// Launch only after editor/recording vetoes and before orderly worker drain.
     /// The copied helper waits for the host-lifetime package lock to release, so
     /// even an early spawn can never replace a still-running native application.
-    pub fn launch(mut self, preferences_visible: bool) -> Result<(), Error> {
+    pub fn launch(mut self, restart: super::RestartIntent) -> Result<(), Error> {
         if !self.request.installation.installable() {
             return Err(Error::Installation("this package uses manual updates"));
         }
-        self.request.preferences_visible = preferences_visible;
+        self.request.preferences_visible = restart.restore_preferences;
+        self.request.preview_artifact_ids = restart.preview_artifact_ids;
+        self.request.capture_windows = restart.capture_windows;
+        let bytes = serde_json::to_vec(&self.request).map_err(|_| Error::Manifest)?;
+        if bytes.len() > 256 * 1024 {
+            return Err(Error::MetadataTooLarge);
+        }
         let helper_name = if cfg!(windows) {
             "native_preview_update_helper.exe"
         } else {
@@ -407,7 +419,7 @@ impl Download {
             .create_new(true)
             .write(true)
             .open(&request)?;
-        serde_json::to_writer(&mut file, &self.request).map_err(|_| Error::Manifest)?;
+        file.write_all(&bytes)?;
         file.sync_all()?;
         let log = fs::File::options()
             .create_new(true)
@@ -471,8 +483,11 @@ fn install_with(
     key: &PublicKey,
     package_lock: impl FnOnce() -> Result<fs::File, Error>,
 ) -> Result<(), Error> {
-    let bytes = fs::read(request_path)?;
-    if bytes.len() > 32 * 1024 {
+    let mut bytes = Vec::new();
+    fs::File::open(request_path)?
+        .take(256 * 1024 + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > 256 * 1024 {
         return Err(Error::Manifest);
     }
     let request: InstallRequest = serde_json::from_slice(&bytes).map_err(|_| Error::Manifest)?;
@@ -662,7 +677,14 @@ fn launch_and_confirm(
         .create_new(true)
         .open(&ready)?;
     let token = uuid::Uuid::new_v4().to_string();
-    health::write_restart_preferences(&ready, request.preferences_visible)?;
+    health::write_restart_intent(
+        &ready,
+        &super::RestartIntent {
+            restore_preferences: request.preferences_visible,
+            preview_artifact_ids: request.preview_artifact_ids.clone(),
+            capture_windows: request.capture_windows.clone(),
+        },
+    )?;
     let mut child = Command::new(executable)
         .env_remove("APPIMAGE")
         .env_remove("APPDIR")

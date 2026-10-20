@@ -852,7 +852,12 @@ fn main() {
     fn explicit_restart_visibility_crosses_the_private_health_handoff() {
         for (visible, mode) in [(true, "restart-visible"), (false, "restart-closed")] {
             let (fixture, profile) = fixture(mode);
-            let pending = fixture.replace().with_restart_preferences(visible);
+            let pending = fixture
+                .replace()
+                .with_restart_intent(crate::updater::RestartIntent {
+                    restore_preferences: visible,
+                    ..Default::default()
+                });
             let transaction = pending.paths.transaction.clone();
             let running = Running(
                 pending
@@ -876,7 +881,12 @@ fn main() {
     #[test]
     fn a_healthy_peer_ignoring_restart_intent_cannot_confirm_replacement() {
         let (fixture, profile) = fixture("restart-ignored");
-        let pending = fixture.replace().with_restart_preferences(true);
+        let pending = fixture
+            .replace()
+            .with_restart_intent(crate::updater::RestartIntent {
+                restore_preferences: true,
+                ..Default::default()
+            });
         let transaction = pending.paths.transaction.clone();
         let failure = pending
             .launch(&profile, Duration::from_secs(10), &CancelToken::default())

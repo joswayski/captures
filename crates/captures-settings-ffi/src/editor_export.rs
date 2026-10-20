@@ -326,6 +326,7 @@ mod tests {
             history_root: root.clone(),
             drafts_root: data.path().join("drafts"),
             artifact_id: capture.entry.id,
+            source_artifact_id: None,
         })
         .unwrap();
         let before = json!(session.snapshot());

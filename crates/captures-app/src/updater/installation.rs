@@ -25,7 +25,7 @@ pub struct PendingInstallation {
     paths: Paths,
     info: ReleaseInfo,
     id: uuid::Uuid,
-    restore_preferences: Option<bool>,
+    restore_preferences: Option<super::RestartIntent>,
 }
 
 impl PendingInstallation {
@@ -33,12 +33,12 @@ impl PendingInstallation {
         &self.info
     }
 
-    /// Carry an explicit pre-shutdown Preferences VISIBILITY snapshot to the
-    /// development health launch. Focus/update-click origin are not substitutes.
+    /// Carry the accepted pre-shutdown window snapshot to the development
+    /// health launch. Focus/update-click origin are not visibility substitutes.
     /// The helper accepts operator intent or an opt-in GUI shutdown record bound
     /// to its freshly authenticated target. Neither enables GUI installation.
-    pub fn with_restart_preferences(mut self, visible: bool) -> Self {
-        self.restore_preferences = Some(visible);
+    pub fn with_restart_intent(mut self, intent: super::RestartIntent) -> Self {
+        self.restore_preferences = Some(intent);
         self
     }
 

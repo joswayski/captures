@@ -1715,13 +1715,14 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     func present(artifact: CaptureArtifact, historyRoot: String, outputDirectory: String? = nil,
+                 sourceArtifactID: String? = nil,
                  completion: ((Bool) -> Void)? = nil) {
         guard terminationCompletion == nil else { completion?(false); return }
         if closeRequested {
             pendingPresentation?.cancel()
             pendingPresentation = (open: { [weak self] in
                 self?.present(artifact: artifact, historyRoot: historyRoot,
-                              outputDirectory: outputDirectory, completion: completion)
+                              outputDirectory: outputDirectory, sourceArtifactID: sourceArtifactID, completion: completion)
             }, cancel: { completion?(false) })
             return
         }
@@ -1771,7 +1772,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         publishPresence()
         let draftsRoot = URL(fileURLWithPath: historyRoot).deletingLastPathComponent()
             .appendingPathComponent("editor-drafts", isDirectory: true).path
-        worker.open(historyRoot: historyRoot, draftsRoot: draftsRoot, artifactID: artifact.id) {
+        worker.open(historyRoot: historyRoot, draftsRoot: draftsRoot, artifactID: artifact.id,
+                    sourceArtifactID: sourceArtifactID) {
             [weak self] result in
             guard let self else { completion?(false); return }
             let accepted: Bool
@@ -1802,6 +1804,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     var activeArtifactID: String? { window.isVisible ? state.artifactID : nil }
+    /// Export target survives an accepted termination drain, unlike session state.
+    var restartSourceArtifactID: String? {
+        (exportTarget?["source"] as? [String: Any])?["artifact_id"] as? String
+    }
 
     /// Capture this editor window shows while open (visible or minimized), for
     /// the mini-preview "In editor" presence.
@@ -4530,7 +4536,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private func startExportTarget(_ snapshot: NativeEditorSnapshot) {
         let source: Any
         if let path = snapshot.originalExportPath {
-            source = ["artifact_id": snapshot.artifactID, "path": path] as [String: Any]
+            source = ["artifact_id": snapshot.sourceArtifactID ?? snapshot.artifactID, "path": path] as [String: Any]
         } else {
             source = NSNull()
         }

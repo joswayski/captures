@@ -127,7 +127,7 @@ pub struct Options {
     pub open_history: bool,
     pub native_update_health: Option<captures_app::updater::HealthAcknowledgement>,
     /// Consumed only after primary election, from the private health sidecar.
-    pub native_update_restore_preferences: bool,
+    pub native_update_restart: Option<captures_app::updater::RestartIntent>,
     pub native_update_checks: Option<captures_app::updater::UpdateClient>,
     pub native_update_staging_directory: Option<PathBuf>,
     pub native_update_shutdown_intent: Option<captures_app::updater::ShutdownIntentDestination>,
@@ -161,7 +161,7 @@ impl Options {
             open_preferences: false,
             open_history: false,
             native_update_health: None,
-            native_update_restore_preferences: false,
+            native_update_restart: None,
             native_update_checks: None,
             native_update_staging_directory: None,
             native_update_shutdown_intent: None,
