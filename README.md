@@ -872,8 +872,10 @@ Fit does not enlarge small screenshots; manual zoom still can.
 Cmd/Ctrl +/− zoom in 1.25× steps; Cmd/Ctrl 0 shows 100% (not Fit), including while
 an editor field has focus. Zoom shortcuts cancel unfinished canvas gestures.
 Cmd/Ctrl Z undoes and Cmd/Ctrl Shift Z redoes document edits outside text entry
-and open dialogs. Typing retains its own Undo; commands do not queue while the
+and open dialogs. Typing retains its own Undo; Undo/Redo do not queue while the
 editor is busy. These are editor-local shortcuts, not global capture shortcuts.
+Successful Undo/Redo clears layer and staged crop selections, matching Tauri;
+the current tool stays active. Reselect a layer before further layer edits.
 Cmd/Ctrl D duplicates the selected layer; Delete/Backspace removes an unlocked
 selection. Locked and hidden layers can still be duplicated, and typing fields
 keep their own deletion keys. Arrow keys nudge an unlocked selection by one image

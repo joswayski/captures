@@ -118,6 +118,8 @@ struct Presented {
     copied: bool,
     /// Layer Copy and a no-op Paste leave the current tool/fields untouched.
     preserve_controls: bool,
+    /// Successful history navigation clears shipping's layer and crop selection.
+    history_navigation: bool,
     pasted_layer: bool,
     created_layer: Option<String>,
     can_undo: bool,
@@ -159,6 +161,7 @@ impl Presented {
             saved: None,
             copied: false,
             preserve_controls: false,
+            history_navigation: false,
             pasted_layer: false,
             created_layer: None,
             can_undo: snapshot.can_undo,
@@ -1038,6 +1041,10 @@ impl View {
                     self.export_error = None;
                 }
                 let preserve_controls = presented.preserve_controls;
+                let history_navigation = presented.history_navigation;
+                if history_navigation {
+                    self.cancel_crop();
+                }
                 let pasted_layer = presented.pasted_layer;
                 let combined_layers = std::mem::take(&mut self.combine_pending);
                 let selected = presented
@@ -1062,7 +1069,9 @@ impl View {
                 }
                 self.presented = Some(presented);
                 self.ensure_export_target();
-                if !preserve_controls {
+                if history_navigation {
+                    self.select_layer_exact(None);
+                } else if !preserve_controls {
                     self.select_layer_exact(selected);
                 }
                 if self.live_queue.is_empty() && !ctx.input(|input| input.pointer.primary_down()) {
@@ -1980,6 +1989,8 @@ impl Editor {
                                     | Request::CreateText { .. }
                             );
                             let copied_layer = matches!(request, Request::CopyLayer { .. });
+                            let history_navigation =
+                                matches!(request, Request::Undo | Request::Redo);
                             let reset = matches!(request, Request::DiscardDraft);
                             let retained_id = match &request {
                                 Request::PasteRetainedLayer { new_id, .. } => Some(new_id.clone()),
@@ -1996,6 +2007,7 @@ impl Editor {
                             let mut presented = Presented::after_edit(session);
                             presented.created_layer = retained_id;
                             presented.preserve_controls = copied_layer;
+                            presented.history_navigation = history_navigation;
                             presented.pasted_layer = pasted_layer;
                             if creates_layer {
                                 presented.created_layer = presented
@@ -9518,6 +9530,7 @@ mod tests {
             saved: None,
             copied: false,
             preserve_controls: false,
+            history_navigation: false,
             pasted_layer: false,
             created_layer: None,
             can_undo: unsaved,
@@ -12243,10 +12256,7 @@ mod tests {
             .unwrap()
             .submit(&editor.tx, Request::Undo);
         receive(&editor, &ctx);
-        assert_eq!(
-            editor.view.lock().unwrap().selected_layer.as_deref(),
-            Some("capture-background")
-        );
+        assert!(editor.view.lock().unwrap().selected_layer.is_none());
         editor
             .view
             .lock()
@@ -12942,6 +12952,58 @@ mod tests {
     }
 
     #[test]
+    fn history_completion_clears_surviving_selection_and_same_size_crop() {
+        let (data, id) = fixture();
+        let ctx = egui::Context::default();
+        let editor = Editor::open(
+            &ctx,
+            data.path().join("history"),
+            id,
+            data.path().join("exports"),
+            CaptureMode::Region,
+            |_| unreachable!("copy was not requested"),
+        );
+        receive(&editor, &ctx);
+        editor.view.lock().unwrap().submit(
+            &editor.tx,
+            Request::Layer {
+                id: "capture-background".into(),
+                edit: LayerEdit::Visibility { visible: false },
+            },
+        );
+        receive(&editor, &ctx);
+        for cropping in [false, true] {
+            for (request, visible, can_undo, can_redo) in [
+                (Request::Undo, true, false, true),
+                (Request::Redo, false, true, false),
+            ] {
+                {
+                    let mut view = editor.view.lock().unwrap();
+                    if cropping {
+                        view.activate_tool(Section::Geometry, None);
+                        view.crop = [1., 1., 2., 2.];
+                    } else {
+                        view.select_layer_exact(Some("capture-background".into()));
+                        assert_eq!(view.selected_layer.as_deref(), Some("capture-background"));
+                    }
+                    view.submit(&editor.tx, request);
+                }
+                receive(&editor, &ctx);
+                let view = editor.view.lock().unwrap();
+                let frame = view.presented.as_ref().unwrap();
+                assert!(view.selected_layer.is_none());
+                assert!(view.crop_previous.is_none());
+                assert_eq!(view.crop, [0., 0., 7., 3.]);
+                assert_eq!(frame.pixels.dimensions(), (7, 3));
+                assert_eq!(frame.document.elements.len(), 1);
+                assert_eq!(frame.document.elements[0].base().id, "capture-background");
+                assert_eq!(frame.document.elements[0].base().visible, visible);
+                assert_eq!((frame.can_undo, frame.can_redo), (can_undo, can_redo));
+            }
+        }
+    }
+
+    #[test]
     fn layer_selection_follows_ids_and_failed_commands_restore_published_fields() {
         let ctx = egui::Context::default();
         let mut view = View::default();
@@ -12976,7 +13038,7 @@ mod tests {
         assert_eq!(view.selected_layer.as_deref(), Some("copy"));
         assert_eq!(view.layer_geometry, [7., 3., 24., 24.]);
         assert!(!view.pending);
-        view.receive(&ctx, Ok(presented(false))); // Undo removed the selected copy.
+        view.receive(&ctx, Ok(presented(false))); // Ordinary refresh removed the selected copy.
         assert_eq!(view.selected_layer.as_deref(), Some("capture-background"));
         assert_eq!(view.layer_geometry, [7., 3., 0., 0.]);
         let mut empty = presented(true);

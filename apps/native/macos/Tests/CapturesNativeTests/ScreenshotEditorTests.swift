@@ -3486,11 +3486,50 @@ final class ScreenshotEditorTests: XCTestCase {
 
         worker.response = { request in
             guard request["operation"] as? String == "undo" else { return nil }
-            return self.snapshot(id: "shot", unsaved: true, layers: [back, middle, front])
+            return self.snapshot(id: "shot", unsaved: true, canRedo: true, layers: [back, middle, front])
         }
+        let staged = NSRect(x: 1, y: 1, width: 20, height: 10)
+        let unavailableRedo = try button("Redo", in: controller.root)
+        XCTAssertFalse(unavailableRedo.isEnabled)
+        let requestCount = worker.requests.count
+        unavailableRedo.performClick(nil)
+        XCTAssertEqual(worker.requests.count, requestCount)
+        XCTAssertEqual(try selectedLayerName(in: controller), "Back")
         try press("Undo", in: controller.root)
-        XCTAssertEqual(try selectedLayerName(in: controller), "Back",
-                       "undo retains a still-existing stable layer selection")
+        XCTAssertEqual(table.selectedRow, -1, "undo clears even a surviving stable layer selection")
+        XCTAssertNil(controller.selectionOverlay.selectedLayerID)
+
+        for (title, operation) in [("Undo", "undo"), ("Redo", "redo")] {
+            // Layer and Crop selections belong to mutually exclusive tools.
+            for cropping in [false, true] {
+                if cropping { try stageCrop(staged, in: controller) }
+                else {
+                    table.selectRowIndexes(IndexSet(integer: 1), byExtendingSelection: false)
+                    controller.tableViewSelectionDidChange(Notification(name: NSTableView.selectionDidChangeNotification,
+                                                                          object: table))
+                }
+                let expectedID = cropping ? nil : middle.id
+                worker.failOperation = operation
+                let accepted = controller.state.snapshot
+                try press(title, in: controller.root)
+                XCTAssertEqual(controller.state.snapshot, accepted, "failed history preserves the document")
+                XCTAssertEqual(controller.selectionOverlay.selectedLayerID, expectedID)
+                XCTAssertEqual(controller.cropSelection, cropping ? staged : nil)
+
+                worker.failOperation = nil
+                worker.deferRequests = true
+                try press(title, in: controller.root)
+                XCTAssertEqual(controller.selectionOverlay.selectedLayerID, expectedID,
+                               "history must not clear selection before its response is accepted")
+                XCTAssertEqual(controller.cropSelection, cropping ? staged : nil)
+                worker.completePending(with: snapshot(id: "shot", unsaved: true, canRedo: true,
+                                                       layers: [back, middle, front]))
+                worker.deferRequests = false
+                XCTAssertEqual(table.selectedRow, -1, "successful history clears the layer selection")
+                XCTAssertNil(controller.selectionOverlay.selectedLayerID)
+                XCTAssertNil(controller.cropSelection, "history clears crop even without a canvas-size change")
+            }
+        }
     }
 
     func testEditorControlsRenderAndSendSharedGeometryCommands() throws {
@@ -8182,6 +8221,9 @@ final class ScreenshotEditorTests: XCTestCase {
             waitUntil { !controller.state.busy && controller.state.snapshot?.layers.first?.textStyle == style }
             try press("Redo", in: controller.root)
             waitUntil { !controller.state.busy && controller.state.snapshot?.layers.first?.textStyle == serif }
+            // History restores the style, not selection for the next inspector edit.
+            try table("Screenshot layers", in: controller.root)
+                .selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
             family.selectItem(withTitle: "Rounded")
             _ = family.sendAction(family.action, to: family.target)
             waitUntil { !controller.state.busy && controller.state.snapshot?.layers.first?.textStyle?.fontFamily == "rounded" }

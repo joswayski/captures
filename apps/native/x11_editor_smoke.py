@@ -1985,9 +1985,34 @@ def main():
             resize_editor(1000, 901, "sleep", ".3")
             properties_start()
             blur_click()
+            recording = spawn("history-selection-recording", ["ffmpeg", "-y", "-loglevel", "error",
+                "-f", "x11grab", "-framerate", "20", "-video_size", "1400x1200",
+                "-i", env["DISPLAY"], "-c:v", "libx264", "-preset", "veryfast",
+                "-crf", "26", "-pix_fmt", "yuv420p", str(output / "history-selection.mp4")])
+            time.sleep(1)
+            for y in (80, 120, 160, 200, 260, 340, 430):
+                window_move((28, y), "sleep", ".15")
+            shot(editor, "history-selected-before-undo")
             run("xdotool", "key", "ctrl+z", "sleep", ".3")
             assert save_layers(lambda values: values[-1] == arrow, "selected style undo")[-1] == arrow
+            before_history_shortcuts = draft_bytes()
+            run("xdotool", "key", "Right", "ctrl+d", "sleep", "1")
+            assert draft_bytes() == before_history_shortcuts, "Undo clears a surviving layer's shortcut target"
+            shot(editor, "history-undo-clears-selection")
+            layer_click(0)  # Redo must also clear a selection made after Undo.
+            window_move((28, 430), "sleep", ".2")  # Separate hover feedback from selection in captures.
+            run("xdotool", "key", "ctrl+shift+z", "sleep", ".3")
+            assert save_layers(lambda values: values[-1] == recolored, "selected style redo")[-1] == recolored
+            before_history_shortcuts = draft_bytes()
+            run("xdotool", "key", "Right", "ctrl+d", "sleep", "1")
+            assert draft_bytes() == before_history_shortcuts, "Redo restores content, not layer selection"
+            shot(editor, "history-redo-clears-selection")
+            recording.send_signal(signal.SIGINT)
+            recording.wait(timeout=10)
+            run("xdotool", "key", "ctrl+z", "sleep", ".3")
+            assert save_layers(lambda values: values[-1] == arrow, "restore style fixture")[-1] == arrow
             for owner in ("field", "context-menu", "layer-settings"):
+                layer_click(0)  # History clears selection; Escape ownership needs an explicit target.
                 if owner == "field":
                     canvas_click("width")
                 elif owner == "context-menu":
@@ -2186,6 +2211,7 @@ def main():
                 "passed": True, "appearance": args.appearance,
                 "checks": ["open-no-selection", "explicit-layer-selection",
                            "keyboard-undo", "keyboard-redo-exact-layer", "field-undo-focus", "field-redo-focus",
+                           "undo-clears-surviving-selection", "redo-clears-surviving-selection",
                            "confirmation-focus", "shortcut-restored-after-dialog", "original-unchanged",
                            "duplicate-offset-fresh-id", "field-layer-shortcuts", "delete-selected-copy",
                            "backspace-selected-copy", "locked-delete-guard", "arrow-1px", "shift-arrow-10px",
