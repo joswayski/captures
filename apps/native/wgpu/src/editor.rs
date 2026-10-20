@@ -568,7 +568,7 @@ struct View {
     /// A held Curve slider gesture shares one live undo key.
     curve_drag: Option<String>,
     history_changed: bool,
-    original_replaced: bool,
+    original_replaced: Option<String>,
     selected_layer: Option<String>,
     layer_gesture: Option<LayerGesture>,
     pending_layer_selection: Option<String>,
@@ -703,7 +703,7 @@ impl Default for View {
             curve_bend: None,
             curve_drag: None,
             history_changed: false,
-            original_replaced: false,
+            original_replaced: None,
             selected_layer: None,
             layer_gesture: None,
             pending_layer_selection: None,
@@ -1029,7 +1029,7 @@ impl View {
                     }
                     if let SavePlan::Overwrite { artifact_id, .. } = &plan {
                         self.history_changed = true;
-                        self.original_replaced |= *artifact_id == self.artifact_id;
+                        self.original_replaced = Some(artifact_id.clone());
                     }
                     if let Some(target) = &mut self.export_target {
                         target.record_saved(&saved);
@@ -2195,8 +2195,8 @@ impl Editor {
         std::mem::take(&mut self.view.lock().unwrap().history_changed)
     }
 
-    pub fn take_original_replaced(&self) -> bool {
-        std::mem::take(&mut self.view.lock().unwrap().original_replaced)
+    pub fn take_original_replaced(&self) -> Option<String> {
+        self.view.lock().unwrap().original_replaced.take()
     }
 
     pub fn receive(&self, ctx: &egui::Context) {
@@ -15405,8 +15405,12 @@ mod tests {
             view.save(&editor.tx);
         }
         receive(&editor, &ctx);
-        assert!(editor.take_history_changed() && editor.take_original_replaced());
-        assert!(!editor.take_original_replaced());
+        assert!(editor.take_history_changed());
+        assert_eq!(
+            editor.take_original_replaced().as_deref(),
+            Some(id.as_str())
+        );
+        assert_eq!(editor.take_original_replaced(), None);
         let output = image::open(&destination).unwrap().to_rgba8();
         assert_eq!(output.dimensions(), (4, 2));
         assert_eq!(output.get_pixel(0, 0).0, [62, 71, 9, 255]);
@@ -15520,7 +15524,7 @@ mod tests {
         let editor = Editor::open(
             &ctx,
             root.clone(),
-            id,
+            id.clone(),
             data.path().join("exports"),
             CaptureMode::Region,
             |_| unreachable!("copy was not requested"),
@@ -15537,6 +15541,17 @@ mod tests {
         receive(&editor, &ctx);
         assert!(editor.take_history_changed());
         assert!(!editor.take_history_changed());
+        assert_eq!(
+            editor.take_original_replaced(),
+            None,
+            "a new file replaces no preview"
+        );
+        let saved_id = captures_history::load(&root, chrono::Utc::now())
+            .unwrap()
+            .into_iter()
+            .find(|entry| entry.id != id)
+            .unwrap()
+            .id;
         let bytes = fs::read(&destination).unwrap();
         let image = image::load_from_memory(&bytes).unwrap().into_rgba8();
         assert_eq!(image.dimensions(), (4, 2));
@@ -15562,10 +15577,12 @@ mod tests {
         }
         receive(&editor, &ctx);
         assert!(editor.take_history_changed());
-        assert!(
-            !editor.take_original_replaced(),
-            "the editor's own original was not touched"
+        assert_eq!(
+            editor.take_original_replaced(),
+            Some(saved_id),
+            "invalidate the adopted copy, not the unchanged draft owner"
         );
+        assert_eq!(editor.take_original_replaced(), None);
         assert_eq!(fs::read(&destination).unwrap(), bytes);
         assert_eq!(fs::read_dir(&root).unwrap().count(), 2);
         {
