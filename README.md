@@ -238,7 +238,8 @@ the fresh-configure fix (for Sway, use 1.9+); older Sway 1.7 is not supported.
 Like the shipping app, the native workbenches open Capture History, Preferences and first-run setup as
 separate, resizable windows that reflow down to their minimum sizes. Native Preferences saves
 appearance, custom colors, and capture/media defaults through shared Rust logic
-in a separate development settings file. Find retains its query and current match
+in a separate development settings file. Capture-folder typing autosaves without
+leaving the field. Find retains its query and current match
 when closed; `Cmd`/`Ctrl`+`F` reopens it and selects the query for replacement.
 In the wgpu host, Escape in a custom-color field cancels the draft and leaves Find open.
 Fresh native profiles show the shipping setup screen before capture or opening

@@ -2093,7 +2093,14 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
 
     private func windowFocusFind() { findField?.selectText(nil) }
     func controlTextDidChange(_ obj: Notification) {
-        if (obj.object as? NSTextField)?.identifier?.rawValue == "find" { matchIndex = 0; updateFind(scroll: true) }
+        guard !rebuilding, let field = obj.object as? NSTextField else { return }
+        if field.identifier?.rawValue == "find" {
+            matchIndex = 0; updateFind(scroll: true)
+        } else if field.identifier?.rawValue == "setting.output_directory" {
+            // Keep the active field editor and caret while the existing store
+            // coalesces typing, just like the shipping directory input.
+            set(field.stringValue, for: "output_directory", rerender: false)
+        }
     }
 
     private func updateFind(scroll reveal: Bool = false) {
