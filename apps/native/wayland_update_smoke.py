@@ -527,6 +527,8 @@ def acquisition(args, root, env, bus, pointer, fixture, evidence, host_class=Hos
                 (case / "result.json").write_text(json.dumps(facts, indent=2))
                 print(json.dumps(facts), flush=True)
             except Exception:
+                print(json.dumps({"host_pid": app.pid, "host_exit_code": app.poll()}), flush=True)
+                subprocess.run(["ps", "-o", "pid,stat,wchan:32,etime,time,comm", "-p", str(app.pid)], check=False)
                 host_class.capture(env, case / "failed.png")
                 (case / "failed-windows.json").write_text(json.dumps(host_class.windows(env), indent=2))
                 print(log_path.read_text()[-10000:])
