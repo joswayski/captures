@@ -240,7 +240,7 @@ separate, resizable windows that reflow down to their minimum sizes. Native Pref
 appearance, custom colors, and capture/media defaults through shared Rust logic
 in a separate development settings file. Find retains its query and current match
 when closed; `Cmd`/`Ctrl`+`F` reopens it and selects the query for replacement.
-In the wgpu host, Escape in a custom-color field cancels the draft and leaves Find open.
+Escape in a custom-color field cancels the draft and leaves Find open on both native hosts.
 Fresh native profiles show the shipping setup screen before capture or opening
 queued media. macOS offers explicit Screen
 Recording and optional Microphone access, Settings links, and a permission restart;
