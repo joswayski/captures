@@ -1290,6 +1290,21 @@ def main():
             copied = save_layers(lambda values: len(values) == 3, "private layer paste")[-1]
             assert (copied["x"], copied["y"]) == (imported["x"] + 24, imported["y"] + 24)
 
+            # Separate key occurrences without redraw-sized sleeps. Each must
+            # retain the private copy even while a preceding render is busy.
+            run("xdotool", "key", "--delay", "1", "ctrl+v", "ctrl+v", "ctrl+v")
+            rapid = save_layers(lambda values: len(values) == 6, "three rapid retained pastes")
+            for value in rapid[3:]:
+                assert value["src"] == imported["src"]
+            assert sorted((value["x"], value["y"]) for value in rapid[3:]) == [
+                (imported["x"] + 24 * offset, imported["y"] + 24 * offset)
+                for offset in (2, 3, 4)]
+            shot(editor, "clipboard-rapid-retained-pastes")
+            for count in (5, 4, 3):
+                run("xdotool", "key", "ctrl+z")
+                save_layers(lambda values: len(values) == count, "one Undo per retained paste")
+            shot(editor, "clipboard-rapid-pastes-undone")
+
             def status_pixels():
                 width, height = window_size()
                 return run("import", "-window", editor, "-crop", f"440x80+{width - 440}+{height - 80}",
@@ -1502,6 +1517,7 @@ def main():
                 "checks": ["real-PNG-paste-pixels", "linear-PNG-to-sRGB-alpha", "sRGB-overrides-gamma",
                            "INCR-PNG-above-1MiB-color-managed", "INCR-PNG-oversized-hint-rejected",
                            "Add-images-placement-expansion", "Select-last-image",
+                           "rapid-retained-layer-pastes", "individual-Undo-for-retained-pastes",
                            "private-OS-marker-no-text", "24px-layer-offset", "external-text-invalidates-layer",
                            "text-html-empty-silent-noop", "corrupt-image-error-and-recovery",
                            "filename-text-paste", "external-image-replaces-layer", "Undo-Redo",

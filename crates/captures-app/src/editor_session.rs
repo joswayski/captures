@@ -7,7 +7,10 @@ use std::{
     fs::File,
     io::{Cursor, Read},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU32, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -285,6 +288,13 @@ pub enum Request {
         new_id: String,
         after_id: Option<String>,
     },
+    /// A host-retained copy, never arbitrary clipboard JSON or another session's layer.
+    #[serde(skip)]
+    PasteRetainedLayer {
+        clipboard: Arc<CopiedLayer>,
+        new_id: String,
+        after_id: Option<String>,
+    },
     MergeDown {
         id: String,
         new_id: String,
@@ -440,13 +450,23 @@ pub struct EditorSession {
     /// Image sources whose PNG the saved draft already holds. Sources are
     /// immutable, so later autosaves only write new images and the manifest.
     persisted_assets: BTreeSet<String>,
-    layer_clipboard: Option<Element>,
-    layer_paste_count: u32,
+    layer_clipboard: Option<Arc<CopiedLayer>>,
+    clipboard_scope: Arc<()>,
     text_input: Option<TransientTextInput>,
     /// The key and resulting document of the last live inspector edit; the
     /// next live edit with the same key amends that undo step.
     live: Option<(String, Document)>,
     thumbnails: crate::editor_layers::ThumbnailCache,
+}
+
+/// Immutable copied contents retained by an accepted Paste. Successful offsets
+/// belong to this copy, even when a later Copy replaces the session clipboard.
+/// The session owns its assets; discard/reset invalidates outstanding copies.
+#[derive(Debug)]
+pub struct CopiedLayer {
+    scope: Arc<()>,
+    element: Element,
+    paste_count: AtomicU32,
 }
 
 struct TransientTextInput {
@@ -699,7 +719,7 @@ impl EditorSession {
             has_draft,
             persisted_assets,
             layer_clipboard: None,
-            layer_paste_count: 0,
+            clipboard_scope: Arc::new(()),
             text_input: None,
             live: None,
             thumbnails: crate::editor_layers::ThumbnailCache::default(),
@@ -1579,8 +1599,11 @@ impl EditorSession {
                     .iter()
                     .find(|element| element.base().id == id)
                     .ok_or("The selected layer no longer exists.")?;
-                self.layer_clipboard = Some(element.clone());
-                self.layer_paste_count = 0;
+                self.layer_clipboard = Some(Arc::new(CopiedLayer {
+                    scope: self.clipboard_scope.clone(),
+                    element: element.clone(),
+                    paste_count: AtomicU32::new(0),
+                }));
                 return Ok(());
             }
             Request::RemoveImageBackground {
@@ -1610,7 +1633,18 @@ impl EditorSession {
             }
             request => (request, None),
         };
-        let is_paste = matches!(&request, Request::PasteLayer { .. });
+        let request = match request {
+            Request::PasteLayer { new_id, after_id } => Request::PasteRetainedLayer {
+                clipboard: self.copied_layer().ok_or("No copied layer is available.")?,
+                new_id,
+                after_id,
+            },
+            request => request,
+        };
+        let pasted_clipboard = match &request {
+            Request::PasteRetainedLayer { clipboard, .. } => Some(clipboard.clone()),
+            _ => None,
+        };
         let metadata_only = matches!(
             &request,
             Request::Layer {
@@ -1692,11 +1726,14 @@ impl EditorSession {
                 document.edit_layer(&id, edit)?;
                 next.commit(document);
             }
-            Request::PasteLayer { new_id, after_id } => {
-                let clipboard = self
-                    .layer_clipboard
-                    .as_ref()
-                    .ok_or("No copied layer is available.")?;
+            Request::PasteRetainedLayer {
+                clipboard,
+                new_id,
+                after_id,
+            } => {
+                if !Arc::ptr_eq(&clipboard.scope, &self.clipboard_scope) {
+                    return Err("The copied layer belongs to a closed or reset editor.".into());
+                }
                 let mut document = next.current().clone();
                 if new_id.is_empty()
                     || document
@@ -1706,8 +1743,8 @@ impl EditorSession {
                 {
                     return Err("A pasted layer needs a new nonempty identifier.".into());
                 }
-                let offset = 24. * f64::from(self.layer_paste_count + 1);
-                let pasted = clipboard.copied_layer(new_id, offset)?;
+                let offset = 24. * f64::from(clipboard.paste_count.load(Ordering::Relaxed) + 1);
+                let pasted = clipboard.element.copied_layer(new_id, offset)?;
                 let insertion = after_id
                     .as_deref()
                     .and_then(|id| {
@@ -1720,7 +1757,7 @@ impl EditorSession {
                 document.elements.insert(insertion, pasted);
                 next.commit(document);
             }
-            Request::CopyLayer { .. } => unreachable!(),
+            Request::CopyLayer { .. } | Request::PasteLayer { .. } => unreachable!(),
             Request::MergeDown { .. } | Request::MergeVisible { .. } | Request::Flatten { .. } => {
                 unreachable!()
             }
@@ -1788,10 +1825,15 @@ impl EditorSession {
         self.history = next;
         self.pixels = pixels;
         self.live = live_key.map(|key| (key, self.history.current().clone()));
-        if is_paste {
-            self.layer_paste_count += 1;
+        if let Some(clipboard) = pasted_clipboard {
+            clipboard.paste_count.fetch_add(1, Ordering::Relaxed);
         }
         Ok(())
+    }
+
+    /// Retain the published copied layer before another command can replace it.
+    pub fn copied_layer(&self) -> Option<Arc<CopiedLayer>> {
+        self.layer_clipboard.clone()
     }
 
     fn autosave_draft(&mut self, updated_at_ms: u64) -> Result<(), String> {
@@ -1882,7 +1924,7 @@ impl EditorSession {
         self.pixels = Arc::new(pixels);
         self.has_draft = false;
         self.layer_clipboard = None;
-        self.layer_paste_count = 0;
+        self.clipboard_scope = Arc::new(());
         Ok(())
     }
 }

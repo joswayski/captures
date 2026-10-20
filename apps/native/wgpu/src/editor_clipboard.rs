@@ -6,7 +6,7 @@ use image::RgbaImage;
 
 #[derive(Default)]
 pub struct Clipboard {
-    marker: Option<Marker>,
+    marker: Option<std::sync::Arc<Marker>>,
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     images: Option<arboard::Clipboard>,
 }
@@ -14,12 +14,22 @@ pub struct Clipboard {
 impl Clipboard {
     pub fn claim_layer(&mut self, ctx: &eframe::egui::Context) -> Result<(), String> {
         self.marker = None;
-        self.marker = Some(Marker::claim(ctx)?);
+        self.marker = Some(std::sync::Arc::new(Marker::claim(ctx)?));
         Ok(())
     }
 
     pub fn owns_layer(&self) -> bool {
-        self.marker.as_ref().is_some_and(Marker::matches)
+        self.marker.as_ref().is_some_and(|marker| marker.matches())
+    }
+
+    pub fn published(
+        &self,
+        layer: std::sync::Arc<captures_app::editor_session::CopiedLayer>,
+    ) -> Published {
+        Published {
+            marker: self.marker.clone().expect("claimed marker"),
+            layer,
+        }
     }
 
     pub fn images(
@@ -156,6 +166,18 @@ impl Clipboard {
                 .ok_or("Clipboard image has invalid RGBA pixels.")?;
             Ok(vec![("Clipboard image".into(), pixels)])
         }
+    }
+}
+
+#[derive(Clone)]
+pub struct Published {
+    marker: std::sync::Arc<Marker>,
+    layer: std::sync::Arc<captures_app::editor_session::CopiedLayer>,
+}
+
+impl Published {
+    pub fn retained(&self) -> Option<std::sync::Arc<captures_app::editor_session::CopiedLayer>> {
+        self.marker.matches().then(|| self.layer.clone())
     }
 }
 

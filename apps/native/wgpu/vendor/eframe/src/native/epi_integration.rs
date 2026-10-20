@@ -192,6 +192,9 @@ pub struct EpiIntegration {
 
     pending_full_output: egui::FullOutput,
 
+    /// Per-window modifiers at native dispatch, before the next egui frame.
+    paste_modifiers: std::collections::HashMap<winit::window::WindowId, egui::Modifiers>,
+
     /// When set, it is time to close the native window.
     close: bool,
 
@@ -258,6 +261,7 @@ impl EpiIntegration {
             last_auto_save: Instant::now(),
             pending_raw_input: Default::default(),
             pending_full_output: Default::default(),
+            paste_modifiers: Default::default(),
             close: false,
             can_drag_window: false,
             #[cfg(feature = "persistence")]
@@ -295,7 +299,67 @@ impl EpiIntegration {
             self.can_drag_window = true;
         }
 
-        egui_winit.on_window_event(window, event)
+        match event {
+            WindowEvent::ModifiersChanged(value) => {
+                let value = value.state();
+                self.paste_modifiers.insert(
+                    window.id(),
+                    egui::Modifiers {
+                        alt: value.alt_key(),
+                        ctrl: value.control_key(),
+                        shift: value.shift_key(),
+                        mac_cmd: cfg!(target_os = "macos") && value.super_key(),
+                        command: if cfg!(target_os = "macos") {
+                            value.super_key()
+                        } else {
+                            value.control_key()
+                        },
+                    },
+                );
+            }
+            WindowEvent::Focused(false) | WindowEvent::Destroyed => {
+                self.paste_modifiers.remove(&window.id());
+            }
+            _ => {}
+        }
+        let start = egui_winit.egui_input().events.len();
+        let response = egui_winit.on_window_event(window, event);
+        // egui-winit consumes a Paste key even when the private clipboard has
+        // no text/image it understands. Recover that occurrence here, before
+        // the next native event, rather than collapsing/reordering taps at draw.
+        if let WindowEvent::KeyboardInput {
+            event,
+            is_synthetic: false,
+            ..
+        } = event
+        {
+            let modifiers = self
+                .paste_modifiers
+                .get(&window.id())
+                .copied()
+                .unwrap_or_default();
+            if event.state == ElementState::Pressed
+                && modifiers.command
+                && matches!(&event.logical_key, winit::keyboard::Key::Character(key) if key.eq_ignore_ascii_case("v"))
+                && !egui_winit.egui_input().events[start..].iter().any(|event| {
+                    matches!(
+                        event,
+                        egui::Event::Paste(_)
+                            | egui::Event::PasteImage(_)
+                            | egui::Event::Key { pressed: true, .. }
+                    )
+                })
+            {
+                egui_winit.egui_input_mut().events.push(egui::Event::Key {
+                    key: egui::Key::V,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: event.repeat,
+                    modifiers,
+                });
+            }
+        }
+        response
     }
 
     pub fn pre_update(&mut self) {

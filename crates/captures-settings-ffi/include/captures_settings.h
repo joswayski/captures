@@ -590,6 +590,19 @@ typedef struct CapturesEditorSession CapturesEditorSession;
 typedef struct CapturesEditorFrame CapturesEditorFrame;
 CapturesEditorSession *captures_editor_open_v1(const char *request_json, char **output);
 char *captures_editor_request_v1(CapturesEditorSession *session, const char *request_json);
+/* Retain the exact current copied layer, or null if none. Future Copy commands
+ * cannot change its contents or successful-paste offset count. Serialized on
+ * the session worker; the retained handle may outlive the session. Free exactly
+ * once, after all calls using it finish, on any thread. */
+typedef struct CapturesEditorLayerClipboard CapturesEditorLayerClipboard;
+const CapturesEditorLayerClipboard *captures_editor_layer_clipboard_v1(const CapturesEditorSession *session);
+void captures_editor_layer_clipboard_free_v1(const CapturesEditorLayerClipboard *clipboard);
+/* Paste into the same live, non-reset session only. Request JSON is
+ * {new_id:string,after_id:string|null}; returns the usual owned snapshot/error
+ * envelope. Null handles are errors. Neither handle may be freed during a call.
+ * This never consults the current OS/session clipboard. */
+char *captures_editor_paste_layer_v1(CapturesEditorSession *session,
+    const CapturesEditorLayerClipboard *clipboard, const char *request_json);
 /* Stateless picking from a published document JSON copy, not a session handle.
  * Call once on pointer press, never per movement/frame. No render/decode/I/O.
  * Coordinates and nonnegative tolerance are finite document pixels.

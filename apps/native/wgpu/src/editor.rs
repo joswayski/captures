@@ -581,6 +581,11 @@ struct View {
     /// text field's identity so that key still belongs to the field.
     text_field_focus: Option<egui::Id>,
     pending: bool,
+    // Only completed Copy publications are visible to input acceptance. Never
+    // consult the worker's mutable current copy when a retained action drains.
+    published_copy: Arc<Mutex<Option<crate::editor_clipboard::Published>>>,
+    // Independent of external import FIFO: internal layers need no decoding.
+    retained_pastes: std::collections::VecDeque<Request>,
     closed: bool,
     /// Retain the session while accepted work and the final draft drain.
     close_requested: bool,
@@ -704,6 +709,8 @@ impl Default for View {
             inline: None,
             text_field_focus: None,
             pending: true,
+            published_copy: Arc::default(),
+            retained_pastes: Default::default(),
             closed: false,
             close_requested: false,
             close_deadline: None,
@@ -830,6 +837,7 @@ impl View {
     }
 
     fn request_close(&mut self) {
+        self.retained_pastes.clear();
         // Dialog results not yet submitted are not accepted edits/exports.
         self.import_picker = None;
         self.folder_picker = None;
@@ -1093,7 +1101,25 @@ impl View {
     }
 
     fn submit(&mut self, tx: &Sender<Job>, request: Request) {
+        if matches!(request, Request::DiscardDraft) {
+            self.retained_pastes.clear();
+            *self.published_copy.lock().unwrap() = None;
+        }
         self.submit_job(tx, Job::Apply(request));
+    }
+
+    fn drain_retained_pastes(&mut self, tx: &Sender<Job>) {
+        if self.closed || self.close_requested {
+            self.retained_pastes.clear();
+        } else if !self.pending
+            && self.inline.is_none()
+            && let Some(request) = self.retained_pastes.pop_front()
+        {
+            if let Request::PasteRetainedLayer { new_id, .. } = &request {
+                self.pending_layer_selection = Some(new_id.clone());
+            }
+            self.submit(tx, request);
+        }
     }
 
     fn reset_background_fields(&mut self) {
@@ -1869,6 +1895,8 @@ impl Editor {
         let (tx, jobs) = mpsc::channel();
         let (out, rx) = mpsc::channel();
         let wake_ctx = ctx.clone();
+        let published_copy = Arc::new(Mutex::new(None));
+        let worker_copy = published_copy.clone();
         let worker = thread::spawn(move || {
             let opened = EditorSession::open_with_fonts(
                 OpenRequest {
@@ -1927,12 +1955,24 @@ impl Editor {
                                     | Request::CreateText { .. }
                             );
                             let copied_layer = matches!(request, Request::CopyLayer { .. });
-                            let pasted_layer = matches!(request, Request::PasteLayer { .. });
+                            let reset = matches!(request, Request::DiscardDraft);
+                            let retained_id = match &request {
+                                Request::PasteRetainedLayer { new_id, .. } => Some(new_id.clone()),
+                                _ => None,
+                            };
+                            let pasted_layer = retained_id.is_some();
                             session.execute(request)?;
+                            if reset {
+                                *worker_copy.lock().unwrap() = None;
+                            }
                             if copied_layer {
                                 clipboard.claim_layer(&wake_ctx)?;
+                                *worker_copy.lock().unwrap() = session
+                                    .copied_layer()
+                                    .map(|layer| clipboard.published(layer));
                             }
                             let mut presented = Presented::after_edit(session);
+                            presented.created_layer = retained_id;
                             presented.preserve_controls = copied_layer;
                             presented.pasted_layer = pasted_layer;
                             if creates_layer {
@@ -2041,6 +2081,7 @@ impl Editor {
                 default_directory: output_directory,
                 default_stem,
                 original_bytes,
+                published_copy,
                 drawing_preview: Some(drawing_preview::State::new(ctx.clone(), viewport)),
                 autosaves: true,
                 // Unit tests open real editors; they never hand files to a
@@ -2099,6 +2140,7 @@ impl Editor {
             self.view.lock().unwrap().receive(ctx, result);
             ctx.request_repaint_of(self.viewport);
         }
+        self.view.lock().unwrap().drain_retained_pastes(&self.tx);
         self.view.lock().unwrap().drain_save(&self.tx);
         if let Some(preview) = &mut self.view.lock().unwrap().drawing_preview {
             preview.receive(&self.tx);
@@ -2147,6 +2189,7 @@ impl Editor {
             // Files not yet submitted must not enter after the final flush.
             view.import_picker = None;
             view.drop.queue.clear();
+            view.retained_pastes.clear();
         }
         // Consume completions in order, including one Save queued during Copy
         // and buffered inspector edits. Rejections retain their ordinary policy
@@ -2991,13 +3034,14 @@ fn handle_document_shortcuts(ctx: &egui::Context, view: &mut View, tx: &Sender<J
         let mut requests = Vec::new();
         input.events.retain(|event| {
             // Winit supplies semantic clipboard events on native platforms.
-            // Their text payload belongs to the OS clipboard, not our layer copy.
+            // Native translation adds a fallback key only if that occurrence
+            // produced no semantic Paste. Never deduplicate different taps here.
             match event {
                 egui::Event::Copy => {
                     requests.push(Shortcut::Document(egui::Key::C, false));
                     return false;
                 }
-                egui::Event::Paste(_) => {
+                egui::Event::Paste(_) | egui::Event::PasteImage(_) => {
                     requests.push(Shortcut::Document(egui::Key::V, false));
                     return false;
                 }
@@ -3073,6 +3117,10 @@ fn handle_document_shortcuts(ctx: &egui::Context, view: &mut View, tx: &Sender<J
             if !view.pending {
                 view.select_layer_exact(None);
             }
+            continue;
+        }
+        if matches!(shortcut, Shortcut::Document(egui::Key::V, _)) {
+            dispatch_layer_action(view, tx, LayerAction::Paste, view.selected_layer.clone());
             continue;
         }
         if view.pending {
@@ -5766,7 +5814,11 @@ enum LayerAction {
 }
 
 fn layer_action_enabled(view: &View, action: LayerAction, target_id: Option<&str>) -> bool {
-    if view.pending || view.inline.is_some() || view.closed || view.close_requested {
+    if (view.pending && !matches!(action, LayerAction::Paste))
+        || view.inline.is_some()
+        || view.closed
+        || view.close_requested
+    {
         return false;
     }
     let Some(presented) = &view.presented else {
@@ -5806,6 +5858,26 @@ fn dispatch_layer_action(
 ) {
     if !layer_action_enabled(view, action, target_id.as_deref()) {
         return;
+    }
+    if matches!(action, LayerAction::Paste) {
+        let retained = view
+            .published_copy
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|copy| copy.retained());
+        if let Some(clipboard) = retained {
+            view.retained_pastes.push_back(Request::PasteRetainedLayer {
+                clipboard,
+                new_id: uuid::Uuid::new_v4().to_string(),
+                after_id: target_id,
+            });
+            view.drain_retained_pastes(tx);
+            return;
+        }
+        if view.pending {
+            return;
+        }
     }
     let request = match action {
         LayerAction::Copy => Request::CopyLayer {
@@ -8661,7 +8733,7 @@ mod tests {
                 egui::Event::Key {
                     key: egui::Key::V,
                     physical_key: None,
-                    pressed: true,
+                    pressed: false,
                     repeat: false,
                     modifiers: egui::Modifiers::CTRL,
                 },
@@ -8674,7 +8746,7 @@ mod tests {
         assert_ne!(new_id, original_id);
         assert!(
             rx.try_recv().is_err(),
-            "semantic and native key-down paste enqueue once"
+            "semantic paste and its native key release enqueue once"
         );
         frame(&mut view, vec![egui::Event::Copy]);
         assert!(
@@ -14467,6 +14539,118 @@ mod tests {
         )
         .unwrap();
         (data, artifact.entry.id)
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "requires an isolated X11 clipboard (run with xvfb-run)"]
+    fn retained_pastes_accept_a_during_copy_b_and_undo_individually() {
+        let (data, artifact_id) = fixture();
+        let ctx = egui::Context::default();
+        let mut session = EditorSession::open_with_fonts(
+            OpenRequest {
+                drafts_root: data.path().join("editor-drafts"),
+                history_root: data.path().join("history"),
+                artifact_id,
+            },
+            Some(captures_app::editor_fonts::bundled()),
+        )
+        .unwrap();
+        let a = session
+            .import_images(
+                vec![(
+                    "A".into(),
+                    RgbaImage::from_pixel(9, 4, image::Rgba([255, 7, 31, 255])),
+                )],
+                None,
+                None,
+            )
+            .unwrap();
+        session
+            .execute(Request::CopyLayer { id: a.clone() })
+            .unwrap();
+        let mut clipboard = crate::editor_clipboard::Clipboard::default();
+        clipboard.claim_layer(&ctx).unwrap();
+        let mut view = View::default();
+        *view.published_copy.lock().unwrap() =
+            Some(clipboard.published(session.copied_layer().unwrap()));
+        let b = session
+            .import_images(
+                vec![(
+                    "B".into(),
+                    RgbaImage::from_pixel(3, 8, image::Rgba([2, 99, 231, 255])),
+                )],
+                None,
+                None,
+            )
+            .unwrap();
+        view.receive(&ctx, Ok(Presented::after_edit(&mut session)));
+        view.selected_layer = Some(b.clone());
+        // B's Copy is in flight: the worker already changed its session copy,
+        // but has not completed publication. Acceptance must use published A.
+        session
+            .execute(Request::CopyLayer { id: b.clone() })
+            .unwrap();
+        view.pending = true;
+        let (tx, rx) = mpsc::channel();
+        // Different native occurrences may use different representations.
+        // Counting semantic/native events as pairs would silently drop a tap.
+        let events = vec![
+            egui::Event::Paste(String::new()),
+            egui::Event::Key {
+                key: egui::Key::V,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::CTRL,
+            },
+            egui::Event::PasteImage(Arc::new(egui::ColorImage::filled(
+                [1, 1],
+                egui::Color32::RED,
+            ))),
+        ];
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                events,
+                ..Default::default()
+            },
+            |_| handle_document_shortcuts(&ctx, &mut view, &tx),
+        );
+        output.textures_delta.clear();
+        assert_eq!(view.retained_pastes.len(), 3);
+        assert!(rx.try_recv().is_err());
+        clipboard.claim_layer(&ctx).unwrap();
+        *view.published_copy.lock().unwrap() =
+            Some(clipboard.published(session.copied_layer().unwrap()));
+        view.selected_layer = Some(a.clone()); // must not retarget accepted requests
+        view.pending = false;
+        for count in 4..=6 {
+            view.drain_retained_pastes(&tx);
+            let Job::Apply(request) = rx.try_recv().unwrap() else {
+                panic!("expected paste")
+            };
+            assert!(
+                matches!(&request, Request::PasteRetainedLayer { after_id: Some(id), .. } if id == &b)
+            );
+            session.execute(request).unwrap();
+            let snapshot = session.snapshot();
+            assert_eq!(snapshot.document.elements.len(), count);
+            let json = serde_json::to_value(&snapshot.document.elements[3]).unwrap();
+            assert_eq!(json["name"], "A copy");
+            assert_eq!(json["naturalWidth"].as_f64(), Some(9.));
+            assert_eq!(json["naturalHeight"].as_f64(), Some(4.));
+            view.receive(&ctx, Ok(Presented::after_edit(&mut session)));
+        }
+        for count in (3..6).rev() {
+            session.execute(Request::Undo).unwrap();
+            assert_eq!(session.snapshot().document.elements.len(), count);
+        }
+        view.pending = true;
+        dispatch_layer_action(&mut view, &tx, LayerAction::Paste, Some(b));
+        assert_eq!(view.retained_pastes.len(), 1);
+        view.request_close();
+        assert!(view.retained_pastes.is_empty());
+        assert!(rx.try_recv().is_err());
     }
 
     /// Stand in for an encoded comparison without running an encode.

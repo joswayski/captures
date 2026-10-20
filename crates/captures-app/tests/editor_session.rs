@@ -720,11 +720,105 @@ fn paste_render_failure_preserves_clipboard_history_pixels_and_saved_draft() {
 fn layer_clipboards_are_isolated_between_open_sessions() {
     let (data, artifact_id, _) = setup();
     let mut first = open(data.path(), &artifact_id).unwrap();
-    let second = open(data.path(), &artifact_id).unwrap();
+    let mut second = open(data.path(), &artifact_id).unwrap();
     let id = first.snapshot().document.elements[0].base().id.clone();
     first.execute(Request::CopyLayer { id }).unwrap();
     assert!(first.snapshot().can_paste_layer);
     assert!(!second.snapshot().can_paste_layer);
+    let retained = first.copied_layer().unwrap();
+    drop(first);
+    let before = second.snapshot().document.clone();
+    assert!(
+        second
+            .execute(Request::PasteRetainedLayer {
+                clipboard: retained,
+                new_id: "foreign".into(),
+                after_id: None,
+            })
+            .is_err()
+    );
+    assert_eq!(second.snapshot().document, &before);
+    assert!(!second.snapshot().can_undo);
+}
+
+#[test]
+fn retained_copy_keeps_contents_and_offsets_across_new_copy_and_rejects_reset() {
+    let (data, artifact_id, _) = setup();
+    let mut editor = open(data.path(), &artifact_id).unwrap();
+    let source = editor.snapshot().document.elements[0].base().id.clone();
+    editor
+        .execute(Request::CopyLayer { id: source.clone() })
+        .unwrap();
+    let retained = editor.copied_layer().unwrap();
+    editor
+        .execute(Request::Layer {
+            id: source.clone(),
+            edit: LayerEdit::Lock { locked: false },
+        })
+        .unwrap();
+    editor
+        .execute(Request::Layer {
+            id: source.clone(),
+            edit: LayerEdit::Translate {
+                delta_x: 13.,
+                delta_y: -7.,
+            },
+        })
+        .unwrap();
+    editor
+        .execute(Request::CopyLayer { id: source.clone() })
+        .unwrap();
+    let before = editor.snapshot().document.clone();
+    for (id, expected) in [("retained-one", (24., 24.)), ("retained-two", (48., 48.))] {
+        // Failure must not consume this retained generation's successful offset.
+        assert!(
+            editor
+                .execute(Request::PasteRetainedLayer {
+                    clipboard: retained.clone(),
+                    new_id: source.clone(),
+                    after_id: None,
+                })
+                .is_err()
+        );
+        editor
+            .execute(Request::PasteRetainedLayer {
+                clipboard: retained.clone(),
+                new_id: id.into(),
+                after_id: None,
+            })
+            .unwrap();
+        let pasted = editor.snapshot().document.elements.last().unwrap().base();
+        assert_eq!((pasted.x, pasted.y), expected);
+    }
+    editor
+        .execute(Request::PasteLayer {
+            new_id: "latest-copy".into(),
+            after_id: None,
+        })
+        .unwrap();
+    let pasted = editor.snapshot().document.elements.last().unwrap().base();
+    assert_eq!(
+        (pasted.x, pasted.y),
+        (37., 17.),
+        "the latest copy has its own first offset"
+    );
+    for _ in 0..3 {
+        editor.execute(Request::Undo).unwrap();
+    }
+    assert_eq!(editor.snapshot().document, &before);
+    editor.execute(Request::DiscardDraft).unwrap();
+    let reset = editor.snapshot().document.clone();
+    assert!(
+        editor
+            .execute(Request::PasteRetainedLayer {
+                clipboard: retained,
+                new_id: "stale".into(),
+                after_id: None,
+            })
+            .is_err()
+    );
+    assert_eq!(editor.snapshot().document, &reset);
+    assert!(!editor.snapshot().can_undo);
 }
 
 #[test]
