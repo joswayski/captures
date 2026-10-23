@@ -1,6 +1,32 @@
 import AppKit
 import UniformTypeIdentifiers
 
+/// A non-focus-stealing splitter: dragging never commits the active field editor.
+private final class EditorInspectorDivider: NSView {
+    var resize: (CGFloat?) -> Void = { _ in }
+    var borderColor: NSColor = .clear { didSet { needsDisplay = true } }
+    private var lastX: CGFloat = 0
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .resizeLeftRight) }
+    override func mouseDown(with event: NSEvent) {
+        lastX = event.locationInWindow.x
+        if event.clickCount == 2 { resize(nil) }
+    }
+    override func mouseDragged(with event: NSEvent) {
+        let x = event.locationInWindow.x
+        resize(lastX - x)
+        lastX = x
+    }
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .splitter }
+    override func accessibilityLabel() -> String? { "Inspector width" }
+    override func accessibilityPerformIncrement() -> Bool { resize(16); return true }
+    override func accessibilityPerformDecrement() -> Bool { resize(-16); return true }
+    override func draw(_ dirtyRect: NSRect) {
+        borderColor.setFill()
+        NSRect(x: bounds.midX, y: 0, width: 1, height: bounds.height).fill()
+    }
+}
+
 struct ScreenshotEditorState: Equatable {
     private(set) var generation = 0
     private(set) var artifactID: String?
@@ -1992,8 +2018,85 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     /// Frame-based layout: the full-width export bar is pinned to the bottom;
     /// the viewport, zoom row and inspector sit above it.
+    private var inspectorWidth: CGFloat = 320
+    private var preferredInspectorWidth: CGFloat = 320
+    private var inspectorInitialized = false
+    private let inspectorDivider = EditorInspectorDivider()
+    private var inspectorFrames: [(NSView, NSRect)] = []
+    private var inspectorContentWidth: CGFloat { inspectorWidth - 2 * Self.panelInset }
+    private var inspectorPairX: CGFloat { (inspectorContentWidth - 8) / 2 + 8 }
+
+    /// Capture only the host's frame-based rows. Composite controls own their
+    /// internal layout; AppKit owns scroll clips, scrollers and field editors.
+    private func rememberInspectorFrames(_ view: NSView) {
+        for child in view.subviews {
+            if let scroll = child as? NSScrollView {
+                if let document = scroll.documentView {
+                    inspectorFrames.append((document, document.frame))
+                    if !(document is NSTextView) { rememberInspectorFrames(document) }
+                }
+            } else if child is Surface {
+                rememberInspectorFrames(child)
+            }
+            // Width is set from the baseline below; leave vertical autoresizing
+            // intact, but do not apply the panel's width delta a second time.
+            child.autoresizingMask.remove([.width, .minXMargin, .maxXMargin])
+            inspectorFrames.append((child, child.frame))
+        }
+    }
+
     private func layoutEditor() {
         guard let previewPanel = viewportInput.superview else { return }
+        if !inspectorInitialized {
+            inspectorInitialized = true
+            for panel in [layersPanel, geometryPanel, layerPropertiesPanel, drawPanel] {
+                rememberInspectorFrames(panel)
+            }
+            preferredInspectorWidth = root.bounds.width <= 1040 ? 280 : 320
+            root.addSubview(inspectorDivider)
+            inspectorDivider.resize = { [weak self] delta in
+                guard let self else { return }
+                self.preferredInspectorWidth = delta.map { min(480, max(280, self.inspectorWidth + $0)) }
+                    ?? (self.root.bounds.width <= 1040 ? 280 : 320)
+                self.layoutEditor()
+            }
+        }
+        let canvasGaps = tokens.number("s-5") + tokens.number("s-6")
+        inspectorWidth = min(preferredInspectorWidth, min(480, max(280,
+            root.bounds.width - 416 - canvasGaps)))
+        let previousWidth = layersPanel.frame.width + Self.panelInset
+        if previousWidth != inspectorWidth {
+            let delta = inspectorWidth - Self.sidebarWidth
+            for (view, baseline) in inspectorFrames {
+                var frame = view.frame
+                if baseline.width >= Self.contentWidth - 18 || view is EditorDropShadowFields {
+                    frame.size.width = baseline.width + delta
+                } else if abs(baseline.width - Self.pairWidth) < 1
+                            || view === clearCropButton || view === applyCropButton {
+                    frame.size.width = baseline.width + delta / 2
+                }
+                if abs(baseline.minX - Self.pairX) < 1 || view === applyCropButton {
+                    frame.origin.x = baseline.minX + delta / 2
+                } else if baseline.minX >= Self.contentWidth - 40 {
+                    frame.origin.x = baseline.minX + delta
+                }
+                view.frame = frame
+                if let swatches = view as? ColorSwatchRow {
+                    swatches.frame.size.height = ColorSwatchRow.height(
+                        width: frame.width, compact: false, tokens: tokens)
+                } else if let shadow = view as? EditorDropShadowFields {
+                    shadow.frame.size.height = EditorDropShadowFields.height(width: frame.width, tokens: tokens)
+                } else if let picker = view as? EditorShapePicker {
+                    picker.frame.size = picker.pickerSize(width: frame.width)
+                }
+            }
+            // Crop actions use s-3 rather than the number pairs' s-4 gap.
+            // Reattach the halo after both action frames have been resized.
+            if let applyCropButton { applyCropHalo.surround(applyCropButton) }
+            layerTable.tableColumns.first?.width = inspectorContentWidth
+            layoutLayerInspectorTail()
+            publishDrawToolControls()
+        }
         let bar = exportBarHeight
         layoutHeader()
         let top = chromeTop
@@ -2008,9 +2111,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 y: top + tokens.number("s-4") + CGFloat(index) * (side + tokens.number("s-1")),
                 width: side, height: side)
         }
-        // Shipping's fixed 320 pt sidebar column; the canvas takes the rest,
+        // The resizable sidebar column; the canvas takes the rest,
         // `--s-6` short of the column. Panels start `--s-5` inside it.
-        let sidebarX = root.bounds.width - Self.sidebarWidth
+        let sidebarX = root.bounds.width - inspectorWidth
+        inspectorDivider.frame = NSRect(x: sidebarX - 3, y: top, width: 6,
+                                        height: max(0, root.bounds.height - bar - top))
         let inspectorX = sidebarX + Self.panelInset
         let previewX = railWidth + gap
         previewPanel.frame = NSRect(x: previewX, y: top + gap,
@@ -2025,9 +2130,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         // the rest for the tool's Properties, all the way to the export bar.
         let column = max(0, root.bounds.height - bar - top - gap)
         let layersHeight = min(column, max(188, (column * 0.4).rounded()))
-        layersPanel.frame = NSRect(x: inspectorX, y: top + gap, width: Self.panelWidth, height: layersHeight)
+        layersPanel.frame = NSRect(x: inspectorX, y: top + gap, width: inspectorWidth - Self.panelInset, height: layersHeight)
         for panel in [geometryPanel, layerPropertiesPanel, drawPanel] {
-            panel.frame = NSRect(x: inspectorX, y: layersPanel.frame.maxY, width: Self.panelWidth,
+            panel.frame = NSRect(x: inspectorX, y: layersPanel.frame.maxY, width: inspectorWidth - Self.panelInset,
                                  height: max(0, column - layersHeight))
         }
         if layerMenuID != nil { closeLayerMenu() }
@@ -2880,7 +2985,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     /// Height of a full-width shipping `ColorField` swatch grid in Properties.
     private var panelSwatchHeight: CGFloat {
-        ColorSwatchRow.height(width: Self.contentWidth, compact: false, tokens: tokens)
+        ColorSwatchRow.height(width: inspectorContentWidth, compact: false, tokens: tokens)
     }
 
     /// A shipping `ColorField` in Properties: the legend, then the swatch row.
@@ -3123,8 +3228,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         textContentLabel?.frame.origin.y = y; textContentScroll?.frame.origin.y = y + label
         y += label + (textContentScroll?.frame.height ?? 82) + gap
         textFamilyLabel?.frame.origin = NSPoint(x: 0, y: y); textFamily.frame.origin = NSPoint(x: 0, y: y + label)
-        textSizeLabel?.frame.origin = NSPoint(x: Self.pairX, y: y)
-        textSize.frame.origin = NSPoint(x: Self.pairX, y: y + label)
+        textSizeLabel?.frame.origin = NSPoint(x: inspectorPairX, y: y)
+        textSize.frame.origin = NSPoint(x: inspectorPairX, y: y + label)
         y = textFamily.frame.maxY + gap
         textFormat.frame.origin.y = y; y = textFormat.frame.maxY + gap
         textColorLabel?.frame.origin.y = y
@@ -5966,7 +6071,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         geometryViews.forEach { $0.isHidden = !image }
         if image {
             for (index, field) in [layerWidth, layerHeight, layerX, layerY].enumerated() {
-                let x = CGFloat(index % 2) * Self.pairX
+                let x = CGFloat(index % 2) * inspectorPairX
                 let rowY = y + CGFloat(index / 2) * 58
                 layerGeometryLabels[index].frame.origin = NSPoint(x: x, y: rowY)
                 field.frame.origin = NSPoint(x: x, y: rowY + 22)
@@ -7046,6 +7151,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private func restyleChrome() {
         let raised = tokens.color("surface-raised").cgColor
         let border = tokens.color("border-subtle").cgColor
+        inspectorDivider.borderColor = tokens.color("border-subtle")
         headerBar.layer?.backgroundColor = raised
         railPanel.layer?.backgroundColor = raised
         headerRule.layer?.backgroundColor = border

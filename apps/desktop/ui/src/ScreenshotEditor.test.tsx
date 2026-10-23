@@ -260,6 +260,82 @@ describe("ScreenshotEditor", () => {
     document.getElementById("captures-editor-paint-canvas-host")?.remove();
   });
 
+  it("resizes the inspector with pointer and keyboard without changing the document", async () => {
+    let editorWidth = 1280;
+    const originalBounds = HTMLElement.prototype.getBoundingClientRect;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      if (this.classList.contains("screenshot-editor")) {
+        return DOMRect.fromRect({ width: editorWidth, height: 900 });
+      }
+      return originalBounds.call(this);
+    });
+    let notifyResize: () => void = () => {};
+    const originalObserver = window.ResizeObserver;
+    window.ResizeObserver = class {
+      constructor(private callback: () => void) {}
+      observe(target: Element) {
+        if (target.classList.contains("screenshot-editor")) notifyResize = this.callback;
+      }
+      unobserve() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver;
+    try {
+      render(<ScreenshotEditor />);
+      const divider = await screen.findByRole("separator", { name: "Resize properties panel" });
+      divider.setPointerCapture = vi.fn();
+      divider.releasePointerCapture = vi.fn();
+      const main = screen.getByRole("main");
+      const expectWidth = (width: number) => {
+        expect(divider).toHaveAttribute("aria-valuenow", String(width));
+        expect(main).toHaveStyle({ gridTemplateColumns: `56px minmax(0, 1fr) ${width}px` });
+      };
+      expectWidth(320);
+      fireEvent.pointerDown(divider, { button: 0, pointerId: 1, clientX: 960 });
+      fireEvent.pointerMove(divider, { pointerId: 1, clientX: 840 });
+      expectWidth(440);
+      fireEvent.pointerMove(divider, { pointerId: 1, clientX: 600 });
+      expectWidth(480);
+      fireEvent.pointerUp(divider, { pointerId: 1 });
+      fireEvent.pointerMove(divider, { pointerId: 1, clientX: 1100 });
+      expectWidth(480);
+      expect(main).not.toHaveAttribute("data-resizing-sidebar");
+
+      // Shrinking the window reserves 360px of canvas; enlarging restores the preference.
+      editorWidth = 860;
+      act(() => notifyResize());
+      expectWidth(444);
+      editorWidth = 1280;
+      act(() => notifyResize());
+      expectWidth(480);
+      fireEvent.keyDown(divider, { key: "Home" });
+      expectWidth(280);
+      fireEvent.keyDown(divider, { key: "ArrowRight" });
+      expectWidth(280);
+      fireEvent.keyDown(divider, { key: "ArrowLeft", shiftKey: true });
+      expectWidth(320);
+      fireEvent.keyDown(divider, { key: "ArrowRight" });
+      expectWidth(310);
+
+      fireEvent.pointerDown(divider, { button: 0, pointerId: 2, clientX: 970 });
+      fireEvent.pointerMove(divider, { pointerId: 2, clientX: 850 });
+      expectWidth(430);
+      fireEvent.pointerCancel(divider, { pointerId: 2 });
+      expectWidth(310);
+      fireEvent.doubleClick(divider);
+      expectWidth(320);
+      fireEvent.keyDown(divider, { key: "End" });
+      expectWidth(480);
+      fireEvent.keyDown(divider, { key: "Enter" });
+      expectWidth(320);
+      expect(screen.getByLabelText("Canvas width")).toHaveValue(1440);
+      expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+    } finally {
+      window.ResizeObserver = originalObserver;
+    }
+  });
+
   it("dismisses the restored-draft notice without losing edits", async () => {
     window.history.replaceState(
       {},
@@ -1194,7 +1270,12 @@ describe("ScreenshotEditor", () => {
     expect(inlineEditor).not.toHaveClass("is-placeholder-selected");
     expect(inlineFrame).toBeInTheDocument();
     expect(inlineEditor.style.getPropertyValue("--inline-text-selection-color")).toBe("#ffffff");
-    expect(inlineEditor).toHaveStyle({ color: "#ffffff", backgroundColor: "#ff3b5c" });
+    expect(inlineEditor).toHaveStyle({
+      color: "#ffffff",
+      backgroundColor: "#ff3b5c",
+      fontWeight: 700,
+    });
+    expect(screen.getByRole("button", { name: "Bold" })).toHaveAttribute("aria-pressed", "true");
     const initialHeight = Number.parseFloat(inlineFrame.style.height);
     const initialWidth = Number.parseFloat(inlineFrame.style.width);
     expect(initialWidth).toBeGreaterThan(300);
@@ -1238,6 +1319,11 @@ describe("ScreenshotEditor", () => {
     expect(await screen.findByRole("textbox", { name: "Edit text on canvas" })).toHaveValue(
       "Hello from the screenshot editor",
     );
+    fireEvent.click(screen.getByRole("button", { name: "Bold" }));
+    expect(screen.getByRole("button", { name: "Bold" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("textbox", { name: "Edit text on canvas" })).toHaveStyle({
+      fontWeight: 400,
+    });
   });
 
   it("resizes text horizontally without scaling it and keeps the chosen width when typing", async () => {

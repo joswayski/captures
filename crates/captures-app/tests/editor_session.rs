@@ -4520,7 +4520,12 @@ fn text_shadow_toggle_preserves_custom_style_width_undo_and_saved_pixels() {
 #[test]
 fn typed_text_creation_uses_fresh_ids_measured_width_pixels_and_one_undo_step() {
     let (data, id, _) = setup();
-    let mut editor = open_text(data.path(), &id, text_fonts()).unwrap();
+    let mut fonts = text_fonts();
+    fonts.files.insert(
+        "bold".into(),
+        Arc::from(include_bytes!("../../captures-image/tests/shaping-bold.ttf").as_slice()),
+    );
+    let mut editor = open_text(data.path(), &id, fonts).unwrap();
     editor
         .execute(Request::ResizeCanvas {
             width: 200.,
@@ -4534,7 +4539,8 @@ fn typed_text_creation_uses_fresh_ids_measured_width_pixels_and_one_undo_step() 
     let Element::Text(label) = created.elements.last().unwrap() else {
         panic!()
     };
-    assert_eq!((label.base.x, label.base.y, label.width), (20., 20., 84.)); // 56 advance + 28 inset
+    assert!(label.bold);
+    assert_eq!((label.base.x, label.base.y, label.width), (20., 20., 92.)); // Bold: 64 advance + 28 inset.
     assert_eq!(label.auto_width, Some(true));
     assert!(!label.base.locked && label.base.visible);
     assert_eq!(created.elements[0], before.elements[0]);
@@ -4593,6 +4599,7 @@ fn styled_text_creation_matches_shipping_treatments_and_fractional_placement() {
             (151.75, 22.125, 250.)
         );
         assert_eq!(text.align, "left");
+        assert!(text.bold);
         assert_eq!(text.color, "#2174c5");
         assert_eq!(
             text.font_family,
@@ -4617,6 +4624,7 @@ fn styled_text_creation_matches_shipping_treatments_and_fractional_placement() {
             panic!()
         };
         assert_eq!(text.align, "center");
+        assert!(text.bold);
         assert_eq!(text.base.x + text.width / 2., point.x);
         assert_eq!(text.background.as_deref(), Some("#2174c5"));
         assert_eq!(text.rounded_background, preset == "rounded-box");

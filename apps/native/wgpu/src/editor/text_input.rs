@@ -452,6 +452,17 @@ fn inline_galley(
     ctx.fonts_mut(|fonts| fonts.layout_job(job))
 }
 
+#[cfg(test)]
+fn show(
+    ui: &mut egui::Ui,
+    tokens: &Tokens,
+    view: &mut View,
+    available: egui::Rect,
+    preview: egui::Rect,
+) {
+    show_with_inspector(ui, tokens, view, available, preview, false);
+}
+
 /// Shipping `.screenshot-inline-text-frame`: the text being typed sits on the
 /// canvas in the layer's own face, size, colour, plate and rotation, inside a
 /// 1 px accent outline `--s-3` outside the frame. Clicking away and Escape
@@ -462,12 +473,13 @@ fn inline_galley(
 /// the frame centre. Pointer selection maps back to the unrotated galley while
 /// TextEdit keeps keyboard/IME/clipboard ownership. Outlined labels replace
 /// only the visible glyph ink with cached, hollow atlas-derived strokes.
-pub(super) fn show(
+pub(super) fn show_with_inspector(
     ui: &mut egui::Ui,
     tokens: &Tokens,
     view: &mut View,
     available: egui::Rect,
     preview: egui::Rect,
+    inspector_resizing: bool,
 ) {
     let Some(element) = view.inline_element() else {
         return;
@@ -613,7 +625,7 @@ pub(super) fn show(
             // The pointer adapter is a separate widget. TextEdit must not blur
             // and collapse its anchor before handling same-frame keyboard input.
             // Actual click-away is handled below using the rotated frame.
-            let focus_policy = pointer_adapter.then(|| {
+            let focus_policy = (pointer_adapter || inspector_resizing).then(|| {
                 ui.ctx().options_mut(|options| {
                     std::mem::replace(
                         &mut options.input_options.surrender_focus_on,
@@ -792,7 +804,7 @@ pub(super) fn show(
                     captures_app::editor_chrome::text_format::INLINE_LABEL,
                 )
             });
-            if input.focus {
+            if input.focus || inspector_resizing {
                 field.request_focus();
                 input.focus = false;
             }
@@ -917,7 +929,10 @@ pub(super) fn show(
             if !ime_owned_escape {
                 finish = Some(true);
             }
-        } else if !blocked && (!ui.input(|i| i.focused) || clicked_elsewhere || lost_focus) {
+        } else if !blocked
+            && !inspector_resizing
+            && (!ui.input(|i| i.focused) || clicked_elsewhere || lost_focus)
+        {
             finish.get_or_insert(true);
         }
     }

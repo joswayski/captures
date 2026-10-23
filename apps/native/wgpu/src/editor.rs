@@ -2413,48 +2413,120 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     view.drive_estimate(ui.ctx());
     view.drive_compare(ui.ctx());
     show_export_bar(ui, tokens, view, tx);
-    egui::Panel::right("editor-geometry")
-        .resizable(false)
-        .exact_size(320.)
-        .show(ui, |ui| {
-            // Shipping `.screenshot-sidebar`: Layers above Properties, always.
-            // Live fields stay enabled while a job runs; their edits queue.
-            let enabled = view.inline.is_none() && view.presented.is_some();
-            let layers_height = layers::section_height(ui.available_height());
-            let top = ui.cursor().top();
-            ui.add_enabled_ui(enabled, |ui| {
-                layers::show(ui, tokens, view, tx, layers_height)
-            });
-            let used = ui.cursor().top() - top;
-            ui.add_space((layers_height - used).max(0.));
-            ui.painter().hline(
-                ui.max_rect().expand2(egui::vec2(8., 0.)).x_range(),
-                ui.cursor().top() - 0.5,
-                egui::Stroke::new(1., tokens.color("border-subtle")),
-            );
-            // Shipping's sticky Properties title stays outside the fields'
-            // scroll viewport, so it cannot cover a control scrolled into view.
-            ui.spacing_mut().item_spacing.y = 0.;
-            ui.add_enabled_ui(enabled, |ui| chrome::properties_heading(ui, tokens, view));
-            crate::primitives::scroll_area(
-                ui,
-                tokens,
-                egui::ScrollArea::vertical()
-                    .id_salt(view.properties_section())
-                    .auto_shrink([false, false]),
-                |ui| {
-                    ui.add_enabled_ui(enabled, |ui| {
-                        // Sections space their own items (`inspector::section`).
-                        ui.spacing_mut().item_spacing.y = 0.;
-                        match view.properties_section() {
-                            Section::Layers => show_layer_properties(ui, tokens, view, tx),
-                            Section::Draw => show_draw_properties(ui, tokens, view),
-                            Section::Geometry => show_crop_properties(ui, tokens, view, tx),
-                        }
-                    });
-                },
-            );
+    // Keep the tool rail and a useful canvas inside the existing window.
+    let inspector_max = (ui.available_width() - 56. - 360. - 16.).clamp(280., 480.);
+    let inspector_default: f32 = if ui.available_width() <= 1040. {
+        280.
+    } else {
+        320.
+    };
+    let inspector_id = ui.scope_id().with_salt("editor-geometry".into());
+    let preference_id = inspector_id.with("preferred-width");
+    let preferred_width = ui
+        .ctx()
+        .data_mut(|data| *data.get_temp_mut_or_insert_with(preference_id, || inspector_default));
+    let resize_response = ui.read_response(inspector_id.with("__resize"));
+    if resize_response
+        .as_ref()
+        .is_some_and(egui::Response::double_clicked)
+    {
+        ui.ctx().data_mut(|data| {
+            data.remove::<egui::containers::panel::PanelState>(inspector_id);
+            data.insert_temp(preference_id, inspector_default);
         });
+    } else if !resize_response
+        .as_ref()
+        .is_some_and(|response| response.dragged() || response.drag_stopped())
+        && let Some(mut state) = egui::containers::panel::PanelState::load(ui.ctx(), inspector_id)
+    {
+        // Clamping for a small window must not erase the session preference.
+        state.outer_rect.min.x = state.outer_rect.max.x - preferred_width.min(inspector_max);
+        ui.ctx()
+            .data_mut(|data| data.insert_persisted(inspector_id, state));
+    }
+    let preserve_inspector_focus = resize_response.as_ref().is_some_and(|response| {
+        response.is_pointer_button_down_on()
+            || response.dragged()
+            || (response.hovered() && ui.input(|input| input.pointer.any_pressed()))
+    });
+    let focus_policy = preserve_inspector_focus.then(|| {
+        ui.ctx().options_mut(|options| {
+            std::mem::replace(
+                &mut options.input_options.surrender_focus_on,
+                egui::SurrenderFocusOn::Never,
+            )
+        })
+    });
+    egui::Panel::right("editor-geometry")
+        .resizable(true)
+        .default_size(inspector_default)
+        .size_range(280. ..=inspector_max)
+        .show(ui, |ui| {
+            // Intrinsic child minima must not grow the resizable column. The
+            // child retains widget ids/focus; only the allocated host width is fixed.
+            let rect = ui.available_rect_before_wrap();
+            let mut inspector_ui = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+            inspector_ui.set_clip_rect(rect.intersect(ui.clip_rect()));
+            {
+                let ui = &mut inspector_ui;
+                // Shipping `.screenshot-sidebar`: Layers above Properties, always.
+                // Live fields stay enabled while a job runs; their edits queue.
+                let enabled = view.inline.is_none() && view.presented.is_some();
+                let layers_height = layers::section_height(ui.available_height());
+                let top = ui.cursor().top();
+                ui.add_enabled_ui(enabled, |ui| {
+                    layers::show(ui, tokens, view, tx, layers_height)
+                });
+                let used = ui.cursor().top() - top;
+                ui.add_space((layers_height - used).max(0.));
+                ui.painter().hline(
+                    ui.max_rect().expand2(egui::vec2(8., 0.)).x_range(),
+                    ui.cursor().top() - 0.5,
+                    egui::Stroke::new(1., tokens.color("border-subtle")),
+                );
+                // Shipping's sticky Properties title stays outside the fields'
+                // scroll viewport, so it cannot cover a control scrolled into view.
+                ui.spacing_mut().item_spacing.y = 0.;
+                ui.add_enabled_ui(enabled, |ui| chrome::properties_heading(ui, tokens, view));
+                crate::primitives::scroll_area(
+                    ui,
+                    tokens,
+                    egui::ScrollArea::vertical()
+                        .id_salt(view.properties_section())
+                        .auto_shrink([false, false]),
+                    |ui| {
+                        ui.add_enabled_ui(enabled, |ui| {
+                            // Sections space their own items (`inspector::section`).
+                            ui.spacing_mut().item_spacing.y = 0.;
+                            match view.properties_section() {
+                                Section::Layers => show_layer_properties(ui, tokens, view, tx),
+                                Section::Draw => show_draw_properties(ui, tokens, view),
+                                Section::Geometry => show_crop_properties(ui, tokens, view, tx),
+                            }
+                        });
+                    },
+                );
+            }
+            ui.allocate_exact_size(rect.size(), egui::Sense::hover());
+        });
+    if let Some(policy) = focus_policy {
+        ui.ctx()
+            .options_mut(|options| options.input_options.surrender_focus_on = policy);
+    }
+    // This is the resize widget id used by the pinned egui Panel API.
+    let inspector_resizing =
+        ui.read_response(inspector_id.with("__resize"))
+            .is_some_and(|response| {
+                response.is_pointer_button_down_on()
+                    || response.dragged()
+                    || response.drag_stopped()
+            });
+    if inspector_resizing
+        && let Some(state) = egui::containers::panel::PanelState::load(ui.ctx(), inspector_id)
+    {
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(preference_id, state.size().x));
+    }
     chrome::show_tool_rail(ui, tokens, view);
     egui::CentralPanel::default().show(ui, |ui| {
         let texture = view
@@ -2535,7 +2607,14 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
             }
             canvas::paint_trim_preview(ui, tokens, view, available, preview);
             canvas::paint_drop_guide(ui, tokens, view, available, preview);
-            text_input::show(ui, tokens, view, available, preview);
+            text_input::show_with_inspector(
+                ui,
+                tokens,
+                view,
+                available,
+                preview,
+                inspector_resizing,
+            );
             if comparing && view.compare_visible() {
                 let badges = view.compare_badges();
                 let drawing = view.section == Section::Draw;

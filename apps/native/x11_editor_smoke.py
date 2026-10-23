@@ -117,6 +117,8 @@ def main():
                         help="Exercise pre-placement Text style/size/color and centered box placement")
     parser.add_argument("--text-input-only", action="store_true",
                         help="Exercise on-canvas text composition, finish, blank discard, undo and quit")
+    parser.add_argument("--inspector-resize-only", action="store_true",
+                        help="Drag the native inspector through its limits without editing the document")
     parser.add_argument("--polygon-only", action="store_true",
                         help="Exercise Triangle/Diamond/Star previews, cancellation and saved pixels")
     parser.add_argument("--drawing-defaults-only", action="store_true",
@@ -1075,6 +1077,79 @@ def main():
             inspector_click(round(8 + (index % columns + .5) * pitch), first_row + index // columns * 32)
 
         draft = output / "editor-drafts" / artifact_id / "manifest.json"
+
+        if args.inspector_resize_only:
+            before = draft_bytes()
+            size = window_size()
+
+            def check_width(name, width, y=None):
+                shot(editor, name)
+                row = run("convert", str(output / f"{name}.png"), "-crop",
+                          f"{size[0]}x1+0+{y if y is not None else size[1] - 100}", "-depth", "8", "rgb:-")
+                background = row[300:303]
+                edges = [x for x in range(100, size[0] - 10)
+                         if row[x * 3:x * 3 + 3] != background]
+                assert edges == [size[0] - width], (name, edges, width)
+
+            def resize_from(width, target):
+                x = size[0] - width
+                run("xdotool", "mousemove", "--sync", "--window", editor, str(x), "200",
+                    "sleep", ".2", "mousedown", "1", "sleep", ".2",
+                    "mousemove", "--sync", "--window", editor, str(size[0] - target), "200",
+                    "sleep", ".3", "mouseup", "1", "sleep", ".3")
+                assert window_size() == size, "splitter must not resize the window"
+                assert draft_bytes() == before, "splitter must not edit/autosave a document"
+            default = 280 if size[0] <= 1040 else 320
+            resize_from(default, 440)
+            check_width("inspector-wide", 440)
+            resize_from(440, 900)
+            maximum = min(480, size[0] - 432)
+            check_width("inspector-maximum", maximum)
+            run("xdotool", "windowsize", "--sync", editor, "760", str(size[1]), "sleep", ".5")
+            original_size = size
+            size = window_size()
+            check_width("inspector-window-clamped", 328)
+            run("xdotool", "windowsize", "--sync", editor, *map(str, original_size), "sleep", ".5")
+            size = window_size()
+            check_width("inspector-window-restored", maximum)
+            resize_from(maximum, 180)
+            check_width("inspector-minimum", 280)
+            resize_from(280, 360)
+            check_width("inspector-restored", 360)
+            run("xdotool", "mousemove", "--sync", "--window", editor,
+                str(size[0] - 360), "200", "click", "--repeat", "2", "--delay", "80", "1", "sleep", ".4")
+            check_width("inspector-reset", default)
+            resize_from(default, 320)
+            toolbar_click("draw")
+            draw_tool("text")
+            click(editor, *document_point((80, 60)))
+            type_text("Resize", 1)
+            time.sleep(.5)
+            resize_from(320, 400)
+            type_text(" kept", 1)
+            shot(editor, "inspector-inline-focus")
+            assert draft_bytes() == before, "resizing must not finish inline text"
+            run("xdotool", "key", "Escape", "sleep", ".5")
+            wait(lambda: draft.exists(), "inline text autosave after explicit finish")
+            text = json.loads(draft.read_text())["document"]["elements"][-1]
+            assert text["text"] == "Resize kept", text
+            assert text["bold"] is True, text
+            click(editor, size[0] - 200, 460)  # Selected text's inspector textarea.
+            run("xdotool", "key", "ctrl+a")
+            type_text("Inspector", 1)
+
+            def text_saved(value):
+                return (draft.exists() and json.loads(draft.read_text())["document"]["elements"][-1]
+                        .get("text") == value)
+
+            wait(lambda: text_saved("Inspector"), "inspector typing before resizing")
+            before = draft_bytes()
+            resize_from(400, 280)
+            type_text(" focus", 1)
+            wait(lambda: text_saved("Inspector focus"), "inspector field keeps typing focus after resizing")
+            check_width("inspector-field-focus-minimum", 280, y=110)
+            print("PASS native inspector: limits, reset, shrink/restore, fixed window, unchanged document, inline focus")
+            return
 
         def saved(width, height, x, y):
             data = draft_bytes()

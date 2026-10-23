@@ -348,6 +348,18 @@ final class EditorCurveControls: NSView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        bendValue.frame.origin.x = newSize.width - 60
+        bendSlider.frame.size.width = newSize.width
+        straightenButton?.frame.size.width = newSize.width
+        help.frame.size.width = newSize.width
+        for (index, mark) in marks.enumerated() {
+            mark.frame.origin.x = CGFloat(index) * newSize.width / 3
+            mark.frame.size.width = newSize.width / 3 - 1
+        }
+    }
+
     func setHandles(_ value: NativeCurveHandles?, layerID: String? = nil) {
         // A receipt can arrive during native slider tracking even with no
         // queued value. Keep the pointer's input, not the older document.

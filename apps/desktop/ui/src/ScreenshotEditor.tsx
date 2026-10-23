@@ -1706,6 +1706,40 @@ export function ScreenshotEditor() {
   const [defaultFontSize, setDefaultFontSize] = useState(48);
   const [defaultTextStyle, setDefaultTextStyle] = useState<TextStylePreset>("rounded-box");
   const [rotationSnapDegrees, setRotationSnapDegrees] = useState(SHAPE_ROTATION_SNAP_DEGREES);
+  const editorRef = useRef<HTMLElement>(null);
+  const [editorWidth, setEditorWidth] = useState(window.innerWidth);
+  // Window-local preference: never include panel layout in document history/drafts.
+  const [preferredSidebarWidth, setPreferredSidebarWidth] = useState<number | null>(null);
+  const [resizingSidebar, setResizingSidebar] = useState(false);
+  const sidebarDragRef = useRef<{
+    pointerId: number;
+    x: number;
+    width: number;
+    previousWidth: number | null;
+  } | null>(null);
+  const sidebarMinWidth = 280;
+  const sidebarMaxWidth = Math.max(sidebarMinWidth, Math.min(480, editorWidth - 56 - 360));
+  const sidebarWidth = Math.min(
+    sidebarMaxWidth,
+    Math.max(sidebarMinWidth, preferredSidebarWidth ?? (editorWidth <= 1040 ? 280 : 320)),
+  );
+  const resizeSidebar = (width: number) =>
+    setPreferredSidebarWidth(
+      Math.round(Math.max(sidebarMinWidth, Math.min(sidebarMaxWidth, width))),
+    );
+
+  const editorReady = Boolean(artifact && editorDocument);
+  useLayoutEffect(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const update = () => setEditorWidth(editor.getBoundingClientRect().width);
+    update();
+    if (typeof ResizeObserver !== "function") return;
+    const observer = new ResizeObserver(update);
+    observer.observe(editor);
+    return () => observer.disconnect();
+  }, [editorReady]);
+
   const [fitScale, setFitScale] = useState(1);
   const [zoomMode, setZoomMode] = useState<"fit" | "manual">("fit");
   const [zoom, setZoom] = useState(100);
@@ -5423,7 +5457,10 @@ export function ScreenshotEditor() {
 
   return (
     <main
+      ref={editorRef}
       className={`screenshot-editor${dragActive ? " screenshot-editor-drag-active" : ""}`}
+      style={{ gridTemplateColumns: `56px minmax(0, 1fr) ${sidebarWidth}px` }}
+      data-resizing-sidebar={resizingSidebar || undefined}
       onDragEnter={(event) => {
         if (!isFileTransfer(event.dataTransfer)) return;
         event.preventDefault();
@@ -6183,7 +6220,81 @@ export function ScreenshotEditor() {
           )}
       </section>
 
-      <aside className="screenshot-sidebar">
+      <div
+        className="screenshot-sidebar-resize"
+        role="separator"
+        aria-label="Resize properties panel"
+        aria-orientation="vertical"
+        aria-controls="screenshot-sidebar"
+        aria-valuemin={sidebarMinWidth}
+        aria-valuemax={sidebarMaxWidth}
+        aria-valuenow={sidebarWidth}
+        aria-valuetext={`${sidebarWidth} pixels wide`}
+        tabIndex={0}
+        title="Drag to resize · Double-click to reset"
+        onPointerDown={(event) => {
+          if (event.button !== 0 || sidebarDragRef.current) return;
+          // Keep an in-progress text field focused; resizing isn't a document edit.
+          event.preventDefault();
+          event.currentTarget.setPointerCapture(event.pointerId);
+          sidebarDragRef.current = {
+            pointerId: event.pointerId,
+            x: event.clientX,
+            width: sidebarWidth,
+            previousWidth: preferredSidebarWidth,
+          };
+          setResizingSidebar(true);
+        }}
+        onPointerMove={(event) => {
+          const drag = sidebarDragRef.current;
+          if (drag?.pointerId === event.pointerId) {
+            resizeSidebar(drag.width + drag.x - event.clientX);
+          }
+        }}
+        onPointerUp={(event) => {
+          if (sidebarDragRef.current?.pointerId !== event.pointerId) return;
+          sidebarDragRef.current = null;
+          setResizingSidebar(false);
+          event.currentTarget.releasePointerCapture(event.pointerId);
+        }}
+        onPointerCancel={() => {
+          const drag = sidebarDragRef.current;
+          if (drag) setPreferredSidebarWidth(drag.previousWidth);
+          sidebarDragRef.current = null;
+          setResizingSidebar(false);
+        }}
+        onLostPointerCapture={() => {
+          sidebarDragRef.current = null;
+          setResizingSidebar(false);
+        }}
+        onDoubleClick={() => setPreferredSidebarWidth(null)}
+        onKeyDown={(event) => {
+          // These keys must not also nudge/delete a selected canvas layer.
+          event.stopPropagation();
+          const step = event.shiftKey ? 40 : 10;
+          switch (event.key) {
+            case "ArrowLeft":
+              resizeSidebar(sidebarWidth + step);
+              break;
+            case "ArrowRight":
+              resizeSidebar(sidebarWidth - step);
+              break;
+            case "Home":
+              resizeSidebar(sidebarMinWidth);
+              break;
+            case "End":
+              resizeSidebar(sidebarMaxWidth);
+              break;
+            case "Enter":
+              setPreferredSidebarWidth(null);
+              break;
+            default:
+              return;
+          }
+          event.preventDefault();
+        }}
+      />
+      <aside className="screenshot-sidebar" id="screenshot-sidebar">
         <section className="screenshot-layers" aria-label="Layers">
           <div className="screenshot-layers-heading">
             <div>
@@ -6959,6 +7070,7 @@ export function ScreenshotEditor() {
                   type="button"
                   className={selected.bold ? "active" : ""}
                   aria-label="Bold"
+                  aria-pressed={selected.bold}
                   onClick={() =>
                     updateSelected((element) =>
                       element.kind === "text"
@@ -6973,6 +7085,7 @@ export function ScreenshotEditor() {
                   type="button"
                   className={selected.italic ? "active" : ""}
                   aria-label="Italic"
+                  aria-pressed={selected.italic}
                   onClick={() =>
                     updateSelected((element) =>
                       element.kind === "text"
@@ -6989,6 +7102,7 @@ export function ScreenshotEditor() {
                     type="button"
                     className={selected.align === align ? "active" : ""}
                     aria-label={`Align ${align}`}
+                    aria-pressed={selected.align === align}
                     onClick={() =>
                       updateSelected((element) =>
                         element.kind === "text" ? { ...element, align } : element,

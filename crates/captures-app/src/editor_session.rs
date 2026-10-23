@@ -1989,7 +1989,7 @@ pub fn new_text_element(id: String, create: &TextCreate) -> Result<TextElement, 
         width,
         auto_width: Some(true),
         font_family: font_family.into(),
-        bold: false,
+        bold: true,
         italic: false,
         align: if centered { "center" } else { "left" }.into(),
         color: if centered {

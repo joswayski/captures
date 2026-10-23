@@ -793,7 +793,7 @@ export function createPlacedTextElement(options: {
       width,
       autoWidth: true,
       fontFamily: "sans",
-      bold: false,
+      bold: true,
       italic: false,
       align,
       color: textPresetPrefersCenter(options.preset) ? "#ffffff" : options.color,

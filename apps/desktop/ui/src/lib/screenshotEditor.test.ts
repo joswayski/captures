@@ -2188,6 +2188,7 @@ describe("screenshot editor geometry", () => {
       align: "center",
       roundedBackground: true,
       fontFamily: "rounded",
+      bold: true,
     });
     expect(placed.x).toBeCloseTo(400 - composing / 2, 5);
     expect(isBlankTextElement(placed)).toBe(true);
@@ -2220,6 +2221,7 @@ describe("screenshot editor geometry", () => {
       text: "",
       align: "left",
       x: 80,
+      bold: true,
       roundedBackground: false,
       background: null,
     });
