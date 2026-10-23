@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use captures_app::{
-    editor::{Element, Rect, TextElement},
+    editor::{Document, Element, Point, Rect, ResizeDrag, ResizeHandle, TextElement},
     editor_text::{
         FONT_FAMILY_LABELS, TEXT_STYLE_PRESETS, fit_auto_width, font_family_options,
         inline_editor_layout, layout, resize, selection_bounds, text_style_preset_id,
@@ -85,7 +85,12 @@ fn text_style_picker_value_matches_shipping_text_style_preset() {
     );
     assert_eq!(text_style_preset_id("mono", false, true, false), "outlined");
     assert_eq!(text_style_preset_id("rounded", true, true, false), "box");
-    assert_eq!(text_style_preset_id("serif", true, false, true), "box");
+    for family in ["sans", "rounded", "serif", "mono"] {
+        assert_eq!(
+            text_style_preset_id(family, true, false, true),
+            "rounded-box"
+        );
+    }
 }
 
 #[test]
@@ -248,7 +253,28 @@ fn real_shaping_controls_wrap_ligatures_and_auto_width() {
     assert_eq!(fitted.width, 180.); // longest line 145 + 35 caret padding
     assert_eq!(fitted.base.x, element.base.x - 36.);
 
+    // Real narrow glyph advances fit one line even when the UTF-16 estimate
+    // would claim several rows. Paint, selection and inline must agree.
+    element.text = "fi".repeat(10);
+    element.background = None;
+    element.drop_shadow = Some(false);
+    let narrow = fit_auto_width(&element, false, |s| {
+        renderer.measure_line(s, &style).map(f64::from)
+    })
+    .unwrap();
+    assert_eq!(narrow.width, 485.);
+    assert_eq!(selection_bounds(&narrow).unwrap().height, 125.);
+    assert_eq!(inline_editor_layout(&narrow).unwrap().frame.height, 125.);
+    assert_eq!(
+        layout(&narrow, |s| renderer.measure_line(s, &style).map(f64::from))
+            .unwrap()
+            .rows
+            .len(),
+        1
+    );
+
     // A token can exceed the raster extent, yet every wrapped row fits it.
+    element.auto_width = Some(false);
     element.text = "L".repeat(240);
     element.width = 140.;
     let wrapped = layout(&element, |s| {
@@ -262,6 +288,171 @@ fn real_shaping_controls_wrap_ligatures_and_auto_width() {
             .iter()
             .all(|row| row.text == "LL" && row.advance == 140.)
     );
+}
+
+#[test]
+fn auto_width_narrow_letters_never_wrap_in_paint_selection_or_inline_layout() {
+    let mut element = cases().remove(0).element;
+    element.font_size = 20.;
+    element.text = "iiiiiiiiiiii\n  iii  \n".into();
+    element.auto_width = Some(true);
+    element.background = None;
+    element.drop_shadow = Some(false);
+    let element = fit_auto_width(&element, false, |s| Ok(s.chars().count() as f64 * 2.)).unwrap();
+    assert_eq!(element.width, 31.);
+    let painted = layout(&element, |s| Ok(s.chars().count() as f64 * 2.)).unwrap();
+    assert_eq!(
+        painted
+            .rows
+            .iter()
+            .map(|row| row.text.as_str())
+            .collect::<Vec<_>>(),
+        ["iiiiiiiiiiii", "  iii  ", ""]
+    );
+    assert_eq!(painted.content.height, 75.);
+    assert_eq!(selection_bounds(&element).unwrap().height, 75.);
+    assert_eq!(inline_editor_layout(&element).unwrap().frame.height, 75.);
+    // Even stale/narrow stored width cannot wrap an auto-width label in paint.
+    let mut narrow = element.clone();
+    narrow.width = 8.;
+    assert_eq!(
+        layout(&narrow, |s| Ok(s.len() as f64 * 20.))
+            .unwrap()
+            .rows
+            .len(),
+        3
+    );
+    narrow.auto_width = Some(false);
+    assert!(selection_bounds(&narrow).unwrap().height > 75.);
+    assert!(inline_editor_layout(&narrow).unwrap().frame.height > 75.);
+}
+
+#[test]
+fn text_resize_reflows_width_and_scales_height_independently_with_updated_padding() {
+    let mut element = cases().remove(0).element;
+    element.font_size = 20.;
+    element.width = 100.;
+    element.text = "one two three four".into();
+    element.background = Some("#2174c5".into());
+    element.drop_shadow = Some(false);
+    element.auto_width = Some(true);
+    let initial = selection_bounds(&element).unwrap();
+    assert_eq!(resize(&element, initial, initial).unwrap(), element);
+    for (width_scale, height_scale, size) in [
+        (0.5, 1., 20.),
+        (1., 2., 40.),
+        (3., 2., 40.),
+        (2., 2., 40.),
+        (1., 0.01, 8.),
+        (1., 100., 512.),
+    ] {
+        let next = Rect {
+            x: 12.,
+            y: 18.,
+            width: initial.width * width_scale,
+            height: initial.height * height_scale,
+        };
+        let resized = resize(&element, initial, next).unwrap();
+        assert_eq!(resized.font_size, size);
+        assert_eq!(resized.auto_width, Some(false));
+        assert!(
+            (resized.width - (next.width - size * 0.72).max(8_f64.max((size * 0.5).round()))).abs()
+                < 1e-9
+        );
+        assert!((resized.base.x - (next.x + size * 0.36)).abs() < 1e-9);
+        assert!((resized.base.y - (next.y + size * 0.22)).abs() < 1e-9);
+        assert_eq!(resized.color, element.color);
+        assert_eq!(resized.background, element.background);
+    }
+    let next = Rect {
+        width: initial.width / 2.,
+        ..initial
+    };
+    let reflowed = resize(&element, initial, next).unwrap();
+    assert!(selection_bounds(&reflowed).unwrap().height > initial.height);
+}
+
+#[test]
+fn text_resize_preserves_fractional_size_within_height_tolerance_and_floors_scale() {
+    let mut text = cases().remove(0).element;
+    text.font_size = 31.25;
+    let initial = selection_bounds(&text).unwrap();
+    for width_scale in [1., 1.0005, 2.] {
+        for height_scale in [0.9995, 1., 1.0005] {
+            let next = Rect {
+                x: initial.x + 1.,
+                width: initial.width * width_scale,
+                height: initial.height * height_scale,
+                ..initial
+            };
+            assert_eq!(resize(&text, initial, next).unwrap().font_size, 31.25);
+        }
+    }
+    text.font_size = 400.;
+    let initial = selection_bounds(&text).unwrap();
+    let next = Rect {
+        height: initial.height * 0.01,
+        ..initial
+    };
+    assert_eq!(resize(&text, initial, next).unwrap().font_size, 20.);
+}
+
+#[test]
+fn text_exposes_all_eight_grips_and_only_shift_corners_lock_aspect() {
+    let mut text = cases().remove(0).element;
+    text.base.x = 300.;
+    text.base.y = 300.;
+    text.base.rotation = None;
+    text.base.locked = false;
+    text.base.visible = true;
+    text.font_size = 40.;
+    text.width = 200.;
+    text.text = "i".into();
+    text.background = None;
+    text.drop_shadow = Some(false);
+    text.auto_width = Some(true);
+    let document = Document {
+        width: 2000.,
+        height: 2000.,
+        background: None,
+        elements: vec![Element::Text(text.clone())],
+        extra: Default::default(),
+    };
+    for (handle, x, y, dx, dy) in [
+        (ResizeHandle::Nw, 300., 300., -40., -50.),
+        (ResizeHandle::N, 400., 300., 0., -50.),
+        (ResizeHandle::Ne, 500., 300., 40., -50.),
+        (ResizeHandle::E, 500., 325., 40., 0.),
+        (ResizeHandle::Se, 500., 350., 40., 50.),
+        (ResizeHandle::S, 400., 350., 0., 50.),
+        (ResizeHandle::Sw, 300., 350., -40., 50.),
+        (ResizeHandle::W, 300., 325., -40., 0.),
+    ] {
+        assert_eq!(
+            document.elements[0]
+                .resize_handle_at(Point { x, y }, 4.)
+                .unwrap(),
+            Some(handle)
+        );
+        let drag = ResizeDrag::new(&document, &text.base.id, handle, 1.).unwrap();
+        let current = Point {
+            x: x + dx,
+            y: y + dy,
+        };
+        let Element::Text(free) = drag.preview(current, false).unwrap().element else {
+            panic!()
+        };
+        assert_eq!(free.font_size, if dy == 0. { 40. } else { 80. });
+        assert_eq!(free.width, if dx == 0. { 200. } else { 240. });
+        assert_eq!(free.auto_width, Some(false));
+        if dx != 0. && dy != 0. {
+            let Element::Text(locked) = drag.preview(current, true).unwrap().element else {
+                panic!()
+            };
+            assert!((locked.width / locked.font_size - text.width / text.font_size).abs() < 1e-9);
+            assert_ne!(locked.width, free.width);
+        }
+    }
 }
 
 #[test]

@@ -72,7 +72,7 @@ pub const TEXT_STYLE_PRESETS: [TextStylePreset; 7] = [
     TextStylePreset {
         id: "rounded-box",
         label: "Rounded Box",
-        font_family: "rounded",
+        font_family: "sans",
         background: Some("#111318"),
         outlined: false,
         rounded_background: true,
@@ -90,7 +90,7 @@ pub fn text_style_preset_id(
 ) -> &'static str {
     match (font_family, has_background) {
         _ if outlined && !has_background => "outlined",
-        ("rounded", true) if rounded_background => "rounded-box",
+        (_, true) if rounded_background => "rounded-box",
         ("mono", true) => "mono-box",
         (_, true) => "box",
         ("rounded", false) => "rounded",
@@ -248,6 +248,18 @@ fn wrap(
     Ok(lines)
 }
 
+fn lines(
+    element: &TextElement,
+    width: f64,
+    measure: &mut impl FnMut(&str) -> Result<f64, String>,
+) -> Result<Vec<String>, String> {
+    if element.uses_auto_width() {
+        Ok(element.text.split('\n').map(str::to_owned).collect())
+    } else {
+        wrap(&element.text, width, measure)
+    }
+}
+
 /// Compute wrapped paint rows and an optional plate. Measurements must use the
 /// same face/style as rasterization. A glyph wider than the box is not discarded.
 pub fn layout(
@@ -258,8 +270,8 @@ pub fn layout(
     // Preserve drawText's unrounded paint minimum; wrapTextLines separately uses
     // the rounded eight-pixel minimum. They differ for narrow/fractional boxes.
     let width = element.width.max(element.font_size * 0.5);
-    let lines = wrap(
-        &element.text,
+    let lines = lines(
+        element,
         width.max(minimum_width(element.font_size)),
         &mut measure,
     )?;
@@ -388,11 +400,11 @@ fn interaction_pad(element: &TextElement, size: f64) -> Point {
 }
 
 /// Unrotated shipping interaction bounds, including plate/shadow padding.
-/// These intentionally use estimated wrapping; painting uses real shaping.
+/// Fixed-width text uses estimated wrapping; auto-width splits only at newlines.
 pub fn selection_bounds(element: &TextElement) -> Result<Rect, String> {
     validate(element)?;
     let width = element.width.max(minimum_width(element.font_size));
-    let rows = wrap(&element.text, width, &mut |line| {
+    let rows = lines(element, width, &mut |line| {
         estimate(line, element.font_size)
     })?;
     let pad = interaction_pad(element, element.font_size);
@@ -404,8 +416,9 @@ pub fn selection_bounds(element: &TextElement) -> Result<Rect, String> {
     })
 }
 
-/// Map a text layer between selection boxes. Side resizing reflows fixed-width
-/// text; other drags scale type. Auto-width labels refit rather than stretch ink.
+/// Map a text layer between selection boxes. Width-only resizing reflows text;
+/// other drags scale type by height and set width independently. Any real resize
+/// makes the box fixed-width; a click preserves the original auto-width state.
 pub fn resize(element: &TextElement, initial: Rect, next: Rect) -> Result<TextElement, String> {
     validate(element)?;
     if ![
@@ -423,38 +436,24 @@ pub fn resize(element: &TextElement, initial: Rect, next: Rect) -> Result<TextEl
     {
         return Err("Text resize requires finite, positive bounds.".into());
     }
-    let scale_x = next.width / initial.width.max(1.);
-    let scale_y = next.height / initial.height.max(1.);
-    let width_only = (scale_y - 1.).abs() < 0.001 && (scale_x - 1.).abs() >= 0.001;
-    let height_only = (scale_x - 1.).abs() < 0.001 && (scale_y - 1.).abs() >= 0.001;
-    let auto = element.uses_auto_width();
-    let mut resized = element.clone();
-    if width_only && !auto {
-        let pad = interaction_pad(element, element.font_size);
-        resized.base.x = next.x + pad.x;
-        resized.base.y = next.y + pad.y;
-        resized.width = minimum_width(element.font_size).max(next.width - pad.x * 2.);
-    } else {
-        let scale = if width_only {
-            scale_x
-        } else if height_only {
-            scale_y
-        } else {
-            scale_x.abs().min(scale_y.abs())
-        }
-        .max(0.05);
-        let size = (element.font_size * scale).round().clamp(8., 512.);
-        let pad = interaction_pad(element, size);
-        resized.font_size = size;
-        resized.base.x = next.x + pad.x;
-        resized.base.y = next.y + pad.y;
-        resized.width = if auto {
-            fitted_width(&element.text, size, &mut |line| estimate(line, size))?
-        } else {
-            minimum_width(size).max(element.width * scale)
-        };
+    if initial == next {
+        return Ok(element.clone());
     }
-    resized.auto_width = Some(auto);
+    let scale_y = next.height / initial.height.max(1.);
+    let mut resized = element.clone();
+    let size = if (scale_y - 1.).abs() < 0.001 {
+        element.font_size
+    } else {
+        (element.font_size * scale_y.max(0.05))
+            .round()
+            .clamp(8., 512.)
+    };
+    let pad = interaction_pad(element, size);
+    resized.font_size = size;
+    resized.base.x = next.x + pad.x;
+    resized.base.y = next.y + pad.y;
+    resized.width = minimum_width(size).max(next.width - pad.x * 2.);
+    resized.auto_width = Some(false);
     validate(&resized)?;
     Ok(resized)
 }
@@ -496,7 +495,7 @@ pub fn fit_auto_width(
 /// host draws the text it is typing, in unscaled document units. The frame is
 /// the painted plate or glyph box (`textLayoutBounds`, shadow excluded) and
 /// rotates about its centre, like the canvas paint. Hosts scale it by the
-/// display scale and keep shipping's 48 × 28 px minimum.
+/// display scale, sizing the composing frame to content plus padding.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct InlineEditorLayout {
     pub frame: Rect,
@@ -515,17 +514,13 @@ pub struct InlineEditorLayout {
     pub auto_width: bool,
 }
 
-/// Shipping inline editor minimum (`Math.max(48, …)`, `Math.max(28, …)`), in
-/// screen pixels after display scaling.
-pub const INLINE_EDITOR_MIN_SIZE: (f64, f64) = (48., 28.);
-
 /// Geometry for the host-drawn inline text editor. Uses the same estimated
 /// wrapping as shipping's layout box; hosts wrap glyphs with real metrics.
 pub fn inline_editor_layout(element: &TextElement) -> Result<InlineEditorLayout, String> {
     validate(element)?;
     let size = element.font_size;
     let width = element.width.max(minimum_width(size));
-    let rows = wrap(&element.text, width, &mut |line| estimate(line, size))?;
+    let rows = lines(element, width, &mut |line| estimate(line, size))?;
     let line_height = size * 1.25;
     let content_height = rows.len().max(1) as f64 * line_height;
     let plate = element

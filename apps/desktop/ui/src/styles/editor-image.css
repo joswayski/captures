@@ -2017,6 +2017,39 @@
 
 /* -------------------------------------------------------------- sidebar --- */
 
+.screenshot-sidebar-resize {
+  z-index: 6;
+  grid-row: 2;
+  grid-column: 3;
+  justify-self: start;
+  width: var(--s-4);
+  transform: translateX(-50%);
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+  outline: none;
+}
+
+.screenshot-sidebar-resize::after {
+  content: "";
+  display: block;
+  width: var(--s-1);
+  height: 100%;
+  margin: auto;
+}
+
+.screenshot-sidebar-resize:hover::after,
+.screenshot-sidebar-resize:focus-visible::after,
+.screenshot-editor[data-resizing-sidebar] .screenshot-sidebar-resize::after {
+  background: var(--theme-accent);
+}
+
+.screenshot-editor[data-resizing-sidebar],
+.screenshot-editor[data-resizing-sidebar] * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
 .screenshot-sidebar {
   display: grid;
   min-width: 0;
@@ -3076,8 +3109,7 @@
   letter-spacing: var(--tracking-tighter);
 }
 
-.screenshot-text-style-preview.style-rounded,
-.screenshot-text-style-preview.style-rounded-box {
+.screenshot-text-style-preview.style-rounded {
   font-family: ui-rounded, "SF Pro Rounded", "Arial Rounded MT Bold", system-ui, sans-serif;
 }
 
@@ -3855,10 +3887,6 @@
 }
 
 @media (max-width: 1040px) {
-  .screenshot-editor {
-    grid-template-columns: 56px minmax(0, 1fr) 280px;
-  }
-
   /* Keep zoom reachable on narrower editor windows; only drop undo/redo chrome. */
   .screenshot-editor-history-actions > button:first-child,
   .screenshot-editor-history-actions > button:nth-child(2) {

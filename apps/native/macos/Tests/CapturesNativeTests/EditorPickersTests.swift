@@ -128,7 +128,7 @@ final class EditorPickersTests: XCTestCase {
              "roundedBackground": false],
             ["id": "mono-box", "label": "Mono Box", "fontFamily": "mono", "background": "#111318",
              "outlined": false, "roundedBackground": false],
-            ["id": "rounded-box", "label": "Rounded Box", "fontFamily": "rounded", "background": "#111318",
+            ["id": "rounded-box", "label": "Rounded Box", "fontFamily": "sans", "background": "#111318",
              "outlined": false, "roundedBackground": true],
         ] as [[String: Any]]).map { try XCTUnwrap(NativeTextPreset($0)) }
         XCTAssertTrue(TextStyleChip.font(for: presets[1]).isFixedPitch)

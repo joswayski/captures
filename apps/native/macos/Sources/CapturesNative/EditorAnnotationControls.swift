@@ -85,6 +85,12 @@ final class EditorAnnotationControls: NSView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    override func setFrameSize(_ newSize: NSSize) {
+        let widthChanged = newSize.width != frame.width
+        super.setFrameSize(newSize)
+        if widthChanged { refresh() }
+    }
+
     func setStyle(_ style: NativeAnnotationStyle?) {
         // A live edit landed: the published style caught up with the fields,
         // so keep what is shown (and any offset being typed) as it is.
