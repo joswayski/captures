@@ -17,8 +17,11 @@ acknowledgement; a failed acknowledgement retains recovery files and does not
 automatically roll back a possibly running application. Windows uses NSIS; Debian
 uses manual package installation. The development helper on all hosts and native
 macOS/AppImage updates now carry open editors and ordered screenshot previews
-through the existing one-shot readiness marker. The installed Windows NSIS relaunch
-does not yet carry this session. This does not restore windows across a Tauri/native cutover or manual
+through the existing one-shot readiness marker. Windows NSIS now forwards the same
+session via `/ARGS` and waits for the application's matching readiness token before
+marking installation complete. Its pinned NSIS transport fixture exercises real
+argument parsing and asynchronous launch without modifying an installed app;
+physical elevated-upgrade acceptance remains open. This does not restore windows across a Tauri/native cutover or manual
 reinstall. See [release recovery](releases.md#native-preview-packaging-and-recovery).
 
 ## Progress dashboard
