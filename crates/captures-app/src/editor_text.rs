@@ -495,7 +495,7 @@ pub fn fit_auto_width(
 /// host draws the text it is typing, in unscaled document units. The frame is
 /// the painted plate or glyph box (`textLayoutBounds`, shadow excluded) and
 /// rotates about its centre, like the canvas paint. Hosts scale it by the
-/// display scale and keep shipping's 48 × 28 px minimum.
+/// display scale, sizing the composing frame to content plus padding.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct InlineEditorLayout {
     pub frame: Rect,
@@ -513,10 +513,6 @@ pub struct InlineEditorLayout {
     /// Auto-width labels grow instead of wrapping (`white-space: pre`).
     pub auto_width: bool,
 }
-
-/// Shipping inline editor minimum (`Math.max(48, …)`, `Math.max(28, …)`), in
-/// screen pixels after display scaling.
-pub const INLINE_EDITOR_MIN_SIZE: (f64, f64) = (48., 28.);
 
 /// Geometry for the host-drawn inline text editor. Uses the same estimated
 /// wrapping as shipping's layout box; hosts wrap glyphs with real metrics.

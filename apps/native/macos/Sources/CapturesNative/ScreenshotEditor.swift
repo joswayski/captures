@@ -5917,8 +5917,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         return elements.first { $0["id"] as? String == id && $0["kind"] as? String == "text" }
     }
 
-    /// Shipping inline editor geometry: the layer's plate or glyph box (at
-    /// least 48 × 28 pt) scaled to the canvas, its padding, face, colour,
+    /// Shipping inline editor geometry: the layer's plate or glyph box
+    /// scaled to the canvas, its padding, face, colour,
     /// outline and alignment, rotated about the frame centre. The published
     /// preview omits this layer while the input is active.
     private func updateInlineTextFrame() {
@@ -5961,8 +5961,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let contentWidth = layout.autoWidth ? ceil(bounds.width) + 2 : acceptedWidth
         let trailingLine: CGFloat = text.hasSuffix("\n") ? lineHeight : 0
         let contentHeight = max(lineHeight, ceil(bounds.height) + trailingLine)
-        let width = max(48, contentWidth + pad[1] + pad[3])
-        let height = max(28, contentHeight + pad[0] + pad[2])
+        let width = contentWidth + pad[1] + pad[3]
+        let height = contentHeight + pad[0] + pad[2]
         let acceptedLeft = image.minX + layout.frame.minX * scale
         let acceptedRight = acceptedLeft + layout.frame.width * scale
         let left: CGFloat

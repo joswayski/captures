@@ -346,7 +346,7 @@ fn inline_geometry(
     preview: egui::Rect,
     scale: f32,
 ) -> Option<InlineGeometry> {
-    use captures_app::editor_text::{INLINE_EDITOR_MIN_SIZE, inline_editor_layout};
+    use captures_app::editor_text::inline_editor_layout;
     let layout = inline_editor_layout(element).ok()?;
     let [top, right, bottom, left] = layout.padding.map(|value| value as f32 * scale);
     let alpha = (element.base.opacity / 100.).clamp(0., 1.) as f32;
@@ -394,8 +394,8 @@ fn inline_geometry(
     };
     let line_height = layout.line_height as f32 * scale;
     let content_height = (galley.rows.len().max(1) as f32 * line_height).max(line_height);
-    let width = (content_width + left + right).max(INLINE_EDITOR_MIN_SIZE.0 as f32);
-    let height = (content_height + top + bottom).max(INLINE_EDITOR_MIN_SIZE.1 as f32);
+    let width = content_width + left + right;
+    let height = content_height + top + bottom;
     let accepted_left = frame.x as f32 * scale;
     let accepted_screen_width = frame.width as f32 * scale;
     let x = if layout.auto_width {
@@ -1953,7 +1953,7 @@ mod tests {
     }
 
     #[test]
-    fn inline_geometry_follows_the_layer_style_anchor_rotation_and_minimum() {
+    fn inline_geometry_follows_the_layer_style_anchor_and_rotation() {
         let ctx = egui::Context::default();
         crate::ui_fonts::install(&ctx);
         ctx.begin_pass(Default::default());
@@ -2007,9 +2007,26 @@ mod tests {
         );
         assert_eq!(outlined.angle, geometry.angle);
         assert_eq!(outlined.format, geometry.format);
-        // Shipping's 48 × 28 minimum applies to a blank label.
+        // Blank labels retain a caret allowance, not a fixed screen minimum.
         let blank = inline_geometry(&ctx, &element, None, "", preview, 0.1).unwrap();
-        assert!(blank.frame.width() > 47.99 && blank.frame.height() > 27.99);
+        assert!(blank.content.width() >= 2.);
+        assert!(blank.frame.width() < 48. && blank.frame.height() < 28.);
+
+        // Content and existing plate padding scale together, including at 20%.
+        element.font_size = 55.;
+        for scale in [0.1, 0.2, 0.5, 1.] {
+            let single = inline_geometry(&ctx, &element, None, "i", preview, scale).unwrap();
+            let newline = inline_geometry(&ctx, &element, None, "i\n", preview, scale).unwrap();
+            let removed = inline_geometry(&ctx, &element, None, "i", preview, scale).unwrap();
+            assert!((single.frame.height() - 55. * (1.25 + 0.44) * scale).abs() < 1e-3);
+            assert!(
+                (newline.frame.height() - single.frame.height() - 55. * 1.25 * scale).abs() < 1e-3
+            );
+            assert_eq!(removed.frame, single.frame);
+            if scale <= 0.2 {
+                assert!(single.frame.width() < 48. && single.frame.height() < 28.);
+            }
+        }
         ctx.end_pass().textures_delta.clear();
     }
 

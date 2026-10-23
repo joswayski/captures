@@ -1279,10 +1279,20 @@ describe("ScreenshotEditor", () => {
     const initialHeight = Number.parseFloat(inlineFrame.style.height);
     const initialWidth = Number.parseFloat(inlineFrame.style.width);
     expect(initialWidth).toBeGreaterThan(300);
+    // Editing must scale with the label, not impose a screen-sized form field.
+    setCanvasZoomPercent(20);
+    expect(Number.parseFloat(inlineFrame.style.height)).toBeCloseTo(initialHeight * 0.2);
     fireEvent.change(inlineEditor, {
       target: { value: "Hi" },
     });
-    expect(Number.parseFloat(inlineFrame.style.width)).toBeLessThan(initialWidth);
+    expect(Number.parseFloat(inlineFrame.style.width)).toBeLessThan(48);
+    expect(Number.parseFloat(inlineFrame.style.height)).toBeCloseTo(initialHeight * 0.2);
+    const singleLineHeight = Number.parseFloat(inlineFrame.style.height);
+    const screenFontSize = Number.parseFloat(inlineEditor.style.fontSize);
+    fireEvent.change(inlineEditor, { target: { value: "Hi\nSecond line" } });
+    expect(Number.parseFloat(inlineFrame.style.height)).toBeCloseTo(
+      singleLineHeight + screenFontSize * 1.25,
+    );
     fireEvent.change(inlineEditor, {
       target: { value: "Hello from the screenshot editor" },
     });
@@ -1290,8 +1300,8 @@ describe("ScreenshotEditor", () => {
     expect(screen.getByRole("textbox", { name: "Text" })).toHaveValue(
       "Hello from the screenshot editor",
     );
-    expect(Number.parseFloat(inlineFrame.style.width)).toBeGreaterThan(initialWidth);
-    expect(Number.parseFloat(inlineFrame.style.height)).toBe(initialHeight);
+    expect(Number.parseFloat(inlineFrame.style.width)).toBeGreaterThan(initialWidth * 0.2);
+    expect(Number.parseFloat(inlineFrame.style.height)).toBe(singleLineHeight);
     expect(inlineEditor).toHaveClass("is-auto-width");
     expect(inlineEditor).toHaveAttribute("wrap", "off");
     expect(screen.getByRole("button", { name: "Bold" })).toBeInTheDocument();
@@ -1302,6 +1312,8 @@ describe("ScreenshotEditor", () => {
       ),
     ).toBeInTheDocument();
 
+    setCanvasZoomPercent(100);
+    expect(Number.parseFloat(inlineFrame.style.height)).toBe(initialHeight);
     fireEvent.blur(inlineEditor);
     expect(screen.queryByRole("textbox", { name: "Edit text on canvas" })).not.toBeInTheDocument();
     fireEvent.pointerDown(canvas, {

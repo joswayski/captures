@@ -2632,8 +2632,8 @@ export function ScreenshotEditor() {
       frame: {
         left: localBounds.x * displayScale,
         top: localBounds.y * displayScale,
-        width: Math.max(48, localBounds.width * displayScale),
-        height: Math.max(28, localBounds.height * displayScale),
+        width: localBounds.width * displayScale,
+        height: localBounds.height * displayScale,
       },
       radius:
         textBackgroundRadius(editingText, localBounds.width, localBounds.height) * displayScale,
