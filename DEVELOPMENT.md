@@ -265,6 +265,14 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
+On Windows, `pwsh -File scripts/test-windows-update-session.ps1` also runs the
+native updater's NSIS transport regression. It downloads and verifies the release
+bundler's pinned compiler/plugin, then launches a disposable probe through the
+real `/ARGS` parser. It checks Unicode/quoted paths, restored session contents and
+startup acknowledgement before payload cleanup. It never installs Captures or
+modifies an existing profile; elevated installed-upgrade acceptance is separate.
+The Windows CI Rust job runs this check automatically.
+
 ## Native frontend migration
 
 The browser-free macOS workbench is separate from the shipping Tauri app. On a
