@@ -3411,7 +3411,7 @@ def main():
             shot(editor, "text-input-typing")
             # The session preview omits the typed layer; the inline editor
             # paints its Rounded Box plate at the layer's own position.
-            settled_document_pixel("text-input-typing", 80, 57, (17, 19, 24), 2)
+            settled_document_pixel("text-input-typing", 80, 57, (255, 59, 92), 2)
             assert draft_bytes() == before, "typing previews must not persist a draft"
             run("xdotool", "key", "Escape", "sleep", ".3")
             created = save_layers(lambda values: len(values) == 2, "multiline input finished")[-1]
@@ -3623,15 +3623,15 @@ def main():
             type_text("Rounded")
             run("xdotool", "key", "Escape", "sleep", ".3")
             rounded = save_layers(lambda values: len(values) == 2, "default rounded Text placed")[-1]
-            assert (rounded["fontFamily"], rounded["fontSize"], rounded["color"]) == ("rounded", 24, "#ff3b5c")
-            assert rounded["background"] == "#111318" and rounded["roundedBackground"]
+            assert (rounded["fontFamily"], rounded["fontSize"], rounded["color"]) == ("rounded", 24, "#ffffff")
+            assert rounded["background"] == "#ff3b5c" and rounded["roundedBackground"]
             assert rounded["align"] == "center" and rounded["y"] == 200
             assert math.isclose(rounded["x"] + rounded["width"] / 2, 480, abs_tol=1e-6)
             assert json.loads(draft.read_text())["fonts"]["families"]["rounded"] == "Nunito"
             toolbar_click("layers")  # Deselect with Select; Text stays active after Finish.
             fixture_click((28, 109))
             shot(editor, "text-defaults-rounded")
-            document_pixel("text-defaults-rounded", 480, 196, (17, 19, 24))
+            document_pixel("text-defaults-rounded", 480, 196, (255, 59, 92))
             toolbar_click("draw")
             resize_editor(760, 540)
             shot(editor, "text-defaults-rounded-minimum")
@@ -3660,18 +3660,18 @@ def main():
             type_text("Native")
             shot(editor, "text-defaults-composing")
             # The inline editor draws the Mono Box plate where the label lands.
-            settled_document_pixel("text-defaults-composing", 200, 76, (17, 19, 24), 2)
+            settled_document_pixel("text-defaults-composing", 200, 76, (45, 156, 255), 2)
             run("xdotool", "key", "Escape", "sleep", ".3")
             text = save_layers(lambda values: len(values) == 2, "styled Text placed")[-1]
             assert text["kind"] == "text" and text["fontFamily"] == "mono"
-            assert text["fontSize"] == 37.5 and text["color"] == "#2d9cff", text
+            assert text["fontSize"] == 37.5 and text["color"] == "#ffffff", text
             assert text["text"] == "Native" and text["align"] == "center" and text["y"] == 80
             assert math.isclose(text["x"] + text["width"] / 2, 200, abs_tol=1e-6)
-            assert text["background"] == "#111318" and text["autoWidth"]
+            assert text["background"] == "#2d9cff" and text["autoWidth"]
             toolbar_click("layers")
             fixture_click((28, 109))  # Deselect: the rotation stem crosses the plate sample.
             shot(editor, "text-defaults-created")
-            document_pixel("text-defaults-created", 200, 76, (17, 19, 24))
+            document_pixel("text-defaults-created", 200, 76, (45, 156, 255))
             toolbar_click("undo")
             save_layers(lambda values: len(values) == 1, "styled creation single undo")
             toolbar_click("redo")
@@ -3692,8 +3692,8 @@ def main():
             type_text("Fresh")
             run("xdotool", "key", "Escape", "sleep", ".3")
             reset = save_layers(lambda values: len(values) == 3, "fresh editor Text defaults")[-1]
-            assert (reset["fontFamily"], reset["fontSize"], reset["color"]) == ("rounded", 24, "#ff3b5c")
-            assert reset["align"] == "center" and reset["background"] == "#111318"
+            assert (reset["fontFamily"], reset["fontSize"], reset["color"]) == ("rounded", 24, "#ffffff")
+            assert reset["align"] == "center" and reset["background"] == "#ff3b5c"
             assert reset["roundedBackground"]
             assert reset["id"] != text["id"]
             assert (artifact / "capture.png").read_bytes() == original
@@ -3884,8 +3884,8 @@ def main():
             type_text("Later")
             run("xdotool", "key", "Escape", "sleep", ".3")
             future = save_layers(lambda values: len(values) == 3, "carried preset creates later label")[-1]
-            assert future["fontFamily"] == "mono" and future["background"] == "#111318"
-            assert future["fontSize"] == 24 and future["color"] == "#ff3b5c"
+            assert future["fontFamily"] == "mono" and future["background"] == "#ff3b5c"
+            assert future["fontSize"] == 24 and future["color"] == "#ffffff"
             assert not future["bold"] and not future["italic"] and not future["outlined"]
             assert future["align"] == "center" and not future["roundedBackground"]
             assert future["id"] != created["id"]

@@ -82,6 +82,8 @@ On macOS, update and launch notices follow the menu-bar icon as it moves. If the
 - On macOS and Windows, recording controls stay out of screenshots and recordings by default (Preferences). On Linux, use Hide controls during a recording to keep the bar off-screen
 - Cursor and click highlights in recordings (where supported)
 - Built-in screenshot editor — closed shapes start filled, with an optional stroke; text, shapes, images, and drawings can rotate from a shared handle (hold Shift to use a configurable snap increment); text and drawings with optional drop shadows (color, opacity, blur, and offset; the whole label, including a background plate), crop (drag from outside the canvas to reach an edge; hold Shift to lock aspect), layers that hang off the canvas stay clipped until you expand, erase to transparent; unsaved edits restore when you reopen
+- Text labels start white on a pink rounded background. New labels grow as you type without adding blank lines; Enter adds a line. After finishing text entry, drag a side handle to set the wrapping width without changing type size, a top/bottom handle to change type size without forcing the width, or a corner to change both. Hold Shift on a corner for proportional resizing. These source changes also apply to the opt-in native editors; existing label colors stay unchanged.
+  Fixed-width selection geometry still estimates wrapping, so its outline and rotation center can differ from the measured painted text. This remains editor parity work.
 - Current Tauri source also accepts image pixels or image files from the clipboard with `Cmd`/`Ctrl`+`V` in the screenshot editor, alongside Add images and file drops. Pasted images become editable layers below the selected image (or canvas), with one Undo per paste. Text fields keep normal paste. Layer copy/paste keeps an editable snapshot within that editor and claims the clipboard, so copying an image elsewhere takes precedence on the next paste; **Copy image** still copies the full canvas for other apps. This requires a Preview newer than 2026.10.1104. Image overlays in the video/GIF editor are not supported
 - Open PNG, JPEG, WebP, GIF, MP4, and WebM files with Captures from Finder, File Explorer, or your file manager. Captures appears in Open With and does not become the default app for those types. Installed macOS, Windows, and Debian packages register this; an AppImage needs a desktop entry with `%U`. Save can overwrite the file you opened
 - Trim, crop, resize, and adjust audio in recordings, with an estimated saved size and an in-editor before/after compression comparison (Hide on the overlay, or switch back to Preserve quality)
@@ -665,7 +667,8 @@ connect a basic **Text** tool. Selected text's properties, including its style a
 shadow color, opacity, blur and offsets, apply as you edit, as in the shipping
 editor; typing in one field is one undo step. Before placement, choose a
 named style and size; boxed styles center on the click. As in the shipping editor,
-new text takes the drawing Color (annotation red until you change it). These
+new boxed text uses white letters and the drawing Color for its background
+(pink until you change it); unboxed text uses that Color for its letters. These
 defaults last only for that editor. Both hosts start at Rounded Box when its
 font is offered, otherwise Standard, then Plain, with an initial size scaled to the
 original capture (24–72). The bundle includes
@@ -849,7 +852,7 @@ Drag it to rotate; hold Shift for stops configured under **Properties → Shift 
 or saved preference. Rotation uses the same live-pixel
 preview, cancellation, undo and draft behavior. Hidden or locked layers have no
 grip.
-Eight border grips resize images, shapes and drawings. Shift keeps corner drags
+Eight border grips resize images, text, shapes and drawings. Shift keeps corner drags
 proportional; edge grips remain single-axis. Unrotated resizes snap to canvas and
 visible-layer edges with guide lines; rotated resizes retain the opposite anchor.
 Resizing previews pixels without growing the canvas; fully outside content can

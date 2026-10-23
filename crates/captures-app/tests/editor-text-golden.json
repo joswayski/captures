@@ -201,7 +201,7 @@
           "blendMode": "multiply",
           "text": "  A  B  \n\nC\n",
           "fontSize": 16,
-          "width": 21,
+          "width": 35.400000000000006,
           "fontFamily": "explicit-test-face",
           "bold": true,
           "italic": true,
@@ -230,16 +230,16 @@
         "expected": {
           "id": "text-0",
           "kind": "text",
-          "x": -6.34,
-          "y": 48.07,
+          "x": 0.17999999999999972,
+          "y": 53.61,
           "rotation": 0.3,
           "visible": true,
           "locked": true,
           "opacity": 61,
           "blendMode": "multiply",
           "text": "  A  B  \n\nC\n",
-          "fontSize": 31,
-          "width": 39,
+          "fontSize": 38,
+          "width": 34.036,
           "fontFamily": "explicit-test-face",
           "bold": true,
           "italic": true,
@@ -315,7 +315,7 @@
           "blendMode": "multiply",
           "text": "  A  B  \n\nC\n",
           "fontSize": 512,
-          "width": 900,
+          "width": 2172.1600000000003,
           "fontFamily": "explicit-test-face",
           "bold": true,
           "italic": true,
@@ -353,7 +353,7 @@
           "blendMode": "multiply",
           "text": "  A  B  \n\nC\n",
           "fontSize": 42,
-          "width": 54,
+          "width": 21,
           "fontFamily": "explicit-test-face",
           "bold": true,
           "italic": true,
@@ -382,16 +382,16 @@
         "expected": {
           "id": "text-0",
           "kind": "text",
-          "x": -8.86,
-          "y": 46.53,
+          "x": 2.6199999999999974,
+          "y": 55.49,
           "rotation": 0.3,
           "visible": true,
           "locked": true,
           "opacity": 61,
           "blendMode": "multiply",
           "text": "  A  B  \n\nC\n",
-          "fontSize": 24,
-          "width": 30.033,
+          "fontSize": 42,
+          "width": 21,
           "fontFamily": "explicit-test-face",
           "bold": true,
           "italic": true,
@@ -1829,16 +1829,16 @@
         "expected": {
           "id": "text-11",
           "kind": "text",
-          "x": 0.17999999999999972,
-          "y": 53.61,
+          "x": -9.04,
+          "y": 46.42,
           "rotation": 0.3,
           "visible": true,
           "locked": true,
           "opacity": 61,
           "blendMode": "multiply",
           "text": "fi\nAB",
-          "fontSize": 38,
-          "width": 56,
+          "fontSize": 23.5,
+          "width": 156.55200000000002,
           "fontFamily": "explicit-test-face",
           "bold": true,
           "italic": true,
@@ -1854,7 +1854,7 @@
               "two"
             ]
           },
-          "autoWidth": true
+          "autoWidth": false
         }
       },
       {
@@ -1876,7 +1876,7 @@
           "blendMode": "multiply",
           "text": "fi\nAB",
           "fontSize": 16,
-          "width": 24,
+          "width": 86.4,
           "fontFamily": "explicit-test-face",
           "bold": true,
           "italic": true,
@@ -1892,7 +1892,7 @@
               "two"
             ]
           },
-          "autoWidth": true
+          "autoWidth": false
         }
       },
       {
@@ -1905,16 +1905,16 @@
         "expected": {
           "id": "text-11",
           "kind": "text",
-          "x": -6.34,
-          "y": 48.07,
+          "x": 0.17999999999999972,
+          "y": 53.61,
           "rotation": 0.3,
           "visible": true,
           "locked": true,
           "opacity": 61,
           "blendMode": "multiply",
           "text": "fi\nAB",
-          "fontSize": 31,
-          "width": 46,
+          "fontSize": 38,
+          "width": 100.336,
           "fontFamily": "explicit-test-face",
           "bold": true,
           "italic": true,
@@ -1930,7 +1930,7 @@
               "two"
             ]
           },
-          "autoWidth": true
+          "autoWidth": false
         }
       },
       {
@@ -1952,7 +1952,7 @@
           "blendMode": "multiply",
           "text": "fi\nAB",
           "fontSize": 8,
-          "width": 12,
+          "width": 8,
           "fontFamily": "explicit-test-face",
           "bold": true,
           "italic": true,
@@ -1968,7 +1968,7 @@
               "two"
             ]
           },
-          "autoWidth": true
+          "autoWidth": false
         }
       },
       {
@@ -1990,7 +1990,7 @@
           "blendMode": "multiply",
           "text": "fi\nAB",
           "fontSize": 512,
-          "width": 753,
+          "width": 4212.16,
           "fontFamily": "explicit-test-face",
           "bold": true,
           "italic": true,
@@ -2006,7 +2006,7 @@
               "two"
             ]
           },
-          "autoWidth": true
+          "autoWidth": false
         }
       },
       {
@@ -2028,7 +2028,7 @@
           "blendMode": "multiply",
           "text": "fi\nAB",
           "fontSize": 42,
-          "width": 62,
+          "width": 57.74296,
           "fontFamily": "explicit-test-face",
           "bold": true,
           "italic": true,
@@ -2044,7 +2044,7 @@
               "two"
             ]
           },
-          "autoWidth": true
+          "autoWidth": false
         }
       },
       {
@@ -2057,16 +2057,16 @@
         "expected": {
           "id": "text-11",
           "kind": "text",
-          "x": -8.86,
-          "y": 46.53,
+          "x": 2.6199999999999974,
+          "y": 55.49,
           "rotation": 0.3,
           "visible": true,
           "locked": true,
           "opacity": 61,
           "blendMode": "multiply",
           "text": "fi\nAB",
-          "fontSize": 24,
-          "width": 36,
+          "fontSize": 42,
+          "width": 57.81851200000001,
           "fontFamily": "explicit-test-face",
           "bold": true,
           "italic": true,
@@ -2082,7 +2082,7 @@
               "two"
             ]
           },
-          "autoWidth": true
+          "autoWidth": false
         }
       }
     ]
@@ -2641,15 +2641,15 @@
       "autoWidth": true
     },
     "measurements": {
-      " ": 3,
-      "﻿ ": 12
+      "﻿ ": 12,
+      " ": 3
     },
     "expected": {
       "rows": [
         {
-          "text": "",
-          "advance": 3,
-          "x": 5.25,
+          "text": "﻿ ",
+          "advance": 12,
+          "x": 0.75,
           "y": 17.75
         },
         {
@@ -3266,16 +3266,16 @@
         "expected": {
           "id": "text-20",
           "kind": "text",
-          "x": 45.18000000000001,
-          "y": 98.61,
+          "x": 39.959999999999994,
+          "y": 95.42,
           "rotation": 0.3,
           "visible": true,
           "locked": true,
           "opacity": 61,
           "blendMode": "multiply",
           "text": "AB\nC",
-          "fontSize": 38,
-          "width": 56,
+          "fontSize": 23.5,
+          "width": 165.75200000000004,
           "fontFamily": "explicit-test-face",
           "bold": true,
           "italic": true,
@@ -3291,7 +3291,7 @@
               "two"
             ]
           },
-          "autoWidth": true,
+          "autoWidth": false,
           "dropShadowStyle": {
             "color": "#123456",
             "opacity": 38,
@@ -3320,7 +3320,7 @@
           "blendMode": "multiply",
           "text": "AB\nC",
           "fontSize": 16,
-          "width": 24,
+          "width": 55.400000000000006,
           "fontFamily": "explicit-test-face",
           "bold": true,
           "italic": true,
@@ -3336,7 +3336,7 @@
               "two"
             ]
           },
-          "autoWidth": true,
+          "autoWidth": false,
           "dropShadowStyle": {
             "color": "#123456",
             "opacity": 38,
@@ -3356,16 +3356,16 @@
         "expected": {
           "id": "text-20",
           "kind": "text",
-          "x": 42.66,
-          "y": 97.07,
+          "x": 45.18000000000001,
+          "y": 98.61,
           "rotation": 0.3,
           "visible": true,
           "locked": true,
           "opacity": 61,
           "blendMode": "multiply",
           "text": "AB\nC",
-          "fontSize": 31,
-          "width": 46,
+          "fontSize": 38,
+          "width": 97.436,
           "fontFamily": "explicit-test-face",
           "bold": true,
           "italic": true,
@@ -3381,7 +3381,7 @@
               "two"
             ]
           },
-          "autoWidth": true,
+          "autoWidth": false,
           "dropShadowStyle": {
             "color": "#123456",
             "opacity": 38,
@@ -3410,7 +3410,7 @@
           "blendMode": "multiply",
           "text": "AB\nC",
           "fontSize": 8,
-          "width": 12,
+          "width": 8,
           "fontFamily": "explicit-test-face",
           "bold": true,
           "italic": true,
@@ -3426,7 +3426,7 @@
               "two"
             ]
           },
-          "autoWidth": true,
+          "autoWidth": false,
           "dropShadowStyle": {
             "color": "#123456",
             "opacity": 38,
@@ -3455,7 +3455,7 @@
           "blendMode": "multiply",
           "text": "AB\nC",
           "fontSize": 512,
-          "width": 753,
+          "width": 7222.160000000001,
           "fontFamily": "explicit-test-face",
           "bold": true,
           "italic": true,
@@ -3471,7 +3471,7 @@
               "two"
             ]
           },
-          "autoWidth": true,
+          "autoWidth": false,
           "dropShadowStyle": {
             "color": "#123456",
             "opacity": 38,
@@ -3500,7 +3500,7 @@
           "blendMode": "multiply",
           "text": "AB\nC",
           "fontSize": 42,
-          "width": 62,
+          "width": 36.776459999999986,
           "fontFamily": "explicit-test-face",
           "bold": true,
           "italic": true,
@@ -3516,7 +3516,7 @@
               "two"
             ]
           },
-          "autoWidth": true,
+          "autoWidth": false,
           "dropShadowStyle": {
             "color": "#123456",
             "opacity": 38,
@@ -3536,16 +3536,16 @@
         "expected": {
           "id": "text-20",
           "kind": "text",
-          "x": 40.14,
-          "y": 95.53,
+          "x": 46.620000000000005,
+          "y": 99.49,
           "rotation": 0.3,
           "visible": true,
           "locked": true,
           "opacity": 61,
           "blendMode": "multiply",
           "text": "AB\nC",
-          "fontSize": 24,
-          "width": 36,
+          "fontSize": 42,
+          "width": 36.89221200000003,
           "fontFamily": "explicit-test-face",
           "bold": true,
           "italic": true,
@@ -3561,7 +3561,7 @@
               "two"
             ]
           },
-          "autoWidth": true,
+          "autoWidth": false,
           "dropShadowStyle": {
             "color": "#123456",
             "opacity": 38,

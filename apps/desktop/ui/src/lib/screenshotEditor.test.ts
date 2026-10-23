@@ -1997,7 +1997,7 @@ describe("screenshot editor geometry", () => {
     expect(resizedTaller).toMatchObject({
       kind: "text",
       fontSize: 80,
-      width: 240,
+      width: 120,
       x: textBounds.x,
       y: textBounds.y,
     });
@@ -2028,19 +2028,25 @@ describe("screenshot editor geometry", () => {
       ...elementBounds(autoWidth),
       height: elementBounds(autoWidth).height * 2,
     });
-    expect(autoTaller).toMatchObject({ kind: "text", autoWidth: true, fontSize: 80 });
+    expect(autoTaller).toMatchObject({ kind: "text", autoWidth: false, fontSize: 80 });
     if (autoTaller.kind !== "text") throw new Error("expected text");
-    expect(autoTaller.width).toBe(fittedAutoWidthTextBox("Hi", 80));
+    expect(autoTaller.width).toBe(autoWidth.width);
 
     const autoWider = resizeElement(autoWidth, elementBounds(autoWidth), {
       ...elementBounds(autoWidth),
       width: elementBounds(autoWidth).width * 2,
     });
-    expect(autoWider).toMatchObject({ kind: "text", autoWidth: true, fontSize: 80 });
+    expect(autoWider).toMatchObject({ kind: "text", autoWidth: false, fontSize: 40 });
     if (autoWider.kind !== "text") throw new Error("expected text");
-    expect(autoWider.width).toBe(fittedAutoWidthTextBox("Hi", 80));
+    expect(autoWider.width).toBe(autoWidth.width * 2);
+    expect(fitEditingAutoWidthTextElement({ ...autoWider, text: "A longer label" }).width).toBe(
+      autoWider.width,
+    );
+    expect(resizeElement(autoWidth, elementBounds(autoWidth), elementBounds(autoWidth))).toBe(
+      autoWidth,
+    );
 
-    // Non-uniform corner drag must not stretch the plate independently of type.
+    // A free corner drag controls width independently of type size.
     const bubbleLabel: EditorTextElement = {
       ...autoWidth,
       id: "bubble-label",
@@ -2055,16 +2061,11 @@ describe("screenshot editor geometry", () => {
       width: bubbleStart.width * 2,
       height: bubbleStart.height * 1.1,
     });
-    expect(stretched).toMatchObject({ kind: "text", autoWidth: true, fontSize: 44 });
+    expect(stretched).toMatchObject({ kind: "text", autoWidth: false, fontSize: 44 });
     if (stretched.kind !== "text") throw new Error("expected text");
     const bubbleEnd = elementBounds(stretched);
-    expect(bubbleEnd.width / bubbleEnd.height).toBeCloseTo(
-      bubbleStart.width / bubbleStart.height,
-      2,
-    );
-    expect(bubbleEnd.width / bubbleEnd.height).toBeLessThan(
-      ((bubbleStart.width * 2) / (bubbleStart.height * 1.1)) * 0.7,
-    );
+    expect(bubbleEnd.width).toBeCloseTo(bubbleStart.width * 2);
+    expect(bubbleEnd.height).toBeCloseTo(bubbleStart.height * 1.1);
 
     // Background plates expand paint/selection bounds beyond the layout box.
     const bubble: EditorTextElement = {
@@ -2146,6 +2147,24 @@ describe("screenshot editor geometry", () => {
     });
     expect(wrapped.width).toBe(80);
     expect(wrapTextLines(wrapped.text, wrapped.width, wrapped.fontSize).length).toBeGreaterThan(1);
+  });
+
+  it("keeps measured auto-width labels one line high until an explicit newline", () => {
+    const placed = createPlacedTextElement({
+      id: "narrow-glyphs",
+      point: { x: 400, y: 120 },
+      fontSize: 40,
+      color: "#ff3b5c",
+      preset: "rounded-box",
+    });
+    // Real narrow glyphs fit much more tightly than the fallback 0.56-em estimate.
+    const typed = fitEditingAutoWidthTextElement(
+      { ...placed, text: "iiiiiiiiiiii" },
+      (line) => line.length * 8,
+    );
+    expect(textLayoutBounds(typed).height).toBeCloseTo(67.6);
+    expect(textLayoutBounds({ ...typed, text: `${typed.text}\n` }).height).toBeCloseTo(117.6);
+    expect(textLayoutBounds({ ...typed, autoWidth: false }).height).toBeGreaterThan(67.6);
   });
 
   it("opens a wide empty text field, then hugs glyphs, with a rounded rect not a capsule", () => {

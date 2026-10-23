@@ -4618,7 +4618,7 @@ fn styled_text_creation_matches_shipping_treatments_and_fractional_placement() {
         };
         assert_eq!(text.align, "center");
         assert_eq!(text.base.x + text.width / 2., point.x);
-        assert_eq!(text.background.as_deref(), Some("#111318"));
+        assert_eq!(text.background.as_deref(), Some("#2174c5"));
         assert_eq!(text.rounded_background, preset == "rounded-box");
         assert_eq!(
             text.font_family,
@@ -4630,7 +4630,7 @@ fn styled_text_creation_matches_shipping_treatments_and_fractional_placement() {
                 "sans"
             }
         );
-        assert_eq!(text.color, "#2174c5");
+        assert_eq!(text.color, "#ffffff");
     }
 
     let accepted = editor.snapshot().document.clone();

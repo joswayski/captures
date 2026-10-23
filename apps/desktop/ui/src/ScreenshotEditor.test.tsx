@@ -1193,7 +1193,9 @@ describe("ScreenshotEditor", () => {
     expect(inlineEditor).toHaveFocus();
     expect(inlineEditor).not.toHaveClass("is-placeholder-selected");
     expect(inlineFrame).toBeInTheDocument();
-    expect(inlineEditor.style.getPropertyValue("--inline-text-selection-color")).toBe("#ff3b5c");
+    expect(inlineEditor.style.getPropertyValue("--inline-text-selection-color")).toBe("#ffffff");
+    expect(inlineEditor).toHaveStyle({ color: "#ffffff", backgroundColor: "#ff3b5c" });
+    const initialHeight = Number.parseFloat(inlineFrame.style.height);
     const initialWidth = Number.parseFloat(inlineFrame.style.width);
     expect(initialWidth).toBeGreaterThan(300);
     fireEvent.change(inlineEditor, {
@@ -1208,6 +1210,7 @@ describe("ScreenshotEditor", () => {
       "Hello from the screenshot editor",
     );
     expect(Number.parseFloat(inlineFrame.style.width)).toBeGreaterThan(initialWidth);
+    expect(Number.parseFloat(inlineFrame.style.height)).toBe(initialHeight);
     expect(inlineEditor).toHaveClass("is-auto-width");
     expect(inlineEditor).toHaveAttribute("wrap", "off");
     expect(screen.getByRole("button", { name: "Bold" })).toBeInTheDocument();
@@ -1235,6 +1238,60 @@ describe("ScreenshotEditor", () => {
     expect(await screen.findByRole("textbox", { name: "Edit text on canvas" })).toHaveValue(
       "Hello from the screenshot editor",
     );
+  });
+
+  it("resizes text horizontally without scaling it and keeps the chosen width when typing", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Canvas width");
+    setCanvasZoomPercent(100);
+    fireEvent.click(screen.getByRole("button", { name: "Text (T)" }));
+    const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
+    canvas.setPointerCapture = vi.fn();
+    canvas.hasPointerCapture = vi.fn(() => true);
+    canvas.releasePointerCapture = vi.fn();
+    setCanvasBounds(canvas);
+    fireEvent.pointerDown(canvas, { button: 0, pointerId: 1, clientX: 500, clientY: 250 });
+    fireEvent.pointerUp(canvas, { button: 0, pointerId: 1, clientX: 500, clientY: 250 });
+    const input = await screen.findByRole("textbox", { name: "Edit text on canvas" });
+    fireEvent.change(input, { target: { value: "A wide text label" } });
+    const frame = input.parentElement!;
+    const left = Number.parseFloat(frame.style.left);
+    const top = Number.parseFloat(frame.style.top);
+    const width = Number.parseFloat(frame.style.width);
+    const height = Number.parseFloat(frame.style.height);
+    const size = (screen.getByLabelText("Size") as HTMLInputElement).value;
+    fireEvent.blur(input);
+
+    // The mid-right grip must be an edge resize, not a mapped corner.
+    fireEvent.pointerDown(canvas, {
+      button: 0,
+      pointerId: 2,
+      clientX: left + width,
+      clientY: top + height / 2,
+    });
+    fireEvent.pointerMove(canvas, {
+      buttons: 1,
+      pointerId: 2,
+      clientX: left + width + 100,
+      clientY: top + height / 2,
+    });
+    fireEvent.pointerUp(canvas, {
+      button: 0,
+      pointerId: 2,
+      clientX: left + width + 100,
+      clientY: top + height / 2,
+    });
+    expect(screen.getByLabelText("Size")).toHaveValue(Number(size));
+    fireEvent.doubleClick(canvas, {
+      button: 0,
+      clientX: left + (width + 100) / 2,
+      clientY: top + height / 2,
+    });
+    const resized = await screen.findByRole("textbox", { name: "Edit text on canvas" });
+    expect(resized).toHaveAttribute("wrap", "soft");
+    expect(Number.parseFloat(resized.parentElement!.style.width)).toBeCloseTo(width + 100);
+    fireEvent.change(resized, { target: { value: "More text stays in the resized column" } });
+    expect(Number.parseFloat(resized.parentElement!.style.width)).toBeCloseTo(width + 100);
   });
 
   it("discards a new text layer if you click away without typing", async () => {
@@ -1332,7 +1389,7 @@ describe("ScreenshotEditor", () => {
     const inlineFrame = inlineEditor.closest(".screenshot-inline-text-frame") as HTMLElement;
     expect(Number.parseFloat(inlineFrame.style.left)).toBeCloseTo(120, 5);
     expect(Number.parseFloat(inlineFrame.style.top)).toBeCloseTo(100, 5);
-    expect(Number.parseFloat(inlineFrame.style.width)).toBeCloseTo(202, 5);
+    expect(Number.parseFloat(inlineFrame.style.width)).toBeCloseTo(200, 5);
     expect(Number.parseFloat(inlineFrame.style.height)).toBeLessThan(60);
     expect(inlineFrame.style.transform).toContain("rotate(1.570796");
   });
@@ -1378,7 +1435,7 @@ describe("ScreenshotEditor", () => {
       name: "Edit text on canvas",
     });
     expect(inlineEditor.style.fontFamily).toContain("ui-rounded");
-    expect(inlineEditor).toHaveStyle({ backgroundColor: "#111318" });
+    expect(inlineEditor).toHaveStyle({ backgroundColor: "#ff3b5c", color: "#ffffff" });
     const radius = Number.parseFloat(inlineEditor.style.borderRadius);
     const frameHeight = Number.parseFloat(
       (inlineEditor.closest(".screenshot-inline-text-frame") as HTMLElement).style.height,
@@ -1404,7 +1461,7 @@ describe("ScreenshotEditor", () => {
     );
     expect(inlineEditor.style.color).toBe("transparent");
     expect(inlineEditor.style.backgroundColor).toBe("transparent");
-    expect(inlineEditor.style.webkitTextStroke).toContain("#ff3b5c");
+    expect(inlineEditor.style.webkitTextStroke).toContain("#ffffff");
     expect(inlineEditor.style.getPropertyValue("--inline-text-selection-color")).toBe(
       "transparent",
     );

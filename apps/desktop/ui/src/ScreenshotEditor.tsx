@@ -155,8 +155,8 @@ import {
   textGlyphDrawY,
   textHasBackgroundPlate,
   textLayoutBounds,
+  textLines,
   textStylePreset,
-  wrapTextLines,
   translateElement,
   canvasTrimMarginPreview,
   trimDocumentToContent,
@@ -457,12 +457,7 @@ function hitTestSelectedAnnotation(
   }
   const localPoint = elementLocalPoint(selected, point);
   const bounds = elementLocalBounds(selected);
-  const handle = hitTestResizeHandle(
-    bounds,
-    localPoint,
-    interactionRadius,
-    selected.kind === "text" ? "corners" : "all",
-  );
+  const handle = hitTestResizeHandle(bounds, localPoint, interactionRadius);
   // Arrow endpoints sit near the dashed-box corners. Prefer those corners so
   // shrinking the box scales the whole arrow (shaft + head), not just the tip.
   if (handle && isResizeCornerHandle(handle)) {
@@ -983,12 +978,7 @@ function drawText(
   context.save();
   context.font = editorTextCanvasFont(element);
   context.textAlign = element.align;
-  const lines = wrapTextLines(
-    element.text,
-    boxWidth,
-    element.fontSize,
-    (line) => context.measureText(line || " ").width,
-  );
+  const lines = textLines(element, (line) => context.measureText(line || " ").width);
   const contentHeight = Math.max(1, lines.length) * lineHeight;
   const anchorX =
     element.align === "center"
@@ -1387,8 +1377,7 @@ function drawEditorOverlays(
     const bounds = selectionBoundsOverride ?? (selected ? elementLocalBounds(selected) : null);
     if (bounds) {
       const curveable = Boolean(shape && isCurveableStrokeShape(shape));
-      // Text labels scale as a sticker: corner grips only, no independent stretch.
-      const cornerGripsOnly = curveable || selected?.kind === "text";
+      const cornerGripsOnly = curveable;
       context.save();
       const rotation = selected ? elementRotation(selected) : 0;
       if (rotation !== 0) {
@@ -1406,8 +1395,7 @@ function drawEditorOverlays(
       context.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
       context.setLineDash([]);
       // Corner grips scale the whole annotation (including arrow heads).
-      // Mid-edge grips stay off lines/arrows so curve dots remain easy to grab,
-      // and off text so the plate cannot stretch independently of the type.
+      // Mid-edge grips stay off lines/arrows so curve dots remain easy to grab.
       context.globalAlpha = 0.88;
       context.fillStyle = accentColor;
       context.strokeStyle = "rgba(255, 255, 255, 0.9)";
@@ -2596,22 +2584,25 @@ export function ScreenshotEditor() {
 
   const inlineTextLayout = useMemo(() => {
     if (!editingText) return null;
-    const localBounds = textLayoutBounds(editingText);
+    const localBounds = textLayoutBounds(editingText, (line) =>
+      measureTextElementLine(editingText, line),
+    );
     const pad = textHasBackgroundPlate(editingText)
       ? textBackgroundPad(editingText.fontSize)
       : { x: 0, y: 0 };
-    // Match the painted bubble (padding + layout box) so wrapping tracks canvas width.
-    // Border is extra under border-box; include it so the content box matches `width`.
-    const border = 2;
+    // The focus outline is outside the borderless textarea. Match the painted
+    // plate exactly so opening the editor does not change wrapping or rotation.
     const optical = editingText.fontSize * TEXT_OPTICAL_CENTER_NUDGE_RATIO * displayScale;
     const padY = pad.y * displayScale;
     return {
       frame: {
         left: localBounds.x * displayScale,
         top: localBounds.y * displayScale,
-        width: Math.max(48, localBounds.width * displayScale + border),
-        height: Math.max(28, localBounds.height * displayScale + border),
+        width: Math.max(48, localBounds.width * displayScale),
+        height: Math.max(28, localBounds.height * displayScale),
       },
+      radius:
+        textBackgroundRadius(editingText, localBounds.width, localBounds.height) * displayScale,
       padding: `${padY + optical}px ${pad.x * displayScale}px ${Math.max(0, padY - optical)}px`,
     };
   }, [displayScale, editingText]);
@@ -4103,9 +4094,7 @@ export function ScreenshotEditor() {
       const minSize = 8 / Math.max(0.01, displayScale);
       const snapThreshold = ALIGNMENT_SNAP_SCREEN_PX / Math.max(0.01, displayScale);
       // Hold Shift while dragging a corner to keep the original aspect ratio.
-      // Text labels always scale as a unit so the plate cannot stretch
-      // independently of the glyphs (including outline drags mapped to corners).
-      const lockAspectRatio = event.shiftKey || gesture.element.kind === "text";
+      const lockAspectRatio = event.shiftKey;
       const pointer = elementLocalPoint(gesture.element, point);
       const rotatedElement = elementRotation(gesture.element) !== 0;
       const freeBounds = resizeBoundsFromHandle(
@@ -5831,13 +5820,7 @@ export function ScreenshotEditor() {
                   padding: inlineTextLayout.padding,
                   color: editingText.outlined ? "transparent" : editingText.color,
                   backgroundColor: editingText.background ?? "transparent",
-                  borderRadius: editingText.roundedBackground
-                    ? textBackgroundRadius(
-                        editingText,
-                        textLayoutBounds(editingText).width,
-                        textLayoutBounds(editingText).height,
-                      ) * displayScale
-                    : undefined,
+                  borderRadius: editingText.roundedBackground ? inlineTextLayout.radius : undefined,
                   caretColor: editingText.color,
                   fontFamily: fontFamily(editingText),
                   fontSize: editingText.fontSize * displayScale,
