@@ -3109,8 +3109,7 @@
   letter-spacing: var(--tracking-tighter);
 }
 
-.screenshot-text-style-preview.style-rounded,
-.screenshot-text-style-preview.style-rounded-box {
+.screenshot-text-style-preview.style-rounded {
   font-family: ui-rounded, "SF Pro Rounded", "Arial Rounded MT Bold", system-ui, sans-serif;
 }
 

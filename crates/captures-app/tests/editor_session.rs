@@ -4630,13 +4630,7 @@ fn styled_text_creation_matches_shipping_treatments_and_fractional_placement() {
         assert_eq!(text.rounded_background, preset == "rounded-box");
         assert_eq!(
             text.font_family,
-            if preset == "mono-box" {
-                "mono"
-            } else if preset == "rounded-box" {
-                "rounded"
-            } else {
-                "sans"
-            }
+            if preset == "mono-box" { "mono" } else { "sans" }
         );
         assert_eq!(text.color, "#ffffff");
     }
@@ -4674,7 +4668,7 @@ fn invalid_or_unavailable_text_styles_preserve_document_pixels_redo_and_draft() 
     let manifest = data.path().join("drafts").join(&id).join("manifest.json");
     let persisted = fs::read(&manifest).unwrap();
 
-    for preset in ["not-a-style", "rounded-box"] {
+    for preset in ["not-a-style", "rounded"] {
         let error = editor
             .execute(styled_text_request(
                 "L",
@@ -5122,7 +5116,7 @@ fn older_sans_only_drafts_pin_a_bundled_family_when_text_first_uses_it() {
     reopened
         .execute(styled_text_request(
             "Rounded",
-            "rounded-box",
+            "rounded",
             Point { x: 300., y: 150. },
             24.,
         ))

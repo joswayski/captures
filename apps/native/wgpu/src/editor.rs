@@ -10072,6 +10072,13 @@ mod tests {
             .retain(|preset| preset.font_family != "rounded");
         let mut reopened = View::default();
         reopened.receive(&ctx, Ok(legacy));
+        assert_eq!(reopened.new_text_preset.as_deref(), Some("rounded-box"));
+        let mut legacy = presented_text("old", "accepted");
+        legacy
+            .text_style_presets
+            .retain(|preset| preset.id != "rounded-box");
+        let mut reopened = View::default();
+        reopened.receive(&ctx, Ok(legacy));
         assert_eq!(reopened.new_text_preset.as_deref(), Some("standard"));
         let mut plain = presented_text("old", "accepted");
         plain.text_style_presets.clear();

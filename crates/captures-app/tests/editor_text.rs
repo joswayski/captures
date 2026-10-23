@@ -85,7 +85,12 @@ fn text_style_picker_value_matches_shipping_text_style_preset() {
     );
     assert_eq!(text_style_preset_id("mono", false, true, false), "outlined");
     assert_eq!(text_style_preset_id("rounded", true, true, false), "box");
-    assert_eq!(text_style_preset_id("serif", true, false, true), "box");
+    for family in ["sans", "rounded", "serif", "mono"] {
+        assert_eq!(
+            text_style_preset_id(family, true, false, true),
+            "rounded-box"
+        );
+    }
 }
 
 #[test]

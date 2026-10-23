@@ -72,7 +72,7 @@ pub const TEXT_STYLE_PRESETS: [TextStylePreset; 7] = [
     TextStylePreset {
         id: "rounded-box",
         label: "Rounded Box",
-        font_family: "rounded",
+        font_family: "sans",
         background: Some("#111318"),
         outlined: false,
         rounded_background: true,
@@ -90,7 +90,7 @@ pub fn text_style_preset_id(
 ) -> &'static str {
     match (font_family, has_background) {
         _ if outlined && !has_background => "outlined",
-        ("rounded", true) if rounded_background => "rounded-box",
+        (_, true) if rounded_background => "rounded-box",
         ("mono", true) => "mono-box",
         (_, true) => "box",
         ("rounded", false) => "rounded",

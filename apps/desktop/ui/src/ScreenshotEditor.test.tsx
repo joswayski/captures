@@ -1275,6 +1275,7 @@ describe("ScreenshotEditor", () => {
       backgroundColor: "#ff3b5c",
       fontWeight: 700,
     });
+    expect(screen.getByLabelText("Font")).toHaveValue("sans");
     expect(screen.getByRole("button", { name: "Bold" })).toHaveAttribute("aria-pressed", "true");
     const initialHeight = Number.parseFloat(inlineFrame.style.height);
     const initialWidth = Number.parseFloat(inlineFrame.style.width);
@@ -1532,7 +1533,9 @@ describe("ScreenshotEditor", () => {
     const inlineEditor = await screen.findByRole("textbox", {
       name: "Edit text on canvas",
     });
-    expect(inlineEditor.style.fontFamily).toContain("ui-rounded");
+    expect(screen.getByLabelText("Font")).toHaveValue("sans");
+    expect(inlineEditor.style.fontFamily).toContain("sans-serif");
+    expect(inlineEditor.style.fontFamily).not.toContain("ui-rounded");
     expect(inlineEditor).toHaveStyle({ backgroundColor: "#ff3b5c", color: "#ffffff" });
     const radius = Number.parseFloat(inlineEditor.style.borderRadius);
     const frameHeight = Number.parseFloat(

@@ -2187,7 +2187,7 @@ describe("screenshot editor geometry", () => {
       width: composing,
       align: "center",
       roundedBackground: true,
-      fontFamily: "rounded",
+      fontFamily: "sans",
       bold: true,
     });
     expect(placed.x).toBeCloseTo(400 - composing / 2, 5);
@@ -2365,7 +2365,7 @@ describe("screenshot editor geometry", () => {
         roundedBackground: false,
       },
       "rounded-box": {
-        fontFamily: "rounded",
+        fontFamily: "sans",
         background: "#111318",
         outlined: false,
         roundedBackground: true,
@@ -2383,6 +2383,15 @@ describe("screenshot editor geometry", () => {
       });
       expect(textStylePreset(styled)).toBe(preset);
     }
+    // Previously saved rounded-font labels still describe their rounded plate.
+    expect(
+      textStylePreset({
+        ...text,
+        fontFamily: "rounded",
+        background: "#ff3b5c",
+        roundedBackground: true,
+      }),
+    ).toBe("rounded-box");
   });
 
   it("builds a complete canvas font shorthand so rounded blobs keep their family", () => {

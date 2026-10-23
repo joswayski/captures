@@ -267,8 +267,8 @@ def main():
             "sleep", ".15", "mouseup", "1", "sleep", ".2")
 
     # Keep the four coordinate spaces explicit. Toolbar coordinates are window-local,
-    # inspector coordinates are local to the fixed right panel (shipping's 320px
-    # sidebar column, INSPECTOR_WIDTH), document points
+    # inspector coordinates are local to the right panel (explicitly set to the
+    # authored 320px fixture width below, except in the resize suite), document points
     # are authored in image pixels, and exported-image pixels never pass through these
     # helpers. A few visual fixtures use the historical screenshot coordinates whose
     # document origin was (8, 89); fixture_to_document names that conversion directly.
@@ -289,6 +289,21 @@ def main():
     def editor_width_of(window):
         geometry = run("xdotool", "getwindowgeometry", "--shell", window).decode()
         return int(re.search(r"^WIDTH=(\d+)$", geometry, re.MULTILINE).group(1))
+
+    def prepare_fixture_inspector(window):
+        # A fresh editor at <=1040px now starts at 280px and retains that width
+        # when enlarged. Set the authored width through the real divider rather
+        # than sending canvas/field clicks 40px away from their targets. The
+        # dedicated resize suite still exercises the unmodified host default.
+        if args.inspector_resize_only:
+            return
+        width = editor_width_of(window)
+        initial = 280 if width <= 1040 else 320
+        if initial != INSPECTOR_WIDTH:
+            run("xdotool", "mousemove", "--sync", "--window", window,
+                str(width - initial), "200", "sleep", ".2", "mousedown", "1", "sleep", ".2",
+                "mousemove", "--sync", "--window", window, str(width - INSPECTOR_WIDTH), "200",
+                "sleep", ".3", "mouseup", "1", "sleep", ".3")
 
     def draft_bytes():
         if draft is None:
@@ -1054,6 +1069,7 @@ def main():
             editor = wait(lambda: windows("Captures Screenshot Editor"), "screenshot editor")[0]
         run("xdotool", "windowmove", "--sync", editor, "100", "80")
         time.sleep(1)
+        prepare_fixture_inspector(editor)
         shot(editor, "editor-original")
         pixel("editor-original", 520, 600,
               (245, 245, 247) if args.appearance == "light" else (16, 16, 20))
@@ -1216,6 +1232,7 @@ def main():
             window = wait(lambda: windows("Captures Screenshot Editor"), "reopened editor")[0]
             run("xdotool", "windowmove", "--sync", window, "100", "80")
             time.sleep(.6)
+            prepare_fixture_inspector(window)
             if restored:
                 # A restored draft shows shipping's banner above the header; keep
                 # the authored layout by dismissing it unless testing the notice.
@@ -3574,8 +3591,11 @@ def main():
             outlined = save_layers(lambda values: len(values) == 3, "outlined input finishes")[-1]
             assert outlined["text"] == "BOLD" and outlined["outlined"]
             assert outlined["fontSize"] == 72 and outlined["background"] is None
+            assert outlined["bold"], "new outlined text shares the bold default"
             toolbar_click("layers")
-            prop_click(37, 430)  # Existing Text Properties: Bold.
+            prop_click(37, 430)  # Existing Text Properties: turn the default Bold off, then on.
+            regular = save_layers(lambda values: not values[-1]["bold"], "outlined regular applied")[-1]
+            prop_click(37, 430)
             bold = save_layers(lambda values: values[-1]["bold"], "outlined bold applied")[-1]
             before = draft_bytes()
             begin_input((300, 200))
@@ -3633,7 +3653,9 @@ def main():
             run("xdotool", "key", "ctrl+z", "sleep", ".3")
             save_layers(lambda values: values[-1] == bold, "outlined rotation undo")
             run("xdotool", "key", "ctrl+z", "sleep", ".3")
-            save_layers(lambda values: values[-1] == outlined, "outlined bold undo")
+            save_layers(lambda values: values[-1] == regular, "outlined bold undo")
+            run("xdotool", "key", "ctrl+z", "sleep", ".3")
+            save_layers(lambda values: values[-1] == outlined, "outlined regular undo")
             run("xdotool", "key", "ctrl+z", "sleep", ".3")
             save_layers(lambda values: len(values) == 2 and values[-1] == created, "outlined creation undo")
             toolbar_click("layers")
@@ -3698,11 +3720,11 @@ def main():
             type_text("Rounded")
             run("xdotool", "key", "Escape", "sleep", ".3")
             rounded = save_layers(lambda values: len(values) == 2, "default rounded Text placed")[-1]
-            assert (rounded["fontFamily"], rounded["fontSize"], rounded["color"]) == ("rounded", 24, "#ffffff")
+            assert (rounded["fontFamily"], rounded["fontSize"], rounded["color"]) == ("sans", 24, "#ffffff")
             assert rounded["background"] == "#ff3b5c" and rounded["roundedBackground"]
             assert rounded["align"] == "center" and rounded["y"] == 200
             assert math.isclose(rounded["x"] + rounded["width"] / 2, 480, abs_tol=1e-6)
-            assert json.loads(draft.read_text())["fonts"]["families"]["rounded"] == "Nunito"
+            assert json.loads(draft.read_text())["fonts"]["families"]["sans"] == "Liberation Sans"
             toolbar_click("layers")  # Deselect with Select; Text stays active after Finish.
             fixture_click((28, 109))
             shot(editor, "text-defaults-rounded")
@@ -3767,7 +3789,7 @@ def main():
             type_text("Fresh")
             run("xdotool", "key", "Escape", "sleep", ".3")
             reset = save_layers(lambda values: len(values) == 3, "fresh editor Text defaults")[-1]
-            assert (reset["fontFamily"], reset["fontSize"], reset["color"]) == ("rounded", 24, "#ffffff")
+            assert (reset["fontFamily"], reset["fontSize"], reset["color"]) == ("sans", 24, "#ffffff")
             assert reset["align"] == "center" and reset["background"] == "#ff3b5c"
             assert reset["roundedBackground"]
             assert reset["id"] != text["id"]
@@ -3835,7 +3857,7 @@ def main():
             # in one field is one undo step, each toggle or menu choice another.
             prop_click(95, TEXT["style"])
             prop_click(60, TEXT_STYLE_ROWS["rounded-box"])
-            rounded = save_layers(lambda values: values[-1]["fontFamily"] == "rounded"
+            rounded = save_layers(lambda values: values[-1]["fontFamily"] == "sans"
                                   and values[-1]["roundedBackground"], "Rounded Box applied")[-1]
             shot(editor, f"text-rounded-font-{args.appearance}")
             prop_click(60, TEXT["font"])

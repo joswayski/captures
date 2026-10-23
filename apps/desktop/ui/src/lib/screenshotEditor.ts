@@ -500,7 +500,7 @@ export const DEFAULT_TEXT_BOX_BACKGROUND = "#111318";
 export function textStylePreset(element: EditorTextElement): TextStylePreset {
   if (element.outlined && element.background === null) return "outlined";
   if (element.background !== null) {
-    if (element.fontFamily === "rounded" && element.roundedBackground) {
+    if (element.roundedBackground) {
       return "rounded-box";
     }
     if (element.fontFamily === "mono") return "mono-box";
@@ -565,7 +565,7 @@ export function applyTextStylePreset(
   if (preset === "rounded-box") {
     return {
       ...element,
-      fontFamily: "rounded",
+      fontFamily: "sans",
       background: boxBackground,
       outlined: false,
       roundedBackground: true,

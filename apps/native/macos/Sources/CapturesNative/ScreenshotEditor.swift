@@ -4358,7 +4358,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let plated = style.background != nil
         if style.outlined && !plated { return "outlined" }
         if plated {
-            if style.fontFamily == "rounded" && style.roundedBackground { return "rounded-box" }
+            if style.roundedBackground { return "rounded-box" }
             return style.fontFamily == "mono" ? "mono-box" : "box"
         }
         switch style.fontFamily {
