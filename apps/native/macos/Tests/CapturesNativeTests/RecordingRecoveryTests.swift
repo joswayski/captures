@@ -250,9 +250,11 @@ final class RecordingRecoveryTests: XCTestCase {
         let image = PreviewView.fixtureImage(scale: 1)
         try XCTUnwrap(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]))
             .write(to: directory.appendingPathComponent("preview.png"))
+        // This fixture goes through the real History loader's 30-day retention.
+        // A fixed date eventually deletes the recording before recovery can select it.
         let metadata: [String: Any] = ["id": id, "kind": "video", "width": 160, "height": 90,
             "size_bytes": (try FileManager.default.attributesOfItem(atPath: media.path)[.size] as? NSNumber)?.intValue ?? 0,
-            "created_at": "2026-09-22T00:00:00Z", "mode": "display", "mime_type": "video/mp4",
+            "created_at": ISO8601DateFormatter().string(from: Date()), "mode": "display", "mime_type": "video/mp4",
             "duration_ms": 2_000, "preview_url": "capture-history://\(id)/preview",
             "full_url": "capture-history://\(id)/full",
             "target": ["type": "display", "display_id": "fixture"]]

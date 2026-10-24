@@ -345,9 +345,12 @@ fn inline_geometry(
     text: &str,
     preview: egui::Rect,
     scale: f32,
+    measured_layout: Option<&captures_app::editor_text::InlineEditorLayout>,
 ) -> Option<InlineGeometry> {
     use captures_app::editor_text::inline_editor_layout;
-    let layout = inline_editor_layout(element).ok()?;
+    let layout = measured_layout
+        .cloned()
+        .or_else(|| inline_editor_layout(element).ok())?;
     let [top, right, bottom, left] = layout.padding.map(|value| value as f32 * scale);
     let alpha = (element.base.opacity / 100.).clamp(0., 1.) as f32;
     let color = |value: &str| {
@@ -394,8 +397,19 @@ fn inline_geometry(
     };
     let line_height = layout.line_height as f32 * scale;
     let content_height = (galley.rows.len().max(1) as f32 * line_height).max(line_height);
-    let width = content_width + left + right;
-    let height = content_height + top + bottom;
+    // The accepted frame already includes the worker's legacy-pivot correction.
+    // Only the unsent typing buffer grows locally; never recenter accepted text.
+    let accepted = measured_layout.is_some() && text == element.text;
+    let width = if accepted {
+        frame.width as f32 * scale
+    } else {
+        content_width + left + right
+    };
+    let height = if accepted {
+        frame.height as f32 * scale
+    } else {
+        content_height + top + bottom
+    };
     let accepted_left = frame.x as f32 * scale;
     let accepted_screen_width = frame.width as f32 * scale;
     let x = if layout.auto_width {
@@ -499,6 +513,15 @@ pub(super) fn show_with_inspector(
         &input.text,
         preview,
         scale,
+        view.presented
+            .as_ref()
+            .filter(|presented| {
+                presented
+                    .active_text_input
+                    .as_ref()
+                    .is_some_and(|(token, _)| token == &input.id)
+            })
+            .and_then(|presented| presented.inline_layout.as_ref()),
     ) else {
         return;
     };
@@ -1973,7 +1996,7 @@ mod tests {
         element.base.opacity = 50.;
         let preview = egui::Rect::from_min_size(egui::pos2(100., 50.), egui::vec2(320., 180.));
         let geometry =
-            inline_geometry(&ctx, &element, None, "Wide label text", preview, 0.5).unwrap();
+            inline_geometry(&ctx, &element, None, "Wide label text", preview, 0.5, None).unwrap();
         let layout = captures_app::editor_text::inline_editor_layout(&element).unwrap();
         // Auto width keeps the accepted plate's centre while the buffer grows.
         let accepted_center =
@@ -1995,7 +2018,7 @@ mod tests {
         assert!(geometry.outline_width.is_none());
         element.outlined = true;
         let outlined =
-            inline_geometry(&ctx, &element, None, "Wide label text", preview, 0.5).unwrap();
+            inline_geometry(&ctx, &element, None, "Wide label text", preview, 0.5, None).unwrap();
         assert_eq!(outlined.outline_width, Some(1.28));
         assert_eq!(
             outlined.frame, geometry.frame,
@@ -2007,17 +2030,48 @@ mod tests {
         );
         assert_eq!(outlined.angle, geometry.angle);
         assert_eq!(outlined.format, geometry.format);
+        let mut measured_layout = layout.clone();
+        measured_layout.frame.x += 23.;
+        measured_layout.frame.y -= 11.;
+        measured_layout.frame.height += 80.;
+        let accepted = inline_geometry(
+            &ctx,
+            &element,
+            None,
+            &element.text,
+            preview,
+            0.5,
+            Some(&measured_layout),
+        )
+        .unwrap();
+        assert_eq!(
+            accepted.frame,
+            egui::Rect::from_min_size(
+                preview.min
+                    + egui::vec2(
+                        measured_layout.frame.x as f32 * 0.5,
+                        measured_layout.frame.y as f32 * 0.5
+                    ),
+                egui::vec2(
+                    measured_layout.frame.width as f32 * 0.5,
+                    measured_layout.frame.height as f32 * 0.5
+                ),
+            ),
+            "accepted inline frame keeps the worker's measured world centre"
+        );
+        assert_eq!(accepted.angle, measured_layout.rotation as f32);
         // Blank labels retain a caret allowance, not a fixed screen minimum.
-        let blank = inline_geometry(&ctx, &element, None, "", preview, 0.1).unwrap();
+        let blank = inline_geometry(&ctx, &element, None, "", preview, 0.1, None).unwrap();
         assert!(blank.content.width() >= 2.);
         assert!(blank.frame.width() < 48. && blank.frame.height() < 28.);
 
         // Content and existing plate padding scale together, including at 20%.
         element.font_size = 55.;
         for scale in [0.1, 0.2, 0.5, 1.] {
-            let single = inline_geometry(&ctx, &element, None, "i", preview, scale).unwrap();
-            let newline = inline_geometry(&ctx, &element, None, "i\n", preview, scale).unwrap();
-            let removed = inline_geometry(&ctx, &element, None, "i", preview, scale).unwrap();
+            let single = inline_geometry(&ctx, &element, None, "i", preview, scale, None).unwrap();
+            let newline =
+                inline_geometry(&ctx, &element, None, "i\n", preview, scale, None).unwrap();
+            let removed = inline_geometry(&ctx, &element, None, "i", preview, scale, None).unwrap();
             assert!((single.frame.height() - 55. * (1.25 + 0.44) * scale).abs() < 1e-3);
             assert!(
                 (newline.frame.height() - single.frame.height() - 55. * 1.25 * scale).abs() < 1e-3

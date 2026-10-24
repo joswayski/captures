@@ -613,6 +613,11 @@ char *captures_editor_paste_layer_v1(CapturesEditorSession *session,
  * document-space corners; unsupported layers omit their outline. */
 char *captures_editor_hit_test_document_v1(const char *document_json,
     double x, double y, double tolerance);
+/* v2 consumes snapshot.text_bounds: layer ID -> rect relative to base x/y.
+ * Ephemeral and font/session specific; never persist it in a document. Null
+ * selects legacy v1 geometry. Missing/invalid measurements return an error. */
+char *captures_editor_hit_test_document_v2(const char *document_json,
+    const char *text_bounds_json, double x, double y, double tolerance);
 /* Stateless canvas-interaction geometry from a published document JSON copy.
  * drop_guide {selected_id: string|null, point: {x,y}|null} returns the image-drop
  * guide {placement: "top"|"right"|"bottom"|"left"|"stack", label, target, point,
@@ -686,6 +691,12 @@ typedef struct {
 } CapturesEditorResizePreview;
 char *captures_editor_resize_begin_v1(const char *document_json, const char *layer_id,
     CapturesSelectionPoint point, double display_scale, CapturesEditorResizeDrag **output);
+/* Measured grip and neighbor picking. For TEXT use preview_drawing_v1 for all
+ * candidate geometry/pixels, never resize_preview_v1 with stale measurements.
+ * Non-text drags can still use resize_preview_v1. Free the owner with v1. */
+char *captures_editor_resize_begin_v2(const char *document_json, const char *text_bounds_json,
+    const char *layer_id, CapturesSelectionPoint point, double display_scale,
+    CapturesEditorResizeDrag **output);
 bool captures_editor_resize_preview_v1(const CapturesEditorResizeDrag *drag,
     CapturesSelectionPoint current, bool lock_aspect, CapturesEditorResizePreview *output);
 void captures_editor_resize_free_v1(CapturesEditorResizeDrag *drag);
@@ -700,6 +711,12 @@ void captures_editor_resize_free_v1(CapturesEditorResizeDrag *drag);
 typedef struct CapturesEditorMoveDrag CapturesEditorMoveDrag;
 char *captures_editor_move_begin_v1(const char *document_json, const char *layer_id,
     double display_scale, CapturesEditorMoveDrag **output);
+/* Bounds must come from the same snapshot as document_json, then remain fixed
+ * for this gesture. Moving does not reflow text. Free the owner with v1. */
+char *captures_editor_move_begin_v2(const char *document_json, const char *text_bounds_json,
+    const char *layer_id, double display_scale, CapturesEditorMoveDrag **output);
+bool captures_editor_move_preview_v2(const CapturesEditorMoveDrag *drag,
+    const char *text_bounds_json, CapturesSelectionPoint delta, CapturesEditorResizePreview *output);
 bool captures_editor_move_preview_v1(const CapturesEditorMoveDrag *drag,
     CapturesSelectionPoint delta, CapturesEditorResizePreview *output);
 void captures_editor_move_free_v1(CapturesEditorMoveDrag *drag);
@@ -778,13 +795,15 @@ void captures_editor_frame_free_v1(CapturesEditorFrame *frame);
 CapturesEditorFrame *captures_editor_decode_image_v1(const char *path, char **output);
 
 /* Worker-only uncommitted drawing render. Accepts create_closed_shape,
- * create_open_shape, create_freehand_path or paint_image_background requests.
+ * create_open_shape, create_freehand_path, paint_image_background or layer requests.
  * Brush requests contain the complete gesture, rendered from published assets.
  * Never changes document,
  * undo/redo, assets, published frame or drafts; no I/O. Retains independent
  * pixels freed with frame_free_v1. Session access must remain serialized.
  * NULL output refuses the operation; otherwise writes owned success/error JSON
- * freed with captures_settings_free_v1. Failure returns NULL. */
+ * freed with captures_settings_free_v1. Success result contains text_bounds,
+ * selection_outlines and guides matching these exact pixels. Publish or discard
+ * the frame and geometry together on coalescing/cancellation. Failure returns NULL. */
 CapturesEditorFrame *captures_editor_preview_drawing_v1(CapturesEditorSession *session,
     const char *request_json, char **output);
 

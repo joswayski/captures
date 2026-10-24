@@ -19,8 +19,8 @@ use captures_app::{
         DropShadowStylePatch, Element, ElementBase, ElementStyle, FreehandPathCreate,
         GuideOrientation, ImageTransform, LayerEdit, LayerPlacement, MoveDrag, OpenShapeCreate,
         OpenShapeKind, OptionalNullable, Point, Rect, ResizeDrag, ResizeHandle, ShapeElement,
-        TextElement, arrow_fill_polygon, preview_rotation, rotation_angle, rotation_handle,
-        smooth_path_centerline,
+        TextBounds, TextElement, arrow_fill_polygon, preview_rotation, rotation_angle,
+        rotation_handle, smooth_path_centerline,
     },
     editor_chrome::colors,
     editor_export::{
@@ -104,6 +104,7 @@ enum Job {
 
 struct Presented {
     document: Arc<Document>,
+    text_bounds: TextBounds,
     /// Live Layers-row previews by layer ID (`captures_app::editor_layers`).
     thumbnails: BTreeMap<String, Arc<RgbaImage>>,
     /// Natural pixels of each visible image layer by source, shared with the
@@ -129,6 +130,7 @@ struct Presented {
     can_merge_visible: bool,
     can_flatten: bool,
     active_text_input: Option<(String, String)>,
+    inline_layout: Option<captures_app::editor_text::InlineEditorLayout>,
     unsaved: bool,
     has_draft: bool,
 }
@@ -153,6 +155,7 @@ impl Presented {
                 })
                 .collect(),
             document: Arc::new(snapshot.document.clone()),
+            text_bounds: snapshot.text_bounds.clone(),
             image_assets: session.visible_image_assets(),
             pixels: session.pixels(),
             original_export_path: snapshot.original_export_path.map(Path::to_owned),
@@ -175,6 +178,10 @@ impl Presented {
                 .collect(),
             can_merge_visible: snapshot.can_merge_visible,
             can_flatten: snapshot.can_flatten,
+            inline_layout: snapshot
+                .active_text_input
+                .as_ref()
+                .and_then(|input| input.layout.clone()),
             active_text_input: snapshot
                 .active_text_input
                 .map(|input| (input.input_id.to_owned(), input.layer_id.to_owned())),
@@ -1985,7 +1992,7 @@ impl Editor {
                         let pixels = session
                             .as_mut()
                             .ok_or_else(|| "Editor is unavailable.".to_owned())
-                            .and_then(|session| session.preview_drawing(request));
+                            .and_then(|session| session.preview_drawing_with_geometry(request));
                         let _ = reply.send(drawing_preview::Reply { epoch, pixels });
                         wake(&wake_ctx, viewport);
                         continue;
@@ -3518,6 +3525,8 @@ fn show_layer_canvas(
     // must not replay a gesture whose state has already been cleared.
     let mut owned = view.layer_gesture.is_some();
     let document = presented.document.clone();
+    let text_bounds = presented.text_bounds.clone();
+    let mut measure = |text: &TextElement| text_bounds.bounds(text);
     let bounds = Rect {
         x: 0.,
         y: 0.,
@@ -3571,7 +3580,7 @@ fn show_layer_canvas(
                 view.cancel_layer_gesture();
                 return true;
             }
-            match document.hit_test(point, 8. / display_scale) {
+            match document.hit_test_with(point, 8. / display_scale, &mut measure) {
                 Ok(Some(Element::Text(text))) if view.section == Section::Layers => {
                     view.begin_inline(
                         tx,
@@ -3631,7 +3640,7 @@ fn show_layer_canvas(
                         if !base.visible || base.locked {
                             return None;
                         }
-                        let outline = element.selection_outline().ok()?;
+                        let outline = element.selection_outline_with(&mut measure).ok()?;
                         let handle = rotation_handle(
                             outline,
                             base.rotation(),
@@ -3712,14 +3721,23 @@ fn show_layer_canvas(
                         else {
                             return Ok(None);
                         };
-                        let Some(handle) = element.resize_handle_at(point, 8. / display_scale)?
+                        let Some(handle) = element.resize_handle_at_with(
+                            point,
+                            8. / display_scale,
+                            &mut measure,
+                        )?
                         else {
                             return Ok(None);
                         };
-                        let drag =
-                            ResizeDrag::new(&document, &element.base().id, handle, display_scale)?;
-                        let preview = drag.preview(point, modifiers.shift)?;
-                        Ok(Some((element.base().id.clone(), handle, drag, preview)))
+                        let drag = ResizeDrag::new_with(
+                            &document,
+                            &element.base().id,
+                            handle,
+                            display_scale,
+                            &mut measure,
+                        )?;
+                        let outline = element.selection_outline_with(&mut measure)?;
+                        Ok(Some((element.base().id.clone(), handle, drag, outline)))
                     })();
                     let resize = match resize {
                         Ok(resize) => resize,
@@ -3728,15 +3746,15 @@ fn show_layer_canvas(
                             continue;
                         }
                     };
-                    if let Some((id, handle, drag, resize)) = resize {
+                    if let Some((id, handle, drag, outline)) = resize {
                         owned = true;
                         view.layer_gesture = Some(LayerGesture {
                             kind: LayerGestureKind::Resize {
                                 id,
                                 handle,
                                 drag: Box::new(drag),
-                                outline: resize.outline,
-                                guides: resize.guides,
+                                outline,
+                                guides: Vec::new(),
                                 lock_aspect: modifiers.shift,
                                 display_scale,
                             },
@@ -3761,7 +3779,7 @@ fn show_layer_canvas(
                             .transpose()
                             .map(Option::flatten)
                     } else {
-                        document.hit_test(point, 8. / display_scale)
+                        document.hit_test_with(point, 8. / display_scale, &mut measure)
                     };
                     match hit {
                         Ok(hit) => {
@@ -3771,15 +3789,16 @@ fn show_layer_canvas(
                             owned = true;
                             let move_state = hit
                                 .map(|element| {
-                                    let drag = MoveDrag::new(
+                                    let drag = MoveDrag::new_with(
                                         &document,
                                         &element.base().id,
                                         display_scale,
+                                        &mut measure,
                                     )?;
                                     Ok::<_, String>((
                                         element.base().id.clone(),
                                         Box::new(drag),
-                                        element.selection_outline()?,
+                                        element.selection_outline_with(&mut measure)?,
                                     ))
                                 })
                                 .transpose();
@@ -3935,6 +3954,7 @@ fn show_layer_canvas(
     if let Some(LayerGesture {
         kind:
             LayerGestureKind::Resize {
+                id,
                 drag,
                 outline,
                 guides,
@@ -3944,6 +3964,10 @@ fn show_layer_canvas(
         current,
         ..
     }) = &mut view.layer_gesture
+        && !document
+            .elements
+            .iter()
+            .any(|element| &element.base().id == id && matches!(element, Element::Text(_)))
         && let Ok(resize) = drag.preview(*current, *lock_aspect)
     {
         *outline = resize.outline;
@@ -3966,14 +3990,14 @@ fn show_layer_canvas(
             .hypot(delta.y * f64::from(preview.height()) / bounds.height)
             >= 3.;
         Some(if moving {
-            drag.preview(delta)
+            drag.preview_with(delta, &mut measure)
                 .map(|preview| (preview.outline, preview.guides))
         } else {
             document
                 .elements
                 .iter()
                 .find(|element| &element.base().id == id)?
-                .selection_outline()
+                .selection_outline_with(&mut measure)
                 .map(|outline| (outline, Vec::new()))
         })
     });
@@ -4094,12 +4118,12 @@ fn show_layer_canvas(
     {
         let point = image_point(position, preview, bounds);
         owned |= element
-            .resize_handle_at(point, 8. / display_scale)
+            .resize_handle_at_with(point, 8. / display_scale, &mut measure)
             .ok()
             .flatten()
             .is_some()
             || element
-                .selection_outline()
+                .selection_outline_with(&mut measure)
                 .ok()
                 .and_then(|outline| {
                     rotation_handle(
@@ -4126,7 +4150,7 @@ fn show_layer_canvas(
     if owned && input_enabled && !viewport_intercepted {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
     }
-    let (outline, delta, active_rotation, guides, show_grips) =
+    let (mut outline, delta, mut active_rotation, mut guides, show_grips) =
         if let Some(gesture) = &view.layer_gesture {
             match &gesture.kind {
                 LayerGestureKind::Move {
@@ -4196,7 +4220,7 @@ fn show_layer_canvas(
                     .find(|element| &element.base().id == id)
             });
             (
-                selected.and_then(|element| element.selection_outline().ok()),
+                selected.and_then(|element| element.selection_outline_with(&mut measure).ok()),
                 Point { x: 0., y: 0. },
                 selected
                     .filter(|element| element.base().visible && !element.base().locked)
@@ -4205,6 +4229,37 @@ fn show_layer_canvas(
                 selected.is_some_and(|element| element.base().visible && !element.base().locked),
             )
         };
+    // Text geometry must match the published worker pixels. In particular, a
+    // resized candidate cannot be measured from the original snapshot map.
+    if let Some(gesture) = &view.layer_gesture {
+        let id = match &gesture.kind {
+            LayerGestureKind::Move { id, .. } => id.as_deref(),
+            LayerGestureKind::Resize { id, .. }
+            | LayerGestureKind::Rotate { id, .. }
+            | LayerGestureKind::Curve { id, .. } => Some(id.as_str()),
+        };
+        if let Some(element) = id.and_then(|id| {
+            document
+                .elements
+                .iter()
+                .find(|element| element.base().id == id)
+        }) && matches!(element, Element::Text(_))
+        {
+            let geometry = view
+                .drawing_preview
+                .as_ref()
+                .and_then(|preview| preview.geometry.as_ref());
+            outline = match geometry {
+                Some(preview) => preview.selection_outlines.get(&element.base().id).copied(),
+                None => element.selection_outline_with(&mut measure).ok(),
+            };
+            guides = geometry.map_or(&[][..], |preview| preview.guides.as_slice());
+            if active_rotation.is_some() {
+                active_rotation = outline
+                    .map(|points| (points[1].y - points[0].y).atan2(points[1].x - points[0].x));
+            }
+        }
+    }
     if let Some(outline) = outline {
         let project = |point: Point| {
             egui::pos2(
@@ -4394,10 +4449,11 @@ fn show_shape(
             && preview.contains(position)
         {
             let point = image_point(position, preview, bounds);
-            let hit = match presented
-                .document
-                .hit_test(point, 8. * bounds.width / f64::from(preview.width()))
-            {
+            let hit = match presented.document.hit_test_with(
+                point,
+                8. * bounds.width / f64::from(preview.width()),
+                &mut |text| presented.text_bounds.bounds(text),
+            ) {
                 Ok(hit) => hit,
                 Err(error) => {
                     view.error = Some(error);
@@ -9635,6 +9691,7 @@ mod tests {
     pub(super) fn presented(unsaved: bool) -> Presented {
         Presented {
             document: Arc::new(Document::new_capture("fixture", 7., 3., None)),
+            text_bounds: TextBounds::default(),
             thumbnails: BTreeMap::new(),
             image_assets: BTreeMap::new(),
             pixels: Arc::new(RgbaImage::new(7, 3)),
@@ -9655,6 +9712,7 @@ mod tests {
             can_merge_visible: false,
             can_flatten: false,
             active_text_input: None,
+            inline_layout: None,
             unsaved,
             has_draft: !unsaved,
         }
@@ -9691,6 +9749,18 @@ mod tests {
                 drop_shadow_style: None,
                 extra: Default::default(),
             }));
+        // These legacy host-only fixtures intentionally use their original
+        // estimated layout. Production snapshots always come from the worker.
+        let element = value.document.elements.last().unwrap();
+        let bounds = element.selection_bounds().unwrap();
+        value.text_bounds.0.insert(
+            id.into(),
+            Rect {
+                x: bounds.x - element.base().x,
+                y: bounds.y - element.base().y,
+                ..bounds
+            },
+        );
         value.created_layer = Some(id.into());
         value
     }
@@ -11859,7 +11929,9 @@ mod tests {
         reply
             .send(drawing_preview::Reply {
                 epoch,
-                pixels: Ok(Arc::new(RgbaImage::new(1200, 600))),
+                pixels: Ok(drawing_preview::test_preview(Arc::new(RgbaImage::new(
+                    1200, 600,
+                )))),
             })
             .unwrap();
         view.drawing_preview.as_mut().unwrap().receive(&tx);
@@ -14249,6 +14321,146 @@ mod tests {
     }
 
     #[test]
+    fn measured_text_picks_and_grips_use_snapshot_geometry_without_remeasuring_candidates() {
+        for action in ["drag_move", "resize", "rotate"] {
+            let ctx = egui::Context::default();
+            let mut snapshot = presented_text("text", "WWW iii");
+            snapshot.pixels = Arc::new(RgbaImage::new(400, 300));
+            let document = Arc::make_mut(&mut snapshot.document);
+            document.width = 400.;
+            document.height = 300.;
+            let Element::Text(text) = document.elements.last_mut().unwrap() else {
+                panic!("text")
+            };
+            text.base.x = 60.;
+            text.base.y = 60.;
+            text.auto_width = Some(false);
+            text.width = 120.;
+            snapshot.text_bounds.0.insert(
+                "text".into(),
+                Rect {
+                    x: -4.,
+                    y: -4.,
+                    width: 128.,
+                    height: 180.,
+                },
+            );
+            let original_outline = document
+                .elements
+                .last()
+                .unwrap()
+                .selection_outline_with(&mut |text| snapshot.text_bounds.bounds(text))
+                .unwrap();
+            let mut view = View {
+                section: Section::Layers,
+                ..Default::default()
+            };
+            view.receive(&ctx, Ok(snapshot));
+            view.select_layer_exact((action != "drag_move").then(|| "text".into()));
+            view.drawing_preview = Some(drawing_preview::State::new(
+                ctx.clone(),
+                egui::ViewportId::ROOT,
+            ));
+            let preview = egui::Rect::from_min_size(egui::pos2(20., 20.), egui::vec2(320., 240.));
+            let project =
+                |point: Point| egui::pos2(20. + point.x as f32 * 0.8, 20. + point.y as f32 * 0.8);
+            let start = match action {
+                "resize" => original_outline[2],
+                "rotate" => {
+                    rotation_handle(original_outline, 0., 0.8, 400., 300.)
+                        .unwrap()
+                        .handle
+                }
+                _ => Point { x: 110., y: 210. }, // Lower lines outside the fontless estimate.
+            };
+            let (tx, rx) = mpsc::channel();
+            layer_frame(
+                &ctx,
+                &mut view,
+                &tx,
+                preview,
+                true,
+                egui::Modifiers::NONE,
+                vec![egui::Event::PointerButton {
+                    pos: project(start),
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+            assert!(view.layer_gesture.is_some(), "{action}: {:?}", view.error);
+            let end = Point {
+                x: start.x + 30.,
+                y: start.y + 20.,
+            };
+            layer_frame(
+                &ctx,
+                &mut view,
+                &tx,
+                preview,
+                true,
+                egui::Modifiers::NONE,
+                vec![egui::Event::PointerMoved(project(end))],
+            );
+            let Job::DrawingPreview {
+                request: Request::Layer { id, edit },
+                epoch,
+                reply,
+            } = rx.try_recv().unwrap()
+            else {
+                panic!("text preview")
+            };
+            assert_eq!(id, "text");
+            assert_eq!(serde_json::to_value(edit).unwrap()["action"], action);
+            if let Some(LayerGesture {
+                kind: LayerGestureKind::Resize { outline, .. },
+                ..
+            }) = &view.layer_gesture
+            {
+                assert_eq!(
+                    *outline, original_outline,
+                    "do not resize text with the stale map"
+                );
+            }
+            let mut rendered = drawing_preview::test_preview(Arc::new(RgbaImage::new(400, 300)));
+            let measured = original_outline.map(|point| Point {
+                x: point.x + 17.,
+                y: point.y + 29.,
+            });
+            rendered.selection_outlines.insert("text".into(), measured);
+            reply
+                .send(drawing_preview::Reply {
+                    epoch,
+                    pixels: Ok(rendered),
+                })
+                .unwrap();
+            view.drawing_preview.as_mut().unwrap().receive(&tx);
+            layer_frame(
+                &ctx,
+                &mut view,
+                &tx,
+                preview,
+                true,
+                egui::Modifiers::NONE,
+                vec![],
+            );
+            assert_eq!(
+                view.drawing_preview
+                    .as_ref()
+                    .unwrap()
+                    .geometry
+                    .as_ref()
+                    .unwrap()
+                    .selection_outlines["text"],
+                measured
+            );
+            view.cancel_layer_gesture();
+            assert!(view.drawing_preview.as_ref().unwrap().geometry.is_none());
+            assert!(view.drawing_preview.as_ref().unwrap().texture.is_none());
+        }
+    }
+
+    #[test]
     fn canvas_layer_pixels_coalesce_without_mutation_and_reject_release_or_cancel_replies() {
         for action in ["drag_move", "rotate", "resize", "curve"] {
             for release in [false, true] {
@@ -14385,7 +14597,7 @@ mod tests {
                 reply
                     .send(drawing_preview::Reply {
                         epoch,
-                        pixels: Ok(pixels.clone()),
+                        pixels: Ok(drawing_preview::test_preview(pixels.clone())),
                     })
                     .unwrap();
                 view.drawing_preview.as_mut().unwrap().receive(&tx);
@@ -14418,7 +14630,21 @@ mod tests {
                 view.cancel_drawing();
                 assert!(
                     view.drawing_preview.as_ref().unwrap().texture.is_some(),
-                    "inactive drawing cleanup cannot cancel layer pixels"
+                    "completed frames remain visible while the latest pointer sample renders"
+                );
+                assert!(
+                    Arc::ptr_eq(
+                        &view
+                            .drawing_preview
+                            .as_ref()
+                            .unwrap()
+                            .geometry
+                            .as_ref()
+                            .unwrap()
+                            .pixels,
+                        &pixels,
+                    ),
+                    "inactive drawing cleanup retains the layer's matching frame"
                 );
                 layer_frame(&ctx, &mut view, &tx, preview, true, modifiers, vec![]);
                 assert!(
@@ -14471,7 +14697,7 @@ mod tests {
                 reply
                     .send(drawing_preview::Reply {
                         epoch,
-                        pixels: Ok(pixels),
+                        pixels: Ok(drawing_preview::test_preview(pixels)),
                     })
                     .unwrap();
                 view.drawing_preview.as_mut().unwrap().receive(&tx);
@@ -14479,6 +14705,7 @@ mod tests {
                     view.drawing_preview.as_ref().unwrap().texture.is_none(),
                     "late pixels cannot replace accepted state"
                 );
+                assert!(view.drawing_preview.as_ref().unwrap().geometry.is_none());
                 assert!(
                     rx.try_recv().is_err(),
                     "no queued work survives the gesture"

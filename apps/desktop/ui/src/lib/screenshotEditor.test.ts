@@ -28,8 +28,11 @@ import {
   curveStrokeHoverHint,
   duplicateScreenshotElement,
   elementBounds,
+  elementInteractionCenter,
+  elementLocalBounds,
   elementLocalPoint,
   elementRotation,
+  elementRotationOrigin,
   elementRotationHandleFitsCanvas,
   elementRotationHandlePoint,
   elementWorldPoint,
@@ -66,6 +69,8 @@ import {
   stackDropLightFocusAtPoint,
   resizeBoundsFromHandle,
   resizeElement,
+  resizeHandlePoint,
+  oppositeResizeHandle,
   shapeLocalBounds,
   shapeRotation,
   shapeRotationDegrees,
@@ -123,6 +128,7 @@ import {
   type EditorImageElement,
   type EditorShapeElement,
   type EditorTextElement,
+  type ResizeHandle,
   type ScreenshotElement,
 } from "./screenshotEditor";
 
@@ -138,6 +144,173 @@ function estimateLineFits(line: string, maxWidth: number, fontSize: number): boo
   if (!line) return true;
   return line.length * fontSize * 0.56 <= maxWidth + fontSize * 0.56;
 }
+
+describe("measured text interaction geometry", () => {
+  const label: EditorTextElement = {
+    ...editableLayer,
+    id: "measured-label",
+    kind: "text",
+    x: 100,
+    y: 100,
+    text: "WW WW",
+    fontSize: 20,
+    width: 80,
+    autoWidth: false,
+    fontFamily: "sans",
+    bold: true,
+    italic: false,
+    align: "left",
+    color: "#ffffff",
+    background: null,
+    outlined: false,
+    roundedBackground: false,
+  };
+
+  it.each([
+    { width: 80, advance: 1, measuredLines: 2, estimatedLines: 1 },
+    { width: 40, advance: 0.3, measuredLines: 1, estimatedLines: 2 },
+  ])(
+    "picks measured body and handles when width=$width disagrees with estimates",
+    ({ width, advance, measuredLines, estimatedLines }) => {
+      const element = { ...label, width, rotation: Math.PI / 3 };
+      const measure = (text: EditorTextElement, line: string) =>
+        line.length * text.fontSize * advance;
+      const bounds = elementLocalBounds(element, measure);
+      expect(bounds.height).toBe(measuredLines * 25);
+      expect(elementLocalBounds(element).height).toBe(estimatedLines * 25);
+      const disputedPoint = elementWorldPoint(element, {
+        x: element.x + width / 2,
+        y: element.y + 37.5,
+      });
+      expect(hitTestElement([element], disputedPoint, 0, measure)).toBe(
+        measuredLines === 2 ? element : null,
+      );
+      expect(hitTestElement([element], disputedPoint, 0)).toBe(
+        estimatedLines === 2 ? element : null,
+      );
+      const corner = elementWorldPoint(element, resizeHandlePoint(bounds, "se"));
+      expect(hitTestResizeHandle(bounds, elementLocalPoint(element, corner), 4)).toBe("se");
+      const handle = elementRotationHandlePoint(element, 1, undefined, measure);
+      expect(hitTestElementRotationHandle(element, handle, 4, 1, undefined, measure)).toBe(true);
+      const worldBounds = elementBounds(element, measure);
+      const corners = (["nw", "ne", "se", "sw"] as const).map((grip) =>
+        elementWorldPoint(element, resizeHandlePoint(bounds, grip)),
+      );
+      expect(worldBounds.x).toBeCloseTo(Math.min(...corners.map(({ x }) => x)));
+      expect(worldBounds.y).toBeCloseTo(Math.min(...corners.map(({ y }) => y)));
+      expect(worldBounds.width).toBeCloseTo(Math.max(...corners.map(({ x }) => x)) - worldBounds.x);
+      expect(worldBounds.height).toBeCloseTo(
+        Math.max(...corners.map(({ y }) => y)) - worldBounds.y,
+      );
+    },
+  );
+
+  it("retains saved-label paint coordinates while rotating interactions about their measured center", () => {
+    const element = { ...label, rotation: Math.PI / 2 };
+    const measure = (text: EditorTextElement, line: string) => line.length * text.fontSize;
+    const saved = JSON.stringify(element);
+    // Historical estimate: one 25px line, even though the canvas paints two.
+    expect(elementRotationOrigin(element)).toEqual({ x: 140, y: 112.5 });
+    expect(elementWorldPoint(element, { x: 100, y: 100 }).x).toBeCloseTo(152.5);
+    expect(elementWorldPoint(element, { x: 100, y: 100 }).y).toBeCloseTo(72.5);
+    const center = elementInteractionCenter(element, measure);
+    expect(center.x).toBeCloseTo(127.5);
+    expect(center.y).toBeCloseTo(112.5);
+    for (const angle of [0, -Math.PI / 4, Math.PI]) {
+      const next = withElementRotation(element, angle, measure);
+      const nextCenter = elementInteractionCenter(next, measure);
+      expect(nextCenter.x).toBeCloseTo(center.x, 8);
+      expect(nextCenter.y).toBeCloseTo(center.y, 8);
+    }
+    expect(JSON.stringify(element)).toBe(saved);
+  });
+
+  it.each([0, Math.PI / 3, -Math.PI / 4])(
+    "pins remeasured opposite handles across wrap changes at rotation=%s",
+    (rotation) => {
+      const handles: ResizeHandle[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
+      for (const { width, nextWidth, advance } of [
+        { width: 80, nextWidth: 120, advance: 1 },
+        { width: 120, nextWidth: 80, advance: 1 },
+        { width: 40, nextWidth: 20, advance: 0.3 },
+      ]) {
+        const element = { ...label, width, rotation };
+        const measure = (text: EditorTextElement, line: string) =>
+          line.length * text.fontSize * advance;
+        const before = elementLocalBounds(element, measure);
+        for (const handle of handles) {
+          const opposite = oppositeResizeHandle(handle);
+          const fixed = elementWorldPoint(element, resizeHandlePoint(before, opposite));
+          const next = resizeElement(
+            element,
+            before,
+            { ...before, width: nextWidth },
+            measure,
+            handle,
+          );
+          const after = elementLocalBounds(next, measure);
+          expect(after.height).not.toBe(before.height);
+          const actual = elementWorldPoint(next, resizeHandlePoint(after, opposite));
+          expect(actual.x).toBeCloseTo(fixed.x, 8);
+          expect(actual.y).toBeCloseTo(fixed.y, 8);
+          expect(Object.keys(next).sort()).toEqual(Object.keys(element).sort());
+        }
+      }
+    },
+  );
+
+  it("remeasures candidate fonts and plate/shadow padding when resizing auto-width labels", () => {
+    const measure = (text: EditorTextElement, line: string) => line.length * text.fontSize;
+    const element = {
+      ...label,
+      autoWidth: true,
+      rotation: 0.7,
+      background: "#ff3b5c",
+      dropShadow: true,
+    };
+    const before = elementLocalBounds(element, measure);
+    const fixed = elementWorldPoint(element, resizeHandlePoint(before, "se"));
+    for (const scale of [0.63, 2, 1000]) {
+      const next = resizeElement(
+        element,
+        before,
+        { ...before, width: before.width * 0.7, height: before.height * scale },
+        measure,
+        "nw",
+      );
+      if (next.kind !== "text") throw new Error("expected text");
+      expect(next.autoWidth).toBe(false);
+      expect(next.fontSize).toBe(Math.min(512, Math.max(8, Math.round(20 * scale))));
+      const actual = elementWorldPoint(
+        next,
+        resizeHandlePoint(elementLocalBounds(next, measure), "se"),
+      );
+      expect(actual.x).toBeCloseTo(fixed.x, 8);
+      expect(actual.y).toBeCloseTo(fixed.y, 8);
+    }
+  });
+
+  it("uses measured edges for movement snapping, trim and expansion preview/commit", () => {
+    const measure = (text: EditorTextElement, line: string) => line.length * text.fontSize;
+    const document = { ...createScreenshotDocument("capture", 250, 140), elements: [label] };
+    const bounds = elementBounds(label, measure);
+    expect(visibleContentBounds(document, measure)).toEqual(bounds);
+    expect(collectAlignmentSnapLines(document, null, measure).horizontal).toContain(150);
+    expect(collectAlignmentSnapLines(document, null).horizontal).not.toContain(150);
+    const preview = previewExpandedCanvasRect(bounds, document, 0);
+    const expanded = expandDocumentToFitBounds(document, bounds, 0);
+    expect(preview).toEqual({ x: 0, y: 0, width: expanded.width, height: expanded.height });
+    expect(expanded.height).toBe(150);
+    const trimmed = trimDocumentToContent(document, 0, measure);
+    expect(trimmed.height).toBe(50);
+    const margins = canvasTrimMarginPreview(document, 0, measure);
+    expect(margins?.margins.bottom).toBe(0);
+    const snapped = snapTranslatedBounds(bounds, { vertical: [], horizontal: [153] }, 5);
+    const moved = translateElement(label, snapped.bounds.x - bounds.x, snapped.bounds.y - bounds.y);
+    expect(elementBounds(moved, measure)).toEqual(snapped.bounds);
+    expect(elementBounds(moved, measure).y + bounds.height).toBe(153);
+  });
+});
 
 describe("screenshot editor geometry", () => {
   it("creates a lossless full-resolution document", () => {

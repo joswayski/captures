@@ -1,7 +1,7 @@
 //! Shipping editor paragraph, auto-width and interaction rules.
 //!
-//! Paint uses explicit font measurement. Selection/resize deliberately use the
-//! shipping UTF-16 width estimate, not glyph ink or host font access.
+//! Paint and worker-owned interactions use explicit font measurement. The
+//! UTF-16 estimate remains available for fontless callers and legacy paint pivots.
 
 use serde::Serialize;
 
@@ -387,7 +387,7 @@ pub fn shadow_style(element: &TextElement, size: f64) -> ElementStyle {
     }
 }
 
-fn interaction_pad(element: &TextElement, size: f64) -> Point {
+pub(crate) fn interaction_pad(element: &TextElement, size: f64) -> Point {
     let shadow = annotation_drop_shadow_pad(&shadow_style(element, size));
     let plate = element
         .background
@@ -514,15 +514,22 @@ pub struct InlineEditorLayout {
     pub auto_width: bool,
 }
 
-/// Geometry for the host-drawn inline text editor. Uses the same estimated
-/// wrapping as shipping's layout box; hosts wrap glyphs with real metrics.
+/// Fontless compatibility geometry for the host-drawn inline text editor.
 pub fn inline_editor_layout(element: &TextElement) -> Result<InlineEditorLayout, String> {
+    inline_editor_layout_with(element, &mut selection_bounds)
+}
+
+pub fn inline_editor_layout_with(
+    element: &TextElement,
+    measure: &mut crate::editor::TextMeasurer<'_>,
+) -> Result<InlineEditorLayout, String> {
     validate(element)?;
     let size = element.font_size;
-    let width = element.width.max(minimum_width(size));
-    let rows = lines(element, width, &mut |line| estimate(line, size))?;
+    let bounds = measure(element)?;
+    let pad = interaction_pad(element, size);
+    let width = bounds.width - 2. * pad.x;
     let line_height = size * 1.25;
-    let content_height = rows.len().max(1) as f64 * line_height;
+    let content_height = bounds.height - 2. * pad.y;
     let plate = element
         .background
         .as_deref()
@@ -532,12 +539,19 @@ pub fn inline_editor_layout(element: &TextElement) -> Result<InlineEditorLayout,
     } else {
         (0., 0.)
     };
-    let frame = Rect {
+    let mut frame = Rect {
         x: element.base.x - pad_x,
         y: element.base.y - pad_y,
         width: width + pad_x * 2.,
         height: content_height + pad_y * 2.,
     };
+    // Hosts rotate inline controls about their own center. Place that center
+    // on the measured box's world center without changing the saved paint pivot.
+    let center = crate::editor::rect_center(frame);
+    let pivot = crate::editor::rect_center(selection_bounds(element)?);
+    let world = crate::editor::rotate_point(center, pivot, element.base.rotation());
+    frame.x += world.x - center.x;
+    frame.y += world.y - center.y;
     let optical = size * 0.07;
     let shortest = frame.width.min(frame.height);
     let plate_radius = if plate && element.rounded_background && shortest > 0. {

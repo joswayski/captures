@@ -4,7 +4,7 @@ use super::region::{RegionPixels, response, text};
 use captures_app::{
     editor::{
         ClosedShapeKind, CropDrag, DEFAULT_ROTATION_SNAP_DEGREES, Document, Element, ElementBase,
-        ElementStyle, GuideOrientation, MoveDrag, Point, ResizeDrag, ShapeElement,
+        ElementStyle, GuideOrientation, MoveDrag, Point, ResizeDrag, ShapeElement, TextBounds,
         arrow_fill_polygon, preview_rotation, rotation_handle, smooth_path_centerline,
     },
     editor_canvas as canvas,
@@ -284,6 +284,23 @@ pub unsafe extern "C" fn captures_editor_move_begin_v1(
     display_scale: f64,
     output: *mut *mut MoveDrag,
 ) -> *mut c_char {
+    // SAFETY: forwards the caller's input and output contracts; null selects legacy geometry.
+    unsafe {
+        captures_editor_move_begin_v2(document_json, ptr::null(), layer_id, display_scale, output)
+    }
+}
+
+/// Begin a move using published, ephemeral text bounds. Null bounds retain v1 behavior.
+/// # Safety
+/// Strings are readable NUL-terminated UTF-8; output is writable. Free as for v1.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_editor_move_begin_v2(
+    document_json: *const c_char,
+    text_bounds_json: *const c_char,
+    layer_id: *const c_char,
+    display_scale: f64,
+    output: *mut *mut MoveDrag,
+) -> *mut c_char {
     let result = catch_unwind(AssertUnwindSafe(|| {
         if output.is_null() {
             return Err("Missing move output.".into());
@@ -302,7 +319,16 @@ pub unsafe extern "C" fn captures_editor_move_begin_v1(
         if element.base().locked || !element.base().visible {
             return Err("The selected layer is hidden or locked.".into());
         }
-        let drag = MoveDrag::new(&document, id, display_scale)?;
+        let drag = if text_bounds_json.is_null() {
+            MoveDrag::new(&document, id, display_scale)?
+        } else {
+            // SAFETY: caller retains the readable snapshot JSON for this call.
+            let bounds: TextBounds = serde_json::from_str(unsafe { text(text_bounds_json) }?)
+                .map_err(|error| error.to_string())?;
+            MoveDrag::new_with(&document, id, display_scale, &mut |text| {
+                bounds.bounds(text)
+            })?
+        };
         // SAFETY: caller takes unique ownership of copied geometry and snap lines.
         unsafe { output.write(Box::into_raw(Box::new(drag))) };
         Ok::<_, String>(json!({}))
@@ -324,15 +350,40 @@ pub unsafe extern "C" fn captures_editor_move_preview_v1(
     delta: AbiPoint,
     output: *mut ResizePreview,
 ) -> bool {
+    // SAFETY: forwards the v1 input/output contracts.
+    unsafe { captures_editor_move_preview_v2(drag, ptr::null(), delta, output) }
+}
+
+/// Move preview using the same snapshot bounds as begin_v2. Moving does not reflow text.
+/// # Safety
+/// Drag is live, bounds JSON is null or readable UTF-8, output is writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_editor_move_preview_v2(
+    drag: *const MoveDrag,
+    text_bounds_json: *const c_char,
+    delta: AbiPoint,
+    output: *mut ResizePreview,
+) -> bool {
     if drag.is_null() || output.is_null() {
         return false;
     }
     catch_unwind(AssertUnwindSafe(|| {
         // SAFETY: caller retains the immutable owner for this call.
-        let Ok(preview) = unsafe { &*drag }.preview(Point {
+        let drag = unsafe { &*drag };
+        let delta = Point {
             x: delta.x,
             y: delta.y,
-        }) else {
+        };
+        let result = if text_bounds_json.is_null() {
+            drag.preview(delta)
+        } else {
+            // SAFETY: caller retains readable input for this call.
+            let bounds = unsafe { text(text_bounds_json) }.and_then(|json| {
+                serde_json::from_str::<TextBounds>(json).map_err(|error| error.to_string())
+            });
+            bounds.and_then(|bounds| drag.preview_with(delta, &mut |text| bounds.bounds(text)))
+        };
+        let Ok(preview) = result else {
             return false;
         };
         // SAFETY: caller supplies writable descriptor storage; all values copied.
@@ -365,6 +416,32 @@ pub unsafe extern "C" fn captures_editor_resize_begin_v1(
     display_scale: f64,
     output: *mut *mut ResizeDrag,
 ) -> *mut c_char {
+    // SAFETY: forwards the v1 contracts; null selects legacy geometry.
+    unsafe {
+        captures_editor_resize_begin_v2(
+            document_json,
+            ptr::null(),
+            layer_id,
+            point,
+            display_scale,
+            output,
+        )
+    }
+}
+
+/// Pick a measured resize grip. Text candidates must use worker drawing previews,
+/// not resize_preview_v1: resizing changes font size/wrapping and invalidates the map.
+/// # Safety
+/// Strings are readable NUL-terminated UTF-8; output is writable. Free as for v1.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_editor_resize_begin_v2(
+    document_json: *const c_char,
+    text_bounds_json: *const c_char,
+    layer_id: *const c_char,
+    point: AbiPoint,
+    display_scale: f64,
+    output: *mut *mut ResizeDrag,
+) -> *mut c_char {
     let result = catch_unwind(AssertUnwindSafe(|| {
         if output.is_null() {
             return Err("Missing resize output.".into());
@@ -386,17 +463,35 @@ pub unsafe extern "C" fn captures_editor_resize_begin_v1(
         if element.base().locked || !element.base().visible {
             return Ok(json!({"handle": null}));
         }
-        let handle = element.resize_handle_at(
-            Point {
-                x: point.x,
-                y: point.y,
-            },
-            8. / display_scale,
-        )?;
+        let bounds: Option<TextBounds> = if text_bounds_json.is_null() {
+            None
+        } else {
+            // SAFETY: caller retains readable snapshot JSON.
+            Some(
+                serde_json::from_str(unsafe { text(text_bounds_json) }?)
+                    .map_err(|error| error.to_string())?,
+            )
+        };
+        let point = Point {
+            x: point.x,
+            y: point.y,
+        };
+        let handle = if let Some(bounds) = &bounds {
+            element
+                .resize_handle_at_with(point, 8. / display_scale, &mut |text| bounds.bounds(text))?
+        } else {
+            element.resize_handle_at(point, 8. / display_scale)?
+        };
         let Some(handle) = handle else {
             return Ok(json!({"handle": null}));
         };
-        let drag = ResizeDrag::new(&document, id, handle, display_scale)?;
+        let drag = if let Some(bounds) = &bounds {
+            ResizeDrag::new_with(&document, id, handle, display_scale, &mut |text| {
+                bounds.bounds(text)
+            })?
+        } else {
+            ResizeDrag::new(&document, id, handle, display_scale)?
+        };
         let result = json!({"handle": handle as u32});
         // SAFETY: the caller takes ownership independently of the parsed document.
         unsafe { output.write(Box::into_raw(Box::new(drag))) };
@@ -583,11 +678,34 @@ pub unsafe extern "C" fn captures_editor_hit_test_document_v1(
     y: f64,
     tolerance: f64,
 ) -> *mut c_char {
+    // SAFETY: forwards the v1 readable-input contract.
+    unsafe { captures_editor_hit_test_document_v2(document_json, ptr::null(), x, y, tolerance) }
+}
+
+/// Pick any layer using bounds published with the document, without accessing fonts.
+/// # Safety
+/// Strings are readable NUL-terminated UTF-8. Null bounds retain v1 behavior.
+/// Free the response with captures_settings_free_v1.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_editor_hit_test_document_v2(
+    document_json: *const c_char,
+    text_bounds_json: *const c_char,
+    x: f64,
+    y: f64,
+    tolerance: f64,
+) -> *mut c_char {
     let result = catch_unwind(AssertUnwindSafe(|| {
         // SAFETY: caller retains readable input during this call.
         let document: Document = serde_json::from_str(unsafe { text(document_json) }?)
             .map_err(|error| error.to_string())?;
-        let hit = document.hit_test(Point { x, y }, tolerance)?;
+        let hit = if text_bounds_json.is_null() {
+            document.hit_test(Point { x, y }, tolerance)?
+        } else {
+            // SAFETY: caller retains readable snapshot JSON for this call.
+            let bounds: TextBounds = serde_json::from_str(unsafe { text(text_bounds_json) }?)
+                .map_err(|error| error.to_string())?;
+            document.hit_test_with(Point { x, y }, tolerance, &mut |text| bounds.bounds(text))?
+        };
         Ok::<_, String>(json!({"hit": hit.map(|element| element.base().id.as_str())}))
     }))
     .unwrap_or_else(|_| Err("internal panic".into()));
@@ -1345,13 +1463,17 @@ pub unsafe extern "C" fn captures_editor_preview_drawing_v1(
         let request = serde_json::from_str::<Request>(unsafe { text(request_json) }?)
             .map_err(|error| error.to_string())?;
         let session = unsafe { session.as_mut() }.ok_or("editor handle is null")?;
-        session.preview_drawing(request)
+        session.preview_drawing_with_geometry(request)
     }))
     .unwrap_or_else(|_| Err("internal panic".into()));
     let (frame, value) = match result {
-        Ok(pixels) => (
-            Box::into_raw(Box::new(pixels)),
-            json!({"ok":true,"result":{}}),
+        Ok(preview) => (
+            Box::into_raw(Box::new(preview.pixels)),
+            json!({"ok":true,"result":{
+                "text_bounds": preview.text_bounds,
+                "selection_outlines": preview.selection_outlines,
+                "guides": preview.guides,
+            }}),
         ),
         Err(error) => (ptr::null_mut(), json!({"ok":false,"error":error})),
     };
@@ -2469,6 +2591,152 @@ mod tests {
         assert!(!session.is_null());
         assert_eq!(unsafe { take_json(output) }["ok"], true);
         session
+    }
+
+    #[test]
+    fn measured_text_picking_dragging_and_preview_geometry_use_the_session_frame() {
+        let (_data, request, _) = editor_fixture();
+        // SAFETY: all JSON strings and owners remain live; each returned allocation is freed once.
+        unsafe {
+            let session = open_editor(&request);
+            (&mut *session)
+                .execute(Request::ResizeCanvas {
+                    width: 640.,
+                    height: 480.,
+                })
+                .unwrap();
+            (&mut *session)
+                .execute(
+                    serde_json::from_value(json!({
+                        "operation": "create_text", "point": {"x": 80., "y": 80.},
+                        "text": "WWW iii WWW iii WWW iii", "fontSize": 32.,
+                        "fontFamily": "sans", "color": "#111111", "dropShadow": false,
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+            let id = (&*session)
+                .snapshot()
+                .document
+                .elements
+                .last()
+                .unwrap()
+                .base()
+                .id
+                .clone();
+            let id_c = CString::new(id.clone()).unwrap();
+            (&mut *session).execute(serde_json::from_value(json!({
+                "operation": "layer", "id": id, "edit": {"action": "resize", "handle": "e",
+                    "current": {"x": 210., "y": 100.}, "display_scale": 1., "lock_aspect": false}
+            })).unwrap()).unwrap();
+            for edit in [
+                json!({"action": "drag_move", "delta_x": 23., "delta_y": 31., "display_scale": 1.}),
+                json!({"action": "resize", "handle": "se", "current": {"x": 310., "y": 390.},
+                    "display_scale": 1., "lock_aspect": false}),
+                json!({"action": "rotate", "radians": 0.6}),
+            ] {
+                let before = json!((&*session).snapshot());
+                let document = CString::new(before["document"].to_string()).unwrap();
+                let bounds = CString::new(before["text_bounds"].to_string()).unwrap();
+                let outline: [Point; 4] =
+                    serde_json::from_value(before["selection_outlines"][&id].clone()).unwrap();
+                let center = Point {
+                    x: (outline[0].x + outline[2].x) / 2.,
+                    y: (outline[0].y + outline[2].y) / 2.,
+                };
+                let hit = take_json(captures_editor_hit_test_document_v2(
+                    document.as_ptr(),
+                    bounds.as_ptr(),
+                    center.x,
+                    center.y,
+                    0.,
+                ));
+                assert_eq!(hit["result"]["hit"], id);
+                let missing = take_json(captures_editor_hit_test_document_v2(
+                    document.as_ptr(),
+                    c"{}".as_ptr(),
+                    center.x,
+                    center.y,
+                    0.,
+                ));
+                assert_eq!(
+                    missing["ok"], false,
+                    "no fontless fallback for missing measured text"
+                );
+                let mut resize = ptr::null_mut();
+                let grip = take_json(captures_editor_resize_begin_v2(
+                    document.as_ptr(),
+                    bounds.as_ptr(),
+                    id_c.as_ptr(),
+                    AbiPoint {
+                        x: outline[2].x,
+                        y: outline[2].y,
+                    },
+                    1.,
+                    &mut resize,
+                ));
+                assert_eq!(grip["result"]["handle"], 4);
+                captures_editor_resize_free_v1(resize);
+                let request =
+                    CString::new(json!({"operation": "layer", "id": id, "edit": edit}).to_string())
+                        .unwrap();
+                let mut output = ptr::null_mut();
+                let frame =
+                    captures_editor_preview_drawing_v1(session, request.as_ptr(), &mut output);
+                let result = take_json(output);
+                assert_eq!(result["ok"], true, "{result}");
+                assert!(!frame.is_null());
+                assert_eq!(
+                    json!((&*session).snapshot()),
+                    before,
+                    "preview is ephemeral"
+                );
+                if edit["action"] == "drag_move" {
+                    let mut drag = ptr::null_mut();
+                    assert_eq!(
+                        take_json(captures_editor_move_begin_v2(
+                            document.as_ptr(),
+                            bounds.as_ptr(),
+                            id_c.as_ptr(),
+                            1.,
+                            &mut drag
+                        ))["ok"],
+                        true
+                    );
+                    let mut geometry = MaybeUninit::uninit();
+                    assert!(captures_editor_move_preview_v2(
+                        drag,
+                        bounds.as_ptr(),
+                        AbiPoint { x: 23., y: 31. },
+                        geometry.as_mut_ptr()
+                    ));
+                    let geometry = geometry.assume_init();
+                    for (actual, expected) in geometry.outline.iter().zip(
+                        result["result"]["selection_outlines"][&id]
+                            .as_array()
+                            .unwrap(),
+                    ) {
+                        assert_eq!(actual.x, expected["x"].as_f64().unwrap());
+                        assert_eq!(actual.y, expected["y"].as_f64().unwrap());
+                    }
+                    captures_editor_move_free_v1(drag);
+                }
+                let committed = take_json(captures_editor_request_v1(session, request.as_ptr()));
+                assert_eq!(committed["ok"], true, "{committed}");
+                assert_eq!(
+                    result["result"]["selection_outlines"],
+                    committed["result"]["selection_outlines"]
+                );
+                assert_eq!(
+                    result["result"]["text_bounds"],
+                    committed["result"]["text_bounds"]
+                );
+                assert_eq!(*(*frame), *(&*session).pixels());
+                assert!(committed["result"]["document"].get("text_bounds").is_none());
+                captures_editor_frame_free_v1(frame);
+            }
+            captures_editor_free_v1(session);
+        }
     }
 
     #[test]

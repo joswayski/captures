@@ -20,6 +20,7 @@ import {
   elementRotationHandlePoint,
   resizeHandlePoint,
   type EditorShapeElement,
+  type EditorTextElement,
 } from "./lib/screenshotEditor";
 import { ScreenshotEditor } from "./ScreenshotEditor";
 import type { CaptureArtifact } from "./types";
@@ -1492,6 +1493,85 @@ describe("ScreenshotEditor", () => {
     expect(Number.parseFloat(inlineFrame.style.width)).toBeCloseTo(200, 5);
     expect(Number.parseFloat(inlineFrame.style.height)).toBeLessThan(60);
     expect(inlineFrame.style.transform).toContain("rotate(1.570796");
+  });
+
+  it("refreshes measured picking and inline geometry after fonts load without moving the legacy paint pivot", async () => {
+    const restoreCanvas = installExportableCanvas();
+    const originalFonts = Object.getOwnPropertyDescriptor(document, "fonts");
+    const fonts = Object.assign(new EventTarget(), {
+      load: vi.fn(async () => []),
+      ready: Promise.resolve(),
+    });
+    Object.defineProperty(document, "fonts", { configurable: true, value: fonts });
+    let advance = 0.3;
+    const context = document.createElement("canvas").getContext("2d")!;
+    context.measureText = (line) => ({ width: line.length * 20 * advance }) as TextMetrics;
+    const label: EditorTextElement = {
+      id: "measured-text",
+      kind: "text",
+      text: "WW WW",
+      fontSize: 20,
+      width: 80,
+      autoWidth: false,
+      fontFamily: "sans",
+      bold: true,
+      italic: false,
+      align: "left",
+      color: "#fff",
+      background: null,
+      outlined: false,
+      roundedBackground: false,
+      x: 100,
+      y: 100,
+      rotation: Math.PI / 2,
+      locked: false,
+      visible: true,
+      opacity: 100,
+      blendMode: "source-over",
+    };
+    const draftDocument = createScreenshotDocument("capture", 1440, 900, "capture-1");
+    draftDocument.elements.push(label);
+    const originalInvoke = vi.mocked(invoke).getMockImplementation()!;
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "load_screenshot_editor_draft") {
+        return { document: draftDocument, updated_at_ms: 1 };
+      }
+      return originalInvoke(command, args);
+    });
+    try {
+      render(<ScreenshotEditor />);
+      await screen.findByText("Restored unsaved edits from last time.");
+      setCanvasZoomPercent(100);
+      const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
+      setCanvasBounds(canvas);
+      fireEvent.doubleClick(canvas, { button: 0, clientX: 140, clientY: 112.5 });
+      const input = await screen.findByRole("textbox", { name: "Edit text on canvas" });
+      const frame = input.parentElement!;
+      expect(frame.style.height).toBe("25px");
+      expect(frame.style.transformOrigin).toBe("40px 12.5px");
+
+      // Same document, newly available metrics: two lines rather than one.
+      advance = 1;
+      await act(async () => fonts.dispatchEvent(new Event("loadingdone")));
+      expect(frame.style.height).toBe("50px");
+      expect(frame.style.transformOrigin).toBe("40px 12.5px");
+      expect(frame.style.left).toBe("100px");
+      expect(frame.style.top).toBe("100px");
+      fireEvent.blur(input);
+      // Local (140,145) is world (107.5,112.5) about the unchanged old pivot.
+      // This lies beyond the old body's hit tolerance, but in the painted line.
+      fireEvent.doubleClick(canvas, { button: 0, clientX: 107.5, clientY: 112.5 });
+      expect(await screen.findByRole("textbox", { name: "Edit text on canvas" })).toHaveValue(
+        "WW WW",
+      );
+      expect(
+        document.querySelector("#captures-editor-paint-canvas-host canvas"),
+      ).toBeInTheDocument();
+    } finally {
+      restoreCanvas();
+      if (originalFonts) Object.defineProperty(document, "fonts", originalFonts);
+      else Reflect.deleteProperty(document, "fonts");
+    }
   });
 
   it("creates text with any of the seven visual style presets", async () => {

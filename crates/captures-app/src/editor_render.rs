@@ -192,6 +192,46 @@ fn canvas_text_line(line: &str) -> Cow<'_, str> {
     }
 }
 
+fn text_layout(
+    element: &TextElement,
+    renderer: &mut TextRenderer,
+    style: &TextStyle<'_>,
+) -> Result<crate::editor_text::TextLayout, String> {
+    crate::editor_text::layout(element, |line| {
+        renderer
+            .measure_line(&canvas_text_line(line), style)
+            .map(f64::from)
+    })
+}
+
+/// Measured line boxes plus the same plate/shadow interaction padding as paint.
+/// This is not tight glyph ink, and does not change the legacy painting pivot.
+pub(crate) fn measured_text_bounds(
+    element: &TextElement,
+    renderer: &mut TextRenderer,
+    families: &BTreeMap<String, String>,
+) -> Result<crate::editor::Rect, String> {
+    validate_text(element, families)?;
+    let layout = text_layout(
+        element,
+        renderer,
+        &TextStyle {
+            family: &families[&element.font_family],
+            size: element.font_size as f32,
+            bold: element.bold,
+            italic: element.italic,
+            color: [0, 0, 0, 255],
+        },
+    )?;
+    let pad = crate::editor_text::interaction_pad(element, element.font_size);
+    Ok(crate::editor::Rect {
+        x: layout.content.x - pad.x,
+        y: layout.content.y - pad.y,
+        width: layout.content.width + 2. * pad.x,
+        height: layout.content.height + 2. * pad.y,
+    })
+}
+
 /// Validate property edits even on hidden text, using the same fonts and Canvas
 /// normalization as paint. Content/type edits refit; color/alignment edits do not.
 pub(crate) fn prepare_text_edit(
@@ -246,11 +286,7 @@ fn text_layers(
         italic: element.italic,
         color: color(&element.color)?,
     };
-    let layout = crate::editor_text::layout(element, |line| {
-        renderer
-            .measure_line(&canvas_text_line(line), &style)
-            .map(f64::from)
-    })?;
+    let layout = text_layout(element, renderer, &style)?;
     let mode = blend_mode(&element.base.blend_mode, "text", &element.base.id)?;
     let number = |value, axis| finite_layer_f32(value, "text", axis, &element.base.id);
     let bounds = crate::editor_text::selection_bounds(element)?;

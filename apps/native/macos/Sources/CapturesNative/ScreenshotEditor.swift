@@ -782,6 +782,8 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
     var selectedOutline: [CGPoint]? { didSet { needsDisplay = true } }
     var selectedLayerID: String? { didSet { if selectedLayerID != oldValue { cancelGesture() }; needsDisplay = true } }
     var documentJSON: String? { didSet { if documentJSON != oldValue { cancelGesture() } } }
+    var textBoundsJSON: String? { didSet { if textBoundsJSON != oldValue { cancelGesture() } } }
+    var selectedIsText = false
     var selectedRotation = 0.0 { didSet { needsDisplay = true } }
     var rotationSnapDegrees = 15.0 {
         didSet { if rotationSnapDegrees != oldValue { cancelGesture() } }
@@ -795,6 +797,7 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
     var imageRect: (() -> NSRect)?
     var hitTestLayer: ((CGPoint, Double) throws -> String?)?
     var outlineForLayer: ((String) -> [CGPoint]?)?
+    var isTextLayer: ((String) -> Bool)?
     var onSelect: ((String?) -> Void)?
     var onMove: ((String, CGFloat, CGFloat, Double) -> Void)?
     var onRotate: ((String, Double) -> Void)?
@@ -802,6 +805,7 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
     var onPreview: ((String, [String: Any]) -> Void)?
     var onPreviewCancel: (() -> Void)?
     var pixelPreviewVisible = false { didSet { needsDisplay = true } }
+    var workerPreview: EditorDrawingPreview? { didSet { needsDisplay = true } }
     var onDoubleClick: ((CGPoint, Double) -> Bool)?
     var onError: ((Error) -> Void)?
     /// Curve dots for the selected visible, unlocked line/arrow.
@@ -852,8 +856,24 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
 
     static let resizeHandleNames = ["nw", "n", "ne", "e", "se", "s", "sw", "w"]
 
+    private var activeTextLayerID: String? {
+        guard startPoint != nil else { return nil }
+        if let id = rotatingLayerID ?? (resizeDrag != nil ? selectedLayerID : nil), selectedIsText { return id }
+        if let id = hitLayerID, isTextLayer?(id) == true { return id }
+        return nil
+    }
+
+    var displayedOutline: [CGPoint]? {
+        if let id = activeTextLayerID {
+            if let workerPreview { return workerPreview.selectionOutlines[id] }
+            return outlineForLayer?(id) ?? selectedOutline
+        }
+        return resizePreview?.outline ?? movePreview?.outline ?? rotationPreview?.outline
+            ?? (startPoint == nil ? selectedOutline : transientOutline)
+    }
+
     var resizeHandlePoints: [CGPoint] {
-        guard resizeEnabled, let outline = resizePreview?.outline ?? selectedOutline, outline.count == 4 else { return [] }
+        guard resizeEnabled, let outline = displayedOutline, outline.count == 4 else { return [] }
         return [outline[0], midpoint(outline[0], outline[1]), outline[1],
                 midpoint(outline[1], outline[2]), outline[2], midpoint(outline[2], outline[3]),
                 outline[3], midpoint(outline[3], outline[0])]
@@ -882,7 +902,7 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
             return true
         }
         if resizeEnabled, let id = selectedLayerID, let documentJSON,
-           let result = try? NativeEditorResizeDrag.begin(documentJSON: documentJSON, layerID: id,
+           let result = try? NativeEditorResizeDrag.begin(documentJSON: documentJSON, textBoundsJSON: textBoundsJSON, layerID: id,
                 point: documentPoint, displayScale: scale), result.1 != nil { return true }
         if curveHandles != nil, let id = selectedLayerID,
            curveHitTest?(id, documentPoint, 10 / scale)?.handle != nil { return true }
@@ -970,7 +990,7 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
             let scale = presentedImageRect.width / canvasSize.width
             var result: (NativeEditorResizeDrag?, Int?) = (nil, nil)
             if resizeEnabled, let id = selectedLayerID, let documentJSON {
-                result = try NativeEditorResizeDrag.begin(documentJSON: documentJSON, layerID: id,
+                result = try NativeEditorResizeDrag.begin(documentJSON: documentJSON, textBoundsJSON: textBoundsJSON, layerID: id,
                     point: documentPoint, displayScale: scale)
             }
             // Shipping priority: corner resize, then curve dots, then edge resize.
@@ -985,7 +1005,7 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
                 resizeDrag = drag; resizeHandle = handle
                 startPoint = point; currentPoint = point
                 lockResizeAspect = snap && handle.isMultiple(of: 2)
-                resizePreview = drag.preview(current: documentPoint, lockAspect: lockResizeAspect)
+                if !selectedIsText { resizePreview = drag.preview(current: documentPoint, lockAspect: lockResizeAspect) }
                 needsDisplay = true; return
             }
             hitLayerID = try hitTestLayer?(documentPoint, 8 / scale)
@@ -993,7 +1013,7 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
             if let id = hitLayerID {
                 guard let documentJSON else { throw AppBridgeError.invalidResponse }
                 moveDrag = try NativeEditorMoveDrag.begin(documentJSON: documentJSON,
-                    layerID: id, displayScale: scale)
+                    textBoundsJSON: textBoundsJSON, layerID: id, displayScale: scale)
             }
             transientOutline = hitLayerID.flatMap { outlineForLayer?($0) }
             startPoint = point; currentPoint = point; needsDisplay = true
@@ -1012,7 +1032,8 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
                 snapDegrees: rotationSnapDegrees)
         } else if let resizeDrag, let handle = resizeHandle {
             if let snap { lockResizeAspect = snap && handle.isMultiple(of: 2) }
-            resizePreview = resizeDrag.preview(current: canvasPoint(for: point), lockAspect: lockResizeAspect)
+            // A text resize reflows the candidate. Only the worker can measure it.
+            if !selectedIsText { resizePreview = resizeDrag.preview(current: canvasPoint(for: point), lockAspect: lockResizeAspect) }
         } else if let moveDrag {
             guard hypot(point.x - startPoint.x, point.y - startPoint.y) >= 3 else {
                 movePreview = nil; needsDisplay = true; onPreviewCancel?(); return
@@ -1091,6 +1112,7 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
         rotationStartOutline = nil; rotatingLayerID = nil; rotationPreview = nil; needsDisplay = true
         resizeDrag = nil; resizeHandle = nil; resizePreview = nil; lockResizeAspect = false
         moveDrag = nil; movePreview = nil
+        workerPreview = nil
         curveLayerID = nil; curveHandle = nil; curvePreview = nil
         if active { onPreviewCancel?() }
         layoutExpandButton()
@@ -1122,8 +1144,7 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
     }
     private func drawSelection() {
         guard canvasSize.width > 0, canvasSize.height > 0,
-              let outline = resizePreview?.outline ?? movePreview?.outline ?? rotationPreview?.outline
-                ?? (startPoint == nil ? selectedOutline : transientOutline),
+              let outline = displayedOutline,
               outline.count == 4 else { return }
         NSGraphicsContext.saveGraphicsState()
         defer { NSGraphicsContext.restoreGraphicsState() }
@@ -1136,9 +1157,10 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
             index == 0 ? path.move(to: mapped) : path.line(to: mapped)
         }
         path.close(); strokeColor.setStroke(); path.lineWidth = 2; path.stroke()
-        if let preview = resizePreview ?? movePreview {
+        let activeGuides = activeTextLayerID != nil ? (workerPreview?.guides ?? []) : (resizePreview ?? movePreview)?.guides ?? []
+        if !activeGuides.isEmpty {
             let guides = NSBezierPath()
-            for guide in preview.guides {
+            for guide in activeGuides {
                 if guide.orientation == .vertical {
                     let x = image.minX + guide.position * scale
                     guides.move(to: CGPoint(x: x, y: image.minY)); guides.line(to: CGPoint(x: x, y: image.maxY))
@@ -1159,7 +1181,8 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
         }
         if rotationEnabled, startPoint == nil || rotatingLayerID != nil,
            let geometry = NativeEditorRotationHandle(outline: outline,
-               radians: rotationPreview?.radians ?? selectedRotation, displayScale: scale, canvas: canvasSize) {
+               radians: activeTextLayerID != nil ? atan2(outline[1].y - outline[0].y, outline[1].x - outline[0].x)
+                   : rotationPreview?.radians ?? selectedRotation, displayScale: scale, canvas: canvasSize) {
             let map: (CGPoint) -> CGPoint = { CGPoint(x: image.minX + $0.x * scale, y: image.minY + $0.y * scale) }
             let connector = NSBezierPath(); connector.move(to: map(geometry.anchor)); connector.line(to: map(geometry.handle))
             connector.lineWidth = 2; connector.stroke()
@@ -2444,10 +2467,14 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                           shape: self.drawShape.rawValue, point: point, radius: tolerance * 10 / 8) else { return nil }
                 return id
             }
-            return try NativeEditorHitTesting.hit(documentJSON: json, point: point, tolerance: tolerance)
+            return try NativeEditorHitTesting.hit(documentJSON: json, textBoundsJSON: self.state.snapshot?.textBoundsJSON,
+                                                 point: point, tolerance: tolerance)
         }
         selectionOverlay.outlineForLayer = { [weak self] id in
             self?.state.snapshot?.layers.first(where: { $0.id == id })?.selectionOutline
+        }
+        selectionOverlay.isTextLayer = { [weak self] id in
+            self?.state.snapshot?.layers.first(where: { $0.id == id })?.kind == .text
         }
         selectionOverlay.onSelect = { [weak self] id in self?.selectCanvasLayer(id) }
         selectionOverlay.onMove = { [weak self] id, dx, dy, scale in
@@ -5051,6 +5078,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         if drawOverlay.pixelPreviewVisible || selectionOverlay.pixelPreviewVisible { preview.image = editedImage }
         drawOverlay.pixelPreviewVisible = false
         selectionOverlay.pixelPreviewVisible = false
+        selectionOverlay.workerPreview = nil
     }
 
     private func drainDrawingPreview() {
@@ -5064,8 +5092,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             if self.drawingPreviewEpoch == epoch, self.state.generation == generation,
                !self.state.busy, self.drawOverlay.startPoint != nil || self.selectionOverlay.startPoint != nil {
                 switch result {
-                case .success(let image):
+                case .success(let preview):
+                    let image = preview.image
                     self.preview.image = NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
+                    self.selectionOverlay.workerPreview = preview
                     self.drawOverlay.pixelPreviewVisible = self.drawOverlay.startPoint != nil
                     self.selectionOverlay.pixelPreviewVisible = self.selectionOverlay.startPoint != nil
                 case .failure:
@@ -5074,6 +5104,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                     }
                     self.drawOverlay.pixelPreviewVisible = false
                     self.selectionOverlay.pixelPreviewVisible = false
+                    self.selectionOverlay.workerPreview = nil
                 }
             }
             self.drainDrawingPreview()
@@ -5143,6 +5174,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
               let snapshot = state.snapshot else { return false }
         do {
             guard let id = try NativeEditorHitTesting.hit(documentJSON: snapshot.documentJSON,
+                                                           textBoundsJSON: snapshot.textBoundsJSON,
                                                            point: point, tolerance: tolerance),
                   let layer = snapshot.layers.first(where: { $0.id == id }),
                   layer.kind == .text, layer.visible, !layer.locked,
@@ -5893,6 +5925,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     /// creates (`inline_text_layout`, shared with the wgpu host).
     private func inlineTextLayout() -> NativeInlineTextLayout? {
         guard let input = inlineTextInput else { return nil }
+        if state.snapshot?.activeTextInput?.inputID == input.inputID,
+           let layout = state.snapshot?.activeTextLayout { return layout }
         let target = input.beginTarget
         let existing = target?["kind"] as? String == "existing" ? target?["id"] as? String : nil
         if let id = input.layerID ?? existing, let element = documentTextElement(id),
@@ -5961,8 +5995,13 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let contentWidth = layout.autoWidth ? ceil(bounds.width) + 2 : acceptedWidth
         let trailingLine: CGFloat = text.hasSuffix("\n") ? lineHeight : 0
         let contentHeight = max(lineHeight, ceil(bounds.height) + trailingLine)
-        let width = contentWidth + pad[1] + pad[3]
-        let height = contentHeight + pad[0] + pad[2]
+        // Accepted layout already carries the worker's measured world centre.
+        // Local sizing is only for the unaccepted typing buffer / pending Begin.
+        let accepted = snapshot.activeTextLayout != nil
+            && snapshot.activeTextInput?.inputID == inlineTextInput?.inputID
+            && text == inlineTextInput?.acceptedText
+        let width = accepted ? layout.frame.width * scale : contentWidth + pad[1] + pad[3]
+        let height = accepted ? layout.frame.height * scale : contentHeight + pad[0] + pad[2]
         let acceptedLeft = image.minX + layout.frame.minX * scale
         let acceptedRight = acceptedLeft + layout.frame.width * scale
         let left: CGFloat
@@ -6136,7 +6175,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             }
         }
         guard sectionControl.selectedSegment == Section.layers,
-              let id = try? NativeEditorHitTesting.hit(documentJSON: json, point: point, tolerance: radius),
+              let id = try? NativeEditorHitTesting.hit(documentJSON: json, textBoundsJSON: state.snapshot?.textBoundsJSON, point: point, tolerance: radius),
               id != selectedLayer?.id, state.snapshot?.curveHandles[id] != nil,
               let hit = try? NativeEditorCanvas.curveHit(documentJSON: json, layerID: id, point: point, radius: radius),
               hit.onPath, let closest = hit.closest else { return false }
@@ -6152,7 +6191,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             return hint
         }
         guard sectionControl.selectedSegment == Section.layers,
-              let id = try? NativeEditorHitTesting.hit(documentJSON: json, point: point, tolerance: radius),
+              let id = try? NativeEditorHitTesting.hit(documentJSON: json, textBoundsJSON: state.snapshot?.textBoundsJSON, point: point, tolerance: radius),
               id != selectedLayer?.id, state.snapshot?.curveHandles[id] != nil,
               let hit = try? NativeEditorCanvas.curveHit(documentJSON: json, layerID: id, point: point, radius: radius),
               hit.onPath else { return nil }
@@ -6928,6 +6967,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         publishTextFields(preserveStaged: true)
         publishDrawToolControls()
         selectionOverlay.documentJSON = state.snapshot?.documentJSON
+        selectionOverlay.textBoundsJSON = state.snapshot?.textBoundsJSON
+        selectionOverlay.selectedIsText = selectedLayer?.kind == .text
         selectionOverlay.selectedOutline = selectedLayer?.selectionOutline
         selectionOverlay.selectedLayerID = selectedLayer?.id
         selectionOverlay.selectedRotation = selectedLayer?.rotation ?? 0

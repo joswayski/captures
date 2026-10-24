@@ -76,13 +76,15 @@ final class ScreenshotEditorTests: XCTestCase {
                 XCTAssertTrue(worker.requests.isEmpty)
                 XCTAssertEqual(controller.state.snapshot, original)
                 worker.completeDrawingPreview()
-                XCTAssertTrue(overlay.pixelPreviewVisible)
+                XCTAssertTrue(overlay.pixelPreviewVisible, "completed frames remain visible while the latest pointer sample renders")
+                XCTAssertNotNil(overlay.workerPreview)
                 XCTAssertEqual(worker.drawingPreviews.count, 2, "only the latest pending geometry renders")
                 let latest = try XCTUnwrap(worker.drawingPreviews.last)
                 XCTAssertEqual(latest["id"] as? String, "front")
                 XCTAssertEqual((latest["edit"] as? [String: Any])?["action"] as? String, action)
                 controller.drawOverlay.cancelGesture()
                 XCTAssertTrue(overlay.pixelPreviewVisible, "inactive drawing cleanup retains layer pixels")
+                XCTAssertNotNil(overlay.workerPreview, "inactive drawing cleanup retains matching geometry")
                 if release {
                     overlay.end(at: last)
                     XCTAssertEqual(worker.requests.count, 1)
@@ -91,9 +93,63 @@ final class ScreenshotEditorTests: XCTestCase {
                 } else { overlay.cancelGesture() }
                 worker.completeDrawingPreview()
                 XCTAssertFalse(overlay.pixelPreviewVisible, "late pixels cannot overwrite a released/cancelled gesture")
+                XCTAssertNil(overlay.workerPreview, "late geometry cannot overwrite a released/cancelled gesture")
                 XCTAssertEqual(worker.drawingPreviews.count, 2)
                 XCTAssertEqual(controller.state.snapshot, original)
             }
+        }
+    }
+
+    func testMeasuredTextPickingAndTransformOutlinesFollowWorkerFrames() throws {
+        _ = NSApplication.shared
+        var text = textLayer(id: "text", text: "WWW iii WWW iii")
+        text["width"] = 120.0; text["autoWidth"] = false
+        text["blendMode"] = "source-over" // This fixture crosses the Rust document ABI.
+        let outline: [[String: Double]] = [
+            ["x": 16, "y": 20], ["x": 144, "y": 20], ["x": 144, "y": 200], ["x": 16, "y": 200],
+        ]
+        let original = snapshot(id: "shot", layers: [text], extra: [
+            "selection_outlines": ["text": outline],
+            "text_bounds": ["text": ["x": -4, "y": -4, "width": 128, "height": 180]],
+        ])
+        let bounds = try XCTUnwrap(original.textBoundsJSON)
+        XCTAssertEqual(try NativeEditorHitTesting.hit(documentJSON: original.documentJSON, textBoundsJSON: bounds,
+            point: CGPoint(x: 80, y: 180), tolerance: 0), "text", "pick the measured lower lines before selection")
+        for action in ["drag_move", "resize", "rotate"] {
+            let worker = FakeEditorWorker(snapshot: original)
+            worker.deferDrawingPreviews = true
+            let controller = fittedController(worker)
+            defer { controller.window.orderOut(nil) }
+            try showLayers(in: controller.root)
+            if action != "drag_move" {
+                try table("Screenshot layers", in: controller.root).selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+            }
+            let overlay = controller.selectionOverlay
+            let image = overlay.presentedImageRect, scale = image.width / 640
+            func point(_ p: CGPoint) -> CGPoint { CGPoint(x: image.minX + p.x * scale, y: image.minY + p.y * scale) }
+            let start: CGPoint
+            if action == "rotate" {
+                start = try XCTUnwrap(NativeEditorRotationHandle(outline: try XCTUnwrap(overlay.selectedOutline),
+                    radians: 0, displayScale: scale, canvas: overlay.canvasSize)).handle
+            } else { start = action == "resize" ? CGPoint(x: 144, y: 200) : CGPoint(x: 80, y: 180) }
+            overlay.begin(at: point(start))
+            overlay.drag(to: point(CGPoint(x: start.x + 40, y: start.y + 20)))
+            XCTAssertEqual((worker.drawingPreviews.last?["edit"] as? [String: Any])?["action"] as? String, action)
+            XCTAssertNil(overlay.resizePreview, "text must never use the fontless resize preview")
+            let measured = outline.map { ["x": $0["x"]! + 17, "y": $0["y"]! + 29] }
+            worker.completeDrawingPreview(geometry: ["selection_outlines": ["text": measured],
+                "guides": [["orientation": "vertical", "position": 33.0]]])
+            let accepted = try XCTUnwrap(overlay.workerPreview)
+            XCTAssertEqual(overlay.displayedOutline, accepted.selectionOutlines["text"])
+            XCTAssertEqual(accepted.guides.count, 1)
+            overlay.drag(to: point(CGPoint(x: start.x + 60, y: start.y + 35)))
+            XCTAssertEqual(overlay.displayedOutline, accepted.selectionOutlines["text"],
+                           "new pointer geometry cannot overwrite the last matching worker pixels")
+            overlay.cancelGesture()
+            worker.completeDrawingPreview(geometry: ["selection_outlines": ["text": measured], "guides": []])
+            XCTAssertNil(overlay.workerPreview)
+            XCTAssertFalse(overlay.pixelPreviewVisible)
+            XCTAssertEqual(controller.state.snapshot, original)
         }
     }
 
@@ -114,7 +170,7 @@ final class ScreenshotEditorTests: XCTestCase {
         overlay.begin(at: start); overlay.drag(to: middle); overlay.drag(to: end)
         XCTAssertEqual(worker.drawingPreviews.count, 1, "one render in flight")
         worker.completeDrawingPreview()
-        XCTAssertTrue(overlay.pixelPreviewVisible)
+        XCTAssertTrue(overlay.pixelPreviewVisible, "continuous pointer input must not starve completed frames")
         XCTAssertEqual(worker.drawingPreviews.count, 2, "replace intermediate pointer geometry")
         let pendingEnd = try XCTUnwrap(worker.drawingPreviews.last?["end"] as? [String: CGFloat])
         XCTAssertEqual(pendingEnd["x"], overlay.canvasPoint(for: end).x)
@@ -912,24 +968,24 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(bar.frame.height, 80)
             // Exercise both axes without exceeding the CI display's height.
             controller.window.setContentSize(NSSize(width: 760, height: 540))
-            waitUntil { input.bounds.size == NSSize(width: 320, height: 348) }
+            waitUntil { input.bounds.size == NSSize(width: 360, height: 348) }
             controller.window.setContentSize(NSSize(width: 1200, height: 600))
             controller.root.layoutSubtreeIfNeeded()
-            // 760×408 holds the 640×360 screenshot at its actual size, centred.
-            waitUntil { input.bounds.size == NSSize(width: 760, height: 408)
+            // The initial 280pt inspector preference survives window resizing.
+            // 800×408 holds the 640×360 screenshot at its actual size, centred.
+            waitUntil { input.bounds.size == NSSize(width: 800, height: 408)
                 && abs(controller.presentedImageRect.height - 360) < 1e-7 }
             XCTAssertEqual(controller.root.bounds.size, NSSize(width: 1200, height: 600))
-            // Shipping's 320pt sidebar column: panels start --s-5 inside it, and
+            // Panels start --s-5 inside the retained 280pt sidebar column, and
             // Layers takes max(188pt, 40%) above Properties.
-            XCTAssertEqual(ScreenshotEditorController.sidebarWidth, 320)
-            XCTAssertEqual(layersSection.frame, NSRect(x: 892, y: 64, width: 308, height: 188))
+            XCTAssertEqual(layersSection.frame, NSRect(x: 932, y: 64, width: 268, height: 188))
             XCTAssertFalse(layersSection.isHidden, "Layers shows whatever the tool")
-            XCTAssertEqual(inspector.frame, NSRect(x: 892, y: 252, width: 308, height: 268))
+            XCTAssertEqual(inspector.frame, NSRect(x: 932, y: 252, width: 268, height: 268))
             XCTAssertFalse(undo.isHidden)
             let zoomGroup = try XCTUnwrap(descendants(in: controller.root)
                 .first { $0.accessibilityLabel() == "Canvas zoom controls" })
             XCTAssertLessThan(undo.frame.maxX, zoomGroup.frame.minX)
-            XCTAssertEqual(controller.presentedImageRect, NSRect(x: 60, y: 24, width: 640, height: 360))
+            XCTAssertEqual(controller.presentedImageRect, NSRect(x: 80, y: 24, width: 640, height: 360))
             XCTAssertEqual(bar.frame, NSRect(x: 0, y: 520, width: 1200, height: 80))
             for control in descendants(in: controller.root) where
                 ["Canvas zoom", "Canvas zoom preset", "Canvas width"]
@@ -941,12 +997,12 @@ final class ScreenshotEditorTests: XCTestCase {
             try render(controller.root, name: "screenshot-editor-resized-fit-\(appearance)")
             controller.window.setContentSize(NSSize(width: 760, height: 540))
             controller.root.layoutSubtreeIfNeeded()
-            waitUntil { controller.presentedImageRect.width == 320 }
-            XCTAssertEqual(input.bounds.size, NSSize(width: 320, height: 348))
-            XCTAssertEqual(layersSection.frame, NSRect(x: 452, y: 64, width: 308, height: 188))
-            XCTAssertEqual(inspector.frame, NSRect(x: 452, y: 252, width: 308, height: 208))
+            waitUntil { controller.presentedImageRect.width == 360 }
+            XCTAssertEqual(input.bounds.size, NSSize(width: 360, height: 348))
+            XCTAssertEqual(layersSection.frame, NSRect(x: 492, y: 64, width: 268, height: 188))
+            XCTAssertEqual(inspector.frame, NSRect(x: 492, y: 252, width: 268, height: 208))
             XCTAssertTrue(undo.isHidden)
-            XCTAssertEqual(controller.presentedImageRect, NSRect(x: 0, y: 84, width: 320, height: 180))
+            XCTAssertEqual(controller.presentedImageRect, NSRect(x: 0, y: 72.75, width: 360, height: 202.5))
             try render(controller.root, name: "screenshot-editor-resized-minimum-\(appearance)")
             XCTAssertEqual(controller.viewport, NativeEditorViewport())
             XCTAssertEqual(controller.state.snapshot, original)
@@ -1173,12 +1229,12 @@ final class ScreenshotEditorTests: XCTestCase {
         controller.drawOverlay.begin(at: NSPoint(x: 120, y: 140))
         XCTAssertNotNil(controller.drawOverlay.startPoint)
         controller.window.setContentSize(NSSize(width: 1200, height: 600))
-        waitUntil { controller.drawOverlay.startPoint == nil && input.bounds.width == 760
-            && controller.presentedImageRect.midX == 380 + CGFloat(viewport.panX) }
+        waitUntil { controller.drawOverlay.startPoint == nil && input.bounds.width == 800
+            && controller.presentedImageRect.midX == 400 + CGFloat(viewport.panX) }
         controller.drawOverlay.end(at: NSPoint(x: 260, y: 220))
         XCTAssertEqual(controller.viewport, viewport)
-        XCTAssertEqual(controller.presentedImageRect.midX, 380 + CGFloat(viewport.panX), accuracy: 1e-7)
-        // 1200×600 leaves a 760×368 viewport between the restored-draft banner,
+        XCTAssertEqual(controller.presentedImageRect.midX, 400 + CGFloat(viewport.panX), accuracy: 1e-7)
+        // 1200×600 leaves an 800×368 viewport between the restored-draft banner,
         // the 52pt header and the 80pt export bar.
         XCTAssertEqual(controller.presentedImageRect.midY, 184 + CGFloat(viewport.panY), accuracy: 1e-7)
         let point = NSPoint(x: 160, y: 180)
@@ -1221,7 +1277,7 @@ final class ScreenshotEditorTests: XCTestCase {
             for width in [CGFloat(1041), 1040, 760, 1000] {
                 controller.window.setContentSize(NSSize(width: width, height: 540))
                 controller.root.layoutSubtreeIfNeeded()
-                waitUntil { input.bounds.width == width - 440 }
+                waitUntil { input.bounds.width == width - 400 }
                 XCTAssertEqual(input.bounds.height, 348)
                 XCTAssertEqual(undo.isHidden, width <= 1040)
                 // 92pt/72pt slider cells minus their 8pt/6pt padding.
@@ -1231,8 +1287,8 @@ final class ScreenshotEditorTests: XCTestCase {
                 XCTAssertTrue(controller.root.bounds.contains(trim.convert(trim.bounds, to: controller.root)))
             }
             controller.window.setContentSize(NSSize(width: 760, height: 540))
-            waitUntil { controller.presentedImageRect.width == 320 }
-            XCTAssertEqual(controller.presentedImageRect, NSRect(x: 0, y: 84, width: 320, height: 180))
+            waitUntil { controller.presentedImageRect.width == 360 }
+            XCTAssertEqual(controller.presentedImageRect, NSRect(x: 0, y: 72.75, width: 360, height: 202.5))
             XCTAssertTrue(trim.iconOnly, "the minimum header keeps Trim as an icon with its tooltip")
             XCTAssertEqual(trim.title, "Trim edges")
             XCTAssertEqual(trim.toolTip, "Shrink the canvas to the edges of visible layers")
@@ -3322,10 +3378,10 @@ final class ScreenshotEditorTests: XCTestCase {
 
         controller.selectDrawTool(.ellipse)
         let overlay = controller.drawOverlay
-        // A 560×408 viewport fits the 1280×640 canvas by width (scale 7/16),
-        // leaving 64pt of whitespace above and below it.
+        // The retained 280pt inspector leaves a 600×408 viewport. Fit scales
+        // the 1280×640 canvas by 15/32, leaving 54pt above and below it.
         XCTAssertEqual(overlay.presentedImageRect,
-                       NSRect(x: 0, y: 64, width: 560, height: 280))
+                       NSRect(x: 0, y: 54, width: 600, height: 300))
         overlay.begin(at: NSPoint(x: 500, y: 275))
         overlay.drag(to: NSPoint(x: 60, y: 5))
         XCTAssertTrue(worker.requests.isEmpty, "transient drawing never mutates the document")
@@ -3336,10 +3392,10 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(request["shape"] as? String, "ellipse")
         let start = try XCTUnwrap(request["start"] as? [String: CGFloat])
         let end = try XCTUnwrap(request["end"] as? [String: CGFloat])
-        XCTAssertEqual(try XCTUnwrap(start["x"]), 1_142.857, accuracy: 0.001)
-        XCTAssertEqual(try XCTUnwrap(start["y"]), 482.286, accuracy: 0.001)
-        XCTAssertEqual(try XCTUnwrap(end["x"]), 137.143, accuracy: 0.001)
-        XCTAssertEqual(try XCTUnwrap(end["y"]), -134.857, accuracy: 0.001,
+        XCTAssertEqual(try XCTUnwrap(start["x"]), 1_066.667, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(start["y"]), 471.467, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(end["x"]), 128, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(end["y"]), -104.533, accuracy: 0.001,
                        "preview whitespace maps to off-canvas document coordinates")
         XCTAssertEqual((request["style"] as? [String: Any])?["color"] as? String, "#FF3B5C")
         XCTAssertEqual(request["opacity"] as? Double, 100)
@@ -3436,7 +3492,7 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(request["operation"] as? String, "create_closed_shape")
             XCTAssertEqual(request["shape"] as? String, title.lowercased())
             let end = try XCTUnwrap(request["end"] as? [String: CGFloat])
-            XCTAssertEqual(try XCTUnwrap(end["y"]), -134.857, accuracy: 0.001)
+            XCTAssertEqual(try XCTUnwrap(end["y"]), -104.533, accuracy: 0.001)
             overlay.begin(at: NSPoint(x: 300, y: 200)); overlay.end(at: NSPoint(x: 300, y: 350))
             overlay.begin(at: NSPoint(x: 300, y: 200)); overlay.end(at: NSPoint(x: 400, y: 200))
             overlay.begin(at: NSPoint(x: 200, y: 200)); overlay.drag(to: NSPoint(x: 260, y: 260))
@@ -8015,7 +8071,7 @@ final class ScreenshotEditorTests: XCTestCase {
                                           "offsetX": -3, "offsetY": 9]]]
         let rendered = expectation(description: "uncommitted drawing frame")
         var frame: CGImage?
-        worker.previewDrawing(drawing) { result in frame = try? result.get(); rendered.fulfill() }
+        worker.previewDrawing(drawing) { result in frame = try? result.get().image; rendered.fulfill() }
         wait(for: [rendered], timeout: 5)
         XCTAssertEqual(rgba(try XCTUnwrap(frame), x: 35, y: 10), [18, 52, 86, 255])
         XCTAssertEqual(rgba(try XCTUnwrap(frame), x: 32, y: 19), [240, 192, 64, 255])
@@ -8586,10 +8642,10 @@ final class ScreenshotEditorTests: XCTestCase {
         func preview(_ object: [String: Any], alpha: UInt8) throws {
             let before = try request(["operation": "snapshot"]).snapshot
             let done = expectation(description: "brush pixels before publication")
-            var response: Result<CGImage, Error>?
+            var response: Result<EditorDrawingPreview, Error>?
             worker.previewDrawing(object) { response = $0; done.fulfill() }
             wait(for: [done], timeout: 5)
-            XCTAssertEqual(rgba(try XCTUnwrap(response).get(), x: 2, y: 1)[3], alpha)
+            XCTAssertEqual(rgba(try XCTUnwrap(response).get().image, x: 2, y: 1)[3], alpha)
             XCTAssertEqual(try request(["operation": "snapshot"]).snapshot, before)
         }
         var erase = stroke; erase["mode"] = "erase"
@@ -9160,7 +9216,7 @@ private final class FakeEditorWorker: EditorWorking {
     var liveKeys: [String] = []
     var drawingPreviews: [[String: Any]] = []
     var deferDrawingPreviews = false
-    private var pendingDrawingPreview: ((Result<CGImage, Error>) -> Void)?
+    private var pendingDrawingPreview: ((Result<EditorDrawingPreview, Error>) -> Void)?
     var encodes: [[String: Any]] = []
     var saves: [[String: Any]] = []
     var originalSaves: [[String: Any]] = []
@@ -9240,15 +9296,20 @@ private final class FakeEditorWorker: EditorWorking {
             image: CGImage.fixture(width: Int(snapshot.width), height: Int(snapshot.height)))))
     }
 
-    func previewDrawing(_ object: [String: Any], completion: @escaping (Result<CGImage, Error>) -> Void) {
+    func previewDrawing(_ object: [String: Any], completion: @escaping (Result<EditorDrawingPreview, Error>) -> Void) {
         drawingPreviews.append(object)
         if deferDrawingPreviews { pendingDrawingPreview = completion }
         else { completion(.failure(AppBridgeError.backend("Fixture has no drawing pixel renderer."))) }
     }
 
-    func completeDrawingPreview() {
+    func completeDrawingPreview(geometry: [String: Any]? = nil) {
         let completion = pendingDrawingPreview; pendingDrawingPreview = nil
-        completion?(.success(CGImage.fixture(width: Int(snapshot.width), height: Int(snapshot.height))))
+        completion?(Result {
+            try EditorDrawingPreview(image: CGImage.fixture(width: Int(snapshot.width), height: Int(snapshot.height)),
+                geometry: geometry ?? ["selection_outlines": snapshot.layers.reduce(into: [String: [[String: Double]]]()) { result, layer in
+                    result[layer.id] = layer.selectionOutline?.map { ["x": Double($0.x), "y": Double($0.y)] }
+                }, "guides": []])
+        })
     }
 
     func completePending(with snapshot: NativeEditorSnapshot) {
@@ -10318,7 +10379,7 @@ extension ScreenshotEditorTests {
                        ["Rectangle (R)", "Ellipse (O)", "Line (L)", "Triangle", "Diamond (D)", "Star (S)"])
         XCTAssertEqual(picker.buttons.filter { $0.button.active }.map(\.key), ["ellipse"])
         // `.screenshot-shape-picker`: three columns of 40pt buttons, --s-2 apart.
-        XCTAssertEqual(picker.frame.width, ScreenshotEditorController.contentWidth)
+        XCTAssertEqual(picker.frame.width, 256, "280pt initial inspector minus two 12pt insets")
         XCTAssertEqual(picker.frame.height, 2 * 40 + 4)
         XCTAssertEqual(picker.buttons[1].button.frame.minX - picker.buttons[0].button.frame.maxX, 4, accuracy: 0.01)
         XCTAssertEqual(picker.buttons[3].button.frame.minY - picker.buttons[0].button.frame.maxY, 4, accuracy: 0.01)

@@ -759,10 +759,11 @@ fn canvas_toolbar(
     );
     // Shipping `disabled={!canTrimEdges}`: nothing to trim greys it out.
     let can_trim = enabled
-        && view
-            .presented
-            .as_ref()
-            .is_some_and(|presented| presented.document.can_trim_to_content());
+        && view.presented.as_ref().is_some_and(|presented| {
+            presented
+                .document
+                .can_trim_to_content_with(&mut |text| presented.text_bounds.bounds(text))
+        });
     let response = canvas_tool(
         ui,
         tokens,

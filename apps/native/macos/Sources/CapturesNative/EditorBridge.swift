@@ -182,13 +182,15 @@ final class NativeEditorResizeDrag {
     private init(handle: OpaquePointer) { self.handle = handle }
     deinit { captures_editor_resize_free_v1(handle) }
 
-    static func begin(documentJSON: String, layerID: String, point: CGPoint,
+    static func begin(documentJSON: String, textBoundsJSON: String? = nil, layerID: String, point: CGPoint,
                       displayScale: Double) throws -> (NativeEditorResizeDrag?, Int?) {
         var nativeDrag: OpaquePointer?
         let response = documentJSON.withCString { document in
             layerID.withCString { layer in
-                captures_editor_resize_begin_v1(document, layer,
-                    CapturesSelectionPoint(x: point.x, y: point.y), displayScale, &nativeDrag)
+                (textBoundsJSON ?? "").withCString { bounds in
+                    captures_editor_resize_begin_v2(document, textBoundsJSON == nil ? nil : bounds, layer,
+                        CapturesSelectionPoint(x: point.x, y: point.y), displayScale, &nativeDrag)
+                }
             }
         }
         let owner = nativeDrag.map(NativeEditorResizeDrag.init)
@@ -217,16 +219,20 @@ final class NativeEditorResizeDrag {
 /// Owns the immutable original move geometry and snap lines for one pointer gesture.
 final class NativeEditorMoveDrag {
     private let handle: OpaquePointer
+    private var textBoundsJSON: String?
 
     private init(handle: OpaquePointer) { self.handle = handle }
     deinit { captures_editor_move_free_v1(handle) }
 
-    static func begin(documentJSON: String, layerID: String,
+    static func begin(documentJSON: String, textBoundsJSON: String? = nil, layerID: String,
                       displayScale: Double) throws -> NativeEditorMoveDrag {
         var nativeDrag: OpaquePointer?
         let response = documentJSON.withCString { document in
             layerID.withCString { layer in
-                captures_editor_move_begin_v1(document, layer, displayScale, &nativeDrag)
+                (textBoundsJSON ?? "").withCString { bounds in
+                    captures_editor_move_begin_v2(document, textBoundsJSON == nil ? nil : bounds,
+                        layer, displayScale, &nativeDrag)
+                }
             }
         }
         let owner = nativeDrag.map(NativeEditorMoveDrag.init)
@@ -234,13 +240,17 @@ final class NativeEditorMoveDrag {
         defer { captures_settings_free_v1(response) }
         _ = try AppBridge.decode(Data(bytes: response, count: strlen(response)))
         guard let owner else { throw AppBridgeError.invalidResponse }
+        owner.textBoundsJSON = textBoundsJSON
         return owner
     }
 
     func preview(delta: CGPoint) -> NativeEditorResizePreview? {
         var output = CapturesEditorResizePreview()
-        guard captures_editor_move_preview_v1(handle,
-            CapturesSelectionPoint(x: delta.x, y: delta.y), &output) else { return nil }
+        let success = (textBoundsJSON ?? "").withCString { bounds in
+            captures_editor_move_preview_v2(handle, textBoundsJSON == nil ? nil : bounds,
+                CapturesSelectionPoint(x: delta.x, y: delta.y), &output)
+        }
+        guard success else { return nil }
         return NativeEditorResizePreview(output)
     }
 }
@@ -508,6 +518,7 @@ struct NativeEditorSnapshot: Equatable {
     let unsavedChanges: Bool
     let hasDraft: Bool
     let activeTextInput: NativeActiveTextInput?
+    let activeTextLayout: NativeInlineTextLayout?
     let fontFamilies: [String: String]
     /// Shipping font menu order and labels ("Sans serif", …) for `fontFamilies`.
     let fontFamilyOptions: [NativeFontFamilyOption]
@@ -516,6 +527,8 @@ struct NativeEditorSnapshot: Equatable {
     let layers: [NativeEditorLayer]
     /// Stable, sorted JSON used by pointer-down hit testing without touching the session.
     let documentJSON: String
+    /// Ephemeral bounds published with this document, never draft metadata.
+    let textBoundsJSON: String?
     /// Curve dots and Curve/Straighten state per line/arrow layer ID.
     let curveHandles: [String: NativeCurveHandles]
     /// Overflow ghost and Expand canvas action per layer past the canvas edge.
@@ -615,6 +628,14 @@ struct NativeEditorSnapshot: Equatable {
         self.canFlatten = canFlatten
         self.unsavedChanges = unsavedChanges; self.hasDraft = hasDraft
         self.activeTextInput = activeTextInput
+        if let input = value["active_text_input"] as? [String: Any],
+           let layout = input["layout"] as? [String: Any],
+           let element = elements.first(where: { $0["id"] as? String == activeTextInput?.layerID }) {
+            guard let parsed = NativeInlineTextLayout(element: element, layout: layout) else { return nil }
+            activeTextLayout = parsed
+        } else {
+            activeTextLayout = nil
+        }
         let fontFamilies = value["font_families"] as? [String: String] ?? [:]
         self.fontFamilies = fontFamilies
         var options: [NativeFontFamilyOption] = []
@@ -633,6 +654,12 @@ struct NativeEditorSnapshot: Equatable {
         textStylePresets = parsedPresets.filter { fontFamilies[$0.fontFamily] != nil }
         self.layers = Array(layers.reversed())
         self.documentJSON = String(decoding: documentData, as: UTF8.self)
+        if let bounds = value["text_bounds"] {
+            guard let data = try? JSONSerialization.data(withJSONObject: bounds, options: [.sortedKeys]) else { return nil }
+            textBoundsJSON = String(decoding: data, as: UTF8.self)
+        } else {
+            textBoundsJSON = nil // Compatibility with older snapshot producers.
+        }
         // Older host-only fixtures predate these shared snapshot fields.
         curveHandles = (value["curve_handles"] as? [String: [String: Any]] ?? [:])
             .compactMapValues(NativeCurveHandles.init)
@@ -682,9 +709,12 @@ struct NativeDrawingStyle: Equatable {
 }
 
 enum NativeEditorHitTesting {
-    static func hit(documentJSON: String, point: CGPoint, tolerance: Double) throws -> String? {
-        let response = documentJSON.withCString {
-            captures_editor_hit_test_document_v1($0, point.x, point.y, tolerance)
+    static func hit(documentJSON: String, textBoundsJSON: String? = nil, point: CGPoint, tolerance: Double) throws -> String? {
+        let response = documentJSON.withCString { document in
+            (textBoundsJSON ?? "").withCString { bounds in
+                captures_editor_hit_test_document_v2(document, textBoundsJSON == nil ? nil : bounds,
+                    point.x, point.y, tolerance)
+            }
         }
         guard let response else { throw AppBridgeError.invalidResponse }
         defer { captures_settings_free_v1(response) }
@@ -698,6 +728,34 @@ enum NativeEditorHitTesting {
 struct EditorPresentation {
     let snapshot: NativeEditorSnapshot
     let image: CGImage
+}
+
+/// One worker result: pixels and measured geometry always travel together.
+struct EditorDrawingPreview {
+    let image: CGImage
+    let selectionOutlines: [String: [CGPoint]]
+    let guides: [NativeEditorAlignmentGuide]
+
+    init(image: CGImage, geometry: [String: Any]) throws {
+        guard let outlines = geometry["selection_outlines"] as? [String: [[String: Any]]],
+              let guides = geometry["guides"] as? [[String: Any]] else { throw AppBridgeError.invalidResponse }
+        self.image = image
+        self.selectionOutlines = try outlines.mapValues { points in
+            guard points.count == 4 else { throw AppBridgeError.invalidResponse }
+            return try points.map { point in
+                guard let x = point["x"] as? Double, let y = point["y"] as? Double,
+                      x.isFinite, y.isFinite else { throw AppBridgeError.invalidResponse }
+                return CGPoint(x: x, y: y)
+            }
+        }
+        self.guides = try guides.map { guide in
+            guard let axis = guide["orientation"] as? String,
+                  let position = guide["position"] as? Double, position.isFinite,
+                  axis == "vertical" || axis == "horizontal" else { throw AppBridgeError.invalidResponse }
+            return NativeEditorAlignmentGuide(orientation: axis == "vertical" ? .vertical : .horizontal,
+                                              position: position)
+        }
+    }
 }
 
 struct EditorOutputPresentation {
@@ -1016,7 +1074,7 @@ private final class NativeEditorSession {
         return loupe
     }
 
-    func previewDrawing(_ object: [String: Any]) throws -> CGImage {
+    func previewDrawing(_ object: [String: Any]) throws -> EditorDrawingPreview {
         let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
         var response: UnsafeMutablePointer<CChar>?
         let handle = String(decoding: data, as: UTF8.self).withCString {
@@ -1025,9 +1083,9 @@ private final class NativeEditorSession {
         let frame = handle.map(NativeEditorFrame.init(handle:))
         defer { captures_settings_free_v1(response) }
         guard let response else { throw AppBridgeError.invalidResponse }
-        _ = try AppBridge.decode(Data(bytes: response, count: strlen(response)))
+        let geometry = try AppBridge.decode(Data(bytes: response, count: strlen(response)))
         guard let frame else { throw AppBridgeError.invalidResponse }
-        return try frame.image()
+        return try EditorDrawingPreview(image: frame.image(), geometry: geometry)
     }
 
     func encode(_ options: [String: Any]) throws -> EditorOutputPresentation {
@@ -1161,7 +1219,7 @@ protocol EditorWorking: AnyObject {
     func request(_ object: [String: Any],
                  completion: @escaping (Result<EditorPresentation, Error>) -> Void)
     func previewDrawing(_ object: [String: Any],
-                        completion: @escaping (Result<CGImage, Error>) -> Void)
+                        completion: @escaping (Result<EditorDrawingPreview, Error>) -> Void)
     func encode(_ options: [String: Any],
                 completion: @escaping (Result<EditorOutputPresentation, Error>) -> Void)
     func saveNew(_ request: [String: Any],
@@ -1288,10 +1346,10 @@ final class EditorWorker: EditorWorking {
     }
 
     func previewDrawing(_ object: [String: Any],
-                        completion: @escaping (Result<CGImage, Error>) -> Void) {
+                        completion: @escaping (Result<EditorDrawingPreview, Error>) -> Void) {
         let storage = storage
         Self.queue.async {
-            let result = Result { () throws -> CGImage in
+            let result = Result { () throws -> EditorDrawingPreview in
                 guard let session = storage.session else {
                     throw AppBridgeError.backend("The screenshot editor is closed.")
                 }
