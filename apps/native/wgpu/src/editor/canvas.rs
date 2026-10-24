@@ -488,9 +488,13 @@ pub(super) fn expand_preview(view: &View) -> Option<(String, CanvasExpandPreview
         .elements
         .iter()
         .find(|element| &element.base().id == id)?;
-    let preview =
-        canvas::canvas_expand_preview(element, presented.document.width, presented.document.height)
-            .ok()??;
+    let preview = canvas::canvas_expand_preview_with(
+        element,
+        presented.document.width,
+        presented.document.height,
+        &mut |text| presented.text_bounds.bounds(text),
+    )
+    .ok()??;
     Some((id.clone(), preview))
 }
 
@@ -703,7 +707,11 @@ pub(super) fn double_click(
         }
     }
     if view.section == Section::Layers
-        && let Ok(Some(Element::Shape(shape))) = document.hit_test(point, radius)
+        && let Some(presented) = &view.presented
+        && let Ok(Some(Element::Shape(shape))) =
+            document.hit_test_with(point, radius, &mut |text| {
+                presented.text_bounds.bounds(text)
+            })
         && canvas::is_curveable(shape)
         && Some(&shape.base.id) != view.selected_layer.as_ref()
     {
@@ -802,7 +810,10 @@ pub(super) fn hover_hint(
     if view.section != Section::Layers {
         return None;
     }
-    match document.hit_test(point, radius) {
+    let presented = view.presented.as_ref()?;
+    match document.hit_test_with(point, radius, &mut |text| {
+        presented.text_bounds.bounds(text)
+    }) {
         Ok(Some(Element::Shape(shape)))
             if canvas::is_curveable(shape)
                 && Some(&shape.base.id) != view.selected_layer.as_ref() =>
@@ -1004,7 +1015,10 @@ pub(super) fn paint_trim_preview(
     let (Some(presented), Some(bounds)) = (view.presented.as_ref(), document_bounds(view)) else {
         return;
     };
-    let Some(trim) = presented.document.trim_preview() else {
+    let Some(trim) = presented
+        .document
+        .trim_preview_with(&mut |text| presented.text_bounds.bounds(text))
+    else {
         return;
     };
     let reduced = crate::motion::reduced(ui.ctx());

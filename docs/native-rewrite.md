@@ -1672,7 +1672,7 @@ non-additive shaping, Unicode, metadata preservation and measurement failures.
 Measurement avoids glyph bitmaps and permits advances beyond the raster extent
 so long tokens can wrap; rasterization retains its extent/pixel budgets. Paragraph
 inputs are limited to 4096 UTF-8 bytes and type sizes greater than zero through 512.
-These helpers describe measured paint layout, not Tauri's estimated selection bounds;
+These helpers describe measured line boxes, not tight glyph bounds;
 font-specific control-character support remains the supplied measurer's contract.
 An opt-in document renderer now accepts caller-owned fonts and explicit mappings
 from document family keys to supplied font names. It composites filled/outlined paragraphs
@@ -1698,14 +1698,23 @@ cannot apply yet (a partial color) are not sent. Legacy low-level `Shape::Text`
 shadows remain unsupported.
 Text and plate paints now share the
 shipping selection pivot for rotation, including when estimated wrapping differs
-from actual glyph layout. Shared selection/hit testing, move snapping, Trim and
-resize accept text geometry. Fixed-width side drags reflow without changing type
-size; other drags scale type, while auto-width labels refit. Interaction bounds
-use shipping's UTF-16 width estimate and rounded minimum, not measured paint or
-glyph bounds; plate and default/custom shadow padding are included. Shipping-generated
+from actual glyph layout. That legacy paint pivot remains unchanged when opening
+saved labels. Tauri and both native hosts now use font-measured line boxes for
+selection/hit testing, move/resize snapping, rotation handles, Trim and expansion;
+plate and default/custom shadow padding are included. Rotation preserves the
+measured world-space center; resizing remeasures the candidate and preserves its
+opposite handle across wrapping changes. Native sessions publish transient bounds,
+outlines and guides with their matching worker pixels, using the session's pinned
+font bytes; none of this geometry enters saved drafts. Fontless compatibility APIs
+retain the UTF-16 estimate. Fixed-width side drags reflow without changing type
+size; top/bottom drags change type size independently, and corners combine both.
+Shipping-generated
 vectors exercise Unicode wrapping, fractional widths, side/corner classification,
 8–512 resize clamps and metadata preservation. Session tests cover accepted pixels,
-undo/redo and reopening after text transforms. Shared `create_text`/`edit_text`
+undo/redo and reopening after text transforms, including different pinned fonts
+with identical layer IDs. Linux X11 and browser interaction checks exercise measured
+wrapping and anchors; physical macOS/Windows/Wayland acceptance remains open.
+Shared `create_text`/`edit_text`
 commands now create plain, left-aligned auto-width labels with fresh IDs and edit
 content, font family/size, bold/italic, alignment, color and square/rounded plates.
 Content/type edits refit from owned-font measurements while preserving alignment

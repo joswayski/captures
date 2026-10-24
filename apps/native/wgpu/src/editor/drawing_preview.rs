@@ -1,12 +1,11 @@
 //! One in-flight render plus one replaceable pending gesture. Replies never
 //! publish editor state, and cancellation invalidates both queued and late work.
 use super::{Job, Request, Sender, egui, mpsc, wake};
-use image::RgbaImage;
-use std::sync::Arc;
+use captures_app::editor_session::DrawingPreview;
 
 pub(super) struct Reply {
     pub epoch: u64,
-    pub pixels: Result<Arc<RgbaImage>, String>,
+    pub pixels: Result<DrawingPreview, String>,
 }
 
 pub(super) struct State {
@@ -18,6 +17,7 @@ pub(super) struct State {
     reply: Sender<Reply>,
     replies: mpsc::Receiver<Reply>,
     pub texture: Option<egui::TextureHandle>,
+    pub geometry: Option<DrawingPreview>,
 }
 
 impl State {
@@ -32,6 +32,7 @@ impl State {
             reply,
             replies,
             texture: None,
+            geometry: None,
         }
     }
 
@@ -59,6 +60,7 @@ impl State {
             self.epoch += 1;
             self.latest = None;
             self.texture = None;
+            self.geometry = None;
             wake(&self.ctx, self.viewport);
         }
     }
@@ -66,8 +68,12 @@ impl State {
     pub fn receive(&mut self, tx: &Sender<Job>) {
         while let Ok(reply) = self.replies.try_recv() {
             self.in_flight = false;
+            // Publish completed frames while newer pointer samples are queued:
+            // otherwise a continuous drag can starve the preview until release.
             if reply.epoch == self.epoch {
-                self.texture = reply.pixels.ok().map(|pixels| {
+                self.geometry = reply.pixels.ok();
+                self.texture = self.geometry.as_ref().map(|preview| {
+                    let pixels = &preview.pixels;
                     self.ctx.load_texture(
                         "drawing-preview",
                         egui::ColorImage::from_rgba_unmultiplied(
@@ -85,8 +91,20 @@ impl State {
 }
 
 #[cfg(test)]
+pub(super) fn test_preview(pixels: std::sync::Arc<image::RgbaImage>) -> DrawingPreview {
+    DrawingPreview {
+        pixels,
+        text_bounds: Default::default(),
+        selection_outlines: Default::default(),
+        guides: Vec::new(),
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use image::RgbaImage;
+    use std::sync::Arc;
 
     fn request(x: f64) -> Request {
         serde_json::from_value(serde_json::json!({"operation":"create_open_shape",
@@ -124,11 +142,15 @@ mod tests {
         reply
             .send(Reply {
                 epoch: old_epoch,
-                pixels: Ok(pixels.clone()),
+                pixels: Ok(test_preview(pixels.clone())),
             })
             .unwrap();
         state.receive(&tx);
-        assert!(state.texture.is_some());
+        assert!(
+            state.texture.is_some(),
+            "continuous pointer input must not starve completed preview frames"
+        );
+        assert!(state.geometry.is_some());
         let (epoch, reply, x) = take(&rx);
         assert_eq!(x, 5., "skip the obsolete intermediate geometry");
         state.cancel();
@@ -141,7 +163,7 @@ mod tests {
         reply
             .send(Reply {
                 epoch,
-                pixels: Ok(pixels.clone()),
+                pixels: Ok(test_preview(pixels.clone())),
             })
             .unwrap();
         state.receive(&tx);
@@ -149,19 +171,22 @@ mod tests {
             state.texture.is_none(),
             "cancelled frame cannot replace the new gesture"
         );
+        assert!(state.geometry.is_none());
         let (epoch, reply, x) = take(&rx);
         assert_eq!(x, 9.);
         reply
             .send(Reply {
                 epoch,
-                pixels: Ok(pixels),
+                pixels: Ok(test_preview(pixels)),
             })
             .unwrap();
         state.receive(&tx);
         assert_eq!(state.texture.as_ref().unwrap().size(), [7, 3]);
+        assert!(state.geometry.is_some());
         state.receive(&tx);
         assert!(rx.try_recv().is_err(), "no recurring static render");
         state.cancel();
         assert!(state.texture.is_none());
+        assert!(state.geometry.is_none());
     }
 }

@@ -76,13 +76,15 @@ final class ScreenshotEditorTests: XCTestCase {
                 XCTAssertTrue(worker.requests.isEmpty)
                 XCTAssertEqual(controller.state.snapshot, original)
                 worker.completeDrawingPreview()
-                XCTAssertTrue(overlay.pixelPreviewVisible)
+                XCTAssertTrue(overlay.pixelPreviewVisible, "completed frames remain visible while the latest pointer sample renders")
+                XCTAssertNotNil(overlay.workerPreview)
                 XCTAssertEqual(worker.drawingPreviews.count, 2, "only the latest pending geometry renders")
                 let latest = try XCTUnwrap(worker.drawingPreviews.last)
                 XCTAssertEqual(latest["id"] as? String, "front")
                 XCTAssertEqual((latest["edit"] as? [String: Any])?["action"] as? String, action)
                 controller.drawOverlay.cancelGesture()
                 XCTAssertTrue(overlay.pixelPreviewVisible, "inactive drawing cleanup retains layer pixels")
+                XCTAssertNotNil(overlay.workerPreview, "inactive drawing cleanup retains matching geometry")
                 if release {
                     overlay.end(at: last)
                     XCTAssertEqual(worker.requests.count, 1)
@@ -91,9 +93,62 @@ final class ScreenshotEditorTests: XCTestCase {
                 } else { overlay.cancelGesture() }
                 worker.completeDrawingPreview()
                 XCTAssertFalse(overlay.pixelPreviewVisible, "late pixels cannot overwrite a released/cancelled gesture")
+                XCTAssertNil(overlay.workerPreview, "late geometry cannot overwrite a released/cancelled gesture")
                 XCTAssertEqual(worker.drawingPreviews.count, 2)
                 XCTAssertEqual(controller.state.snapshot, original)
             }
+        }
+    }
+
+    func testMeasuredTextPickingAndTransformOutlinesFollowWorkerFrames() throws {
+        _ = NSApplication.shared
+        var text = textLayer(id: "text", text: "WWW iii WWW iii")
+        text["width"] = 120.0; text["autoWidth"] = false
+        let outline: [[String: Double]] = [
+            ["x": 16, "y": 20], ["x": 144, "y": 20], ["x": 144, "y": 200], ["x": 16, "y": 200],
+        ]
+        let original = snapshot(id: "shot", layers: [text], extra: [
+            "selection_outlines": ["text": outline],
+            "text_bounds": ["text": ["x": -4, "y": -4, "width": 128, "height": 180]],
+        ])
+        let bounds = try XCTUnwrap(original.textBoundsJSON)
+        XCTAssertEqual(try NativeEditorHitTesting.hit(documentJSON: original.documentJSON, textBoundsJSON: bounds,
+            point: CGPoint(x: 80, y: 180), tolerance: 0), "text", "pick the measured lower lines before selection")
+        for action in ["drag_move", "resize", "rotate"] {
+            let worker = FakeEditorWorker(snapshot: original)
+            worker.deferDrawingPreviews = true
+            let controller = fittedController(worker)
+            defer { controller.window.orderOut(nil) }
+            try showLayers(in: controller.root)
+            if action != "drag_move" {
+                try table("Screenshot layers", in: controller.root).selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+            }
+            let overlay = controller.selectionOverlay
+            let image = overlay.presentedImageRect, scale = image.width / 640
+            func point(_ p: CGPoint) -> CGPoint { CGPoint(x: image.minX + p.x * scale, y: image.minY + p.y * scale) }
+            let start: CGPoint
+            if action == "rotate" {
+                start = try XCTUnwrap(NativeEditorRotationHandle(outline: try XCTUnwrap(overlay.selectedOutline),
+                    radians: 0, displayScale: scale, canvas: overlay.canvasSize)).handle
+            } else { start = action == "resize" ? CGPoint(x: 144, y: 200) : CGPoint(x: 80, y: 180) }
+            overlay.begin(at: point(start))
+            overlay.drag(to: point(CGPoint(x: start.x + 40, y: start.y + 20)))
+            XCTAssertEqual((worker.drawingPreviews.last?["edit"] as? [String: Any])?["action"] as? String, action)
+            XCTAssertNil(overlay.resizePreview, "text must never use the fontless resize preview")
+            let measured = outline.map { ["x": $0["x"]! + 17, "y": $0["y"]! + 29] }
+            worker.completeDrawingPreview(geometry: ["selection_outlines": ["text": measured],
+                "guides": [["orientation": "vertical", "position": 33.0]]])
+            let accepted = try XCTUnwrap(overlay.workerPreview)
+            XCTAssertEqual(overlay.displayedOutline, accepted.selectionOutlines["text"])
+            XCTAssertEqual(accepted.guides.count, 1)
+            overlay.drag(to: point(CGPoint(x: start.x + 60, y: start.y + 35)))
+            XCTAssertEqual(overlay.displayedOutline, accepted.selectionOutlines["text"],
+                           "new pointer geometry cannot overwrite the last matching worker pixels")
+            overlay.cancelGesture()
+            worker.completeDrawingPreview(geometry: ["selection_outlines": ["text": measured], "guides": []])
+            XCTAssertNil(overlay.workerPreview)
+            XCTAssertFalse(overlay.pixelPreviewVisible)
+            XCTAssertEqual(controller.state.snapshot, original)
         }
     }
 
@@ -114,7 +169,7 @@ final class ScreenshotEditorTests: XCTestCase {
         overlay.begin(at: start); overlay.drag(to: middle); overlay.drag(to: end)
         XCTAssertEqual(worker.drawingPreviews.count, 1, "one render in flight")
         worker.completeDrawingPreview()
-        XCTAssertTrue(overlay.pixelPreviewVisible)
+        XCTAssertTrue(overlay.pixelPreviewVisible, "continuous pointer input must not starve completed frames")
         XCTAssertEqual(worker.drawingPreviews.count, 2, "replace intermediate pointer geometry")
         let pendingEnd = try XCTUnwrap(worker.drawingPreviews.last?["end"] as? [String: CGFloat])
         XCTAssertEqual(pendingEnd["x"], overlay.canvasPoint(for: end).x)
@@ -8015,7 +8070,7 @@ final class ScreenshotEditorTests: XCTestCase {
                                           "offsetX": -3, "offsetY": 9]]]
         let rendered = expectation(description: "uncommitted drawing frame")
         var frame: CGImage?
-        worker.previewDrawing(drawing) { result in frame = try? result.get(); rendered.fulfill() }
+        worker.previewDrawing(drawing) { result in frame = try? result.get().image; rendered.fulfill() }
         wait(for: [rendered], timeout: 5)
         XCTAssertEqual(rgba(try XCTUnwrap(frame), x: 35, y: 10), [18, 52, 86, 255])
         XCTAssertEqual(rgba(try XCTUnwrap(frame), x: 32, y: 19), [240, 192, 64, 255])
@@ -8586,10 +8641,10 @@ final class ScreenshotEditorTests: XCTestCase {
         func preview(_ object: [String: Any], alpha: UInt8) throws {
             let before = try request(["operation": "snapshot"]).snapshot
             let done = expectation(description: "brush pixels before publication")
-            var response: Result<CGImage, Error>?
+            var response: Result<EditorDrawingPreview, Error>?
             worker.previewDrawing(object) { response = $0; done.fulfill() }
             wait(for: [done], timeout: 5)
-            XCTAssertEqual(rgba(try XCTUnwrap(response).get(), x: 2, y: 1)[3], alpha)
+            XCTAssertEqual(rgba(try XCTUnwrap(response).get().image, x: 2, y: 1)[3], alpha)
             XCTAssertEqual(try request(["operation": "snapshot"]).snapshot, before)
         }
         var erase = stroke; erase["mode"] = "erase"
@@ -9160,7 +9215,7 @@ private final class FakeEditorWorker: EditorWorking {
     var liveKeys: [String] = []
     var drawingPreviews: [[String: Any]] = []
     var deferDrawingPreviews = false
-    private var pendingDrawingPreview: ((Result<CGImage, Error>) -> Void)?
+    private var pendingDrawingPreview: ((Result<EditorDrawingPreview, Error>) -> Void)?
     var encodes: [[String: Any]] = []
     var saves: [[String: Any]] = []
     var originalSaves: [[String: Any]] = []
@@ -9240,15 +9295,20 @@ private final class FakeEditorWorker: EditorWorking {
             image: CGImage.fixture(width: Int(snapshot.width), height: Int(snapshot.height)))))
     }
 
-    func previewDrawing(_ object: [String: Any], completion: @escaping (Result<CGImage, Error>) -> Void) {
+    func previewDrawing(_ object: [String: Any], completion: @escaping (Result<EditorDrawingPreview, Error>) -> Void) {
         drawingPreviews.append(object)
         if deferDrawingPreviews { pendingDrawingPreview = completion }
         else { completion(.failure(AppBridgeError.backend("Fixture has no drawing pixel renderer."))) }
     }
 
-    func completeDrawingPreview() {
+    func completeDrawingPreview(geometry: [String: Any]? = nil) {
         let completion = pendingDrawingPreview; pendingDrawingPreview = nil
-        completion?(.success(CGImage.fixture(width: Int(snapshot.width), height: Int(snapshot.height))))
+        completion?(Result {
+            try EditorDrawingPreview(image: CGImage.fixture(width: Int(snapshot.width), height: Int(snapshot.height)),
+                geometry: geometry ?? ["selection_outlines": snapshot.layers.reduce(into: [String: [[String: Double]]]()) { result, layer in
+                    result[layer.id] = layer.selectionOutline?.map { ["x": Double($0.x), "y": Double($0.y)] }
+                }, "guides": []])
+        })
     }
 
     func completePending(with snapshot: NativeEditorSnapshot) {

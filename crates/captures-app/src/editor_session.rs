@@ -22,13 +22,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     editor::{
-        AnnotationStylePatch, ClosedShapeCreate, Document, DocumentHistory, DropShadowStyle,
-        DropShadowStylePatch, Element, ElementBase, ElementStyle, FreehandPathCreate, ImageElement,
-        LayerEdit, OpenShapeCreate, OptionalNullable, Point, Rect, TextElement, image_bounds,
+        AlignmentGuide, AnnotationStylePatch, ClosedShapeCreate, Document, DocumentHistory,
+        DropShadowStyle, DropShadowStylePatch, Element, ElementBase, ElementStyle,
+        FreehandPathCreate, ImageElement, LayerEdit, OpenShapeCreate, OptionalNullable, Point,
+        Rect, TextBounds, TextElement, image_bounds,
     },
     editor_image_background::{BrushMode, paint_stroke},
     editor_render::{
-        MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS, prepare_text_edit, render, render_with_text,
+        MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS, measured_text_bounds, prepare_text_edit, render,
+        render_with_text,
     },
 };
 
@@ -393,6 +395,7 @@ pub struct Snapshot<'a> {
     pub annotation_controls: BTreeMap<&'a str, AnnotationControls<'a>>,
     /// Resolved display defaults; reading them never authors custom shadow data.
     pub text_shadow_styles: BTreeMap<&'a str, DropShadowStyle>,
+    pub text_bounds: &'a TextBounds,
     pub selection_outlines: BTreeMap<&'a str, [Point; 4]>,
     /// Curve dots, Curve slider state and centerline per line/arrow layer.
     pub curve_handles: BTreeMap<&'a str, crate::editor_canvas::CurveHandles>,
@@ -436,6 +439,16 @@ pub struct ActiveTextInput<'a> {
     pub layout: Option<crate::editor_text::InlineEditorLayout>,
 }
 
+/// One worker result: pixels and their font-measured interaction geometry are
+/// published/cancelled together. Geometry never enters the saved document.
+#[derive(Clone, Debug)]
+pub struct DrawingPreview {
+    pub pixels: Arc<RgbaImage>,
+    pub text_bounds: TextBounds,
+    pub selection_outlines: BTreeMap<String, [Point; 4]>,
+    pub guides: Vec<AlignmentGuide>,
+}
+
 pub struct EditorSession {
     artifact_id: String,
     history_root: PathBuf,
@@ -448,7 +461,7 @@ pub struct EditorSession {
     persisted: Document,
     assets: BTreeMap<String, Arc<RgbaImage>>,
     fonts: Option<SessionFonts>,
-    pixels: Arc<RgbaImage>,
+    frame: DrawingPreview,
     has_draft: bool,
     /// The unedited document when it is known without decoding the original
     /// again (opened without a draft, or after Discard). Autosaving a document
@@ -481,7 +494,7 @@ struct TransientTextInput {
     layer_id: String,
     is_new: bool,
     document: Document,
-    original_pixels: Arc<RgbaImage>,
+    original_frame: DrawingPreview,
 }
 
 /// The text-input preview: `document` with the edited layer hidden, because
@@ -490,15 +503,16 @@ fn render_text_input_frame(
     document: &Document,
     layer_id: &str,
     assets: &BTreeMap<String, Arc<RgbaImage>>,
-    fonts: Option<&mut SessionFonts>,
-) -> Result<RgbaImage, String> {
+    mut fonts: Option<&mut SessionFonts>,
+) -> Result<DrawingPreview, String> {
     let mut hidden = document.clone();
     for element in &mut hidden.elements {
         if element.base().id == layer_id {
             element.base_mut().visible = false;
         }
     }
-    render_frame(&hidden, assets, fonts)
+    let pixels = Arc::new(render_frame(&hidden, assets, fonts.as_deref_mut())?);
+    prepare_geometry(document, pixels, fonts)
 }
 
 struct SessionFonts {
@@ -519,6 +533,10 @@ struct SessionFonts {
 const FALLBACK_FAMILY_ORDER: [&str; 4] = ["sans", "serif", "mono", "rounded"];
 
 impl SessionFonts {
+    fn bounds(&mut self, element: &TextElement) -> Result<Rect, String> {
+        measured_text_bounds(element, &mut self.renderer, &self.assets.families)
+    }
+
     fn new(
         assets: editor_draft::FontAssets,
         host: Option<editor_draft::FontAssets>,
@@ -627,6 +645,61 @@ fn render_frame(
     }
 }
 
+fn prepare_frame(
+    document: &Document,
+    assets: &BTreeMap<String, Arc<RgbaImage>>,
+    mut fonts: Option<&mut SessionFonts>,
+) -> Result<DrawingPreview, String> {
+    let pixels = Arc::new(render_frame(document, assets, fonts.as_deref_mut())?);
+    prepare_geometry(document, pixels, fonts)
+}
+
+fn prepare_geometry(
+    document: &Document,
+    pixels: Arc<RgbaImage>,
+    mut fonts: Option<&mut SessionFonts>,
+) -> Result<DrawingPreview, String> {
+    let mut text_bounds = TextBounds::default();
+    for element in &document.elements {
+        if let Element::Text(text) = element {
+            let measured = fonts
+                .as_deref_mut()
+                .ok_or_else(|| "Text requires explicit font bytes.".to_owned())
+                .and_then(|fonts| fonts.bounds(text));
+            match measured {
+                Ok(bounds) => {
+                    text_bounds.0.insert(
+                        text.base.id.clone(),
+                        Rect {
+                            x: bounds.x - text.base.x,
+                            y: bounds.y - text.base.y,
+                            ..bounds
+                        },
+                    );
+                }
+                Err(error) if text.base.visible => return Err(error),
+                Err(_) => {} // Hidden unsupported layers remain round-trippable.
+            }
+        }
+    }
+    let selection_outlines = document
+        .elements
+        .iter()
+        .filter_map(|element| {
+            element
+                .selection_outline_with(&mut |text| text_bounds.bounds(text))
+                .ok()
+                .map(|outline| (element.base().id.clone(), outline))
+        })
+        .collect();
+    Ok(DrawingPreview {
+        pixels,
+        text_bounds,
+        selection_outlines,
+        guides: Vec::new(),
+    })
+}
+
 impl EditorSession {
     pub fn open(request: OpenRequest) -> Result<Self, String> {
         Self::open_with_fonts(request, None)
@@ -705,7 +778,7 @@ impl EditorSession {
         let mut fonts = fonts
             .map(|assets| SessionFonts::new(assets, host, platform))
             .transpose()?;
-        let pixels = Arc::new(render_frame(&document, &assets, fonts.as_mut())?);
+        let frame = prepare_frame(&document, &assets, fonts.as_mut())?;
         let persisted_assets = if has_draft {
             sources(&document).into_iter().map(str::to_owned).collect()
         } else {
@@ -726,7 +799,7 @@ impl EditorSession {
             persisted: document,
             assets,
             fonts,
-            pixels,
+            frame,
             has_draft,
             persisted_assets,
             layer_clipboard: None,
@@ -791,7 +864,12 @@ impl EditorSession {
                         Element::Text(text) if text.base.id == input.layer_id => Some(text),
                         _ => None,
                     })
-                    .and_then(|text| crate::editor_text::inline_editor_layout(text).ok()),
+                    .and_then(|text| {
+                        crate::editor_text::inline_editor_layout_with(text, &mut |text| {
+                            self.frame.text_bounds.bounds(text)
+                        })
+                        .ok()
+                    }),
             }),
             document,
             font_families: self.fonts.as_ref().map(|fonts| &fonts.offered),
@@ -823,16 +901,12 @@ impl EditorSession {
                     _ => None,
                 })
                 .collect(),
+            text_bounds: &self.frame.text_bounds,
             selection_outlines: self
-                .visible_document()
-                .elements
+                .frame
+                .selection_outlines
                 .iter()
-                .filter_map(|element| {
-                    element
-                        .selection_outline()
-                        .ok()
-                        .map(|outline| (element.base().id.as_str(), outline))
-                })
+                .map(|(id, outline)| (id.as_str(), *outline))
                 .collect(),
             curve_handles: document
                 .elements
@@ -847,18 +921,21 @@ impl EditorSession {
                 .elements
                 .iter()
                 .filter_map(|element| {
-                    crate::editor_canvas::canvas_expand_preview(
+                    crate::editor_canvas::canvas_expand_preview_with(
                         element,
                         document.width,
                         document.height,
+                        &mut |text| self.frame.text_bounds.bounds(text),
                     )
                     .ok()
                     .flatten()
                     .map(|preview| (element.base().id.as_str(), preview))
                 })
                 .collect(),
-            can_trim: document.can_trim_to_content(),
-            trim_preview: document.trim_preview(),
+            can_trim: document
+                .can_trim_to_content_with(&mut |text| self.frame.text_bounds.bounds(text)),
+            trim_preview: document
+                .trim_preview_with(&mut |text| self.frame.text_bounds.bounds(text)),
             layer_thumbnails: self
                 .thumbnails
                 .iter()
@@ -945,7 +1022,7 @@ impl EditorSession {
                 .as_deref()
                 .unwrap_or(&self.artifact_id),
             expected,
-            &self.pixels,
+            &self.frame.pixels,
             options,
         )
         .map_err(|error| error.to_string())
@@ -983,7 +1060,7 @@ impl EditorSession {
     /// subsequent edits or even the session itself.
     #[must_use]
     pub fn pixels(&self) -> Arc<RgbaImage> {
-        self.pixels.clone()
+        self.frame.pixels.clone()
     }
 
     /// Encode the current rendered frame on the session worker. The owned bytes
@@ -991,7 +1068,7 @@ impl EditorSession {
     /// any files; hosts own file publication and clipboard operations.
     pub fn encode_export(&self, options: ExportOptions) -> Result<Vec<u8>, String> {
         self.require_finished_text_input()?;
-        captures_image::encode_export(&self.pixels, options)
+        captures_image::encode_export(&self.frame.pixels, options)
     }
 
     /// Import one decoded image as a single undoable edit. Asset ownership,
@@ -1096,11 +1173,11 @@ impl EditorSession {
         let last_id = last_id.ok_or("No images to import.")?;
         let mut history = self.history.clone();
         history.commit(document);
-        let pixels = render_frame(history.current(), &assets, self.fonts.as_mut())?;
+        let frame = prepare_frame(history.current(), &assets, self.fonts.as_mut())?;
 
         self.history = history;
         self.assets = assets;
-        self.pixels = Arc::new(pixels);
+        self.frame = frame;
         Ok(last_id)
     }
 
@@ -1254,14 +1331,14 @@ impl EditorSession {
         edited: RgbaImage,
     ) -> Result<(), String> {
         let (document, assets) = self.image_background_candidate(index, edited)?;
-        let pixels = render_frame(&document, &assets, self.fonts.as_mut())?;
+        let frame = prepare_frame(&document, &assets, self.fonts.as_mut())?;
         // Assets, rendered frame and history change together. Failed/no-op
         // requests keep redo and the pre-edit source for a later restore brush.
         let mut history = self.history.clone();
         history.commit(document);
         self.assets = assets;
         self.history = history;
-        self.pixels = Arc::new(pixels);
+        self.frame = frame;
         Ok(())
     }
 
@@ -1352,8 +1429,8 @@ impl EditorSession {
         // Combining keeps the canvas dimensions. Bound the newly retained
         // asset before allocating a second full-canvas render.
         validate_import_dimensions(
-            self.pixels.width(),
-            self.pixels.height(),
+            self.frame.pixels.width(),
+            self.frame.pixels.height(),
             retained_asset_pixels(&self.assets)?,
         )?;
         let combined = render_frame(&raster_document, &self.assets, self.fonts.as_mut())?;
@@ -1394,12 +1471,12 @@ impl EditorSession {
         }
         let mut assets = self.assets.clone();
         assets.insert(source, Arc::new(combined));
-        let pixels = render_frame(&document, &assets, self.fonts.as_mut())?;
+        let frame = prepare_frame(&document, &assets, self.fonts.as_mut())?;
         let mut history = self.history.clone();
         history.commit(document);
         self.assets = assets;
         self.history = history;
-        self.pixels = Arc::new(pixels);
+        self.frame = frame;
         Ok(())
     }
 
@@ -1415,7 +1492,7 @@ impl EditorSession {
             return Err("Finish or cancel the active text input before beginning another.".into());
         }
 
-        let original_pixels = self.pixels.clone();
+        let original_frame = self.frame.clone();
         let mut document = self.history.current().clone();
         let (layer_id, is_new) = match target {
             TextInputTarget::Existing { id } => {
@@ -1437,20 +1514,16 @@ impl EditorSession {
                 (id, true)
             }
         };
-        let pixels = Arc::new(render_text_input_frame(
-            &document,
-            &layer_id,
-            &self.assets,
-            self.fonts.as_mut(),
-        )?);
+        let frame =
+            render_text_input_frame(&document, &layer_id, &self.assets, self.fonts.as_mut())?;
         self.text_input = Some(TransientTextInput {
             input_id,
             layer_id,
             is_new,
             document,
-            original_pixels,
+            original_frame,
         });
-        self.pixels = pixels;
+        self.frame = frame;
         Ok(())
     }
 
@@ -1476,14 +1549,14 @@ impl EditorSession {
             .as_mut()
             .ok_or("Text requires explicit font bytes.")?;
         *element = prepare_text_edit(element, true, &mut fonts.renderer, &fonts.assets.families)?;
-        let pixels =
+        let frame =
             render_text_input_frame(&document, &layer_id, &self.assets, self.fonts.as_mut())?;
 
         self.text_input
             .as_mut()
             .expect("validated active text input")
             .document = document;
-        self.pixels = Arc::new(pixels);
+        self.frame = frame;
         Ok(())
     }
 
@@ -1494,7 +1567,7 @@ impl EditorSession {
             .filter(|input| input.input_id == input_id)
             .ok_or("The text input token is stale.")?;
         if !commit {
-            self.pixels = input.original_pixels.clone();
+            self.frame = input.original_frame.clone();
             self.text_input = None;
             return Ok(());
         }
@@ -1512,15 +1585,15 @@ impl EditorSession {
             document.elements.remove(index);
         }
 
-        let pixels = if &document == self.history.current() {
-            input.original_pixels.clone()
+        let frame = if &document == self.history.current() {
+            input.original_frame.clone()
         } else {
-            Arc::new(render_frame(&document, &self.assets, self.fonts.as_mut())?)
+            prepare_frame(&document, &self.assets, self.fonts.as_mut())?
         };
         let mut history = self.history.clone();
         history.commit(document);
         self.history = history;
-        self.pixels = pixels;
+        self.frame = frame;
         self.text_input = None;
         Ok(())
     }
@@ -1530,6 +1603,14 @@ impl EditorSession {
     /// caches may change: document, history, assets, published pixels and drafts
     /// remain untouched. The returned frame owns its pixels independently.
     pub fn preview_drawing(&mut self, request: Request) -> Result<Arc<RgbaImage>, String> {
+        self.preview_drawing_with_geometry(request)
+            .map(|frame| frame.pixels)
+    }
+
+    pub fn preview_drawing_with_geometry(
+        &mut self,
+        request: Request,
+    ) -> Result<DrawingPreview, String> {
         self.require_finished_text_input()?;
         if let Request::PaintImageBackground {
             points,
@@ -1540,12 +1621,13 @@ impl EditorSession {
         {
             let Some((index, edited)) = self.background_brush_edit(points, size, softness, mode)?
             else {
-                return Ok(self.pixels());
+                return Ok(self.frame.clone());
             };
             let (document, assets) = self.image_background_candidate(index, edited)?;
-            return render_frame(&document, &assets, self.fonts.as_mut()).map(Arc::new);
+            return prepare_frame(&document, &assets, self.fonts.as_mut());
         }
         let mut document = self.history.current().clone();
+        let mut guides = Vec::new();
         match request {
             Request::CreateClosedShape { create } => {
                 document.create_closed_shape(create)?;
@@ -1561,10 +1643,30 @@ impl EditorSession {
                 edit:
                     edit @ (LayerEdit::DragMove { .. }
                     | LayerEdit::Rotate { .. }
-                    | LayerEdit::Resize { .. }
-                    | LayerEdit::Curve {
+                    | LayerEdit::Resize { .. }),
+            } => {
+                let index = document
+                    .elements
+                    .iter()
+                    .position(|element| element.base().id == id)
+                    .ok_or("The selected layer no longer exists.")?;
+                let preview = document.preview_layer(&id, &edit, &mut |text| {
+                    self.fonts
+                        .as_mut()
+                        .ok_or("Text requires explicit font bytes.")?
+                        .bounds(text)
+                })?;
+                if !document.elements[index].base().locked {
+                    document.elements[index] = preview.element;
+                    guides = preview.guides;
+                }
+            }
+            Request::Layer {
+                id,
+                edit:
+                    edit @ LayerEdit::Curve {
                         edit: crate::editor_canvas::CurveEdit::Move { .. },
-                    }),
+                    },
             } => document.edit_layer_with_canvas_expansion(&id, edit, false)?,
             _ => {
                 return Err(
@@ -1573,7 +1675,9 @@ impl EditorSession {
                 );
             }
         }
-        render_frame(&document, &self.assets, self.fonts.as_mut()).map(Arc::new)
+        let mut frame = prepare_frame(&document, &self.assets, self.fonts.as_mut())?;
+        frame.guides = guides;
+        Ok(frame)
     }
 
     pub fn execute(&mut self, request: Request) -> Result<(), String> {
@@ -1737,7 +1841,12 @@ impl EditorSession {
             }
             Request::Layer { id, edit } => {
                 let mut document = next.current().clone();
-                document.edit_layer(&id, edit)?;
+                document.edit_layer_with_geometry(&id, edit, true, &mut |text| {
+                    self.fonts
+                        .as_mut()
+                        .ok_or("Text requires explicit font bytes.")?
+                        .bounds(text)
+                })?;
                 next.commit(document);
             }
             Request::PasteRetainedLayer {
@@ -1798,7 +1907,12 @@ impl EditorSession {
             }
             Request::TrimCanvas => {
                 let mut document = next.current().clone();
-                document.trim_to_content()?;
+                document.trim_to_content_with(&mut |text| {
+                    self.fonts
+                        .as_mut()
+                        .ok_or("Text requires explicit font bytes.")?
+                        .bounds(text)
+                })?;
                 next.commit(document);
             }
         }
@@ -1825,19 +1939,15 @@ impl EditorSession {
         }
         // Lock and Rename change only metadata on an already validated frame.
         // Keep command validation, history and persistence on their normal path.
-        let pixels = if metadata_only {
-            self.pixels.clone()
+        let frame = if metadata_only {
+            self.frame.clone()
         } else {
-            Arc::new(render_frame(
-                next.current(),
-                &self.assets,
-                self.fonts.as_mut(),
-            )?)
+            prepare_frame(next.current(), &self.assets, self.fonts.as_mut())?
         };
         // Rendering/validation failure leaves both the undo stacks and frame
         // unchanged. Hosts never receive a half-applied edit.
         self.history = next;
-        self.pixels = pixels;
+        self.frame = frame;
         self.live = live_key.map(|key| (key, self.history.current().clone()));
         if let Some(clipboard) = pasted_clipboard {
             clipboard.paste_count.fetch_add(1, Ordering::Relaxed);
@@ -1933,7 +2043,7 @@ impl EditorSession {
                 .unwrap_or(&self.artifact_id),
             &mut assets,
         )?;
-        let pixels = render_frame(&original, &assets, self.fonts.as_mut())?;
+        let frame = prepare_frame(&original, &assets, self.fonts.as_mut())?;
         editor_draft::discard(&self.drafts_root, &self.artifact_id)
             .map_err(|error| error.to_string())?;
         self.history = DocumentHistory::new(original.clone());
@@ -1941,7 +2051,7 @@ impl EditorSession {
         self.persisted = original;
         self.persisted_assets.clear();
         self.assets = assets;
-        self.pixels = Arc::new(pixels);
+        self.frame = frame;
         self.has_draft = false;
         self.layer_clipboard = None;
         self.clipboard_scope = Arc::new(());

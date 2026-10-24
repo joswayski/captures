@@ -111,6 +111,8 @@ def main():
                         help="Exercise real-input layer merging, flattening, history and output pixels")
     parser.add_argument("--text-draft-only", action="store_true",
                         help="Restore explicit-font text, save/reopen and copy pixels (no Text input UI)")
+    parser.add_argument("--measured-text-only", action="store_true",
+                        help="Exercise explicit-font wrapping, picking, resize and rotation anchors")
     parser.add_argument("--text-only", action="store_true",
                         help="Exercise the real Text tool UI, undo/redo and draft reopen")
     parser.add_argument("--text-defaults-only", action="store_true",
@@ -985,7 +987,7 @@ def main():
             original_metadata = json.loads(metadata_path.read_text())
             original_metadata["saved_path"] = str(source_export)
             metadata_path.write_text(json.dumps(original_metadata))
-        if args.text_draft_only:
+        if args.text_draft_only or args.measured_text_only:
             # Original test font, not a system font or a shipping font policy.
             draft_root = output / "editor-drafts" / artifact_id
             (draft_root / "assets").mkdir(parents=True)
@@ -995,6 +997,21 @@ def main():
             font_bytes = font.read_bytes()
             (draft_root / "fonts/regular.font").write_bytes(font_bytes)
             base = {"visible": True, "locked": False, "opacity": 100, "blendMode": "source-over"}
+            text_layers = [
+                {**base, "kind": "text", "id": "label", "x": 250, "y": 40,
+                 "text": "L\nfi", "fontSize": 80, "width": 180, "fontFamily": "sans",
+                 "bold": False, "italic": False, "align": "right", "color": "#ff0000",
+                 "background": "#f7f7f5", "outlined": False, "roundedBackground": True},
+            ]
+            if args.measured_text_only:
+                text_layers = [
+                    {**base, "kind": "text", "id": name, "x": x, "y": 100,
+                     "text": text, "fontSize": 40, "width": 50, "autoWidth": False,
+                     "fontFamily": "sans", "bold": False, "italic": False,
+                     "align": "left", "color": "#ff0000", "background": None,
+                     "outlined": False, "roundedBackground": False, "dropShadow": False}
+                    for name, x, text in (("wide", 250, "LL"), ("narrow", 450, "iiii"))
+                ]
             (draft_root / "manifest.json").write_text(json.dumps({
                 "schema_version": 1, "artifact_id": artifact_id, "updated_at_ms": 1,
                 "fonts": {"families": {"sans": "Captures Shaping Test"}, "assets": ["regular"]},
@@ -1003,10 +1020,7 @@ def main():
                      "locked": True, "source": "background", "src": "draft-asset:original",
                      "originalSrc": None, "name": "Original screenshot", "width": 640,
                      "height": 360, "naturalWidth": 640, "naturalHeight": 360},
-                    {**base, "kind": "text", "id": "label", "x": 250, "y": 40,
-                     "text": "L\nfi", "fontSize": 80, "width": 180, "fontFamily": "sans",
-                     "bold": False, "italic": False, "align": "right", "color": "#ff0000",
-                     "background": "#f7f7f5", "outlined": False, "roundedBackground": True},
+                    *text_layers,
                 ]},
             }))
         settings = output / "settings.json"
@@ -1021,7 +1035,8 @@ def main():
         # The full software-rendered suite can exceed ten minutes; its final
         # quit-recovery assertions must run before the app's safety timeout.
         app_command = [str(binary), "--live", "--open-history", "--history-root", str(history),
-                       "--settings-file", str(settings), "--quit-after", "900"]
+                       "--settings-file", str(settings), "--quit-after",
+                       "300" if args.measured_text_only else "900"]
         open_arguments = []
         if args.external_image_only:
             source_png = output / "External image é.png"
@@ -3645,7 +3660,11 @@ def main():
             # selected glyph or an absent background fails these independent RGBs.
             document_pixel("text-input-outline-rotated-pointer-word", center_x - 37, center_y,
                            (83, 128, 141), tolerance=1)
-            document_pixel("text-input-outline-rotated-pointer-word", center_x + 3, center_y - 20,
+            # Pinned Liberation Sans Bold: B advance + half O advance is 10/9 em.
+            # Turn that glyph center around the authored frame pivot, not the
+            # former egui content-width pivot (which put this sample on O's stroke).
+            o_center_y = center_y + bold["x"] + bold["fontSize"] * 10 / 9 - center_x
+            document_pixel("text-input-outline-rotated-pointer-word", center_x + 3, o_center_y,
                            (88, 166, 98), tolerance=1)
             run("xdotool", "key", "Escape", "sleep", ".3")
             save_layers(lambda values: values[-1] == rotated, "unchanged rotated outlined input")
@@ -4067,6 +4086,166 @@ def main():
                            "original-unchanged"],
             }, indent=2) + "\n")
             print("PASS native Text UI: create, style, undo/redo, save/reopen, minimum")
+            return
+
+        if args.measured_text_only:
+            click(editor, editor_width() - DRAFT_DISMISS_RIGHT, 20)
+            toolbar_click("layers")
+            # Independent oracle: make_shaping_font.py authors 1000-unit ems,
+            # L advance 700 and i advance 200. At 40px, LL needs 56px while
+            # iiii needs 32px. In a 50px column they occupy two/one 50px rows,
+            # the reverse of the old .56em-per-character estimate. L has a
+            # 6px stem; i has a 4px stem. Sample inside those known outlines,
+            # not antialiased edges or bounds read back from the application.
+            red, blue = (255, 0, 0), (40, 110, 166)
+            baseline_samples = [(252, 120, red), (252, 170, red), (280, 120, blue),
+                                (452, 130, red), (476, 130, red), (452, 180, (46, 158, 113))]
+
+            def measured_viewport():
+                resize_editor(1200, 701, "sleep", ".3")
+                width, height = window_size()
+                # Reuse the inspector suite's empty-row divider oracle. Under
+                # load the initial drag can be missed; reset the actual divider
+                # through its real double-click action before trusting Fit.
+                def divider():
+                    shot(editor, "measured-text-viewport")
+                    row = run("convert", str(output / "measured-text-viewport.png"), "-crop",
+                              f"{width}x1+0+{height - 100}", "-depth", "8", "rgb:-")
+                    edges = [x for x in range(100, width - 10)
+                             if row[x * 3:x * 3 + 3] != row[300:303]]
+                    assert len(edges) == 1, ("inspector divider", edges)
+                    return edges[0]
+                edge = divider()
+                if edge != width - INSPECTOR_WIDTH:
+                    window_move((edge, 200), "click", "--repeat", "2", "--delay", "120", "1")
+                    wait(lambda: divider() == width - INSPECTOR_WIDTH, "measured-text 320px inspector")
+
+            def measured_pixels(name, samples):
+                # Worker-rendered held previews can arrive after the pointer
+                # event; use the existing bounded repaint wait, not a fixed sleep.
+                for x, y, color in samples:
+                    settled_document_pixel(name, x, y, color)
+
+            def measured_crop(name, box):
+                window, size, bar = shot_layouts[name]
+                left, top, scale = fit_geometry(size, window, bar)
+                assert scale == 1, "measured-text pixel oracle requires 1:1 Fit"
+                x, y, width, height = box
+                return run("convert", str(output / f"{name}.png"), "-crop",
+                           f"{width}x{height}+{round(left + x)}+{round(top + y)}",
+                           "-depth", "8", "rgb:-")
+
+            def measured_gesture(start, end, name=None, samples=(), shift=False):
+                before = draft_bytes()
+                start, end = document_point(start), document_point(end)
+                run("xdotool", "mousemove", "--sync", "--window", editor, *map(str, start),
+                    "sleep", ".2")
+                if shift:
+                    run("xdotool", "keydown", "Shift_L", "sleep", ".1")
+                run("xdotool", "mousedown", "1", "sleep", ".2", "mousemove", "--sync",
+                    "--window", editor, *map(str, end), "sleep", ".5")
+                if name:
+                    measured_pixels(name, samples)
+                    assert draft_bytes() == before, "held text transform wrote a draft"
+                run("xdotool", "mouseup", "1", "sleep", ".3")
+                if shift:
+                    run("xdotool", "keyup", "Shift_L")
+
+            measured_viewport()
+            measured_pixels("measured-text-restored", baseline_samples)
+            # Lower-row non-ink body: the legacy one-row LL box misses this.
+            measured_gesture((270, 175), (280, 185))
+            save_layers(lambda values: all(math.isclose(values[1][key], value, abs_tol=1e-6)
+                for key, value in (("x", 260), ("y", 110))),
+                        "measured LL lower row is selectable")
+            toolbar_click("undo")
+            initial = save_layers(lambda values: (values[1]["x"], values[1]["y"]) == (250, 100),
+                                  "lower-row move is one undo step")
+            before = draft_bytes()
+            # The converse: no phantom second row beneath iiii may be picked.
+            measured_gesture((470, 175), (480, 185))
+            settled_draft()
+            assert draft_bytes() == before, "estimated phantom iiii row was selectable"
+            measured_gesture((470, 130), (480, 140))
+            save_layers(lambda values: all(math.isclose(values[2][key], value, abs_tol=1e-6)
+                for key, value in (("x", 460), ("y", 110))),
+                        "measured iiii real row is selectable")
+            toolbar_click("undo")
+            save_layers(lambda values: values == initial, "iiii move is one undo step")
+
+            click(editor, *document_point((270, 175)))
+            # East grip (300,150) crosses the 56px wrapping threshold. Keep
+            # the opposite measured midpoint (250,150), so the one-row box
+            # must become (250,125)-(330,175), not remain top-aligned at y100.
+            resize_samples = [(252, 140, red), (280, 140, red), (252, 180, blue)]
+            measured_gesture((300, 150), (330, 150), "measured-text-resize-held", resize_samples)
+            resized = save_layers(lambda values: all(math.isclose(values[1][key], value, abs_tol=1e-6)
+                for key, value in (("x", 250), ("y", 125), ("width", 80), ("fontSize", 40))),
+                "reflow keeps opposite measured midpoint")
+            measured_pixels("measured-text-resize-release", resize_samples)
+            # Compare an ink-bearing interior, excluding transient guides/grips.
+            assert measured_crop("measured-text-resize-held", (251, 135, 65, 8)) == measured_crop(
+                "measured-text-resize-release", (251, 135, 65, 8)), "resize preview/release ink differs"
+            toolbar_click("undo")
+            save_layers(lambda values: values == initial, "reflow single undo")
+            measured_pixels("measured-text-resize-undo", baseline_samples)
+            toolbar_click("redo")
+            save_layers(lambda values: values == resized, "reflow single redo")
+            toolbar_click("undo")
+            save_layers(lambda values: values == initial, "restore two rows before rotation")
+
+            click(editor, *document_point((270, 175)))
+            settled_document_pixel("measured-text-rotation-ready", 269, 72, (255, 202, 40))
+            # Top grip is 28px above the two-row box. Quarter-turn about the
+            # measured center (275,150): (252,120)->(305,127), and the lower
+            # stem (252,170)->(255,127). A legacy center at (275,125) misses
+            # both samples. These world-space expectations use fixture glyphs,
+            # not the saved schema's compatibility paint pivot.
+            rotated_samples = [(305, 127, red), (255, 127, red), (252, 170, blue)]
+            measured_gesture((275, 72), (353, 150), "measured-text-rotate-held",
+                             rotated_samples, shift=True)
+            rotated = save_layers(lambda values: math.isclose(values[1].get("rotation", 0),
+                math.pi / 2, abs_tol=1e-6), "quarter-turn about measured center")
+            measured_pixels("measured-text-rotate-release", rotated_samples)
+            # Release restores the north midpoint grip at (275,125). Compare
+            # the two glyph interiors on either side, not that transient UI.
+            for box in ((240, 126, 25, 20), (290, 126, 25, 20)):
+                assert measured_crop("measured-text-rotate-held", box) == measured_crop(
+                    "measured-text-rotate-release", box), "rotation preview/release ink differs"
+            toolbar_click("undo")
+            save_layers(lambda values: values == initial, "rotation single undo")
+            measured_pixels("measured-text-rotate-undo", baseline_samples)
+            toolbar_click("redo")
+            save_layers(lambda values: values == rotated, "rotation single redo")
+            click(editor, *document_point((600, 50)))  # No selection chrome in the reopen comparison.
+            measured_pixels("measured-text-before-reopen", rotated_samples)
+            close(editor)
+            wait(lambda: not windows("Captures Screenshot Editor"), "measured-text editor closes")
+            editor = reopen()
+            measured_viewport()
+            run("xdotool", "mousemove", "0", "0")
+            measured_pixels("measured-text-reopened", rotated_samples)
+            assert layers() == rotated, "reopen changed text geometry"
+            assert measured_crop("measured-text-before-reopen", (0, 0, 640, 360)) == measured_crop(
+                "measured-text-reopened", (0, 0, 640, 360)), "reopen changed document pixels"
+            assert (draft.parent / "fonts/regular.font").read_bytes() == font_bytes
+            assert json.loads(draft.read_text())["fonts"] == {
+                "families": {"sans": "Captures Shaping Test"}, "assets": ["regular"]}
+            assert (artifact / "capture.png").read_bytes() == original
+            close(root)
+            wait(lambda: app.poll() is not None, "measured-text suite quits")
+            assert app.returncode == 0
+            (output / "result.json").write_text(json.dumps({
+                "passed": True, "appearance": args.appearance,
+                "checks": ["fixture-LL-two-rows-iiii-one-row-ink", "LL-lower-row-picking",
+                           "iiii-no-phantom-row-picking", "iiii-real-row-picking",
+                           "side-resize-wrap-threshold-opposite-midpoint", "rotation-measured-center",
+                           "held-transforms-do-not-save", "preview-release-ink-equality",
+                           "move-single-undo", "resize-rotation-single-undo-redo",
+                           "reopen-full-document-pixel-equality",
+                           "font-bytes-and-original-preserved"],
+            }, indent=2) + "\n")
+            print("PASS native measured text: wrapping, picking, reflow anchor, rotation center, preview, undo, reopen")
             return
 
         if args.text_draft_only:

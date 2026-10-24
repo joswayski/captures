@@ -583,6 +583,9 @@ export function applyTextStylePreset(
 /** Line box height as a multiple of fontSize (matches canvas + inline editor). */
 export const TEXT_LINE_HEIGHT_RATIO = 1.25;
 
+/** Runtime font metrics, never stored in an element or draft. */
+export type TextMeasurement = (element: EditorTextElement, line: string) => number;
+
 /**
  * Approximate average glyph advance relative to fontSize for sans-like faces.
  * Used when a Canvas measureText context is not available (hit tests, bounds).
@@ -1350,6 +1353,7 @@ export function cropDocument(document: ScreenshotDocument, crop: EditorRect): Sc
  */
 export function visibleContentBounds(
   document: Pick<ScreenshotDocument, "elements">,
+  measure?: TextMeasurement,
 ): EditorRect | null {
   let minX = Number.POSITIVE_INFINITY;
   let minY = Number.POSITIVE_INFINITY;
@@ -1359,7 +1363,7 @@ export function visibleContentBounds(
   for (const element of document.elements) {
     if (!element.visible) continue;
     found = true;
-    const bounds = elementBounds(element);
+    const bounds = elementBounds(element, measure);
     minX = Math.min(minX, bounds.x);
     minY = Math.min(minY, bounds.y);
     maxX = Math.max(maxX, bounds.x + bounds.width);
@@ -1385,8 +1389,9 @@ export function visibleContentBounds(
 export function trimDocumentToContent(
   document: ScreenshotDocument,
   padding = 0,
+  measure?: TextMeasurement,
 ): ScreenshotDocument {
-  const content = visibleContentBounds(document);
+  const content = visibleContentBounds(document, measure);
   if (!content) return document;
 
   const safePadding = Math.max(0, Math.round(padding));
@@ -1427,10 +1432,11 @@ export type CanvasTrimMarginPreview = {
 export function canvasTrimMarginPreview(
   document: ScreenshotDocument,
   padding = 0,
+  measure?: TextMeasurement,
 ): CanvasTrimMarginPreview | null {
-  if (trimDocumentToContent(document, padding) === document) return null;
+  if (trimDocumentToContent(document, padding, measure) === document) return null;
 
-  const content = visibleContentBounds(document);
+  const content = visibleContentBounds(document, measure);
   if (!content) return null;
 
   const safePadding = Math.max(0, Math.round(padding));
@@ -1759,12 +1765,13 @@ export function expandDocumentForElement(
   document: ScreenshotDocument,
   element: ScreenshotElement,
   padding = 24,
+  measure?: TextMeasurement,
 ): ScreenshotDocument {
-  const bounds = elementBounds(element);
+  const bounds = elementBounds(element, measure);
   const shiftX = Math.max(0, Math.ceil(-bounds.x));
   const shiftY = Math.max(0, Math.ceil(-bounds.y));
   const shiftedElement = translateElement(element, shiftX, shiftY);
-  const shiftedBounds = elementBounds(shiftedElement);
+  const shiftedBounds = elementBounds(shiftedElement, measure);
   return {
     ...document,
     width: Math.max(
@@ -1852,12 +1859,13 @@ export type BoundsSnapResult = {
 export function collectAlignmentSnapLines(
   document: Pick<ScreenshotDocument, "width" | "height" | "elements">,
   excludeId: string | null,
+  measure?: TextMeasurement,
 ): { vertical: number[]; horizontal: number[] } {
   const vertical = new Set<number>([0, document.width]);
   const horizontal = new Set<number>([0, document.height]);
   for (const element of document.elements) {
     if (element.id === excludeId || !element.visible) continue;
-    const bounds = elementBounds(element);
+    const bounds = elementBounds(element, measure);
     vertical.add(bounds.x);
     vertical.add(bounds.x + bounds.width);
     horizontal.add(bounds.y);
@@ -2878,13 +2886,16 @@ export function withShapeRotation(
   return withElementRotation(element, radians);
 }
 
-export function withElementRotation<T extends ScreenshotElement>(element: T, radians: number): T {
+export function withElementRotation<T extends ScreenshotElement>(
+  element: T,
+  radians: number,
+  measure?: TextMeasurement,
+): T {
   const rotation = normalizeShapeRotation(radians);
-  if (rotation === 0) {
-    if (element.rotation == null) return element;
-    return { ...element, rotation: undefined } as T;
-  }
-  return { ...element, rotation } as T;
+  if (rotation === 0 && element.rotation == null) return element;
+  const next = { ...element, rotation: rotation || undefined } as T;
+  const center = rectCenter(elementLocalBounds(element, measure));
+  return preserveElementWorldPoint(element, next, center);
 }
 
 export function rotatePointAround(
@@ -2957,8 +2968,17 @@ export function shapeRotationOrigin(element: EditorShapeElement): EditorPoint {
   return elementRotationOrigin(element);
 }
 
+/** Legacy paint pivot. Do not substitute measured bounds: saved labels must not move. */
 export function elementRotationOrigin(element: ScreenshotElement): EditorPoint {
   return rectCenter(elementLocalBounds(element));
+}
+
+/** Visible interaction center in world space, distinct from the legacy paint pivot. */
+export function elementInteractionCenter(
+  element: ScreenshotElement,
+  measure?: TextMeasurement,
+): EditorPoint {
+  return elementWorldPoint(element, rectCenter(elementLocalBounds(element, measure)));
 }
 
 export function shapeWorldPoint(element: EditorShapeElement, localPoint: EditorPoint): EditorPoint {
@@ -3000,11 +3020,10 @@ export function preserveElementWorldPoint<T extends ScreenshotElement>(
   initial: T,
   next: T,
   localAnchor: EditorPoint,
+  nextLocalAnchor: EditorPoint = localAnchor,
 ): T {
-  const rotation = elementRotation(next);
-  if (rotation === 0 && elementRotation(initial) === 0) return next;
   const before = elementWorldPoint(initial, localAnchor);
-  const after = elementWorldPoint(next, localAnchor);
+  const after = elementWorldPoint(next, nextLocalAnchor);
   const deltaX = before.x - after.x;
   const deltaY = before.y - after.y;
   if (Math.abs(deltaX) < 1e-9 && Math.abs(deltaY) < 1e-9) return next;
@@ -3027,9 +3046,10 @@ function elementRotationHandleGeometry(
   element: ScreenshotElement,
   displayScale: number,
   canvas?: Pick<ScreenshotDocument, "width" | "height">,
+  measure?: TextMeasurement,
 ): { anchor: EditorPoint; handle: EditorPoint } {
-  const bounds = elementLocalBounds(element);
-  const origin = rectCenter(bounds);
+  const bounds = elementLocalBounds(element, measure);
+  const origin = elementRotationOrigin(element);
   const offset = shapeRotationHandleOffset(displayScale);
   const midX = bounds.x + bounds.width / 2;
   const candidates = [
@@ -3070,16 +3090,18 @@ export function elementRotationHandlePoint(
   element: ScreenshotElement,
   displayScale: number,
   canvas?: Pick<ScreenshotDocument, "width" | "height">,
+  measure?: TextMeasurement,
 ): EditorPoint {
-  return elementRotationHandleGeometry(element, displayScale, canvas).handle;
+  return elementRotationHandleGeometry(element, displayScale, canvas, measure).handle;
 }
 
 export function elementRotationHandleAnchorPoint(
   element: ScreenshotElement,
   displayScale: number,
   canvas?: Pick<ScreenshotDocument, "width" | "height">,
+  measure?: TextMeasurement,
 ): EditorPoint {
-  return elementRotationHandleGeometry(element, displayScale, canvas).anchor;
+  return elementRotationHandleGeometry(element, displayScale, canvas, measure).anchor;
 }
 
 export function hitTestShapeRotationHandle(
@@ -3097,8 +3119,9 @@ export function hitTestElementRotationHandle(
   handleRadius: number,
   displayScale: number,
   canvas?: Pick<ScreenshotDocument, "width" | "height">,
+  measure?: TextMeasurement,
 ): boolean {
-  const handle = elementRotationHandlePoint(element, displayScale, canvas);
+  const handle = elementRotationHandlePoint(element, displayScale, canvas, measure);
   const minRadius = 6 / Math.max(0.01, displayScale);
   const radius = Math.max(minRadius, handleRadius * 1.25);
   return Math.hypot(point.x - handle.x, point.y - handle.y) <= radius;
@@ -3117,8 +3140,9 @@ export function elementRotationHandleFitsCanvas(
   element: ScreenshotElement,
   displayScale: number,
   canvas: Pick<ScreenshotDocument, "width" | "height">,
+  measure?: TextMeasurement,
 ): boolean {
-  const handle = elementRotationHandlePoint(element, displayScale, canvas);
+  const handle = elementRotationHandlePoint(element, displayScale, canvas, measure);
   const pad = 8 / Math.max(0.01, displayScale);
   return (
     handle.x >= pad &&
@@ -3141,9 +3165,12 @@ export function elementRotationHandleFitsCanvas(
  * Arrowhead shoulders are measured at the tip only — never as an isotropic pad
  * on every side of the shaft (that left large empty selection / trim margins).
  */
-function rotatedBounds(local: EditorRect, rotation: number): EditorRect {
+function rotatedBounds(
+  local: EditorRect,
+  rotation: number,
+  origin = rectCenter(local),
+): EditorRect {
   if (rotation === 0) return local;
-  const origin = rectCenter(local);
   return boundsFromPoints(
     [
       { x: local.x, y: local.y },
@@ -3571,6 +3598,28 @@ export function resizeElement(
   element: ScreenshotElement,
   initialBounds: EditorRect,
   nextBounds: EditorRect,
+  measure?: TextMeasurement,
+  handle?: ResizeHandle,
+): ScreenshotElement {
+  const next = resizeElementLocal(element, initialBounds, nextBounds);
+  if (!handle) return next;
+  const opposite = oppositeResizeHandle(handle);
+  const anchor = resizeHandlePoint(initialBounds, opposite);
+  if (element.kind !== "text") return preserveElementWorldPoint(element, next, anchor);
+  // Reflow can change the candidate height discontinuously. Compare actual
+  // opposite handles, not the same local point under two different pivots.
+  return preserveElementWorldPoint(
+    element,
+    next,
+    anchor,
+    resizeHandlePoint(elementLocalBounds(next, measure), opposite),
+  );
+}
+
+function resizeElementLocal(
+  element: ScreenshotElement,
+  initialBounds: EditorRect,
+  nextBounds: EditorRect,
 ): ScreenshotElement {
   const scaleX = nextBounds.width / Math.max(1, initialBounds.width);
   const scaleY = nextBounds.height / Math.max(1, initialBounds.height);
@@ -3659,7 +3708,10 @@ export function resizeCursor(handle: ResizeHandle): string {
 }
 
 /** Unrotated selection/content bounds used for local-space interaction. */
-export function elementLocalBounds(element: ScreenshotElement): EditorRect {
+export function elementLocalBounds(
+  element: ScreenshotElement,
+  measure?: TextMeasurement,
+): EditorRect {
   if (element.kind === "image") {
     return {
       x: element.x,
@@ -3669,7 +3721,7 @@ export function elementLocalBounds(element: ScreenshotElement): EditorRect {
     };
   }
   if (element.kind === "text") {
-    const layout = textLayoutBounds(element);
+    const layout = textLayoutBounds(element, measure && ((line) => measure(element, line)));
     const shadowPad = annotationDropShadowPad(textDropShadowStyle(element));
     if (shadowPad <= 0) return layout;
     return {
@@ -3699,7 +3751,7 @@ export function elementLocalBounds(element: ScreenshotElement): EditorRect {
 }
 
 /** Painted axis-aligned bounds after applying the element's authored rotation. */
-export function elementBounds(element: ScreenshotElement): EditorRect {
+export function elementBounds(element: ScreenshotElement, measure?: TextMeasurement): EditorRect {
   const rotation = elementRotation(element);
   if (element.kind === "path" && element.points.length > 0 && rotation !== 0) {
     const origin = elementRotationOrigin(element);
@@ -3709,7 +3761,11 @@ export function elementBounds(element: ScreenshotElement): EditorRect {
       padding,
     );
   }
-  return rotatedBounds(elementLocalBounds(element), rotation);
+  return rotatedBounds(
+    elementLocalBounds(element, measure),
+    rotation,
+    elementRotationOrigin(element),
+  );
 }
 
 /** CSS size of each Layers-panel thumbnail (matches `.screenshot-layer-preview`). */
@@ -3741,12 +3797,13 @@ export function hitTestElement(
   elements: ScreenshotElement[],
   point: EditorPoint,
   tolerance = 8,
+  measure?: TextMeasurement,
 ): ScreenshotElement | null {
   for (let index = elements.length - 1; index >= 0; index -= 1) {
     const element = elements[index];
     if (!element.visible || element.locked) continue;
     const hitPoint = elementLocalPoint(element, point);
-    const bounds = elementLocalBounds(element);
+    const bounds = elementLocalBounds(element, measure);
     if (
       hitPoint.x >= bounds.x - tolerance &&
       hitPoint.x <= bounds.x + bounds.width + tolerance &&

@@ -5,7 +5,7 @@
 //! without discarding data owned by the shipping editor. Host-only selection,
 //! crop-preview, and rendering state do not belong here.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -96,6 +96,30 @@ pub struct Rect {
     pub y: f64,
     pub width: f64,
     pub height: f64,
+}
+
+/// Font-aware interaction geometry supplied by the rendering session. The
+/// fontless document API remains available for legacy clients and fixtures.
+pub type TextMeasurer<'a> = dyn FnMut(&TextElement) -> Result<Rect, String> + 'a;
+
+/// Frame-local text bounds relative to each layer's authored origin. Never part
+/// of a document/draft: identical IDs in different sessions can pin other fonts.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct TextBounds(pub BTreeMap<String, Rect>);
+
+impl TextBounds {
+    pub fn bounds(&self, text: &TextElement) -> Result<Rect, String> {
+        let bounds = self
+            .0
+            .get(&text.base.id)
+            .ok_or("Text geometry is not ready.")?;
+        Ok(Rect {
+            x: bounds.x + text.base.x,
+            y: bounds.y + text.base.y,
+            ..*bounds
+        })
+    }
 }
 
 /// Transient geometry for one interactive crop drag.
@@ -897,17 +921,27 @@ impl Element {
     /// Selection-box picking for one visible, unlocked layer. Callers validate
     /// finite coordinates and a nonnegative tolerance before picking.
     pub(crate) fn hit_test(&self, point: Point, tolerance: f64) -> Result<bool, String> {
+        self.hit_test_with(point, tolerance, &mut crate::editor_text::selection_bounds)
+    }
+
+    fn hit_test_with(
+        &self,
+        point: Point,
+        tolerance: f64,
+        measure: &mut TextMeasurer<'_>,
+    ) -> Result<bool, String> {
         let base = self.base();
         if !base.visible || base.locked {
             return Ok(false);
         }
-        let bounds = self.selection_bounds()?;
+        let bounds = self.selection_bounds_with(measure)?;
         let Point { mut x, mut y } = point;
         // Match the shipping zero-angle shortcut: subtracting/adding the
         // pivot can otherwise move an exact fractional edge outside.
         if base.rotation() != 0. {
-            let center_x = bounds.x + bounds.width / 2.;
-            let center_y = bounds.y + bounds.height / 2.;
+            let pivot = rect_center(self.selection_bounds()?);
+            let center_x = pivot.x;
+            let center_y = pivot.y;
             let (sin, cos) = (-base.rotation()).sin_cos();
             let delta_x = point.x - center_x;
             let delta_y = point.y - center_y;
@@ -924,6 +958,10 @@ impl Element {
     /// painted-pixel bounds. The center is also the element's rotation pivot.
     /// Text follows shipping's estimated wrapping, not measured glyph ink.
     pub fn selection_bounds(&self) -> Result<Rect, String> {
+        self.selection_bounds_with(&mut crate::editor_text::selection_bounds)
+    }
+
+    pub fn selection_bounds_with(&self, measure: &mut TextMeasurer<'_>) -> Result<Rect, String> {
         match self {
             Self::Image(image) => Ok(Rect {
                 x: image.base.x,
@@ -931,7 +969,7 @@ impl Element {
                 width: image.width,
                 height: image.height,
             }),
-            Self::Text(text) => crate::editor_text::selection_bounds(text),
+            Self::Text(text) => measure(text),
             Self::Shape(shape) => match shape.shape.as_str() {
                 "rectangle" | "ellipse" | "triangle" | "diamond" | "star" => {
                     Ok(closed_shape_bounds(shape))
@@ -978,10 +1016,27 @@ impl Element {
         painted_bounds(self)
     }
 
+    pub fn painted_bounds_with(&self, measure: &mut TextMeasurer<'_>) -> Result<Rect, String> {
+        if matches!(self, Self::Text(_)) {
+            return Ok(bounds_from_points(
+                &self.selection_outline_with(measure)?,
+                0.,
+            ));
+        }
+        painted_bounds(self)
+    }
+
     /// Document-space corners for native selection/move feedback. Hosts only
     /// translate/project these points; picking and rotation remain shared.
     pub fn selection_outline(&self) -> Result<[Point; 4], String> {
-        let bounds = self.selection_bounds()?;
+        self.selection_outline_with(&mut crate::editor_text::selection_bounds)
+    }
+
+    pub fn selection_outline_with(
+        &self,
+        measure: &mut TextMeasurer<'_>,
+    ) -> Result<[Point; 4], String> {
+        let bounds = self.selection_bounds_with(measure)?;
         let mut points = [
             Point {
                 x: bounds.x,
@@ -1002,10 +1057,9 @@ impl Element {
         ];
         let rotation = self.base().rotation();
         if rotation != 0. {
-            let center = Point {
-                x: bounds.x + bounds.width / 2.,
-                y: bounds.y + bounds.height / 2.,
-            };
+            // Painting retains its legacy pivot so opening an existing rotated
+            // label cannot move its pixels merely because metrics are available.
+            let center = rect_center(self.selection_bounds()?);
             let (sin, cos) = rotation.sin_cos();
             for point in &mut points {
                 let dx = point.x - center.x;
@@ -1025,13 +1079,22 @@ impl Element {
         point: Point,
         radius: f64,
     ) -> Result<Option<ResizeHandle>, String> {
+        self.resize_handle_at_with(point, radius, &mut crate::editor_text::selection_bounds)
+    }
+
+    pub fn resize_handle_at_with(
+        &self,
+        point: Point,
+        radius: f64,
+        measure: &mut TextMeasurer<'_>,
+    ) -> Result<Option<ResizeHandle>, String> {
         if !point.x.is_finite() || !point.y.is_finite() || !radius.is_finite() || radius < 0. {
             return Err(
                 "Resize hit testing requires finite coordinates and nonnegative radius.".into(),
             );
         }
-        let bounds = self.selection_bounds()?;
-        let center = rect_center(bounds);
+        let bounds = self.selection_bounds_with(measure)?;
+        let center = rect_center(self.selection_bounds()?);
         let local = rotate_point(point, center, -self.base().rotation());
         Ok(hit_test_resize_handle(bounds, local, radius))
     }
@@ -1098,6 +1161,22 @@ impl ResizeDrag {
         handle: ResizeHandle,
         display_scale: f64,
     ) -> Result<Self, String> {
+        Self::new_with(
+            document,
+            id,
+            handle,
+            display_scale,
+            &mut crate::editor_text::selection_bounds,
+        )
+    }
+
+    pub fn new_with(
+        document: &Document,
+        id: &str,
+        handle: ResizeHandle,
+        display_scale: f64,
+        measure: &mut TextMeasurer<'_>,
+    ) -> Result<Self, String> {
         if !display_scale.is_finite() || display_scale <= 0. {
             return Err("Resize display scale must be finite and positive.".into());
         }
@@ -1107,8 +1186,8 @@ impl ResizeDrag {
             .find(|element| element.base().id == id)
             .ok_or("The selected layer no longer exists.")?
             .clone();
-        let initial_bounds = element.selection_bounds()?;
-        let (vertical_lines, horizontal_lines) = collect_alignment_lines(document, id)?;
+        let initial_bounds = element.selection_bounds_with(measure)?;
+        let (vertical_lines, horizontal_lines) = collect_alignment_lines(document, id, measure)?;
         Ok(Self {
             element,
             initial_bounds,
@@ -1120,12 +1199,25 @@ impl ResizeDrag {
     }
 
     pub fn preview(&self, current: Point, lock_aspect: bool) -> Result<ResizePreview, String> {
+        self.preview_with(
+            current,
+            lock_aspect,
+            &mut crate::editor_text::selection_bounds,
+        )
+    }
+
+    pub fn preview_with(
+        &self,
+        current: Point,
+        lock_aspect: bool,
+        measure: &mut TextMeasurer<'_>,
+    ) -> Result<ResizePreview, String> {
         if !current.x.is_finite() || !current.y.is_finite() {
             return Err("Resize coordinates must be finite.".into());
         }
         let minimum = 8. / self.display_scale.max(0.01);
         let threshold = ALIGNMENT_SNAP_SCREEN_PX / self.display_scale.max(0.01);
-        let center = rect_center(self.initial_bounds);
+        let center = rect_center(self.element.selection_bounds()?);
         let local_current = rotate_point(current, center, -self.element.base().rotation());
         let free = resize_bounds_from_handle(
             self.initial_bounds,
@@ -1134,11 +1226,40 @@ impl ResizeDrag {
             minimum,
             lock_aspect,
         );
-        let (snapped, guides) = if self.element.base().rotation() == 0. {
+        let candidate = |bounds, measure: &mut TextMeasurer<'_>| -> Result<Element, String> {
+            let mut element = resize_element(&self.element, self.initial_bounds, bounds)?;
+            if matches!(element, Element::Text(_)) {
+                let opposite = opposite_resize_handle(self.handle);
+                let before = rotate_point(
+                    resize_handle_point(self.initial_bounds, opposite),
+                    center,
+                    self.element.base().rotation(),
+                );
+                let measured = element.selection_bounds_with(measure)?;
+                let after = rotate_point(
+                    resize_handle_point(measured, opposite),
+                    rect_center(element.selection_bounds()?),
+                    element.base().rotation(),
+                );
+                element.translate_layer(before.x - after.x, before.y - after.y)?;
+            } else if element.base().rotation() != 0. {
+                let anchor =
+                    resize_handle_point(self.initial_bounds, opposite_resize_handle(self.handle));
+                preserve_element_world_point(&self.element, &mut element, anchor)?;
+            }
+            Ok(element)
+        };
+        let snap_bounds =
+            if self.element.base().rotation() == 0. && matches!(self.element, Element::Text(_)) {
+                candidate(free, measure)?.selection_bounds_with(measure)?
+            } else {
+                free
+            };
+        let (snapped, mut guides) = if self.element.base().rotation() == 0. {
             snap_resized_bounds(
                 self.initial_bounds,
                 self.handle,
-                free,
+                snap_bounds,
                 &self.vertical_lines,
                 &self.horizontal_lines,
                 threshold,
@@ -1146,6 +1267,14 @@ impl ResizeDrag {
             )
         } else {
             (free, Vec::new())
+        };
+        // Reflow is not type scaling. Apply only the measured snap correction
+        // to the original request before sizing the final candidate.
+        let snapped = Rect {
+            x: free.x + snapped.x - snap_bounds.x,
+            y: free.y + snapped.y - snap_bounds.y,
+            width: free.width + snapped.width - snap_bounds.width,
+            height: free.height + snapped.height - snap_bounds.height,
         };
         let next_bounds = if lock_aspect {
             resize_bounds_from_handle(
@@ -1158,13 +1287,18 @@ impl ResizeDrag {
         } else {
             snapped
         };
-        let mut element = resize_element(&self.element, self.initial_bounds, next_bounds)?;
-        if element.base().rotation() != 0. {
-            let anchor =
-                resize_handle_point(self.initial_bounds, opposite_resize_handle(self.handle));
-            preserve_element_world_point(&self.element, &mut element, anchor)?;
+        let element = candidate(next_bounds, measure)?;
+        if matches!(element, Element::Text(_)) {
+            let bounds = element.painted_bounds_with(measure)?;
+            guides.retain(|guide| {
+                let (start, end) = match guide.orientation {
+                    GuideOrientation::Vertical => (bounds.x, bounds.x + bounds.width),
+                    GuideOrientation::Horizontal => (bounds.y, bounds.y + bounds.height),
+                };
+                (guide.position - start).abs() < 1e-6 || (guide.position - end).abs() < 1e-6
+            });
         }
-        let outline = element.selection_outline()?;
+        let outline = element.selection_outline_with(measure)?;
         if !finite_outline(&outline) {
             return Err("Resize must keep geometry finite.".into());
         }
@@ -1178,6 +1312,20 @@ impl ResizeDrag {
 
 impl MoveDrag {
     pub fn new(document: &Document, id: &str, display_scale: f64) -> Result<Self, String> {
+        Self::new_with(
+            document,
+            id,
+            display_scale,
+            &mut crate::editor_text::selection_bounds,
+        )
+    }
+
+    pub fn new_with(
+        document: &Document,
+        id: &str,
+        display_scale: f64,
+        measure: &mut TextMeasurer<'_>,
+    ) -> Result<Self, String> {
         if !display_scale.is_finite() || display_scale <= 0. {
             return Err("Move display scale must be finite and positive.".into());
         }
@@ -1187,8 +1335,8 @@ impl MoveDrag {
             .find(|element| element.base().id == id)
             .ok_or("The selected layer no longer exists.")?
             .clone();
-        let initial_bounds = painted_bounds(&element)?;
-        let (vertical_lines, horizontal_lines) = collect_alignment_lines(document, id)?;
+        let initial_bounds = element.painted_bounds_with(measure)?;
+        let (vertical_lines, horizontal_lines) = collect_alignment_lines(document, id, measure)?;
         Ok(Self {
             element,
             initial_bounds,
@@ -1199,6 +1347,14 @@ impl MoveDrag {
     }
 
     pub fn preview(&self, delta: Point) -> Result<MovePreview, String> {
+        self.preview_with(delta, &mut crate::editor_text::selection_bounds)
+    }
+
+    pub fn preview_with(
+        &self,
+        delta: Point,
+        measure: &mut TextMeasurer<'_>,
+    ) -> Result<MovePreview, String> {
         if !delta.x.is_finite() || !delta.y.is_finite() {
             return Err("Move delta must be finite.".into());
         }
@@ -1216,7 +1372,7 @@ impl MoveDrag {
         );
         let mut element = self.element.clone();
         element.translate_layer(delta.x + snapped.x - free.x, delta.y + snapped.y - free.y)?;
-        let outline = element.selection_outline()?;
+        let outline = element.selection_outline_with(measure)?;
         if !finite_outline(&outline) {
             return Err("Move must keep geometry finite.".into());
         }
@@ -1231,6 +1387,7 @@ impl MoveDrag {
 fn collect_alignment_lines(
     document: &Document,
     exclude_id: &str,
+    measure: &mut TextMeasurer<'_>,
 ) -> Result<(Vec<f64>, Vec<f64>), String> {
     let mut vertical = vec![0., document.width];
     let mut horizontal = vec![0., document.height];
@@ -1238,7 +1395,7 @@ fn collect_alignment_lines(
         if element.base().id == exclude_id || !element.base().visible {
             continue;
         }
-        let bounds = painted_bounds(element)?;
+        let bounds = element.painted_bounds_with(measure)?;
         push_unique_number(&mut vertical, bounds.x);
         push_unique_number(&mut vertical, bounds.x + bounds.width);
         push_unique_number(&mut horizontal, bounds.y);
@@ -1465,6 +1622,15 @@ impl Document {
     /// an error rather than silently selecting through it. Hidden/locked layers
     /// do not block picking. This query never edits the document or history.
     pub fn hit_test(&self, point: Point, tolerance: f64) -> Result<Option<&Element>, String> {
+        self.hit_test_with(point, tolerance, &mut crate::editor_text::selection_bounds)
+    }
+
+    pub fn hit_test_with(
+        &self,
+        point: Point,
+        tolerance: f64,
+        measure: &mut TextMeasurer<'_>,
+    ) -> Result<Option<&Element>, String> {
         if !point.x.is_finite() || !point.y.is_finite() || !tolerance.is_finite() || tolerance < 0.
         {
             return Err(
@@ -1472,7 +1638,7 @@ impl Document {
             );
         }
         for element in self.elements.iter().rev() {
-            if element.hit_test(point, tolerance)? {
+            if element.hit_test_with(point, tolerance, measure)? {
                 return Ok(Some(element));
             }
         }
@@ -1534,13 +1700,20 @@ impl Document {
     /// painted bounds (locked and off-canvas layers included, hidden layers
     /// ignored), at least 1 × 1. `None` when nothing is visible.
     pub fn visible_content_bounds(&self) -> Result<Option<Rect>, String> {
+        self.visible_content_bounds_with(&mut crate::editor_text::selection_bounds)
+    }
+
+    pub fn visible_content_bounds_with(
+        &self,
+        measure: &mut TextMeasurer<'_>,
+    ) -> Result<Option<Rect>, String> {
         let mut content: Option<Rect> = None;
         for element in self
             .elements
             .iter()
             .filter(|element| element.base().visible)
         {
-            let bounds = painted_bounds(element)?;
+            let bounds = element.painted_bounds_with(measure)?;
             content = Some(match content {
                 None => bounds,
                 Some(previous) => {
@@ -1565,7 +1738,11 @@ impl Document {
     /// Fit the canvas to visible layer geometry, including locked/transparent
     /// layers and off-canvas content. This does not scan flattened alpha pixels.
     pub fn trim_to_content(&mut self) -> Result<(), String> {
-        if let Some(bounds) = self.visible_content_bounds()? {
+        self.trim_to_content_with(&mut crate::editor_text::selection_bounds)
+    }
+
+    pub fn trim_to_content_with(&mut self, measure: &mut TextMeasurer<'_>) -> Result<(), String> {
+        if let Some(bounds) = self.visible_content_bounds_with(measure)? {
             self.fit_canvas_to_bounds(bounds);
         }
         Ok(())
@@ -1776,6 +1953,83 @@ impl Document {
         edit: LayerEdit,
         expand_canvas: bool,
     ) -> Result<(), String> {
+        self.edit_layer_with_geometry(
+            id,
+            edit,
+            expand_canvas,
+            &mut crate::editor_text::selection_bounds,
+        )
+    }
+
+    /// The worker uses the same candidate for pointer previews and commits.
+    pub fn preview_layer(
+        &self,
+        id: &str,
+        edit: &LayerEdit,
+        measure: &mut TextMeasurer<'_>,
+    ) -> Result<ResizePreview, String> {
+        match *edit {
+            LayerEdit::DragMove {
+                delta_x,
+                delta_y,
+                display_scale,
+            } => {
+                let preview = MoveDrag::new_with(self, id, display_scale, measure)?.preview_with(
+                    Point {
+                        x: delta_x,
+                        y: delta_y,
+                    },
+                    measure,
+                )?;
+                Ok(ResizePreview {
+                    element: preview.element,
+                    outline: preview.outline,
+                    guides: preview.guides,
+                })
+            }
+            LayerEdit::Resize {
+                handle,
+                current,
+                display_scale,
+                lock_aspect,
+            } => ResizeDrag::new_with(self, id, handle, display_scale, measure)?.preview_with(
+                current,
+                lock_aspect,
+                measure,
+            ),
+            LayerEdit::Rotate { radians } => {
+                let radians =
+                    rotation_angle(radians, None).ok_or("Layer rotation must be finite.")?;
+                let initial = self
+                    .elements
+                    .iter()
+                    .find(|element| element.base().id == id)
+                    .ok_or("The selected layer no longer exists.")?;
+                let center = rect_center(initial.selection_bounds_with(measure)?);
+                let pivot = rect_center(initial.selection_bounds()?);
+                let before = rotate_point(center, pivot, initial.base().rotation());
+                let after = rotate_point(center, pivot, radians);
+                let mut element = initial.clone();
+                element.base_mut().rotation = (radians != 0.).then_some(radians);
+                element.translate_layer(before.x - after.x, before.y - after.y)?;
+                let outline = element.selection_outline_with(measure)?;
+                Ok(ResizePreview {
+                    element,
+                    outline,
+                    guides: Vec::new(),
+                })
+            }
+            _ => Err("Only move, resize and rotation have a layer gesture preview.".into()),
+        }
+    }
+
+    pub fn edit_layer_with_geometry(
+        &mut self,
+        id: &str,
+        edit: LayerEdit,
+        expand_canvas: bool,
+        measure: &mut TextMeasurer<'_>,
+    ) -> Result<(), String> {
         let Some(index) = self
             .elements
             .iter()
@@ -1850,63 +2104,16 @@ impl Document {
                     self.elements[index].translate_layer(delta_x, delta_y)?;
                 }
             }
-            LayerEdit::DragMove {
-                delta_x,
-                delta_y,
-                display_scale,
-            } => {
-                if !delta_x.is_finite() || !delta_y.is_finite() {
-                    return Err("Move delta must be finite.".into());
-                }
-                if !display_scale.is_finite() || display_scale <= 0. {
-                    return Err("Move display scale must be finite and positive.".into());
-                }
+            edit @ (LayerEdit::DragMove { .. }
+            | LayerEdit::Rotate { .. }
+            | LayerEdit::Resize { .. }) => {
+                let preview = self.preview_layer(id, &edit, measure)?;
                 if !locked {
-                    let preview = MoveDrag::new(self, id, display_scale)?.preview(Point {
-                        x: delta_x,
-                        y: delta_y,
-                    })?;
-                    let bounds = painted_bounds(&preview.element)?;
+                    let bounds = preview.element.painted_bounds_with(measure)?;
                     self.elements[index] = preview.element;
                     if expand_canvas && fully_outside_canvas(bounds, self.width, self.height) {
                         self.expand_canvas_to_bounds(bounds);
                     }
-                }
-            }
-            LayerEdit::Rotate { radians } => {
-                let radians =
-                    rotation_angle(radians, None).ok_or("Layer rotation must be finite.")?;
-                if !locked {
-                    self.elements[index].selection_bounds()?;
-                    self.elements[index].base_mut().rotation = (radians != 0.).then_some(radians);
-                    let bounds = painted_bounds(&self.elements[index])?;
-                    if expand_canvas && fully_outside_canvas(bounds, self.width, self.height) {
-                        self.expand_canvas_to_bounds(bounds);
-                    }
-                }
-            }
-            LayerEdit::Resize {
-                handle,
-                current,
-                display_scale,
-                lock_aspect,
-            } => {
-                if !current.x.is_finite() || !current.y.is_finite() {
-                    return Err("Resize coordinates must be finite.".into());
-                }
-                if !display_scale.is_finite() || display_scale <= 0. {
-                    return Err("Resize display scale must be finite and positive.".into());
-                }
-                if !locked {
-                    let drag = ResizeDrag::new(self, id, handle, display_scale)?;
-                    let preview = drag.preview(current, lock_aspect)?;
-                    let mut next = self.clone();
-                    next.elements[index] = preview.element;
-                    let bounds = painted_bounds(&next.elements[index])?;
-                    if expand_canvas && fully_outside_canvas(bounds, next.width, next.height) {
-                        next.expand_canvas_to_bounds(bounds);
-                    }
-                    *self = next;
                 }
             }
             LayerEdit::Delete => {
@@ -1977,7 +2184,7 @@ impl Document {
                     crate::editor_canvas::apply_curve_edit(shape, edit)?;
                 }
             }
-            LayerEdit::ExpandCanvas => self.expand_canvas_to_fit(id)?,
+            LayerEdit::ExpandCanvas => self.expand_canvas_to_fit_with(id, measure)?,
             LayerEdit::BlendMode { blend_mode } => {
                 if !crate::editor_layers::BLEND_MODES
                     .iter()

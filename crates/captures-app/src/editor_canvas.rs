@@ -8,7 +8,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::editor::{
-    Document, Element, Point, Rect, ShapeElement, rect_center, rotate_point, sample_controlled_path,
+    Document, Element, Point, Rect, ShapeElement, TextMeasurer, rect_center, rotate_point,
+    sample_controlled_path,
 };
 
 /// Shipping `.screenshot-canvas-expand-action` label.
@@ -192,10 +193,24 @@ pub fn canvas_expand_preview(
     width: f64,
     height: f64,
 ) -> Result<Option<CanvasExpandPreview>, String> {
+    canvas_expand_preview_with(
+        element,
+        width,
+        height,
+        &mut crate::editor_text::selection_bounds,
+    )
+}
+
+pub fn canvas_expand_preview_with(
+    element: &Element,
+    width: f64,
+    height: f64,
+    measure: &mut TextMeasurer<'_>,
+) -> Result<Option<CanvasExpandPreview>, String> {
     if !element.base().visible {
         return Ok(None);
     }
-    let bounds = element.painted_bounds()?;
+    let bounds = element.painted_bounds_with(measure)?;
     let edges = canvas_overflow_edges(bounds, width, height);
     if edges.is_empty() {
         return Ok(None);
@@ -224,12 +239,20 @@ impl Document {
     /// one layer's painted bounds fit, shifting every layer for negative
     /// overflow. Hosts submit it as one layer edit, so it is one undo step.
     pub fn expand_canvas_to_fit(&mut self, id: &str) -> Result<(), String> {
+        self.expand_canvas_to_fit_with(id, &mut crate::editor_text::selection_bounds)
+    }
+
+    pub fn expand_canvas_to_fit_with(
+        &mut self,
+        id: &str,
+        measure: &mut TextMeasurer<'_>,
+    ) -> Result<(), String> {
         let element = self
             .elements
             .iter()
             .find(|element| element.base().id == id)
             .ok_or("The selected layer no longer exists.")?;
-        let bounds = element.painted_bounds()?;
+        let bounds = element.painted_bounds_with(measure)?;
         let Some(rect) = preview_expanded_canvas_rect(bounds, self.width, self.height) else {
             return Ok(());
         };
@@ -330,7 +353,11 @@ impl Document {
     /// disable the button otherwise.
     #[must_use]
     pub fn can_trim_to_content(&self) -> bool {
-        let Ok(Some(bounds)) = self.visible_content_bounds() else {
+        self.can_trim_to_content_with(&mut crate::editor_text::selection_bounds)
+    }
+
+    pub fn can_trim_to_content_with(&self, measure: &mut TextMeasurer<'_>) -> bool {
+        let Ok(Some(bounds)) = self.visible_content_bounds_with(measure) else {
             return false;
         };
         let frame = trim_frame(bounds);
@@ -343,10 +370,14 @@ impl Document {
     /// when the trim is a no-op or cuts nothing on-canvas.
     #[must_use]
     pub fn trim_preview(&self) -> Option<CanvasTrimPreview> {
-        if !self.can_trim_to_content() {
+        self.trim_preview_with(&mut crate::editor_text::selection_bounds)
+    }
+
+    pub fn trim_preview_with(&self, measure: &mut TextMeasurer<'_>) -> Option<CanvasTrimPreview> {
+        if !self.can_trim_to_content_with(measure) {
             return None;
         }
-        let frame = trim_frame(self.visible_content_bounds().ok()??);
+        let frame = trim_frame(self.visible_content_bounds_with(measure).ok()??);
         let left = frame.x.max(0.);
         let top = frame.y.max(0.);
         let right = (frame.x + frame.width).min(self.width);

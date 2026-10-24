@@ -84,6 +84,7 @@ import {
   closedShapePolygon,
   editorPointsToSvgPath,
   elementBounds,
+  elementInteractionCenter,
   elementLocalBounds,
   elementLocalPoint,
   elementRotation,
@@ -130,9 +131,7 @@ import {
   scaleArrowStrokeForLength,
   shapeLocalPoint,
   SHAPE_ROTATION_SNAP_DEGREES,
-  preserveElementWorldPoint,
   preserveShapeWorldPoint,
-  oppositeResizeHandle,
   snapShapeRotation,
   withElementRotation,
   snapResizedBounds,
@@ -179,6 +178,7 @@ import {
   type EditorPoint,
   type EditorRect,
   type EditorTextElement,
+  type TextMeasurement,
   type DropShadowStyle,
   type ElementStyle,
   type ResizeHandle,
@@ -450,13 +450,21 @@ function hitTestSelectedAnnotation(
   | null {
   if (selected.locked || !selected.visible) return null;
   if (
-    (!canvas || elementRotationHandleFitsCanvas(selected, displayScale, canvas)) &&
-    hitTestElementRotationHandle(selected, point, interactionRadius, displayScale, canvas)
+    (!canvas ||
+      elementRotationHandleFitsCanvas(selected, displayScale, canvas, measureTextElementLine)) &&
+    hitTestElementRotationHandle(
+      selected,
+      point,
+      interactionRadius,
+      displayScale,
+      canvas,
+      measureTextElementLine,
+    )
   ) {
     return { kind: "rotate" };
   }
   const localPoint = elementLocalPoint(selected, point);
-  const bounds = elementLocalBounds(selected);
+  const bounds = elementLocalBounds(selected, measureTextElementLine);
   const handle = hitTestResizeHandle(bounds, localPoint, interactionRadius);
   // Arrow endpoints sit near the dashed-box corners. Prefer those corners so
   // shrinking the box scales the whole arrow (shaft + head), not just the tip.
@@ -488,7 +496,7 @@ function hitTestSelectedShapeBody(
     );
     return closest.distance <= pathHitRadius;
   }
-  return hitTestElement([selected], point, interactionRadius) !== null;
+  return hitTestElement([selected], point, interactionRadius, measureTextElementLine) !== null;
 }
 
 const REMOVE_BG_MODE_ITEMS: Array<{ mode: RemoveBackgroundMode; label: string }> = [
@@ -676,21 +684,28 @@ function fontFamily(element: Extract<ScreenshotElement, { kind: "text" }>): stri
   return editorTextFontStack(element.fontFamily);
 }
 
-/** Offscreen 2D context for measuring live text while typing (not the editor canvas). */
-let textMetricsContext: CanvasRenderingContext2D | null | undefined;
+/** Attached 2D context shared by painting-compatible layout and interactions.
+ * No layout is cached: every candidate is measured with its own current font.
+ */
+let textMetricsCanvas: HTMLCanvasElement | undefined;
+let textMetricsFontKey = "";
 
 function measureTextElementLine(element: EditorTextElement, line: string): number {
-  if (textMetricsContext === undefined) {
-    if (typeof document === "undefined") {
-      textMetricsContext = null;
-    } else {
-      const metricsCanvas = createDocumentPaintCanvas(1, 1);
-      textMetricsContext = metricsCanvas.getContext("2d");
-    }
+  if (typeof document === "undefined") return estimateTextWidth(line, element.fontSize);
+  if (!textMetricsCanvas?.isConnected) {
+    textMetricsCanvas = createDocumentPaintCanvas(8, 8);
+    textMetricsFontKey = "";
   }
-  if (!textMetricsContext) return estimateTextWidth(line, element.fontSize);
-  textMetricsContext.font = editorTextCanvasFont(element);
-  const width = textMetricsContext.measureText(line || " ").width;
+  const context = textMetricsCanvas.getContext("2d");
+  if (!context) return estimateTextWidth(line, element.fontSize);
+  // Family resolution probes attached canvases. Do it once per font change,
+  // not once per candidate word during a wrapping/resize pointer event.
+  const key = `${element.fontFamily}:${element.fontSize}:${element.bold}:${element.italic}`;
+  if (textMetricsFontKey !== key) {
+    context.font = editorTextCanvasFont(element);
+    textMetricsFontKey = key;
+  }
+  const width = context.measureText(line || " ").width;
   return Number.isFinite(width) && width > 0 ? width : estimateTextWidth(line, element.fontSize);
 }
 
@@ -1179,8 +1194,10 @@ function withPreviewStrokeFloor(
  */
 const AnnotationLayerPreview = memo(function AnnotationLayerPreview({
   element,
+  measureText,
 }: {
   element: Exclude<ScreenshotElement, EditorImageElement>;
+  measureText: TextMeasurement;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -1204,7 +1221,7 @@ const AnnotationLayerPreview = memo(function AnnotationLayerPreview({
     context.imageSmoothingEnabled = true;
     context.imageSmoothingQuality = "high";
 
-    const bounds = elementBounds(element);
+    const bounds = elementBounds(element, measureText);
     const { scale, translateX, translateY } = previewTransformForBounds(bounds);
     const painted = withPreviewStrokeFloor(element, scale);
 
@@ -1214,7 +1231,7 @@ const AnnotationLayerPreview = memo(function AnnotationLayerPreview({
     context.scale(scale, scale);
     paintScreenshotElement(context, painted, EMPTY_LAYER_PREVIEW_IMAGE_CACHE);
     context.restore();
-  }, [element]);
+  }, [element, measureText]);
 
   return (
     <canvas
@@ -1374,18 +1391,21 @@ function drawEditorOverlays(
   const unit = 1 / Math.max(0.01, displayScale);
   if ((selected?.visible ?? false) || selectionBoundsOverride) {
     const shape = selected?.kind === "shape" ? selected : null;
-    const bounds = selectionBoundsOverride ?? (selected ? elementLocalBounds(selected) : null);
+    const bounds =
+      selected?.kind === "text"
+        ? elementLocalBounds(selected, measureTextElementLine)
+        : (selectionBoundsOverride ??
+          (selected ? elementLocalBounds(selected, measureTextElementLine) : null));
     if (bounds) {
       const curveable = Boolean(shape && isCurveableStrokeShape(shape));
       const cornerGripsOnly = curveable;
       context.save();
       const rotation = selected ? elementRotation(selected) : 0;
-      if (rotation !== 0) {
-        const originX = bounds.x + bounds.width / 2;
-        const originY = bounds.y + bounds.height / 2;
-        context.translate(originX, originY);
+      if (rotation !== 0 && selected) {
+        const origin = elementRotationOrigin(selected);
+        context.translate(origin.x, origin.y);
         context.rotate(rotation);
-        context.translate(-originX, -originY);
+        context.translate(-origin.x, -origin.y);
       }
       // Lighter selection chrome so post-place curve grips stay the focus.
       context.globalAlpha = curveable ? 0.55 : 0.9;
@@ -1446,11 +1466,19 @@ function drawEditorOverlays(
         }
       }
       context.restore();
-      if (selected && elementRotationHandleFitsCanvas(selected, displayScale, document)) {
+      if (
+        selected &&
+        elementRotationHandleFitsCanvas(selected, displayScale, document, measureTextElementLine)
+      ) {
         drawShapeRotationHandle(
           context,
-          elementRotationHandleAnchorPoint(selected, displayScale, document),
-          elementRotationHandlePoint(selected, displayScale, document),
+          elementRotationHandleAnchorPoint(
+            selected,
+            displayScale,
+            document,
+            measureTextElementLine,
+          ),
+          elementRotationHandlePoint(selected, displayScale, document, measureTextElementLine),
           unit,
           accentColor,
         );
@@ -1744,6 +1772,7 @@ export function ScreenshotEditor() {
   const [zoomMode, setZoomMode] = useState<"fit" | "manual">("fit");
   const [zoom, setZoom] = useState(100);
   const [imageRevision, setImageRevision] = useState(0);
+  const [measureText, setMeasureText] = useState<TextMeasurement>(() => measureTextElementLine);
   const [dragActive, setDragActive] = useState(false);
   const [imageDropGuide, setImageDropGuide] = useState<ImageDropGuide | null>(null);
   const imageDropGuideRef = useRef<ImageDropGuide | null>(null);
@@ -2541,16 +2570,16 @@ export function ScreenshotEditor() {
   /** True when visible layers leave empty margin (or overhang) on the canvas. */
   const canTrimEdges = useMemo(() => {
     if (!editorDocument) return false;
-    const content = visibleContentBounds(editorDocument);
+    const content = visibleContentBounds(editorDocument, measureText);
     if (!content) return false;
-    return trimDocumentToContent(editorDocument) !== editorDocument;
-  }, [editorDocument]);
+    return trimDocumentToContent(editorDocument, 0, measureText) !== editorDocument;
+  }, [editorDocument, measureText]);
 
   /** Hover preview: which current-canvas margins Trim edges would discard. */
   const trimEdgesPreview = useMemo((): CanvasTrimMarginPreview | null => {
     if (!trimEdgesHover || !canTrimEdges || !editorDocument) return null;
-    return canvasTrimMarginPreview(editorDocument);
-  }, [trimEdgesHover, canTrimEdges, editorDocument]);
+    return canvasTrimMarginPreview(editorDocument, 0, measureText);
+  }, [trimEdgesHover, canTrimEdges, editorDocument, measureText]);
 
   const editingText = editingTextId === selectedId && selected?.kind === "text" ? selected : null;
 
@@ -2603,16 +2632,27 @@ export function ScreenshotEditor() {
     if (canvasExpandPreview || !editorDocument || !overflowHoverId) return null;
     const element = editorDocument.elements.find((item) => item.id === overflowHoverId);
     if (!element || !element.visible) return null;
-    return canvasExpandPreviewForBounds(elementBounds(element), editorDocument, element);
-  }, [canvasExpandPreview, editorDocument, overflowHoverId]);
-  const shownExpandPreview = canvasExpandPreview ?? idleOverflowPreview;
+    return canvasExpandPreviewForBounds(
+      elementBounds(element, measureText),
+      editorDocument,
+      element,
+    );
+  }, [canvasExpandPreview, editorDocument, overflowHoverId, measureText]);
+  const shownExpandPreview = useMemo(() => {
+    if (!canvasExpandPreview) return idleOverflowPreview;
+    return canvasExpandPreviewForBounds(
+      elementBounds(canvasExpandPreview.element, measureText),
+      canvasExpandPreview.canvas,
+      canvasExpandPreview.element,
+    );
+  }, [canvasExpandPreview, idleOverflowPreview, measureText]);
   const expandPreviewIsLive = canvasExpandPreview !== null;
   const expandPreviewArmed =
     !expandPreviewIsLive && expandButtonHover && shownExpandPreview !== null;
   const expandActionAnchor =
     !expandPreviewIsLive && shownExpandPreview
       ? canvasExpandButtonAnchor(
-          elementBounds(shownExpandPreview.element),
+          elementBounds(shownExpandPreview.element, measureTextElementLine),
           shownExpandPreview.canvas,
           22 / Math.max(0.01, displayScale),
         )
@@ -2620,9 +2660,7 @@ export function ScreenshotEditor() {
 
   const inlineTextLayout = useMemo(() => {
     if (!editingText) return null;
-    const localBounds = textLayoutBounds(editingText, (line) =>
-      measureTextElementLine(editingText, line),
-    );
+    const localBounds = textLayoutBounds(editingText, (line) => measureText(editingText, line));
     const pad = textHasBackgroundPlate(editingText)
       ? textBackgroundPad(editingText.fontSize)
       : { x: 0, y: 0 };
@@ -2630,7 +2668,9 @@ export function ScreenshotEditor() {
     // plate exactly so opening the editor does not change wrapping or rotation.
     const optical = editingText.fontSize * TEXT_OPTICAL_CENTER_NUDGE_RATIO * displayScale;
     const padY = pad.y * displayScale;
+    const paintPivot = elementRotationOrigin(editingText);
     return {
+      transformOrigin: `${(paintPivot.x - localBounds.x) * displayScale}px ${(paintPivot.y - localBounds.y) * displayScale}px`,
       frame: {
         left: localBounds.x * displayScale,
         top: localBounds.y * displayScale,
@@ -2641,7 +2681,7 @@ export function ScreenshotEditor() {
         textBackgroundRadius(editingText, localBounds.width, localBounds.height) * displayScale,
       padding: `${padY + optical}px ${pad.x * displayScale}px ${Math.max(0, padY - optical)}px`,
     };
-  }, [displayScale, editingText]);
+  }, [displayScale, editingText, measureText]);
 
   useLayoutEffect(() => {
     displayedZoomPercentRef.current = displayScale * 100;
@@ -2819,13 +2859,25 @@ export function ScreenshotEditor() {
 
   useEffect(() => {
     let cancelled = false;
-    void loadEditorTextFonts().then(() => {
-      if (!cancelled) paintEditorCanvas();
-    });
+    const refresh = () => {
+      // Invalidate memoized geometry without touching authored document data.
+      textMetricsFontKey = "";
+      if (!cancelled)
+        setMeasureText(
+          (): TextMeasurement => (element, line) => measureTextElementLine(element, line),
+        );
+    };
+    void loadEditorTextFonts().then(refresh);
+    document.fonts?.addEventListener?.("loadingdone", refresh);
     return () => {
       cancelled = true;
+      document.fonts?.removeEventListener?.("loadingdone", refresh);
     };
-  }, [imageRevision, paintEditorCanvas]);
+  }, []);
+
+  useEffect(() => {
+    paintEditorCanvas();
+  }, [imageRevision, measureText, paintEditorCanvas]);
 
   // Paint the wand's magnified color loupe whenever the sample pixel moves.
   useLayoutEffect(() => {
@@ -3546,7 +3598,7 @@ export function ScreenshotEditor() {
     if (
       element &&
       element.visible &&
-      canvasOverflowEdges(elementBounds(element), canvas).length > 0
+      canvasOverflowEdges(elementBounds(element, measureTextElementLine), canvas).length > 0
     ) {
       setOverflowHoverId(element.id);
       return;
@@ -3563,7 +3615,12 @@ export function ScreenshotEditor() {
       return;
     }
     const interactionRadius = 10 / Math.max(0.01, displayScale);
-    const hovered = hitTestElement(current.elements, point, interactionRadius);
+    const hovered = hitTestElement(
+      current.elements,
+      point,
+      interactionRadius,
+      measureTextElementLine,
+    );
     revealOverflowIfNeeded(hovered, current);
   };
 
@@ -3571,7 +3628,11 @@ export function ScreenshotEditor() {
     const current = documentRef.current;
     const element = current?.elements.find((item) => item.id === elementId);
     if (!current || !element) return;
-    const expanded = expandDocumentToFitBounds(current, elementBounds(element), 0);
+    const expanded = expandDocumentToFitBounds(
+      current,
+      elementBounds(element, measureTextElementLine),
+      0,
+    );
     if (expanded === current) return;
     commitDocument(expanded);
     setOverflowHoverId(null);
@@ -3627,7 +3688,7 @@ export function ScreenshotEditor() {
           current,
         );
         if (annotationHit?.kind === "rotate") {
-          const origin = elementRotationOrigin(selectedElement);
+          const origin = elementInteractionCenter(selectedElement, measureTextElementLine);
           startCanvasGesture({
             kind: "rotate",
             pointerId: event.pointerId,
@@ -3671,7 +3732,12 @@ export function ScreenshotEditor() {
         }
       }
 
-      const element = hitTestElement(current.elements, point, interactionRadius);
+      const element = hitTestElement(
+        current.elements,
+        point,
+        interactionRadius,
+        measureTextElementLine,
+      );
       setSelectedId(element?.id ?? null);
       setCurveHoverTip(null);
       if (element) {
@@ -3717,7 +3783,12 @@ export function ScreenshotEditor() {
     }
 
     if (tool === "text") {
-      const existing = hitTestElement(current.elements, point, interactionRadius);
+      const existing = hitTestElement(
+        current.elements,
+        point,
+        interactionRadius,
+        measureTextElementLine,
+      );
       if (existing?.kind === "text") {
         beginTextEditingFromPointerDown(existing.id);
         return;
@@ -3735,8 +3806,8 @@ export function ScreenshotEditor() {
       });
       // Fully off-canvas text still grows the document so the label is not lost.
       const withText = { ...current, elements: [...current.elements, element] };
-      const next = isFullyOutsideCanvas(elementBounds(element), current)
-        ? expandDocumentToFitBounds(withText, elementBounds(element), 0)
+      const next = isFullyOutsideCanvas(elementBounds(element, measureTextElementLine), current)
+        ? expandDocumentToFitBounds(withText, elementBounds(element, measureTextElementLine), 0)
         : withText;
       commitDocument(next);
       revealOverflowIfNeeded(
@@ -3762,7 +3833,7 @@ export function ScreenshotEditor() {
           current,
         );
         if (annotationHit?.kind === "rotate") {
-          const origin = elementRotationOrigin(selectedElement);
+          const origin = elementInteractionCenter(selectedElement, measureTextElementLine);
           startCanvasGesture({
             kind: "rotate",
             pointerId: event.pointerId,
@@ -3965,7 +4036,7 @@ export function ScreenshotEditor() {
         }
         if (tool === "select") {
           const hovered = current
-            ? hitTestElement(current.elements, point, interactionRadius)
+            ? hitTestElement(current.elements, point, interactionRadius, measureTextElementLine)
             : null;
           // Unselected curveable strokes: light discovery tip when hovering the path.
           if (
@@ -4059,7 +4130,11 @@ export function ScreenshotEditor() {
       }
       setCanvasCursor("grabbing");
       setCanvasExpandPreview(
-        canvasExpandPreviewForBounds(elementBounds(next), gesture.initialDocument, next),
+        canvasExpandPreviewForBounds(
+          elementBounds(next, measureTextElementLine),
+          gesture.initialDocument,
+          next,
+        ),
       );
       replaceDocument(replaceElement(gesture.initialDocument, gesture.element.id, next));
       return;
@@ -4074,9 +4149,14 @@ export function ScreenshotEditor() {
           event.shiftKey,
           rotationSnapDegrees,
         ),
+        measureTextElementLine,
       );
       setCanvasExpandPreview(
-        canvasExpandPreviewForBounds(elementBounds(next), gesture.initialDocument, next),
+        canvasExpandPreviewForBounds(
+          elementBounds(next, measureTextElementLine),
+          gesture.initialDocument,
+          next,
+        ),
       );
       replaceDocument(replaceElement(gesture.initialDocument, gesture.element.id, next));
       return;
@@ -4098,8 +4178,12 @@ export function ScreenshotEditor() {
         point.x - gesture.origin.x,
         point.y - gesture.origin.y,
       );
-      const freeBounds = elementBounds(free);
-      const lines = collectAlignmentSnapLines(gesture.initialDocument, gesture.element.id);
+      const freeBounds = elementBounds(free, measureTextElementLine);
+      const lines = collectAlignmentSnapLines(
+        gesture.initialDocument,
+        gesture.element.id,
+        measureTextElementLine,
+      );
       const snapped = snapTranslatedBounds(freeBounds, lines, snapThreshold);
       const deltaX = snapped.bounds.x - freeBounds.x;
       const deltaY = snapped.bounds.y - freeBounds.y;
@@ -4107,7 +4191,11 @@ export function ScreenshotEditor() {
       const nextDocument = replaceElement(gesture.initialDocument, gesture.element.id, moved);
       setAlignmentGuides(snapped.guides);
       setCanvasExpandPreview(
-        canvasExpandPreviewForBounds(elementBounds(moved), gesture.initialDocument, moved),
+        canvasExpandPreviewForBounds(
+          elementBounds(moved, measureTextElementLine),
+          gesture.initialDocument,
+          moved,
+        ),
       );
       replaceDocument(nextDocument);
       return;
@@ -4140,40 +4228,81 @@ export function ScreenshotEditor() {
         minSize,
         lockAspectRatio,
       );
-      const lines = collectAlignmentSnapLines(gesture.initialDocument, gesture.element.id);
+      const lines = collectAlignmentSnapLines(
+        gesture.initialDocument,
+        gesture.element.id,
+        measureTextElementLine,
+      );
+      // Snap the candidate's painted edges, not the requested drag rectangle:
+      // wrapping can add/remove lines before the pointer reaches a snap target.
+      const snapBounds =
+        !rotatedElement && gesture.element.kind === "text"
+          ? elementLocalBounds(
+              resizeElement(
+                gesture.element,
+                gesture.initialBounds,
+                freeBounds,
+                measureTextElementLine,
+                gesture.handle,
+              ),
+              measureTextElementLine,
+            )
+          : freeBounds;
       const snapped = rotatedElement
         ? { bounds: freeBounds, guides: [] as AlignmentSnapGuide[] }
         : snapResizedBounds(
             gesture.initialBounds,
             gesture.handle,
-            freeBounds,
+            snapBounds,
             lines,
             snapThreshold,
             minSize,
           );
+      // Apply only the snap correction to the requested scale. Feeding a
+      // reflowed height back as a scale would enlarge/shrink the type twice.
+      const snappedRequest = {
+        x: freeBounds.x + snapped.bounds.x - snapBounds.x,
+        y: freeBounds.y + snapped.bounds.y - snapBounds.y,
+        width: freeBounds.width + snapped.bounds.width - snapBounds.width,
+        height: freeBounds.height + snapped.bounds.height - snapBounds.height,
+      };
       // Snap can nudge axes independently; re-apply the lock so Shift stays fixed-ratio.
       const nextBounds = lockAspectRatio
         ? resizeBoundsFromHandle(
             gesture.initialBounds,
             gesture.handle,
-            resizeHandlePoint(snapped.bounds, gesture.handle),
+            resizeHandlePoint(snappedRequest, gesture.handle),
             minSize,
             true,
           )
-        : snapped.bounds;
-      let resized = resizeElement(gesture.element, gesture.initialBounds, nextBounds);
-      if (elementRotation(resized) !== 0) {
-        const anchor = resizeHandlePoint(
-          gesture.initialBounds,
-          oppositeResizeHandle(gesture.handle),
-        );
-        resized = preserveElementWorldPoint(gesture.element, resized, anchor);
-      }
-      gestureRef.current = { ...gesture, currentBounds: nextBounds };
-      setResizePreviewBounds(elementLocalBounds(resized));
-      setAlignmentGuides(snapped.guides);
+        : snappedRequest;
+      const resized = resizeElement(
+        gesture.element,
+        gesture.initialBounds,
+        nextBounds,
+        measureTextElementLine,
+        gesture.handle,
+      );
+      const measuredBounds = elementLocalBounds(resized, measureTextElementLine);
+      gestureRef.current = { ...gesture, currentBounds: measuredBounds };
+      setResizePreviewBounds(measuredBounds);
+      // Reflow and integer font sizes can prevent the requested edge from
+      // landing on a snap line. Never advertise a guide the paint did not reach.
+      setAlignmentGuides(
+        snapped.guides.filter(({ orientation, position }) => {
+          const edges =
+            orientation === "vertical"
+              ? [measuredBounds.x, measuredBounds.x + measuredBounds.width]
+              : [measuredBounds.y, measuredBounds.y + measuredBounds.height];
+          return edges.some((edge) => Math.abs(edge - position) < 0.01);
+        }),
+      );
       setCanvasExpandPreview(
-        canvasExpandPreviewForBounds(elementBounds(resized), gesture.initialDocument, resized),
+        canvasExpandPreviewForBounds(
+          elementBounds(resized, measureTextElementLine),
+          gesture.initialDocument,
+          resized,
+        ),
       );
       replaceDocument(replaceElement(gesture.initialDocument, gesture.element.id, resized));
       return;
@@ -4206,7 +4335,11 @@ export function ScreenshotEditor() {
       replaceDocument(replaceElement(current, element.id, updated));
     }
     setCanvasExpandPreview(
-      canvasExpandPreviewForBounds(elementBounds(updated), gesture.initialDocument, updated),
+      canvasExpandPreviewForBounds(
+        elementBounds(updated, measureTextElementLine),
+        gesture.initialDocument,
+        updated,
+      ),
     );
   };
 
@@ -4316,7 +4449,7 @@ export function ScreenshotEditor() {
       const elementId = gesture.kind === "draw" ? gesture.elementId : gesture.element.id;
       const element = current.elements.find(({ id }) => id === elementId);
       if (element) {
-        const bounds = elementBounds(element);
+        const bounds = elementBounds(element, measureTextElementLine);
         if (isFullyOutsideCanvas(bounds, current)) {
           const expanded = expandDocumentToFitBounds(current, bounds, 0);
           if (expanded !== current) {
@@ -4416,7 +4549,7 @@ export function ScreenshotEditor() {
     }
 
     // Double-click an unselected line/arrow path: select it and add a curve point.
-    const hit = hitTestElement(current.elements, point, interactionRadius);
+    const hit = hitTestElement(current.elements, point, interactionRadius, measureTextElementLine);
     if (
       hit &&
       hit.kind === "shape" &&
@@ -4459,7 +4592,7 @@ export function ScreenshotEditor() {
   const applyTrimEdges = () => {
     const current = documentRef.current;
     if (!current) return;
-    const trimmed = trimDocumentToContent(current);
+    const trimmed = trimDocumentToContent(current, 0, measureTextElementLine);
     if (trimmed === current) return;
     commitDocument(trimmed);
     setCropSelection(null);
@@ -4489,9 +4622,13 @@ export function ScreenshotEditor() {
       // Layered compositions keep the canvas; hanging overflow stays clipped until
       // the user expands. Fully off-canvas results still grow so the layer is not lost.
       if (rotates && fillsCanvas) {
-        next = trimDocumentToContent(next);
-      } else if (isFullyOutsideCanvas(elementBounds(transformed), next)) {
-        next = expandDocumentToFitBounds(next, elementBounds(transformed), 0);
+        next = trimDocumentToContent(next, 0, measureTextElementLine);
+      } else if (isFullyOutsideCanvas(elementBounds(transformed, measureTextElementLine), next)) {
+        next = expandDocumentToFitBounds(
+          next,
+          elementBounds(transformed, measureTextElementLine),
+          0,
+        );
       }
 
       commitDocument(next);
@@ -4505,7 +4642,7 @@ export function ScreenshotEditor() {
       if (
         nextElement &&
         nextElement.visible &&
-        canvasOverflowEdges(elementBounds(nextElement), next).length > 0
+        canvasOverflowEdges(elementBounds(nextElement, measureTextElementLine), next).length > 0
       ) {
         setOverflowHoverId(nextElement.id);
       } else {
@@ -4812,15 +4949,20 @@ export function ScreenshotEditor() {
             opacity: 100,
             blendMode: "source-over",
           };
-          if (isFullyOutsideCanvas(elementBounds(element), next)) {
-            next = expandDocumentForElement(next, element, imageDropExpandPadding(placement.edge));
+          if (isFullyOutsideCanvas(elementBounds(element, measureTextElementLine), next)) {
+            next = expandDocumentForElement(
+              next,
+              element,
+              imageDropExpandPadding(placement.edge),
+              measureTextElementLine,
+            );
           } else {
             next = { ...next, elements: [...next.elements, element] };
           }
           lastId = element.id;
           const added = next.elements.find(({ id }) => id === element.id);
           if (added) {
-            const target = elementBounds(added);
+            const target = elementBounds(added, measureTextElementLine);
             const point = {
               x: target.x + target.width / 2,
               y: target.y + target.height,
@@ -5834,7 +5976,7 @@ export function ScreenshotEditor() {
                   elementRotation(editingText) === 0
                     ? undefined
                     : `rotate(${elementRotation(editingText)}rad)`,
-                transformOrigin: "center",
+                transformOrigin: inlineTextLayout.transformOrigin,
               }}
               onPointerDown={(event) => event.stopPropagation()}
             >
@@ -6428,7 +6570,7 @@ export function ScreenshotEditor() {
                           }}
                         />
                       ) : (
-                        <AnnotationLayerPreview element={element} />
+                        <AnnotationLayerPreview element={element} measureText={measureText} />
                       )}
                     </span>
                     <span className="screenshot-layer-copy">

@@ -3858,6 +3858,215 @@ fn text_selection_move_resize_rotation_and_saved_pixels_share_one_session() {
     assert_eq!(open(data.path(), &id).unwrap().pixels(), resized);
 }
 
+#[test]
+fn measured_text_frames_keep_picking_resize_rotation_and_trim_in_sync() {
+    use captures_app::editor::ResizeHandle;
+
+    let rotate_point = |point: Point, pivot: Point, angle: f64| Point {
+        x: pivot.x + (point.x - pivot.x) * angle.cos() - (point.y - pivot.y) * angle.sin(),
+        y: pivot.y + (point.x - pivot.x) * angle.sin() + (point.y - pivot.y) * angle.cos(),
+    };
+
+    // The fixture font advances L by .7em and i by .2em; the old estimate is
+    // .56em for both. These columns disagree with it in opposite directions.
+    for (content, expected_height, estimated_height) in [("LL", 100., 50.), ("iiii", 50., 100.)] {
+        let (data, id, _) = setup();
+        let mut editor = open_text(data.path(), &id, text_fonts()).unwrap();
+        add_text(&mut editor);
+        let mut document = editor.snapshot().document.clone();
+        document.width = 400.;
+        document.height = 400.;
+        document.elements.remove(0);
+        let Element::Text(text) = &mut document.elements[0] else {
+            panic!()
+        };
+        text.text = content.into();
+        text.font_size = 40.;
+        text.width = 50.;
+        text.auto_width = Some(false);
+        text.base.x = 120.;
+        text.base.y = 100.;
+        text.base.rotation = Some(0.3);
+        editor.execute(Request::Commit { document }).unwrap();
+        let snapshot = editor.snapshot();
+        let text = match &snapshot.document.elements[0] {
+            Element::Text(text) => text,
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            snapshot.text_bounds.bounds(text).unwrap().height,
+            expected_height
+        );
+        assert_eq!(
+            snapshot.document.elements[0]
+                .selection_bounds()
+                .unwrap()
+                .height,
+            estimated_height
+        );
+        let pivot = Point {
+            x: 145.,
+            y: 100. + estimated_height / 2.,
+        };
+        let expected = [
+            Point { x: 120., y: 100. },
+            Point { x: 170., y: 100. },
+            Point {
+                x: 170.,
+                y: 100. + expected_height,
+            },
+            Point {
+                x: 120.,
+                y: 100. + expected_height,
+            },
+        ]
+        .map(|point| rotate_point(point, pivot, 0.3));
+        let outline = snapshot.selection_outlines["label"];
+        for (actual, expected) in outline.into_iter().zip(expected) {
+            assert!((actual.x - expected.x).abs() < 1e-8 && (actual.y - expected.y).abs() < 1e-8);
+        }
+        let point = rotate_point(Point { x: 140., y: 175. }, pivot, 0.3);
+        let hit = snapshot
+            .document
+            .hit_test_with(point, 0., &mut |text| snapshot.text_bounds.bounds(text))
+            .unwrap();
+        assert_eq!(hit.is_some(), content == "LL");
+        let pixels = editor.pixels();
+        for edit in [
+            LayerEdit::Resize {
+                handle: ResizeHandle::E,
+                current: rotate_point(
+                    Point {
+                        x: 230.,
+                        y: 100. + expected_height / 2.,
+                    },
+                    pivot,
+                    0.3,
+                ),
+                display_scale: 1.,
+                lock_aspect: false,
+            },
+            LayerEdit::Rotate { radians: -0.7 },
+        ] {
+            let before = serde_json::to_value(editor.snapshot()).unwrap();
+            let published = editor.pixels();
+            let is_resize = matches!(edit, LayerEdit::Resize { .. });
+            let preview = editor
+                .preview_drawing_with_geometry(Request::Layer {
+                    id: "label".into(),
+                    edit: edit.clone(),
+                })
+                .unwrap();
+            assert_eq!(serde_json::to_value(editor.snapshot()).unwrap(), before);
+            assert!(Arc::ptr_eq(&published, &editor.pixels()));
+            let after = preview.selection_outlines["label"];
+            let anchor = |points: [Point; 4]| {
+                if is_resize {
+                    Point {
+                        x: (points[0].x + points[3].x) / 2.,
+                        y: (points[0].y + points[3].y) / 2.,
+                    }
+                } else {
+                    Point {
+                        x: (points[0].x + points[2].x) / 2.,
+                        y: (points[0].y + points[2].y) / 2.,
+                    }
+                }
+            };
+            assert!((anchor(after).x - anchor(outline).x).abs() < 1e-8);
+            assert!((anchor(after).y - anchor(outline).y).abs() < 1e-8);
+            editor
+                .execute(Request::Layer {
+                    id: "label".into(),
+                    edit,
+                })
+                .unwrap();
+            assert_eq!(editor.pixels(), preview.pixels);
+            assert_eq!(editor.snapshot().text_bounds, &preview.text_bounds);
+            assert_eq!(editor.snapshot().selection_outlines["label"], after);
+            editor.execute(Request::Undo).unwrap();
+        }
+        editor
+            .execute(begin_existing_text_input("geometry", "label"))
+            .unwrap();
+        let layout = editor.snapshot().active_text_input.unwrap().layout.unwrap();
+        assert_eq!(layout.frame.height, expected_height);
+        assert!(
+            (layout.frame.x + layout.frame.width / 2. - (outline[0].x + outline[2].x) / 2.).abs()
+                < 1e-8
+        );
+        editor
+            .execute(finish_text_input("geometry", false))
+            .unwrap();
+        assert_eq!(editor.pixels(), pixels);
+        let bounds = editor
+            .snapshot()
+            .document
+            .visible_content_bounds_with(&mut |text| editor.snapshot().text_bounds.bounds(text))
+            .unwrap()
+            .unwrap();
+        let trim = captures_app::editor_canvas::trim_frame(bounds);
+        editor.execute(Request::TrimCanvas).unwrap();
+        assert_eq!(
+            (
+                editor.snapshot().document.width,
+                editor.snapshot().document.height
+            ),
+            (trim.width, trim.height)
+        );
+        editor.execute(Request::Undo).unwrap();
+        editor
+            .execute(Request::SaveDraft { updated_at_ms: 63 })
+            .unwrap();
+        let reopened = open(data.path(), &id).unwrap();
+        assert_eq!(
+            reopened.snapshot().text_bounds,
+            editor.snapshot().text_bounds
+        );
+        assert_eq!(
+            reopened.snapshot().selection_outlines,
+            editor.snapshot().selection_outlines
+        );
+        assert_eq!(reopened.pixels(), pixels);
+    }
+}
+
+#[test]
+fn identical_layer_ids_measure_their_own_pinned_fonts_after_reopen() {
+    let (regular_data, regular_id, _) = setup();
+    let (bold_data, bold_id, _) = setup();
+    let mut bold_fonts = text_fonts();
+    bold_fonts.files.insert(
+        "regular".into(),
+        Arc::from(include_bytes!("../../captures-image/tests/shaping-bold.ttf").as_slice()),
+    );
+    let mut regular = open_text(regular_data.path(), &regular_id, text_fonts()).unwrap();
+    let mut bold = open_text(bold_data.path(), &bold_id, bold_fonts.clone()).unwrap();
+    for editor in [&mut regular, &mut bold] {
+        add_text(editor);
+        let mut document = editor.snapshot().document.clone();
+        let Element::Text(text) = document.elements.last_mut().unwrap() else {
+            panic!()
+        };
+        text.text = "LL".into();
+        text.width = 120.;
+        text.auto_width = Some(false);
+        editor.execute(Request::Commit { document }).unwrap();
+    }
+    // At 80px, two regular L advances total 112px; the bold face needs 128px.
+    assert_eq!(regular.snapshot().text_bounds.0["label"].height, 100.);
+    assert_eq!(bold.snapshot().text_bounds.0["label"].height, 200.);
+    regular
+        .execute(Request::SaveDraft { updated_at_ms: 64 })
+        .unwrap();
+    let restored = open_text(regular_data.path(), &regular_id, bold_fonts).unwrap();
+    assert_eq!(
+        restored.snapshot().text_bounds,
+        regular.snapshot().text_bounds
+    );
+    assert_eq!(restored.pixels(), regular.pixels());
+}
+
 fn create_text_request(text: &str) -> Request {
     serde_json::from_value(json!({
         "operation":"create_text", "point":{"x":20,"y":20}, "text":text,
