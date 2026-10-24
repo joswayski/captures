@@ -72,7 +72,7 @@ pub const TEXT_STYLE_PRESETS: [TextStylePreset; 7] = [
     TextStylePreset {
         id: "rounded-box",
         label: "Rounded Box",
-        font_family: "sans",
+        font_family: "rounded",
         background: Some("#111318"),
         outlined: false,
         rounded_background: true,
@@ -106,7 +106,7 @@ pub const FONT_FAMILY_LABELS: [(&str, &str); 4] = [
     ("sans", "Sans serif"),
     ("serif", "Serif"),
     ("mono", "Monospace"),
-    ("rounded", "Rounded"),
+    ("rounded", "Nunito"),
 ];
 
 /// Font menu rows for a draft's pinned families (`key -> asset name`): the

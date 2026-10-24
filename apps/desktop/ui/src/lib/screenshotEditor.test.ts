@@ -2187,7 +2187,7 @@ describe("screenshot editor geometry", () => {
       width: composing,
       align: "center",
       roundedBackground: true,
-      fontFamily: "sans",
+      fontFamily: "rounded",
       bold: true,
     });
     expect(placed.x).toBeCloseTo(400 - composing / 2, 5);
@@ -2365,7 +2365,7 @@ describe("screenshot editor geometry", () => {
         roundedBackground: false,
       },
       "rounded-box": {
-        fontFamily: "sans",
+        fontFamily: "rounded",
         background: "#111318",
         outlined: false,
         roundedBackground: true,
@@ -2395,7 +2395,7 @@ describe("screenshot editor geometry", () => {
   });
 
   it("builds a complete canvas font shorthand so rounded blobs keep their family", () => {
-    expect(editorTextFontStack("rounded")).toContain("ui-rounded");
+    expect(editorTextFontStack("rounded")).toBe("'Captures Nunito', sans-serif");
     expect(
       editorTextCanvasFont({
         italic: false,
@@ -2414,14 +2414,11 @@ describe("screenshot editor geometry", () => {
     ).toMatch(/^italic 400 22px /);
   });
 
-  it("skips canvas families that paint as Times when rounded was requested", () => {
+  it("paints Nunito on canvas, with sans fallback only when the face is unavailable", () => {
     const widths: Record<string, number> = {
       serif: 245.41,
       "sans-serif": 288.1,
-      "ui-rounded": 245.41,
-      "'SF Pro Rounded'": 245.41,
-      "'Arial Rounded MT Bold'": 245.41,
-      "system-ui": 291.14,
+      "'Captures Nunito'": 280.5,
       Georgia: 245.41,
     };
     const spy = vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(() => {
@@ -2435,7 +2432,7 @@ describe("screenshot editor geometry", () => {
       return context as unknown as CanvasRenderingContext2D;
     });
     try {
-      expect(resolveEditorTextCanvasFamily("rounded")).toBe("system-ui");
+      expect(resolveEditorTextCanvasFamily("rounded")).toBe("'Captures Nunito'");
       expect(
         editorTextCanvasFont({
           italic: false,
@@ -2443,7 +2440,9 @@ describe("screenshot editor geometry", () => {
           fontSize: 48,
           fontFamily: "rounded",
         }),
-      ).toBe("normal 700 48px system-ui");
+      ).toBe("normal 700 48px 'Captures Nunito'");
+      widths["'Captures Nunito'"] = widths.serif;
+      expect(resolveEditorTextCanvasFamily("rounded")).toBe("sans-serif");
       expect(resolveEditorTextCanvasFamily("serif")).toBe("Georgia");
     } finally {
       spy.mockRestore();
@@ -2478,7 +2477,7 @@ describe("screenshot editor geometry", () => {
     try {
       await loadEditorTextFonts();
       expect(fonts.load).toHaveBeenCalled();
-      expect(loaded.some((spec) => spec.includes("ui-rounded"))).toBe(true);
+      expect(loaded.some((spec) => spec.includes("Captures Nunito"))).toBe(true);
       expect(loaded.some((spec) => spec.includes("Georgia"))).toBe(true);
     } finally {
       if (original) Object.defineProperty(document, "fonts", original);

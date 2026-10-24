@@ -44,7 +44,7 @@
   {
     "id": "rounded-box",
     "background": "#111318",
-    "fontFamily": "sans",
+    "fontFamily": "rounded",
     "outlined": false,
     "roundedBackground": true
   }

@@ -570,6 +570,11 @@ acceptance remain open on every platform.
 
 ### Native editor validation
 
+Tauri and native share the four pinned Nunito TTFs in
+`crates/captures-app/fonts/nunito`. The desktop Vite build emits the font files and
+their full license at `ui/dist/licenses/Nunito-OFL.txt`; no runtime font download
+is needed. Verify these assets when changing the desktop build configuration.
+
 Both native executables accept `--font-license` to print the bundled editor-font
 copyright and full OFL notice without opening a window. Native resources and
 font-bearing draft manifests also retain it. Run `apps/native/x11_editor_smoke.py

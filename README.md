@@ -82,7 +82,7 @@ On macOS, update and launch notices follow the menu-bar icon as it moves. If the
 - On macOS and Windows, recording controls stay out of screenshots and recordings by default (Preferences). On Linux, use Hide controls during a recording to keep the bar off-screen
 - Cursor and click highlights in recordings (where supported)
 - Built-in screenshot editor — closed shapes start filled, with an optional stroke; text, shapes, images, and drawings can rotate from a shared handle (hold Shift to use a configurable snap increment); text and drawings with optional drop shadows (color, opacity, blur, and offset; the whole label, including a background plate), crop (drag from outside the canvas to reach an edge; hold Shift to lock aspect), layers that hang off the canvas stay clipped until you expand, erase to transparent; unsaved edits restore when you reopen
-- Text labels start in bold Sans serif, white on a pink rounded background; turn off Bold for regular weight. Rounded remains available in the font picker. New labels grow horizontally as you type; Enter adds a line. The editing box follows the text size and canvas zoom instead of forcing a taller minimum-height field. After finishing text entry, drag a side handle to set the wrapping width without changing type size, a top/bottom handle to change type size without forcing the width, or a corner to change both. Hold Shift on a corner for proportional resizing. These source changes also apply to the opt-in native editors; existing label fonts, colors and weights stay unchanged.
+- Text labels start in bold Nunito, white on a pink rounded background; turn off Bold for regular weight. Nunito is bundled offline in Tauri and the opt-in native editors. Existing Tauri labels using the former platform-dependent Rounded font now use Nunito too; other font selections, colors and weights stay unchanged. New labels grow horizontally as you type; Enter adds a line. The editing box follows the text size and canvas zoom instead of forcing a taller minimum-height field. After finishing text entry, drag a side handle to set the wrapping width without changing type size, a top/bottom handle to change type size without forcing the width, or a corner to change both. Hold Shift on a corner for proportional resizing. These source changes also apply to the opt-in native editors.
   Fixed-width selection geometry still estimates wrapping, so its outline and rotation center can differ from the measured painted text. This remains editor parity work.
 - Drag the left edge of the screenshot editor's Layers/Properties panel to resize it. Its width stays local to the editor window, without changing the image or Undo history. In Tauri, focus the divider and use Left/Right to resize, or double-click it (Enter on the keyboard) to reset.
 - Current Tauri source also accepts image pixels or image files from the clipboard with `Cmd`/`Ctrl`+`V` in the screenshot editor, alongside Add images and file drops. Pasted images become editable layers below the selected image (or canvas), with one Undo per paste. Text fields keep normal paste. Layer copy/paste keeps an editable snapshot within that editor and claims the clipboard, so copying an image elsewhere takes precedence on the next paste; **Copy image** still copies the full canvas for other apps. This requires a Preview newer than 2026.10.1104. Image overlays in the video/GIF editor are not supported
@@ -682,7 +682,7 @@ Like the shipping editor's browser fallback, a character the chosen font lacks
 the fonts installed on the computer, rather than failing; installed fonts are
 never copied into drafts.
 Selected-text named styles use those fonts, including Rounded and Rounded Box.
-Choosing a non-rounded font clears the box's rounded corners; choosing Rounded
+Choosing a non-rounded font clears the box's rounded corners; choosing Nunito
 afterward keeps those corners square until you explicitly choose Rounded Box.
 In both native editors, explicitly choosing a named style for selected text also makes that
 style the next new-text choice for this editor. Undo or a failed edit does not
@@ -702,9 +702,9 @@ PRIMARY text on X11 and Wayland compositors with data-control support. Reads are
 limited to 64 KiB and two seconds; changing input or focus cancels delayed pastes.
 Unavailable PRIMARY never substitutes the ordinary clipboard. Physical macOS,
 Windows, Wayland, IME and accessibility acceptance remain unverified.
-This is not Tauri system-font equivalence: the four families use the bundled faces
-rather than the operating system's, installed fonts only fill in missing characters,
-and fonts are never imported or downloaded.
+Nunito uses the same bundled faces in Tauri and native. The other three native
+families use Liberation rather than Tauri's system fonts; installed fonts only
+fill in missing characters, and fonts are never imported or downloaded.
 Worker-owned editor sessions add draft restore/save/discard, transactional crop/
 resize/lossless image transforms/undo, single decoded-RGBA image import, and retained
 pixel frames for native hosts. Typed rectangle/ellipse/triangle/diamond/star, straight-line/arrow and
@@ -1010,7 +1010,7 @@ preview without editing. Properties shows a stroke or brush preview for drawing
 tools and Erase/Restore, and Apply crop pulses while a crop is staged. Physical-platform
 input acceptance remains parity work.
 Text controls support a style picker, multiline content, font families (listed
-as Sans serif, Serif, Monospace and Rounded), size, bold/italic and alignment buttons,
+as Sans serif, Serif, Monospace and Nunito), size, bold/italic and alignment buttons,
 swatch-row text and background colors, a Text background plate and a Drop shadow
 toggle; outlined and rounded plates come from the Outlined and Rounded Box styles.
 Drawing default colors use the same swatch rows.

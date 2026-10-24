@@ -373,7 +373,7 @@ export const EDITOR_TEXT_FONT_STACKS = {
   sans: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
   serif: "Georgia, 'Times New Roman', serif",
   mono: "'SFMono-Regular', Consolas, monospace",
-  rounded: "ui-rounded, 'SF Pro Rounded', 'Arial Rounded MT Bold', system-ui, sans-serif",
+  rounded: "'Captures Nunito', sans-serif",
 } as const;
 
 export function editorTextFontStack(family: EditorTextElement["fontFamily"]): string {
@@ -565,7 +565,7 @@ export function applyTextStylePreset(
   if (preset === "rounded-box") {
     return {
       ...element,
-      fontFamily: "sans",
+      fontFamily: "rounded",
       background: boxBackground,
       outlined: false,
       roundedBackground: true,

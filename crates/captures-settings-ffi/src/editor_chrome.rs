@@ -558,7 +558,7 @@ mod tests {
         let created = &call(json!({"operation": "inline_text_layout", "create": {
             "point": {"x": 200., "y": 80.}, "text": "", "fontSize": 20., "fontFamily": "sans",
             "color": "#2d9cff", "stylePreset": "rounded-box"}}))["result"];
-        assert_eq!(created["element"]["fontFamily"], "sans");
+        assert_eq!(created["element"]["fontFamily"], "rounded");
         assert_eq!(created["element"]["x"], 120.);
         assert!(created["layout"]["plate_radius"].as_f64().unwrap() > 0.);
         let existing = &call(json!({"operation": "inline_text_layout",

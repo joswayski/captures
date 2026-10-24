@@ -6,6 +6,40 @@
  * follows light/dark with the rest of the app.
  */
 
+/* Reuse the native editor's pinned, unmodified Nunito faces, entirely offline. */
+@font-face {
+  font-family: "Captures Nunito";
+  src: url("../../../../../crates/captures-app/fonts/nunito/Nunito-Regular.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Captures Nunito";
+  src: url("../../../../../crates/captures-app/fonts/nunito/Nunito-Bold.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 700;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Captures Nunito";
+  src: url("../../../../../crates/captures-app/fonts/nunito/Nunito-Italic.ttf") format("truetype");
+  font-style: italic;
+  font-weight: 400;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Captures Nunito";
+  src: url("../../../../../crates/captures-app/fonts/nunito/Nunito-BoldItalic.ttf")
+    format("truetype");
+  font-style: italic;
+  font-weight: 700;
+  font-display: block;
+}
+
 .screenshot-editor {
   --editor-canvas: var(--surface-sunken);
   --editor-chrome: var(--surface-canvas);
@@ -3109,8 +3143,9 @@
   letter-spacing: var(--tracking-tighter);
 }
 
-.screenshot-text-style-preview.style-rounded {
-  font-family: ui-rounded, "SF Pro Rounded", "Arial Rounded MT Bold", system-ui, sans-serif;
+.screenshot-text-style-preview.style-rounded,
+.screenshot-text-style-preview.style-rounded-box {
+  font-family: "Captures Nunito", sans-serif;
 }
 
 .screenshot-text-style-preview.style-mono,

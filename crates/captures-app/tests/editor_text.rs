@@ -107,9 +107,9 @@ fn font_menu_uses_shipping_labels_and_order_not_asset_names() {
             .iter()
             .map(|(_, label)| label.as_str())
             .collect::<Vec<_>>(),
-        ["Sans serif", "Serif", "Monospace", "Rounded"]
+        ["Sans serif", "Serif", "Monospace", "Nunito"]
     );
-    // A legacy draft without Rounded, plus an unknown pinned key.
+    // A legacy draft without Nunito, plus an unknown pinned key.
     let mut legacy = bundled.clone();
     legacy.remove("rounded");
     legacy.insert("display".into(), "Display Face".into());

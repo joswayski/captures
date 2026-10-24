@@ -10072,7 +10072,7 @@ mod tests {
             .retain(|preset| preset.font_family != "rounded");
         let mut reopened = View::default();
         reopened.receive(&ctx, Ok(legacy));
-        assert_eq!(reopened.new_text_preset.as_deref(), Some("rounded-box"));
+        assert_eq!(reopened.new_text_preset.as_deref(), Some("standard"));
         let mut legacy = presented_text("old", "accepted");
         legacy
             .text_style_presets
@@ -10081,7 +10081,10 @@ mod tests {
         reopened.receive(&ctx, Ok(legacy));
         assert_eq!(reopened.new_text_preset.as_deref(), Some("standard"));
         let mut plain = presented_text("old", "accepted");
-        plain.text_style_presets.clear();
+        plain.font_families.remove("rounded");
+        plain
+            .text_style_presets
+            .retain(|preset| preset.font_family != "rounded" && preset.id != "standard");
         let mut reopened = View::default();
         reopened.receive(&ctx, Ok(plain));
         assert_eq!(reopened.new_text_preset, None);
@@ -15377,7 +15380,7 @@ mod tests {
                     .into_iter()
                     .map(|(_, label)| label)
                     .collect::<Vec<_>>(),
-                ["Sans serif", "Serif", "Monospace", "Rounded"]
+                ["Sans serif", "Serif", "Monospace", "Nunito"]
             );
             assert_eq!(view.new_text_preset.as_deref(), Some("rounded-box"));
             assert_eq!(*presented.pixels, *sans_pixels);

@@ -4630,7 +4630,11 @@ fn styled_text_creation_matches_shipping_treatments_and_fractional_placement() {
         assert_eq!(text.rounded_background, preset == "rounded-box");
         assert_eq!(
             text.font_family,
-            if preset == "mono-box" { "mono" } else { "sans" }
+            match preset {
+                "mono-box" => "mono",
+                "rounded-box" => "rounded",
+                _ => "sans",
+            }
         );
         assert_eq!(text.color, "#ffffff");
     }
@@ -4668,7 +4672,14 @@ fn invalid_or_unavailable_text_styles_preserve_document_pixels_redo_and_draft() 
     let manifest = data.path().join("drafts").join(&id).join("manifest.json");
     let persisted = fs::read(&manifest).unwrap();
 
-    for preset in ["not-a-style", "rounded"] {
+    assert!(
+        editor
+            .snapshot()
+            .text_style_presets
+            .iter()
+            .all(|preset| preset.font_family != "rounded")
+    );
+    for preset in ["not-a-style", "rounded", "rounded-box"] {
         let error = editor
             .execute(styled_text_request(
                 "L",
@@ -4952,7 +4963,7 @@ fn bundled_font_styles_render_offline_and_preserve_bytes_and_license_on_reopen()
             {"key": "sans", "label": "Sans serif"},
             {"key": "serif", "label": "Serif"},
             {"key": "mono", "label": "Monospace"},
-            {"key": "rounded", "label": "Rounded"},
+            {"key": "rounded", "label": "Nunito"},
         ])
     );
     assert_eq!(
@@ -5077,7 +5088,7 @@ fn older_sans_only_drafts_pin_a_bundled_family_when_text_first_uses_it() {
             {"key": "sans", "label": "Sans serif"},
             {"key": "serif", "label": "Serif"},
             {"key": "mono", "label": "Monospace"},
-            {"key": "rounded", "label": "Rounded"},
+            {"key": "rounded", "label": "Nunito"},
         ])
     );
     assert_eq!(reopened.snapshot().text_style_presets.len(), 7);
@@ -5112,11 +5123,11 @@ fn older_sans_only_drafts_pin_a_bundled_family_when_text_first_uses_it() {
         .unwrap();
     assert_ne!(reopened.pixels(), accepted);
     let serif = reopened.pixels();
-    // A preset placement pins Rounded the same way.
+    // Rounded Box placement pins Nunito the same way, not its requested sans.
     reopened
         .execute(styled_text_request(
-            "Rounded",
-            "rounded",
+            "Rounded Box",
+            "rounded-box",
             Point { x: 300., y: 150. },
             24.,
         ))

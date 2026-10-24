@@ -3720,11 +3720,11 @@ def main():
             type_text("Rounded")
             run("xdotool", "key", "Escape", "sleep", ".3")
             rounded = save_layers(lambda values: len(values) == 2, "default rounded Text placed")[-1]
-            assert (rounded["fontFamily"], rounded["fontSize"], rounded["color"]) == ("sans", 24, "#ffffff")
+            assert (rounded["fontFamily"], rounded["fontSize"], rounded["color"]) == ("rounded", 24, "#ffffff")
             assert rounded["background"] == "#ff3b5c" and rounded["roundedBackground"]
             assert rounded["align"] == "center" and rounded["y"] == 200
             assert math.isclose(rounded["x"] + rounded["width"] / 2, 480, abs_tol=1e-6)
-            assert json.loads(draft.read_text())["fonts"]["families"]["sans"] == "Liberation Sans"
+            assert json.loads(draft.read_text())["fonts"]["families"]["rounded"] == "Nunito"
             toolbar_click("layers")  # Deselect with Select; Text stays active after Finish.
             fixture_click((28, 109))
             shot(editor, "text-defaults-rounded")
@@ -3789,7 +3789,7 @@ def main():
             type_text("Fresh")
             run("xdotool", "key", "Escape", "sleep", ".3")
             reset = save_layers(lambda values: len(values) == 3, "fresh editor Text defaults")[-1]
-            assert (reset["fontFamily"], reset["fontSize"], reset["color"]) == ("sans", 24, "#ffffff")
+            assert (reset["fontFamily"], reset["fontSize"], reset["color"]) == ("rounded", 24, "#ffffff")
             assert reset["align"] == "center" and reset["background"] == "#ff3b5c"
             assert reset["roundedBackground"]
             assert reset["id"] != text["id"]
@@ -3857,7 +3857,7 @@ def main():
             # in one field is one undo step, each toggle or menu choice another.
             prop_click(95, TEXT["style"])
             prop_click(60, TEXT_STYLE_ROWS["rounded-box"])
-            rounded = save_layers(lambda values: values[-1]["fontFamily"] == "sans"
+            rounded = save_layers(lambda values: values[-1]["fontFamily"] == "rounded"
                                   and values[-1]["roundedBackground"], "Rounded Box applied")[-1]
             shot(editor, f"text-rounded-font-{args.appearance}")
             prop_click(60, TEXT["font"])
@@ -3873,17 +3873,17 @@ def main():
             save_layers(lambda values: values[-1] == rounded, "font and corners undo together")
             toolbar_click("redo")
             save_layers(lambda values: values[-1] == serif, "font and corners redo together")
-            # Choosing Rounded alone does not recreate the preset's corner flag.
+            # Choosing Nunito alone does not recreate the preset's corner flag.
             layer_click(0)
             prop_click(60, TEXT["font"])
             prop_click(40, TEXT["font"] + 125)
             round_face = save_layers(lambda values: values[-1]["fontFamily"] == "rounded",
-                                     "manual Rounded font applied")[-1]
+                                     "manual Nunito font applied")[-1]
             shot(editor, f"text-manual-rounded-{args.appearance}")
             assert not round_face["roundedBackground"], round_face
             assert round_face["background"] == rounded["background"]
             toolbar_click("undo")
-            save_layers(lambda values: values[-1] == serif, "manual Rounded undone")
+            save_layers(lambda values: values[-1] == serif, "manual Nunito undone")
             toolbar_click("undo")
             save_layers(lambda values: values[-1] == rounded, "boxed font change undone")
             toolbar_click("undo")
@@ -3892,7 +3892,7 @@ def main():
             prop_click(60, TEXT["font"])
             shot(editor, f"text-font-menu-{args.appearance}")
             # The token Font listbox opens below: Sans serif, Serif, Monospace,
-            # Rounded on a 28 px pitch.
+            # Nunito on a 28 px pitch.
             prop_click(40, TEXT["font"] + 69)  # Serif.
             save_layers(lambda values: values[-1]["fontFamily"] == "serif", "font family applied live")
             prop_click(105, TEXT["text"])

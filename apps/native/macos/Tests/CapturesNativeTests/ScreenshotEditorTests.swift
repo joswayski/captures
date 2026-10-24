@@ -6162,8 +6162,8 @@ final class ScreenshotEditorTests: XCTestCase {
         let tool = DrawToolChoice(controller)
         tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
         let preset = try popup("New text style", in: controller.root)
-        XCTAssertEqual(preset.itemTitles, ["Plain", "Standard", "Outlined", "Mono", "Box", "Mono Box", "Rounded Box"])
-        XCTAssertEqual(preset.titleOfSelectedItem, "Rounded Box")
+        XCTAssertEqual(preset.itemTitles, ["Plain", "Standard", "Outlined", "Mono", "Box", "Mono Box"])
+        XCTAssertEqual(preset.titleOfSelectedItem, "Standard")
         preset.selectItem(withTitle: "Mono Box")
         let size = try field("New text size", in: controller.root)
         XCTAssertFalse(descendants(in: controller.root).compactMap { $0 as? ColorSwatchRow }
@@ -6226,7 +6226,7 @@ final class ScreenshotEditorTests: XCTestCase {
         let fresh = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: freshWorker)
         defer { fresh.window.orderOut(nil) }
         fresh.present(artifact: artifact(id: "fresh"), historyRoot: "/native/History")
-        XCTAssertEqual(try popup("New text style", in: fresh.root).titleOfSelectedItem, "Rounded Box")
+        XCTAssertEqual(try popup("New text style", in: fresh.root).titleOfSelectedItem, "Standard")
         XCTAssertEqual(try field("New text size", in: fresh.root).stringValue, "24")
         let freshTool = DrawToolChoice(fresh)
         freshTool.selectItem(withTitle: "Text"); _ = freshTool.sendAction(freshTool.action, to: freshTool.target)
@@ -6356,9 +6356,9 @@ final class ScreenshotEditorTests: XCTestCase {
                 controller.present(artifact: artifact(id: "old"), historyRoot: "/native/History")
                 let preset = try popup("New text style", in: controller.root)
                 XCTAssertFalse(preset.itemTitles.contains("Rounded"), "missing rounded font is not substituted")
-                XCTAssertEqual(preset.itemTitles.contains("Rounded Box"), includeRoundedBox)
+                XCTAssertFalse(preset.itemTitles.contains("Rounded Box"), "Rounded Box also requires Nunito")
                 XCTAssertEqual(preset.titleOfSelectedItem,
-                               includeRoundedBox ? "Rounded Box" : (includeStandard ? "Standard" : "Plain"))
+                               includeStandard ? "Standard" : "Plain")
             }
         }
     }
@@ -7103,7 +7103,7 @@ final class ScreenshotEditorTests: XCTestCase {
                         "mono": "Liberation Mono", "rounded": "Nunito"]
         // Shared Rust orders and labels the font menu (`editor_text::font_family_options`).
         let options = [["key": "sans", "label": "Sans serif"], ["key": "serif", "label": "Serif"],
-                       ["key": "mono", "label": "Monospace"], ["key": "rounded", "label": "Rounded"],
+                       ["key": "mono", "label": "Monospace"], ["key": "rounded", "label": "Nunito"],
                        ["key": "missing", "label": "Not pinned"]]
         let worker = FakeEditorWorker(snapshot: snapshot(id: "shot",
             layers: [textLayer(id: "copy", text: "accepted", family: "serif")],
@@ -7115,9 +7115,9 @@ final class ScreenshotEditorTests: XCTestCase {
                        "rows for fonts the draft does not pin are dropped")
         try showLayers(in: controller.root)
         let family = try popup("Text font", in: controller.root)
-        XCTAssertEqual(family.itemTitles, ["Sans serif", "Serif", "Monospace", "Rounded"])
+        XCTAssertEqual(family.itemTitles, ["Sans serif", "Serif", "Monospace", "Nunito"])
         XCTAssertEqual(family.titleOfSelectedItem, "Serif")
-        XCTAssertFalse(family.itemTitles.contains { $0.hasPrefix("Liberation") || $0 == "Nunito" })
+        XCTAssertFalse(family.itemTitles.contains { $0.hasPrefix("Liberation") || $0 == "Rounded" })
         let styles = try popup("Text style preset", in: controller.root)
         XCTAssertEqual(styles.itemTitles, ["Standard", "Rounded", "Outlined", "Mono", "Box",
                                            "Mono Box", "Rounded Box"])
@@ -8192,7 +8192,7 @@ final class ScreenshotEditorTests: XCTestCase {
         var roundedCreate = create; roundedCreate["stylePreset"] = "rounded-box"
         let rounded = try request(roundedCreate)
         let style = try XCTUnwrap(rounded.snapshot.layers.first?.textStyle)
-        XCTAssertEqual(style.fontFamily, "sans")
+        XCTAssertEqual(style.fontFamily, "rounded")
         XCTAssertEqual(style.fontSize, 48)
         XCTAssertEqual(style.color, "#ffffff")
         XCTAssertEqual(style.background, "#ff3b5c")
@@ -8257,11 +8257,11 @@ final class ScreenshotEditorTests: XCTestCase {
             // History restores the style, not selection for the next inspector edit.
             try table("Screenshot layers", in: controller.root)
                 .selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
-            family.selectItem(withTitle: "Rounded")
+            family.selectItem(withTitle: "Nunito")
             _ = family.sendAction(family.action, to: family.target)
             waitUntil { !controller.state.busy && controller.state.snapshot?.layers.first?.textStyle?.fontFamily == "rounded" }
             let roundFace = try XCTUnwrap(controller.state.snapshot?.layers.first?.textStyle)
-            XCTAssertFalse(roundFace.roundedBackground, "manual Rounded does not reapply Rounded Box")
+            XCTAssertFalse(roundFace.roundedBackground, "manual Nunito does not reapply Rounded Box")
             XCTAssertEqual(roundFace.background, style.background)
             try render(controller.root, name: "screenshot-editor-manual-rounded-normal-\(appearance)")
             controller.window.setContentSize(NSSize(width: 760, height: 540))
@@ -8684,7 +8684,7 @@ final class ScreenshotEditorTests: XCTestCase {
                 ["id": "mono", "label": "Mono", "fontFamily": "mono", "background": NSNull(), "outlined": false, "roundedBackground": false],
                 ["id": "box", "label": "Box", "fontFamily": "sans", "background": "#111318", "outlined": false, "roundedBackground": false],
                 ["id": "mono-box", "label": "Mono Box", "fontFamily": "mono", "background": "#111318", "outlined": false, "roundedBackground": false],
-                ["id": "rounded-box", "label": "Rounded Box", "fontFamily": "sans", "background": "#111318", "outlined": false, "roundedBackground": true],
+                ["id": "rounded-box", "label": "Rounded Box", "fontFamily": "rounded", "background": "#111318", "outlined": false, "roundedBackground": true],
             ] as [[String: Any]]).filter {
                 fonts[$0["fontFamily"] as! String] != nil
                     && (includeStandardPreset || $0["id"] as? String != "standard")

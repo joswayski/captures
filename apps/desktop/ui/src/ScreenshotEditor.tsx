@@ -2356,6 +2356,8 @@ export function ScreenshotEditor() {
       const [loaded, loadedSettings] = await Promise.all([
         invoke<CaptureArtifact | null>("get_artifact", { artifactId }),
         invoke<AppSettings>("get_settings").catch(() => null),
+        // First placement must measure the bundled face, not a temporary fallback.
+        loadEditorTextFonts(),
       ]);
       if (!active) return;
       if (!loaded) throw new Error("The screenshot is no longer available.");
@@ -7046,7 +7048,7 @@ export function ScreenshotEditor() {
                     <option value="sans">Sans serif</option>
                     <option value="serif">Serif</option>
                     <option value="mono">Monospace</option>
-                    <option value="rounded">Rounded</option>
+                    <option value="rounded">Nunito</option>
                   </select>
                 </label>
                 <label>
