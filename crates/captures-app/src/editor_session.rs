@@ -1989,11 +1989,15 @@ pub fn new_text_element(id: String, create: &TextCreate) -> Result<TextElement, 
         width,
         auto_width: Some(true),
         font_family: font_family.into(),
-        bold: false,
+        bold: true,
         italic: false,
         align: if centered { "center" } else { "left" }.into(),
-        color: create.color.clone(),
-        background: preset.and_then(|preset| preset.background.map(str::to_owned)),
+        color: if centered {
+            "#ffffff".into()
+        } else {
+            create.color.clone()
+        },
+        background: centered.then(|| create.color.clone()),
         outlined: preset.is_some_and(|preset| preset.outlined),
         rounded_background: preset.is_some_and(|preset| preset.rounded_background),
         drop_shadow: create.drop_shadow,

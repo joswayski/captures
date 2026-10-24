@@ -6348,14 +6348,18 @@ final class ScreenshotEditorTests: XCTestCase {
 
         let sans = ["sans": "Liberation Sans"]
         for includeStandard in [true, false] {
-            let worker = FakeEditorWorker(snapshot: snapshot(id: "old", fonts: sans,
-                includeStandardPreset: includeStandard))
-            let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
-            defer { controller.window.orderOut(nil) }
-            controller.present(artifact: artifact(id: "old"), historyRoot: "/native/History")
-            let preset = try popup("New text style", in: controller.root)
-            XCTAssertFalse(preset.itemTitles.contains("Rounded Box"), "missing rounded font is not substituted")
-            XCTAssertEqual(preset.titleOfSelectedItem, includeStandard ? "Standard" : "Plain")
+            for includeRoundedBox in [true, false] {
+                let worker = FakeEditorWorker(snapshot: snapshot(id: "old", fonts: sans,
+                    includeStandardPreset: includeStandard, includeRoundedBoxPreset: includeRoundedBox))
+                let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+                defer { controller.window.orderOut(nil) }
+                controller.present(artifact: artifact(id: "old"), historyRoot: "/native/History")
+                let preset = try popup("New text style", in: controller.root)
+                XCTAssertFalse(preset.itemTitles.contains("Rounded"), "missing rounded font is not substituted")
+                XCTAssertFalse(preset.itemTitles.contains("Rounded Box"), "Rounded Box also requires Nunito")
+                XCTAssertEqual(preset.titleOfSelectedItem,
+                               includeStandard ? "Standard" : "Plain")
+            }
         }
     }
 
@@ -7099,7 +7103,7 @@ final class ScreenshotEditorTests: XCTestCase {
                         "mono": "Liberation Mono", "rounded": "Nunito"]
         // Shared Rust orders and labels the font menu (`editor_text::font_family_options`).
         let options = [["key": "sans", "label": "Sans serif"], ["key": "serif", "label": "Serif"],
-                       ["key": "mono", "label": "Monospace"], ["key": "rounded", "label": "Rounded"],
+                       ["key": "mono", "label": "Monospace"], ["key": "rounded", "label": "Nunito"],
                        ["key": "missing", "label": "Not pinned"]]
         let worker = FakeEditorWorker(snapshot: snapshot(id: "shot",
             layers: [textLayer(id: "copy", text: "accepted", family: "serif")],
@@ -7111,9 +7115,9 @@ final class ScreenshotEditorTests: XCTestCase {
                        "rows for fonts the draft does not pin are dropped")
         try showLayers(in: controller.root)
         let family = try popup("Text font", in: controller.root)
-        XCTAssertEqual(family.itemTitles, ["Sans serif", "Serif", "Monospace", "Rounded"])
+        XCTAssertEqual(family.itemTitles, ["Sans serif", "Serif", "Monospace", "Nunito"])
         XCTAssertEqual(family.titleOfSelectedItem, "Serif")
-        XCTAssertFalse(family.itemTitles.contains { $0.hasPrefix("Liberation") || $0 == "Nunito" })
+        XCTAssertFalse(family.itemTitles.contains { $0.hasPrefix("Liberation") || $0 == "Rounded" })
         let styles = try popup("Text style preset", in: controller.root)
         XCTAssertEqual(styles.itemTitles, ["Standard", "Rounded", "Outlined", "Mono", "Box",
                                            "Mono Box", "Rounded Box"])
@@ -8190,10 +8194,10 @@ final class ScreenshotEditorTests: XCTestCase {
         let style = try XCTUnwrap(rounded.snapshot.layers.first?.textStyle)
         XCTAssertEqual(style.fontFamily, "rounded")
         XCTAssertEqual(style.fontSize, 48)
-        XCTAssertEqual(style.color, "#ff3b5c")
-        XCTAssertEqual(style.background, "#111318")
+        XCTAssertEqual(style.color, "#ffffff")
+        XCTAssertEqual(style.background, "#ff3b5c")
         XCTAssertTrue(style.roundedBackground)
-        XCTAssertFalse(style.bold); XCTAssertFalse(style.italic); XCTAssertFalse(style.outlined)
+        XCTAssertTrue(style.bold); XCTAssertFalse(style.italic); XCTAssertFalse(style.outlined)
         XCTAssertEqual(style.align, "center")
         let pixels = try XCTUnwrap(rounded.image.dataProvider?.data) as Data
         XCTAssertNotEqual(pixels, try XCTUnwrap(plain.image.dataProvider?.data) as Data)
@@ -8253,11 +8257,11 @@ final class ScreenshotEditorTests: XCTestCase {
             // History restores the style, not selection for the next inspector edit.
             try table("Screenshot layers", in: controller.root)
                 .selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
-            family.selectItem(withTitle: "Rounded")
+            family.selectItem(withTitle: "Nunito")
             _ = family.sendAction(family.action, to: family.target)
             waitUntil { !controller.state.busy && controller.state.snapshot?.layers.first?.textStyle?.fontFamily == "rounded" }
             let roundFace = try XCTUnwrap(controller.state.snapshot?.layers.first?.textStyle)
-            XCTAssertFalse(roundFace.roundedBackground, "manual Rounded does not reapply Rounded Box")
+            XCTAssertFalse(roundFace.roundedBackground, "manual Nunito does not reapply Rounded Box")
             XCTAssertEqual(roundFace.background, style.background)
             try render(controller.root, name: "screenshot-editor-manual-rounded-normal-\(appearance)")
             controller.window.setContentSize(NSSize(width: 760, height: 540))
@@ -8657,6 +8661,7 @@ final class ScreenshotEditorTests: XCTestCase {
                           fonts: [String: String] = [:],
                           fontOptions: [[String: String]]? = nil,
                           includeStandardPreset: Bool = true,
+                          includeRoundedBoxPreset: Bool = true,
                           canPaste: Bool = false,
                           mergeDownIDs: [String] = [],
                           canMergeVisible: Bool = false,
@@ -8683,6 +8688,7 @@ final class ScreenshotEditorTests: XCTestCase {
             ] as [[String: Any]]).filter {
                 fonts[$0["fontFamily"] as! String] != nil
                     && (includeStandardPreset || $0["id"] as? String != "standard")
+                    && (includeRoundedBoxPreset || $0["id"] as? String != "rounded-box")
             },
             "annotation_controls": annotations,
             "text_shadow_styles": textShadows ?? Dictionary(uniqueKeysWithValues: layers.compactMap { layer in

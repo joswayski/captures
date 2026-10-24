@@ -155,8 +155,8 @@ import {
   textGlyphDrawY,
   textHasBackgroundPlate,
   textLayoutBounds,
+  textLines,
   textStylePreset,
-  wrapTextLines,
   translateElement,
   canvasTrimMarginPreview,
   trimDocumentToContent,
@@ -457,12 +457,7 @@ function hitTestSelectedAnnotation(
   }
   const localPoint = elementLocalPoint(selected, point);
   const bounds = elementLocalBounds(selected);
-  const handle = hitTestResizeHandle(
-    bounds,
-    localPoint,
-    interactionRadius,
-    selected.kind === "text" ? "corners" : "all",
-  );
+  const handle = hitTestResizeHandle(bounds, localPoint, interactionRadius);
   // Arrow endpoints sit near the dashed-box corners. Prefer those corners so
   // shrinking the box scales the whole arrow (shaft + head), not just the tip.
   if (handle && isResizeCornerHandle(handle)) {
@@ -983,12 +978,7 @@ function drawText(
   context.save();
   context.font = editorTextCanvasFont(element);
   context.textAlign = element.align;
-  const lines = wrapTextLines(
-    element.text,
-    boxWidth,
-    element.fontSize,
-    (line) => context.measureText(line || " ").width,
-  );
+  const lines = textLines(element, (line) => context.measureText(line || " ").width);
   const contentHeight = Math.max(1, lines.length) * lineHeight;
   const anchorX =
     element.align === "center"
@@ -1387,8 +1377,7 @@ function drawEditorOverlays(
     const bounds = selectionBoundsOverride ?? (selected ? elementLocalBounds(selected) : null);
     if (bounds) {
       const curveable = Boolean(shape && isCurveableStrokeShape(shape));
-      // Text labels scale as a sticker: corner grips only, no independent stretch.
-      const cornerGripsOnly = curveable || selected?.kind === "text";
+      const cornerGripsOnly = curveable;
       context.save();
       const rotation = selected ? elementRotation(selected) : 0;
       if (rotation !== 0) {
@@ -1406,8 +1395,7 @@ function drawEditorOverlays(
       context.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
       context.setLineDash([]);
       // Corner grips scale the whole annotation (including arrow heads).
-      // Mid-edge grips stay off lines/arrows so curve dots remain easy to grab,
-      // and off text so the plate cannot stretch independently of the type.
+      // Mid-edge grips stay off lines/arrows so curve dots remain easy to grab.
       context.globalAlpha = 0.88;
       context.fillStyle = accentColor;
       context.strokeStyle = "rgba(255, 255, 255, 0.9)";
@@ -1718,6 +1706,40 @@ export function ScreenshotEditor() {
   const [defaultFontSize, setDefaultFontSize] = useState(48);
   const [defaultTextStyle, setDefaultTextStyle] = useState<TextStylePreset>("rounded-box");
   const [rotationSnapDegrees, setRotationSnapDegrees] = useState(SHAPE_ROTATION_SNAP_DEGREES);
+  const editorRef = useRef<HTMLElement>(null);
+  const [editorWidth, setEditorWidth] = useState(window.innerWidth);
+  // Window-local preference: never include panel layout in document history/drafts.
+  const [preferredSidebarWidth, setPreferredSidebarWidth] = useState<number | null>(null);
+  const [resizingSidebar, setResizingSidebar] = useState(false);
+  const sidebarDragRef = useRef<{
+    pointerId: number;
+    x: number;
+    width: number;
+    previousWidth: number | null;
+  } | null>(null);
+  const sidebarMinWidth = 280;
+  const sidebarMaxWidth = Math.max(sidebarMinWidth, Math.min(480, editorWidth - 56 - 360));
+  const sidebarWidth = Math.min(
+    sidebarMaxWidth,
+    Math.max(sidebarMinWidth, preferredSidebarWidth ?? (editorWidth <= 1040 ? 280 : 320)),
+  );
+  const resizeSidebar = (width: number) =>
+    setPreferredSidebarWidth(
+      Math.round(Math.max(sidebarMinWidth, Math.min(sidebarMaxWidth, width))),
+    );
+
+  const editorReady = Boolean(artifact && editorDocument);
+  useLayoutEffect(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const update = () => setEditorWidth(editor.getBoundingClientRect().width);
+    update();
+    if (typeof ResizeObserver !== "function") return;
+    const observer = new ResizeObserver(update);
+    observer.observe(editor);
+    return () => observer.disconnect();
+  }, [editorReady]);
+
   const [fitScale, setFitScale] = useState(1);
   const [zoomMode, setZoomMode] = useState<"fit" | "manual">("fit");
   const [zoom, setZoom] = useState(100);
@@ -2334,6 +2356,8 @@ export function ScreenshotEditor() {
       const [loaded, loadedSettings] = await Promise.all([
         invoke<CaptureArtifact | null>("get_artifact", { artifactId }),
         invoke<AppSettings>("get_settings").catch(() => null),
+        // First placement must measure the bundled face, not a temporary fallback.
+        loadEditorTextFonts(),
       ]);
       if (!active) return;
       if (!loaded) throw new Error("The screenshot is no longer available.");
@@ -2596,22 +2620,25 @@ export function ScreenshotEditor() {
 
   const inlineTextLayout = useMemo(() => {
     if (!editingText) return null;
-    const localBounds = textLayoutBounds(editingText);
+    const localBounds = textLayoutBounds(editingText, (line) =>
+      measureTextElementLine(editingText, line),
+    );
     const pad = textHasBackgroundPlate(editingText)
       ? textBackgroundPad(editingText.fontSize)
       : { x: 0, y: 0 };
-    // Match the painted bubble (padding + layout box) so wrapping tracks canvas width.
-    // Border is extra under border-box; include it so the content box matches `width`.
-    const border = 2;
+    // The focus outline is outside the borderless textarea. Match the painted
+    // plate exactly so opening the editor does not change wrapping or rotation.
     const optical = editingText.fontSize * TEXT_OPTICAL_CENTER_NUDGE_RATIO * displayScale;
     const padY = pad.y * displayScale;
     return {
       frame: {
         left: localBounds.x * displayScale,
         top: localBounds.y * displayScale,
-        width: Math.max(48, localBounds.width * displayScale + border),
-        height: Math.max(28, localBounds.height * displayScale + border),
+        width: localBounds.width * displayScale,
+        height: localBounds.height * displayScale,
       },
+      radius:
+        textBackgroundRadius(editingText, localBounds.width, localBounds.height) * displayScale,
       padding: `${padY + optical}px ${pad.x * displayScale}px ${Math.max(0, padY - optical)}px`,
     };
   }, [displayScale, editingText]);
@@ -4103,9 +4130,7 @@ export function ScreenshotEditor() {
       const minSize = 8 / Math.max(0.01, displayScale);
       const snapThreshold = ALIGNMENT_SNAP_SCREEN_PX / Math.max(0.01, displayScale);
       // Hold Shift while dragging a corner to keep the original aspect ratio.
-      // Text labels always scale as a unit so the plate cannot stretch
-      // independently of the glyphs (including outline drags mapped to corners).
-      const lockAspectRatio = event.shiftKey || gesture.element.kind === "text";
+      const lockAspectRatio = event.shiftKey;
       const pointer = elementLocalPoint(gesture.element, point);
       const rotatedElement = elementRotation(gesture.element) !== 0;
       const freeBounds = resizeBoundsFromHandle(
@@ -5434,7 +5459,10 @@ export function ScreenshotEditor() {
 
   return (
     <main
+      ref={editorRef}
       className={`screenshot-editor${dragActive ? " screenshot-editor-drag-active" : ""}`}
+      style={{ gridTemplateColumns: `56px minmax(0, 1fr) ${sidebarWidth}px` }}
+      data-resizing-sidebar={resizingSidebar || undefined}
       onDragEnter={(event) => {
         if (!isFileTransfer(event.dataTransfer)) return;
         event.preventDefault();
@@ -5831,13 +5859,7 @@ export function ScreenshotEditor() {
                   padding: inlineTextLayout.padding,
                   color: editingText.outlined ? "transparent" : editingText.color,
                   backgroundColor: editingText.background ?? "transparent",
-                  borderRadius: editingText.roundedBackground
-                    ? textBackgroundRadius(
-                        editingText,
-                        textLayoutBounds(editingText).width,
-                        textLayoutBounds(editingText).height,
-                      ) * displayScale
-                    : undefined,
+                  borderRadius: editingText.roundedBackground ? inlineTextLayout.radius : undefined,
                   caretColor: editingText.color,
                   fontFamily: fontFamily(editingText),
                   fontSize: editingText.fontSize * displayScale,
@@ -6200,7 +6222,81 @@ export function ScreenshotEditor() {
           )}
       </section>
 
-      <aside className="screenshot-sidebar">
+      <div
+        className="screenshot-sidebar-resize"
+        role="separator"
+        aria-label="Resize properties panel"
+        aria-orientation="vertical"
+        aria-controls="screenshot-sidebar"
+        aria-valuemin={sidebarMinWidth}
+        aria-valuemax={sidebarMaxWidth}
+        aria-valuenow={sidebarWidth}
+        aria-valuetext={`${sidebarWidth} pixels wide`}
+        tabIndex={0}
+        title="Drag to resize · Double-click to reset"
+        onPointerDown={(event) => {
+          if (event.button !== 0 || sidebarDragRef.current) return;
+          // Keep an in-progress text field focused; resizing isn't a document edit.
+          event.preventDefault();
+          event.currentTarget.setPointerCapture(event.pointerId);
+          sidebarDragRef.current = {
+            pointerId: event.pointerId,
+            x: event.clientX,
+            width: sidebarWidth,
+            previousWidth: preferredSidebarWidth,
+          };
+          setResizingSidebar(true);
+        }}
+        onPointerMove={(event) => {
+          const drag = sidebarDragRef.current;
+          if (drag?.pointerId === event.pointerId) {
+            resizeSidebar(drag.width + drag.x - event.clientX);
+          }
+        }}
+        onPointerUp={(event) => {
+          if (sidebarDragRef.current?.pointerId !== event.pointerId) return;
+          sidebarDragRef.current = null;
+          setResizingSidebar(false);
+          event.currentTarget.releasePointerCapture(event.pointerId);
+        }}
+        onPointerCancel={() => {
+          const drag = sidebarDragRef.current;
+          if (drag) setPreferredSidebarWidth(drag.previousWidth);
+          sidebarDragRef.current = null;
+          setResizingSidebar(false);
+        }}
+        onLostPointerCapture={() => {
+          sidebarDragRef.current = null;
+          setResizingSidebar(false);
+        }}
+        onDoubleClick={() => setPreferredSidebarWidth(null)}
+        onKeyDown={(event) => {
+          // These keys must not also nudge/delete a selected canvas layer.
+          event.stopPropagation();
+          const step = event.shiftKey ? 40 : 10;
+          switch (event.key) {
+            case "ArrowLeft":
+              resizeSidebar(sidebarWidth + step);
+              break;
+            case "ArrowRight":
+              resizeSidebar(sidebarWidth - step);
+              break;
+            case "Home":
+              resizeSidebar(sidebarMinWidth);
+              break;
+            case "End":
+              resizeSidebar(sidebarMaxWidth);
+              break;
+            case "Enter":
+              setPreferredSidebarWidth(null);
+              break;
+            default:
+              return;
+          }
+          event.preventDefault();
+        }}
+      />
+      <aside className="screenshot-sidebar" id="screenshot-sidebar">
         <section className="screenshot-layers" aria-label="Layers">
           <div className="screenshot-layers-heading">
             <div>
@@ -6952,7 +7048,7 @@ export function ScreenshotEditor() {
                     <option value="sans">Sans serif</option>
                     <option value="serif">Serif</option>
                     <option value="mono">Monospace</option>
-                    <option value="rounded">Rounded</option>
+                    <option value="rounded">Nunito</option>
                   </select>
                 </label>
                 <label>
@@ -6976,6 +7072,7 @@ export function ScreenshotEditor() {
                   type="button"
                   className={selected.bold ? "active" : ""}
                   aria-label="Bold"
+                  aria-pressed={selected.bold}
                   onClick={() =>
                     updateSelected((element) =>
                       element.kind === "text"
@@ -6990,6 +7087,7 @@ export function ScreenshotEditor() {
                   type="button"
                   className={selected.italic ? "active" : ""}
                   aria-label="Italic"
+                  aria-pressed={selected.italic}
                   onClick={() =>
                     updateSelected((element) =>
                       element.kind === "text"
@@ -7006,6 +7104,7 @@ export function ScreenshotEditor() {
                     type="button"
                     className={selected.align === align ? "active" : ""}
                     aria-label={`Align ${align}`}
+                    aria-pressed={selected.align === align}
                     onClick={() =>
                       updateSelected((element) =>
                         element.kind === "text" ? { ...element, align } : element,

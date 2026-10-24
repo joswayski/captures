@@ -373,7 +373,7 @@ export const EDITOR_TEXT_FONT_STACKS = {
   sans: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
   serif: "Georgia, 'Times New Roman', serif",
   mono: "'SFMono-Regular', Consolas, monospace",
-  rounded: "ui-rounded, 'SF Pro Rounded', 'Arial Rounded MT Bold', system-ui, sans-serif",
+  rounded: "'Captures Nunito', sans-serif",
 } as const;
 
 export function editorTextFontStack(family: EditorTextElement["fontFamily"]): string {
@@ -500,7 +500,7 @@ export const DEFAULT_TEXT_BOX_BACKGROUND = "#111318";
 export function textStylePreset(element: EditorTextElement): TextStylePreset {
   if (element.outlined && element.background === null) return "outlined";
   if (element.background !== null) {
-    if (element.fontFamily === "rounded" && element.roundedBackground) {
+    if (element.roundedBackground) {
       return "rounded-box";
     }
     if (element.fontFamily === "mono") return "mono-box";
@@ -793,11 +793,11 @@ export function createPlacedTextElement(options: {
       width,
       autoWidth: true,
       fontFamily: "sans",
-      bold: false,
+      bold: true,
       italic: false,
       align,
-      color: options.color,
-      background: null,
+      color: textPresetPrefersCenter(options.preset) ? "#ffffff" : options.color,
+      background: textPresetPrefersCenter(options.preset) ? options.color : null,
       outlined: false,
       roundedBackground: false,
       dropShadow: options.dropShadow,
@@ -844,16 +844,23 @@ export function textDropShadowStyle(
   };
 }
 
-/**
- * Layout size of wrapped text (no background padding).
- * Origin stays at `element.x` / `element.y`.
- */
-export function textContentSize(element: Pick<EditorTextElement, "text" | "width" | "fontSize">): {
-  width: number;
-  height: number;
-} {
+/** Auto-width labels never wrap; fixed-width columns use the supplied font metrics. */
+export function textLines(
+  element: Pick<EditorTextElement, "text" | "width" | "fontSize" | "autoWidth">,
+  measure?: (line: string) => number,
+): string[] {
+  return isAutoWidthText(element)
+    ? element.text.split("\n")
+    : wrapTextLines(element.text, element.width, element.fontSize, measure);
+}
+
+/** Layout size without plate padding. Origin stays at `element.x` / `element.y`. */
+export function textContentSize(
+  element: Pick<EditorTextElement, "text" | "width" | "fontSize" | "autoWidth">,
+  measure?: (line: string) => number,
+): { width: number; height: number } {
   const boxWidth = Math.max(minTextBoxWidth(element.fontSize), element.width);
-  const lines = wrapTextLines(element.text, boxWidth, element.fontSize);
+  const lines = textLines(element, measure);
   return {
     width: boxWidth,
     height: Math.max(1, lines.length) * element.fontSize * TEXT_LINE_HEIGHT_RATIO,
@@ -864,8 +871,11 @@ export function textContentSize(element: Pick<EditorTextElement, "text" | "width
  * Painted plate or glyph box without drop-shadow padding. Inline editing and
  * type layout use this; selection/trim bounds add the shadow separately.
  */
-export function textLayoutBounds(element: EditorTextElement): EditorRect {
-  const content = textContentSize(element);
+export function textLayoutBounds(
+  element: EditorTextElement,
+  measure?: (line: string) => number,
+): EditorRect {
+  const content = textContentSize(element, measure);
   if (!textHasBackgroundPlate(element)) {
     return {
       x: element.x,
@@ -3581,48 +3591,28 @@ export function resizeElement(
   }
 
   if (element.kind === "text") {
-    // Side drags on a fixed wrap box change column width (reflow, same type size).
-    // Auto-width labels and any height/corner drag scale type size instead of
-    // stretching an empty plate around unchanged glyphs.
-    const widthOnly = Math.abs(scaleY - 1) < 0.001 && Math.abs(scaleX - 1) >= 0.001;
-    const heightOnly = Math.abs(scaleX - 1) < 0.001 && Math.abs(scaleY - 1) >= 0.001;
-    const autoWidth = isAutoWidthText(element);
-    if (widthOnly && !autoWidth) {
-      const pad = textInteractionPad(element);
-      return {
-        ...element,
-        x: nextBounds.x + pad.x,
-        y: nextBounds.y + pad.y,
-        width: Math.max(minTextBoxWidth(element.fontSize), nextBounds.width - pad.x * 2),
-        autoWidth: false,
-      };
+    if (
+      nextBounds.x === initialBounds.x &&
+      nextBounds.y === initialBounds.y &&
+      nextBounds.width === initialBounds.width &&
+      nextBounds.height === initialBounds.height
+    ) {
+      return element;
     }
-    const fontScale = widthOnly
-      ? scaleX
-      : heightOnly
-        ? scaleY
-        : Math.min(Math.abs(scaleX), Math.abs(scaleY));
-    const nextFontSize = clamp(Math.round(element.fontSize * Math.max(0.05, fontScale)), 8, 512);
+    // Horizontal drags set a wrapping column without scaling the letters.
+    // Vertical drags change type size; corners change both axes independently.
+    // Once resized, typing respects the user's column instead of auto-fitting it.
+    const nextFontSize =
+      Math.abs(scaleY - 1) < 0.001
+        ? element.fontSize
+        : clamp(Math.round(element.fontSize * Math.max(0.05, scaleY)), 8, 512);
     const pad = textInteractionPad(element, nextFontSize);
-    const originX = nextBounds.x + pad.x;
-    const originY = nextBounds.y + pad.y;
-    if (autoWidth) {
-      const nextWidth = fittedAutoWidthTextBox(element.text, nextFontSize);
-      return {
-        ...element,
-        fontSize: nextFontSize,
-        x: originX,
-        y: originY,
-        width: nextWidth,
-        autoWidth: true,
-      };
-    }
     return {
       ...element,
       fontSize: nextFontSize,
-      x: originX,
-      y: originY,
-      width: Math.max(minTextBoxWidth(nextFontSize), element.width * Math.max(0.05, fontScale)),
+      x: nextBounds.x + pad.x,
+      y: nextBounds.y + pad.y,
+      width: Math.max(minTextBoxWidth(nextFontSize), nextBounds.width - pad.x * 2),
       autoWidth: false,
     };
   }

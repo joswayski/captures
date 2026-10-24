@@ -1997,7 +1997,7 @@ describe("screenshot editor geometry", () => {
     expect(resizedTaller).toMatchObject({
       kind: "text",
       fontSize: 80,
-      width: 240,
+      width: 120,
       x: textBounds.x,
       y: textBounds.y,
     });
@@ -2028,19 +2028,25 @@ describe("screenshot editor geometry", () => {
       ...elementBounds(autoWidth),
       height: elementBounds(autoWidth).height * 2,
     });
-    expect(autoTaller).toMatchObject({ kind: "text", autoWidth: true, fontSize: 80 });
+    expect(autoTaller).toMatchObject({ kind: "text", autoWidth: false, fontSize: 80 });
     if (autoTaller.kind !== "text") throw new Error("expected text");
-    expect(autoTaller.width).toBe(fittedAutoWidthTextBox("Hi", 80));
+    expect(autoTaller.width).toBe(autoWidth.width);
 
     const autoWider = resizeElement(autoWidth, elementBounds(autoWidth), {
       ...elementBounds(autoWidth),
       width: elementBounds(autoWidth).width * 2,
     });
-    expect(autoWider).toMatchObject({ kind: "text", autoWidth: true, fontSize: 80 });
+    expect(autoWider).toMatchObject({ kind: "text", autoWidth: false, fontSize: 40 });
     if (autoWider.kind !== "text") throw new Error("expected text");
-    expect(autoWider.width).toBe(fittedAutoWidthTextBox("Hi", 80));
+    expect(autoWider.width).toBe(autoWidth.width * 2);
+    expect(fitEditingAutoWidthTextElement({ ...autoWider, text: "A longer label" }).width).toBe(
+      autoWider.width,
+    );
+    expect(resizeElement(autoWidth, elementBounds(autoWidth), elementBounds(autoWidth))).toBe(
+      autoWidth,
+    );
 
-    // Non-uniform corner drag must not stretch the plate independently of type.
+    // A free corner drag controls width independently of type size.
     const bubbleLabel: EditorTextElement = {
       ...autoWidth,
       id: "bubble-label",
@@ -2055,16 +2061,11 @@ describe("screenshot editor geometry", () => {
       width: bubbleStart.width * 2,
       height: bubbleStart.height * 1.1,
     });
-    expect(stretched).toMatchObject({ kind: "text", autoWidth: true, fontSize: 44 });
+    expect(stretched).toMatchObject({ kind: "text", autoWidth: false, fontSize: 44 });
     if (stretched.kind !== "text") throw new Error("expected text");
     const bubbleEnd = elementBounds(stretched);
-    expect(bubbleEnd.width / bubbleEnd.height).toBeCloseTo(
-      bubbleStart.width / bubbleStart.height,
-      2,
-    );
-    expect(bubbleEnd.width / bubbleEnd.height).toBeLessThan(
-      ((bubbleStart.width * 2) / (bubbleStart.height * 1.1)) * 0.7,
-    );
+    expect(bubbleEnd.width).toBeCloseTo(bubbleStart.width * 2);
+    expect(bubbleEnd.height).toBeCloseTo(bubbleStart.height * 1.1);
 
     // Background plates expand paint/selection bounds beyond the layout box.
     const bubble: EditorTextElement = {
@@ -2148,6 +2149,24 @@ describe("screenshot editor geometry", () => {
     expect(wrapTextLines(wrapped.text, wrapped.width, wrapped.fontSize).length).toBeGreaterThan(1);
   });
 
+  it("keeps measured auto-width labels one line high until an explicit newline", () => {
+    const placed = createPlacedTextElement({
+      id: "narrow-glyphs",
+      point: { x: 400, y: 120 },
+      fontSize: 40,
+      color: "#ff3b5c",
+      preset: "rounded-box",
+    });
+    // Real narrow glyphs fit much more tightly than the fallback 0.56-em estimate.
+    const typed = fitEditingAutoWidthTextElement(
+      { ...placed, text: "iiiiiiiiiiii" },
+      (line) => line.length * 8,
+    );
+    expect(textLayoutBounds(typed).height).toBeCloseTo(67.6);
+    expect(textLayoutBounds({ ...typed, text: `${typed.text}\n` }).height).toBeCloseTo(117.6);
+    expect(textLayoutBounds({ ...typed, autoWidth: false }).height).toBeGreaterThan(67.6);
+  });
+
   it("opens a wide empty text field, then hugs glyphs, with a rounded rect not a capsule", () => {
     const fontSize = 48;
     const composing = composingTextBoxWidth(fontSize);
@@ -2169,6 +2188,7 @@ describe("screenshot editor geometry", () => {
       align: "center",
       roundedBackground: true,
       fontFamily: "rounded",
+      bold: true,
     });
     expect(placed.x).toBeCloseTo(400 - composing / 2, 5);
     expect(isBlankTextElement(placed)).toBe(true);
@@ -2201,6 +2221,7 @@ describe("screenshot editor geometry", () => {
       text: "",
       align: "left",
       x: 80,
+      bold: true,
       roundedBackground: false,
       background: null,
     });
@@ -2362,10 +2383,19 @@ describe("screenshot editor geometry", () => {
       });
       expect(textStylePreset(styled)).toBe(preset);
     }
+    // Previously saved rounded-font labels still describe their rounded plate.
+    expect(
+      textStylePreset({
+        ...text,
+        fontFamily: "rounded",
+        background: "#ff3b5c",
+        roundedBackground: true,
+      }),
+    ).toBe("rounded-box");
   });
 
   it("builds a complete canvas font shorthand so rounded blobs keep their family", () => {
-    expect(editorTextFontStack("rounded")).toContain("ui-rounded");
+    expect(editorTextFontStack("rounded")).toBe("'Captures Nunito', sans-serif");
     expect(
       editorTextCanvasFont({
         italic: false,
@@ -2384,14 +2414,11 @@ describe("screenshot editor geometry", () => {
     ).toMatch(/^italic 400 22px /);
   });
 
-  it("skips canvas families that paint as Times when rounded was requested", () => {
+  it("paints Nunito on canvas, with sans fallback only when the face is unavailable", () => {
     const widths: Record<string, number> = {
       serif: 245.41,
       "sans-serif": 288.1,
-      "ui-rounded": 245.41,
-      "'SF Pro Rounded'": 245.41,
-      "'Arial Rounded MT Bold'": 245.41,
-      "system-ui": 291.14,
+      "'Captures Nunito'": 280.5,
       Georgia: 245.41,
     };
     const spy = vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(() => {
@@ -2405,7 +2432,7 @@ describe("screenshot editor geometry", () => {
       return context as unknown as CanvasRenderingContext2D;
     });
     try {
-      expect(resolveEditorTextCanvasFamily("rounded")).toBe("system-ui");
+      expect(resolveEditorTextCanvasFamily("rounded")).toBe("'Captures Nunito'");
       expect(
         editorTextCanvasFont({
           italic: false,
@@ -2413,7 +2440,9 @@ describe("screenshot editor geometry", () => {
           fontSize: 48,
           fontFamily: "rounded",
         }),
-      ).toBe("normal 700 48px system-ui");
+      ).toBe("normal 700 48px 'Captures Nunito'");
+      widths["'Captures Nunito'"] = widths.serif;
+      expect(resolveEditorTextCanvasFamily("rounded")).toBe("sans-serif");
       expect(resolveEditorTextCanvasFamily("serif")).toBe("Georgia");
     } finally {
       spy.mockRestore();
@@ -2448,7 +2477,7 @@ describe("screenshot editor geometry", () => {
     try {
       await loadEditorTextFonts();
       expect(fonts.load).toHaveBeenCalled();
-      expect(loaded.some((spec) => spec.includes("ui-rounded"))).toBe(true);
+      expect(loaded.some((spec) => spec.includes("Captures Nunito"))).toBe(true);
       expect(loaded.some((spec) => spec.includes("Georgia"))).toBe(true);
     } finally {
       if (original) Object.defineProperty(document, "fonts", original);

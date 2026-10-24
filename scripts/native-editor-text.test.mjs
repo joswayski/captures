@@ -11,7 +11,7 @@ import {
   textBackgroundRadius,
   textHasBackgroundPlate,
   TEXT_LINE_HEIGHT_RATIO,
-  wrapTextLines,
+  textLines,
 } from "../apps/desktop/ui/src/lib/screenshotEditor.ts";
 
 const fixture = new URL("../crates/captures-app/tests/editor-text-golden.json", import.meta.url);
@@ -95,7 +95,7 @@ function cases() {
     // Mirror drawText's paint coordinates; wrap/auto-fit/plate rules themselves
     // run the actual shipping helpers, not a second copy of their algorithms.
     const width = Math.max(element.fontSize * 0.5, element.width);
-    const lines = wrapTextLines(element.text, width, element.fontSize, recordedMeasure);
+    const lines = textLines(element, recordedMeasure);
     const height = lines.length * element.fontSize * TEXT_LINE_HEIGHT_RATIO;
     const content = { x: element.x, y: element.y, width, height };
     const rows = lines.map((text, index) => {
@@ -212,10 +212,10 @@ if (process.argv.includes("--write")) {
     assert.equal(data[18].selection.height, 25);
     assert.equal(data[19].selection.height, 50);
     assert.equal(data[0].resizes[0].expected.fontSize, data[0].element.fontSize);
-    assert.equal(data[11].resizes[0].expected.fontSize, 38);
+    assert.equal(data[11].resizes[0].expected.fontSize, data[11].element.fontSize);
     assert.equal(data[0].resizes[3].expected.fontSize, 8);
     assert.equal(data[0].resizes[4].expected.fontSize, 512);
     assert.equal(data[0].resizes[5].expected.fontSize, 42);
-    assert.equal(data[0].resizes[6].expected.fontSize, 24);
+    assert.equal(data[0].resizes[6].expected.fontSize, 42);
   });
 }

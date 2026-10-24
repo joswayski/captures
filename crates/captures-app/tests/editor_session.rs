@@ -4520,7 +4520,12 @@ fn text_shadow_toggle_preserves_custom_style_width_undo_and_saved_pixels() {
 #[test]
 fn typed_text_creation_uses_fresh_ids_measured_width_pixels_and_one_undo_step() {
     let (data, id, _) = setup();
-    let mut editor = open_text(data.path(), &id, text_fonts()).unwrap();
+    let mut fonts = text_fonts();
+    fonts.files.insert(
+        "bold".into(),
+        Arc::from(include_bytes!("../../captures-image/tests/shaping-bold.ttf").as_slice()),
+    );
+    let mut editor = open_text(data.path(), &id, fonts).unwrap();
     editor
         .execute(Request::ResizeCanvas {
             width: 200.,
@@ -4534,7 +4539,8 @@ fn typed_text_creation_uses_fresh_ids_measured_width_pixels_and_one_undo_step() 
     let Element::Text(label) = created.elements.last().unwrap() else {
         panic!()
     };
-    assert_eq!((label.base.x, label.base.y, label.width), (20., 20., 84.)); // 56 advance + 28 inset
+    assert!(label.bold);
+    assert_eq!((label.base.x, label.base.y, label.width), (20., 20., 92.)); // Bold: 64 advance + 28 inset.
     assert_eq!(label.auto_width, Some(true));
     assert!(!label.base.locked && label.base.visible);
     assert_eq!(created.elements[0], before.elements[0]);
@@ -4593,6 +4599,7 @@ fn styled_text_creation_matches_shipping_treatments_and_fractional_placement() {
             (151.75, 22.125, 250.)
         );
         assert_eq!(text.align, "left");
+        assert!(text.bold);
         assert_eq!(text.color, "#2174c5");
         assert_eq!(
             text.font_family,
@@ -4617,20 +4624,19 @@ fn styled_text_creation_matches_shipping_treatments_and_fractional_placement() {
             panic!()
         };
         assert_eq!(text.align, "center");
+        assert!(text.bold);
         assert_eq!(text.base.x + text.width / 2., point.x);
-        assert_eq!(text.background.as_deref(), Some("#111318"));
+        assert_eq!(text.background.as_deref(), Some("#2174c5"));
         assert_eq!(text.rounded_background, preset == "rounded-box");
         assert_eq!(
             text.font_family,
-            if preset == "mono-box" {
-                "mono"
-            } else if preset == "rounded-box" {
-                "rounded"
-            } else {
-                "sans"
+            match preset {
+                "mono-box" => "mono",
+                "rounded-box" => "rounded",
+                _ => "sans",
             }
         );
-        assert_eq!(text.color, "#2174c5");
+        assert_eq!(text.color, "#ffffff");
     }
 
     let accepted = editor.snapshot().document.clone();
@@ -4666,7 +4672,14 @@ fn invalid_or_unavailable_text_styles_preserve_document_pixels_redo_and_draft() 
     let manifest = data.path().join("drafts").join(&id).join("manifest.json");
     let persisted = fs::read(&manifest).unwrap();
 
-    for preset in ["not-a-style", "rounded-box"] {
+    assert!(
+        editor
+            .snapshot()
+            .text_style_presets
+            .iter()
+            .all(|preset| preset.font_family != "rounded")
+    );
+    for preset in ["not-a-style", "rounded", "rounded-box"] {
         let error = editor
             .execute(styled_text_request(
                 "L",
@@ -4950,7 +4963,7 @@ fn bundled_font_styles_render_offline_and_preserve_bytes_and_license_on_reopen()
             {"key": "sans", "label": "Sans serif"},
             {"key": "serif", "label": "Serif"},
             {"key": "mono", "label": "Monospace"},
-            {"key": "rounded", "label": "Rounded"},
+            {"key": "rounded", "label": "Nunito"},
         ])
     );
     assert_eq!(
@@ -5075,7 +5088,7 @@ fn older_sans_only_drafts_pin_a_bundled_family_when_text_first_uses_it() {
             {"key": "sans", "label": "Sans serif"},
             {"key": "serif", "label": "Serif"},
             {"key": "mono", "label": "Monospace"},
-            {"key": "rounded", "label": "Rounded"},
+            {"key": "rounded", "label": "Nunito"},
         ])
     );
     assert_eq!(reopened.snapshot().text_style_presets.len(), 7);
@@ -5110,10 +5123,10 @@ fn older_sans_only_drafts_pin_a_bundled_family_when_text_first_uses_it() {
         .unwrap();
     assert_ne!(reopened.pixels(), accepted);
     let serif = reopened.pixels();
-    // A preset placement pins Rounded the same way.
+    // Rounded Box placement pins Nunito the same way, not its requested sans.
     reopened
         .execute(styled_text_request(
-            "Rounded",
+            "Rounded Box",
             "rounded-box",
             Point { x: 300., y: 150. },
             24.,
