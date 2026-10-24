@@ -3,6 +3,9 @@
 //! artifact bytes, including their signed version/target filename, can install.
 pub mod recovery;
 
+#[cfg(all(test, windows))]
+mod windows_tests;
+
 use super::*;
 use std::{
     fs,
@@ -552,12 +555,7 @@ fn install_with(
             // NSIS owns the installed path and update/relaunch registry identity.
             // Release the cooperative lock before /R launches the new process.
             drop(lock);
-            let status = Command::new(installer)
-                .args(["/P", "/UPDATE", "/R"])
-                .status()?;
-            if !status.success() {
-                return Err(Error::Installation("the Windows installer failed"));
-            }
+            launch_and_confirm(&installer, directory, &request)?;
         }
         InstallTarget::AppImage { path } => {
             if request.target != Target::LinuxX64
@@ -685,16 +683,36 @@ fn launch_and_confirm(
             capture_windows: request.capture_windows.clone(),
         },
     )?;
-    let mut child = Command::new(executable)
-        .env_remove("APPIMAGE")
-        .env_remove("APPDIR")
-        .arg("--live")
-        .arg("--native-update-ready-file")
-        .arg(&ready)
-        .arg("--native-update-ready-token")
-        .arg(&token)
-        .stdin(Stdio::null())
-        .spawn()?;
+    let windows = matches!(request.installation, InstallTarget::Windows { .. });
+    let mut child = if windows {
+        #[cfg(windows)]
+        {
+            let status = windows_installer_command(executable, &ready, &token)?
+                .stdin(Stdio::null())
+                .status()?;
+            if !status.success() {
+                return Err(Error::Installation("the Windows installer failed"));
+            }
+            // /R launches asynchronously through RunAsUser. Installer exit is
+            // not application readiness, and NSIS does not return a child handle.
+            None
+        }
+        #[cfg(not(windows))]
+        return Err(Error::Target);
+    } else {
+        Some(
+            Command::new(executable)
+                .env_remove("APPIMAGE")
+                .env_remove("APPDIR")
+                .arg("--live")
+                .arg("--native-update-ready-file")
+                .arg(&ready)
+                .arg("--native-update-ready-token")
+                .arg(&token)
+                .stdin(Stdio::null())
+                .spawn()?,
+        )
+    };
     let started = std::time::Instant::now();
     loop {
         file.seek(SeekFrom::Start(0))?;
@@ -703,15 +721,52 @@ fn launch_and_confirm(
         if bytes == format!("{token}\n").as_bytes() {
             return Ok(());
         }
-        if child.try_wait()?.is_some() || started.elapsed() > Duration::from_secs(120) {
+        let exited = child
+            .as_mut()
+            .map(|child| child.try_wait())
+            .transpose()?
+            .flatten()
+            .is_some();
+        if exited || started.elapsed() > Duration::from_secs(120) {
             // Do not overwrite a possibly running process. Keep the old package
             // and recovery journal rather than guessing that a timeout is death.
-            return Err(Error::Installation(
-                "new Preview did not confirm startup; previous package retained (see backup.json)",
-            ));
+            return Err(Error::Installation(if windows {
+                "Windows installation finished but startup was not confirmed; recovery files retained"
+            } else {
+                "new Preview did not confirm startup; previous package retained (see backup.json)"
+            }));
         }
         std::thread::sleep(Duration::from_millis(100));
     }
+}
+
+#[cfg(windows)]
+fn windows_installer_command(
+    installer: &Path,
+    ready: &Path,
+    token: &str,
+) -> Result<Command, Error> {
+    use std::{
+        ffi::OsString,
+        os::windows::{ffi::OsStrExt, process::CommandExt},
+    };
+    // NSIS GetOptions is not a CRT argv parser. Keep /ARGS last, quote only
+    // the filename, and preserve UTF-16 rather than using Path::display().
+    // The generated filename ends in `ready`, never a quote or trailing slash.
+    let mut arguments = OsString::from("/P /UPDATE /R /ARGS --live --native-update-ready-file \"");
+    arguments.push(ready);
+    arguments.push("\" --native-update-ready-token ");
+    arguments.push(token);
+    // Tauri's pinned Unicode NSIS 3.11 has 1024-character strings, including
+    // NUL. $CMDLINE includes the quoted installer executable and separator.
+    if installer.as_os_str().encode_wide().count() + 3 + arguments.encode_wide().count() >= 1024 {
+        return Err(Error::Configuration(
+            "Windows update command exceeds the NSIS string limit",
+        ));
+    }
+    let mut command = Command::new(installer);
+    command.raw_arg(arguments);
+    Ok(command)
 }
 
 fn extract_app(payload: &[u8], destination: &Path) -> Result<(), Error> {

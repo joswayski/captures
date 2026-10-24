@@ -552,9 +552,11 @@ profile, an explicitly imported isolated copy, or an existing enrolled developme
 profile with a retained pre-update data snapshot. It can also recover a failed
 package replacement after all app processes stop; package recovery does not restore
 profile data. It does not update installed copies or reuse their profiles.
-The native development helper and macOS/AppImage update handoffs retain Preferences
+The native development helper and macOS/AppImage/Windows update handoffs retain Preferences
 visibility, open screenshot and recording editors, and the ordered screenshot
-preview stack. The installed Windows NSIS relaunch does not yet carry this session.
+preview stack. Windows forwards the one-shot session through NSIS and waits for
+application startup acknowledgement before marking the update complete; installer
+exit alone is not success. Elevated installed-upgrade acceptance remains unverified.
 Screenshot drafts keep their
 original owner when the editor has adopted a saved copy. Unsaved recording edits
 still block restart; window geometry and undo history are not restored. Missing
