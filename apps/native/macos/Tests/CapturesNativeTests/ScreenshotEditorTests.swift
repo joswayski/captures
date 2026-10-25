@@ -4259,13 +4259,17 @@ final class ScreenshotEditorTests: XCTestCase {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let url = root.appendingPathComponent("Vector é.SVG")
+        // Nested uses compose (2+1, 1-2) + (3-2, 4-1) = (4,2).
+        // Shift shapes by (-4,-2); the 0.5 viewBox scale leaves the expected pixels unchanged.
         let svg = """
         <svg xmlns="http://www.w3.org/2000/svg" height="4" viewBox="0 0 6 8">
           <defs><g id="shapes">
-            <rect x="2" y="4" width="2" height="2" fill="#0b49d3" opacity="0.5"/>
-            <path d="M4 0H6V2H4Z" fill="#359711"/>
+            <rect x="-2" y="2" width="2" height="2" fill="#0b49d3" opacity="0.5"/>
+            <path d="M0 -2H2V0H0Z" fill="#359711"/>
+          </g><g id="nested">
+            <use href="#shapes" x="3" y="4" transform="translate(-2 -1)"/>
           </g></defs>
-          <use href="#shapes"/>
+          <use href="#nested" x="2" y="1" transform="translate(1 -2)"/>
         </svg>
         """
         try Data(svg.utf8).write(to: url)

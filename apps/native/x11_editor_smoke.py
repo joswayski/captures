@@ -367,6 +367,25 @@ def main():
             width += INSPECTOR_GROWTH
         run("xdotool", "windowsize", "--sync", editor, str(width), str(height), *map(str, tail))
 
+    def prepare_wide_fixture_viewport(name):
+        resize_editor(1200, 701, "sleep", ".3")
+        width, height = window_size()
+        # Reuse the inspector suite's empty-row divider oracle. Under load
+        # the initial drag can be missed; reset the actual divider through
+        # its real double-click action before trusting Fit coordinates.
+        def divider():
+            shot(editor, name)
+            row = run("convert", str(output / f"{name}.png"), "-crop",
+                      f"{width}x1+0+{height - 100}", "-depth", "8", "rgb:-")
+            edges = [x for x in range(100, width - 10)
+                     if row[x * 3:x * 3 + 3] != row[300:303]]
+            assert len(edges) == 1, ("inspector divider", edges)
+            return edges[0]
+        edge = divider()
+        if edge != width - INSPECTOR_WIDTH:
+            window_move((edge, 200), "click", "--repeat", "2", "--delay", "120", "1")
+            wait(lambda: divider() == width - INSPECTOR_WIDTH, "fixture 320px inspector")
+
     def resize_inspector_fixture(width, height, *tail):
         # Inspector-authored fixtures keep their historical inspector height:
         # the export bar replaces the old 80px footer below the inspector.
@@ -1654,7 +1673,7 @@ def main():
             return
 
         if args.import_formats_only:
-            resize_editor(1200, 701)
+            prepare_wide_fixture_viewport("import-formats-viewport")
             gif = output / "First frame.GIF"
             bmp = output / "Asymmetric.BMP"
             svg = output / "Vector.SVG"
@@ -1668,12 +1687,15 @@ def main():
             run("convert", "-size", "80x50", "xc:#ebbf48", "-fill", "#8e44ad",
                 "-draw", "rectangle 31,19 79,49", "-strip", "BMP3:" + str(bmp))
             # Infer height from width/viewBox; browser and native pixels must stay 90×50.
+            # Nested uses translate by (8+4, 6-2) + (10-2, 8-2) = (20,10).
+            # Offset the authored shapes by (-20,-10), retaining the independent pixels below.
             svg.write_text('<svg xmlns="http://www.w3.org/2000/svg" width="90" viewBox="0 0 180 100">'
                 '<defs><g id="shapes">'
-                '<path d="M0 0H70V100H0Z" fill="#2d64bd"/>'
-                '<rect x="100" y="40" width="50" height="50" fill="white" opacity="0.5"/>'
-                '<text x="78" y="28" font-family="sans-serif" font-size="24" fill="#2d64bd">A7</text>'
-                '</g></defs><use href="#shapes"/></svg>')
+                '<path d="M-20 -10H50V90H-20Z" fill="#2d64bd"/>'
+                '<rect x="80" y="30" width="50" height="50" fill="white" opacity="0.5"/>'
+                '<text x="58" y="18" font-family="sans-serif" font-size="24" fill="#2d64bd">A7</text>'
+                '</g><g id="nested"><use href="#shapes" x="10" y="8" transform="translate(-2 -2)"/>'
+                '</g></defs><use href="#nested" x="8" y="6" transform="translate(4 -2)"/></svg>')
             source_bytes = {path: path.read_bytes() for path in [gif, bmp, svg]}
             chooser.selected = [gif, notes, bmp, svg]
             toolbar_click("import")
@@ -1696,6 +1718,13 @@ def main():
             asset_pixel(imported[3], 10, 10, (45, 100, 189, 255))
             asset_pixel(imported[3], 80, 10, (0, 0, 0, 0))
             asset_pixel(imported[3], 60, 30, (255, 255, 255, 128))
+            # Exact shape edges catch missing translations even when interior samples still match.
+            asset_pixel(imported[3], 34, 49, (45, 100, 189, 255))
+            asset_pixel(imported[3], 35, 40, (0, 0, 0, 0))
+            asset_pixel(imported[3], 50, 20, (255, 255, 255, 128))
+            asset_pixel(imported[3], 49, 20, (0, 0, 0, 0))
+            asset_pixel(imported[3], 74, 44, (255, 255, 255, 128))
+            asset_pixel(imported[3], 75, 44, (0, 0, 0, 0))
             svg_asset = draft.parent / "assets" / (imported[3]["src"].split(":", 1)[1] + ".png")
             text_pixels = run("convert", str(svg_asset), "-crop", "35x16+38+0", "-depth", "8", "rgba:-")
             assert any(text_pixels[3::4]), "bundled SVG text must not silently disappear"
@@ -1779,18 +1808,24 @@ def main():
             unsupported_svg = output / "Resource.SVG"
             unsupported_svg.write_text('<svg xmlns="http://www.w3.org/2000/svg" width="90" height="50">'
                 '<use href="private.svg#shapes"/></svg>')
-            chooser.selected = [unsupported_svg]
-            toolbar_click("import")
-            wait(lambda: chooser.pending, "unsupported SVG picker")
-            GLib.idle_add(chooser.respond, False)
-            assert save_layers(lambda values: values == imported,
-                               "rejected SVG leaves the document untouched") == imported
-            shot(editor, "svg-conversion-error")
-            toolbar_click("undo")
-            save_layers(lambda values: len(values) == 1,
-                        "rejected SVG adds no undo step; whole valid batch undone")
-            toolbar_click("redo")
-            assert save_layers(lambda values: len(values) == 4, "valid SVG restored after rejection") == imported
+            cyclic_svg = output / "Cyclic.SVG"
+            cyclic_svg.write_text('<svg xmlns="http://www.w3.org/2000/svg" width="90" height="50">'
+                '<defs><g id="a"><use href="#b" x="8"/></g>'
+                '<g id="b"><use href="#a" y="6"/></g></defs><use href="#a"/></svg>')
+            for invalid, name in [(unsupported_svg, "svg-conversion-error"),
+                                  (cyclic_svg, "svg-cyclic-reference-error")]:
+                chooser.selected = [invalid]
+                toolbar_click("import")
+                wait(lambda: chooser.pending, "unsupported SVG picker")
+                GLib.idle_add(chooser.respond, False)
+                assert save_layers(lambda values: values == imported,
+                                   "rejected SVG leaves the document untouched") == imported
+                shot(editor, name)
+                toolbar_click("undo")
+                save_layers(lambda values: len(values) == 1,
+                            "rejected SVG adds no undo step; whole valid batch undone")
+                toolbar_click("redo")
+                assert save_layers(lambda values: len(values) == 4, "valid SVG restored after rejection") == imported
             assert all(path.read_bytes() == before for path, before in source_bytes.items())
             for path in source_bytes:
                 path.unlink()
@@ -1813,7 +1848,9 @@ def main():
                 "checks": ["gif-bmp-svg-picker-filters", "mixed-case-extensions", "unsupported-file-skipped",
                            "first-gif-frame-only", "transparent-gif-pixels", "asymmetric-bmp-pixels",
                            "svg-inferred-height", "svg-local-reference", "svg-viewbox-rasterization",
+                           "svg-nested-local-references", "svg-composed-translations-exact-edges",
                            "straight-svg-alpha", "svg-bundled-text", "external-svg-reference-rejected",
+                           "cyclic-nested-svg-reference-rejected",
                            "unsupported-svg-preserves-document-and-undo",
                            "ordered-placement", "one-undo-step-per-picker-or-drop", "stable-redo",
                            "late-picker-and-drop-decode-render-failure-atomic", "retry-after-failure",
@@ -4101,25 +4138,6 @@ def main():
             baseline_samples = [(252, 120, red), (252, 170, red), (280, 120, blue),
                                 (452, 130, red), (476, 130, red), (452, 180, (46, 158, 113))]
 
-            def measured_viewport():
-                resize_editor(1200, 701, "sleep", ".3")
-                width, height = window_size()
-                # Reuse the inspector suite's empty-row divider oracle. Under
-                # load the initial drag can be missed; reset the actual divider
-                # through its real double-click action before trusting Fit.
-                def divider():
-                    shot(editor, "measured-text-viewport")
-                    row = run("convert", str(output / "measured-text-viewport.png"), "-crop",
-                              f"{width}x1+0+{height - 100}", "-depth", "8", "rgb:-")
-                    edges = [x for x in range(100, width - 10)
-                             if row[x * 3:x * 3 + 3] != row[300:303]]
-                    assert len(edges) == 1, ("inspector divider", edges)
-                    return edges[0]
-                edge = divider()
-                if edge != width - INSPECTOR_WIDTH:
-                    window_move((edge, 200), "click", "--repeat", "2", "--delay", "120", "1")
-                    wait(lambda: divider() == width - INSPECTOR_WIDTH, "measured-text 320px inspector")
-
             def measured_pixels(name, samples):
                 # Worker-rendered held previews can arrive after the pointer
                 # event; use the existing bounded repaint wait, not a fixed sleep.
@@ -4151,7 +4169,7 @@ def main():
                 if shift:
                     run("xdotool", "keyup", "Shift_L")
 
-            measured_viewport()
+            prepare_wide_fixture_viewport("measured-text-viewport")
             measured_pixels("measured-text-restored", baseline_samples)
             # Lower-row non-ink body: the legacy one-row LL box misses this.
             measured_gesture((270, 175), (280, 185))
@@ -4222,7 +4240,7 @@ def main():
             close(editor)
             wait(lambda: not windows("Captures Screenshot Editor"), "measured-text editor closes")
             editor = reopen()
-            measured_viewport()
+            prepare_wide_fixture_viewport("measured-text-viewport")
             run("xdotool", "mousemove", "0", "0")
             measured_pixels("measured-text-reopened", rotated_samples)
             assert layers() == rotated, "reopen changed text geometry"
