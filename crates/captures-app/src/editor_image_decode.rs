@@ -400,51 +400,17 @@ fn decode_svg(bytes: &[u8], not_loaded: &str) -> Result<RgbaImage, String> {
             ids.entry(id).or_insert(node);
         }
     }
-    // usvg's source XML limit does not bound cloned <use> subtrees. Reject
-    // nested reuse and charge every occurrence before expansion/font loading.
+    // usvg's source XML limit does not bound cloned <use> subtrees. Charge
+    // every nested occurrence before expansion/font loading, not unique IDs.
     let mut expanded_nodes = xml.descendants().count();
     for node in xml.descendants().filter(|node| node.has_tag_name("use")) {
-        let href = node.attribute("href");
-        let xlink = node.attribute(("http://www.w3.org/1999/xlink", "href"));
-        if href.is_some() && xlink.is_some() && href != xlink {
-            return Err(
-                "This SVG has conflicting reuse references. Convert it to PNG first.".into(),
-            );
-        }
-        let target = href
-            .or(xlink)
-            .and_then(|href| href.strip_prefix('#'))
-            .filter(|id| !id.is_empty())
-            .and_then(|id| ids.get(id).copied())
-            .ok_or(
-                "This SVG has external or unresolved reuse references. Convert it to PNG first.",
-            )?;
-        let depth = node.ancestors().filter(roxmltree::Node::is_element).count();
-        for child in target.descendants() {
-            expanded_nodes += 1;
-            if expanded_nodes > 32_768 {
-                return Err("SVG imports are limited to 32,768 nodes including reused content. Convert it to PNG first.".into());
-            }
-            if child.has_tag_name("use") {
-                return Err(
-                    "This SVG contains nested reuse references. Convert it to PNG first.".into(),
-                );
-            }
-            if child.is_element()
-                && depth
-                    + child
-                        .ancestors()
-                        .take_while(|parent| *parent != target)
-                        .count()
-                    + 1
-                    > 32
-            {
-                return Err(
-                    "This SVG's reused content is too deeply nested. Convert it to PNG first."
-                        .into(),
-                );
-            }
-        }
+        validate_svg_use(
+            node,
+            &ids,
+            node.ancestors().filter(roxmltree::Node::is_element).count(),
+            &mut expanded_nodes,
+            &mut Vec::new(),
+        )?;
     }
     static FONTS: OnceLock<Arc<resvg::usvg::fontdb::Database>> = OnceLock::new();
     let mut options = resvg::usvg::Options {
@@ -494,6 +460,62 @@ fn decode_svg(bytes: &[u8], not_loaded: &str) -> Result<RgbaImage, String> {
         pixmap.take_demultiplied(),
     )
     .ok_or_else(|| not_loaded.to_owned())
+}
+
+/// Bound the expanded tree, including definitions and every reused occurrence.
+/// The active target chain rejects cycles without rejecting shared siblings.
+fn validate_svg_use<'a, 'input>(
+    node: roxmltree::Node<'a, 'input>,
+    ids: &HashMap<&str, roxmltree::Node<'a, 'input>>,
+    depth: usize,
+    expanded_nodes: &mut usize,
+    active: &mut Vec<roxmltree::NodeId>,
+) -> Result<(), String> {
+    // roxmltree's string lookup matches any namespace. Match usvg's actual
+    // unqualified href so an earlier xlink/foreign attribute cannot undercount.
+    let href = node
+        .attributes()
+        .find(|attribute| attribute.name() == "href" && attribute.namespace().is_none())
+        .map(|attribute| attribute.value());
+    let xlink = node.attribute(("http://www.w3.org/1999/xlink", "href"));
+    if href.is_some() && xlink.is_some() && href != xlink {
+        return Err("This SVG has conflicting reuse references. Convert it to PNG first.".into());
+    }
+    let target = href
+        .or(xlink)
+        .and_then(|href| href.strip_prefix('#'))
+        .filter(|id| !id.is_empty())
+        .and_then(|id| ids.get(id).copied())
+        .ok_or("This SVG has external or unresolved reuse references. Convert it to PNG first.")?;
+    if active.contains(&target.id()) {
+        return Err("This SVG contains cyclic reuse references. Convert it to PNG first.".into());
+    }
+    active.push(target.id());
+    for child in target.descendants() {
+        *expanded_nodes += 1;
+        if *expanded_nodes > 32_768 {
+            return Err("SVG imports are limited to 32,768 nodes including reused content. Convert it to PNG first.".into());
+        }
+        if child.is_element() {
+            let child_depth = depth
+                + child
+                    .ancestors()
+                    .take_while(|parent| *parent != target)
+                    .count()
+                + 1;
+            if child_depth > 32 {
+                return Err(
+                    "This SVG's reused content is too deeply nested. Convert it to PNG first."
+                        .into(),
+                );
+            }
+            if child.has_tag_name("use") {
+                validate_svg_use(child, ids, child_depth, expanded_nodes, active)?;
+            }
+        }
+    }
+    active.pop();
+    Ok(())
 }
 
 /// BITMAPV4/V5 color descriptions, which image's decoder does not expose.
@@ -1248,6 +1270,8 @@ mod tests {
             r##"href="#stamp""##,
             r##"xlink:href="#stamp""##,
             r##"href="#stamp" xlink:href="#stamp""##,
+            r##"xlink:href="#stamp" href="#stamp""##,
+            r##"xmlns:other="urn:other" other:href="#missing" href="#stamp""##,
         ] {
             let svg = format!(
                 r##"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="9" height="6">
@@ -1278,7 +1302,36 @@ mod tests {
     }
 
     #[test]
-    fn svg_rejects_external_unresolved_conflicting_and_nested_references() {
+    fn svg_nested_references_preserve_composed_transforms_and_alpha() {
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="12" height="9">
+            <defs>
+              <g id="leaf"><rect x="1" y="2" width="1" height="1" fill="#0b49d3" opacity="0.5"/>
+                <path d="M2 0H3V1H2Z" fill="#359711"/></g>
+              <g id="branch"><use href="#leaf" x="2" y="1"/></g>
+              <g id="stamp"><use xlink:href="#branch" transform="translate(1 2)"/></g>
+            </defs>
+            <use href="#stamp"/><use href="#branch" transform="translate(6 3)"/>
+        </svg>"##;
+        let pixels = decode_import_bytes(svg, "nested.svg").unwrap();
+        assert_eq!(pixels.dimensions(), (12, 9));
+        for y in 0..9 {
+            for x in 0..12 {
+                let actual = pixels.get_pixel(x, y).0;
+                match (x, y) {
+                    (4, 5) | (9, 6) => {
+                        for (actual, expected) in actual.into_iter().zip([11, 73, 211, 128]) {
+                            close(actual, expected, 1, "nested SVG straight alpha");
+                        }
+                    }
+                    (5, 3) | (10, 4) => assert_eq!(actual, [53, 151, 17, 255]),
+                    _ => assert_eq!(actual, [0, 0, 0, 0], "{x},{y}"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn svg_rejects_external_unresolved_conflicting_and_cyclic_references() {
         for body in [
             r#"<use/>"#,
             r##"<use href="#"/>"##,
@@ -1287,12 +1340,14 @@ mod tests {
             r##"<use xlink:href="https://example.invalid/vector.svg#stamp"/>"##,
             r#"<use href="data:image/svg+xml;base64,PHN2Zy8+"/>"#,
             r##"<defs><path id="a"/><path id="b"/></defs><use href="#a" xlink:href="#b"/>"##,
+            r##"<defs><path id="a"/><path id="b"/></defs><use xlink:href="#b" href="#a"/>"##,
             r##"<defs><path id="a"/></defs><use href="#a" xlink:href="private.svg#a"/>"##,
             r##"<defs><path id="a"/></defs><use href="private.svg#a" xlink:href="#a"/>"##,
-            r##"<defs><g id="a"><use href="#b"/></g><path id="b"/></defs><use href="#a"/>"##,
             r##"<use id="a" href="#a"/>"##,
             r##"<g id="a"><use href="#a"/></g>"##,
             r##"<defs><use id="a" href="#b"/><use id="b" href="#a"/></defs><use href="#a"/>"##,
+            r##"<defs><g id="a"><use href="#b"/></g><g id="b"><use href="#c"/></g><g id="c"><use href="#a"/></g></defs><use href="#a"/>"##,
+            r##"<defs><g id="a"><use href="#a"/></g><path id="a"/></defs><use href="#a"/>"##,
         ] {
             let svg = format!(
                 r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="3" height="4">{body}</svg>"#
@@ -1339,6 +1394,19 @@ mod tests {
                 "duplicate ID: {duplicate}"
             );
         }
+        // A foreign href must not redirect preflight to a smaller subtree
+        // while usvg expands the unqualified href instead.
+        let foreign_href = nodes(31, false)
+            .replace("</defs>", "<path id='small'/></defs>")
+            .replace(
+                "<use href='#stamp'/>",
+                "<use xmlns:other='urn:other' other:href='#small' href='#stamp'/>",
+            );
+        assert!(
+            decode_import_bytes(foreign_href.as_bytes(), "nested.svg")
+                .unwrap_err()
+                .contains("32,768")
+        );
         let definition = format!(
             "<defs><g id='stamp'>{}{}</g></defs>",
             "<g>".repeat(29),
@@ -1360,6 +1428,42 @@ mod tests {
                 assert!(result.unwrap_err().contains("nested"));
             }
         }
+    }
+
+    #[test]
+    fn svg_nested_references_bound_each_expansion_and_its_depth() {
+        let svg = |levels, copies, extra| {
+            let mut definitions = "<g id='n0'><path/></g>".to_owned();
+            for level in 1..=levels {
+                definitions.push_str(&format!(
+                    "<g id='n{level}'>{}</g>",
+                    format!("<use href='#n{}'/>", level - 1).repeat(copies),
+                ));
+            }
+            format!(
+                "<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'><defs>{definitions}</defs><use href='#n{levels}'/>{}</svg>",
+                "<path/>".repeat(extra),
+            )
+        };
+        // Each binary level copies both branches, including copies inside defs.
+        // Source + expanded nodes = 15 * 2^levels - 7 - 3*levels.
+        // Eleven levels use 30,680 nodes; these straddle the 32,768-node bound.
+        assert!(decode_import_bytes(svg(11, 2, 2088).as_bytes(), "nested.svg").is_ok());
+        for input in [svg(11, 2, 2089), svg(12, 2, 0)] {
+            assert!(
+                decode_import_bytes(input.as_bytes(), "nested.svg")
+                    .unwrap_err()
+                    .contains("32,768")
+            );
+        }
+        // A single-copy chain stays well below the node cap. Its deepest path
+        // is svg + outer use + (group/use pairs) + final group/path: 2*n + 4.
+        assert!(decode_import_bytes(svg(14, 1, 0).as_bytes(), "nested.svg").is_ok());
+        assert!(
+            decode_import_bytes(svg(15, 1, 0).as_bytes(), "nested.svg")
+                .unwrap_err()
+                .contains("nested")
+        );
     }
 
     #[test]
