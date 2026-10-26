@@ -2442,6 +2442,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
         let focused = ui.memory(|memory| memory.has_focus(resize_id));
         let mut width = preferred_width.clamp(280., inspector_max);
         let mut requested = false;
+        let mut owns_key = false;
         ui.input_mut(|input| {
             let keyboard = focused && input.focused;
             input.events.retain(|event| {
@@ -2452,6 +2453,10 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                         modifiers,
                         ..
                     } if keyboard => {
+                        if *key == egui::Key::Tab {
+                            return true;
+                        }
+                        owns_key = true;
                         let step = if modifiers.shift { 40. } else { 10. };
                         match key {
                             egui::Key::ArrowLeft => width + step,
@@ -2459,7 +2464,6 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                             egui::Key::Home => 280.,
                             egui::Key::End => inspector_max,
                             egui::Key::Enter => inspector_default,
-                            egui::Key::Tab => return true,
                             // Other keys must not reach editor or egui's
                             // end-of-pass global zoom shortcuts.
                             _ => return false,
@@ -2488,6 +2492,11 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                 false
             });
         });
+        if owns_key {
+            // The first arrow can arrive before egui installs the focus lock.
+            // Consuming its event alone does not cancel scheduled navigation.
+            ui.memory_mut(|memory| memory.move_focus(egui::FocusDirection::None));
+        }
         if requested {
             preferred_width = width;
             ui.ctx()
@@ -7472,8 +7481,7 @@ mod tests {
             }
         }
         assert!(focused, "separator must be in the editor's Tab order");
-        // egui installs a focus lock on the pass after focus is acquired.
-        frame(&mut view, 1100., vec![]);
+        // The first arrow must work without an intervening idle paint pass.
         let zoom = ctx.zoom_factor();
         for (width, events, expected) in [
             (1100., vec![key(egui::Key::ArrowLeft, false)], 330.),
