@@ -6131,10 +6131,20 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let inputResolved = inlineTextInput == nil && !draining
         let cropReady = sectionControl?.selectedSegment == Section.geometry && state.snapshot != nil
             && !state.busy && inputResolved
-        cropOverlay.croppingEnabled = cropReady && cropActive
-        cropAspect.isEnabled = cropReady && cropActive
         let active = sectionControl?.selectedSegment == Section.draw
             && state.snapshot != nil && !state.busy && inputResolved
+        let selectionReady = toolShowsTransformChrome
+            && state.snapshot != nil && !state.busy && inputResolved && !importLoading
+        // Park focus before hiding its overlay, otherwise AppKit advances to
+        // the divider. Do not resign an overlay that stays visible: that would
+        // cancel its gesture. Explicit divider/field focus stays untouched.
+        if (window.firstResponder === cropOverlay && !(cropReady && cropActive))
+            || (window.firstResponder === drawOverlay && !active)
+            || (window.firstResponder === selectionOverlay && !selectionReady) {
+            window.makeFirstResponder(viewportInput)
+        }
+        cropOverlay.croppingEnabled = cropReady && cropActive
+        cropAspect.isEnabled = cropReady && cropActive
         eraserMode?.isEnabled = state.snapshot != nil && !state.busy && inputResolved
         wandTolerance?.isEnabled = active; wandContiguous.isEnabled = active
         brushSize?.isEnabled = active; brushSoftness?.isEnabled = active
@@ -6158,8 +6168,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         drawOverlay.drawingEnabled = active
         if !active || drawShape != .wand { hideWandLoupe() }
         selectionOverlay.selectedOnly = sectionControl?.selectedSegment == Section.draw
-        selectionOverlay.selectionEnabled = toolShowsTransformChrome
-            && state.snapshot != nil && !state.busy && inputResolved && !importLoading
+        selectionOverlay.selectionEnabled = selectionReady
+        if window.firstResponder === viewportInput, state.snapshot != nil,
+           !state.busy, inputResolved, !importLoading {
+            focusActiveCanvas()
+        }
     }
 
     /// Properties for the selected layer, top to bottom: the heading, then

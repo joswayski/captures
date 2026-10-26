@@ -2958,6 +2958,8 @@ final class ScreenshotEditorTests: XCTestCase {
         let frame = try canvasPreviewImage(in: controller.root)
         XCTAssertEqual(rgba(frame, x: 2, y: 3), [31, 70, 133, 255])
         XCTAssertEqual(rgba(frame, x: 3, y: 8), [219, 19, 53, 255])
+        XCTAssertTrue(controller.window.firstResponder === controller.selectionOverlay,
+                      "asynchronous import must return document keys to the canvas")
         try shortcut("z", 6)
         waitUntil { controller.state.snapshot?.layers.count == 1 && !controller.state.busy }
         XCTAssertTrue(controller.state.snapshot?.canRedo == true)
@@ -5863,10 +5865,14 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertTrue(controller.state.snapshot?.canPasteLayer == true)
         XCTAssertNotNil(controller.compareView.afterImage,
                         "copy changes capability only and keeps the encoded After side")
+        XCTAssertTrue(controller.window.firstResponder === controller.selectionOverlay,
+                      "a busy command must not leave focus on the divider")
 
         // Draw with the export settings (and so the comparison) still open.
         let sections = try segmented("Editor section", in: controller.root)
         sections.selectedSegment = 2; _ = sections.sendAction(sections.action, to: sections.target)
+        XCTAssertTrue(controller.window.firstResponder === controller.drawOverlay,
+                      "changing tools must not leave focus on the divider")
         worker.response = { request in
             guard request["operation"] as? String == "paste_layer",
                   let id = request["new_id"] as? String else { return nil }
