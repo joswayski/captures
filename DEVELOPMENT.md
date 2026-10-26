@@ -200,6 +200,18 @@ Run the default repository gate:
 npm run check
 ```
 
+On Linux, check that cancelling capture returns the global Escape key to other
+applications on a disposable X11 display (requires `xvfb` and `xauth`):
+
+```sh
+env -u WAYLAND_DISPLAY CAPTURES_TEST_PRIVATE_X11=1 xvfb-run -a \
+  cargo test -p captures-app --test escape_hotkey -- --ignored
+```
+
+The root and native wgpu workspaces use the existing `global-hotkey` 0.8.0
+dependency from `crates/vendor/global-hotkey`, with an X11 ungrab-flush fix until
+upstream releases it. See its `PATCHES.md` for provenance and removal criteria.
+
 The JS/TS toolchain uses Vite 8 (Rolldown/Oxc), Vitest 5, stable native Go
 TypeScript 7 (`tsc`), Oxlint and Oxfmt. Node 24/npm 11 remain the runtime and
 package manager. `npm test` runs all isolated desktop, web and repository-script

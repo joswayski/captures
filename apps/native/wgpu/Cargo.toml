@@ -14,6 +14,7 @@ default-run = "captures-wgpu-workbench"
 [patch.crates-io]
 winit = { path = "vendor/winit" }
 smithay-client-toolkit = { path = "vendor/sctk" }
+global-hotkey = { path = "../../../crates/vendor/global-hotkey" }
 
 [patch."https://github.com/emilk/egui"]
 eframe = { path = "vendor/eframe" }

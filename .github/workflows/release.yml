@@ -186,7 +186,9 @@ jobs:
             libxdo-dev \
             libxrandr-dev \
             pkg-config \
-            wget
+            wget \
+            xauth \
+            xvfb
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -197,6 +199,11 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo check --workspace --all-targets
       - run: cargo test --workspace
+      - name: Return Escape to other X11 applications after capture
+        if: runner.os == 'Linux'
+        run: >-
+          env -u WAYLAND_DISPLAY CAPTURES_TEST_PRIVATE_X11=1 xvfb-run -a
+          cargo test -p captures-app --test escape_hotkey -- --ignored
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
   prepare:

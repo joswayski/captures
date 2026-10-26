@@ -114,6 +114,59 @@ pub const fn recording_prep_must_disarm_escape_intent() -> bool {
     true
 }
 
+/// One physical Escape press owns at most one cancellation. Consume its matching
+/// release, but fail open on the next press even if host cleanup never arrives.
+#[cfg(any(target_os = "windows", test))]
+#[derive(Default)]
+struct EscapeKeyState {
+    enabled: std::sync::atomic::AtomicBool,
+    pressed: std::sync::atomic::AtomicBool,
+}
+
+#[cfg(any(target_os = "windows", test))]
+#[derive(Debug, Eq, PartialEq)]
+enum EscapeKeyAction {
+    PassThrough,
+    Swallow,
+    Cancel,
+}
+
+#[cfg(any(target_os = "windows", test))]
+impl EscapeKeyState {
+    const fn new() -> Self {
+        Self {
+            enabled: std::sync::atomic::AtomicBool::new(false),
+            pressed: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    fn set_enabled(&self, enabled: bool) {
+        self.enabled
+            .store(enabled, std::sync::atomic::Ordering::Release);
+    }
+
+    fn key_event(&self, down: bool) -> EscapeKeyAction {
+        use std::sync::atomic::Ordering;
+
+        if !down {
+            return if self.pressed.swap(false, Ordering::AcqRel) {
+                EscapeKeyAction::Swallow
+            } else {
+                EscapeKeyAction::PassThrough
+            };
+        }
+        if self.pressed.load(Ordering::Acquire) {
+            return EscapeKeyAction::Swallow;
+        }
+        if self.enabled.swap(false, Ordering::AcqRel) {
+            self.pressed.store(true, Ordering::Release);
+            EscapeKeyAction::Cancel
+        } else {
+            EscapeKeyAction::PassThrough
+        }
+    }
+}
+
 #[cfg(target_os = "windows")]
 mod windows_hook {
     use std::{
@@ -121,7 +174,7 @@ mod windows_hook {
         ptr,
         sync::{
             Mutex, OnceLock,
-            atomic::{AtomicBool, AtomicPtr, Ordering},
+            atomic::{AtomicPtr, Ordering},
         },
     };
 
@@ -133,10 +186,9 @@ mod windows_hook {
         },
     };
 
-    use super::WINDOWS_VK_ESCAPE;
+    use super::{EscapeKeyAction, EscapeKeyState, WINDOWS_VK_ESCAPE};
 
-    static ENABLED: AtomicBool = AtomicBool::new(false);
-    static SWALLOWED: AtomicBool = AtomicBool::new(false);
+    static KEYS: EscapeKeyState = EscapeKeyState::new();
     static HOOK: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
     static INSTALL: Mutex<()> = Mutex::new(());
     type Handler = fn();
@@ -153,10 +205,7 @@ mod windows_hook {
     }
 
     pub fn set_enabled(enabled: bool) {
-        ENABLED.store(enabled, Ordering::Release);
-        if !enabled {
-            SWALLOWED.store(false, Ordering::Release);
-        }
+        KEYS.set_enabled(enabled);
     }
 
     pub fn ensure_hook() -> Result<(), String> {
@@ -182,10 +231,7 @@ mod windows_hook {
     }
 
     extern "system" fn capture_escape_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-        if code >= 0
-            && super::windows_escape_hook_should_swallow(ENABLED.load(Ordering::Acquire))
-            && should_handle(wparam, lparam)
-        {
+        if code >= 0 && should_handle(wparam, lparam) {
             return 1;
         }
         unsafe { CallNextHookEx(ptr::null_mut(), code, wparam, lparam) }
@@ -205,22 +251,61 @@ mod windows_hook {
         if !is_down && !is_up {
             return false;
         }
-        if is_down {
-            if !ENABLED.load(Ordering::Acquire) {
-                return false;
+        match KEYS.key_event(is_down) {
+            EscapeKeyAction::PassThrough => false,
+            EscapeKeyAction::Swallow => true,
+            EscapeKeyAction::Cancel => {
+                // Never hold a mutex across host cancellation, or wait for a
+                // handler update inside the system-wide keyboard hook.
+                let handler = handler_slot().try_lock().ok().and_then(|slot| *slot);
+                if let Some(handler) = handler {
+                    handler();
+                    true
+                } else {
+                    let _ = KEYS.key_event(false);
+                    false
+                }
             }
-            dispatch();
-            SWALLOWED.store(true, Ordering::Release);
-            return true;
         }
-        SWALLOWED.swap(false, Ordering::AcqRel)
     }
 
-    fn dispatch() {
-        if let Ok(slot) = handler_slot().lock()
-            && let Some(handler) = *slot
-        {
-            handler();
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::sync::atomic::AtomicUsize;
+
+        #[test]
+        fn hook_filters_input_and_releases_escape_after_cancellation() {
+            static CANCELS: AtomicUsize = AtomicUsize::new(0);
+            fn cancel() {
+                CANCELS.fetch_add(1, Ordering::Relaxed);
+                // Native hosts may clear the callback during cancellation.
+                // This must not deadlock against the hook's handler mutex.
+                set_handler(None);
+                set_enabled(false);
+            }
+            let event = |message: u32, vk: u32, flags: u32| {
+                let info = KBDLLHOOKSTRUCT {
+                    vkCode: vk,
+                    flags,
+                    ..Default::default()
+                };
+                should_handle(message as WPARAM, &info as *const _ as LPARAM)
+            };
+            set_handler(Some(cancel));
+            set_enabled(true);
+            assert!(!event(WM_KEYDOWN, 0x41, 0));
+            assert!(!event(WM_KEYDOWN, WINDOWS_VK_ESCAPE, LLKHF_INJECTED));
+            assert!(event(WM_SYSKEYDOWN, WINDOWS_VK_ESCAPE, 0));
+            assert!(event(WM_KEYDOWN, WINDOWS_VK_ESCAPE, 0));
+            assert!(event(WM_SYSKEYUP, WINDOWS_VK_ESCAPE, 0));
+            assert_eq!(CANCELS.load(Ordering::Relaxed), 1);
+            assert!(!event(WM_KEYDOWN, WINDOWS_VK_ESCAPE, 0));
+            assert!(!event(WM_KEYUP, WINDOWS_VK_ESCAPE, 0));
+
+            set_enabled(true);
+            assert!(!event(WM_KEYDOWN, WINDOWS_VK_ESCAPE, 0), "no handler");
+            assert!(!event(WM_KEYUP, WINDOWS_VK_ESCAPE, 0));
         }
     }
 }
@@ -331,6 +416,48 @@ mod tests {
     fn windows_escape_hook_never_swallows_while_disarmed() {
         assert!(windows_escape_hook_should_swallow(true));
         assert!(!windows_escape_hook_should_swallow(false));
+    }
+
+    #[test]
+    fn windows_escape_returns_to_other_apps_without_waiting_for_cleanup() {
+        use super::{EscapeKeyAction::*, EscapeKeyState};
+
+        let keys = EscapeKeyState::new();
+        assert_eq!(keys.key_event(true), PassThrough);
+        assert_eq!(keys.key_event(false), PassThrough);
+
+        keys.set_enabled(true);
+        assert_eq!(keys.key_event(true), Cancel);
+        assert_eq!(
+            keys.key_event(true),
+            Swallow,
+            "repeat must not cancel twice"
+        );
+        assert_eq!(keys.key_event(false), Swallow);
+        // Simulate delayed/missing host cleanup: no set_enabled(false) call.
+        assert_eq!(keys.key_event(true), PassThrough);
+        assert_eq!(keys.key_event(false), PassThrough);
+
+        keys.set_enabled(true);
+        assert_eq!(keys.key_event(true), Cancel, "a new capture can cancel");
+        keys.set_enabled(false);
+        assert_eq!(keys.key_event(true), Swallow);
+        assert_eq!(
+            keys.key_event(false),
+            Swallow,
+            "do not leak an orphan key-up"
+        );
+        assert_eq!(keys.key_event(true), PassThrough);
+        assert_eq!(keys.key_event(false), PassThrough);
+
+        keys.set_enabled(true);
+        keys.set_enabled(false);
+        assert_eq!(
+            keys.key_event(true),
+            PassThrough,
+            "capture finished by mouse"
+        );
+        assert_eq!(keys.key_event(false), PassThrough);
     }
 
     #[test]

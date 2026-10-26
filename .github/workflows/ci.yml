@@ -158,6 +158,11 @@ jobs:
           xvfb-run -a -s '-screen 0 640x480x24 -nolisten tcp -noreset'
           cargo test -p captures-recording-platform
           private_x11_records_pause_resume_pixels_and_cancelled_start -- --ignored
+      - name: Return Escape to other X11 applications after capture
+        if: runner.os == 'Linux'
+        run: >-
+          env -u WAYLAND_DISPLAY CAPTURES_TEST_PRIVATE_X11=1 xvfb-run -a
+          cargo test -p captures-app --test escape_hotkey -- --ignored
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
   macos-app:
