@@ -1169,6 +1169,61 @@ def main():
             run("xdotool", "mousemove", "--sync", "--window", editor,
                 str(size[0] - 360), "200", "click", "--repeat", "2", "--delay", "80", "1", "sleep", ".4")
             check_width("inspector-reset", default)
+
+            def focus_divider(width):
+                # Locate actual Tab focus by the stock token ring on both sides
+                # of the divider. No private focus API or assumed Tab count.
+                run("xdotool", "mousemove", "--sync", "--window", editor, "100", str(size[1] - 100))
+                for _ in range(80):
+                    run("xdotool", "key", "Tab", "sleep", ".1")
+                    shot(editor, "inspector-tab-focus")
+                    row = run("convert", str(output / "inspector-tab-focus.png"), "-crop",
+                              f"25x1+{size[0] - width - 12}+{size[1] - 100}", "-depth", "8", "rgb:-")
+                    left = any(row[x * 3:x * 3 + 3] != row[:3] for x in range(2, 10))
+                    right = any(row[x * 3:x * 3 + 3] != row[-3:] for x in range(15, 23))
+                    if left and right:
+                        return
+                raise AssertionError("Tab never reached the inspector divider")
+
+            def keyboard_width(name, keys, width):
+                run("xdotool", "key", *keys, "sleep", ".2")
+                shot(editor, f"{name}-focused")
+                # Tab away removes only the ring, letting the existing exact
+                # one-pixel divider oracle check width. Shift-Tab returns to it.
+                run("xdotool", "key", "Tab", "sleep", ".2")
+                check_width(name, width)
+                run("xdotool", "key", "shift+Tab", "sleep", ".2")
+                assert window_size() == size
+                assert draft_bytes() == before, "divider keys must not edit the document"
+
+            focus_divider(default)
+            recording = spawn("inspector-keyboard-recording", ["ffmpeg", "-y", "-loglevel", "error",
+                "-f", "x11grab", "-framerate", "20", "-video_size", "1400x1200",
+                "-i", env["DISPLAY"], "-c:v", "libx264", "-preset", "veryfast",
+                "-crf", "23", "-pix_fmt", "yuv420p", str(output / "inspector-keyboard.mp4")])
+            for x in [size[0] - default - 40, size[0] - default, size[0] - default + 40]:
+                run("xdotool", "mousemove", "--sync", "--window", editor, str(x), "200", "sleep", ".3")
+            keyboard_width("inspector-key-left", ["Left"], default + 10)
+            keyboard_width("inspector-key-shift-left", ["shift+Left"], default + 50)
+            keyboard_width("inspector-key-right", ["Right"], default + 40)
+            keyboard_width("inspector-key-shift-right", ["shift+Right"], default)
+            keyboard_width("inspector-key-minimum", ["Home", "Right"], 280)
+            keyboard_width("inspector-key-maximum", ["End", "Left"], maximum)
+            keyboard_width("inspector-key-reset", ["Return"], default)
+            # Keyboard clamping starts from displayed width, not the retained
+            # wider preference. Explicit input replaces that preference.
+            keyboard_width("inspector-key-retained", ["End"], maximum)
+            run("xdotool", "windowsize", "--sync", editor, "760", str(size[1]), "sleep", ".5")
+            size = window_size()
+            keyboard_width("inspector-key-window-clamped", ["Right"], 318)
+            run("xdotool", "windowsize", "--sync", editor, *map(str, original_size), "sleep", ".5")
+            size = window_size()
+            keyboard_width("inspector-key-window-restored", ["Up", "Delete", "ctrl+z"], 318)
+            keyboard_width("inspector-key-final-reset", ["Return"], default)
+            run("xdotool", "key", "Tab", "sleep", ".2")
+            recording.send_signal(signal.SIGINT)
+            recording.wait(timeout=10)
+            assert recording.returncode in (0, 255)
             resize_from(default, 320)
             toolbar_click("draw")
             draw_tool("text")
@@ -1198,7 +1253,12 @@ def main():
             type_text(" focus", 1)
             wait(lambda: text_saved("Inspector focus"), "inspector field keeps typing focus after resizing")
             check_width("inspector-field-focus-minimum", 280, y=110)
-            print("PASS native inspector: limits, reset, shrink/restore, fixed window, unchanged document, inline focus")
+            before = draft_bytes()
+            focus_divider(280)
+            run("xdotool", "key", "Delete", "Up", "ctrl+z", "ctrl+d", "sleep", "1.2")
+            assert draft_bytes() == before, "focused divider must not delete, nudge, undo or duplicate text"
+            print("PASS native inspector: pointer/keyboard limits, reset, shrink/restore, Tab focus, "
+                  "fixed window, unchanged document, inline and field focus")
             return
 
         def saved(width, height, x, y):

@@ -427,6 +427,213 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(worker.encodes.count, 1)
     }
 
+    func testInspectorDividerKeyboardWidthAccessibilityAndResetBreakpoints() throws {
+        _ = NSApplication.shared
+        let original = snapshot(id: "shot", unsaved: true, canRedo: true)
+        let worker = FakeEditorWorker(snapshot: original)
+        let controller = fittedController(worker)
+        defer { controller.window.orderOut(nil) }
+        let divider = try XCTUnwrap(descendants(in: controller.root)
+            .first { $0.accessibilityLabel() == "Resize properties panel" })
+        let panel = try XCTUnwrap(descendants(in: controller.root)
+            .first { $0.accessibilityLabel() == "Layer controls" })
+        controller.window.setContentSize(NSSize(width: 1200, height: 600))
+        controller.windowDidResize(Notification(name: NSWindow.didResizeNotification))
+        XCTAssertTrue(divider.acceptsFirstResponder)
+        XCTAssertTrue(controller.window.makeFirstResponder(divider))
+        XCTAssertEqual(divider.focusRingType, .exterior)
+        XCTAssertEqual(divider.focusRingMaskBounds, divider.bounds)
+        XCTAssertEqual(divider.accessibilityRole(), .splitter)
+        XCTAssertEqual(divider.accessibilityOrientation(), .vertical)
+        XCTAssertEqual((divider.accessibilityMinValue() as? NSNumber)?.intValue, 280)
+        XCTAssertEqual((divider.accessibilityMaxValue() as? NSNumber)?.intValue, 480)
+
+        func press(_ code: UInt16, _ characters: String, width: CGFloat,
+                   shift: Bool = false, file: StaticString = #filePath, line: UInt = #line) throws {
+            let frame = controller.window.frame
+            controller.window.sendEvent(try keyEvent(window: controller.window, keyCode: code,
+                characters: characters, modifiers: shift ? .shift : []))
+            XCTAssertEqual(controller.root.bounds.width - divider.frame.midX, width, file: file, line: line)
+            XCTAssertEqual(panel.frame.width + 12, width, file: file, line: line)
+            XCTAssertEqual((divider.accessibilityValue() as? NSNumber)?.doubleValue,
+                           Double(width), file: file, line: line)
+            XCTAssertEqual(divider.accessibilityValueDescription(), "\(Int(width)) pixels wide", file: file, line: line)
+            XCTAssertEqual(controller.window.frame, frame, file: file, line: line)
+            XCTAssertTrue(controller.window.firstResponder === divider, file: file, line: line)
+        }
+        try press(123, "\u{f702}", width: 290)
+        try press(123, "\u{f702}", width: 330, shift: true)
+        try press(124, "\u{f703}", width: 320)
+        try press(124, "\u{f703}", width: 280, shift: true)
+        try press(124, "\u{f703}", width: 280)
+        try press(119, "\u{f72b}", width: 480)
+        try press(123, "\u{f702}", width: 480, shift: true)
+        try press(115, "\u{f729}", width: 280)
+        try press(36, "\r", width: 320)
+        try press(119, "\u{f72b}", width: 480)
+        try press(76, "\u{3}", width: 320)
+        for (windowWidth, resetWidth) in [(1040.0, 280.0), (1041.0, 320.0)] {
+            controller.window.setContentSize(NSSize(width: windowWidth, height: 600))
+            controller.windowDidResize(Notification(name: NSWindow.didResizeNotification))
+            try press(36, "\r", width: CGFloat(resetWidth))
+        }
+        XCTAssertTrue(divider.accessibilityPerformIncrement())
+        XCTAssertEqual((divider.accessibilityValue() as? NSNumber)?.intValue, 330)
+        XCTAssertTrue(divider.accessibilityPerformDecrement())
+        XCTAssertEqual((divider.accessibilityValue() as? NSNumber)?.intValue, 320)
+        XCTAssertEqual(controller.state.snapshot, original)
+        XCTAssertTrue(worker.requests.isEmpty && worker.saves.isEmpty && worker.encodes.isEmpty)
+    }
+
+    func testInspectorDividerNarrowBoundsRetainPreferenceUntilExplicitResize() throws {
+        _ = NSApplication.shared
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
+        let controller = fittedController(worker)
+        defer { controller.window.orderOut(nil) }
+        let divider = try XCTUnwrap(descendants(in: controller.root)
+            .first { $0.accessibilityLabel() == "Resize properties panel" })
+        XCTAssertTrue(controller.window.makeFirstResponder(divider))
+        func windowWidth(_ width: CGFloat, inspector: CGFloat, maximum: Int) {
+            controller.window.setContentSize(NSSize(width: width, height: 600))
+            controller.windowDidResize(Notification(name: NSWindow.didResizeNotification))
+            XCTAssertEqual(controller.root.bounds.width - divider.frame.midX, inspector)
+            XCTAssertEqual((divider.accessibilityValue() as? NSNumber)?.doubleValue, Double(inspector))
+            XCTAssertEqual((divider.accessibilityMaxValue() as? NSNumber)?.intValue, maximum)
+        }
+        let end = try keyEvent(window: controller.window, keyCode: 119, characters: "\u{f72b}")
+        controller.window.sendEvent(end)
+        windowWidth(1200, inspector: 480, maximum: 480)
+        windowWidth(760, inspector: 316, maximum: 316)
+        windowWidth(1200, inspector: 480, maximum: 480)
+        windowWidth(760, inspector: 316, maximum: 316)
+        let frame = controller.window.frame
+        controller.window.sendEvent(end)
+        XCTAssertEqual(controller.window.frame, frame)
+        windowWidth(1200, inspector: 316, maximum: 480) // End uses today's constrained max, not 480.
+        windowWidth(760, inspector: 316, maximum: 316)
+        let left = try keyEvent(window: controller.window, keyCode: 123, characters: "\u{f702}", modifiers: .shift)
+        for _ in 0..<3 { controller.window.sendEvent(left) }
+        XCTAssertEqual(controller.root.bounds.width - divider.frame.midX, 316)
+        windowWidth(1200, inspector: 316, maximum: 480)
+        windowWidth(760, inspector: 316, maximum: 316)
+        XCTAssertTrue(divider.accessibilityPerformIncrement())
+        windowWidth(1200, inspector: 316, maximum: 480)
+        windowWidth(760, inspector: 316, maximum: 316)
+        controller.window.sendEvent(try keyEvent(window: controller.window, keyCode: 124, characters: "\u{f703}"))
+        XCTAssertEqual(controller.root.bounds.width - divider.frame.midX, 306, "steps start at actual, not preferred width")
+        controller.window.sendEvent(try keyEvent(window: controller.window, keyCode: 115, characters: "\u{f729}"))
+        XCTAssertEqual(controller.root.bounds.width - divider.frame.midX, 280)
+        controller.window.sendEvent(end)
+        controller.window.sendEvent(try keyEvent(window: controller.window, keyCode: 36, characters: "\r"))
+        XCTAssertEqual(controller.root.bounds.width - divider.frame.midX, 280)
+        XCTAssertEqual(controller.window.frame, frame)
+        XCTAssertTrue(worker.requests.isEmpty && worker.saves.isEmpty && worker.encodes.isEmpty)
+    }
+
+    func testFocusedInspectorDividerOwnsDocumentKeysButAllowsTabTraversal() throws {
+        _ = NSApplication.shared
+        let original = snapshot(id: "shot", unsaved: true, canRedo: true, layers: [
+            layer(id: "front", name: "Front", x: 8, y: 21, visible: true, locked: false, opacity: 100),
+        ])
+        let worker = FakeEditorWorker(snapshot: original)
+        let controller = fittedController(worker)
+        defer { controller.window.orderOut(nil) }
+        try showLayers(in: controller.root)
+        let divider = try XCTUnwrap(descendants(in: controller.root)
+            .first { $0.accessibilityLabel() == "Resize properties panel" })
+        XCTAssertTrue(controller.keyViewOrder.contains { $0 === divider })
+        let previous = try XCTUnwrap(divider.previousValidKeyView)
+        XCTAssertTrue(controller.window.makeFirstResponder(previous))
+        controller.window.selectNextKeyView(nil)
+        XCTAssertTrue(controller.window.firstResponder === divider, "the real key loop reaches the divider")
+        let frame = controller.window.frame
+        let viewport = controller.viewport
+        let events: [(UInt16, String, NSEvent.ModifierFlags)] = [
+            (123, "\u{f702}", []), (124, "\u{f703}", []),
+            (125, "\u{f701}", []), (126, "\u{f700}", .shift),
+            (51, "\u{7f}", []), (117, "\u{f728}", []), (53, "\u{1b}", []),
+            (35, "p", []), (2, "d", .command), (6, "z", .command), (6, "z", [.command, .shift]),
+            (8, "c", .command), (9, "v", .command), (24, "+", .command), (27, "-", .command),
+        ]
+        for (code, characters, modifiers) in events {
+            let event = try keyEvent(window: controller.window, keyCode: code, characters: characters, modifiers: modifiers)
+            XCTAssertTrue(controller.window.performKeyEquivalent(with: event))
+            controller.window.sendEvent(event)
+        }
+        XCTAssertEqual(controller.selectionOverlay.selectedLayerID, "front")
+        XCTAssertEqual(try segmented("Editor section", in: controller.root).selectedSegment, 1)
+        XCTAssertEqual(controller.state.snapshot, original)
+        XCTAssertEqual(controller.viewport, viewport)
+        XCTAssertEqual(controller.window.frame, frame)
+        XCTAssertTrue(worker.requests.isEmpty && worker.saves.isEmpty && worker.encodes.isEmpty)
+
+        for modifiers in [NSEvent.ModifierFlags(), .shift] {
+            XCTAssertTrue(controller.window.makeFirstResponder(divider))
+            let tab = try keyEvent(window: controller.window, keyCode: 48, characters: "\t", modifiers: modifiers)
+            XCTAssertFalse(controller.window.performKeyEquivalent(with: tab))
+            controller.window.sendEvent(tab)
+            XCTAssertFalse(controller.window.firstResponder === divider, "Tab and Shift-Tab must leave the divider")
+        }
+    }
+
+    func testInspectorPointerResizeAndDoubleClickPreserveFieldAndInlineTextFocus() throws {
+        _ = NSApplication.shared
+        for inline in [false, true] {
+            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
+            worker.response = { request in
+                guard ["begin_text_input", "update_text_input"].contains(request["operation"] as? String ?? "")
+                    else { return nil }
+                return self.snapshot(id: "shot",
+                    layers: [self.textLayer(id: "fresh", text: request["text"] as? String ?? "")],
+                    activeTextInput: ["input_id": request["input_id"] as! String,
+                                      "layer_id": "fresh", "is_new": true])
+            }
+            let controller = fittedController(worker)
+            defer { controller.window.orderOut(nil) }
+            let editor: NSTextView
+            if inline {
+                try button("Text (T)", in: controller.root).performClick(nil)
+                let point = NSPoint(x: controller.presentedImageRect.midX, y: controller.presentedImageRect.midY)
+                controller.drawOverlay.begin(at: point); controller.drawOverlay.end(at: point)
+                try typeInline("Uncommitted text", in: controller)
+                editor = try textView("Edit text on canvas", in: controller.root)
+            } else {
+                try showGeometry(in: controller.root)
+                XCTAssertTrue(controller.window.makeFirstResponder(try field("Canvas width", in: controller.root)))
+                editor = try XCTUnwrap(controller.window.firstResponder as? NSTextView)
+            }
+            editor.setSelectedRange(NSRange(location: 1, length: 2))
+            let text = editor.string, selection = editor.selectedRange()
+            let original = controller.state.snapshot, requests = worker.requests.count
+            let frame = controller.window.frame
+            let divider = try XCTUnwrap(descendants(in: controller.root)
+                .first { $0.accessibilityLabel() == "Resize properties panel" })
+            let start = divider.convert(NSPoint(x: divider.bounds.midX, y: divider.bounds.midY), to: nil)
+            func mouse(_ type: NSEvent.EventType, point: NSPoint, clicks: Int = 1) throws -> NSEvent {
+                try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: 0,
+                    windowNumber: controller.window.windowNumber, context: nil, eventNumber: 0,
+                    clickCount: clicks, pressure: 1))
+            }
+            controller.window.sendEvent(try mouse(.leftMouseDown, point: start))
+            let dragged = NSPoint(x: start.x - 40.5, y: start.y)
+            controller.window.sendEvent(try mouse(.leftMouseDragged, point: dragged))
+            controller.window.sendEvent(try mouse(.leftMouseUp, point: dragged))
+            XCTAssertEqual(controller.root.bounds.width - divider.frame.midX, 320.5)
+            XCTAssertEqual(divider.accessibilityValueDescription(), "320.5 pixels wide")
+            controller.window.sendEvent(try mouse(.leftMouseDown, point: dragged, clicks: 2))
+            controller.window.sendEvent(try mouse(.leftMouseUp, point: dragged, clicks: 2))
+            XCTAssertEqual(controller.root.bounds.width - divider.frame.midX, 280)
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.02)) // Flush any accidental inline blur callback.
+            XCTAssertTrue(controller.window.firstResponder === editor)
+            XCTAssertEqual(editor.string, text)
+            XCTAssertEqual(editor.selectedRange(), selection)
+            XCTAssertEqual(controller.state.snapshot, original)
+            XCTAssertEqual(worker.requests.count, requests, "resizing must not finish an inline text transaction")
+            XCTAssertEqual(controller.window.frame, frame)
+            XCTAssertTrue(worker.saves.isEmpty && worker.encodes.isEmpty)
+        }
+    }
+
     func testArrowNudgesKeepTypingLocksAndOneAcceptedCommand() throws {
         _ = NSApplication.shared
         let hidden = layer(id: "hidden", name: "Hidden", x: 8, y: 21,
