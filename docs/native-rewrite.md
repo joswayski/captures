@@ -4739,6 +4739,20 @@ Below 1000 points wide, AppKit moves canvas dimensions to a second footer row;
 the inspector retains its width and scrolling access to every section's controls.
 Windows/X11/Wayland keep their existing responsive layout; physical resize/input
 acceptance remains open on all hosts.
+Both native screenshot inspectors now expose a Tab-focusable vertical divider
+named "Resize properties panel", with the actual width and window-constrained
+minimum/maximum available to accessibility. Left/Right grow/shrink by 10 points,
+Shift uses 40, Home/End select the bounds, and Enter resets to 280 at window widths
+up to 1040 or 320 above it. AppKit and AccessKit increment/decrement use 10;
+AccessKit also accepts finite SetValue requests. Explicit adjustments clamp from
+the displayed width; merely shrinking a window preserves the wider preference.
+Focused-divider keys do not edit layers or invoke document/viewport shortcuts.
+Pointer dragging and double-click reset keep the active text field focused.
+AppKit uses its native focus ring; wgpu uses the existing token focus ring.
+Host tests cover keyboard order, width limits, preference retention and assistive
+values; the X11 inspector smoke covers real Tab/arrow input, exact divider pixels,
+unchanged draft bytes and pointer resizing during text entry. Physical macOS,
+Windows, Wayland and screen-reader acceptance remain open.
 Both hosts replace the pinned Copy/Save footer and Output section with the
 shipping-style bottom export bar, available in Geometry, Layers and Draw at every
 size down to 760×540 (the default AppKit window grows to 1000×780 to keep the
