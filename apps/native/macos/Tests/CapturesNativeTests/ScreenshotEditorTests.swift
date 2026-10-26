@@ -5871,8 +5871,9 @@ final class ScreenshotEditorTests: XCTestCase {
         // Draw with the export settings (and so the comparison) still open.
         let sections = try segmented("Editor section", in: controller.root)
         sections.selectedSegment = 2; _ = sections.sendAction(sections.action, to: sections.target)
-        XCTAssertTrue(controller.window.firstResponder === controller.drawOverlay,
-                      "changing tools must not leave focus on the divider")
+        XCTAssertFalse(controller.selectionOverlay.isHidden, "Shapes retains transform controls")
+        XCTAssertTrue(controller.window.firstResponder === controller.selectionOverlay,
+                      "the still-visible overlay keeps focus rather than advancing to the divider")
         worker.response = { request in
             guard request["operation"] as? String == "paste_layer",
                   let id = request["new_id"] as? String else { return nil }
