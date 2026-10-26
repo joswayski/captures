@@ -270,16 +270,12 @@ fn quiet_button(
     enabled: bool,
 ) -> egui::Response {
     let side = model::HEADER_CONTROL as f32;
-    // Register the final sense once: a disabled button must not take and
-    // immediately surrender Tab focus, trapping traversal before the inspector.
-    let (rect, response) = ui.allocate_exact_size(
-        Vec2::splat(side),
-        if enabled {
-            Sense::click()
-        } else {
-            Sense::hover()
-        },
-    );
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(side), Sense::click());
+    let response = if enabled {
+        response
+    } else {
+        ui.interact(rect, response.id, Sense::hover())
+    };
     let hovered = enabled && response.hovered();
     if hovered {
         ui.painter()
@@ -312,14 +308,12 @@ fn add_images(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, enabled: bool
         2. * tokens.number("s-5") + 16. + gap + text.size().x,
         model::HEADER_CONTROL as f32,
     );
-    let (rect, response) = ui.allocate_exact_size(
-        size,
-        if enabled {
-            Sense::click()
-        } else {
-            Sense::hover()
-        },
-    );
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let response = if enabled {
+        response
+    } else {
+        ui.interact(rect, response.id, Sense::hover())
+    };
     let hovered = enabled && response.hovered();
     ui.painter().rect(
         rect,
@@ -1211,14 +1205,12 @@ pub(super) fn show_tool_rail(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View
                         ),
                         _ => shape.is_none_or(|shape| view.draw_shape == shape),
                     };
-                let (rect, response) = ui.allocate_exact_size(
-                    Vec2::splat(button),
-                    if enabled {
-                        Sense::click()
-                    } else {
-                        Sense::hover()
-                    },
-                );
+                let (rect, response) = ui.allocate_exact_size(Vec2::splat(button), Sense::click());
+                let response = if enabled {
+                    response
+                } else {
+                    ui.interact(rect, response.id, Sense::hover())
+                };
                 let name = if tool.key == model::SHAPES_KEY {
                     model::shapes_tooltip(shape_key(if view.draw_shape.is_grouped() {
                         view.draw_shape

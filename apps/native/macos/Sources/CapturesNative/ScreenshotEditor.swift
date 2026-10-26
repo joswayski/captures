@@ -1,58 +1,11 @@
 import AppKit
 import UniformTypeIdentifiers
 
-/// Keyboard-focusable, but pointer resizing never commits the active field editor.
+/// A non-focus-stealing splitter: dragging never commits the active field editor.
 private final class EditorInspectorDivider: NSView {
     var resize: (CGFloat?) -> Void = { _ in }
     var borderColor: NSColor = .clear { didSet { needsDisplay = true } }
-    private var inspectorWidth: CGFloat = 280
-    private var maximumWidth: CGFloat = 480
     private var lastX: CGFloat = 0
-    override var acceptsFirstResponder: Bool { true }
-    override func becomeFirstResponder() -> Bool {
-        let accepted = super.becomeFirstResponder()
-        needsDisplay = true; return accepted
-    }
-    override func resignFirstResponder() -> Bool {
-        let accepted = super.resignFirstResponder()
-        needsDisplay = true; return accepted
-    }
-    override func drawFocusRingMask() { bounds.fill() }
-    override var focusRingMaskBounds: NSRect { bounds }
-
-    /// The window calls this before its canvas/document shortcuts. Consume
-    /// every key except Tab, just like the shipping separator's stopPropagation.
-    func handleShortcut(_ event: NSEvent) -> Bool {
-        let step: CGFloat = event.modifierFlags.contains(.shift) ? 40 : 10
-        switch event.keyCode {
-        case 48: return false
-        case 123: resize(min(step, maximumWidth - inspectorWidth))
-        case 124: resize(max(-step, 280 - inspectorWidth))
-        case 115: resize(280 - inspectorWidth)
-        case 119: resize(maximumWidth - inspectorWidth)
-        case 36, 76: resize(nil)
-        default: break
-        }
-        return true
-    }
-    override func keyDown(with event: NSEvent) {
-        guard !handleShortcut(event) else { return }
-        if event.modifierFlags.contains(.shift) { window?.selectPreviousKeyView(self) }
-        else { window?.selectNextKeyView(self) }
-    }
-
-    func updateWidth(_ width: CGFloat, maximum: CGFloat) {
-        let changed = inspectorWidth != width
-        inspectorWidth = width; maximumWidth = maximum
-        setAccessibilityOrientation(.vertical)
-        setAccessibilityMinValue(NSNumber(value: 280))
-        setAccessibilityMaxValue(NSNumber(value: Double(maximum)))
-        setAccessibilityValue(NSNumber(value: Double(width)))
-        let description = width == width.rounded() ? String(Int(width)) : String(Double(width))
-        setAccessibilityValueDescription("\(description) pixels wide")
-        if changed { NSAccessibility.post(element: self, notification: .valueChanged) }
-    }
-
     override func resetCursorRects() { addCursorRect(bounds, cursor: .resizeLeftRight) }
     override func mouseDown(with event: NSEvent) {
         lastX = event.locationInWindow.x
@@ -65,13 +18,9 @@ private final class EditorInspectorDivider: NSView {
     }
     override func isAccessibilityElement() -> Bool { true }
     override func accessibilityRole() -> NSAccessibility.Role? { .splitter }
-    override func accessibilityLabel() -> String? { "Resize properties panel" }
-    override func accessibilityPerformIncrement() -> Bool {
-        resize(min(10, maximumWidth - inspectorWidth)); return true
-    }
-    override func accessibilityPerformDecrement() -> Bool {
-        resize(max(-10, 280 - inspectorWidth)); return true
-    }
+    override func accessibilityLabel() -> String? { "Inspector width" }
+    override func accessibilityPerformIncrement() -> Bool { resize(16); return true }
+    override func accessibilityPerformDecrement() -> Bool { resize(-16); return true }
     override func draw(_ dirtyRect: NSRect) {
         borderColor.setFill()
         NSRect(x: bounds.midX, y: 0, width: 1, height: bounds.height).fill()
@@ -2127,9 +2076,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 rememberInspectorFrames(panel)
             }
             preferredInspectorWidth = root.bounds.width <= 1040 ? 280 : 320
-            // Include the divider before the inspector in the explicit Tab loop.
-            root.addSubview(inspectorDivider, positioned: .below, relativeTo: layersPanel)
-            inspectorDivider.focusRingType = .exterior
+            root.addSubview(inspectorDivider)
             inspectorDivider.resize = { [weak self] delta in
                 guard let self else { return }
                 self.preferredInspectorWidth = delta.map { min(480, max(280, self.inspectorWidth + $0)) }
@@ -2138,9 +2085,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             }
         }
         let canvasGaps = tokens.number("s-5") + tokens.number("s-6")
-        let maximumWidth = min(480, max(280, root.bounds.width - 416 - canvasGaps))
-        inspectorWidth = min(preferredInspectorWidth, maximumWidth)
-        inspectorDivider.updateWidth(inspectorWidth, maximum: maximumWidth)
+        inspectorWidth = min(preferredInspectorWidth, min(480, max(280,
+            root.bounds.width - 416 - canvasGaps)))
         let previousWidth = layersPanel.frame.width + Self.panelInset
         if previousWidth != inspectorWidth {
             let delta = inspectorWidth - Self.sidebarWidth
@@ -5734,7 +5680,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private func handleEditorShortcut(_ event: NSEvent) -> Bool {
         guard event.type == .keyDown else { return false }
         if draining { return true }
-        if window.firstResponder === inspectorDivider { return inspectorDivider.handleShortcut(event) }
         if event.keyCode == 53, shapeFlyout?.isHidden == false {
             showShapeFlyout(false)
             return true

@@ -2384,13 +2384,8 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     view.flush_live(tx);
     view.drive_autosave(ui.ctx(), tx);
     let previous_section = view.section;
-    let inspector_id = ui.scope_id().with_salt("editor-geometry".into());
-    let resize_id = inspector_id.with("__resize");
-    // Shipping's focused separator owns keys without editing the document.
-    if !ui.memory(|memory| memory.has_focus(resize_id)) {
-        handle_viewport_shortcuts(ui.ctx(), view);
-        handle_document_shortcuts(ui.ctx(), view, tx);
-    }
+    handle_viewport_shortcuts(ui.ctx(), view);
+    handle_document_shortcuts(ui.ctx(), view, tx);
     crate::clipboard_input::clear(ui.ctx());
     egui::Panel::top("editor-actions")
         .resizable(false)
@@ -2432,78 +2427,12 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     } else {
         320.
     };
+    let inspector_id = ui.scope_id().with_salt("editor-geometry".into());
     let preference_id = inspector_id.with("preferred-width");
-    let mut preferred_width = ui
+    let preferred_width = ui
         .ctx()
         .data_mut(|data| *data.get_temp_mut_or_insert_with(preference_id, || inspector_default));
-    let resize_response = ui.read_response(resize_id);
-    if ui.is_enabled() && !view.close_requested {
-        use egui::accesskit::{Action, ActionData, TreeId};
-        let focused = ui.memory(|memory| memory.has_focus(resize_id));
-        let mut width = preferred_width.clamp(280., inspector_max);
-        let mut requested = false;
-        let mut owns_key = false;
-        ui.input_mut(|input| {
-            let keyboard = focused && input.focused;
-            input.events.retain(|event| {
-                let next = match event {
-                    egui::Event::Key {
-                        key,
-                        pressed: true,
-                        modifiers,
-                        ..
-                    } if keyboard => {
-                        if *key == egui::Key::Tab {
-                            return true;
-                        }
-                        owns_key = true;
-                        let step = if modifiers.shift { 40. } else { 10. };
-                        match key {
-                            egui::Key::ArrowLeft => width + step,
-                            egui::Key::ArrowRight => width - step,
-                            egui::Key::Home => 280.,
-                            egui::Key::End => inspector_max,
-                            egui::Key::Enter => inspector_default,
-                            // Other keys must not reach editor or egui's
-                            // end-of-pass global zoom shortcuts.
-                            _ => return false,
-                        }
-                    }
-                    egui::Event::AccessKitActionRequest(request)
-                        if request.target_tree == TreeId::ROOT
-                            && request.target_node == resize_id.accesskit_id() =>
-                    {
-                        match request.action {
-                            Action::Increment => width + 10.,
-                            Action::Decrement => width - 10.,
-                            Action::SetValue => match request.data.as_ref() {
-                                Some(ActionData::NumericValue(value)) if value.is_finite() => {
-                                    value.clamp(280., f64::from(inspector_max)) as f32
-                                }
-                                _ => return true,
-                            },
-                            _ => return true,
-                        }
-                    }
-                    _ => return true,
-                };
-                width = next.clamp(280., inspector_max);
-                requested = true;
-                false
-            });
-        });
-        if owns_key {
-            // The first arrow can arrive before egui installs the focus lock.
-            // Consuming its event alone does not cancel scheduled navigation.
-            ui.memory_mut(|memory| memory.move_focus(egui::FocusDirection::None));
-        }
-        if requested {
-            preferred_width = width;
-            ui.ctx()
-                .data_mut(|data| data.insert_temp(preference_id, width));
-            ui.ctx().request_repaint();
-        }
-    }
+    let resize_response = ui.read_response(inspector_id.with("__resize"));
     if resize_response
         .as_ref()
         .is_some_and(egui::Response::double_clicked)
@@ -2592,62 +2521,18 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
             .options_mut(|options| options.input_options.surrender_focus_on = policy);
     }
     // This is the resize widget id used by the pinned egui Panel API.
-    let inspector_resizing = ui.read_response(resize_id).is_some_and(|response| {
-        response.is_pointer_button_down_on() || response.dragged() || response.drag_stopped()
-    });
+    let inspector_resizing =
+        ui.read_response(inspector_id.with("__resize"))
+            .is_some_and(|response| {
+                response.is_pointer_button_down_on()
+                    || response.dragged()
+                    || response.drag_stopped()
+            });
     if inspector_resizing
         && let Some(state) = egui::containers::panel::PanelState::load(ui.ctx(), inspector_id)
     {
         ui.ctx()
             .data_mut(|data| data.insert_temp(preference_id, state.size().x));
-    }
-    if let Some(response) = ui.read_response(resize_id)
-        && let Some(state) = egui::containers::panel::PanelState::load(ui.ctx(), inspector_id)
-    {
-        use egui::accesskit::{Action, Orientation};
-        let width = f64::from(state.size().x);
-        if response.gained_focus() {
-            // egui installs the focus lock once this widget had focus last pass.
-            ui.ctx().request_repaint();
-        }
-        if response.has_focus() {
-            ui.memory_mut(|memory| {
-                memory.set_focus_lock_filter(
-                    resize_id,
-                    egui::EventFilter {
-                        horizontal_arrows: true,
-                        vertical_arrows: true,
-                        escape: true,
-                        ..Default::default()
-                    },
-                );
-            });
-        }
-        response.widget_info(|| {
-            let mut info = egui::WidgetInfo::labeled(
-                egui::WidgetType::ResizeHandle,
-                response.enabled(),
-                "Resize properties panel",
-            );
-            info.value = Some(width);
-            info.current_text_value = Some(format!("{width:.0} pixels"));
-            info
-        });
-        ui.ctx().accesskit_node_builder(resize_id, |node| {
-            node.set_orientation(Orientation::Vertical);
-            node.set_min_numeric_value(280.);
-            node.set_max_numeric_value(f64::from(inspector_max));
-            node.set_numeric_value_step(10.);
-            if response.enabled() {
-                node.add_action(Action::SetValue);
-                if width < f64::from(inspector_max) {
-                    node.add_action(Action::Increment);
-                }
-                if width > 280. {
-                    node.add_action(Action::Decrement);
-                }
-            }
-        });
     }
     chrome::show_tool_rail(ui, tokens, view);
     egui::CentralPanel::default().show(ui, |ui| {
@@ -7407,161 +7292,6 @@ mod tests {
             Ok(Job::Apply(Request::PasteLayer { after_id: None, .. }))
         ));
         assert!(rx.try_recv().is_err());
-    }
-
-    #[test]
-    fn inspector_separator_keyboard_and_accessibility_preserve_window_preferences() {
-        use crate::accessibility::tests::find_role;
-        use egui::accesskit::{Action, ActionData, ActionRequest, Orientation, Role, TreeId};
-
-        let ctx = egui::Context::default();
-        ctx.enable_accesskit();
-        let tokens = crate::tokens::load().remove("light-mustard").unwrap();
-        let (tx, _rx) = mpsc::channel();
-        let mut view = View::default();
-        view.receive(&ctx, Ok(presented(false)));
-        view.section = Section::Layers;
-        view.selected_layer = Some("capture-background".into());
-        let frame = |view: &mut View, width, events| {
-            let mut output = ctx.run_ui(
-                egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(width, 700.),
-                    )),
-                    events,
-                    ..Default::default()
-                },
-                |ui| show(ui, &tokens, view, &tx),
-            );
-            output.textures_delta.clear();
-            output.platform_output.accesskit_update.unwrap()
-        };
-        let key = |key, shift| egui::Event::Key {
-            key,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers {
-                shift,
-                ..Default::default()
-            },
-        };
-        frame(&mut view, 1100., vec![]);
-        let tree = frame(&mut view, 1100., vec![]);
-        let (id, node) = find_role(&tree, Role::Splitter, "Resize properties panel").unwrap();
-        assert_eq!(node.numeric_value(), Some(320.));
-        assert_eq!(node.min_numeric_value(), Some(280.));
-        assert_eq!(node.max_numeric_value(), Some(480.));
-        assert_eq!(node.numeric_value_step(), Some(10.));
-        assert_eq!(node.orientation(), Some(Orientation::Vertical));
-        let action = |action, data| {
-            egui::Event::AccessKitActionRequest(ActionRequest {
-                action,
-                target_tree: TreeId::ROOT,
-                target_node: id,
-                data,
-            })
-        };
-        for action in [
-            Action::Focus,
-            Action::Increment,
-            Action::Decrement,
-            Action::SetValue,
-        ] {
-            assert!(node.supports_action(action));
-        }
-        // Exercise actual Tab traversal rather than requesting private widget focus.
-        let mut focused = false;
-        for _ in 0..80 {
-            let tree = frame(&mut view, 1100., vec![key(egui::Key::Tab, false)]);
-            if tree.focus == id {
-                focused = true;
-                break;
-            }
-        }
-        assert!(focused, "separator must be in the editor's Tab order");
-        // The first arrow must work without an intervening idle paint pass.
-        let zoom = ctx.zoom_factor();
-        for (width, events, expected) in [
-            (1100., vec![key(egui::Key::ArrowLeft, false)], 330.),
-            (1100., vec![key(egui::Key::ArrowRight, true)], 290.),
-            (1100., vec![key(egui::Key::Home, false)], 280.),
-            (1100., vec![key(egui::Key::ArrowRight, false)], 280.),
-            (
-                1100.,
-                vec![key(egui::Key::End, false), key(egui::Key::ArrowRight, true)],
-                440.,
-            ),
-            (760., vec![], 328.),
-            (1100., vec![], 440.),
-            (760., vec![key(egui::Key::ArrowRight, false)], 318.),
-            (1100., vec![], 318.),
-            (1100., vec![key(egui::Key::Enter, false)], 320.),
-            (760., vec![key(egui::Key::Enter, false)], 280.),
-            (
-                1100.,
-                vec![
-                    action(Action::SetValue, Some(ActionData::NumericValue(350.))),
-                    action(Action::Increment, None),
-                    action(Action::Decrement, None),
-                ],
-                350.,
-            ),
-            (
-                760.,
-                vec![action(
-                    Action::SetValue,
-                    Some(ActionData::NumericValue(900.)),
-                )],
-                328.,
-            ),
-            (
-                1100.,
-                vec![action(
-                    Action::SetValue,
-                    Some(ActionData::NumericValue(f64::NAN)),
-                )],
-                328.,
-            ),
-            (
-                1100.,
-                vec![
-                    key(egui::Key::Delete, false),
-                    key(egui::Key::ArrowUp, false),
-                ],
-                328.,
-            ),
-            (
-                1100.,
-                vec![egui::Event::Key {
-                    key: egui::Key::Plus,
-                    physical_key: None,
-                    pressed: true,
-                    repeat: false,
-                    modifiers: egui::Modifiers::COMMAND,
-                }],
-                328.,
-            ),
-        ] {
-            let tree = frame(&mut view, width, events);
-            let (_, node) = find_role(&tree, Role::Splitter, "Resize properties panel").unwrap();
-            assert_eq!(node.numeric_value(), Some(expected));
-            assert_eq!(tree.focus, id, "resizing must retain keyboard focus");
-            assert!(
-                !view.pending,
-                "separator keys must not edit the selected layer"
-            );
-            assert_eq!(
-                ctx.zoom_factor(),
-                zoom,
-                "separator keys must not zoom the UI"
-            );
-        }
-        let tree = frame(&mut view, 1100., vec![key(egui::Key::Tab, false)]);
-        assert_ne!(tree.focus, id, "Tab must leave the separator");
-        let tree = frame(&mut view, 1100., vec![action(Action::Focus, None)]);
-        assert_eq!(tree.focus, id, "screen readers can focus the separator");
     }
 
     #[test]
