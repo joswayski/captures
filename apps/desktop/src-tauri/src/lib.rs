@@ -4340,6 +4340,8 @@ static CAPTURE_ESCAPE_APP: OnceLock<AppHandle> = OnceLock::new();
 /// overlay, selector, or countdown. Real window and session state take over
 /// after that so Escape is not stolen during an in-progress recording.
 static CAPTURE_ESCAPE_INTENT: AtomicBool = AtomicBool::new(false);
+#[cfg(target_os = "windows")]
+static CAPTURE_ESCAPE_HOOK_AVAILABLE: AtomicBool = AtomicBool::new(false);
 static CAPTURE_ESCAPE_HOTKEY_REGISTERED: AtomicBool = AtomicBool::new(false);
 static CAPTURE_ESCAPE_CANCELING: AtomicBool = AtomicBool::new(false);
 /// Serializes deferred global-shortcut mutations. The plugin invokes handlers
@@ -4359,6 +4361,9 @@ fn install_capture_escape_cancel(app: &AppHandle) {
     captures_session::set_capture_escape_handler(Some(on_native_capture_escape));
     if let Err(error) = captures_session::ensure_capture_escape_hook() {
         eprintln!("could not install capture Escape hook: {error}");
+    } else {
+        #[cfg(target_os = "windows")]
+        CAPTURE_ESCAPE_HOOK_AVAILABLE.store(true, Ordering::Release);
     }
     #[cfg(target_os = "macos")]
     {
@@ -4371,19 +4376,29 @@ fn on_native_capture_escape() {
     let Some(app) = CAPTURE_ESCAPE_APP.get() else {
         return;
     };
-    handle_native_capture_escape(app);
+    queue_capture_escape(app);
 }
 
-fn handle_native_capture_escape(app: &AppHandle) {
-    let state = app.state::<Arc<AppState>>().inner().clone();
-    if !capture_escape_ui_is_active(app, &state) {
+fn queue_capture_escape(app: &AppHandle) {
+    // A Windows low-level hook must return promptly. Window queries and capture
+    // cleanup can block on the event loop or a worker; never run them in the
+    // system-wide keyboard hook or under the global-shortcut registry lock.
+    // Invalidate before returning so releasing a held shortcut cannot start
+    // another capture while cancellation is still waiting for its worker.
+    if !begin_capture_cancellation(app) {
         return;
     }
-    cancel_active_capture_ui(app, &state);
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<Arc<AppState>>().inner().clone();
+        finish_capture_cancellation(&app, &state);
+    });
 }
 
 pub(crate) fn arm_capture_escape(app: &AppHandle) {
     CAPTURE_ESCAPE_INTENT.store(true, Ordering::Release);
+    // Do not leave a gap before the deferred sync can run on shortcut key-down.
+    captures_session::set_capture_escape_enabled(true);
     sync_capture_escape(app);
 }
 
@@ -4468,22 +4483,25 @@ fn handoff_capture_escape_from_intent(app: &AppHandle, surface_visible: bool) {
 }
 
 pub(crate) fn sync_capture_escape(app: &AppHandle) {
-    let state = app.state::<Arc<AppState>>().inner().clone();
-    let active = capture_escape_ui_is_active(app, &state);
-    captures_session::set_capture_escape_enabled(active);
-    #[cfg(target_os = "macos")]
-    captures_macos_window::set_capture_escape_armed(active);
-    schedule_capture_escape_hotkey_sync(app, active);
+    schedule_capture_escape_hotkey_sync(app);
 }
 
 fn capture_escape_ui_is_active(app: &AppHandle, state: &AppState) -> bool {
+    if CAPTURE_ESCAPE_CANCELING.load(Ordering::Acquire) {
+        return false;
+    }
+    // Tauri window queries wait for the main thread. Drop every state guard
+    // first: that thread may be handling a selection/countdown command that
+    // needs the same mutex before it can answer the visibility query.
+    let recording_selection = state.recording_selection.lock().is_some();
+    let screenshot_countdown = screenshot_countdown_is_active(state);
+    let recording_countdown = recording::recording_countdown_is_active(state);
     captures_session::CaptureEscapeUi::from_live_surfaces(
         CAPTURE_ESCAPE_INTENT.load(Ordering::Acquire),
         window_is_visible(app, "overlay"),
-        state.recording_selection.lock().is_some() || window_is_visible(app, "recording-selector"),
-        screenshot_countdown_is_active(state) || window_is_visible(app, "screenshot-countdown"),
-        recording::recording_countdown_is_active(state)
-            || window_is_visible(app, "recording-countdown"),
+        recording_selection || window_is_visible(app, "recording-selector"),
+        screenshot_countdown || window_is_visible(app, "screenshot-countdown"),
+        recording_countdown || window_is_visible(app, "recording-countdown"),
     )
     .is_armed()
 }
@@ -4494,11 +4512,23 @@ fn window_is_visible(app: &AppHandle, label: &str) -> bool {
 }
 
 fn cancel_active_capture_ui(app: &AppHandle, state: &Arc<AppState>) {
+    if begin_capture_cancellation(app) {
+        finish_capture_cancellation(app, state);
+    }
+}
+
+fn begin_capture_cancellation(app: &AppHandle) -> bool {
     if CAPTURE_ESCAPE_CANCELING.swap(true, Ordering::AcqRel) {
-        return;
+        return false;
     }
     invalidate_capture_flow();
     CAPTURE_ESCAPE_INTENT.store(false, Ordering::Release);
+    captures_session::set_capture_escape_enabled(false);
+    sync_capture_escape(app);
+    true
+}
+
+fn finish_capture_cancellation(app: &AppHandle, state: &Arc<AppState>) {
     abort_prefetched_freeze_capture(app);
     hide_capture_overlay(app);
     let generations: Vec<u64> = state
@@ -4516,11 +4546,11 @@ fn cancel_active_capture_ui(app: &AppHandle, state: &Arc<AppState>) {
     release_claimed_region_capture_cursor();
     reveal_document_windows_after_capture(app);
     updates::restore_update_notice(app);
-    sync_capture_escape(app);
     CAPTURE_ESCAPE_CANCELING.store(false, Ordering::Release);
+    sync_capture_escape(app);
 }
 
-fn schedule_capture_escape_hotkey_sync(app: &AppHandle, active: bool) {
+fn schedule_capture_escape_hotkey_sync(app: &AppHandle) {
     let generation = CAPTURE_ESCAPE_HOTKEY_SYNC_GENERATION
         .fetch_add(1, Ordering::AcqRel)
         .wrapping_add(1);
@@ -4532,7 +4562,24 @@ fn schedule_capture_escape_hotkey_sync(app: &AppHandle, active: bool) {
         if CAPTURE_ESCAPE_HOTKEY_SYNC_GENERATION.load(Ordering::Acquire) != generation {
             return;
         }
-        if active {
+        // Read live state only after taking the serialization lock. Capturing
+        // `active` at the caller lets a slow old visibility query register Escape
+        // after a newer cancellation already unregistered it.
+        let state = app.state::<Arc<AppState>>().inner().clone();
+        let active = capture_escape_ui_is_active(&app, &state);
+        if CAPTURE_ESCAPE_HOTKEY_SYNC_GENERATION.load(Ordering::Acquire) != generation {
+            return;
+        }
+        captures_session::set_capture_escape_enabled(active);
+        #[cfg(target_os = "macos")]
+        captures_macos_window::set_capture_escape_armed(active);
+        // RegisterHotKey consumes Escape independently of the hook. Do not let
+        // a second owner defeat the Windows hook's one-press fail-open behavior.
+        #[cfg(target_os = "windows")]
+        let needs_hotkey = !CAPTURE_ESCAPE_HOOK_AVAILABLE.load(Ordering::Acquire);
+        #[cfg(not(target_os = "windows"))]
+        let needs_hotkey = true;
+        if active && needs_hotkey {
             register_capture_escape_hotkey(&app);
         } else {
             unregister_capture_escape_hotkey(&app);
@@ -4555,7 +4602,7 @@ fn register_capture_escape_hotkey(app: &AppHandle) {
             if event.state() != ShortcutState::Pressed {
                 return;
             }
-            handle_native_capture_escape(app);
+            queue_capture_escape(app);
         })
     {
         CAPTURE_ESCAPE_HOTKEY_REGISTERED.store(false, Ordering::Release);
@@ -4564,11 +4611,14 @@ fn register_capture_escape_hotkey(app: &AppHandle) {
 }
 
 fn unregister_capture_escape_hotkey(app: &AppHandle) {
-    if !CAPTURE_ESCAPE_HOTKEY_REGISTERED.swap(false, Ordering::AcqRel) {
+    if !CAPTURE_ESCAPE_HOTKEY_REGISTERED.load(Ordering::Acquire) {
         return;
     }
     if let Ok(parsed) = parse_shortcut("Escape") {
-        let _ = app.global_shortcut().unregister(parsed);
+        match app.global_shortcut().unregister(parsed) {
+            Ok(()) => CAPTURE_ESCAPE_HOTKEY_REGISTERED.store(false, Ordering::Release),
+            Err(error) => eprintln!("could not unregister capture Escape: {error}"),
+        }
     }
 }
 
@@ -4673,6 +4723,7 @@ fn dispatch_new_capture_shortcut(
         if event_state == ShortcutState::Released && trigger_is_suppressed {
             clear_shortcut_capture_flow();
             abort_prefetched_freeze_capture(app);
+            disarm_capture_escape_intent(app);
         }
         return;
     }
@@ -4785,6 +4836,7 @@ fn register_recording_shortcut(
                 if event.state() == ShortcutState::Released && trigger_is_suppressed {
                     clear_shortcut_capture_flow();
                     abort_prefetched_freeze_capture(app);
+                    disarm_capture_escape_intent(app);
                 }
                 return;
             }
@@ -5085,6 +5137,7 @@ fn dispatch_recording_shortcut(app: &AppHandle, target: CaptureMode, event_state
         if event_state == ShortcutState::Released && trigger_is_suppressed {
             clear_shortcut_capture_flow();
             abort_prefetched_freeze_capture(app);
+            disarm_capture_escape_intent(app);
         }
         return;
     }

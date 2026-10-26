@@ -282,18 +282,22 @@ pub(crate) async fn prepare_capture_selector_inner(
 ) -> Result<RecordingSelectionSession, AppError> {
     crate::ensure_capture_session_available().inspect_err(|_| {
         crate::abort_prefetched_freeze_capture(&app);
+        crate::disarm_capture_escape_intent(&app);
     })?;
     if crate::updates::install_is_active(&app) {
         crate::abort_prefetched_freeze_capture(&app);
+        crate::disarm_capture_escape_intent(&app);
         return Err(AppError::UpdateInstalling);
     }
     if recording_session_is_active(&state) || crate::screenshot_countdown_is_active(&state) {
         crate::abort_prefetched_freeze_capture(&app);
+        crate::disarm_capture_escape_intent(&app);
         return Err(AppError::CaptureInProgress);
     }
     let overlay_visible = crate::capture_overlay_is_visible(&app);
     if !state.sessions.lock().is_empty() && !overlay_visible {
         crate::abort_prefetched_freeze_capture(&app);
+        crate::disarm_capture_escape_intent(&app);
         return Err(AppError::CaptureInProgress);
     }
     let recapture_menu =
@@ -313,6 +317,10 @@ pub(crate) async fn prepare_capture_selector_inner(
                 eprintln!("failed to update the open capture menu: {error}");
             }
             crate::abort_prefetched_freeze_capture(&app);
+            // The existing selection owns Escape, just as on the new-selection
+            // path. Retaining prep intent here keeps Escape global after this
+            // menu is later dismissed with its Cancel button.
+            crate::disarm_capture_escape_intent(&app);
             return Ok(summary);
         }
         if !recapture_menu {
@@ -684,7 +692,7 @@ fn restore_after_recording_selection(app: &AppHandle, state: &Arc<AppState>) {
     crate::set_capture_huds_protected(app, false);
     crate::restore_excluded_recording_chrome(app);
     crate::restore_thumbnail_capture_ui(app, state);
-    crate::sync_capture_escape(app);
+    crate::disarm_capture_escape_intent(app);
 }
 
 pub(crate) fn dismiss_open_recording_selection(app: &AppHandle, state: &Arc<AppState>) -> bool {

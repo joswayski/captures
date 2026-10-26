@@ -132,6 +132,10 @@ These statuses describe the downloadable Tauri Preview. Native parity and physic
 
 Defaults follow each platform’s built-in screenshot keys. Captures-only actions keep extra shortcuts.
 
+Escape belongs to Captures only while preparing or selecting a capture, or during
+a capture countdown. Closing or cancelling that flow returns Escape to other apps;
+an ongoing recording does not reserve it.
+
 ### macOS
 
 | Default shortcut | Action |

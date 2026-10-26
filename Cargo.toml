@@ -19,7 +19,12 @@ members = [
     "crates/captures-session",
     "crates/captures-video",
 ]
+exclude = ["crates/vendor/global-hotkey"]
 resolver = "2"
+
+[patch.crates-io]
+# 0.8.0 with the X11 ungrab flush fix; see the vendored PATCHES.md.
+global-hotkey = { path = "crates/vendor/global-hotkey" }
 
 [workspace.package]
 version = "0.1.0"
