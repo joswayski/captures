@@ -516,12 +516,17 @@ fn zoom_slider(
     layout: model::HeaderLayout,
     percent: Option<f64>,
 ) {
+    use egui::accesskit::{Action, ActionData, Orientation, TreeId};
+
     let pad = tokens.number(if layout.show_history { "s-4" } else { "s-3" });
     let track = rect.shrink2(vec2(pad, 0.));
     let enabled = percent.is_some() && !view.pending;
+    let id = ui.scope_id().with("zoom-slider");
+    // `interact` may apply Tab before we read earlier keys in this frame.
+    let had_focus = ui.memory(|memory| memory.has_focus(id));
     let response = ui.interact(
         track,
-        ui.scope_id().with("zoom-slider"),
+        id,
         if enabled {
             Sense::click_and_drag()
         } else {
@@ -534,10 +539,91 @@ fn zoom_slider(
         && (response.dragged() || response.clicked())
         && let Some(pointer) = response.interact_pointer_pos()
     {
+        response.request_focus();
         let span = travel.end() - travel.start();
         let position = f64::from(((pointer.x - travel.start()) / span).clamp(0., 1.));
         if let Some(zoom) = zoom_from_slider(position) {
             set_viewport_zoom(view, zoom, None);
+        }
+    }
+    if enabled {
+        let mut keyboard = (had_focus || response.has_focus()) && ui.input(|input| input.focused);
+        if response.has_focus() {
+            ui.memory_mut(|memory| {
+                memory.set_focus_lock_filter(
+                    id,
+                    egui::EventFilter {
+                        horizontal_arrows: true,
+                        vertical_arrows: true,
+                        ..Default::default()
+                    },
+                );
+            });
+        }
+        let mut owns_key = false;
+        let mut tabbed_away = false;
+        // Like the shipping range input (0..1, step=any), arrows move 1% of
+        // the log track and Page keys move 10%. Accessibility values are zoom
+        // percentages, not track positions. Preserve mixed event order.
+        ui.input_mut(|input| {
+            input.events.retain(|event| {
+                let current = displayed_zoom(view).unwrap_or(5.);
+                let position = zoom_slider_position(current).unwrap_or(0.);
+                let next = match event {
+                    egui::Event::Key {
+                        key: egui::Key::Tab,
+                        pressed: true,
+                        ..
+                    } if had_focus => {
+                        keyboard = false;
+                        tabbed_away = true;
+                        return true;
+                    }
+                    egui::Event::Key {
+                        key,
+                        pressed: true,
+                        modifiers,
+                        ..
+                    } if keyboard && !modifiers.command && !modifiers.ctrl && !modifiers.alt => {
+                        let next = match key {
+                            egui::Key::ArrowRight | egui::Key::ArrowUp => position + 0.01,
+                            egui::Key::ArrowLeft | egui::Key::ArrowDown => position - 0.01,
+                            egui::Key::PageUp => position + 0.1,
+                            egui::Key::PageDown => position - 0.1,
+                            egui::Key::Home => 0.,
+                            egui::Key::End => 1.,
+                            _ => return true,
+                        };
+                        owns_key = true;
+                        zoom_from_slider(next)
+                    }
+                    egui::Event::AccessKitActionRequest(request)
+                        if request.target_tree == TreeId::ROOT
+                            && request.target_node == id.accesskit_id() =>
+                    {
+                        match request.action {
+                            Action::Increment => zoom_from_slider(position + 0.01),
+                            Action::Decrement => zoom_from_slider(position - 0.01),
+                            Action::SetValue => match request.data.as_ref() {
+                                Some(ActionData::NumericValue(value)) if value.is_finite() => {
+                                    Some(*value)
+                                }
+                                _ => return true,
+                            },
+                            _ => return true,
+                        }
+                    }
+                    _ => return true,
+                };
+                if let Some(next) = next {
+                    set_viewport_zoom(view, next, None);
+                }
+                false
+            });
+        });
+        if owns_key && !tabbed_away {
+            // The first arrow after Tab can precede the focus-lock pass.
+            ui.memory_mut(|memory| memory.move_focus(egui::FocusDirection::None));
         }
     }
     let position = displayed_zoom(view)
@@ -559,6 +645,15 @@ fn zoom_slider(
         tokens.color("surface-raised"),
         Stroke::new(1., dim(tokens.color("border-strong"), enabled)),
     );
+    if enabled && response.has_focus() {
+        crate::primitives::focus_ring(
+            ui,
+            tokens,
+            egui::Rect::from_center_size(thumb, Vec2::splat(radius * 2.)),
+            radius,
+        );
+    }
+    let percent = displayed_zoom(view).map(|value| value.clamp(5., 800.));
     let label = match percent {
         Some(value) if view.viewport.zoom_percent == 0. => {
             format!("Fit ({})", model::zoom_label(value))
@@ -567,11 +662,23 @@ fn zoom_slider(
         None => copy::ZOOM_SLIDER.into(),
     };
     response.widget_info(|| {
-        egui::WidgetInfo::labeled(
-            egui::WidgetType::Slider,
-            enabled,
-            format!("{}: {label}", copy::ZOOM_SLIDER),
-        )
+        let mut info = egui::WidgetInfo::slider(enabled, percent.unwrap_or(5.), copy::ZOOM_SLIDER);
+        info.current_text_value = Some(label.clone());
+        info
+    });
+    ui.ctx().accesskit_node_builder(id, |node| {
+        node.set_orientation(Orientation::Horizontal);
+        node.set_min_numeric_value(5.);
+        node.set_max_numeric_value(800.);
+        if enabled {
+            node.add_action(Action::SetValue);
+            if percent.is_some_and(|value| value < 800.) {
+                node.add_action(Action::Increment);
+            }
+            if percent.is_some_and(|value| value > 5.) {
+                node.add_action(Action::Decrement);
+            }
+        }
     });
     response.on_hover_text(copy::ZOOM_SLIDER_TOOLTIP);
 }

@@ -4989,6 +4989,14 @@ def main():
             shot(editor, "viewport-presets-custom-menu-minimum")
             run("xdotool", "key", "Escape")
             topbar_click("fit")  # Fit resets the viewport-center anchor.
+            recording = spawn("zoom-slider-recording", ["ffmpeg", "-y", "-loglevel", "error",
+                "-f", "x11grab", "-framerate", "20", "-video_size", "1400x1200",
+                "-i", env["DISPLAY"], "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+                str(output / "zoom-slider-keyboard.mp4")])
+            points, _ = header_controls(editor_width())
+            for x in range(points["fit"], points["slider-max"] + 1, 4):
+                run("xdotool", "mousemove", "--sync", "--window", editor,
+                    str(x), str(HEADER_Y), "sleep", ".02")
             topbar_click("slider-min")  # Left end of the logarithmic slider: 5%.
             shot(editor, "viewport-slider-minimum")
             # The header, export bar and 320px sidebar leave x=64..432,
@@ -5002,6 +5010,30 @@ def main():
             shot(editor, "viewport-slider-maximum")
             pixel("viewport-slider-maximum", 66, 150, (40, 110, 166))
             pixel("viewport-slider-maximum", 430, 450, (40, 110, 166))
+            run("xdotool", "key", "Home", "Right", "sleep", ".3")
+            shot(editor, "viewport-slider-keyboard-step")
+            # 5 × 160^0.01, rounded to 5.3%: width 33.92, x=231.04..264.96.
+            # The old pointer-only slider stays at 800%; linear +1 stays at 6%.
+            pixel("viewport-slider-keyboard-step", 231, 248, (40, 110, 166))
+            pixel("viewport-slider-keyboard-step", 230, 248, surface)
+            pixel("viewport-slider-keyboard-step", 264, 248, (40, 110, 166))
+            pixel("viewport-slider-keyboard-step", 265, 248, surface)
+            run("xdotool", "key", "Home", "Prior", "sleep", ".3")
+            shot(editor, "viewport-slider-keyboard-page")
+            # PageUp uses 10% of the log track: 8.3%, width 53.12.
+            pixel("viewport-slider-keyboard-page", 222, 248, (40, 110, 166))
+            pixel("viewport-slider-keyboard-page", 220, 248, surface)
+            run("xdotool", "key", "End", "Up", "sleep", ".3")
+            shot(editor, "viewport-slider-keyboard-end")
+            pixel("viewport-slider-keyboard-end", 66, 150, (40, 110, 166))
+            pixel("viewport-slider-keyboard-end", 430, 450, (40, 110, 166))
+            run("xdotool", "key", "Home", "Left", "Tab", "Right", "sleep", ".3")
+            shot(editor, "viewport-slider-keyboard-tab-away")
+            pixel("viewport-slider-keyboard-tab-away", 233, 248, (40, 110, 166))
+            pixel("viewport-slider-keyboard-tab-away", 231, 248, surface)
+            recording.send_signal(signal.SIGINT)
+            recording.wait(timeout=10)
+            assert recording.returncode in (0, 255)
             assert not draft.exists(), "slider changes must not create a draft"
             assert (artifact / "capture.png").read_bytes() == original
             close(root)
@@ -5015,7 +5047,9 @@ def main():
                            "viewport-presets-50-200-pixels", "viewport-custom-preset-menu",
                            "viewport-preset-fit-no-draft", "viewport-reselect-fit-clears-pan",
                            "viewport-fit-no-upscale", "viewport-custom-menu-minimum",
-                           "viewport-slider-5-percent-pixels", "viewport-slider-800-percent-pixels"],
+                           "viewport-slider-5-percent-pixels", "viewport-slider-800-percent-pixels",
+                           "viewport-slider-keyboard-log-step-and-page-pixels",
+                           "viewport-slider-keyboard-home-end-bounds-and-tab-away"],
             }, indent=2) + "\n")
             print("PASS native zoom: wheel, pan, toolbar, keyboard, presets, custom zoom, focused field, no draft")
             return

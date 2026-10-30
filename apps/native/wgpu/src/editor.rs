@@ -7678,6 +7678,169 @@ mod tests {
     }
 
     #[test]
+    fn zoom_slider_keyboard_and_accessibility_only_change_the_viewport() {
+        use crate::accessibility::tests::find_role;
+        use captures_app::editor_chrome::zoom_label;
+        use egui::accesskit::{Action, ActionData, ActionRequest, Orientation, Role, TreeId};
+
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let tokens = crate::tokens::load().remove("light-mustard").unwrap();
+        let (tx, rx) = mpsc::channel();
+        let mut view = View::default();
+        view.receive(&ctx, Ok(presented(false)));
+        view.section = Section::Layers;
+        view.selected_layer = Some("capture-background".into());
+        let original = view.presented.as_ref().unwrap().document.clone();
+        let frame = |view: &mut View, events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1100., 700.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| show(ui, &tokens, view, &tx),
+            );
+            output.textures_delta.clear();
+            output.platform_output.accesskit_update.unwrap()
+        };
+        let key = |key| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(&mut view, vec![]);
+        let tree = frame(&mut view, vec![]);
+        let (id, node) = find_role(&tree, Role::Slider, "Canvas zoom").unwrap();
+        assert_eq!(node.numeric_value(), Some(100.));
+        assert_eq!(node.value(), Some("Fit (100%)"));
+        assert_eq!(node.min_numeric_value(), Some(5.));
+        assert_eq!(node.max_numeric_value(), Some(800.));
+        assert_eq!(node.orientation(), Some(Orientation::Horizontal));
+        let action = |action, data| {
+            egui::Event::AccessKitActionRequest(ActionRequest {
+                action,
+                target_tree: TreeId::ROOT,
+                target_node: id,
+                data,
+            })
+        };
+        for action in [
+            Action::Focus,
+            Action::SetValue,
+            Action::Increment,
+            Action::Decrement,
+        ] {
+            assert!(node.supports_action(action));
+        }
+        let mut focused = false;
+        for _ in 0..80 {
+            if frame(&mut view, vec![key(egui::Key::Tab)]).focus == id {
+                focused = true;
+                break;
+            }
+        }
+        assert!(focused, "zoom slider must be reachable through Tab");
+        // No idle frame between Tab and the first arrow. Expected values use
+        // 100 × 160^0.01 / 100 × 160^0.1, not the slider implementation.
+        for (events, expected) in [
+            (vec![key(egui::Key::ArrowRight)], 105.2),
+            (vec![key(egui::Key::Home), key(egui::Key::ArrowLeft)], 5.),
+            (vec![key(egui::Key::ArrowUp)], 5.3),
+            (vec![key(egui::Key::End), key(egui::Key::ArrowUp)], 800.),
+            (
+                vec![
+                    action(Action::SetValue, Some(ActionData::NumericValue(100.))),
+                    key(egui::Key::PageUp),
+                ],
+                166.1,
+            ),
+            (
+                vec![
+                    action(Action::SetValue, Some(ActionData::NumericValue(100.))),
+                    key(egui::Key::PageDown),
+                ],
+                60.2,
+            ),
+            (
+                vec![
+                    action(Action::SetValue, Some(ActionData::NumericValue(50.))),
+                    action(Action::Increment, None),
+                ],
+                52.6,
+            ),
+            (vec![action(Action::Decrement, None)], 50.),
+            (
+                vec![action(
+                    Action::SetValue,
+                    Some(ActionData::NumericValue(900.)),
+                )],
+                800.,
+            ),
+            (
+                vec![action(
+                    Action::SetValue,
+                    Some(ActionData::NumericValue(f64::NAN)),
+                )],
+                800.,
+            ),
+            (
+                vec![action(
+                    Action::SetValue,
+                    Some(ActionData::NumericValue(-10.)),
+                )],
+                5.,
+            ),
+        ] {
+            let tree = frame(&mut view, events);
+            let (_, node) = find_role(&tree, Role::Slider, "Canvas zoom").unwrap();
+            assert_eq!(view.viewport.zoom_percent, expected);
+            assert_eq!(node.numeric_value(), Some(expected));
+            assert_eq!(node.value(), Some(zoom_label(expected).as_str()));
+            assert_eq!(node.supports_action(Action::Increment), expected < 800.);
+            assert_eq!(node.supports_action(Action::Decrement), expected > 5.);
+            assert_eq!(tree.focus, id, "arrows must not navigate away");
+            assert_eq!(view.presented.as_ref().unwrap().document, original);
+            assert!(!view.pending);
+        }
+        assert!(
+            rx.try_recv().is_err(),
+            "zoom must not enqueue document work"
+        );
+        // Fast key presses may be delivered in one paint pass. Owning an arrow
+        // must neither cancel the following Tab nor eat keys after that Tab.
+        frame(&mut view, vec![key(egui::Key::End)]);
+        let tree = frame(
+            &mut view,
+            vec![
+                key(egui::Key::Home),
+                key(egui::Key::ArrowLeft),
+                key(egui::Key::Tab),
+                key(egui::Key::ArrowRight),
+            ],
+        );
+        assert_ne!(tree.focus, id);
+        assert_eq!(view.viewport.zoom_percent, 5.);
+        view.pending = true;
+        let tree = frame(
+            &mut view,
+            vec![action(
+                Action::SetValue,
+                Some(ActionData::NumericValue(200.)),
+            )],
+        );
+        let (_, node) = find_role(&tree, Role::Slider, "Canvas zoom").unwrap();
+        assert_eq!(view.viewport.zoom_percent, 5.);
+        assert!(!node.supports_action(Action::SetValue));
+        assert!(!node.supports_action(Action::Increment));
+    }
+
+    #[test]
     fn header_keeps_canvas_toolbar_clear_of_controls_and_hides_history_at_1040() {
         // Assertions compare layouts with each other, never platform font widths.
         let ctx = egui::Context::default();
