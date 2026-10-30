@@ -839,6 +839,9 @@ keyboard in its custom-color chooser; incomplete input keeps the accepted color.
 Its shared range controls expose bounds and adjustment actions to accessibility
 APIs. Physical screen-reader acceptance remains open; AppKit keeps its native
 sliders and system color panel.
+Windows/Linux custom selects retain focus on the first arrow after Tab and
+process rapid navigation, selection and cancellation keys in order, including
+repeated arrows. Tab still closes the listbox and moves to the next control.
 Its Layers panel also edits annotation fill, stroke, opacity and shadow settings live,
 as shipping does; shared Rust owns style defaults, rendering, undo folding and draft
 persistence.

@@ -32,6 +32,19 @@ do not replace physical macOS/Windows/Linux, accessibility or mixed-DPI checks.
 The detailed checklist below remains the release gate; unchecked does not mean
 unimplemented. Later slice notes supersede earlier notes about missing behavior.
 
+The shared wgpu custom select now processes keyboard events in arrival order,
+including repeated arrows in one frame. Tab-to-select followed immediately by
+an arrow retains trigger focus instead of allowing egui's directional navigation
+to take it. End/Home/Enter selects the first enabled option; Escape before Enter
+cancels and reopens rather than selecting the cancelled highlight. A selection
+followed by Space may reopen, and a following Tab leaves without focus being
+stolen back. Existing field, inline and glass select styles and accessibility
+semantics remain unchanged. The real-X11 output-size fixture saves independently
+checked 75% and 50% images through rapid keyboard sequences and retains pointer
+coverage for Custom. AppKit is unchanged; physical Windows, Wayland and
+screen-reader checks remain open. This does not migrate the separate custom
+zoom-presets menu or close any native release acceptance gate.
+
 The wgpu screenshot-editor zoom slider now owns arrow keys (1% of its logarithmic
 track), Page Up/Down (10%) and Home/End (5–800%) while focused. Tab still leaves
 the control; the first arrow after Tab cannot move focus. Accessibility reports
