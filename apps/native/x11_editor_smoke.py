@@ -3320,13 +3320,28 @@ def main():
                 setting_menu(54, index, 4, item_height=40)
                 export_bar["custom"] = index == 3
 
+            recording = spawn("select-keyboard-recording", ["ffmpeg", "-y", "-loglevel", "error",
+                "-f", "x11grab", "-framerate", "20", "-video_size", "1400x1200",
+                "-i", env["DISPLAY"], "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+                str(output / "select-keyboard.mp4")])
+            for x in range(16, 160, 4):
+                run("xdotool", "mousemove", "--sync", "--window", editor,
+                    *map(str, setting_point(x)), "sleep", ".02")
             setting_click(54)
             shot(editor, "output-size-menu")
             run("xdotool", "key", "Escape", "sleep", ".2")
-            output_size(1)  # 75%.
+            # Fast ordered keys: open, last, first, next, choose 75%. A per-key
+            # scan collapses Down and processes Home before End, choosing Custom.
+            run("xdotool", "key", "--delay", "0", "Down", "End", "Home", "Down", "Return")
             size_export("75-percent", "480x270", section="geometry")
-            output_size(2)  # 50%.
+            setting_click(54)
+            # Home only highlights Original; Escape cancels, Return reopens at
+            # the accepted 75%, then Down/Return chooses 50%.
+            run("xdotool", "key", "--delay", "0", "Home", "Escape", "Return", "Down", "Return")
             size_export("50-percent", "320x180", section="layers")
+            recording.send_signal(signal.SIGINT)
+            recording.wait(timeout=10)
+            assert recording.returncode in (0, 255)
             output_size(3)  # Custom starts from 640x360, locked.
             setting_field(237, 96)
             size_export("locked", "96x54", section="draw")
@@ -3367,7 +3382,8 @@ def main():
                            "custom-aspect-lock", "custom-independent-height", "copy-full-resolution",
                            "invalid-dimensions-disable-save", "minimum-controls",
                            "no-draft-or-original-write", "save-from-all-sections",
-                           "copy-from-minimum-draw"],
+                           "copy-from-minimum-draw", "ordered-select-keys-save-dimensions",
+                           "select-escape-cancel-reopen-save-dimensions"],
             }, indent=2) + "\n")
             print("PASS native output sizing: percentages, custom lock/unlock, History, copy, no edits")
             return

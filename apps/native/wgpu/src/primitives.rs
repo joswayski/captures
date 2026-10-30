@@ -419,6 +419,7 @@ impl<'a> Select<'a> {
         let (rect, _) =
             ui.allocate_exact_size(egui::vec2(self.width, height), egui::Sense::hover());
         // The trigger owns the select's id, so focus and the listbox agree.
+        let had_focus = ui.memory(|memory| memory.has_focus(id));
         let response = ui.interact(rect, id, egui::Sense::click());
         let enabled = ui.is_enabled();
         let disabled: Vec<bool> = options.iter().map(|option| option.disabled).collect();
@@ -461,9 +462,58 @@ impl<'a> Select<'a> {
         if !enabled {
             state.open = false;
         }
+        let mut keyboard_click = false;
+        let mut tabbed_away = false;
         // Keyboard: the focused trigger, or any open listbox (a pointer opens
-        // it through the same state model).
-        if enabled && (focused || state.open) {
+        // it through the same state model). Consume events in arrival order,
+        // including repeats, rather than processing one occurrence per key.
+        if enabled && (had_focus || focused || state.open) && ui.input(|input| input.focused) {
+            let mut owns_key = false;
+            ui.input_mut(|input| {
+                input.events.retain(|event| {
+                    let egui::Event::Key {
+                        key, pressed: true, ..
+                    } = event
+                    else {
+                        return true;
+                    };
+                    if *key == egui::Key::Tab && (had_focus || state.open) {
+                        state.open = false;
+                        tabbed_away = true;
+                        return true;
+                    }
+                    if tabbed_away {
+                        return true;
+                    }
+                    let key = match key {
+                        egui::Key::ArrowDown => select::Key::ArrowDown,
+                        egui::Key::ArrowUp => select::Key::ArrowUp,
+                        egui::Key::Home => select::Key::Home,
+                        egui::Key::End => select::Key::End,
+                        egui::Key::Enter => select::Key::Enter,
+                        egui::Key::Space => select::Key::Space,
+                        egui::Key::Escape => select::Key::Escape,
+                        _ => return true,
+                    };
+                    let outcome =
+                        select::key(state, &disabled, chosen.unwrap_or(selected_index), key);
+                    if !outcome.handled {
+                        return true;
+                    }
+                    owns_key = true;
+                    keyboard_click |= matches!(key, select::Key::Enter | select::Key::Space);
+                    state = outcome.state;
+                    if let Some(index) = outcome.chosen {
+                        chosen = Some(index);
+                    }
+                    false
+                });
+            });
+            if owns_key && !tabbed_away {
+                // egui schedules directional navigation before this pass can
+                // install the newly focused trigger's arrow-key filter.
+                ui.memory_mut(|memory| memory.move_focus(egui::FocusDirection::None));
+            }
             if focused {
                 ui.memory_mut(|memory| {
                     memory.set_focus_lock_filter(
@@ -476,32 +526,7 @@ impl<'a> Select<'a> {
                     );
                 });
             }
-            for (key, logical) in [
-                (select::Key::ArrowDown, egui::Key::ArrowDown),
-                (select::Key::ArrowUp, egui::Key::ArrowUp),
-                (select::Key::Home, egui::Key::Home),
-                (select::Key::End, egui::Key::End),
-                (select::Key::Enter, egui::Key::Enter),
-                (select::Key::Space, egui::Key::Space),
-                (select::Key::Escape, egui::Key::Escape),
-            ] {
-                if !ui.input(|input| input.key_pressed(logical)) {
-                    continue;
-                }
-                let outcome = select::key(state, &disabled, selected_index, key);
-                if outcome.handled {
-                    ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, logical));
-                    state = outcome.state;
-                    if let Some(index) = outcome.chosen {
-                        chosen = Some(index);
-                    }
-                }
-            }
         }
-        let keyboard_click = focused
-            && ui.input(|input| {
-                input.key_pressed(egui::Key::Enter) || input.key_pressed(egui::Key::Space)
-            });
         if enabled && response.clicked() && !keyboard_click {
             response.request_focus();
             state = if state.open {
@@ -806,6 +831,7 @@ impl<'a> Select<'a> {
                                                 }
                                                 if row_response.clicked() {
                                                     chosen = Some(index);
+                                                    state.open = false;
                                                 }
                                                 let active =
                                                     state.active == index && !option.disabled;
@@ -900,13 +926,12 @@ impl<'a> Select<'a> {
             ui.ctx().request_repaint();
         }
         if let Some(index) = chosen {
-            state.open = false;
             memory.menu = egui::Vec2::ZERO;
             chosen = options
                 .get(index)
                 .filter(|option| !option.disabled)
                 .map(|_| index);
-            if chosen.is_some() {
+            if chosen.is_some() && !tabbed_away {
                 ui.memory_mut(|memory| memory.request_focus(id));
             }
         }
@@ -1735,14 +1760,16 @@ mod tests {
                 if let Some(chosen) = output.chosen {
                     *value = chosen;
                 }
+                let _ = ui.button("Next control");
             });
             seen
         };
         let (trigger, _) = run(vec![], &mut value);
-        ctx.memory_mut(|memory| memory.request_focus(trigger.unwrap()));
-        run(vec![], &mut value);
-        run(vec![], &mut value);
+        run(vec![key(egui::Key::Tab)], &mut value);
+        assert_eq!(ctx.memory(|memory| memory.focused()), trigger);
+        // An arrow immediately after Tab must open without moving focus.
         run(vec![key(egui::Key::ArrowDown)], &mut value);
+        assert_eq!(ctx.memory(|memory| memory.focused()), trigger);
         let (_, rows) = run(vec![], &mut value);
         assert_eq!(rows, 3, "ArrowDown opens the listbox");
         run(vec![key(egui::Key::ArrowDown)], &mut value);
@@ -1755,6 +1782,68 @@ mod tests {
         run(vec![key(egui::Key::Escape)], &mut value);
         let (_, rows) = run(vec![], &mut value);
         assert_eq!((value, rows), (3, 0), "Escape closes without choosing");
+
+        run(vec![key(egui::Key::Space)], &mut value);
+        run(
+            vec![
+                key(egui::Key::End),
+                key(egui::Key::Home),
+                key(egui::Key::Enter),
+            ],
+            &mut value,
+        );
+        assert_eq!(value, 1, "the last navigation key wins, not enum order");
+        run(
+            vec![
+                key(egui::Key::ArrowDown),
+                key(egui::Key::ArrowDown),
+                key(egui::Key::Enter),
+            ],
+            &mut value,
+        );
+        assert_eq!(
+            value, 3,
+            "multiple arrow events in one pass are not collapsed"
+        );
+        run(vec![key(egui::Key::Space)], &mut value);
+        run(
+            vec![
+                key(egui::Key::Home),
+                key(egui::Key::Escape),
+                key(egui::Key::Enter),
+            ],
+            &mut value,
+        );
+        assert_eq!(value, 3, "Escape before Enter cancels rather than selects");
+        let (_, rows) = run(vec![], &mut value);
+        assert_eq!(rows, 3, "Enter after Escape reopens the selected option");
+        run(
+            vec![
+                key(egui::Key::Home),
+                key(egui::Key::Enter),
+                key(egui::Key::Space),
+            ],
+            &mut value,
+        );
+        let (_, rows) = run(vec![], &mut value);
+        assert_eq!(
+            (value, rows),
+            (1, 3),
+            "Space after choosing reopens instead of being discarded"
+        );
+        run(
+            vec![
+                key(egui::Key::End),
+                key(egui::Key::Enter),
+                key(egui::Key::Tab),
+                key(egui::Key::ArrowUp),
+            ],
+            &mut value,
+        );
+        let (_, rows) = run(vec![], &mut value);
+        assert_eq!(value, 3, "selection before Tab is retained");
+        assert_eq!(rows, 0, "Tab closes the menu and reaches the next control");
+        assert_ne!(ctx.memory(|memory| memory.focused()), trigger);
     }
 
     #[test]
