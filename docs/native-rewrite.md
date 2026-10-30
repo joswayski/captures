@@ -32,6 +32,19 @@ do not replace physical macOS/Windows/Linux, accessibility or mixed-DPI checks.
 The detailed checklist below remains the release gate; unchecked does not mean
 unimplemented. Later slice notes supersede earlier notes about missing behavior.
 
+The wgpu screenshot-editor zoom slider now owns arrow keys (1% of its logarithmic
+track), Page Up/Down (10%) and Home/End (5–800%) while focused. Tab still leaves
+the control; the first arrow after Tab cannot move focus. Accessibility reports
+the displayed zoom percentage, bounds and Fit description, with ordered
+increment/decrement/finite SetValue actions. Pointer and keyboard input share the
+existing view-only zoom path, without document edits, worker jobs or Undo entries.
+The regression exercises the rendered editor's Tab order and accessibility tree;
+the private-X11 zoom fixture checks real keys against independent canvas-edge
+pixels and unchanged capture/draft data. AppKit retains its existing NSSlider;
+this slice changes only the Windows/X11/Wayland wgpu host. Physical Windows,
+Wayland and screen-reader acceptance remain open. Media upload quota prevents
+visual inspection of this slice's captured screenshots/recording in the orb.
+
 Native update restart snapshots include Preferences visibility, screenshot draft
 owners and adopted saved-copy sources, recording editors, and ordered preview IDs.
 Both hosts snapshot before teardown and preserve the editor veto. Restart refuses
