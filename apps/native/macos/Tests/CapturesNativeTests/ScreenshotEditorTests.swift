@@ -286,6 +286,7 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertTrue(flyout.isHidden)
             rail[3].performClick(nil)
             XCTAssertFalse(flyout.isHidden, "Shapes opens its flyout")
+            XCTAssertTrue(controller.window.firstResponder === flyout.buttons[0].button)
             XCTAssertEqual(flyout.frame.minX, rail[3].frame.maxX + 10)
             XCTAssertEqual(flyout.frame.size, NSSize(width: 6 + 3 * 44 + 2 * 4 + 6, height: 6 + 2 * 44 + 4 + 6),
                            "three 44pt columns, --s-2 gaps and --s-3 padding")
@@ -301,7 +302,45 @@ final class ScreenshotEditorTests: XCTestCase {
                 XCTAssertTrue(flyout.isHidden, "choosing a shape closes the flyout")
                 XCTAssertTrue(flyout.buttons[index].button.active)
                 XCTAssertEqual(flyout.buttons.filter { $0.button.active }.count, 1)
+                XCTAssertTrue(controller.window.firstResponder === rail[3], "choice restores the trigger")
             }
+            let editsBeforeNavigation = worker.requests.count
+            controller.window.sendEvent(try keyEvent(window: controller.window, keyCode: 125, characters: "\u{f701}"))
+            XCTAssertFalse(flyout.isHidden, "arrow opens from the trigger")
+            XCTAssertTrue(controller.window.firstResponder === flyout.buttons[5].button, "reopen focuses the current shape")
+            let navigation: [(UInt16, String, Int)] = [
+                (124, "\u{f703}", 0), (123, "\u{f702}", 5),
+                (125, "\u{f701}", 2), (126, "\u{f700}", 5),
+                (115, "\u{f729}", 0), (119, "\u{f72b}", 5),
+            ]
+            for (code, characters, index) in navigation {
+                controller.window.sendEvent(try keyEvent(window: controller.window, keyCode: code, characters: characters))
+                XCTAssertTrue(controller.window.firstResponder === flyout.buttons[index].button)
+                XCTAssertEqual(controller.drawOverlay.shape, .star, "navigation does not choose")
+            }
+            controller.window.sendEvent(try keyEvent(window: controller.window, keyCode: 115, characters: "\u{f729}"))
+            controller.window.sendEvent(try keyEvent(window: controller.window, keyCode: 125, characters: "\u{f701}"))
+            controller.window.sendEvent(try keyEvent(window: controller.window, keyCode: 36, characters: "\r"))
+            XCTAssertEqual(controller.drawOverlay.shape, .triangle)
+            XCTAssertTrue(flyout.isHidden)
+            XCTAssertTrue(controller.window.firstResponder === rail[3])
+            for code in [UInt16(53), 48] {
+                controller.window.sendEvent(try keyEvent(window: controller.window, keyCode: 126, characters: "\u{f700}"))
+                XCTAssertFalse(flyout.isHidden)
+                controller.window.sendEvent(try keyEvent(window: controller.window, keyCode: code, characters: code == 53 ? "\u{1b}" : "\t"))
+                XCTAssertTrue(flyout.isHidden)
+                XCTAssertTrue(controller.window.firstResponder === rail[3], "dismissal restores the trigger")
+            }
+            controller.window.sendEvent(try keyEvent(window: controller.window, keyCode: 49, characters: " "))
+            XCTAssertFalse(flyout.isHidden, "Space opens from the trigger")
+            controller.window.sendEvent(try keyEvent(window: controller.window, keyCode: 49, characters: " "))
+            XCTAssertTrue(flyout.isHidden, "Space chooses the focused shape")
+            XCTAssertTrue(controller.window.firstResponder === rail[3])
+            controller.showShapeFlyout(true)
+            controller.window.sendEvent(try keyEvent(window: controller.window, keyCode: 48, characters: "\t", modifiers: .shift))
+            XCTAssertTrue(flyout.isHidden)
+            XCTAssertTrue(controller.window.firstResponder === rail[3], "Shift+Tab restores the trigger too")
+            XCTAssertEqual(worker.requests.count, editsBeforeNavigation, "menu keys do not edit the document")
             for (index, shape) in [(4, EditorDrawOverlay.Shape.arrow), (5, .pen), (6, .wand)] {
                 rail[index].performClick(nil)
                 XCTAssertEqual(controller.drawOverlay.shape, shape)

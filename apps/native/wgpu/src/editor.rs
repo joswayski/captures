@@ -8152,6 +8152,7 @@ mod tests {
     #[test]
     fn rail_selects_tools_and_shape_menu_without_editing_or_leaking_busy_clicks() {
         let ctx = egui::Context::default();
+        ctx.enable_accesskit();
         let tokens = crate::tokens::load().remove("light-mustard").unwrap();
         let mut view = View::default();
         view.receive(&ctx, Ok(presented(true)));
@@ -8179,6 +8180,22 @@ mod tests {
             assert!(output.platform_output.num_completed_passes >= 2);
             output.textures_delta.clear();
             output
+        };
+        let focused_name = |output: egui::FullOutput| {
+            let tree = output.platform_output.accesskit_update.unwrap();
+            tree.nodes
+                .iter()
+                .find(|(id, _)| *id == tree.focus)
+                .and_then(|(_, node)| node.label())
+                .unwrap_or_default()
+                .to_owned()
+        };
+        let key = |key| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
         };
         let click = |view: &mut View, pos| {
             frame(view, vec![egui::Event::PointerMoved(pos)]);
@@ -8229,7 +8246,7 @@ mod tests {
         click(&mut view, rail(3));
         assert!(view.selected_layer.is_none(), "Shapes clears selection");
         assert!(egui::Popup::is_any_open(&ctx));
-        frame(&mut view, vec![]);
+        assert_eq!(focused_name(frame(&mut view, vec![])), "Rectangle (R)");
         // The flyout opens 10px right of Shapes, centred on it: a 3×2 grid of
         // 44px buttons with 4px gaps and 6px padding. Star is last.
         let star = egui::pos2(
@@ -8239,6 +8256,7 @@ mod tests {
         click(&mut view, star);
         assert_eq!(view.draw_shape, DrawShape::Star);
         assert!(!egui::Popup::is_any_open(&ctx));
+        assert!(focused_name(frame(&mut view, vec![])).starts_with("Shapes"));
         for (row, shape) in [
             (4, DrawShape::Arrow),
             (5, DrawShape::Freehand),
@@ -8264,11 +8282,68 @@ mod tests {
             }],
         );
         assert!(!egui::Popup::is_any_open(&ctx));
+        assert!(focused_name(frame(&mut view, vec![])).starts_with("Shapes"));
+        frame(&mut view, vec![key(egui::Key::ArrowDown)]);
+        assert!(
+            egui::Popup::is_any_open(&ctx),
+            "arrow opens from the trigger"
+        );
+        assert_eq!(focused_name(frame(&mut view, vec![])), "Star (S)");
+        for (navigation, expected) in [
+            (egui::Key::ArrowRight, "Rectangle (R)"),
+            (egui::Key::ArrowLeft, "Star (S)"),
+            (egui::Key::ArrowDown, "Line (L)"),
+            (egui::Key::ArrowUp, "Star (S)"),
+            (egui::Key::Home, "Rectangle (R)"),
+            (egui::Key::End, "Star (S)"),
+        ] {
+            frame(&mut view, vec![key(navigation)]);
+            assert_eq!(focused_name(frame(&mut view, vec![])), expected);
+            assert_eq!(
+                view.draw_shape,
+                DrawShape::Star,
+                "navigation does not choose"
+            );
+        }
+        frame(
+            &mut view,
+            vec![
+                key(egui::Key::Home),
+                key(egui::Key::ArrowDown),
+                key(egui::Key::Enter),
+            ],
+        );
+        assert_eq!(view.draw_shape, DrawShape::Triangle);
+        assert!(!egui::Popup::is_any_open(&ctx));
+        assert!(focused_name(frame(&mut view, vec![])).starts_with("Shapes"));
+        frame(&mut view, vec![key(egui::Key::ArrowUp)]);
+        frame(&mut view, vec![key(egui::Key::Tab)]);
+        assert!(!egui::Popup::is_any_open(&ctx));
+        assert!(focused_name(frame(&mut view, vec![])).starts_with("Shapes"));
+        frame(&mut view, vec![key(egui::Key::Space)]);
+        assert!(egui::Popup::is_any_open(&ctx));
+        frame(&mut view, vec![key(egui::Key::Space)]);
+        assert!(!egui::Popup::is_any_open(&ctx));
+        assert_eq!(view.draw_shape, DrawShape::Triangle);
+        assert!(focused_name(frame(&mut view, vec![])).starts_with("Shapes"));
+        frame(&mut view, vec![key(egui::Key::ArrowLeft)]);
+        frame(
+            &mut view,
+            vec![egui::Event::Key {
+                key: egui::Key::Tab,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::SHIFT,
+            }],
+        );
+        assert!(!egui::Popup::is_any_open(&ctx));
+        assert!(focused_name(frame(&mut view, vec![])).starts_with("Shapes"));
         for blocked in 0..2 {
             view.pending = blocked == 0;
             view.close_requested = blocked == 1;
             click(&mut view, rail(4));
-            assert_eq!(view.draw_shape, DrawShape::Star);
+            assert_eq!(view.draw_shape, DrawShape::Triangle);
         }
         assert_eq!(view.presented.as_ref().unwrap().document, original);
     }

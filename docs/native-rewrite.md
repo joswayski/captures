@@ -81,6 +81,17 @@ slider through Tab before exporting independently measured stereo tone gains
 AppKit keeps its native sliders. Windows/X11/Wayland share this implementation;
 physical Windows, Wayland and assistive-technology acceptance remain open.
 
+Both native Shapes flyouts follow Tauri's keyboard model: opening focuses the
+current shape, arrows wrap through the three-column grid, Home/End reach its
+first/last item, and Enter/Space choose without editing the document. Choice,
+Escape and Tab (including Shift+Tab) restore the Shapes trigger; an arrow from
+that trigger opens the flyout again. Outside clicks keep their normal focus
+behavior. wgpu uses the token focus ring; AppKit uses its native button focus.
+The rail regressions exercise focus, wrapping, choice, dismissal and unchanged
+documents. The private-X11 history-shortcut fixture also draws and undoes a
+keyboard-selected Triangle, validating its saved shape rather than only an open
+menu. Physical macOS/Windows/X11/Wayland and screen-reader acceptance remain open.
+
 The wgpu screenshot-editor zoom slider now owns arrow keys (1% of its logarithmic
 track), Page Up/Down (10%) and Home/End (5–800%) while focused. Tab still leaves
 the control; the first arrow after Tab cannot move focus. Accessibility reports
