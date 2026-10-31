@@ -4926,7 +4926,7 @@ def main():
         document_pixel(f"viewport-fit-{args.appearance}", 72, 111, (40, 110, 166))
         topbar_click("zoom")
         shot(editor, "viewport-presets-menu")
-        click(editor, zoom_menu_x(), 152)  # 100% preset, without a custom row.
+        click(editor, zoom_menu_x(), 124)  # 100% preset: shared listbox rows are 28px high.
         shot(editor, "viewport-actual-button")
         topbar_click("plus")  # 1.25x
         shot(editor, "viewport-125-button")
@@ -4936,7 +4936,12 @@ def main():
         shot(editor, "viewport-125-key")
 
         def viewport_pixels(name):
-            return run("convert", str(output / f"{name}.png"), "-crop", "584x500+64+89", "-depth", "8", "rgba:-")
+            width, height = window_size()
+            # Keep the original wide-window probe, but exclude sidebar hover
+            # and export controls when comparing the new minimum-width cases.
+            width = min(584, width - INSPECTOR_WIDTH - 8 - 64)
+            height = min(500, height - export_bar_height() - 8 - 89)
+            return run("convert", str(output / f"{name}.png"), "-crop", f"{width}x{height}+64+89", "-depth", "8", "rgba:-")
 
         assert viewport_pixels("viewport-actual-key") == viewport_pixels("viewport-actual-button")
         assert viewport_pixels("viewport-125-key") == viewport_pixels("viewport-125-button")
@@ -4947,7 +4952,7 @@ def main():
         assert viewport_pixels("viewport-field-key") == viewport_pixels("viewport-actual-button")
         run("xdotool", "key", "Escape")
         topbar_click("zoom")
-        click(editor, zoom_menu_x(), 108)  # 50% preset.
+        click(editor, zoom_menu_x(), 96)  # 50% preset.
         shot(editor, "viewport-preset-50")
         # 640×360 at 50% is 320×180, centered in the 594×603 viewport.
         # The 56px rail moves the viewport center right by 28px.
@@ -4958,18 +4963,18 @@ def main():
         pixel("viewport-preset-50", 521, 310,
               (245, 245, 247) if args.appearance == "light" else (16, 16, 20))
         topbar_click("zoom")
-        click(editor, zoom_menu_x(), 196)  # 200% preset.
+        click(editor, zoom_menu_x(), 152)  # 200% preset.
         shot(editor, "viewport-preset-200")
         run("xdotool", "key", "ctrl+0", "ctrl+equal", "ctrl+equal", "sleep", ".3")
         shot(editor, "viewport-preset-custom")
         topbar_click("zoom")
         shot(editor, "viewport-presets-custom-menu")
-        click(editor, zoom_menu_x(), 240)  # 200% now follows the custom percentage row.
+        click(editor, zoom_menu_x(), 180)  # 200% now follows the custom percentage row.
         shot(editor, "viewport-preset-200-from-custom")
         assert viewport_pixels("viewport-preset-200") == viewport_pixels("viewport-preset-200-from-custom")
         assert viewport_pixels("viewport-preset-50") != viewport_pixels("viewport-preset-200")
         topbar_click("zoom")
-        click(editor, zoom_menu_x(), 64)  # Fit removes the custom row and resets pan.
+        click(editor, zoom_menu_x(), 68)  # Fit removes the custom row and resets pan.
         shot(editor, "viewport-preset-fit")
         assert viewport_pixels("viewport-preset-fit") == viewport_pixels(f"viewport-fit-{args.appearance}")
         run("xdotool", "mousemove", "--sync", "--window", editor, "290", "250",
@@ -4978,7 +4983,7 @@ def main():
         shot(editor, "viewport-fit-panned")
         assert viewport_pixels("viewport-fit-panned") != viewport_pixels("viewport-preset-fit")
         topbar_click("zoom")
-        click(editor, zoom_menu_x(), 64)  # Reselecting Fit must reset pan even when already selected.
+        click(editor, zoom_menu_x(), 68)  # Reselecting Fit must reset pan even when already selected.
         shot(editor, "viewport-preset-fit-reselected")
         assert viewport_pixels("viewport-preset-fit-reselected") == viewport_pixels("viewport-preset-fit")
         assert not draft.exists(), "toolbar zoom must remain outside draft state"
@@ -5001,9 +5006,35 @@ def main():
             run("xdotool", "windowsize", "--sync", editor, "760", "540",
                 "key", "ctrl+0", "ctrl+equal", "ctrl+equal", "sleep", ".3")
             shot(editor, "viewport-preset-custom-minimum")
+            recording = spawn("zoom-preset-recording", ["ffmpeg", "-y", "-loglevel", "error",
+                "-f", "x11grab", "-framerate", "20", "-video_size", "1400x1200",
+                "-i", env["DISPLAY"], "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+                str(output / "zoom-preset-keyboard.mp4")])
+            points, _ = header_controls(editor_width())
+            for x in range(points["fit"], points["zoom"] + 1, 4):
+                run("xdotool", "mousemove", "--sync", "--window", editor,
+                    str(x), str(HEADER_Y), "sleep", ".02")
             topbar_click("zoom")
             shot(editor, "viewport-presets-custom-menu-minimum")
-            run("xdotool", "key", "Escape")
+            run("xdotool", "key", "--delay", "1", "End", "Home", "Return", "sleep", ".3")
+            shot(editor, "viewport-presets-keyboard-fit")
+            topbar_click("fit")
+            shot(editor, "viewport-presets-pointer-fit")
+            assert viewport_pixels("viewport-presets-keyboard-fit") == viewport_pixels("viewport-presets-pointer-fit")
+            topbar_click("zoom")
+            run("xdotool", "key", "--delay", "1", "End", "Escape", "sleep", ".3")
+            shot(editor, "viewport-presets-keyboard-cancel")
+            assert viewport_pixels("viewport-presets-keyboard-cancel") == viewport_pixels("viewport-presets-pointer-fit")
+            run("xdotool", "key", "space", "End", "Return", "sleep", ".3")
+            shot(editor, "viewport-presets-keyboard-200")
+            topbar_click("zoom")
+            click(editor, zoom_menu_x(), 152)
+            shot(editor, "viewport-presets-pointer-200")
+            assert viewport_pixels("viewport-presets-keyboard-200") == viewport_pixels("viewport-presets-pointer-200")
+            assert viewport_pixels("viewport-presets-keyboard-200") != viewport_pixels("viewport-presets-pointer-fit")
+            recording.send_signal(signal.SIGINT)
+            recording.wait(timeout=10)
+            assert recording.returncode in (0, 255)
             topbar_click("fit")  # Fit resets the viewport-center anchor.
             recording = spawn("zoom-slider-recording", ["ffmpeg", "-y", "-loglevel", "error",
                 "-f", "x11grab", "-framerate", "20", "-video_size", "1400x1200",

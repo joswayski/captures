@@ -320,6 +320,8 @@ pub enum SelectStyle {
     Glass,
     /// `.filename-format-select`: borderless inside another field.
     Inline,
+    /// `.screenshot-editor-zoom-presets`: compact mono value at the zoom group's end.
+    Zoom,
 }
 
 /// The trigger response, whether the listbox is open, a newly chosen value,
@@ -328,6 +330,9 @@ pub struct SelectOutput<T> {
     pub response: egui::Response,
     /// The listbox is open (shipping `onOpen` fires as it opens).
     pub open: bool,
+    /// An accepted option, including reselecting the current value (e.g. Fit resets pan).
+    pub activated: Option<T>,
+    /// An accepted option only when it differs from the current value.
     pub chosen: Option<T>,
     pub rows: Vec<Rect>,
     /// The listbox's visible area while open (the rows' clip rect).
@@ -414,7 +419,7 @@ impl<'a> Select<'a> {
             SelectStyle::Field => t.number("h-md"),
             SelectStyle::Glass => t.number("h-lg"),
             // `height: 100%` of the field it sits in.
-            SelectStyle::Inline => ui.max_rect().height(),
+            SelectStyle::Inline | SelectStyle::Zoom => ui.max_rect().height(),
         });
         let (rect, _) =
             ui.allocate_exact_size(egui::vec2(self.width, height), egui::Sense::hover());
@@ -550,7 +555,11 @@ impl<'a> Select<'a> {
         // Trigger.
         let open = state.open;
         let hovered = enabled && response.hovered();
-        let radius = t.number("r-md");
+        let radius = if self.style == SelectStyle::Zoom {
+            (t.number("r-lg") - 1.).max(0.)
+        } else {
+            t.number("r-md")
+        };
         let painter = ui.painter();
         let (fill, border, ink, glyph) = match self.style {
             SelectStyle::Field => (
@@ -577,6 +586,16 @@ impl<'a> Select<'a> {
                 t.color("glass-text"),
                 t.color("glass-text-subtle"),
             ),
+            SelectStyle::Zoom => (
+                if hovered {
+                    t.color("surface-hover")
+                } else {
+                    Color32::TRANSPARENT
+                },
+                Color32::TRANSPARENT,
+                t.color("text"),
+                t.color("text-subtle"),
+            ),
             SelectStyle::Inline => (
                 if hovered {
                     t.color("surface-hover")
@@ -596,8 +615,8 @@ impl<'a> Select<'a> {
                 }),
             ),
         };
-        // The inline trigger rounds only the field's right end.
-        let corners = if self.style == SelectStyle::Inline {
+        // Embedded triggers round only their field/group's right end.
+        let corners = if matches!(self.style, SelectStyle::Inline | SelectStyle::Zoom) {
             let r = radius.min(255.) as u8;
             egui::CornerRadius {
                 nw: 0,
@@ -621,8 +640,17 @@ impl<'a> Select<'a> {
             t.number("s-4")
         };
         let text = self.trigger_text.unwrap_or(selected_label);
-        let font = egui::FontId::proportional(t.number("text-sm"));
-        let text_width = (rect.width() - padding * 2. - 14. - t.number("s-3")).max(0.);
+        let font = if self.style == SelectStyle::Zoom {
+            egui::FontId::monospace(t.number("text-xs"))
+        } else {
+            egui::FontId::proportional(t.number("text-sm"))
+        };
+        let text_width = if self.style == SelectStyle::Zoom {
+            rect.width() - padding - 20.
+        } else {
+            rect.width() - padding * 2. - 14. - t.number("s-3")
+        }
+        .max(0.);
         let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), font.clone(), ink);
         job.wrap = egui::text::TextWrapping::truncate_at_width(text_width);
         let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
@@ -636,13 +664,25 @@ impl<'a> Select<'a> {
             galley,
             ink,
         );
-        chevron(
-            painter,
-            egui::pos2(rect.right() - padding - 7., rect.center().y),
-            14.,
-            open,
-            glyph,
-        );
+        if self.style == SelectStyle::Zoom {
+            crate::preferences_widgets::icon(
+                painter,
+                "chevron-down",
+                Rect::from_center_size(
+                    egui::pos2(rect.right() - 10., rect.center().y),
+                    egui::Vec2::splat(12.),
+                ),
+                glyph,
+            );
+        } else {
+            chevron(
+                painter,
+                egui::pos2(rect.right() - padding - 7., rect.center().y),
+                14.,
+                open,
+                glyph,
+            );
+        }
         if (focused || open) && self.style != SelectStyle::Inline {
             focus_ring(ui, t, rect, radius);
         } else if focused {
@@ -731,6 +771,9 @@ impl<'a> Select<'a> {
                 .fixed_pos(origin)
                 .constrain(false)
                 .show(ui.ctx(), |ui| {
+                    // An Area remembers its last height. Let a reopened menu grow
+                    // when its options change (e.g. zoom adds a custom percentage).
+                    ui.set_max_height(layout.max_height as f32);
                     crate::motion::with_pose(ui, pose, pivot, |ui| {
                         egui::Frame::new()
                             .fill(t.color(if glass {
@@ -976,6 +1019,7 @@ impl<'a> Select<'a> {
             response,
             open: state.open,
             list_clip,
+            activated: chosen.map(|index| options[index].value.clone()),
             chosen: chosen.and_then(|index| {
                 let value = options[index].value.clone();
                 (value != *selected).then_some(value)

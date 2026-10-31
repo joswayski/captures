@@ -980,6 +980,8 @@ Dismiss in both native hosts and shipping Tauri; dismissing it preserves the
 restored document and saved edits. Recenter
 appears only while the canvas is panned mostly off screen.
 The zoom menu offers Fit, 50%, 100% and 200% and displays the current custom zoom.
+The Windows/Linux preset menu supports keyboard navigation, Escape cancellation,
+and accessible option selection; choosing Fit again also clears pan.
 Both hosts also provide a logarithmic 5–800% zoom slider. It tracks the actual Fit
 scale and preserves the viewport-center image point when dragged.
 The Windows/Linux slider also accepts arrow keys, Page Up/Down and Home/End

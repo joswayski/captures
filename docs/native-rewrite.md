@@ -32,6 +32,17 @@ do not replace physical macOS/Windows/Linux, accessibility or mixed-DPI checks.
 The detailed checklist below remains the release gate; unchecked does not mean
 unimplemented. Later slice notes supersede earlier notes about missing behavior.
 
+The wgpu screenshot zoom preset menu now uses the shared select's ordered
+keyboard handling and accessible listbox instead of a generic popup. Its compact
+monospace trigger retains the zoom group's geometry; Fit, custom zoom, 50%, 100%
+and 200% remain view-only actions. Selecting Fit again still resets pan, while
+ordinary select consumers retain change-only notifications. The editor regression
+covers Tab then ArrowDown, cancellation, custom-row removal, assistive selection,
+Fit reselection and unchanged document/worker state. AppKit keeps its native
+NSPopUpButton. Windows/X11/Wayland share this implementation; physical Windows,
+Wayland and screen-reader acceptance remain separate from automated Linux checks.
+This slice does not authorize public native downloads.
+
 The shared wgpu custom select now processes keyboard events in arrival order,
 including repeated arrows in one frame. Tab-to-select followed immediately by
 an arrow retains trigger focus instead of allowing egui's directional navigation
