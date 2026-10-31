@@ -10,8 +10,7 @@ const CAPER_INVITE_URL = "https://caper.chat/invite/pIXKAZFUp8";
 const AUTHOR_URL = "https://josevalerio.com";
 const CONTACT_EMAIL = "jose@captur.es";
 const PREVIEW_DOWNLOAD_BASE = `${REPO_URL}/releases/download/preview`;
-const COOKING_TOOLTIP =
-  "Development builds are still running. These changes may not be in the public Tauri download.";
+const COOKING_TOOLTIP = "These changes are still being built and may not be in your download yet.";
 
 const PREVIEW_DOWNLOADS = [
   {
@@ -116,10 +115,6 @@ export default function Home({
                 <h2 className="text-base font-medium tracking-tight text-ink sm:text-lg">
                   Download Captures
                 </h2>
-                <p className="mt-3 max-w-xl text-sm leading-relaxed text-ink-muted">
-                  {linuxInstallCopy(detectedDownload)} Please give feedback in the app,{" "}
-                  <FeedbackChannels />.
-                </p>
 
                 <div className="mt-8">
                   <div className="flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:items-center">
@@ -133,6 +128,9 @@ export default function Home({
                     </a>
                     <GitHubSourceButton />
                   </div>
+                  <p className="mt-3 text-sm leading-relaxed text-ink-muted">
+                    {installCopy(detectedDownload)}
+                  </p>
                   {linuxAlternative ? (
                     <p className="mt-3 text-xs text-ink-soft">
                       <a
@@ -154,6 +152,9 @@ export default function Home({
                     </a>
                   </p>
                 </div>
+                <p className="mt-6 text-xs leading-relaxed text-ink-soft">
+                  Feedback is welcome in the app, <FeedbackChannels />.
+                </p>
               </>
             ) : (
               <>
@@ -249,9 +250,11 @@ function linuxAlternativeLabel(download: PreviewDownload) {
   return download.id === "linux-deb" ? ".deb for Ubuntu / Debian" : "AppImage";
 }
 
-function linuxInstallCopy(download: PreviewDownload) {
-  if (download.family !== "linux") return null;
-  return "For the AppImage, copy it over ~/.local/bin/Captures.AppImage and make it executable; running it from Downloads starts a second copy. Settings and captures stay.";
+function installCopy(download: PreviewDownload) {
+  if (download.family === "macos") return "Open the .dmg and drag Captures to Applications.";
+  if (download.family === "windows") return "Run the downloaded installer.";
+  if (download.id === "linux-deb") return "Open the .deb with your software installer.";
+  return "Make the AppImage executable, then open it.";
 }
 
 function availabilityLabel(download: PreviewDownload | null) {
@@ -290,8 +293,8 @@ function FeedbackChannels() {
         className="font-medium text-ink underline underline-offset-4 transition-colors duration-200 ease-out hover:text-accent-readable"
       >
         caper.chat
-      </a>{" "}
-      (my other app), or <CopyEmailButton email={CONTACT_EMAIL} />
+      </a>
+      , or <CopyEmailButton email={CONTACT_EMAIL} />
     </>
   );
 }
