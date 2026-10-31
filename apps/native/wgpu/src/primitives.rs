@@ -1120,6 +1120,7 @@ impl<'a> NumberInput<'a> {
         // ArrowUp/ArrowDown step before the text edit sees them.
         if enabled && focused_before {
             let mut keyboard = true;
+            let mut owns_key = false;
             ui.input_mut(|input| {
                 input.events.retain(|event| {
                     let egui::Event::Key {
@@ -1144,6 +1145,7 @@ impl<'a> NumberInput<'a> {
                         egui::Key::ArrowDown => false,
                         _ => return true,
                     };
+                    owns_key = true;
                     // Clamping makes order observable at both limits.
                     let next = number::step_from(&buffer, self.step, up, self.min, self.max);
                     set(value, next);
@@ -1151,6 +1153,11 @@ impl<'a> NumberInput<'a> {
                     false
                 });
             });
+            if owns_key && keyboard {
+                // Tab focus can arrive before TextEdit installs its arrow lock.
+                // Cancel that queued arrow movement, but never cancel departure.
+                ui.memory_mut(|memory| memory.move_focus(egui::FocusDirection::None));
+            }
         }
         let hovered = enabled && ui.rect_contains_pointer(rect);
         let radius = t.number("r-md");
@@ -2187,6 +2194,32 @@ mod tests {
             });
         }
         assert_eq!(seen, [false, true, false]);
+    }
+
+    #[test]
+    fn number_input_keeps_the_first_arrow_after_tab() {
+        let (ctx, t) = setup();
+        let mut values = [9u32, 17];
+        let run = |events: Vec<egui::Event>, values: &mut [u32; 2]| {
+            frame(&ctx, events, |ui| {
+                for (index, value) in values.iter_mut().enumerate() {
+                    NumberInput::new(("tab-number", index), "Numeric field", 120.)
+                        .range(0. ..=100.)
+                        .show(ui, &t, value);
+                }
+            });
+        };
+        run(vec![], &mut values);
+        run(vec![key(egui::Key::Tab)], &mut values);
+        run(vec![key(egui::Key::ArrowDown)], &mut values);
+        assert_eq!(values, [8, 17]);
+        run(vec![key(egui::Key::ArrowDown)], &mut values);
+        assert_eq!(values, [7, 17], "the first arrow must not move focus");
+        run(vec![key(egui::Key::Tab)], &mut values);
+        run(vec![key(egui::Key::ArrowUp)], &mut values);
+        assert_eq!(values, [7, 18]);
+        run(vec![key(egui::Key::ArrowUp)], &mut values);
+        assert_eq!(values, [7, 19]);
     }
 
     #[test]
