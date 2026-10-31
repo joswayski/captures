@@ -2709,7 +2709,11 @@ def main():
             save_layers(lambda values: len(values) == 1, "undo invisible line")
             toolbar_click("draw")
             before = draft_bytes()
+            # Present the restored drawing controls before targeting the slider.
+            # Undo's worker completion alone does not settle the flyout layout.
+            shot(editor, "drawing-shadow-restored-controls")
             prop_slider(OPEN_DRAW_ROWS["opacity"], "End")
+            shot(editor, "drawing-shadow-opacity-controls")
             prop_click(16, OPEN_DRAW_ROWS["shadow"])  # Line's pre-placement Drop shadow.
             shot(editor, "drawing-shadow-controls")
             # Shipping DropShadowFields, indented under the check row.

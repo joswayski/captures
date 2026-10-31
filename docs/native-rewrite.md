@@ -69,6 +69,18 @@ and nonfinite inputs, retained focus, unchanged documents and comparison output.
 Hosted AppKit execution and physical VoiceOver acceptance are separate gates;
 this implementation does not authorize native public downloads.
 
+Shared wgpu range sliders (annotation/brush settings and recording volumes) now
+retain focus on the first arrow immediately after Tab, matching native range
+input behavior. Rapid adjustment → Tab → adjustment sequences apply only the
+keys before departure; they neither cancel Tab nor change the previous slider
+afterwards. Discrete undo steps and ordered accessibility actions are retained.
+The egui frame regression reproduces the original focus loss and covers
+both sides of the Tab boundary; recording audio fixtures re-enter each volume
+slider through Tab before exporting independently measured stereo tone gains
+(25% system audio and 175% microphone, dark and light private-X11 runs).
+AppKit keeps its native sliders. Windows/X11/Wayland share this implementation;
+physical Windows, Wayland and assistive-technology acceptance remain open.
+
 The wgpu screenshot-editor zoom slider now owns arrow keys (1% of its logarithmic
 track), Page Up/Down (10%) and Home/End (5–800%) while focused. Tab still leaves
 the control; the first arrow after Tab cannot move focus. Accessibility reports
