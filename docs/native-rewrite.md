@@ -45,6 +45,14 @@ appearances at normal and minimum sizes. Windows/X11/Wayland share the wgpu
 code, and AppKit is covered by the hosted macOS workflow only. Physical-host and
 screen-reader acceptance remain open.
 
+Compact Preferences windows (≤720 px) now follow shipping's control rules on
+both hosts. Stacked selects and the Interface theme segmented control stretch
+across the card, with segments sharing the track equally. The mini preview
+corner picker stacks but stays right-aligned. Shortcut rows never stack. A wgpu
+regression checks select width and recorder position at 880 and 560 px. The
+AppKit compact-window test checks the same three rules on the hosted macOS
+workflow. Physical-host acceptance remains open.
+
 The screenshot editor's color field was audited against the shipping
 `ColorField`. No change was needed. Tab reaches the eight swatches in order,
 then the custom tile, then the hex field once the custom picker is open.

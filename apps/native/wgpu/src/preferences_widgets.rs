@@ -183,6 +183,7 @@ pub fn segmented(
     label: &str,
     options: &[(&'static str, &'static str)],
     selected: &str,
+    stretch: bool,
 ) -> Option<&'static str> {
     let size = t.number("text-sm");
     let padding = t.number("s-5");
@@ -190,7 +191,14 @@ pub fn segmented(
         .iter()
         .map(|(_, name)| text(ui, name, size, t.color("text")))
         .collect();
-    let widths: Vec<f32> = galleys.iter().map(|g| g.size().x + padding * 2.).collect();
+    let mut widths: Vec<f32> = galleys.iter().map(|g| g.size().x + padding * 2.).collect();
+    if stretch {
+        // `button { flex: 1 }` shares the available width equally, never
+        // narrower than a label.
+        let share = (ui.available_width() - 8.) / options.len().max(1) as f32;
+        let natural = widths.iter().copied().fold(0., f32::max);
+        widths.fill(share.max(natural));
+    }
     let height = t.number("h-sm") + 8.;
     let (rect, _) = ui.allocate_exact_size(
         vec2(widths.iter().sum::<f32>() + 8., height),

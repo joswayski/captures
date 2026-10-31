@@ -1109,6 +1109,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     private func inlineRow(_ title: String, detail: String, emphasis: PreferencesPolicy.Emphasized? = nil,
                            control: NSSize, y: CGFloat, card: NSView, enabled: Bool = true,
                            keepInline: Bool = false, switchHint: Bool = false,
+                           stacked placement: StackedControl = .leading,
                            highlight key: String? = nil) -> (row: NSRect, control: NSRect) {
         // A compact window stacks the control under the copy
         // (`.setting-row-inline { grid-template-columns: minmax(0, 1fr) }`).
@@ -1134,13 +1135,19 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         searchable.append((findBackground(row, parent: card), "\(title) \(text)"))
         addCopy(title, detail: detail, emphasis: emphasis, x: inset, y: stacked ? y : y + (height - copy) / 2,
             width: width, parent: card, enabled: enabled, switchHint: switchHint)
+        let stackedWidth = placement == .stretch ? contentWidth : min(control.width, contentWidth)
         let frame = stacked
-            ? NSRect(x: inset, y: y + copy + tokens.number("s-3"),
-                     width: min(control.width, contentWidth), height: control.height)
+            ? NSRect(x: placement == .trailing ? row.maxX - stackedWidth : inset,
+                     y: y + copy + tokens.number("s-3"), width: stackedWidth, height: control.height)
             : NSRect(x: row.maxX - control.width, y: y + (height - control.height) / 2,
                      width: control.width, height: control.height)
         return (row, frame)
     }
+
+    /// Where a stacked (compact) control sits under its copy: selects and
+    /// segmented controls stretch (`.setting-control { justify-self: stretch }`),
+    /// the corner picker keeps `justify-items: end`.
+    enum StackedControl { case leading, stretch, trailing }
 
     /// A whole-row switch for a boolean setting at `path` (top level or
     /// `["recording", key]`).
@@ -1208,7 +1215,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     private func selectRow(_ key: String, y: CGFloat, card: NSView) -> CGFloat {
         let copy = PreferencesPolicy.row(key)
         let layout = inlineRow(copy.title, detail: copy.detail,
-            control: NSSize(width: 160, height: tokens.number("h-md")), y: y, card: card)
+            control: NSSize(width: 160, height: tokens.number("h-md")), y: y, card: card, stacked: .stretch)
         select(key, frame: layout.control, parent: card)
         return layout.row.maxY
     }
@@ -1282,10 +1289,16 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         var y = top
         let appearance = PreferencesPolicy.row("appearance")
         let modes = PreferencesPolicy.pairs("appearance_modes")
-        let widths = modes.map { PreferenceSegmentButton.width($0.label, tokens: tokens) }
+        var widths = modes.map { PreferenceSegmentButton.width($0.label, tokens: tokens) }
         let segmentHeight = tokens.number("h-sm")
         let layout = inlineRow(appearance.title, detail: appearance.detail,
-            control: NSSize(width: widths.reduce(0, +) + 8, height: segmentHeight + 8), y: y, card: card)
+            control: NSSize(width: widths.reduce(0, +) + 8, height: segmentHeight + 8), y: y, card: card,
+            stacked: .stretch)
+        // Stretched segments share the track equally (`button { flex: 1 }`).
+        if layout.control.width > widths.reduce(0, +) + 8, !modes.isEmpty {
+            let share = (layout.control.width - 8) / CGFloat(modes.count)
+            widths = widths.map { _ in max(share, widths.max() ?? share) }
+        }
         let track = Surface(frame: layout.control)
         track.wantsLayer = true; track.layer?.cornerRadius = tokens.number("r-lg")
         track.layer?.backgroundColor = tokens.color("surface-sunken").cgColor
@@ -1467,7 +1480,8 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     private func cornerPickerRow(_ y: CGFloat, card: NSView, enabled: Bool) -> CGFloat {
         let copy = PreferencesPolicy.row("mini_preview_placement")
         let size = NSSize(width: 108, height: 72 + tokens.number("s-2") + 16)
-        let layout = inlineRow(copy.title, detail: copy.detail, control: size, y: y, card: card)
+        let layout = inlineRow(copy.title, detail: copy.detail, control: size, y: y, card: card,
+            stacked: .trailing)
         let picker = Surface(frame: layout.control)
         picker.alphaValue = enabled ? 1 : 0.55
         picker.setAccessibilityRole(.radioGroup)
@@ -1548,8 +1562,9 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
             ? (settings["recording"] as? [String: Any] ?? [:]).string(key)
             : settings.string(key)
         let width = min(260, max(180, contentWidth * 0.45))
+        // `.shortcut-row` is a fixed two-column grid that never stacks.
         let layout = inlineRow(title, detail: "", control: NSSize(width: width, height: tokens.number("h-md")),
-            y: y, card: parent)
+            y: y, card: parent, keepInline: true)
         let keys = (try? shortcutDisplay(shortcut)) ?? [shortcut]
         let recorder = ShortcutRecorderButton(frame: layout.control,
             tokens: tokens, label: title, keys: keys.filter { !$0.isEmpty })
@@ -1787,7 +1802,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     private func microphoneRow(_ y: CGFloat, card: NSView) -> CGFloat {
         let copy = PreferencesPolicy.row("recording.microphone_device_id")
         let layout = inlineRow(copy.title, detail: copy.detail,
-            control: NSSize(width: 160, height: tokens.number("h-md")), y: y, card: card)
+            control: NSSize(width: 160, height: tokens.number("h-md")), y: y, card: card, stacked: .stretch)
         let menu = ClosurePopUpButton(frame: layout.control, pullsDown: false)
         menu.tokens = tokens
         menu.setAccessibilityLabel(copy.accessibilityLabel)

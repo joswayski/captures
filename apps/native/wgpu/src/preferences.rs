@@ -1465,12 +1465,19 @@ impl Preferences {
         control_size: egui::Vec2,
         control: impl FnOnce(&mut Self, &mut egui::Ui),
     ) -> (egui::Rect, egui::layers::ShapeIdx) {
-        self.copy_row(ui, t, title, desc, emphasis, control_size, false, control)
+        self.copy_row(
+            ui,
+            t,
+            title,
+            desc,
+            emphasis,
+            control_size,
+            RowKind::Inline,
+            control,
+        )
     }
 
-    /// [`Self::row`], or a `.check-row.switch-row` when `switch`: it never
-    /// stacks, and its `small` hint has no 52ch cap and sits 3 px lower
-    /// (`margin-top: 3px`).
+    /// [`Self::row`] with an explicit compact-window [`RowKind`].
     #[allow(clippy::too_many_arguments)]
     fn copy_row(
         &mut self,
@@ -1480,13 +1487,15 @@ impl Preferences {
         desc: &str,
         emphasis: Option<preferences::Emphasized>,
         control_size: egui::Vec2,
-        switch: bool,
+        kind: RowKind,
         control: impl FnOnce(&mut Self, &mut egui::Ui),
     ) -> (egui::Rect, egui::layers::ShapeIdx) {
         let background = ui.painter().add(egui::Shape::Noop);
         let full = ui.available_width();
-        // Compact windows stack the control under the copy; switches stay inline.
-        let stacked = self.compact && !switch;
+        let switch = kind == RowKind::Switch;
+        // Compact windows stack the control under the copy
+        // (`.setting-row-inline`); switch and shortcut rows stay inline.
+        let stacked = self.compact && matches!(kind, RowKind::Inline | RowKind::EndAligned);
         let copy_width = if stacked {
             full
         } else {
@@ -1536,7 +1545,11 @@ impl Preferences {
                     egui::pos2(rect.left(), rect.bottom() - control_size.y),
                     egui::vec2(full, control_size.y),
                 ),
-                egui::Layout::left_to_right(egui::Align::Center),
+                if kind == RowKind::EndAligned {
+                    egui::Layout::right_to_left(egui::Align::Center)
+                } else {
+                    egui::Layout::left_to_right(egui::Align::Center)
+                },
             )
         } else {
             (
@@ -1592,7 +1605,7 @@ impl Preferences {
                 desc,
                 emphasis,
                 egui::vec2(32., 19.),
-                true,
+                RowKind::Switch,
                 |_, ui| {
                     switch_rect = ui
                         .allocate_exact_size(egui::vec2(32., 19.), egui::Sense::hover())
@@ -1693,7 +1706,13 @@ impl Preferences {
             None,
             egui::vec2(160., t.number("h-md")),
             |this, ui| {
-                this.select_control(ui, t, path, 160., options);
+                // Stacked selects stretch (`.setting-control { justify-self: stretch }`).
+                let width = if this.compact {
+                    ui.available_width()
+                } else {
+                    160.
+                };
+                this.select_control(ui, t, path, width, options);
             },
         );
     }
@@ -1749,13 +1768,14 @@ impl Preferences {
                 copy.description,
                 None,
                 egui::vec2(200., t.number("h-sm") + 8.),
-                |_, ui| {
+                |this, ui| {
                     chosen = widgets::segmented(
                         ui,
                         t,
                         copy.title,
                         &preferences::APPEARANCE_MODES,
                         &selected,
+                        this.compact,
                     );
                 },
             );
@@ -2050,13 +2070,15 @@ impl Preferences {
             let copy = preferences::row("mini_preview_placement");
             let placement = string_at(&this.value, &["mini_preview_placement"]);
             let mut chosen = None;
-            this.row(
+            // `.mini-preview-placement { justify-items: end }` when stacked.
+            this.copy_row(
                 ui,
                 t,
                 copy.title,
                 copy.description,
                 None,
                 egui::vec2(108., 94.),
+                RowKind::EndAligned,
                 |_, ui| {
                     ui.add_enabled_ui(previews, |ui| {
                         chosen = widgets::corner_picker(
@@ -2218,13 +2240,14 @@ impl Preferences {
                 width,
             );
             let height = t.number("h-md").max(galley.size().y);
-            self.row(
+            self.copy_row(
                 ui,
                 t,
                 field.label(),
                 "Desktop-managed",
                 None,
                 egui::vec2(width, height),
+                RowKind::Shortcut,
                 |_, ui| {
                     ui.label(galley);
                 },
@@ -2257,13 +2280,14 @@ impl Preferences {
             } else {
                 0.
             };
-        self.row(
+        self.copy_row(
             ui,
             t,
             field.label(),
             "",
             None,
             egui::vec2(width, height),
+            RowKind::Shortcut,
             |this, ui| {
                 let response = ui
                     .allocate_ui_with_layout(
@@ -2517,8 +2541,13 @@ impl Preferences {
             copy.description,
             None,
             egui::vec2(160., t.number("h-md")),
-            |_, ui| {
-                let output = crate::primitives::Select::new(path.join("."), copy.title, 160.)
+            |this, ui| {
+                let width = if this.compact {
+                    ui.available_width()
+                } else {
+                    160.
+                };
+                let output = crate::primitives::Select::new(path.join("."), copy.title, width)
                     .show(ui, t, &choices, &current);
                 open_requested = output.open;
                 chosen = output.chosen.map(|(_, id)| id);
@@ -2769,7 +2798,7 @@ impl Preferences {
                     &detail,
                     None,
                     egui::vec2(32., 19.),
-                    true,
+                    RowKind::Switch,
                     |_, ui| {
                         switch_rect = ui
                             .allocate_exact_size(egui::vec2(32., 19.), egui::Sense::hover())
@@ -2986,6 +3015,20 @@ fn fit_chips(text_widths: &[f32], available: f32) -> (f32, f32, f32) {
         scale -= 0.02;
     }
     (scale.max(0.8), 4., 4.)
+}
+
+/// How a Preferences row lays out in a compact (≤720 px) window.
+#[derive(Clone, Copy, PartialEq)]
+enum RowKind {
+    /// `.setting-row-inline`: the control stacks under the copy.
+    Inline,
+    /// Stacks like [`Self::Inline`], keeping the control right-aligned.
+    EndAligned,
+    /// `.check-row.switch-row`: never stacks; its hint has no 52ch cap and
+    /// sits 3 px lower (`small { margin-top: 3px }`).
+    Switch,
+    /// `.shortcut-row`: a fixed two-column grid that never stacks.
+    Shortcut,
 }
 
 /// Shipping `.setting-copy small`: `--text-sm` in `--text-subtle` at
@@ -3308,6 +3351,69 @@ mod tests {
                 select.bottom() - detail.bottom() > tokens.number("h-md"),
                 prefs.compact,
                 "{width}: select row {select:?} stacks only when compact"
+            );
+        }
+    }
+
+    #[test]
+    fn compact_selects_stretch_while_shortcut_recorders_stay_inline() {
+        use egui::accesskit::Role;
+        let tokens = crate::tokens::load()["light-mustard"].clone();
+        for width in [880_f32, 560.] {
+            let dir = tempfile::tempdir().unwrap();
+            let ctx = egui::Context::default();
+            ctx.enable_accesskit();
+            let mut prefs =
+                Preferences::new(ctx.clone(), dir.path().join("settings.json"), None, None);
+            prefs.compact = width <= 720.;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 3000.),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    prefs.capture(ui, &tokens);
+                    prefs.shortcuts(ui, &tokens);
+                },
+            );
+            output.textures_delta.clear();
+            let tree = output.platform_output.accesskit_update.take().unwrap();
+            let bounds = |role: Role, label: &str| {
+                tree.nodes
+                    .iter()
+                    .find(|(_, node)| node.role() == role && node.label() == Some(label))
+                    .and_then(|(_, node)| node.bounds())
+                    .unwrap_or_else(|| panic!("{width}: no {role:?} {label}"))
+            };
+            let select = bounds(Role::ComboBox, preferences::row("screenshot_format").title);
+            if prefs.compact {
+                // `.setting-control { justify-self: stretch }`.
+                assert!(
+                    select.width() > f64::from(width) * 0.8,
+                    "{width}: {select:?} stretches"
+                );
+            } else {
+                assert!(
+                    (select.width() - 160.).abs() < 1.,
+                    "{width}: {select:?} keeps 160 px"
+                );
+            }
+            // `.shortcut-row` never stacks: the recorder sits right of center.
+            let label = ShortcutField::Window.label();
+            let recorder = tree
+                .nodes
+                .iter()
+                .find(|(_, node)| {
+                    node.role() == Role::Button && node.label().is_some_and(|l| l.contains(label))
+                })
+                .and_then(|(_, node)| node.bounds())
+                .unwrap_or_else(|| panic!("{width}: no {label} recorder"));
+            assert!(
+                recorder.x0 > f64::from(width) / 2. - 1.,
+                "{width}: {recorder:?} stays inline"
             );
         }
     }

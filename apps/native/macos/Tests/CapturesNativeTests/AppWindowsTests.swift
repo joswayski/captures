@@ -151,6 +151,26 @@ final class AppWindowsTests: XCTestCase {
         let cardFrame = try XCTUnwrap(card.superview).convert(card.frame, to: root)
         XCTAssertGreaterThanOrEqual(cardFrame.minX, 0)
         XCTAssertLessThanOrEqual(cardFrame.maxX, root.bounds.width + 0.5, "cards fit the minimum window")
+        // Shipping's compact rules: stacked selects stretch across the card,
+        // the corner picker stays right-aligned, and shortcut rows never stack.
+        func frame(_ view: NSView) -> NSRect { view.superview!.convert(view.frame, to: root) }
+        func section(_ id: String) throws -> NSRect {
+            try frame(XCTUnwrap(descendants(of: root).first { $0.identifier?.rawValue == "preferences-card.\(id)" }))
+        }
+        let capture = try section("capture")
+        let format = try XCTUnwrap(descendants(of: root).compactMap { $0 as? NSPopUpButton }.first {
+            $0.accessibilityLabel() == PreferencesPolicy.row("screenshot_format").accessibilityLabel
+        })
+        XCTAssertGreaterThan(frame(format).width, capture.width * 0.75, "stacked selects stretch")
+        let corner = try XCTUnwrap(descendants(of: root).first {
+            $0.identifier?.rawValue.hasPrefix("mini-preview-placement.") == true
+        })
+        XCTAssertGreaterThan(frame(corner).midX, capture.midX, "the corner picker stays right-aligned")
+        let shortcuts = try section("shortcuts")
+        let recorder = try XCTUnwrap(descendants(of: root).first {
+            $0.identifier?.rawValue.hasPrefix("shortcut.") == true
+        })
+        XCTAssertGreaterThan(frame(recorder).minX, shortcuts.midX - 1, "shortcut recorders stay inline")
 
         preferencesWindow.setContentSize(NSSize(width: spec.size.width, height: 600))
         try settle { navButtons().count == sections }
