@@ -397,11 +397,6 @@ fn zoom_group(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, layout: model
         sw: outer,
         ..Default::default()
     };
-    let last = egui::CornerRadius {
-        ne: outer,
-        se: outer,
-        ..Default::default()
-    };
     if zoom_button(
         ui,
         tokens,
@@ -450,7 +445,7 @@ fn zoom_group(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, layout: model
     {
         change_viewport_zoom(view, 1.25, None);
     }
-    zoom_presets(ui, tokens, view, preset_rect, last);
+    zoom_presets(ui, tokens, view, preset_rect);
     ui.painter()
         .rect_stroke(group, radius, Stroke::new(1., border), StrokeKind::Inside);
 }
@@ -685,80 +680,35 @@ fn zoom_slider(
 
 /// Shipping `.screenshot-editor-zoom-presets`: a mono, tabular value with a
 /// chevron opening Fit, the current custom zoom, 50%, 100% and 200%.
-fn zoom_presets(
-    ui: &mut egui::Ui,
-    tokens: &Tokens,
-    view: &mut View,
-    rect: egui::Rect,
-    corners: egui::CornerRadius,
-) {
-    let response = ui
-        .interact(
-            rect,
-            ui.scope_id().with("viewport-zoom-preset"),
-            Sense::click(),
-        )
-        .on_hover_text(copy::ZOOM_PRESET_TOOLTIP);
+fn zoom_presets(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, rect: egui::Rect) {
+    use crate::primitives::{Select, SelectOption, SelectStyle};
+
     let current = view.viewport.zoom_percent;
-    let label = if current == 0. {
-        "Fit".to_owned()
-    } else {
-        model::zoom_label(current)
-    };
-    if response.hovered() {
-        ui.painter()
-            .rect_filled(rect, corners, tokens.color("surface-hover"));
+    let mut values = vec![(0., "Fit".to_owned())];
+    if current != 0. && !copy::ZOOM_PRESETS.contains(&current) {
+        values.push((current, model::zoom_label(current)));
     }
-    let ink = tokens.color("text");
-    let text = galley(ui, &label, FontId::monospace(tokens.number("text-xs")), ink);
-    ui.painter().galley(
-        pos2(
-            rect.left() + tokens.number("s-4"),
-            rect.center().y - text.size().y / 2.,
-        ),
-        text,
-        ink,
-    );
-    icon(
-        ui.painter(),
-        "chevron-down",
-        pos2(rect.right() - 10., rect.center().y),
-        12.,
-        1.8,
-        tokens.color("text-subtle"),
-    );
-    response.widget_info(|| {
-        egui::WidgetInfo::labeled(
-            egui::WidgetType::ComboBox,
-            true,
-            format!("{}: {label}", copy::ZOOM_PRESET),
-        )
-    });
-    let mut chosen = None;
-    egui::Popup::menu(&response)
-        .align(egui::RectAlign::BOTTOM_END)
-        .show(|ui| {
-            if ui.selectable_label(current == 0., "Fit").clicked() {
-                chosen = Some(0.);
-            }
-            if current != 0.
-                && !copy::ZOOM_PRESETS.contains(&current)
-                && ui
-                    .selectable_label(true, model::zoom_label(current))
-                    .clicked()
-            {
-                chosen = Some(current);
-            }
-            for percent in copy::ZOOM_PRESETS {
-                if ui
-                    .selectable_label(current == percent, model::zoom_label(percent))
-                    .clicked()
-                {
-                    chosen = Some(percent);
-                }
-            }
-        });
-    match chosen {
+    values.extend(copy::ZOOM_PRESETS.map(|percent| (percent, model::zoom_label(percent))));
+    let options: Vec<_> = values
+        .iter()
+        .map(|(percent, label)| SelectOption::new(*percent, label))
+        .collect();
+    let output = Select::new("viewport-zoom-preset", copy::ZOOM_PRESET, rect.width())
+        .style(SelectStyle::Zoom)
+        .height(rect.height())
+        .show(
+            &mut ui.new_child(
+                UiBuilder::new()
+                    .max_rect(rect)
+                    .layout(Layout::top_down(Align::Min)),
+            ),
+            tokens,
+            &options,
+            &current,
+        );
+    output.response.on_hover_text(copy::ZOOM_PRESET_TOOLTIP);
+    match output.activated {
+        // Reselecting Fit must still reset pan, even if the numeric value did not change.
         Some(0.) => view.reset_viewport(),
         Some(percent) => set_viewport_zoom(view, percent, None),
         None => {}

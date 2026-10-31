@@ -839,6 +839,9 @@ keyboard in its custom-color chooser; incomplete input keeps the accepted color.
 Its shared range controls expose bounds and adjustment actions to accessibility
 APIs. Physical screen-reader acceptance remains open; AppKit keeps its native
 sliders and system color panel.
+Windows/Linux custom selects retain focus on the first arrow after Tab and
+process rapid navigation, selection and cancellation keys in order, including
+repeated arrows. Tab still closes the listbox and moves to the next control.
 Its Layers panel also edits annotation fill, stroke, opacity and shadow settings live,
 as shipping does; shared Rust owns style defaults, rendering, undo folding and draft
 persistence.
@@ -977,6 +980,8 @@ Dismiss in both native hosts and shipping Tauri; dismissing it preserves the
 restored document and saved edits. Recenter
 appears only while the canvas is panned mostly off screen.
 The zoom menu offers Fit, 50%, 100% and 200% and displays the current custom zoom.
+The Windows/Linux preset menu supports keyboard navigation, Escape cancellation,
+and accessible option selection; choosing Fit again also clears pan.
 Both hosts also provide a logarithmic 5–800% zoom slider. It tracks the actual Fit
 scale and preserves the viewport-center image point when dragged.
 The Windows/Linux slider also accepts arrow keys, Page Up/Down and Home/End

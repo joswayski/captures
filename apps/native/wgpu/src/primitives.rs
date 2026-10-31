@@ -320,6 +320,8 @@ pub enum SelectStyle {
     Glass,
     /// `.filename-format-select`: borderless inside another field.
     Inline,
+    /// `.screenshot-editor-zoom-presets`: compact mono value at the zoom group's end.
+    Zoom,
 }
 
 /// The trigger response, whether the listbox is open, a newly chosen value,
@@ -328,6 +330,9 @@ pub struct SelectOutput<T> {
     pub response: egui::Response,
     /// The listbox is open (shipping `onOpen` fires as it opens).
     pub open: bool,
+    /// An accepted option, including reselecting the current value (e.g. Fit resets pan).
+    pub activated: Option<T>,
+    /// An accepted option only when it differs from the current value.
     pub chosen: Option<T>,
     pub rows: Vec<Rect>,
     /// The listbox's visible area while open (the rows' clip rect).
@@ -414,11 +419,12 @@ impl<'a> Select<'a> {
             SelectStyle::Field => t.number("h-md"),
             SelectStyle::Glass => t.number("h-lg"),
             // `height: 100%` of the field it sits in.
-            SelectStyle::Inline => ui.max_rect().height(),
+            SelectStyle::Inline | SelectStyle::Zoom => ui.max_rect().height(),
         });
         let (rect, _) =
             ui.allocate_exact_size(egui::vec2(self.width, height), egui::Sense::hover());
         // The trigger owns the select's id, so focus and the listbox agree.
+        let had_focus = ui.memory(|memory| memory.has_focus(id));
         let response = ui.interact(rect, id, egui::Sense::click());
         let enabled = ui.is_enabled();
         let disabled: Vec<bool> = options.iter().map(|option| option.disabled).collect();
@@ -461,9 +467,58 @@ impl<'a> Select<'a> {
         if !enabled {
             state.open = false;
         }
+        let mut keyboard_click = false;
+        let mut tabbed_away = false;
         // Keyboard: the focused trigger, or any open listbox (a pointer opens
-        // it through the same state model).
-        if enabled && (focused || state.open) {
+        // it through the same state model). Consume events in arrival order,
+        // including repeats, rather than processing one occurrence per key.
+        if enabled && (had_focus || focused || state.open) && ui.input(|input| input.focused) {
+            let mut owns_key = false;
+            ui.input_mut(|input| {
+                input.events.retain(|event| {
+                    let egui::Event::Key {
+                        key, pressed: true, ..
+                    } = event
+                    else {
+                        return true;
+                    };
+                    if *key == egui::Key::Tab && (had_focus || state.open) {
+                        state.open = false;
+                        tabbed_away = true;
+                        return true;
+                    }
+                    if tabbed_away {
+                        return true;
+                    }
+                    let key = match key {
+                        egui::Key::ArrowDown => select::Key::ArrowDown,
+                        egui::Key::ArrowUp => select::Key::ArrowUp,
+                        egui::Key::Home => select::Key::Home,
+                        egui::Key::End => select::Key::End,
+                        egui::Key::Enter => select::Key::Enter,
+                        egui::Key::Space => select::Key::Space,
+                        egui::Key::Escape => select::Key::Escape,
+                        _ => return true,
+                    };
+                    let outcome =
+                        select::key(state, &disabled, chosen.unwrap_or(selected_index), key);
+                    if !outcome.handled {
+                        return true;
+                    }
+                    owns_key = true;
+                    keyboard_click |= matches!(key, select::Key::Enter | select::Key::Space);
+                    state = outcome.state;
+                    if let Some(index) = outcome.chosen {
+                        chosen = Some(index);
+                    }
+                    false
+                });
+            });
+            if owns_key && !tabbed_away {
+                // egui schedules directional navigation before this pass can
+                // install the newly focused trigger's arrow-key filter.
+                ui.memory_mut(|memory| memory.move_focus(egui::FocusDirection::None));
+            }
             if focused {
                 ui.memory_mut(|memory| {
                     memory.set_focus_lock_filter(
@@ -476,32 +531,7 @@ impl<'a> Select<'a> {
                     );
                 });
             }
-            for (key, logical) in [
-                (select::Key::ArrowDown, egui::Key::ArrowDown),
-                (select::Key::ArrowUp, egui::Key::ArrowUp),
-                (select::Key::Home, egui::Key::Home),
-                (select::Key::End, egui::Key::End),
-                (select::Key::Enter, egui::Key::Enter),
-                (select::Key::Space, egui::Key::Space),
-                (select::Key::Escape, egui::Key::Escape),
-            ] {
-                if !ui.input(|input| input.key_pressed(logical)) {
-                    continue;
-                }
-                let outcome = select::key(state, &disabled, selected_index, key);
-                if outcome.handled {
-                    ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, logical));
-                    state = outcome.state;
-                    if let Some(index) = outcome.chosen {
-                        chosen = Some(index);
-                    }
-                }
-            }
         }
-        let keyboard_click = focused
-            && ui.input(|input| {
-                input.key_pressed(egui::Key::Enter) || input.key_pressed(egui::Key::Space)
-            });
         if enabled && response.clicked() && !keyboard_click {
             response.request_focus();
             state = if state.open {
@@ -525,7 +555,11 @@ impl<'a> Select<'a> {
         // Trigger.
         let open = state.open;
         let hovered = enabled && response.hovered();
-        let radius = t.number("r-md");
+        let radius = if self.style == SelectStyle::Zoom {
+            (t.number("r-lg") - 1.).max(0.)
+        } else {
+            t.number("r-md")
+        };
         let painter = ui.painter();
         let (fill, border, ink, glyph) = match self.style {
             SelectStyle::Field => (
@@ -552,6 +586,16 @@ impl<'a> Select<'a> {
                 t.color("glass-text"),
                 t.color("glass-text-subtle"),
             ),
+            SelectStyle::Zoom => (
+                if hovered {
+                    t.color("surface-hover")
+                } else {
+                    Color32::TRANSPARENT
+                },
+                Color32::TRANSPARENT,
+                t.color("text"),
+                t.color("text-subtle"),
+            ),
             SelectStyle::Inline => (
                 if hovered {
                     t.color("surface-hover")
@@ -571,8 +615,8 @@ impl<'a> Select<'a> {
                 }),
             ),
         };
-        // The inline trigger rounds only the field's right end.
-        let corners = if self.style == SelectStyle::Inline {
+        // Embedded triggers round only their field/group's right end.
+        let corners = if matches!(self.style, SelectStyle::Inline | SelectStyle::Zoom) {
             let r = radius.min(255.) as u8;
             egui::CornerRadius {
                 nw: 0,
@@ -596,8 +640,17 @@ impl<'a> Select<'a> {
             t.number("s-4")
         };
         let text = self.trigger_text.unwrap_or(selected_label);
-        let font = egui::FontId::proportional(t.number("text-sm"));
-        let text_width = (rect.width() - padding * 2. - 14. - t.number("s-3")).max(0.);
+        let font = if self.style == SelectStyle::Zoom {
+            egui::FontId::monospace(t.number("text-xs"))
+        } else {
+            egui::FontId::proportional(t.number("text-sm"))
+        };
+        let text_width = if self.style == SelectStyle::Zoom {
+            rect.width() - padding - 20.
+        } else {
+            rect.width() - padding * 2. - 14. - t.number("s-3")
+        }
+        .max(0.);
         let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), font.clone(), ink);
         job.wrap = egui::text::TextWrapping::truncate_at_width(text_width);
         let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
@@ -611,13 +664,25 @@ impl<'a> Select<'a> {
             galley,
             ink,
         );
-        chevron(
-            painter,
-            egui::pos2(rect.right() - padding - 7., rect.center().y),
-            14.,
-            open,
-            glyph,
-        );
+        if self.style == SelectStyle::Zoom {
+            crate::preferences_widgets::icon(
+                painter,
+                "chevron-down",
+                Rect::from_center_size(
+                    egui::pos2(rect.right() - 10., rect.center().y),
+                    egui::Vec2::splat(12.),
+                ),
+                glyph,
+            );
+        } else {
+            chevron(
+                painter,
+                egui::pos2(rect.right() - padding - 7., rect.center().y),
+                14.,
+                open,
+                glyph,
+            );
+        }
         if (focused || open) && self.style != SelectStyle::Inline {
             focus_ring(ui, t, rect, radius);
         } else if focused {
@@ -706,6 +771,9 @@ impl<'a> Select<'a> {
                 .fixed_pos(origin)
                 .constrain(false)
                 .show(ui.ctx(), |ui| {
+                    // An Area remembers its last height. Let a reopened menu grow
+                    // when its options change (e.g. zoom adds a custom percentage).
+                    ui.set_max_height(layout.max_height as f32);
                     crate::motion::with_pose(ui, pose, pivot, |ui| {
                         egui::Frame::new()
                             .fill(t.color(if glass {
@@ -806,6 +874,7 @@ impl<'a> Select<'a> {
                                                 }
                                                 if row_response.clicked() {
                                                     chosen = Some(index);
+                                                    state.open = false;
                                                 }
                                                 let active =
                                                     state.active == index && !option.disabled;
@@ -900,13 +969,12 @@ impl<'a> Select<'a> {
             ui.ctx().request_repaint();
         }
         if let Some(index) = chosen {
-            state.open = false;
             memory.menu = egui::Vec2::ZERO;
             chosen = options
                 .get(index)
                 .filter(|option| !option.disabled)
                 .map(|_| index);
-            if chosen.is_some() {
+            if chosen.is_some() && !tabbed_away {
                 ui.memory_mut(|memory| memory.request_focus(id));
             }
         }
@@ -951,6 +1019,7 @@ impl<'a> Select<'a> {
             response,
             open: state.open,
             list_clip,
+            activated: chosen.map(|index| options[index].value.clone()),
             chosen: chosen.and_then(|index| {
                 let value = options[index].value.clone();
                 (value != *selected).then_some(value)
@@ -1735,14 +1804,16 @@ mod tests {
                 if let Some(chosen) = output.chosen {
                     *value = chosen;
                 }
+                let _ = ui.button("Next control");
             });
             seen
         };
         let (trigger, _) = run(vec![], &mut value);
-        ctx.memory_mut(|memory| memory.request_focus(trigger.unwrap()));
-        run(vec![], &mut value);
-        run(vec![], &mut value);
+        run(vec![key(egui::Key::Tab)], &mut value);
+        assert_eq!(ctx.memory(|memory| memory.focused()), trigger);
+        // An arrow immediately after Tab must open without moving focus.
         run(vec![key(egui::Key::ArrowDown)], &mut value);
+        assert_eq!(ctx.memory(|memory| memory.focused()), trigger);
         let (_, rows) = run(vec![], &mut value);
         assert_eq!(rows, 3, "ArrowDown opens the listbox");
         run(vec![key(egui::Key::ArrowDown)], &mut value);
@@ -1755,6 +1826,68 @@ mod tests {
         run(vec![key(egui::Key::Escape)], &mut value);
         let (_, rows) = run(vec![], &mut value);
         assert_eq!((value, rows), (3, 0), "Escape closes without choosing");
+
+        run(vec![key(egui::Key::Space)], &mut value);
+        run(
+            vec![
+                key(egui::Key::End),
+                key(egui::Key::Home),
+                key(egui::Key::Enter),
+            ],
+            &mut value,
+        );
+        assert_eq!(value, 1, "the last navigation key wins, not enum order");
+        run(
+            vec![
+                key(egui::Key::ArrowDown),
+                key(egui::Key::ArrowDown),
+                key(egui::Key::Enter),
+            ],
+            &mut value,
+        );
+        assert_eq!(
+            value, 3,
+            "multiple arrow events in one pass are not collapsed"
+        );
+        run(vec![key(egui::Key::Space)], &mut value);
+        run(
+            vec![
+                key(egui::Key::Home),
+                key(egui::Key::Escape),
+                key(egui::Key::Enter),
+            ],
+            &mut value,
+        );
+        assert_eq!(value, 3, "Escape before Enter cancels rather than selects");
+        let (_, rows) = run(vec![], &mut value);
+        assert_eq!(rows, 3, "Enter after Escape reopens the selected option");
+        run(
+            vec![
+                key(egui::Key::Home),
+                key(egui::Key::Enter),
+                key(egui::Key::Space),
+            ],
+            &mut value,
+        );
+        let (_, rows) = run(vec![], &mut value);
+        assert_eq!(
+            (value, rows),
+            (1, 3),
+            "Space after choosing reopens instead of being discarded"
+        );
+        run(
+            vec![
+                key(egui::Key::End),
+                key(egui::Key::Enter),
+                key(egui::Key::Tab),
+                key(egui::Key::ArrowUp),
+            ],
+            &mut value,
+        );
+        let (_, rows) = run(vec![], &mut value);
+        assert_eq!(value, 3, "selection before Tab is retained");
+        assert_eq!(rows, 0, "Tab closes the menu and reaches the next control");
+        assert_ne!(ctx.memory(|memory| memory.focused()), trigger);
     }
 
     #[test]
