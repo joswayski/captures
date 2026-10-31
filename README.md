@@ -965,7 +965,10 @@ Focused native controls retain typing and letter navigation.
 Both hosts also keep a left tool rail visible beside the canvas, with the shipping
 labels and hover tips: Select & move, Crop, Text, Shapes, Arrow, Freehand and Eraser.
 Shapes opens Rectangle, Ellipse, Line, Triangle, Diamond and Star, recalling the last
-choice. The rail chooses the tool (there are no section tabs); pending work
+choice. Its keyboard focus starts on that shape; arrows wrap through the
+three-column grid, Home/End reach its first/last item, and Enter/Space choose.
+Escape or Tab closes the flyout and returns focus to Shapes without choosing.
+The rail chooses the tool (there are no section tabs); pending work
 disables it. Drawing selects the new layer and shows its Properties while keeping
 the drawing tool active. Choosing Crop or a drawing tool clears selection and
 restores that tool's controls. Like shipping, the header holds the canvas W × H

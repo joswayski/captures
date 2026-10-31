@@ -4123,6 +4123,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         flyout.chosen = { [weak self] key in
             self?.showShapeFlyout(false)
             self?.chooseGroupedShape(key)
+            self?.window.makeFirstResponder(self?.toolRailButtons.first(where: { $0.key == "shapes" })?.button)
         }
         shapeFlyout = flyout
     }
@@ -4144,21 +4145,56 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         flyout.current = (isGroupedShape(drawShape) ? drawShape : lastGroupedShape).rawValue
         flyout.isHidden = false
         railTip.isHidden = true
+        window.makeFirstResponder(flyout.buttons.first(where: { $0.key == flyout.current })?.button)
         guard shapeFlyoutMonitor == nil else { return }
         shapeFlyoutMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) {
             [weak self] event in
             guard let self, let flyout = self.shapeFlyout, !flyout.isHidden else { return event }
-            if event.type == .keyDown {
-                guard event.keyCode == 53 else { return event }
-                self.showShapeFlyout(false)
-                return nil
-            }
             guard event.window === self.window else { self.showShapeFlyout(false); return event }
+            if event.type == .keyDown {
+                return self.handleShapeFlyoutKey(event) ? nil : event
+            }
             let point = self.root.convert(event.locationInWindow, from: nil)
             let button = self.toolRailButtons.first(where: { $0.key == "shapes" })?.button
             if !flyout.frame.contains(point) && button?.frame.contains(point) != true { self.showShapeFlyout(false) }
             return event
         }
+    }
+
+    /// Shipping Shapes menu: focus moves through a wrapping three-column grid;
+    /// navigation alone never chooses a shape or edits the document.
+    private func handleShapeFlyoutKey(_ event: NSEvent) -> Bool {
+        guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
+              let flyout = shapeFlyout,
+              let anchor = toolRailButtons.first(where: { $0.key == "shapes" })?.button,
+              anchor.isEnabled else { return false }
+        if flyout.isHidden {
+            guard window.firstResponder === anchor,
+                  [123, 124, 125, 126, 36, 76, 49].contains(event.keyCode) else { return false }
+            chooseRailTool("shapes")
+            return !flyout.isHidden
+        }
+        let index = flyout.buttons.firstIndex(where: { window.firstResponder === $0.button })
+            ?? flyout.buttons.firstIndex(where: { $0.key == flyout.current }) ?? 0
+        let next: Int
+        switch event.keyCode {
+        case 53, 48: // Escape / Tab (including Shift+Tab)
+            showShapeFlyout(false)
+            window.makeFirstResponder(anchor)
+            return true
+        case 36, 76, 49: // Return / keypad Enter / Space
+            flyout.buttons[index].button.performClick(nil)
+            return true
+        case 123: next = index - 1
+        case 124: next = index + 1
+        case 125: next = index + 3
+        case 126: next = index - 3
+        case 115: next = 0 // Home
+        case 119: next = flyout.buttons.count - 1 // End
+        default: return false
+        }
+        window.makeFirstResponder(flyout.buttons[(next + flyout.buttons.count) % flyout.buttons.count].button)
+        return true
     }
 
     private func chooseRailTool(_ key: String) {
@@ -4168,6 +4204,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             let open = shapeFlyout?.isHidden == false
             activateTool(section: Section.draw, shape: lastGroupedShape)
             showShapeFlyout(!open)
+            if open { window.makeFirstResponder(toolRailButtons.first(where: { $0.key == "shapes" })?.button) }
+            return
         } else {
             showShapeFlyout(false)
             window.makeFirstResponder(nil)
@@ -5764,10 +5802,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         guard event.type == .keyDown else { return false }
         if draining { return true }
         if window.firstResponder === inspectorDivider { return inspectorDivider.handleShortcut(event) }
-        if event.keyCode == 53, shapeFlyout?.isHidden == false {
-            showShapeFlyout(false)
-            return true
-        }
+        if handleShapeFlyoutKey(event) { return true }
         if event.keyCode == 53, layerMenuID != nil {
             closeLayerMenu()
             return true

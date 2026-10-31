@@ -2170,9 +2170,37 @@ def main():
             layer_click(0)
             shot(editor, "explicit-layer-selection")
             assert not draft.exists(), "selecting a layer does not edit the document"
+            recording = spawn("shape-keyboard-capture", ["ffmpeg", "-y", "-v", "error",
+                "-f", "x11grab", "-draw_mouse", "1", "-framerate", "20",
+                "-video_size", "1400x1200", "-i", env["DISPLAY"],
+                "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+                str(output / "shape-keyboard.mp4")])
+            for y in range(110, rail_point("shapes")[1], 8):
+                window_move((28, y), "sleep", ".02")
             rail_click("shapes")  # Persistent Shapes rail button.
             shot(editor, "tool-rail-shapes-menu")
+            # End -> Star, Right wraps to Rectangle, Down moves one row to
+            # Triangle. Validate the choice through the real saved document.
+            run("xdotool", "key", "--delay", "160", "End", "Right", "Down")
+            shot(editor, "tool-rail-shapes-triangle-focus")
+            run("xdotool", "key", "Return", "sleep", ".3")
+            assert not draft.exists(), "menu navigation and choice must not edit"
+            drag((320, 250), (480, 370))
+            triangle = save_layers(lambda values: len(values) == 2, "keyboard-selected Triangle")[-1]
+            assert triangle["shape"] == "triangle", triangle
+            shot(editor, "tool-rail-keyboard-triangle")
+            toolbar_click("undo")
+            save_layers(lambda values: len(values) == 1, "undo keyboard-selected Triangle")
+            rail_click("shapes")
             run("xdotool", "key", "Escape", "sleep", ".3")
+            run("xdotool", "key", "Down", "sleep", ".3")
+            shot(editor, "tool-rail-shapes-reopened-focus")
+            run("xdotool", "key", "Tab", "sleep", ".3", "key", "Up", "sleep", ".3",
+                "key", "shift+Tab", "sleep", ".3")
+            shot(editor, "tool-rail-shapes-trigger-focus")
+            recording.send_signal(signal.SIGINT)
+            recording.wait(timeout=10)
+            assert recording.returncode in (0, 255)
             assert not draft.exists(), "opening/closing tool menus must not save edits"
             rail_click("arrow")  # Arrow, independent of the inspector section.
             drag((320, 250), (480, 370))

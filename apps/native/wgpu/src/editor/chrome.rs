@@ -1371,7 +1371,7 @@ pub(super) fn show_tool_rail(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View
                         ink.gamma_multiply(0.72),
                         Stroke::NONE,
                     ));
-                    flyout_open = shapes_flyout(ui, tokens, view, &response);
+                    flyout_open = shapes_flyout(ui, tokens, view, &response, enabled);
                 }
                 if (hovered || response.has_focus()) && !flyout_open {
                     tip = Some((rect, tool.label));
@@ -1486,6 +1486,7 @@ fn shapes_flyout(
     tokens: &Tokens,
     view: &mut View,
     anchor: &egui::Response,
+    enabled: bool,
 ) -> bool {
     let current = if view.draw_shape.is_grouped() {
         view.draw_shape
@@ -1494,7 +1495,102 @@ fn shapes_flyout(
     };
     let side = model::SHAPE_FLYOUT_BUTTON as f32;
     let gap = tokens.number("s-2");
-    egui::Popup::menu(anchor)
+    let popup = egui::Popup::menu(anchor);
+    let popup_id = popup.get_id();
+    if !enabled {
+        egui::Popup::close_id(ui.ctx(), popup_id);
+        return false;
+    }
+    let was_open = popup.is_open();
+    let mut open = was_open != anchor.clicked();
+    let item_id = |index: usize| anchor.id.with(model::SHAPE_TOOLS[index].key);
+    let current_index = model::SHAPE_TOOLS
+        .iter()
+        .position(|item| shape_for_key(item.key) == current)
+        .unwrap_or(0);
+    let mut index = ui
+        .memory(|memory| memory.focused())
+        .and_then(|focused| (0..model::SHAPE_TOOLS.len()).find(|index| item_id(*index) == focused))
+        .unwrap_or(current_index);
+    let mut focus = (open && !was_open).then_some(current_index);
+    let mut choose = None;
+    let mut restore = false;
+    let mut keyboard_open = open && was_open;
+    let mut activate = false;
+    let anchor_focused = anchor.has_focus();
+    ui.input_mut(|input| {
+        input.events.retain(|event| {
+            let egui::Event::Key {
+                key,
+                pressed: true,
+                modifiers,
+                ..
+            } = event
+            else {
+                return true;
+            };
+            if modifiers.command || modifiers.ctrl || modifiers.alt || !input.focused {
+                return true;
+            }
+            if !keyboard_open {
+                if !restore
+                    && anchor_focused
+                    && matches!(
+                        key,
+                        egui::Key::ArrowLeft
+                            | egui::Key::ArrowRight
+                            | egui::Key::ArrowUp
+                            | egui::Key::ArrowDown
+                    )
+                {
+                    open = true;
+                    keyboard_open = true;
+                    focus = Some(current_index);
+                    activate = true;
+                    return false;
+                }
+                return true;
+            }
+            let count = model::SHAPE_TOOLS.len();
+            index = match key {
+                egui::Key::Escape | egui::Key::Tab => {
+                    open = false;
+                    keyboard_open = false;
+                    restore = true;
+                    return false;
+                }
+                egui::Key::Enter | egui::Key::Space => {
+                    choose = Some(shape_for_key(model::SHAPE_TOOLS[index].key));
+                    open = false;
+                    keyboard_open = false;
+                    restore = true;
+                    return false;
+                }
+                egui::Key::ArrowRight => (index + 1) % count,
+                egui::Key::ArrowLeft => (index + count - 1) % count,
+                egui::Key::ArrowDown => (index + model::SHAPE_FLYOUT_COLUMNS) % count,
+                egui::Key::ArrowUp => (index + count - model::SHAPE_FLYOUT_COLUMNS) % count,
+                egui::Key::Home => 0,
+                egui::Key::End => count - 1,
+                _ => return true,
+            };
+            focus = Some(index);
+            false
+        });
+    });
+    if let Some(shape) = choose {
+        view.activate_tool(Section::Draw, Some(shape));
+    } else if activate {
+        view.activate_tool(Section::Draw, Some(current));
+    }
+    if restore || focus.is_some() {
+        ui.memory_mut(|memory| memory.move_focus(egui::FocusDirection::None));
+    }
+    if restore {
+        anchor.request_focus();
+    }
+    popup
+        .open_memory(egui::SetOpenCommand::Bool(open))
         .align(egui::RectAlign::RIGHT)
         .gap(10.)
         .frame(
@@ -1512,8 +1608,11 @@ fn shapes_flyout(
                     for (index, item) in model::SHAPE_TOOLS.iter().enumerate() {
                         let shape = shape_for_key(item.key);
                         let active = current == shape;
-                        let (rect, response) =
-                            ui.allocate_exact_size(Vec2::splat(side), Sense::click());
+                        let (rect, _) = ui.allocate_exact_size(Vec2::splat(side), Sense::hover());
+                        let response = ui.interact(rect, item_id(index), Sense::click());
+                        if focus == Some(index) {
+                            response.request_focus();
+                        }
                         let name = item.name();
                         accessible(&response, egui::WidgetType::RadioButton, active, &name);
                         let hovered = response.hovered();
@@ -1533,9 +1632,13 @@ fn shapes_flyout(
                             "text-muted"
                         });
                         icon(ui.painter(), item.icon, rect.center(), 22., 1.75, ink);
+                        if response.has_focus() {
+                            crate::primitives::focus_ring(ui, tokens, rect, radius);
+                        }
                         if response.on_hover_text(&name).clicked() {
                             view.activate_tool(Section::Draw, Some(shape));
                             ui.close();
+                            anchor.request_focus();
                         }
                         if (index + 1) % model::SHAPE_FLYOUT_COLUMNS == 0 {
                             ui.end_row();
