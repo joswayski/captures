@@ -255,15 +255,15 @@ function FeedbackList({ appMenu }: { appMenu?: "menu bar" | "tray" }) {
             aria-label="@josevalerio on X"
           >
             <XIcon className="h-3 w-3" />
-            josevalerio
+            @josevalerio
           </a>
         </li>
         <li>
-          Share it in{" "}
+          Share it in the{" "}
           <a href={CAPER_INVITE_URL} target="_blank" rel="noreferrer" className="inline-chip">
             #feedback
           </a>{" "}
-          on caper.chat
+          channel on caper.chat
         </li>
         <li>
           Email me at <CopyEmailButton email={CONTACT_EMAIL} />
