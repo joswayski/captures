@@ -256,14 +256,15 @@ function FeedbackList({ appMenu }: { appMenu?: "menu bar" | "tray" }) {
           >
             <XIcon className="h-3 w-3" />
             @josevalerio
+            <ExternalLinkIcon className="h-3 w-3 opacity-60" />
           </a>
         </li>
         <li>
           Share it in the{" "}
           <a href={CAPER_INVITE_URL} target="_blank" rel="noreferrer" className="inline-chip">
-            #feedback
-          </a>{" "}
-          channel on caper.chat
+            #feedback channel on caper.chat
+            <ExternalLinkIcon className="h-3 w-3 opacity-60" />
+          </a>
         </li>
         <li>
           Email me at <CopyEmailButton email={CONTACT_EMAIL} />
@@ -427,6 +428,23 @@ function LinuxIcon({ className }: { className?: string }) {
         fillRule="evenodd"
         d="M12 2.2c-2.05 0-3.7 1.7-3.7 4 0 .72.18 1.38.5 1.94-2.28 1.32-3.85 3.55-4.38 6.1-.52 2.5.05 4.28 1.55 5.15-.62.42-1.02 1.1-1.02 1.88 0 1.42 1.48 2.18 3.05 2.52 1.42.3 3.12.36 5 .36s3.58-.06 5-.36c1.57-.34 3.05-1.1 3.05-2.52 0-.78-.4-1.46-1.02-1.88 1.5-.87 2.07-2.65 1.55-5.15-.53-2.55-2.1-4.78-4.38-6.1.32-.56.5-1.22.5-1.94 0-2.3-1.65-4-3.7-4ZM10.2 5.55c.45-.3.95.05.88.58-.06.46-.58.72-1.02.45-.44-.26-.42-.82.14-1.03Zm3.8 0c.56.21.58.77.14 1.03-.44.27-.96.01-1.02-.45-.07-.53.43-.88.88-.58ZM9.35 16.85c.9.5 1.75.78 2.65.78s1.75-.28 2.65-.78c.28-.16.6.02.6.34 0 .78-1.05 1.5-3.25 1.5s-3.25-.72-3.25-1.5c0-.32.32-.5.6-.34Z"
       />
+    </svg>
+  );
+}
+
+function ExternalLinkIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className={className}
+    >
+      <path d="M7 17 17 7M9 7h8v8" />
     </svg>
   );
 }
