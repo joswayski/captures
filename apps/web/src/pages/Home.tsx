@@ -157,8 +157,7 @@ export default function Home({
                 </h2>
                 <p className="mt-3 max-w-xl text-sm leading-relaxed text-ink-muted">
                   Captures is available for macOS, Windows, and Linux. Visit from your computer to
-                  download it, or follow the project on GitHub. Feedback is welcome{" "}
-                  <FeedbackChannels />.
+                  download it, or follow the project on GitHub.
                 </p>
                 <div className="mt-8">
                   <GitHubSourceButton primary />
@@ -166,6 +165,12 @@ export default function Home({
               </>
             )}
           </div>
+          <section className="mt-8" aria-labelledby="feedback-heading">
+            <h2 id="feedback-heading" className="text-sm font-medium text-ink">
+              Feedback
+            </h2>
+            <FeedbackChannels />
+          </section>
         </section>
 
         <ProductGallery />
@@ -261,28 +266,33 @@ function availabilityLabel(download: PreviewDownload | null) {
 
 function FeedbackChannels() {
   return (
-    <>
-      on{" "}
-      <a
-        href={X_URL}
-        target="_blank"
-        rel="noreferrer"
-        className="inline-chip"
-        aria-label="Give feedback on X"
-      >
-        <XIcon className="h-3 w-3" />
-      </a>
-      , on{" "}
-      <a
-        href={CAPER_INVITE_URL}
-        target="_blank"
-        rel="noreferrer"
-        className="font-medium text-ink underline underline-offset-4 transition-colors duration-200 ease-out hover:text-accent-readable"
-      >
-        caper.chat
-      </a>
-      , or <CopyEmailButton email={CONTACT_EMAIL} />
-    </>
+    <ul className="mt-3 list-disc space-y-3 pl-5 text-sm text-ink-muted">
+      <li>In the app: Send Feedback…</li>
+      <li>
+        <a
+          href={X_URL}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-chip"
+          aria-label="Give feedback on X"
+        >
+          <XIcon className="h-3 w-3" />
+        </a>
+      </li>
+      <li>
+        <a
+          href={CAPER_INVITE_URL}
+          target="_blank"
+          rel="noreferrer"
+          className="font-medium text-ink underline underline-offset-4 transition-colors duration-200 ease-out hover:text-accent-readable"
+        >
+          caper.chat
+        </a>
+      </li>
+      <li>
+        <CopyEmailButton email={CONTACT_EMAIL} />
+      </li>
+    </ul>
   );
 }
 
