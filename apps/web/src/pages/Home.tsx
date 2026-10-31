@@ -234,48 +234,39 @@ function linuxAlternativeLabel(download: PreviewDownload) {
   return download.id === "linux-deb" ? ".deb for Ubuntu / Debian" : "AppImage";
 }
 
-const FEEDBACK_LINK_CLASS =
-  "font-medium text-ink no-underline underline-offset-4 transition-colors duration-200 ease-out hover:text-accent-readable hover:underline";
-
 function FeedbackList({ appMenu }: { appMenu?: "menu bar" | "tray" }) {
   return (
     <div className="mt-10">
       <h2 className="text-xs text-ink-soft">Questions or feedback?</h2>
-      <ul className="mt-3 space-y-2.5 text-sm text-ink-muted">
+      <ul className="mt-3 space-y-3 text-sm leading-relaxed text-ink-muted">
         {appMenu ? (
-          <li className="flex items-center gap-2.5">
-            <CaptureIcon className="h-3.5 w-3.5 shrink-0 text-ink-soft" />
-            <span>
-              Choose <span className="font-medium text-ink">Send Feedback…</span> from the Captures{" "}
-              {appMenu} icon
-            </span>
+          <li>
+            Choose <span className="font-medium text-ink">Send Feedback…</span> from the Captures{" "}
+            {appMenu} icon
           </li>
         ) : null}
-        <li className="flex items-center gap-2.5">
-          <XIcon className="h-3.5 w-3.5 shrink-0 text-ink-soft" />
-          <a href={X_URL} target="_blank" rel="noreferrer" className={FEEDBACK_LINK_CLASS}>
-            Tell me on X
-          </a>
-        </li>
-        <li className="flex items-center gap-2.5">
-          <ChatIcon className="h-3.5 w-3.5 shrink-0 text-ink-soft" />
+        <li>
+          Tell me on{" "}
           <a
-            href={CAPER_INVITE_URL}
+            href={X_URL}
             target="_blank"
             rel="noreferrer"
-            className={FEEDBACK_LINK_CLASS}
+            className="inline-chip"
+            aria-label="@josevalerio on X"
           >
-            Share it in the{" "}
-            <span className="rounded bg-accent-soft px-1 text-accent-readable">#feedback</span>{" "}
-            channel on caper.chat
+            <XIcon className="h-3 w-3" />
+            josevalerio
           </a>
         </li>
-        <li className="flex items-center gap-2.5">
-          <MailIcon className="h-3.5 w-3.5 shrink-0 text-ink-soft" />
-          <a href={`mailto:${CONTACT_EMAIL}`} className={FEEDBACK_LINK_CLASS}>
-            Email me
-          </a>
-          <CopyEmailButton email={CONTACT_EMAIL} />
+        <li>
+          Share it in{" "}
+          <a href={CAPER_INVITE_URL} target="_blank" rel="noreferrer" className="inline-chip">
+            #feedback
+          </a>{" "}
+          on caper.chat
+        </li>
+        <li>
+          Email me at <CopyEmailButton email={CONTACT_EMAIL} />
         </li>
       </ul>
     </div>
@@ -316,14 +307,19 @@ function CopyEmailButton({ email }: { email: string }) {
   return (
     <button
       type="button"
-      className="cursor-pointer text-xs text-ink-soft transition-colors duration-200 ease-out hover:text-accent-readable"
+      className="group/email inline-flex max-w-full translate-y-px cursor-pointer flex-col items-start rounded border border-border bg-surface px-2 py-1 text-left no-underline transition-colors duration-200 ease-out hover:border-accent/30 hover:bg-accent-soft focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
       onClick={handleCopy}
-      title={`Copy ${email}`}
-      aria-label={`Copy email ${email}`}
+      aria-label={copied ? `Copied ${email}` : `Copy email ${email}`}
     >
-      {copied ? "copied!" : email}
-      <span role="status" className="sr-only">
-        {copied ? `Copied ${email}` : ""}
+      <span className="inline-flex min-w-0 items-center gap-1.5 text-[0.8125rem] font-medium leading-none text-ink transition-colors duration-200 ease-out group-hover/email:text-accent-readable">
+        <MailIcon className="h-3 w-3 shrink-0" />
+        <span className="break-all">{email}</span>
+      </span>
+      <span
+        role="status"
+        className="mt-1 text-[0.625rem] font-normal leading-none text-ink-soft transition-colors duration-200 ease-out group-hover/email:text-accent-readable/70"
+      >
+        {copied ? "copied!" : "click to copy"}
       </span>
     </button>
   );
@@ -431,23 +427,6 @@ function LinuxIcon({ className }: { className?: string }) {
         fillRule="evenodd"
         d="M12 2.2c-2.05 0-3.7 1.7-3.7 4 0 .72.18 1.38.5 1.94-2.28 1.32-3.85 3.55-4.38 6.1-.52 2.5.05 4.28 1.55 5.15-.62.42-1.02 1.1-1.02 1.88 0 1.42 1.48 2.18 3.05 2.52 1.42.3 3.12.36 5 .36s3.58-.06 5-.36c1.57-.34 3.05-1.1 3.05-2.52 0-.78-.4-1.46-1.02-1.88 1.5-.87 2.07-2.65 1.55-5.15-.53-2.55-2.1-4.78-4.38-6.1.32-.56.5-1.22.5-1.94 0-2.3-1.65-4-3.7-4ZM10.2 5.55c.45-.3.95.05.88.58-.06.46-.58.72-1.02.45-.44-.26-.42-.82.14-1.03Zm3.8 0c.56.21.58.77.14 1.03-.44.27-.96.01-1.02-.45-.07-.53.43-.88.88-.58ZM9.35 16.85c.9.5 1.75.78 2.65.78s1.75-.28 2.65-.78c.28-.16.6.02.6.34 0 .78-1.05 1.5-3.25 1.5s-3.25-.72-3.25-1.5c0-.32.32-.5.6-.34Z"
       />
-    </svg>
-  );
-}
-
-function ChatIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      className={className}
-    >
-      <path d="M20 12a8 8 0 0 1-11.6 7.1L4 20l1-4.1A8 8 0 1 1 20 12Z" />
     </svg>
   );
 }
