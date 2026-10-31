@@ -141,7 +141,7 @@ export default function Home({
                     </p>
                   ) : null}
                 </div>
-                <FeedbackList inApp />
+                <FeedbackList appMenu={detectedDownload.family === "macos" ? "menu bar" : "tray"} />
               </>
             ) : (
               <>
@@ -237,23 +237,24 @@ function linuxAlternativeLabel(download: PreviewDownload) {
 const FEEDBACK_LINK_CLASS =
   "font-medium text-ink no-underline underline-offset-4 transition-colors duration-200 ease-out hover:text-accent-readable hover:underline";
 
-function FeedbackList({ inApp = false }: { inApp?: boolean }) {
+function FeedbackList({ appMenu }: { appMenu?: "menu bar" | "tray" }) {
   return (
     <div className="mt-10">
       <h2 className="text-xs text-ink-soft">Questions or feedback?</h2>
       <ul className="mt-3 space-y-2.5 text-sm text-ink-muted">
-        {inApp ? (
+        {appMenu ? (
           <li className="flex items-center gap-2.5">
             <CaptureIcon className="h-3.5 w-3.5 shrink-0 text-ink-soft" />
             <span>
-              <span className="font-medium text-ink">Send Feedback</span> in the app
+              Choose <span className="font-medium text-ink">Send Feedback…</span> from the Captures{" "}
+              {appMenu} icon
             </span>
           </li>
         ) : null}
         <li className="flex items-center gap-2.5">
           <XIcon className="h-3.5 w-3.5 shrink-0 text-ink-soft" />
           <a href={X_URL} target="_blank" rel="noreferrer" className={FEEDBACK_LINK_CLASS}>
-            @josevalerio
+            Tell me on X
           </a>
         </li>
         <li className="flex items-center gap-2.5">
@@ -264,11 +265,16 @@ function FeedbackList({ inApp = false }: { inApp?: boolean }) {
             rel="noreferrer"
             className={FEEDBACK_LINK_CLASS}
           >
-            caper.chat
+            Share it in the{" "}
+            <span className="rounded bg-accent-soft px-1 text-accent-readable">#feedback</span>{" "}
+            channel on caper.chat
           </a>
         </li>
         <li className="flex items-center gap-2.5">
           <MailIcon className="h-3.5 w-3.5 shrink-0 text-ink-soft" />
+          <a href={`mailto:${CONTACT_EMAIL}`} className={FEEDBACK_LINK_CLASS}>
+            Email me
+          </a>
           <CopyEmailButton email={CONTACT_EMAIL} />
         </li>
       </ul>
@@ -310,15 +316,12 @@ function CopyEmailButton({ email }: { email: string }) {
   return (
     <button
       type="button"
-      className={`group/email cursor-pointer text-left ${FEEDBACK_LINK_CLASS}`}
+      className="cursor-pointer text-xs text-ink-soft transition-colors duration-200 ease-out hover:text-accent-readable"
       onClick={handleCopy}
-      title="Copy email address"
+      title={`Copy ${email}`}
       aria-label={`Copy email ${email}`}
     >
-      {email}
-      <span className="ml-2 text-xs font-normal text-ink-soft transition-colors duration-200 ease-out group-hover/email:text-accent-readable/70">
-        {copied ? "copied!" : "copy"}
-      </span>
+      {copied ? "copied!" : email}
       <span role="status" className="sr-only">
         {copied ? `Copied ${email}` : ""}
       </span>
