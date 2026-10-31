@@ -6,11 +6,10 @@ import ProductGallery from "../ProductGallery";
 const REPO_URL = "https://github.com/joswayski/captures";
 const RELEASES_URL = `${REPO_URL}/releases`;
 const X_URL = "https://x.com/josevalerio";
+const CAPER_INVITE_URL = "https://caper.chat/invite/pIXKAZFUp8";
 const AUTHOR_URL = "https://josevalerio.com";
 const CONTACT_EMAIL = "jose@captur.es";
 const PREVIEW_DOWNLOAD_BASE = `${REPO_URL}/releases/download/preview`;
-const CAPTURE_PITCH =
-  "Screenshot or record any region, window, or display, then mark it up or trim it in the built-in editor.";
 const COOKING_TOOLTIP = "Still building. This change may not be in the download yet.";
 
 const PREVIEW_DOWNLOADS = [
@@ -116,11 +115,7 @@ export default function Home({
                 <h2 className="text-base font-medium tracking-tight text-ink sm:text-lg">
                   Download Captures
                 </h2>
-                <p className="mt-3 max-w-xl text-sm leading-relaxed text-ink-muted">
-                  {CAPTURE_PITCH} Free, open source, and keeps itself up to date.
-                </p>
-
-                <div className="mt-8">
+                <div className="mt-5">
                   <div className="flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:items-center">
                     <a href={detectedDownload.href} className="download-button">
                       <OsIcon
@@ -168,8 +163,8 @@ export default function Home({
                   Capture from your desktop
                 </h2>
                 <p className="mt-3 max-w-xl text-sm leading-relaxed text-ink-muted">
-                  {CAPTURE_PITCH} Available for macOS, Windows, and Linux. Open this page on your
-                  computer to download it.
+                  Available for macOS, Windows, and Linux. Open this page on your computer to
+                  download it.
                 </p>
                 <div className="mt-8">
                   <GitHubSourceButton primary />
@@ -291,6 +286,15 @@ function FeedbackLine({ inApp = false }: { inApp?: boolean }) {
         aria-label="Give feedback on X"
       >
         <XIcon className="h-3 w-3" />
+      </a>
+      , chat on{" "}
+      <a
+        href={CAPER_INVITE_URL}
+        target="_blank"
+        rel="noreferrer"
+        className="font-medium text-ink underline underline-offset-4 transition-colors duration-200 ease-out hover:text-accent-readable"
+      >
+        caper.chat
       </a>
       , or email <CopyEmailButton email={CONTACT_EMAIL} />.
     </p>
