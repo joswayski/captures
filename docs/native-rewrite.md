@@ -56,6 +56,19 @@ coverage for Custom. AppKit is unchanged; physical Windows, Wayland and
 screen-reader checks remain open. This does not migrate the separate custom
 zoom-presets menu or close any native release acceptance gate.
 
+The AppKit screenshot zoom slider now keeps its native NSSlider drawing and
+0–1 logarithmic track while exposing 5–800% numeric accessibility values and
+bounds. Assistive SetValue accepts finite percentages, clamps to those bounds,
+and uses the existing view-only zoom action. Increment/decrement and arrow keys
+move 1% of the logarithmic track; Page Up/Down move 10%, Home/End reach the limits,
+and Tab keeps normal native traversal. Disabled sliders reject every adjustment
+path. This matches the already-implemented Windows/X11/Wayland wgpu contract;
+those hosts are unchanged in this slice. The existing AppKit zoom regression
+also covers keyboard events through NSWindow, accessibility actions, disabled
+and nonfinite inputs, retained focus, unchanged documents and comparison output.
+Hosted AppKit execution and physical VoiceOver acceptance are separate gates;
+this implementation does not authorize native public downloads.
+
 The wgpu screenshot-editor zoom slider now owns arrow keys (1% of its logarithmic
 track), Page Up/Down (10%) and Home/End (5–800%) while focused. Tab still leaves
 the control; the first arrow after Tab cannot move focus. Accessibility reports
