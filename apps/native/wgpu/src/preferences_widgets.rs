@@ -76,7 +76,11 @@ pub fn brand(ui: &mut egui::Ui, t: &Tokens) {
         Rect::from_center_size(tile.center(), Vec2::splat(16.)),
         t.color("theme-accent-ink"),
     );
-    let name = text(ui, "Captures", t.number("text-md"), t.color("text"));
+    let name = ui.painter().layout_no_wrap(
+        "Captures".to_owned(),
+        crate::ui_fonts::semibold(ui, t.number("text-md")),
+        t.color("text"),
+    );
     painter.galley(
         pos2(
             tile.right() + t.number("s-4"),

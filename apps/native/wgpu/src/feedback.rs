@@ -15,7 +15,7 @@ use std::{
 use captures_app::feedback as copy;
 use captures_feedback::{FeedbackContext, FeedbackDraft};
 use eframe::egui::{
-    self, Color32, FontFamily, FontId, Rect, RichText, Sense, Stroke, StrokeKind, Vec2, pos2, vec2,
+    self, Color32, FontId, Rect, RichText, Sense, Stroke, StrokeKind, Vec2, pos2, vec2,
 };
 
 use crate::{preferences_widgets as widgets, tokens::Tokens};
@@ -479,7 +479,7 @@ impl Feedback {
         } else {
             copy::SEND
         };
-        let font = semibold(ui, t.number("text-md"));
+        let font = crate::ui_fonts::semibold(ui, t.number("text-md"));
         let button_text =
             ui.painter()
                 .layout_no_wrap(label.to_owned(), font, t.color("theme-accent-ink"));
@@ -642,28 +642,18 @@ impl FeedbackWindow {
     }
 }
 
-/// `--weight-semibold` when the host installed the system semibold face.
-fn semibold(ui: &egui::Ui, size: f32) -> FontId {
-    let family = FontFamily::Name(crate::ui_fonts::SEMIBOLD.into());
-    if ui.fonts(|fonts| fonts.definitions().families.contains_key(&family)) {
-        FontId::new(size, family)
-    } else {
-        FontId::proportional(size)
-    }
-}
-
 /// `.feedback-header`: eyebrow, heading and the 56ch intro.
 fn header(ui: &mut egui::Ui, t: &Tokens) {
     ui.label(
         RichText::new(copy::EYEBROW.to_uppercase())
-            .font(semibold(ui, t.number("text-2xs")))
+            .font(crate::ui_fonts::semibold(ui, t.number("text-2xs")))
             .extra_letter_spacing(t.number("text-2xs") * 0.04)
             .color(t.color("text-subtle")),
     );
     ui.add_space(t.number("s-2"));
     ui.label(
         RichText::new(copy::TITLE)
-            .font(semibold(ui, t.number("text-2xl")))
+            .font(crate::ui_fonts::semibold(ui, t.number("text-2xl")))
             .color(t.color("text")),
     );
     ui.add_space(t.number("s-4"));

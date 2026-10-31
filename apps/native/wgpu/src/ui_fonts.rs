@@ -11,6 +11,16 @@ use std::path::PathBuf;
 /// Named family for shipping `--weight-semibold` (600) text.
 pub const SEMIBOLD: &str = "semibold";
 
+/// `--weight-semibold` when the host installed the system semibold face.
+pub fn semibold(ui: &egui::Ui, size: f32) -> egui::FontId {
+    let family = egui::FontFamily::Name(SEMIBOLD.into());
+    if ui.fonts(|fonts| fonts.definitions().families.contains_key(&family)) {
+        egui::FontId::new(size, family)
+    } else {
+        egui::FontId::proportional(size)
+    }
+}
+
 #[derive(Debug, Default, PartialEq)]
 struct Faces {
     regular: Option<PathBuf>,
