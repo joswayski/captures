@@ -32,6 +32,66 @@ do not replace physical macOS/Windows/Linux, accessibility or mixed-DPI checks.
 The detailed checklist below remains the release gate; unchecked does not mean
 unimplemented. Later slice notes supersede earlier notes about missing behavior.
 
+The wgpu screenshot zoom preset menu now uses the shared select's ordered
+keyboard handling and accessible listbox instead of a generic popup. Its compact
+monospace trigger retains the zoom group's geometry; Fit, custom zoom, 50%, 100%
+and 200% remain view-only actions. Selecting Fit again still resets pan, while
+ordinary select consumers retain change-only notifications. The editor regression
+covers Tab then ArrowDown, cancellation, custom-row removal, assistive selection,
+Fit reselection and unchanged document/worker state. AppKit keeps its native
+NSPopUpButton. Windows/X11/Wayland share this implementation; physical Windows,
+Wayland and screen-reader acceptance remain separate from automated Linux checks.
+This slice does not authorize public native downloads.
+
+The shared wgpu custom select now processes keyboard events in arrival order,
+including repeated arrows in one frame. Tab-to-select followed immediately by
+an arrow retains trigger focus instead of allowing egui's directional navigation
+to take it. End/Home/Enter selects the first enabled option; Escape before Enter
+cancels and reopens rather than selecting the cancelled highlight. A selection
+followed by Space may reopen, and a following Tab leaves without focus being
+stolen back. Existing field, inline and glass select styles and accessibility
+semantics remain unchanged. The real-X11 output-size fixture saves independently
+checked 75% and 50% images through rapid keyboard sequences and retains pointer
+coverage for Custom. AppKit is unchanged; physical Windows, Wayland and
+screen-reader checks remain open. This does not migrate the separate custom
+zoom-presets menu or close any native release acceptance gate.
+
+The AppKit screenshot zoom slider now keeps its native NSSlider drawing and
+0–1 logarithmic track while exposing 5–800% numeric accessibility values and
+bounds. Assistive SetValue accepts finite percentages, clamps to those bounds,
+and uses the existing view-only zoom action. Increment/decrement and arrow keys
+move 1% of the logarithmic track; Page Up/Down move 10%, Home/End reach the limits,
+and Tab keeps normal native traversal. Disabled sliders reject every adjustment
+path. This matches the already-implemented Windows/X11/Wayland wgpu contract;
+those hosts are unchanged in this slice. The existing AppKit zoom regression
+also covers keyboard events through NSWindow, accessibility actions, disabled
+and nonfinite inputs, retained focus, unchanged documents and comparison output.
+Hosted AppKit execution and physical VoiceOver acceptance are separate gates;
+this implementation does not authorize native public downloads.
+
+Shared wgpu range sliders (annotation/brush settings and recording volumes) now
+retain focus on the first arrow immediately after Tab, matching native range
+input behavior. Rapid adjustment → Tab → adjustment sequences apply only the
+keys before departure; they neither cancel Tab nor change the previous slider
+afterwards. Discrete undo steps and ordered accessibility actions are retained.
+The egui frame regression reproduces the original focus loss and covers
+both sides of the Tab boundary; recording audio fixtures re-enter each volume
+slider through Tab before exporting independently measured stereo tone gains
+(25% system audio and 175% microphone, dark and light private-X11 runs).
+AppKit keeps its native sliders. Windows/X11/Wayland share this implementation;
+physical Windows, Wayland and assistive-technology acceptance remain open.
+
+Both native Shapes flyouts follow Tauri's keyboard model: opening focuses the
+current shape, arrows wrap through the three-column grid, Home/End reach its
+first/last item, and Enter/Space choose without editing the document. Choice,
+Escape and Tab (including Shift+Tab) restore the Shapes trigger; an arrow from
+that trigger opens the flyout again. Outside clicks keep their normal focus
+behavior. wgpu uses the token focus ring; AppKit uses its native button focus.
+The rail regressions exercise focus, wrapping, choice, dismissal and unchanged
+documents. The private-X11 history-shortcut fixture also draws and undoes a
+keyboard-selected Triangle, validating its saved shape rather than only an open
+menu. Physical macOS/Windows/X11/Wayland and screen-reader acceptance remain open.
+
 The wgpu screenshot-editor zoom slider now owns arrow keys (1% of its logarithmic
 track), Page Up/Down (10%) and Home/End (5–800%) while focused. Tab still leaves
 the control; the first arrow after Tab cannot move focus. Accessibility reports

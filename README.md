@@ -837,8 +837,13 @@ An approximate vector guide appears until the first pixel frame is ready.
 The Windows/Linux native candidate also accepts exact `#rrggbb` colors from the
 keyboard in its custom-color chooser; incomplete input keeps the accepted color.
 Its shared range controls expose bounds and adjustment actions to accessibility
-APIs. Physical screen-reader acceptance remains open; AppKit keeps its native
+APIs. Arrow adjustments retain keyboard focus immediately after Tab; tabbing
+away stops subsequent keys from changing the previous slider.
+Physical screen-reader acceptance remains open; AppKit keeps its native
 sliders and system color panel.
+Windows/Linux custom selects retain focus on the first arrow after Tab and
+process rapid navigation, selection and cancellation keys in order, including
+repeated arrows. Tab still closes the listbox and moves to the next control.
 Its Layers panel also edits annotation fill, stroke, opacity and shadow settings live,
 as shipping does; shared Rust owns style defaults, rendering, undo folding and draft
 persistence.
@@ -965,7 +970,10 @@ Focused native controls retain typing and letter navigation.
 Both hosts also keep a left tool rail visible beside the canvas, with the shipping
 labels and hover tips: Select & move, Crop, Text, Shapes, Arrow, Freehand and Eraser.
 Shapes opens Rectangle, Ellipse, Line, Triangle, Diamond and Star, recalling the last
-choice. The rail chooses the tool (there are no section tabs); pending work
+choice. Its keyboard focus starts on that shape; arrows wrap through the
+three-column grid, Home/End reach its first/last item, and Enter/Space choose.
+Escape or Tab closes the flyout and returns focus to Shapes without choosing.
+The rail chooses the tool (there are no section tabs); pending work
 disables it. Drawing selects the new layer and shows its Properties while keeping
 the drawing tool active. Choosing Crop or a drawing tool clears selection and
 restores that tool's controls. Like shipping, the header holds the canvas W × H
@@ -977,10 +985,12 @@ Dismiss in both native hosts and shipping Tauri; dismissing it preserves the
 restored document and saved edits. Recenter
 appears only while the canvas is panned mostly off screen.
 The zoom menu offers Fit, 50%, 100% and 200% and displays the current custom zoom.
+The Windows/Linux preset menu supports keyboard navigation, Escape cancellation,
+and accessible option selection; choosing Fit again also clears pan.
 Both hosts also provide a logarithmic 5–800% zoom slider. It tracks the actual Fit
 scale and preserves the viewport-center image point when dragged.
-The Windows/Linux slider also accepts arrow keys, Page Up/Down and Home/End
-while focused, and exposes zoom percentages and value actions to accessibility
+Both native sliders also accept arrow keys, Page Up/Down and Home/End
+while focused, and expose zoom percentages and value actions to accessibility
 tools. These view-only changes do not alter the screenshot or its Undo history.
 Fit retains each workbench's existing placement.
 Windows, Wayland and physical AppKit presentation remain unverified.

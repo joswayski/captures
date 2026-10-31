@@ -1,6 +1,60 @@
 import AppKit
 import UniformTypeIdentifiers
 
+/// Keep NSSlider's native drawing and logarithmic 0–1 track, but expose the
+/// shipping 5–800% zoom contract to keyboard and accessibility clients.
+private final class EditorZoomSlider: NSSlider {
+    override func accessibilityValue() -> Any? {
+        NativeEditorViewport.sliderZoom(position: doubleValue).map { NSNumber(value: $0) }
+    }
+    override func accessibilityMinValue() -> Any? { NSNumber(value: 5) }
+    override func accessibilityMaxValue() -> Any? { NSNumber(value: 800) }
+    override func setAccessibilityValue(_ value: Any?) {
+        guard let percent = (value as? NSNumber)?.doubleValue,
+              let position = NativeEditorViewport.sliderPosition(percent: percent) else { return }
+        _ = choosePosition(position)
+    }
+    override func accessibilityPerformIncrement() -> Bool {
+        guard doubleValue < 1 else { return false }
+        return choosePosition(doubleValue + 0.01)
+    }
+    override func accessibilityPerformDecrement() -> Bool {
+        guard doubleValue > 0 else { return false }
+        return choosePosition(doubleValue - 0.01)
+    }
+    override func isAccessibilitySelectorAllowed(_ selector: Selector) -> Bool {
+        switch selector {
+        case #selector(setAccessibilityValue(_:)): return isEnabled
+        case #selector(accessibilityPerformIncrement): return isEnabled && doubleValue < 1
+        case #selector(accessibilityPerformDecrement): return isEnabled && doubleValue > 0
+        default: return super.isAccessibilitySelectorAllowed(selector)
+        }
+    }
+    override func keyDown(with event: NSEvent) {
+        guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty else {
+            super.keyDown(with: event); return
+        }
+        let position: Double
+        switch event.keyCode {
+        case 123, 125: position = doubleValue - 0.01
+        case 124, 126: position = doubleValue + 0.01
+        case 116: position = doubleValue + 0.1
+        case 121: position = doubleValue - 0.1
+        case 115: position = 0
+        case 119: position = 1
+        default: super.keyDown(with: event); return
+        }
+        _ = choosePosition(position)
+    }
+    private func choosePosition(_ position: Double) -> Bool {
+        guard isEnabled else { return false }
+        doubleValue = min(1, max(0, position))
+        let accepted = sendAction(action, to: target)
+        if accepted { NSAccessibility.post(element: self, notification: .valueChanged) }
+        return accepted
+    }
+}
+
 /// Keyboard-focusable, but pointer resizing never commits the active field editor.
 private final class EditorInspectorDivider: NSView {
     var resize: (CGFloat?) -> Void = { _ in }
@@ -1429,7 +1483,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var viewportCanvasSize = NSSize.zero
     private var viewportBounds = NSRect.zero
     private let zoomPreset = NSPopUpButton()
-    private let zoomSlider = NSSlider(value: 0, minValue: 0, maxValue: 1, target: nil, action: nil)
+    private let zoomSlider = EditorZoomSlider(value: 0, minValue: 0, maxValue: 1, target: nil, action: nil)
     /// Shipping's read-only crop Width/Height (`readOnly` inputs).
     private let cropWidth = NSTextField()
     private let cropHeight = NSTextField()
@@ -4123,6 +4177,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         flyout.chosen = { [weak self] key in
             self?.showShapeFlyout(false)
             self?.chooseGroupedShape(key)
+            self?.window.makeFirstResponder(self?.toolRailButtons.first(where: { $0.key == "shapes" })?.button)
         }
         shapeFlyout = flyout
     }
@@ -4144,21 +4199,56 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         flyout.current = (isGroupedShape(drawShape) ? drawShape : lastGroupedShape).rawValue
         flyout.isHidden = false
         railTip.isHidden = true
+        window.makeFirstResponder(flyout.buttons.first(where: { $0.key == flyout.current })?.button)
         guard shapeFlyoutMonitor == nil else { return }
         shapeFlyoutMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) {
             [weak self] event in
             guard let self, let flyout = self.shapeFlyout, !flyout.isHidden else { return event }
-            if event.type == .keyDown {
-                guard event.keyCode == 53 else { return event }
-                self.showShapeFlyout(false)
-                return nil
-            }
             guard event.window === self.window else { self.showShapeFlyout(false); return event }
+            if event.type == .keyDown {
+                return self.handleShapeFlyoutKey(event) ? nil : event
+            }
             let point = self.root.convert(event.locationInWindow, from: nil)
             let button = self.toolRailButtons.first(where: { $0.key == "shapes" })?.button
             if !flyout.frame.contains(point) && button?.frame.contains(point) != true { self.showShapeFlyout(false) }
             return event
         }
+    }
+
+    /// Shipping Shapes menu: focus moves through a wrapping three-column grid;
+    /// navigation alone never chooses a shape or edits the document.
+    private func handleShapeFlyoutKey(_ event: NSEvent) -> Bool {
+        guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
+              let flyout = shapeFlyout,
+              let anchor = toolRailButtons.first(where: { $0.key == "shapes" })?.button,
+              anchor.isEnabled else { return false }
+        if flyout.isHidden {
+            guard window.firstResponder === anchor,
+                  [123, 124, 125, 126, 36, 76, 49].contains(event.keyCode) else { return false }
+            chooseRailTool("shapes")
+            return !flyout.isHidden
+        }
+        let index = flyout.buttons.firstIndex(where: { window.firstResponder === $0.button })
+            ?? flyout.buttons.firstIndex(where: { $0.key == flyout.current }) ?? 0
+        let next: Int
+        switch event.keyCode {
+        case 53, 48: // Escape / Tab (including Shift+Tab)
+            showShapeFlyout(false)
+            window.makeFirstResponder(anchor)
+            return true
+        case 36, 76, 49: // Return / keypad Enter / Space
+            flyout.buttons[index].button.performClick(nil)
+            return true
+        case 123: next = index - 1
+        case 124: next = index + 1
+        case 125: next = index + 3
+        case 126: next = index - 3
+        case 115: next = 0 // Home
+        case 119: next = flyout.buttons.count - 1 // End
+        default: return false
+        }
+        window.makeFirstResponder(flyout.buttons[(next + flyout.buttons.count) % flyout.buttons.count].button)
+        return true
     }
 
     private func chooseRailTool(_ key: String) {
@@ -4168,6 +4258,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             let open = shapeFlyout?.isHidden == false
             activateTool(section: Section.draw, shape: lastGroupedShape)
             showShapeFlyout(!open)
+            if open { window.makeFirstResponder(toolRailButtons.first(where: { $0.key == "shapes" })?.button) }
+            return
         } else {
             showShapeFlyout(false)
             window.makeFirstResponder(nil)
@@ -5764,10 +5856,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         guard event.type == .keyDown else { return false }
         if draining { return true }
         if window.firstResponder === inspectorDivider { return inspectorDivider.handleShortcut(event) }
-        if event.keyCode == 53, shapeFlyout?.isHidden == false {
-            showShapeFlyout(false)
-            return true
-        }
+        if handleShapeFlyoutKey(event) { return true }
         if event.keyCode == 53, layerMenuID != nil {
             closeLayerMenu()
             return true
