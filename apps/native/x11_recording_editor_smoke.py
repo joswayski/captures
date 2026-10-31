@@ -351,7 +351,18 @@ def main():
         # a rect read while Working can miss the track once it finishes.
         idle(window)
         x0, y0, x1, y1 = visible_rect(window, f"{track} volume")
+        for x in range(int(x0) - 40, int((x0 + x1) // 2), 10):
+            run("xdotool", "mousemove", "--sync", "--window", window,
+                str(x), str((y0 + y1) // 2), "sleep", ".01")
         click(window, (x0 + x1) // 2, (y0 + y1) // 2)
+        # Leave and re-enter through Tab, then adjust twice. If
+        # the first arrow navigates away, the subsequent exact-value keys and
+        # independently measured export gains below cannot silently pass.
+        # Let traversal render before sending arrows: egui commits Tab focus
+        # at the frame boundary. The primitive test covers its first frame.
+        run("xdotool", "key", "shift+Tab", "sleep", ".2",
+            "key", "Tab", "sleep", ".2",
+            "key", "Down", "sleep", ".12", "key", "Down", "sleep", ".2")
         edge, base = ("End", 200) if value > 100 else ("Home", 0)
         pages, units = divmod(abs(value - base), 10)
         up = value >= base
@@ -2461,9 +2472,17 @@ def main():
             choose(editor, "Output resolution", "Original")
             fill(editor, "End (ms)", 2300)
             choose(editor, "Format", ".mp4")
+            recording = spawn("volume-keyboard-capture", ["ffmpeg", "-y", "-v", "error",
+                "-f", "x11grab", "-draw_mouse", "1", "-framerate", "20",
+                "-video_size", "1280x1200", "-i", env["DISPLAY"],
+                "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+                str(output / "volume-keyboard.mp4")])
             volume(editor, "System audio", 25)
             volume(editor, "Microphone", 175)
             shot(editor, "audio-staged")
+            recording.send_signal(signal.SIGINT)
+            recording.wait(timeout=10)
+            assert recording.returncode in (0, 255)
             settle(editor)
             shot(editor, "audio-applied")
 

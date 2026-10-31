@@ -837,7 +837,9 @@ An approximate vector guide appears until the first pixel frame is ready.
 The Windows/Linux native candidate also accepts exact `#rrggbb` colors from the
 keyboard in its custom-color chooser; incomplete input keeps the accepted color.
 Its shared range controls expose bounds and adjustment actions to accessibility
-APIs. Physical screen-reader acceptance remains open; AppKit keeps its native
+APIs. Arrow adjustments retain keyboard focus immediately after Tab; tabbing
+away stops subsequent keys from changing the previous slider.
+Physical screen-reader acceptance remains open; AppKit keeps its native
 sliders and system color panel.
 Its Layers panel also edits annotation fill, stroke, opacity and shadow settings live,
 as shipping does; shared Rust owns style defaults, rendering, undo folding and draft

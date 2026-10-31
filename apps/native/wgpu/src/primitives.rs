@@ -1305,6 +1305,7 @@ impl<'a> RangeSlider<'a> {
             egui::pos2(bounds.left(), bounds.top() + readout_height + gap),
             egui::vec2(bounds.width(), track_height),
         );
+        let had_focus = ui.memory(|memory| memory.has_focus(id));
         let mut response = ui.interact(track, id, egui::Sense::click_and_drag());
         let travel = track.x_range().shrink(7.);
         let mut next = *value;
@@ -1330,7 +1331,10 @@ impl<'a> RangeSlider<'a> {
                     );
                 });
             }
-            let focused = response.has_focus();
+            let mut keyboard =
+                (had_focus || response.has_focus()) && ui.input(|input| input.focused);
+            let mut owns_key = false;
+            let mut tabbed_away = false;
             let big = self.step * 10.;
             // Keyboard and assistive edits share arrival order and discrete undo
             // steps. Grouping Increment/Decrement around SetValue loses edits.
@@ -1338,12 +1342,21 @@ impl<'a> RangeSlider<'a> {
                 input.events.retain(|event| {
                     let requested = match event {
                         egui::Event::Key {
+                            key: egui::Key::Tab,
+                            pressed: true,
+                            ..
+                        } if had_focus => {
+                            keyboard = false;
+                            tabbed_away = true;
+                            return true;
+                        }
+                        egui::Event::Key {
                             key,
                             pressed: true,
                             modifiers,
                             ..
-                        } if focused && modifiers.matches_logically(egui::Modifiers::NONE) => {
-                            match key {
+                        } if keyboard && modifiers.matches_logically(egui::Modifiers::NONE) => {
+                            let next = match key {
                                 egui::Key::ArrowRight | egui::Key::ArrowUp => next + self.step,
                                 egui::Key::ArrowLeft | egui::Key::ArrowDown => next - self.step,
                                 egui::Key::PageUp => next + big,
@@ -1351,7 +1364,9 @@ impl<'a> RangeSlider<'a> {
                                 egui::Key::Home => self.min,
                                 egui::Key::End => self.max,
                                 _ => return true,
-                            }
+                            };
+                            owns_key = true;
+                            next
                         }
                         egui::Event::AccessKitActionRequest(request)
                             if request.target_tree == TreeId::ROOT
@@ -1379,6 +1394,10 @@ impl<'a> RangeSlider<'a> {
                     false
                 });
             });
+            if owns_key && !tabbed_away {
+                // The first arrow after Tab can precede the focus-lock pass.
+                ui.memory_mut(|memory| memory.move_focus(egui::FocusDirection::None));
+            }
         }
         if next != *value {
             *value = next;
@@ -2157,18 +2176,31 @@ mod tests {
         let mut value = 100.;
         let run = |events: Vec<egui::Event>, value: &mut f64| {
             let mut track = Rect::NOTHING;
+            let mut slider_id = None;
+            let mut next_id = None;
             frame(&ctx, events, |ui| {
                 let text = format!("{value}%");
-                track = RangeSlider::new("test-range", "Volume", 214., 0. ..=200., text)
+                let response = RangeSlider::new("test-range", "Volume", 214., 0. ..=200., text)
                     .marks(&marks)
                     .description("Louder than the source above 100%.")
-                    .show(ui, &t, value)
-                    .rect;
+                    .show(ui, &t, value);
+                track = response.rect;
+                slider_id = Some(response.id);
+                next_id = Some(ui.button("Next control").id);
             });
-            track
+            (track, slider_id, next_id)
         };
-        let track = run(vec![], &mut value);
+        let (track, slider_id, next_id) = run(vec![], &mut value);
         assert_eq!(track.height(), 20.);
+        run(vec![key(egui::Key::Tab)], &mut value);
+        assert_eq!(ctx.memory(|memory| memory.focused()), slider_id);
+        run(vec![key(egui::Key::ArrowDown)], &mut value);
+        assert_eq!(value, 99.);
+        assert_eq!(
+            ctx.memory(|memory| memory.focused()),
+            slider_id,
+            "the first arrow after Tab must adjust without leaving the slider"
+        );
         // The thumb travels 7 pt inside each end: 200 pt for 0–200.
         let quarter = egui::pos2(track.left() + 7. + 50., track.center().y);
         run(
@@ -2209,6 +2241,29 @@ mod tests {
             value, 189.,
             "End must precede decrements received in the same frame"
         );
+        run(
+            vec![
+                key(egui::Key::Home),
+                key(egui::Key::ArrowRight),
+                key(egui::Key::Tab),
+                key(egui::Key::ArrowRight),
+            ],
+            &mut value,
+        );
+        assert_eq!(value, 1., "consume adjustments before Tab, not after it");
+        assert_eq!(ctx.memory(|memory| memory.focused()), next_id);
+        run(
+            vec![egui::Event::PointerMoved(quarter), press(quarter, true)],
+            &mut value,
+        );
+        run(vec![press(quarter, false)], &mut value);
+        assert_eq!(ctx.memory(|memory| memory.focused()), slider_id);
+        run(vec![key(egui::Key::Tab), key(egui::Key::Home)], &mut value);
+        assert_eq!(
+            value, 50.,
+            "Tab before the first adjustment leaves the value intact"
+        );
+        assert_eq!(ctx.memory(|memory| memory.focused()), next_id);
     }
 
     #[test]
