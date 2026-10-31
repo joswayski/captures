@@ -2,9 +2,6 @@
 
 Captures is a cross-platform screen capture utility built for quick captures and a lightweight workflow.
 
-> [!WARNING]
-> Experimental and under active development. See platform status below.
-
 ## A quick look
 
 <table>
@@ -42,9 +39,9 @@ Captures is a cross-platform screen capture utility built for quick captures and
   </tr>
 </table>
 
-## Download Captures Preview
+## Download Captures
 
-These links download the **latest validated Tauri Preview**. This remains an experimental Preview, not a stable release; the native rewrite continues separately.
+Download Captures for macOS, Windows, or Linux.
 
 | Platform | Download |
 | --- | --- |
@@ -57,7 +54,7 @@ Tauri desktop changes merged to `main` automatically build, publish and update t
 
 Installed copies check captur.es at launch and about every five minutes. Preferences and the tray also offer **Check for Updates**. Downloads from GitHub are signature-verified before installation; screenshot draft-save failure cancels restart. If Captures will not open or cannot install an update, use the installer links above. For an AppImage, replace your existing AppImage (normally `~/.local/bin/Captures.AppImage`) and make it executable (`chmod +x`) rather than running a second copy from Downloads. Dated builds, including experimental native builds, remain in the [build archive](https://github.com/joswayski/captures/releases).
 
-New desktop Preview release notes use AI-written highlights, with commit-based notes as a fallback. Generation runs in the release workflow using source changes, not your captures or app data; the desktop app does not contact Anthropic.
+New desktop release notes use AI-written highlights, with commit-based notes as a fallback. Generation runs in the release workflow using source changes, not your captures or app data; the desktop app does not contact Anthropic.
 
 If you installed an experimental native Preview, return to Tauri manually rather than using its updater. Quit Captures and replace the installed app with a download above. Native migration preserved the original Tauri profile; native-only captures and edits remain in the separate native profile and are not imported back automatically. Do not delete either profile. See [native update recovery](docs/releases.md#native-preview-packaging-and-recovery) for retained backups and limitations.
 
@@ -97,7 +94,7 @@ On macOS, update and launch notices follow the menu-bar icon as it moves. If the
 - Capture shortcuts work from Preferences, except while assigning a shortcut. Preferences → General offers **Start Captures on login** on macOS, Windows, and Linux, starting in the background when you sign in. Current source enables it by default for new installs; saved Off choices stay off. Tauri Preview 2026.10.1104 and earlier default to off
 - Capture UI and capture actions stay disabled while the desktop session is locked or inactive
 - Optional in-app feedback (never includes your captures)
-- After an unexpected quit, Preview may send a crash diagnostic (app version, OS, and a redacted panic or OS crash summary) through the same feedback channel; it never includes captures or home-directory paths. An in-app update restart, normal logoff, or shutdown is not a crash.
+- After an unexpected quit, Captures may send a crash diagnostic (app version, OS, and a redacted panic or OS crash summary) through the same feedback channel; it never includes captures or home-directory paths. An in-app update restart, normal logoff, or shutdown is not a crash.
 
 ## Optional cloud accounts — in development
 
@@ -122,11 +119,11 @@ not implemented yet.
 | Platform | Status |
 | --- | --- |
 | macOS 13+ | Supported; primary development target |
-| Windows 11 | Supported; experimental |
+| Windows 11 | Supported |
 | Linux X11 | Supported; hide recording controls manually when needed |
-| Linux Wayland | Experimental; no window targeting, cursor capture, or click highlights. Mini previews cannot poll the pointer, so the stack stays interactive and may cover apps underneath |
+| Linux Wayland | No window targeting, cursor capture, or click highlights. Mini previews cannot poll the pointer, so the stack stays interactive and may cover apps underneath |
 
-These statuses describe the downloadable Tauri Preview. Native parity and physical-platform acceptance remain separate; automated or headless tests do not replace them.
+These statuses describe the downloadable Captures app. Native parity and physical-platform acceptance remain separate; automated or headless tests do not replace them.
 
 ## Shortcuts
 

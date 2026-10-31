@@ -4,7 +4,7 @@
 
 - Captures is a work-in-progress, cross-platform screen capture utility. Keep public wording broad enough to cover screenshots, GIFs, and video.
 - Clearly separate current features from roadmap ideas. Do not present tentative work as shipped or promise release dates unless the repository already commits to them.
-- Treat dated Preview builds as experimental. Do not publish a stable release until the maintainer explicitly starts that channel.
+- Public-facing copy calls the shipping Tauri app Captures, not Preview or experimental. Keep internal release tags and channel mechanics separate from product wording; the native rewrite remains opt-in development.
 - Tauri is the public app: `release.yml` automatically builds and promotes validated Tauri Previews on main pushes. Public release selection requires the Tauri runtime marker (with legacy Tauri history recognized separately); never infer the runtime from the presence of native tooling. Native remains separate, opt-in development until the maintainer accepts parity. Match Tauri behavior and visuals, without adding unrequested controls such as Share.
 
 ## Repository map

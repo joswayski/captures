@@ -10,8 +10,7 @@ const CAPER_INVITE_URL = "https://caper.chat/invite/pIXKAZFUp8";
 const AUTHOR_URL = "https://josevalerio.com";
 const CONTACT_EMAIL = "jose@captur.es";
 const PREVIEW_DOWNLOAD_BASE = `${REPO_URL}/releases/download/preview`;
-const COOKING_TOOLTIP =
-  "Development builds are still running. These changes may not be in the public Tauri download.";
+const COOKING_TOOLTIP = "These changes are still being built and may not be in your download yet.";
 
 const PREVIEW_DOWNLOADS = [
   {
@@ -114,14 +113,8 @@ export default function Home({
             {detectedDownload ? (
               <>
                 <h2 className="text-base font-medium tracking-tight text-ink sm:text-lg">
-                  Download Captures{" "}
-                  <span className="text-xs font-normal text-ink-soft">(experimental)</span>
+                  Download Captures
                 </h2>
-                <p className="mt-3 max-w-xl text-sm leading-relaxed text-ink-muted">
-                  Downloads use the existing Tauri app. The native rewrite is being tested
-                  separately. {linuxInstallCopy(detectedDownload)} Please give feedback in the app,{" "}
-                  <FeedbackChannels />.
-                </p>
 
                 <div className="mt-8">
                   <div className="flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:items-center">
@@ -164,8 +157,7 @@ export default function Home({
                 </h2>
                 <p className="mt-3 max-w-xl text-sm leading-relaxed text-ink-muted">
                   Captures is available for macOS, Windows, and Linux. Visit from your computer to
-                  download it, or follow the project on GitHub. Feedback is welcome{" "}
-                  <FeedbackChannels />.
+                  download it, or follow the project on GitHub.
                 </p>
                 <div className="mt-8">
                   <GitHubSourceButton primary />
@@ -173,6 +165,12 @@ export default function Home({
               </>
             )}
           </div>
+          <section className="mt-8" aria-labelledby="feedback-heading">
+            <h2 id="feedback-heading" className="text-sm font-medium text-ink">
+              Feedback
+            </h2>
+            <FeedbackChannels />
+          </section>
         </section>
 
         <ProductGallery />
@@ -251,11 +249,6 @@ function linuxAlternativeLabel(download: PreviewDownload) {
   return download.id === "linux-deb" ? ".deb for Ubuntu / Debian" : "AppImage";
 }
 
-function linuxInstallCopy(download: PreviewDownload) {
-  if (download.family !== "linux") return null;
-  return "For the AppImage, copy it over ~/.local/bin/Captures.AppImage and make it executable; running it from Downloads starts a second copy. Settings and captures stay.";
-}
-
 function availabilityLabel(download: PreviewDownload | null) {
   const names = ["macOS", "Windows", "Linux"] as const;
   const current =
@@ -273,28 +266,33 @@ function availabilityLabel(download: PreviewDownload | null) {
 
 function FeedbackChannels() {
   return (
-    <>
-      on{" "}
-      <a
-        href={X_URL}
-        target="_blank"
-        rel="noreferrer"
-        className="inline-chip"
-        aria-label="Give feedback on X"
-      >
-        <XIcon className="h-3 w-3" />
-      </a>
-      , on{" "}
-      <a
-        href={CAPER_INVITE_URL}
-        target="_blank"
-        rel="noreferrer"
-        className="font-medium text-ink underline underline-offset-4 transition-colors duration-200 ease-out hover:text-accent-readable"
-      >
-        caper.chat
-      </a>{" "}
-      (my other app), or <CopyEmailButton email={CONTACT_EMAIL} />
-    </>
+    <ul className="mt-3 list-disc space-y-3 pl-5 text-sm text-ink-muted">
+      <li>In the app: Send Feedback…</li>
+      <li>
+        <a
+          href={X_URL}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-chip"
+          aria-label="Give feedback on X"
+        >
+          <XIcon className="h-3 w-3" />
+        </a>
+      </li>
+      <li>
+        <a
+          href={CAPER_INVITE_URL}
+          target="_blank"
+          rel="noreferrer"
+          className="font-medium text-ink underline underline-offset-4 transition-colors duration-200 ease-out hover:text-accent-readable"
+        >
+          caper.chat
+        </a>
+      </li>
+      <li>
+        <CopyEmailButton email={CONTACT_EMAIL} />
+      </li>
+    </ul>
   );
 }
 
