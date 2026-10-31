@@ -821,11 +821,16 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(slider.doubleValue, 0.5902718572045537, accuracy: 1e-12,
                            "Fit uses the small image's actual 100%, not the zero sentinel")
             XCTAssertTrue(slider.isContinuous)
+            XCTAssertEqual((slider.accessibilityValue() as? NSNumber)?.doubleValue, 100)
+            XCTAssertEqual((slider.accessibilityMinValue() as? NSNumber)?.doubleValue, 5)
+            XCTAssertEqual((slider.accessibilityMaxValue() as? NSNumber)?.doubleValue, 800)
+            XCTAssertEqual(slider.accessibilityValueDescription(), "Fit (100%)")
             try showComparison(controller, worker)
             for (position, percent) in [(0.0, 5.0), (0.5, 63.2), (0.75, 224.9), (1.0, 800.0)] {
                 slider.doubleValue = position
                 _ = slider.sendAction(slider.action, to: slider.target)
                 XCTAssertEqual(controller.viewport.zoomPercent, percent)
+                XCTAssertEqual((slider.accessibilityValue() as? NSNumber)?.doubleValue, percent)
                 XCTAssertEqual(controller.state.snapshot, original)
                 // Zoom moves the comparison with the canvas without re-encoding.
                 XCTAssertNotNil(controller.compareView.afterImage)
@@ -842,6 +847,58 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(controller.viewport, NativeEditorViewport())
             XCTAssertEqual(slider.doubleValue, 0.5902718572045537, accuracy: 1e-12)
             try render(controller.root, name: "screenshot-editor-zoom-slider-fit-\(appearance)")
+
+            XCTAssertTrue(controller.window.makeFirstResponder(slider))
+            let steps: [(UInt16, String, Double)] = [
+                (124, "\u{f703}", 105.2), (115, "\u{f729}", 5),
+                (126, "\u{f700}", 5.3), (125, "\u{f701}", 5),
+                (119, "\u{f72b}", 800), (124, "\u{f703}", 800),
+                (123, "\u{f702}", 760.4),
+            ]
+            for (code, characters, expected) in steps {
+                controller.window.sendEvent(try keyEvent(window: controller.window, keyCode: code,
+                                                        characters: characters))
+                XCTAssertEqual(controller.viewport.zoomPercent, expected)
+                XCTAssertEqual((slider.accessibilityValue() as? NSNumber)?.doubleValue, expected)
+                XCTAssertTrue(controller.window.firstResponder === slider, "zoom keys retain slider focus")
+            }
+            for (code, characters, expected) in [(UInt16(116), "\u{f72c}", 166.1),
+                                                 (UInt16(121), "\u{f72d}", 60.2)] {
+                slider.setAccessibilityValue(NSNumber(value: 100))
+                controller.window.sendEvent(try keyEvent(window: controller.window, keyCode: code,
+                                                        characters: characters))
+                XCTAssertEqual(controller.viewport.zoomPercent, expected, "Page keys move 10% of the log track")
+            }
+            slider.setAccessibilityValue(NSNumber(value: 50))
+            XCTAssertEqual(controller.viewport.zoomPercent, 50, "AX values are percentages, not track positions")
+            XCTAssertTrue(slider.accessibilityPerformIncrement())
+            XCTAssertEqual(controller.viewport.zoomPercent, 52.6)
+            XCTAssertTrue(slider.accessibilityPerformDecrement())
+            XCTAssertEqual(controller.viewport.zoomPercent, 50)
+            for invalid in [Double.nan, Double.infinity, -Double.infinity] {
+                slider.setAccessibilityValue(NSNumber(value: invalid))
+                XCTAssertEqual(controller.viewport.zoomPercent, 50)
+            }
+            slider.setAccessibilityValue(NSNumber(value: 900))
+            XCTAssertEqual(controller.viewport.zoomPercent, 800)
+            XCTAssertFalse(slider.accessibilityPerformIncrement())
+            XCTAssertFalse(slider.isAccessibilitySelectorAllowed(NSSelectorFromString("accessibilityPerformIncrement")))
+            slider.setAccessibilityValue(NSNumber(value: -10))
+            XCTAssertEqual(controller.viewport.zoomPercent, 5)
+            XCTAssertFalse(slider.accessibilityPerformDecrement())
+            XCTAssertFalse(slider.isAccessibilitySelectorAllowed(NSSelectorFromString("accessibilityPerformDecrement")))
+            controller.window.sendEvent(try keyEvent(window: controller.window, keyCode: 48, characters: "\t"))
+            XCTAssertFalse(controller.window.firstResponder === slider, "Tab leaves the slider")
+            slider.isEnabled = false
+            slider.setAccessibilityValue(NSNumber(value: 200))
+            XCTAssertFalse(slider.accessibilityPerformIncrement())
+            XCTAssertFalse(slider.accessibilityPerformDecrement())
+            XCTAssertFalse(slider.isAccessibilitySelectorAllowed(NSSelectorFromString("setAccessibilityValue:")))
+            slider.keyDown(with: try keyEvent(window: controller.window, keyCode: 119, characters: "\u{f72b}"))
+            XCTAssertEqual(controller.viewport.zoomPercent, 5, "disabled slider ignores all adjustment paths")
+            XCTAssertEqual(controller.state.snapshot, original)
+            XCTAssertTrue(worker.requests.isEmpty && worker.encodes.isEmpty)
+            XCTAssertEqual(worker.compares.count, 1, "view-only zoom does not re-encode the comparison")
         }
         XCTAssertNil(NativeEditorViewport.sliderZoom(position: .nan))
         XCTAssertNil(NativeEditorViewport.sliderPosition(percent: .infinity))
