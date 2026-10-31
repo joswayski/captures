@@ -4,14 +4,12 @@ import type { PreviewDownloadId } from "../detectPreviewDownload";
 import ProductGallery from "../ProductGallery";
 
 const REPO_URL = "https://github.com/joswayski/captures";
-const RELEASES_URL = `${REPO_URL}/releases`;
 const X_URL = "https://x.com/josevalerio";
 const CAPER_INVITE_URL = "https://caper.chat/invite/pIXKAZFUp8";
 const AUTHOR_URL = "https://josevalerio.com";
 const CONTACT_EMAIL = "jose@captur.es";
 const PREVIEW_DOWNLOAD_BASE = `${REPO_URL}/releases/download/preview`;
-const COOKING_TOOLTIP =
-  "Development builds are still running. These changes may not be in the public Tauri download.";
+const COOKING_TOOLTIP = "Still building. This change may not be in the download yet.";
 
 const PREVIEW_DOWNLOADS = [
   {
@@ -110,20 +108,10 @@ export default function Home({
             .
           </p>
 
-          <div className="mt-12 border-t border-border pt-10" id="download">
+          <div className="mt-8" id="download">
             {detectedDownload ? (
               <>
-                <h2 className="text-base font-medium tracking-tight text-ink sm:text-lg">
-                  Download Captures{" "}
-                  <span className="text-xs font-normal text-ink-soft">(experimental)</span>
-                </h2>
-                <p className="mt-3 max-w-xl text-sm leading-relaxed text-ink-muted">
-                  Downloads use the existing Tauri app. The native rewrite is being tested
-                  separately. {linuxInstallCopy(detectedDownload)} Please give feedback in the app,{" "}
-                  <FeedbackChannels />.
-                </p>
-
-                <div className="mt-8">
+                <div>
                   <div className="flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:items-center">
                     <a href={detectedDownload.href} className="download-button">
                       <OsIcon
@@ -145,31 +133,26 @@ export default function Home({
                       </a>
                     </p>
                   ) : null}
-                  <p className="mt-3 text-xs text-ink-soft">
-                    <a
-                      href={RELEASES_URL}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-ink-muted no-underline underline-offset-2 transition-colors duration-200 ease-out hover:text-accent-readable hover:underline"
-                    >
-                      {availabilityLabel(detectedDownload)}
-                    </a>
-                  </p>
+                  {detectedDownload.family === "linux" ? (
+                    <p className="mt-3 max-w-xl text-xs leading-relaxed text-ink-soft">
+                      Updating an AppImage by hand? Replace{" "}
+                      <code className="text-ink-muted">~/.local/bin/Captures.AppImage</code> and
+                      make it executable instead of running a second copy from Downloads.
+                    </p>
+                  ) : null}
                 </div>
+                <FeedbackList appMenu={detectedDownload.family === "macos" ? "menu bar" : "tray"} />
               </>
             ) : (
               <>
-                <h2 className="text-base font-medium tracking-tight text-ink sm:text-lg">
-                  Capture from your desktop
-                </h2>
-                <p className="mt-3 max-w-xl text-sm leading-relaxed text-ink-muted">
-                  Captures is available for macOS, Windows, and Linux. Visit from your computer to
-                  download it, or follow the project on GitHub. Feedback is welcome{" "}
-                  <FeedbackChannels />.
+                <p className="max-w-xl text-sm leading-relaxed text-ink-muted">
+                  Available for macOS, Windows, and Linux. Open this page on your computer to
+                  download it.
                 </p>
                 <div className="mt-8">
                   <GitHubSourceButton primary />
                 </div>
+                <FeedbackList />
               </>
             )}
           </div>
@@ -251,50 +234,43 @@ function linuxAlternativeLabel(download: PreviewDownload) {
   return download.id === "linux-deb" ? ".deb for Ubuntu / Debian" : "AppImage";
 }
 
-function linuxInstallCopy(download: PreviewDownload) {
-  if (download.family !== "linux") return null;
-  return "For the AppImage, copy it over ~/.local/bin/Captures.AppImage and make it executable; running it from Downloads starts a second copy. Settings and captures stay.";
-}
-
-function availabilityLabel(download: PreviewDownload | null) {
-  const names = ["macOS", "Windows", "Linux"] as const;
-  const current =
-    download?.family === "macos"
-      ? "macOS"
-      : download?.family === "windows"
-        ? "Windows"
-        : download?.family === "linux"
-          ? "Linux"
-          : null;
-  if (!current) return "Available for macOS, Windows, and Linux";
-  const others = names.filter((name) => name !== current);
-  return `Also available for ${others[0]} and ${others[1]}`;
-}
-
-function FeedbackChannels() {
+function FeedbackList({ appMenu }: { appMenu?: "menu bar" | "tray" }) {
   return (
-    <>
-      on{" "}
-      <a
-        href={X_URL}
-        target="_blank"
-        rel="noreferrer"
-        className="inline-chip"
-        aria-label="Give feedback on X"
-      >
-        <XIcon className="h-3 w-3" />
-      </a>
-      , on{" "}
-      <a
-        href={CAPER_INVITE_URL}
-        target="_blank"
-        rel="noreferrer"
-        className="font-medium text-ink underline underline-offset-4 transition-colors duration-200 ease-out hover:text-accent-readable"
-      >
-        caper.chat
-      </a>{" "}
-      (my other app), or <CopyEmailButton email={CONTACT_EMAIL} />
-    </>
+    <div className="mt-10">
+      <h2 className="text-xs text-ink-soft">Questions or feedback?</h2>
+      <ul className="mt-3 space-y-3 text-sm leading-relaxed text-ink-muted">
+        {appMenu ? (
+          <li>
+            Choose <span className="font-medium text-ink">Send Feedback…</span> from the Captures{" "}
+            {appMenu} icon
+          </li>
+        ) : null}
+        <li>
+          Tell me on{" "}
+          <a
+            href={X_URL}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-chip"
+            aria-label="@josevalerio on X"
+          >
+            <XIcon className="h-3 w-3" />
+            @josevalerio
+            <ExternalLinkIcon className="h-3 w-3 opacity-60" />
+          </a>
+        </li>
+        <li>
+          Share it in the{" "}
+          <a href={CAPER_INVITE_URL} target="_blank" rel="noreferrer" className="inline-chip">
+            #feedback channel on caper.chat
+            <ExternalLinkIcon className="h-3 w-3 opacity-60" />
+          </a>
+        </li>
+        <li>
+          Email me at <CopyEmailButton email={CONTACT_EMAIL} />
+        </li>
+      </ul>
+    </div>
   );
 }
 
@@ -452,6 +428,23 @@ function LinuxIcon({ className }: { className?: string }) {
         fillRule="evenodd"
         d="M12 2.2c-2.05 0-3.7 1.7-3.7 4 0 .72.18 1.38.5 1.94-2.28 1.32-3.85 3.55-4.38 6.1-.52 2.5.05 4.28 1.55 5.15-.62.42-1.02 1.1-1.02 1.88 0 1.42 1.48 2.18 3.05 2.52 1.42.3 3.12.36 5 .36s3.58-.06 5-.36c1.57-.34 3.05-1.1 3.05-2.52 0-.78-.4-1.46-1.02-1.88 1.5-.87 2.07-2.65 1.55-5.15-.53-2.55-2.1-4.78-4.38-6.1.32-.56.5-1.22.5-1.94 0-2.3-1.65-4-3.7-4ZM10.2 5.55c.45-.3.95.05.88.58-.06.46-.58.72-1.02.45-.44-.26-.42-.82.14-1.03Zm3.8 0c.56.21.58.77.14 1.03-.44.27-.96.01-1.02-.45-.07-.53.43-.88.88-.58ZM9.35 16.85c.9.5 1.75.78 2.65.78s1.75-.28 2.65-.78c.28-.16.6.02.6.34 0 .78-1.05 1.5-3.25 1.5s-3.25-.72-3.25-1.5c0-.32.32-.5.6-.34Z"
       />
+    </svg>
+  );
+}
+
+function ExternalLinkIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className={className}
+    >
+      <path d="M7 17 17 7M9 7h8v8" />
     </svg>
   );
 }
