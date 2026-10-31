@@ -32,6 +32,25 @@ do not replace physical macOS/Windows/Linux, accessibility or mixed-DPI checks.
 The detailed checklist below remains the release gate; unchecked does not mean
 unimplemented. Later slice notes supersede earlier notes about missing behavior.
 
+Native Preferences typography and row layout now follow the shipping
+stylesheet more closely. On wgpu, the window title, card headings and brand use
+the resolved semibold UI face. Descriptions use `--leading-snug` and a 52ch cap
+measured from the face's "0" advance instead of a fixed estimate. Whole-row
+switches (`.check-row.switch-row`) never stack in compact windows, and their
+hints fill the copy column without the 52ch cap. The Choose… slot is sized to
+its label. AppKit applies the same switch-row and measured-52ch rules; its
+headings were already semibold. A wgpu regression checks uncapped inline switch
+hints and compact-only select stacking at 880 and 560 px. Private-X11 Find passed in both
+appearances at normal and minimum sizes. Windows/X11/Wayland share the wgpu
+code, and AppKit is covered by the hosted macOS workflow only. Physical-host and
+screen-reader acceptance remain open.
+
+The screenshot editor's color field was audited against the shipping
+`ColorField`. No change was needed. Tab reaches the eight swatches in order,
+then the custom tile, then the hex field once the custom picker is open.
+Space and Enter choose a swatch.
+Arrows remain owned by the focused widget, following the existing wgpu rule.
+
 Shared wgpu numeric fields apply Up/Down events in arrival order, including
 clamping at either limit. The first arrow after Tab retains numeric-field focus
 instead of also navigating to a neighboring control; a two-field regression

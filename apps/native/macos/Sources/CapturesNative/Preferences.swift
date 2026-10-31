@@ -1029,8 +1029,11 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         return card.frame.maxY + tokens.number("s-6")
     }
 
-    /// Shipping `max-width: 52ch` for row and card descriptions.
-    private var descriptionWidth: CGFloat { 52 * tokens.number("text-sm") * 0.56 }
+    /// Shipping `max-width: 52ch` for row and card descriptions; `ch` is the
+    /// advance of "0" in the description font.
+    private var descriptionWidth: CGFloat {
+        52 * ("0" as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: tokens.number("text-sm"))]).width
+    }
 
     private func textHeight(_ text: String, size: CGFloat, width: CGFloat,
                             weight: NSFont.Weight = .regular) -> CGFloat {
@@ -1059,25 +1062,28 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         return wash
     }
 
-    /// Row copy: a `--text-md` title over a subtle, 52ch description.
-    private func copyHeight(_ title: String, detail: String, width: CGFloat) -> CGFloat {
+    /// Row copy: a `--text-md` title over a subtle, 52ch description. A
+    /// `.check-row.switch-row` hint (`switchHint`) has no 52ch cap and sits
+    /// 3 pt lower (`small { margin-top: 3px }`).
+    private func copyHeight(_ title: String, detail: String, width: CGFloat, switchHint: Bool = false) -> CGFloat {
         let titleHeight = textHeight(title, size: tokens.number("text-md"), width: width, weight: .medium)
-        let detailHeight = textHeight(detail, size: tokens.number("text-sm"), width: min(width, descriptionWidth))
-        return titleHeight + (detail.isEmpty ? 0 : 3 + detailHeight)
+        let detailHeight = textHeight(detail, size: tokens.number("text-sm"),
+            width: switchHint ? width : min(width, descriptionWidth))
+        return titleHeight + (detail.isEmpty ? 0 : (switchHint ? 6 : 3) + detailHeight)
     }
 
     @discardableResult
     private func addCopy(_ title: String, detail: String, emphasis: PreferencesPolicy.Emphasized? = nil,
                          x: CGFloat, y: CGFloat, width: CGFloat, parent: NSView,
-                         enabled: Bool = true) -> [NSTextField] {
+                         enabled: Bool = true, switchHint: Bool = false) -> [NSTextField] {
         let titleHeight = textHeight(title, size: tokens.number("text-md"), width: width, weight: .medium)
         let first = addLabel(title, frame: NSRect(x: x, y: y, width: width, height: titleHeight),
             size: tokens.number("text-md"), weight: .medium, parent: parent)
         var labels = [first]
         let text = emphasis?.text ?? detail
         if !text.isEmpty {
-            let detailWidth = min(width, descriptionWidth)
-            let second = wrappingLabel(text, frame: NSRect(x: x, y: y + titleHeight + 3, width: detailWidth,
+            let detailWidth = switchHint ? width : min(width, descriptionWidth)
+            let second = wrappingLabel(text, frame: NSRect(x: x, y: y + titleHeight + (switchHint ? 6 : 3), width: detailWidth,
                 height: textHeight(text, size: tokens.number("text-sm"), width: detailWidth)),
                 size: tokens.number("text-sm"), parent: parent)
             if let emphasis, !emphasis.emphasis.isEmpty {
@@ -1102,13 +1108,15 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     /// control frame.
     private func inlineRow(_ title: String, detail: String, emphasis: PreferencesPolicy.Emphasized? = nil,
                            control: NSSize, y: CGFloat, card: NSView, enabled: Bool = true,
-                           keepInline: Bool = false, highlight key: String? = nil) -> (row: NSRect, control: NSRect) {
+                           keepInline: Bool = false, switchHint: Bool = false,
+                           highlight key: String? = nil) -> (row: NSRect, control: NSRect) {
         // A compact window stacks the control under the copy
         // (`.setting-row-inline { grid-template-columns: minmax(0, 1fr) }`).
-        let stacked = compactLayout && !keepInline
+        // Switch rows are flex rows in shipping and never stack.
+        let stacked = compactLayout && !keepInline && !switchHint
         let width = stacked ? contentWidth : contentWidth - control.width - tokens.number("s-6")
         let text = emphasis?.text ?? detail
-        let copy = copyHeight(title, detail: text, width: width)
+        let copy = copyHeight(title, detail: text, width: width, switchHint: switchHint)
         let height = stacked ? copy + tokens.number("s-3") + control.height : max(copy, control.height)
         let row = NSRect(x: inset, y: y, width: contentWidth, height: height)
         if let key, key == highlightedSetting {
@@ -1125,7 +1133,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         }
         searchable.append((findBackground(row, parent: card), "\(title) \(text)"))
         addCopy(title, detail: detail, emphasis: emphasis, x: inset, y: stacked ? y : y + (height - copy) / 2,
-            width: width, parent: card, enabled: enabled)
+            width: width, parent: card, enabled: enabled, switchHint: switchHint)
         let frame = stacked
             ? NSRect(x: inset, y: y + copy + tokens.number("s-3"),
                      width: min(control.width, contentWidth), height: control.height)
@@ -1142,7 +1150,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
                            enabled: Bool = true) -> CGFloat {
         let isOn = boolSetting(path)
         let layout = inlineRow(title, detail: detail, emphasis: emphasis, control: NSSize(width: 32, height: 19),
-            y: y, card: card, enabled: enabled, highlight: path.count == 1 ? path[0] : nil)
+            y: y, card: card, enabled: enabled, switchHint: true, highlight: path.count == 1 ? path[0] : nil)
         let button = PreferenceSwitchButton(frame: layout.row, tokens: tokens, label: title, isOn: isOn) {
             [weak self] in
             guard let self else { return }
@@ -1868,7 +1876,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         guard loginItemService != nil else {
             // Fixtures and exercise runs cannot register a login item.
             let layout = inlineRow(title, detail: PreferencesPolicy.text("login_item.unavailable"),
-                control: NSSize(width: 32, height: 19), y: y, card: card, enabled: false)
+                control: NSSize(width: 32, height: 19), y: y, card: card, enabled: false, switchHint: true)
             let button = PreferenceSwitchButton(frame: layout.row, tokens: tokens, label: title, isOn: false) {}
             button.identifier = NSUserInterfaceItemIdentifier("login-item-unavailable")
             button.isEnabled = false
@@ -1883,7 +1891,8 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         }
         let detail = loginItemPending ? PreferencesPolicy.text("login_item.checking")
             : PreferencesPolicy.text("login_item.detail")
-        let layout = inlineRow(title, detail: detail, control: NSSize(width: 32, height: 19), y: y, card: card)
+        let layout = inlineRow(title, detail: detail, control: NSSize(width: 32, height: 19), y: y, card: card,
+            switchHint: true)
         let button = PreferenceSwitchButton(frame: layout.row, tokens: tokens, label: title,
             isOn: loginItemEnabled == true) { [weak self] in self?.toggleLoginItem() }
         button.title = loginItemPending ? PreferencesPolicy.text("login_item.checking")

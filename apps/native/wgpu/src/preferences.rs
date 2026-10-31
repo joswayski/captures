@@ -964,6 +964,8 @@ impl Preferences {
     /// Shipping `.preferences-nav`: the brand, then one entry per card with the
     /// card in view highlighted.
     pub fn sidebar(&mut self, ui: &mut egui::Ui, t: &Tokens) {
+        // `.preferences-nav { gap: var(--s-6) }`, then 1 px between entries.
+        ui.spacing_mut().item_spacing.y = 0.;
         widgets::brand(ui, t);
         ui.add_space(t.number("s-6"));
         ui.spacing_mut().item_spacing.y = 1.;
@@ -1110,7 +1112,10 @@ impl Preferences {
                     ui.spacing_mut().item_spacing.x = t.number("s-6");
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 2.;
-                        ui.label(RichText::new(preferences::TITLE).size(t.number("text-xl")));
+                        ui.label(
+                            RichText::new(preferences::TITLE)
+                                .font(crate::ui_fonts::semibold(ui, t.number("text-xl"))),
+                        );
                         ui.label(
                             RichText::new(preferences::SUBTITLE)
                                 .size(t.number("text-sm"))
@@ -1404,7 +1409,10 @@ impl Preferences {
                 let background = ui.painter().add(egui::Shape::Noop);
                 let heading = ui
                     .vertical(|ui| {
-                        ui.label(RichText::new(section.title).size(t.number("text-lg")));
+                        ui.label(
+                            RichText::new(section.title)
+                                .font(crate::ui_fonts::semibold(ui, t.number("text-lg"))),
+                        );
                         ui.add_space(t.number("s-2"));
                         description(ui, t, description_text, None);
                     })
@@ -1457,10 +1465,28 @@ impl Preferences {
         control_size: egui::Vec2,
         control: impl FnOnce(&mut Self, &mut egui::Ui),
     ) -> (egui::Rect, egui::layers::ShapeIdx) {
+        self.copy_row(ui, t, title, desc, emphasis, control_size, false, control)
+    }
+
+    /// [`Self::row`], or a `.check-row.switch-row` when `switch`: it never
+    /// stacks, and its `small` hint has no 52ch cap and sits 3 px lower
+    /// (`margin-top: 3px`).
+    #[allow(clippy::too_many_arguments)]
+    fn copy_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        t: &Tokens,
+        title: &str,
+        desc: &str,
+        emphasis: Option<preferences::Emphasized>,
+        control_size: egui::Vec2,
+        switch: bool,
+        control: impl FnOnce(&mut Self, &mut egui::Ui),
+    ) -> (egui::Rect, egui::layers::ShapeIdx) {
         let background = ui.painter().add(egui::Shape::Noop);
         let full = ui.available_width();
-        // Compact windows stack the control under the copy.
-        let stacked = self.compact;
+        // Compact windows stack the control under the copy; switches stay inline.
+        let stacked = self.compact && !switch;
         let copy_width = if stacked {
             full
         } else {
@@ -1475,12 +1501,13 @@ impl Preferences {
         let has_description = !desc.is_empty() || emphasis.is_some();
         let description_galley = has_description.then(|| {
             ui.painter()
-                .layout_job(description_job(t, desc, emphasis, copy_width))
+                .layout_job(description_job(ui, t, desc, emphasis, copy_width, !switch))
         });
+        let description_gap = if switch { 6. } else { 3. };
         let copy_height = title_galley.size().y
             + description_galley
                 .as_ref()
-                .map_or(0., |galley| 3. + galley.size().y);
+                .map_or(0., |galley| description_gap + galley.size().y);
         let gap = t.number("s-3");
         let height = if stacked {
             copy_height + gap + control_size.y
@@ -1498,7 +1525,7 @@ impl Preferences {
             .galley(egui::pos2(rect.left(), top), title_galley, t.color("text"));
         if let Some(galley) = description_galley {
             ui.painter().galley(
-                egui::pos2(rect.left(), top + title_height + 3.),
+                egui::pos2(rect.left(), top + title_height + description_gap),
                 galley,
                 t.color("text-subtle"),
             );
@@ -1558,13 +1585,14 @@ impl Preferences {
             .unwrap_or(false);
         ui.add_enabled_ui(enabled, |ui| {
             let mut switch_rect = egui::Rect::NOTHING;
-            let (rect, background) = self.row(
+            let (rect, background) = self.copy_row(
                 ui,
                 t,
                 title,
                 desc,
                 emphasis,
                 egui::vec2(32., 19.),
+                true,
                 |_, ui| {
                     switch_rect = ui
                         .allocate_exact_size(egui::vec2(32., 19.), egui::Sense::hover())
@@ -1967,7 +1995,7 @@ impl Preferences {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = t.number("s-4");
                         let mut path = string_at(&this.value, &["output_directory"]);
-                        let choose = 2. * t.number("s-5") + 7. * t.number("text-sm");
+                        let choose = widgets::button_width(ui, t, "Choose…");
                         let changed = field_scope(ui, t, |ui| {
                             ui.add(
                                 egui::TextEdit::singleline(&mut path)
@@ -2734,13 +2762,14 @@ impl Preferences {
             let on = this.login_enabled == Some(true);
             ui.add_enabled_ui(enabled, |ui| {
                 let mut switch_rect = egui::Rect::NOTHING;
-                let (rect, _) = this.row(
+                let (rect, _) = this.copy_row(
                     ui,
                     t,
                     preferences::LOGIN_ITEM_TITLE,
                     &detail,
                     None,
                     egui::vec2(32., 19.),
+                    true,
                     |_, ui| {
                         switch_rect = ui
                             .allocate_exact_size(egui::vec2(32., 19.), egui::Sense::hover())
@@ -2959,17 +2988,24 @@ fn fit_chips(text_widths: &[f32], available: f32) -> (f32, f32, f32) {
     (scale.max(0.8), 4., 4.)
 }
 
-/// Shipping `.setting-copy small`: `--text-sm` in `--text-subtle`, at most
-/// 52ch wide, with an optional `<strong>` word in `--text`.
+/// Shipping `.setting-copy small`: `--text-sm` in `--text-subtle` at
+/// `--leading-snug`, at most 52ch wide when `capped`, with an optional
+/// `<strong>` word in `--text`.
 fn description_job(
+    ui: &egui::Ui,
     t: &Tokens,
     text: &str,
     emphasis: Option<preferences::Emphasized>,
     available: f32,
+    capped: bool,
 ) -> egui::text::LayoutJob {
     let size = t.number("text-sm");
-    let subtle = egui::TextFormat::simple(egui::FontId::proportional(size), t.color("text-subtle"));
-    let strong = egui::TextFormat::simple(egui::FontId::proportional(size), t.color("text"));
+    let format = |color| egui::TextFormat {
+        line_height: Some(size * t.number("leading-snug")),
+        ..egui::TextFormat::simple(egui::FontId::proportional(size), color)
+    };
+    let subtle = format(t.color("text-subtle"));
+    let strong = format(t.color("text"));
     let mut job = egui::text::LayoutJob::default();
     match emphasis {
         Some(parts) => {
@@ -2979,18 +3015,27 @@ fn description_job(
         }
         None => job.append(text, 0., subtle),
     }
-    job.wrap.max_width = (52. * size * 0.56).min(available);
+    job.wrap.max_width = if capped {
+        // `ch` is the advance of "0" in the resolved UI face.
+        let ch = ui.fonts_mut(|fonts| fonts.glyph_width(&egui::FontId::proportional(size), '0'));
+        (52. * ch).min(available)
+    } else {
+        available
+    };
     job
 }
 
+/// A 52ch description label. `Label` rewraps its job at the available width,
+/// so lay out the galley here to keep the cap.
 fn description(
     ui: &mut egui::Ui,
     t: &Tokens,
     text: &str,
     emphasis: Option<preferences::Emphasized>,
 ) {
-    let job = description_job(t, text, emphasis, ui.available_width());
-    ui.label(job);
+    let job = description_job(ui, t, text, emphasis, ui.available_width(), true);
+    let galley = ui.painter().layout_job(job);
+    ui.label(galley);
 }
 
 fn custom_color_field_id(key: &str) -> egui::Id {
@@ -3194,6 +3239,76 @@ mod tests {
                 );
                 assert!(action_right < width);
             }
+        }
+    }
+
+    #[test]
+    fn switch_rows_stay_inline_with_uncapped_hints_while_selects_stack_when_compact() {
+        let tokens = crate::tokens::load()["light-mustard"].clone();
+        for width in [880., 560.] {
+            let dir = tempfile::tempdir().unwrap();
+            let ctx = egui::Context::default();
+            let mut prefs =
+                Preferences::new(ctx.clone(), dir.path().join("settings.json"), None, None);
+            prefs.compact = width <= 720.;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 2000.),
+                    )),
+                    ..Default::default()
+                },
+                |ui| prefs.capture(ui, &tokens),
+            );
+            output.textures_delta.clear();
+            let text = |prefix: &str| {
+                output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text().starts_with(prefix) => {
+                            Some(text.galley.rect.translate(text.pos.to_vec2()))
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("missing {prefix} at {width}"))
+            };
+            let row = |prefix: &str| {
+                prefs
+                    .find_rows
+                    .iter()
+                    .find(|row| row.text.starts_with(prefix))
+                    .unwrap()
+                    .rect
+            };
+            let ch = ctx.fonts_mut(|fonts| {
+                fonts.glyph_width(&egui::FontId::proportional(tokens.number("text-sm")), '0')
+            });
+            // `.check-row.switch-row`: the hint fills the copy column and the
+            // 19 px switch sits beside it, never below.
+            let hint = text("Drawing a region, choosing a window");
+            assert!(
+                hint.width() > 52. * ch + 1.,
+                "{width}: switch hint {hint:?} is uncapped"
+            );
+            let switch = row("Start capture as soon as a target is selected");
+            assert!(
+                (switch.bottom() - hint.bottom()).abs() < 1.,
+                "{width}: switch row {switch:?} ends with its hint {hint:?}"
+            );
+            // `.setting-row-inline` keeps the 52ch cap and stacks when compact.
+            let detail = text(preferences::row("screenshot_format").description);
+            assert!(
+                detail.width() <= 52. * ch + 1.,
+                "{width}: {detail:?} keeps 52ch"
+            );
+            let select = row(preferences::row("screenshot_format").title);
+            assert_eq!(
+                select.bottom() - detail.bottom() > tokens.number("h-md"),
+                prefs.compact,
+                "{width}: select row {select:?} stacks only when compact"
+            );
         }
     }
 
