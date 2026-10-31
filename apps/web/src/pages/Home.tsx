@@ -114,12 +114,10 @@ export default function Home({
             {detectedDownload ? (
               <>
                 <h2 className="text-base font-medium tracking-tight text-ink sm:text-lg">
-                  Download Captures{" "}
-                  <span className="text-xs font-normal text-ink-soft">(experimental)</span>
+                  Download Captures
                 </h2>
                 <p className="mt-3 max-w-xl text-sm leading-relaxed text-ink-muted">
-                  Downloads use the existing Tauri app. The native rewrite is being tested
-                  separately. {linuxInstallCopy(detectedDownload)} Please give feedback in the app,{" "}
+                  {linuxInstallCopy(detectedDownload)} Please give feedback in the app,{" "}
                   <FeedbackChannels />.
                 </p>
 
