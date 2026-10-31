@@ -1119,13 +1119,38 @@ impl<'a> NumberInput<'a> {
         };
         // ArrowUp/ArrowDown step before the text edit sees them.
         if enabled && focused_before {
-            for (key, up) in [(egui::Key::ArrowUp, true), (egui::Key::ArrowDown, false)] {
-                while ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, key)) {
+            let mut keyboard = true;
+            ui.input_mut(|input| {
+                input.events.retain(|event| {
+                    let egui::Event::Key {
+                        key,
+                        pressed: true,
+                        modifiers,
+                        ..
+                    } = event
+                    else {
+                        return true;
+                    };
+                    // Leave traversal/commit keys for TextEdit, and stop
+                    // stepping this field after keyboard focus departs.
+                    if matches!(key, egui::Key::Tab | egui::Key::Enter) {
+                        keyboard = false;
+                    }
+                    if !keyboard || !modifiers.matches_logically(egui::Modifiers::NONE) {
+                        return true;
+                    }
+                    let up = match key {
+                        egui::Key::ArrowUp => true,
+                        egui::Key::ArrowDown => false,
+                        _ => return true,
+                    };
+                    // Clamping makes order observable at both limits.
                     let next = number::step_from(&buffer, self.step, up, self.min, self.max);
                     set(value, next);
                     buffer = number_text(N::from_f64(next), self.step);
-                }
-            }
+                    false
+                });
+            });
         }
         let hovered = enabled && ui.rect_contains_pointer(rect);
         let radius = t.number("r-md");
@@ -2199,9 +2224,49 @@ mod tests {
             &mut value,
         );
         run(vec![press(text, false)], &mut value);
+        run(
+            vec![key(egui::Key::ArrowDown), key(egui::Key::ArrowUp)],
+            &mut value,
+        );
+        assert_eq!(value, 10, "Down then Up must return to the maximum");
         run(vec![key(egui::Key::ArrowDown)], &mut value);
         run(vec![key(egui::Key::ArrowDown)], &mut value);
         assert_eq!(value, 8, "ArrowDown steps the focused field");
+        run(vec![key(egui::Key::ArrowDown); 8], &mut value);
+        assert_eq!(value, 0);
+        run(
+            vec![key(egui::Key::ArrowDown), key(egui::Key::ArrowUp)],
+            &mut value,
+        );
+        assert_eq!(value, 1, "Down clamps before Up leaves the minimum");
+        for departure in [egui::Key::Tab, egui::Key::Enter, egui::Key::Escape] {
+            run(vec![], &mut value);
+            run(
+                vec![egui::Event::PointerMoved(text), press(text, true)],
+                &mut value,
+            );
+            run(vec![press(text, false)], &mut value);
+            let before = value;
+            run(
+                vec![
+                    key(egui::Key::ArrowUp),
+                    key(departure),
+                    key(egui::Key::ArrowDown),
+                ],
+                &mut value,
+            );
+            // egui clears focus before widgets run on Escape. Preserve its
+            // existing whole-pass cancellation, rather than restoring focus.
+            assert_eq!(
+                value,
+                if departure == egui::Key::Escape {
+                    before
+                } else {
+                    before + 1
+                },
+                "{departure:?} must preserve the field's departure/cancellation behavior"
+            );
+        }
     }
 
     #[test]

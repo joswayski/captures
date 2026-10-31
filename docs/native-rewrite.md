@@ -32,6 +32,15 @@ do not replace physical macOS/Windows/Linux, accessibility or mixed-DPI checks.
 The detailed checklist below remains the release gate; unchecked does not mean
 unimplemented. Later slice notes supersede earlier notes about missing behavior.
 
+Shared wgpu numeric fields apply Up/Down events in arrival order, including
+clamping at either limit. Tab and Enter leave subsequent arrows unconsumed
+instead of stepping the previous field. Escape retains egui's whole-pass focus
+cancellation. The existing numeric control regression checks both bounds,
+adjustment → departure → adjustment, and unchanged Escape cancellation;
+AppKit already steps from its current field editor one event at a time and is
+unchanged. Windows/X11/Wayland share this implementation; physical Windows,
+Wayland and screen-reader acceptance remain open.
+
 The wgpu screenshot zoom preset menu now uses the shared select's ordered
 keyboard handling and accessible listbox instead of a generic popup. Its compact
 monospace trigger retains the zoom group's geometry; Fit, custom zoom, 50%, 100%
