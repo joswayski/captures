@@ -845,7 +845,8 @@ Windows/Linux custom selects retain focus on the first arrow after Tab and
 process rapid navigation, selection and cancellation keys in order, including
 repeated arrows. Tab still closes the listbox and moves to the next control.
 Native Windows/Linux numeric fields also apply rapid Up/Down steps in order at
-their limits; stepping stops when Tab or Enter leaves the field.
+their limits and retain focus on the first arrow after Tab; stepping stops when
+Tab or Enter leaves the field.
 Its Layers panel also edits annotation fill, stroke, opacity and shadow settings live,
 as shipping does; shared Rust owns style defaults, rendering, undo folding and draft
 persistence.

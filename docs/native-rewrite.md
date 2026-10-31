@@ -33,7 +33,10 @@ The detailed checklist below remains the release gate; unchecked does not mean
 unimplemented. Later slice notes supersede earlier notes about missing behavior.
 
 Shared wgpu numeric fields apply Up/Down events in arrival order, including
-clamping at either limit. Tab and Enter leave subsequent arrows unconsumed
+clamping at either limit. The first arrow after Tab retains numeric-field focus
+instead of also navigating to a neighboring control; a two-field regression
+checks both directions without an intervening focus-lock frame.
+Tab and Enter leave subsequent arrows unconsumed
 instead of stepping the previous field. Escape retains egui's whole-pass focus
 cancellation. The existing numeric control regression checks both bounds,
 adjustment → departure → adjustment, and unchanged Escape cancellation;
