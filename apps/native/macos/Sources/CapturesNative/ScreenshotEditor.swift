@@ -1,6 +1,60 @@
 import AppKit
 import UniformTypeIdentifiers
 
+/// Keep NSSlider's native drawing and logarithmic 0–1 track, but expose the
+/// shipping 5–800% zoom contract to keyboard and accessibility clients.
+private final class EditorZoomSlider: NSSlider {
+    override func accessibilityValue() -> Any? {
+        NativeEditorViewport.sliderZoom(position: doubleValue).map { NSNumber(value: $0) }
+    }
+    override func accessibilityMinValue() -> Any? { NSNumber(value: 5) }
+    override func accessibilityMaxValue() -> Any? { NSNumber(value: 800) }
+    override func setAccessibilityValue(_ value: Any?) {
+        guard let percent = (value as? NSNumber)?.doubleValue,
+              let position = NativeEditorViewport.sliderPosition(percent: percent) else { return }
+        _ = choosePosition(position)
+    }
+    override func accessibilityPerformIncrement() -> Bool {
+        guard doubleValue < 1 else { return false }
+        return choosePosition(doubleValue + 0.01)
+    }
+    override func accessibilityPerformDecrement() -> Bool {
+        guard doubleValue > 0 else { return false }
+        return choosePosition(doubleValue - 0.01)
+    }
+    override func isAccessibilitySelectorAllowed(_ selector: Selector) -> Bool {
+        switch selector {
+        case #selector(setAccessibilityValue(_:)): return isEnabled
+        case #selector(accessibilityPerformIncrement): return isEnabled && doubleValue < 1
+        case #selector(accessibilityPerformDecrement): return isEnabled && doubleValue > 0
+        default: return super.isAccessibilitySelectorAllowed(selector)
+        }
+    }
+    override func keyDown(with event: NSEvent) {
+        guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty else {
+            super.keyDown(with: event); return
+        }
+        let position: Double
+        switch event.keyCode {
+        case 123, 125: position = doubleValue - 0.01
+        case 124, 126: position = doubleValue + 0.01
+        case 116: position = doubleValue + 0.1
+        case 121: position = doubleValue - 0.1
+        case 115: position = 0
+        case 119: position = 1
+        default: super.keyDown(with: event); return
+        }
+        _ = choosePosition(position)
+    }
+    private func choosePosition(_ position: Double) -> Bool {
+        guard isEnabled else { return false }
+        doubleValue = min(1, max(0, position))
+        let accepted = sendAction(action, to: target)
+        if accepted { NSAccessibility.post(element: self, notification: .valueChanged) }
+        return accepted
+    }
+}
+
 /// Keyboard-focusable, but pointer resizing never commits the active field editor.
 private final class EditorInspectorDivider: NSView {
     var resize: (CGFloat?) -> Void = { _ in }
@@ -1429,7 +1483,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var viewportCanvasSize = NSSize.zero
     private var viewportBounds = NSRect.zero
     private let zoomPreset = NSPopUpButton()
-    private let zoomSlider = NSSlider(value: 0, minValue: 0, maxValue: 1, target: nil, action: nil)
+    private let zoomSlider = EditorZoomSlider(value: 0, minValue: 0, maxValue: 1, target: nil, action: nil)
     /// Shipping's read-only crop Width/Height (`readOnly` inputs).
     private let cropWidth = NSTextField()
     private let cropHeight = NSTextField()

@@ -979,8 +979,8 @@ appears only while the canvas is panned mostly off screen.
 The zoom menu offers Fit, 50%, 100% and 200% and displays the current custom zoom.
 Both hosts also provide a logarithmic 5–800% zoom slider. It tracks the actual Fit
 scale and preserves the viewport-center image point when dragged.
-The Windows/Linux slider also accepts arrow keys, Page Up/Down and Home/End
-while focused, and exposes zoom percentages and value actions to accessibility
+Both native sliders also accept arrow keys, Page Up/Down and Home/End
+while focused, and expose zoom percentages and value actions to accessibility
 tools. These view-only changes do not alter the screenshot or its Undo history.
 Fit retains each workbench's existing placement.
 Windows, Wayland and physical AppKit presentation remain unverified.
