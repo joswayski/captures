@@ -128,9 +128,6 @@ export default function Home({
                     </a>
                     <GitHubSourceButton />
                   </div>
-                  <p className="mt-3 text-sm leading-relaxed text-ink-muted">
-                    {installCopy(detectedDownload)}
-                  </p>
                   {linuxAlternative ? (
                     <p className="mt-3 text-xs text-ink-soft">
                       <a
@@ -152,9 +149,6 @@ export default function Home({
                     </a>
                   </p>
                 </div>
-                <p className="mt-6 text-xs leading-relaxed text-ink-soft">
-                  Feedback is welcome in the app, <FeedbackChannels />.
-                </p>
               </>
             ) : (
               <>
@@ -248,13 +242,6 @@ function linuxAlternativeDownload(download: PreviewDownload) {
 
 function linuxAlternativeLabel(download: PreviewDownload) {
   return download.id === "linux-deb" ? ".deb for Ubuntu / Debian" : "AppImage";
-}
-
-function installCopy(download: PreviewDownload) {
-  if (download.family === "macos") return "Open the .dmg and drag Captures to Applications.";
-  if (download.family === "windows") return "Run the downloaded installer.";
-  if (download.id === "linux-deb") return "Open the .deb with your software installer.";
-  return "Make the AppImage executable, then open it.";
 }
 
 function availabilityLabel(download: PreviewDownload | null) {
