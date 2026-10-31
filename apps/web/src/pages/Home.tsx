@@ -4,7 +4,6 @@ import type { PreviewDownloadId } from "../detectPreviewDownload";
 import ProductGallery from "../ProductGallery";
 
 const REPO_URL = "https://github.com/joswayski/captures";
-const RELEASES_URL = `${REPO_URL}/releases`;
 const X_URL = "https://x.com/josevalerio";
 const CAPER_INVITE_URL = "https://caper.chat/invite/pIXKAZFUp8";
 const AUTHOR_URL = "https://josevalerio.com";
@@ -109,13 +108,10 @@ export default function Home({
             .
           </p>
 
-          <div className="mt-12 border-t border-border pt-10" id="download">
+          <div className="mt-8" id="download">
             {detectedDownload ? (
               <>
-                <h2 className="text-base font-medium tracking-tight text-ink sm:text-lg">
-                  Download Captures
-                </h2>
-                <div className="mt-5">
+                <div>
                   <div className="flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:items-center">
                     <a href={detectedDownload.href} className="download-button">
                       <OsIcon
@@ -144,32 +140,19 @@ export default function Home({
                       make it executable instead of running a second copy from Downloads.
                     </p>
                   ) : null}
-                  <p className="mt-3 text-xs text-ink-soft">
-                    <a
-                      href={RELEASES_URL}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-ink-muted no-underline underline-offset-2 transition-colors duration-200 ease-out hover:text-accent-readable hover:underline"
-                    >
-                      {availabilityLabel(detectedDownload)}
-                    </a>
-                  </p>
                 </div>
-                <FeedbackLine inApp />
+                <FeedbackList inApp />
               </>
             ) : (
               <>
-                <h2 className="text-base font-medium tracking-tight text-ink sm:text-lg">
-                  Capture from your desktop
-                </h2>
-                <p className="mt-3 max-w-xl text-sm leading-relaxed text-ink-muted">
+                <p className="max-w-xl text-sm leading-relaxed text-ink-muted">
                   Available for macOS, Windows, and Linux. Open this page on your computer to
                   download it.
                 </p>
                 <div className="mt-8">
                   <GitHubSourceButton primary />
                 </div>
-                <FeedbackLine />
+                <FeedbackList />
               </>
             )}
           </div>
@@ -251,53 +234,45 @@ function linuxAlternativeLabel(download: PreviewDownload) {
   return download.id === "linux-deb" ? ".deb for Ubuntu / Debian" : "AppImage";
 }
 
-function availabilityLabel(download: PreviewDownload | null) {
-  const names = ["macOS", "Windows", "Linux"] as const;
-  const current =
-    download?.family === "macos"
-      ? "macOS"
-      : download?.family === "windows"
-        ? "Windows"
-        : download?.family === "linux"
-          ? "Linux"
-          : null;
-  if (!current) return "Available for macOS, Windows, and Linux";
-  const others = names.filter((name) => name !== current);
-  return `Also available for ${others[0]} and ${others[1]}`;
-}
+const FEEDBACK_LINK_CLASS =
+  "font-medium text-ink no-underline underline-offset-4 transition-colors duration-200 ease-out hover:text-accent-readable hover:underline";
 
-function FeedbackLine({ inApp = false }: { inApp?: boolean }) {
+function FeedbackList({ inApp = false }: { inApp?: boolean }) {
   return (
-    <p className="mt-8 max-w-xl text-sm leading-loose text-ink-muted">
-      Questions or feedback?{" "}
-      {inApp ? (
-        <>
-          Use <span className="font-medium text-ink">Send Feedback</span> in the app, find me
-          on{" "}
-        </>
-      ) : (
-        "Find me on "
-      )}
-      <a
-        href={X_URL}
-        target="_blank"
-        rel="noreferrer"
-        className="inline-chip"
-        aria-label="Give feedback on X"
-      >
-        <XIcon className="h-3 w-3" />
-      </a>
-      , chat on{" "}
-      <a
-        href={CAPER_INVITE_URL}
-        target="_blank"
-        rel="noreferrer"
-        className="font-medium text-ink underline underline-offset-4 transition-colors duration-200 ease-out hover:text-accent-readable"
-      >
-        caper.chat
-      </a>
-      , or email <CopyEmailButton email={CONTACT_EMAIL} />.
-    </p>
+    <div className="mt-10">
+      <h2 className="text-xs text-ink-soft">Questions or feedback?</h2>
+      <ul className="mt-3 space-y-2.5 text-sm text-ink-muted">
+        {inApp ? (
+          <li className="flex items-center gap-2.5">
+            <CaptureIcon className="h-3.5 w-3.5 shrink-0 text-ink-soft" />
+            <span>
+              <span className="font-medium text-ink">Send Feedback</span> in the app
+            </span>
+          </li>
+        ) : null}
+        <li className="flex items-center gap-2.5">
+          <XIcon className="h-3.5 w-3.5 shrink-0 text-ink-soft" />
+          <a href={X_URL} target="_blank" rel="noreferrer" className={FEEDBACK_LINK_CLASS}>
+            @josevalerio
+          </a>
+        </li>
+        <li className="flex items-center gap-2.5">
+          <ChatIcon className="h-3.5 w-3.5 shrink-0 text-ink-soft" />
+          <a
+            href={CAPER_INVITE_URL}
+            target="_blank"
+            rel="noreferrer"
+            className={FEEDBACK_LINK_CLASS}
+          >
+            caper.chat
+          </a>
+        </li>
+        <li className="flex items-center gap-2.5">
+          <MailIcon className="h-3.5 w-3.5 shrink-0 text-ink-soft" />
+          <CopyEmailButton email={CONTACT_EMAIL} />
+        </li>
+      </ul>
+    </div>
   );
 }
 
@@ -335,17 +310,15 @@ function CopyEmailButton({ email }: { email: string }) {
   return (
     <button
       type="button"
-      className="inline-chip"
+      className={`group/email cursor-pointer text-left ${FEEDBACK_LINK_CLASS}`}
       onClick={handleCopy}
       title="Copy email address"
       aria-label={`Copy email ${email}`}
     >
-      {copied ? (
-        <CheckIcon className="h-3 w-3 shrink-0" />
-      ) : (
-        <MailIcon className="h-3 w-3 shrink-0" />
-      )}
-      {copied ? "Copied" : email}
+      {email}
+      <span className="ml-2 text-xs font-normal text-ink-soft transition-colors duration-200 ease-out group-hover/email:text-accent-readable/70">
+        {copied ? "copied!" : "copy"}
+      </span>
       <span role="status" className="sr-only">
         {copied ? `Copied ${email}` : ""}
       </span>
@@ -459,19 +432,19 @@ function LinuxIcon({ className }: { className?: string }) {
   );
 }
 
-function CheckIcon({ className }: { className?: string }) {
+function ChatIcon({ className }: { className?: string }) {
   return (
     <svg
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="2.2"
+      strokeWidth="1.8"
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"
       className={className}
     >
-      <path d="m5 12.5 4.5 4.5L19 7.5" />
+      <path d="M20 12a8 8 0 0 1-11.6 7.1L4 20l1-4.1A8 8 0 1 1 20 12Z" />
     </svg>
   );
 }
