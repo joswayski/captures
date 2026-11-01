@@ -9127,7 +9127,8 @@ impl Live {
                     .inner_margin(egui::Margin {
                         left: margin("s-8"),
                         right: margin("s-8"),
-                        top: margin("s-8"),
+                        // `.capture-history { padding: var(--s-9) var(--s-8) … }`.
+                        top: margin("s-9"),
                         // Shipping `.history-shell` gap before the filters.
                         bottom: margin("s-6"),
                     }),

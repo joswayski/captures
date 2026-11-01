@@ -357,20 +357,20 @@ def main():
 
                     wait(copied_restored)
                     print(f"PASS {prefix}: Restore during Clear all opens one actionable 240px card in {elapsed:.3f}s; all source files unchanged", flush=True)
-                    click(948, 99)  # Delete all arms "Delete all forever" in place.
+                    click(948, 126)  # Delete all arms "Delete all forever" in place.
                     screenshot("confirmation")
                     assert len(list(history.glob("*/metadata.json"))) == 3, "arming confirmation deleted files"
                     run("xdotool", "key", "Escape")
                     time.sleep(.2)
                     assert len(list(history.glob("*/metadata.json"))) == 3, "Escape deleted files"
-                    click(948, 99)
-                    click(820, 99)  # Explicit Cancel.
+                    click(948, 126)
+                    click(820, 126)  # Explicit Cancel.
                     assert len(list(history.glob("*/metadata.json"))) == 3, "Cancel deleted files"
                     screenshot("cancelled")
                     if fail_partway:
                         protected.chmod(0o555)
-                    click(948, 99)
-                    click(948, 99)  # Explicit Delete all forever.
+                    click(948, 126)
+                    click(948, 126)  # Explicit Delete all forever.
                     if fail_partway:
                         try:
                             wait(lambda: len(list(history.glob("*/metadata.json"))) == 1)
@@ -379,8 +379,8 @@ def main():
                             assert (protected / "capture.png").is_file(), "failed item disappeared"
                         finally:
                             protected.chmod(0o755)
-                        click(948, 99)
-                        click(948, 99)  # Retry after restoring write access.
+                        click(948, 126)
+                        click(948, 126)  # Retry after restoring write access.
                     wait(lambda: not list(history.glob("*/metadata.json")))
                     wait(lambda: not previews())  # Clearing History drops restored previews.
                     time.sleep(.3)

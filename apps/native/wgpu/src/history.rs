@@ -178,15 +178,21 @@ fn header_layout(
             }
             ui.label(
                 RichText::new(copy.title)
-                    .size(t.number("text-3xl"))
-                    .color(t.color("text"))
-                    .strong(),
+                    .font(crate::ui_fonts::semibold(ui, t.number("text-3xl")))
+                    .color(t.color("text")),
             );
-            ui.label(
-                RichText::new(copy.lede)
-                    .size(t.number("text-md"))
-                    .color(t.color("text-subtle")),
+            // `.history-heading > p { max-width: 60ch; line-height: --leading-snug }`.
+            let size = t.number("text-md");
+            let ch = ui.fonts_mut(|fonts| fonts.glyph_width(&FontId::proportional(size), '0'));
+            let mut job = LayoutJob::simple(
+                copy.lede.to_owned(),
+                FontId::proportional(size),
+                t.color("text-subtle"),
+                (60. * ch).min(ui.available_width()),
             );
+            job.sections[0].format.line_height = Some(size * t.number("leading-snug"));
+            let lede = ui.painter().layout_job(job);
+            ui.label(lede);
         })
         .response
         .rect
@@ -422,13 +428,16 @@ pub fn grid(
             // tallest card.
             let mut extras = shared::RowExtras::default();
             for (index, item) in items.iter().enumerate() {
-                if let Some(error) = item.error {
+                let warning = if item.card.warning.is_some() {
+                    shared::CARD_WARNING_EXTRA
+                } else {
+                    0.
+                };
+                let error = item.error.map_or(0., |error| {
                     let text = error_galley(ui, t, error, layout.card_width as f32);
-                    extras.grow(
-                        index / layout.columns,
-                        shared::card_error_extra(f64::from(text.size().y)),
-                    );
-                }
+                    shared::card_error_extra(f64::from(text.size().y))
+                });
+                extras.grow(index / layout.columns, warning + error);
             }
             ui.set_height(layout.content_height_with(items.len(), &extras) as f32);
             let origin = ui.max_rect().min;
@@ -670,8 +679,9 @@ fn card(
         let galley = painter.layout_job(job);
         painter.galley(Pos2::new(rect.left() + pad, y), galley, color);
     };
-    line(&card.date, y, t.number("text-md"), t.color("text"));
-    y += 18. + t.number("s-2");
+    // `time { padding-block: 1px; line-height: --leading-snug }`.
+    line(&card.date, y + 1., t.number("text-md"), t.color("text"));
+    y += shared::CARD_DATE_HEIGHT as f32 + t.number("s-2");
     line(
         &card.details,
         y,
@@ -679,12 +689,19 @@ fn card(
         t.color("text-subtle"),
     );
     if let Some(warning) = &card.warning {
-        y += 16. + t.number("s-2");
+        y += shared::CARD_LINE_HEIGHT as f32 + t.number("s-2");
         line(warning, y, t.number("text-sm"), t.color("caution-text"));
     }
     let width = (inner - gap) / 2.;
-    // Stretched cards in a grown row keep their actions in place.
-    let actions_top = rect.top() + shared::CARD_ACTIONS_TOP as f32;
+    // `align-content: start`: a warning pushes only its own card's actions
+    // down; cards stretched by a grown row keep theirs in place.
+    let actions_top = rect.top()
+        + (shared::CARD_ACTIONS_TOP
+            + if card.warning.is_some() {
+                shared::CARD_WARNING_EXTRA
+            } else {
+                0.
+            }) as f32;
     for (slot, action) in card.actions.iter().copied().enumerate() {
         let button_rect = Rect::from_min_size(
             Pos2::new(rect.left() + pad + slot as f32 * (width + gap), actions_top),
@@ -969,15 +986,17 @@ fn button(
             Color32::TRANSPARENT,
             t.color("text"),
         ),
+        // Shipping's quiet `.history-delete` (`:is(.history-delete, …)`
+        // computes transparent with `--text-subtle`, danger on hover).
         (ButtonStyle::Overlay, false) => (
-            t.color("surface-raised").gamma_multiply(0.88),
-            t.color("border-subtle"),
-            t.color("text"),
+            Color32::TRANSPARENT,
+            Color32::TRANSPARENT,
+            t.color("text-subtle"),
         ),
         (ButtonStyle::Overlay, true) => (
-            t.color("theme-signal"),
+            t.color("danger-surface"),
             Color32::TRANSPARENT,
-            t.color("theme-signal-ink"),
+            t.color("danger-text"),
         ),
     };
     let alpha = if enabled { 1. } else { 0.45 };
@@ -1003,7 +1022,12 @@ fn button(
     }
     let color = text.gamma_multiply(alpha);
     let size = t.number("text-sm");
-    let font = FontId::proportional(size);
+    // `.ui-btn-primary` / `.history-edit`: `--weight-semibold`.
+    let font = if matches!(style, ButtonStyle::Primary) {
+        crate::ui_fonts::semibold(ui, size)
+    } else {
+        FontId::proportional(size)
+    };
     let icon_size = if matches!(style, ButtonStyle::Overlay | ButtonStyle::ConfirmOverlay) {
         16.
     } else {
