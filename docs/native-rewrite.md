@@ -53,6 +53,16 @@ regression checks select width and recorder position at 880 and 560 px. The
 AppKit compact-window test checks the same three rules on the hosted macOS
 workflow. Physical-host acceptance remains open.
 
+History now uses shipping's measured card and header metrics on both hosts. The
+card body is 104 px, not 120, so a card is 274 px tall. Every card no longer
+reserves space for a dropped-frame warning. A warning grows only its own row and
+moves only its own card's actions. The Trash button is quiet
+(`--text-subtle` on a transparent ground, danger surface on hover). The title
+and primary labels are semibold, the lede is capped at 60ch with
+`--leading-snug`, and the header sits `--s-9` from the top. 1020×720 renders of
+Tauri and wgpu, idle and hovered, were compared side by side. AppKit is
+covered by the hosted macOS workflow only. Physical-host acceptance remains open.
+
 The screenshot editor's color field was audited against the shipping
 `ColorField`. No change was needed. Tab reaches the eight swatches in order,
 then the custom tile, then the hex field once the custom picker is open.
