@@ -1731,6 +1731,30 @@ struct PortalRegion {
 #[cfg(target_os = "linux")]
 type PortalRegionAction = (selector::Action, Option<(LogicalRect, f64)>);
 
+/// A Wayland Region recording selecting on its ScreenCast stream's first
+/// frame, then counting down. The recording worker blocks its start until
+/// `reply` carries the frame-pixel rectangle; dropping it cancels the take.
+#[cfg(target_os = "linux")]
+struct PortalRecordingRegion {
+    generation: u64,
+    reply: std::sync::mpsc::SyncSender<Option<CaptureRect>>,
+    frame_size: (u32, u32),
+    /// The shared selector over the first frame, until confirmation.
+    region: Option<PortalRegion>,
+    /// Written by the selector and countdown viewports.
+    action: Arc<Mutex<Option<PortalRegionAction>>>,
+    /// The confirmed rectangle, the countdown that follows it, and whether
+    /// that countdown is shown at all (a zero-second delay declares nothing).
+    confirmed: Option<(CaptureRect, captures_app::capture_flow::Countdown, bool)>,
+    /// When the selector and countdown were last seen unmapped.
+    hidden_since: Option<Instant>,
+}
+
+#[cfg(target_os = "linux")]
+fn portal_region_selector_viewport(generation: u64) -> egui::ViewportId {
+    egui::ViewportId::from_hash_of(("portal-region-selector", generation))
+}
+
 #[cfg(target_os = "linux")]
 impl PortalScreenshot {
     fn countdown_hidden(&mut self, now: Instant, frame: u64) -> bool {
@@ -1937,6 +1961,8 @@ pub struct Live {
     capture_failure: Option<CaptureFailure>,
     #[cfg(target_os = "linux")]
     portal_screenshot: Option<PortalScreenshot>,
+    #[cfg(target_os = "linux")]
+    portal_recording_region: Option<PortalRecordingRegion>,
     history_requested: bool,
     /// Open Preferences, optionally revealing a capture-menu setting.
     preference_target_requested: Option<Option<PreferenceTarget>>,
@@ -2316,6 +2342,8 @@ impl Live {
             capture_failure: None,
             #[cfg(target_os = "linux")]
             portal_screenshot: None,
+            #[cfg(target_os = "linux")]
+            portal_recording_region: None,
             history_requested: false,
             preference_target_requested: None,
             controls_error: None,
@@ -3329,6 +3357,161 @@ impl Live {
         request_hidden_root_paint(ctx);
     }
 
+    /// Show a Region recording's first granted frame in the shared fullscreen
+    /// selector. Every Captures window is already unmapped for consent.
+    #[cfg(target_os = "linux")]
+    fn begin_portal_recording_region(
+        &mut self,
+        ctx: &egui::Context,
+        generation: u64,
+        frame: Arc<image::RgbaImage>,
+        reply: std::sync::mpsc::SyncSender<Option<CaptureRect>>,
+    ) {
+        let texture = ctx.load_texture(
+            format!("portal-recording-region-{generation}"),
+            egui::ColorImage::from_rgba_unmultiplied(
+                [frame.width() as usize, frame.height() as usize],
+                frame.as_raw(),
+            ),
+            egui::TextureOptions::LINEAR,
+        );
+        let action: Arc<Mutex<Option<PortalRegionAction>>> = Arc::default();
+        // The hidden root only runs on wakes. Keep it advancing the selection
+        // and countdown while this request is alive and current.
+        let alive = Arc::downgrade(&action);
+        let wake = ctx.clone();
+        thread::spawn(move || {
+            while alive.strong_count() > 0 && captures_app::capture_flow::is_current(generation) {
+                wake.request_repaint_of(egui::ViewportId::ROOT);
+                thread::sleep(Duration::from_millis(50));
+            }
+            wake.request_repaint_of(egui::ViewportId::ROOT);
+        });
+        self.portal_recording_region = Some(PortalRecordingRegion {
+            generation,
+            reply,
+            frame_size: (frame.width(), frame.height()),
+            region: Some(PortalRegion {
+                still: frame,
+                texture,
+                selector: Arc::default(),
+                action: Arc::clone(&action),
+            }),
+            action,
+            confirmed: None,
+            hidden_since: None,
+        });
+        self.status = "Select a region to record. Press Escape to cancel.".into();
+        request_hidden_root_ui(ctx);
+    }
+
+    /// Confirm → countdown → unmap the selector and countdown → reply with the
+    /// rectangle, so the first encoded frame shows only the selected desktop.
+    #[cfg(target_os = "linux")]
+    fn advance_portal_recording_region(&mut self, ctx: &egui::Context) {
+        let Some(pending) = self.portal_recording_region.as_mut() else {
+            return;
+        };
+        let generation = pending.generation;
+        let owned = self
+            .flow
+            .as_ref()
+            .is_some_and(|flow| flow.generation() == generation && flow.is_current())
+            && self.capture_phase == Some(CapturePhase::RecordingStarting);
+        if !owned {
+            self.portal_recording_region = None;
+            request_hidden_root_ui(ctx);
+            return;
+        }
+        let now = Instant::now();
+        let action = pending.action.lock().unwrap().take();
+        match action {
+            Some((selector::Action::Cancel, _)) => {
+                if let Some((_, clock, _)) = pending.confirmed
+                    && clock.remaining(now) > 0
+                {
+                    self.countdown_exit = Some(CountdownExit::new(
+                        main_countdown_viewport(),
+                        "Captures Recording Countdown",
+                        None,
+                        crate::countdown::Kind::Recording,
+                        clock.remaining(now),
+                    ));
+                }
+                // The worker reports a cancelled start and discards the take.
+                let _ = pending.reply.try_send(None);
+                self.portal_recording_region = None;
+                self.status = "Cancelling recording…".into();
+                request_hidden_root_ui(ctx);
+                return;
+            }
+            Some((selector::Action::Confirm, Some((rect, scale))))
+                if pending.confirmed.is_none() =>
+            {
+                let (width, height) = pending.frame_size;
+                let crop = rect.to_physical(scale, width, height);
+                if scale.is_finite() && scale > 0. && crop.width > 0 && crop.height > 0 {
+                    let seconds = self
+                        .recording_snapshot
+                        .as_ref()
+                        .map_or(0, |snapshot| snapshot.options.countdown_seconds);
+                    pending.confirmed = Some((
+                        CaptureRect {
+                            x: crop.x as i32,
+                            y: crop.y as i32,
+                            width: crop.width,
+                            height: crop.height,
+                        },
+                        captures_app::capture_flow::Countdown::new(now, seconds),
+                        seconds > 0,
+                    ));
+                    // Stop declaring the selector; the countdown takes over.
+                    pending.region = None;
+                    self.status = "Recording countdown. Press Escape to cancel.".into();
+                    request_hidden_root_ui(ctx);
+                }
+            }
+            _ => {}
+        }
+        let Some((rect, clock, _)) = pending.confirmed else {
+            return;
+        };
+        if clock.remaining(now) > 0 {
+            return;
+        }
+        // Linux cannot exclude Captures windows from the stream: start only
+        // once the compositor has unmapped the selector and the countdown.
+        let hidden = ctx.input(|input| {
+            [
+                portal_region_selector_viewport(generation),
+                main_countdown_viewport(),
+            ]
+            .iter()
+            .all(|id| {
+                input
+                    .raw
+                    .viewports
+                    .get(id)
+                    .is_none_or(|info| info.visible() == Some(false))
+            })
+        });
+        if !hidden {
+            pending.hidden_since = None;
+            ctx.send_viewport_cmd_to(
+                main_countdown_viewport(),
+                egui::ViewportCommand::Visible(false),
+            );
+            return;
+        }
+        if pending.hidden_since.get_or_insert(now).elapsed() < Duration::from_millis(150) {
+            return;
+        }
+        let _ = pending.reply.try_send(Some(rect));
+        self.portal_recording_region = None;
+        self.status = "Starting recording…".into();
+        request_hidden_root_ui(ctx);
+    }
+
     #[cfg(target_os = "linux")]
     fn launch_portal_screenshot(
         &mut self,
@@ -4011,6 +4194,8 @@ impl Live {
     pub fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         #[cfg(target_os = "linux")]
         self.advance_portal_screenshot(ctx, frame);
+        #[cfg(target_os = "linux")]
+        self.advance_portal_recording_region(ctx);
         if let Some((outcome, directory)) = self.recovery.receive() {
             self.previews.remove(&outcome.entry.id);
             self.pending += 1;
@@ -4918,7 +5103,15 @@ impl Live {
                 {
                     match result {
                         Ok(snapshot) => {
-                            let seconds = snapshot.options.countdown_seconds;
+                            // A portal Region counts down after its selection,
+                            // which happens on the granted stream (see Start).
+                            let seconds = if snapshot.options.target
+                                == (RecordingTarget::PortalRegion { selection: None })
+                            {
+                                0
+                            } else {
+                                snapshot.options.countdown_seconds
+                            };
                             self.recording_hud_error
                                 .apply(captures_app::recording_hud::ErrorEvent::SessionChanged);
                             self.recording_snapshot = Some(snapshot);
@@ -5236,6 +5429,18 @@ impl Live {
                     self.pending = self.pending.saturating_sub(1);
                     self.recovery.refresh();
                 }
+                #[cfg(target_os = "linux")]
+                recording::Event::SelectRegion {
+                    generation,
+                    frame,
+                    reply,
+                } if self.flow.as_ref().is_some_and(|flow| {
+                    flow.generation() == generation && flow.is_current()
+                }) && self.capture_phase == Some(CapturePhase::RecordingStarting)
+                    && !self.recording_has_started =>
+                {
+                    self.begin_portal_recording_region(ctx, generation, frame, reply);
+                }
                 recording::Event::ToolchainVerified { .. }
                 | recording::Event::Microphones { .. }
                 | recording::Event::Snapshot { .. }
@@ -5245,7 +5450,9 @@ impl Live {
                 | recording::Event::MicrophoneMuted { .. }
                 | recording::Event::Restarted { .. }
                 | recording::Event::Finished { .. }
-                | recording::Event::Discarded { .. } => {}
+                | recording::Event::Discarded { .. }
+                // Dropping a stale reply cancels that start.
+                | recording::Event::SelectRegion { .. } => {}
             }
         }
         if self.root_hide_deferred
@@ -6986,6 +7193,9 @@ impl Live {
     }
 
     fn finish_capture(&mut self, ctx: &egui::Context, preserve_auto_copy: bool) {
+        // An unanswered Region selection cancels its recording start.
+        #[cfg(target_os = "linux")]
+        drop(self.portal_recording_region.take());
         #[cfg(target_os = "linux")]
         if let Some(portal) = self.portal_screenshot.take() {
             // Source/session loss or parent finalization invalidates only an
@@ -9064,59 +9274,14 @@ impl Live {
         if let Some(portal) = &self.portal_screenshot
             && let Some(region) = &portal.region
         {
-            let t = t.clone();
-            let generation = portal.flow.generation();
-            let texture = region.texture.clone();
-            let selector = Arc::clone(&region.selector);
-            let action = Arc::clone(&region.action);
-            let still = texture.size_vec2();
-            // The portal supplies no output geometry, so the compositor places
-            // this fullscreen window. A multi-output still is letterboxed into
-            // it; selections always map back onto the still itself.
-            ctx.show_viewport_deferred(
-                egui::ViewportId::from_hash_of(("portal-region-selector", generation)),
-                egui::ViewportBuilder::default()
-                    .with_title("Captures Region Selection")
-                    .with_fullscreen(true)
-                    .with_decorations(false)
-                    .with_taskbar(false),
-                move |ui, _| {
-                    let root = ui.ctx().clone();
-                    let send = |chosen| {
-                        *action.lock().unwrap() = Some(chosen);
-                        root.request_repaint_of(egui::ViewportId::ROOT);
-                    };
-                    if ui.input(|input| input.viewport().close_requested()) {
-                        send((selector::Action::Cancel, None));
-                        return;
-                    }
-                    let area = ui.max_rect();
-                    ui.painter().rect_filled(area, 0, egui::Color32::BLACK);
-                    let scale = (area.width() / still.x).min(area.height() / still.y);
-                    let fit = egui::Rect::from_center_size(area.center(), still * scale);
-                    let bounds = captures_app::selection::Bounds {
-                        width: f64::from(fit.width()),
-                        height: f64::from(fit.height()),
-                    };
-                    let shown = ui
-                        .scope_builder(egui::UiBuilder::new().max_rect(fit), |ui| {
-                            selector
-                                .lock()
-                                .unwrap()
-                                .show(ui, &t, Some(&texture), Some(bounds))
-                        })
-                        .inner;
-                    match shown {
-                        Some(selector::Action::Confirm) => {
-                            let rect = selector.lock().unwrap().rect();
-                            let pixels = f64::from(still.x) / bounds.width;
-                            send((selector::Action::Confirm, rect.map(|rect| (rect, pixels))));
-                        }
-                        Some(selector::Action::Cancel) => send((selector::Action::Cancel, None)),
-                        None => {}
-                    }
-                },
-            );
+            show_portal_region_selector(ctx, t, portal.flow.generation(), region);
+        }
+        // A Region recording selects on its granted stream's first frame.
+        #[cfg(target_os = "linux")]
+        if let Some(pending) = &self.portal_recording_region
+            && let Some(region) = &pending.region
+        {
+            show_portal_region_selector(ctx, t, pending.generation, region);
         }
         let mut countdown_declared = false;
         #[cfg(target_os = "linux")]
@@ -9155,6 +9320,52 @@ impl Live {
                         &t,
                         clock.remaining(Instant::now()).max(1),
                         crate::countdown::Kind::Screenshot,
+                        !captures_app::capture_flow::is_current(generation),
+                        poses,
+                    );
+                    ui.ctx().request_repaint_after(Duration::from_millis(100));
+                },
+            );
+            countdown_declared = true;
+        }
+        // A Region recording counts down after its selection, on the
+        // compositor-placed recording countdown; Escape cancels the take.
+        #[cfg(target_os = "linux")]
+        if let Some(pending) = &self.portal_recording_region
+            && let Some((_, clock, true)) = pending.confirmed
+        {
+            let t = t.clone();
+            let generation = pending.generation;
+            let action = Arc::clone(&pending.action);
+            // Keep it declared and hidden until the worker gets its answer.
+            ctx.show_viewport_deferred(
+                main_countdown_viewport(),
+                countdown_viewport("Captures Recording Countdown", None, &t)
+                    .with_visible(clock.remaining(Instant::now()) > 0),
+                move |ui, _| {
+                    if clock.remaining(Instant::now()) == 0 {
+                        ui.ctx()
+                            .send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                        ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+                        return;
+                    }
+                    if ui.input(|i| {
+                        i.viewport().close_requested() || i.key_pressed(egui::Key::Escape)
+                    }) {
+                        *action.lock().unwrap() = Some((selector::Action::Cancel, None));
+                        ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+                    }
+                    let poses = countdown_entrance(
+                        ui.ctx(),
+                        &t,
+                        ("portal-recording-region-countdown", generation),
+                        reduced_motion,
+                    );
+                    crate::countdown::show(
+                        ui,
+                        &t,
+                        clock.remaining(Instant::now()).max(1),
+                        crate::countdown::Kind::Recording,
                         !captures_app::capture_flow::is_current(generation),
                         poses,
                     );
@@ -9390,7 +9601,7 @@ impl Live {
                     self.request_capture(CaptureRequest::Recording(capture_controls::TargetMode::Window));
                     ui.ctx().request_repaint();
                 }
-                let notice = ui.label(RichText::new("Desktop portal • Window screenshots and recording need window-sharing support. Region capture and floating previews are unavailable.")
+                let notice = ui.label(RichText::new("Desktop portal • Window screenshots and recording need window-sharing support. Floating previews are unavailable.")
                     .size(t.number("text-sm")).color(t.color("text-subtle")));
                 if std::env::var_os("CAPTURES_NATIVE_LAYOUT_PROBE").is_some() {
                     let clip = ui.clip_rect();
@@ -10115,6 +10326,71 @@ fn monitor_matches_overlay(
             .all(|(actual, expected)| (actual - expected).abs() <= 1.)
 }
 
+/// Shipping's Wayland Region overlay over a portal frame: a fullscreen,
+/// compositor-placed window running the shared selector. Used for Region
+/// screenshots (a portal still) and Region recordings (the stream's first
+/// frame); selections map back onto the frame's own pixels.
+#[cfg(target_os = "linux")]
+fn show_portal_region_selector(
+    ctx: &egui::Context,
+    t: &Tokens,
+    generation: u64,
+    region: &PortalRegion,
+) {
+    let t = t.clone();
+    let texture = region.texture.clone();
+    let selector = Arc::clone(&region.selector);
+    let action = Arc::clone(&region.action);
+    let still = texture.size_vec2();
+    // The portal supplies no output geometry, so the compositor places
+    // this fullscreen window. A multi-output still is letterboxed into
+    // it; selections always map back onto the still itself.
+    ctx.show_viewport_deferred(
+        portal_region_selector_viewport(generation),
+        egui::ViewportBuilder::default()
+            .with_title("Captures Region Selection")
+            .with_fullscreen(true)
+            .with_decorations(false)
+            .with_taskbar(false),
+        move |ui, _| {
+            let root = ui.ctx().clone();
+            let send = |chosen| {
+                *action.lock().unwrap() = Some(chosen);
+                root.request_repaint_of(egui::ViewportId::ROOT);
+            };
+            if ui.input(|input| input.viewport().close_requested()) {
+                send((selector::Action::Cancel, None));
+                return;
+            }
+            let area = ui.max_rect();
+            ui.painter().rect_filled(area, 0, egui::Color32::BLACK);
+            let scale = (area.width() / still.x).min(area.height() / still.y);
+            let fit = egui::Rect::from_center_size(area.center(), still * scale);
+            let bounds = captures_app::selection::Bounds {
+                width: f64::from(fit.width()),
+                height: f64::from(fit.height()),
+            };
+            let shown = ui
+                .scope_builder(egui::UiBuilder::new().max_rect(fit), |ui| {
+                    selector
+                        .lock()
+                        .unwrap()
+                        .show(ui, &t, Some(&texture), Some(bounds))
+                })
+                .inner;
+            match shown {
+                Some(selector::Action::Confirm) => {
+                    let rect = selector.lock().unwrap().rect();
+                    let pixels = f64::from(still.x) / bounds.width;
+                    send((selector::Action::Confirm, rect.map(|rect| (rect, pixels))));
+                }
+                Some(selector::Action::Cancel) => send((selector::Action::Cancel, None)),
+                None => {}
+            }
+        },
+    );
+}
+
 fn main_countdown_viewport() -> egui::ViewportId {
     egui::ViewportId::from_hash_of("screenshot-countdown")
 }
@@ -10324,7 +10600,8 @@ fn portal_recording_options(
     let target = match mode {
         capture_controls::TargetMode::Display => RecordingTarget::PortalDisplay,
         capture_controls::TargetMode::Window => RecordingTarget::PortalWindow,
-        capture_controls::TargetMode::Region => return Err("Region recording is unavailable through the desktop portal. Choose a display or window instead.".into()),
+        // Selected on the granted stream's first frame, after consent.
+        capture_controls::TargetMode::Region => RecordingTarget::PortalRegion { selection: None },
     };
     let options = RecordingOptions {
         kind: RecordingKind::Video,
@@ -12504,7 +12781,20 @@ mod tests {
         assert_eq!(window.target, RecordingTarget::PortalWindow);
         assert_eq!(window.audio, options.audio);
         assert_eq!(window.countdown_seconds, 5);
-        assert!(portal_recording_options(&settings, capture_controls::TargetMode::Region).is_err());
+        let region =
+            portal_recording_options(&settings, capture_controls::TargetMode::Region).unwrap();
+        assert_eq!(
+            region.target,
+            RecordingTarget::PortalRegion { selection: None }
+        );
+        assert_eq!(
+            serde_json::to_value(&region.target).unwrap(),
+            serde_json::json!({"type":"portal_region"})
+        );
+        assert_eq!(
+            (region.audio, region.countdown_seconds),
+            (options.audio.clone(), 5)
+        );
         settings.highlight_clicks = true;
         assert!(
             portal_recording_options(&settings, capture_controls::TargetMode::Display).is_err()
@@ -12759,6 +13049,123 @@ mod tests {
         live.flush();
         drop(live);
         assert!(!captures_app::capture_flow::is_current(generation));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn portal_region_recording_selects_on_the_stream_frame_then_counts_down() {
+        let root = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        ctx.set_embed_viewports(false);
+        let tokens = crate::tokens::load()["dark-mustard"].clone();
+        let mut live = Live::new(ctx.clone(), Some(root.path().into()));
+        let declared = |live: &mut Live, id| {
+            ctx.begin_pass(Default::default());
+            live.viewports(&ctx, &tokens, Ok(AppSettings::default()), false);
+            let mut output = ctx.end_pass();
+            output.textures_delta.clear();
+            output.viewport_output.contains_key(&id)
+        };
+        for (countdown, cancel) in [(0, false), (2, false), (2, true)] {
+            let flow = CaptureFlow::begin_for_test(0).unwrap();
+            let generation = flow.generation();
+            live.flow = Some(flow);
+            live.capture_phase = Some(CapturePhase::RecordingStarting);
+            let mut snapshot: RecordingSessionSnapshot =
+                serde_json::from_value(serde_json::json!({
+                    "id": "take", "state": "countdown", "elapsed_ms": 0,
+                    "countdown_remaining_seconds": null, "warning": null, "error": null,
+                    "options": {"kind": "video", "target": {"type": "portal_region"},
+                        "frames_per_second": 30, "max_resolution": "original",
+                        "countdown_seconds": 0, "show_cursor": false},
+                }))
+                .unwrap();
+            snapshot.options.countdown_seconds = countdown;
+            live.recording_snapshot = Some(snapshot);
+            let (reply, answer) = std::sync::mpsc::sync_channel(1);
+            live.begin_portal_recording_region(
+                &ctx,
+                generation,
+                Arc::new(image::RgbaImage::new(1_280, 900)),
+                reply,
+            );
+            let selector = portal_region_selector_viewport(generation);
+            assert!(
+                declared(&mut live, selector),
+                "selector over the first frame"
+            );
+            assert!(!declared(&mut live, main_countdown_viewport()));
+            // A letterboxed selection at half size maps onto stream pixels.
+            let pending = live.portal_recording_region.as_ref().unwrap();
+            *pending.action.lock().unwrap() = Some((
+                selector::Action::Confirm,
+                Some((
+                    LogicalRect {
+                        x: 50.,
+                        y: 60.5,
+                        width: 150.,
+                        height: 100.,
+                    },
+                    2.,
+                )),
+            ));
+            live.advance_portal_recording_region(&ctx);
+            assert!(answer.try_recv().is_err(), "no answer before the countdown");
+            assert!(!declared(&mut live, selector), "selector closes on confirm");
+            assert_eq!(
+                declared(&mut live, main_countdown_viewport()),
+                countdown > 0,
+                "the configured countdown follows the selection"
+            );
+            if cancel {
+                let pending = live.portal_recording_region.as_ref().unwrap();
+                *pending.action.lock().unwrap() = Some((selector::Action::Cancel, None));
+                live.advance_portal_recording_region(&ctx);
+                assert_eq!(answer.try_recv().unwrap(), None);
+                assert!(live.portal_recording_region.is_none());
+                assert!(live.countdown_exit.is_some(), "cancelled countdown lingers");
+                live.countdown_exit = None;
+            } else {
+                if countdown > 0 {
+                    let pending = live.portal_recording_region.as_mut().unwrap();
+                    let (rect, _, shown) = pending.confirmed.unwrap();
+                    pending.confirmed = Some((
+                        rect,
+                        captures_app::capture_flow::Countdown::new(Instant::now(), 0),
+                        shown,
+                    ));
+                }
+                live.advance_portal_recording_region(&ctx);
+                assert!(
+                    answer.try_recv().is_err(),
+                    "waits for the windows to settle"
+                );
+                std::thread::sleep(Duration::from_millis(160));
+                live.advance_portal_recording_region(&ctx);
+                assert_eq!(
+                    answer.try_recv().unwrap(),
+                    Some(CaptureRect {
+                        x: 100,
+                        y: 121,
+                        width: 300,
+                        height: 200,
+                    })
+                );
+                assert!(live.portal_recording_region.is_none());
+            }
+            live.flow = None;
+            live.capture_phase = None;
+        }
+        // A stale request (no owning start) is dropped, cancelling that start.
+        let (reply, answer) = std::sync::mpsc::sync_channel(1);
+        live.begin_portal_recording_region(&ctx, 7, Arc::new(image::RgbaImage::new(4, 4)), reply);
+        live.advance_portal_recording_region(&ctx);
+        assert!(live.portal_recording_region.is_none());
+        assert!(matches!(
+            answer.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Disconnected)
+        ));
+        live.flush();
     }
 
     #[test]

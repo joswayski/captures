@@ -12,12 +12,17 @@ pub use recovery::{RecordingRecovery, RecoveryDraft, RecoveryOutcome, RecoveryPr
 use std::path::Path;
 
 use captures_capture::DisplayDescriptor;
-use captures_recording::{AudioDevice, RecordingOptions};
+use captures_recording::{AudioDevice, CaptureRect, RecordingOptions};
 #[cfg(target_os = "macos")]
 pub use captures_recording_macos::MacRecordingSegment as NativeRecordingSegment;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 pub use captures_recording_xcap::XcapRecordingSegment as NativeRecordingSegment;
 use serde::{Deserialize, Serialize};
+
+/// Host callback for a portal Region recording's first segment: show the
+/// granted stream's first frame, block until the user confirms a rectangle in
+/// its pixels, or return `None` to cancel like a declined portal consent.
+pub type RegionSelector<'a> = dyn Fn(&image::RgbaImage) -> Option<CaptureRect> + 'a;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RecordingCapabilities {
@@ -93,12 +98,18 @@ pub fn start_native_segment(
     exclude_captures_app: bool,
     is_current: &dyn Fn() -> bool,
 ) -> Result<NativeRecordingSegment, String> {
-    start_segment(options, path, display, exclude_captures_app, is_current).map_err(|error| {
-        match error {
-            #[cfg(target_os = "linux")]
-            StartFailure::Cancelled => "Recording cancelled".into(),
-            StartFailure::Failed(error) => error,
-        }
+    start_segment(
+        options,
+        path,
+        display,
+        exclude_captures_app,
+        is_current,
+        None,
+    )
+    .map_err(|error| match error {
+        #[cfg(target_os = "linux")]
+        StartFailure::Cancelled => "Recording cancelled".into(),
+        StartFailure::Failed(error) => error,
     })
 }
 
@@ -114,9 +125,10 @@ fn start_segment(
     display: Option<&DisplayDescriptor>,
     exclude_captures_app: bool,
     is_current: &dyn Fn() -> bool,
+    select_region: Option<&RegionSelector<'_>>,
 ) -> Result<NativeRecordingSegment, StartFailure> {
     #[cfg(not(target_os = "linux"))]
-    let _ = is_current;
+    let _ = (is_current, select_region);
     if options.target.is_portal() {
         if display.is_some() {
             return Err(StartFailure::Failed(
@@ -124,14 +136,16 @@ fn start_segment(
             ));
         }
         #[cfg(target_os = "linux")]
-        return NativeRecordingSegment::start_portal(options, path, &|| !is_current()).map_err(
-            |error| match error {
-                captures_recording_xcap::XcapRecordingError::PortalCancelled => {
-                    StartFailure::Cancelled
-                }
-                error => StartFailure::Failed(error.to_string()),
-            },
-        );
+        return NativeRecordingSegment::start_portal(
+            options,
+            path,
+            &|| !is_current(),
+            select_region,
+        )
+        .map_err(|error| match error {
+            captures_recording_xcap::XcapRecordingError::PortalCancelled => StartFailure::Cancelled,
+            error => StartFailure::Failed(error.to_string()),
+        });
         #[cfg(not(target_os = "linux"))]
         return Err(StartFailure::Failed(
             "Portal recording is only supported on Linux".into(),

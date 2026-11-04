@@ -11,7 +11,9 @@ use std::{
 };
 
 use captures_capture::{DisplayDescriptor, WindowDescriptor, XcapBackend};
-use captures_recording::{CaptureRect, RecordingOptions, RecordingSegmentInfo, RecordingTarget};
+use captures_recording::{
+    CaptureRect, PortalRegionSelection, RecordingOptions, RecordingSegmentInfo, RecordingTarget,
+};
 use captures_video::{H264Mp4Error, H264Mp4Writer};
 use image::RgbaImage;
 use parking_lot::Mutex;
@@ -27,6 +29,13 @@ use crate::{
 
 const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(3);
 const CONTROL_POLL_INTERVAL: Duration = Duration::from_millis(10);
+/// After a Region selection, how long to wait for a frame without the selector.
+#[cfg(target_os = "linux")]
+const POST_SELECTION_FRAME_WAIT: Duration = Duration::from_millis(200);
+
+/// Shows the first granted frame of a Region recording and blocks until the
+/// user confirms a rectangle in that frame's pixels (`None` cancels).
+pub type PortalRegionSelector<'a> = dyn Fn(&RgbaImage) -> Option<CaptureRect> + 'a;
 
 #[derive(Debug, Error)]
 pub enum XcapRecordingError {
@@ -70,8 +79,10 @@ struct EncoderContext {
 
 enum CaptureRecorder {
     Direct(VideoRecorder),
+    /// The source and its dropped-frame count before encoding began. Frames
+    /// discarded while the user selected a Region are not dropped frames.
     #[cfg(target_os = "linux")]
-    Portal(crate::PortalVideoSource),
+    Portal(crate::PortalVideoSource, u64),
 }
 
 impl CaptureRecorder {
@@ -79,7 +90,7 @@ impl CaptureRecorder {
         match self {
             Self::Direct(_) => None,
             #[cfg(target_os = "linux")]
-            Self::Portal(source) => source.warning(),
+            Self::Portal(source, _) => source.warning(),
         }
     }
 
@@ -87,7 +98,7 @@ impl CaptureRecorder {
         match self {
             Self::Direct(_) => false,
             #[cfg(target_os = "linux")]
-            Self::Portal(_) => true,
+            Self::Portal(..) => true,
         }
     }
 
@@ -98,12 +109,12 @@ impl CaptureRecorder {
                 .map(|()| 0)
                 .map_err(|error| XcapRecordingError::Capture(error.to_string())),
             #[cfg(target_os = "linux")]
-            Self::Portal(mut source) => {
+            Self::Portal(mut source, dropped_before) => {
                 source.finish().map_err(XcapRecordingError::Capture)?;
                 if let Some(problem) = source.warning() {
                     return Err(XcapRecordingError::Capture(problem));
                 }
-                Ok(source.dropped_frames())
+                Ok(source.dropped_frames().saturating_sub(dropped_before))
             }
         }
     }
@@ -127,6 +138,7 @@ pub struct XcapRecordingSegment {
     warning: Arc<Mutex<Option<String>>>,
     system_audio: Option<AudioSegment>,
     microphone: Option<AudioSegment>,
+    portal_region: Option<PortalRegionSelection>,
 }
 
 impl XcapRecordingSegment {
@@ -242,11 +254,14 @@ impl XcapRecordingSegment {
 
     /// Records only the portal-selected display/window. Cursor pixels come from the
     /// granted stream; no pointer polling, monitor enumeration or fallback.
+    /// A Region crops a display stream: without a stored selection, the first
+    /// granted frame goes to `select_region` (one consent, exact stream pixels).
     #[cfg(target_os = "linux")]
     pub fn start_portal(
         options: &RecordingOptions,
         output_path: &Path,
         cancelled: &dyn Fn() -> bool,
+        select_region: Option<&PortalRegionSelector<'_>>,
     ) -> XcapRecordingResult<Self> {
         options
             .validate()
@@ -265,7 +280,7 @@ impl XcapRecordingSegment {
             crate::PortalVideoError::Failed(error) => XcapRecordingError::Capture(error),
         })?;
         let deadline = Instant::now() + FIRST_FRAME_TIMEOUT;
-        let first_image = loop {
+        let mut first_image = loop {
             if cancelled() {
                 return Err(XcapRecordingError::PortalCancelled);
             }
@@ -284,13 +299,54 @@ impl XcapRecordingSegment {
                 }
             }
         };
+        let (receiver, region) = match &options.target {
+            RecordingTarget::PortalRegion {
+                selection: Some(selection),
+            } => (receiver, Some(*selection)),
+            RecordingTarget::PortalRegion { selection: None } => {
+                let select = select_region.ok_or_else(|| {
+                    XcapRecordingError::Worker("Region recording requires a selection".into())
+                })?;
+                let (chosen, receiver, latest) =
+                    select_while_draining(receiver, &first_image, select)?;
+                let Some(rect) = chosen else {
+                    return Err(XcapRecordingError::PortalCancelled);
+                };
+                if cancelled() {
+                    return Err(XcapRecordingError::PortalCancelled);
+                }
+                let selection = PortalRegionSelection {
+                    rect,
+                    frame_width: first_image.width(),
+                    frame_height: first_image.height(),
+                };
+                if !selection.is_valid() {
+                    return Err(XcapRecordingError::InvalidTarget);
+                }
+                // Encode from a frame taken after the selector closed: prefer a
+                // fresh one, else the newest frame drained during selection.
+                let after = match receiver.recv_timeout(POST_SELECTION_FRAME_WAIT) {
+                    Ok(frame) => Some(frame),
+                    Err(RecvTimeoutError::Timeout) => latest,
+                    Err(RecvTimeoutError::Disconnected) => {
+                        return Err(XcapRecordingError::Capture(
+                            source.warning().unwrap_or_else(|| {
+                                "The portal video stream ended during region selection.".into()
+                            }),
+                        ));
+                    }
+                };
+                if let Some(frame) = after {
+                    first_image = frame_image(frame)?;
+                }
+                (receiver, Some(selection))
+            }
+            _ => (receiver, None),
+        };
+        let source_rect = portal_source_rect(region, first_image.width(), first_image.height())
+            .ok_or(XcapRecordingError::InvalidTarget)?;
         let transform = FrameTransform::new(
-            FrameRect {
-                x: 0,
-                y: 0,
-                width: first_image.width(),
-                height: first_image.height(),
-            },
+            source_rect,
             options.max_resolution,
             first_image.width(),
             first_image.height(),
@@ -299,17 +355,26 @@ impl XcapRecordingSegment {
         if let Some(parent) = output_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        Self::encode(
+        let dropped_before = source.dropped_frames();
+        let mut segment = Self::encode(
             options,
             output_path,
             RecordingInput {
-                recorder: CaptureRecorder::Portal(source),
+                recorder: CaptureRecorder::Portal(source, dropped_before),
                 receiver,
                 first_image,
                 transform,
             },
             None,
-        )
+        )?;
+        segment.portal_region = region;
+        Ok(segment)
+    }
+
+    /// The Region selection this portal segment crops, to persist for later
+    /// segments. `None` for every other target.
+    pub const fn portal_region_selection(&self) -> Option<PortalRegionSelection> {
+        self.portal_region
     }
 
     fn encode(
@@ -450,6 +515,7 @@ impl XcapRecordingSegment {
             warning,
             system_audio,
             microphone,
+            portal_region: None,
         })
     }
 
@@ -708,6 +774,66 @@ fn encode_frame(
     Ok(())
 }
 
+/// Runs the blocking Region selection while a worker keeps receiving frames, so
+/// the bounded stream never backs up. Returns the choice, the receiver and the
+/// newest frame that arrived meanwhile.
+#[cfg(any(target_os = "linux", test))]
+fn select_while_draining(
+    receiver: Receiver<Frame>,
+    first_image: &RgbaImage,
+    select: &PortalRegionSelector<'_>,
+) -> XcapRecordingResult<(Option<CaptureRect>, Receiver<Frame>, Option<Frame>)> {
+    let done = AtomicBool::new(false);
+    thread::scope(|scope| {
+        let drain = thread::Builder::new()
+            .name("captures-portal-region-drain".to_owned())
+            .spawn_scoped(scope, || {
+                let mut latest = None;
+                while !done.load(Ordering::Acquire) {
+                    match receiver.recv_timeout(CONTROL_POLL_INTERVAL) {
+                        Ok(frame) => latest = Some(frame),
+                        Err(RecvTimeoutError::Timeout) => {}
+                        Err(RecvTimeoutError::Disconnected) => break,
+                    }
+                }
+                (receiver, latest)
+            })
+            .map_err(|error| XcapRecordingError::Worker(error.to_string()))?;
+        let chosen = select(first_image);
+        done.store(true, Ordering::Release);
+        let (receiver, latest) = drain.join().map_err(|_| {
+            XcapRecordingError::Worker("region selection frame worker panicked".to_owned())
+        })?;
+        Ok((chosen, receiver, latest))
+    })
+}
+
+/// The portal frame area to encode: the whole frame, or a Region selection
+/// mapped from the frame size it was chosen on onto this stream's size.
+#[cfg(any(target_os = "linux", test))]
+fn portal_source_rect(
+    region: Option<PortalRegionSelection>,
+    width: u32,
+    height: u32,
+) -> Option<FrameRect> {
+    match region {
+        None => Some(FrameRect {
+            x: 0,
+            y: 0,
+            width,
+            height,
+        }),
+        Some(selection) if selection.is_valid() => FrameRect::from_logical(
+            selection.rect,
+            selection.frame_width,
+            selection.frame_height,
+            width,
+            height,
+        ),
+        Some(_) => None,
+    }
+}
+
 fn find_monitor(display_id: &str) -> XcapRecordingResult<Monitor> {
     Monitor::all()
         .map_err(|error| XcapRecordingError::Capture(error.to_string()))?
@@ -800,4 +926,176 @@ fn companion_audio_path(output_path: &Path, suffix: &str) -> PathBuf {
         .and_then(|stem| stem.to_str())
         .unwrap_or("segment");
     output_path.with_file_name(format!("{stem}.{suffix}.wav"))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+
+    use captures_recording::{CaptureRect, MaxResolution, PortalRegionSelection};
+    use image::{Rgba, RgbaImage};
+    use xcap::Frame;
+
+    use super::{FrameRect, FrameTransform, portal_source_rect, select_while_draining};
+
+    /// Each pixel encodes its own coordinates, so a shifted, transposed or
+    /// unscaled crop cannot match.
+    fn encoded(width: u32, height: u32) -> RgbaImage {
+        RgbaImage::from_fn(width, height, |x, y| {
+            Rgba([
+                (x % 251) as u8,
+                (y % 241) as u8,
+                (x / 251 + y / 241 * 8) as u8,
+                255,
+            ])
+        })
+    }
+
+    fn pixel(rgb: &[u8], width: u32, x: u32, y: u32) -> [u8; 3] {
+        let offset = ((y * width + x) * 3) as usize;
+        [rgb[offset], rgb[offset + 1], rgb[offset + 2]]
+    }
+
+    #[test]
+    fn region_crops_exact_asymmetric_stream_pixels() {
+        let frame = encoded(1_280, 900);
+        let selection = PortalRegionSelection {
+            rect: CaptureRect {
+                x: 101,
+                y: 37,
+                width: 300,
+                height: 200,
+            },
+            frame_width: 1_280,
+            frame_height: 900,
+        };
+        let source = portal_source_rect(Some(selection), 1_280, 900).unwrap();
+        assert_eq!(
+            source,
+            FrameRect {
+                x: 101,
+                y: 37,
+                width: 300,
+                height: 200,
+            }
+        );
+        let transform = FrameTransform::new(source, MaxResolution::Original, 1_280, 900).unwrap();
+        assert_eq!(transform.dimensions(), (300, 200));
+        let rgb = transform.rgb(&frame);
+        let expected = |x: u32, y: u32| {
+            let [r, g, b, _] = frame.get_pixel(x, y).0;
+            [r, g, b]
+        };
+        assert_eq!(pixel(&rgb, 300, 0, 0), expected(101, 37));
+        assert_eq!(pixel(&rgb, 300, 299, 0), expected(400, 37));
+        assert_eq!(pixel(&rgb, 300, 0, 199), expected(101, 236));
+        assert_eq!(pixel(&rgb, 300, 299, 199), expected(400, 236));
+
+        // Odd sizes are even-rounded by the encoder, keeping the top-left.
+        let odd = PortalRegionSelection {
+            rect: CaptureRect {
+                x: 7,
+                y: 5,
+                width: 301,
+                height: 199,
+            },
+            ..selection
+        };
+        let source = portal_source_rect(Some(odd), 1_280, 900).unwrap();
+        let transform = FrameTransform::new(source, MaxResolution::Original, 1_280, 900).unwrap();
+        assert_eq!(transform.dimensions(), (300, 198));
+        assert_eq!(portal_source_rect(None, 1_280, 900).unwrap().width, 1_280);
+    }
+
+    #[test]
+    fn resumed_region_maps_onto_a_differently_sized_stream() {
+        let selection = PortalRegionSelection {
+            rect: CaptureRect {
+                x: 100,
+                y: 120,
+                width: 300,
+                height: 200,
+            },
+            frame_width: 1_280,
+            frame_height: 900,
+        };
+        // The same output now streams at 2x, then at an asymmetric size.
+        assert_eq!(
+            portal_source_rect(Some(selection), 2_560, 1_800).unwrap(),
+            FrameRect {
+                x: 200,
+                y: 240,
+                width: 600,
+                height: 400,
+            }
+        );
+        assert_eq!(
+            portal_source_rect(Some(selection), 640, 1_800).unwrap(),
+            FrameRect {
+                x: 50,
+                y: 240,
+                width: 150,
+                height: 400,
+            }
+        );
+        let invalid = PortalRegionSelection {
+            rect: CaptureRect {
+                x: 1_200,
+                ..selection.rect
+            },
+            ..selection
+        };
+        assert_eq!(portal_source_rect(Some(invalid), 1_280, 900), None);
+    }
+
+    #[test]
+    fn selection_keeps_draining_the_bounded_stream_and_returns_its_newest_frame() {
+        let (tx, rx) = mpsc::sync_channel(1);
+        let first = encoded(64, 48);
+        let (chosen, receiver, latest) = select_while_draining(rx, &first, &|image| {
+            assert_eq!(image.dimensions(), (64, 48));
+            // A blocked selector must not back up the one-slot stream.
+            for index in 0..20_u8 {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                let mut frame = Some(Frame {
+                    width: 1,
+                    height: 1,
+                    raw: vec![index, 0, 0, 255],
+                });
+                while let Some(pending) = frame.take() {
+                    match tx.try_send(pending) {
+                        Ok(()) => {}
+                        Err(mpsc::TrySendError::Full(pending)) => {
+                            assert!(std::time::Instant::now() < deadline, "stream backed up");
+                            frame = Some(pending);
+                            std::thread::sleep(std::time::Duration::from_millis(1));
+                        }
+                        Err(mpsc::TrySendError::Disconnected(_)) => panic!("receiver dropped"),
+                    }
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            Some(CaptureRect {
+                x: 1,
+                y: 2,
+                width: 3,
+                height: 4,
+            })
+        })
+        .unwrap();
+        assert_eq!(chosen.unwrap().width, 3);
+        assert_eq!(latest.unwrap().raw[0], 19);
+        // The receiver is handed back for encoding.
+        tx.send(Frame {
+            width: 1,
+            height: 1,
+            raw: vec![99, 0, 0, 255],
+        })
+        .unwrap();
+        assert_eq!(receiver.recv().unwrap().raw[0], 99);
+
+        let (_tx, rx) = mpsc::sync_channel(1);
+        let (chosen, _, latest) = select_while_draining(rx, &first, &|_| None).unwrap();
+        assert!(chosen.is_none() && latest.is_none());
+    }
 }

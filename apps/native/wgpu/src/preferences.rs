@@ -2145,7 +2145,7 @@ impl Preferences {
     fn shortcuts(&mut self, ui: &mut egui::Ui, t: &Tokens) {
         let help = preferences::shortcut_help(shortcut_platform());
         let mut intro = if self.portal_shortcuts.is_some() {
-            "Your desktop manages these global shortcuts. It may choose different keys or leave actions unbound. Wayland screenshots use the desktop portal; region recording remains unavailable.".to_owned()
+            "Your desktop manages these global shortcuts. It may choose different keys or leave actions unbound. Wayland screenshots and recordings use the desktop portal.".to_owned()
         } else {
             format!("{} {}", preferences::SECTIONS[3].description, help.intro)
         };

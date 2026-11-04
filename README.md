@@ -235,7 +235,14 @@ see [verification limits](apps/native/gnome-window-verification.md).
 **Screenshot Region** takes one portal still of the desktop, shows it in a
 fullscreen, compositor-placed selector, and saves the selected area from that
 still. With several monitors the still is letterboxed into the selector's
-output. Region recording remains unavailable.
+output. **Record Region** (tray or shortcut) asks for one display-sharing grant,
+shows the stream's first frame in the same selector, runs the configured
+countdown after you confirm, and records only the selected area of that stream.
+Pause/resume and restart reuse the selection without selecting again; each new
+segment still asks the portal. Escape or closing the selector or countdown
+cancels without saving. The selector and countdown leave the screen before
+recording starts, but the controls can appear in the video if they overlap
+the region. Click highlights and keystrokes remain unavailable on Wayland.
 Portal policy controls consent; window screenshots require the configured cursor
 mode, while display stills keep backend-controlled cursor inclusion. Separate no-window diagnostics
 also exercise GIF sessions. Restored window positions are compositor-controlled.
@@ -1053,7 +1060,7 @@ denied capture opens the native permission recovery: Restart & Retry on macOS, o
 screen or optional microphone access explicitly. Done returns to the workspace
 even after denial or a check failure, without restarting or closing editors.
 Windows/X11 need no upfront screen grant; microphone status is not reported there.
-Wayland window screenshots require a window-sharing portal; region recording remains unavailable. Physical
+Wayland window screenshots require a window-sharing portal. Physical
 permission-revocation/retry acceptance is still open.
 Post-save source adoption, remaining editor layout/interaction parity,
 physical setup/login and installed-update acceptance remain open. Shared editor support is prerequisite work,

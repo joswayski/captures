@@ -433,7 +433,8 @@ impl PortalVideoSource {
         cancelled: &dyn Fn() -> bool,
     ) -> Result<(Self, Receiver<Frame>), PortalVideoError> {
         let source_type = match target {
-            RecordingTarget::PortalDisplay => 1,
+            // A Region is cropped from a display stream after selection.
+            RecordingTarget::PortalDisplay | RecordingTarget::PortalRegion { .. } => 1,
             RecordingTarget::PortalWindow => 2,
             _ => return Err(error("recording target is not a portal source").into()),
         };

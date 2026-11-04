@@ -2,7 +2,9 @@
 """Acceptance fixture for the native Wayland display-recording host.
 
 Runs the live application on a private 1280x900 Sway desktop and exercises its
-real History button and recording HUD with real Wayland pointer input.  Portal
+real History button and recording HUD with real Wayland pointer input.  The
+Region case starts from the real tray, drags a selection over the granted
+stream's first frame and checks the recorded crop's size and pixels.  Portal
 consent in this fixture is the pinned, non-interactive wlr test backend; it is
 not evidence of physical compositor consent UX.
 """
@@ -67,9 +69,22 @@ def events(path, name=None):
     return parsed
 
 
+REGION = (100, 120, 300, 200)  # x, y, width, height on the 1280x900 output
+
+
+def region_background(path):
+    """Each pixel encodes its coordinates, so a shifted, transposed or scaled
+    crop cannot match: R = x / 5, G = y / 4, B = 77."""
+    subprocess.run(["convert", "-size", f"{WIDTH}x{HEIGHT}", "xc:black",
+                    "-channel", "R", "-fx", "floor(i/5)/255", "-channel", "G", "-fx", "floor(j/4)/255",
+                    "-channel", "B", "-fx", "77/255", "+channel", "-depth", "8", f"PNG24:{path}"],
+                   check=True)
+
+
 def run_appearance(binary, pointer, root, appearance, env, portal_mode, interrupt_source,
-                   window_only=False, pending_quit=False):
-    suffix = "-window" if window_only else "-pending-quit" if pending_quit else ""
+                   window_only=False, pending_quit=False, region_bus=None):
+    suffix = ("-window" if window_only else "-pending-quit" if pending_quit
+              else "-region" if region_bus else "")
     profile = root / (appearance + suffix)
     profile.mkdir()
     history_root = profile / "history"
@@ -90,7 +105,8 @@ def run_appearance(binary, pointer, root, appearance, env, portal_mode, interrup
         "recording": {
             "video_format": "mp4",
             "video_fps": 15,
-            "countdown_seconds": 3,
+            # The Region countdown follows selection; keep its wait short.
+            "countdown_seconds": 1 if region_bus else 3,
             "show_cursor": False,
             "capture_system_audio": False,
             "microphone_device_id": None,
@@ -104,7 +120,7 @@ def run_appearance(binary, pointer, root, appearance, env, portal_mode, interrup
     app = subprocess.Popen([
         binary, "--live", "--open-history", "--open-preferences",
         "--settings-file", str(settings), "--history-root", str(history_root),
-        "--quit-after", "30" if pending_quit else "100",
+        "--quit-after", "30" if pending_quit else "60" if region_bus else "100",
     ], env=env, stdout=host_log, stderr=host_log)
 
     def click(x, y):
@@ -219,6 +235,125 @@ def run_appearance(binary, pointer, root, appearance, env, portal_mode, interrup
              window("Captures Preferences"), "History and Preferences mapped")
         arrange("Capture History", (24, 28, 880, 640))
         arrange("Captures Preferences", (650, 300, 600, 560))
+        if region_bus:
+            from wayland_lifecycle_smoke import WATCHER, menu_action, watcher
+            wait(lambda: watcher(region_bus) and watcher(region_bus).Get(
+                WATCHER, "RegisteredStatusNotifierItems"), "native tray registered")
+            background = profile / "region-background.png"
+            region_background(background)
+            subprocess.run(["swaymsg", f"output * bg {background} fill"], env=env, check=True,
+                           stdout=subprocess.DEVNULL)
+            time.sleep(.5)
+            recovery = profile / "recording-recovery"
+            x, y, w, h = REGION
+
+            def start_region():
+                submissions = len(events(host_log_path, "portal-recording-submit"))
+                menu_action(region_bus, "Record Region")
+                wait(lambda: len(events(host_log_path, "portal-recording-submit")) > submissions,
+                     "Region recording requested consent before selecting")
+                selector = wait(lambda: window("Captures Region Selection"),
+                                "fullscreen selector over the stream's first frame")
+                assert (selector["rect"]["width"], selector["rect"]["height"]) == (WIDTH, HEIGHT), selector
+                assert not window("Captures Recording Countdown"), "countdown ran before selection"
+                assert not window("Captures Recording Controls"), "HUD appeared before selection"
+                assert not window("Capture History") and not window("Captures Preferences")
+                return selector
+
+            # Closing the selector cancels like declining consent: no take, no HUD.
+            selector = start_region()
+            time.sleep(1.5)  # past the fullscreen configure and first paints
+            shot("region-selector")
+            subprocess.run(["swaymsg", f'[con_id={selector["id"]}] kill'], env=env, check=True,
+                           stdout=subprocess.DEVNULL)
+            wait(lambda: window("Capture History") and not window("Captures Region Selection"),
+                 "History restored after cancelling the Region selector")
+            time.sleep(1)
+            assert not window("Captures Recording Controls"), "cancelled selection opened the HUD"
+            assert not window("Captures Recording Countdown"), "cancelled selection counted down"
+            assert not metadata(), "cancelled Region recording saved media"
+            assert not list(recovery.glob("*/manifest.json")), "cancelled Region left a take"
+            assert not list(profile.rglob("*.mp4")), "cancelled Region left a segment"
+
+            arrange("Capture History", (24, 28, 880, 640))
+            arrange("Captures Preferences", (650, 300, 600, 560))
+            start_region()
+            time.sleep(.5)
+            pointer.stdin.write(f"drag {x} {y} {WIDTH} {HEIGHT} {x + w} {y + h}\n".encode())
+            pointer.stdin.flush()
+            assert select.select([pointer.stdout], [], [], 10)[0], "drag did not finish"
+            assert pointer.stdout.readline().strip() == b"DRAGGED"
+            countdown = wait(lambda: window("Captures Recording Countdown"),
+                             "recording countdown after the selection", timeout=4)
+            assert countdown["rect"]["width"] > 0 and not window("Captures Region Selection")
+            assert not window("Captures Recording Controls"), "HUD overlapped the countdown"
+            running = hud_control("pause_resume", "recording", True)
+            assert not window("Captures Recording Countdown"), "countdown stayed mapped"
+            draft = json.loads(wait(lambda: next(iter(recovery.glob("*/manifest.json")), None),
+                                    "running Region take").read_text())
+            selection = {"rect": {"x": x, "y": y, "width": w, "height": h},
+                         "frame_width": WIDTH, "frame_height": HEIGHT}
+            # Persisted for resume, restart and recovery without selecting again.
+            assert draft["options"]["target"] == {"type": "portal_region", "selection": selection}, draft
+            shot("region-running")
+            time.sleep(1.5)
+            click_layout(hud_control("stop", "recording", True))
+            recording_metadata = wait(lambda: next(iter(metadata("video")), None),
+                                      "published Region recording", timeout=25)
+            entry = json.loads(recording_metadata.read_text())
+            assert entry["target"] == {"type": "portal_region", "selection": selection}, entry
+            expected_size = (w & ~1, h & ~1)
+            assert (entry["width"], entry["height"]) == expected_size, entry
+            media = recording_metadata.parent / "media.mp4"
+            probe = json.loads(subprocess.check_output([
+                "ffprobe", "-v", "error", "-show_format", "-show_streams", "-of", "json", str(media)
+            ], timeout=10))
+            videos = [stream for stream in probe["streams"] if stream["codec_type"] == "video"]
+            assert len(videos) == 1 and videos[0]["codec_name"] == "h264", probe
+            assert (int(videos[0]["width"]), int(videos[0]["height"])) == expected_size, probe
+            duration = float(probe["format"]["duration"])
+            assert 1.0 <= duration <= 6, duration
+            # Corners sit inside the encoded gradient. H.264 4:2:0, quantization
+            # and YUV range conversion shift levels by up to about 5, so allow 6:
+            # still tight enough to reject a crop that is off by ~30 px or more.
+            tolerance = 6
+            samples = {}
+            for label, seek in (("first", None), ("middle", "0.8")):
+                frame = subprocess.check_output([
+                    "ffmpeg", "-v", "error", *(["-ss", seek] if seek else []), "-i", str(media),
+                    "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"
+                ], timeout=15)
+                assert len(frame) == expected_size[0] * expected_size[1] * 3, len(frame)
+                for corner, (cx, cy) in {"top_left": (2, 2), "top_right": (expected_size[0] - 3, 2),
+                                         "bottom_left": (2, expected_size[1] - 3),
+                                         "bottom_right": (expected_size[0] - 3, expected_size[1] - 3),
+                                         "center": (expected_size[0] // 2, expected_size[1] // 2)}.items():
+                    offset = (cy * expected_size[0] + cx) * 3
+                    actual = tuple(frame[offset:offset + 3])
+                    expected = ((x + cx) // 5, (y + cy) // 4, 77)
+                    samples[f"{label}_{corner}"] = {"actual": actual, "expected": expected}
+                    assert all(abs(a - b) <= tolerance for a, b in zip(actual, expected)), \
+                        (label, corner, actual, expected)
+                # The gradient's span across the crop pins its scale: a 2x or
+                # unscaled full-frame mapping changes these differences.
+                left, right = samples[f"{label}_top_left"], samples[f"{label}_top_right"]
+                bottom = samples[f"{label}_bottom_left"]
+                for (got, want) in ((right["actual"][0] - left["actual"][0],
+                                     right["expected"][0] - left["expected"][0]),
+                                    (bottom["actual"][1] - left["actual"][1],
+                                     bottom["expected"][1] - left["expected"][1])):
+                    assert abs(got - want) <= tolerance, (label, got, want)
+            wait(lambda: window("Capture History"), "workspace restored after publication")
+            assert not list(recovery.glob("*/manifest.json")), "published take kept its recovery"
+            subprocess.run(["swaymsg", "output * bg #234567 solid_color"], env=env, check=True,
+                           stdout=subprocess.DEVNULL)
+            report = {"appearance": appearance, "target": entry["target"],
+                      "dimensions": list(expected_size), "duration_seconds": duration,
+                      "corner_samples": samples, "selector_cancel_saved_nothing": True,
+                      "countdown_after_selection": True, "mp4": str(media.relative_to(profile))}
+            (profile / "result.json").write_text(json.dumps(report, indent=2))
+            print(json.dumps(report), flush=True)
+            return
         if window_only:
             window_layout = settled_layout("portal-window-recording-layout", "Capture History")
             assert window_layout[0]["enabled"], "Record window must be reachable without a tray"
@@ -633,7 +768,7 @@ def isolated(args):
 
         pointer = spawn("injector", [str(args.injector.resolve()), "pointer"], True)
         ready(pointer)
-        for appearance in ("dark", "light"):
+        for appearance in () if args.region_only else ("dark", "light"):
             portal_mode("real")
             run_appearance(str(args.binary.resolve()), pointer, output, appearance, env,
                            portal_mode, lambda: stop(backend), window_only=True)
@@ -642,7 +777,18 @@ def isolated(args):
             portal_mode("real")
             run_appearance(str(args.binary.resolve()), pointer, output, appearance, env,
                            portal_mode, lambda: stop(backend), pending_quit=True)
-        (output / "PASS").write_text("dark and light native Wayland recording host acceptance passed\n")
+        # A real SNI host makes the tray's Record Region reachable; invisible
+        # mode keeps exact desktop pixels. The cases above deliberately run
+        # without a tray (Hide unavailable), so the bar is added only now.
+        with sway_config.open("a") as config:
+            config.write("bar {\n id captures-test\n mode invisible\n workspace_buttons no\n}\n")
+        subprocess.run(["swaymsg", "reload"], env=env, check=True, stdout=subprocess.DEVNULL)
+        for appearance in ("dark", "light"):
+            portal_mode("real")
+            run_appearance(str(args.binary.resolve()), pointer, output, appearance, env,
+                           portal_mode, lambda: stop(backend), region_bus=bus)
+        (output / "PASS").write_text("dark and light native Wayland recording host acceptance passed"
+                                     + (" (Region cases only)" if args.region_only else "") + "\n")
     except Exception:
         (output / "FAIL").write_text("inspect retained logs and screenshots\n")
         raise
@@ -670,6 +816,7 @@ def main():
                         help="Private daemon launcher from build_pipewire_fixture.sh; clients retain installed libraries")
     parser.add_argument("--output", type=Path, required=True,
                         help="new disposable directory; retained with logs, media, and screenshots")
+    parser.add_argument("--region-only", action="store_true", help="only run the Region cases")
     parser.add_argument("--isolated", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     for path, label in ((args.binary, "binary"), (args.injector, "injector"),
@@ -681,11 +828,13 @@ def main():
             "sudo", "unshare", "--mount", "--propagation", "private", "sh", "-eu", "-c",
             'mount -t tmpfs tmpfs /tmp; chmod 1777 /tmp; exec setpriv --reuid="$1" '
             '--regid="$2" --init-groups env HOME="$3" PATH="${10}" "$4" "$5" --isolated '
-            '--binary "$6" --injector "$7" --wlr-backend "$8" --output "$9" ${11:+--pipewire-daemon "${11}"}',
+            '--binary "$6" --injector "$7" --wlr-backend "$8" --output "$9" ${11:+--pipewire-daemon "${11}"} '
+            '${12:+--region-only}',
             "sh", str(os.getuid()), str(os.getgid()), str(Path.home()), sys.executable,
             str(Path(__file__).resolve()), str(args.binary.resolve()), str(args.injector.resolve()),
             str(args.wlr_backend.resolve()), str(args.output.resolve()), os.environ["PATH"],
             str(args.pipewire_daemon.resolve()) if args.pipewire_daemon else "",
+            "1" if args.region_only else "",
         ]
         subprocess.run(command, check=True)
         return

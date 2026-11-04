@@ -78,7 +78,7 @@ and rejects stale and empty selections. The private-Sway smoke
 (`wayland_native_capture_smoke.py --region-only`) drags over a
 coordinate-encoded desktop in both appearances, checks the exact 300×200 crop
 and corner pixels, and checks that cancelling saves nothing. Region recording
-on Wayland remains unavailable. Physical GNOME/KDE acceptance remains open.
+followed in the next Wayland slice. Physical GNOME/KDE acceptance remains open.
 
 Hidden windows now remap on wlroots before 0.16 (Sway 1.7, as shipped by
 Debian 12 and Ubuntu 22.04). After a NULL-buffer unmap, that wlroots never
@@ -93,6 +93,36 @@ fixture: the full `wayland_native_capture_smoke.py` (real, cancel, failure, lock
 quit and Region cases, both appearances), `wayland_lifecycle_smoke.py` and
 `wayland_visibility_smoke.py`. Physical GNOME, KDE and Sway hosts are not
 verified. macOS, Windows and X11 are unaffected (Wayland-only code).
+
+Wayland now records a Region, as shipping does. **Record Region** (tray or
+shortcut) uses a new `portal_region` target and asks for one display ScreenCast
+grant. The segment hands the stream's first frame to a host callback, which
+shows it in the same fullscreen "Captures Region Selection" viewport and shared
+`Selector` as Region screenshots. A worker keeps draining frames while the user
+selects, and those frames are not counted as dropped. The configured recording
+countdown runs after the selection, not before consent. Captures waits until
+the compositor has unmapped the selector and countdown, then crops every frame
+with `FrameTransform`, in that stream's own pixels, so it is exact and
+multi-monitor safe. The selection, with the frame size it was chosen on, is
+persisted in the take's options. Resume, microphone reopen, restart and
+recovery reuse it, scaled with `FrameRect::from_logical` if a later stream's
+size differs, without selecting again. Escape or closing the selector or
+countdown cancels like a declined portal consent: the take is discarded and
+nothing is saved. Click highlights and keystrokes stay unsupported on portal
+recording. Unit tests check an asymmetric crop and even rounding, a resume
+onto 2× and asymmetric stream sizes, the drain, serde round-trips, rejection of
+out-of-frame selections, and the host's selection → countdown → settle →
+reply order and cancel. `wayland_recording_host_smoke.py` now starts Region
+from the real tray over a coordinate-encoded desktop in both appearances. It
+checks that consent precedes the selector and the countdown follows it. It
+drags 300×200 at (100, 120), records about 1.5 s, and checks the MP4 is 300×200
+H.264 and that the corner, centre and gradient-span pixels of two decoded
+frames match within 6 levels. It also checks that closing the selector saves
+no media, draft or segment. Verified on the pinned Sway 1.9 compositor,
+xdg-desktop-portal-wlr and PipeWire fixtures. Physical GNOME/KDE/Sway portals
+and multi-monitor streams are not verified. macOS, Windows and X11 behavior is
+unchanged: the target is Linux-portal-only. The macOS and Tauri matches reject
+it like the other portal targets.
 
 The screenshot editor viewport now matches shipping on both hosts. Fit keeps
 shipping's 28 px around the image (`(clientWidth - 56) / width`). The canvas

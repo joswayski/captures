@@ -9,7 +9,7 @@ pub use draft::{
 };
 pub use model::{
     AudioDevice, AudioDeviceKind, AudioOptions, CaptureRect, GifOptions, MaxResolution,
-    RecordingKind, RecordingOptions, RecordingSegmentInfo, RecordingSessionSnapshot,
-    RecordingState, RecordingTarget,
+    PortalRegionSelection, RecordingKind, RecordingOptions, RecordingSegmentInfo,
+    RecordingSessionSnapshot, RecordingState, RecordingTarget,
 };
 pub use session::{RecordingCoordinator, RecordingError, RecordingResult};

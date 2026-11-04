@@ -179,11 +179,16 @@ pub unsafe extern "C" fn captures_recording_request_v1(
                 exclude_captures_app,
             } => {
                 let callback = is_current.ok_or("start requires an is_current callback")?;
-                let snapshot = session.start(exclude_captures_app, || {
-                    // SAFETY: callback/context validity is part of this function's contract.
-                    let host_current = unsafe { callback(context, generation) };
-                    host_current && captures_app::capture_flow::is_current(generation)
-                })?;
+                let snapshot = session.start(
+                    exclude_captures_app,
+                    || {
+                        // SAFETY: callback/context validity is part of this function's contract.
+                        let host_current = unsafe { callback(context, generation) };
+                        host_current && captures_app::capture_flow::is_current(generation)
+                    },
+                    // The macOS host has no portal Region recording.
+                    None,
+                )?;
                 Ok(json!({"snapshot":snapshot}))
             }
             RecordingRequest::Pause => Ok(json!({"snapshot":session.pause()?})),
