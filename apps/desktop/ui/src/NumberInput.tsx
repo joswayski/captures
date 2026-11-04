@@ -1,6 +1,7 @@
 import {
   useCallback,
   useId,
+  useState,
   type ChangeEvent,
   type FocusEvent,
   type InputHTMLAttributes,
@@ -106,6 +107,11 @@ export function NumberInput({
   onCommit,
 }: NumberInputProps) {
   const inputId = useId();
+  const [draft, setDraft] = useState({ source: value, text: String(value) });
+  if (draft.source !== value) {
+    setDraft({ source: value, text: String(value) });
+  }
+  const displayValue = onTextChange ? value : draft.text;
   const showSteppers = !hideSteppers && !readOnly && !disabled;
   const canEdit = !disabled && !readOnly;
 
@@ -117,9 +123,10 @@ export function NumberInput({
         onCommit?.(text);
         return;
       }
-      onChange?.(next);
+      setDraft({ source: next, text: String(next) });
+      if (next !== value) onChange?.(next);
     },
-    [onChange, onCommit, onTextChange, step],
+    [onChange, onCommit, onTextChange, step, value],
   );
 
   const handleInput = useCallback(
@@ -129,33 +136,58 @@ export function NumberInput({
         onTextChange(event.target.value);
         return;
       }
-      onChange?.(Number(event.target.value));
+      const text = event.target.value;
+      const next = text.trim() === "" ? Number.NaN : Number(text);
+      const valid = Number.isFinite(next) && clamp(next, min, max) === next;
+      setDraft({ source: valid ? next : value, text });
+      if (valid) onChange?.(next);
     },
-    [canEdit, onChange, onTextChange],
+    [canEdit, max, min, onChange, onTextChange, value],
+  );
+
+  const commit = useCallback(
+    (text: string) => {
+      if (onCommit) {
+        onCommit(text);
+      } else if (!onTextChange) {
+        const next = text.trim() === "" ? Number.NaN : Number(text);
+        if (Number.isFinite(next)) emitValue(clamp(next, min, max));
+        else setDraft({ source: value, text: String(value) });
+      }
+    },
+    [emitValue, max, min, onCommit, onTextChange, value],
   );
 
   const nudge = useCallback(
     (direction: 1 | -1) => {
       if (!canEdit) return;
-      emitValue(stepFrom(value, step, direction, min, max));
+      emitValue(
+        stepFrom(
+          String(displayValue).trim() === "" ? value : displayValue,
+          step,
+          direction,
+          min,
+          max,
+        ),
+      );
     },
-    [canEdit, emitValue, max, min, step, value],
+    [canEdit, displayValue, emitValue, max, min, step, value],
   );
 
   const handleBlur = useCallback(
     (event: FocusEvent<HTMLInputElement>) => {
       if (!canEdit) return;
-      onCommit?.(event.currentTarget.value);
+      commit(event.currentTarget.value);
     },
-    [canEdit, onCommit],
+    [canEdit, commit],
   );
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent<HTMLInputElement>) => {
       if (!canEdit) return;
-      if (event.key === "Enter" && onCommit) {
+      if (event.key === "Enter") {
         event.preventDefault();
-        onCommit(event.currentTarget.value);
+        commit(event.currentTarget.value);
         return;
       }
       if (!showSteppers) return;
@@ -167,7 +199,7 @@ export function NumberInput({
         nudge(-1);
       }
     },
-    [canEdit, nudge, onCommit, showSteppers],
+    [canEdit, commit, nudge, showSteppers],
   );
 
   const current = parseCurrent(value);
@@ -193,7 +225,7 @@ export function NumberInput({
         min={min}
         max={max}
         step={step}
-        value={value}
+        value={displayValue}
         disabled={disabled}
         readOnly={readOnly}
         aria-label={ariaLabel}
