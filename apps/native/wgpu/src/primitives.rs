@@ -1039,11 +1039,22 @@ fn number_text<N: egui::emath::Numeric>(value: N, step: f64) -> String {
     }
 }
 
+/// What a step starts from: the typed draft, or the last value when the
+/// draft is blank or does not parse (shipping steps a blank field from it).
+fn step_base<N: egui::emath::Numeric>(buffer: &str, value: N, step: f64) -> String {
+    match buffer.trim().parse::<f64>() {
+        Ok(parsed) if parsed.is_finite() => buffer.to_owned(),
+        _ => number_text(value, step),
+    }
+}
+
 /// Shipping `NumberInput`: a mono field with custom Increase/Decrease
 /// steppers (hidden while disabled) and ArrowUp/ArrowDown stepping through
-/// `captures_app::controls::number`. Typing updates the value as it parses,
-/// clamped to the bounds, unless `commit_on_enter` defers it to Enter or
-/// focus loss.
+/// `captures_app::controls::number`. Typing publishes finite in-range values
+/// as they parse, unless `commit_on_enter` defers them to Enter or focus loss.
+/// Empty and out-of-range drafts stay visible while typing; committing clamps
+/// a finite draft and restores the last value for an empty or invalid one.
+/// A blank field steps from the last value.
 pub struct NumberInput<'a> {
     id_salt: egui::IdSalt,
     label: &'a str,
@@ -1147,7 +1158,8 @@ impl<'a> NumberInput<'a> {
                     };
                     owns_key = true;
                     // Clamping makes order observable at both limits.
-                    let next = number::step_from(&buffer, self.step, up, self.min, self.max);
+                    let base = step_base(&buffer, *value, self.step);
+                    let next = number::step_from(&base, self.step, up, self.min, self.max);
                     set(value, next);
                     buffer = number_text(N::from_f64(next), self.step);
                     false
@@ -1206,11 +1218,14 @@ impl<'a> NumberInput<'a> {
             info
         });
         let parsed = buffer.trim().parse::<f64>().ok().filter(|v| v.is_finite());
+        // Only in-range drafts publish live; typing "1" toward "12" in an
+        // 8–512 field must not apply 8 first.
         if text.changed()
             && !self.commit_on_enter
             && let Some(parsed) = parsed
+            && self.clamp(parsed) == parsed
         {
-            set(value, self.clamp(parsed));
+            set(value, parsed);
         }
         if text.lost_focus()
             && !ui.input(|input| input.key_pressed(egui::Key::Escape))
@@ -1241,7 +1256,8 @@ impl<'a> NumberInput<'a> {
         }
 
         if steppers {
-            let (at_min, at_max) = number::at_bounds(&buffer, self.min, self.max);
+            let base = step_base(&buffer, *value, self.step);
+            let (at_min, at_max) = number::at_bounds(&base, self.min, self.max);
             let column = Rect::from_min_max(egui::pos2(text_rect.right(), rect.top()), rect.max);
             let painter = ui.painter();
             painter.rect_filled(
@@ -1293,7 +1309,7 @@ impl<'a> NumberInput<'a> {
                 ui.painter()
                     .add(egui::Shape::line(points, Stroke::new(2. * s, color)));
                 if step.clicked() && !disabled {
-                    let next = number::step_from(&buffer, self.step, up, self.min, self.max);
+                    let next = number::step_from(&base, self.step, up, self.min, self.max);
                     set(value, next);
                     if text.has_focus() {
                         ui.data_mut(|data| {
@@ -2342,6 +2358,60 @@ mod tests {
             value, 37.5,
             "committing on blur parses the typed text, not the step-rounded display"
         );
+    }
+
+    #[test]
+    fn number_input_keeps_drafts_and_publishes_only_in_range_values() {
+        // Shipping `NumberInput` drafts: clearing a selected 8–512 text size
+        // and retyping 12 must not apply 8 on the way.
+        let (ctx, t) = setup();
+        let mut value = 24.;
+        let mut published = Vec::new();
+        let mut run = |events: Vec<egui::Event>, value: &mut f64| {
+            let mut field = Rect::NOTHING;
+            frame(&ctx, events, |ui| {
+                let before = *value;
+                field = NumberInput::new("draft", "Text size", 120.)
+                    .range(8. ..=512.)
+                    .show(ui, &t, value)
+                    .rect;
+                if *value != before {
+                    published.push(*value);
+                }
+            });
+            field
+        };
+        let field = run(vec![], &mut value);
+        let text = egui::pos2(field.left() + 20., field.center().y);
+        run(
+            vec![egui::Event::PointerMoved(text), press(text, true)],
+            &mut value,
+        );
+        run(vec![press(text, false)], &mut value);
+        let clear = || {
+            let mut keys = vec![key(egui::Key::End)];
+            keys.extend((0..4).map(|_| key(egui::Key::Backspace)));
+            keys
+        };
+        run(clear(), &mut value);
+        run(vec![egui::Event::Text("1".into())], &mut value);
+        assert_eq!(value, 24., "an out-of-range draft does not publish");
+        run(vec![egui::Event::Text("2".into())], &mut value);
+        assert_eq!(value, 12.);
+        // A blank field steps from the last value, not from the minimum.
+        run(clear(), &mut value);
+        run(vec![key(egui::Key::ArrowUp)], &mut value);
+        assert_eq!(value, 13.);
+        run(clear(), &mut value);
+        run(vec![egui::Event::Text("600".into())], &mut value);
+        assert_eq!(value, 13., "typing past the maximum waits for commit");
+        run(vec![key(egui::Key::Enter)], &mut value);
+        for _ in 0..3 {
+            run(vec![], &mut value);
+        }
+        assert_eq!(value, 512., "Enter clamps a finite out-of-range draft");
+        let _ = run;
+        assert_eq!(published, [12., 13., 512.]);
     }
 
     #[test]
