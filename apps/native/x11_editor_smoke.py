@@ -221,6 +221,13 @@ def main():
                      "-depth", "8", "rgb:-")
         assert len(actual) == 3 and all(abs(a - b) <= tolerance for a, b in zip(actual, expected)), (name, x, y, actual, expected)
 
+    def outside_image(name, x, y, image=(40, 110, 166)):
+        # Just past a canvas edge, shipping's `.screenshot-canvas-surface`
+        # paints a 1px `--border` ring and `--shadow-lg`, never image.
+        actual = run("convert", str(output / f"{name}.png"), "-crop", f"1x1+{x}+{y}",
+                     "-depth", "8", "rgb:-")
+        assert len(actual) == 3 and max(abs(a - b) for a, b in zip(actual, image)) > 24, (name, x, y, actual)
+
     def document_pixel(name, x, y, expected, tolerance=0):
         window, size, bar = shot_layouts[name]
         left, top, scale = fit_geometry(size, window, bar)
@@ -293,19 +300,20 @@ def main():
         return int(re.search(r"^WIDTH=(\d+)$", geometry, re.MULTILINE).group(1))
 
     def prepare_fixture_inspector(window):
-        # A fresh editor at <=1040px now starts at 280px and retains that width
-        # when enlarged. Set the authored width through the real divider rather
+        # A fresh editor at <=1040px starts at 280px (following the window until
+        # the divider is used, like shipping). Set the authored width through the real divider rather
         # than sending canvas/field clicks 40px away from their targets. The
         # dedicated resize suite still exercises the unmodified host default.
         if args.inspector_resize_only:
             return
+        # Always press the divider: an unset width would follow later window
+        # resizes, so even an unchanged 320px must become an explicit choice.
         width = editor_width_of(window)
         initial = 280 if width <= 1040 else 320
-        if initial != INSPECTOR_WIDTH:
-            run("xdotool", "mousemove", "--sync", "--window", window,
-                str(width - initial), "200", "sleep", ".2", "mousedown", "1", "sleep", ".2",
-                "mousemove", "--sync", "--window", window, str(width - INSPECTOR_WIDTH), "200",
-                "sleep", ".3", "mouseup", "1", "sleep", ".3")
+        run("xdotool", "mousemove", "--sync", "--window", window,
+            str(width - initial), "200", "sleep", ".2", "mousedown", "1", "sleep", ".2",
+            "mousemove", "--sync", "--window", window, str(width - INSPECTOR_WIDTH), "200",
+            "sleep", ".3", "mouseup", "1", "sleep", ".3")
 
     def draft_bytes():
         if draft is None:
@@ -327,8 +335,9 @@ def main():
     def fit_geometry(size=None, window=None, bar=None):
         width, height = window or window_size()
         image_width, image_height = size or document_size()
-        available = (64., 60., width - INSPECTOR_WIDTH - 8.,
-                     height - 8. - (export_bar_height() if bar is None else bar))
+        # Shipping's Fit: the 56px-rail/52px-header viewport less 28px a side.
+        available = (84., 80., width - INSPECTOR_WIDTH - 28.,
+                     height - 28. - (export_bar_height() if bar is None else bar))
         scale = min(1., max(.02, (available[2] - available[0]) / image_width),
                     max(.02, (available[3] - available[1]) / image_height))
         center = ((available[0] + available[2]) / 2, (available[1] + available[3]) / 2)
@@ -4990,9 +4999,10 @@ def main():
         # The 56px rail moves the viewport center right by 28px.
         pixel("viewport-preset-50", 203, 310, (40, 110, 166))
         pixel("viewport-preset-50", 258, 340, (229, 179, 68))
-        pixel("viewport-preset-50", 196, 310,
-              (245, 245, 247) if args.appearance == "light" else (16, 16, 20))
-        pixel("viewport-preset-50", 521, 310,
+        outside_image("viewport-preset-50", 196, 310)
+        outside_image("viewport-preset-50", 521, 310)
+        # The plain surface shows beyond the canvas surface's `--shadow-lg`.
+        pixel("viewport-preset-50", 140, 310,
               (245, 245, 247) if args.appearance == "light" else (16, 16, 20))
         topbar_click("zoom")
         click(editor, zoom_menu_x(), 152)  # 200% preset.
@@ -5030,10 +5040,13 @@ def main():
             # leaves x=64..942, y=60..892. Its center is (503,476), so the
             # 640×360 source spans x=183..823, y=296..656. Raster sample
             # centers at the bottom edge are excluded by the top-left fill rule.
+            # Just past each edge is the `.screenshot-canvas-surface` 1px
+            # `--border` ring, never image; the surface shows beyond its shadow.
             pixel("viewport-fit-no-upscale", 822, 400, (40, 110, 166))
-            pixel("viewport-fit-no-upscale", 823, 400, surface)
+            outside_image("viewport-fit-no-upscale", 823, 400)
+            pixel("viewport-fit-no-upscale", 900, 400, surface)
             pixel("viewport-fit-no-upscale", 300, 655, (40, 110, 166))
-            pixel("viewport-fit-no-upscale", 300, 656, surface)
+            outside_image("viewport-fit-no-upscale", 300, 656)
             assert not draft.exists(), "Fit resizing must not create a draft"
             run("xdotool", "windowsize", "--sync", editor, "760", "540",
                 "key", "ctrl+0", "ctrl+equal", "ctrl+equal", "sleep", ".3")
@@ -5082,9 +5095,9 @@ def main():
             # y=60..452, center (248,256). The 5% source is 32×18, starting
             # at (232,247).
             pixel("viewport-slider-minimum", 233, 248, (40, 110, 166))
-            pixel("viewport-slider-minimum", 231, 248, surface)
-            pixel("viewport-slider-minimum", 264, 248, surface)
-            pixel("viewport-slider-minimum", 233, 265, surface)
+            outside_image("viewport-slider-minimum", 231, 248)
+            outside_image("viewport-slider-minimum", 264, 248)
+            outside_image("viewport-slider-minimum", 233, 265)
             topbar_click("slider-max")  # Right end: 800%, preserving the same anchor.
             shot(editor, "viewport-slider-maximum")
             pixel("viewport-slider-maximum", 66, 150, (40, 110, 166))
@@ -5094,14 +5107,14 @@ def main():
             # 5 × 160^0.01, rounded to 5.3%: width 33.92, x=231.04..264.96.
             # The old pointer-only slider stays at 800%; linear +1 stays at 6%.
             pixel("viewport-slider-keyboard-step", 231, 248, (40, 110, 166))
-            pixel("viewport-slider-keyboard-step", 230, 248, surface)
+            outside_image("viewport-slider-keyboard-step", 230, 248)
             pixel("viewport-slider-keyboard-step", 264, 248, (40, 110, 166))
-            pixel("viewport-slider-keyboard-step", 265, 248, surface)
+            outside_image("viewport-slider-keyboard-step", 265, 248)
             run("xdotool", "key", "Home", "Prior", "sleep", ".3")
             shot(editor, "viewport-slider-keyboard-page")
             # PageUp uses 10% of the log track: 8.3%, width 53.12.
             pixel("viewport-slider-keyboard-page", 222, 248, (40, 110, 166))
-            pixel("viewport-slider-keyboard-page", 220, 248, surface)
+            outside_image("viewport-slider-keyboard-page", 220, 248)
             run("xdotool", "key", "End", "Up", "sleep", ".3")
             shot(editor, "viewport-slider-keyboard-end")
             pixel("viewport-slider-keyboard-end", 66, 150, (40, 110, 166))
@@ -5109,7 +5122,7 @@ def main():
             run("xdotool", "key", "Home", "Left", "Tab", "Right", "sleep", ".3")
             shot(editor, "viewport-slider-keyboard-tab-away")
             pixel("viewport-slider-keyboard-tab-away", 233, 248, (40, 110, 166))
-            pixel("viewport-slider-keyboard-tab-away", 231, 248, surface)
+            outside_image("viewport-slider-keyboard-tab-away", 231, 248)
             recording.send_signal(signal.SIGINT)
             recording.wait(timeout=10)
             assert recording.returncode in (0, 255)

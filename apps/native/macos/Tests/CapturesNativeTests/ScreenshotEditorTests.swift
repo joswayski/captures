@@ -502,10 +502,13 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(controller.window.frame, frame, file: file, line: line)
             XCTAssertTrue(controller.window.firstResponder === divider, file: file, line: line)
         }
-        try press(123, "\u{f702}", width: 290)
-        try press(123, "\u{f702}", width: 330, shift: true)
-        try press(124, "\u{f703}", width: 320)
-        try press(124, "\u{f703}", width: 280, shift: true)
+        // The unset preference follows the widened window (shipping's null
+        // `preferredSidebarWidth`), so the first step starts from 320.
+        try press(123, "\u{f702}", width: 330)
+        try press(123, "\u{f702}", width: 370, shift: true)
+        try press(124, "\u{f703}", width: 360)
+        try press(124, "\u{f703}", width: 320, shift: true)
+        try press(115, "\u{f729}", width: 280)
         try press(124, "\u{f703}", width: 280)
         try press(119, "\u{f72b}", width: 480)
         try press(123, "\u{f702}", width: 480, shift: true)
@@ -516,6 +519,8 @@ final class ScreenshotEditorTests: XCTestCase {
         for (windowWidth, resetWidth) in [(1040.0, 280.0), (1041.0, 320.0)] {
             controller.window.setContentSize(NSSize(width: windowWidth, height: 600))
             controller.windowDidResize(Notification(name: NSWindow.didResizeNotification))
+            XCTAssertEqual(controller.root.bounds.width - divider.frame.midX, CGFloat(resetWidth),
+                           "a reset width follows the window without another Enter")
             try press(36, "\r", width: CGFloat(resetWidth))
         }
         XCTAssertTrue(divider.accessibilityPerformIncrement())
@@ -1279,21 +1284,22 @@ final class ScreenshotEditorTests: XCTestCase {
             waitUntil { input.bounds.size == NSSize(width: 360, height: 348) }
             controller.window.setContentSize(NSSize(width: 1200, height: 600))
             controller.root.layoutSubtreeIfNeeded()
-            // The initial 280pt inspector preference survives window resizing.
-            // 800×408 holds the 640×360 screenshot at its actual size, centred.
-            waitUntil { input.bounds.size == NSSize(width: 800, height: 408)
+            // An unset inspector width follows the window (320pt above 1040pt),
+            // like shipping's null `preferredSidebarWidth`. 760×408, less the
+            // Fit inset, holds the 640×360 screenshot at its actual size, centred.
+            waitUntil { input.bounds.size == NSSize(width: 760, height: 408)
                 && abs(controller.presentedImageRect.height - 360) < 1e-7 }
             XCTAssertEqual(controller.root.bounds.size, NSSize(width: 1200, height: 600))
-            // Panels start --s-5 inside the retained 280pt sidebar column, and
-            // Layers takes max(188pt, 40%) above Properties.
-            XCTAssertEqual(layersSection.frame, NSRect(x: 932, y: 64, width: 268, height: 188))
+            // Panels start --s-5 inside the 320pt sidebar column, and Layers
+            // takes max(188pt, 40%) above Properties.
+            XCTAssertEqual(layersSection.frame, NSRect(x: 892, y: 64, width: 308, height: 188))
             XCTAssertFalse(layersSection.isHidden, "Layers shows whatever the tool")
-            XCTAssertEqual(inspector.frame, NSRect(x: 932, y: 252, width: 268, height: 268))
+            XCTAssertEqual(inspector.frame, NSRect(x: 892, y: 252, width: 308, height: 268))
             XCTAssertFalse(undo.isHidden)
             let zoomGroup = try XCTUnwrap(descendants(in: controller.root)
                 .first { $0.accessibilityLabel() == "Canvas zoom controls" })
             XCTAssertLessThan(undo.frame.maxX, zoomGroup.frame.minX)
-            XCTAssertEqual(controller.presentedImageRect, NSRect(x: 80, y: 24, width: 640, height: 360))
+            XCTAssertEqual(controller.presentedImageRect, NSRect(x: 60, y: 24, width: 640, height: 360))
             XCTAssertEqual(bar.frame, NSRect(x: 0, y: 520, width: 1200, height: 80))
             for control in descendants(in: controller.root) where
                 ["Canvas zoom", "Canvas zoom preset", "Canvas width"]
@@ -1305,12 +1311,13 @@ final class ScreenshotEditorTests: XCTestCase {
             try render(controller.root, name: "screenshot-editor-resized-fit-\(appearance)")
             controller.window.setContentSize(NSSize(width: 760, height: 540))
             controller.root.layoutSubtreeIfNeeded()
-            waitUntil { controller.presentedImageRect.width == 360 }
+            // Shipping's Fit keeps 28pt a side: 340 of the 360pt viewport.
+            waitUntil { controller.presentedImageRect.width == 340 }
             XCTAssertEqual(input.bounds.size, NSSize(width: 360, height: 348))
             XCTAssertEqual(layersSection.frame, NSRect(x: 492, y: 64, width: 268, height: 188))
             XCTAssertEqual(inspector.frame, NSRect(x: 492, y: 252, width: 268, height: 208))
             XCTAssertTrue(undo.isHidden)
-            XCTAssertEqual(controller.presentedImageRect, NSRect(x: 0, y: 72.75, width: 360, height: 202.5))
+            XCTAssertEqual(controller.presentedImageRect, NSRect(x: 10, y: 78.375, width: 340, height: 191.25))
             try render(controller.root, name: "screenshot-editor-resized-minimum-\(appearance)")
             XCTAssertEqual(controller.viewport, NativeEditorViewport())
             XCTAssertEqual(controller.state.snapshot, original)
@@ -1585,7 +1592,8 @@ final class ScreenshotEditorTests: XCTestCase {
             for width in [CGFloat(1041), 1040, 760, 1000] {
                 controller.window.setContentSize(NSSize(width: width, height: 540))
                 controller.root.layoutSubtreeIfNeeded()
-                waitUntil { input.bounds.width == width - 400 }
+                // The unset inspector width is 320pt above 1040pt, else 280pt.
+                waitUntil { input.bounds.width == width - (width > 1040 ? 440 : 400) }
                 XCTAssertEqual(input.bounds.height, 348)
                 XCTAssertEqual(undo.isHidden, width <= 1040)
                 // 92pt/72pt slider cells minus their 8pt/6pt padding.
@@ -1595,8 +1603,9 @@ final class ScreenshotEditorTests: XCTestCase {
                 XCTAssertTrue(controller.root.bounds.contains(trim.convert(trim.bounds, to: controller.root)))
             }
             controller.window.setContentSize(NSSize(width: 760, height: 540))
-            waitUntil { controller.presentedImageRect.width == 360 }
-            XCTAssertEqual(controller.presentedImageRect, NSRect(x: 0, y: 72.75, width: 360, height: 202.5))
+            // Shipping's Fit keeps 28pt a side: 340 of the 360pt viewport.
+            waitUntil { controller.presentedImageRect.width == 340 }
+            XCTAssertEqual(controller.presentedImageRect, NSRect(x: 10, y: 78.375, width: 340, height: 191.25))
             XCTAssertTrue(trim.iconOnly, "the minimum header keeps Trim as an icon with its tooltip")
             XCTAssertEqual(trim.title, "Trim edges")
             XCTAssertEqual(trim.toolTip, "Shrink the canvas to the edges of visible layers")

@@ -1478,6 +1478,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private let outputIntegerFormatter: NumberFormatter
     private var tokens: Tokens
     private let preview = NSImageView()
+    /// `.screenshot-canvas-surface`: a 1px `--border` ring and `--shadow-lg`.
+    private let canvasSurface = NSView()
+    private var canvasSurfaceShadowSize = NSSize.zero
     private let viewportInput = EditorViewportGestureView()
     private(set) var viewport = NativeEditorViewport()
     private var viewportCanvasSize = NSSize.zero
@@ -2171,7 +2174,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     /// Frame-based layout: the full-width export bar is pinned to the bottom;
     /// the viewport, zoom row and inspector sit above it.
     private var inspectorWidth: CGFloat = 320
-    private var preferredInspectorWidth: CGFloat = 320
+    /// Shipping's `preferredSidebarWidth`: nil follows the window's default
+    /// (280 at or below 1040pt, else 320) until the user resizes.
+    private var preferredInspectorWidth: CGFloat?
     private var inspectorInitialized = false
     private let inspectorDivider = EditorInspectorDivider()
     private var inspectorFrames: [(NSView, NSRect)] = []
@@ -2204,19 +2209,17 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             for panel in [layersPanel, geometryPanel, layerPropertiesPanel, drawPanel] {
                 rememberInspectorFrames(panel)
             }
-            preferredInspectorWidth = root.bounds.width <= 1040 ? 280 : 320
             root.addSubview(inspectorDivider)
             inspectorDivider.focusRingType = .exterior
             inspectorDivider.resize = { [weak self] delta in
                 guard let self else { return }
                 self.preferredInspectorWidth = delta.map { min(480, max(280, self.inspectorWidth + $0)) }
-                    ?? (self.root.bounds.width <= 1040 ? 280 : 320)
                 self.layoutEditor()
             }
         }
         let canvasGaps = tokens.number("s-5") + tokens.number("s-6")
         let maximumWidth = min(480, max(280, root.bounds.width - 416 - canvasGaps))
-        inspectorWidth = min(preferredInspectorWidth, maximumWidth)
+        inspectorWidth = min(preferredInspectorWidth ?? (root.bounds.width <= 1040 ? 280 : 320), maximumWidth)
         inspectorDivider.updateWidth(inspectorWidth, maximum: maximumWidth)
         let previousWidth = layersPanel.frame.width + Self.panelInset
         if previousWidth != inspectorWidth {
@@ -2555,6 +2558,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         preview.frame = viewportInput.bounds
         preview.imageScaling = .scaleAxesIndependently
         preview.setAccessibilityLabel("Edited screenshot preview")
+        canvasSurface.wantsLayer = true
+        viewportInput.addSubview(canvasSurface)
         viewportInput.addSubview(preview)
         drawOverlay.frame = viewportInput.bounds
         drawOverlay.autoresizingMask = [.width, .height]
@@ -5827,9 +5832,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private var fittedImageRect: NSRect {
         guard viewportCanvasSize.width > 0, viewportCanvasSize.height > 0 else { return .zero }
-        // Match Tauri's 2–100% Fit range; manual zoom has its own 5–800% range.
-        let scale = min(1, max(0.02, viewportBounds.width / viewportCanvasSize.width),
-                        max(0.02, viewportBounds.height / viewportCanvasSize.height))
+        // Match Tauri's Fit: `(clientWidth - 56) / width`, 28pt a side of the
+        // panel (the viewport already sits 18pt in), clamped to 2–100%;
+        // manual zoom has its own 5–800% range.
+        let inset: CGFloat = 2 * (28 - 18)
+        let scale = min(1, max(0.02, (viewportBounds.width - inset) / viewportCanvasSize.width),
+                        max(0.02, (viewportBounds.height - inset) / viewportCanvasSize.height))
         let size = NSSize(width: viewportCanvasSize.width * scale,
                           height: viewportCanvasSize.height * scale)
         return NSRect(x: (viewportBounds.width - size.width) / 2,
@@ -6053,6 +6061,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
     private func updateViewportGeometry() {
         preview.frame = presentedImageRect
+        canvasSurface.isHidden = editedImage == nil || presentedImageRect.isEmpty
+        canvasSurface.frame = presentedImageRect.insetBy(dx: -1, dy: -1)
+        if let layer = canvasSurface.layer, canvasSurface.bounds.size != canvasSurfaceShadowSize {
+            canvasSurfaceShadowSize = canvasSurface.bounds.size
+            BoxShadowLayers.install(tokens.shadow("shadow-lg"), on: layer, bounds: canvasSurface.bounds, radius: 0)
+        }
         recenterButton?.isHidden = editedImage == nil
             || !EditorChrome.canvasOffscreen(viewport: viewportInput.bounds, canvas: presentedImageRect)
         updateInlineTextFrame()
@@ -7368,6 +7382,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         drawOverlay.needsDisplay = true
         preview.superview?.layer?.backgroundColor = tokens.color("surface-sunken").cgColor
         preview.superview?.layer?.borderColor = tokens.color("border").cgColor
+        canvasSurface.layer?.backgroundColor = tokens.color("border").cgColor
     }
 
     private func publishLayerCount(_ count: Int) {
