@@ -4953,7 +4953,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         exportEstimateDelta.textColor = tokens.color((bar?.deltaPercent ?? 0) < 0 ? "positive-text" : "caution-text")
         let copyTitle = copyConfirmed ? "Copied" : "Copy image"
         if copyImageButton.title != copyTitle { copyImageButton.title = copyTitle }
-        copyImageButton.icon = copyConfirmed ? .shipping("check") : nil
+        copyImageButton.icon = .shipping(copyConfirmed ? "check" : "copy")
         copyImageButton.setAccessibilityLabel(copyConfirmed ? "Copied" : "Copy image")
         showInFolderButton.isHidden = lastSavedPath == nil
         exportSaveButton.toolTip = bar?.hint
