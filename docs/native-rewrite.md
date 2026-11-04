@@ -63,6 +63,17 @@ and primary labels are semibold, the lede is capped at 60ch with
 Tauri and wgpu, idle and hovered, were compared side by side. AppKit is
 covered by the hosted macOS workflow only. Physical-host acceptance remains open.
 
+The screenshot editor viewport now matches shipping on both hosts. Fit keeps
+shipping's 28 px around the image (`(clientWidth - 56) / width`). The canvas
+draws `.screenshot-canvas-surface`'s 1 px `--border` ring and `--shadow-lg`. An
+unresized inspector follows the window's default width (280 at or below 1040,
+else 320), and Enter or a double-click on the divider unsets it again, like
+shipping's null `preferredSidebarWidth`. Before, the first width stuck. The
+wgpu inspector-separator test fails without the reset change. The X11
+zoom, canvas-interaction and inspector-resize smokes pass; edge probes now
+expect the ring rather than bare surface. AppKit is covered by the hosted macOS
+workflow only. Physical-host acceptance remains open.
+
 Numeric fields follow shipping's `NumberInput` draft contract (#1210). While
 typing, empty and out-of-range drafts stay visible and only finite in-range
 values publish, so clearing a text size and typing 12 no longer applies 8

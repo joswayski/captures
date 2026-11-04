@@ -2432,16 +2432,20 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
     } else {
         320.
     };
+    // Shipping's `preferredSidebarWidth`: unset follows the window's default
+    // until the user resizes; Enter or a double-click unsets it again.
     let preference_id = inspector_id.with("preferred-width");
     let mut preferred_width = ui
         .ctx()
-        .data_mut(|data| *data.get_temp_mut_or_insert_with(preference_id, || inspector_default));
+        .data(|data| data.get_temp::<f32>(preference_id))
+        .unwrap_or(inspector_default);
     let resize_response = ui.read_response(resize_id);
     if ui.is_enabled() && !view.close_requested {
         use egui::accesskit::{Action, ActionData, TreeId};
         let focused = ui.memory(|memory| memory.has_focus(resize_id));
         let mut width = preferred_width.clamp(280., inspector_max);
         let mut requested = false;
+        let mut reset = false;
         let mut owns_key = false;
         ui.input_mut(|input| {
             let keyboard = focused && input.focused;
@@ -2463,7 +2467,10 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
                             egui::Key::ArrowRight => width - step,
                             egui::Key::Home => 280.,
                             egui::Key::End => inspector_max,
-                            egui::Key::Enter => inspector_default,
+                            egui::Key::Enter => {
+                                reset = true;
+                                inspector_default
+                            }
                             // Other keys must not reach editor or egui's
                             // end-of-pass global zoom shortcuts.
                             _ => return false,
@@ -2499,18 +2506,23 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
         }
         if requested {
             preferred_width = width;
-            ui.ctx()
-                .data_mut(|data| data.insert_temp(preference_id, width));
+            ui.ctx().data_mut(|data| {
+                if reset {
+                    data.remove_temp::<f32>(preference_id);
+                } else {
+                    data.insert_temp(preference_id, width);
+                }
+            });
             ui.ctx().request_repaint();
         }
     }
-    if resize_response
+    let double_clicked = resize_response
         .as_ref()
-        .is_some_and(egui::Response::double_clicked)
-    {
+        .is_some_and(egui::Response::double_clicked);
+    if double_clicked {
         ui.ctx().data_mut(|data| {
             data.remove::<egui::containers::panel::PanelState>(inspector_id);
-            data.insert_temp(preference_id, inspector_default);
+            data.remove_temp::<f32>(preference_id);
         });
     } else if !resize_response
         .as_ref()
@@ -2596,6 +2608,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
         response.is_pointer_button_down_on() || response.dragged() || response.drag_stopped()
     });
     if inspector_resizing
+        && !double_clicked
         && let Some(state) = egui::containers::panel::PanelState::load(ui.ctx(), inspector_id)
     {
         ui.ctx()
@@ -2675,14 +2688,24 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
             let preview = viewport_rect(view.viewport, fit, size).unwrap_or(fit);
             canvas::receive_drops(ui.ctx(), view, Some(preview));
             ui.allocate_rect(available, egui::Sense::hover());
-            ui.painter()
-                .with_clip_rect(available.intersect(ui.clip_rect()))
-                .image(
-                    texture.id(),
-                    preview,
-                    egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
-                    egui::Color32::WHITE,
-                );
+            // `.screenshot-canvas-surface`: `0 0 0 1px var(--border), var(--shadow-lg)`.
+            let surface = ui
+                .painter()
+                .with_clip_rect(available.intersect(ui.clip_rect()));
+            let dark = ui.visuals().dark_mode;
+            surface.add(crate::primitives::shadow_lg(dark).as_shape(preview, 0));
+            surface.rect_stroke(
+                preview,
+                0,
+                egui::Stroke::new(1., tokens.color("border")),
+                egui::StrokeKind::Outside,
+            );
+            surface.image(
+                texture.id(),
+                preview,
+                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
+                egui::Color32::WHITE,
+            );
             let clip = available.intersect(ui.clip_rect());
             let comparing = view.compare_visible() && !view.compare_suppressed();
             if comparing {
@@ -3189,11 +3212,16 @@ fn show_crop_properties(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx:
     });
 }
 
+const FIT_INSET: f32 = 40.;
+
 fn fitted_image_rect(available: egui::Rect, image: egui::Vec2) -> egui::Rect {
-    // Match Tauri's 2–100% Fit range; manual zoom has its own 5–800% range.
-    let scale = (available.width() / image.x)
+    // Match Tauri's Fit, `(clientWidth - 56) / width`, clamped to 2–100%;
+    // manual zoom has its own 5–800% range. `available` is already 8 px inside
+    // the canvas panel (clear of the inspector divider's grab zone), so 20 px
+    // more a side gives shipping's 28 px.
+    let scale = ((available.width() - FIT_INSET) / image.x)
         .max(0.02)
-        .min((available.height() / image.y).max(0.02))
+        .min(((available.height() - FIT_INSET) / image.y).max(0.02))
         .min(1.);
     // Keep spare space balanced, matching Tauri and AppKit even when the
     // minimum Fit scale makes a very large image extend beyond the viewport.
@@ -7499,6 +7527,9 @@ mod tests {
             (1100., vec![], 318.),
             (1100., vec![key(egui::Key::Enter, false)], 320.),
             (760., vec![key(egui::Key::Enter, false)], 280.),
+            // Reset follows the window's default again, like shipping's null
+            // `preferredSidebarWidth`, instead of latching the narrow width.
+            (1100., vec![], 320.),
             (
                 1100.,
                 vec![
@@ -9464,20 +9495,22 @@ mod tests {
                 egui::vec2(160., 90.),
                 egui::pos2(151., 152.),
             ),
+            // Fit leaves 20 px more a side (28 px from the panel, like
+            // shipping): 360 × 260 of this 400 × 300.
             (
-                egui::vec2(400., 300.),
-                egui::vec2(400., 300.),
-                egui::pos2(31., 47.),
+                egui::vec2(360., 260.),
+                egui::vec2(360., 260.),
+                egui::pos2(51., 67.),
             ),
             (
-                egui::vec2(800., 200.),
-                egui::vec2(400., 100.),
-                egui::pos2(31., 147.),
+                egui::vec2(720., 180.),
+                egui::vec2(360., 90.),
+                egui::pos2(51., 152.),
             ),
             (
-                egui::vec2(200., 1200.),
-                egui::vec2(50., 300.),
-                egui::pos2(206., 47.),
+                egui::vec2(200., 1040.),
+                egui::vec2(50., 260.),
+                egui::pos2(206., 67.),
             ),
             (
                 egui::vec2(40000., 20000.),
@@ -9508,7 +9541,8 @@ mod tests {
         view.output = Some((view.texture.as_ref().unwrap().clone(), 123));
         view.viewport_area = Some(egui::Rect::from_min_size(
             egui::pos2(31., 47.),
-            egui::vec2(400., 200.),
+            // 400 × 200 after the Fit inset.
+            egui::vec2(440., 240.),
         ));
         view.viewport_image_size = Some(egui::vec2(800., 400.));
         assert_eq!(displayed_zoom(&view), Some(50.));
