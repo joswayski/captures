@@ -63,6 +63,17 @@ and primary labels are semibold, the lede is capped at 60ch with
 Tauri and wgpu, idle and hovered, were compared side by side. AppKit is
 covered by the hosted macOS workflow only. Physical-host acceptance remains open.
 
+Numeric fields follow shipping's `NumberInput` draft contract (#1210). While
+typing, empty and out-of-range drafts stay visible and only finite in-range
+values publish, so clearing a text size and typing 12 no longer applies 8
+first. Blur or Enter clamps a finite draft, and an empty or invalid draft
+restores the last value. A blank field steps from the last value, not the
+minimum. On wgpu this lives in the shared `NumberInput`. On AppKit,
+`TokenNumberField` steps a blank draft from its last committed text and offers
+`committedDraft()`, which both text-size fields apply when editing ends.
+AppKit layer width and height still restore the accepted size rather than
+clamping. AppKit is covered by the hosted macOS workflow only.
+
 The screenshot editor's color field was audited against the shipping
 `ColorField`. No change was needed. Tab reaches the eight swatches in order,
 then the custom tile, then the hex field once the custom picker is open.

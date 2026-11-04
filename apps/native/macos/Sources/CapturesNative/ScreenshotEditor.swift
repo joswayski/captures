@@ -4584,6 +4584,17 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
            [layerWidth, layerHeight, layerX, layerY].contains(where: { $0 === field }) {
             publishLayerGeometry()
         }
+        // Shipping `NumberInput` drafts: leaving a text size clamps a finite
+        // out-of-range draft and restores the last value for an empty one.
+        if let field = notification.object as? TokenNumberField,
+           field === textSize || field === createTextSize, let text = field.committedDraft() {
+            field.stringValue = text
+            if field === textSize {
+                textControlsChanged(field: field.accessibilityLabel() ?? "field")
+            } else {
+                refreshDefaultShadowFields()
+            }
+        }
     }
 
     /// Escape in the inline rename field cancels the rename.
