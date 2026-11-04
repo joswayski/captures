@@ -1,9 +1,83 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { NumberInput } from "./NumberInput";
 
 describe("NumberInput", () => {
+  it("keeps empty and out-of-range drafts editable without changing the document", () => {
+    function Field() {
+      const [value, setValue] = useState(8);
+      return (
+        <>
+          <NumberInput ariaLabel="Size" value={value} min={8} max={512} onChange={setValue} />
+          <output>{value}</output>
+          <button onClick={() => setValue(24)}>External update</button>
+        </>
+      );
+    }
+    render(<Field />);
+    const field = screen.getByRole("spinbutton", { name: "Size" });
+    const documentValue = screen.getByRole("status");
+    fireEvent.change(field, { target: { value: "" } });
+    expect(field).toHaveValue(null);
+    expect(documentValue).toHaveTextContent("8");
+    fireEvent.change(field, { target: { value: "1" } });
+    expect(field).toHaveValue(1);
+    expect(documentValue).toHaveTextContent("8");
+    fireEvent.change(field, { target: { value: "12" } });
+    expect(field).toHaveValue(12);
+    expect(documentValue).toHaveTextContent("12");
+    fireEvent.change(field, { target: { value: "" } });
+    fireEvent.blur(field);
+    expect(field).toHaveValue(12);
+    fireEvent.change(field, { target: { value: "4" } });
+    expect(field).toHaveValue(4);
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(field).toHaveValue(8);
+    fireEvent.change(field, { target: { value: "900" } });
+    expect(documentValue).toHaveTextContent("8");
+    fireEvent.blur(field);
+    expect(field).toHaveValue(512);
+    fireEvent.change(field, { target: { value: "" } });
+    fireEvent.keyDown(field, { key: "ArrowDown" });
+    expect(field).toHaveValue(511);
+    fireEvent.change(field, { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "External update" }));
+    expect(field).toHaveValue(24);
+  });
+
+  it.each([
+    { min: -100, max: 100, step: 1, text: "-12", expected: -12 },
+    { min: 0.1, max: 10, step: 0.1, text: "0.5", expected: 0.5 },
+  ])(
+    "allows replacing signed and fractional values: $text",
+    ({ min, max, step, text, expected }) => {
+      function Field() {
+        const [value, setValue] = useState(2);
+        return (
+          <NumberInput
+            ariaLabel="Value"
+            value={value}
+            min={min}
+            max={max}
+            step={step}
+            onChange={setValue}
+          />
+        );
+      }
+      render(<Field />);
+      const field = screen.getByRole("spinbutton", { name: "Value" });
+      fireEvent.change(field, { target: { value: "" } });
+      expect(field).toHaveValue(null);
+      fireEvent.change(field, { target: { value: text } });
+      fireEvent.blur(field);
+      expect(field).toHaveValue(expected);
+      fireEvent.keyDown(field, { key: "ArrowUp" });
+      expect(field).toHaveValue(expected + step);
+    },
+  );
+
   it("exposes a spinbutton and larger custom steppers", () => {
     const onChange = vi.fn();
     render(
