@@ -124,6 +124,19 @@ and multi-monitor streams are not verified. macOS, Windows and X11 behavior is
 unchanged: the target is Linux-portal-only. The macOS and Tauri matches reject
 it like the other portal targets.
 
+The AppKit screenshot editor's export bar and Layers heading now follow
+shipping more closely. Copy image and Save carry the shipping `copy` and `save`
+icons (Copy image is 112 pt; the export disclosure's minimum is 144 pt, so the
+"Save as new file" switch keeps its room at 760 pt). "Change…" is a borderless
+text action, as in shipping. The layer count is shipping's 19 pt
+`--surface-sunken` pill with the count centered in it; before, the label drew
+its digit at the top of the pill's frame. Compared with Tauri's
+`?view=screenshot-editor&mock=1` render at 1000×642 and the hosted macOS
+workbench's `native-pixels`. macOS: hosted XCTest renders only. Windows, X11
+and Wayland: unchanged (wgpu already had the icons). Still different on AppKit:
+the footnote placement, bold field captions and the joined filename/format
+control.
+
 The screenshot editor viewport now matches shipping on both hosts. Fit keeps
 shipping's 28 px around the image (`(clientWidth - 56) / width`). The canvas
 draws `.screenshot-canvas-surface`'s 1 px `--border` ring and `--shadow-lg`. An
