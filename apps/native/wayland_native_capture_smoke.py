@@ -336,12 +336,110 @@ def host_cases(binary, pointer, root, env, bus, front, store, saver, screenshots
                 stop(fixture)
 
 
+def region_cases(binary, pointer, root, env, bus, store, screenshots):
+    """Wayland Region: portal still → fullscreen selector → cropped History entry."""
+    from wayland_lifecycle_smoke import menu_action, watcher
+
+    store.SetPermission("screenshot", True, "screenshot", "", ["yes"])
+    # Each desktop pixel encodes its coordinates, so a shifted, transposed or
+    # unscaled crop cannot match.
+    background = root / "region-background.png"
+    subprocess.run(["convert", "-size", f"{WIDTH}x{HEIGHT}", "xc:black",
+                    "-channel", "R", "-fx", "floor(i/5)/255", "-channel", "G", "-fx", "floor(j/4)/255",
+                    "-channel", "B", "-fx", "77/255", "+channel", "-depth", "8", f"PNG24:{background}"],
+                   check=True)
+    subprocess.run(["swaymsg", f"output * bg {background} fill"], env=env, check=True,
+                   stdout=subprocess.DEVNULL)
+    time.sleep(.5)
+    for mode, appearance in (("confirm", "dark"), ("confirm", "light"), ("cancel", "dark")):
+        profile = root / f"region-{mode}-{appearance}"
+        profile.mkdir()
+        settings = profile / "settings.json"
+        settings.write_text(json.dumps({"onboarding_completed": True, "settings_schema_version": 5,
+                                       "appearance": appearance, "auto_copy_to_clipboard": False,
+                                       "launch_at_login": False, "screenshot_countdown_seconds": 0,
+                                       "region_shortcut": "Ctrl+Shift+F7", "window_shortcut": "Ctrl+Shift+F8",
+                                       "display_shortcut": "Ctrl+Shift+F9",
+                                       "output_directory": str(profile / "exports")}))
+        log = (profile / "host.log").open("w")
+        app = subprocess.Popen([binary, "--live", "--open-history", "--settings-file", str(settings),
+                                "--history-root", str(profile / "history"), "--quit-after", "60"],
+                               env=env, stdout=log, stderr=log)
+        try:
+            def named(name):
+                assert app.poll() is None, (profile / "host.log").read_text()
+                return next((node for node in windows(env) if node["name"] == name), None)
+            wait(lambda: named("Capture History"), "History mapped")
+            wait(lambda: watcher(bus) and watcher(bus).Get(
+                "org.kde.StatusNotifierWatcher", "RegisteredStatusNotifierItems"), "native tray registered")
+            time.sleep(1)
+            history = profile / "history"
+            before = set(history.glob("*/metadata.json"))
+            menu_action(bus, "Screenshot Region")
+            selector = wait(lambda: named("Captures Region Selection"), "fullscreen region selector")
+            assert selector["rect"]["width"] == WIDTH and selector["rect"]["height"] == HEIGHT, selector["rect"]
+            assert named("Capture History") is None, "History must not cover the still"
+            time.sleep(1)
+            if screenshots:
+                subprocess.run(["grim", str(screenshots / f"native-wayland-region-{mode}-{appearance}-idle.png")],
+                               env=env, check=True, timeout=5)
+            if mode == "cancel":
+                subprocess.run(["swaymsg", f'[con_id={selector["id"]}] kill'], env=env, check=True,
+                               stdout=subprocess.DEVNULL)
+                # A tray-started Wayland capture does not remap History yet
+                # (also true for Display). Check the selector closed instead.
+                wait(lambda: named("Captures Region Selection") is None, "cancelled selector closed")
+                time.sleep(1)
+                assert set(history.glob("*/metadata.json")) == before, "cancelled region saved a capture"
+                print(json.dumps({"native_host": appearance, "case": "region-cancel", "new_artifacts": 0}),
+                      flush=True)
+                continue
+            pointer.stdin.write(f"drag 100 120 {WIDTH} {HEIGHT} 400 320\n".encode())
+            pointer.stdin.flush()
+            assert select.select([pointer.stdout], [], [], 10)[0], "drag did not finish"
+            assert pointer.stdout.readline().strip() == b"DRAGGED"
+            entries = wait(lambda: set(history.glob("*/metadata.json")) - before, "region saved")
+            assert len(entries) == 1
+            entry = next(iter(entries))
+            assert json.loads(entry.read_text()).get("mode") == "region", entry.read_text()
+            captured = entry.parent / "capture.png"
+            size = subprocess.check_output(["identify", "-format", "%w %h", str(captured)]).decode().split()
+            assert size == ["300", "200"], size
+            pixels = rgba(captured)
+            def at(x, y):
+                offset = (y * 300 + x) * 4
+                return tuple(pixels[offset:offset + 4])
+            expect = lambda x, y: (x // 5, y // 4, 77, 255)
+            assert at(0, 0) == expect(100, 120), at(0, 0)
+            assert at(299, 199) == expect(399, 319), at(299, 199)
+            wait(lambda: named("Captures Region Selection") is None, "selector closed after capture")
+            if screenshots:
+                shutil.copyfile(captured, screenshots / f"native-wayland-region-{appearance}-capture.png")
+            print(json.dumps({"native_host": appearance, "case": "region", "size": size}), flush=True)
+        except Exception:
+            if screenshots:
+                subprocess.run(["grim", str(screenshots / f"native-wayland-region-{mode}-{appearance}-failed.png")],
+                               env=env, check=False)
+            log.flush()
+            if screenshots:
+                shutil.copyfile(profile / "host.log", screenshots / f"native-wayland-region-{mode}-{appearance}.log")
+            print((profile / "host.log").read_text(errors="replace")[-4000:], file=sys.stderr)
+            print(json.dumps([node["name"] for node in windows(env)]), file=sys.stderr)
+            raise
+        finally:
+            stop(app)
+            log.close()
+    subprocess.run(["swaymsg", "output * bg #234567 solid_color"], env=env, check=True,
+                   stdout=subprocess.DEVNULL)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--injector", type=Path, required=True)
     parser.add_argument("--screenshots", type=Path)
     parser.add_argument("--isolated", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--region-only", action="store_true", help="only run the Region cases")
     args = parser.parse_args()
     binary, injector = str(args.binary.resolve()), str(args.injector.resolve())
     screenshots = args.screenshots.resolve() if args.screenshots else None
@@ -352,10 +450,10 @@ def main():
         # Preserve explicitly selected fixture tools: sudo's secure_path must
         # not silently replace a modern compositor with the system version.
         command = ["sudo", "unshare", "--mount", "--propagation", "private", "sh", "-eu", "-c",
-                   'mount -t tmpfs tmpfs /tmp; chmod 1777 /tmp; exec setpriv --reuid="$1" --regid="$2" --init-groups env HOME="$3" PATH="$9" "$4" "$5" --isolated --binary "$6" --injector "$7" ${8:+--screenshots} ${8:+"$8"}',
+                   'mount -t tmpfs tmpfs /tmp; chmod 1777 /tmp; exec setpriv --reuid="$1" --regid="$2" --init-groups env HOME="$3" PATH="$9" "$4" "$5" --isolated --binary "$6" --injector "$7" ${8:+--screenshots} ${8:+"$8"} ${10:+--region-only}',
                    "sh", str(os.getuid()), str(os.getgid()), str(Path.home()), sys.executable,
                    str(Path(__file__).resolve()), binary, injector, str(screenshots) if screenshots else "",
-                   os.environ["PATH"]]
+                   os.environ["PATH"], "1" if args.region_only else ""]
         subprocess.run(command, check=True)
         return
     with tempfile.TemporaryDirectory(prefix="captures-native-wayland-") as temporary:
@@ -442,7 +540,9 @@ def main():
                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE)
             services.append(pointer)
             ready(pointer)
-            host_cases(binary, pointer, root, env, bus, front, store, saver, screenshots)
+            if not args.region_only:
+                host_cases(binary, pointer, root, env, bus, front, store, saver, screenshots)
+            region_cases(binary, pointer, root, env, bus, store, screenshots)
         except Exception:
             log.flush()
             print((root / "services.log").read_text(errors="replace"), file=sys.stderr)

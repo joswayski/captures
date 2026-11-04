@@ -63,6 +63,26 @@ and primary labels are semibold, the lede is capped at 60ch with
 Tauri and wgpu, idle and hovered, were compared side by side. AppKit is
 covered by the hosted macOS workflow only. Physical-host acceptance remains open.
 
+Wayland now supports Region screenshots, following shipping's portal-backed
+Region overlay. **Screenshot Region** unmaps Captures' windows, runs any
+configured countdown, then takes one Screenshot-portal still. The still fills a
+fullscreen, compositor-placed selector that uses the shared region `Selector`,
+and the confirmed selection is cropped from that still in shared Rust
+(`acquire_portal_region_still` and `persist_portal_region`) and saved as a
+Region capture. The portal reports no output geometry, so a multi-output still
+is letterboxed into the selector's output; the crop always maps back onto the
+still. Escape or closing the selector cancels without saving. Unlike X11, the
+countdown runs before the still rather than after the selection, because the
+selection is drawn over that still. A unit test crops asymmetric pixels at 2×
+and rejects stale and empty selections. The private-Sway smoke
+(`wayland_native_capture_smoke.py --region-only`) drags over a
+coordinate-encoded desktop in both appearances, checks the exact 300×200 crop
+and corner pixels, and checks that cancelling saves nothing. Region recording
+on Wayland remains unavailable. Physical GNOME/KDE acceptance remains open.
+Known, not caused by this slice: after any screenshot started from the tray on
+Wayland, the History root window stays unmapped (Preferences remaps), even when
+reopened from the tray. Captures started from History's own button restore it.
+
 The screenshot editor viewport now matches shipping on both hosts. Fit keeps
 shipping's 28 px around the image (`(clientWidth - 56) / width`). The canvas
 draws `.screenshot-canvas-surface`'s 1 px `--border` ring and `--shadow-lg`. An

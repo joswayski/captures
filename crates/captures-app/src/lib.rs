@@ -647,6 +647,63 @@ pub fn capture_portal_screenshot(
     persist_portal_screenshot(root, generation, &image, mode, capture_flow::commit)
 }
 
+/// Acquire the frozen desktop still that a Wayland region selection draws
+/// over, like shipping's portal-backed Region overlay. Nothing is persisted:
+/// [`persist_portal_region`] crops and publishes the confirmed selection.
+/// `Ok(None)` is portal or local cancellation.
+#[cfg(target_os = "linux")]
+pub fn acquire_portal_region_still(generation: u64) -> Result<Option<RgbaImage>, Error> {
+    if !capture_flow::is_current(generation) {
+        return Ok(None);
+    }
+    if !captures_session::capture_session_available() {
+        capture_flow::cancel(generation);
+        return Err(CaptureError::SessionUnavailable.into());
+    }
+    let cancelled = || !capture_flow::is_current(generation);
+    Ok(captures_capture::portal_screenshot(
+        PORTAL_SCREENSHOT_TIMEOUT,
+        cancelled,
+    )?)
+}
+
+/// Crop a confirmed Wayland selection from its portal still and persist it as
+/// a Region capture. `rect` is in the selector's logical units; `scale` maps
+/// them to still pixels. An empty crop fails without touching History.
+#[cfg(target_os = "linux")]
+pub fn persist_portal_region(
+    root: &Path,
+    generation: u64,
+    still: &RgbaImage,
+    rect: selection::Rect,
+    scale: f64,
+) -> Result<Option<Artifact>, Error> {
+    // A lock can race the selection. Fail closed before making History durable.
+    if !captures_session::capture_session_available() {
+        capture_flow::cancel(generation);
+        return Err(CaptureError::SessionUnavailable.into());
+    }
+    persist_portal_region_with(root, generation, still, rect, scale, capture_flow::commit)
+}
+
+#[cfg(target_os = "linux")]
+fn persist_portal_region_with(
+    root: &Path,
+    generation: u64,
+    still: &RgbaImage,
+    rect: selection::Rect,
+    scale: f64,
+    commit: impl FnOnce(u64) -> bool,
+) -> Result<Option<Artifact>, Error> {
+    let crop = rect.to_physical(scale, still.width(), still.height());
+    if !scale.is_finite() || scale <= 0. || crop.width == 0 || crop.height == 0 {
+        return Err(CaptureError::Backend("The selected region is empty.".into()).into());
+    }
+    let image =
+        image::imageops::crop_imm(still, crop.x, crop.y, crop.width, crop.height).to_image();
+    persist_portal_screenshot(root, generation, &image, CaptureMode::Region, commit)
+}
+
 #[cfg(target_os = "linux")]
 fn persist_portal_screenshot(
     root: &Path,
@@ -1279,6 +1336,45 @@ mod tests {
             .is_err()
         );
         assert_eq!(fs::read(missing).unwrap(), b"not a history directory");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn portal_region_crops_scaled_selection_from_the_still() {
+        // Each pixel encodes its own coordinates, so a shifted, transposed or
+        // unscaled crop cannot match.
+        let still = RgbaImage::from_fn(8, 6, |x, y| image::Rgba([x as u8, y as u8, 7, 255]));
+        let rect = selection::Rect {
+            x: 1.,
+            y: 0.5,
+            width: 1.5,
+            height: 2.,
+        };
+        let root = tempfile::tempdir().unwrap();
+        assert!(
+            persist_portal_region_with(root.path(), 3, &still, rect, 2., |generation| generation
+                == 4)
+            .unwrap()
+            .is_none(),
+            "a stale selection must not persist"
+        );
+        assert_eq!(root.path().read_dir().unwrap().count(), 0);
+        let artifact = persist_portal_region_with(root.path(), 4, &still, rect, 2., |_| true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(artifact.entry.mode, Some(CaptureMode::Region));
+        let saved = image::open(&artifact.image_path).unwrap().to_rgba8();
+        assert_eq!(saved.dimensions(), (3, 4));
+        assert_eq!(saved.get_pixel(0, 0).0, [2, 1, 7, 255]);
+        assert_eq!(saved.get_pixel(2, 3).0, [4, 4, 7, 255]);
+
+        let empty = selection::Rect {
+            x: 7.9,
+            y: 1.,
+            width: 4.,
+            height: 1.,
+        };
+        assert!(persist_portal_region_with(root.path(), 4, &still, empty, 2., |_| true).is_err());
     }
 
     #[cfg(target_os = "linux")]
