@@ -361,7 +361,7 @@ def main():
             command.append("--sync")
         run(*command, "--window", editor, str(x), str(y), *tail)
 
-    def resize_editor(width, height, *tail):
+    def resize_editor(width, height, *tail, fit_inset=True):
         # Full-size geometry fixtures use odd client heights so an even-height
         # document's centered Fit origin lands on an integer device pixel. They
         # predate the full-width export bar: add its collapsed 80px so the canvas
@@ -374,6 +374,12 @@ def main():
         # inspector's growth so the canvas keeps its historical width.
         if width > 760:
             width += INSPECTOR_GROWTH
+        # They also predate shipping's Fit inset (28px a side, 20px beyond the
+        # former 8px margin): grow both axes so Fit keeps its historical scale.
+        if fit_inset and height > 540:
+            height += 40
+        if fit_inset and width > 760:
+            width += 40
         run("xdotool", "windowsize", "--sync", editor, str(width), str(height), *map(str, tail))
 
     def prepare_wide_fixture_viewport(name):
@@ -4918,7 +4924,7 @@ def main():
 
         # 896 (986 with the wider sidebar) keeps the header clear of its
         # font-measured label threshold.
-        resize_editor(896, 700)
+        resize_editor(896, 700, fit_inset=False)
         # Viewport state is host-only. Exercise anchored wheel zoom and an
         # ordered middle-button pan before the coordinate-sensitive fixtures.
         shot(editor, f"viewport-before-{args.appearance}")
@@ -5033,7 +5039,7 @@ def main():
         if args.zoom_only:
             # With spare width AND height, Fit keeps the 640×360 source at 1×.
             # An uncapped fit would paint beyond both independently checked edges.
-            resize_editor(1180, 900, "sleep", ".3")
+            resize_editor(1180, 900, "sleep", ".3", fit_inset=False)
             shot(editor, "viewport-fit-no-upscale")
             surface = (245, 245, 247) if args.appearance == "light" else (16, 16, 20)
             # Client 1180×900 minus the rail, inspector and central-panel margins
