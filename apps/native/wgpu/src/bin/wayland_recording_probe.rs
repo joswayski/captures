@@ -99,7 +99,7 @@ fn run() -> Result<(), String> {
     let started = Instant::now();
     let is_current = || cancel_after.is_none_or(|duration| started.elapsed() < duration);
     let mut session = RecordingSession::prepare(recovery_root, options, None)?;
-    session.start(false, is_current)?;
+    session.start(false, is_current, None)?;
     println!(
         "{}",
         serde_json::json!({"event": "recording", "target": session.snapshot().options.target})
@@ -138,7 +138,7 @@ fn run() -> Result<(), String> {
         if session.snapshot().elapsed_ms != snapshot.elapsed_ms {
             return Err("Paused recording elapsed time changed.".into());
         }
-        session.start(false, is_current)?; // A new grant, never a persistent restore token.
+        session.start(false, is_current, None)?; // A new grant, never a persistent restore token.
         record_until(&mut session, duration_ms + 300)?;
     }
     if scenario == "restart" {
@@ -146,7 +146,7 @@ fn run() -> Result<(), String> {
         if !session.manifest().segments.is_empty() || session.snapshot().elapsed_ms != 0 {
             return Err("Restart retained the previous take.".into());
         }
-        session.start(false, is_current)?;
+        session.start(false, is_current, None)?;
         record_until(&mut session, duration_ms + 300)?;
     }
     let tools = MediaToolchain::from_command_names();

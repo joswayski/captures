@@ -1,12 +1,16 @@
 use std::{
     path::PathBuf,
-    sync::mpsc::{self, Receiver, Sender},
+    sync::{
+        Arc,
+        mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender},
+    },
     thread,
+    time::Duration,
 };
 
 use captures_capture::DisplayDescriptor;
 use captures_media::CancelToken;
-use captures_recording::{AudioDevice, RecordingOptions, RecordingSessionSnapshot};
+use captures_recording::{AudioDevice, CaptureRect, RecordingOptions, RecordingSessionSnapshot};
 use captures_recording_platform::{FinalizedRecording, RecordingSession};
 use eframe::egui;
 
@@ -100,6 +104,42 @@ pub enum Event {
         result: Result<RecordingSessionSnapshot, String>,
     },
     Retired,
+    /// A portal Region recording's first granted frame. The worker blocks its
+    /// start until `reply` carries a rectangle in frame pixels, `None`, or is
+    /// dropped (both cancel), or the capture generation is cancelled.
+    SelectRegion {
+        generation: u64,
+        frame: Arc<image::RgbaImage>,
+        reply: SyncSender<Option<CaptureRect>>,
+    },
+}
+
+/// Ask the UI thread for a Region over `frame` and wait for its answer.
+fn select_region(
+    events: &Sender<Event>,
+    ctx: &egui::Context,
+    generation: u64,
+    frame: &image::RgbaImage,
+) -> Option<CaptureRect> {
+    let (reply, answer) = mpsc::sync_channel(1);
+    events
+        .send(Event::SelectRegion {
+            generation,
+            frame: Arc::new(frame.clone()),
+            reply,
+        })
+        .ok()?;
+    ctx.request_repaint_of(egui::ViewportId::ROOT);
+    loop {
+        if !captures_app::capture_flow::is_current(generation) {
+            return None;
+        }
+        match answer.recv_timeout(Duration::from_millis(50)) {
+            Ok(rect) => return rect,
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => return None,
+        }
+    }
 }
 
 pub struct MutationFailure {
@@ -182,9 +222,13 @@ impl Worker {
                                     snapshot: None,
                                 })
                             },
-                            |session| match session.start(exclude_captures_app, || {
-                                captures_app::capture_flow::is_current(generation)
-                            }) {
+                            |session| match session.start(
+                                exclude_captures_app,
+                                || captures_app::capture_flow::is_current(generation),
+                                Some(&|frame: &image::RgbaImage| {
+                                    select_region(&events, &ctx, generation, frame)
+                                }),
+                            ) {
                                 Ok(snapshot) => Ok(snapshot),
                                 Err(error) => Err(MutationFailure {
                                     error,

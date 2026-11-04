@@ -694,7 +694,8 @@ requires externally ending the granted stream. `--duration-ms` defaults to 450;
 `--cancel-after-ms` cancels consent/start or discards an active session. Both probes
 accept `--target display|window` (default display) and reject DISPLAY. Portal sessions
 serialize `{"type":"portal_display"}` or `{"type":"portal_window"}` without
-monitor/window IDs or origins; dimensions come only from validated pixel frames. Cursor
+monitor/window IDs or origins (a host Region adds only its stream-pixel
+`selection` and the frame size it was chosen on); dimensions come only from validated pixel frames. Cursor
 pixels are portal-owned, and unsupported click/keystroke overlays are rejected.
 
 Passing `--recording-binary` repeats both targets' protocol cases through the session,
@@ -728,9 +729,11 @@ shares only the selected window; each resume/restart obtains fresh consent and
 can select a different window. Unsupported backends fail visibly without display
 fallback, retaining a failed empty take for Retry/Delete.
 Linux display capture includes the recording controls in video. Hide is available only with a
-working tray restoration path; the HUD states when it is unavailable. Screenshots
-during recording, region targeting and click/keystroke overlays are not
-supported on Wayland. Window placement after remapping is compositor-controlled.
+working tray restoration path; the HUD states when it is unavailable.
+Click/keystroke overlays are not supported on Wayland. A Region recording
+selects on the display grant's first frame, counts down after selection and
+crops that stream; its selection is reused for later segments. Window placement
+after remapping is compositor-controlled.
 
 ```sh
 PATH="$compositor:$PATH" /usr/bin/python3 apps/native/wayland_recording_host_smoke.py \
@@ -739,6 +742,9 @@ PATH="$compositor:$PATH" /usr/bin/python3 apps/native/wayland_recording_host_smo
   --wlr-backend "$backend" --pipewire-daemon "$pipewire" \
   --output "$HOME/.cache/native-wayland-recording-new"
 ```
+
+Add `--region-only` to run only the tray Region cases (selector cancel, and a
+300×200 drag over a coordinate-encoded desktop checked in the decoded MP4).
 
 Use a new disposable output directory outside `/tmp` and the video fixture's pinned
 backend, compositor and private daemon.
@@ -773,8 +779,9 @@ first placing a preview. **Restore** is disabled with a platform limitation tool
 Screenshot commands honor the configured delay in the shared fixed-glass,
 compositor-placed countdown. Focused Escape/close cancels before consent. The host
 keeps its hidden viewport alive until the native unmap acknowledgement, then
-removes it after portal completion. Region screenshots fail explicitly;
-display/window recording uses the controls path above.
+removes it after portal completion. Region screenshots select on a portal
+still; Region recording selects on the granted display stream's first frame
+and then counts down. Display/window recording uses the controls path above.
 
 The granted Window screenshot shortcut and tray **Screenshot Window** request
 only ScreenCast source type 2, with portal v3+ and an explicit matching

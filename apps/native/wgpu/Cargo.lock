@@ -981,6 +981,7 @@ dependencies = [
  "captures-recording-xcap",
  "chrono",
  "file-id",
+ "image",
  "serde",
  "serde_json",
  "sha2",

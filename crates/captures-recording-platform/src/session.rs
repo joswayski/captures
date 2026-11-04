@@ -14,7 +14,9 @@ use captures_recording::{
 };
 use serde::Serialize;
 
-use crate::{NativeRecordingSegment, StartFailure, recovery::RecoveryLease, start_segment};
+use crate::{
+    NativeRecordingSegment, RegionSelector, StartFailure, recovery::RecoveryLease, start_segment,
+};
 
 #[derive(Debug, Serialize)]
 pub struct FinalizedRecording {
@@ -147,12 +149,21 @@ impl RecordingSession {
     /// cancelled resume leaves completed segments paused for stop/finalization.
     /// An engine that cannot open fails an initial start (hosts offer Retry
     /// recording) but leaves a resumed take paused with the error.
+    /// `select_region` is used only by a portal Region without a selection;
+    /// the chosen selection is persisted so later segments reuse it.
     pub fn start(
         &mut self,
         exclude_captures_app: bool,
         is_current: impl Fn() -> bool,
+        select_region: Option<&RegionSelector<'_>>,
     ) -> Result<RecordingSessionSnapshot, String> {
-        self.start_with(exclude_captures_app, is_current, start_segment)
+        self.start_with(
+            exclude_captures_app,
+            is_current,
+            |options, path, display, exclude, is_current| {
+                start_segment(options, path, display, exclude, is_current, select_region)
+            },
+        )
     }
 
     fn start_with(
@@ -224,6 +235,7 @@ impl RecordingSession {
         let now = now_ms();
         let (width, height) = segment.dimensions();
         let prepare = (|| {
+            self.persist_portal_region(&segment)?;
             let relative = |sidecar: Option<(PathBuf, i64)>| -> Result<_, String> {
                 sidecar
                     .map(|(path, offset)| {
@@ -281,7 +293,15 @@ impl RecordingSession {
         exclude_captures_app: bool,
         is_current: impl Fn() -> bool,
     ) -> Result<RecordingSessionSnapshot, String> {
-        self.set_microphone_muted_with(muted, exclude_captures_app, is_current, start_segment)
+        // A reopened Region segment reuses its persisted selection.
+        self.set_microphone_muted_with(
+            muted,
+            exclude_captures_app,
+            is_current,
+            |options, path, display, exclude, is_current| {
+                start_segment(options, path, display, exclude, is_current, None)
+            },
+        )
     }
 
     fn set_microphone_muted_with(
@@ -609,6 +629,26 @@ impl RecordingSession {
         self.store.save(&self.manifest).map_err(string)
     }
 
+    /// Store a first segment's Region selection in the manifest options, so
+    /// resume, restart, microphone reopen and recovery crop the same area.
+    fn persist_portal_region(&mut self, segment: &NativeRecordingSegment) -> Result<(), String> {
+        #[cfg(target_os = "linux")]
+        if let captures_recording::RecordingTarget::PortalRegion { selection: None } =
+            self.manifest.options.target
+        {
+            let selection = segment
+                .portal_region_selection()
+                .ok_or("Region recording started without a selection")?;
+            let mut options = self.manifest.options.clone();
+            options.target = captures_recording::RecordingTarget::PortalRegion {
+                selection: Some(selection),
+            };
+            return self.persist_options(options);
+        }
+        let _ = segment;
+        Ok(())
+    }
+
     fn persist_options(&mut self, options: RecordingOptions) -> Result<(), String> {
         let now = now_ms();
         self.coordinator
@@ -729,6 +769,7 @@ mod tests {
         for target in [
             RecordingTarget::PortalDisplay,
             RecordingTarget::PortalWindow,
+            RecordingTarget::PortalRegion { selection: None },
         ] {
             options.target = target;
             assert!(
@@ -915,7 +956,7 @@ mod tests {
                 .is_err()
         );
         assert_eq!(
-            session.start(false, || false).unwrap_err(),
+            session.start(false, || false, None).unwrap_err(),
             "Recording cancelled"
         );
         assert_eq!(session.snapshot().state, RecordingState::Discarded);
@@ -968,7 +1009,7 @@ mod tests {
         let sentinel = session.directory.join("completed-media");
         std::fs::write(&sentinel, b"preserve prior take").unwrap();
         assert_eq!(
-            session.start(false, || false).unwrap_err(),
+            session.start(false, || false, None).unwrap_err(),
             "Recording cancelled"
         );
         assert_eq!(session.snapshot().state, RecordingState::Paused);
@@ -1077,7 +1118,7 @@ mod tests {
         );
 
         assert_eq!(
-            session.start(false, || false).unwrap_err(),
+            session.start(false, || false, None).unwrap_err(),
             "Recording cancelled"
         );
         assert_eq!(session.manifest, before);
@@ -1395,7 +1436,7 @@ mod tests {
                 .unwrap();
         let replaced_path = restarted.directory.join("segment-000.mp4");
         set_background("#c02040");
-        restarted.start(false, || true).unwrap();
+        restarted.start(false, || true, None).unwrap();
         thread::sleep(Duration::from_millis(350));
         restarted.pause().unwrap();
         assert!(restarted.snapshot().elapsed_ms > 0);
@@ -1406,7 +1447,7 @@ mod tests {
         assert!(!replaced_path.exists());
 
         set_background("#2070c0");
-        restarted.start(false, || true).unwrap();
+        restarted.start(false, || true, None).unwrap();
         thread::sleep(Duration::from_millis(350));
         assert!(restarted.snapshot().elapsed_ms > 0);
         let running_restart = restarted.restart().unwrap();
@@ -1415,7 +1456,7 @@ mod tests {
         assert!(!replaced_path.exists());
 
         set_background("#20a050");
-        restarted.start(false, || true).unwrap();
+        restarted.start(false, || true, None).unwrap();
         thread::sleep(Duration::from_millis(350));
         restarted.pause().unwrap();
         let pixel = first_pixel(&replaced_path);
@@ -1430,11 +1471,11 @@ mod tests {
         for (index, color) in ["#c02040", "#2070c0"].into_iter().enumerate() {
             set_background(color);
             assert_eq!(
-                session.start(false, || true).unwrap().state,
+                session.start(false, || true, None).unwrap().state,
                 RecordingState::Recording
             );
             assert!(
-                session.start(false, || true).is_err(),
+                session.start(false, || true, None).is_err(),
                 "duplicate Start must not open another engine"
             );
             thread::sleep(Duration::from_millis(350));
@@ -1474,10 +1515,14 @@ mod tests {
             let calls = Cell::new(0);
             assert_eq!(
                 session
-                    .start(false, || {
-                        calls.set(calls.get() + 1);
-                        after_open && calls.get() == 1
-                    })
+                    .start(
+                        false,
+                        || {
+                            calls.set(calls.get() + 1);
+                            after_open && calls.get() == 1
+                        },
+                        None
+                    )
                     .unwrap_err(),
                 "Recording cancelled"
             );
@@ -1683,7 +1728,7 @@ mod tests {
         let mut failing =
             RecordingSession::prepare(root.path().into(), options(&display), display.clone())
                 .unwrap();
-        failing.start(false, || true).unwrap();
+        failing.start(false, || true, None).unwrap();
         thread::sleep(Duration::from_millis(200));
         let manifest_path = failing.directory.join("manifest.json");
         std::fs::remove_file(&manifest_path).unwrap();
@@ -1709,10 +1754,14 @@ mod tests {
         let calls = Cell::new(0);
         assert_eq!(
             cancelled
-                .start(false, || {
-                    calls.set(calls.get() + 1);
-                    calls.get() == 1
-                })
+                .start(
+                    false,
+                    || {
+                        calls.set(calls.get() + 1);
+                        calls.get() == 1
+                    },
+                    None
+                )
                 .unwrap_err(),
             "Recording cancelled"
         );
