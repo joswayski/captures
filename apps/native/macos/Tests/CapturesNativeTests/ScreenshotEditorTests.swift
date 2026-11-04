@@ -1392,7 +1392,9 @@ final class ScreenshotEditorTests: XCTestCase {
             waitUntil(timeout: ScreenshotEditorController.exportConfirmationDuration + 2) {
                 copy.title == "Copy image"
             }
-            XCTAssertNil(copy.icon)
+            // Shipping's Copy image keeps its copy icon once the confirmation ends.
+            if case .shipping(let name)? = copy.icon { XCTAssertEqual(name, "copy") }
+            else { XCTFail("Copy image returns to the shared copy icon") }
             XCTAssertTrue(worker.requests.isEmpty)
         }
     }
