@@ -79,9 +79,20 @@ and rejects stale and empty selections. The private-Sway smoke
 coordinate-encoded desktop in both appearances, checks the exact 300×200 crop
 and corner pixels, and checks that cancelling saves nothing. Region recording
 on Wayland remains unavailable. Physical GNOME/KDE acceptance remains open.
-Known, not caused by this slice: after any screenshot started from the tray on
-Wayland, the History root window stays unmapped (Preferences remaps), even when
-reopened from the tray. Captures started from History's own button restore it.
+
+Hidden windows now remap on wlroots before 0.16 (Sway 1.7, as shipped by
+Debian 12 and Ubuntu 22.04). After a NULL-buffer unmap, that wlroots never
+answers the remap's bufferless initial commit with a configure, so History stayed
+unmapped after every portal capture, whether started from the tray or from
+History, and reopening it could not help. The vendored winit remap now also
+requests the toplevel's last mapped maximized state (`set_maximized` or
+`unset_maximized`), which obliges a configure on every compositor. This matches
+Tauri, whose GTK windows remap there. The Region smoke's cancel case now checks
+that History is restored. Verified on headless Sway 1.7 and the pinned Sway 1.9
+fixture: the full `wayland_native_capture_smoke.py` (real, cancel, failure, lock,
+quit and Region cases, both appearances), `wayland_lifecycle_smoke.py` and
+`wayland_visibility_smoke.py`. Physical GNOME, KDE and Sway hosts are not
+verified. macOS, Windows and X11 are unaffected (Wayland-only code).
 
 The screenshot editor viewport now matches shipping on both hosts. Fit keeps
 shipping's 28 px around the image (`(clientWidth - 56) / width`). The canvas
@@ -273,8 +284,8 @@ List requests and held host dispatch. The 14-case private-Sway host suite covers
 dark/light normal/minimum UI, Configure/Retry, screenshot pixels, window-only failed
 recording cleanup and pending/event-heavy Quit. The same-role remap patch now rejects stale configures
 before SCTK ACK and stops rendering during drain; its immediate-hide/cancelled-remap
-pixel regression needs the fresh-configure compositor fix (Sway 1.9+).
-Sway 1.7 is unsupported; the pinned headless test fixture is not a desktop install.
+pixel regression passes on headless Sway 1.7 and 1.9 (see the wlroots 0.15 remap
+note); the pinned headless test fixture is not a desktop install.
 The hidden live root now declares children on its first UI pass even when settings
 load immediately; otherwise a quiet launch could consume the notice's one-shot
 paint request without creating it. Private-Sway lifecycle and real dark/light

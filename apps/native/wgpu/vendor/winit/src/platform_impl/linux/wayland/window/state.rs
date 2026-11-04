@@ -81,6 +81,9 @@ pub struct WindowState {
     initially_configured: bool,
     show_after_unmap: bool,
 
+    /// Whether the last mapping was maximized, requested again on remap.
+    maximized_before_unmap: bool,
+
     /// The pointers observed on the window.
     pub pointers: Vec<Weak<ThemedPointer<WinitPointerData>>>,
 
@@ -226,6 +229,7 @@ impl WindowState {
             mapping_generation: 0,
             initially_configured: false,
             show_after_unmap: false,
+            maximized_before_unmap: false,
             max_inner_size: None,
             min_inner_size: MIN_WINDOW_SIZE,
             resize_increments: None,
@@ -682,8 +686,12 @@ impl WindowState {
             // The separate decoration object retains its mode across unmap.
             // Repeating set_mode is not part of the xdg_toplevel reset and
             // can arrange a retired container on older compositors.
-            if self.requested_maximized {
+            // Either request also obliges a configure. wlroots before 0.16 (Sway 1.7, as in
+            // Debian 12 and Ubuntu 22.04) never answers a remap's initial commit otherwise.
+            if self.requested_maximized || self.maximized_before_unmap {
                 self.window.set_maximized();
+            } else {
+                self.window.unset_maximized();
             }
             if let Some(output) = self.requested_fullscreen.as_ref() {
                 self.window.set_fullscreen(output.as_ref());
@@ -704,6 +712,8 @@ impl WindowState {
             if matches!(self.mapping, MappingState::InitiallyHidden | MappingState::Hidden | MappingState::Draining | MappingState::Unmapping) {
                 return None;
             }
+            self.maximized_before_unmap =
+                self.last_configure.as_ref().is_some_and(|configure| configure.is_maximized());
             self.mapping_generation = self.mapping_generation.wrapping_add(1);
             self.mapping = MappingState::Draining;
             self.frame_callback_state = FrameCallbackState::None;
