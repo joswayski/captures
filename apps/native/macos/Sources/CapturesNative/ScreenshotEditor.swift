@@ -2277,10 +2277,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         inspectorDivider.frame = NSRect(x: sidebarX - 3, y: top, width: 6,
                                         height: max(0, root.bounds.height - bar - top))
         let inspectorX = sidebarX + Self.panelInset
-        let previewX = railWidth + gap
-        previewPanel.frame = NSRect(x: previewX, y: top + gap,
-                                    width: max(0, sidebarX - tokens.number("s-6") - previewX),
-                                    height: max(0, root.bounds.height - bar - 2 * gap - top))
+        // Shipping's `.screenshot-canvas-viewport` fills its grid cell, from
+        // the rail to the sidebar and from the header to the export bar.
+        previewPanel.frame = NSRect(x: railWidth, y: top,
+                                    width: max(0, sidebarX - railWidth),
+                                    height: max(0, root.bounds.height - bar - top))
         if let recenterButton {
             recenterButton.frame.origin = NSPoint(
                 x: (previewPanel.bounds.width - recenterButton.frame.width) / 2, y: gap)
@@ -2547,8 +2548,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                                                 width: 640 - tokens.number("s-12"), height: 550))
         previewPanel.wantsLayer = true
         previewPanel.layer?.masksToBounds = true
-        previewPanel.layer?.cornerRadius = tokens.number("r-xl")
-        previewPanel.layer?.borderWidth = 1
         previewPanel.autoresizingMask = [.width, .height]
         root.addSubview(previewPanel)
         viewportBounds = previewPanel.bounds.insetBy(dx: 18, dy: 18)
@@ -7394,8 +7393,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         dropGuideView.glassFill = tokens.color("glass-strong")
         dropGuideView.glassText = tokens.color("glass-text")
         drawOverlay.needsDisplay = true
-        preview.superview?.layer?.backgroundColor = tokens.color("surface-sunken").cgColor
-        preview.superview?.layer?.borderColor = tokens.color("border").cgColor
+        // `--editor-canvas`: `--surface-sunken`, or the deeper `--n-5` well in light mode.
+        let well = tokens.color(dark ? "surface-sunken" : "n-5").cgColor
+        viewportInput.layer?.backgroundColor = well
+        viewportInput.superview?.layer?.backgroundColor = well
         canvasSurface.layer?.backgroundColor = tokens.color("border").cgColor
     }
 

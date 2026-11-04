@@ -2547,11 +2547,21 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
             )
         })
     });
+    // `.screenshot-sidebar` is `--editor-panel` with a 1 px `--editor-border`
+    // left edge, painted below with the resize highlight instead of egui's
+    // separator, which strokes hovered and dragged edges in the text color.
+    let parent_style = ui.style().clone();
+    let widgets = &mut ui.style_mut().visuals.widgets;
+    widgets.hovered.fg_stroke = egui::Stroke::NONE;
+    widgets.active.fg_stroke = egui::Stroke::NONE;
     egui::Panel::right("editor-geometry")
         .resizable(true)
+        .show_separator_line(false)
+        .frame(egui::Frame::side_top_panel(&parent_style).fill(tokens.color("surface-raised")))
         .default_size(inspector_default)
         .size_range(280. ..=inspector_max)
         .show(ui, |ui| {
+            ui.set_style(parent_style.clone());
             // Intrinsic child minima must not grow the resizable column. The
             // child retains widget ids/focus; only the allocated host width is fixed.
             let rect = ui.available_rect_before_wrap();
@@ -2599,6 +2609,7 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
             }
             ui.allocate_exact_size(rect.size(), egui::Sense::hover());
         });
+    ui.set_style(parent_style);
     if let Some(policy) = focus_policy {
         ui.ctx()
             .options_mut(|options| options.input_options.surrender_focus_on = policy);
@@ -2663,141 +2674,170 @@ fn show(ui: &mut egui::Ui, tokens: &Tokens, view: &mut View, tx: &Sender<Job>) {
         });
     }
     chrome::show_tool_rail(ui, tokens, view);
-    egui::CentralPanel::default().show(ui, |ui| {
-        let texture = view
-            .drawing_preview
-            .as_ref()
-            .and_then(|preview| preview.texture.as_ref())
-            .or(view.texture.as_ref());
-        if let Some(texture) = texture {
-            let texture = texture.clone();
-            let available = ui.available_rect_before_wrap();
-            if view.viewport_area != Some(available) {
-                view.cancel_edit_gestures();
-                view.viewport_pan = None;
-                view.viewport_area = Some(available);
-            }
-            let size = texture.size_vec2();
-            view.viewport_image_size = Some(size);
-            let fit = fitted_image_rect(available, size);
-            let comparison_id = egui::Id::unique("screenshot-compression-comparison");
-            let intercepted = (view.compare_visible()
-                && !view.compare_suppressed()
-                && crate::compare_overlay::owns_pointer(ui.ctx(), comparison_id))
-                || handle_viewport_input(ui, view, available);
-            let preview = viewport_rect(view.viewport, fit, size).unwrap_or(fit);
-            canvas::receive_drops(ui.ctx(), view, Some(preview));
-            ui.allocate_rect(available, egui::Sense::hover());
-            // `.screenshot-canvas-surface`: `0 0 0 1px var(--border), var(--shadow-lg)`.
-            let surface = ui
-                .painter()
-                .with_clip_rect(available.intersect(ui.clip_rect()));
-            let dark = ui.visuals().dark_mode;
-            surface.add(crate::primitives::shadow_lg(dark).as_shape(preview, 0));
-            surface.rect_stroke(
-                preview,
-                0,
-                egui::Stroke::new(1., tokens.color("border")),
-                egui::StrokeKind::Outside,
-            );
-            surface.image(
-                texture.id(),
-                preview,
-                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
-                egui::Color32::WHITE,
-            );
-            let clip = available.intersect(ui.clip_rect());
-            let comparing = view.compare_visible() && !view.compare_suppressed();
-            if comparing {
-                crate::compare_overlay::paint_after(
-                    ui,
+    // `--editor-canvas`: `--surface-sunken`, or the deeper `--n-5` well in light mode.
+    let well = tokens.color(if ui.visuals().dark_mode {
+        "surface-sunken"
+    } else {
+        "n-5"
+    });
+    egui::CentralPanel::default()
+        .frame(egui::Frame::central_panel(ui.style()).fill(well))
+        .show(ui, |ui| {
+            let texture = view
+                .drawing_preview
+                .as_ref()
+                .and_then(|preview| preview.texture.as_ref())
+                .or(view.texture.as_ref());
+            if let Some(texture) = texture {
+                let texture = texture.clone();
+                let available = ui.available_rect_before_wrap();
+                if view.viewport_area != Some(available) {
+                    view.cancel_edit_gestures();
+                    view.viewport_pan = None;
+                    view.viewport_area = Some(available);
+                }
+                let size = texture.size_vec2();
+                view.viewport_image_size = Some(size);
+                let fit = fitted_image_rect(available, size);
+                let comparison_id = egui::Id::unique("screenshot-compression-comparison");
+                let intercepted = (view.compare_visible()
+                    && !view.compare_suppressed()
+                    && crate::compare_overlay::owns_pointer(ui.ctx(), comparison_id))
+                    || handle_viewport_input(ui, view, available);
+                let preview = viewport_rect(view.viewport, fit, size).unwrap_or(fit);
+                canvas::receive_drops(ui.ctx(), view, Some(preview));
+                ui.allocate_rect(available, egui::Sense::hover());
+                // `.screenshot-canvas-surface`: `0 0 0 1px var(--border), var(--shadow-lg)`.
+                let surface = ui
+                    .painter()
+                    .with_clip_rect(available.intersect(ui.clip_rect()));
+                let dark = ui.visuals().dark_mode;
+                surface.add(crate::primitives::shadow_lg(dark).as_shape(preview, 0));
+                surface.rect_stroke(
                     preview,
-                    clip,
-                    view.output.as_ref().map(|(texture, _)| texture),
-                    view.compare_split,
+                    0,
+                    egui::Stroke::new(1., tokens.color("border")),
+                    egui::StrokeKind::Outside,
                 );
-            }
-            if view.crop_previous.is_some() && !view.pending && view.inline.is_none() {
-                show_crop(ui, tokens, view, available, preview, intercepted);
-            }
-            let layer_owned = view.tool_shows_transform_chrome()
-                && view.shape_drag.is_none()
-                && view.inline.is_none()
-                && !view.pending
-                && !view.close_requested
-                && show_layer_canvas(ui, tokens, view, tx, available, preview, intercepted);
-            if view.section == Section::Draw
-                && view.inline.is_none()
-                && !view.pending
-                && !view.close_requested
-            {
-                show_shape(
+                surface.image(
+                    texture.id(),
+                    preview,
+                    egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
+                    egui::Color32::WHITE,
+                );
+                let clip = available.intersect(ui.clip_rect());
+                let comparing = view.compare_visible() && !view.compare_suppressed();
+                if comparing {
+                    crate::compare_overlay::paint_after(
+                        ui,
+                        preview,
+                        clip,
+                        view.output.as_ref().map(|(texture, _)| texture),
+                        view.compare_split,
+                    );
+                }
+                if view.crop_previous.is_some() && !view.pending && view.inline.is_none() {
+                    show_crop(ui, tokens, view, available, preview, intercepted);
+                }
+                let layer_owned = view.tool_shows_transform_chrome()
+                    && view.shape_drag.is_none()
+                    && view.inline.is_none()
+                    && !view.pending
+                    && !view.close_requested
+                    && show_layer_canvas(ui, tokens, view, tx, available, preview, intercepted);
+                if view.section == Section::Draw
+                    && view.inline.is_none()
+                    && !view.pending
+                    && !view.close_requested
+                {
+                    show_shape(
+                        ui,
+                        tokens,
+                        view,
+                        tx,
+                        available,
+                        preview,
+                        intercepted || layer_owned,
+                    );
+                } else {
+                    view.wand_loupe = None;
+                }
+                if view.section == Section::Layers
+                    && view.crop_previous.is_none()
+                    && !view.close_requested
+                    && !view.drop.hovering
+                {
+                    canvas::show_expand(ui, tokens, view, tx, available, preview);
+                }
+                canvas::paint_trim_preview(ui, tokens, view, available, preview);
+                canvas::paint_drop_guide(ui, tokens, view, available, preview);
+                text_input::show_with_inspector(
                     ui,
                     tokens,
                     view,
-                    tx,
                     available,
                     preview,
-                    intercepted || layer_owned,
+                    inspector_resizing,
                 );
-            } else {
-                view.wand_loupe = None;
-            }
-            if view.section == Section::Layers
-                && view.crop_previous.is_none()
-                && !view.close_requested
-                && !view.drop.hovering
-            {
-                canvas::show_expand(ui, tokens, view, tx, available, preview);
-            }
-            canvas::paint_trim_preview(ui, tokens, view, available, preview);
-            canvas::paint_drop_guide(ui, tokens, view, available, preview);
-            text_input::show_with_inspector(
-                ui,
-                tokens,
-                view,
-                available,
-                preview,
-                inspector_resizing,
-            );
-            if comparing && view.compare_visible() {
-                let badges = view.compare_badges();
-                let drawing = view.section == Section::Draw;
-                let error = view.compare_error.clone();
-                let mut split = view.compare_split;
-                let shown = crate::compare_overlay::show_chrome(
-                    ui,
-                    tokens,
-                    crate::compare_overlay::Overlay {
-                        id: comparison_id,
-                        frame: preview,
-                        clip,
-                        after: view.output.as_ref().map(|(texture, _)| texture),
-                        badges,
-                        processing: view.compare_pending,
-                        error: error.as_deref(),
-                        range_enabled: !drawing && view.crop_previous.is_none(),
-                        after_hint: drawing.then_some(compare::AFTER_HINT),
-                    },
-                    &mut split,
-                );
-                view.compare_split = split;
-                if shown.dismissed {
-                    view.compare_dismissed = true;
+                if comparing && view.compare_visible() {
+                    let badges = view.compare_badges();
+                    let drawing = view.section == Section::Draw;
+                    let error = view.compare_error.clone();
+                    let mut split = view.compare_split;
+                    let shown = crate::compare_overlay::show_chrome(
+                        ui,
+                        tokens,
+                        crate::compare_overlay::Overlay {
+                            id: comparison_id,
+                            frame: preview,
+                            clip,
+                            after: view.output.as_ref().map(|(texture, _)| texture),
+                            badges,
+                            processing: view.compare_pending,
+                            error: error.as_deref(),
+                            range_enabled: !drawing && view.crop_previous.is_none(),
+                            after_hint: drawing.then_some(compare::AFTER_HINT),
+                        },
+                        &mut split,
+                    );
+                    view.compare_split = split;
+                    if shown.dismissed {
+                        view.compare_dismissed = true;
+                    }
                 }
+                chrome::recenter(ui, tokens, view, available, preview);
+            } else if view.pending {
+                canvas::receive_drops(ui.ctx(), view, None);
+                ui.centered_and_justified(|ui| {
+                    ui.spinner();
+                });
+            } else {
+                ui.centered_and_justified(|ui| {
+                    ui.label("Could not open this screenshot. See the error below.");
+                });
             }
-            chrome::recenter(ui, tokens, view, available, preview);
-        } else if view.pending {
-            canvas::receive_drops(ui.ctx(), view, None);
-            ui.centered_and_justified(|ui| {
-                ui.spinner();
-            });
-        } else {
-            ui.centered_and_justified(|ui| {
-                ui.label("Could not open this screenshot. See the error below.");
-            });
+        });
+    // After the canvas, so the 4 px `.screenshot-sidebar-resize::after` accent
+    // can straddle the edge: shown while hovered, focused or dragged.
+    if let Some(state) = egui::containers::panel::PanelState::load(ui.ctx(), inspector_id) {
+        let rect = state.outer_rect;
+        let x = rect.left() + 0.5;
+        ui.painter().vline(
+            x,
+            rect.y_range(),
+            egui::Stroke::new(1., tokens.color("border-subtle")),
+        );
+        let highlighted = ui.read_response(resize_id).is_some_and(|response| {
+            response.hovered() || response.has_focus() || response.dragged()
+        });
+        if highlighted {
+            ui.painter().rect_filled(
+                egui::Rect::from_x_y_ranges(x - 2. ..=x + 2., rect.y_range()),
+                0,
+                tokens.color("theme-accent"),
+            );
         }
-    });
+    }
     view.drain_inline(tx);
     if canvas::drain_drops(view, tx) {
         ui.ctx().request_repaint();
@@ -5523,6 +5563,7 @@ fn show_export_row(
                 .add_sized(
                     [stem, height],
                     egui::TextEdit::singleline(&mut view.filename)
+                        .background_color(tokens.color("surface-field"))
                         .align(egui::Align2::LEFT_CENTER)
                         .hint_text("Filename"),
                 )
@@ -5573,60 +5614,49 @@ fn show_export_row(
             }
             let copied = view.copied_until.is_some();
             let label = if copied { "Copied" } else { "Copy image" };
-            let mut copy = egui::Button::new(RichText::new(label).color(if copied {
-                tokens.color("positive-text")
-            } else {
-                tokens.color("text")
-            }));
+            let ink = tokens.color(if copied { "positive-text" } else { "text" });
+            // Shipping's 14 px `copy` / `check` icon sits `--s-3` before the label.
+            let glyph = egui::IdSalt::new("screenshot-export-copy-icon");
+            let mut copy = egui::Button::new((
+                egui::Atom::custom(glyph, egui::Vec2::splat(14.)),
+                RichText::new(label).color(ink),
+            ))
+            .gap(tokens.number("s-3"))
+            .min_size(egui::vec2(EXPORT_COPY_WIDTH, height));
             if copied {
                 copy = copy.fill(tokens.color("positive-surface"));
             }
-            let response = ui
-                .add_sized([EXPORT_COPY_WIDTH, height], copy)
+            let shown = copy.atom_ui(ui);
+            if let Some(rect) = shown.rect(glyph) {
+                let icon = if copied { "check" } else { "copy" };
+                crate::capture_controls::paint_icon(ui.painter(), icon, rect, 1.8, ink);
+            }
+            let response = shown
+                .response
                 .on_hover_text("Copy the edited image to the clipboard. Does not save a file.");
             response.widget_info(|| {
-                egui::WidgetInfo::labeled(
-                    egui::WidgetType::Button,
-                    response.enabled(),
-                    if copied { "Copied" } else { "Copy image" },
-                )
+                egui::WidgetInfo::labeled(egui::WidgetType::Button, response.enabled(), label)
             });
-            if copied {
-                // The bundled UI font has no check glyph; draw the shipping check icon.
-                let text = ui.fonts_mut(|fonts| {
-                    fonts
-                        .layout_no_wrap(
-                            label.into(),
-                            egui::TextStyle::Button.resolve(ui.style()),
-                            egui::Color32::WHITE,
-                        )
-                        .size()
-                        .x
-                });
-                let center = response.rect.center() - egui::vec2(text / 2. + 10., 0.);
-                crate::capture_controls::paint_icon(
-                    ui.painter(),
-                    "check",
-                    egui::Rect::from_center_size(center, egui::Vec2::splat(16.)),
-                    1.8,
-                    tokens.color("positive-text"),
-                );
-            }
             if response.clicked() {
                 view.copy(tx);
             }
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let plan_ready = bar.is_some_and(|bar| bar.plan.is_some() && bar.error.is_none());
-            let save = egui::Button::new(
+            let save_ink = tokens.color("theme-accent-ink");
+            let save_glyph = egui::IdSalt::new("screenshot-export-save-icon");
+            let save = egui::Button::new((
+                egui::Atom::custom(save_glyph, egui::Vec2::splat(14.)),
                 RichText::new(if view.export_job == Some(ExportJob::Save) {
                     "Saving…"
                 } else {
                     "Save"
                 })
                 .strong()
-                .color(tokens.color("theme-accent-ink")),
-            )
+                .color(save_ink),
+            ))
+            .gap(tokens.number("s-3"))
+            .min_size(egui::vec2(EXPORT_SAVE_WIDTH, height))
             .fill(tokens.color("theme-accent"));
             let hint = bar.map_or_else(String::new, |bar| bar.hint.clone());
             let save_ready = ready
@@ -5637,7 +5667,19 @@ fn show_export_row(
             let response = ui
                 .add_enabled_ui(
                     save_ready && plan_ready && view.folder_picker.is_none(),
-                    |ui| ui.add_sized([EXPORT_SAVE_WIDTH, height], save),
+                    |ui| {
+                        let shown = save.atom_ui(ui);
+                        if let Some(rect) = shown.rect(save_glyph) {
+                            crate::capture_controls::paint_icon(
+                                ui.painter(),
+                                "save",
+                                rect,
+                                1.8,
+                                save_ink,
+                            );
+                        }
+                        shown.response
+                    },
                 )
                 .inner
                 .on_hover_text(&hint);

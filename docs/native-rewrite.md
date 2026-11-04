@@ -74,6 +74,18 @@ zoom, canvas-interaction and inspector-resize smokes pass; edge probes now
 expect the ring rather than bare surface. AppKit is covered by the hosted macOS
 workflow only. Physical-host acceptance remains open.
 
+The screenshot editor's canvas well uses shipping's `--editor-canvas` on both
+hosts: `--surface-sunken`, or the deeper `--n-5` in light mode. Before, it was
+`--surface-canvas` in both appearances. On AppKit, the canvas now fills its
+column like `.screenshot-canvas-viewport` instead of a rounded, bordered card.
+On wgpu, the inspector is `--surface-raised` with a 1 px `--border-subtle`
+left edge and shipping's 4 px accent bar while the divider is hovered, focused
+or dragged. egui's own separator used to stroke that edge almost black. The
+filename field is `--surface-field`, and Copy image and Save show their 14 px
+shipping icons. 1280×800 light and dark renders match the Tauri harness in
+well, inspector, divider and field pixels. AppKit is covered by the hosted
+macOS workflow only.
+
 Numeric fields follow shipping's `NumberInput` draft contract (#1210). While
 typing, empty and out-of-range drafts stay visible and only finite in-range
 values publish, so clearing a text size and typing 12 no longer applies 8
