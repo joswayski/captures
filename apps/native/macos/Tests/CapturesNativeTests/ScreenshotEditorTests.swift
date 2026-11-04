@@ -1544,12 +1544,13 @@ final class ScreenshotEditorTests: XCTestCase {
         controller.drawOverlay.begin(at: NSPoint(x: 120, y: 140))
         XCTAssertNotNil(controller.drawOverlay.startPoint)
         controller.window.setContentSize(NSSize(width: 1200, height: 600))
-        waitUntil { controller.drawOverlay.startPoint == nil && input.bounds.width == 800
-            && controller.presentedImageRect.midX == 400 + CGFloat(viewport.panX) }
+        // An unset inspector follows the window to 320pt above 1040pt.
+        waitUntil { controller.drawOverlay.startPoint == nil && input.bounds.width == 760
+            && controller.presentedImageRect.midX == 380 + CGFloat(viewport.panX) }
         controller.drawOverlay.end(at: NSPoint(x: 260, y: 220))
         XCTAssertEqual(controller.viewport, viewport)
-        XCTAssertEqual(controller.presentedImageRect.midX, 400 + CGFloat(viewport.panX), accuracy: 1e-7)
-        // 1200×600 leaves an 800×368 viewport between the restored-draft banner,
+        XCTAssertEqual(controller.presentedImageRect.midX, 380 + CGFloat(viewport.panX), accuracy: 1e-7)
+        // 1200×600 leaves a 760×368 viewport between the restored-draft banner,
         // the 52pt header and the 80pt export bar.
         XCTAssertEqual(controller.presentedImageRect.midY, 184 + CGFloat(viewport.panY), accuracy: 1e-7)
         let point = NSPoint(x: 160, y: 180)
@@ -3697,10 +3698,10 @@ final class ScreenshotEditorTests: XCTestCase {
 
         controller.selectDrawTool(.ellipse)
         let overlay = controller.drawOverlay
-        // The retained 280pt inspector leaves a 600×408 viewport. Fit scales
-        // the 1280×640 canvas by 15/32, leaving 54pt above and below it.
+        // The 280pt inspector leaves a 600×408 viewport. Fit keeps shipping's
+        // 28pt a side, scaling the 1280×640 canvas by 580/1280 = 0.453125.
         XCTAssertEqual(overlay.presentedImageRect,
-                       NSRect(x: 0, y: 54, width: 600, height: 300))
+                       NSRect(x: 10, y: 59, width: 580, height: 290))
         overlay.begin(at: NSPoint(x: 500, y: 275))
         overlay.drag(to: NSPoint(x: 60, y: 5))
         XCTAssertTrue(worker.requests.isEmpty, "transient drawing never mutates the document")
@@ -3711,10 +3712,10 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(request["shape"] as? String, "ellipse")
         let start = try XCTUnwrap(request["start"] as? [String: CGFloat])
         let end = try XCTUnwrap(request["end"] as? [String: CGFloat])
-        XCTAssertEqual(try XCTUnwrap(start["x"]), 1_066.667, accuracy: 0.001)
-        XCTAssertEqual(try XCTUnwrap(start["y"]), 471.467, accuracy: 0.001)
-        XCTAssertEqual(try XCTUnwrap(end["x"]), 128, accuracy: 0.001)
-        XCTAssertEqual(try XCTUnwrap(end["y"]), -104.533, accuracy: 0.001,
+        XCTAssertEqual(try XCTUnwrap(start["x"]), 1_081.379, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(start["y"]), 476.690, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(end["x"]), 110.345, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(end["y"]), -119.172, accuracy: 0.001,
                        "preview whitespace maps to off-canvas document coordinates")
         XCTAssertEqual((request["style"] as? [String: Any])?["color"] as? String, "#FF3B5C")
         XCTAssertEqual(request["opacity"] as? Double, 100)
@@ -3811,7 +3812,7 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(request["operation"] as? String, "create_closed_shape")
             XCTAssertEqual(request["shape"] as? String, title.lowercased())
             let end = try XCTUnwrap(request["end"] as? [String: CGFloat])
-            XCTAssertEqual(try XCTUnwrap(end["y"]), -104.533, accuracy: 0.001)
+            XCTAssertEqual(try XCTUnwrap(end["y"]), -119.172, accuracy: 0.001)
             overlay.begin(at: NSPoint(x: 300, y: 200)); overlay.end(at: NSPoint(x: 300, y: 350))
             overlay.begin(at: NSPoint(x: 300, y: 200)); overlay.end(at: NSPoint(x: 400, y: 200))
             overlay.begin(at: NSPoint(x: 200, y: 200)); overlay.drag(to: NSPoint(x: 260, y: 260))

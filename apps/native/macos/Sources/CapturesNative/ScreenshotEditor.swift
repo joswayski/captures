@@ -2251,6 +2251,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             // Reattach the halo after both action frames have been resized.
             if let applyCropButton { applyCropHalo.surround(applyCropButton) }
             layerTable.tableColumns.first?.width = inspectorContentWidth
+            // NSTableView grows with its column but never shrinks back, so a
+            // narrower inspector would leave the table wider than its clip.
+            layerTable.setFrameSize(NSSize(width: inspectorContentWidth, height: layerTable.frame.height))
             layoutLayerInspectorTail()
             publishDrawToolControls()
         }
