@@ -1356,7 +1356,7 @@ final class ScreenshotEditorTests: XCTestCase {
                 XCTAssertEqual(bar.frame, NSRect(x: 0, y: size.height - 80, width: size.width, height: 80))
                 XCTAssertEqual(disclosure.frame, NSRect(x: 16, y: 32, width: widths.disclosure, height: 36))
                 XCTAssertEqual(copy.frame, NSRect(x: 16 + widths.disclosure + 8 + widths.filename + 8 + 72 + 8,
-                                                  y: 33, width: 96, height: 34))
+                                                  y: 33, width: 112, height: 34))
                 XCTAssertEqual(save.frame, NSRect(x: size.width - 112, y: 33, width: 96, height: 34))
                 XCTAssertLessThan(copy.frame.maxX, save.frame.minX - 140, "room for the new-file switch")
                 for index in 0..<3 {
