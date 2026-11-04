@@ -464,7 +464,7 @@ fn inject(destination: &str, click: Option<[u32; 4]>) {
     queue.roundtrip(&mut State).unwrap();
     let clock = std::time::Instant::now();
     let timestamp = || clock.elapsed().as_millis() as u32;
-    let mut perform = |click: Option<[u32; 4]>, scroll: Option<f64>| {
+    let mut perform = |click: Option<[u32; 4]>, scroll: Option<f64>, drag_to: Option<[u32; 2]>| {
         let start_x = if destination == "reverse" { 570 } else { 180 };
         let [x, y, width, height] = click.unwrap_or([start_x, 150, 900, 500]);
         pointer.motion_absolute(timestamp(), x, y, width, height);
@@ -482,7 +482,18 @@ fn inject(destination: &str, click: Option<[u32; 4]>) {
         pointer.frame();
         queue.roundtrip(&mut State).unwrap();
         thread::sleep(Duration::from_millis(150));
-        if click.is_none() {
+        if let Some([to_x, to_y]) = drag_to {
+            // A held primary drag in eight steps, for selection surfaces.
+            for step in 1..=8 {
+                let along = |from: u32, to: u32| {
+                    (i64::from(from) + (i64::from(to) - i64::from(from)) * step / 8) as u32
+                };
+                pointer.motion_absolute(timestamp(), along(x, to_x), along(y, to_y), width, height);
+                pointer.frame();
+                queue.roundtrip(&mut State).unwrap();
+                thread::sleep(Duration::from_millis(40));
+            }
+        } else if click.is_none() {
             // Cross the drag threshold while still inside the source. GTK
             // needs to start its Wayland grab before the pointer leaves it.
             let threshold_x = if destination == "reverse" { 540 } else { 210 };
@@ -519,6 +530,11 @@ fn inject(destination: &str, click: Option<[u32; 4]>) {
         println!("READY");
         for line in io::stdin().lock().lines() {
             let line = line.unwrap();
+            // `drag x y width height to_x to_y` holds the primary button.
+            let (dragging, line) = match line.strip_prefix("drag ") {
+                Some(rest) => (true, rest.to_owned()),
+                None => (false, line),
+            };
             let mut values = line.split_whitespace();
             let coordinates = std::array::from_fn(|_| {
                 values
@@ -527,10 +543,22 @@ fn inject(destination: &str, click: Option<[u32; 4]>) {
                     .parse::<u32>()
                     .expect("coordinate")
             });
+            if dragging {
+                let to = std::array::from_fn(|_| {
+                    values
+                        .next()
+                        .expect("to_x to_y")
+                        .parse::<u32>()
+                        .expect("coordinate")
+                });
+                perform(Some(coordinates), None, Some(to));
+                println!("DRAGGED");
+                continue;
+            }
             let scroll = values
                 .next()
                 .map(|value| value.parse().expect("scroll distance"));
-            perform(Some(coordinates), scroll);
+            perform(Some(coordinates), scroll, None);
             println!(
                 "{}",
                 if scroll.is_some() {
@@ -541,7 +569,7 @@ fn inject(destination: &str, click: Option<[u32; 4]>) {
             );
         }
     } else {
-        perform(click, None);
+        perform(click, None, None);
     }
 }
 

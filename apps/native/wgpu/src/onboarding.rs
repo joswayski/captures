@@ -9,7 +9,7 @@ use eframe::egui::{
 
 use crate::{accessibility, tokens::Tokens};
 
-pub const WAYLAND_NOTE: &str = "Wayland screenshots and display recording use your desktop portal. Native region/window selection is not available yet.";
+pub const WAYLAND_NOTE: &str = "Wayland screenshots and recordings use your desktop portal. Region recording is not available yet.";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Target {

@@ -232,7 +232,10 @@ before adding it to History. This requires portal v3+ with window-sharing suppor
 unsupported backends fail without substituting a display. Window capture through
 the resident native GNOME/KDE UI and physical acceptance remain unverified;
 see [verification limits](apps/native/gnome-window-verification.md).
-Region capture remains unavailable.
+**Screenshot Region** takes one portal still of the desktop, shows it in a
+fullscreen, compositor-placed selector, and saves the selected area from that
+still. With several monitors the still is letterboxed into the selector's
+output. Region recording remains unavailable.
 Portal policy controls consent; window screenshots require the configured cursor
 mode, while display stills keep backend-controlled cursor inclusion. Separate no-window diagnostics
 also exercise GIF sessions. Restored window positions are compositor-controlled.
@@ -1050,7 +1053,7 @@ denied capture opens the native permission recovery: Restart & Retry on macOS, o
 screen or optional microphone access explicitly. Done returns to the workspace
 even after denial or a check failure, without restarting or closing editors.
 Windows/X11 need no upfront screen grant; microphone status is not reported there.
-Wayland window screenshots require a window-sharing portal; region capture remains unavailable. Physical
+Wayland window screenshots require a window-sharing portal; region recording remains unavailable. Physical
 permission-revocation/retry acceptance is still open.
 Post-save source adoption, remaining editor layout/interaction parity,
 physical setup/login and installed-update acceptance remain open. Shared editor support is prerequisite work,

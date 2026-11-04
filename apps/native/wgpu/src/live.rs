@@ -125,6 +125,18 @@ enum Job {
         mode: captures_capture::CaptureMode,
         include_cursor: bool,
     },
+    #[cfg(target_os = "linux")]
+    PreparePortalRegion {
+        generation: u64,
+    },
+    #[cfg(target_os = "linux")]
+    PersistPortalRegion {
+        root: PathBuf,
+        generation: u64,
+        still: Arc<image::RgbaImage>,
+        rect: LogicalRect,
+        scale: f64,
+    },
     PrepareRegion {
         display_id: String,
         generation: u64,
@@ -221,6 +233,11 @@ enum Reply {
     PortalCaptured {
         generation: u64,
         result: Result<Option<Box<Artifact>>, String>,
+    },
+    #[cfg(target_os = "linux")]
+    PortalRegionPrepared {
+        generation: u64,
+        result: Result<Option<image::RgbaImage>, String>,
     },
     WindowPrepared {
         generation: u64,
@@ -1694,7 +1711,25 @@ struct PortalScreenshot {
     submitted: bool,
     countdown: Option<captures_app::capture_flow::Countdown>,
     countdown_hidden_frame: Option<u64>,
+    /// Region mode: the frozen portal still while the user selects over it.
+    region: Option<PortalRegion>,
 }
+
+/// Shipping's Wayland Region overlay: the portal still fills a fullscreen,
+/// compositor-placed window and the selection is cropped from that still.
+#[cfg(target_os = "linux")]
+struct PortalRegion {
+    still: Arc<image::RgbaImage>,
+    texture: egui::TextureHandle,
+    selector: Arc<Mutex<Selector>>,
+    /// Written by the selector viewport: the action, with the selection in the
+    /// selector's logical units and its scale to still pixels.
+    action: Arc<Mutex<Option<PortalRegionAction>>>,
+}
+
+/// A selector action, with the selection and its scale to still pixels.
+#[cfg(target_os = "linux")]
+type PortalRegionAction = (selector::Action, Option<(LogicalRect, f64)>);
 
 #[cfg(target_os = "linux")]
 impl PortalScreenshot {
@@ -1978,6 +2013,27 @@ impl Live {
                             generation,
                             mode,
                             include_cursor,
+                        )
+                        .map(|artifact| artifact.map(Box::new))
+                        .map_err(|error| error.to_string()),
+                    },
+                    #[cfg(target_os = "linux")]
+                    Job::PreparePortalRegion { generation } => Reply::PortalRegionPrepared {
+                        generation,
+                        result: captures_app::acquire_portal_region_still(generation)
+                            .map_err(|error| error.to_string()),
+                    },
+                    #[cfg(target_os = "linux")]
+                    Job::PersistPortalRegion {
+                        root,
+                        generation,
+                        still,
+                        rect,
+                        scale,
+                    } => Reply::PortalCaptured {
+                        generation,
+                        result: captures_app::persist_portal_region(
+                            &root, generation, &still, rect, scale,
                         )
                         .map(|artifact| artifact.map(Box::new))
                         .map_err(|error| error.to_string()),
@@ -3295,8 +3351,11 @@ impl Live {
                 captures_capture::CaptureMode::Display
             }
             CaptureRequest::Window => captures_capture::CaptureMode::Window,
+            CaptureRequest::Region => captures_capture::CaptureMode::Region,
             _ => {
-                self.capture_failed("Wayland region capture is not available yet. Use a desktop-portal display or window screenshot.".into());
+                self.capture_failed(
+                    "This capture is not available through the desktop portal.".into(),
+                );
                 self.history_requested = true;
                 return;
             }
@@ -3373,6 +3432,7 @@ impl Live {
             submitted: false,
             countdown,
             countdown_hidden_frame: None,
+            region: None,
         });
         self.capture_in_flight = true;
         self.status = "Preparing desktop-portal screenshot…".into();
@@ -3398,6 +3458,36 @@ impl Live {
                     input.raw.viewports.get(id).and_then(|info| info.visible())).collect::<Vec<_>>())
             })
         });
+        if let Some(region) = &portal.region {
+            let action = region.action.lock().unwrap().take();
+            let generation = portal.flow.generation();
+            match action {
+                _ if !portal.flow.is_current() => {
+                    self.finish_portal_screenshot(ctx, false);
+                    self.status = "Screenshot cancelled.".into();
+                }
+                Some((selector::Action::Confirm, Some((rect, scale)))) => {
+                    let still = Arc::clone(&region.still);
+                    portal.region = None;
+                    self.pending += 1;
+                    let _ = self.tx.send(Job::PersistPortalRegion {
+                        root: self.root.clone(),
+                        generation,
+                        still,
+                        rect,
+                        scale,
+                    });
+                    self.status = "Saving region…".into();
+                }
+                Some((selector::Action::Cancel, _)) => {
+                    captures_app::capture_flow::cancel(generation);
+                    self.finish_portal_screenshot(ctx, false);
+                    self.status = "Screenshot cancelled.".into();
+                }
+                _ => {}
+            }
+            return;
+        }
         if portal.submitted {
             return;
         }
@@ -3463,12 +3553,20 @@ impl Live {
         if hidden {
             portal.submitted = true;
             self.pending += 1;
-            let _ = self.tx.send(Job::CapturePortal {
-                root: self.root.clone(),
-                generation: portal.flow.generation(),
-                mode: portal.mode,
-                include_cursor: portal.include_cursor,
-            });
+            let _ = self
+                .tx
+                .send(if portal.mode == captures_capture::CaptureMode::Region {
+                    Job::PreparePortalRegion {
+                        generation: portal.flow.generation(),
+                    }
+                } else {
+                    Job::CapturePortal {
+                        root: self.root.clone(),
+                        generation: portal.flow.generation(),
+                        mode: portal.mode,
+                        include_cursor: portal.include_cursor,
+                    }
+                });
             self.status = if portal.mode == captures_capture::CaptureMode::Window {
                 "Waiting for the desktop window-sharing portal…"
             } else {
@@ -6078,6 +6176,51 @@ impl Live {
                         Ok(None) => self.status = "Screenshot cancelled.".into(),
                         Err(error) if recording => self.hud_action_failed(ctx, error),
                         Err(error) => self.capture_failed(error),
+                    }
+                }
+                #[cfg(target_os = "linux")]
+                Reply::PortalRegionPrepared { generation, result } => {
+                    self.pending = self.pending.saturating_sub(1);
+                    let Some(portal) = self.portal_screenshot.as_mut().filter(|portal| {
+                        portal.flow.generation() == generation
+                            && portal.submitted
+                            && portal.region.is_none()
+                    }) else {
+                        continue;
+                    };
+                    match result {
+                        Ok(Some(still)) if portal.flow.is_current() => {
+                            let texture = ctx.load_texture(
+                                format!("portal-region-{generation}"),
+                                egui::ColorImage::from_rgba_unmultiplied(
+                                    [still.width() as usize, still.height() as usize],
+                                    still.as_raw(),
+                                ),
+                                egui::TextureOptions::LINEAR,
+                            );
+                            portal.region = Some(PortalRegion {
+                                still: Arc::new(still),
+                                texture,
+                                selector: Arc::default(),
+                                action: Arc::default(),
+                            });
+                            self.status = "Select a region. Press Escape to cancel.".into();
+                            request_hidden_root_ui(ctx);
+                        }
+                        Ok(_) => {
+                            self.finish_portal_screenshot(ctx, false);
+                            self.status = "Screenshot cancelled.".into();
+                        }
+                        Err(error) => {
+                            let recording = portal.recording;
+                            self.finish_portal_screenshot(ctx, false);
+                            if recording {
+                                self.hud_action_failed(ctx, error);
+                            } else {
+                                self.capture_failed(error);
+                                self.history_requested = true;
+                            }
+                        }
                     }
                 }
                 Reply::RegionCaptured { generation, result } => {
@@ -8917,6 +9060,64 @@ impl Live {
                 },
             );
         }
+        #[cfg(target_os = "linux")]
+        if let Some(portal) = &self.portal_screenshot
+            && let Some(region) = &portal.region
+        {
+            let t = t.clone();
+            let generation = portal.flow.generation();
+            let texture = region.texture.clone();
+            let selector = Arc::clone(&region.selector);
+            let action = Arc::clone(&region.action);
+            let still = texture.size_vec2();
+            // The portal supplies no output geometry, so the compositor places
+            // this fullscreen window. A multi-output still is letterboxed into
+            // it; selections always map back onto the still itself.
+            ctx.show_viewport_deferred(
+                egui::ViewportId::from_hash_of(("portal-region-selector", generation)),
+                egui::ViewportBuilder::default()
+                    .with_title("Captures Region Selection")
+                    .with_fullscreen(true)
+                    .with_decorations(false)
+                    .with_taskbar(false),
+                move |ui, _| {
+                    let root = ui.ctx().clone();
+                    let send = |chosen| {
+                        *action.lock().unwrap() = Some(chosen);
+                        root.request_repaint_of(egui::ViewportId::ROOT);
+                    };
+                    if ui.input(|input| input.viewport().close_requested()) {
+                        send((selector::Action::Cancel, None));
+                        return;
+                    }
+                    let area = ui.max_rect();
+                    ui.painter().rect_filled(area, 0, egui::Color32::BLACK);
+                    let scale = (area.width() / still.x).min(area.height() / still.y);
+                    let fit = egui::Rect::from_center_size(area.center(), still * scale);
+                    let bounds = captures_app::selection::Bounds {
+                        width: f64::from(fit.width()),
+                        height: f64::from(fit.height()),
+                    };
+                    let shown = ui
+                        .scope_builder(egui::UiBuilder::new().max_rect(fit), |ui| {
+                            selector
+                                .lock()
+                                .unwrap()
+                                .show(ui, &t, Some(&texture), Some(bounds))
+                        })
+                        .inner;
+                    match shown {
+                        Some(selector::Action::Confirm) => {
+                            let rect = selector.lock().unwrap().rect();
+                            let pixels = f64::from(still.x) / bounds.width;
+                            send((selector::Action::Confirm, rect.map(|rect| (rect, pixels))));
+                        }
+                        Some(selector::Action::Cancel) => send((selector::Action::Cancel, None)),
+                        None => {}
+                    }
+                },
+            );
+        }
         let mut countdown_declared = false;
         #[cfg(target_os = "linux")]
         if let Some(portal) = &self.portal_screenshot
@@ -10912,6 +11113,7 @@ mod tests {
                 submitted: true,
                 countdown: None,
                 countdown_hidden_frame: None,
+                region: None,
             });
             let now = Instant::now();
             let portal = live.portal_screenshot.as_mut().unwrap();
@@ -10976,6 +11178,7 @@ mod tests {
             submitted: true,
             countdown: None,
             countdown_hidden_frame: None,
+            region: None,
         });
         live.finish_capture(&ctx, false);
         assert!(
