@@ -392,14 +392,17 @@ def main():
         # the initial drag can be missed; reset the actual divider through
         # its real double-click action before trusting Fit coordinates.
         def divider():
+            # Off the divider: its hover accent straddles the edge.
+            run("xdotool", "mousemove", "--sync", "--window", editor, "100", "200", "sleep", ".2")
             shot(editor, name)
             row = run("convert", str(output / f"{name}.png"), "-crop",
                       f"{width}x1+0+{height - 100}", "-depth", "8", "rgb:-")
             edges = [x for x in range(100, width - 10)
                      if row[x * 3:x * 3 + 3] != row[300:303]]
-            assert len(edges) == 1, ("inspector divider", edges)
-            return edges[0]
-        edge = divider()
+            # The raised inspector differs from the canvas well from its edge on.
+            # A frame from before the resize repaint has no such single edge.
+            return edges[0] if edges and edges == list(range(edges[0], width - 10)) else None
+        edge = wait(divider, "inspector divider")
         if edge != width - INSPECTOR_WIDTH:
             window_move((edge, 200), "click", "--repeat", "2", "--delay", "120", "1")
             wait(lambda: divider() == width - INSPECTOR_WIDTH, "fixture 320px inspector")
@@ -453,7 +456,7 @@ def main():
     # the ⋯ button. Offsets are from its top-left corner; annotation layers have
     # no 132 px Transform section. The popover shifts up to stay on screen.
     LAYER_MENU = {
-        "blend": (140, 70), "opacity": (143, 142),
+        "blend": (140, 70), "opacity": (141, 142),  # Opacity: the track midpoint.
         "rotate-left": (80, 222), "rotate-right": (208, 222),
         "flip-horizontal": (80, 266), "flip-vertical": (208, 266),
         "bring-front": (100, 354), "send-back": (100, 390),
@@ -1151,13 +1154,16 @@ def main():
             size = window_size()
 
             def check_width(name, width, y=None):
+                # Off the divider: its hover accent straddles the edge.
+                run("xdotool", "mousemove", "--sync", "--window", editor, "100", "200", "sleep", ".2")
                 shot(editor, name)
                 row = run("convert", str(output / f"{name}.png"), "-crop",
                           f"{size[0]}x1+0+{y if y is not None else size[1] - 100}", "-depth", "8", "rgb:-")
                 background = row[300:303]
                 edges = [x for x in range(100, size[0] - 10)
                          if row[x * 3:x * 3 + 3] != background]
-                assert edges == [size[0] - width], (name, edges, width)
+                # The raised inspector differs from the canvas well from its edge on.
+                assert edges == list(range(size[0] - width, size[0] - 10)), (name, edges, width)
 
             def resize_from(width, target):
                 x = size[0] - width
