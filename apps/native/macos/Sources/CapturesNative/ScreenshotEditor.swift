@@ -1507,6 +1507,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private let layersPanel = Surface()
     private let layerContent = Surface()
     private let layerCount = NSTextField(labelWithString: "0")
+    /// Shipping's `.screenshot-layers-heading span` pill. A label draws its
+    /// text at the top of its frame, so the count is centered inside this view.
+    private let layerCountPill = NSView()
     private let layerHeadingRule = Surface()
     private var addLayerButton: CaptureButton!
     private var drawHeading: NSTextField?
@@ -2449,9 +2452,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     /// Disclosure and filename widths: fixed actions first, then the disclosure
     /// grows to fit its summary, then the filename field takes what remains.
     static func exportWidths(_ width: CGFloat) -> (disclosure: CGFloat, filename: CGFloat) {
-        let fixed: CGFloat = 72 + 96 + 148 + 96 + 5 * 8
+        let fixed: CGFloat = 72 + 112 + 148 + 96 + 5 * 8
         let flexible = max(0, width - 32 - fixed)
-        let disclosure = min(210, max(150, flexible - 120))
+        let disclosure = min(210, max(144, flexible - 120))
         return (disclosure, min(320, max(120, flexible - disclosure)))
     }
 
@@ -2481,7 +2484,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         exportChevron.frame = NSRect(x: disclosure - 26, y: 9, width: 16, height: 18)
         outputFilename.frame = NSRect(x: 16 + disclosure + 8, y: rowY + 3, width: filename, height: 30)
         outputFormat.frame = NSRect(x: outputFilename.frame.maxX + 8, y: rowY + 3, width: 72, height: 30)
-        copyImageButton.frame = NSRect(x: outputFormat.frame.maxX + 8, y: rowY + 1, width: 96, height: 34)
+        copyImageButton.frame = NSRect(x: outputFormat.frame.maxX + 8, y: rowY + 1, width: 112, height: 34)
         exportSaveButton.frame = NSRect(x: width - 16 - 96, y: rowY + 1, width: 96, height: 34)
         saveAsNewSwitch.frame = NSRect(x: exportSaveButton.frame.minX - 8 - 140, y: rowY + 8, width: 38, height: 20)
         saveAsNewLabel.frame = NSRect(x: saveAsNewSwitch.frame.maxX + 4, y: rowY + 9, width: 98, height: 18)
@@ -3542,6 +3545,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             [weak self] in self?.chooseOutputDirectory()
         }
         changeOutputDirectoryButton.setAccessibilityLabel("Change save location")
+        // Shipping's "Change…" is a borderless text action beside the path.
+        changeOutputDirectoryButton.quiet = true
         outputFilename.setAccessibilityLabel("Saved filename")
         outputFilename.placeholderString = "Filename"
         outputFilename.delegate = self
@@ -3556,6 +3561,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             [weak self] in self?.copyEditedImage()
         }
         copyImageButton.toolTip = "Copy the edited image to the clipboard. Does not save a file."
+        copyImageButton.icon = .shipping("copy")
         showInFolderButton = button("Show in Folder", frame: .zero, parent: exportBar) {
             [weak self] in self?.revealSavedFile()
         }
@@ -3573,6 +3579,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         exportBar.addSubview(saveAsNewLabel)
         exportSaveButton = button("Save", frame: .zero, parent: exportBar) { [weak self] in self?.saveExport() }
         exportSaveButton.primary = true
+        exportSaveButton.icon = .shipping("save")
         updateOutputOptionControls()
     }
 
@@ -3591,12 +3598,16 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         layersPanel.addSubview(title)
         layerCount.font = .monospacedSystemFont(ofSize: tokens.number("text-2xs"), weight: .regular)
         layerCount.alignment = .center
-        layerCount.wantsLayer = true
-        layerCount.layer?.cornerRadius = 9.5
-        layerCount.frame = NSRect(x: title.frame.maxX + tokens.number("s-3"), y: (headingHeight - 19) / 2,
-                                  width: 19, height: 19)
+        layerCount.sizeToFit()
+        layerCountPill.wantsLayer = true
+        layerCountPill.layer?.cornerRadius = 9.5
+        layerCountPill.frame = NSRect(x: title.frame.maxX + tokens.number("s-3"), y: (headingHeight - 19) / 2,
+                                      width: 19, height: 19)
+        layerCount.frame = NSRect(x: 0, y: (19 - layerCount.frame.height) / 2,
+                                  width: 19, height: layerCount.frame.height)
         layerCount.setAccessibilityLabel("Layer count")
-        layersPanel.addSubview(layerCount)
+        layerCountPill.addSubview(layerCount)
+        layersPanel.addSubview(layerCountPill)
         addLayerButton = button("", frame: NSRect(x: Self.contentWidth - 30, y: (headingHeight - 30) / 2,
                                                   width: 30, height: 30),
                                 parent: layersPanel) { [weak self] in self?.chooseImage() }
@@ -7402,7 +7413,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private func publishLayerCount(_ count: Int) {
         layerCount.stringValue = "\(count)"
-        layerCount.frame.size.width = max(19, ceil(layerCount.attributedStringValue.size().width) + 8)
+        let width = max(19, ceil(layerCount.attributedStringValue.size().width) + 8)
+        layerCountPill.frame.size.width = width
+        layerCount.frame.size.width = width
     }
 
     private func restyleChrome() {
@@ -7431,7 +7444,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         railTip.layer?.borderColor = tokens.color("glass-border").cgColor
         railTip.textColor = tokens.color("glass-text")
         layerCount.textColor = tokens.color("text-subtle")
-        layerCount.layer?.backgroundColor = tokens.color("surface-sunken").cgColor
+        layerCountPill.layer?.backgroundColor = tokens.color("surface-sunken").cgColor
         layerHeadingRule.layer?.backgroundColor = border
         layerPropertiesRule.layer?.backgroundColor = border
         layerSectionRule.layer?.backgroundColor = border
