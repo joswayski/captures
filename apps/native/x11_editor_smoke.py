@@ -228,6 +228,9 @@ def main():
                      "-depth", "8", "rgb:-")
         assert len(actual) == 3 and max(abs(a - b) for a, b in zip(actual, image)) > 24, (name, x, y, actual)
 
+    # `--editor-canvas`: the deeper `--n-5` well in light mode, `--surface-sunken` in dark.
+    WELL = (224, 224, 231) if args.appearance == "light" else (11, 11, 14)
+
     def document_pixel(name, x, y, expected, tolerance=0):
         window, size, bar = shot_layouts[name]
         left, top, scale = fit_geometry(size, window, bar)
@@ -1121,7 +1124,7 @@ def main():
         prepare_fixture_inspector(editor)
         shot(editor, "editor-original")
         pixel("editor-original", 520, 600,
-              (245, 245, 247) if args.appearance == "light" else (16, 16, 20))
+              WELL)
 
         def type_text(value, delay=10):
             # xdotool type consumes all remaining arguments; do not chain keys after it.
@@ -4963,7 +4966,7 @@ def main():
         shot(editor, f"viewport-offscreen-{args.appearance}")
         viewport_center = (64 + (editor_width() - INSPECTOR_WIDTH - 8 - 64) // 2, 376)
         pixel(f"viewport-offscreen-{args.appearance}", *viewport_center,
-              (245, 245, 247) if args.appearance == "light" else (16, 16, 20))
+              WELL)
         topbar_click("recenter")
         shot(editor, f"viewport-recenter-{args.appearance}")
         pixel(f"viewport-recenter-{args.appearance}", *viewport_center, (40, 110, 166))
@@ -5009,7 +5012,7 @@ def main():
         outside_image("viewport-preset-50", 521, 310)
         # The plain surface shows beyond the canvas surface's `--shadow-lg`.
         pixel("viewport-preset-50", 140, 310,
-              (245, 245, 247) if args.appearance == "light" else (16, 16, 20))
+              WELL)
         topbar_click("zoom")
         click(editor, zoom_menu_x(), 152)  # 200% preset.
         shot(editor, "viewport-preset-200")
@@ -5041,7 +5044,7 @@ def main():
             # An uncapped fit would paint beyond both independently checked edges.
             resize_editor(1180, 900, "sleep", ".3", fit_inset=False)
             shot(editor, "viewport-fit-no-upscale")
-            surface = (245, 245, 247) if args.appearance == "light" else (16, 16, 20)
+            surface = WELL
             # Client 1180×900 minus the rail, inspector and central-panel margins
             # leaves x=64..942, y=60..892. Its center is (503,476), so the
             # 640×360 source spans x=183..823, y=296..656. Raster sample
