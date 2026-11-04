@@ -386,9 +386,9 @@ def region_cases(binary, pointer, root, env, bus, store, screenshots):
             if mode == "cancel":
                 subprocess.run(["swaymsg", f'[con_id={selector["id"]}] kill'], env=env, check=True,
                                stdout=subprocess.DEVNULL)
-                # A tray-started Wayland capture does not remap History yet
-                # (also true for Display). Check the selector closed instead.
                 wait(lambda: named("Captures Region Selection") is None, "cancelled selector closed")
+                # Like a confirmed capture, cancelling restores the History it hid.
+                wait(lambda: named("Capture History"), "History restored after cancel")
                 time.sleep(1)
                 assert set(history.glob("*/metadata.json")) == before, "cancelled region saved a capture"
                 print(json.dumps({"native_host": appearance, "case": "region-cancel", "new_artifacts": 0}),

@@ -20,9 +20,10 @@ drain sync. A second sync acknowledges unmapping. The custom xdg-surface dispatc
 filters stale configures before SCTK auto-ACK; the drain alone cannot exclude
 later compositor events. Show/hide during a bufferless remap retains its handshake.
 The persistent decoration object keeps its mode. Repeated set_mode can crash
-Sway 1.7's retired-container arrangement; that compositor also lacks the fresh
-initial-configure remap fix and is unsupported. The pinned headless-only Sway 1.9
-fixture exercises immediate present/hide, cancelled remaps and exact pixels.
+Sway 1.7's retired-container arrangement. wlroots before 0.16 (Sway 1.7) never
+answers a remap's initial commit, so the remap also requests the last mapped
+maximized state; either request obliges a configure. Headless Sway 1.7 and the
+pinned Sway 1.9 fixture exercise immediate present/hide, cancelled remaps and exact pixels.
 Completion reports `(accepted_copy, own_client, exact_source_window)`. The file
 must outlive completion. Source handling shares winit's connection and event
 queue: a second Wayland connection cannot use the original pointer serial.

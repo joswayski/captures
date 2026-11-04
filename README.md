@@ -243,8 +243,8 @@ Native Wayland global shortcuts use the desktop's GlobalShortcuts portal. The
 desktop chooses the available actions and keys; Preferences shows its returned
 bindings with Configure (portal v2+) or explicit Retry after failure. There is no
 X11 fallback or takeover of system screenshot keys. A granted action does not add
-an unsupported capture mode. Same-role window remapping needs a compositor with
-the fresh-configure fix (for Sway, use 1.9+); older Sway 1.7 is not supported.
+an unsupported capture mode. Hidden windows remap after a capture on older
+wlroots compositors too, such as Sway 1.7 (Debian 12, Ubuntu 22.04).
 Like the shipping app, the native workbenches open Capture History, Preferences and first-run setup as
 separate, resizable windows that reflow down to their minimum sizes. Native Preferences saves
 appearance, custom colors, and capture/media defaults through shared Rust logic
