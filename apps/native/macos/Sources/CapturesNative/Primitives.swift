@@ -766,6 +766,10 @@ final class TokenNumberField: NSTextField {
     var minimum: (() -> Double?) = { nil }
     var maximum: (() -> Double?) = { nil }
     var stepped: ((TokenNumberField) -> Void)?
+    /// Shipping `NumberInput`'s last committed value: what the field showed
+    /// when editing began, or its latest finite in-range draft. A blank draft
+    /// steps from it, and an empty or invalid commit restores it.
+    private(set) var committedText = ""
     let increaseHalf = TokenStepperHalf(up: true)
     let decreaseHalf = TokenStepperHalf(up: false)
     static let stepperWidth: CGFloat = 26
@@ -796,7 +800,12 @@ final class TokenNumberField: NSTextField {
         guard let tokens else { return }
         textColor = tokens.color("text").withAlphaComponent(isEnabled ? 1 : 0.5)
     }
-    override var stringValue: String { didSet { updateSteppers() } }
+    override var stringValue: String {
+        didSet {
+            if currentEditor() == nil { committedText = stringValue }
+            updateSteppers()
+        }
+    }
     override func setAccessibilityLabel(_ accessibilityLabel: String?) {
         super.setAccessibilityLabel(accessibilityLabel)
         let name = accessibilityLabel ?? ""
@@ -832,23 +841,50 @@ final class TokenNumberField: NSTextField {
         needsDisplay = true
     }
 
-    /// One shipping step from the current text, as if typed.
+    private static func finite(_ text: String) -> Double? {
+        Double(text.trimmingCharacters(in: .whitespaces)).flatMap { $0.isFinite ? $0 : nil }
+    }
+
+    private func clamped(_ value: Double) -> Double {
+        let lower = minimum().map { Swift.max($0, value) } ?? value
+        return maximum().map { Swift.min($0, lower) } ?? lower
+    }
+
+    /// One shipping step from the current text, as if typed. A blank or
+    /// invalid draft steps from the last committed value.
     func step(up: Bool) {
-        let text = currentEditor()?.string ?? stringValue
+        let typed = currentEditor()?.string ?? stringValue
+        let text = Self.finite(typed) == nil ? committedText : typed
         guard isEnabled, let next = ControlsBridge.step(text, up: up, min: minimum(), max: maximum())
         else { return }
         stringValue = next
         currentEditor()?.string = next
+        committedText = next
         stepped?(self)
     }
 
+    /// Shipping `NumberInput` commit (blur/Enter): a finite out-of-range
+    /// draft clamps to the bounds, and an empty or invalid one restores the
+    /// last committed value. Returns the text to show, or nil when the draft
+    /// already commits as typed.
+    func committedDraft() -> String? {
+        let text = currentEditor()?.string ?? stringValue
+        guard let value = Self.finite(text) else { return text == committedText ? nil : committedText }
+        let next = clamped(value)
+        guard next != value else { return nil }
+        return next == next.rounded() ? String(Int(next)) : String(next)
+    }
+
     override func becomeFirstResponder() -> Bool {
+        committedText = stringValue
         let accepted = super.becomeFirstResponder(); needsDisplay = true; return accepted
     }
     override func textDidEndEditing(_ notification: Notification) {
         super.textDidEndEditing(notification); needsDisplay = true; updateSteppers()
     }
     override func textDidChange(_ notification: Notification) {
+        let text = currentEditor()?.string ?? stringValue
+        if let value = Self.finite(text), clamped(value) == value { committedText = text }
         super.textDidChange(notification); updateSteppers()
     }
 

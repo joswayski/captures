@@ -244,6 +244,22 @@ final class PrimitivesTests: XCTestCase {
         XCTAssertFalse(field.increaseHalf.accessibilityPerformPress())
         field.step(up: false)
         XCTAssertEqual(steps, ["10", "9"])
+        // Shipping `NumberInput` drafts: a blank draft steps from the last
+        // committed value (not the minimum), and commit clamps or restores.
+        XCTAssertTrue(window.makeFirstResponder(field))
+        let editor = try XCTUnwrap(field.currentEditor())
+        editor.string = ""
+        field.step(up: true)
+        XCTAssertEqual(field.stringValue, "10")
+        editor.string = ""
+        XCTAssertEqual(field.committedDraft(), "10", "an empty commit restores the last value")
+        editor.string = "40"
+        XCTAssertEqual(field.committedDraft(), "10", "a finite draft clamps to the maximum")
+        editor.string = "-3"
+        XCTAssertEqual(field.committedDraft(), "0")
+        editor.string = "7"
+        XCTAssertNil(field.committedDraft(), "an in-range draft commits as typed")
+        window.makeFirstResponder(nil)
         XCTAssertEqual(field.focusRingType, .none)
         field.isEnabled = false
         XCTAssertTrue(field.increaseHalf.isHidden, "disabled fields hide their steppers")
