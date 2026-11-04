@@ -23,10 +23,16 @@ pub const GRID_GAP: f64 = 16.0;
 /// `.history-image-wrap` height plus its 1 px bottom border.
 pub const CARD_IMAGE_HEIGHT: f64 = 168.0;
 pub const CARD_DIVIDER: f64 = 1.0;
-/// `.history-card-body`: 12 px padding, date (18), 4 px gap, details (16), one
-/// optional dropped-frame line (4 + 16), 6 px action margin, a 32 px action row
-/// and 12 px padding. Every card reserves the warning line so rows stay aligned.
-pub const CARD_BODY_HEIGHT: f64 = 120.0;
+/// `.history-card-body` (`display: grid; gap: var(--s-2)`): 12 px padding, the
+/// date (20 with its 1 px padding-block), 4 px gap, details (14), 4 px gap plus
+/// the actions' 6 px margin, a 32 px action row and 12 px padding.
+pub const CARD_BODY_HEIGHT: f64 = 104.0;
+/// `.history-card-body time` and `> p` line boxes.
+pub const CARD_DATE_HEIGHT: f64 = 20.0;
+pub const CARD_LINE_HEIGHT: f64 = 14.0;
+/// A dropped-frame warning line (gap plus one line). It grows only its row,
+/// and moves only its own card's actions (`align-content: start`).
+pub const CARD_WARNING_EXTRA: f64 = 4.0 + CARD_LINE_HEIGHT;
 pub const CARD_HEIGHT: f64 = CARD_IMAGE_HEIGHT + CARD_DIVIDER + CARD_BODY_HEIGHT;
 /// Top of a card's action row. Cards in a grown row stretch (CSS grid rows fit
 /// their tallest card) but keep their actions here, like shipping.
@@ -763,8 +769,8 @@ mod tests {
             (wide.card_width + GRID_GAP, wide.row_stride())
         );
         assert_eq!(wide.visible_rows(0, 0.0, 500.0), 0..0);
-        assert_eq!(wide.visible_rows(100, 0.0, 300.0), 0..1);
-        assert_eq!(wide.visible_rows(100, 0.0, 400.0), 0..2);
+        assert_eq!(wide.visible_rows(100, 0.0, wide.row_stride() - 1.0), 0..1);
+        assert_eq!(wide.visible_rows(100, 0.0, wide.row_stride() + 1.0), 0..2);
         assert_eq!(
             wide.visible_rows(100, wide.row_stride() * 10.5, 10.0),
             10..11

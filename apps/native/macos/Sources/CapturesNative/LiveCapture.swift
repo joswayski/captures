@@ -915,15 +915,19 @@ final class LiveCaptureController: NSObject {
         let gap = tokens.number("s-3")
 
         let headingWidth = max(0, min(420, right - left))
-        backToPreferencesButton?.frame = NSRect(x: left, y: 24,
+        // `.capture-history { padding-top: var(--s-9) }`.
+        let top = tokens.number("s-9")
+        backToPreferencesButton?.frame = NSRect(x: left, y: top,
             width: width(copy.backToPreferences) + 15 + gap + 2 * tokens.number("s-5"), height: height)
-        let titleTop = 24 + height + gap
+        // `.history-heading > p { max-width: 60ch }`, `ch` measured from "0".
+        let ledeCap = ledeLabel.map { 60 * ("0" as NSString).size(withAttributes: [.font: $0.font!]).width } ?? 600
+        let titleTop = top + height + gap
         let ledeTop = titleTop + 36 + gap
         headingLabel?.frame = NSRect(x: left, y: titleTop, width: headingWidth, height: 36)
 
         var headerBottom: CGFloat
         if compact {
-            let ledeWidth = max(0, right - left)
+            let ledeWidth = max(0, min(ledeCap, right - left))
             let ledeHeight = ledeLabel.map { max(20, textHeight(copy.lede, font: $0.font!, width: ledeWidth)) } ?? 20
             ledeLabel?.frame = NSRect(x: left, y: ledeTop, width: ledeWidth, height: ledeHeight)
             headerBottom = ledeTop + ledeHeight
@@ -943,15 +947,15 @@ final class LiveCaptureController: NSObject {
                                                  y: ledeTop - 10, width: cancelWidth, height: height)
             let actionsLeft = deleteAllButton.isHidden ? right + 12
                 : deleteAllCancelButton.isHidden ? deleteAllButton.frame.minX : deleteAllCancelButton.frame.minX
-            let ledeWidth = max(0, min(600, actionsLeft - 12 - left))
+            let ledeWidth = max(0, min(ledeCap, actionsLeft - 12 - left))
             let ledeHeight = ledeLabel.map { max(20, textHeight(copy.lede, font: $0.font!, width: ledeWidth)) } ?? 20
             ledeLabel?.frame = NSRect(x: left, y: ledeTop, width: ledeWidth, height: ledeHeight)
             headerBottom = max(ledeTop + ledeHeight, deleteAllButton.isHidden ? 0 : ledeTop - 10 + height)
         }
 
-        let top = headerBottom + tokens.number("s-6")
-        if top != contentTop {
-            contentTop = top
+        let gridTop = headerBottom + tokens.number("s-6")
+        if gridTop != contentTop {
+            contentTop = gridTop
             layoutHistory()
         }
     }

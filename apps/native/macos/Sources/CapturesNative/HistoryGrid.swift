@@ -263,10 +263,9 @@ final class HistoryButton: NSButton {
             fill = tokens.color("theme-signal-deep"); border = nil; text = tokens.color("theme-signal-ink")
         case (.ghost, false): fill = nil; border = nil; text = tokens.color("text-muted")
         case (.ghost, true): fill = tokens.color("surface-hover"); border = nil; text = tokens.color("text")
-        case (.overlay, false):
-            fill = tokens.color("surface-raised").withAlphaComponent(0.88); border = tokens.color("border-subtle")
-            text = tokens.color("text")
-        case (.overlay, true): fill = tokens.color("theme-signal"); border = nil; text = tokens.color("theme-signal-ink")
+        // Shipping's quiet `.history-delete`: transparent `--text-subtle`, danger on hover.
+        case (.overlay, false): fill = nil; border = nil; text = tokens.color("text-subtle")
+        case (.overlay, true): fill = tokens.color("danger-surface"); border = nil; text = tokens.color("danger-text")
         }
         let alpha: CGFloat = isEnabled ? 1 : 0.45
         let radius = tokens.number("r-md")
@@ -511,7 +510,7 @@ final class HistoryCardView: NSView {
     let errorBox = NSView()
     let errorLabel = NSTextField(wrappingLabelWithString: "")
     /// The unstretched card height; actions stay at its bottom in a grown row.
-    var baseHeight: CGFloat = 289 { didSet { needsLayout = true } }
+    var baseHeight: CGFloat = 273 { didSet { needsLayout = true } }
     private(set) var actionButtons: [HistoryButton] = []
     private(set) var deleteButton: HistoryButton!
     var selected = false { didSet { needsDisplay = true } }
@@ -652,14 +651,17 @@ final class HistoryCardView: NSView {
                                     width: chipWidth, height: chipHeight)
         let pad = tokens.number("s-5"), inner = bounds.width - 2 * pad
         var y = imageHeight + 1 + pad
-        dateLabel.frame = NSRect(x: pad, y: y, width: inner, height: 18)
-        y += 18 + tokens.number("s-2")
-        detailsLabel.frame = NSRect(x: pad, y: y, width: inner, height: 16)
-        y += 16 + tokens.number("s-2")
-        warningLabel.frame = NSRect(x: pad, y: y, width: inner, height: 16)
+        // `.history-card-body`: a 20 pt date (1 pt padding-block), 14 pt lines, `gap: var(--s-2)`.
+        dateLabel.frame = NSRect(x: pad, y: y + 1, width: inner, height: 18)
+        y += Self.dateHeight + tokens.number("s-2")
+        detailsLabel.frame = NSRect(x: pad, y: y, width: inner, height: Self.lineHeight + 2)
+        y += Self.lineHeight + tokens.number("s-2")
+        warningLabel.frame = NSRect(x: pad, y: y, width: inner, height: Self.lineHeight + 2)
         let gap = tokens.number("s-3"), height = tokens.number("h-md")
         let width = (inner - gap) / 2
+        // `align-content: start`: only a card with a warning moves its actions down.
         let actionsTop = min(bounds.height, baseHeight) - pad - height
+            + (warningLabel.isHidden ? 0 : Self.warningExtra)
         for (slot, button) in actionButtons.enumerated() {
             button.frame = NSRect(x: pad + CGFloat(slot) * (width + gap), y: actionsTop,
                                   width: width, height: height)
@@ -675,6 +677,10 @@ final class HistoryCardView: NSView {
                                       width: inner - 2 * inset.width, height: textHeight)
         }
     }
+
+    static let dateHeight: CGFloat = 20, lineHeight: CGFloat = 14
+    /// A dropped-frame warning line (`history_view::CARD_WARNING_EXTRA`).
+    static let warningExtra: CGFloat = 4 + lineHeight
 
     static func errorFont(_ tokens: Tokens) -> NSFont {
         .systemFont(ofSize: tokens.number("text-xs"))
@@ -880,13 +886,16 @@ final class HistoryGridView: NSView {
         scrollToVisible(layout.frame(row, extras: rowExtras(layout)))
     }
 
-    /// Rows grown by a card error, keeping each row's tallest card.
+    /// Rows grown by a card error or dropped-frame warning, keeping each row's tallest card.
     func rowExtras(_ layout: HistoryGridLayout) -> [Int: CGFloat] {
         var extras: [Int: CGFloat] = [:]
         for (index, item) in items.enumerated() {
-            guard let error = item.error else { continue }
-            let extra = HistoryCardView.errorExtra(error, cardWidth: layout.cardWidth, tokens: tokens)
-            extras[index / layout.columns] = max(extras[index / layout.columns] ?? 0, extra)
+            let warning = item.card?.warning == nil ? 0 : HistoryCardView.warningExtra
+            let error = item.error.map {
+                HistoryCardView.errorExtra($0, cardWidth: layout.cardWidth, tokens: tokens)
+            } ?? 0
+            guard warning + error > 0 else { continue }
+            extras[index / layout.columns] = max(extras[index / layout.columns] ?? 0, warning + error)
         }
         return extras
     }
