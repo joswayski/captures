@@ -107,6 +107,8 @@ pub enum Event {
     /// A portal Region recording's first granted frame. The worker blocks its
     /// start until `reply` carries a rectangle in frame pixels, `None`, or is
     /// dropped (both cancel), or the capture generation is cancelled.
+    /// Only Linux hosts read it; elsewhere no portal Region target exists.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     SelectRegion {
         generation: u64,
         frame: Arc<image::RgbaImage>,
