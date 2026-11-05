@@ -24,6 +24,42 @@ argument parsing and asynchronous launch without modifying an installed app;
 physical elevated-upgrade acceptance remains open. This does not restore windows across a Tauri/native cutover or manual
 reinstall. See [release recovery](releases.md#native-preview-packaging-and-recovery).
 
+## Host direction
+
+Captures goes fully native on every platform (owner decision, November 2026,
+after real-GPU benchmarks: a Win32/DirectComposition/Direct2D build used about
+10× less CPU per frame than egui on Windows, about half the memory and a faster
+first frame; AppKit beat egui on memory and key-to-screen latency on macOS).
+
+- **macOS:** AppKit, as today.
+- **Windows:** Rust `windows` crate with Win32, DirectComposition, Direct2D,
+  DirectWrite and UI Automation. Starts from the Caper benchmark reference
+  (`joswayski/caper`, branch `bench/win32-native-reference`).
+- **Linux:** GTK4 (`gtk4-rs`) in `apps/native/gtk`, with Captures controls drawn
+  through GtkSnapshot from the shared tokens, and AT-SPI from GTK.
+
+Both new hosts reuse the shared Rust capture, media, session and settings
+crates and the generated tokens, and are built on retained widgets or layers
+that redraw only what changed, with composition-only motion. The egui/wgpu
+workbench gets only the fixes needed to keep CI green. It keeps running until
+each platform's replacement passes: feature parity, screenshot parity with
+Tauri, performance at least as good as the egui host on real hardware, and
+accessibility. Work starts where egui was heaviest (Preferences hover, editor
+zoom and resize). None of this promotes native to production without the
+owner's approval.
+
+The first GTK4 slice is Preferences: the shipping sidebar (brand mark and
+section list that follows scrolling), header with Capture History…, and the
+General and Capture cards with token-drawn switches (32×19 pill, 13 pt knob
+easing over `--dur-3`, hover border, focus ring, AT-SPI switch role and
+checked state). Whole rows toggle, settings save through `captures-settings`,
+and the login item is queried off the UI thread with the shared
+`login_item`. Compared side by side with the Tauri harness at 880×660 under
+Xvfb; CI renders it headlessly in both appearances. Not yet ported:
+Appearance, Shortcuts, Recording, GIF export, Updates and About cards, Find,
+compact layout, and every other window. Linux real-hardware performance and
+Orca checks wait for the owner's Linux PC. Windows, macOS: unchanged.
+
 ## Progress dashboard
 
 We are delivering stage 4 workflow slices and stage 5 editor slices.

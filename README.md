@@ -194,8 +194,11 @@ and height stay proportional.
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for local setup, validation, and packaging.
 The public Preview pipeline uses the Tauri/React app. The separate native rewrite
-uses AppKit on macOS and Rust/wgpu on Windows/Linux, with shared Rust engines and
-platform-specific capture integrations. Its development workbenches keep separate
+uses AppKit on macOS. Windows and Linux are moving from the Rust/wgpu workbench
+to the OS toolkits (Win32 with DirectComposition, Direct2D and DirectWrite on
+Windows; GTK4 on Linux) with Captures' own styling, sharing the Rust engines and
+platform-specific capture integrations. The wgpu workbench stays until each
+replacement passes its parity gates. Its development workbenches keep separate
 data and do not join the public update channel. The detailed native development
 notes below describe implemented slices, not completion of physical acceptance
 or approval to replace the public app.
