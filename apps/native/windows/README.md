@@ -4,7 +4,8 @@ The Windows replacement for the egui/wgpu workbench: Win32 windows,
 DirectComposition, Direct2D, DirectWrite (system Segoe UI Variable) and UI
 Automation, with Captures' own token-drawn controls. See
 [native-rewrite.md](../../../docs/native-rewrite.md#host-direction) for the
-direction and the gates it must pass. Only Preferences exists so far.
+direction and the gates it must pass. Only Preferences exists so far: the
+General, Appearance and Capture cards.
 
 ```powershell
 node apps/native/prepare.mjs --output apps/native/windows/resources

@@ -64,6 +64,8 @@ pub struct Host {
     pointer: Option<(f32, f32)>,
     login: Option<Login>,
     appearance: Option<String>,
+    /// Choose… was activated; the picker opens once the host is released.
+    pick_folder: bool,
 }
 
 impl Host {
@@ -130,6 +132,7 @@ impl Host {
                 pointer: None,
                 login,
                 appearance: options.appearance.clone(),
+                pick_folder: false,
             })
         }
     }
@@ -269,9 +272,26 @@ impl Host {
     }
 
     pub fn activate(&mut self, target: Target) {
-        if let Some(Action::Login(on)) = self.scene.activate(target) {
-            self.request_login(Some(on));
+        match self.scene.activate(target) {
+            Some(Action::Login(on)) => self.request_login(Some(on)),
+            Some(Action::Retheme) => {
+                // A choice made here replaces a `--appearance` override.
+                self.appearance = None;
+                self.retheme();
+            }
+            Some(Action::ChooseFolder) => self.pick_folder = true,
+            None => {}
         }
+        self.need = true;
+    }
+
+    /// Rebuild the tokens from the saved appearance and accent; every surface
+    /// redraws in the new palette.
+    fn retheme(&mut self) {
+        let tokens = appearance::tokens(self.appearance.as_deref(), self.scene.settings());
+        appearance::title_bar(self.hwnd, &tokens);
+        self.scene.t = tokens;
+        self.layout = true;
         self.need = true;
     }
 
@@ -327,22 +347,35 @@ impl Host {
         self.need = true;
     }
 
+    /// Windows' app mode or animation setting changed.
     fn refresh_appearance(&mut self) {
-        let settings = captures_settings::load(&self.scene_settings_file()).unwrap_or_default();
-        let tokens = appearance::tokens(self.appearance.as_deref(), &settings);
         self.scene.reduced_motion = appearance::reduced_motion();
-        if tokens.color("surface-canvas") != self.scene.t.color("surface-canvas")
-            || tokens.color("theme-accent") != self.scene.t.color("theme-accent")
-        {
-            appearance::title_bar(self.hwnd, &tokens);
-            self.scene.t = tokens;
-            self.layout = true;
-            self.need = true;
+        let tokens = appearance::tokens(self.appearance.as_deref(), self.scene.settings());
+        if tokens.appearance != self.scene.t.appearance {
+            self.retheme();
         }
     }
 
-    fn scene_settings_file(&self) -> PathBuf {
-        self.scene.settings_file().to_owned()
+    /// Show the folder picker; called with the host released.
+    fn choose_folder(hwnd: HWND) {
+        let Some(current) = with_host(|h| {
+            h.pick_folder = false;
+            h.scene.settings().output_directory.clone()
+        }) else {
+            return;
+        };
+        match crate::dialog::pick_folder(hwnd, crate::scene::FOLDER_DIALOG_TITLE, &current) {
+            Ok(Some(path)) => {
+                with_host(|h| {
+                    if h.scene.set_output_directory(path) {
+                        h.layout = true;
+                        h.need = true;
+                    }
+                });
+            }
+            Ok(None) => {}
+            Err(error) => eprintln!("folder picker failed: {error}"),
+        }
     }
 
     fn set_pointer(&mut self, pointer: Option<(f32, f32)>) {
@@ -493,7 +526,8 @@ impl Host {
                     let row = &self.scene.rows[row];
                     (event, row.on, row.detail.clone())
                 }
-                Event::Focus(_) => (event, false, String::new()),
+                Event::Folder => (event, false, self.scene.settings().output_directory.clone()),
+                Event::Focus(_) | Event::Selected(_) => (event, false, String::new()),
             })
             .collect()
     }
@@ -635,13 +669,17 @@ pub fn run(options: Options) -> Result<()> {
                         eprintln!("frame failed: {error:?}");
                     }
                 }
-                (h.need, h.take_events())
+                (h.need, h.take_events(), h.pick_folder)
             });
-            let Some((again, events)) = state else {
+            let Some((again, events, pick_folder)) = state else {
                 continue;
             };
             if !events.is_empty() {
                 crate::uia::raise(&events);
+            }
+            if pick_folder {
+                Host::choose_folder(hwnd);
+                continue;
             }
             if !again {
                 let _ = WaitMessage();

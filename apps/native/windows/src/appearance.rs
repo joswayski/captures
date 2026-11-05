@@ -27,7 +27,13 @@ pub fn tokens(appearance: Option<&str>, settings: &captures_settings::AppSetting
         .ok()
         .and_then(|value| value.as_str().map(str::to_owned))
         .unwrap_or_else(|| "mustard".into());
-    Tokens::variant(&resolve(appearance, settings), &theme)
+    let tokens = Tokens::variant(&resolve(appearance, settings), &theme);
+    if settings.theme == captures_settings::ColorTheme::Custom {
+        let custom = &settings.custom_theme;
+        tokens.with_custom(&custom.accent, &custom.signal)
+    } else {
+        tokens
+    }
 }
 
 fn system_dark() -> bool {

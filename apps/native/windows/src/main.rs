@@ -8,6 +8,8 @@
 #[cfg(windows)]
 mod appearance;
 #[cfg(windows)]
+mod dialog;
+#[cfg(windows)]
 mod gfx;
 #[cfg(windows)]
 mod host;

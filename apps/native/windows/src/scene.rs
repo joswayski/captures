@@ -1,17 +1,17 @@
 //! The Preferences window as a retained tree of nodes, following shipping
-//! `.preferences` (`styles/windows.css`) and the copy in
-//! `captures_app::preferences`.
+//! `.preferences` (`styles/windows.css`, `styles/primitives.css`) and the copy
+//! and option lists in `captures_app::preferences`.
 //!
 //! Each node with content maps to one DirectComposition surface (see
 //! `host.rs`) and is redrawn only when its own `dirty` flag is set. Hover,
-//! active and toggle transitions animate node opacity and offsets on the
-//! compositor; the only CPU redraw on hover is a 32×19 switch track. The same
-//! tree paints offscreen for `--screenshot`.
+//! active, selection and toggle transitions animate node opacity and offsets
+//! on the compositor; the only CPU redraw on hover is a 32×19 switch track.
+//! The same tree paints offscreen for `--screenshot`.
 use std::path::PathBuf;
 use std::time::Instant;
 
 use captures_app::motion::CubicBezier;
-use captures_app::preferences::{self, SECTIONS};
+use captures_app::preferences::{self, APPEARANCE_MODES, SECTIONS, THEMES};
 use windows::Win32::Graphics::Direct2D::ID2D1DeviceContext;
 use windows::core::Result;
 
@@ -24,8 +24,43 @@ const KNOB: f32 = 13.;
 const KNOB_TRAVEL: f32 = 13.;
 const SECTIONS_MAX: f32 = 720.;
 const SCROLLBAR: f32 = 10.;
-/// Cards in shipping order: (section index, rows).
-pub const CARDS: [(usize, &[usize]); 2] = [(0, &[0]), (2, &[1, 2, 3, 4])];
+/// `.theme-option` min-height and the swatch side.
+const CHIP_H: f32 = 34.;
+const SWATCH: f32 = 18.;
+/// `.ui-segmented`: 1 px border plus 3 px padding around `--h-sm` buttons.
+const SEGMENT_INSET: f32 = 4.;
+pub const FOLDER_DIALOG_TITLE: &str = "Choose capture folder";
+/// The accent grid's shipping accessible name (`aria-label`).
+pub const ACCENT_GROUP_LABEL: &str = "Color theme";
+
+/// One row of a settings card.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Item {
+    /// A `.check-row.switch-row`, by index into [`Scene::rows`].
+    Switch(usize),
+    /// Interface theme: the System/Light/Dark segmented control.
+    Mode,
+    /// Accent color: the theme chip grid.
+    Accent,
+    /// Save captures to: the folder field and Choose….
+    Folder,
+}
+
+/// Cards in shipping order: (section index, items).
+pub const CARDS: [(usize, &[Item]); 3] = [
+    (0, &[Item::Switch(0)]),
+    (1, &[Item::Mode, Item::Accent]),
+    (
+        2,
+        &[
+            Item::Folder,
+            Item::Switch(1),
+            Item::Switch(2),
+            Item::Switch(3),
+            Item::Switch(4),
+        ],
+    ),
+];
 pub const FLAGS: [&str; 4] = [
     "auto_copy_to_clipboard",
     "auto_start_on_selection",
@@ -53,6 +88,10 @@ impl Rect {
     fn offset(self, dx: f32, dy: f32) -> Self {
         Self::new(self.x + dx, self.y + dy, self.w, self.h)
     }
+
+    fn at_origin(self) -> Self {
+        Self::new(0., 0., self.w, self.h)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -61,6 +100,20 @@ pub enum Ring {
     Tight(f32),
     /// `--focus-ring`: 2 px of canvas, then 2 px of accent at 55%.
     Full(f32),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Target {
+    Nav(usize),
+    History,
+    /// A switch row.
+    Row(usize),
+    /// An Interface theme segment, in `APPEARANCE_MODES` order.
+    Mode(usize),
+    /// An accent chip, in `THEMES` order.
+    Theme(usize),
+    /// Save captures to: Choose….
+    Choose,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -80,13 +133,38 @@ pub enum Kind {
     /// The scroller: canvas fill, clips its children.
     Viewport,
     Card(usize),
-    RowCopy(usize),
+    /// An item's title and description.
+    Copy(Item),
     TrackOff(usize),
     TrackOn,
     KnobOff,
     KnobOn,
-    Ring(Ring),
-    Thumb,
+    /// `.ui-segmented` and its sliding `.capture-segmented-indicator`.
+    SegTrack,
+    SegThumb,
+    /// A segment label; resting and `lit` (hover/selected) layers cross-fade.
+    SegLabel {
+        index: usize,
+        lit: bool,
+    },
+    /// `.theme-option:hover`.
+    ChipHover(usize),
+    /// A `.theme-option`, resting or `.active` (raised, bordered, checked).
+    Chip {
+        index: usize,
+        active: bool,
+    },
+    /// The read-only `.directory-input input`.
+    Field,
+    /// `.directory-input button`, resting or hovered.
+    Choose {
+        lit: bool,
+    },
+    Ring {
+        shape: Ring,
+        target: Target,
+    },
+    Scrollbar,
 }
 
 impl Kind {
@@ -147,13 +225,6 @@ impl Motion {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Target {
-    Nav(usize),
-    History,
-    Row(usize),
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum RowKey {
     Login,
     Flag(usize),
@@ -171,6 +242,10 @@ pub struct RowState {
 pub enum Action {
     /// Change the login item off the UI thread.
     Login(bool),
+    /// Appearance or accent changed: rebuild the tokens and redraw.
+    Retheme,
+    /// Show the folder picker, outside the host borrow.
+    ChooseFolder,
 }
 
 /// Accessibility notifications, raised by the host outside its borrow.
@@ -179,6 +254,10 @@ pub enum Event {
     Focus(Target),
     Toggled(usize),
     Detail(usize),
+    /// A segment or accent chip became the selection.
+    Selected(Target),
+    /// The capture folder changed.
+    Folder,
 }
 
 struct RowNodes {
@@ -187,8 +266,33 @@ struct RowNodes {
     track_off: usize,
     track_on: usize,
     knob: usize,
+    knob_off: usize,
     knob_on: usize,
     ring: usize,
+}
+
+/// A control with a resting layer, a lit layer above it and a focus ring.
+#[derive(Clone, Copy)]
+struct Layered {
+    base: usize,
+    lit: usize,
+    ring: usize,
+}
+
+struct ChipNodes {
+    group: usize,
+    hover: usize,
+    base: usize,
+    active: usize,
+    ring: usize,
+}
+
+struct CopyText {
+    item: Item,
+    title: Text,
+    detail: Option<Text>,
+    /// Between title and detail: 6 px in switch rows, 3 px in `.setting-copy`.
+    gap: f32,
 }
 
 #[derive(Default)]
@@ -200,8 +304,12 @@ struct Texts {
     history: Option<Text>,
     card_titles: Vec<Text>,
     card_descriptions: Vec<Text>,
-    row_titles: Vec<Text>,
-    row_details: Vec<Option<Text>>,
+    copies: Vec<CopyText>,
+    segments: Vec<Text>,
+    chips: Vec<Text>,
+    check: Option<Text>,
+    path: Option<Text>,
+    choose: Option<Text>,
 }
 
 pub struct Scene {
@@ -224,22 +332,33 @@ pub struct Scene {
     settings: captures_settings::AppSettings,
     settings_file: PathBuf,
     texts: Texts,
-    nav_items: Vec<(usize, usize, usize)>,
+    nav_items: Vec<Layered>,
     nav_bg: usize,
     header: usize,
-    history: (usize, usize, usize),
+    history: Layered,
     viewport: usize,
     content: usize,
     cards: Vec<usize>,
     row_nodes: Vec<RowNodes>,
-    thumb: usize,
+    mode_copy: usize,
+    seg_track: usize,
+    seg_thumb: usize,
+    /// Segment groups: resting label, lit label, focus ring.
+    segments: Vec<usize>,
+    accent_copy: usize,
+    chips: Vec<ChipNodes>,
+    folder_copy: usize,
+    field: usize,
+    choose: Layered,
+    scrollbar: usize,
     // Layout results, DIPs.
-    header_h: f32,
     title_y: f32,
     card_rects: Vec<Rect>,
     separators: Vec<Vec<f32>>,
-    /// Whole `label` rows, in content coordinates.
-    row_rects: Vec<Rect>,
+    /// Whole items (including their top padding), in content coordinates.
+    item_rects: Vec<(Item, Rect)>,
+    /// Accent chip grid, in content coordinates.
+    grid_rect: Rect,
     content_h: f32,
     content_w: f32,
     scroll: f32,
@@ -265,6 +384,11 @@ impl Scene {
                 enabled: true,
             });
         }
+        let none = Layered {
+            base: 0,
+            lit: 0,
+            ring: 0,
+        };
         let mut scene = Self {
             t,
             w: 0.,
@@ -287,17 +411,26 @@ impl Scene {
             nav_items: Vec::new(),
             nav_bg: 0,
             header: 0,
-            history: (0, 0, 0),
+            history: none,
             viewport: 0,
             content: 0,
             cards: Vec::new(),
             row_nodes: Vec::new(),
-            thumb: 0,
-            header_h: 0.,
+            mode_copy: 0,
+            seg_track: 0,
+            seg_thumb: 0,
+            segments: Vec::new(),
+            accent_copy: 0,
+            chips: Vec::new(),
+            folder_copy: 0,
+            field: 0,
+            choose: none,
+            scrollbar: 0,
             title_y: 0.,
             card_rects: Vec::new(),
             separators: Vec::new(),
-            row_rects: Vec::new(),
+            item_rects: Vec::new(),
+            grid_rect: Rect::default(),
             content_h: 0.,
             content_w: 0.,
             scroll: 0.,
@@ -327,59 +460,127 @@ impl Scene {
         index
     }
 
+    fn ring(&mut self, parent: usize, shape: Ring, target: Target) -> usize {
+        let bleed = match shape {
+            Ring::Tight(_) => 2.,
+            Ring::Full(_) => 4.,
+        };
+        self.add(Some(parent), Kind::Ring { shape, target }, bleed)
+    }
+
     fn build(&mut self) {
         let root = self.add(None, Kind::Group, 0.);
         self.nav_bg = self.add(Some(root), Kind::NavBg, 0.);
         for index in 0..SECTIONS.len() {
             let base = self.add(Some(self.nav_bg), Kind::NavItem { index, lit: false }, 0.);
             let lit = self.add(Some(base), Kind::NavItem { index, lit: true }, 0.);
-            let ring = self.add(Some(base), Kind::Ring(Ring::Tight(8.)), 2.);
-            self.nav_items.push((base, lit, ring));
+            let ring = self.ring(base, Ring::Tight(8.), Target::Nav(index));
+            self.nav_items.push(Layered { base, lit, ring });
         }
         self.header = self.add(Some(root), Kind::HeaderBg, 0.);
         let base = self.add(Some(self.header), Kind::History { lit: false }, 0.);
         let lit = self.add(Some(base), Kind::History { lit: true }, 0.);
-        let ring = self.add(Some(base), Kind::Ring(Ring::Full(8.)), 4.);
-        self.history = (base, lit, ring);
+        let ring = self.ring(base, Ring::Full(8.), Target::History);
+        self.history = Layered { base, lit, ring };
         self.viewport = self.add(Some(root), Kind::Viewport, 0.);
         self.content = self.add(Some(self.viewport), Kind::Group, 0.);
-        for (card, (_, rows)) in CARDS.iter().enumerate() {
+        let mut row_nodes = Vec::new();
+        for (card, (_, items)) in CARDS.iter().enumerate() {
             let node = self.add(Some(self.content), Kind::Card(card), 8.);
             self.cards.push(node);
-            for &row in *rows {
-                let copy = self.add(Some(node), Kind::RowCopy(row), 0.);
-                let switch = self.add(Some(node), Kind::Group, 0.);
-                self.nodes[switch].group_opacity = true;
-                let track_off = self.add(Some(switch), Kind::TrackOff(row), 0.);
-                let track_on = self.add(Some(switch), Kind::TrackOn, 0.);
-                let knob = self.add(Some(switch), Kind::Group, 0.);
-                self.add(Some(knob), Kind::KnobOff, 3.);
-                let knob_on = self.add(Some(knob), Kind::KnobOn, 0.);
-                let ring = self.add(Some(switch), Kind::Ring(Ring::Full(SWITCH.1 / 2.)), 4.);
-                self.row_nodes.push(RowNodes {
-                    copy,
-                    switch,
-                    track_off,
-                    track_on,
-                    knob,
-                    knob_on,
-                    ring,
-                });
+            for &item in *items {
+                let copy = self.add(Some(node), Kind::Copy(item), 0.);
+                match item {
+                    Item::Switch(row) => {
+                        let switch = self.add(Some(node), Kind::Group, 0.);
+                        self.nodes[switch].group_opacity = true;
+                        let track_off = self.add(Some(switch), Kind::TrackOff(row), 0.);
+                        let track_on = self.add(Some(switch), Kind::TrackOn, 0.);
+                        let knob = self.add(Some(switch), Kind::Group, 0.);
+                        let knob_off = self.add(Some(knob), Kind::KnobOff, 3.);
+                        let knob_on = self.add(Some(knob), Kind::KnobOn, 0.);
+                        let ring = self.ring(switch, Ring::Full(SWITCH.1 / 2.), Target::Row(row));
+                        row_nodes.push((
+                            row,
+                            RowNodes {
+                                copy,
+                                switch,
+                                track_off,
+                                track_on,
+                                knob,
+                                knob_off,
+                                knob_on,
+                                ring,
+                            },
+                        ));
+                    }
+                    Item::Mode => {
+                        self.mode_copy = copy;
+                        self.seg_track = self.add(Some(node), Kind::SegTrack, 0.);
+                        self.seg_thumb = self.add(Some(self.seg_track), Kind::SegThumb, 2.);
+                        let radius = self.t.n("r-sm");
+                        for index in 0..APPEARANCE_MODES.len() {
+                            // Both label layers fade, so they are siblings.
+                            let group = self.add(Some(self.seg_track), Kind::Group, 0.);
+                            self.add(Some(group), Kind::SegLabel { index, lit: false }, 0.);
+                            self.add(Some(group), Kind::SegLabel { index, lit: true }, 0.);
+                            self.ring(group, Ring::Tight(radius), Target::Mode(index));
+                            self.segments.push(group);
+                        }
+                    }
+                    Item::Accent => {
+                        self.accent_copy = copy;
+                        let radius = self.t.n("r-md");
+                        for index in 0..THEMES.len() {
+                            let group = self.add(Some(node), Kind::Group, 0.);
+                            let hover = self.add(Some(group), Kind::ChipHover(index), 0.);
+                            let base = self.add(
+                                Some(group),
+                                Kind::Chip {
+                                    index,
+                                    active: false,
+                                },
+                                0.,
+                            );
+                            let active = self.add(
+                                Some(group),
+                                Kind::Chip {
+                                    index,
+                                    active: true,
+                                },
+                                2.,
+                            );
+                            let ring = self.ring(group, Ring::Full(radius), Target::Theme(index));
+                            self.chips.push(ChipNodes {
+                                group,
+                                hover,
+                                base,
+                                active,
+                                ring,
+                            });
+                        }
+                    }
+                    Item::Folder => {
+                        self.folder_copy = copy;
+                        self.field = self.add(Some(node), Kind::Field, 0.);
+                        let base = self.add(Some(node), Kind::Choose { lit: false }, 2.);
+                        let lit = self.add(Some(base), Kind::Choose { lit: true }, 2.);
+                        let radius = self.t.n("r-md");
+                        let ring = self.ring(base, Ring::Full(radius), Target::Choose);
+                        self.choose = Layered { base, lit, ring };
+                    }
+                }
             }
         }
-        self.thumb = self.add(Some(self.viewport), Kind::Thumb, 0.);
-        self.sync_state();
+        row_nodes.sort_by_key(|(row, _)| *row);
+        self.row_nodes = row_nodes.into_iter().map(|(_, nodes)| nodes).collect();
+        self.scrollbar = self.add(Some(self.viewport), Kind::Scrollbar, 0.);
+        self.sync_switches();
+        self.refresh(false);
     }
 
-    /// Static opacities, offsets and visibility that follow from state.
-    fn sync_state(&mut self) {
-        for index in 0..SECTIONS.len() {
-            let (_, lit, ring) = self.nav_items[index];
-            self.nodes[lit].opacity = self.nav_lit(index);
-            self.nodes[ring].visible = self.ring_shown(Target::Nav(index));
-        }
-        self.nodes[self.history.1].opacity = f32::from(self.hover == Some(Target::History));
-        self.nodes[self.history.2].visible = self.ring_shown(Target::History);
+    /// Switch knobs, tracks and disabled opacity that follow from state.
+    fn sync_switches(&mut self) {
         for (row, nodes) in self.row_nodes.iter().enumerate() {
             let state = &self.rows[row];
             let on = f32::from(state.on);
@@ -388,10 +589,58 @@ impl Scene {
             self.nodes[nodes.knob].rect.x = 3. + KNOB_TRAVEL * on;
             self.nodes[nodes.switch].opacity = if state.enabled { 1. } else { 0.4 };
             self.nodes[nodes.copy].opacity = if state.enabled { 1. } else { 0.55 };
-            self.nodes[nodes.ring].visible = self.ring_shown(Target::Row(row));
         }
         for node in &mut self.nodes {
             node.props = true;
+        }
+    }
+
+    /// The opacity a state layer should have, with its transition token.
+    fn layer_target(&self, kind: Kind) -> Option<(f32, &'static str)> {
+        let on = |b: bool| f32::from(b);
+        Some(match kind {
+            Kind::NavItem { index, lit: true } => (self.nav_lit(index), "dur-2"),
+            Kind::History { lit: true } => (on(self.hover == Some(Target::History)), "dur-2"),
+            Kind::SegLabel { index, lit } => {
+                let shown = index == self.mode_index() || self.hover == Some(Target::Mode(index));
+                (if lit { on(shown) } else { 1. - on(shown) }, "dur-3")
+            }
+            Kind::ChipHover(index) => (
+                on(self.hover == Some(Target::Theme(index)) && index != self.theme_index()),
+                "dur-2",
+            ),
+            Kind::Chip {
+                index,
+                active: true,
+            } => (on(index == self.theme_index()), "dur-2"),
+            Kind::Choose { lit: true } => (on(self.hover == Some(Target::Choose)), "dur-2"),
+            _ => return None,
+        })
+    }
+
+    /// Bring every state layer and focus ring to the current state, on the
+    /// compositor when `animate`.
+    fn refresh(&mut self, animate: bool) {
+        for node in 0..self.nodes.len() {
+            let kind = self.nodes[node].kind;
+            if let Kind::Ring { target, .. } = kind {
+                let shown = self.ring_shown(target);
+                if self.nodes[node].visible != shown {
+                    self.nodes[node].visible = shown;
+                    self.nodes[node].props = true;
+                }
+            }
+            let Some((to, duration)) = self.layer_target(kind) else {
+                continue;
+            };
+            if animate {
+                if (self.nodes[node].opacity - to).abs() > 1e-4 {
+                    self.animate(node, Prop::Opacity, to, duration);
+                }
+            } else {
+                self.nodes[node].opacity = to;
+                self.nodes[node].props = true;
+            }
         }
     }
 
@@ -403,14 +652,34 @@ impl Scene {
         self.focus_visible && self.focus == Some(target)
     }
 
+    /// The selected Interface theme segment.
+    pub fn mode_index(&self) -> usize {
+        let id = serde_json::to_value(self.settings.appearance).unwrap_or_default();
+        APPEARANCE_MODES
+            .iter()
+            .position(|(mode, _)| id.as_str() == Some(*mode))
+            .unwrap_or(0)
+    }
+
+    /// The selected accent chip.
+    pub fn theme_index(&self) -> usize {
+        let id = serde_json::to_value(self.settings.theme).unwrap_or_default();
+        THEMES
+            .iter()
+            .position(|theme| id.as_str() == Some(theme.id))
+            .unwrap_or(0)
+    }
+
+    pub fn settings(&self) -> &captures_settings::AppSettings {
+        &self.settings
+    }
+
     // ---- layout ----
 
     /// Lay out every node for a `w`×`h` DIP client area.
     pub fn layout(&mut self, g: &Gfx, w: f32, h: f32) -> Result<()> {
         self.w = w;
         self.h = h;
-        // Layout snaps running motions to their targets.
-        self.motions.clear();
         let t = &self.t;
         let n = |name: &str| t.n(name);
         let (s5, s6, s8) = (n("s-5"), n("s-6"), n("s-8"));
@@ -425,11 +694,11 @@ impl Scene {
         let list_w = NAV_WIDTH - 2. * s5 - 1.;
         let list_y = s6 + 26. + s6;
         let item_h = n("h-md");
-        for (index, &(base, lit, ring)) in self.nav_items.iter().enumerate() {
+        for (index, item) in self.nav_items.iter().enumerate() {
             let r = Rect::new(s5, list_y + (item_h + 1.) * index as f32, list_w, item_h);
-            self.nodes[base].rect = r;
-            self.nodes[lit].rect = Rect::new(0., 0., r.w, r.h);
-            self.nodes[ring].rect = Rect::new(0., 0., r.w, r.h);
+            self.nodes[item.base].rect = r;
+            self.nodes[item.lit].rect = r.at_origin();
+            self.nodes[item.ring].rect = r.at_origin();
         }
 
         // `.preferences-header`: 16/24 padding, min-height 64, 1 px rule.
@@ -440,7 +709,6 @@ impl Scene {
         let block = title.height + 2. + subtitle.height;
         let header_h = (s6 + block.max(item_h) + s6 + 1.).max(64.);
         self.title_y = (header_h - 1. - block) / 2.;
-        self.header_h = header_h;
         self.nodes[self.header].rect = Rect::new(NAV_WIDTH, 0., body_w, header_h);
         let button_w = (history.width + 2. * s5 + 2.).ceil();
         let button = Rect::new(
@@ -449,9 +717,9 @@ impl Scene {
             button_w,
             item_h,
         );
-        self.nodes[self.history.0].rect = button;
-        self.nodes[self.history.1].rect = Rect::new(0., 0., button.w, button.h);
-        self.nodes[self.history.2].rect = Rect::new(0., 0., button.w, button.h);
+        self.nodes[self.history.base].rect = button;
+        self.nodes[self.history.lit].rect = button.at_origin();
+        self.nodes[self.history.ring].rect = button.at_origin();
         self.texts.title = Some(title);
         self.texts.subtitle = Some(subtitle);
         self.texts.history = Some(history);
@@ -468,6 +736,9 @@ impl Scene {
             self.nodes[node].rect = self.card_rects[card];
         }
         let scroll = self.scroll.max(0.);
+        // Running motions keep going from where they are, retargeted to the
+        // new geometry; the host re-issues them after this layout.
+        let motions = std::mem::take(&mut self.motions);
         // Force the offsets and thumb to be recomputed for the new layout.
         self.scroll = -1.;
         self.set_scroll(scroll, false);
@@ -475,7 +746,18 @@ impl Scene {
             node.dirty = true;
             node.props = true;
         }
-        self.sync_state();
+        self.sync_switches();
+        self.refresh(false);
+        for mut motion in motions {
+            let node = &self.nodes[motion.node];
+            motion.to = match motion.prop {
+                Prop::Opacity => node.opacity,
+                Prop::OffsetX => node.rect.x,
+                Prop::OffsetY => node.rect.y,
+            };
+            motion.applied = false;
+            self.motions.push(motion);
+        }
         Ok(())
     }
 
@@ -487,55 +769,51 @@ impl Scene {
         self.content_w = viewport_w.max(0.);
         let card_w = (self.content_w.min(SECTIONS_MAX) - 2. * s8).max(80.);
         let inner_w = card_w - 2. * (s6 + 1.);
-        let measure = g.ch(t, Style::CardDescription)?;
+        // `max-width: 52ch` of card and `.setting-copy` descriptions.
+        let measure = 52. * g.ch(t, Style::CardDescription)?;
         self.card_rects.clear();
         self.separators.clear();
+        self.item_rects.clear();
         self.texts.card_titles.clear();
         self.texts.card_descriptions.clear();
-        self.texts.row_titles.clear();
-        self.texts.row_details.clear();
-        self.row_rects = vec![Rect::default(); self.rows.len()];
-        let mut row_layouts = Vec::new();
+        self.texts.copies.clear();
+        let inset = s6 + 1.;
         let mut y = s8;
-        for (section, rows) in CARDS.iter() {
+        for (section, items) in CARDS.iter() {
             let section = &SECTIONS[*section];
-            let title = g.text(t, Style::CardTitle, section.title, inner_w)?;
+            let title = g.text(&self.t, Style::CardTitle, section.title, inner_w)?;
             let description = g.text(
-                t,
+                &self.t,
                 Style::CardDescription,
                 section.description,
-                inner_w.min(52. * measure),
+                inner_w.min(measure),
             )?;
-            let inset = s6 + 1.;
             let mut cy = inset + title.height + s2 + description.height;
             let mut separators = Vec::new();
-            for (position, &row) in rows.iter().enumerate() {
+            for (position, &item) in items.iter().enumerate() {
                 cy += s5;
                 let top = cy;
-                // `.settings-card > * + *` rules; the first row after the header
-                // has only `--s-1` of padding.
+                // `.settings-card > * + *` rules; the first item after the
+                // header has only `--s-1` of padding.
                 let pad = if position == 0 {
                     s1
                 } else {
                     separators.push(top);
                     1. + s5
                 };
-                let copy_w = (inner_w - SWITCH.0 - s6).max(40.);
-                let state = &self.rows[row];
-                let row_title = g.text(t, Style::RowTitle, state.title, copy_w)?;
-                let detail = if state.detail.is_empty() {
-                    None
-                } else {
-                    Some(g.text(t, Style::RowDescription, &state.detail, copy_w)?)
-                };
-                // `.check-row small` adds 3 px to the span's 3 px grid gap.
-                let copy_h = row_title.height + detail.as_ref().map_or(0., |d| 6. + d.height);
-                let content_h = copy_h.max(SWITCH.1);
-                row_layouts.push((row, top, pad, copy_w, copy_h, content_h));
-                self.row_rects[row] = Rect::new(s8 + inset, y + top, inner_w, pad + content_h);
-                self.texts.row_titles.push(row_title);
-                self.texts.row_details.push(detail);
-                cy = top + pad + content_h;
+                let body = top + pad;
+                let h = self.layout_item(g, item, (inset, body, inner_w), measure)?;
+                let rect = Rect::new(s8 + inset, y + top, inner_w, pad + h);
+                self.item_rects.push((item, rect));
+                if item == Item::Accent {
+                    self.grid_rect = Rect::new(
+                        rect.x,
+                        rect.y + rect.h - 2. * CHIP_H - s2,
+                        inner_w,
+                        2. * CHIP_H + s2,
+                    );
+                }
+                cy = body + h;
             }
             let card_h = cy + inset;
             self.card_rects.push(Rect::new(s8, y, card_w, card_h));
@@ -545,35 +823,187 @@ impl Scene {
             y += card_h + s6;
         }
         self.content_h = y - s6 + s12;
-        // Texts were pushed in row order because CARDS lists rows in order.
-        for (row, top, pad, copy_w, copy_h, content_h) in row_layouts {
-            let nodes = &self.row_nodes[row];
-            let inset = s6 + 1.;
-            self.nodes[nodes.copy].rect =
-                Rect::new(inset, top + pad + (content_h - copy_h) / 2., copy_w, copy_h);
-            self.nodes[nodes.switch].rect = Rect::new(
-                inset + inner_w - SWITCH.0,
-                (top + pad + (content_h - SWITCH.1) / 2.).round(),
-                SWITCH.0,
-                SWITCH.1,
-            );
-            let (track_off, track_on, knob, knob_on, ring) = (
-                nodes.track_off,
-                nodes.track_on,
-                nodes.knob,
-                nodes.knob_on,
-                nodes.ring,
-            );
-            let track = Rect::new(0., 0., SWITCH.0, SWITCH.1);
-            self.nodes[track_off].rect = track;
-            self.nodes[track_on].rect = track;
-            self.nodes[ring].rect = track;
-            self.nodes[knob].rect = Rect::new(3., 3., KNOB, KNOB);
-            let knob_off = self.children[knob][0];
-            self.nodes[knob_off].rect = Rect::new(0., 0., KNOB, KNOB);
-            self.nodes[knob_on].rect = Rect::new(0., 0., KNOB, KNOB);
-        }
         Ok(())
+    }
+
+    /// Lay out one item's nodes inside its card at `(x, y)` (card coordinates)
+    /// across `width`; returns its height.
+    fn layout_item(
+        &mut self,
+        g: &Gfx,
+        item: Item,
+        (x, y, width): (f32, f32, f32),
+        measure: f32,
+    ) -> Result<f32> {
+        let n = |name: &str| self.t.n(name);
+        let (s2, s4, s5, s6) = (n("s-2"), n("s-4"), n("s-5"), n("s-6"));
+        let (h_sm, h_lg) = (n("h-sm"), n("h-lg"));
+        match item {
+            Item::Switch(row) => {
+                let copy_w = (width - SWITCH.0 - s6).max(40.);
+                let state = &self.rows[row];
+                let title = g.text(&self.t, Style::RowTitle, state.title, copy_w)?;
+                let detail = if state.detail.is_empty() {
+                    None
+                } else {
+                    Some(g.text(&self.t, Style::RowDescription, &state.detail, copy_w)?)
+                };
+                // `.check-row small` adds 3 px to the span's 3 px grid gap.
+                let copy_h = title.height + detail.as_ref().map_or(0., |d| 6. + d.height);
+                let content_h = copy_h.max(SWITCH.1);
+                self.texts.copies.push(CopyText {
+                    item,
+                    title,
+                    detail,
+                    gap: 6.,
+                });
+                let nodes = &self.row_nodes[row];
+                let ids = (
+                    nodes.copy,
+                    nodes.switch,
+                    nodes.track_off,
+                    nodes.track_on,
+                    nodes.ring,
+                    nodes.knob,
+                    nodes.knob_off,
+                    nodes.knob_on,
+                );
+                let (copy, switch, track_off, track_on, ring, knob, knob_off, knob_on) = ids;
+                self.nodes[copy].rect = Rect::new(x, y + (content_h - copy_h) / 2., copy_w, copy_h);
+                self.nodes[switch].rect = Rect::new(
+                    x + width - SWITCH.0,
+                    (y + (content_h - SWITCH.1) / 2.).round(),
+                    SWITCH.0,
+                    SWITCH.1,
+                );
+                let track = Rect::new(0., 0., SWITCH.0, SWITCH.1);
+                for node in [track_off, track_on, ring] {
+                    self.nodes[node].rect = track;
+                }
+                self.nodes[knob].rect = Rect::new(3., 3., KNOB, KNOB);
+                self.nodes[knob_off].rect = Rect::new(0., 0., KNOB, KNOB);
+                self.nodes[knob_on].rect = Rect::new(0., 0., KNOB, KNOB);
+                Ok(content_h)
+            }
+            Item::Mode => {
+                // `.setting-row-inline`: copy, then the control at max-content.
+                self.texts.segments = APPEARANCE_MODES
+                    .iter()
+                    .map(|(_, name)| g.text(&self.t, Style::Segment, name, 1e4))
+                    .collect::<Result<_>>()?;
+                let widths: Vec<f32> = self
+                    .texts
+                    .segments
+                    .iter()
+                    .map(|label| label.width + 2. * s5)
+                    .collect();
+                let track_w = widths.iter().sum::<f32>() + 2. * SEGMENT_INSET;
+                let track_h = h_sm + 2. * SEGMENT_INSET;
+                let copy_w = (width - track_w - s6).max(40.);
+                let row = preferences::row("appearance");
+                let title = g.text(&self.t, Style::RowTitle, row.title, copy_w)?;
+                let detail = g.text(
+                    &self.t,
+                    Style::RowDescription,
+                    row.description,
+                    copy_w.min(measure),
+                )?;
+                let copy_h = title.height + 3. + detail.height;
+                let content_h = copy_h.max(track_h);
+                self.texts.copies.push(CopyText {
+                    item,
+                    title,
+                    detail: Some(detail),
+                    gap: 3.,
+                });
+                self.nodes[self.mode_copy].rect =
+                    Rect::new(x, y + (content_h - copy_h) / 2., copy_w, copy_h);
+                self.nodes[self.seg_track].rect = Rect::new(
+                    x + width - track_w,
+                    (y + (content_h - track_h) / 2.).round(),
+                    track_w,
+                    track_h,
+                );
+                let mut left = SEGMENT_INSET;
+                for (index, &group) in self.segments.iter().enumerate() {
+                    let r = Rect::new(left, SEGMENT_INSET, widths[index], h_sm);
+                    self.nodes[group].rect = r;
+                    for &child in &self.children[group] {
+                        self.nodes[child].rect = r.at_origin();
+                    }
+                    left += widths[index];
+                }
+                let selected = self.nodes[self.segments[self.mode_index()]].rect;
+                self.nodes[self.seg_thumb].rect = selected;
+                Ok(content_h)
+            }
+            Item::Accent => {
+                // `.setting-row-stack`: copy, 8 px, then the 5-column grid.
+                let row = preferences::row("theme");
+                let title = g.text(&self.t, Style::RowTitle, row.title, width)?;
+                let detail = g.text(
+                    &self.t,
+                    Style::RowDescription,
+                    row.description,
+                    width.min(measure),
+                )?;
+                let copy_h = title.height + 3. + detail.height;
+                self.texts.copies.push(CopyText {
+                    item,
+                    title,
+                    detail: Some(detail),
+                    gap: 3.,
+                });
+                self.nodes[self.accent_copy].rect = Rect::new(x, y, width, copy_h);
+                self.texts.chips = THEMES
+                    .iter()
+                    .map(|theme| g.text(&self.t, Style::Chip, theme.name, 1e4))
+                    .collect::<Result<_>>()?;
+                self.texts.check = Some(g.text(&self.t, Style::Check, "✓", 1e4)?);
+                let columns = preferences::THEME_COLUMNS;
+                let col_w = (width - (columns - 1) as f32 * s2) / columns as f32;
+                let grid_y = y + copy_h + s4;
+                for (index, chip) in self.chips.iter().enumerate() {
+                    let (col, line) = ((index % columns) as f32, (index / columns) as f32);
+                    let r = Rect::new(
+                        x + col * (col_w + s2),
+                        grid_y + line * (CHIP_H + s2),
+                        col_w,
+                        CHIP_H,
+                    );
+                    self.nodes[chip.group].rect = r;
+                    for node in [chip.hover, chip.base, chip.active, chip.ring] {
+                        self.nodes[node].rect = r.at_origin();
+                    }
+                }
+                let lines = THEMES.len().div_ceil(columns) as f32;
+                Ok(copy_h + s4 + lines * CHIP_H + (lines - 1.) * s2)
+            }
+            Item::Folder => {
+                let row = preferences::row("output_directory");
+                let title = g.text(&self.t, Style::RowTitle, row.title, width)?;
+                let copy_h = title.height;
+                self.texts.copies.push(CopyText {
+                    item,
+                    title,
+                    detail: None,
+                    gap: 3.,
+                });
+                self.nodes[self.folder_copy].rect = Rect::new(x, y, width, copy_h);
+                let choose = g.text(&self.t, Style::Control, "Choose…", 1e4)?;
+                let button_w = (choose.width + 2. * s5 + 2.).ceil();
+                let field_y = y + copy_h + s4;
+                self.nodes[self.field].rect = Rect::new(x, field_y, width - s4 - button_w, h_lg);
+                let button = Rect::new(x + width - button_w, field_y, button_w, h_lg);
+                self.nodes[self.choose.base].rect = button;
+                self.nodes[self.choose.lit].rect = button.at_origin();
+                self.nodes[self.choose.ring].rect = button.at_origin();
+                self.texts.choose = Some(choose);
+                self.texts.path =
+                    Some(g.text(&self.t, Style::Mono, &self.settings.output_directory, 1e4)?);
+                Ok(copy_h + s4 + h_lg)
+            }
+        }
     }
 
     fn viewport_rect(&self) -> Rect {
@@ -593,7 +1023,7 @@ impl Scene {
             .map_or(self.scroll, |m| -m.value(now))
     }
 
-    fn thumb_rect(&self, scroll: f32) -> Rect {
+    fn scrollbar_rect(&self, scroll: f32) -> Rect {
         let viewport = self.viewport_rect();
         let max = self.max_scroll();
         let track = viewport.h - 6.;
@@ -617,24 +1047,21 @@ impl Scene {
         }
         let from = self.scroll_now();
         self.scroll = target;
-        let thumb = self.thumb_rect(target);
-        self.nodes[self.thumb].rect = Rect::new(thumb.x, thumb.y, thumb.w, thumb.h);
-        self.nodes[self.thumb].visible = self.max_scroll() > 0.;
-        let from_thumb = self.thumb_rect(from).y;
-        self.motions.retain(|m| {
-            !(m.prop == Prop::OffsetY && (m.node == self.content || m.node == self.thumb))
-        });
-        self.nodes[self.content].rect.y = -target;
-        self.nodes[self.content].props = true;
-        self.nodes[self.thumb].props = true;
-        if smooth && !self.reduced_motion && from.is_finite() {
+        let bar = self.scrollbar_rect(target);
+        self.nodes[self.scrollbar].rect = bar;
+        self.nodes[self.scrollbar].visible = self.max_scroll() > 0.;
+        let from_bar = self.scrollbar_rect(from).y;
+        let (content, scrollbar) = (self.content, self.scrollbar);
+        self.motions
+            .retain(|m| !(m.prop == Prop::OffsetY && (m.node == content || m.node == scrollbar)));
+        self.nodes[content].rect.y = -target;
+        self.nodes[content].props = true;
+        self.nodes[scrollbar].props = true;
+        if smooth && !self.reduced_motion && from >= 0. {
             let start = Instant::now();
             let curve = self.curve("ease-standard");
             let seconds = self.t.n("dur-5") / 1000.;
-            for (node, from, to) in [
-                (self.content, -from, -target),
-                (self.thumb, from_thumb, thumb.y),
-            ] {
+            for (node, from, to) in [(content, -from, -target), (scrollbar, from_bar, bar.y)] {
                 self.motions.push(Motion {
                     node,
                     prop: Prop::OffsetY,
@@ -683,7 +1110,7 @@ impl Scene {
         CubicBezier::new(x1, y1, x2, y2).unwrap_or(CubicBezier::LINEAR)
     }
 
-    /// Animate `prop` of `node` to `to` over the `duration` token.
+    /// Animate `prop` of `node` from where it is now to `to`.
     fn animate(&mut self, node: usize, prop: Prop, to: f32, duration: &str) {
         let now = Instant::now();
         let current = |n: &Node| match prop {
@@ -696,6 +1123,11 @@ impl Scene {
             .iter()
             .find(|m| m.node == node && m.prop == prop)
             .map_or_else(|| current(&self.nodes[node]), |m| m.value(now));
+        self.animate_from(node, prop, from, to, duration);
+    }
+
+    /// Animate `prop` of `node` from `from` to `to` over the `duration` token.
+    fn animate_from(&mut self, node: usize, prop: Prop, from: f32, to: f32, duration: &str) {
         self.motions.retain(|m| !(m.node == node && m.prop == prop));
         let target = &mut self.nodes[node];
         match prop {
@@ -714,7 +1146,7 @@ impl Scene {
             prop,
             from,
             to,
-            start: now,
+            start: Instant::now(),
             seconds,
             curve,
             applied: false,
@@ -724,15 +1156,9 @@ impl Scene {
     // ---- state ----
 
     fn set_active(&mut self, index: usize) {
-        if index == self.active {
-            return;
-        }
-        let old = std::mem::replace(&mut self.active, index);
-        for i in [old, index] {
-            let (_, lit, _) = self.nav_items[i];
-            self.nodes[lit].dirty = true;
-            let to = self.nav_lit(i);
-            self.animate(lit, Prop::Opacity, to, "dur-2");
+        if index != self.active {
+            self.active = index;
+            self.refresh(true);
         }
     }
 
@@ -741,25 +1167,16 @@ impl Scene {
             return;
         }
         let old = std::mem::replace(&mut self.hover, hover);
+        // The off track's border lightens; the only hover repaint.
         for target in [old, hover].into_iter().flatten() {
-            match target {
-                Target::Nav(i) => {
-                    let (_, lit, _) = self.nav_items[i];
-                    let to = self.nav_lit(i);
-                    self.animate(lit, Prop::Opacity, to, "dur-2");
-                }
-                Target::History => {
-                    let to = f32::from(self.hover == Some(Target::History));
-                    self.animate(self.history.1, Prop::Opacity, to, "dur-2");
-                }
-                // The off track's border lightens; the only hover repaint.
-                Target::Row(row) => {
-                    if self.rows[row].enabled && !self.rows[row].on {
-                        self.nodes[self.row_nodes[row].track_off].dirty = true;
-                    }
-                }
+            if let Target::Row(row) = target
+                && self.rows[row].enabled
+                && !self.rows[row].on
+            {
+                self.nodes[self.row_nodes[row].track_off].dirty = true;
             }
         }
+        self.refresh(true);
     }
 
     pub fn set_focus(&mut self, focus: Option<Target>, visible: bool) {
@@ -769,41 +1186,35 @@ impl Scene {
         let old = self.focus;
         self.focus = focus;
         self.focus_visible = visible;
-        for target in [old, focus].into_iter().flatten() {
-            let ring = self.ring(target);
-            self.nodes[ring].visible = self.ring_shown(target);
-            self.nodes[ring].props = true;
-        }
+        self.refresh(true);
         if let Some(target) = focus
             && focus != old
         {
             self.events.push(Event::Focus(target));
         }
-        if visible && let Some(Target::Row(row)) = focus {
-            self.reveal(row);
+        if visible && let Some(target) = focus {
+            self.reveal(target);
         }
     }
 
-    fn ring(&self, target: Target) -> usize {
-        match target {
-            Target::Nav(i) => self.nav_items[i].2,
-            Target::History => self.history.2,
-            Target::Row(row) => self.row_nodes[row].ring,
-        }
-    }
-
+    /// Tab order: sidebar, header action, then card controls in order.
     pub fn focusable(&self) -> Vec<Target> {
         let mut list: Vec<Target> = (0..SECTIONS.len()).map(Target::Nav).collect();
         list.push(Target::History);
-        for (row, state) in self.rows.iter().enumerate() {
-            if state.enabled {
-                list.push(Target::Row(row));
+        for (_, items) in CARDS {
+            for item in items {
+                match *item {
+                    Item::Switch(row) if self.rows[row].enabled => list.push(Target::Row(row)),
+                    Item::Switch(_) => {}
+                    Item::Mode => list.extend((0..APPEARANCE_MODES.len()).map(Target::Mode)),
+                    Item::Accent => list.extend((0..THEMES.len()).map(Target::Theme)),
+                    Item::Folder => list.push(Target::Choose),
+                }
             }
         }
         list
     }
 
-    /// Tab order: sidebar, header action, then switches.
     pub fn focus_step(&mut self, forward: bool) {
         let list = self.focusable();
         let index = self.focus.and_then(|f| list.iter().position(|t| *t == f));
@@ -816,15 +1227,21 @@ impl Scene {
         self.set_focus(Some(list[next]), true);
     }
 
-    /// Keep a focused row inside the viewport.
-    fn reveal(&mut self, row: usize) {
-        let r = self.row_rects[row];
-        let vh = self.viewport_rect().h;
+    /// Keep a focused control inside the viewport.
+    fn reveal(&mut self, target: Target) {
+        if matches!(target, Target::Nav(_) | Target::History) {
+            return;
+        }
+        let r = match target {
+            Target::Row(row) => self.row_rect(row),
+            _ => self.target_rect(target),
+        };
+        let v = self.viewport_rect();
         let margin = self.t.n("s-6");
-        if r.y - margin < self.scroll {
-            self.set_scroll(r.y - margin, false);
-        } else if r.y + r.h + margin > self.scroll + vh {
-            self.set_scroll(r.y + r.h + margin - vh, false);
+        if r.y - margin < v.y {
+            self.scroll_by(r.y - margin - v.y);
+        } else if r.y + r.h + margin > v.y + v.h {
+            self.scroll_by(r.y + r.h + margin - v.y - v.h);
         }
     }
 
@@ -841,7 +1258,63 @@ impl Scene {
             // Capture History is not part of this host yet.
             Target::History => None,
             Target::Row(row) => self.toggle(row),
+            Target::Mode(index) => self.select_mode(index),
+            Target::Theme(index) => self.select_theme(index),
+            Target::Choose => Some(Action::ChooseFolder),
         }
+    }
+
+    fn save(&mut self) {
+        match captures_settings::save(&self.settings_file, &self.settings) {
+            Ok(saved) => self.settings = saved,
+            Err(error) => eprintln!("{}", preferences::save_error(&error.to_string())),
+        }
+    }
+
+    fn select_mode(&mut self, index: usize) -> Option<Action> {
+        let old = self.mode_index();
+        if index == old {
+            return None;
+        }
+        let id = APPEARANCE_MODES[index].0;
+        self.settings.appearance = serde_json::from_value(serde_json::json!(id)).ok()?;
+        self.save();
+        // The indicator takes the new segment's width and slides over
+        // `--dur-4` from the old one (centred on it).
+        let (from, to) = (
+            self.nodes[self.segments[old]].rect,
+            self.nodes[self.segments[index]].rect,
+        );
+        let thumb = self.seg_thumb;
+        self.nodes[thumb].rect = to;
+        self.nodes[thumb].dirty = true;
+        let start = from.x + (from.w - to.w) / 2.;
+        self.animate_from(thumb, Prop::OffsetX, start, to.x, "dur-4");
+        self.refresh(true);
+        self.events.push(Event::Selected(Target::Mode(index)));
+        Some(Action::Retheme)
+    }
+
+    fn select_theme(&mut self, index: usize) -> Option<Action> {
+        if index == self.theme_index() {
+            return None;
+        }
+        self.settings.theme = serde_json::from_value(serde_json::json!(THEMES[index].id)).ok()?;
+        self.save();
+        self.refresh(true);
+        self.events.push(Event::Selected(Target::Theme(index)));
+        Some(Action::Retheme)
+    }
+
+    /// Save a folder chosen in the picker; true when the layout must change.
+    pub fn set_output_directory(&mut self, path: String) -> bool {
+        if path == self.settings.output_directory {
+            return false;
+        }
+        self.settings.output_directory = path;
+        self.save();
+        self.events.push(Event::Folder);
+        true
     }
 
     fn toggle(&mut self, row: usize) -> Option<Action> {
@@ -858,10 +1331,7 @@ impl Scene {
             RowKey::Flag(flag) => {
                 self.set_row(row, on);
                 set_flag(&mut self.settings, flag, on);
-                match captures_settings::save(&self.settings_file, &self.settings) {
-                    Ok(saved) => self.settings = saved,
-                    Err(error) => eprintln!("{}", preferences::save_error(&error.to_string())),
-                }
+                self.save();
                 None
             }
         }
@@ -911,18 +1381,18 @@ impl Scene {
         true
     }
 
-    pub fn settings_file(&self) -> &std::path::Path {
-        &self.settings_file
-    }
-
     // ---- geometry for input and accessibility (client DIPs) ----
 
+    /// A node's rect in client DIPs, at the live (possibly animating) scroll.
     pub fn absolute(&self, node: usize) -> Rect {
         let mut r = self.nodes[node].rect;
         let mut parent = self.nodes[node].parent;
         while let Some(p) = parent {
             let pr = self.nodes[p].rect;
             r = r.offset(pr.x, pr.y);
+            if p == self.content {
+                r = r.offset(0., self.scroll - self.scroll_now());
+            }
             parent = self.nodes[p].parent;
         }
         r
@@ -934,19 +1404,43 @@ impl Scene {
     }
 
     pub fn target_rect(&self, target: Target) -> Rect {
-        match target {
-            Target::Nav(i) => self.absolute(self.nav_items[i].0),
-            Target::History => self.absolute(self.history.0),
-            Target::Row(row) => self.absolute(self.row_nodes[row].switch),
-        }
+        self.absolute(match target {
+            Target::Nav(i) => self.nav_items[i].base,
+            Target::History => self.history.base,
+            Target::Row(row) => self.row_nodes[row].switch,
+            Target::Mode(i) => self.segments[i],
+            Target::Theme(i) => self.chips[i].group,
+            Target::Choose => self.choose.base,
+        })
+    }
+
+    pub fn item_rect(&self, item: Item) -> Rect {
+        self.item_rects
+            .iter()
+            .find(|(i, _)| *i == item)
+            .map_or_else(Rect::default, |(_, r)| self.content_rect(*r))
     }
 
     pub fn row_rect(&self, row: usize) -> Rect {
-        self.content_rect(self.row_rects[row])
+        self.item_rect(Item::Switch(row))
     }
 
     pub fn card_rect(&self, card: usize) -> Rect {
         self.content_rect(self.card_rects[card])
+    }
+
+    /// The Interface theme control (`role="group"`).
+    pub fn mode_rect(&self) -> Rect {
+        self.absolute(self.seg_track)
+    }
+
+    /// The accent chip grid (`role="radiogroup"`).
+    pub fn accent_rect(&self) -> Rect {
+        self.content_rect(self.grid_rect)
+    }
+
+    pub fn field_rect(&self) -> Rect {
+        self.absolute(self.field)
     }
 
     pub fn viewport(&self) -> Rect {
@@ -970,16 +1464,25 @@ impl Scene {
     }
 
     pub fn hit(&self, x: f32, y: f32) -> Option<Target> {
-        for (i, &(base, _, _)) in self.nav_items.iter().enumerate() {
-            if self.absolute(base).contains(x, y) {
+        for (i, item) in self.nav_items.iter().enumerate() {
+            if self.absolute(item.base).contains(x, y) {
                 return Some(Target::Nav(i));
             }
         }
-        if self.absolute(self.history.0).contains(x, y) {
+        if self.absolute(self.history.base).contains(x, y) {
             return Some(Target::History);
         }
         if !self.viewport_rect().contains(x, y) {
             return None;
+        }
+        let controls = (0..APPEARANCE_MODES.len())
+            .map(Target::Mode)
+            .chain((0..THEMES.len()).map(Target::Theme))
+            .chain([Target::Choose]);
+        for target in controls {
+            if self.target_rect(target).contains(x, y) {
+                return Some(target);
+            }
         }
         (0..self.rows.len())
             .find(|&row| self.row_rect(row).contains(x, y))
@@ -996,6 +1499,7 @@ impl Scene {
         let (w, h) = (n.rect.w, n.rect.h);
         let all = rect(0., 0., w, h);
         let accent_ring = t.color_alpha("theme-accent", 0.55);
+        let centered = |text: &Text, x: f32| (x, (h - text.height) / 2.);
         match n.kind {
             Kind::Group => {}
             Kind::NavBg => {
@@ -1026,7 +1530,7 @@ impl Scene {
             }
             Kind::NavItem { index, lit } => {
                 let label = &self.texts.nav[index];
-                let y = (h - label.height) / 2.;
+                let (x, y) = centered(label, t.n("s-4"));
                 if lit {
                     // Opaque so the resting label never shows through.
                     gfx::fill(dc, all, c("surface-sunken"))?;
@@ -1036,9 +1540,9 @@ impl Scene {
                         "surface-hover"
                     };
                     gfx::fill_round(dc, all, t.n("r-md"), c(bg))?;
-                    gfx::text(dc, label, t.n("s-4"), y, c("text"))?;
+                    gfx::text(dc, label, x, y, c("text"))?;
                 } else {
-                    gfx::text(dc, label, t.n("s-4"), y, c("text-subtle"))?;
+                    gfx::text(dc, label, x, y, c("text-subtle"))?;
                 }
             }
             Kind::HeaderBg => {
@@ -1059,8 +1563,8 @@ impl Scene {
                 }
                 gfx::border(dc, all, radius, 1., c("border"))?;
                 if let Some(label) = &self.texts.history {
-                    let y = (h - label.height) / 2.;
-                    gfx::text(dc, label, t.n("s-5") + 1., y, c("text"))?;
+                    let (x, y) = centered(label, t.n("s-5") + 1.);
+                    gfx::text(dc, label, x, y, c("text"))?;
                 }
             }
             Kind::Viewport => gfx::fill(dc, all, c("surface-canvas"))?,
@@ -1084,11 +1588,13 @@ impl Scene {
                     gfx::fill(dc, rect(inset, y, w - inset, y + 1.), c("border-subtle"))?;
                 }
             }
-            Kind::RowCopy(row) => {
-                let title = &self.texts.row_titles[row];
-                gfx::text(dc, title, 0., 0., c("text"))?;
-                if let Some(detail) = &self.texts.row_details[row] {
-                    gfx::text(dc, detail, 0., title.height + 6., c("text-subtle"))?;
+            Kind::Copy(item) => {
+                if let Some(copy) = self.texts.copies.iter().find(|copy| copy.item == item) {
+                    gfx::text(dc, &copy.title, 0., 0., c("text"))?;
+                    if let Some(detail) = &copy.detail {
+                        let y = copy.title.height + copy.gap;
+                        gfx::text(dc, detail, 0., y, c("text-subtle"))?;
+                    }
                 }
             }
             Kind::TrackOff(row) => {
@@ -1108,12 +1614,106 @@ impl Scene {
                 gfx::fill_round(dc, all, w / 2., c("text-subtle"))?;
             }
             Kind::KnobOn => gfx::fill_round(dc, all, w / 2., c("theme-accent-ink"))?,
-            Kind::Ring(Ring::Tight(radius)) => gfx::ring(dc, all, radius, 0., 2., accent_ring)?,
-            Kind::Ring(Ring::Full(radius)) => {
+            Kind::SegTrack => {
+                let radius = t.n("r-lg");
+                gfx::fill_round(dc, all, radius, c("surface-sunken"))?;
+                gfx::border(dc, all, radius, 1., c("border-subtle"))?;
+            }
+            Kind::SegThumb => {
+                let radius = t.n("r-sm");
+                gfx::shadow(dc, all, radius, t.shadow("shadow-xs"))?;
+                gfx::fill_round(dc, all, radius, c("surface-raised"))?;
+                gfx::border(dc, all, radius, 1., c("border-subtle"))?;
+            }
+            Kind::SegLabel { index, lit } => {
+                let label = &self.texts.segments[index];
+                let (x, y) = centered(label, (w - label.width) / 2.);
+                let color = if lit { "text" } else { "text-subtle" };
+                gfx::text(dc, label, x, y, c(color))?;
+            }
+            Kind::ChipHover(_) => gfx::fill_round(dc, all, t.n("r-md"), c("surface-hover"))?,
+            Kind::Chip { index, active } => {
+                let radius = t.n("r-md");
+                if active {
+                    gfx::shadow(dc, all, radius, t.shadow("shadow-xs"))?;
+                    gfx::fill_round(dc, all, radius, c("surface-raised"))?;
+                    gfx::border(dc, all, radius, 1., c("border"))?;
+                }
+                // 1 px border, `0 var(--s-3)` padding, `18px 1fr 10px` columns.
+                let s3 = t.n("s-3");
+                let left = 1. + s3;
+                let top = (h - SWATCH) / 2.;
+                let theme = &THEMES[index];
+                let colors = (theme.id != "custom").then(|| t.swatch(theme.id));
+                let tile = rect(left, top, left + SWATCH, top + SWATCH);
+                gfx::swatch(dc, &g.factory, tile, t.n("r-sm"), colors)?;
+                let label = &self.texts.chips[index];
+                let name_x = left + SWATCH + s3;
+                let check_x = w - 1. - s3 - 10.;
+                let color = if active { "text" } else { "text-muted" };
+                unsafe {
+                    dc.PushAxisAlignedClip(
+                        &rect(name_x, 0., check_x - s3, h),
+                        windows::Win32::Graphics::Direct2D::D2D1_ANTIALIAS_MODE_ALIASED,
+                    );
+                }
+                gfx::text(dc, label, name_x, (h - label.height) / 2., c(color))?;
+                unsafe { dc.PopAxisAlignedClip() };
+                if active && let Some(check) = &self.texts.check {
+                    let mark = if t.appearance == "dark" {
+                        "theme-accent"
+                    } else {
+                        "theme-accent-readable"
+                    };
+                    let x = check_x + (10. - check.width) / 2.;
+                    gfx::text(dc, check, x, (h - check.height) / 2., c(mark))?;
+                }
+            }
+            Kind::Field => {
+                let radius = t.n("r-md");
+                gfx::fill_round(dc, all, radius, c("surface-field"))?;
+                gfx::border(dc, all, radius, 1., c("control-border"))?;
+                if let Some(path) = &self.texts.path {
+                    let pad = t.n("s-5") + 1.;
+                    unsafe {
+                        dc.PushAxisAlignedClip(
+                            &rect(pad, 0., w - pad, h),
+                            windows::Win32::Graphics::Direct2D::D2D1_ANTIALIAS_MODE_ALIASED,
+                        );
+                    }
+                    gfx::text(dc, path, pad, (h - path.height) / 2., c("text"))?;
+                    unsafe { dc.PopAxisAlignedClip() };
+                }
+            }
+            Kind::Choose { lit } => {
+                let radius = t.n("r-md");
+                let (bg, edge) = if lit {
+                    ("control-hover", "border-strong")
+                } else {
+                    ("control", "control-border")
+                };
+                if !lit {
+                    gfx::shadow(dc, all, radius, t.shadow("shadow-xs"))?;
+                }
+                gfx::fill_round(dc, all, radius, c(bg))?;
+                gfx::border(dc, all, radius, 1., c(edge))?;
+                if let Some(label) = &self.texts.choose {
+                    let (x, y) = centered(label, (w - label.width) / 2.);
+                    gfx::text(dc, label, x, y, c("text"))?;
+                }
+            }
+            Kind::Ring {
+                shape: Ring::Tight(radius),
+                ..
+            } => gfx::ring(dc, all, radius, 0., 2., accent_ring)?,
+            Kind::Ring {
+                shape: Ring::Full(radius),
+                ..
+            } => {
                 gfx::ring(dc, all, radius, 0., 2., c("surface-canvas"))?;
                 gfx::ring(dc, all, radius, 2., 4., accent_ring)?;
             }
-            Kind::Thumb => gfx::fill_round(dc, all, w / 2., c("border-strong"))?,
+            Kind::Scrollbar => gfx::fill_round(dc, all, w / 2., c("border-strong"))?,
         }
         Ok(())
     }
