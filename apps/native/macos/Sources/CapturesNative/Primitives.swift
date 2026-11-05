@@ -329,10 +329,20 @@ final class ClosurePopUpButton: NSPopUpButton {
             border = .clear
             ink = tokens.color(hovered || focused ? "text" : "text-subtle"); glyph = ink
         }
-        let outline = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: radius, yRadius: radius)
+        // An inline select only rounds the corners it shares with its field.
+        let shape = selectStyle == .inline
+            ? NSRect(x: -radius, y: 0, width: bounds.width + radius, height: bounds.height).insetBy(dx: 0.5, dy: 0.5)
+            : bounds.insetBy(dx: 0.5, dy: 0.5)
+        let outline = NSBezierPath(roundedRect: shape, xRadius: radius, yRadius: radius)
         fill.withAlphaComponent(fill.alphaComponent * alpha).setFill(); outline.fill()
         border.withAlphaComponent(border.alphaComponent * alpha).setStroke()
         outline.lineWidth = 1; outline.stroke()
+        if selectStyle == .inline {
+            // Shipping `.filename-format-select`'s left border divides it from the field.
+            let rule = tokens.color("control-border")
+            rule.withAlphaComponent(rule.alphaComponent * alpha).setFill()
+            NSRect(x: 0, y: 0, width: 1, height: bounds.height).fill(using: .sourceOver)
+        }
         if focused && selectStyle != .inline { drawFocusRing(tokens, in: bounds, radius: radius) }
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: tokens.number("text-sm")),

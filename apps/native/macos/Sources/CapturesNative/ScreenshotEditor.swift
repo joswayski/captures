@@ -1418,6 +1418,98 @@ final class EditorExportChevron: NSView {
     }
 }
 
+/// Shipping `.screenshot-make-copy`: a 28×16 token switch, its 11 pt label
+/// and the divider before Save. The button's `state` is the setting.
+final class EditorMakeCopySwitch: NSButton {
+    var tokens: Tokens! { didSet { needsDisplay = true } }
+    static let label = "Save as new file"
+    private var hovered = false
+    private var hoverTracking: NSTrackingArea?
+
+    override var isFlipped: Bool { true }
+    override var state: NSControl.StateValue {
+        didSet { setAccessibilityValue(state == .on ? 1 : 0); needsDisplay = true }
+    }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        title = ""; isBordered = false; setButtonType(.toggle)
+        setAccessibilityRole(.checkBox); setAccessibilityLabel(Self.label)
+        setAccessibilityValue(0)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    private var labelAttributes: [NSAttributedString.Key: Any] {
+        [.font: NSFont.systemFont(ofSize: tokens.number("text-xs"), weight: .medium),
+         .foregroundColor: tokens.color("text-muted")]
+    }
+
+    /// Track, gap, label, then the divider's padding and 1 pt rule.
+    var preferredWidth: CGFloat {
+        28 + tokens.number("s-3") + ceil((Self.label as NSString).size(withAttributes: labelAttributes).width)
+            + tokens.number("s-5") + 1
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTracking { removeTrackingArea(hoverTracking) }
+        let tracking = NSTrackingArea(rect: .zero,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
+        addTrackingArea(tracking); hoverTracking = tracking
+    }
+    override func mouseEntered(with event: NSEvent) { hovered = true; needsDisplay = true }
+    override func mouseExited(with event: NSEvent) { hovered = false; needsDisplay = true }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let tokens else { return }
+        let alpha: CGFloat = isEnabled ? 1 : 0.55
+        let on = state == .on
+        let track = NSRect(x: 0, y: ((bounds.height - 16) / 2).rounded(), width: 28, height: 16)
+        let path = NSBezierPath(roundedRect: track.insetBy(dx: 0.5, dy: 0.5), xRadius: 7.5, yRadius: 7.5)
+        tokens.color(on ? "theme-accent" : "surface-field").withAlphaComponent(alpha).setFill(); path.fill()
+        if !on {
+            tokens.color(isEnabled && hovered ? "text-faint" : "border-strong").withAlphaComponent(alpha).setStroke()
+            path.lineWidth = 1; path.stroke()
+        }
+        // The 10 pt knob sits 2 pt inside the 1 pt border and travels 12 pt.
+        let knob = NSRect(x: track.minX + 3 + (on ? 12 : 0), y: track.minY + 3, width: 10, height: 10)
+        tokens.color(on ? "theme-accent-ink" : "text-subtle").withAlphaComponent(alpha).setFill()
+        NSBezierPath(ovalIn: knob).fill()
+        if window?.firstResponder === self { drawFocusRing(tokens, in: track.insetBy(dx: -2, dy: -2), radius: 10) }
+        var attributes = labelAttributes
+        attributes[.foregroundColor] = tokens.color("text-muted").withAlphaComponent(alpha)
+        let size = (Self.label as NSString).size(withAttributes: attributes)
+        (Self.label as NSString).draw(at: NSPoint(x: track.maxX + tokens.number("s-3"),
+            y: (bounds.height - size.height) / 2), withAttributes: attributes)
+        tokens.color("border-subtle").setFill()
+        NSRect(x: bounds.width - 1, y: 0, width: 1, height: bounds.height).fill(using: .sourceOver)
+    }
+}
+
+/// Shipping `.recording-filename-input`: one field-coloured box holding the
+/// borderless filename and the inline format select, with the accent border
+/// and tight ring while the filename is being edited.
+final class EditorFilenameBox: NSView {
+    var tokens: Tokens! { didSet { needsDisplay = true } }
+    weak var field: NSTextField?
+    override var isFlipped: Bool { true }
+
+    var editing: Bool {
+        guard let field, let editor = field.currentEditor() else { return false }
+        return window?.firstResponder === editor
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let tokens else { return }
+        let radius = tokens.number("r-md")
+        let outline = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: radius, yRadius: radius)
+        tokens.color("surface-field").setFill(); outline.fill()
+        tokens.color(editing ? "theme-accent" : "control-border").setStroke()
+        outline.lineWidth = 1; outline.stroke()
+        if editing { drawFocusRing(tokens, in: bounds, radius: radius) }
+    }
+}
+
 private final class EditorInlineTextView: NSTextView {
     var onEscape: (() -> Void)?
     var onBlur: (() -> Void)?
@@ -1609,11 +1701,14 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private let exportChevron = EditorExportChevron()
     private let exportFilenameCaption = NSTextField(labelWithString: "Filename")
     private let exportSavingToCaption = NSTextField(labelWithString: "Saving to")
-    private let exportStatus = NSTextField(labelWithString: "")
+    /// Shipping `.screenshot-export-notice`: the save/copy result or failure,
+    /// above the always-visible `.screenshot-export-hint`.
+    private let exportStatus = NSTextField(wrappingLabelWithString: "")
+    private let exportHint = NSTextField(wrappingLabelWithString: "")
+    private let exportFilenameBox = EditorFilenameBox()
     private let exportEstimateValue = NSTextField(labelWithString: "—")
     private let exportEstimateDelta = NSTextField(labelWithString: "")
-    private let saveAsNewSwitch = NSSwitch()
-    private let saveAsNewLabel = NSTextField(labelWithString: "Save as new file")
+    private let saveAsNewSwitch = EditorMakeCopySwitch()
     /// Settings groups behind the disclosure: caption, controls with their
     /// x offsets/widths inside the group, and the group width.
     private var exportGroups: [String: (caption: NSTextField, views: [(NSView, CGFloat, CGFloat)], width: CGFloat)] = [:]
@@ -2167,8 +2262,15 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         window.setContentSize(fitted)
     }
 
-    /// Keep the footer pinned; expanded settings reserve only their visible rows.
-    var exportBarHeight: CGFloat { 80 + (exportSettingsOpen ? exportSettingsHeight + 16 : 0) }
+    /// Shipping `.screenshot-export-bar`: a 1 pt rule, 8 pt padding, the open
+    /// settings card, then the save row (and, at 1040 pt or narrower, the
+    /// status row below it). The footer stays pinned; it only grows for the
+    /// settings card's visible rows or a hint that needs more lines.
+    var exportBarHeight: CGFloat {
+        let padding = tokens.number("s-4")
+        let row = exportRowMetrics()
+        return 1 + padding + (exportSettingsOpen ? exportSettingsHeight + padding : 0) + row.height + padding
+    }
 
     private var exportSettingsHeight: CGFloat {
         2 * tokens.number("s-4") + 46 + (exportSettingsLayout().last?.row ?? 0) * 52
@@ -2449,14 +2551,121 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     static let backgroundTitle = "Background color"
 
-    /// Disclosure and filename widths: fixed actions first, then the disclosure
-    /// grows to fit its summary, then the filename field takes what remains.
-    static func exportWidths(_ width: CGFloat) -> (disclosure: CGFloat, filename: CGFloat) {
-        let fixed: CGFloat = 72 + 112 + 148 + 96 + 5 * 8
-        let flexible = max(0, width - 32 - fixed)
-        let disclosure = min(210, max(144, flexible - 120))
-        return (disclosure, min(320, max(120, flexible - disclosure)))
+    /// Shipping `.screenshot-save-row` tracks at a window width.
+    struct ExportRowLayout: Equatable {
+        /// Wider than shipping's 1040 px breakpoint: the status is a column
+        /// between Copy and the actions, not a row below them.
+        var wide: Bool
+        var disclosure: CGFloat
+        var filename: CGFloat
+        /// The status column (wide) or the full-width status row.
+        var status: CGFloat
     }
+
+    /// CSS grid sizing for the save row: `minmax(178px, 210px) minmax(240px,
+    /// 390px) auto minmax(120px, 1fr) auto` with 12 pt gaps when wide, else
+    /// `minmax(170px, 200px) minmax(230px, 1fr) auto auto` with 8 pt gaps.
+    /// `secondary` and `actions` are the auto columns' content widths.
+    static func exportRow(width: CGFloat, secondary: CGFloat, actions: CGFloat) -> ExportRowLayout {
+        let inner = max(0, width - 2 * 12)
+        if width > 1040 {
+            var free = inner - 4 * 12 - secondary - actions - (178 + 240 + 120)
+            var filename: CGFloat = 240
+            if free < 0 { filename = max(120, filename + free); free = 0 }
+            // Grid's maximize step shares free space equally between the
+            // bounded tracks until each reaches its limit; the 1fr status
+            // column takes what is left.
+            let disclosureGrowth = min(free / 2, 32)
+            let filenameGrowth = min(free - disclosureGrowth, 150)
+            return ExportRowLayout(wide: true, disclosure: 178 + disclosureGrowth,
+                                   filename: filename + filenameGrowth,
+                                   status: 120 + free - disclosureGrowth - filenameGrowth)
+        }
+        let rest = max(0, inner - 3 * 8 - secondary - actions)
+        var disclosure = min(200, max(170, rest - 230))
+        // Below shipping's 860 pt minimum the filename keeps a usable width.
+        if rest - disclosure < 120 { disclosure = max(144, rest - 120) }
+        return ExportRowLayout(wide: false, disclosure: disclosure, filename: max(0, rest - disclosure),
+                               status: inner)
+    }
+
+    private func exportTextWidth(_ text: String, size: String, weight: NSFont.Weight) -> CGFloat {
+        ceil((text as NSString).size(withAttributes:
+            [.font: NSFont.systemFont(ofSize: tokens.number(size), weight: weight)]).width)
+    }
+
+    /// Shipping `.screenshot-export-secondary` / `-actions` buttons: 12 pt
+    /// side padding, a 14 pt icon and a 6 pt gap inside a 1 pt border.
+    private func exportButtonWidth(_ titles: [String], icon: Bool, minimum: CGFloat,
+                                   weight: NSFont.Weight = .medium) -> CGFloat {
+        let text = titles.map { exportTextWidth($0, size: "text-sm", weight: weight) }.max() ?? 0
+        return max(minimum, 2 + 2 * tokens.number("s-5") + (icon ? 14 + tokens.number("s-3") : 0) + text)
+    }
+
+    /// Widths of the auto columns: [Show in Folder] Copy image, and
+    /// [Save as new file] Save.
+    private var exportAutoWidths: (secondary: CGFloat, actions: CGFloat, copy: CGFloat, save: CGFloat,
+                                   reveal: CGFloat) {
+        let gap = tokens.number("s-3")
+        let copy = exportButtonWidth(["Copy image", "Copied"], icon: true, minimum: 86)
+        let reveal = exportButtonWidth(["Show in Folder"], icon: false, minimum: 86)
+        let save = exportButtonWidth([exportSaveButton?.title ?? "Save"], icon: true, minimum: 106,
+                                     weight: .semibold)
+        let secondary = copy + (showInFolderButton?.isHidden == false ? reveal + gap : 0)
+        let actions = save + (saveAsNewSwitch.isHidden ? 0 : saveAsNewSwitch.preferredWidth + tokens.number("s-2") + gap)
+        return (secondary, actions, copy, save, reveal)
+    }
+
+    /// One 11 pt status line at shipping's 1.35 line height.
+    private static let exportStatusLine: CGFloat = 15
+
+    private func exportStatusParagraph(alignment: NSTextAlignment) -> NSParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        style.minimumLineHeight = Self.exportStatusLine; style.maximumLineHeight = Self.exportStatusLine
+        style.alignment = alignment; style.lineBreakMode = .byWordWrapping
+        return style
+    }
+
+    private func exportStatusTextHeight(_ text: String, width: CGFloat, weight: NSFont.Weight,
+                                        maximumLines: Int) -> CGFloat {
+        guard !text.isEmpty, width > 0 else { return Self.exportStatusLine }
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: tokens.number("text-xs"), weight: weight),
+            .paragraphStyle: exportStatusParagraph(alignment: .left),
+        ]
+        let bounds = (text as NSString).boundingRect(with: NSSize(width: width, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin], attributes: attributes)
+        let lines = max(1, min(maximumLines, Int((bounds.height / Self.exportStatusLine).rounded(.up))))
+        return CGFloat(lines) * Self.exportStatusLine
+    }
+
+    /// The save row's height and its status block: the notice line (17 pt,
+    /// reserved while idle; up to two lines for a failure), a 2 pt gap and
+    /// the hint, which a failure replaces.
+    private func exportRowMetrics() -> (height: CGFloat, status: CGFloat, notice: CGFloat, hint: CGFloat,
+                                        layout: ExportRowLayout) {
+        let auto = exportAutoWidths
+        let layout = Self.exportRow(width: root.bounds.width, secondary: auto.secondary, actions: auto.actions)
+        let failed = exportStatusIsError
+        let notice = failed
+            ? 2 + exportStatusTextHeight(exportStatus.stringValue, width: layout.status, weight: .medium,
+                                         maximumLines: 2)
+            : 2 + Self.exportStatusLine
+        let hint = exportStatusTextHeight(exportHint.stringValue, width: layout.status,
+                                          weight: .regular, maximumLines: 6)
+        // A failure hides the hint but keeps its room, so an error never
+        // moves the canvas under the pointer.
+        let content = max(notice, 2 + Self.exportStatusLine + 2 + hint)
+        let field: CGFloat = 60 // 20 pt heading, 4 pt gap, 36 pt filename box.
+        if layout.wide {
+            let status = max(tokens.number("h-lg"), content)
+            return (max(field, status), status, notice, hint, layout)
+        }
+        let status = max(20, content)
+        return (field + tokens.number("s-4") + status, status, notice, hint, layout)
+    }
+
+    private var exportStatusIsError = false
 
     private func updateExportLayout() {
         // Estimates and worker receipts only need the footer. Reflow the canvas
@@ -2469,37 +2678,99 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private func layoutExportBar() {
         guard exportDisclosure != nil else { return }
         let width = root.bounds.width
-        exportBar.frame = NSRect(x: 0, y: root.bounds.height - exportBarHeight,
-                                 width: width, height: exportBarHeight)
+        let height = exportBarHeight
+        exportBar.frame = NSRect(x: 0, y: root.bounds.height - height, width: width, height: height)
         exportBarRule.frame = NSRect(x: 0, y: 0, width: width, height: 1)
+        let inset = tokens.number("s-5"), padding = tokens.number("s-4")
         exportSettingsPanel.isHidden = !exportSettingsOpen
-        exportSettingsPanel.frame = NSRect(x: 16, y: 10, width: width - 32, height: exportSettingsHeight)
+        exportSettingsPanel.frame = NSRect(x: inset, y: 1 + padding, width: width - 2 * inset,
+                                           height: exportSettingsHeight)
         layoutExportSettings()
-        let (disclosure, filename) = Self.exportWidths(width)
-        let base: CGFloat = exportSettingsOpen ? exportSettingsHeight + 16 : 0
-        let headingY = base + 10, rowY = base + 32
-        exportDisclosure.frame = NSRect(x: 16, y: rowY, width: disclosure, height: 36)
-        exportDisclosureTitle.frame = NSRect(x: 12, y: 3, width: disclosure - 40, height: 16)
-        exportSummary.frame = NSRect(x: 12, y: 19, width: disclosure - 40, height: 14)
-        exportChevron.frame = NSRect(x: disclosure - 26, y: 9, width: 16, height: 18)
-        outputFilename.frame = NSRect(x: 16 + disclosure + 8, y: rowY + 3, width: filename, height: 30)
-        outputFormat.frame = NSRect(x: outputFilename.frame.maxX + 8, y: rowY + 3, width: 72, height: 30)
-        copyImageButton.frame = NSRect(x: outputFormat.frame.maxX + 8, y: rowY + 1, width: 112, height: 34)
-        exportSaveButton.frame = NSRect(x: width - 16 - 96, y: rowY + 1, width: 96, height: 34)
-        saveAsNewSwitch.frame = NSRect(x: exportSaveButton.frame.minX - 8 - 140, y: rowY + 8, width: 38, height: 20)
-        saveAsNewLabel.frame = NSRect(x: saveAsNewSwitch.frame.maxX + 4, y: rowY + 9, width: 98, height: 18)
-        let headingX = outputFilename.frame.minX
-        let headingEnd = outputFormat.frame.maxX
-        exportFilenameCaption.frame = NSRect(x: headingX, y: headingY, width: 58, height: 16)
-        exportSavingToCaption.frame = NSRect(x: headingX + 60, y: headingY, width: 58, height: 16)
-        changeOutputDirectoryButton.frame = NSRect(x: headingEnd - 72, y: headingY - 4, width: 72, height: 24)
-        outputLocation.frame = NSRect(x: headingX + 120, y: headingY,
-                                      width: max(24, changeOutputDirectoryButton.frame.minX - 4 - headingX - 120),
-                                      height: 16)
-        showInFolderButton.frame = NSRect(x: width - 16 - 112, y: headingY - 4, width: 112, height: 24)
-        let statusRight = showInFolderButton.isHidden ? width - 16 : showInFolderButton.frame.minX - 8
-        exportStatus.frame = NSRect(x: headingEnd + 12, y: headingY,
-                                    width: max(0, statusRight - headingEnd - 12), height: 16)
+        let metrics = exportRowMetrics(), row = metrics.layout
+        let auto = exportAutoWidths
+        let gap: CGFloat = row.wide ? 12 : 8
+        let top = 1 + padding + (exportSettingsOpen ? exportSettingsHeight + padding : 0)
+        // Grid `align-items: end`: every control sits on the field row's bottom.
+        let bottom = top + (row.wide ? metrics.height : 60)
+        let controlHeight = tokens.number("h-lg")
+        let controlY = bottom - controlHeight
+
+        // `.screenshot-export-disclosure`: 44 pt, label over the mono summary.
+        exportDisclosure.frame = NSRect(x: inset, y: bottom - 44, width: row.disclosure, height: 44)
+        let textX = 1 + tokens.number("s-5")
+        let textWidth = max(0, row.disclosure - textX - 15 - tokens.number("s-4") - 1 - tokens.number("s-4"))
+        exportDisclosureTitle.frame = NSRect(x: textX, y: 5, width: textWidth, height: 16)
+        exportSummary.frame = NSRect(x: textX, y: 24, width: textWidth, height: 16)
+        exportChevron.frame = NSRect(x: row.disclosure - 1 - tokens.number("s-4") - 15, y: 14.5,
+                                     width: 15, height: 15)
+
+        // `.recording-filename`: the heading (Filename, then the right-aligned
+        // Saving to · path · Change… group) over the joined filename box.
+        let fieldX = exportDisclosure.frame.maxX + gap
+        exportFilenameBox.frame = NSRect(x: fieldX, y: controlY, width: row.filename, height: controlHeight)
+        let formatWidth = max(62, tokens.number("s-4") + exportTextWidth(outputFormat.titleOfSelectedItem ?? "",
+            size: "text-sm", weight: .regular) + tokens.number("s-2") + 14 + tokens.number("s-3"))
+        outputFormat.frame = NSRect(x: row.filename - 1 - formatWidth, y: 1, width: formatWidth,
+                                    height: controlHeight - 2)
+        outputFilename.frame = NSRect(x: 1, y: 1, width: max(0, outputFormat.frame.minX - 1),
+                                      height: controlHeight - 2)
+        let headingY = controlY - tokens.number("s-2") - 20
+        let captionWidth = exportTextWidth("Filename", size: "text-xs", weight: .medium) + 4
+        exportFilenameCaption.frame = NSRect(x: fieldX, y: headingY + 2, width: captionWidth, height: 16)
+        let small = tokens.number("s-2")
+        let changeWidth = 4 + 2 * small + exportTextWidth("Change…", size: "text-2xs", weight: .medium)
+        let fieldRight = fieldX + row.filename
+        changeOutputDirectoryButton.frame = NSRect(x: fieldRight - changeWidth, y: headingY,
+                                                   width: changeWidth, height: 20)
+        let savingWidth = exportTextWidth("Saving to", size: "text-2xs", weight: .medium) + 4
+        let groupLeft = exportFilenameCaption.frame.maxX + tokens.number("s-4")
+        let pathRoom = changeOutputDirectoryButton.frame.minX - small - (groupLeft + savingWidth + small)
+        let pathText = ceil((outputLocation.stringValue as NSString).size(withAttributes:
+            [.font: outputLocation.font as Any]).width) + 4
+        let pathWidth = max(24, min(170, pathText, pathRoom))
+        outputLocation.frame = NSRect(x: changeOutputDirectoryButton.frame.minX - small - pathWidth,
+                                      y: headingY + 2, width: pathWidth, height: 16)
+        exportSavingToCaption.frame = NSRect(x: outputLocation.frame.minX - small - savingWidth,
+                                             y: headingY + 3, width: savingWidth, height: 14)
+
+        // `.screenshot-export-secondary`: [Show in Folder] Copy image.
+        let copyX = exportFilenameBox.frame.maxX + gap + auto.secondary - auto.copy
+        copyImageButton.frame = NSRect(x: copyX, y: controlY, width: auto.copy, height: controlHeight)
+        showInFolderButton.frame = NSRect(x: copyX - tokens.number("s-3") - auto.reveal, y: controlY,
+                                          width: auto.reveal, height: controlHeight)
+
+        // `.screenshot-export-actions`: [Save as new file |] Save.
+        exportSaveButton.frame = NSRect(x: width - inset - auto.save, y: controlY, width: auto.save,
+                                        height: controlHeight)
+        saveAsNewSwitch.frame = NSRect(x: exportSaveButton.frame.minX - tokens.number("s-3") - small
+                                           - saveAsNewSwitch.preferredWidth,
+                                       y: controlY, width: saveAsNewSwitch.preferredWidth, height: controlHeight)
+
+        // `.screenshot-export-status`: the notice over the hint, centred in a
+        // 36 pt column right-aligned before the actions, or a left-aligned
+        // full-width row below the field row at 1040 pt and narrower.
+        let statusX: CGFloat, statusTop: CGFloat
+        let content = metrics.notice + (exportHint.isHidden ? 0 : 2 + metrics.hint)
+        if row.wide {
+            statusX = copyImageButton.frame.maxX + gap
+            statusTop = bottom - metrics.status + (metrics.status - content) / 2
+        } else {
+            statusX = inset
+            statusTop = top + 60 + padding
+        }
+        let alignment: NSTextAlignment = row.wide ? .right : .left
+        // The text's own paragraph style decides its alignment, so restyle it
+        // when the row switches between the wide column and the full-width row.
+        for label in [exportStatus, exportHint] where label.alignment != alignment {
+            label.alignment = alignment
+            let text = NSMutableAttributedString(attributedString: label.attributedStringValue)
+            text.addAttribute(.paragraphStyle, value: exportStatusParagraph(alignment: alignment),
+                              range: NSRange(location: 0, length: text.length))
+            label.attributedStringValue = text
+        }
+        exportStatus.frame = NSRect(x: statusX, y: statusTop + 1, width: row.status, height: metrics.notice - 2)
+        exportHint.frame = NSRect(x: statusX, y: statusTop + metrics.notice + 2, width: row.status,
+                                  height: metrics.hint)
     }
 
     /// The same row plan sizes the card and places its visible controls.
@@ -2512,7 +2783,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             + (outputQuality?.indexOfSelectedItem == 2 ? ["maximum"] : [])
             + ["estimate"]
             + (outputQuality?.indexOfSelectedItem != 0 && comparisonDismissed ? ["comparison"] : [])
-        let available = root.bounds.width - 32 - 24
+        let available = root.bounds.width - 2 * tokens.number("s-5") - 24
         var x: CGFloat = 12, row: CGFloat = 0
         var result: [(key: String, x: CGFloat, row: CGFloat)] = []
         for key in visible {
@@ -3535,10 +3806,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         [exportDisclosureTitle as NSView, exportSummary, exportChevron].forEach { exportDisclosure.addSubview($0) }
 
         exportFilenameCaption.font = .systemFont(ofSize: tokens.number("text-xs"), weight: .medium)
-        exportSavingToCaption.font = .systemFont(ofSize: tokens.number("text-xs"))
-        exportSavingToCaption.identifier = NSUserInterfaceItemIdentifier("editor-muted")
-        outputLocation.font = .monospacedSystemFont(ofSize: tokens.number("text-2xs"), weight: .regular)
-        outputLocation.lineBreakMode = .byTruncatingMiddle
+        exportSavingToCaption.font = .systemFont(ofSize: tokens.number("text-2xs"), weight: .medium)
+        outputLocation.font = .monospacedSystemFont(ofSize: tokens.number("text-2xs"), weight: .medium)
+        outputLocation.lineBreakMode = .byTruncatingTail
         outputLocation.setAccessibilityLabel("Save location")
         [exportFilenameCaption, exportSavingToCaption, outputLocation].forEach { exportBar.addSubview($0) }
         changeOutputDirectoryButton = button("Change…", frame: .zero, parent: exportBar) {
@@ -3547,16 +3817,30 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         changeOutputDirectoryButton.setAccessibilityLabel("Change save location")
         // Shipping's "Change…" is a borderless text action beside the path.
         changeOutputDirectoryButton.quiet = true
+        changeOutputDirectoryButton.textSize = tokens.number("text-2xs")
+        // One box: the borderless stem and the inline format select.
+        exportFilenameBox.tokens = tokens
+        exportFilenameBox.field = outputFilename
+        exportBar.addSubview(exportFilenameBox)
+        let filenameCell = TokenNumberFieldCell(textCell: "")
+        filenameCell.leadingInset = tokens.number("s-4")
+        filenameCell.isEditable = true; filenameCell.isScrollable = true
+        filenameCell.lineBreakMode = .byTruncatingTail
+        outputFilename.cell = filenameCell
+        outputFilename.isBezeled = false; outputFilename.isBordered = false
+        outputFilename.drawsBackground = false; outputFilename.focusRingType = .none
+        outputFilename.font = .systemFont(ofSize: tokens.number("text-sm"))
         outputFilename.setAccessibilityLabel("Saved filename")
         outputFilename.placeholderString = "Filename"
         outputFilename.delegate = self
-        exportBar.addSubview(outputFilename)
+        exportFilenameBox.addSubview(outputFilename)
         outputFormat = ClosurePopUpButton(frame: .zero, pullsDown: false)
         outputFormat.tokens = tokens
+        outputFormat.selectStyle = .inline
         outputFormat.addItems(withTitles: [".png", ".jpg", ".webp"])
         outputFormat.setAccessibilityLabel("Format")
         outputFormat.target = self; outputFormat.action = #selector(outputOptionsChanged)
-        exportBar.addSubview(outputFormat)
+        exportFilenameBox.addSubview(outputFormat)
         copyImageButton = button("Copy image", frame: .zero, parent: exportBar) {
             [weak self] in self?.copyEditedImage()
         }
@@ -3566,20 +3850,23 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             [weak self] in self?.revealSavedFile()
         }
         showInFolderButton.isHidden = true
-        exportStatus.font = .systemFont(ofSize: tokens.number("text-xs"))
-        exportStatus.lineBreakMode = .byTruncatingTail
-        exportStatus.alignment = .right
         exportStatus.setAccessibilityLabel("Export status")
-        exportBar.addSubview(exportStatus)
-        saveAsNewSwitch.setAccessibilityLabel("Save as new file")
+        exportHint.setAccessibilityLabel("Export hint")
+        for label in [exportStatus, exportHint] {
+            label.isSelectable = true
+            label.maximumNumberOfLines = 0
+            exportBar.addSubview(label)
+        }
+        saveAsNewSwitch.tokens = tokens
         saveAsNewSwitch.toolTip = "Save as a new file and leave the original untouched"
         saveAsNewSwitch.target = self; saveAsNewSwitch.action = #selector(saveAsNewChanged)
         exportBar.addSubview(saveAsNewSwitch)
-        saveAsNewLabel.font = .systemFont(ofSize: tokens.number("text-sm"))
-        exportBar.addSubview(saveAsNewLabel)
         exportSaveButton = button("Save", frame: .zero, parent: exportBar) { [weak self] in self?.saveExport() }
         exportSaveButton.primary = true
         exportSaveButton.icon = .shipping("save")
+        for action in [copyImageButton!, showInFolderButton!, exportSaveButton!] {
+            action.textSize = tokens.number("text-sm"); action.iconSide = 14
+        }
         updateOutputOptionControls()
     }
 
@@ -4591,7 +4878,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         "Hold Shift while dragging the rotate handle to snap in \(Int(degrees))° increments."
     }
 
+    func controlTextDidBeginEditing(_ notification: Notification) {
+        if notification.object as? NSTextField === outputFilename { exportFilenameBox.needsDisplay = true }
+    }
+
     func controlTextDidEndEditing(_ notification: Notification) {
+        if notification.object as? NSTextField === outputFilename { exportFilenameBox.needsDisplay = true }
         if notification.object as? NSTextField === rotationSnap { rotationSnapChanged() }
         if let field = notification.object as? NSTextField,
            field.identifier == Self.layerRenameIdentifier, renamingLayerID != nil {
@@ -4934,7 +5226,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             outputFormat.item(at: 1)?.toolTip = bar.hintWarning ? "Fills in transparent areas." : nil
         }
         saveAsNewSwitch.isHidden = bar?.formatRequiresCopy ?? true
-        saveAsNewLabel.isHidden = saveAsNewSwitch.isHidden
         saveAsNewSwitch.state = bar?.savingCopy == false ? .off : .on
         if let bar {
             // Shipping `CustomSelect` descriptions for the current format.
@@ -4957,25 +5248,27 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         copyImageButton.setAccessibilityLabel(copyConfirmed ? "Copied" : "Copy image")
         showInFolderButton.isHidden = lastSavedPath == nil
         exportSaveButton.toolTip = bar?.hint
-        let message: (String, String)
-        if let exportError {
-            message = (exportError, "danger-text")
-        } else if let editorError {
-            message = (editorError, "danger-text")
-        } else if let error = exportOptionsError ?? bar?.error {
-            message = (error, "danger-text")
-        } else if let exportNotice {
-            message = (exportNotice, "positive-text")
-        } else if let bar {
-            message = (bar.hint, bar.hintWarning ? "caution-text" : "text-subtle")
-        } else {
-            message = ("", "text-subtle")
-        }
-        exportStatus.stringValue = message.0
-        exportStatus.toolTip = message.0
-        exportStatus.textColor = tokens.color(message.1)
+        // Shipping's notice line holds a failure or the latest result; the
+        // hint below it stays visible unless a failure replaces it.
+        let failure = exportError ?? editorError ?? exportOptionsError ?? bar?.error
+        exportStatusIsError = failure != nil
+        let notice = failure ?? exportNotice ?? ""
+        setExportStatusText(exportStatus, notice, color: failure != nil ? "danger-text" : "positive-text",
+                            weight: .medium)
+        exportStatus.toolTip = notice.isEmpty ? nil : notice
+        exportHint.isHidden = failure != nil
+        setExportStatusText(exportHint, bar?.hint ?? "",
+                            color: bar?.hintWarning == true ? "caution-text" : "text-subtle", weight: .regular)
         updateExportLayout()
         publishComparison()
+    }
+
+    private func setExportStatusText(_ label: NSTextField, _ text: String, color: String, weight: NSFont.Weight) {
+        label.attributedStringValue = NSAttributedString(string: text, attributes: [
+            .font: NSFont.systemFont(ofSize: tokens.number("text-xs"), weight: weight),
+            .foregroundColor: tokens.color(color),
+            .paragraphStyle: exportStatusParagraph(alignment: label.alignment),
+        ])
     }
 
     /// Output option or pixel changes: refresh the summary and re-estimate.
@@ -6023,8 +6316,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private func publishZoomPreset() {
         let current = viewport.zoomPercent
-        let displayed = current == 0
-            ? fittedImageRect.width / max(1, viewportCanvasSize.width) * 100 : current
+        let displayed = displayedZoomPercent
         zoomSlider.doubleValue = NativeEditorViewport.sliderPosition(percent: displayed) ?? 0
         let description = current == 0 ? "Fit (\(format(displayed))%)" : "\(format(current))%"
         zoomSlider.setAccessibilityValueDescription(description)
@@ -6043,10 +6335,16 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         publishZoomLimits(ready: state.snapshot != nil && !state.busy && inlineTextInput == nil && !draining)
     }
 
+    /// The zoom shown to the user: Fit resolves to the fitted image's scale.
+    private var displayedZoomPercent: Double {
+        guard viewport.zoomPercent == 0 else { return viewport.zoomPercent }
+        let fitted = Double(fittedImageRect.width) / Double(max(1, viewportCanvasSize.width))
+        return fitted * 100
+    }
+
     /// Shipping disables − and + at the 5% and 800% bounds.
     private func publishZoomLimits(ready: Bool) {
-        let displayed = viewport.zoomPercent == 0
-            ? fittedImageRect.width / max(1, viewportCanvasSize.width) * 100 : viewport.zoomPercent
+        let displayed = displayedZoomPercent
         zoomOutButton?.isEnabled = ready && displayed > 5 + 0.05
         zoomInButton?.isEnabled = ready && displayed < 800 - 0.05
     }
@@ -6061,8 +6359,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
     private func scaleViewport(by factor: Double, anchor: NSPoint? = nil) {
         guard factor.isFinite, factor > 0 else { return }
-        let current = viewport.zoomPercent == 0
-            ? fittedImageRect.width / max(1, viewportCanvasSize.width) * 100 : viewport.zoomPercent
+        let current = displayedZoomPercent
         zoomViewport(to: current * factor,
                      anchor: anchor ?? NSPoint(x: viewportBounds.width / 2, y: viewportBounds.height / 2))
     }
@@ -7362,13 +7659,16 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         exportBarRule.layer?.backgroundColor = tokens.color("border-subtle").cgColor
         exportSettingsPanel.layer?.backgroundColor = tokens.color("surface-sunken").cgColor
         exportSettingsPanel.layer?.borderColor = tokens.color("border").cgColor
-        for label in [exportFilenameCaption, saveAsNewLabel, exportDisclosureTitle] {
-            label.textColor = tokens.color("text")
+        // Shipping `--editor-text-muted` captions over `--editor-text-subtle` detail.
+        for label in [exportFilenameCaption, exportDisclosureTitle] {
+            label.textColor = tokens.color("text-muted")
         }
-        exportChevron.ink = tokens.color("text-subtle")
+        exportChevron.ink = tokens.color("text-muted")
         for label in [exportSavingToCaption, outputLocation, exportSummary, outputDimensions] {
             label.textColor = tokens.color("text-subtle")
         }
+        outputFilename.textColor = tokens.color("text")
+        exportFilenameBox.tokens = tokens; saveAsNewSwitch.tokens = tokens
         for group in exportGroups.values { group.caption.textColor = tokens.color("text-muted") }
         publishExportBar()
         textEditor.backgroundColor = tokens.color("surface-sunken")

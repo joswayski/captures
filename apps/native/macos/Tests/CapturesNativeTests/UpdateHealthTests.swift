@@ -25,7 +25,7 @@ final class UpdateHealthTests: XCTestCase {
             base + ["--screenshot", "/tmp/screenshot.png"],
             base + ["--native-update-ready-token", token],
             base + ["--update-state", "available"],
-        ] { XCTAssertThrowsError(try Options(invalid), "accepted \(invalid)") }
+        ] as [[String]] { XCTAssertThrowsError(try Options(invalid), "accepted \(invalid)") }
         XCTAssertThrowsError(try Options(Array(base.dropFirst()), bundled: true),
                              "a bundled launch must still include explicit --live")
     }
