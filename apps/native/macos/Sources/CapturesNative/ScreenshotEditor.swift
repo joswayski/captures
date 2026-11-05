@@ -1984,7 +1984,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         super.init()
         editorWindow.editorEvent = { [weak self] in self?.handleEditorEvent($0) ?? false }
         window.isReleasedWhenClosed = false; window.title = EditorWindowTitle.screenshot
-        window.contentMinSize = NSSize(width: 760, height: 540)
+        // Shipping `min_inner_size(860, 600)` (screenshot_editor.rs).
+        window.contentMinSize = NSSize(width: 860, height: 600)
         window.delegate = self
         window.contentView = root
         build(); restyle(tokens); updateControls()
@@ -2322,8 +2323,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 self.layoutEditor()
             }
         }
-        let canvasGaps = tokens.number("s-5") + tokens.number("s-6")
-        let maximumWidth = min(480, max(280, root.bounds.width - 416 - canvasGaps))
+        // Shipping `sidebarMaxWidth`: min(480, editorWidth - 56 - 360), never below 280.
+        let maximumWidth = min(480, max(280, root.bounds.width - 56 - 360))
         inspectorWidth = min(preferredInspectorWidth ?? (root.bounds.width <= 1040 ? 280 : 320), maximumWidth)
         inspectorDivider.updateWidth(inspectorWidth, maximum: maximumWidth)
         let previousWidth = layersPanel.frame.width + Self.panelInset
