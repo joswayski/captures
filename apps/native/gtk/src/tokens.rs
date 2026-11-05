@@ -26,16 +26,71 @@ pub struct Tokens {
     raw: BTreeMap<String, String>,
 }
 
+thread_local! {
+    /// Every `{appearance}-{theme}` variant, parsed once.
+    static VARIANTS: BTreeMap<String, Tokens> =
+        serde_json::from_str(include_str!("../resources/tokens.json"))
+            .expect("build-generated tokens");
+}
+
+/// `"light"` or `"dark"` for the saved appearance, following the desktop for
+/// System.
+pub fn resolve_appearance(appearance: captures_settings::Appearance) -> &'static str {
+    match appearance {
+        captures_settings::Appearance::Light => "light",
+        captures_settings::Appearance::Dark => "dark",
+        captures_settings::Appearance::System => {
+            let dark =
+                gtk::Settings::default().is_some_and(|s| s.is_gtk_application_prefer_dark_theme());
+            if dark { "dark" } else { "light" }
+        }
+    }
+}
+
+/// The persisted id of a theme (`mustard`, …, `custom`).
+pub fn theme_id(theme: captures_settings::ColorTheme) -> String {
+    serde_json::to_value(theme)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "mustard".into())
+}
+
 impl Tokens {
     /// The `{appearance}-{theme}` variant, such as `light-mustard`.
     pub fn variant(appearance: &str, theme: &str) -> Tokens {
-        let mut all: BTreeMap<String, Tokens> =
-            serde_json::from_str(include_str!("../resources/tokens.json"))
-                .expect("build-generated tokens");
-        let key = format!("{appearance}-{theme}");
-        all.remove(&key)
-            .or_else(|| all.remove(&format!("{appearance}-mustard")))
-            .expect("mustard tokens")
+        VARIANTS.with(|all| {
+            all.get(&format!("{appearance}-{theme}"))
+                .or_else(|| all.get(&format!("{appearance}-mustard")))
+                .cloned()
+                .expect("mustard tokens")
+        })
+    }
+
+    /// Tokens for saved settings, with the Custom palette derived like
+    /// shipping `buildCustomThemeVariables`.
+    pub fn for_settings(settings: &captures_settings::AppSettings, appearance: &str) -> Tokens {
+        let theme = theme_id(settings.theme);
+        let mut tokens = Tokens::variant(appearance, &theme);
+        if theme == "custom"
+            && let Ok(colors) = captures_settings::theme::custom_colors(
+                &settings.custom_theme.accent,
+                &settings.custom_theme.signal,
+                appearance == "light",
+            )
+        {
+            tokens.colors.extend(colors);
+        }
+        tokens
+    }
+
+    /// A theme's accent and signal in one appearance, for accent swatches.
+    pub fn palette(appearance: &str, theme: &str) -> (gdk::RGBA, gdk::RGBA) {
+        let tokens = Tokens::variant(appearance, theme);
+        (tokens.rgba("theme-accent"), tokens.rgba("theme-signal"))
+    }
+
+    pub fn raw(&self, name: &str) -> &str {
+        self.raw.get(name).map(String::as_str).unwrap_or_default()
     }
 
     pub fn number(&self, name: &str) -> f32 {
@@ -54,6 +109,21 @@ impl Tokens {
     /// A color as GTK CSS.
     pub fn css(&self, name: &str) -> String {
         css_rgba(self.colors[name])
+    }
+
+    pub fn color_css(&self, name: &str) -> Option<String> {
+        self.colors.get(name).copied().map(css_rgba)
+    }
+
+    /// A `box-shadow` token's layers as `(x, y, blur, spread, color)`.
+    pub fn shadow(&self, name: &str) -> Vec<(f32, f32, f32, f32, gdk::RGBA)> {
+        self.shadows[name]
+            .iter()
+            .map(|s| {
+                let [r, g, b, a] = s.color;
+                (s.x, s.y, s.blur, s.spread, gdk::RGBA::new(r, g, b, a))
+            })
+            .collect()
     }
 
     /// A `box-shadow` token as GTK CSS, first layer on top.

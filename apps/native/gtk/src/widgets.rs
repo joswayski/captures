@@ -89,6 +89,17 @@ impl Icon {
         icon.imp().stroke.set(1.8);
         icon
     }
+
+    /// Stroke width in the icon's 24-unit space.
+    pub fn with_stroke(self, stroke: f64) -> Self {
+        self.imp().stroke.set(stroke);
+        self
+    }
+
+    pub fn set_name(&self, name: &str) {
+        *self.imp().name.borrow_mut() = name.to_owned();
+        self.queue_draw();
+    }
 }
 
 mod clamp_imp {
