@@ -479,7 +479,11 @@ impl State {
         }
         // New cards move rows; look again once the list has laid them out,
         // and wait a few frames at most for rows it has not laid out yet.
-        let waits = if unlaid { self.layout_waits.get() + 1 } else { 0 };
+        let waits = if unlaid {
+            self.layout_waits.get() + 1
+        } else {
+            0
+        };
         self.layout_waits.set(waits);
         if changed || (unlaid && waits < 10) {
             self.queue_visibility();
