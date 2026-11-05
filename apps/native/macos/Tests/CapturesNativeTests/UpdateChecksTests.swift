@@ -207,7 +207,7 @@ final class UpdateChecksTests: XCTestCase {
             base + flags + ["--open-media", "/tmp/capture.png"],
             base + flags + ["--native-update-current-version", "2026.9.99"],
             base + flags + ["--native-update-ready-file", "/ready", "--native-update-ready-token", "123e4567-e89b-42d3-a456-426614174000"],
-        ] { XCTAssertThrowsError(try Options(invalid)) }
+        ] as [[String]] { XCTAssertThrowsError(try Options(invalid)) }
         XCTAssertThrowsError(try Options(Array(base.dropFirst()) + flags, bundled: true))
         XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent("settings.json").path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent("history").path))

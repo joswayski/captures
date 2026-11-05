@@ -265,7 +265,7 @@ final class CaptureButton: NSButton {
             path.stroke()
         }
         let font = NSFont.systemFont(ofSize: textSize ?? tokens.number("text-md"),
-                                     weight: solid ? .semibold : .medium)
+                                     weight: solid || primary ? .semibold : .medium) // Shipping primaries are semibold.
         var foreground = solid
             ? tokens.color("solid-ink").withAlphaComponent(isEnabled ? 1 : 0.4)
             : tokens.color(isEnabled

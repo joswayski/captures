@@ -133,9 +133,38 @@ text action, as in shipping. The layer count is shipping's 19 pt
 its digit at the top of the pill's frame. Compared with Tauri's
 `?view=screenshot-editor&mock=1` render at 1000×642 and the hosted macOS
 workbench's `native-pixels`. macOS: hosted XCTest renders only. Windows, X11
-and Wayland: unchanged (wgpu already had the icons). Still different on AppKit:
-the footnote placement, bold field captions and the joined filename/format
-control.
+and Wayland: unchanged (wgpu already had the icons). The remaining footnote,
+caption and filename differences were fixed in the next slice.
+
+The AppKit export bar now uses shipping's `.screenshot-save-row` layout,
+measured from Tauri's DOM at 1280, 1000 and 860 px. The footer is 77 pt above
+1040 pt and 119 pt at or below it. It uses the CSS grid's tracks (disclosure
+178–210, filename 240–390, Copy, a 1fr status column, actions; 170–200 and
+230–1fr with the status moved to a full-width row at 1040 and below) and
+their 12 or 8 pt gaps. All controls share one bottom edge.
+
+- **Disclosure:** 44 pt.
+- **Filename:** a muted 11 pt "Filename" caption, with "Saving to", the
+  ellipsized mono path (at most 170 pt) and a borderless 10 pt "Change…"
+  right-aligned above the field.
+- **Field:** one 36 pt box holds the borderless stem and the inline format
+  select, behind a divider; the accent border and ring show while editing.
+- **Status:** a reserved 11 pt notice line (success or failure) above the
+  always-visible hint. A failure replaces the hint but keeps its room.
+  Shipping drops one line there, but on AppKit an error would then move the
+  canvas under the pointer during a drop. The status is
+  right-aligned in its column, or left-aligned in its own row.
+- **Copy image, Show in Folder and Save:** 36 pt with 12 pt type and 14 pt
+  icons.
+- **Save as new file:** a token-drawn 28×16 switch with its 11 pt label and
+  the divider before Save, replacing the stock `NSSwitch`.
+
+Primary buttons are now semibold, as in shipping. The canvas and inspector
+shrink by the taller footer. AppKit still allows a 760×540 editor window,
+below Tauri's 860×600 minimum; that is the next slice. Compared side by side
+with the Tauri harness (`?view=screenshot-editor&mock=1`). macOS: XCTest
+renders on a macos-26 sidecar (Xcode 26.3) and the hosted macOS workbench.
+Windows, X11 and Wayland: unchanged, since this is AppKit-only.
 
 The screenshot editor viewport now matches shipping on both hosts. Fit keeps
 shipping's 28 px around the image (`(clientWidth - 56) / width`). The canvas
