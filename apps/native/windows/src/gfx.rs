@@ -37,9 +37,19 @@ pub enum Style {
     RowTitle,
     /// `.check-row small`
     RowDescription,
+    /// `.ui-segmented button`
+    Segment,
+    /// `.theme-option-copy strong`
+    Chip,
+    /// `.theme-option-check`
+    Check,
+    /// `.directory-input input`: `--font-mono`
+    Mono,
+    /// `.directory-input button` (`.ui-btn`)
+    Control,
 }
 
-const STYLES: [Style; 9] = [
+const STYLES: [Style; 14] = [
     Style::Brand,
     Style::Nav,
     Style::Title,
@@ -49,6 +59,11 @@ const STYLES: [Style; 9] = [
     Style::CardDescription,
     Style::RowTitle,
     Style::RowDescription,
+    Style::Segment,
+    Style::Chip,
+    Style::Check,
+    Style::Mono,
+    Style::Control,
 ];
 
 struct Spec {
@@ -57,6 +72,7 @@ struct Spec {
     tracking: Option<&'static str>,
     leading: Option<&'static str>,
     wrap: bool,
+    mono: bool,
 }
 
 fn spec(style: Style) -> Spec {
@@ -66,6 +82,7 @@ fn spec(style: Style) -> Spec {
         tracking,
         leading,
         wrap,
+        mono: false,
     };
     match style {
         Style::Brand => spec(
@@ -100,6 +117,31 @@ fn spec(style: Style) -> Spec {
             true,
         ),
         Style::RowTitle => spec("text-md", "weight-medium", None, None, true),
+        Style::Segment | Style::Chip => spec(
+            "text-sm",
+            "weight-medium",
+            None,
+            Some("leading-snug"),
+            false,
+        ),
+        Style::Check => spec("text-2xs", "weight-bold", None, None, false),
+        Style::Mono => Spec {
+            mono: true,
+            ..spec(
+                "text-sm",
+                "weight-regular",
+                None,
+                Some("leading-snug"),
+                false,
+            )
+        },
+        Style::Control => spec(
+            "text-sm",
+            "weight-medium",
+            Some("tracking-tight"),
+            Some("leading-snug"),
+            false,
+        ),
     }
 }
 
@@ -121,6 +163,8 @@ pub struct Gfx {
 }
 
 const FAMILIES: [&str; 2] = ["Segoe UI Variable Text", "Segoe UI"];
+/// The Windows entries of shipping `--font-mono`, then a last resort.
+const MONO_FAMILIES: [&str; 4] = ["Cascadia Mono", "Segoe UI Mono", "Consolas", "Courier New"];
 
 impl Gfx {
     /// `composition` is false for the offscreen `--screenshot` renderer.
@@ -141,16 +185,17 @@ impl Gfx {
             let mut collection = None;
             dwrite.GetSystemFontCollection(&mut collection, false)?;
             let collection = collection.ok_or_else(Error::empty)?;
-            let mut chosen = None;
-            for family in FAMILIES {
-                let (mut index, mut exists) = (0, BOOL(0));
-                collection.FindFamilyName(&HSTRING::from(family), &mut index, &mut exists)?;
-                if exists.as_bool() {
-                    chosen = Some((family, index));
-                    break;
-                }
-            }
-            let (family, index) = chosen.unwrap_or((FAMILIES[1], 0));
+            let find = |families: &[&'static str]| {
+                families.iter().find_map(|family| {
+                    let (mut index, mut exists) = (0, BOOL(0));
+                    collection
+                        .FindFamilyName(&HSTRING::from(*family), &mut index, &mut exists)
+                        .ok()?;
+                    exists.as_bool().then_some((*family, index))
+                })
+            };
+            let (family, index) = find(&FAMILIES).unwrap_or((FAMILIES[1], 0));
+            let mono = find(&MONO_FAMILIES).map_or(MONO_FAMILIES[2], |(family, _)| family);
             let mut metrics = DWRITE_FONT_METRICS::default();
             if let Ok(font) = collection.GetFontFamily(index).and_then(|f| {
                 f.GetFirstMatchingFont(
@@ -177,7 +222,7 @@ impl Gfx {
             for style in STYLES {
                 let spec = spec(style);
                 let (size, weight) = (tokens.n(spec.size), tokens.n(spec.weight));
-                let family = &HSTRING::from(family);
+                let family = &HSTRING::from(if spec.mono { mono } else { family });
                 let format: IDWriteTextFormat = match axes.as_ref().and_then(|f| {
                     f.CreateTextFormat(
                         family,
@@ -547,4 +592,123 @@ pub fn icon(
         }
     }
     Ok(())
+}
+
+/// Shipping `.theme-option-preview`: an accent tile with the signal hue as a
+/// wedge in its lower-right half (or the Custom rainbow), clipped to `radius`,
+/// with a 1 px inset hairline.
+pub fn swatch(
+    dc: &ID2D1DeviceContext,
+    factory: &ID2D1Factory1,
+    r: D2D_RECT_F,
+    radius: f32,
+    colors: Option<(D2D1_COLOR_F, D2D1_COLOR_F)>,
+) -> Result<()> {
+    let (w, h) = (r.right - r.left, r.bottom - r.top);
+    unsafe {
+        match colors {
+            Some((accent, signal)) => {
+                fill_round(dc, r, radius, accent)?;
+                // `clip-path: polygon(100% 0, 100% 100%, 0 100%)` on the right column.
+                let tile = factory.CreateRoundedRectangleGeometry(&rounded(r, radius))?;
+                let wedge = factory.CreatePathGeometry()?;
+                let sink = wedge.Open()?;
+                sink.BeginFigure(
+                    Vector2 {
+                        X: r.right,
+                        Y: r.top,
+                    },
+                    D2D1_FIGURE_BEGIN_FILLED,
+                );
+                sink.AddLines(&[
+                    Vector2 {
+                        X: r.right,
+                        Y: r.bottom,
+                    },
+                    Vector2 {
+                        X: r.left + w / 2.,
+                        Y: r.bottom,
+                    },
+                ]);
+                sink.EndFigure(D2D1_FIGURE_END_CLOSED);
+                sink.Close()?;
+                let mut layer = D2D1_LAYER_PARAMETERS1 {
+                    contentBounds: rect(-1e6, -1e6, 1e6, 1e6),
+                    geometricMask: std::mem::ManuallyDrop::new(Some(tile.cast()?)),
+                    maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                    maskTransform: Matrix3x2::identity(),
+                    opacity: 1.,
+                    ..Default::default()
+                };
+                dc.PushLayer(&layer, None::<&ID2D1Layer>);
+                let filled = brush(dc, signal).map(|b| dc.FillGeometry(&wedge, &b, None));
+                dc.PopLayer();
+                // Release the mask reference the parameters own.
+                std::mem::ManuallyDrop::drop(&mut layer.geometricMask);
+                filled?;
+            }
+            None => {
+                // `.theme-option-custom`'s `linear-gradient(120deg, hsl(…))` stops in sRGB.
+                let hues: [(f32, u32); 7] = [
+                    (0., 0xff475a),
+                    (0.18, 0xffab3d),
+                    (0.34, 0xf7e845),
+                    (0.5, 0x3ee081),
+                    (0.66, 0x3cd4ec),
+                    (0.84, 0xc357f4),
+                    (1., 0xff52ae),
+                ];
+                let stops: Vec<D2D1_GRADIENT_STOP> = hues
+                    .iter()
+                    .map(|&(position, rgb)| D2D1_GRADIENT_STOP {
+                        position,
+                        color: D2D1_COLOR_F {
+                            r: ((rgb >> 16) & 0xff) as f32 / 255.,
+                            g: ((rgb >> 8) & 0xff) as f32 / 255.,
+                            b: (rgb & 0xff) as f32 / 255.,
+                            a: 1.,
+                        },
+                    })
+                    .collect();
+                // The plain render-target overloads (sRGB, 8-bit stops).
+                let target: &ID2D1RenderTarget = dc;
+                let collection = target.CreateGradientStopCollection(
+                    &stops,
+                    D2D1_GAMMA_2_2,
+                    D2D1_EXTEND_MODE_CLAMP,
+                )?;
+                let angle = 120f32.to_radians();
+                let (dx, dy) = (angle.sin(), -angle.cos());
+                let half = (w * dx.abs() + h * dy.abs()) / 2.;
+                let (cx, cy) = (r.left + w / 2., r.top + h / 2.);
+                let gradient = target.CreateLinearGradientBrush(
+                    &D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
+                        startPoint: Vector2 {
+                            X: cx - dx * half,
+                            Y: cy - dy * half,
+                        },
+                        endPoint: Vector2 {
+                            X: cx + dx * half,
+                            Y: cy + dy * half,
+                        },
+                    },
+                    None,
+                    &collection,
+                )?;
+                dc.FillRoundedRectangle(&rounded(r, radius), &gradient);
+            }
+        }
+    }
+    border(
+        dc,
+        r,
+        radius,
+        1.,
+        D2D1_COLOR_F {
+            r: 0.,
+            g: 0.,
+            b: 0.,
+            a: 0.16,
+        },
+    )
 }

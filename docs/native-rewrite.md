@@ -72,11 +72,32 @@ and scrolling moves the card column's visual, so hover repaints at most one
 text). Whole rows toggle, settings save through `captures-settings`, and the
 login item runs off the UI thread with the shared `login_item`. Capture
 History… does not open anything yet. Card shadows approximate the blur, and
-the scrollbar has no drag. `--screenshot` renders offscreen in CI in both
-appearances. Only cross-compiled (`x86_64-pc-windows-gnu`) and rendered
-offscreen under Wine with substitute fonts. A real Windows run, DPI changes,
-composition animations, real-hardware performance and Narrator are not yet
-verified. macOS, Linux: unchanged.
+the scrollbar has no drag. `--screenshot` renders offscreen in both
+appearances in CI on windows-2025, where the renders matched with real Segoe
+UI. The interactive window, DPI changes, composition animations,
+real-hardware performance and Narrator are not yet verified. macOS, Linux:
+unchanged.
+
+The second Windows slice adds the Appearance card and the Capture card's
+folder row in shipping order. Interface theme is the shipping segmented
+control (System/Light/Dark) whose indicator slides over `--dur-4`; choosing a
+mode or one of the ten accent chips (swatches from the generated
+`themes.css` tokens, Custom derived like `shared/themes.ts`, a check on the
+selected chip) saves through `captures-settings` and re-themes every surface
+live. Save captures to shows the folder read-only beside Choose…, which opens
+the system folder picker (`IFileOpenDialog`, `FOS_PICKFOLDERS`) and saves the
+result. Hover on segments, chips and Choose… cross-fades layers on the
+compositor without a redraw. UI Automation exposes the segments and chips as
+radio buttons (SelectionItem) in groups with the Selection pattern, the
+folder as a read-only Edit (Value) and Choose… as a button (Invoke). The
+folder field is read-only rather than an editable text field, and the
+indicator snaps to the new segment's width as it slides. Not yet ported: the
+custom colour editor, Shortcuts, Recording, GIF export, Updates and About
+cards, and the compact layout. Windows: cross-compiled only
+(`x86_64-pc-windows-gnu`) and rendered offscreen under Wine with substitute
+fonts, which ignores Direct2D layers. The picker, live re-theming,
+animations, DPI and Narrator need a real Windows run. macOS, Linux:
+unchanged.
 
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
