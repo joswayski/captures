@@ -202,6 +202,14 @@ with the Tauri harness (`?view=screenshot-editor&mock=1`). macOS: XCTest
 renders on a macos-26 sidecar (Xcode 26.3) and the hosted macOS workbench.
 Windows, X11 and Wayland: unchanged, since this is AppKit-only.
 
+The AppKit screenshot editor's minimum window is now Tauri's 860×600
+(`min_inner_size(860, 600)`), not 760×540. Its inspector divider maximum now
+uses shipping's `min(480, width − 56 − 360)`; AppKit had subtracted another
+28 pt, so the 860 pt maximum is now 444 like Tauri, not 416. At the minimum,
+Trim edges keeps its label, as in Tauri. Compared side by side with the Tauri
+harness at 860×600. macOS: full ScreenshotEditorTests pass on a macos-26
+sidecar (Xcode 26.3). Windows, X11, Wayland: unchanged (AppKit-only).
+
 The screenshot editor viewport now matches shipping on both hosts. Fit keeps
 shipping's 28 px around the image (`(clientWidth - 56) / width`). The canvas
 draws `.screenshot-canvas-surface`'s 1 px `--border` ring and `--shadow-lg`. An

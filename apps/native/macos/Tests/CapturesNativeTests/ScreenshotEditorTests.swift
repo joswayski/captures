@@ -229,7 +229,7 @@ final class ScreenshotEditorTests: XCTestCase {
                 worker: worker, writeClipboard: { _ in true })
             defer { controller.window.orderOut(nil) }
             controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
-            controller.window.setContentSize(NSSize(width: 760, height: 540))
+            controller.window.setContentSize(NSSize(width: 860, height: 600))
             controller.windowDidResize(Notification(name: NSWindow.didResizeNotification))
             let labels = ["Select & move (V)", "Crop (C)", "Text (T)", "Shapes", "Arrow (A)", "Freehand (P)", "Eraser (B)"]
             let rail = try labels.map { label in
@@ -549,24 +549,24 @@ final class ScreenshotEditorTests: XCTestCase {
         let end = try keyEvent(window: controller.window, keyCode: 119, characters: "\u{f72b}")
         controller.window.sendEvent(end)
         windowWidth(1200, inspector: 480, maximum: 480)
-        windowWidth(760, inspector: 316, maximum: 316)
+        windowWidth(860, inspector: 444, maximum: 444)
         windowWidth(1200, inspector: 480, maximum: 480)
-        windowWidth(760, inspector: 316, maximum: 316)
+        windowWidth(860, inspector: 444, maximum: 444)
         let frame = controller.window.frame
         controller.window.sendEvent(end)
         XCTAssertEqual(controller.window.frame, frame)
-        windowWidth(1200, inspector: 316, maximum: 480) // End uses today's constrained max, not 480.
-        windowWidth(760, inspector: 316, maximum: 316)
+        windowWidth(1200, inspector: 444, maximum: 480) // End uses today's constrained max, not 480.
+        windowWidth(860, inspector: 444, maximum: 444)
         let left = try keyEvent(window: controller.window, keyCode: 123, characters: "\u{f702}", modifiers: .shift)
         for _ in 0..<3 { controller.window.sendEvent(left) }
-        XCTAssertEqual(controller.root.bounds.width - divider.frame.midX, 316)
-        windowWidth(1200, inspector: 316, maximum: 480)
-        windowWidth(760, inspector: 316, maximum: 316)
+        XCTAssertEqual(controller.root.bounds.width - divider.frame.midX, 444)
+        windowWidth(1200, inspector: 444, maximum: 480)
+        windowWidth(860, inspector: 444, maximum: 444)
         XCTAssertTrue(divider.accessibilityPerformIncrement())
-        windowWidth(1200, inspector: 316, maximum: 480)
-        windowWidth(760, inspector: 316, maximum: 316)
+        windowWidth(1200, inspector: 444, maximum: 480)
+        windowWidth(860, inspector: 444, maximum: 444)
         controller.window.sendEvent(try keyEvent(window: controller.window, keyCode: 124, characters: "\u{f703}"))
-        XCTAssertEqual(controller.root.bounds.width - divider.frame.midX, 306, "steps start at actual, not preferred width")
+        XCTAssertEqual(controller.root.bounds.width - divider.frame.midX, 434, "steps start at actual, not preferred width")
         controller.window.sendEvent(try keyEvent(window: controller.window, keyCode: 115, characters: "\u{f729}"))
         XCTAssertEqual(controller.root.bounds.width - divider.frame.midX, 280)
         controller.window.sendEvent(end)
@@ -1244,7 +1244,7 @@ final class ScreenshotEditorTests: XCTestCase {
             defer { controller.window.orderOut(nil) }
             controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
             XCTAssertTrue(controller.window.styleMask.contains(.resizable))
-            XCTAssertEqual(controller.window.contentMinSize, NSSize(width: 760, height: 540))
+            XCTAssertEqual(controller.window.contentMinSize, NSSize(width: 860, height: 600))
             let input = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? EditorViewportGestureView }
                 .first { $0.accessibilityLabel() == "Screenshot viewport" })
             let section = try segmented("Editor section", in: controller.root)
@@ -1280,8 +1280,8 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(bar.frame.maxY, controller.root.bounds.height)
             XCTAssertEqual(bar.frame.height, 119)
             // Exercise both axes without exceeding the CI display's height.
-            controller.window.setContentSize(NSSize(width: 760, height: 540))
-            waitUntil { input.bounds.size == NSSize(width: 388, height: 333) }
+            controller.window.setContentSize(NSSize(width: 860, height: 600))
+            waitUntil { input.bounds.size == NSSize(width: 488, height: 393) }
             controller.window.setContentSize(NSSize(width: 1200, height: 600))
             controller.root.layoutSubtreeIfNeeded()
             // An unset inspector width follows the window (320pt above 1040pt),
@@ -1309,16 +1309,16 @@ final class ScreenshotEditorTests: XCTestCase {
                 XCTAssertFalse(frame.intersects(bar.frame), "\(control) stays above the export bar")
             }
             try render(controller.root, name: "screenshot-editor-resized-fit-\(appearance)")
-            controller.window.setContentSize(NSSize(width: 760, height: 540))
+            controller.window.setContentSize(NSSize(width: 860, height: 600))
             controller.root.layoutSubtreeIfNeeded()
-            // Shipping's Fit keeps 28pt a side: 368 of the 388pt viewport.
-            waitUntil { abs(controller.presentedImageRect.width - 368) < 0.001 }
-            XCTAssertEqual(input.bounds.size, NSSize(width: 388, height: 333))
-            XCTAssertEqual(layersSection.frame, NSRect(x: 492, y: 64, width: 268, height: 188))
-            XCTAssertEqual(inspector.frame, NSRect(x: 492, y: 252, width: 268, height: 169))
+            // Fit leaves 10pt a side: 468 of the 488pt viewport at the 860pt minimum.
+            waitUntil { abs(controller.presentedImageRect.width - 468) < 0.001 }
+            XCTAssertEqual(input.bounds.size, NSSize(width: 488, height: 393))
+            XCTAssertEqual(layersSection.frame, NSRect(x: 592, y: 64, width: 268, height: 188))
+            XCTAssertEqual(inspector.frame, NSRect(x: 592, y: 252, width: 268, height: 229))
             XCTAssertTrue(undo.isHidden)
             let fit = controller.presentedImageRect
-            for (actual, expected) in [(fit.minX, 10.0), (fit.minY, 63), (fit.width, 368), (fit.height, 207)] {
+            for (actual, expected) in [(fit.minX, 10.0), (fit.minY, 64.875), (fit.width, 468), (fit.height, 263.25)] {
                 XCTAssertEqual(actual, expected, accuracy: 0.001)
             }
             try render(controller.root, name: "screenshot-editor-resized-minimum-\(appearance)")
@@ -1349,7 +1349,7 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertTrue(try saveAsNewSwitch(in: controller.root).isHidden, "a first save always writes a new file")
             let sections = try segmented("Editor section", in: controller.root)
             XCTAssertEqual(sections.segmentCount, 3)
-            for size in [NSSize(width: 1200, height: 600), NSSize(width: 760, height: 540)] {
+            for size in [NSSize(width: 1200, height: 600), NSSize(width: 860, height: 600)] {
                 controller.window.setContentSize(size)
                 controller.root.layoutSubtreeIfNeeded()
                 // Shipping `.screenshot-save-row`: 12 pt insets, the 44 pt
@@ -1493,17 +1493,17 @@ final class ScreenshotEditorTests: XCTestCase {
             quality.selectItem(withTitle: "Compress"); _ = quality.sendAction(quality.action, to: quality.target)
             checkPanel(height: 189)
             try render(controller.root, name: "screenshot-editor-export-compact-\(appearance)")
-            controller.window.setContentSize(NSSize(width: 760, height: 540))
-            waitUntil { controller.root.bounds.width == 760 }
+            controller.window.setContentSize(NSSize(width: 860, height: 600))
+            waitUntil { controller.root.bounds.width == 860 }
             checkPanel(height: 189)
             let singleRowViewport = viewport.bounds.height
             quality.selectItem(withTitle: "Maximum file size")
             _ = quality.sendAction(quality.action, to: quality.target)
-            checkPanel(height: 241, bottomPadding: 12) // The estimate-only row's labels are 4pt shorter.
-            XCTAssertEqual(singleRowViewport - viewport.bounds.height, 52, accuracy: 0.1,
-                           "wrapping also updates the canvas, not just the export card")
+            checkPanel(height: 189) // Size, quality, maximum and estimate still fit at 860pt.
             size.selectItem(withTitle: "Custom"); _ = size.sendAction(size.action, to: size.target)
             checkPanel(height: 241)
+            XCTAssertEqual(singleRowViewport - viewport.bounds.height, 52, accuracy: 0.1,
+                           "wrapping also updates the canvas, not just the export card")
             XCTAssertFalse(try field("Custom output width", in: controller.root).isHidden)
             try render(controller.root, name: "screenshot-editor-export-wrapped-custom-\(appearance)")
             size.selectItem(withTitle: "Original"); _ = size.sendAction(size.action, to: size.target)
@@ -1602,14 +1602,14 @@ final class ScreenshotEditorTests: XCTestCase {
             let sections = try segmented("Editor section", in: controller.root)
             // Both sides of shipping's 1040pt header rule, the minimum and a return
             // to wide, catch stale offsets and cumulative drift.
-            for width in [CGFloat(1041), 1040, 760, 1000] {
-                controller.window.setContentSize(NSSize(width: width, height: 540))
+            for width in [CGFloat(1041), 1040, 860, 1000] {
+                controller.window.setContentSize(NSSize(width: width, height: 600))
                 controller.root.layoutSubtreeIfNeeded()
                 // The unset inspector width is 320pt above 1040pt, else 280pt. The
                 // canvas fills its column like `.screenshot-canvas-viewport`.
                 waitUntil { input.bounds.width == width - (width > 1040 ? 412 : 372) }
                 // Shipping's footer is 77pt, or 119pt with the hint row at 1040pt and below.
-                XCTAssertEqual(input.bounds.height, width > 1040 ? 375 : 333)
+                XCTAssertEqual(input.bounds.height, width > 1040 ? 435 : 393)
                 XCTAssertEqual(undo.isHidden, width <= 1040)
                 // 92pt/72pt slider cells minus their 8pt/6pt padding.
                 XCTAssertEqual(zoom.frame.width, width > 1040 ? 76 : 60)
@@ -1617,14 +1617,14 @@ final class ScreenshotEditorTests: XCTestCase {
                 XCTAssertFalse(trim.isHiddenOrHasHiddenAncestor)
                 XCTAssertTrue(controller.root.bounds.contains(trim.convert(trim.bounds, to: controller.root)))
             }
-            controller.window.setContentSize(NSSize(width: 760, height: 540))
-            // Shipping's Fit keeps 28pt a side: 368 of the 388pt viewport.
-            waitUntil { abs(controller.presentedImageRect.width - 368) < 0.001 }
+            controller.window.setContentSize(NSSize(width: 860, height: 600))
+            // Fit leaves 10pt a side: 468 of the 488pt viewport at the 860pt minimum.
+            waitUntil { abs(controller.presentedImageRect.width - 468) < 0.001 }
             let fit = controller.presentedImageRect
-            for (actual, expected) in [(fit.minX, 10.0), (fit.minY, 63), (fit.width, 368), (fit.height, 207)] {
+            for (actual, expected) in [(fit.minX, 10.0), (fit.minY, 64.875), (fit.width, 468), (fit.height, 263.25)] {
                 XCTAssertEqual(actual, expected, accuracy: 0.001)
             }
-            XCTAssertTrue(trim.iconOnly, "the minimum header keeps Trim as an icon with its tooltip")
+            XCTAssertFalse(trim.iconOnly, "like shipping, the 860pt minimum header still labels Trim edges")
             XCTAssertEqual(trim.title, "Trim edges")
             XCTAssertEqual(trim.toolTip, "Shrink the canvas to the edges of visible layers")
             for control in controller.root.subviews where !control.isHidden {
@@ -4069,7 +4069,7 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertTrue(try button("Send to back", in: card).isEnabled)
             try render(controller.root, name: "screenshot-editor-combine-normal-\(appearance)")
 
-            controller.window.setContentSize(NSSize(width: 760, height: 540))
+            controller.window.setContentSize(NSSize(width: 860, height: 600))
             controller.windowDidResize(Notification(name: NSWindow.didResizeNotification))
             XCTAssertNil(controller.layerMenuID, "resizing closes the popover")
             controller.toggleLayerMenu(id: "hidden-image")
@@ -4169,7 +4169,7 @@ final class ScreenshotEditorTests: XCTestCase {
                 warning: "The new file is safe, but the isolated native History location is unavailable.",
                 notice: "Saved /Users/test/Pictures/Captures Export/Captures_2026-09-20_edited.png. History was not updated: The new file is safe, but the isolated native History location is unavailable."))
             try button("Save", in: controller.root).performClick(nil)
-            controller.window.setContentSize(NSSize(width: 760, height: 540))
+            controller.window.setContentSize(NSSize(width: 860, height: 600))
             try render(controller.root, name: "screenshot-editor-export-bar-warning-minimum-\(appearance)")
             try showOutput(in: controller.root)
             try render(controller.root, name: "screenshot-editor-export-settings-minimum-\(appearance)")
@@ -5149,7 +5149,7 @@ final class ScreenshotEditorTests: XCTestCase {
                     .first { $0.accessibilityLabel() == "Properties heading" && !$0.isHiddenOrHasHiddenAncestor })
                 XCTAssertNil(heading.enclosingScrollView, "\(tool): title cannot scroll with the fields")
                 XCTAssertFalse(heading.stringValue.isEmpty)
-                for size in [NSSize(width: 1000, height: 600), NSSize(width: 760, height: 540)] {
+                for size in [NSSize(width: 1000, height: 600), NSSize(width: 860, height: 600)] {
                     controller.window.setContentSize(size)
                     let initial = heading.convert(heading.bounds, to: controller.root)
                     let document = try XCTUnwrap(scroll.documentView)
@@ -5470,7 +5470,7 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertTrue(input.visibleRect.contains(input.bounds), "expanded \(input) is fully visible")
         }
         try render(controller.root, name: "screenshot-editor-new-drawing-shadow-retained-light")
-        controller.window.setContentSize(NSSize(width: 760, height: 540))
+        controller.window.setContentSize(NSSize(width: 860, height: 600))
         controller.root.layoutSubtreeIfNeeded()
         // The fixed title leaves less room than the entire multi-row color
         // group. Each swatch and custom well must still be fully reachable.
@@ -6689,7 +6689,7 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(color.selectedHex, "#ff3b5c")
             controller.window.setContentSize(NSSize(width: 1200, height: 820))
             try render(controller.root, name: "screenshot-editor-text-default-rounded-normal-\(appearance)")
-            controller.window.setContentSize(NSSize(width: 760, height: 540))
+            controller.window.setContentSize(NSSize(width: 860, height: 600))
             let scroll = try XCTUnwrap(size.enclosingScrollView)
             // Layers keeps its 188pt row, so the Properties area scrolls
             // to each default in turn, like shipping's sidebar. New text has
@@ -7311,7 +7311,7 @@ final class ScreenshotEditorTests: XCTestCase {
             }, "shipping commits on click-away and Escape; there are no Done/Cancel buttons")
             editor.string = "Native multiline\nΩ and 日本語"
             try render(controller.root, name: "screenshot-editor-inline-text-normal-\(appearance)")
-            controller.window.setContentSize(NSSize(width: 760, height: 540))
+            controller.window.setContentSize(NSSize(width: 860, height: 600))
             controller.root.layoutSubtreeIfNeeded()
             XCTAssertTrue(controller.presentedImageRect.intersects(frame.frame))
             // Shipping's 48 × 28 minimum, plus the outline outset on each side.
@@ -7342,7 +7342,7 @@ final class ScreenshotEditorTests: XCTestCase {
                                                         worker: worker)
             defer { controller.window.orderOut(nil) }
             controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
-            controller.window.setContentSize(NSSize(width: 760, height: 540))
+            controller.window.setContentSize(NSSize(width: 860, height: 600))
             try showDraw(in: controller.root)
             let tool = DrawToolChoice(controller)
             tool.selectItem(withTitle: "Text"); _ = tool.sendAction(tool.action, to: tool.target)
@@ -7662,7 +7662,7 @@ final class ScreenshotEditorTests: XCTestCase {
             controller.selectDrawTool(.text)
             controller.window.setContentSize(NSSize(width: 1200, height: 820))
             try render(controller.root, name: "screenshot-editor-future-text-style-normal-\(appearance)")
-            controller.window.setContentSize(NSSize(width: 760, height: 540))
+            controller.window.setContentSize(NSSize(width: 860, height: 600))
             let scroll = try XCTUnwrap(future.enclosingScrollView)
             // The Properties area below Layers scrolls to each carried value.
             // Shipping's Text section has no Color row: new text takes the
@@ -7975,7 +7975,7 @@ final class ScreenshotEditorTests: XCTestCase {
                            "editor status must not take space from Properties")
             preset.scrollToVisible(preset.bounds)
             try render(controller.root, name: "screenshot-editor-text-normal-\(appearance)")
-            controller.window.setContentSize(NSSize(width: 760, height: 540))
+            controller.window.setContentSize(NSSize(width: 860, height: 600))
             XCTAssertEqual(properties.frame.maxY, bar.frame.minY)
             for control in [preset, inputScroll, family, size, last] as [NSView] {
                 control.scrollToVisible(control.bounds)
@@ -8630,7 +8630,7 @@ final class ScreenshotEditorTests: XCTestCase {
             try showDraw(in: controller.root)
             controller.window.setContentSize(NSSize(width: 1200, height: 820))
             try render(controller.root, name: "screenshot-editor-rounded-box-saved-normal-\(appearance)")
-            controller.window.setContentSize(NSSize(width: 760, height: 540))
+            controller.window.setContentSize(NSSize(width: 860, height: 600))
             try render(controller.root, name: "screenshot-editor-rounded-box-saved-minimum-\(appearance)")
             controller.window.setContentSize(NSSize(width: 1200, height: 820))
             try showLayers(in: controller.root)
@@ -8666,7 +8666,7 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertFalse(roundFace.roundedBackground, "manual Nunito does not reapply Rounded Box")
             XCTAssertEqual(roundFace.background, style.background)
             try render(controller.root, name: "screenshot-editor-manual-rounded-normal-\(appearance)")
-            controller.window.setContentSize(NSSize(width: 760, height: 540))
+            controller.window.setContentSize(NSSize(width: 860, height: 600))
             try render(controller.root, name: "screenshot-editor-manual-rounded-minimum-\(appearance)")
             try press("Undo", in: controller.root)
             waitUntil { !controller.state.busy && controller.state.snapshot?.layers.first?.textStyle == serif }
@@ -9907,7 +9907,7 @@ extension ScreenshotEditorTests {
             waitUntil { controller.state.snapshot != nil && !controller.state.busy }
             try showLayers(in: controller.root)
             let accepted = controller.state.snapshot
-            for (width, height, label) in [(1000, 646, "normal"), (760, 540, "minimum")] {
+            for (width, height, label) in [(1000, 646, "normal"), (860, 600, "minimum")] {
                 controller.window.setContentSize(NSSize(width: CGFloat(width), height: CGFloat(height)))
                 controller.windowDidResize(Notification(name: NSWindow.didResizeNotification))
                 controller.root.layoutSubtreeIfNeeded()
