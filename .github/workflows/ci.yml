@@ -124,6 +124,48 @@ jobs:
             test -s "$RUNNER_TEMP/preferences-$appearance.png"
           done
 
+  # The Windows host that replaces the egui/wgpu UI on Windows (see
+  # docs/native-rewrite.md): rustfmt, clippy, and an offscreen Preferences render.
+  native-windows:
+    name: Native Windows checks
+    runs-on: windows-2025
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 1.95.0
+          components: rustfmt, clippy
+          cache-workspaces: apps/native/windows
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: node apps/native/prepare.mjs --output apps/native/windows/resources
+      - run: cargo +1.95.0 fmt --manifest-path apps/native/windows/Cargo.toml --all -- --check
+      - run: cargo +1.95.0 clippy --manifest-path apps/native/windows/Cargo.toml --locked --all-targets -- -D warnings
+      - name: Render Preferences offscreen in both appearances
+        run: |
+          cargo +1.95.0 build --manifest-path apps/native/windows/Cargo.toml --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $settings = Join-Path $env:RUNNER_TEMP 'settings.json'
+          foreach ($appearance in 'light', 'dark') {
+            $png = Join-Path $env:RUNNER_TEMP "preferences-$appearance.png"
+            & apps/native/windows/target/debug/captures-windows.exe `
+              --appearance $appearance --settings-file $settings `
+              --size 880x660 --screenshot $png
+            if ($LASTEXITCODE -ne 0) { throw "--screenshot ($appearance) exited $LASTEXITCODE" }
+            if (-not (Test-Path $png) -or (Get-Item $png).Length -eq 0) { throw "$png is empty" }
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-windows-preferences
+          path: ${{ runner.temp }}/preferences-*.png
+          if-no-files-found: error
+
   rust:
     name: Rust checks (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

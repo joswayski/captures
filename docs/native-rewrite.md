@@ -60,6 +60,24 @@ Appearance, Shortcuts, Recording, GIF export, Updates and About cards, Find,
 compact layout, and every other window. Linux real-hardware performance and
 Orca checks wait for the owner's Linux PC. Windows, macOS: unchanged.
 
+The first Windows slice (`apps/native/windows`) is the same Preferences surface
+on Win32 with DirectComposition, Direct2D and DirectWrite (system Segoe UI
+Variable): the sidebar with scroll-follow, the header with Capture History…,
+and the General and Capture cards with token-drawn switches. Every node has
+its own composition surface; hover and active states cross-fade on the
+compositor, the knob slides 13 px as a compositor animation over `--dur-3`,
+and scrolling moves the card column's visual, so hover repaints at most one
+32×19 switch track. UI Automation exposes the window, the section buttons
+(Invoke), the cards as groups and the switches (Toggle pattern, name and help
+text). Whole rows toggle, settings save through `captures-settings`, and the
+login item runs off the UI thread with the shared `login_item`. Capture
+History… does not open anything yet. Card shadows approximate the blur, and
+the scrollbar has no drag. `--screenshot` renders offscreen in CI in both
+appearances. Only cross-compiled (`x86_64-pc-windows-gnu`) and rendered
+offscreen under Wine with substitute fonts. A real Windows run, DPI changes,
+composition animations, real-hardware performance and Narrator are not yet
+verified. macOS, Linux: unchanged.
+
 ## Progress dashboard
 
 We are delivering stage 4 workflow slices and stage 5 editor slices.
