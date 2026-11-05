@@ -42,6 +42,11 @@ mod imp {
         fn class_init(klass: &mut Self::Class) {
             klass.set_accessible_role(gtk::AccessibleRole::Switch);
             klass.set_css_name("captures-switch");
+            // Exported over AT-SPI as the switch's action, so assistive
+            // technology can toggle it without synthesizing input.
+            klass.install_action("switch.toggle", None, |widget, _, _| {
+                widget.activate_toggle();
+            });
         }
     }
 

@@ -504,7 +504,9 @@ name = "captures-gtk"
 version = "0.1.0"
 dependencies = [
  "captures-app",
+ "captures-history",
  "captures-settings",
+ "chrono",
  "gtk4",
  "serde",
  "serde_json",

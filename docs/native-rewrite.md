@@ -78,6 +78,24 @@ offscreen under Wine with substitute fonts. A real Windows run, DPI changes,
 composition animations, real-hardware performance and Narrator are not yet
 verified. macOS, Linux: unchanged.
 
+The second GTK4 slice is Capture History: shipping header (Back to
+Preferences, title, 60ch lede, two-step Delete all), filter pills with
+counts, and the card grid (thumbnail, two-step Delete, date, details,
+dropped-frame warning, Edit plus Restore or Save file, secondary-click menu,
+file drag out, inline card errors). It is one virtualized `GtkListView`; only
+rows near the viewport hold cards and thumbnails, decoded at card size from
+`preview.png` off the UI thread. With a 1000-entry fixture under Xvfb (Cairo
+renderer, release build) the process RSS is about 99 MB with 6 live cards,
+against 249 MB when every retained list row built its cards; Preferences
+alone is about 89 MB. These are orb numbers, not the real-hardware gate, and
+not yet compared with egui measured the same way. Edit, Restore, the
+recording editor and Save image/file's GTK 4.10 file dialog are wired to
+stubs or the legacy chooser. CI renders History in both appearances and runs
+`apps/native/gtk/smoke.py` over AT-SPI (filter, two-step delete from disk,
+Preferences switch role, checked state and save). Verified on X11 (Xvfb)
+only; Wayland, Orca and real hardware remain open. Windows, macOS:
+unchanged.
+
 ## Progress dashboard
 
 We are delivering stage 4 workflow slices and stage 5 editor slices.

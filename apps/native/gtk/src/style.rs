@@ -1,152 +1,73 @@
-//! Captures styling for GTK widgets, generated from the shipping tokens.
-//!
-//! Every Captures class starts from `all: unset`, so the desktop's GTK theme
-//! never leaks into the product chrome; only text rendering, input and
-//! accessibility come from GTK. Rules mirror `styles/windows.css`.
+//! Captures styling for GTK widgets: `style.css` with every `var(--token)`
+//! resolved from the shipping tokens. Only text rendering, input and
+//! accessibility come from GTK.
 use gtk::gdk;
 
 use crate::tokens::Tokens;
 
-pub fn css(t: &Tokens) -> String {
-    let n = |name: &str| t.number(name);
-    let c = |name: &str| t.css(name);
-    let md = n("text-md");
-    let xl = n("text-xl");
-    let lg = n("text-lg");
-    format!(
-        r#"
-window.captures {{
-  background: {canvas};
-  color: {text};
-}}
-.captures label {{ all: unset; }}
-.captures .preferences-nav {{
-  padding: {s6}px {s5}px;
-  border-right: 1px solid {border_subtle};
-  background: {sunken};
-}}
-.captures .preferences-nav-brand {{ padding: 0 {s3}px; }}
-.captures .brand-mark {{
-  min-width: 26px;
-  min-height: 26px;
-  border-radius: {r_md}px;
-  color: {accent_ink};
-  background: {accent};
-}}
-.captures .brand-title {{
-  font-size: {md}px;
-  font-weight: {semibold};
-  letter-spacing: {brand_tracking}px;
-}}
-.captures button.nav-item {{
-  all: unset;
-  min-height: {h_md}px;
-  padding: 0 {s4}px;
-  border-radius: {r_md}px;
-  color: {text_subtle};
-  font-size: {md}px;
-  font-weight: {medium};
-  transition: color {dur2}ms, background-color {dur2}ms;
-}}
-.captures button.nav-item:hover {{ color: {text}; background: {hover}; }}
-.captures button.nav-item.active {{ color: {text}; background: {active}; }}
-.captures button.nav-item:focus-visible {{ box-shadow: inset 0 0 0 2px {focus}; }}
-.captures .preferences-header {{
-  min-height: 38px;
-  padding: {s6}px {s8}px;
-  border-bottom: 1px solid {border_subtle};
-  background: {canvas};
-}}
-.captures button.preferences-history-button {{
-  all: unset;
-  min-height: {h_md}px;
-  padding: 0 {s5}px;
-  border: 1px solid {border};
-  border-radius: {r_md}px;
-  color: {text};
-  background: {raised};
-  font-size: {sm}px;
-  font-weight: {medium};
-  transition: background-color {dur2}ms;
-}}
-.captures button.preferences-history-button:hover {{ background: {hover}; }}
-.captures button.preferences-history-button:focus-visible {{ box-shadow: 0 0 0 3px {focus}; }}
-.captures .header-title {{
-  font-size: {xl}px;
-  font-weight: {semibold};
-  letter-spacing: {header_tracking}px;
-}}
-.captures .header-description {{
-  margin-top: 2px;
-  color: {text_subtle};
-  font-size: {sm}px;
-}}
-.captures .preferences-sections {{ padding: {s8}px {s8}px {s12}px; }}
-.captures .settings-card {{
-  padding: {s6}px;
-  border: 1px solid {border_subtle};
-  border-radius: {r_xl}px;
-  background: {raised};
-  box-shadow: {shadow_sm};
-}}
-.captures .card-title {{
-  font-size: {lg}px;
-  font-weight: {semibold};
-  letter-spacing: {card_tracking}px;
-}}
-.captures .card-description, .captures .setting-description {{
-  color: {text_subtle};
-  font-size: {sm}px;
-  line-height: {snug};
-}}
-.captures .setting-row {{ padding-top: {s5}px; border-top: 1px solid {border_subtle}; }}
-.captures .setting-row.first {{ padding-top: {s1}px; border-top-width: 0; }}
-.captures .setting-title {{
-  color: {text};
-  font-size: {md}px;
-  font-weight: {medium};
-}}
-.captures .setting-row.disabled .setting-copy {{ opacity: 0.55; }}
-"#,
-        canvas = c("surface-canvas"),
-        sunken = c("surface-sunken"),
-        raised = c("surface-raised"),
-        hover = c("surface-hover"),
-        active = c("surface-active"),
-        text = c("text"),
-        text_subtle = c("text-subtle"),
-        border_subtle = c("border-subtle"),
-        border = c("border"),
-        accent = c("theme-accent"),
-        accent_ink = c("theme-accent-ink"),
-        focus = {
-            let mut accent = t.rgba("theme-accent");
-            accent.set_alpha(0.55);
-            accent.to_string()
-        },
-        shadow_sm = t.shadow_css("shadow-sm"),
-        s1 = n("s-1"),
-        s3 = n("s-3"),
-        s4 = n("s-4"),
-        s5 = n("s-5"),
-        s6 = n("s-6"),
-        s8 = n("s-8"),
-        s12 = n("s-12"),
-        r_md = n("r-md"),
-        r_xl = n("r-xl"),
-        h_md = n("h-md"),
-        sm = n("text-sm"),
-        md = md,
-        lg = lg,
-        xl = xl,
-        snug = n("leading-snug"),
-        medium = n("weight-medium"),
-        semibold = n("weight-semibold"),
-        dur2 = n("dur-2"),
-        brand_tracking = t.em("tracking-tight", md),
-        header_tracking = t.em("tracking-tighter", xl),
-        card_tracking = t.em("tracking-tight", lg),
+const CSS: &str = include_str!("style.css");
+
+/// Resolve every `var(--name)` in `template` against `lookup`.
+fn expand(template: &str, lookup: impl Fn(&str) -> Option<String>) -> String {
+    let mut out = String::with_capacity(template.len() * 2);
+    let mut rest = template;
+    while let Some(start) = rest.find("var(--") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 6..];
+        let end = after.find(')').expect("closed var()");
+        let name = &after[..end];
+        out.push_str(&lookup(name).unwrap_or_else(|| panic!("unknown CSS token --{name}")));
+        rest = &after[end + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// `color-mix(in srgb, a (1 - amount), b amount)`.
+pub fn mix(a: gdk::RGBA, b: gdk::RGBA, amount: f32) -> gdk::RGBA {
+    let lerp = |x: f32, y: f32| x + (y - x) * amount;
+    gdk::RGBA::new(
+        lerp(a.red(), b.red()),
+        lerp(a.green(), b.green()),
+        lerp(a.blue(), b.blue()),
+        lerp(a.alpha(), b.alpha()),
     )
+}
+
+pub fn css(t: &Tokens) -> String {
+    let focus = {
+        let mut accent = t.rgba("theme-accent");
+        accent.set_alpha(0.55);
+        accent.to_string()
+    };
+    let tracking = |token: &str, size: &str| format!("{}px", t.em(token, t.number(size)));
+    expand(CSS, |name| {
+        Some(match name {
+            "focus" => focus.clone(),
+            // `--focus-ring` (`styles/base.css`).
+            "focus-ring" => format!("0 0 0 2px {}, 0 0 0 4px {focus}", t.css("surface-canvas")),
+            "brand-tracking" => tracking("tracking-tight", "text-md"),
+            "header-tracking" => tracking("tracking-tighter", "text-xl"),
+            "title-tracking" => tracking("tracking-tighter", "text-3xl"),
+            "card-tracking" => tracking("tracking-tight", "text-lg"),
+            "sm-tracking" => tracking("tracking-tight", "text-sm"),
+            "image-hover" => {
+                mix(t.rgba("surface-sunken"), t.rgba("theme-accent"), 0.12).to_string()
+            }
+            name if name.starts_with("shadow-") => t.shadow_css(name),
+            // `--lh-{leading}-{size}`: CSS `line-height: var(--leading-…)` at
+            // `font-size: var(--text-…)`, as pixels.
+            name if name.starts_with("lh-") => {
+                let (leading, size) = name[3..].split_once('-')?;
+                let px =
+                    t.number(&format!("leading-{leading}")) * t.number(&format!("text-{size}"));
+                format!("{px}px")
+            }
+            name => t
+                .color_css(name)
+                .or_else(|| t.raw(name).map(str::to_owned))?,
+        })
+    })
 }
 
 /// Install (or replace) the Captures stylesheet for the display.
@@ -159,4 +80,25 @@ pub fn install(t: &Tokens) -> gtk::CssProvider {
         gtk::STYLE_PROVIDER_PRIORITY_USER,
     );
     provider
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_token_in_the_stylesheet_resolves() {
+        for appearance in ["light", "dark"] {
+            let css = css(&Tokens::variant(appearance, "mustard"));
+            assert!(!css.contains("var("), "unresolved token in {appearance}");
+        }
+    }
+
+    #[test]
+    fn expand_substitutes_in_place() {
+        let out = expand("a: var(--x); b: var(--yy) 1px;", |name| {
+            Some(format!("<{name}>"))
+        });
+        assert_eq!(out, "a: <x>; b: <yy> 1px;");
+    }
 }

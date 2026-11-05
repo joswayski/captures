@@ -1,0 +1,348 @@
+/*
+ * Captures styling for GTK widgets. Rules mirror the shipping stylesheets
+ * (`apps/desktop/ui/src/styles/`), written with token references that are resolved
+ * by `style.rs` because GTK 4.6 has no CSS custom properties. Every Captures
+ * class starts from `all: unset`, so the desktop's GTK theme never leaks into
+ * the product chrome. GTK `min-height` sizes the content box, so shipping's
+ * border-box heights subtract padding and borders. Pango scales a unitless
+ * `line-height` by the font's own line height, not its size, so CSS's
+ * `line-height: 1.35` at 13 px is written as a length (`--lh-snug-md`).
+ */
+window.captures {
+  background: var(--surface-canvas);
+  color: var(--text);
+}
+.captures label { all: unset; }
+.captures scrollbar { background: transparent; border: none; }
+.captures scrollbar slider {
+  min-width: 6px;
+  min-height: 6px;
+  border: 2px solid transparent;
+  border-radius: var(--r-pill);
+  background-clip: padding-box;
+  background-color: var(--border-strong);
+}
+.captures tooltip.background,
+.captures tooltip {
+  border-radius: var(--r-sm);
+  color: var(--glass-text);
+  background: var(--glass-strong-solid);
+  font-size: var(--text-xs);
+}
+
+/* ------------------------------------------------------- preferences ---- */
+
+.captures .preferences-nav {
+  padding: var(--s-6) var(--s-5);
+  border-right: 1px solid var(--border-subtle);
+  background: var(--surface-sunken);
+}
+.captures .preferences-nav-brand { padding: 0 var(--s-3); }
+.captures .brand-mark {
+  min-width: 26px;
+  min-height: 26px;
+  border-radius: var(--r-md);
+  color: var(--theme-accent-ink);
+  background: var(--theme-accent);
+}
+.captures .brand-title {
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--brand-tracking);
+}
+.captures button.nav-item {
+  all: unset;
+  min-height: var(--h-md);
+  padding: 0 var(--s-4);
+  border-radius: var(--r-md);
+  color: var(--text-subtle);
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  transition: color var(--dur-2), background-color var(--dur-2);
+}
+.captures button.nav-item:hover { color: var(--text); background: var(--surface-hover); }
+.captures button.nav-item.active { color: var(--text); background: var(--surface-active); }
+.captures button.nav-item:focus-visible { box-shadow: inset 0 0 0 2px var(--focus); }
+.captures .preferences-header {
+  min-height: 38px;
+  padding: var(--s-6) var(--s-8);
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-canvas);
+}
+.captures button.preferences-history-button {
+  all: unset;
+  min-height: var(--h-md);
+  padding: 0 var(--s-5);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  color: var(--text);
+  background: var(--surface-raised);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  transition: background-color var(--dur-2);
+}
+.captures button.preferences-history-button:hover { background: var(--surface-hover); }
+.captures button.preferences-history-button:focus-visible { box-shadow: 0 0 0 3px var(--focus); }
+.captures .header-title {
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--header-tracking);
+}
+.captures .header-description {
+  margin-top: 2px;
+  color: var(--text-subtle);
+  font-size: var(--text-sm);
+}
+.captures .preferences-sections { padding: var(--s-8) var(--s-8) var(--s-12); }
+.captures .settings-card {
+  padding: var(--s-6);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-xl);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-sm);
+}
+.captures .card-title {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--card-tracking);
+}
+.captures .card-description, .captures .setting-description {
+  color: var(--text-subtle);
+  font-size: var(--text-sm);
+  line-height: var(--lh-snug-sm);
+}
+.captures .setting-row { padding-top: var(--s-5); border-top: 1px solid var(--border-subtle); }
+.captures .setting-row.first { padding-top: var(--s-1); border-top-width: 0; }
+.captures .setting-title {
+  color: var(--text);
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+}
+.captures .setting-row.disabled .setting-copy { opacity: 0.55; }
+
+/* ---------------------------------------------------------- buttons ---- */
+
+/* `.ui-btn` (primitives.css): a 32 px border box. */
+.captures button.ui-btn {
+  all: unset;
+  min-height: 30px;
+  padding: 0 var(--s-5);
+  border: 1px solid var(--control-border);
+  border-radius: var(--r-md);
+  color: var(--text);
+  background: var(--control);
+  box-shadow: var(--shadow-xs);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--sm-tracking);
+  transition: background-color var(--dur-2) var(--ease-standard),
+    border-color var(--dur-2) var(--ease-standard),
+    color var(--dur-2) var(--ease-standard),
+    box-shadow var(--dur-2) var(--ease-standard);
+}
+.captures button.ui-btn:hover { border-color: var(--border-strong); background: var(--control-hover); }
+.captures button.ui-btn:focus-visible { box-shadow: var(--focus-ring); }
+.captures button.ui-btn:disabled { opacity: 0.45; }
+.captures button.ui-btn.primary {
+  border-color: transparent;
+  color: var(--theme-accent-ink);
+  background: var(--theme-accent);
+  box-shadow: var(--shadow-sm);
+  font-weight: var(--weight-semibold);
+}
+.captures button.ui-btn.primary:hover { background: var(--theme-accent-hover); }
+.captures button.ui-btn.ghost {
+  border-color: transparent;
+  color: var(--text-muted);
+  background: transparent;
+  box-shadow: none;
+}
+.captures button.ui-btn.ghost:hover { color: var(--text); background: var(--surface-hover); }
+/* Destructive actions stay quiet until hovered or awaiting confirmation. */
+.captures button.ui-btn.danger {
+  border-color: transparent;
+  color: var(--text-subtle);
+  background: transparent;
+  box-shadow: none;
+}
+.captures button.ui-btn.danger:hover { color: var(--danger-text); background: var(--danger-surface); }
+.captures button.ui-btn.danger.confirm { color: #ffffff; background: var(--theme-signal-strong); }
+.captures button.ui-btn.danger.confirm:hover { background: var(--theme-signal-deep); }
+.captures button.ui-btn.danger:focus-visible,
+.captures button.ui-btn.ghost:focus-visible,
+.captures button.ui-btn.primary:focus-visible { box-shadow: var(--focus-ring); }
+
+/* ---------------------------------------------------------- history ---- */
+
+.captures .history-page { color: var(--text); background: var(--surface-canvas); }
+.captures listview.history-list { all: unset; }
+.captures listview.history-list > row {
+  all: unset;
+  padding: 0 var(--s-8);
+}
+.captures .history-header-row { padding-top: var(--s-9); }
+.captures .history-title {
+  margin: var(--s-3) 0;
+  font-size: var(--text-3xl);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--title-tracking);
+}
+.captures .history-lede {
+  color: var(--text-subtle);
+  font-size: var(--text-md);
+  line-height: var(--lh-snug-md);
+}
+.captures .history-toolbar {
+  margin-top: var(--s-6);
+  padding-bottom: var(--s-5);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.captures button.history-filter {
+  all: unset;
+  min-height: 26px;
+  padding: 0 var(--s-4);
+  border: 1px solid transparent;
+  border-radius: var(--r-pill);
+  color: var(--text-subtle);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  transition: color var(--dur-2) var(--ease-standard),
+    background-color var(--dur-2) var(--ease-standard),
+    border-color var(--dur-2) var(--ease-standard);
+}
+.captures button.history-filter .count { color: var(--text-faint); font-feature-settings: "tnum"; }
+.captures button.history-filter:hover { color: var(--text); background: var(--surface-hover); }
+.captures button.history-filter.active {
+  border-color: var(--border);
+  color: var(--text);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-xs);
+}
+.captures button.history-filter:disabled { opacity: 0.4; }
+.captures button.history-filter:focus-visible { box-shadow: var(--focus-ring); }
+.captures .history-error {
+  margin-top: var(--s-6);
+  padding: var(--s-4) var(--s-5);
+  border-radius: var(--r-md);
+  color: var(--danger-text);
+  background: var(--danger-surface);
+  font-size: var(--text-sm);
+}
+.captures .history-grid-row { padding-top: var(--s-6); }
+.captures .history-grid-row.last { padding-bottom: var(--s-11); }
+.captures .history-card {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-xl);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-sm);
+  transition: border-color var(--dur-3) var(--ease-standard),
+    transform var(--dur-3) var(--ease-standard),
+    box-shadow var(--dur-3) var(--ease-standard);
+}
+.captures .history-card:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+}
+.captures .history-image-wrap {
+  min-height: 168px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-sunken);
+}
+.captures button.history-image-open {
+  all: unset;
+  transition: background-color var(--dur-2) var(--ease-standard);
+}
+.captures button.history-image-open:hover { background: var(--image-hover); }
+.captures button.history-image-open:focus-visible { box-shadow: inset var(--focus-ring); }
+.captures .history-image-missing captures-thumbnail { opacity: 0.3; }
+.captures button.history-delete {
+  all: unset;
+  min-width: var(--h-md);
+  min-height: var(--h-md);
+  margin: var(--s-3);
+  border-radius: var(--r-md);
+  color: var(--text-subtle);
+  transition: color var(--dur-2) var(--ease-standard),
+    background-color var(--dur-2) var(--ease-standard);
+}
+.captures button.history-delete:hover { color: var(--danger-text); background: var(--danger-surface); }
+.captures button.history-delete.confirm { color: #ffffff; background: var(--theme-signal-strong); }
+.captures button.history-delete.confirm:hover { background: var(--theme-signal-deep); }
+.captures button.history-delete:focus-visible { box-shadow: var(--focus-ring); }
+.captures .history-missing-label {
+  padding: var(--s-3) var(--s-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  color: var(--text-muted);
+  background: var(--surface-raised);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+.captures .history-card-body { padding: var(--s-5); }
+.captures .history-date {
+  padding: 1px 0;
+  color: var(--text);
+  font-size: var(--text-md);
+  line-height: var(--lh-snug-md);
+  font-weight: var(--weight-medium);
+}
+.captures .history-details {
+  color: var(--text-subtle);
+  font-size: var(--text-sm);
+  font-feature-settings: "tnum";
+}
+.captures .history-warning { color: var(--caution-text); font-size: var(--text-sm); }
+.captures .history-actions { margin-top: var(--s-3); }
+.captures .history-actions button.ui-btn { padding: 0 var(--s-4); }
+.captures .history-card-error {
+  margin-top: var(--s-3);
+  padding: var(--s-3) var(--s-4);
+  border-radius: var(--r-sm);
+  color: var(--danger-text);
+  background: var(--danger-surface);
+  font-size: var(--text-xs);
+  line-height: var(--lh-snug-xs);
+}
+.captures .history-empty { min-height: 320px; }
+.captures .history-empty-icon {
+  min-width: 50px;
+  min-height: 50px;
+  margin-bottom: var(--s-5);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  color: var(--text-subtle);
+  background: var(--surface-raised);
+}
+.captures .history-empty-title { font-size: var(--text-lg); font-weight: var(--weight-semibold); }
+.captures .history-empty-body {
+  margin-top: var(--s-3);
+  color: var(--text-subtle);
+  font-size: var(--text-md);
+}
+
+/* -------------------------------------------------------------- menus ---- */
+
+/* Secondary-click command menus (`.custom-select` listbox look). */
+popover.captures-menu { all: unset; }
+popover.captures-menu > arrow { all: unset; }
+popover.captures-menu > contents {
+  all: unset;
+  min-width: 168px;
+  padding: var(--s-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  color: var(--text);
+  background: var(--surface-overlay);
+  box-shadow: var(--shadow-lg);
+}
+popover.captures-menu button.menu-item {
+  all: unset;
+  min-height: 16px;
+  padding: var(--s-3) var(--s-4);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+popover.captures-menu button.menu-item:hover,
+popover.captures-menu button.menu-item:focus-visible { background: var(--surface-hover); }

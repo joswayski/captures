@@ -56,6 +56,15 @@ impl Tokens {
         css_rgba(self.colors[name])
     }
 
+    pub fn color_css(&self, name: &str) -> Option<String> {
+        self.colors.get(name).copied().map(css_rgba)
+    }
+
+    /// A token's CSS source text, such as `16px` or `140ms`.
+    pub fn raw(&self, name: &str) -> Option<&str> {
+        self.raw.get(name).map(String::as_str)
+    }
+
     /// A `box-shadow` token as GTK CSS, first layer on top.
     pub fn shadow_css(&self, name: &str) -> String {
         self.shadows[name]

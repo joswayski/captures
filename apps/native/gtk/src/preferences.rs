@@ -47,6 +47,7 @@ pub fn build(
     app: &gtk::Application,
     tokens: Rc<Tokens>,
     options: Options,
+    open_history: impl Fn() + 'static,
 ) -> gtk::ApplicationWindow {
     let spec = captures_app::app_windows::PREFERENCES;
     let window = gtk::ApplicationWindow::builder()
@@ -104,6 +105,7 @@ pub fn build(
     let history = gtk::Button::with_label(preferences::HISTORY_ACTION);
     history.add_css_class("preferences-history-button");
     history.set_valign(gtk::Align::Center);
+    history.connect_clicked(move |_| open_history());
     header.append(&history);
     body.append(&header);
 

@@ -2,45 +2,85 @@
 //! own token-drawn surfaces and controls. Runs beside the wgpu workbench
 //! until it passes the feature, screenshot, performance and accessibility
 //! gates in `docs/native-rewrite.md`.
+mod history;
 mod preferences;
 mod style;
 mod switch;
 mod tokens;
 mod widgets;
 
+use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use gtk::prelude::*;
 use gtk::{gio, glib, graphene};
 
+const USAGE: &str = "captures-gtk [--scene preferences|history] [--appearance light|dark]\n\
+  [--settings-file PATH] [--history-root PATH] [--size WxH]\n\
+  [--screenshot OUT.png] [--exercise] [--quit-after SECONDS]";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Scene {
+    Preferences,
+    History,
+}
+
+impl Scene {
+    fn name(self) -> &'static str {
+        match self {
+            Scene::Preferences => "preferences",
+            Scene::History => "history",
+        }
+    }
+}
+
 struct Options {
-    scene: String,
+    scene: Scene,
     appearance: Option<String>,
     settings_file: PathBuf,
     history_root: Option<PathBuf>,
     screenshot: Option<PathBuf>,
     size: Option<(i32, i32)>,
+    exercise: bool,
+    quit_after: Option<Duration>,
 }
 
 fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
     let mut options = Options {
-        scene: "preferences".into(),
+        scene: Scene::Preferences,
         appearance: None,
         settings_file: captures_settings::default_native_settings_path(),
         history_root: None,
         screenshot: None,
         size: None,
+        exercise: false,
+        quit_after: None,
     };
     let mut args = args.skip(1);
     while let Some(flag) = args.next() {
         let mut value = || args.next().ok_or_else(|| format!("{flag} needs a value"));
         match flag.as_str() {
-            "--scene" => options.scene = value()?,
+            "--scene" => {
+                options.scene = match value()?.as_str() {
+                    "preferences" => Scene::Preferences,
+                    "history" => Scene::History,
+                    other => return Err(format!("unsupported scene {other}")),
+                }
+            }
             "--appearance" => options.appearance = Some(value()?),
             "--settings-file" => options.settings_file = value()?.into(),
             "--history-root" => options.history_root = Some(value()?.into()),
             "--screenshot" => options.screenshot = Some(value()?.into()),
+            "--exercise" => options.exercise = true,
+            "--quit-after" => {
+                let seconds: f64 = value()?.parse().map_err(|_| "bad --quit-after")?;
+                if seconds.is_nan() || seconds <= 0. {
+                    return Err("--quit-after must be positive".into());
+                }
+                options.quit_after = Some(Duration::from_secs_f64(seconds));
+            }
             "--size" => {
                 let size = value()?;
                 let (w, h) = size.split_once('x').ok_or("--size is WIDTHxHEIGHT")?;
@@ -49,13 +89,96 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
                     h.parse().map_err(|_| "bad height")?,
                 ));
             }
-            _ => return Err(format!("unknown argument {flag}")),
+            "--help" => return Err(USAGE.into()),
+            _ => return Err(format!("unknown argument {flag}\n{USAGE}")),
         }
     }
-    if options.scene != "preferences" {
-        return Err(format!("unsupported scene {}", options.scene));
-    }
     Ok(options)
+}
+
+/// One JSON line on stdout for `apps/native/profile.py`.
+fn emit(event: &str, mut fields: serde_json::Value) {
+    fields["event"] = event.into();
+    println!("{fields}");
+}
+
+/// Windows shared across the app: one Preferences and one History.
+struct Host {
+    app: gtk::Application,
+    tokens: Rc<tokens::Tokens>,
+    provider: gtk::CssProvider,
+    settings_file: PathBuf,
+    /// The live profile's History, when Captures runs as the app.
+    live_history_root: Option<PathBuf>,
+    history_root: PathBuf,
+    preferences: RefCell<Option<gtk::ApplicationWindow>>,
+    history: RefCell<Option<Rc<history::History>>>,
+}
+
+impl Host {
+    fn show_preferences(self: &Rc<Self>) -> gtk::ApplicationWindow {
+        if let Some(window) = self.preferences.borrow().as_ref() {
+            window.present();
+            return window.clone();
+        }
+        let window = preferences::build(
+            &self.app,
+            self.tokens.clone(),
+            preferences::Options {
+                settings_file: self.settings_file.clone(),
+                history_root: self.live_history_root.clone(),
+            },
+            {
+                let host = Rc::downgrade(self);
+                move || {
+                    if let Some(host) = host.upgrade() {
+                        host.show_history();
+                    }
+                }
+            },
+        );
+        let host = Rc::downgrade(self);
+        window.connect_destroy(move |_| {
+            if let Some(host) = host.upgrade() {
+                host.preferences.borrow_mut().take();
+            }
+        });
+        *self.preferences.borrow_mut() = Some(window.clone());
+        window.present();
+        window
+    }
+
+    fn show_history(self: &Rc<Self>) -> Rc<history::History> {
+        if let Some(history) = self.history.borrow().as_ref() {
+            history.window.present();
+            history.reload();
+            return history.clone();
+        }
+        let host = Rc::downgrade(self);
+        let history = Rc::new(history::build(
+            &self.app,
+            self.tokens.clone(),
+            self.history_root.clone(),
+            history::Actions {
+                open_preferences: Box::new(move || {
+                    if let Some(host) = host.upgrade() {
+                        host.show_preferences();
+                    }
+                }),
+                edit: Box::new(|_| {}),
+                restore: Box::new(|_| {}),
+            },
+        ));
+        let host = Rc::downgrade(self);
+        history.window.connect_destroy(move |_| {
+            if let Some(host) = host.upgrade() {
+                host.history.borrow_mut().take();
+            }
+        });
+        *self.history.borrow_mut() = Some(history.clone());
+        history.window.present();
+        history
+    }
 }
 
 fn main() -> glib::ExitCode {
@@ -66,11 +189,13 @@ fn main() -> glib::ExitCode {
             return glib::ExitCode::from(2);
         }
     };
+    let started = Instant::now();
     let app = gtk::Application::builder()
         .application_id("es.captur.Captures.Gtk")
         .flags(gio::ApplicationFlags::NON_UNIQUE)
         .build();
-    let options = Rc::new(std::cell::RefCell::new(Some(options)));
+    let options = Rc::new(RefCell::new(Some(options)));
+    let hosts: Rc<RefCell<Vec<Rc<Host>>>> = Rc::default();
     app.connect_activate(move |app| {
         let Some(options) = options.borrow_mut().take() else {
             return;
@@ -91,22 +216,65 @@ fn main() -> glib::ExitCode {
             .and_then(|value| value.as_str().map(str::to_owned))
             .unwrap_or_else(|| "mustard".into());
         let tokens = Rc::new(tokens::Tokens::variant(&appearance, &theme));
-        style::install(&tokens);
-        let window = preferences::build(
-            app,
+        let provider = style::install(&tokens);
+        let host = Rc::new(Host {
+            app: app.clone(),
             tokens,
-            preferences::Options {
-                settings_file: options.settings_file,
-                history_root: options.history_root,
-            },
-        );
+            provider,
+            settings_file: options.settings_file.clone(),
+            live_history_root: options.history_root.clone(),
+            history_root: options
+                .history_root
+                .clone()
+                .unwrap_or_else(captures_app::default_history_root),
+            preferences: RefCell::default(),
+            history: RefCell::default(),
+        });
+        hosts.borrow_mut().push(host.clone());
+        let window: gtk::ApplicationWindow = match options.scene {
+            Scene::Preferences => host.show_preferences(),
+            Scene::History => host.show_history().window.clone(),
+        };
         if let Some((w, h)) = options.size {
             window.set_default_size(w, h);
         }
-        window.present();
+        let scene = options.scene;
+        let ready = move || {
+            emit(
+                "ready",
+                serde_json::json!({
+                    "scene": scene.name(), "renderer": "gtk4",
+                    "gsk": std::env::var("GSK_RENDERER").ok(),
+                    "os": std::env::consts::OS, "appearance": appearance,
+                    "launchToMapMs": started.elapsed().as_secs_f64() * 1000.,
+                    "readiness": "window mapped; not first presentation",
+                    "displayEnvironment": {
+                        "wayland": std::env::var("WAYLAND_DISPLAY").ok(),
+                        "x11": std::env::var("DISPLAY").ok()
+                    }
+                }),
+            );
+        };
+        if window.is_mapped() {
+            ready();
+        } else {
+            let ready = RefCell::new(Some(ready));
+            window.connect_map(move |_| {
+                if let Some(ready) = ready.borrow_mut().take() {
+                    ready();
+                }
+            });
+        }
+        if options.exercise {
+            exercise(&host, scene, started);
+        }
+        if let Some(after) = options.quit_after {
+            let app = app.clone();
+            glib::timeout_add_local_once(after, move || app.quit());
+        }
         if let Some(path) = options.screenshot {
             let window = window.clone();
-            glib::timeout_add_local_once(std::time::Duration::from_millis(600), move || {
+            glib::timeout_add_local_once(Duration::from_millis(1500), move || {
                 if let Err(error) = screenshot(&window, &path) {
                     eprintln!("screenshot failed: {error}");
                 }
@@ -115,6 +283,38 @@ fn main() -> glib::ExitCode {
         }
     });
     app.run_with_args::<&str>(&[])
+}
+
+/// `profile.py --exercise`: six scripted mutations at 2, 6, … 22 s, like the
+/// wgpu workbench's `exercise_at`, each reported as `scripted-action`.
+fn exercise(host: &Rc<Host>, scene: Scene, started: Instant) {
+    for cycle in 0..6u64 {
+        let host = host.clone();
+        let at = Duration::from_secs(2 + cycle * 4).saturating_sub(started.elapsed());
+        glib::timeout_add_local_once(at, move || {
+            let start = Instant::now();
+            match scene {
+                // Shipping-equivalent of the workbench's appearance flip: the
+                // stylesheet is rebuilt and every widget restyles.
+                Scene::Preferences => {
+                    let appearance = if cycle % 2 == 0 { "dark" } else { "light" };
+                    let tokens = tokens::Tokens::variant(appearance, "mustard");
+                    host.provider.load_from_data(&style::css(&tokens));
+                }
+                Scene::History => {
+                    if let Some(history) = host.history.borrow().as_ref() {
+                        history.scroll_to_end(cycle % 2 == 0);
+                    }
+                }
+            }
+            emit(
+                "scripted-action",
+                serde_json::json!({"scene": scene.name(), "cycle": cycle,
+                "milliseconds": start.elapsed().as_secs_f64() * 1000.,
+                "note": "CPU mutation, not presentation or hardware input latency"}),
+            );
+        });
+    }
 }
 
 /// Render the window's content (without decorations) to a PNG.
