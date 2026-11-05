@@ -224,33 +224,42 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
+        timeout-minutes: 12
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            curl \
-            file \
-            ffmpeg \
-            hsetroot \
-            libayatana-appindicator3-dev \
-            libasound2-dev \
-            libclang-dev \
-            libdbus-1-dev \
-            libegl-dev \
-            libgbm-dev \
-            libpipewire-0.3-dev \
-            libspa-0.2-dev \
-            librsvg2-dev \
-            libssl-dev \
-            libwayland-dev \
-            libwebkit2gtk-4.1-dev \
-            libxcb1-dev \
-            libxdo-dev \
-            libxrandr-dev \
-            pkg-config \
-            wget \
-            xauth \
-            xvfb
+          # A stalled apt mirror can hang this step; time out each attempt and retry.
+          for attempt in 1 2 3; do
+            if timeout 240 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update &&
+               timeout 300 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y \
+                 build-essential \
+                 curl \
+                 file \
+                 ffmpeg \
+                 hsetroot \
+                 libayatana-appindicator3-dev \
+                 libasound2-dev \
+                 libclang-dev \
+                 libdbus-1-dev \
+                 libegl-dev \
+                 libgbm-dev \
+                 libpipewire-0.3-dev \
+                 libspa-0.2-dev \
+                 librsvg2-dev \
+                 libssl-dev \
+                 libwayland-dev \
+                 libwebkit2gtk-4.1-dev \
+                 libxcb1-dev \
+                 libxdo-dev \
+                 libxrandr-dev \
+                 pkg-config \
+                 wget \
+                 xauth \
+                 xvfb; then
+              exit 0
+            fi
+            echo "apt attempt $attempt failed; retrying"
+            sleep 15
+          done
+          exit 1
       # This job id, toolchain and command set match the `rust` job in
       # release.yml, so both share one rust-cache key per OS. That main-branch
       # run seeds the cache; PR runs restore it but never save a per-PR copy
@@ -351,35 +360,44 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
+        timeout-minutes: 12
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            curl \
-            file \
-            libayatana-appindicator3-dev \
-            libasound2-dev \
-            libclang-dev \
-            libdbus-1-dev \
-            libegl-dev \
-            libgbm-dev \
-            libpipewire-0.3-dev \
-            libspa-0.2-dev \
-            librsvg2-dev \
-            libssl-dev \
-            libwayland-dev \
-            libwebkit2gtk-4.1-dev \
-            libxcb1-dev \
-            libxdo-dev \
-            libxrandr-dev \
-            nasm \
-            patchelf \
-            xdg-utils \
-            pkg-config \
-            wget \
-            xz-utils \
-            yasm \
-            zlib1g-dev
+          # A stalled apt mirror can hang this step; time out each attempt and retry.
+          for attempt in 1 2 3; do
+            if timeout 240 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update &&
+               timeout 300 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y \
+                 build-essential \
+                 curl \
+                 file \
+                 libayatana-appindicator3-dev \
+                 libasound2-dev \
+                 libclang-dev \
+                 libdbus-1-dev \
+                 libegl-dev \
+                 libgbm-dev \
+                 libpipewire-0.3-dev \
+                 libspa-0.2-dev \
+                 librsvg2-dev \
+                 libssl-dev \
+                 libwayland-dev \
+                 libwebkit2gtk-4.1-dev \
+                 libxcb1-dev \
+                 libxdo-dev \
+                 libxrandr-dev \
+                 nasm \
+                 patchelf \
+                 xdg-utils \
+                 pkg-config \
+                 wget \
+                 xz-utils \
+                 yasm \
+                 zlib1g-dev; then
+              exit 0
+            fi
+            echo "apt attempt $attempt failed; retrying"
+            sleep 15
+          done
+          exit 1
       - uses: actions/setup-node@v4
         with:
           node-version: 24
