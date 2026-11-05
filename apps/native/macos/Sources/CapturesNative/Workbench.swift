@@ -121,6 +121,11 @@ final class CaptureButton: NSButton {
     var iconSide: CGFloat? { didSet { needsDisplay = true } }
     var iconStrokeWidth: CGFloat = 1.8 { didSet { needsDisplay = true } }
     var textSize: CGFloat? { didSet { needsDisplay = true } }
+    /// Overrides the medium label weight, e.g. shipping's inherited regular canvas tools.
+    var textWeight: NSFont.Weight? { didSet { needsDisplay = true } }
+    /// Shipping `.screenshot-canvas-bg-trigger`: an 11 pt `--text-subtle`
+    /// chevron 6 pt after the label, with 8 pt leading and 6 pt trailing padding.
+    var trailingChevron = false { didSet { needsDisplay = true } }
     var cornerRadius: CGFloat? { didSet { needsDisplay = true } }
     /// Canvas background chip drawn in place of an icon; `.clear` is transparent.
     var swatch: NSColor? { didSet { needsDisplay = true } }
@@ -265,7 +270,7 @@ final class CaptureButton: NSButton {
             path.stroke()
         }
         let font = NSFont.systemFont(ofSize: textSize ?? tokens.number("text-md"),
-                                     weight: solid || primary ? .semibold : .medium) // Shipping primaries are semibold.
+                                     weight: textWeight ?? (solid || primary ? .semibold : .medium)) // Shipping primaries are semibold.
         var foreground = solid
             ? tokens.color("solid-ink").withAlphaComponent(isEnabled ? 1 : 0.4)
             : tokens.color(isEnabled
@@ -298,7 +303,9 @@ final class CaptureButton: NSButton {
             : icon?.isShipping == true ? 16 : 14)
         let hasGlyph = icon != nil || swatch != nil
         let iconWidth: CGFloat = !hasGlyph ? 0 : (label.isEmpty ? glyphSide : glyphSide + 6)
-        let startX = (bounds.width - size.width - iconWidth) / 2
+        let chevronWidth: CGFloat = trailingChevron ? 6 + 11 : 0
+        // The trigger's 8/6 pt padding puts its content 1 pt right of center.
+        let startX = (bounds.width - size.width - iconWidth - chevronWidth) / 2 + (trailingChevron ? 1 : 0)
         let glyphRect = NSRect(x: startX, y: (bounds.height - glyphSide) / 2,
                                width: glyphSide, height: glyphSide)
         if let swatch {
@@ -308,6 +315,11 @@ final class CaptureButton: NSButton {
         }
         (label as NSString).draw(at: CGPoint(x: startX + iconWidth,
             y: (bounds.height - size.height) / 2), withAttributes: attributes)
+        if trailingChevron {
+            tokens.color("text-subtle").withAlphaComponent(isEnabled ? 1 : 0.32).setStroke()
+            ShippingIcons.stroke("editor-chevron-down", in: NSRect(x: startX + iconWidth + size.width + 6,
+                y: (bounds.height - 11) / 2, width: 11, height: 11), width: iconStrokeWidth)
+        }
         // Shipping `.ui-btn:focus-visible`: AppKit only gives a button first
         // responder through keyboard navigation, so this is focus-visible.
         if focusRingVisible { drawFocusRing(tokens, in: bounds, radius: radius) }

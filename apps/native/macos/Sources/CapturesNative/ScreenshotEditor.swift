@@ -2446,104 +2446,126 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let control = EditorChrome.metric("header_control")
         let y = (height - control) / 2
         let spacing = tokens.number("s-2")
-        let addWidth = 2 * pad + 16 + tokens.number("s-3") + titleWidth(addImagesButton.title)
+        // Shipping `.screenshot-editor-header-main` is a flex row, 12 pt padded
+        // with a 12 pt gap: the Canvas toolbar, then the history actions 4 pt
+        // apart (Undo and Redo above 1040 pt, the zoom group and Add images,
+        // each 4 pt margined). When the row overflows, flexbox shrinks both
+        // sides in proportion to their natural widths. Add images keeps its
+        // width, so the zoom group gives up the history side's share through
+        // its buttons and slider; the Canvas toolbar gives up its share through
+        // the Background picker, then clips.
+        let addWidth = 2 + 2 * pad + 16 + tokens.number("s-3") + titleWidth(addImagesButton.title)
+        let zoomButton = EditorChrome.metric("zoom_button")
+        let sliderPad = tokens.number(layout.showHistory ? "s-4" : "s-3")
+        let zoomNatural = 2 + 3 * zoomButton + layout.sliderWidth + layout.presetWidth
+        let historyNatural = (layout.showHistory ? 2 * (control + spacing) : 0)
+            + spacing + zoomNatural + 2 * spacing + addWidth
+        let canvasNatural = canvasToolbarWidths().reduce(0, +) + 2 * 4 + 6 * 2
+        let overflow = max(0, canvasNatural + historyNatural - (width - 3 * pad))
+        // Inside the zoom group, shrink is weighted by content boxes: a 30 pt
+        // button less its 1 pt divider, the slider less its padding and divider.
+        let sliderContent = layout.sliderWidth - 2 * sliderPad - 1
+        let zoomShrinkable = 3 * (zoomButton - 1) + sliderContent
+        let historyShrink = min(overflow * historyNatural / (canvasNatural + historyNatural), zoomShrinkable)
+        let buttonWidth = zoomButton - historyShrink * (zoomButton - 1) / zoomShrinkable
+        let sliderWidth = layout.sliderWidth - historyShrink * sliderContent / zoomShrinkable
+        let zoomWidth = zoomNatural - historyShrink
         addImagesButton.frame = NSRect(x: width - pad - addWidth, y: y,
                                        width: addWidth, height: control)
-        let zoomButton = EditorChrome.metric("zoom_button")
-        let zoomWidth = 3 * zoomButton + layout.sliderWidth + layout.presetWidth + 4 + 2
         zoomGroup.frame = NSRect(x: addImagesButton.frame.minX - 2 * spacing - zoomWidth, y: y,
                                  width: zoomWidth, height: control)
         var x: CGFloat = 1
         let inner = control - 2
-        let sliderPad = tokens.number(layout.showHistory ? "s-4" : "s-3")
         let zoomViews: [(NSView, CGFloat)] = [
-            (fitButton as NSView, zoomButton), (zoomOutButton! as NSView, zoomButton),
-            (zoomSlider as NSView, layout.sliderWidth), (zoomInButton! as NSView, zoomButton),
+            (fitButton as NSView, buttonWidth), (zoomOutButton! as NSView, buttonWidth),
+            (zoomSlider as NSView, sliderWidth), (zoomInButton! as NSView, buttonWidth),
             (zoomPreset as NSView, layout.presetWidth),
         ]
         for (index, entry) in zoomViews.enumerated() {
             let (view, viewWidth) = entry
+            // Every cell but the preset ends in its 1 pt `border-right` divider.
+            let divided = index < zoomDividers.count
+            let content = viewWidth - (divided ? 1 : 0)
             if view === zoomSlider {
-                view.frame = NSRect(x: x + sliderPad, y: 1, width: viewWidth - 2 * sliderPad, height: inner)
+                view.frame = NSRect(x: x + sliderPad, y: 1, width: content - 2 * sliderPad, height: inner)
             } else if view === zoomPreset {
                 view.frame = NSRect(x: x, y: (control - 26) / 2, width: viewWidth, height: 26)
             } else {
-                view.frame = NSRect(x: x, y: 1, width: viewWidth, height: inner)
+                view.frame = NSRect(x: x, y: 1, width: content, height: inner)
             }
+            if divided { zoomDividers[index].frame = NSRect(x: x + content, y: 1, width: 1, height: inner) }
             x += viewWidth
-            if index < zoomDividers.count {
-                zoomDividers[index].frame = NSRect(x: x, y: 1, width: 1, height: inner)
-                x += 1
-            }
         }
-        var right = zoomGroup.frame.minX - 2 * spacing
         undoButton.isHidden = !layout.showHistory
         redoButton.isHidden = !layout.showHistory
         if layout.showHistory {
-            redoButton.frame = NSRect(x: right - control, y: y, width: control, height: control)
+            redoButton.frame = NSRect(x: zoomGroup.frame.minX - 2 * spacing - control, y: y,
+                                      width: control, height: control)
             undoButton.frame = NSRect(x: redoButton.frame.minX - spacing - control, y: y,
                                       width: control, height: control)
-            right = undoButton.frame.minX
         }
-        layoutCanvasToolbar(available: max(0, right - 2 * pad), y: y)
+        layoutCanvasToolbar(width: canvasNatural - (overflow - historyShrink), y: y)
     }
 
-    /// Shipping `.screenshot-canvas-toolbar`. With too little room it drops the
-    /// "Canvas" label, then draws Trim and Background icon-only (their titles
-    /// stay the accessible names, with tooltips), then clips like `overflow: hidden`.
-    private func layoutCanvasToolbar(available: CGFloat, y: CGFloat) {
-        guard canvasToolbarLabels.count == 4, let trimButton, let backgroundButton else { return }
-        let labels = canvasToolbarLabels
-        func textWidth(_ field: NSTextField) -> CGFloat { ceil(field.attributedStringValue.size().width) + 2 }
-        let small = NSFont.systemFont(ofSize: tokens.number("text-sm"), weight: .medium)
-        func titleWidth(_ text: String) -> CGFloat {
-            ceil((text as NSString).size(withAttributes: [.font: small]).width)
+    /// The natural widths of shipping's `.screenshot-canvas-toolbar` items: the
+    /// Canvas label, W field, ×, H field, split, Trim edges and Background color.
+    /// Trim and Background inherit the editor's 13 pt regular text
+    /// (`.screenshot-editor button` outranks `.screenshot-canvas-tool`).
+    private func canvasToolbarWidths() -> [CGFloat] {
+        guard canvasToolbarLabels.count == 4 else { return [] }
+        func width(_ text: String, _ font: NSFont) -> CGFloat {
+            (text as NSString).size(withAttributes: [.font: font]).width
         }
-        let gap = tokens.number("s-2"), toolPad = tokens.number("s-4"), iconGap = tokens.number("s-3")
-        let fieldWidth = EditorChrome.metric("canvas_field")
-        let labelWidth = toolPad + textWidth(labels[0]) + tokens.number("s-3")
-        let trimFull = 2 * toolPad + 13 + iconGap + titleWidth(EditorChrome.text("header", "trim"))
-        let backgroundFull = 2 * toolPad + 14 + iconGap + titleWidth(Self.backgroundTitle)
-        let compactTool: CGFloat = 28
-        let dimensions = textWidth(labels[1]) + gap + fieldWidth + 2 + textWidth(labels[2]) + 2
-            + textWidth(labels[3]) + gap + fieldWidth
-        let split = 2 + 1 + 2 * gap + 2
-        func total(_ showLabel: Bool, _ full: Bool) -> CGFloat {
-            3 + (showLabel ? labelWidth + 2 : 0) + dimensions + split
-                + (full ? trimFull + 2 + backgroundFull : 2 * compactTool + 2) + 3
-        }
-        let showLabel = total(true, true) <= available
-        let full = showLabel || total(false, true) <= available
+        let small = NSFont.systemFont(ofSize: tokens.number("text-xs"), weight: .medium)
+        let tool = NSFont.systemFont(ofSize: tokens.number("text-md"))
+        let labels = canvasToolbarLabels.map(\.stringValue)
+        let field = EditorChrome.metric("canvas_field"), gap = tokens.number("s-2")
+        let toolPad = tokens.number("s-4"), iconGap = tokens.number("s-3")
+        return [
+            toolPad + width(labels[0], small) + iconGap,
+            width(labels[1], small) + gap + field,
+            width(labels[2], small),
+            width(labels[3], small) + gap + field,
+            1 + 2 * gap,
+            2 + 2 * toolPad + 13 + iconGap + width(EditorChrome.text("header", "trim"), tool),
+            2 + toolPad + 14 + iconGap + width(Self.backgroundTitle, tool) + iconGap + 11 + iconGap,
+        ]
+    }
+
+    /// Shipping `.screenshot-canvas-toolbar`: a 1 pt border, 3 pt padding and
+    /// 2 pt gaps. Every item keeps its natural width, so a narrower toolbar
+    /// clips Background color like `overflow: hidden`.
+    private func layoutCanvasToolbar(width: CGFloat, y: CGFloat) {
+        let widths = canvasToolbarWidths()
+        guard widths.count == 7, let trimButton, let backgroundButton else { return }
         let height = EditorChrome.metric("header_control")
-        canvasToolbar.frame = NSRect(x: tokens.number("s-5"), y: y,
-                                     width: max(0, min(total(showLabel, full), available)), height: height)
-        let labelY = (height - 16) / 2
-        var x: CGFloat = 3
-        labels[0].isHidden = !showLabel
-        if showLabel {
-            labels[0].frame = NSRect(x: x + toolPad, y: labelY, width: textWidth(labels[0]), height: 16)
-            x += labelWidth + 2
+        canvasToolbar.frame = NSRect(x: tokens.number("s-5"), y: y, width: max(0, width), height: height)
+        let labels = canvasToolbarLabels
+        let gap = tokens.number("s-2"), toolPad = tokens.number("s-4")
+        // A label field draws its text 2 pt inside its frame.
+        func place(_ label: NSTextField, at x: CGFloat, width: CGFloat) {
+            label.frame = NSRect(x: x - 2, y: (height - 16) / 2, width: width + 4, height: 16)
         }
+        var x: CGFloat = 4
+        place(labels[0], at: x + toolPad, width: widths[0] - toolPad - tokens.number("s-3"))
+        x += widths[0] + 2
         for (axis, field) in [canvasWidth, canvasHeight].enumerated() {
             let letter = labels[axis == 0 ? 1 : 3]
-            letter.frame = NSRect(x: x, y: labelY, width: textWidth(letter), height: 16)
-            x += letter.frame.width + gap
-            field.frame = NSRect(x: x, y: (height - 22) / 2, width: fieldWidth, height: 22)
-            x += fieldWidth
+            let letterWidth = widths[axis == 0 ? 1 : 3] - gap - EditorChrome.metric("canvas_field")
+            place(letter, at: x, width: letterWidth)
+            field.frame = NSRect(x: x + letterWidth + gap, y: (height - 22) / 2,
+                                 width: EditorChrome.metric("canvas_field"), height: 22)
+            x += widths[axis == 0 ? 1 : 3] + 2
             if axis == 0 {
-                x += 2
-                labels[2].frame = NSRect(x: x, y: labelY, width: textWidth(labels[2]), height: 16)
-                x += labels[2].frame.width + 2
+                place(labels[2], at: x, width: widths[2])
+                x += widths[2] + 2
             }
         }
-        canvasSplit.frame = NSRect(x: x + 2 + gap, y: (height - 16) / 2, width: 1, height: 16)
-        x += split
-        trimButton.iconOnly = !full
-        trimButton.frame = NSRect(x: x, y: (height - 28) / 2, width: full ? trimFull : compactTool, height: 28)
-        x = trimButton.frame.maxX + 2
-        backgroundButton.iconOnly = !full
-        backgroundButton.frame = NSRect(x: x, y: (height - 28) / 2,
-                                        width: full ? backgroundFull : compactTool, height: 28)
+        canvasSplit.frame = NSRect(x: x + gap, y: (height - 16) / 2, width: 1, height: 16)
+        x += widths[4] + 2
+        trimButton.frame = NSRect(x: x, y: (height - 28) / 2, width: widths[5], height: 28)
+        x += widths[5] + 2
+        backgroundButton.frame = NSRect(x: x, y: (height - 28) / 2, width: widths[6], height: 28)
         backgroundCard.frame.origin = NSPoint(
             x: min(canvasToolbar.frame.minX + backgroundButton.frame.minX,
                    max(0, root.bounds.width - backgroundCard.frame.width - 8)),
@@ -3173,7 +3195,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             [weak self] in self?.toggleBackgroundCard()
         }
         for (control, icon) in [(trimButton!, "trim"), (backgroundButton!, "")] {
-            control.quiet = true; control.textSize = tokens.number("text-sm")
+            // `.screenshot-editor button` outranks `.screenshot-canvas-tool`'s
+            // 12 pt medium, so shipping draws these labels in 13 pt regular.
+            control.quiet = true; control.textSize = tokens.number("text-md"); control.textWeight = .regular
             control.cornerRadius = tokens.number("r-sm")
             if !icon.isEmpty { control.icon = .shipping(icon); control.iconSide = 13 }
         }
@@ -3185,6 +3209,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
         backgroundButton.toolTip = EditorColors.text("background_tooltip")
         backgroundButton.swatch = tokens.color("surface-raised")
+        backgroundButton.trailingChevron = true
 
         // Shipping canvas background card: a Solid toggle and the compact swatch
         // row. Every change applies at once as its own undo step.

@@ -1611,11 +1611,32 @@ final class ScreenshotEditorTests: XCTestCase {
                 // Shipping's footer is 77pt, or 119pt with the hint row at 1040pt and below.
                 XCTAssertEqual(input.bounds.height, width > 1040 ? 435 : 393)
                 XCTAssertEqual(undo.isHidden, width <= 1040)
-                // 92pt/72pt slider cells minus their 8pt/6pt padding.
-                XCTAssertEqual(zoom.frame.width, width > 1040 ? 76 : 60)
+                // 92pt/72pt slider cells minus their 8pt/6pt padding and 1pt
+                // divider; at 860pt the overflowing header shrinks the cell to 60.8pt.
+                XCTAssertEqual(zoom.frame.width, width > 1040 ? 75 : width == 860 ? 47.8 : 59, accuracy: 0.1)
                 XCTAssertLessThanOrEqual(canvasToolbar.frame.maxX, zoomGroup.frame.minX - 12)
                 XCTAssertFalse(trim.isHiddenOrHasHiddenAncestor)
                 XCTAssertTrue(controller.root.bounds.contains(trim.convert(trim.bounds, to: controller.root)))
+            }
+            // Shipping's header flex row as WebKit lays it out on macOS: past the
+            // natural width both sides shrink in proportion, the zoom group
+            // through its buttons and slider, and the Canvas toolbar keeps its
+            // label while Background color clips.
+            let addImages = try button("Add images", in: controller.root)
+            let canvasLabel = try XCTUnwrap(canvasToolbar.subviews
+                .first { ($0 as? NSTextField)?.stringValue == "Canvas" })
+            for (width, toolbar, zoomX, zoomWidth) in [(CGFloat(860), 487.9, 515.9, 208.3),
+                                                       (900, 511.6, 539.6, 224.7),
+                                                       (1040, 528.1, 668.2, 236), (1400, 528.1, 1004.2, 260)] {
+                controller.window.setContentSize(NSSize(width: width, height: 600))
+                controller.root.layoutSubtreeIfNeeded()
+                waitUntil { abs(addImages.frame.maxX - (width - 12)) < 0.01 }
+                XCTAssertEqual(canvasToolbar.frame.minX, 12)
+                XCTAssertEqual(canvasToolbar.frame.width, toolbar, accuracy: 0.6, "toolbar at \(width)")
+                XCTAssertEqual(zoomGroup.frame.minX, zoomX, accuracy: 0.6, "zoom group at \(width)")
+                XCTAssertEqual(zoomGroup.frame.width, zoomWidth, accuracy: 0.6, "zoom group at \(width)")
+                XCTAssertEqual(addImages.frame.width, 115.8, accuracy: 0.6)
+                XCTAssertFalse(canvasLabel.isHiddenOrHasHiddenAncestor)
             }
             controller.window.setContentSize(NSSize(width: 860, height: 600))
             // Fit leaves 10pt a side: 468 of the 488pt viewport at the 860pt minimum.
