@@ -553,6 +553,8 @@ pub struct Editor {
     range_drag: Option<(Range, f64)>,
     /// The latest live edit waiting for the one in flight.
     pending: Option<Request>,
+    /// Numbers each label Size or Text change, so none fold into another.
+    edit_seq: u64,
     /// A custom color to ask for once the window is released.
     pick_color: Option<Field>,
     /// Eraser mode and settings, window-local like shipping's.
@@ -1114,6 +1116,7 @@ impl Editor {
             thumb_hover: false,
             range_drag: None,
             pending: None,
+            edit_seq: 0,
             pick_color: None,
             eraser: props::Eraser::default(),
             inline: None,
