@@ -10,15 +10,34 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
+use captures_app::controls::select;
 use captures_app::motion::CubicBezier;
-use captures_app::preferences::{self, APPEARANCE_MODES, SECTIONS, THEMES};
+use captures_app::preferences::{
+    self, APPEARANCE_MODES, COUNTDOWN_SECONDS, RECORDING_FORMATS, RECORDING_FPS, RECORDING_TOGGLES,
+    RESOLUTIONS, SECTIONS, SHORTCUT_ROWS, THEMES,
+};
+use captures_app::shortcuts::{
+    ShortcutKeyEvent, ShortcutPlatform, ShortcutRecording, record_shortcut, shortcut_display_tokens,
+};
 use windows::Win32::Graphics::Direct2D::ID2D1DeviceContext;
 use windows::core::Result;
 
 use crate::gfx::{self, Gfx, Style, Text, rect};
 use crate::tokens::Tokens;
 
+pub const PLATFORM: ShortcutPlatform = ShortcutPlatform::Windows;
 pub const NAV_WIDTH: f32 = 196.;
+/// `.setting-row-inline` control column minimum.
+const SELECT_MIN: f32 = 160.;
+/// `.custom-select-trigger svg` and its path (16-unit box).
+const CHEVRON: f32 = 14.;
+const CHEVRON_PATH: &str = "m4 6 4 4 4-4";
+/// `.shortcut-row` control column: `minmax(180px, 260px)`.
+const RECORDER: (f32, f32) = (180., 260.);
+/// Room for `--shadow-lg` (0 16px 40px) around the listbox.
+const LISTBOX_BLEED: f32 = 36.;
+/// Type-ahead keeps extending its prefix while keys come this close together.
+const TYPE_AHEAD_SECONDS: f32 = 1.;
 const SWITCH: (f32, f32) = (32., 19.);
 const KNOB: f32 = 13.;
 const KNOB_TRAVEL: f32 = 13.;
@@ -44,10 +63,58 @@ pub enum Item {
     Accent,
     /// Save captures to: the folder field and Choose….
     Folder,
+    /// The system screenshot-key `.settings-utility-row` and its Open button.
+    Utility,
+    /// The `.shortcut-list` of recorders, in `SHORTCUT_ROWS` order.
+    Shortcuts,
+    /// A `.setting-row-inline` with a `CustomSelect`.
+    Select(SelectKey),
+    /// The two-column `.setting-grid` of stacked frame rate and resolution.
+    SelectGrid,
+}
+
+/// The Recording card's `CustomSelect`s.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SelectKey {
+    Format,
+    Fps,
+    Resolution,
+    Countdown,
+    Microphone,
+}
+
+pub const SELECTS: [SelectKey; 5] = [
+    SelectKey::Format,
+    SelectKey::Fps,
+    SelectKey::Resolution,
+    SelectKey::Countdown,
+    SelectKey::Microphone,
+];
+
+impl SelectKey {
+    pub fn index(self) -> usize {
+        SELECTS.iter().position(|k| *k == self).expect("select")
+    }
+
+    /// The persisted path, which keys the row copy.
+    pub fn setting(self) -> &'static str {
+        match self {
+            Self::Format => "recording.video_format",
+            Self::Fps => "recording.video_fps",
+            Self::Resolution => "recording.video_max_resolution",
+            Self::Countdown => "recording.countdown_seconds",
+            Self::Microphone => "recording.microphone_device_id",
+        }
+    }
+
+    /// Shipping `ariaLabel`.
+    pub fn label(self) -> &'static str {
+        preferences::select_accessibility_label(self.setting())
+    }
 }
 
 /// Cards in shipping order: (section index, items).
-pub const CARDS: [(usize, &[Item]); 3] = [
+pub const CARDS: [(usize, &[Item]); 5] = [
     (0, &[Item::Switch(0)]),
     (1, &[Item::Mode, Item::Accent]),
     (
@@ -58,6 +125,21 @@ pub const CARDS: [(usize, &[Item]); 3] = [
             Item::Switch(2),
             Item::Switch(3),
             Item::Switch(4),
+        ],
+    ),
+    (3, &[Item::Utility, Item::Shortcuts]),
+    (
+        4,
+        &[
+            Item::Select(SelectKey::Format),
+            Item::SelectGrid,
+            Item::Select(SelectKey::Countdown),
+            Item::Select(SelectKey::Microphone),
+            Item::Switch(5),
+            Item::Switch(6),
+            Item::Switch(7),
+            Item::Switch(8),
+            Item::Switch(9),
         ],
     ),
 ];
@@ -100,6 +182,9 @@ pub enum Ring {
     Tight(f32),
     /// `--focus-ring`: 2 px of canvas, then 2 px of accent at 55%.
     Full(f32),
+    /// A field's focused or open state: an accent border inside, then
+    /// `--focus-ring-tight` outside.
+    Field(f32),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -114,6 +199,14 @@ pub enum Target {
     Theme(usize),
     /// Save captures to: Choose….
     Choose,
+    /// The system screenshot-key row's Open.
+    Open,
+    /// A shortcut recorder, in `SHORTCUT_ROWS` order.
+    Shortcut(usize),
+    /// A select trigger.
+    Select(SelectKey),
+    /// An option in the open listbox; not focusable (the trigger keeps focus).
+    Option(SelectKey, usize),
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -160,6 +253,30 @@ pub enum Kind {
     Choose {
         lit: bool,
     },
+    /// `.settings-utility-action`, resting or hovered.
+    Open {
+        lit: bool,
+    },
+    /// A `.shortcut-row > span`.
+    ShortcutLabel(usize),
+    /// `.shortcut-recorder`: field, key caps or the prompt.
+    Recorder(usize),
+    /// `.shortcut-recorder:hover` border.
+    RecorderHover(usize),
+    /// `.shortcut-error`.
+    ShortcutError(usize),
+    /// `.custom-select-trigger`: field and selected label.
+    Trigger(SelectKey),
+    /// `.custom-select-trigger:hover` border.
+    TriggerHover(SelectKey),
+    /// The trigger's chevron; turns over while open.
+    Chevron(SelectKey),
+    /// `.custom-select-listbox`: overlay panel above everything else.
+    Listbox,
+    /// Every option label of the open listbox, resting.
+    Options,
+    /// The active (hovered or arrowed) option, drawn over its resting label.
+    OptionLit,
     Ring {
         shape: Ring,
         target: Target,
@@ -181,6 +298,8 @@ pub struct Node {
     /// Paint overflow around `rect` (shadows, focus rings), whole DIPs.
     pub bleed: f32,
     pub opacity: f32,
+    /// Clockwise rotation in degrees about the rect's centre.
+    pub angle: f32,
     pub visible: bool,
     pub clip: bool,
     /// Children fade as one layer (switch containers).
@@ -196,6 +315,27 @@ pub enum Prop {
     Opacity,
     OffsetX,
     OffsetY,
+    Angle,
+}
+
+impl Prop {
+    fn get(self, node: &Node) -> f32 {
+        match self {
+            Prop::Opacity => node.opacity,
+            Prop::OffsetX => node.rect.x,
+            Prop::OffsetY => node.rect.y,
+            Prop::Angle => node.angle,
+        }
+    }
+
+    fn set(self, node: &mut Node, value: f32) {
+        match self {
+            Prop::Opacity => node.opacity = value,
+            Prop::OffsetX => node.rect.x = value,
+            Prop::OffsetY => node.rect.y = value,
+            Prop::Angle => node.angle = value,
+        }
+    }
 }
 
 /// A compositor animation for the host to start; values are DIPs or opacity.
@@ -230,6 +370,8 @@ impl Motion {
 pub enum RowKey {
     Login,
     Flag(usize),
+    /// A Recording card switch, by index into `RECORDING_TOGGLES`.
+    Recording(usize),
 }
 
 pub struct RowState {
@@ -248,6 +390,8 @@ pub enum Action {
     Retheme,
     /// Show the folder picker, outside the host borrow.
     ChooseFolder,
+    /// Open Windows keyboard settings.
+    KeyboardSettings,
 }
 
 /// Accessibility notifications, raised by the host outside its borrow.
@@ -260,6 +404,16 @@ pub enum Event {
     Selected(Target),
     /// The capture folder changed.
     Folder,
+    /// A listbox opened or closed.
+    Expanded(SelectKey, bool),
+    /// The active option of the open listbox (`aria-activedescendant`).
+    Active(SelectKey, usize),
+    /// A select's or recorder's value changed.
+    Value(Target),
+    /// A recorder started or stopped recording.
+    Recording(usize, bool),
+    /// A recorder's error changed.
+    ShortcutError(usize),
 }
 
 struct RowNodes {
@@ -279,6 +433,39 @@ struct Layered {
     base: usize,
     lit: usize,
     ring: usize,
+}
+
+struct ShortcutNodes {
+    label: usize,
+    recorder: usize,
+    hover: usize,
+    ring: usize,
+    error: usize,
+}
+
+struct SelectNodes {
+    copy: usize,
+    trigger: usize,
+    hover: usize,
+    chevron: usize,
+    ring: usize,
+}
+
+/// The listbox overlay: panel, clip, scrolled content, resting labels and
+/// the active option.
+#[derive(Default)]
+struct ListNodes {
+    panel: usize,
+    clip: usize,
+    content: usize,
+    options: usize,
+    lit: usize,
+}
+
+/// Option labels of one select: resting and selected (medium) weights.
+struct OptionTexts {
+    regular: Vec<Text>,
+    medium: Vec<Text>,
 }
 
 struct ChipNodes {
@@ -312,6 +499,16 @@ struct Texts {
     check: Option<Text>,
     path: Option<Text>,
     choose: Option<Text>,
+    open: Option<Text>,
+    shortcut_labels: Vec<Text>,
+    /// Key caps per recorder.
+    caps: Vec<Vec<Text>>,
+    prompt: Option<Text>,
+    shortcut_errors: Vec<Option<Text>>,
+    /// The selected label per select, in `SELECTS` order.
+    triggers: Vec<Text>,
+    options: Vec<OptionTexts>,
+    option_check: Option<Text>,
 }
 
 pub struct Scene {
@@ -331,6 +528,21 @@ pub struct Scene {
     pub pressed: Option<Target>,
     pub focus: Option<Target>,
     pub focus_visible: bool,
+    /// The open select and its listbox state.
+    pub open: Option<(SelectKey, select::State)>,
+    /// The recorder that is recording.
+    pub recording: Option<usize>,
+    /// Text changed size: the host must lay out again.
+    pub relayout: bool,
+    /// Live keys of the recording recorder.
+    preview: Vec<String>,
+    shortcut_errors: Vec<String>,
+    /// Recorders whose caps must be laid out again (`prepare`).
+    caps_dirty: Vec<bool>,
+    /// `(id, name)` from the shared recording stack; `None` while loading.
+    microphones: Option<Vec<(String, String)>>,
+    type_ahead: (String, Option<Instant>),
+    list_scroll: f32,
     settings: captures_settings::AppSettings,
     settings_file: PathBuf,
     texts: Texts,
@@ -352,6 +564,11 @@ pub struct Scene {
     folder_copy: usize,
     field: usize,
     choose: Layered,
+    utility_copy: usize,
+    open_button: Layered,
+    shortcuts: Vec<ShortcutNodes>,
+    selects: Vec<SelectNodes>,
+    list: ListNodes,
     scrollbar: usize,
     // Layout results, DIPs.
     title_y: f32,
@@ -386,6 +603,16 @@ impl Scene {
                 enabled: true,
             });
         }
+        for (index, key) in RECORDING_TOGGLES.iter().enumerate() {
+            let row = preferences::row(&format!("recording.{key}"));
+            rows.push(RowState {
+                key: RowKey::Recording(index),
+                title: row.title,
+                detail: row.description.into(),
+                on: recording_value(&settings, index),
+                enabled: true,
+            });
+        }
         let none = Layered {
             base: 0,
             lit: 0,
@@ -407,6 +634,15 @@ impl Scene {
             pressed: None,
             focus: None,
             focus_visible: false,
+            open: None,
+            recording: None,
+            relayout: false,
+            preview: Vec::new(),
+            shortcut_errors: vec![String::new(); SHORTCUT_ROWS.len()],
+            caps_dirty: vec![false; SHORTCUT_ROWS.len()],
+            microphones: None,
+            type_ahead: (String::new(), None),
+            list_scroll: 0.,
             settings,
             settings_file,
             texts: Texts::default(),
@@ -427,6 +663,11 @@ impl Scene {
             folder_copy: 0,
             field: 0,
             choose: none,
+            utility_copy: 0,
+            open_button: none,
+            shortcuts: Vec::new(),
+            selects: Vec::new(),
+            list: ListNodes::default(),
             scrollbar: 0,
             title_y: 0.,
             card_rects: Vec::new(),
@@ -449,6 +690,7 @@ impl Scene {
             rect: Rect::default(),
             bleed,
             opacity: 1.,
+            angle: 0.,
             visible: true,
             clip: kind == Kind::Viewport,
             group_opacity: false,
@@ -464,7 +706,7 @@ impl Scene {
 
     fn ring(&mut self, parent: usize, shape: Ring, target: Target) -> usize {
         let bleed = match shape {
-            Ring::Tight(_) => 2.,
+            Ring::Tight(_) | Ring::Field(_) => 2.,
             Ring::Full(_) => 4.,
         };
         self.add(Some(parent), Kind::Ring { shape, target }, bleed)
@@ -571,14 +813,81 @@ impl Scene {
                         let ring = self.ring(base, Ring::Full(radius), Target::Choose);
                         self.choose = Layered { base, lit, ring };
                     }
+                    Item::Utility => {
+                        self.utility_copy = copy;
+                        let base = self.add(Some(node), Kind::Open { lit: false }, 2.);
+                        let lit = self.add(Some(base), Kind::Open { lit: true }, 2.);
+                        let radius = self.t.n("r-md");
+                        let ring = self.ring(base, Ring::Full(radius), Target::Open);
+                        self.open_button = Layered { base, lit, ring };
+                    }
+                    Item::Shortcuts => {
+                        let radius = self.t.n("r-md");
+                        for index in 0..SHORTCUT_ROWS.len() {
+                            let label = self.add(Some(node), Kind::ShortcutLabel(index), 0.);
+                            let recorder = self.add(Some(node), Kind::Recorder(index), 0.);
+                            let hover = self.add(Some(recorder), Kind::RecorderHover(index), 0.);
+                            let ring =
+                                self.ring(recorder, Ring::Field(radius), Target::Shortcut(index));
+                            let error = self.add(Some(node), Kind::ShortcutError(index), 0.);
+                            self.shortcuts.push(ShortcutNodes {
+                                label,
+                                recorder,
+                                hover,
+                                ring,
+                                error,
+                            });
+                        }
+                    }
+                    Item::Select(key) => self.add_select(node, key, copy),
+                    Item::SelectGrid => {
+                        for key in [SelectKey::Fps, SelectKey::Resolution] {
+                            let copy = self.add(Some(node), Kind::Copy(Item::Select(key)), 0.);
+                            self.add_select(node, key, copy);
+                        }
+                    }
                 }
             }
         }
         row_nodes.sort_by_key(|(row, _)| *row);
         self.row_nodes = row_nodes.into_iter().map(|(_, nodes)| nodes).collect();
         self.scrollbar = self.add(Some(self.viewport), Kind::Scrollbar, 0.);
+        // `.custom-select-listbox` is `position: fixed` above everything.
+        let panel = self.add(Some(root), Kind::Listbox, LISTBOX_BLEED);
+        self.nodes[panel].visible = false;
+        self.nodes[panel].group_opacity = true;
+        let clip = self.add(Some(panel), Kind::Group, 0.);
+        self.nodes[clip].clip = true;
+        let content = self.add(Some(clip), Kind::Group, 0.);
+        let options = self.add(Some(content), Kind::Options, 0.);
+        let lit = self.add(Some(content), Kind::OptionLit, 0.);
+        self.list = ListNodes {
+            panel,
+            clip,
+            content,
+            options,
+            lit,
+        };
         self.sync_switches();
         self.refresh(false);
+    }
+
+    /// A select trigger with its hover border, chevron and focus ring; in
+    /// `SELECTS` order, which is also card order.
+    fn add_select(&mut self, card: usize, key: SelectKey, copy: usize) {
+        debug_assert_eq!(self.selects.len(), key.index());
+        let radius = self.t.n("r-md");
+        let trigger = self.add(Some(card), Kind::Trigger(key), 0.);
+        let hover = self.add(Some(trigger), Kind::TriggerHover(key), 0.);
+        let chevron = self.add(Some(trigger), Kind::Chevron(key), 0.);
+        let ring = self.ring(trigger, Ring::Field(radius), Target::Select(key));
+        self.selects.push(SelectNodes {
+            copy,
+            trigger,
+            hover,
+            chevron,
+            ring,
+        });
     }
 
     /// Switch knobs, tracks and disabled opacity that follow from state.
@@ -616,6 +925,11 @@ impl Scene {
                 active: true,
             } => (on(index == self.theme_index()), "dur-2"),
             Kind::Choose { lit: true } => (on(self.hover == Some(Target::Choose)), "dur-2"),
+            Kind::Open { lit: true } => (on(self.hover == Some(Target::Open)), "dur-2"),
+            Kind::RecorderHover(index) => {
+                (on(self.hover == Some(Target::Shortcut(index))), "dur-2")
+            }
+            Kind::TriggerHover(key) => (on(self.hover == Some(Target::Select(key))), "dur-2"),
             _ => return None,
         })
     }
@@ -651,7 +965,12 @@ impl Scene {
     }
 
     fn ring_shown(&self, target: Target) -> bool {
-        self.focus_visible && self.focus == Some(target)
+        match target {
+            // An open select and a recording recorder keep the accent field.
+            Target::Select(key) if self.open.is_some_and(|(open, _)| open == key) => true,
+            Target::Shortcut(index) if self.recording == Some(index) => true,
+            _ => self.focus_visible && self.focus == Some(target),
+        }
     }
 
     /// The selected Interface theme segment.
@@ -744,6 +1063,7 @@ impl Scene {
         // Force the offsets and thumb to be recomputed for the new layout.
         self.scroll = -1.;
         self.set_scroll(scroll, false);
+        self.place_list();
         for node in &mut self.nodes {
             node.dirty = true;
             node.props = true;
@@ -751,12 +1071,7 @@ impl Scene {
         self.sync_switches();
         self.refresh(false);
         for mut motion in motions {
-            let node = &self.nodes[motion.node];
-            motion.to = match motion.prop {
-                Prop::Opacity => node.opacity,
-                Prop::OffsetX => node.rect.x,
-                Prop::OffsetY => node.rect.y,
-            };
+            motion.to = motion.prop.get(&self.nodes[motion.node]);
             motion.applied = false;
             self.motions.push(motion);
         }
@@ -779,15 +1094,16 @@ impl Scene {
         self.texts.card_titles.clear();
         self.texts.card_descriptions.clear();
         self.texts.copies.clear();
+        self.select_texts(g)?;
         let inset = s6 + 1.;
         let mut y = s8;
-        for (section, items) in CARDS.iter() {
-            let section = &SECTIONS[*section];
+        for (index, items) in CARDS.iter() {
+            let section = &SECTIONS[*index];
             let title = g.text(&self.t, Style::CardTitle, section.title, inner_w)?;
             let description = g.text(
                 &self.t,
                 Style::CardDescription,
-                section.description,
+                &card_description(*index),
                 inner_w.min(measure),
             )?;
             let mut cy = inset + title.height + s2 + description.height;
@@ -828,6 +1144,83 @@ impl Scene {
         Ok(())
     }
 
+    /// Trigger labels, option labels and recorder copy for this layout.
+    fn select_texts(&mut self, g: &Gfx) -> Result<()> {
+        let t = &self.t;
+        self.texts.triggers.clear();
+        self.texts.options.clear();
+        for key in SELECTS {
+            let options = self.select_options(key);
+            let selected = self.select_index(key);
+            let label = options
+                .get(selected)
+                .map_or("", |(label, _)| label.as_str());
+            self.texts
+                .triggers
+                .push(g.text(t, Style::Option, label, 1e4)?);
+            let mut texts = OptionTexts {
+                regular: Vec::new(),
+                medium: Vec::new(),
+            };
+            for (label, _) in &options {
+                texts.regular.push(g.text(t, Style::Option, label, 1e4)?);
+                // `[aria-selected="true"]` is `--weight-medium`.
+                texts.medium.push(g.text(t, Style::Segment, label, 1e4)?);
+            }
+            self.texts.options.push(texts);
+        }
+        self.texts.option_check = Some(g.text(t, Style::Option, "✓", 1e4)?);
+        self.texts.prompt = Some(g.text(t, Style::Option, preferences::SHORTCUT_PROMPT, 1e4)?);
+        Ok(())
+    }
+
+    /// The key caps a recorder shows: live keys while recording, else the
+    /// saved shortcut.
+    fn recorder_keys(&self, index: usize) -> Vec<String> {
+        if self.recording == Some(index) {
+            self.preview.clone()
+        } else {
+            shortcut_display_tokens(shortcut_ref(&self.settings, index), PLATFORM)
+        }
+    }
+
+    fn cap_texts(&self, g: &Gfx, index: usize) -> Result<Vec<Text>> {
+        self.recorder_keys(index)
+            .iter()
+            .map(|key| g.text(&self.t, Style::Kbd, key, 1e4))
+            .collect()
+    }
+
+    /// Lay out recorder caps that changed since the last frame; their
+    /// recorders redraw, nothing else moves.
+    pub fn prepare(&mut self, g: &Gfx) -> Result<()> {
+        for index in 0..SHORTCUT_ROWS.len() {
+            if std::mem::take(&mut self.caps_dirty[index]) && index < self.texts.caps.len() {
+                self.texts.caps[index] = self.cap_texts(g, index)?;
+                self.nodes[self.shortcuts[index].recorder].dirty = true;
+            }
+        }
+        Ok(())
+    }
+
+    /// Place a select trigger and its layers at `r` (card coordinates).
+    fn place_trigger(&mut self, key: SelectKey, r: Rect) {
+        let (trigger, hover, chevron, ring) = {
+            let nodes = &self.selects[key.index()];
+            (nodes.trigger, nodes.hover, nodes.chevron, nodes.ring)
+        };
+        self.nodes[trigger].rect = r;
+        self.nodes[hover].rect = r.at_origin();
+        self.nodes[ring].rect = r.at_origin();
+        let right = 1. + self.t.n("s-4");
+        self.nodes[chevron].rect = Rect::new(
+            r.w - right - CHEVRON,
+            ((r.h - CHEVRON) / 2.).round(),
+            CHEVRON,
+            CHEVRON,
+        );
+    }
+
     /// Lay out one item's nodes inside its card at `(x, y)` (card coordinates)
     /// across `width`; returns its height.
     fn layout_item(
@@ -838,8 +1231,8 @@ impl Scene {
         measure: f32,
     ) -> Result<f32> {
         let n = |name: &str| self.t.n(name);
-        let (s2, s4, s5, s6) = (n("s-2"), n("s-4"), n("s-5"), n("s-6"));
-        let (h_sm, h_lg) = (n("h-sm"), n("h-lg"));
+        let (s2, s3, s4, s5, s6) = (n("s-2"), n("s-3"), n("s-4"), n("s-5"), n("s-6"));
+        let (h_sm, h_md, h_lg) = (n("h-sm"), n("h-md"), n("h-lg"));
         match item {
             Item::Switch(row) => {
                 let copy_w = (width - SWITCH.0 - s6).max(40.);
@@ -1005,6 +1398,156 @@ impl Scene {
                     Some(g.text(&self.t, Style::Mono, &self.settings.output_directory, 1e4)?);
                 Ok(copy_h + s4 + h_lg)
             }
+            Item::Utility => {
+                // `.settings-utility-row`: copy, then the `auto` action.
+                let help = preferences::shortcut_help(PLATFORM);
+                let open = g.text(&self.t, Style::Control, help.system_action, 1e4)?;
+                let button_w = (open.width + 2. * s5 + 2.).ceil();
+                let copy_w = (width - button_w - s6).max(40.);
+                let title = g.text(&self.t, Style::RowTitle, help.system_title, copy_w)?;
+                let detail = g.text(
+                    &self.t,
+                    Style::RowDescription,
+                    help.system_body,
+                    copy_w.min(measure),
+                )?;
+                let copy_h = title.height + 3. + detail.height;
+                let content_h = copy_h.max(h_md);
+                self.texts.copies.push(CopyText {
+                    item,
+                    title,
+                    detail: Some(detail),
+                    gap: 3.,
+                });
+                self.nodes[self.utility_copy].rect =
+                    Rect::new(x, y + (content_h - copy_h) / 2., copy_w, copy_h);
+                let button = Rect::new(
+                    x + width - button_w,
+                    (y + (content_h - h_md) / 2.).round(),
+                    button_w,
+                    h_md,
+                );
+                let Layered { base, lit, ring } = self.open_button;
+                self.nodes[base].rect = button;
+                self.nodes[lit].rect = button.at_origin();
+                self.nodes[ring].rect = button.at_origin();
+                self.texts.open = Some(open);
+                Ok(content_h)
+            }
+            Item::Shortcuts => {
+                // `.shortcut-list` (4 px gaps) of `.shortcut-row`s:
+                // `minmax(0, 1fr) minmax(180px, 260px)` with a 16 px gap.
+                let control_w = (width - s6).clamp(RECORDER.0, RECORDER.1);
+                let label_w = (width - s6 - control_w).max(1.);
+                self.texts.shortcut_labels.clear();
+                self.texts.shortcut_errors.clear();
+                let mut caps = Vec::new();
+                let mut top = y;
+                for (index, (label, _)) in SHORTCUT_ROWS.iter().enumerate() {
+                    let label = g.text(&self.t, Style::RowTitle, label, label_w)?;
+                    let message = &self.shortcut_errors[index];
+                    let error = if message.is_empty() {
+                        None
+                    } else {
+                        Some(g.text(&self.t, Style::Small, message, control_w)?)
+                    };
+                    let control_h = h_md + error.as_ref().map_or(0., |e| s2 + e.height);
+                    let row_h = label.height.max(control_h);
+                    let nodes = &self.shortcuts[index];
+                    let ids = (
+                        nodes.label,
+                        nodes.recorder,
+                        nodes.hover,
+                        nodes.ring,
+                        nodes.error,
+                    );
+                    let (label_node, recorder, hover, ring, error_node) = ids;
+                    self.nodes[label_node].rect =
+                        Rect::new(x, top + (row_h - label.height) / 2., label_w, label.height);
+                    let control_y = top + (row_h - control_h) / 2.;
+                    let r = Rect::new(x + width - control_w, control_y.round(), control_w, h_md);
+                    self.nodes[recorder].rect = r;
+                    self.nodes[hover].rect = r.at_origin();
+                    self.nodes[ring].rect = r.at_origin();
+                    let error_h = error.as_ref().map_or(0., |e| e.height);
+                    self.nodes[error_node].rect =
+                        Rect::new(r.x, control_y + h_md + s2, control_w, error_h);
+                    self.nodes[error_node].visible = error.is_some();
+                    self.texts.shortcut_labels.push(label);
+                    self.texts.shortcut_errors.push(error);
+                    caps.push(self.cap_texts(g, index)?);
+                    top += row_h + s2;
+                }
+                self.texts.caps = caps;
+                self.caps_dirty.fill(false);
+                Ok(top - s2 - y)
+            }
+            Item::Select(key) => {
+                // `.setting-row-inline`: `minmax(160px, max-content)` control.
+                let label_w = self.texts.triggers[key.index()].width;
+                let trigger_w = (label_w + 2. * (s4 + 1.) + s5 + CHEVRON)
+                    .ceil()
+                    .max(SELECT_MIN)
+                    .min((width - s6 - 40.).max(SELECT_MIN));
+                let copy_w = (width - trigger_w - s6).max(40.);
+                let row = preferences::row(key.setting());
+                let title = g.text(&self.t, Style::RowTitle, row.title, copy_w)?;
+                let detail = if row.description.is_empty() {
+                    None
+                } else {
+                    let w = copy_w.min(measure);
+                    Some(g.text(&self.t, Style::RowDescription, row.description, w)?)
+                };
+                let copy_h = title.height + detail.as_ref().map_or(0., |d| 3. + d.height);
+                let content_h = copy_h.max(h_md);
+                self.texts.copies.push(CopyText {
+                    item,
+                    title,
+                    detail,
+                    gap: 3.,
+                });
+                let copy = self.selects[key.index()].copy;
+                self.nodes[copy].rect = Rect::new(x, y + (content_h - copy_h) / 2., copy_w, copy_h);
+                let r = Rect::new(
+                    x + width - trigger_w,
+                    (y + (content_h - h_md) / 2.).round(),
+                    trigger_w,
+                    h_md,
+                );
+                self.place_trigger(key, r);
+                Ok(content_h)
+            }
+            Item::SelectGrid => {
+                // `.setting-grid`: two 1fr columns 12 px apart of stacked
+                // rows, title then the full-width select 6 px below.
+                let col_w = (width - s5) / 2.;
+                let mut height: f32 = 0.;
+                for (col, key) in [SelectKey::Fps, SelectKey::Resolution]
+                    .into_iter()
+                    .enumerate()
+                {
+                    let cx = x + col as f32 * (col_w + s5);
+                    let title = g.text(
+                        &self.t,
+                        Style::RowTitle,
+                        preferences::row(key.setting()).title,
+                        col_w,
+                    )?;
+                    let title_h = title.height;
+                    self.texts.copies.push(CopyText {
+                        item: Item::Select(key),
+                        title,
+                        detail: None,
+                        gap: 3.,
+                    });
+                    let copy = self.selects[key.index()].copy;
+                    self.nodes[copy].rect = Rect::new(cx, y, col_w, title_h);
+                    let r = Rect::new(cx, (y + title_h + s3).round(), col_w, h_md);
+                    self.place_trigger(key, r);
+                    height = height.max(title_h + s3 + h_md);
+                }
+                Ok(height)
+            }
         }
     }
 
@@ -1116,34 +1659,37 @@ impl Scene {
     /// Animate `prop` of `node` from where it is now to `to`.
     fn animate(&mut self, node: usize, prop: Prop, to: f32, duration: &str) {
         let now = Instant::now();
-        let current = |n: &Node| match prop {
-            Prop::Opacity => n.opacity,
-            Prop::OffsetX => n.rect.x,
-            Prop::OffsetY => n.rect.y,
-        };
         let from = self
             .motions
             .iter()
             .find(|m| m.node == node && m.prop == prop)
-            .map_or_else(|| current(&self.nodes[node]), |m| m.value(now));
+            .map_or_else(|| prop.get(&self.nodes[node]), |m| m.value(now));
         self.animate_from(node, prop, from, to, duration);
     }
 
     /// Animate `prop` of `node` from `from` to `to` over the `duration` token.
     fn animate_from(&mut self, node: usize, prop: Prop, from: f32, to: f32, duration: &str) {
+        self.animate_curve(node, prop, (from, to), duration, "ease-standard");
+    }
+
+    /// Animate along the `easing` token curve.
+    fn animate_curve(
+        &mut self,
+        node: usize,
+        prop: Prop,
+        (from, to): (f32, f32),
+        duration: &str,
+        easing: &str,
+    ) {
         self.motions.retain(|m| !(m.node == node && m.prop == prop));
         let target = &mut self.nodes[node];
-        match prop {
-            Prop::Opacity => target.opacity = to,
-            Prop::OffsetX => target.rect.x = to,
-            Prop::OffsetY => target.rect.y = to,
-        }
+        prop.set(target, to);
         target.props = true;
         if self.reduced_motion || (from - to).abs() < 1e-4 {
             return;
         }
         let seconds = self.t.n(duration) / 1000.;
-        let curve = self.curve("ease-standard");
+        let curve = self.curve(easing);
         self.motions.push(Motion {
             node,
             prop,
@@ -1173,6 +1719,10 @@ impl Scene {
             return;
         }
         let old = std::mem::replace(&mut self.hover, hover);
+        // `onPointerEnter` makes the option active.
+        if let Some(Target::Option(_, index)) = hover {
+            self.set_list_active(index);
+        }
         // The off track's border lightens; the only hover repaint.
         for target in [old, hover].into_iter().flatten() {
             if let Target::Row(row) = target
@@ -1190,6 +1740,17 @@ impl Scene {
             return;
         }
         let old = self.focus;
+        // Moving focus blurs a recording recorder and an open select.
+        if let Some(index) = self.recording
+            && focus != Some(Target::Shortcut(index))
+        {
+            self.stop_recording();
+        }
+        if let Some((key, _)) = self.open
+            && focus != Some(Target::Select(key))
+        {
+            self.close_select();
+        }
         self.focus = focus;
         self.focus_visible = visible;
         self.refresh(true);
@@ -1216,6 +1777,14 @@ impl Scene {
                     Item::Mode => list.push(Target::Mode(self.mode_index())),
                     Item::Accent => list.push(Target::Theme(self.theme_index())),
                     Item::Folder => list.push(Target::Choose),
+                    Item::Utility => list.push(Target::Open),
+                    Item::Shortcuts => {
+                        list.extend((0..SHORTCUT_ROWS.len()).map(Target::Shortcut));
+                    }
+                    Item::Select(key) => list.push(Target::Select(key)),
+                    Item::SelectGrid => {
+                        list.extend([SelectKey::Fps, SelectKey::Resolution].map(Target::Select))
+                    }
                 }
             }
         }
@@ -1299,6 +1868,23 @@ impl Scene {
             Target::Mode(index) => self.select_mode(index),
             Target::Theme(index) => self.select_theme(index),
             Target::Choose => Some(Action::ChooseFolder),
+            Target::Open => Some(Action::KeyboardSettings),
+            Target::Shortcut(index) => {
+                self.start_recording(index);
+                None
+            }
+            Target::Select(key) => {
+                if self.open.is_some_and(|(open, _)| open == key) {
+                    self.close_select();
+                } else {
+                    self.open_select(key);
+                }
+                None
+            }
+            Target::Option(key, index) => {
+                self.choose(key, index);
+                None
+            }
         }
     }
 
@@ -1372,6 +1958,12 @@ impl Scene {
                 self.save();
                 None
             }
+            RowKey::Recording(toggle) => {
+                self.set_row(row, on);
+                set_recording(&mut self.settings, toggle, on);
+                self.save();
+                None
+            }
         }
     }
 
@@ -1419,6 +2011,499 @@ impl Scene {
         true
     }
 
+    // ---- selects ----
+
+    /// `(label, disabled)` per option, in shipping order.
+    pub fn select_options(&self, key: SelectKey) -> Vec<(String, bool)> {
+        let plain = |labels: Vec<String>| labels.into_iter().map(|l| (l, false)).collect();
+        match key {
+            SelectKey::Format => {
+                plain(RECORDING_FORMATS.iter().map(|(_, l)| (*l).into()).collect())
+            }
+            SelectKey::Fps => plain(
+                RECORDING_FPS
+                    .iter()
+                    .map(|f| preferences::fps_label(*f))
+                    .collect(),
+            ),
+            SelectKey::Resolution => plain(RESOLUTIONS.iter().map(|(_, l)| (*l).into()).collect()),
+            SelectKey::Countdown => plain(
+                COUNTDOWN_SECONDS
+                    .map(preferences::countdown_label)
+                    .collect(),
+            ),
+            SelectKey::Microphone => self
+                .microphone_entries()
+                .into_iter()
+                .map(|entry| (entry.label, !entry.enabled))
+                .collect(),
+        }
+    }
+
+    /// Shared microphone options: Off, a loading row while devices
+    /// enumerate, a saved device that is missing, then the devices.
+    fn microphone_entries(&self) -> Vec<captures_app::capture_menu::MicrophoneEntry> {
+        let devices: Vec<(&str, &str)> = self
+            .microphones
+            .iter()
+            .flatten()
+            .map(|(id, name)| (id.as_str(), name.as_str()))
+            .collect();
+        captures_app::capture_menu::microphone_entries(
+            true,
+            self.microphones.is_none(),
+            self.settings.recording.microphone_device_id.as_deref(),
+            &devices,
+        )
+    }
+
+    /// The selected option.
+    pub fn select_index(&self, key: SelectKey) -> usize {
+        let recording = &self.settings.recording;
+        let id = |value: serde_json::Value, ids: &[&str]| {
+            ids.iter()
+                .position(|id| value.as_str() == Some(*id))
+                .unwrap_or(0)
+        };
+        match key {
+            SelectKey::Format => id(
+                serde_json::to_value(recording.video_format).unwrap_or_default(),
+                &RECORDING_FORMATS.map(|(id, _)| id),
+            ),
+            SelectKey::Fps => RECORDING_FPS
+                .iter()
+                .position(|fps| *fps == recording.video_fps)
+                .unwrap_or(0),
+            SelectKey::Resolution => id(
+                serde_json::to_value(recording.video_max_resolution).unwrap_or_default(),
+                &RESOLUTIONS.map(|(id, _)| id),
+            ),
+            SelectKey::Countdown => COUNTDOWN_SECONDS
+                .clone()
+                .position(|seconds| seconds == recording.countdown_seconds)
+                .unwrap_or(0),
+            SelectKey::Microphone => {
+                let selected = recording.microphone_device_id.as_deref();
+                self.microphone_entries()
+                    .iter()
+                    .position(|entry| entry.enabled && entry.id.as_deref() == selected)
+                    .unwrap_or(0)
+            }
+        }
+    }
+
+    /// The selected label (the trigger's text and the UIA value).
+    pub fn select_value(&self, key: SelectKey) -> String {
+        self.select_options(key)
+            .into_iter()
+            .nth(self.select_index(key))
+            .map_or_else(String::new, |(label, _)| label)
+    }
+
+    /// Microphones from the shared recording stack arrived.
+    pub fn set_microphones(&mut self, devices: Vec<(String, String)>) {
+        self.microphones = Some(devices);
+        self.relayout = true;
+        self.events
+            .push(Event::Value(Target::Select(SelectKey::Microphone)));
+    }
+
+    fn choose(&mut self, key: SelectKey, index: usize) {
+        let options = self.select_options(key);
+        if options.get(index).is_none_or(|(_, disabled)| *disabled) {
+            return;
+        }
+        self.close_select();
+        if index == self.select_index(key) {
+            return;
+        }
+        let recording = &mut self.settings.recording;
+        match key {
+            SelectKey::Format => {
+                if let Ok(format) =
+                    serde_json::from_value(serde_json::json!(RECORDING_FORMATS[index].0))
+                {
+                    recording.video_format = format;
+                }
+            }
+            SelectKey::Fps => recording.video_fps = RECORDING_FPS[index],
+            SelectKey::Resolution => {
+                if let Ok(resolution) =
+                    serde_json::from_value(serde_json::json!(RESOLUTIONS[index].0))
+                {
+                    recording.video_max_resolution = resolution;
+                }
+            }
+            SelectKey::Countdown => {
+                recording.countdown_seconds = COUNTDOWN_SECONDS.clone().nth(index).unwrap_or(0);
+            }
+            SelectKey::Microphone => {
+                let entry = self.microphone_entries().into_iter().nth(index);
+                self.settings.recording.microphone_device_id = entry.and_then(|e| e.id);
+            }
+        }
+        self.save();
+        // The trigger is `max-content` wide, so its label can move the row.
+        self.relayout = true;
+        self.events.push(Event::Value(Target::Select(key)));
+    }
+
+    /// Open a select's listbox at its selection (`openMenu`).
+    pub fn open_select(&mut self, key: SelectKey) {
+        if self.open.is_some_and(|(open, _)| open == key) {
+            return;
+        }
+        self.close_select();
+        self.stop_recording();
+        let disabled: Vec<bool> = self.select_options(key).iter().map(|(_, d)| *d).collect();
+        let state = select::open(&disabled, self.select_index(key));
+        self.open = Some((key, state));
+        self.list_scroll = 0.;
+        self.place_list();
+        self.reveal_option();
+        let panel = self.list.panel;
+        self.nodes[panel].visible = true;
+        // `ui-pop-in`: fade and drop 4 px over `--dur-2` `--ease-out`.
+        let y = self.nodes[panel].rect.y;
+        self.animate_curve(panel, Prop::Opacity, (0., 1.), "dur-2", "ease-out");
+        self.animate_curve(panel, Prop::OffsetY, (y - 4., y), "dur-2", "ease-out");
+        let chevron = self.selects[key.index()].chevron;
+        self.animate(chevron, Prop::Angle, 180., "dur-2");
+        self.refresh(true);
+        self.events.push(Event::Expanded(key, true));
+        self.events.push(Event::Active(key, state.active));
+    }
+
+    /// Close the open listbox; it unmounts at once, like shipping.
+    pub fn close_select(&mut self) {
+        let Some((key, _)) = self.open.take() else {
+            return;
+        };
+        let panel = self.list.panel;
+        self.motions.retain(|m| m.node != panel);
+        self.nodes[panel].visible = false;
+        self.nodes[panel].opacity = 1.;
+        self.nodes[panel].props = true;
+        let chevron = self.selects[key.index()].chevron;
+        self.animate(chevron, Prop::Angle, 0., "dur-2");
+        self.refresh(true);
+        self.events.push(Event::Expanded(key, false));
+    }
+
+    fn option_h(&self) -> f32 {
+        // `min-height: --h-sm`, `--s-3` padding, 1 px `padding-block` copy.
+        let text = self.texts.options.first().and_then(|o| o.regular.first());
+        let n = |name: &str| self.t.n(name);
+        text.map_or(n("h-sm"), |t| {
+            (t.height + 2. + 2. * n("s-3")).max(n("h-sm"))
+        })
+    }
+
+    /// `(content height, visible height)` of the open listbox's options.
+    fn list_heights(&self) -> (f32, f32) {
+        let panel = self.nodes[self.list.panel].rect;
+        (self.nodes[self.list.options].rect.h, (panel.h - 2.).max(0.))
+    }
+
+    /// Position the open listbox with shipping `placeCustomSelectMenu`.
+    pub fn place_list(&mut self) {
+        let Some((key, mut state)) = self.open else {
+            return;
+        };
+        let Some(texts) = self.texts.options.get(key.index()) else {
+            return;
+        };
+        let n = |name: &str| self.t.n(name);
+        let (s2, s4, s6) = (n("s-2"), n("s-4"), n("s-6"));
+        let count = texts.regular.len();
+        state.active = state.active.min(count.saturating_sub(1));
+        self.open = Some((key, state));
+        let option_h = self.option_h();
+        let label_w = texts.medium.iter().map(|t| t.width).fold(0., f32::max);
+        let check_w = self.texts.option_check.as_ref().map_or(0., |t| t.width);
+        let content_w = (label_w + s6 + check_w + 2. * s4 + 2. * s2 + 2.).ceil();
+        let content_h = count as f32 * option_h + 2. * s2;
+        let trigger = self.absolute(self.selects[key.index()].trigger);
+        let layout = select::layout(
+            select::Rect {
+                left: f64::from(trigger.x),
+                top: f64::from(trigger.y),
+                width: f64::from(trigger.w),
+                height: f64::from(trigger.h),
+            },
+            f64::from(content_w),
+            f64::from(content_h + 2.),
+            f64::from(self.w),
+            f64::from(self.h),
+            count,
+        );
+        let h = (layout.max_height as f32).min(content_h + 2.);
+        let w = layout.width as f32;
+        let panel = Rect::new(layout.left as f32, layout.top as f32, w, h);
+        let ListNodes {
+            panel: panel_node,
+            clip,
+            content,
+            options,
+            lit,
+        } = self.list;
+        self.nodes[panel_node].rect = panel;
+        self.nodes[clip].rect = Rect::new(1., 1., w - 2., h - 2.);
+        self.list_scroll = self.list_scroll.clamp(0., (content_h - (h - 2.)).max(0.));
+        self.nodes[content].rect = Rect::new(0., -self.list_scroll, w - 2., content_h);
+        self.nodes[options].rect = Rect::new(0., 0., w - 2., content_h);
+        self.nodes[lit].rect = Rect::new(
+            s2,
+            s2 + state.active as f32 * option_h,
+            w - 2. - 2. * s2,
+            option_h,
+        );
+        for node in [panel_node, clip, content, options, lit] {
+            self.nodes[node].dirty = true;
+            self.nodes[node].props = true;
+        }
+    }
+
+    /// Keep the active option in view (`scrollIntoView({ block: "nearest" })`).
+    fn reveal_option(&mut self) {
+        let Some((_, state)) = self.open else {
+            return;
+        };
+        let option_h = self.option_h();
+        let s2 = self.t.n("s-2");
+        let (content_h, view_h) = self.list_heights();
+        let top = s2 + state.active as f32 * option_h;
+        let mut scroll = self.list_scroll;
+        if top < scroll {
+            scroll = top;
+        } else if top + option_h > scroll + view_h {
+            scroll = top + option_h - view_h;
+        }
+        self.set_list_scroll(scroll.clamp(0., (content_h - view_h).max(0.)));
+    }
+
+    fn set_list_scroll(&mut self, scroll: f32) {
+        let (content_h, view_h) = self.list_heights();
+        let scroll =
+            (scroll.clamp(0., (content_h - view_h).max(0.)) * self.scale).round() / self.scale;
+        if scroll != self.list_scroll {
+            self.list_scroll = scroll;
+            // A compositor offset; the options do not redraw.
+            self.nodes[self.list.content].rect.y = -scroll;
+            self.nodes[self.list.content].props = true;
+        }
+    }
+
+    /// Scroll the open listbox by `delta` DIPs.
+    pub fn scroll_list(&mut self, delta: f32) {
+        self.set_list_scroll(self.list_scroll + delta);
+    }
+
+    fn set_list_active(&mut self, active: usize) {
+        let Some((key, state)) = self.open else {
+            return;
+        };
+        if state.active == active {
+            return;
+        }
+        self.open = Some((key, select::State { active, ..state }));
+        let lit = self.list.lit;
+        let y = self.t.n("s-2") + active as f32 * self.option_h();
+        self.nodes[lit].rect.y = y;
+        self.nodes[lit].props = true;
+        // Only the 30 px active row repaints.
+        self.nodes[lit].dirty = true;
+        self.reveal_option();
+        self.events.push(Event::Active(key, active));
+    }
+
+    /// The listbox panel contains `(x, y)` (client DIPs).
+    pub fn list_contains(&self, x: f32, y: f32) -> bool {
+        self.open.is_some() && self.nodes[self.list.panel].rect.contains(x, y)
+    }
+
+    /// A key for the focused select (shipping trigger `onKeyDown`); true
+    /// when it was consumed.
+    pub fn select_key(&mut self, key: select::Key) -> bool {
+        let Some(Target::Select(select_key)) = self.focus else {
+            return false;
+        };
+        let state = self
+            .open
+            .filter(|(open, _)| *open == select_key)
+            .map_or_else(select::State::default, |(_, state)| state);
+        let disabled: Vec<bool> = self
+            .select_options(select_key)
+            .iter()
+            .map(|(_, d)| *d)
+            .collect();
+        let outcome = select::key(state, &disabled, self.select_index(select_key), key);
+        if !outcome.handled {
+            return false;
+        }
+        if !self.focus_visible {
+            self.set_focus(self.focus, true);
+        }
+        if let Some(index) = outcome.chosen {
+            self.choose(select_key, index);
+        } else if outcome.state.open && !state.open {
+            self.open_select(select_key);
+        } else if !outcome.state.open && state.open {
+            self.close_select();
+        } else if outcome.state.open {
+            self.set_list_active(outcome.state.active);
+        }
+        true
+    }
+
+    /// Type-ahead in an open listbox: the next enabled option whose label
+    /// starts with the keys typed within the last second.
+    pub fn type_ahead(&mut self, ch: char) -> bool {
+        let Some((key, state)) = self.open else {
+            return false;
+        };
+        let now = Instant::now();
+        let (prefix, last) = &mut self.type_ahead;
+        if last.is_none_or(|t| now.duration_since(t).as_secs_f32() > TYPE_AHEAD_SECONDS) {
+            prefix.clear();
+        }
+        if prefix.is_empty() && ch == ' ' {
+            return false;
+        }
+        prefix.extend(ch.to_lowercase());
+        *last = Some(now);
+        let prefix = prefix.clone();
+        let options = self.select_options(key);
+        let count = options.len();
+        // A new search starts after the active option; a longer prefix may
+        // still match it.
+        let start = if prefix.chars().count() == 1 {
+            state.active + 1
+        } else {
+            state.active
+        };
+        let found = (0..count).map(|k| (start + k) % count).find(|&index| {
+            let (label, disabled) = &options[index];
+            !disabled && label.to_lowercase().starts_with(&prefix)
+        });
+        if let Some(index) = found {
+            self.set_list_active(index);
+        }
+        true
+    }
+
+    // ---- shortcut recorders ----
+
+    /// Start recording a shortcut (the recorder's click).
+    pub fn start_recording(&mut self, index: usize) {
+        self.close_select();
+        if self.recording == Some(index) {
+            return;
+        }
+        self.stop_recording();
+        self.recording = Some(index);
+        self.preview.clear();
+        self.set_shortcut_error(index, String::new());
+        self.caps_dirty[index] = true;
+        self.refresh(true);
+        self.events.push(Event::Recording(index, true));
+    }
+
+    /// Stop recording without a change (Esc, blur).
+    pub fn stop_recording(&mut self) {
+        let Some(index) = self.recording.take() else {
+            return;
+        };
+        self.preview.clear();
+        self.set_shortcut_error(index, String::new());
+        self.caps_dirty[index] = true;
+        self.refresh(true);
+        self.events.push(Event::Recording(index, false));
+    }
+
+    /// A key chord while recording, through the shared recorder policy.
+    pub fn record_key(&mut self, event: &ShortcutKeyEvent) {
+        let Some(index) = self.recording else {
+            return;
+        };
+        match record_shortcut(event, PLATFORM) {
+            ShortcutRecording::Cancel => self.stop_recording(),
+            ShortcutRecording::Waiting { keys } => {
+                self.preview = keys;
+                self.caps_dirty[index] = true;
+                self.set_shortcut_error(index, String::new());
+            }
+            ShortcutRecording::Invalid { keys, message } => {
+                self.preview = keys;
+                self.caps_dirty[index] = true;
+                self.set_shortcut_error(index, message);
+            }
+            ShortcutRecording::Complete { shortcut, .. } => {
+                self.stop_recording();
+                if let Err(message) = self.set_shortcut(index, shortcut) {
+                    self.set_shortcut_error(index, message);
+                }
+            }
+        }
+    }
+
+    /// Restore a recorder's default shortcut from `captures-settings`.
+    pub fn reset_shortcut(&mut self, index: usize) {
+        self.stop_recording();
+        let result = self.set_shortcut(index, shortcut_default(index));
+        self.set_shortcut_error(index, result.err().unwrap_or_default());
+    }
+
+    /// Save a recorded shortcut; settings validation rejects empty and
+    /// duplicate shortcuts, which keeps the old one and reports why.
+    fn set_shortcut(&mut self, index: usize, value: String) -> std::result::Result<(), String> {
+        if shortcut_ref(&self.settings, index) == value {
+            return Ok(());
+        }
+        let mut next = self.settings.clone();
+        *shortcut_mut(&mut next, index) = value;
+        let saved = captures_settings::save(&self.settings_file, &next)
+            .map_err(|error| preferences::save_error(&error.to_string()))?;
+        self.settings = saved;
+        self.caps_dirty[index] = true;
+        self.events.push(Event::Value(Target::Shortcut(index)));
+        Ok(())
+    }
+
+    fn set_shortcut_error(&mut self, index: usize, message: String) {
+        if self.shortcut_errors[index] != message {
+            self.shortcut_errors[index] = message;
+            self.relayout = true;
+            self.events.push(Event::ShortcutError(index));
+        }
+    }
+
+    /// The recorder's error (`.shortcut-error`, `role="status"`).
+    pub fn shortcut_error(&self, index: usize) -> &str {
+        &self.shortcut_errors[index]
+    }
+
+    /// The recorder's keys for accessibility, like the AppKit host.
+    pub fn shortcut_value(&self, index: usize) -> String {
+        let keys = self.recorder_keys(index);
+        if keys.is_empty() {
+            if self.recording == Some(index) {
+                "Press shortcut".into()
+            } else {
+                "None".into()
+            }
+        } else {
+            keys.join(" + ")
+        }
+    }
+
+    /// The window lost focus: like a DOM blur, recording stops and the
+    /// listbox closes.
+    pub fn blur(&mut self) {
+        self.stop_recording();
+        self.close_select();
+    }
+
     // ---- geometry for input and accessibility (client DIPs) ----
 
     /// A node's rect in client DIPs, at the live (possibly animating) scroll.
@@ -1449,7 +2534,33 @@ impl Scene {
             Target::Mode(i) => self.segments[i],
             Target::Theme(i) => self.chips[i].group,
             Target::Choose => self.choose.base,
+            Target::Open => self.open_button.base,
+            Target::Shortcut(i) => self.shortcuts[i].recorder,
+            Target::Select(key) => self.selects[key.index()].trigger,
+            Target::Option(key, i) => return self.option_rect(key, i),
         })
+    }
+
+    /// An option row of the open listbox, in client DIPs.
+    fn option_rect(&self, key: SelectKey, index: usize) -> Rect {
+        if self.open.is_none_or(|(open, _)| open != key) {
+            return Rect::default();
+        }
+        let s2 = self.t.n("s-2");
+        let panel = self.nodes[self.list.panel].rect;
+        let h = self.option_h();
+        Rect::new(
+            panel.x + 1. + s2,
+            panel.y + 1. + s2 + index as f32 * h - self.list_scroll,
+            panel.w - 2. - 2. * s2,
+            h,
+        )
+    }
+
+    /// The visible inside of the open listbox, in client DIPs.
+    pub fn list_rect(&self) -> Rect {
+        let panel = self.nodes[self.list.panel].rect;
+        Rect::new(panel.x + 1., panel.y + 1., panel.w - 2., panel.h - 2.)
     }
 
     pub fn item_rect(&self, item: Item) -> Rect {
@@ -1502,6 +2613,22 @@ impl Scene {
     }
 
     pub fn hit(&self, x: f32, y: f32) -> Option<Target> {
+        if let Some((key, _)) = self.open
+            && self.list_contains(x, y)
+        {
+            // The listbox covers whatever is beneath it.
+            let inside = self.list_rect().contains(x, y);
+            let count = self
+                .texts
+                .options
+                .get(key.index())
+                .map_or(0, |o| o.regular.len());
+            let disabled: Vec<bool> = self.select_options(key).iter().map(|(_, d)| *d).collect();
+            return (0..count)
+                .filter(|&i| !disabled.get(i).copied().unwrap_or(true))
+                .find(|&i| inside && self.option_rect(key, i).contains(x, y))
+                .map(|i| Target::Option(key, i));
+        }
         for (i, item) in self.nav_items.iter().enumerate() {
             if self.absolute(item.base).contains(x, y) {
                 return Some(Target::Nav(i));
@@ -1516,7 +2643,9 @@ impl Scene {
         let controls = (0..APPEARANCE_MODES.len())
             .map(Target::Mode)
             .chain((0..THEMES.len()).map(Target::Theme))
-            .chain([Target::Choose]);
+            .chain([Target::Choose, Target::Open])
+            .chain((0..SHORTCUT_ROWS.len()).map(Target::Shortcut))
+            .chain(SELECTS.map(Target::Select));
         for target in controls {
             if self.target_rect(target).contains(x, y) {
                 return Some(target);
@@ -1723,7 +2852,7 @@ impl Scene {
                     unsafe { dc.PopAxisAlignedClip() };
                 }
             }
-            Kind::Choose { lit } => {
+            Kind::Choose { lit } | Kind::Open { lit } => {
                 let radius = t.n("r-md");
                 let (bg, edge) = if lit {
                     ("control-hover", "border-strong")
@@ -1735,15 +2864,147 @@ impl Scene {
                 }
                 gfx::fill_round(dc, all, radius, c(bg))?;
                 gfx::border(dc, all, radius, 1., c(edge))?;
-                if let Some(label) = &self.texts.choose {
+                let label = match n.kind {
+                    Kind::Open { .. } => &self.texts.open,
+                    _ => &self.texts.choose,
+                };
+                if let Some(label) = label {
                     let (x, y) = centered(label, (w - label.width) / 2.);
                     gfx::text(dc, label, x, y, c("text"))?;
+                }
+            }
+            Kind::ShortcutLabel(index) => {
+                if let Some(label) = self.texts.shortcut_labels.get(index) {
+                    gfx::text(dc, label, 0., 0., c("text"))?;
+                }
+            }
+            Kind::ShortcutError(index) => {
+                if let Some(Some(error)) = self.texts.shortcut_errors.get(index) {
+                    gfx::text(dc, error, 0., 0., c("danger-text"))?;
+                }
+            }
+            Kind::Recorder(index) => {
+                let radius = t.n("r-md");
+                gfx::fill_round(dc, all, radius, c("surface-field"))?;
+                gfx::border(dc, all, radius, 1., c("control-border"))?;
+                // `padding: 2px var(--s-4)`, caps `--s-3` apart.
+                let left = 1. + t.n("s-4");
+                let caps = self.texts.caps.get(index).filter(|caps| !caps.is_empty());
+                let clip = rect(left, 0., w - left, h);
+                unsafe {
+                    dc.PushAxisAlignedClip(
+                        &clip,
+                        windows::Win32::Graphics::Direct2D::D2D1_ANTIALIAS_MODE_ALIASED,
+                    );
+                }
+                match caps {
+                    Some(caps) => {
+                        let mut x = left;
+                        for cap in caps {
+                            // `kbd`: 2/5 padding, 1 px border with a 2 px
+                            // bottom, `--r-xs`, min-width 20.
+                            let cap_w = (cap.width + 12.).max(20.).ceil();
+                            let cap_h = (cap.height + 7.).round();
+                            let top = ((h - cap_h) / 2.).round();
+                            let outer = rect(x, top, x + cap_w, top + cap_h);
+                            let inner = rect(x + 1., top + 1., x + cap_w - 1., top + cap_h - 2.);
+                            let r_xs = t.n("r-xs");
+                            gfx::fill_round(dc, outer, r_xs, c("border"))?;
+                            gfx::fill_round(dc, inner, r_xs - 1., c("surface-raised"))?;
+                            let tx = x + (cap_w - cap.width) / 2.;
+                            gfx::text(dc, cap, tx, top + 3., c("text-muted"))?;
+                            x += cap_w + t.n("s-3");
+                        }
+                    }
+                    None => {
+                        if let Some(prompt) = &self.texts.prompt {
+                            let y = (h - prompt.height) / 2.;
+                            gfx::text(dc, prompt, left, y, c("text-faint"))?;
+                        }
+                    }
+                }
+                unsafe { dc.PopAxisAlignedClip() };
+            }
+            Kind::RecorderHover(_) | Kind::TriggerHover(_) => {
+                // Cover the resting border, then the hover one.
+                let radius = t.n("r-md");
+                gfx::border(dc, all, radius, 1., c("surface-field"))?;
+                gfx::border(dc, all, radius, 1., c("border-strong"))?;
+            }
+            Kind::Trigger(key) => {
+                let radius = t.n("r-md");
+                gfx::fill_round(dc, all, radius, c("surface-field"))?;
+                gfx::border(dc, all, radius, 1., c("control-border"))?;
+                if let Some(label) = self.texts.triggers.get(key.index()) {
+                    let left = 1. + t.n("s-4");
+                    let right = w - left - CHEVRON - t.n("s-5");
+                    unsafe {
+                        dc.PushAxisAlignedClip(
+                            &rect(left, 0., right.max(left), h),
+                            windows::Win32::Graphics::Direct2D::D2D1_ANTIALIAS_MODE_ALIASED,
+                        );
+                    }
+                    gfx::text(dc, label, left, (h - label.height) / 2., c("text"))?;
+                    unsafe { dc.PopAxisAlignedClip() };
+                }
+            }
+            Kind::Chevron(_) => {
+                // `viewBox="0 0 16 16"` at 14 px, stroke 1.7 units.
+                let scale = CHEVRON / 16.;
+                gfx::path(
+                    dc,
+                    &g.factory,
+                    CHEVRON_PATH,
+                    false,
+                    (0., 0., scale),
+                    1.7 * scale,
+                    c("text-subtle"),
+                )?;
+            }
+            Kind::Listbox => {
+                let radius = t.n("r-lg");
+                gfx::shadow(dc, all, radius, t.shadow("shadow-lg"))?;
+                gfx::fill_round(dc, all, radius, c("surface-overlay"))?;
+                gfx::border(dc, all, radius, 1., c("border"))?;
+            }
+            Kind::Options => {
+                if let Some((key, _)) = self.open {
+                    let options = self.select_options(key);
+                    let selected = self.select_index(key);
+                    let (s2, h) = (t.n("s-2"), self.option_h());
+                    for (index, (_, disabled)) in options.iter().enumerate() {
+                        let y = s2 + index as f32 * h;
+                        let color = if *disabled {
+                            "text-faint"
+                        } else if index == selected {
+                            "text"
+                        } else {
+                            "text-muted"
+                        };
+                        self.draw_option(dc, key, index, (s2, y, w - 2. * s2), c(color))?;
+                    }
+                }
+            }
+            Kind::OptionLit => {
+                if let Some((key, state)) = self.open {
+                    // Opaque, so the resting label never shows through.
+                    gfx::fill(dc, all, c("surface-overlay"))?;
+                    gfx::fill_round(dc, all, t.n("r-sm"), c("surface-hover"))?;
+                    self.draw_option(dc, key, state.active, (0., 0., w), c("text"))?;
                 }
             }
             Kind::Ring {
                 shape: Ring::Tight(radius),
                 ..
             } => gfx::ring(dc, all, radius, 0., 2., accent_ring)?,
+            Kind::Ring {
+                shape: Ring::Field(radius),
+                ..
+            } => {
+                gfx::border(dc, all, radius, 1., c("surface-field"))?;
+                gfx::border(dc, all, radius, 1., c("theme-accent"))?;
+                gfx::ring(dc, all, radius, 0., 2., accent_ring)?;
+            }
             Kind::Ring {
                 shape: Ring::Full(radius),
                 ..
@@ -1752,6 +3013,43 @@ impl Scene {
                 gfx::ring(dc, all, radius, 2., 4., accent_ring)?;
             }
             Kind::Scrollbar => gfx::fill_round(dc, all, w / 2., c("border-strong"))?,
+        }
+        Ok(())
+    }
+
+    /// One option row at `(x, y)` across `width`: label (medium when
+    /// selected) and the selected check in the readable accent.
+    fn draw_option(
+        &self,
+        dc: &ID2D1DeviceContext,
+        key: SelectKey,
+        index: usize,
+        (x, y, width): (f32, f32, f32),
+        color: windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F,
+    ) -> Result<()> {
+        let t = &self.t;
+        let Some(texts) = self.texts.options.get(key.index()) else {
+            return Ok(());
+        };
+        let selected = index == self.select_index(key);
+        let label = if selected {
+            texts.medium.get(index)
+        } else {
+            texts.regular.get(index)
+        };
+        let h = self.option_h();
+        let pad = t.n("s-4");
+        if let Some(label) = label {
+            gfx::text(dc, label, x + pad, y + (h - label.height) / 2., color)?;
+        }
+        if selected && let Some(check) = &self.texts.option_check {
+            let mark = if t.appearance == "dark" {
+                "theme-accent"
+            } else {
+                "theme-accent-readable"
+            };
+            let cx = x + width - pad - check.width;
+            gfx::text(dc, check, cx, y + (h - check.height) / 2., t.color(mark))?;
         }
         Ok(())
     }
@@ -1824,6 +3122,83 @@ impl Scene {
             }
         }
         Ok(())
+    }
+}
+
+/// A card's header copy; Shortcuts appends the platform intro like shipping.
+pub fn card_description(section: usize) -> String {
+    let description = SECTIONS[section].description;
+    if SECTIONS[section].title == "Shortcuts" {
+        format!(
+            "{description} {}",
+            preferences::shortcut_help(PLATFORM).intro
+        )
+    } else {
+        description.into()
+    }
+}
+
+fn shortcut_ref(settings: &captures_settings::AppSettings, index: usize) -> &str {
+    match SHORTCUT_ROWS[index].1 {
+        ["new_capture_shortcut"] => &settings.new_capture_shortcut,
+        ["region_shortcut"] => &settings.region_shortcut,
+        ["window_shortcut"] => &settings.window_shortcut,
+        ["display_shortcut"] => &settings.display_shortcut,
+        ["recording", "video_shortcut"] => &settings.recording.video_shortcut,
+        ["recording", "window_shortcut"] => &settings.recording.window_shortcut,
+        ["recording", "display_shortcut"] => &settings.recording.display_shortcut,
+        path => unreachable!("unknown shortcut {path:?}"),
+    }
+}
+
+fn shortcut_mut(settings: &mut captures_settings::AppSettings, index: usize) -> &mut String {
+    match SHORTCUT_ROWS[index].1 {
+        ["new_capture_shortcut"] => &mut settings.new_capture_shortcut,
+        ["region_shortcut"] => &mut settings.region_shortcut,
+        ["window_shortcut"] => &mut settings.window_shortcut,
+        ["display_shortcut"] => &mut settings.display_shortcut,
+        ["recording", "video_shortcut"] => &mut settings.recording.video_shortcut,
+        ["recording", "window_shortcut"] => &mut settings.recording.window_shortcut,
+        ["recording", "display_shortcut"] => &mut settings.recording.display_shortcut,
+        path => unreachable!("unknown shortcut {path:?}"),
+    }
+}
+
+/// The `captures-settings` default for a recorder.
+fn shortcut_default(index: usize) -> String {
+    match SHORTCUT_ROWS[index].1 {
+        ["new_capture_shortcut"] => captures_settings::default_new_capture_shortcut(),
+        ["region_shortcut"] => captures_settings::default_region_shortcut(),
+        ["window_shortcut"] => captures_settings::default_window_shortcut(),
+        ["display_shortcut"] => captures_settings::default_display_shortcut(),
+        ["recording", "video_shortcut"] => captures_settings::default_video_shortcut(),
+        ["recording", "window_shortcut"] => captures_settings::default_record_window_shortcut(),
+        ["recording", "display_shortcut"] => captures_settings::default_record_display_shortcut(),
+        path => unreachable!("unknown shortcut {path:?}"),
+    }
+}
+
+fn recording_value(settings: &captures_settings::AppSettings, toggle: usize) -> bool {
+    let recording = &settings.recording;
+    match RECORDING_TOGGLES[toggle] {
+        "capture_system_audio" => recording.capture_system_audio,
+        "mono_audio" => recording.mono_audio,
+        "show_cursor" => recording.show_cursor,
+        "highlight_clicks" => recording.highlight_clicks,
+        "open_editor_after_recording" => recording.open_editor_after_recording,
+        key => unreachable!("unknown switch {key}"),
+    }
+}
+
+fn set_recording(settings: &mut captures_settings::AppSettings, toggle: usize, on: bool) {
+    let recording = &mut settings.recording;
+    match RECORDING_TOGGLES[toggle] {
+        "capture_system_audio" => recording.capture_system_audio = on,
+        "mono_audio" => recording.mono_audio = on,
+        "show_cursor" => recording.show_cursor = on,
+        "highlight_clicks" => recording.highlight_clicks = on,
+        "open_editor_after_recording" => recording.open_editor_after_recording = on,
+        key => unreachable!("unknown switch {key}"),
     }
 }
 

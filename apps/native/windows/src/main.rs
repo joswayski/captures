@@ -14,6 +14,8 @@ mod gfx;
 #[cfg(windows)]
 mod host;
 #[cfg(windows)]
+mod keys;
+#[cfg(windows)]
 mod scene;
 #[cfg(windows)]
 mod screenshot;

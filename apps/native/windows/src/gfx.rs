@@ -47,9 +47,16 @@ pub enum Style {
     Mono,
     /// `.directory-input button` (`.ui-btn`)
     Control,
+    /// `.custom-select-trigger > span`, `.custom-select-option-copy > span`
+    /// and `.shortcut-prompt`.
+    Option,
+    /// `.shortcut-error`
+    Small,
+    /// `kbd`
+    Kbd,
 }
 
-const STYLES: [Style; 14] = [
+const STYLES: [Style; 17] = [
     Style::Brand,
     Style::Nav,
     Style::Title,
@@ -64,6 +71,9 @@ const STYLES: [Style; 14] = [
     Style::Check,
     Style::Mono,
     Style::Control,
+    Style::Option,
+    Style::Small,
+    Style::Kbd,
 ];
 
 struct Spec {
@@ -71,6 +81,8 @@ struct Spec {
     weight: &'static str,
     tracking: Option<&'static str>,
     leading: Option<&'static str>,
+    /// A literal CSS `line-height` multiplier when there is no token.
+    line: Option<f32>,
     wrap: bool,
     mono: bool,
 }
@@ -81,6 +93,7 @@ fn spec(style: Style) -> Spec {
         weight,
         tracking,
         leading,
+        line: None,
         wrap,
         mono: false,
     };
@@ -142,6 +155,18 @@ fn spec(style: Style) -> Spec {
             Some("leading-snug"),
             false,
         ),
+        Style::Option => spec(
+            "text-sm",
+            "weight-regular",
+            None,
+            Some("leading-snug"),
+            false,
+        ),
+        Style::Small => spec("text-xs", "weight-regular", None, None, true),
+        Style::Kbd => Spec {
+            line: Some(1.3),
+            ..spec("text-2xs", "weight-semibold", None, None, false)
+        },
     }
 }
 
@@ -294,9 +319,9 @@ impl Gfx {
                     },
                 )?;
             }
-            if let Some(leading) = spec.leading {
+            if let Some(multiplier) = spec.leading.map(|leading| t.n(leading)).or(spec.line) {
                 // CSS line boxes split the leading evenly above and below.
-                let line = t.n(leading) * size;
+                let line = multiplier * size;
                 let content = (self.ascent + self.descent) * size;
                 layout.SetLineSpacing(
                     DWRITE_LINE_SPACING_METHOD_UNIFORM,
@@ -542,55 +567,70 @@ pub fn icon(
         return Ok(());
     };
     let scale = side / 24.;
+    for (index, d) in paths.iter().enumerate() {
+        let fill = filled.contains(&index);
+        path(dc, factory, d, fill, (x, y, scale), stroke * scale, color)?;
+    }
+    Ok(())
+}
+
+/// An SVG path `d` at `(x, y)` scaled by `scale`, stroked `width` DIPs wide
+/// with round caps and joins, or filled.
+pub fn path(
+    dc: &ID2D1DeviceContext,
+    factory: &ID2D1Factory1,
+    d: &str,
+    fill: bool,
+    (x, y, scale): (f32, f32, f32),
+    width: f32,
+    color: D2D1_COLOR_F,
+) -> Result<()> {
     let brush = brush(dc, color)?;
     unsafe {
-        let style = factory.CreateStrokeStyle(
-            &D2D1_STROKE_STYLE_PROPERTIES1 {
-                startCap: D2D1_CAP_STYLE_ROUND,
-                endCap: D2D1_CAP_STYLE_ROUND,
-                dashCap: D2D1_CAP_STYLE_ROUND,
-                lineJoin: D2D1_LINE_JOIN_ROUND,
-                miterLimit: 10.,
-                ..Default::default()
-            },
-            None,
-        )?;
-        for (index, d) in paths.iter().enumerate() {
-            let fill = filled.contains(&index);
-            let geometry = factory.CreatePathGeometry()?;
-            let sink = geometry.Open()?;
-            for line in captures_app::icons::flatten(d) {
-                let points: Vec<Vector2> = line
-                    .iter()
-                    .map(|p| Vector2 {
-                        X: x + p[0] * scale,
-                        Y: y + p[1] * scale,
-                    })
-                    .collect();
-                let Some((first, rest)) = points.split_first() else {
-                    continue;
-                };
-                sink.BeginFigure(
-                    *first,
-                    if fill {
-                        D2D1_FIGURE_BEGIN_FILLED
-                    } else {
-                        D2D1_FIGURE_BEGIN_HOLLOW
-                    },
-                );
-                sink.AddLines(rest);
-                sink.EndFigure(if fill {
-                    D2D1_FIGURE_END_CLOSED
+        let geometry = factory.CreatePathGeometry()?;
+        let sink = geometry.Open()?;
+        for line in captures_app::icons::flatten(d) {
+            let points: Vec<Vector2> = line
+                .iter()
+                .map(|p| Vector2 {
+                    X: x + p[0] * scale,
+                    Y: y + p[1] * scale,
+                })
+                .collect();
+            let Some((first, rest)) = points.split_first() else {
+                continue;
+            };
+            sink.BeginFigure(
+                *first,
+                if fill {
+                    D2D1_FIGURE_BEGIN_FILLED
                 } else {
-                    D2D1_FIGURE_END_OPEN
-                });
-            }
-            sink.Close()?;
-            if fill {
-                dc.FillGeometry(&geometry, &brush, None);
+                    D2D1_FIGURE_BEGIN_HOLLOW
+                },
+            );
+            sink.AddLines(rest);
+            sink.EndFigure(if fill {
+                D2D1_FIGURE_END_CLOSED
             } else {
-                dc.DrawGeometry(&geometry, &brush, stroke * scale, &style);
-            }
+                D2D1_FIGURE_END_OPEN
+            });
+        }
+        sink.Close()?;
+        if fill {
+            dc.FillGeometry(&geometry, &brush, None);
+        } else {
+            let style = factory.CreateStrokeStyle(
+                &D2D1_STROKE_STYLE_PROPERTIES1 {
+                    startCap: D2D1_CAP_STYLE_ROUND,
+                    endCap: D2D1_CAP_STYLE_ROUND,
+                    dashCap: D2D1_CAP_STYLE_ROUND,
+                    lineJoin: D2D1_LINE_JOIN_ROUND,
+                    miterLimit: 10.,
+                    ..Default::default()
+                },
+                None,
+            )?;
+            dc.DrawGeometry(&geometry, &brush, width, &style);
         }
     }
     Ok(())
