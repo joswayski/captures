@@ -415,6 +415,7 @@ fn runtime_id(id: Id) -> [i32; 4] {
             Target::Prop(Prop::Aspect) => (28, 0),
             Target::Prop(Prop::CropAction(apply)) => (29, i32::from(apply)),
             Target::Prop(Prop::Preset) => (31, 0),
+            Target::Prop(Prop::Straighten) => (32, 0),
         }
     };
     let stub = |s: Stub| -> (i32, i32) {

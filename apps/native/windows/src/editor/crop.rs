@@ -319,11 +319,23 @@ impl Editor {
         lit: bool,
         (w, h): (f32, f32),
     ) -> Result<()> {
+        self.draw_action(dc, if apply { APPLY } else { CLEAR }, apply, lit, (w, h))
+    }
+
+    /// A `.screenshot-property-actions` button, `.primary` or plain.
+    pub(super) fn draw_action(
+        &self,
+        dc: &ID2D1DeviceContext,
+        label: &str,
+        primary: bool,
+        lit: bool,
+        (w, h): (f32, f32),
+    ) -> Result<()> {
         let t = &self.t;
         let c = |name: &str| t.color(name);
         let all = rect(0., 0., w, h);
         let radius = t.n("r-md");
-        let (style, ink) = if apply {
+        let (style, ink) = if primary {
             let fill = if lit {
                 c("theme-accent-hover")
             } else {
@@ -341,9 +353,7 @@ impl Editor {
             gfx::border(dc, all, radius, 1., border)?;
             (Style::Button, c("text"))
         };
-        let label = self
-            .g
-            .text(t, style, if apply { APPLY } else { CLEAR }, 1e4)?;
+        let label = self.g.text(t, style, label, 1e4)?;
         gfx::text(
             dc,
             &label,
