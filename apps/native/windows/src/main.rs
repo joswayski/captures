@@ -12,6 +12,10 @@ mod dialog;
 #[cfg(windows)]
 mod gfx;
 #[cfg(windows)]
+mod history;
+#[cfg(windows)]
+mod history_uia;
+#[cfg(windows)]
 mod host;
 #[cfg(windows)]
 mod keys;
@@ -29,7 +33,10 @@ mod uia;
 mod uia_text;
 
 #[cfg(windows)]
+#[derive(Clone)]
 pub struct Options {
+    /// `--scene history`: open Capture History instead of Preferences.
+    history: bool,
     appearance: Option<String>,
     settings_file: std::path::PathBuf,
     history_root: Option<std::path::PathBuf>,
@@ -42,6 +49,7 @@ pub struct Options {
 #[cfg(windows)]
 fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
     let mut options = Options {
+        history: false,
         appearance: None,
         settings_file: captures_settings::default_native_settings_path(),
         history_root: None,
@@ -54,10 +62,11 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
         let mut value = || args.next().ok_or_else(|| format!("{flag} needs a value"));
         match flag.as_str() {
             "--scene" => {
-                let scene = value()?;
-                if scene != "preferences" {
-                    return Err(format!("unsupported scene {scene}"));
-                }
+                options.history = match value()?.as_str() {
+                    "preferences" => false,
+                    "history" => true,
+                    scene => return Err(format!("unsupported scene {scene}")),
+                };
             }
             "--appearance" => {
                 let appearance = value()?;

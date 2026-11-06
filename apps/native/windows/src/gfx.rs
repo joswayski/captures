@@ -16,7 +16,7 @@ use windows_numerics::{Matrix3x2, Vector2};
 
 use crate::tokens::{Shadow, Tokens};
 
-/// Text roles in the Preferences window, each a shipping CSS rule.
+/// Text roles in the Preferences and History windows, each a shipping CSS rule.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Style {
     /// `.preferences-nav-brand strong`
@@ -60,11 +60,23 @@ pub enum Style {
     Status,
     /// `.custom-theme-color-control input[type="text"]`: mono `--text-xs`.
     Hex,
-    /// `.custom-theme-field > small`
+    /// `.custom-theme-field > small` and `.history-card-error`
     Note,
+    /// `.history-heading h1`
+    Heading,
+    /// `.history-heading > p:last-child`
+    Lede,
+    /// `.history-card-body time`
+    Date,
+    /// `.history-error`
+    Error,
+    /// `.history-empty p`
+    Body,
+    /// `.history-edit` (`.ui-btn-primary`: semibold)
+    Strong,
 }
 
-const STYLES: [Style; 21] = [
+const STYLES: [Style; 27] = [
     Style::Brand,
     Style::Nav,
     Style::Title,
@@ -86,6 +98,12 @@ const STYLES: [Style; 21] = [
     Style::Status,
     Style::Hex,
     Style::Note,
+    Style::Heading,
+    Style::Lede,
+    Style::Date,
+    Style::Error,
+    Style::Body,
+    Style::Strong,
 ];
 
 struct Spec {
@@ -210,6 +228,36 @@ fn spec(style: Style) -> Spec {
             Some("leading-snug"),
             false,
         ),
+        Style::Heading => spec(
+            "text-3xl",
+            "weight-semibold",
+            Some("tracking-tighter"),
+            Some("leading-tight"),
+            false,
+        ),
+        Style::Lede => spec(
+            "text-md",
+            "weight-regular",
+            None,
+            Some("leading-snug"),
+            true,
+        ),
+        Style::Date => spec(
+            "text-md",
+            "weight-medium",
+            None,
+            Some("leading-snug"),
+            false,
+        ),
+        Style::Error => spec("text-sm", "weight-regular", None, None, true),
+        Style::Body => spec("text-md", "weight-regular", None, None, false),
+        Style::Strong => spec(
+            "text-sm",
+            "weight-semibold",
+            Some("tracking-tight"),
+            Some("leading-snug"),
+            false,
+        ),
         Style::Kbd => Spec {
             line: Some(1.3),
             ..spec("text-2xs", "weight-semibold", None, None, false)
@@ -223,6 +271,7 @@ pub struct Text {
     pub height: f32,
 }
 
+#[derive(Clone)]
 pub struct Gfx {
     pub dc: ID2D1DeviceContext,
     pub factory: ID2D1Factory1,

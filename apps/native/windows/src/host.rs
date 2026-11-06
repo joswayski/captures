@@ -50,6 +50,11 @@ thread_local! {
 /// guaranteed a frame: messages sent from other threads (an external resize,
 /// UIA) are dispatched inside the loop's wait, which would otherwise keep
 /// blocking with `need` set.
+/// Preferences is open.
+pub fn exists() -> bool {
+    HOST.with(|h| h.try_borrow().map_or(true, |h| h.is_some()))
+}
+
 pub fn with_host<R>(f: impl FnOnce(&mut Host) -> R) -> Option<R> {
     HOST.with(|h| {
         let mut h = h.try_borrow_mut().ok()?;
@@ -90,6 +95,8 @@ pub struct Host {
     pick_folder: bool,
     /// A custom color well was activated; its picker opens likewise.
     pick_color: Option<usize>,
+    /// Capture History… was activated; the loop opens it.
+    open_history: bool,
     /// A `WM_APP_WAKE` was posted since the loop last checked `need`.
     woken: bool,
     /// The IME is associated (a text field has focus).
@@ -196,6 +203,7 @@ impl Host {
                 appearance: options.appearance.clone(),
                 pick_folder: false,
                 pick_color: None,
+                open_history: false,
                 woken: false,
                 ime: false,
                 dragging: false,
@@ -587,6 +595,7 @@ impl Host {
             }
             Some(Action::ChooseFolder) => self.pick_folder = true,
             Some(Action::PickColor(i)) => self.pick_color = Some(i),
+            Some(Action::OpenHistory) => self.open_history = true,
             Some(Action::KeyboardSettings) => {
                 let platform = crate::scene::PLATFORM;
                 if let Err(error) = preferences::open_keyboard_settings(platform) {
@@ -1106,7 +1115,7 @@ impl Host {
 }
 
 /// Outer window size for a client area of `w`×`h` DIPs at the window's DPI.
-fn window_size(hwnd: HWND, w: f32, h: f32) -> (i32, i32) {
+pub fn window_size(hwnd: HWND, w: f32, h: f32) -> (i32, i32) {
     unsafe {
         let dpi = GetDpiForWindow(hwnd);
         let s = dpi as f32 / 96.;
@@ -1144,7 +1153,15 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             }
             WM_DESTROY => {
                 let _ = UiaReturnRawElementProvider(hwnd, WPARAM(0), LPARAM(0), None);
-                PostQuitMessage(0);
+                HOST.with(|h| {
+                    if let Ok(mut h) = h.try_borrow_mut() {
+                        h.take();
+                    }
+                });
+                // The last window quits.
+                if !crate::history::exists() {
+                    PostQuitMessage(0);
+                }
                 return LRESULT(0);
             }
             WM_ERASEBKGND => return LRESULT(1),
@@ -1185,18 +1202,17 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
     }
 }
 
-pub fn run(options: Options) -> Result<()> {
+/// Open Preferences, or bring it forward when it is already open.
+pub fn open(options: &Options) -> Result<()> {
+    if let Some(hwnd) = with_host(|h| h.hwnd) {
+        unsafe {
+            let _ = ShowWindow(hwnd, SW_SHOWNORMAL);
+            let _ = SetForegroundWindow(hwnd);
+        }
+        return Ok(());
+    }
     unsafe {
         let instance = GetModuleHandleW(None)?;
-        let class = WNDCLASSW {
-            style: CS_DBLCLKS,
-            lpfnWndProc: Some(wndproc),
-            hInstance: instance.into(),
-            hCursor: LoadCursorW(None, IDC_ARROW)?,
-            lpszClassName: w!("CapturesPreferences"),
-            ..Default::default()
-        };
-        RegisterClassW(&class);
         let spec = captures_app::app_windows::PREFERENCES;
         let hwnd = CreateWindowExW(
             WS_EX_NOREDIRECTIONBITMAP,
@@ -1214,6 +1230,7 @@ pub fn run(options: Options) -> Result<()> {
         )?;
         let (w, h) = options
             .size
+            .filter(|_| !options.history)
             .map_or((spec.width, spec.height), |(w, h)| (w as f32, h as f32));
         let (ww, wh) = window_size(hwnd, w, h);
         let _ = SetWindowPos(
@@ -1225,10 +1242,32 @@ pub fn run(options: Options) -> Result<()> {
             wh,
             SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
         );
-        let host = Host::new(hwnd, &options)?;
+        let host = Host::new(hwnd, options)?;
         HOST.with(|h| *h.borrow_mut() = Some(host));
         with_host(|h| h.request_login(None));
         let _ = ShowWindow(hwnd, SW_SHOW);
+    }
+    Ok(())
+}
+
+pub fn run(options: Options) -> Result<()> {
+    unsafe {
+        let instance = GetModuleHandleW(None)?;
+        let class = WNDCLASSW {
+            style: CS_DBLCLKS,
+            lpfnWndProc: Some(wndproc),
+            hInstance: instance.into(),
+            hCursor: LoadCursorW(None, IDC_ARROW)?,
+            lpszClassName: w!("CapturesPreferences"),
+            ..Default::default()
+        };
+        RegisterClassW(&class);
+        crate::history::register(instance.into())?;
+        if options.history {
+            crate::history::open(&options, options.size)?;
+        } else {
+            open(&options)?;
+        }
         loop {
             let mut msg = MSG::default();
             while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
@@ -1247,21 +1286,47 @@ pub fn run(options: Options) -> Result<()> {
                         eprintln!("frame failed: {error:?}");
                     }
                 }
-                (h.need, h.take_events(), h.pick_folder, h.pick_color)
+                (
+                    h.hwnd,
+                    h.need,
+                    h.take_events(),
+                    h.pick_folder,
+                    h.pick_color,
+                    std::mem::take(&mut h.open_history),
+                )
             });
-            let Some((again, events, pick_folder, pick_color)) = state else {
-                continue;
-            };
-            if !events.is_empty() {
-                crate::uia::raise(&events);
+            // History's frame, like Preferences': only the loop clears `woken`.
+            let history = crate::history::with_history(|h| {
+                h.woken = false;
+                let (again, events, preferences) = h.service();
+                (again, crate::history_uia::describe(h, events), preferences)
+            });
+            let mut again = false;
+            if let Some((again_h, events, preferences)) = history {
+                again |= again_h;
+                if !events.is_empty() {
+                    crate::history_uia::raise(&events);
+                }
+                if preferences && let Err(error) = open(&options) {
+                    eprintln!("couldn't open Preferences: {error}");
+                }
             }
-            if pick_folder {
-                Host::choose_folder(hwnd);
-                continue;
-            }
-            if let Some(i) = pick_color {
-                Host::choose_color(hwnd, i);
-                continue;
+            if let Some((hwnd, again_p, events, pick_folder, pick_color, open_history)) = state {
+                again |= again_p;
+                if !events.is_empty() {
+                    crate::uia::raise(&events);
+                }
+                if open_history && let Err(error) = crate::history::open(&options, None) {
+                    eprintln!("couldn't open Capture History: {error}");
+                }
+                if pick_folder {
+                    Host::choose_folder(hwnd);
+                    continue;
+                }
+                if let Some(i) = pick_color {
+                    Host::choose_color(hwnd, i);
+                    continue;
+                }
             }
             if !again {
                 // Returns for posted, input and sent messages alike; the
