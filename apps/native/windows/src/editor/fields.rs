@@ -185,12 +185,13 @@ impl Editor {
             // `padding: var(--s-3) var(--s-4)` inside the 1 px border.
             Prop::Textarea => Rect::new(1. + s4, 1. + s3, r.w - 2. - 2. * s4, r.h - 2. - 2. * s3),
             // `.has-steppers input { padding-right: var(--s-2) }`.
-            _ => Rect::new(
+            Prop::Number(num) if self.num_steppers(num) => Rect::new(
                 1. + s4,
                 1.,
                 (r.w - 2. - s4 - self.t.n("s-2") - STEPPERS_W).max(1.),
                 r.h - 2.,
             ),
+            _ => Rect::new(1. + s4, 1., (r.w - 2. - 2. * s4).max(1.), r.h - 2.),
         }
     }
 
@@ -202,12 +203,7 @@ impl Editor {
         let prop = edit.prop;
         let multiline = edit.multiline();
         let b = self.field_box(prop);
-        // `.number-input input`: mono; the textarea: `--text-sm`, snug.
-        let style = if multiline {
-            Style::Option
-        } else {
-            Style::Mono
-        };
+        let style = Self::field_style(prop);
         let display = String::from_utf16_lossy(&edit.field.display());
         let composition = edit.field.composition();
         let width = if multiline { b.w } else { 1e5 };
@@ -324,13 +320,36 @@ impl Editor {
         self.need = true;
     }
 
+    /// `.number-input input`: mono; the textarea and the crop's plain
+    /// inputs: `--text-sm`.
+    fn field_style(prop: Prop) -> Style {
+        match prop {
+            Prop::Number(num) if !num.read_only() => Style::Mono,
+            _ => Style::Option,
+        }
+    }
+
     /// Apply an edit to the focused field's model.
     fn field_edit(&mut self, edit: impl FnOnce(&mut textfield::Editor) -> textfield::Change) {
         let Some(focused) = self.field.as_mut() else {
             return;
         };
         let selection = focused.field.selection();
-        let change = edit(&mut focused.field);
+        let before = matches!(focused.prop, Prop::Number(num) if num.read_only())
+            .then(|| String::from_utf16_lossy(focused.field.units()));
+        let mut change = edit(&mut focused.field);
+        // A `readOnly` input keeps its text; only the caret and selection move.
+        if let Some(before) = before
+            && change.text
+        {
+            focused.field.set_text(&before);
+            let end = focused.field.len();
+            focused
+                .field
+                .select(selection.0.min(end), selection.1.min(end));
+            change.text = false;
+            change.caret = true;
+        }
         let prop = focused.prop;
         let text = String::from_utf16_lossy(focused.field.units());
         let after = focused.field.selection();
@@ -649,6 +668,13 @@ impl Editor {
             c("control-border")
         };
         gfx::border(dc, all, radius, 1., border)?;
+        if !self.num_steppers(num) {
+            return if lit {
+                Ok(())
+            } else {
+                self.draw_field_text(dc, prop, (w, h))
+            };
+        }
         // `.number-input-steppers`.
         let sx = w - 1. - STEPPERS_W;
         gfx::fill(dc, rect(sx, 1., w - 1., h - 1.), c("surface-hover"))?;
@@ -788,14 +814,13 @@ impl Editor {
                         let text = self.g.text(t, Style::Option, &shown, b.w)?;
                         gfx::text(dc, &text, b.x, b.y, t.color("text"))?;
                     } else {
-                        let text = self.g.text(t, Style::Mono, &shown, 1e5)?;
-                        gfx::text(
-                            dc,
-                            &text,
-                            b.x,
-                            ((h - text.height) / 2.).max(0.),
-                            t.color("text"),
-                        )?;
+                        // A disabled input (a locked layer's geometry) fades.
+                        let ink = match prop {
+                            Prop::Number(num) if self.num_disabled(num) => t.color("text-faint"),
+                            _ => t.color("text"),
+                        };
+                        let text = self.g.text(t, Self::field_style(prop), &shown, 1e5)?;
+                        gfx::text(dc, &text, b.x, ((h - text.height) / 2.).max(0.), ink)?;
                     }
                 }
             }

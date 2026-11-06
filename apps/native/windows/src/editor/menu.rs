@@ -25,6 +25,8 @@ pub enum MenuKind {
     Style,
     /// The selected label's Font select.
     Font,
+    /// The Crop section's Aspect ratio select.
+    Aspect,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -46,11 +48,17 @@ const VIEWPORT_PADDING: f32 = 8.;
 pub const MENU_BLEED: f32 = 36.;
 
 impl MenuKind {
+    /// A `.custom-select-listbox` (`role="listbox"`), not a menu.
+    pub fn is_select(self) -> bool {
+        matches!(self, MenuKind::Font | MenuKind::Aspect)
+    }
+
     /// The trigger that owns the popup.
     pub fn trigger(self) -> Prop {
         match self {
             MenuKind::Style => Prop::StyleTrigger,
             MenuKind::Font => Prop::Font,
+            MenuKind::Aspect => Prop::Aspect,
         }
     }
 }
@@ -67,6 +75,10 @@ impl Editor {
                 .font_options()
                 .into_iter()
                 .map(|(_, label)| label)
+                .collect(),
+            MenuKind::Aspect => super::crop::ASPECTS
+                .iter()
+                .map(|(label, _)| (*label).to_owned())
                 .collect(),
         }
     }
@@ -92,6 +104,7 @@ impl Editor {
                     .iter()
                     .position(|(key, _)| key == family)
             }
+            MenuKind::Aspect => Some(self.crop_aspect),
         }
     }
 
@@ -181,7 +194,7 @@ impl Editor {
                 width - 2. - 2. * s2,
                 STYLE_ROW,
             ),
-            MenuKind::Font => {
+            MenuKind::Font | MenuKind::Aspect => {
                 let h = self.option_h();
                 Rect::new(1. + s2, 1. + s2 + index as f32 * h, width - 2. - 2. * s2, h)
             }
@@ -235,7 +248,7 @@ impl Editor {
                     .min((self.w - trigger.w - VIEWPORT_PADDING).max(VIEWPORT_PADDING));
                 Rect::new(left, top, trigger.w, h)
             }
-            MenuKind::Font => {
+            MenuKind::Font | MenuKind::Aspect => {
                 let (s4, s6) = (self.t.n("s-4"), self.t.n("s-6"));
                 let label_w = self
                     .menu_items(menu.kind)
@@ -347,6 +360,11 @@ impl Editor {
                     self.apply_text(TextChange::Family(key));
                 }
             }
+            MenuKind::Aspect => {
+                if index < super::crop::ASPECTS.len() {
+                    self.crop_aspect = index;
+                }
+            }
         }
         self.events
             .push(Event::Value(Target::Prop(menu.kind.trigger())));
@@ -363,6 +381,7 @@ impl Editor {
         let kind = match prop {
             Prop::StyleTrigger => MenuKind::Style,
             Prop::Font => MenuKind::Font,
+            Prop::Aspect => MenuKind::Aspect,
             _ => return false,
         };
         let key = match vk {
@@ -425,7 +444,7 @@ impl Editor {
         // `.screenshot-text-style-menu` (`--r-xl`) and the listbox (`--r-lg`).
         let radius = match menu.kind {
             MenuKind::Style => t.n("r-xl"),
-            MenuKind::Font => t.n("r-lg"),
+            MenuKind::Font | MenuKind::Aspect => t.n("r-lg"),
         };
         gfx::shadow(dc, all, radius, t.shadow("shadow-lg"))?;
         gfx::fill_round(dc, all, radius, t.color("surface-overlay"))?;
@@ -494,7 +513,7 @@ impl Editor {
                     ink,
                 )?;
             }
-            MenuKind::Font => {
+            MenuKind::Font | MenuKind::Aspect => {
                 if lit {
                     gfx::fill_round(dc, b, t.n("r-sm"), c("surface-hover"))?;
                 }

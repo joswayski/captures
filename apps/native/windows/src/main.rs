@@ -63,6 +63,8 @@ pub struct Options {
     tool: Option<String>,
     /// `--select LAYER`: the editor's starting selection (a layer ID).
     select: Option<String>,
+    /// `--crop X,Y,W,H`: the editor's Crop tool with that rectangle staged.
+    crop: Option<[f64; 4]>,
     /// `--profile DIR` or `CAPTURES_NATIVE_PROFILE`: a disposable profile for
     /// tests on a real PC. Settings, history and saves stay under DIR, and the
     /// launch-at-login registry entry is never touched.
@@ -82,6 +84,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
         find: None,
         tool: None,
         select: None,
+        crop: None,
         profile: false,
     };
     let mut profile = std::env::var_os("CAPTURES_NATIVE_PROFILE").map(std::path::PathBuf::from);
@@ -119,6 +122,15 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
             "--find" => options.find = Some(value()?),
             "--tool" => options.tool = Some(value()?),
             "--select" => options.select = Some(value()?),
+            "--crop" => {
+                let crop = value()?;
+                let parts: Vec<f64> = crop
+                    .split(',')
+                    .map(|v| v.trim().parse::<f64>())
+                    .collect::<std::result::Result<_, _>>()
+                    .map_err(|_| "--crop is X,Y,W,H")?;
+                options.crop = Some(parts.try_into().map_err(|_| "--crop is X,Y,W,H")?);
+            }
             "--size" => {
                 let size = value()?;
                 let (w, h) = size.split_once('x').ok_or("--size is WIDTHxHEIGHT")?;

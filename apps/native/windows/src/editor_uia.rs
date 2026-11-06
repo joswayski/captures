@@ -293,6 +293,7 @@ fn name(e: &Editor, id: Id) -> String {
         Id::Menu => match e.open_menu_state() {
             Some((MenuKind::Style, _)) => e.style_label().into(),
             Some((MenuKind::Font, _)) => "Font".into(),
+            Some((MenuKind::Aspect, _)) => crate::editor::ASPECT_LABEL.into(),
             None => String::new(),
         },
         Id::MenuItem(i) => e
@@ -312,17 +313,20 @@ fn trigger_kind(id: Id) -> Option<MenuKind> {
     match id {
         Id::Control(Target::Prop(Prop::StyleTrigger)) => Some(MenuKind::Style),
         Id::Control(Target::Prop(Prop::Font)) => Some(MenuKind::Font),
+        Id::Control(Target::Prop(Prop::Aspect)) => Some(MenuKind::Aspect),
         _ => None,
     }
 }
 
 fn control_type(e: &Editor, id: Id) -> UIA_CONTROLTYPE_ID {
     match id {
-        Id::Menu if menu_kind(e) == Some(MenuKind::Font) => UIA_ListControlTypeId,
+        Id::Menu if menu_kind(e).is_some_and(MenuKind::is_select) => UIA_ListControlTypeId,
         Id::Menu => UIA_MenuControlTypeId,
-        Id::MenuItem(_) if menu_kind(e) == Some(MenuKind::Font) => UIA_ListItemControlTypeId,
+        Id::MenuItem(_) if menu_kind(e).is_some_and(MenuKind::is_select) => {
+            UIA_ListItemControlTypeId
+        }
         Id::MenuItem(_) => UIA_MenuItemControlTypeId,
-        Id::Control(Target::Prop(Prop::Font)) => UIA_ComboBoxControlTypeId,
+        Id::Control(Target::Prop(Prop::Font | Prop::Aspect)) => UIA_ComboBoxControlTypeId,
         Id::Control(Target::Prop(Prop::Number(_) | Prop::Textarea)) => UIA_EditControlTypeId,
         Id::Root => UIA_WindowControlTypeId,
         Id::Banner
@@ -386,6 +390,8 @@ fn runtime_id(id: Id) -> [i32; 4] {
             Target::Prop(Prop::Step(num, up)) => (25, num as i32 * 2 + i32::from(up)),
             Target::Prop(Prop::Textarea) => (26, 0),
             Target::Prop(Prop::Format(i)) => (27, i as i32),
+            Target::Prop(Prop::Aspect) => (28, 0),
+            Target::Prop(Prop::CropAction(apply)) => (29, i32::from(apply)),
         }
     };
     let stub = |s: Stub| -> (i32, i32) {
@@ -560,10 +566,12 @@ fn value(e: &Editor, id: Id) -> Option<String> {
         Id::Filename => e.filename(),
         Id::InlineText => e.text_value(),
         Id::Control(Target::Prop(prop @ (Prop::Number(_) | Prop::Textarea))) => e.field_text(prop),
-        Id::Control(Target::Prop(Prop::Font)) => e
-            .menu_selected(MenuKind::Font)
-            .and_then(|i| e.menu_items(MenuKind::Font).into_iter().nth(i))
-            .unwrap_or_default(),
+        Id::Control(Target::Prop(prop @ (Prop::Font | Prop::Aspect))) => {
+            let kind = trigger_kind(Id::Control(Target::Prop(prop)))?;
+            e.menu_selected(kind)
+                .and_then(|i| e.menu_items(kind).into_iter().nth(i))
+                .unwrap_or_default()
+        }
         Id::Location => e.save_location(),
         Id::Stub(stub) => e.stub_value(stub)?,
         _ => return None,
@@ -630,7 +638,7 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                 Id::Control(Target::Prop(Prop::StyleTrigger)) => {
                     pattern == UIA_ExpandCollapsePatternId || pattern == UIA_InvokePatternId
                 }
-                Id::Control(Target::Prop(Prop::Font)) => {
+                Id::Control(Target::Prop(Prop::Font | Prop::Aspect)) => {
                     pattern == UIA_ExpandCollapsePatternId || pattern == UIA_ValuePatternId
                 }
                 Id::Control(Target::Prop(Prop::Number(_) | Prop::Textarea)) => {
@@ -768,10 +776,12 @@ fn expand_state(e: &Editor, id: Id) -> ExpandCollapseState {
 
 /// Inputs that take `Value.SetValue`.
 fn writable(id: Id) -> bool {
-    matches!(
-        id,
-        Id::InlineText | Id::Control(Target::Prop(Prop::Number(_) | Prop::Textarea))
-    )
+    match id {
+        // The crop's Width and Height are `readOnly`.
+        Id::Control(Target::Prop(Prop::Number(num))) => !num.read_only(),
+        Id::InlineText | Id::Control(Target::Prop(Prop::Textarea)) => true,
+        _ => false,
+    }
 }
 
 fn item_selected(e: &Editor, index: usize) -> bool {
@@ -1059,9 +1069,13 @@ impl IValueProvider_Impl for Node_Impl {
         }
         let value = unsafe { value.to_string() }.unwrap_or_default();
         if let Id::Control(Target::Prop(prop)) = self.id {
+            let id = self.id;
             return with(self.hwnd, |e| {
                 if !e.exists(Target::Prop(prop)) {
                     return Err(unavailable());
+                }
+                if !writable(id) || !e.enabled(Target::Prop(prop)) {
+                    return Err(not_enabled());
                 }
                 e.set_field_value(prop, &value);
                 Ok(())

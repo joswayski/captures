@@ -18,6 +18,7 @@ use captures_app::editor::{
 };
 use captures_app::editor_chrome::{SHAPE_TOOLS, colors, eraser, text_format};
 use captures_app::editor_image_background::BrushMode;
+use captures_app::editor_layers::geometry;
 use captures_app::editor_session::{AnnotationControls, Request, TextPatch};
 use captures_app::editor_text::{self, TEXT_STYLE_PRESETS};
 use windows::Win32::Graphics::Direct2D::Common::*;
@@ -53,6 +54,10 @@ pub enum Prop {
     Textarea,
     /// A Text format button: Bold, Italic, then `text_format::ALIGN`.
     Format(usize),
+    /// The Crop section's Aspect ratio select.
+    Aspect,
+    /// Clear (`false`) or Apply crop (`true`).
+    CropAction(bool),
 }
 
 /// A `NumberInput` in Tool properties.
@@ -62,24 +67,83 @@ pub enum Num {
     TextSize,
     /// The Text tool's New text size.
     NewTextSize,
+    /// The selected image's Width, Height, X and Y.
+    LayerWidth,
+    LayerHeight,
+    LayerX,
+    LayerY,
+    /// The staged crop's read-only Width and Height (plain inputs).
+    CropWidth,
+    CropHeight,
 }
 
 impl Num {
-    pub const ALL: [Num; 2] = [Num::TextSize, Num::NewTextSize];
+    pub const ALL: [Num; 8] = [
+        Num::TextSize,
+        Num::NewTextSize,
+        Num::LayerWidth,
+        Num::LayerHeight,
+        Num::LayerX,
+        Num::LayerY,
+        Num::CropWidth,
+        Num::CropHeight,
+    ];
 
-    /// `(min, max)` of the shipping `NumberInput`.
+    /// `(min, max)` of the shipping `NumberInput`; X and Y have none.
     pub fn bounds(self) -> (f64, f64) {
         match self {
             Num::TextSize | Num::NewTextSize => (8., 512.),
+            Num::LayerWidth | Num::LayerHeight => (1., geometry::MAX_SIZE),
+            Num::LayerX | Num::LayerY => (f64::NEG_INFINITY, f64::INFINITY),
+            Num::CropWidth | Num::CropHeight => (0., f64::INFINITY),
         }
     }
 
-    /// The `<label>` caption and the input's accessible name.
-    pub fn label(self) -> &'static str {
+    /// The `<label>` caption.
+    pub fn caption(self) -> &'static str {
         match self {
             Num::TextSize => "Size",
             Num::NewTextSize => "New text size",
+            Num::LayerWidth | Num::CropWidth => geometry::WIDTH,
+            Num::LayerHeight | Num::CropHeight => geometry::HEIGHT,
+            Num::LayerX => "X",
+            Num::LayerY => "Y",
         }
+    }
+
+    /// The input's `aria-label`, when it has one.
+    pub fn aria(self) -> Option<&'static str> {
+        Some(match self {
+            Num::TextSize | Num::NewTextSize => return None,
+            Num::LayerWidth => geometry::WIDTH_LABEL,
+            Num::LayerHeight => geometry::HEIGHT_LABEL,
+            Num::LayerX => geometry::X_LABEL,
+            Num::LayerY => geometry::Y_LABEL,
+            Num::CropWidth => "Crop width",
+            Num::CropHeight => "Crop height",
+        })
+    }
+
+    /// The input's accessible name.
+    pub fn label(self) -> &'static str {
+        self.aria().unwrap_or(self.caption())
+    }
+
+    /// The crop's plain `readOnly` inputs.
+    pub fn read_only(self) -> bool {
+        matches!(self, Num::CropWidth | Num::CropHeight)
+    }
+
+    pub fn is_geometry(self) -> bool {
+        matches!(
+            self,
+            Num::LayerWidth | Num::LayerHeight | Num::LayerX | Num::LayerY
+        )
+    }
+
+    /// `.number-input` is 34 px with its border; a plain input 32.
+    pub fn field_h(self) -> f32 {
+        if self.read_only() { SELECT_H } else { NUMBER_H }
     }
 }
 
@@ -178,6 +242,10 @@ impl Default for Eraser {
 pub enum Note {
     Intro,
     Hint,
+    /// The image section's proportional or locked note.
+    Geometry,
+    /// The Crop section's drag or Shift hint.
+    Crop,
 }
 
 fn eraser_range(range: Range) -> bool {
@@ -252,6 +320,11 @@ pub fn all() -> Vec<Prop> {
     // Steppers are built as children of their field.
     list.extend(Num::ALL.map(Prop::Number));
     list.extend((0..FORMATS).map(Prop::Format));
+    list.extend([
+        Prop::Aspect,
+        Prop::CropAction(false),
+        Prop::CropAction(true),
+    ]);
     list
 }
 
@@ -425,6 +498,12 @@ pub enum Row {
     Number(Num),
     /// `.screenshot-format-buttons`.
     Formats,
+    /// `.screenshot-number-pair` of number fields, two per line.
+    Pairs(&'static [Num]),
+    /// The Crop section's Aspect ratio select.
+    Aspect,
+    /// `.screenshot-property-actions`: Clear and Apply crop.
+    CropActions,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -443,6 +522,10 @@ pub enum Section {
     Text(String),
     /// The Text tool without a selection.
     TextDefaults,
+    /// A selected image layer.
+    Image(String),
+    /// The Crop tool.
+    Crop,
 }
 
 /// The Properties body's top: the heading's 8 px margin and the section's
@@ -456,7 +539,13 @@ impl Editor {
         if self.tool == "b" {
             return Some(Section::Eraser);
         }
+        if self.tool == "c" {
+            return Some(Section::Crop);
+        }
         if let Some(id) = &self.selected {
+            if self.selected_image().is_some() {
+                return Some(Section::Image(id.clone()));
+            }
             if self.selected_text().is_some() {
                 return Some(Section::Text(id.clone()));
             }
@@ -475,7 +564,7 @@ impl Editor {
 
     pub fn values(&self) -> Option<Values> {
         match self.section()? {
-            Section::Eraser => None,
+            Section::Eraser | Section::Image(_) | Section::Crop => None,
             Section::Selected(id) => self.presented.as_ref()?.controls.get(&id).cloned(),
             Section::Text(_) => Some(Values::from_text(self.selected_text()?)),
             Section::TextDefaults => {
@@ -506,6 +595,26 @@ impl Editor {
             }
             rows.push(Row::Note(Note::Hint));
             return rows;
+        }
+        match self.section() {
+            Some(Section::Image(_)) => {
+                return vec![
+                    Row::Pairs(&[Num::LayerWidth, Num::LayerHeight, Num::LayerX, Num::LayerY]),
+                    Row::Note(Note::Geometry),
+                ];
+            }
+            Some(Section::Crop) => {
+                let mut rows = vec![Row::Aspect];
+                if self.crop.is_some() {
+                    rows.extend([
+                        Row::Pairs(&[Num::CropWidth, Num::CropHeight]),
+                        Row::CropActions,
+                    ]);
+                }
+                rows.push(Row::Note(Note::Crop));
+                return rows;
+            }
+            _ => {}
         }
         let (Some(section), Some(v)) = (self.section(), self.values()) else {
             return Vec::new();
@@ -601,10 +710,7 @@ impl Editor {
             let h = match row {
                 Row::Picker => 2. * PICKER_H + self.t.n("s-2"),
                 Row::Modes => MODE_H,
-                Row::Note(note) => self
-                    .g
-                    .text(&self.t, Style::Option, &self.note_text(note), rw)
-                    .map_or(16., |t| t.height.ceil()),
+                Row::Note(note) => self.note_layout(note, rw).map_or(16., |t| t.height.ceil()),
                 Row::Range(range) if !marks(range).is_empty() => {
                     CAPTION_H + self.t.n("s-3") + SLIDER_H + MARKS_H
                 }
@@ -616,6 +722,13 @@ impl Editor {
                 Row::Textarea => CAPTION_H + self.t.n("s-3") + super::fields::TEXTAREA_H,
                 Row::FontSize | Row::Number(_) => CAPTION_H + self.t.n("s-3") + NUMBER_H,
                 Row::Formats => text_format::BUTTON_HEIGHT as f32,
+                Row::Pairs(nums) => {
+                    let lines = nums.len().div_ceil(2);
+                    let line = CAPTION_H + self.t.n("s-3") + nums[0].field_h();
+                    lines as f32 * line + lines.saturating_sub(1) as f32 * self.t.n("s-4")
+                }
+                Row::Aspect => CAPTION_H + self.t.n("s-3") + SELECT_H,
+                Row::CropActions => SELECT_H,
             };
             laid.push(Laid {
                 row,
@@ -686,11 +799,40 @@ impl Editor {
                 })
             }
             Prop::Number(num) => {
-                let r = self.laid(Row::Number(num))?;
-                Some(Rect::new(r.x, r.y + r.h - NUMBER_H, r.w, NUMBER_H))
+                if let Some(r) = self.laid(Row::Number(num)) {
+                    return Some(Rect::new(r.x, r.y + r.h - NUMBER_H, r.w, NUMBER_H));
+                }
+                let (nums, r) = self.props.iter().find_map(|l| match l.row {
+                    Row::Pairs(nums) if nums.contains(&num) => Some((nums, l.rect)),
+                    _ => None,
+                })?;
+                let i = nums.iter().position(|&n| n == num)?;
+                let gap = self.t.n("s-4");
+                let half = (r.w - gap) / 2.;
+                let line = CAPTION_H + self.t.n("s-3") + num.field_h();
+                Some(Rect::new(
+                    r.x + (i % 2) as f32 * (half + gap),
+                    r.y + (i / 2) as f32 * (line + gap) + line - num.field_h(),
+                    half,
+                    num.field_h(),
+                ))
+            }
+            Prop::Aspect => {
+                let r = self.laid(Row::Aspect)?;
+                Some(Rect::new(r.x, r.y + r.h - SELECT_H, r.w, SELECT_H))
+            }
+            Prop::CropAction(apply) => {
+                let r = self.laid(Row::CropActions)?;
+                let gap = self.t.n("s-3");
+                let half = (r.w - gap) / 2.;
+                let x = if apply { r.x + half + gap } else { r.x };
+                Some(Rect::new(x, r.y, half, r.h))
             }
             // Inside its number field: the top or bottom half of the column.
             Prop::Step(num, up) => {
+                if !self.num_steppers(num) {
+                    return None;
+                }
                 let field = self.prop_rect(Prop::Number(num))?;
                 let x = field.w - 1. - super::fields::STEPPERS_W;
                 let mid = (field.h / 2.).round();
@@ -732,9 +874,28 @@ impl Editor {
         self.row_rect(Row::Modes)
     }
 
-    /// An Eraser paragraph's copy.
+    /// A section paragraph, wrapped to `width` like a `<p>`.
+    fn note_layout(&self, note: Note, width: f32) -> Result<gfx::Text> {
+        let mut text = self
+            .g
+            .text(&self.t, Style::Option, &self.note_text(note), width)?;
+        let mut m = windows::Win32::Graphics::DirectWrite::DWRITE_TEXT_METRICS::default();
+        unsafe {
+            text.layout.SetWordWrapping(
+                windows::Win32::Graphics::DirectWrite::DWRITE_WORD_WRAPPING_WRAP,
+            )?;
+            text.layout.GetMetrics(&mut m)?;
+        }
+        text.width = m.widthIncludingTrailingWhitespace;
+        text.height = m.height;
+        Ok(text)
+    }
+
+    /// A section paragraph's copy.
     pub fn note_text(&self, note: Note) -> String {
         match (note, self.eraser.mode) {
+            (Note::Geometry, _) => self.geometry_note(),
+            (Note::Crop, _) => self.crop_note(),
             (Note::Intro, _) => eraser::INTRO,
             (Note::Hint, EraserMode::Wand) => eraser::wand_hint(self.eraser.contiguous),
             (Note::Hint, EraserMode::Brush(BrushMode::Erase)) => eraser::ERASE_HINT,
@@ -918,7 +1079,9 @@ impl Editor {
             | Prop::Font
             | Prop::Number(_)
             | Prop::Step(..)
-            | Prop::Textarea => return None,
+            | Prop::Textarea
+            | Prop::Aspect
+            | Prop::CropAction(_) => return None,
         })
     }
 
@@ -942,9 +1105,15 @@ impl Editor {
             }
             Prop::Font => "Font".into(),
             Prop::Number(num) => num.label().into(),
-            // `NumberInput` without an `ariaLabel`.
-            Prop::Step(_, true) => "Increase".into(),
-            Prop::Step(_, false) => "Decrease".into(),
+            // `Increase ${ariaLabel}`, or plain without one.
+            Prop::Step(num, up) => {
+                let verb = if up { "Increase" } else { "Decrease" };
+                num.aria()
+                    .map_or_else(|| verb.into(), |aria| format!("{verb} {aria}"))
+            }
+            Prop::Aspect => super::crop::ASPECT_LABEL.into(),
+            Prop::CropAction(false) => super::crop::CLEAR.into(),
+            Prop::CropAction(true) => super::crop::APPLY.into(),
             Prop::Textarea => "Text".into(),
             Prop::Format(i) => Editor::format_name(i).into(),
         }
@@ -1020,6 +1189,9 @@ impl Editor {
             }
             Prop::StyleTrigger => self.toggle_menu(MenuKind::Style),
             Prop::Font => self.toggle_menu(MenuKind::Font),
+            Prop::Aspect => self.toggle_menu(MenuKind::Aspect),
+            Prop::CropAction(false) => self.set_crop(None),
+            Prop::CropAction(true) => self.apply_crop(),
             Prop::Step(num, up) => self.nudge(num, up),
             Prop::Format(i) => self.activate_format(i),
             Prop::Range(_) | Prop::Number(_) | Prop::Textarea => {}
@@ -1073,6 +1245,7 @@ impl Editor {
             return;
         };
         match section {
+            Section::Image(_) | Section::Crop => return,
             Section::Eraser => match change {
                 Change::Check(Check::Contiguous, on) => self.eraser.contiguous = on,
                 Change::Range(Range::Tolerance, value) => self.eraser.tolerance = value,
@@ -1310,9 +1483,7 @@ impl Editor {
         };
         for laid in &self.props {
             if let Row::Note(note) = laid.row {
-                let text = self
-                    .g
-                    .text(t, Style::Option, &self.note_text(note), laid.rect.w)?;
+                let text = self.note_layout(note, laid.rect.w)?;
                 gfx::text(dc, &text, laid.rect.x, laid.rect.y, t.color("text-subtle"))?;
             }
             if let Row::Color(field) = laid.row {
@@ -1327,12 +1498,33 @@ impl Editor {
                 Row::Textarea => &[(Prop::Textarea, "Text")],
                 Row::FontSize => &[(Prop::Font, "Font"), (Prop::Number(Num::TextSize), "Size")],
                 Row::Number(num) => &[(Prop::Number(num), num.label())],
+                Row::Aspect => &[(Prop::Aspect, super::crop::ASPECT_LABEL)],
                 _ => &[],
             };
+            let pairs: Vec<(Prop, &str)>;
+            let captions = match laid.row {
+                Row::Pairs(nums) => {
+                    pairs = nums
+                        .iter()
+                        .map(|&n| (Prop::Number(n), n.caption()))
+                        .collect();
+                    &pairs[..]
+                }
+                _ => captions,
+            };
             for (prop, caption) in captions {
-                let x = self.prop_rect(*prop).map_or(laid.rect.x, |r| r.x);
+                let (x, y) = match (laid.row, self.prop_rect(*prop)) {
+                    (Row::Pairs(_), Some(r)) => {
+                        let field_h = match prop {
+                            Prop::Number(num) => num.field_h(),
+                            _ => r.h,
+                        };
+                        (r.x, r.y + r.h - field_h - self.t.n("s-3") - CAPTION_H)
+                    }
+                    (_, r) => (r.map_or(laid.rect.x, |r| r.x), laid.rect.y),
+                };
                 let text = self.g.text(t, Style::Button, caption, 1e4)?;
-                gfx::text(dc, &text, x, laid.rect.y, t.color("text-muted"))?;
+                gfx::text(dc, &text, x, y, t.color("text-muted"))?;
             }
         }
         let y = last.rect.y + last.rect.h + t.n("s-5");
@@ -1376,7 +1568,8 @@ impl Editor {
                 }
                 // Inputs and the select show `--focus-ring-tight` with their
                 // accent border.
-                Prop::Font | Prop::Number(_) | Prop::Textarea => gfx::ring(
+                Prop::CropAction(_) => gfx::ring(dc, all, t.n("r-md"), 2., 4., c("theme-accent")),
+                Prop::Font | Prop::Aspect | Prop::Number(_) | Prop::Textarea => gfx::ring(
                     dc,
                     all,
                     t.n("r-md"),
@@ -1389,7 +1582,9 @@ impl Editor {
         }
         match prop {
             Prop::StyleTrigger => self.draw_style_trigger(dc, layer, (w, h))?,
-            Prop::Font => self.draw_font_select(dc, layer, (w, h))?,
+            Prop::Font => self.draw_select(dc, MenuKind::Font, layer, (w, h))?,
+            Prop::Aspect => self.draw_select(dc, MenuKind::Aspect, layer, (w, h))?,
+            Prop::CropAction(apply) => self.draw_crop_action(dc, apply, lit, (w, h))?,
             Prop::Format(i) => self.draw_format(dc, i, layer, (w, h))?,
             Prop::Number(num) => self.draw_number(dc, num, lit, (w, h))?,
             Prop::Step(num, up) => self.draw_step(dc, num, up, lit, (w, h))?,
@@ -1617,6 +1812,9 @@ impl Editor {
                 Row::FontSize => list.extend([Prop::Font, Prop::Number(Num::TextSize)]),
                 Row::Number(num) => list.push(Prop::Number(num)),
                 Row::Formats => list.extend((0..FORMATS).map(Prop::Format)),
+                Row::Pairs(nums) => list.extend(nums.iter().map(|&n| Prop::Number(n))),
+                Row::Aspect => list.push(Prop::Aspect),
+                Row::CropActions => list.extend([Prop::CropAction(false), Prop::CropAction(true)]),
             }
         }
         list

@@ -549,6 +549,23 @@ apexes no longer spike while it is open. Shipping's own textarea uses
 WebKit's text stroke, which mitres; this host matches the committed look
 instead. Windows: cross-compiled only. macOS, Linux: unchanged.
 
+Image and crop sections: a selected image shows shipping's Width, Height,
+X and Y number fields (`Layer width` and so on, steppers named `Increase
+Layer width`), sent as `LayerEdit::Geometry` one undo step per change, with
+the proportional note; a locked image shows them disabled without
+steppers and the unlock note. The Crop tool stages its rectangle through
+the shared `CropDrag` (aspect presets and Shift lock) instead of cropping on
+release: Properties shows the Aspect ratio select (the Preferences select
+listbox), the read-only Crop width and Crop height, Clear and Apply crop,
+and the Shift hint, or the drag hint with nothing staged; Apply crop crops,
+selects nothing and returns to Select, and Escape, Undo, Redo or another
+tool drop the staged crop. The overlay dims outside it with
+`rgba(5,6,8,.64)`, outlines it white and tags it `W × H`, screen-sized at any
+zoom. `--crop X,Y,W,H` renders a staged crop. Not yet: Apply crop's
+`cta-pulse` halo; under Wine the 8/5 dashed outline draws solid, which needs
+a hardware check. Windows: cross-compiled only, Wine renders in light and
+dark. macOS, Linux: unchanged.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,
