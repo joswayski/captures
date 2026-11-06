@@ -590,6 +590,19 @@ header. Deviation: an empty field reverts on blur, where shipping's
 `Number("")` resizes the canvas to 1 px. Windows: cross-compiled only, Wine
 renders in light and dark. macOS, Linux: unchanged.
 
+Background color: the header's trigger (chip with the colour or the
+transparent checks, `Background color: #… / transparent`, ExpandCollapse)
+opens shipping's `CanvasBackgroundPicker` card, 248 px, below the trigger or
+above it when there is more room, clamped into the window. It holds Solid
+background and the compact `Canvas background` swatch field with the custom
+tile (the system colour dialog, as elsewhere). Changes commit through
+`Request::SetBackground`, one undo step; turning Solid back on restores
+`lastSolid` (initially `#f7f7f5`). The card closes on a press outside it and
+its trigger, and on Escape, which returns focus to the trigger when it was
+inside. UIA: the card is a pane named `Canvas background` after the page,
+like shipping's portal. Windows: cross-compiled only, Wine renders in light
+and dark with the card open. macOS, Linux: unchanged.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,

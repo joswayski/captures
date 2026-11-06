@@ -20,7 +20,9 @@ use windows::Win32::System::Variant::*;
 use windows::Win32::UI::Accessibility::*;
 use windows::core::*;
 
-use crate::editor::{Editor, Event, Field, MenuKind, Num, Prop, Stub, Target, with_editor};
+use crate::editor::{
+    CUSTOM, Check, Editor, Event, Field, MenuKind, Num, Prop, Stub, Target, with_editor,
+};
 use crate::scene::Rect;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -62,6 +64,8 @@ pub enum Id {
     Hint,
     Control(Target),
     Stub(Stub),
+    /// The open Background color card (`role="dialog"`).
+    BgMenu,
     /// The open Text style menu (`role="menu"` of `menuitemradio`) or Font
     /// list (`listbox` of options), and its rows.
     Menu,
@@ -129,12 +133,22 @@ fn children(e: &Editor, id: Id) -> Vec<Id> {
                 list.push(c(Target::SaveAsNew));
             }
             list.push(c(Target::Save));
-            // Shipping portals the menu to the end of `body`.
+            // Shipping portals the card and the menu to the end of `body`.
+            if e.bg_open() {
+                list.push(Id::BgMenu);
+            }
             if e.open_menu_state().is_some() {
                 list.push(Id::Menu);
             }
             list
         }
+        Id::BgMenu if e.bg_open() => vec![
+            c(Target::Prop(Prop::Check(Check::Solid))),
+            Id::ColorField(Field::Canvas),
+        ],
+        Id::ColorField(Field::Canvas) if e.bg_open() => (0..=CUSTOM)
+            .map(|i| c(Target::Prop(Prop::Swatch(Field::Canvas, i))))
+            .collect(),
         Id::Menu => match e.open_menu_state() {
             Some((kind, _)) => (0..e.menu_items(kind).len()).map(Id::MenuItem).collect(),
             None => Vec::new(),
@@ -149,7 +163,7 @@ fn children(e: &Editor, id: Id) -> Vec<Id> {
             c(Target::Prop(Prop::Number(Num::CanvasWidth))),
             c(Target::Prop(Prop::Number(Num::CanvasHeight))),
             c(Target::Trim),
-            Id::Stub(Stub::Background),
+            c(Target::Background),
         ],
         Id::Zoom => vec![
             c(Target::Fit),
@@ -198,6 +212,7 @@ fn children(e: &Editor, id: Id) -> Vec<Id> {
 
 fn prop_parent(prop: Prop) -> Id {
     match prop {
+        Prop::Check(Check::Solid) => Id::BgMenu,
         Prop::Shape(_) => Id::ShapePicker,
         Prop::Mode(_) => Id::ModeGroup,
         Prop::Swatch(field, _) => Id::ColorField(field),
@@ -210,7 +225,8 @@ fn parent(id: Id) -> Option<Id> {
     Some(match id {
         Id::Root => return None,
         Id::BannerText | Id::Control(Target::Dismiss) => Id::Banner,
-        Id::Stub(Stub::Background) | Id::Control(Target::Trim) => Id::CanvasGroup,
+        Id::Control(Target::Trim | Target::Background) => Id::CanvasGroup,
+        Id::ColorField(Field::Canvas) => Id::BgMenu,
         Id::Control(Target::Prop(Prop::Number(num))) if num.is_canvas() => Id::CanvasGroup,
         Id::Control(Target::Fit | Target::ZoomOut | Target::Slider | Target::ZoomIn)
         | Id::Stub(Stub::Preset) => Id::Zoom,
@@ -262,6 +278,7 @@ fn rect(e: &Editor, id: Id) -> Rect {
         Id::Notice | Id::Hint => l.hint,
         Id::Control(target) => e.target_rect(target),
         Id::Stub(stub) => e.stub_rect(stub),
+        Id::BgMenu => e.bg_menu_rect(),
         Id::Menu => e.menu_rect().unwrap_or_default(),
         Id::MenuItem(i) => e.menu_item_rect(i),
     }
@@ -289,6 +306,7 @@ fn name(e: &Editor, id: Id) -> String {
         Id::Hint => e.hint_text(),
         Id::Control(target) => e.name(target),
         Id::Stub(stub) => e.stub_name(stub),
+        Id::BgMenu => editor_chrome::colors::CANVAS_BACKGROUND.into(),
         Id::Menu => match e.open_menu_state() {
             Some((MenuKind::Style, _)) => e.style_label().into(),
             Some((MenuKind::Font, _)) => "Font".into(),
@@ -321,6 +339,8 @@ fn control_type(e: &Editor, id: Id) -> UIA_CONTROLTYPE_ID {
     match id {
         Id::Menu if menu_kind(e).is_some_and(MenuKind::is_select) => UIA_ListControlTypeId,
         Id::Menu => UIA_MenuControlTypeId,
+        // Chromium maps `role="dialog"` to a pane.
+        Id::BgMenu => UIA_PaneControlTypeId,
         Id::MenuItem(_) if menu_kind(e).is_some_and(MenuKind::is_select) => {
             UIA_ListItemControlTypeId
         }
@@ -376,6 +396,7 @@ fn runtime_id(id: Id) -> [i32; 4] {
             Target::SaveAsNew => (14, 0),
             Target::Save => (15, 0),
             Target::Trim => (21, 0),
+            Target::Background => (30, 0),
             Target::Prop(Prop::Shape(i)) => (16, i as i32),
             Target::Prop(Prop::Check(check)) => (17, check as i32),
             Target::Prop(Prop::Swatch(field, i)) => (18, field as i32 * 16 + i as i32),
@@ -393,7 +414,6 @@ fn runtime_id(id: Id) -> [i32; 4] {
     };
     let stub = |s: Stub| -> (i32, i32) {
         match s {
-            Stub::Background => (3, 0),
             Stub::Preset => (4, 0),
             Stub::AddImages => (5, 0),
             Stub::AddLayer => (6, 0),
@@ -426,6 +446,7 @@ fn runtime_id(id: Id) -> [i32; 4] {
         Id::InlineText => (19, 0),
         Id::ModeGroup => (20, 0),
         Id::Menu => (21, 0),
+        Id::BgMenu => (23, 0),
         Id::MenuItem(i) => (22, i as i32),
         Id::Control(t) => {
             let (k, a) = target(t);
@@ -630,7 +651,7 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                 Id::Control(Target::Shape(_)) => {
                     pattern == UIA_SelectionItemPatternId || pattern == UIA_InvokePatternId
                 }
-                Id::Control(Target::Prop(Prop::StyleTrigger)) => {
+                Id::Control(Target::Prop(Prop::StyleTrigger) | Target::Background) => {
                     pattern == UIA_ExpandCollapsePatternId || pattern == UIA_InvokePatternId
                 }
                 Id::Control(Target::Prop(Prop::Font | Prop::Aspect)) => {
@@ -740,7 +761,9 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                     Id::Control(Target::Tool(i)) if i == shapes() => {
                         VARIANT::from(expand_state(e, id).0)
                     }
-                    _ if trigger_kind(id).is_some() => VARIANT::from(expand_state(e, id).0),
+                    _ if trigger_kind(id).is_some() || id == Id::Control(Target::Background) => {
+                        VARIANT::from(expand_state(e, id).0)
+                    }
                     _ => VARIANT::default(),
                 },
                 _ => VARIANT::default(),
@@ -760,6 +783,7 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
 fn expand_state(e: &Editor, id: Id) -> ExpandCollapseState {
     let open = match trigger_kind(id) {
         Some(kind) => e.menu_open(kind),
+        None if id == Id::Control(Target::Background) => e.bg_open(),
         None => e.flyout,
     };
     if open {
@@ -939,6 +963,12 @@ impl Node_Impl {
             match trigger_kind(id) {
                 Some(kind) if e.exists(Target::Prop(kind.trigger())) => e.set_menu(kind, open),
                 Some(_) => return Err(not_enabled()),
+                None if id == Id::Control(Target::Background) => {
+                    if !e.enabled(Target::Background) {
+                        return Err(not_enabled());
+                    }
+                    e.set_bg_menu(open);
+                }
                 None => e.set_flyout(open),
             }
             Ok(())
@@ -1174,7 +1204,9 @@ pub fn raise(hwnd: HWND, events: &[(Event, String)]) {
                         &state(!open),
                         &state(open),
                     );
-                    if !open {
+                    // Focus returns to a menu's trigger; the Background card
+                    // moves focus itself, only when it held it.
+                    if !open && target != Target::Background {
                         // Focus returns to the trigger.
                         let _ =
                             UiaRaiseAutomationEvent(&trigger, UIA_AutomationFocusChangedEventId);
@@ -1250,7 +1282,10 @@ pub fn describe(e: &Editor, events: Vec<Event>) -> Vec<(Event, String)> {
                 Event::InlineText => e.text_value(),
                 Event::Scrolled => scroll_percent(e).to_string(),
                 Event::Expanded(target) => {
-                    let open = trigger_kind(Id::Control(target)).is_some_and(|k| e.menu_open(k));
+                    let open = match target {
+                        Target::Background => e.bg_open(),
+                        _ => trigger_kind(Id::Control(target)).is_some_and(|k| e.menu_open(k)),
+                    };
                     if open { "open" } else { "closed" }.into()
                 }
                 _ => String::new(),
