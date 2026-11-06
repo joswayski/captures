@@ -24,7 +24,7 @@ use captures_media::{
 };
 use captures_settings::{RecordingSettings, VideoFormat};
 use gtk::prelude::*;
-use gtk::{gdk, glib, graphene, gsk};
+use gtk::{gdk, gio, glib, graphene, gsk};
 use image::RgbaImage;
 
 use crate::switch::TokenSwitch;
@@ -304,6 +304,8 @@ struct State {
     estimate_generation: Cell<u64>,
     estimate_cancel: RefCell<Option<CancelToken>>,
     estimate_timer: RefCell<Option<glib::SourceId>>,
+    #[allow(deprecated)] // `GtkFileDialog` needs GTK 4.10.
+    chooser: RefCell<Option<gtk::FileChooserNative>>,
     w: Widgets,
 }
 
@@ -322,6 +324,7 @@ struct Widgets {
     track_overlay: gtk::Overlay,
     handles: [gtk::Scale; 2],
     folder: gtk::Label,
+    change_folder: gtk::Button,
     filename: gtk::Entry,
     save_as_new: TokenSwitch,
     save: gtk::Button,
@@ -485,6 +488,15 @@ pub fn build(app: &gtk::Application, tokens: Rc<Tokens>, options: Options) -> Re
     folder.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
     folder.set_max_width_chars(36);
     file_heading.append(&folder);
+    // Shipping `aria-label="Change save location"` over "Change…"; the text
+    // is presentational because GTK 4.14 names a button after its label.
+    let change_folder = gtk::Button::new();
+    let change_text = gtk::Label::new(Some("Change…"));
+    change_text.set_accessible_role(gtk::AccessibleRole::Presentation);
+    change_folder.set_child(Some(&change_text));
+    change_folder.add_css_class("editor-folder-change");
+    change_folder.update_property(&[gtk::accessible::Property::Label("Change save location")]);
+    file_heading.append(&change_folder);
     file.append(&file_heading);
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     row.add_css_class("editor-filename");
@@ -558,6 +570,7 @@ pub fn build(app: &gtk::Application, tokens: Rc<Tokens>, options: Options) -> Re
         estimate_generation: Cell::default(),
         estimate_cancel: RefCell::default(),
         estimate_timer: RefCell::default(),
+        chooser: RefCell::default(),
         w: Widgets {
             title,
             warning,
@@ -573,6 +586,7 @@ pub fn build(app: &gtk::Application, tokens: Rc<Tokens>, options: Options) -> Re
             track_overlay,
             handles,
             folder,
+            change_folder,
             filename,
             save_as_new,
             save,
@@ -679,6 +693,12 @@ impl State {
         w.save.connect_clicked(move |_| {
             if let Some(state) = weak.upgrade() {
                 state.save();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        w.change_folder.connect_clicked(move |_| {
+            if let Some(state) = weak.upgrade() {
+                state.choose_folder();
             }
         });
         let weak = Rc::downgrade(self);
@@ -1250,6 +1270,42 @@ impl State {
         *self.pending_apply.borrow_mut() = Some(id);
     }
 
+    /// Shipping's `chooseDestinationDirectory`: the folder Save writes to.
+    fn choose_folder(self: &Rc<Self>) {
+        if self.saving.get() {
+            return;
+        }
+        let window = self.w.preview.root().and_downcast::<gtk::Window>();
+        #[allow(deprecated)]
+        let chooser = gtk::FileChooserNative::new(
+            Some("Choose save location"),
+            window.as_ref(),
+            gtk::FileChooserAction::SelectFolder,
+            Some("Select"),
+            Some("Cancel"),
+        );
+        #[allow(deprecated)]
+        let _ = chooser.set_current_folder(Some(&gio::File::for_path(&*self.directory.borrow())));
+        let weak = Rc::downgrade(self);
+        #[allow(deprecated)]
+        chooser.connect_response(move |chooser, response| {
+            let folder = chooser.file().and_then(|file| file.path());
+            chooser.destroy();
+            let Some(state) = weak.upgrade() else { return };
+            state.chooser.borrow_mut().take();
+            if response == gtk::ResponseType::Accept
+                && let Some(folder) = folder
+            {
+                *state.directory.borrow_mut() = folder;
+                state.notify("", false);
+                state.update_footer();
+            }
+        });
+        #[allow(deprecated)]
+        chooser.show();
+        *self.chooser.borrow_mut() = Some(chooser);
+    }
+
     fn saving_copy(&self) -> bool {
         self.original.borrow().is_none() || self.w.save_as_new.is_on()
     }
@@ -1277,6 +1333,7 @@ impl State {
             w.save_as_new.activate_toggle_quietly(true);
         }
         w.save_as_new.set_sensitive(!requires_copy);
+        w.change_folder.set_sensitive(!self.saving.get());
         let valid = self.presented.borrow().as_ref().is_some_and(|p| {
             self.output
                 .specs(p.edit.trim_start_ms, p.trim_end_opt())

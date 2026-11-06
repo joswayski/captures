@@ -629,15 +629,24 @@ def recording_output(binary, scratch):
         switch = [n for role in ("switch", "check box", "toggle button")
                   for n in find(app, role, "Save as new file")][0]
         wait(lambda: has_state(switch, Atspi.StateType.CHECKED), "GIF to save a new file")
+        # Change… picks the folder Save writes to through GTK's chooser.
+        elsewhere = scratch / "gif-elsewhere"
+        elsewhere.mkdir()
+        press(find(app, "push button", "Change save location")[0])
+        choose_file(app, "Choose save location", "Select", elsewhere)
+        wait(lambda: [n for n, (role, name) in nodes(app)
+                      if role == "label" and str(elsewhere) in node_text(n, name)],
+             "the footer to show the new folder")
         save = find(app, "push button", "Save")[0]
         wait(lambda: has_state(save, Atspi.StateType.SENSITIVE), "Save to enable")
         press(save)
-        saved = wait(lambda: [p for p in exports.iterdir() if p.name.endswith("-edited.gif")],
+        saved = wait(lambda: [p for p in elsewhere.iterdir() if p.name.endswith("-edited.gif")],
                      "the saved GIF", timeout=60)[0]
+        assert not [p for p in exports.iterdir() if p.suffix == ".gif"], "GIF saved beside source"
         gif = GdkPixbuf.PixbufAnimation.new_from_file(str(saved))
         assert (gif.get_width(), gif.get_height()) == (320, 180), \
             f"saved {gif.get_width()}×{gif.get_height()}"
-        print(f"recording: cropped to 320×180 and saved {saved.name} as GIF")
+        print(f"recording: cropped to 320×180 and saved {saved.name} as GIF via Change…")
     finally:
         process.terminate()
         process.wait(timeout=10)

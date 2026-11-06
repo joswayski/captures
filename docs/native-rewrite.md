@@ -580,8 +580,9 @@ unapplied and disables Save. With Crop recording on, the preview shows the
 uncropped source frame under the dim, accent box, size badge and eight
 handles, drawn as retained nodes; dragging moves or resizes it in source
 pixels. The handles are drawn, not widgets: assistive technologies use the
-crop spin buttons. Not ported: the Change… folder button, the recording
-compression preview, and save toasts. Release build under Xvfb with Cairo on
+crop spin buttons. Change… picks the folder Save writes to (Save as new and
+replace both use it, as shipping). Not ported: the recording compression
+preview, Cancel and Show in Folder, and save toasts. Release build under Xvfb with Cairo on
 a 4 s 640×360 fixture: about 100 MB RSS and about 10 ms of CPU per 5 s idle;
 the egui workbench has no recording-editor scene to measure against. CI
 installs FFmpeg, renders it in both appearances, and `smoke.py` opens it from
@@ -589,7 +590,7 @@ History, trims 1 s with the keyboard over AT-SPI, plays and pauses, and
 checks that Save as new writes a 3 s `-edited` MP4 and leaves the source
 unchanged; a second step crops to 320 × 180 with the aspect lock, switches
 to GIF (GIF settings, Compress, Save as new forced on) and checks the saved
-GIF's size. X11 (Xvfb) only; Wayland, Orca and real hardware remain open.
+GIF's size in a folder chosen through Change…. X11 (Xvfb) only; Wayland, Orca and real hardware remain open.
 Windows, macOS: unchanged.
 
 ## Progress dashboard
