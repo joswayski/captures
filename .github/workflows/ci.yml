@@ -85,25 +85,45 @@ jobs:
           components: rustfmt, clippy
           cache-workspaces: apps/native/wgpu
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
-      # Like the GTK4 job: a stalled apt mirror hung this step until the job
-      # timed out, so each attempt times out and retries.
+      # The Azure apt mirror sometimes trickles: downloads run separately so
+      # each retry resumes partial files, later attempts switch to
+      # archive.ubuntu.com, and the .debs are cached between runs.
+      - name: Restore cached apt packages
+        uses: actions/cache@v4
+        with:
+          path: ~/apt-archives
+          key: native-wgpu-apt-ubuntu-24.04-v1
       - name: Install Linux windowing and software-rendering test dependencies
-        timeout-minutes: 12
+        timeout-minutes: 15
         run: |
-          for attempt in 1 2 3; do
-            if timeout 240 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update &&
-               timeout 300 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y \
-                 libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 libx11-dev libxi-dev libxrandr-dev \
-                 libdbus-1-dev libxcb1-dev libpipewire-0.3-dev libasound2-dev libasound2-plugins pulseaudio \
-                 libegl-dev libgbm-dev libclang-dev mesa-vulkan-drivers libgl1-mesa-dri xvfb dbus python3-dbus \
-                 python3-gi python3-xlib openbox picom hsetroot sway wl-clipboard xclip xdotool x11-utils \
-                 x11-apps imagemagick xfce4-panel xdg-utils ffmpeg; then
-              exit 0
+          packages="
+            libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 libx11-dev
+            libxi-dev libxrandr-dev libdbus-1-dev libxcb1-dev libpipewire-0.3-dev
+            libasound2-dev libasound2-plugins pulseaudio libegl-dev libgbm-dev libclang-dev
+            mesa-vulkan-drivers libgl1-mesa-dri xvfb dbus python3-dbus python3-gi
+            python3-xlib openbox picom hsetroot sway wl-clipboard xclip xdotool x11-utils
+            x11-apps imagemagick xfce4-panel xdg-utils ffmpeg"
+          if compgen -G "$HOME/apt-archives/*.deb" > /dev/null; then
+            sudo cp "$HOME"/apt-archives/*.deb /var/cache/apt/archives/
+          fi
+          apt_opts="-o Acquire::Retries=3 -o Acquire::http::Timeout=30"
+          downloaded=
+          for attempt in 1 2 3 4; do
+            if [ "$attempt" -ge 3 ]; then
+              echo "http://archive.ubuntu.com/ubuntu/" | sudo tee /etc/apt/apt-mirrors.txt
             fi
-            echo "apt attempt $attempt failed; retrying"
-            sleep 15
+            if timeout 180 sudo apt-get $apt_opts update &&
+               timeout 240 sudo apt-get $apt_opts install -y --download-only $packages; then
+              downloaded=1
+              break
+            fi
+            echo "apt download attempt $attempt failed; retrying"
+            sleep 10
           done
-          exit 1
+          test -n "$downloaded"
+          sudo apt-get install -y --no-download $packages
+          mkdir -p "$HOME/apt-archives"
+          cp /var/cache/apt/archives/*.deb "$HOME/apt-archives/"
       - run: node apps/native/prepare.mjs --output apps/native/wgpu/resources
       - run: cargo +1.95.0 fmt --manifest-path apps/native/wgpu/Cargo.toml --all -- --check
       - run: cargo +1.95.0 test --manifest-path apps/native/wgpu/Cargo.toml --locked
@@ -252,44 +272,46 @@ jobs:
         os: [macos-26, windows-2025, ubuntu-24.04]
     steps:
       - uses: actions/checkout@v4
+      # The Azure apt mirror sometimes trickles: downloads run separately so
+      # each retry resumes partial files, later attempts switch to
+      # archive.ubuntu.com, and the .debs are cached between runs.
+      - name: Restore cached apt packages
+        if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        with:
+          path: ~/apt-archives
+          key: rust-checks-apt-ubuntu-24.04-v1
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
-        timeout-minutes: 12
+        timeout-minutes: 15
         run: |
-          # A stalled apt mirror can hang this step; time out each attempt and retry.
-          for attempt in 1 2 3; do
-            if timeout 240 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update &&
-               timeout 300 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y \
-                 build-essential \
-                 curl \
-                 file \
-                 ffmpeg \
-                 hsetroot \
-                 libayatana-appindicator3-dev \
-                 libasound2-dev \
-                 libclang-dev \
-                 libdbus-1-dev \
-                 libegl-dev \
-                 libgbm-dev \
-                 libpipewire-0.3-dev \
-                 libspa-0.2-dev \
-                 librsvg2-dev \
-                 libssl-dev \
-                 libwayland-dev \
-                 libwebkit2gtk-4.1-dev \
-                 libxcb1-dev \
-                 libxdo-dev \
-                 libxrandr-dev \
-                 pkg-config \
-                 wget \
-                 xauth \
-                 xvfb; then
-              exit 0
+          packages="
+            build-essential curl file ffmpeg hsetroot
+            libayatana-appindicator3-dev libasound2-dev libclang-dev libdbus-1-dev
+            libegl-dev libgbm-dev libpipewire-0.3-dev libspa-0.2-dev librsvg2-dev libssl-dev
+            libwayland-dev libwebkit2gtk-4.1-dev libxcb1-dev libxdo-dev libxrandr-dev
+            pkg-config wget xauth xvfb"
+          if compgen -G "$HOME/apt-archives/*.deb" > /dev/null; then
+            sudo cp "$HOME"/apt-archives/*.deb /var/cache/apt/archives/
+          fi
+          apt_opts="-o Acquire::Retries=3 -o Acquire::http::Timeout=30"
+          downloaded=
+          for attempt in 1 2 3 4; do
+            if [ "$attempt" -ge 3 ]; then
+              echo "http://archive.ubuntu.com/ubuntu/" | sudo tee /etc/apt/apt-mirrors.txt
             fi
-            echo "apt attempt $attempt failed; retrying"
-            sleep 15
+            if timeout 180 sudo apt-get $apt_opts update &&
+               timeout 240 sudo apt-get $apt_opts install -y --download-only $packages; then
+              downloaded=1
+              break
+            fi
+            echo "apt download attempt $attempt failed; retrying"
+            sleep 10
           done
-          exit 1
+          test -n "$downloaded"
+          sudo apt-get install -y --no-download $packages
+          mkdir -p "$HOME/apt-archives"
+          cp /var/cache/apt/archives/*.deb "$HOME/apt-archives/"
       # This job id, toolchain and command set match the `rust` job in
       # release.yml, so both share one rust-cache key per OS. That main-branch
       # run seeds the cache; PR runs restore it but never save a per-PR copy
@@ -388,46 +410,46 @@ jobs:
             artifact_path: target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
     steps:
       - uses: actions/checkout@v4
+      # The Azure apt mirror sometimes trickles: downloads run separately so
+      # each retry resumes partial files, later attempts switch to
+      # archive.ubuntu.com, and the .debs are cached between runs.
+      - name: Restore cached apt packages
+        if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        with:
+          path: ~/apt-archives
+          key: desktop-package-apt-ubuntu-24.04-v1
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
-        timeout-minutes: 12
+        timeout-minutes: 15
         run: |
-          # A stalled apt mirror can hang this step; time out each attempt and retry.
-          for attempt in 1 2 3; do
-            if timeout 240 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update &&
-               timeout 300 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y \
-                 build-essential \
-                 curl \
-                 file \
-                 libayatana-appindicator3-dev \
-                 libasound2-dev \
-                 libclang-dev \
-                 libdbus-1-dev \
-                 libegl-dev \
-                 libgbm-dev \
-                 libpipewire-0.3-dev \
-                 libspa-0.2-dev \
-                 librsvg2-dev \
-                 libssl-dev \
-                 libwayland-dev \
-                 libwebkit2gtk-4.1-dev \
-                 libxcb1-dev \
-                 libxdo-dev \
-                 libxrandr-dev \
-                 nasm \
-                 patchelf \
-                 xdg-utils \
-                 pkg-config \
-                 wget \
-                 xz-utils \
-                 yasm \
-                 zlib1g-dev; then
-              exit 0
+          packages="
+            build-essential curl file libayatana-appindicator3-dev libasound2-dev
+            libclang-dev libdbus-1-dev libegl-dev libgbm-dev libpipewire-0.3-dev
+            libspa-0.2-dev librsvg2-dev libssl-dev libwayland-dev libwebkit2gtk-4.1-dev
+            libxcb1-dev libxdo-dev libxrandr-dev nasm patchelf xdg-utils pkg-config wget
+            xz-utils yasm zlib1g-dev"
+          if compgen -G "$HOME/apt-archives/*.deb" > /dev/null; then
+            sudo cp "$HOME"/apt-archives/*.deb /var/cache/apt/archives/
+          fi
+          apt_opts="-o Acquire::Retries=3 -o Acquire::http::Timeout=30"
+          downloaded=
+          for attempt in 1 2 3 4; do
+            if [ "$attempt" -ge 3 ]; then
+              echo "http://archive.ubuntu.com/ubuntu/" | sudo tee /etc/apt/apt-mirrors.txt
             fi
-            echo "apt attempt $attempt failed; retrying"
-            sleep 15
+            if timeout 180 sudo apt-get $apt_opts update &&
+               timeout 240 sudo apt-get $apt_opts install -y --download-only $packages; then
+              downloaded=1
+              break
+            fi
+            echo "apt download attempt $attempt failed; retrying"
+            sleep 10
           done
-          exit 1
+          test -n "$downloaded"
+          sudo apt-get install -y --no-download $packages
+          mkdir -p "$HOME/apt-archives"
+          cp /var/cache/apt/archives/*.deb "$HOME/apt-archives/"
       - uses: actions/setup-node@v4
         with:
           node-version: 24
