@@ -478,6 +478,18 @@ fell from 22.6–22.8 ms to 11.3–11.9 ms. GTK4, AppKit and the
 FFI ignore the new field. Windows, Linux: shared tests run on Linux.
 macOS: not run; its FFI response is unchanged.
 
+The Win32 editor uses that damage: while a brush stroke's previews each
+report damage relative to the frame on screen, the worker converts and
+sends only that rectangle and keeps a `Weak` to the frame, so it no longer
+diffs the whole image or pins the frame against the shared in-place paste.
+The first frame without damage is diffed against the last undamaged one,
+widened by everything the stroke showed. At 3840×2160 (Linux release
+benchmark of the worker path, Erase size 28, 60 previews) the host's
+per-preview cost fell from 5.6–6.0 ms to 0.02 ms, and a preview from
+27.1–27.5 ms to 12.7–13.6 ms in total; the upload grows from about 5,100 to
+7,200 pixels per preview, since the damage is a bound rather than a diff.
+Windows: cross-compiled only. macOS, Linux: unchanged.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,
