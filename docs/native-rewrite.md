@@ -346,7 +346,15 @@ selection grips; dragging one previews `LayerEdit::Resize` on the worker
 on release, with Shift on a corner keeping proportions, so the shared
 `ResizeDrag` gives labels the README's side, top/bottom and corner rules.
 The open label is an Edit with the Value pattern named "Edit text on
-canvas". Missing so far: shadow X/Y offsets, the line and arrow Curve
+canvas". The Eraser (`editor/eraser.rs`) has shipping's section (intro, the
+"Eraser mode" group of Wand, Erase and Restore, Tolerance with its marks and
+Contiguous only for Wand, Size and Softness for the brushes, and the hint),
+with window-local settings at shipping's defaults. Wand sends
+`RemoveImageBackground`; a brush stroke previews `PaintImageBackground` on
+the worker and commits once on release; the `brush_cursor` ring (dashed for
+Restore) follows the pointer in the overlay and hides the system cursor,
+which shows not-allowed off an image. Missing so far: the brush preview
+tile, the eraser paragraphs as UI Automation text, shadow X/Y offsets, the line and arrow Curve
 control, and the text (style picker, size, format), image and crop
 sections; outlined labels draw without their outline while open.
 Windows: cross-compiled only; Wine renders of Rectangle, Arrow, Freehand

@@ -14,7 +14,8 @@
 use captures_app::editor::{
     AnnotationStylePatch, DropShadowStylePatch, ElementStyle, LayerEdit, OptionalNullable,
 };
-use captures_app::editor_chrome::{SHAPE_TOOLS, colors};
+use captures_app::editor_chrome::{SHAPE_TOOLS, colors, eraser};
+use captures_app::editor_image_background::BrushMode;
 use captures_app::editor_session::{AnnotationControls, Request};
 use windows::Win32::Graphics::Direct2D::Common::*;
 use windows::Win32::Graphics::Direct2D::*;
@@ -35,6 +36,8 @@ pub enum Prop {
     /// A `ColorField` swatch; `CUSTOM` is the custom-color tile.
     Swatch(Field, usize),
     Range(Range),
+    /// An Eraser mode button, in `MODES` order.
+    Mode(usize),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,6 +45,8 @@ pub enum Check {
     Stroke,
     Fill,
     Shadow,
+    /// The Wand's Contiguous only.
+    Contiguous,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,18 +62,85 @@ pub enum Range {
     Opacity,
     ShadowOpacity,
     ShadowBlur,
+    /// The Wand's color tolerance.
+    Tolerance,
+    BrushSize,
+    Softness,
+}
+
+/// Shipping `RemoveBackgroundMode`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EraserMode {
+    Wand,
+    Brush(BrushMode),
+}
+
+pub const MODES: [(EraserMode, &str); 3] = [
+    (EraserMode::Wand, "Wand"),
+    (EraserMode::Brush(BrushMode::Erase), "Erase"),
+    (EraserMode::Brush(BrushMode::Restore), "Restore"),
+];
+
+/// The Eraser's window-local settings, at shipping's defaults.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Eraser {
+    pub mode: EraserMode,
+    pub tolerance: f64,
+    pub contiguous: bool,
+    pub size: f64,
+    pub softness: f64,
+}
+
+impl Default for Eraser {
+    fn default() -> Self {
+        Eraser {
+            mode: EraserMode::Wand,
+            tolerance: 36.,
+            contiguous: true,
+            size: 28.,
+            softness: 18.,
+        }
+    }
+}
+
+/// An Eraser paragraph.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Note {
+    Intro,
+    Hint,
+}
+
+fn eraser_range(range: Range) -> bool {
+    matches!(range, Range::Tolerance | Range::BrushSize | Range::Softness)
+}
+
+/// `RangeSlider` marks.
+fn marks(range: Range) -> &'static [(f64, &'static str)] {
+    match range {
+        Range::Tolerance => &eraser::TOLERANCE_MARKS,
+        Range::BrushSize => &eraser::SIZE_MARKS,
+        Range::Softness => &eraser::SOFTNESS_MARKS,
+        _ => &[],
+    }
 }
 
 /// The custom-color tile's index after the swatches.
 pub const CUSTOM: usize = colors::SWATCHES.len();
-const CHECKS: [Check; 3] = [Check::Stroke, Check::Fill, Check::Shadow];
+const CHECKS: [Check; 4] = [Check::Stroke, Check::Fill, Check::Shadow, Check::Contiguous];
 const FIELDS: [Field; 3] = [Field::Stroke, Field::Fill, Field::Shadow];
-const RANGES: [Range; 4] = [
+const RANGES: [Range; 7] = [
     Range::Width,
     Range::Opacity,
     Range::ShadowOpacity,
     Range::ShadowBlur,
+    Range::Tolerance,
+    Range::BrushSize,
+    Range::Softness,
 ];
+/// `.range-slider.has-marks`: a 2 px gap and the 14 px label row.
+const MARKS_H: f32 = 16.;
+/// `.screenshot-format-buttons button { min-height: 32px }`.
+const MODE_H: f32 = 32.;
 /// `.screenshot-check-row { min-height: 28px }` and its 15 px box.
 const CHECK_H: f32 = 28.;
 const CHECK_BOX: f32 = 15.;
@@ -93,6 +165,7 @@ pub fn all() -> Vec<Prop> {
         list.extend((0..=CUSTOM).map(|i| Prop::Swatch(field, i)));
     }
     list.extend(RANGES.map(Prop::Range));
+    list.extend((0..MODES.len()).map(Prop::Mode));
     list
 }
 
@@ -149,6 +222,7 @@ impl Values {
             Check::Stroke => self.stroke,
             Check::Fill => self.fill.is_some(),
             Check::Shadow => self.shadow,
+            Check::Contiguous => false,
         }
     }
 
@@ -166,6 +240,7 @@ impl Values {
             Range::Opacity => self.opacity,
             Range::ShadowOpacity => self.shadow_opacity,
             Range::ShadowBlur => self.shadow_blur,
+            Range::Tolerance | Range::BrushSize | Range::Softness => 0.,
         }
     }
 }
@@ -194,6 +269,9 @@ pub fn bounds(range: Range) -> (f64, f64) {
         // `DROP_SHADOW_BLUR_MAX` (captures-image), which
         // `resolved_drop_shadow_style` also clamps to.
         Range::ShadowBlur => (0., 100.),
+        Range::Tolerance => eraser::TOLERANCE_RANGE,
+        Range::BrushSize => eraser::SIZE_RANGE,
+        Range::Softness => eraser::SOFTNESS_RANGE,
     }
 }
 
@@ -204,6 +282,9 @@ pub fn range_label(range: Range) -> &'static str {
         Range::Opacity => "Opacity",
         Range::ShadowOpacity => "Shadow opacity",
         Range::ShadowBlur => "Shadow blur",
+        Range::Tolerance => eraser::TOLERANCE_LABEL,
+        Range::BrushSize => eraser::SIZE_LABEL,
+        Range::Softness => eraser::SOFTNESS_LABEL,
     }
 }
 
@@ -212,6 +293,9 @@ pub fn range_text(range: Range, value: f64) -> String {
     match range {
         Range::Width | Range::ShadowBlur => format!("{} px", value.round()),
         Range::Opacity | Range::ShadowOpacity => format!("{}%", value.round()),
+        Range::Tolerance => eraser::tolerance_text(value),
+        Range::BrushSize => eraser::size_text(value),
+        Range::Softness => eraser::softness_text(value),
     }
 }
 
@@ -219,6 +303,9 @@ pub fn range_text(range: Range, value: f64) -> String {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Row {
     Picker,
+    /// The Eraser mode buttons.
+    Modes,
+    Note(Note),
     Check(Check),
     Color(Field),
     Range(Range),
@@ -233,6 +320,7 @@ pub struct Laid {
 /// What the Properties panel edits right now.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Section {
+    Eraser,
     Defaults,
     Selected(String),
 }
@@ -242,9 +330,12 @@ pub enum Section {
 pub const BODY_TOP: f32 = 20.;
 
 impl Editor {
-    /// Shipping's section for the current tool and selection. Text, image,
-    /// crop and Eraser sections are not in this host yet.
+    /// Shipping's section for the current tool and selection. Text, image
+    /// and crop sections are not in this host yet.
     pub fn section(&self) -> Option<Section> {
+        if self.tool == "b" {
+            return Some(Section::Eraser);
+        }
         if let Some(id) = &self.selected {
             let p = self.presented.as_ref()?;
             return p
@@ -260,6 +351,7 @@ impl Editor {
 
     pub fn values(&self) -> Option<Values> {
         match self.section()? {
+            Section::Eraser => None,
             Section::Selected(id) => self.presented.as_ref()?.controls.get(&id).cloned(),
             Section::Defaults => {
                 let d = self.defaults.as_ref()?;
@@ -274,6 +366,16 @@ impl Editor {
 
     /// The rows for the current section, in shipping order.
     fn prop_rows(&self) -> Vec<Row> {
+        if self.section() == Some(Section::Eraser) {
+            let mut rows = vec![Row::Note(Note::Intro), Row::Modes];
+            if self.eraser.mode == EraserMode::Wand {
+                rows.extend([Row::Range(Range::Tolerance), Row::Check(Check::Contiguous)]);
+            } else {
+                rows.extend([Row::Range(Range::BrushSize), Row::Range(Range::Softness)]);
+            }
+            rows.push(Row::Note(Note::Hint));
+            return rows;
+        }
         let (Some(section), Some(v)) = (self.section(), self.values()) else {
             return Vec::new();
         };
@@ -334,6 +436,14 @@ impl Editor {
             let rw = w - indent;
             let h = match row {
                 Row::Picker => 2. * PICKER_H + self.t.n("s-2"),
+                Row::Modes => MODE_H,
+                Row::Note(note) => self
+                    .g
+                    .text(&self.t, Style::Option, &self.note_text(note), rw)
+                    .map_or(16., |t| t.height.ceil()),
+                Row::Range(range) if !marks(range).is_empty() => {
+                    CAPTION_H + self.t.n("s-3") + SLIDER_H + MARKS_H
+                }
                 Row::Check(_) => CHECK_H,
                 Row::Color(_) => CAPTION_H + self.t.n("s-4") + grid_height(rw),
                 Row::Range(_) => CAPTION_H + self.t.n("s-3") + SLIDER_H,
@@ -379,6 +489,12 @@ impl Editor {
                 ))
             }
             Prop::Check(check) => self.laid(Row::Check(check)),
+            Prop::Mode(i) => {
+                let r = self.laid(Row::Modes)?;
+                let gap = self.t.n("s-2");
+                let cell = (r.w - 2. * gap) / 3.;
+                Some(Rect::new(r.x + i as f32 * (cell + gap), r.y, cell, r.h))
+            }
             Prop::Range(range) => self.laid(Row::Range(range)),
             Prop::Swatch(field, i) => {
                 let r = self.laid(Row::Color(field))?;
@@ -398,6 +514,30 @@ impl Editor {
     /// The Shape picker's rect in client DIPs.
     pub fn picker_rect(&self) -> Rect {
         self.row_rect(Row::Picker)
+    }
+
+    /// The Eraser mode group's rect in client DIPs.
+    pub fn modes_rect(&self) -> Rect {
+        self.row_rect(Row::Modes)
+    }
+
+    /// An Eraser paragraph's copy.
+    pub fn note_text(&self, note: Note) -> String {
+        match (note, self.eraser.mode) {
+            (Note::Intro, _) => eraser::INTRO,
+            (Note::Hint, EraserMode::Wand) => eraser::wand_hint(self.eraser.contiguous),
+            (Note::Hint, EraserMode::Brush(BrushMode::Erase)) => eraser::ERASE_HINT,
+            (Note::Hint, EraserMode::Brush(BrushMode::Restore)) => eraser::RESTORE_HINT,
+        }
+        .into()
+    }
+
+    /// Whether a check box is checked.
+    pub fn check_on(&self, check: Check) -> bool {
+        match check {
+            Check::Contiguous => self.eraser.contiguous,
+            check => self.values().is_some_and(|v| v.checked(check)),
+        }
     }
 
     /// A color field's rect in client DIPs.
@@ -469,10 +609,10 @@ impl Editor {
     }
 
     pub fn prop_pressed(&self, prop: Prop) -> Option<bool> {
-        let v = self.values()?;
         Some(match prop {
             Prop::Shape(i) => SHAPE_TOOLS[i].key == self.tool,
-            Prop::Check(check) => v.checked(check),
+            Prop::Check(check) => self.check_on(check),
+            Prop::Mode(i) => self.eraser.mode == MODES[i].0,
             Prop::Swatch(..) | Prop::Range(_) => return None,
         })
     }
@@ -486,6 +626,7 @@ impl Editor {
                 colors::swatch_label(&self.field_label(field), colors::SWATCHES[i])
             }
             Prop::Range(range) => range_label(range).into(),
+            Prop::Mode(i) => MODES[i].1.into(),
         }
     }
 
@@ -519,24 +660,38 @@ impl Editor {
             Range::Width => "Stroke width",
             Range::Opacity | Range::ShadowOpacity => "Opacity",
             Range::ShadowBlur => "Blur",
+            Range::Tolerance => eraser::TOLERANCE,
+            Range::BrushSize => eraser::SIZE,
+            Range::Softness => eraser::SOFTNESS,
         }
     }
 
     /// A slider's shown value: the drag in progress, else the section's.
     pub fn range_value(&self, range: Range) -> f64 {
-        match self.range_drag {
-            Some((r, value)) if r == range => value,
+        match (self.range_drag, range) {
+            (Some((r, value)), _) if r == range => value,
+            (_, Range::Tolerance) => self.eraser.tolerance,
+            (_, Range::BrushSize) => self.eraser.size,
+            (_, Range::Softness) => self.eraser.softness,
             _ => self.values().map_or(0., |v| v.range(range)).round(),
         }
     }
 
     pub fn activate_prop(&mut self, prop: Prop) {
-        let Some(v) = self.values() else {
-            return;
-        };
         match prop {
             Prop::Shape(i) => self.select_tool(SHAPE_TOOLS[i].key),
-            Prop::Check(check) => self.apply(Change::Check(check, !v.checked(check))),
+            Prop::Mode(i) => {
+                if self.eraser.mode != MODES[i].0 {
+                    self.eraser.mode = MODES[i].0;
+                    for j in 0..MODES.len() {
+                        self.events
+                            .push(Event::Toggled(Target::Prop(Prop::Mode(j))));
+                    }
+                    self.props_changed();
+                    self.overlay_changed();
+                }
+            }
+            Prop::Check(check) => self.apply(Change::Check(check, !self.check_on(check))),
             Prop::Swatch(field, CUSTOM) => self.pick_color = Some(field),
             Prop::Swatch(field, i) => {
                 self.apply(Change::Color(field, colors::SWATCHES[i].to_owned()))
@@ -592,6 +747,16 @@ impl Editor {
             return;
         };
         match section {
+            Section::Eraser => match change {
+                Change::Check(Check::Contiguous, on) => self.eraser.contiguous = on,
+                Change::Range(Range::Tolerance, value) => self.eraser.tolerance = value,
+                Change::Range(Range::BrushSize, value) => {
+                    self.eraser.size = value;
+                    self.overlay_changed();
+                }
+                Change::Range(Range::Softness, value) => self.eraser.softness = value,
+                _ => return,
+            },
             Section::Defaults => {
                 let Some(d) = self.defaults.as_mut() else {
                     return;
@@ -611,8 +776,10 @@ impl Editor {
                         s.fill = on.then(|| s.color.clone());
                     }
                     Change::Check(Check::Shadow, on) => s.drop_shadow = Some(on),
+                    Change::Check(Check::Contiguous, _) => {}
                     Change::Range(Range::Width, value) => s.stroke_width = value,
                     Change::Range(Range::Opacity, value) => d.opacity = value,
+                    Change::Range(range, _) if eraser_range(range) => {}
                     Change::Range(range, value) => {
                         s.drop_shadow = Some(true);
                         let mut shadow = s.resolved_drop_shadow_style();
@@ -717,6 +884,12 @@ impl Editor {
             return Ok(());
         };
         for laid in &self.props {
+            if let Row::Note(note) = laid.row {
+                let text = self
+                    .g
+                    .text(t, Style::Option, &self.note_text(note), laid.rect.w)?;
+                gfx::text(dc, &text, laid.rect.x, laid.rect.y, t.color("text-subtle"))?;
+            }
             if let Row::Color(field) = laid.row {
                 let legend = self
                     .g
@@ -741,12 +914,11 @@ impl Editor {
         let c = |name: &str| t.color(name);
         let all = rect(0., 0., w, h);
         let lit = layer == Layer::Lit;
-        let Some(v) = self.values() else {
-            return Ok(());
-        };
         if layer == Layer::Ring {
             return match prop {
-                Prop::Shape(_) => gfx::ring(dc, all, t.n("r-sm"), 2., 4., c("theme-accent")),
+                Prop::Shape(_) | Prop::Mode(_) => {
+                    gfx::ring(dc, all, t.n("r-sm"), 2., 4., c("theme-accent"))
+                }
                 Prop::Check(_) => {
                     let y = (h - CHECK_BOX) / 2.;
                     let r = rect(0., y, CHECK_BOX, y + CHECK_BOX);
@@ -764,6 +936,33 @@ impl Editor {
             };
         }
         match prop {
+            Prop::Mode(i) => {
+                let active = self.eraser.mode == MODES[i].0;
+                let radius = t.n("r-sm");
+                let ink = if active {
+                    if lit {
+                        return Ok(());
+                    }
+                    gfx::fill_round(dc, all, radius, c("theme-accent"))?;
+                    c("theme-accent-ink")
+                } else if lit {
+                    gfx::fill_round(dc, all, radius, c("control-hover"))?;
+                    gfx::border(dc, all, radius, 1., c("border-subtle"))?;
+                    c("text")
+                } else {
+                    gfx::fill_round(dc, all, radius, c("control"))?;
+                    gfx::border(dc, all, radius, 1., c("border-subtle"))?;
+                    c("text-muted")
+                };
+                let label = g.text(t, Style::Strong, MODES[i].1, 1e4)?;
+                gfx::text(
+                    dc,
+                    &label,
+                    ((w - label.width) / 2.).round(),
+                    ((h - label.height) / 2.).round(),
+                    ink,
+                )?;
+            }
             Prop::Shape(i) => {
                 let active = SHAPE_TOOLS[i].key == self.tool;
                 let radius = t.n("r-sm");
@@ -799,7 +998,7 @@ impl Editor {
                 let y = (h - CHECK_BOX) / 2.;
                 let b = rect(0., y, CHECK_BOX, y + CHECK_BOX);
                 let radius = t.n("r-xs");
-                if v.checked(check) {
+                if self.check_on(check) {
                     gfx::fill_round(dc, b, radius, c("theme-accent"))?;
                     // The rotated L of `::before`: 7.5 × 4 at 1.75 px.
                     let (cx, cy) = (CHECK_BOX / 2., y + CHECK_BOX / 2. - 0.5);
@@ -842,6 +1041,9 @@ impl Editor {
                     return Ok(());
                 }
                 let r = TILE / 2.;
+                let Some(v) = self.values() else {
+                    return Ok(());
+                };
                 if colors::swatch_active(v.color(field), colors::SWATCHES[i]) {
                     gfx::fill_round(
                         dc,
@@ -895,6 +1097,34 @@ impl Editor {
                         c("theme-accent"),
                     )?;
                 }
+                // `.range-slider-ticks` and `.range-slider-labels`, inset
+                // half a thumb at each end.
+                let span = (w - THUMB).max(1.);
+                let count = marks(range).len();
+                for (k, (at, label)) in marks(range).iter().enumerate() {
+                    let x = THUMB / 2. + span * ((at - min) / (max - min).max(1.)) as f32;
+                    gfx::fill_round(
+                        dc,
+                        rect(x - 1., mid - 1., x + 1., mid + 1.),
+                        1.,
+                        c("border-strong"),
+                    )?;
+                    let text = g.text(t, Style::Tiny, label, 1e4)?;
+                    let lx = if k == 0 {
+                        x
+                    } else if k + 1 == count {
+                        x - text.width
+                    } else {
+                        x - text.width / 2.
+                    };
+                    gfx::text(
+                        dc,
+                        &text,
+                        lx.round(), // `line-height: 1` on a 10 px label.
+                        top + SLIDER_H + 1.,
+                        c("text-faint"),
+                    )?;
+                }
                 let (x, y) = self.thumb_at(range, w);
                 let thumb = rect(x, y, x + THUMB, y + THUMB);
                 gfx::shadow(dc, thumb, THUMB / 2., t.shadow("shadow-sm"))?;
@@ -919,6 +1149,8 @@ impl Editor {
         for laid in &self.props {
             match laid.row {
                 Row::Picker => list.extend((0..SHAPE_TOOLS.len()).map(Prop::Shape)),
+                Row::Modes => list.extend((0..MODES.len()).map(Prop::Mode)),
+                Row::Note(_) => {}
                 Row::Check(check) => list.push(Prop::Check(check)),
                 Row::Color(field) => list.extend((0..=CUSTOM).map(|i| Prop::Swatch(field, i))),
                 Row::Range(range) => list.push(Prop::Range(range)),
@@ -933,6 +1165,7 @@ pub fn check_label(check: Check) -> &'static str {
         Check::Stroke => "Stroke",
         Check::Fill => "Filled shape",
         Check::Shadow => "Drop shadow",
+        Check::Contiguous => eraser::CONTIGUOUS,
     }
 }
 
@@ -999,6 +1232,7 @@ fn selected_edit(change: &Change, values: Option<&Values>) -> (bool, &'static st
                 }),
             )
         }
+        Change::Check(Check::Contiguous, _) => unreachable!("Eraser settings never edit a layer"),
         Change::Check(Check::Shadow, on) => (
             false,
             "shadow",
@@ -1026,7 +1260,7 @@ fn selected_edit(change: &Change, values: Option<&Values>) -> (bool, &'static st
                 ..Default::default()
             }),
         ),
-        Change::Range(Range::ShadowBlur, value) => (
+        Change::Range(_, value) => (
             true,
             "shadow-blur",
             shadow(DropShadowStylePatch {
@@ -1059,6 +1293,8 @@ fn preview(v: &mut Values, change: &Change) {
             v.shadow = true;
             v.shadow_blur = value;
         }
+        Change::Check(Check::Contiguous, _)
+        | Change::Range(Range::Tolerance | Range::BrushSize | Range::Softness, _) => {}
     }
 }
 
