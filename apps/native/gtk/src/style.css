@@ -1389,3 +1389,25 @@ popover.captures-menu .text-style-preview.style-rounded-box {
 .captures .drop-shadow-settings {
   margin-left: 23px;
 }
+
+/* `.screenshot-shape-picker` in the drawing defaults. */
+.captures button.shape-pick {
+  all: unset;
+  min-height: 38px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm);
+  color: var(--text-muted);
+  background: var(--control);
+}
+.captures button.shape-pick:hover {
+  color: var(--text);
+  background: var(--control-hover);
+}
+.captures button.shape-pick.active {
+  border-color: var(--theme-accent);
+  color: var(--theme-accent-ink);
+  background: var(--theme-accent);
+}
+.captures button.shape-pick:focus-visible {
+  box-shadow: var(--focus-ring-tight);
+}

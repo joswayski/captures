@@ -375,9 +375,14 @@ opening GTK's color chooser, `NumberInput` is a GtkSpinButton with token
 steppers, selects are combo-box triggers over radio-item popovers. Each
 change goes to the worker as `Layer` or `EditText`; sliders, typing and
 number fields use `Live` so a drag is one undo step, and while the worker is
-busy a newer value for the same field replaces the queued one. Drawing
-defaults for unselected tools, Add images, canvas resize, export settings
-and layer reorder/rename are not in the GTK host yet. Release build
+busy a newer value for the same field replaces the queued one. With nothing
+selected, drawing tools show shipping's defaults (Shapes picker, Stroke,
+color, Size, Opacity, Filled shape and fill, Drop shadow) and Text shows New
+text style, New text size and Drop shadow; new shapes, paths and labels use
+them. Like shipping, they stay local to the window and out of history.
+Escape now also clears the Layers highlight. Add images, canvas resize,
+export settings and layer reorder/rename are not in the GTK host yet.
+Release build
 under Xvfb with Cairo on a 640×360 fixture: about 110 MB RSS and near-zero
 idle CPU; the egui workbench's own editor scene measures about 173 MB the
 same way, on its built-in document rather than the same image. CI renders
@@ -388,7 +393,8 @@ Text tool's field and checks Escape commits the layer, then reads the
 Eraser's tolerance slider and toggles Contiguous only over AT-SPI and checks
 a Wand click is exactly one undo step. It also turns on a rectangle's drop
 shadow, drags its opacity, picks a fill swatch and checks one Undo reverts
-the whole drag, and toggles a label's Bold and alignment. X11 (Xvfb) only; Wayland, Orca
+the whole drag, and toggles a label's Bold and alignment; before drawing it
+picks a default fill swatch and checks the new rectangle uses it. X11 (Xvfb) only; Wayland, Orca
 and real hardware remain open. Windows, macOS: unchanged.
 
 The fourth GTK4 slice is the floating previews: History's Restore (or

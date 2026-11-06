@@ -684,6 +684,7 @@ impl ImageSection {
 /// The selected-layer sections, one visible at a time.
 pub(super) struct Inspector {
     pub(super) sink: Rc<Sink>,
+    pub(super) defaults: Rc<DefaultsSection>,
     shape: ShapeSection,
     text: TextSection,
     image: ImageSection,
@@ -694,16 +695,19 @@ impl Inspector {
     pub(super) fn new(tokens: &Rc<Tokens>, content: &gtk::Box) -> Self {
         let sink = Rc::new(Sink::default());
         let inspector = Inspector {
+            defaults: DefaultsSection::new(tokens),
             shape: ShapeSection::new(tokens, &sink),
             text: TextSection::new(tokens, &sink),
             image: ImageSection::new(&sink),
             sink,
             shown: RefCell::default(),
         };
+        content.append(&inspector.defaults.root);
         content.append(&inspector.shape.root);
         content.append(&inspector.text.root);
         content.append(&inspector.image.root);
         inspector.show(None, &BTreeMap::new());
+        inspector.defaults.show(None);
         inspector
     }
 
@@ -737,5 +741,316 @@ impl Inspector {
             None => {}
         }
         self.sink.syncing.set(false);
+    }
+}
+
+/// Shipping's drawing defaults (`defaultStyle`, `defaultOpacity`,
+/// `defaultFontSize`, `defaultTextStyle`): window-local, never in history.
+pub(super) struct Defaults {
+    pub(super) style: RefCell<ElementStyle>,
+    pub(super) opacity: Cell<f64>,
+    pub(super) text_size: Cell<f64>,
+    pub(super) text_preset: RefCell<String>,
+}
+
+fn closed_tool(tool: &str) -> bool {
+    matches!(
+        tool,
+        "rectangle" | "ellipse" | "triangle" | "diamond" | "star"
+    )
+}
+
+/// Apply a shadow change to a local style, as the session does for layers:
+/// any style value turns the shadow on over the resolved defaults.
+fn apply_shadow(style: &mut ElementStyle, change: ShadowEdit) {
+    match change {
+        ShadowEdit::Enabled(on) => style.drop_shadow = Some(on),
+        ShadowEdit::Style { patch, .. } => {
+            let mut shadow = style.resolved_drop_shadow_style();
+            if let Some(color) = patch.color {
+                shadow.color = color;
+            }
+            if let Some(opacity) = patch.opacity {
+                shadow.opacity = opacity;
+            }
+            if let Some(blur) = patch.blur {
+                shadow.blur = blur;
+            }
+            if let Some(x) = patch.offset_x {
+                shadow.offset_x = x;
+            }
+            if let Some(y) = patch.offset_y {
+                shadow.offset_y = y;
+            }
+            style.drop_shadow = Some(true);
+            style.drop_shadow_style = Some(shadow);
+        }
+    }
+}
+
+type PickTool = Box<dyn Fn(&str)>;
+
+/// The section for a drawing or Text tool with nothing selected.
+pub(super) struct DefaultsSection {
+    pub(super) root: gtk::Box,
+    pub(super) values: Rc<Defaults>,
+    tool: Rc<RefCell<String>>,
+    picker: gtk::Box,
+    shapes: Vec<(&'static str, gtk::Button)>,
+    stroke_check: gtk::ToggleButton,
+    stroke: gtk::Box,
+    color: Rc<ColorField>,
+    width: RangeSlider,
+    opacity: RangeSlider,
+    fill_check: gtk::ToggleButton,
+    fill: Rc<ColorField>,
+    text_style: Rc<Choice>,
+    text_size: NumberField,
+    text_box: gtk::Box,
+    shadow: DropShadow,
+    syncing: Rc<Cell<bool>>,
+    pick: Rc<RefCell<Option<PickTool>>>,
+}
+
+impl DefaultsSection {
+    pub(super) fn new(tokens: &Rc<Tokens>) -> Rc<Self> {
+        let values = Rc::new(Defaults {
+            style: RefCell::new(ElementStyle::default()),
+            opacity: Cell::new(100.),
+            text_size: Cell::new(48.),
+            text_preset: RefCell::new("rounded-box".into()),
+        });
+        let syncing = Rc::new(Cell::new(false));
+        let tool = Rc::new(RefCell::new(String::new()));
+        let pick: Rc<RefCell<Option<PickTool>>> = Rc::default();
+        let section: Rc<RefCell<Option<std::rc::Weak<DefaultsSection>>>> = Rc::default();
+        // Every change updates the defaults, then re-syncs visibility.
+        let update = {
+            let values = values.clone();
+            let syncing = syncing.clone();
+            let section = section.clone();
+            Rc::new(move |change: &dyn Fn(&Defaults)| {
+                if syncing.get() {
+                    return;
+                }
+                change(&values);
+                if let Some(section) = section.borrow().as_ref().and_then(|w| w.upgrade()) {
+                    section.sync();
+                }
+            })
+        };
+        let root = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        root.add_css_class("property-section");
+
+        let picker = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        picker.set_homogeneous(true);
+        picker.set_accessible_role(gtk::AccessibleRole::Group);
+        picker.update_property(&[gtk::accessible::Property::Label("Shape")]);
+        let shapes: Vec<_> = captures_app::editor_chrome::SHAPE_TOOLS
+            .iter()
+            .map(|item| {
+                let button = gtk::Button::new();
+                button.add_css_class("shape-pick");
+                button.set_child(Some(&Icon::new(item.key, 18).with_stroke(1.8)));
+                button.set_tooltip_text(Some(&item.name()));
+                button.update_property(&[gtk::accessible::Property::Label(item.label)]);
+                let pick = pick.clone();
+                let key = item.key;
+                button.connect_clicked(move |_| {
+                    if let Some(pick) = pick.borrow().as_ref() {
+                        pick(key);
+                    }
+                });
+                picker.append(&button);
+                (item.key, button)
+            })
+            .collect();
+        root.append(&picker);
+
+        let stroke_check = check_row("Stroke", false);
+        {
+            let update = update.clone();
+            stroke_check.connect_toggled(move |check| {
+                let on = check.is_active();
+                update(&|d| d.style.borrow_mut().stroke_enabled = Some(on));
+            });
+        }
+        root.append(&stroke_check);
+        let stroke = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        let color = {
+            let update = update.clone();
+            ColorField::new(tokens, colors::COLOR, move |color| {
+                update(&|d| d.style.borrow_mut().color = color.clone());
+            })
+        };
+        stroke.append(&color.root);
+        let width = RangeSlider::new("Size", "Stroke width", (2., 40.), 8., &[], |v| {
+            format!("{} px", v.round())
+        });
+        {
+            let update = update.clone();
+            width.scale.connect_value_changed(move |scale| {
+                let value = scale.value().round();
+                update(&|d| d.style.borrow_mut().stroke_width = value);
+            });
+        }
+        stroke.append(&width.root);
+        root.append(&stroke);
+        let opacity = RangeSlider::new("Opacity", "Opacity", (0., 100.), 100., &[], |v| {
+            format!("{}%", v.round())
+        });
+        {
+            let update = update.clone();
+            opacity.scale.connect_value_changed(move |scale| {
+                let value = scale.value().round();
+                update(&|d| d.opacity.set(value));
+            });
+        }
+        root.append(&opacity.root);
+        let fill_check = check_row("Filled shape", true);
+        {
+            let update = update.clone();
+            fill_check.connect_toggled(move |check| {
+                let on = check.is_active();
+                update(&|d| {
+                    let mut style = d.style.borrow_mut();
+                    style.fill = on.then(|| style.color.clone());
+                });
+            });
+        }
+        root.append(&fill_check);
+        let fill = {
+            let update = update.clone();
+            ColorField::new(tokens, colors::FILL_COLOR, move |color| {
+                update(&|d| d.style.borrow_mut().fill = Some(color.clone()));
+            })
+        };
+        root.append(&fill.root);
+
+        let text_box = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        let text_style = {
+            let update = update.clone();
+            Choice::new(
+                Some(&text("New text style", "property-caption")),
+                "New text style",
+                true,
+                move |id| update(&|d| *d.text_preset.borrow_mut() = id.clone()),
+            )
+        };
+        text_style.set_options(
+            TEXT_STYLE_PRESETS
+                .iter()
+                .map(|p| (p.id.to_owned(), p.label.to_owned()))
+                .collect(),
+        );
+        text_box.append(&text_style.root);
+        let text_size = {
+            let update = update.clone();
+            NumberField::new("New text size", (8., 512.), move |size| {
+                update(&|d| d.text_size.set(size.round()));
+            })
+        };
+        text_box.append(&field("New text size", &text_size.root));
+        root.append(&text_box);
+
+        let shadow = {
+            let update = update.clone();
+            DropShadow::new(tokens, move |change| {
+                let change = RefCell::new(Some(change));
+                update(&|d| {
+                    if let Some(change) = change.borrow_mut().take() {
+                        apply_shadow(&mut d.style.borrow_mut(), change);
+                    }
+                });
+            })
+        };
+        root.append(&shadow.root);
+
+        let defaults = Rc::new(DefaultsSection {
+            root,
+            values,
+            tool,
+            picker,
+            shapes,
+            stroke_check,
+            stroke,
+            color,
+            width,
+            opacity,
+            fill_check,
+            fill,
+            text_style,
+            text_size,
+            text_box,
+            shadow,
+            syncing,
+            pick,
+        });
+        *section.borrow_mut() = Some(Rc::downgrade(&defaults));
+        defaults
+    }
+
+    /// The shape picker selects a tool through the editor.
+    pub(super) fn connect_pick(&self, pick: impl Fn(&str) + 'static) {
+        *self.pick.borrow_mut() = Some(Box::new(pick));
+    }
+
+    /// Show the defaults for `tool` (`None` hides the section).
+    pub(super) fn show(&self, tool: Option<&str>) {
+        self.root.set_visible(tool.is_some());
+        if let Some(tool) = tool {
+            *self.tool.borrow_mut() = tool.to_owned();
+            self.sync();
+        }
+    }
+
+    fn sync(&self) {
+        let tool = self.tool.borrow().clone();
+        let text_tool = tool == "t";
+        let closed = closed_tool(&tool);
+        let grouped = captures_app::editor_chrome::SHAPE_TOOLS
+            .iter()
+            .any(|item| item.key == tool);
+        let values = &self.values;
+        let style = values.style.borrow().clone();
+        self.syncing.set(true);
+        self.picker.set_visible(grouped);
+        for (key, button) in &self.shapes {
+            pressed(button, *key == tool);
+        }
+        self.stroke_check.set_visible(closed);
+        self.stroke_check.set_active(style.has_stroke());
+        self.stroke
+            .set_visible(!text_tool && (!closed || style.has_stroke()));
+        self.color.set_label(if closed {
+            colors::STROKE_COLOR
+        } else {
+            colors::COLOR
+        });
+        self.color.set(&style.color);
+        self.width.set(style.stroke_width, false);
+        self.opacity.root.set_visible(!text_tool);
+        self.opacity.set(values.opacity.get(), false);
+        self.fill_check.set_visible(closed);
+        self.fill_check.set_active(style.fill.is_some());
+        self.fill.root.set_visible(closed && style.fill.is_some());
+        if let Some(fill) = &style.fill {
+            self.fill.set(fill);
+        }
+        self.text_box.set_visible(text_tool);
+        self.text_style.set(&values.text_preset.borrow());
+        self.text_size.set(values.text_size.get(), false);
+        // Text's default shadow scales with the new text size.
+        let shadow_style = if text_tool {
+            editor_text::new_text_shadow_style(&style, values.text_size.get())
+        } else {
+            style
+        };
+        self.shadow.sync(
+            shadow_style.has_drop_shadow(),
+            &shadow_style.resolved_drop_shadow_style(),
+            false,
+        );
+        self.syncing.set(false);
     }
 }

@@ -188,6 +188,11 @@ def editor(binary, scratch):
         press(wait(lambda: find(app, "push button", "Rectangle (R)"), "the Shapes flyout")[0])
         # The closing flyout keeps its input grab until it is gone.
         wait(lambda: not find(app, "push button", "Rectangle (R)"), "the flyout to close")
+        # Drawing defaults: with nothing selected the Rectangle tool shows its
+        # defaults; a green default fill must reach the new layer.
+        green = wait(lambda: find(app, "push button", "Fill color: #36c96b"), "the shape defaults")[0]
+        press(green)
+        wait(lambda: has_state(green, Atspi.StateType.PRESSED), "the green default fill")
         # Drag across the middle of the canvas with the real pointer.
         window = subprocess.run(["xdotool", "search", "--sync", "--name",
                                  "Captures Screenshot Editor"],
@@ -212,6 +217,10 @@ def editor(binary, scratch):
         layer = lambda: [n for n, (role, name) in nodes(app)
                          if role == "list item" and name.startswith("Rectangle")]
         wait(layer, "a rectangle layer from the drag")
+        # The new layer is selected, so its own Fill color shows the default.
+        wait(lambda: any(has_state(n, Atspi.StateType.PRESSED)
+                         for n in find(app, "push button", "Fill color: #36c96b")),
+             "the rectangle to use the default fill")
         press(find(app, "push button", "Undo")[0])
         wait(lambda: not layer(), "Undo to remove the rectangle")
         press(find(app, "push button", "Redo")[0])

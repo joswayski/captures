@@ -313,6 +313,9 @@ impl Properties {
         // Shipping shows the selected layer's sections under any tool; only
         // the heading prefers the tool name outside Select.
         self.inspector.show(selection, fonts);
+        // Shipping: `!selected && tool !== crop/select/remove-bg`.
+        let drawing = selection.is_none() && !matches!(tool, "v" | "c" | "b");
+        self.inspector.defaults.show(drawing.then_some(tool));
         let title = match selection.map(captures_app::editor_chrome::element_label) {
             Some(label) if tool == "v" => Some(label),
             _ if tool == "v" => None,

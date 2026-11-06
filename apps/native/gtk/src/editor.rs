@@ -218,7 +218,6 @@ struct State {
     text_overlay: gtk::Overlay,
     text_field: text::TextField,
     inline: RefCell<Option<text::Inline>>,
-    text_size: Cell<f64>,
     input_counter: Cell<u64>,
     properties: properties::Properties,
     /// The pointer over the canvas, for the brush ring and wheel zoom.
@@ -559,7 +558,6 @@ pub fn build(
         text_overlay,
         text_field,
         inline: RefCell::default(),
-        text_size: Cell::new(24.),
         input_counter: Cell::default(),
         last_press: Cell::default(),
         properties,
@@ -1093,7 +1091,9 @@ impl State {
                 w.redo.set_sensitive(presented.can_redo);
                 w.layer_count.set_label(&presented.layers.len().to_string());
                 if first {
-                    self.text_size.set(presented.initial_text_size);
+                    let defaults = &self.properties.inspector.defaults.values;
+                    defaults.text_size.set(presented.initial_text_size.round());
+                    *defaults.style.borrow_mut() = presented.style.clone();
                     w.banner.set_visible(presented.has_draft);
                     *self.target.borrow_mut() = Some(ExportTarget::new(
                         presented.source.clone(),
@@ -1447,6 +1447,12 @@ impl State {
         });
         self.canvas.add_controller(motion);
         let weak = Rc::downgrade(self);
+        self.properties.inspector.defaults.connect_pick(move |key| {
+            if let Some(state) = weak.upgrade() {
+                state.select_tool(key);
+            }
+        });
+        let weak = Rc::downgrade(self);
         self.properties.inspector.sink.connect(move |edit| {
             if let Some(state) = weak.upgrade() {
                 state.property_edit(edit);
@@ -1529,6 +1535,8 @@ impl State {
             (_, "Escape") => {
                 if self.gesture.borrow_mut().take().is_none() {
                     self.selected.borrow_mut().take();
+                    // Clear the Layers highlight and show the tool's defaults.
+                    self.rebuild_selection();
                 }
                 self.canvas.queue_draw();
             }
@@ -1696,12 +1704,9 @@ impl State {
         };
         let scale = self.zoom_percent().unwrap_or(100.) / 100.;
         let moved = |a: Point, b: Point| (b.x - a.x).hypot(b.y - a.y) * scale >= 3.;
-        let style = self
-            .presented
-            .borrow()
-            .as_ref()
-            .map(|p| p.style.clone())
-            .unwrap_or_default();
+        let defaults = &self.properties.inspector.defaults.values;
+        let style = defaults.style.borrow().clone();
+        let opacity = defaults.opacity.get();
         let request = match gesture {
             Gesture::Pan { .. } => None,
             Gesture::Move { id, start, end } if moved(start, end) => Some(Request::Layer {
@@ -1716,7 +1721,7 @@ impl State {
                 create: FreehandPathCreate {
                     points,
                     style,
-                    opacity: 100.,
+                    opacity,
                 },
             }),
             Gesture::Freehand(_) => None,
@@ -1747,7 +1752,7 @@ impl State {
                             start,
                             end,
                             style,
-                            opacity: 100.,
+                            opacity,
                         },
                     })
                 } else {
@@ -1757,7 +1762,7 @@ impl State {
                             start,
                             end,
                             style,
-                            opacity: 100.,
+                            opacity,
                         },
                     })
                 }

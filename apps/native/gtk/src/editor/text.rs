@@ -16,9 +16,6 @@ use gtk::{gdk, glib};
 
 use super::{Job, State};
 
-/// The named treatment new labels start with, as shipping.
-const NEW_TEXT_PRESET: &str = "rounded-box";
-
 /// One inline text transaction.
 pub(super) struct Inline {
     id: String,
@@ -141,19 +138,23 @@ impl State {
             });
         let target = match hit {
             Some(id) => TextInputTarget::Existing { id },
-            None => TextInputTarget::New {
-                create: TextCreate {
-                    point,
-                    text: String::new(),
-                    font_size: self.text_size.get(),
-                    font_family: "sans".into(),
-                    // Shipping places new text in the drawing color.
-                    color: presented.style.color.clone(),
-                    style_preset: Some(NEW_TEXT_PRESET.into()),
-                    drop_shadow: presented.style.drop_shadow,
-                    drop_shadow_style: presented.style.drop_shadow_style.clone(),
-                },
-            },
+            None => {
+                let defaults = &self.properties.inspector.defaults.values;
+                let style = defaults.style.borrow();
+                TextInputTarget::New {
+                    create: TextCreate {
+                        point,
+                        text: String::new(),
+                        font_size: defaults.text_size.get(),
+                        font_family: "sans".into(),
+                        // Shipping places new text in the drawing color.
+                        color: style.color.clone(),
+                        style_preset: Some(defaults.text_preset.borrow().clone()),
+                        drop_shadow: style.drop_shadow,
+                        drop_shadow_style: style.drop_shadow_style.clone(),
+                    },
+                }
+            }
         };
         drop(guard);
         self.start_text(target);
