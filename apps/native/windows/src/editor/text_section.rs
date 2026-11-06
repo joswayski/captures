@@ -74,6 +74,9 @@ impl Editor {
         match num {
             Num::TextSize => self.selected_text().map_or(0., |t| t.font_size),
             Num::NewTextSize => self.new_text_size(),
+            Num::CanvasWidth | Num::CanvasHeight => self
+                .document_size()
+                .map_or(0., |(w, h)| if num == Num::CanvasWidth { w } else { h }),
             num => self.geometry_value(num),
         }
     }
@@ -85,6 +88,7 @@ impl Editor {
                     self.apply_text(TextChange::Size(value));
                 }
             }
+            Num::CanvasWidth | Num::CanvasHeight => self.resize_canvas(num, value),
             num => self.set_geometry(num, value),
         }
     }

@@ -16,7 +16,7 @@ use captures_app::editor::{
     AnnotationStylePatch, DropShadowStyle, DropShadowStylePatch, ElementStyle, LayerEdit,
     OptionalNullable, TextElement,
 };
-use captures_app::editor_chrome::{SHAPE_TOOLS, colors, eraser, text_format};
+use captures_app::editor_chrome::{SHAPE_TOOLS, colors, eraser, header, text_format};
 use captures_app::editor_image_background::BrushMode;
 use captures_app::editor_layers::geometry;
 use captures_app::editor_session::{AnnotationControls, Request, TextPatch};
@@ -75,6 +75,9 @@ pub enum Num {
     /// The staged crop's read-only Width and Height (plain inputs).
     CropWidth,
     CropHeight,
+    /// The header's compact Canvas W and H (`.screenshot-canvas-dim`).
+    CanvasWidth,
+    CanvasHeight,
 }
 
 impl Num {
@@ -96,6 +99,7 @@ impl Num {
             Num::LayerWidth | Num::LayerHeight => (1., geometry::MAX_SIZE),
             Num::LayerX | Num::LayerY => (f64::NEG_INFINITY, f64::INFINITY),
             Num::CropWidth | Num::CropHeight => (0., f64::INFINITY),
+            Num::CanvasWidth | Num::CanvasHeight => (1., geometry::MAX_SIZE),
         }
     }
 
@@ -108,6 +112,8 @@ impl Num {
             Num::LayerHeight | Num::CropHeight => geometry::HEIGHT,
             Num::LayerX => "X",
             Num::LayerY => "Y",
+            Num::CanvasWidth => "W",
+            Num::CanvasHeight => "H",
         }
     }
 
@@ -121,6 +127,8 @@ impl Num {
             Num::LayerY => geometry::Y_LABEL,
             Num::CropWidth => "Crop width",
             Num::CropHeight => "Crop height",
+            Num::CanvasWidth => header::CANVAS_WIDTH,
+            Num::CanvasHeight => header::CANVAS_HEIGHT,
         })
     }
 
@@ -139,6 +147,17 @@ impl Num {
             self,
             Num::LayerWidth | Num::LayerHeight | Num::LayerX | Num::LayerY
         )
+    }
+
+    /// The header's Canvas W and H: compact fields that only commit once
+    /// (`onCommit`), outside Tool properties.
+    pub fn is_canvas(self) -> bool {
+        matches!(self, Num::CanvasWidth | Num::CanvasHeight)
+    }
+
+    /// `.number-input-steppers`, 22 px when compact.
+    pub fn steppers_w(self) -> f32 {
+        if self.is_canvas() { 22. } else { 26. }
     }
 
     /// `.number-input` is 34 px with its border; a plain input 32.
@@ -759,6 +778,21 @@ impl Editor {
     /// A control's rect, body-relative.
     pub(super) fn prop_rect(&self, prop: Prop) -> Option<Rect> {
         match prop {
+            // In the header, header-relative.
+            Prop::Number(num) if num.is_canvas() => {
+                self.presented.as_ref()?;
+                let r = if num == Num::CanvasWidth {
+                    self.l.width_box
+                } else {
+                    self.l.height_box
+                };
+                Some(Rect::new(
+                    r.x - self.l.header.x,
+                    r.y - self.l.header.y,
+                    r.w,
+                    r.h,
+                ))
+            }
             Prop::Shape(i) => {
                 let r = self.laid(Row::Picker)?;
                 let gap = self.t.n("s-2");
@@ -834,12 +868,13 @@ impl Editor {
                     return None;
                 }
                 let field = self.prop_rect(Prop::Number(num))?;
-                let x = field.w - 1. - super::fields::STEPPERS_W;
+                let sw = num.steppers_w();
+                let x = field.w - 1. - sw;
                 let mid = (field.h / 2.).round();
                 Some(if up {
-                    Rect::new(x, 1., super::fields::STEPPERS_W, mid - 1.)
+                    Rect::new(x, 1., sw, mid - 1.)
                 } else {
-                    Rect::new(x, mid + 1., super::fields::STEPPERS_W, field.h - mid - 2.)
+                    Rect::new(x, mid + 1., sw, field.h - mid - 2.)
                 })
             }
             Prop::Format(i) => {
@@ -1034,6 +1069,9 @@ impl Editor {
 
     /// Scroll a focused control into the visible band.
     pub(super) fn reveal_prop(&mut self, prop: Prop) {
+        if matches!(prop, Prop::Number(num) | Prop::Step(num, _) if num.is_canvas()) {
+            return;
+        }
         let Some(r) = self.prop_rect(prop) else {
             return;
         };
@@ -1569,6 +1607,14 @@ impl Editor {
                 // Inputs and the select show `--focus-ring-tight` with their
                 // accent border.
                 Prop::CropAction(_) => gfx::ring(dc, all, t.n("r-md"), 2., 4., c("theme-accent")),
+                Prop::Number(num) if num.is_canvas() => gfx::ring(
+                    dc,
+                    all,
+                    t.n("r-sm"),
+                    0.,
+                    2.,
+                    t.color_alpha("theme-accent", 0.55),
+                ),
                 Prop::Font | Prop::Aspect | Prop::Number(_) | Prop::Textarea => gfx::ring(
                     dc,
                     all,

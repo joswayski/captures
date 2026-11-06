@@ -21,8 +21,6 @@ use crate::gfx::{self, Style, rect};
 use crate::scene::Rect;
 use crate::textfield::{self, Key};
 
-/// `.number-input-steppers { width: 26px }`.
-pub const STEPPERS_W: f32 = 26.;
 /// `textarea { min-height: 82px }`.
 pub const TEXTAREA_H: f32 = 82.;
 
@@ -161,20 +159,36 @@ impl Editor {
             let text = String::from_utf16_lossy(edit.field.units());
             self.commit_number(num, &text);
         }
-        self.set_visible(self.field_caret, false);
+        self.hide_field_carets();
         self.prop_dirty(edit.prop);
     }
 
     /// Enter or blur: a finite value clamps and applies; anything else
     /// shows the current value again.
-    fn commit_number(&mut self, num: Num, text: &str) {
+    ///
+    /// Returns the value the field shows afterwards. Canvas W and H commit
+    /// through the session (`commitCanvasSize`, rounded), so the shown value
+    /// is the committed one before the reply arrives.
+    fn commit_number(&mut self, num: Num, text: &str) -> String {
         let parsed = text.trim().parse::<f64>().ok().filter(|v| v.is_finite());
-        if let Some(value) = parsed {
-            let (min, max) = num.bounds();
-            self.set_number(num, value.clamp(min, max));
+        let (min, max) = num.bounds();
+        let committed = parsed.map(|value| {
+            let value = if num.is_canvas() {
+                value.round()
+            } else {
+                value
+            };
+            value.clamp(min, max)
+        });
+        if let Some(value) = committed {
+            self.set_number(num, value);
         }
         self.own_source(Prop::Number(num));
         self.prop_dirty(Prop::Number(num));
+        match committed {
+            Some(value) if num.is_canvas() => js_number(value),
+            _ => js_number(self.number_value(num)),
+        }
     }
 
     /// The field's text box (content area) relative to its control.
@@ -184,11 +198,22 @@ impl Editor {
         match prop {
             // `padding: var(--s-3) var(--s-4)` inside the 1 px border.
             Prop::Textarea => Rect::new(1. + s4, 1. + s3, r.w - 2. - 2. * s4, r.h - 2. - 2. * s3),
+            // `.is-compact input { padding: var(--s-1) var(--s-3) }`, which
+            // comes after `.has-steppers`' padding-right.
+            Prop::Number(num) if num.is_canvas() => {
+                let s3 = self.t.n("s-3");
+                Rect::new(
+                    1. + s3,
+                    1.,
+                    (r.w - 2. - 2. * s3 - num.steppers_w()).max(1.),
+                    r.h - 2.,
+                )
+            }
             // `.has-steppers input { padding-right: var(--s-2) }`.
             Prop::Number(num) if self.num_steppers(num) => Rect::new(
                 1. + s4,
                 1.,
-                (r.w - 2. - s4 - self.t.n("s-2") - STEPPERS_W).max(1.),
+                (r.w - 2. - s4 - self.t.n("s-2") - num.steppers_w()).max(1.),
                 r.h - 2.,
             ),
             _ => Rect::new(1. + s4, 1., (r.w - 2. - 2. * s4).max(1.), r.h - 2.),
@@ -284,16 +309,53 @@ impl Editor {
         }
     }
 
-    /// The caret visual at the caret, in body coordinates; hidden over a
-    /// selection.
+    /// The focused field's caret visual: Canvas W and H have theirs in the
+    /// header, the rest in the Properties body.
+    pub(super) fn field_caret_node(&self) -> usize {
+        match self.field.as_ref().map(|e| e.prop) {
+            Some(Prop::Number(num)) if num.is_canvas() => self.header_caret,
+            _ => self.field_caret,
+        }
+    }
+
+    pub(super) fn hide_field_carets(&mut self) {
+        self.set_visible(self.field_caret, false);
+        self.set_visible(self.header_caret, false);
+    }
+
+    /// `.is-compact input { text-align: center }`: the text's x offset in
+    /// its box while it fits.
+    fn field_shift(&self, prop: Prop, width: f32) -> f32 {
+        match prop {
+            Prop::Number(num) if num.is_canvas() => ((self.field_box(prop).w - width) / 2.).max(0.),
+            _ => 0.,
+        }
+    }
+
+    /// The focused field's laid-out width.
+    fn field_width(&self) -> f32 {
+        self.field
+            .as_ref()
+            .and_then(|e| e.layout.as_ref())
+            .map_or(0., |l| {
+                let mut m = DWRITE_TEXT_METRICS::default();
+                unsafe {
+                    let _ = l.GetMetrics(&mut m);
+                }
+                m.widthIncludingTrailingWhitespace
+            })
+    }
+
+    /// The caret visual at the caret, in its parent's coordinates; hidden
+    /// over a selection.
     pub(super) fn place_field_caret(&mut self) {
         let Some(edit) = self.field.as_ref() else {
-            self.set_visible(self.field_caret, false);
+            self.hide_field_carets();
             return;
         };
         let (a, b) = edit.field.selection();
         if a != b && !edit.field.composing() {
-            self.set_visible(self.field_caret, false);
+            self.hide_field_carets();
             return;
         }
         let (prop, multiline, scroll, line) =
@@ -303,17 +365,25 @@ impl Editor {
             return;
         };
         let bx = self.field_box(prop);
+        let shift = self.field_shift(prop, self.field_width());
         let (cx, cy) = if multiline {
             (bx.x + x, bx.y + top - scroll)
         } else {
-            (bx.x + x - scroll, (control.h - line) / 2.)
+            (bx.x + shift + x - scroll, (control.h - line) / 2.)
         };
         // Outside the box (a textarea scrolled away): no caret.
         let inside = cy + line > bx.y && cy < bx.y + bx.h;
         let r = Rect::new(control.x + cx, control.y + cy, 1., line.max(4.));
-        let moved = self.nodes[self.field_caret].rect != r || !self.nodes[self.field_caret].visible;
-        self.set_rect(self.field_caret, r);
-        self.set_visible(self.field_caret, inside);
+        let node = self.field_caret_node();
+        let other = if node == self.field_caret {
+            self.header_caret
+        } else {
+            self.field_caret
+        };
+        self.set_visible(other, false);
+        let moved = self.nodes[node].rect != r || !self.nodes[node].visible;
+        self.set_rect(node, r);
+        self.set_visible(node, inside);
         if moved && inside {
             self.caret_blink = true;
         }
@@ -324,6 +394,8 @@ impl Editor {
     /// inputs: `--text-sm`.
     fn field_style(prop: Prop) -> Style {
         match prop {
+            // `.is-compact input { font-size: var(--text-xs) }`.
+            Prop::Number(num) if num.is_canvas() => Style::MonoSmall,
             Prop::Number(num) if !num.read_only() => Style::Mono,
             _ => Style::Option,
         }
@@ -371,6 +443,9 @@ impl Editor {
     fn field_changed(&mut self, prop: Prop, text: String) {
         match prop {
             Prop::Textarea => self.apply_text(super::props::TextChange::Content(text)),
+            // `onTextChange`: Canvas W and H only hold a draft until Enter,
+            // blur or a stepper commits it.
+            Prop::Number(num) if num.is_canvas() => {}
             Prop::Number(num) => {
                 let parsed = if text.trim().is_empty() {
                     None
@@ -453,8 +528,7 @@ impl Editor {
             VK_RETURN => {
                 if let Prop::Number(num) = prop {
                     let text = self.field_text(prop);
-                    self.commit_number(num, &text);
-                    let shown = js_number(self.number_value(num));
+                    let shown = self.commit_number(num, &text);
                     self.field_edit(|f| {
                         let mut change = textfield::Change::default();
                         if String::from_utf16_lossy(f.units()) != shown {
@@ -617,7 +691,8 @@ impl Editor {
         let display = if multiline {
             self.field_hit_local(lx, ly + scroll)
         } else {
-            self.field_hit_local(lx + scroll, 0.)
+            let shift = self.field_shift(prop, self.field_width());
+            self.field_hit_local(lx - shift + scroll, 0.)
         };
         self.field_edit(|f| {
             let position = f.text_position(display);
@@ -634,7 +709,7 @@ impl Editor {
     /// The field's IME anchor in client pixels.
     pub(super) fn field_ime_rect(&self) -> Option<(i32, i32, i32)> {
         self.field.as_ref()?;
-        let r = self.absolute(self.field_caret);
+        let r = self.absolute(self.field_caret_node());
         let s = self.scale;
         let px = |v: f32| (v * s).round() as i32;
         Some((px(r.x), px(r.y), px(r.h)))
@@ -659,6 +734,9 @@ impl Editor {
         if lit && focused {
             return Ok(());
         }
+        if num.is_canvas() {
+            return self.draw_canvas_number(dc, num, lit, (w, h));
+        }
         gfx::fill_round(dc, all, radius, c("surface-field"))?;
         let border = if focused {
             c("theme-accent")
@@ -676,7 +754,7 @@ impl Editor {
             };
         }
         // `.number-input-steppers`.
-        let sx = w - 1. - STEPPERS_W;
+        let sx = w - 1. - num.steppers_w();
         gfx::fill(dc, rect(sx, 1., w - 1., h - 1.), c("surface-hover"))?;
         gfx::fill(dc, rect(sx, 1., sx + 1., h - 1.), c("border-subtle"))?;
         let mid = (h / 2.).round();
@@ -684,6 +762,48 @@ impl Editor {
         if lit {
             return Ok(());
         }
+        self.draw_field_text(dc, prop, (w, h))
+    }
+
+    /// `.screenshot-canvas-dim .number-input.is-compact`: borderless and
+    /// transparent until hovered (`--border-strong`) or focused (accent
+    /// border on `--editor-field`, which is `--surface-field`); the stepper
+    /// column always shows.
+    fn draw_canvas_number(
+        &self,
+        dc: &ID2D1DeviceContext,
+        num: Num,
+        lit: bool,
+        (w, h): (f32, f32),
+    ) -> Result<()> {
+        let t = &self.t;
+        let c = |name: &str| t.color(name);
+        let all = rect(0., 0., w, h);
+        let radius = t.n("r-sm");
+        let prop = Prop::Number(num);
+        if lit {
+            return gfx::border(dc, all, radius, 1., c("border-strong"));
+        }
+        if self.focus == Some(Target::Prop(prop)) {
+            gfx::fill_round(dc, all, radius, c("surface-field"))?;
+            gfx::border(dc, all, radius, 1., c("theme-accent"))?;
+        }
+        let sw = num.steppers_w();
+        let sx = w - 1. - sw;
+        // The column's corners follow the field's (`overflow: hidden`).
+        let column = rect(sx, 1., w - 1., h - 1.);
+        unsafe { dc.PushAxisAlignedClip(&column, D2D1_ANTIALIAS_MODE_ALIASED) };
+        let filled = gfx::fill_round(
+            dc,
+            rect(sx - radius, 1., w - 1., h - 1.),
+            (radius - 1.).max(0.),
+            c("surface-hover"),
+        );
+        unsafe { dc.PopAxisAlignedClip() };
+        filled?;
+        gfx::fill(dc, rect(sx, 1., sx + 1., h - 1.), c("border-subtle"))?;
+        let mid = (h / 2.).round();
+        gfx::fill(dc, rect(sx + 1., mid, w - 1., mid + 1.), c("border-subtle"))?;
         self.draw_field_text(dc, prop, (w, h))
     }
 
@@ -773,7 +893,11 @@ impl Editor {
                     let (ox, oy) = if edit.multiline() {
                         (b.x, b.y - edit.scroll)
                     } else {
-                        (b.x - edit.scroll, ((h - edit.line_height) / 2.).max(0.))
+                        let shift = self.field_shift(prop, self.field_width());
+                        (
+                            b.x + shift - edit.scroll,
+                            ((h - edit.line_height) / 2.).max(0.),
+                        )
                     };
                     let (a, z) = edit.field.selection();
                     if a != z && !edit.field.composing() {
@@ -820,7 +944,8 @@ impl Editor {
                             _ => t.color("text"),
                         };
                         let text = self.g.text(t, Self::field_style(prop), &shown, 1e5)?;
-                        gfx::text(dc, &text, b.x, ((h - text.height) / 2.).max(0.), ink)?;
+                        let x = b.x + self.field_shift(prop, text.width);
+                        gfx::text(dc, &text, x, ((h - text.height) / 2.).max(0.), ink)?;
                     }
                 }
             }

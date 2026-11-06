@@ -69,7 +69,7 @@ mod props;
 mod text;
 mod text_section;
 pub use menu::MenuKind;
-pub use props::{Field, Prop, Range, bounds as range_bounds, range_text};
+pub use props::{Field, Num, Prop, Range, bounds as range_bounds, range_text};
 
 /// `.screenshot-editor { min-width: 860px; min-height: 600px }`; GTK's default.
 pub const SIZE: (f32, f32) = (1280., 840.);
@@ -217,8 +217,6 @@ pub enum Target {
 /// exposed to UI Automation as disabled.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Stub {
-    Width,
-    Height,
     Background,
     Preset,
     AddImages,
@@ -578,6 +576,8 @@ pub struct Editor {
     /// The focused property input and its caret.
     field: Option<fields::FieldEdit>,
     field_caret: usize,
+    /// The caret of a focused Canvas W or H, in the header.
+    header_caret: usize,
     /// Shipping `defaultTextStyle` and `defaultFontSize`: window-local; the
     /// size starts at the session's `text_size`.
     text_preset: &'static str,
@@ -1136,6 +1136,7 @@ impl Editor {
             menu_press: None,
             field: None,
             field_caret: 0,
+            header_caret: 0,
             text_preset: text::NEW_TEXT_PRESET,
             text_size: None,
             input_counter: 0,
@@ -1277,6 +1278,17 @@ impl Editor {
         self.nodes[self.props_thumb].visible = false;
         self.control(root, Target::Divider, 0.);
         self.header = self.add(Some(root), Kind::Header, 0.);
+        // DOM order: Canvas W and H (with their steppers), then Trim edges.
+        for num in [Num::CanvasWidth, Num::CanvasHeight] {
+            let base = self
+                .control(self.header, Target::Prop(Prop::Number(num)), 0.)
+                .base;
+            for up in [true, false] {
+                self.control(base, Target::Prop(Prop::Step(num, up)), 0.);
+            }
+        }
+        self.header_caret = self.add(Some(self.header), Kind::FieldCaret, 0.);
+        self.nodes[self.header_caret].visible = false;
         self.control(self.header, Target::Trim, 0.);
         self.banner_node = self.add(Some(root), Kind::Banner, 0.);
         self.control(self.banner_node, Target::Dismiss, 0.);
@@ -1457,8 +1469,6 @@ impl Editor {
 
     pub fn stub_name(&self, stub: Stub) -> String {
         match stub {
-            Stub::Width => header::CANVAS_WIDTH.into(),
-            Stub::Height => header::CANVAS_HEIGHT.into(),
             Stub::Background => editor_chrome::colors::BACKGROUND.into(),
             Stub::Preset => header::ZOOM_PRESET.into(),
             Stub::AddImages => header::ADD_IMAGES.into(),
@@ -1474,10 +1484,8 @@ impl Editor {
     }
 
     pub fn stub_value(&self, stub: Stub) -> Option<String> {
-        let doc = &self.presented.as_ref()?.document;
+        self.presented.as_ref()?;
         Some(match stub {
-            Stub::Width => format!("{}", doc.width),
-            Stub::Height => format!("{}", doc.height),
             Stub::Preset => self.zoom_text(),
             _ => return None,
         })
@@ -1486,8 +1494,6 @@ impl Editor {
     pub fn stub_rect(&self, stub: Stub) -> Rect {
         let l = &self.l;
         match stub {
-            Stub::Width => l.width_box,
-            Stub::Height => l.height_box,
             Stub::Background => l.background,
             Stub::Preset => l.preset,
             Stub::AddImages => l.add_images,
@@ -1556,6 +1562,23 @@ impl Editor {
         self.presented
             .as_ref()
             .map(|p| (p.document.width, p.document.height))
+    }
+
+    /// `commitCanvasSize`: Canvas W or H, rounded and clamped by the
+    /// field, as its own undo step (the session drops a no-op).
+    pub(super) fn resize_canvas(&mut self, num: Num, value: f64) {
+        let Some((width, height)) = self.document_size() else {
+            return;
+        };
+        let (width, height) = match num {
+            Num::CanvasWidth => (value, height),
+            _ => (width, value),
+        };
+        if (width, height) == (self.document_size().unwrap_or_default()) {
+            return;
+        }
+        self.notice = None;
+        self.submit(Request::ResizeCanvas { width, height });
     }
 
     /// The fitted rect inside the well (shipping Fit), well-relative.
@@ -1955,9 +1978,14 @@ impl Editor {
         }
         self.selected = id;
         // A property input shows the new selection's values; nothing it
-        // held is pending (valid entries apply as they are typed).
-        if self.field.take().is_some() {
-            self.set_visible(self.field_caret, false);
+        // held is pending (valid entries apply as they are typed). Canvas W
+        // and H don't depend on the selection and keep their draft.
+        if self
+            .field
+            .take_if(|e| !matches!(e.prop, Prop::Number(n) if n.is_canvas()))
+            .is_some()
+        {
+            self.hide_field_carets();
             if matches!(self.focus, Some(Target::Prop(_))) {
                 self.focus = None;
             }
@@ -2060,6 +2088,15 @@ impl Editor {
                     // A crop or first frame: the fit and every canvas layer move.
                     self.nodes[self.header].dirty = true;
                     self.relayout = true;
+                    for num in [Num::CanvasWidth, Num::CanvasHeight] {
+                        self.prop_dirty(Prop::Number(num));
+                        for up in [true, false] {
+                            self.prop_dirty(Prop::Step(num, up));
+                        }
+                    }
+                    if self.pending.is_none() {
+                        self.sync_field();
+                    }
                 }
                 self.keep_drag();
                 if first || self.values() != shown || self.selected_element() != shown_layer {
@@ -2745,7 +2782,7 @@ impl Editor {
             && !self.prop_exists(prop)
         {
             self.field = None;
-            self.set_visible(self.field_caret, false);
+            self.hide_field_carets();
         }
         self.field_relayout();
         self.place_menu();
@@ -2975,13 +3012,14 @@ impl Editor {
             return None;
         }
         let in_props = self.props_view().contains(x, y);
+        let header_prop = |t: Target| matches!(t, Target::Prop(Prop::Number(n) | Prop::Step(n, _)) if n.is_canvas());
         // Steppers sit inside their number field.
         let step = self
             .controls
             .iter()
             .map(|(t, _)| *t)
             .filter(|t| matches!(t, Target::Prop(Prop::Step(..))))
-            .find(|&t| in_props && inside(t));
+            .find(|&t| (in_props || header_prop(t)) && inside(t));
         if step.is_some() {
             return step;
         }
@@ -2989,7 +3027,7 @@ impl Editor {
             .iter()
             .map(|(t, _)| *t)
             .filter(|t| !matches!(t, Target::Layer(_) | Target::Eye(_) | Target::Lock(_)))
-            .filter(|t| in_props || !matches!(t, Target::Prop(_)))
+            .filter(|&t| in_props || header_prop(t) || !matches!(t, Target::Prop(_)))
             .find(|&t| inside(t))
     }
 
@@ -3014,6 +3052,8 @@ impl Editor {
             list.push(Target::Dismiss);
         }
         list.extend([
+            Target::Prop(Prop::Number(Num::CanvasWidth)),
+            Target::Prop(Prop::Number(Num::CanvasHeight)),
             Target::Trim,
             Target::Undo,
             Target::Redo,
@@ -3455,12 +3495,8 @@ impl Editor {
             cy(&label),
             c("text-subtle"),
         )?;
-        let (dw, dh) = self
-            .document_size()
-            .map_or((String::new(), String::new()), |(w, h)| {
-                (format!("{w}"), format!("{h}"))
-            });
-        for (letter, value, field) in [("W", dw, l.width_box), ("H", dh, l.height_box)] {
+        // The W and H captions; their fields are controls of their own.
+        for (letter, field) in [("W", l.width_box), ("H", l.height_box)] {
             let dim = g.text(t, Style::Status, letter, 1e4)?;
             let field = local(field);
             gfx::text(
@@ -3470,25 +3506,6 @@ impl Editor {
                 cy(&dim),
                 c("text-subtle"),
             )?;
-            let value = g.text(t, Style::MonoSmall, &value, 1e4)?;
-            // `.number-input` (compact, borderless); read-only here.
-            gfx::text(dc, &value, field.left + s4, cy(&value), c("text"))?;
-            // The spin buttons, dimmed: resizing is not in this host yet.
-            let sx = field.right - 22.;
-            for (name, y) in [
-                ("chevron-up", field.top + 3.),
-                ("chevron-down", field.top + 15.),
-            ] {
-                gfx::icon(
-                    dc,
-                    &g.factory,
-                    name,
-                    &[],
-                    (sx + 5., y, 10.),
-                    1.8,
-                    t.color_alpha("text-subtle", 0.45),
-                )?;
-            }
         }
         let times = g.text(t, Style::Small, "×", 1e4)?;
         let tx = local(l.width_box).right + 2.;
@@ -4794,7 +4811,7 @@ impl Editor {
     fn blink_caret(&mut self, dcomp: &IDCompositionDesktopDevice) -> Result<()> {
         // The label's caret, or a focused property input's.
         let node = if self.field.is_some() {
-            self.field_caret
+            self.field_caret_node()
         } else {
             self.caret
         };
