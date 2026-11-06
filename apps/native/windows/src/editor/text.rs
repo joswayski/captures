@@ -189,6 +189,27 @@ impl View {
     }
 }
 
+/// The first line's ink `(top, bottom)`, layout-relative, or `None` when it
+/// has none (spaces, an empty label).
+fn first_row_ink(
+    factory: &ID2D1Factory1,
+    layout: &IDWriteTextLayout,
+    outline: f32,
+) -> Option<(f32, f32)> {
+    let mut count = 0;
+    unsafe {
+        let _ = layout.GetLineMetrics(None, &mut count);
+        let mut lines = vec![DWRITE_LINE_METRICS::default(); count.max(1) as usize];
+        layout.GetLineMetrics(Some(&mut lines), &mut count).ok()?;
+        let baseline = lines.first()?.baseline;
+        let runs = gfx::ink_runs(factory, layout, outline).ok()?;
+        runs.into_iter()
+            .filter(|(y, _, _)| (y - baseline).abs() < 0.5)
+            .map(|(_, top, bottom)| (top, bottom))
+            .reduce(|a, b| (a.0.min(b.0), a.1.max(b.1)))
+    }
+}
+
 thread_local! {
     /// The bundled editor faces as one in-memory collection; `None` inside
     /// when this DirectWrite cannot load fonts from memory (Windows 10
@@ -616,14 +637,30 @@ impl Editor {
                     (line - (ascent + descent) * size) / 2. + ascent * size,
                 )
                 .ok()?;
+            // The committed render centres each row's ink in its line box
+            // (`editor_render`), not the CSS baseline: place the first row's
+            // ink the same way, so the label doesn't jump on commit.
+            let outline = layout.outline_width as f32 * s;
+            let [_, _, bottom, _] = layout.padding.map(|v| v as f32 * s);
+            // Plate padding without the optical nudge (top = pad + nudge,
+            // bottom = pad - nudge; no plate leaves both at the nudge or 0).
+            let pad_y = if bottom > 0. { (top + bottom) / 2. } else { 0. };
+            let mut origin = (frame.x + left, frame.y + top);
+            if let Some((ink_top, ink_bottom)) =
+                first_row_ink(&self.g.factory, &text_layout, outline)
+            {
+                let content_top = frame.y + pad_y;
+                let ink_h = ink_bottom - ink_top;
+                origin.1 = content_top + (line - ink_h) / 2. - ink_top;
+            }
             Some(View {
                 layout: text_layout,
-                origin: (frame.x + left, frame.y + top),
+                origin,
                 frame,
                 rotation: layout.rotation as f32,
                 radius: layout.plate_radius as f32 * s,
                 color: hex_color(&element.color),
-                outline: layout.outline_width as f32 * s,
+                outline,
                 plate: element
                     .background
                     .as_deref()
@@ -767,6 +804,12 @@ impl Editor {
         if change.text {
             self.events.push(Event::InlineText);
             self.drain_text();
+            // Properties' Text field mirrors the open label.
+            if self.prop_exists(super::Prop::Textarea) {
+                self.prop_dirty(super::Prop::Textarea);
+                self.events
+                    .push(Event::Value(super::Target::Prop(super::Prop::Textarea)));
+            }
         }
         if change.any() {
             self.overlay_changed();
