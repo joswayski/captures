@@ -2558,8 +2558,13 @@ fn snap_resized_bounds(
     }
     let min = minimum.max(1.);
     let anchor = resize_handle_point(initial, opposite_resize_handle(handle));
+    // A side grip moves one axis: its perpendicular edges stay put, so they
+    // never snap (a snapped top would rescale a text label's type).
+    let horizontal_edges = !matches!(handle, ResizeHandle::N | ResizeHandle::S);
+    let vertical_edges = !matches!(handle, ResizeHandle::E | ResizeHandle::W);
     let mut guides = Vec::new();
-    if (next.x - anchor.x).abs() > 0.5
+    if horizontal_edges
+        && (next.x - anchor.x).abs() > 0.5
         && let Some(position) = closest_snap(next.x, vertical, threshold)
         && next.width + next.x - position >= min
     {
@@ -2570,7 +2575,7 @@ fn snap_resized_bounds(
             position,
         });
     }
-    if (next.x + next.width - anchor.x).abs() > 0.5 {
+    if horizontal_edges && (next.x + next.width - anchor.x).abs() > 0.5 {
         let right = next.x + next.width;
         if let Some(position) = closest_snap(right, vertical, threshold)
             && position - next.x >= min
@@ -2582,7 +2587,8 @@ fn snap_resized_bounds(
             });
         }
     }
-    if (next.y - anchor.y).abs() > 0.5
+    if vertical_edges
+        && (next.y - anchor.y).abs() > 0.5
         && let Some(position) = closest_snap(next.y, horizontal, threshold)
         && next.height + next.y - position >= min
     {
@@ -2593,7 +2599,7 @@ fn snap_resized_bounds(
             position,
         });
     }
-    if (next.y + next.height - anchor.y).abs() > 0.5 {
+    if vertical_edges && (next.y + next.height - anchor.y).abs() > 0.5 {
         let bottom = next.y + next.height;
         if let Some(position) = closest_snap(bottom, horizontal, threshold)
             && position - next.y >= min

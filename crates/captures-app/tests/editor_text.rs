@@ -554,3 +554,38 @@ fn inline_editor_layout_matches_shipping_frame_padding_radius_and_rotation() {
         (1.6, 0.5, true)
     );
 }
+
+#[test]
+fn side_grips_keep_the_type_size_beside_a_snapping_edge() {
+    let mut text = cases().remove(0).element;
+    // The top sits 5 px under the canvas edge, inside the snap distance:
+    // only the dragged edge may snap.
+    text.base.x = 300.;
+    text.base.y = 5.;
+    text.base.rotation = None;
+    text.base.locked = false;
+    text.base.visible = true;
+    text.font_size = 40.;
+    text.width = 200.;
+    text.text = "i".into();
+    text.background = None;
+    text.drop_shadow = Some(false);
+    text.auto_width = Some(true);
+    let document = Document {
+        width: 2000.,
+        height: 2000.,
+        background: None,
+        elements: vec![Element::Text(text.clone())],
+        extra: Default::default(),
+    };
+    for (handle, x, dx) in [(ResizeHandle::E, 500., 79.), (ResizeHandle::W, 300., -79.)] {
+        let drag = ResizeDrag::new(&document, &text.base.id, handle, 1.).unwrap();
+        let preview = drag.preview(Point { x: x + dx, y: 30. }, false).unwrap();
+        let Element::Text(resized) = preview.element else {
+            panic!()
+        };
+        assert_eq!(resized.font_size, 40., "{handle:?} keeps the size");
+        assert_eq!(resized.width, 279., "{handle:?} sets the wrap width");
+        assert_eq!(resized.base.y, 5., "{handle:?} keeps the top");
+    }
+}
