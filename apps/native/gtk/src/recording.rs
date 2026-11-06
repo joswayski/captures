@@ -113,7 +113,7 @@ enum Outcome {
     Presented(Result<Box<Presented>, String>),
     Thumbnails(RecordingTimelineThumbnails),
     PlaybackEnded(Result<(), String>),
-    Progress(String),
+    Progress(String, u16),
     Saved(Result<(PathBuf, Option<Box<Presented>>), String>),
     SourceFrame(u64, Arc<RgbaImage>),
     Estimate(u64, Result<ExportEstimate, String>),
@@ -191,10 +191,13 @@ fn worker(
                 }
             };
             let progress = |progress: captures_media::ExportProgress| {
-                let _ =
-                    out.send(Outcome::Progress(progress.message.clone().unwrap_or_else(
-                        || ui::export_stage_label(progress.stage).to_owned(),
-                    )));
+                let _ = out.send(Outcome::Progress(
+                    progress
+                        .message
+                        .clone()
+                        .unwrap_or_else(|| ui::export_stage_label(progress.stage).to_owned()),
+                    progress.completed_per_mille,
+                ));
             };
             while let Ok(job) = jobs.recv() {
                 let outcome = match job {
@@ -304,6 +307,13 @@ struct State {
     estimate_generation: Cell<u64>,
     estimate_cancel: RefCell<Option<CancelToken>>,
     estimate_timer: RefCell<Option<glib::SourceId>>,
+    /// The running export's token, for Cancel.
+    export_cancel: RefCell<Option<CancelToken>>,
+    /// The last saved file and the settings it was saved with: Save stays
+    /// off until something changes (`alreadySaved`).
+    saved: RefCell<Option<(PathBuf, String)>>,
+    /// Clears a success toast after shipping's 4 s.
+    toast_timer: RefCell<Option<glib::SourceId>>,
     #[allow(deprecated)] // `GtkFileDialog` needs GTK 4.10.
     chooser: RefCell<Option<gtk::FileChooserNative>>,
     w: Widgets,
@@ -328,6 +338,9 @@ struct Widgets {
     filename: gtk::Entry,
     save_as_new: TokenSwitch,
     save: gtk::Button,
+    cancel: gtk::Button,
+    show_in_folder: gtk::Button,
+    progress: gtk::ProgressBar,
     status: gtk::Label,
 }
 
@@ -525,21 +538,47 @@ pub fn build(app: &gtk::Application, tokens: Rc<Tokens>, options: Options) -> Re
     as_new.append(&save_as_new);
     as_new.append(&label("Save as new file", "editor-switch-label"));
     columns.append(&as_new);
-    let actions = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-    actions.set_size_request(340, -1);
-    let status = label("", "editor-notice");
-    status.set_hexpand(true);
+    // `.recording-save-action-area`: the one-line toast over the actions.
+    let area = gtk::Box::new(gtk::Orientation::Vertical, 3);
+    area.set_size_request(340, -1);
+    area.set_valign(gtk::Align::End);
+    let status = label("", "recording-save-toast");
     status.set_xalign(1.);
-    status.set_wrap(true);
-    status.set_valign(gtk::Align::Center);
+    status.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    status.set_size_request(-1, 16);
     status.set_accessible_role(gtk::AccessibleRole::Status);
-    actions.append(&status);
+    area.append(&status);
+    let actions = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    actions.set_halign(gtk::Align::End);
+    actions.add_css_class("recording-save-actions");
+    let cancel = gtk::Button::with_label("Cancel");
+    cancel.add_css_class("ui-btn");
+    cancel.add_css_class("recording-save-cancel");
+    cancel.set_size_request(76, -1);
+    actions.append(&cancel);
+    let (show_in_folder, _, _) = icon_button(
+        "folder",
+        "Show in Folder",
+        &["ui-btn", "recording-show-in-folder"],
+    );
+    show_in_folder.set_size_request(140, -1);
+    actions.append(&show_in_folder);
     let (save, _, _) = icon_button("save", "Save", &["ui-btn", "primary", "editor-save"]);
-    save.set_valign(gtk::Align::End);
+    save.set_size_request(100, -1);
     save.set_sensitive(false);
     actions.append(&save);
-    columns.append(&actions);
-    root.append(&bar);
+    area.append(&actions);
+    columns.append(&area);
+    // `.recording-export-progress`: a 3 px strip along the footer's top.
+    let footer = gtk::Overlay::new();
+    footer.set_child(Some(&bar));
+    let progress = gtk::ProgressBar::new();
+    progress.add_css_class("recording-export-progress");
+    progress.set_valign(gtk::Align::Start);
+    progress.set_visible(false);
+    progress.set_can_target(false);
+    footer.add_overlay(&progress);
+    root.append(&footer);
     window.set_child(Some(&root));
 
     let state = Rc::new(State {
@@ -571,6 +610,9 @@ pub fn build(app: &gtk::Application, tokens: Rc<Tokens>, options: Options) -> Re
         estimate_cancel: RefCell::default(),
         estimate_timer: RefCell::default(),
         chooser: RefCell::default(),
+        export_cancel: RefCell::default(),
+        saved: RefCell::default(),
+        toast_timer: RefCell::default(),
         w: Widgets {
             title,
             warning,
@@ -590,6 +632,9 @@ pub fn build(app: &gtk::Application, tokens: Rc<Tokens>, options: Options) -> Re
             filename,
             save_as_new,
             save,
+            cancel,
+            show_in_folder,
+            progress,
             status,
         },
     });
@@ -693,6 +738,22 @@ impl State {
         w.save.connect_clicked(move |_| {
             if let Some(state) = weak.upgrade() {
                 state.save();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        w.cancel.connect_clicked(move |_| {
+            if let Some(state) = weak.upgrade()
+                && let Some(cancel) = state.export_cancel.borrow().as_ref()
+            {
+                cancel.cancel();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        w.show_in_folder.connect_clicked(move |_| {
+            if let Some(state) = weak.upgrade()
+                && let Some((path, _)) = state.saved.borrow().as_ref()
+            {
+                crate::history::reveal(path);
             }
         });
         let weak = Rc::downgrade(self);
@@ -958,20 +1019,34 @@ impl State {
                     position_ms: self.playhead.get(),
                 }));
             }
-            Outcome::Progress(text) => self.notify(&text, false),
+            Outcome::Progress(text, per_mille) => {
+                self.notify(&text, false);
+                self.w.progress.set_visible(true);
+                self.w
+                    .progress
+                    .set_fraction(f64::from(per_mille.min(1_000)) / 1_000.);
+            }
             Outcome::Saved(result) => {
                 self.busy.set(false);
                 self.saving.set(false);
+                self.w.progress.set_visible(false);
+                let cancelled = self
+                    .export_cancel
+                    .borrow_mut()
+                    .take()
+                    .is_some_and(|cancel| cancel.is_cancelled());
                 match result {
                     Ok((path, presented)) => {
                         let gif = self.output.format() == VideoFormat::Gif;
                         let size = std::fs::metadata(&path).map_or(0, |m| m.len());
-                        self.notify(&ui::saved_message(gif, size), false);
                         if let Some(presented) = presented {
-                            *self.original.borrow_mut() = Some(path);
+                            *self.original.borrow_mut() = Some(path.clone());
                             self.accept(*presented);
                         }
+                        *self.saved.borrow_mut() = Some((path, self.fingerprint()));
+                        self.toast(&ui::saved_message(gif, size));
                     }
+                    Err(_) if cancelled => self.toast("Save cancelled."),
                     Err(error) => self.notify(&error, true),
                 }
                 self.update_footer();
@@ -1270,6 +1345,37 @@ impl State {
         *self.pending_apply.borrow_mut() = Some(id);
     }
 
+    /// Everything a save depends on (`recordingEditorFingerprint`).
+    fn fingerprint(&self) -> String {
+        let (start, end) = self.trim.get();
+        format!(
+            "{:?}|{}|{}",
+            self.output
+                .specs(start.round() as u64, Some(end.round() as u64)),
+            self.destination().display(),
+            self.saving_copy(),
+        )
+    }
+
+    /// A success toast, cleared after shipping's 4 s.
+    fn toast(self: &Rc<Self>, text: &str) {
+        self.notify(text, false);
+        set_class(&self.w.status, "success", true);
+        if let Some(id) = self.toast_timer.borrow_mut().take() {
+            id.remove();
+        }
+        let weak = Rc::downgrade(self);
+        let shown = text.to_owned();
+        let id = glib::timeout_add_local_once(Duration::from_secs(4), move || {
+            let Some(state) = weak.upgrade() else { return };
+            state.toast_timer.borrow_mut().take();
+            if state.w.status.label() == shown {
+                state.notify("", false);
+            }
+        });
+        *self.toast_timer.borrow_mut() = Some(id);
+    }
+
     /// Shipping's `chooseDestinationDirectory`: the folder Save writes to.
     fn choose_folder(self: &Rc<Self>) {
         if self.saving.get() {
@@ -1334,13 +1440,31 @@ impl State {
         }
         w.save_as_new.set_sensitive(!requires_copy);
         w.change_folder.set_sensitive(!self.saving.get());
+        // Shipping keeps Cancel and Show in Folder's space as hidden
+        // placeholders so the actions never shift.
+        let saving = self.saving.get();
+        let saved = self.saved.borrow().as_ref().map(|(_, print)| print.clone());
+        let already_saved = !saving && saved.as_deref() == Some(self.fingerprint().as_str());
+        for (button, shown) in [
+            (&w.cancel, saving),
+            (&w.show_in_folder, saved.is_some() && !saving),
+        ] {
+            button.set_child_visible(shown);
+            button.set_sensitive(shown);
+            button.set_can_target(shown);
+            button.set_focusable(shown);
+        }
         let valid = self.presented.borrow().as_ref().is_some_and(|p| {
             self.output
                 .specs(p.edit.trim_start_ms, p.trim_end_opt())
                 .is_some()
         });
         w.save.set_sensitive(
-            error.is_none() && valid && !self.busy.get() && self.pending_apply.borrow().is_none(),
+            error.is_none()
+                && !already_saved
+                && valid
+                && !self.busy.get()
+                && self.pending_apply.borrow().is_none(),
         );
         match error {
             Some(error) => self.notify(error, true),
@@ -1376,6 +1500,9 @@ impl State {
             false,
         );
         let cancel = CancelToken::default();
+        *self.export_cancel.borrow_mut() = Some(cancel.clone());
+        self.w.progress.set_fraction(0.);
+        self.w.progress.set_visible(true);
         let destination = self.destination();
         let _ = self.jobs.send(if self.saving_copy() {
             Job::Save(
@@ -1396,7 +1523,8 @@ impl State {
             .status
             .update_property(&[gtk::accessible::Property::Label(text)]);
         set_class(&self.w.status, "error", error);
-        set_class(&self.w.status, "success", !error && !text.is_empty());
+        // Progress stays subtle; only a toast is a success.
+        set_class(&self.w.status, "success", false);
     }
 
     /// The crop box over the uncropped source, when both are ready: shipping

@@ -1328,6 +1328,34 @@ popover.captures-menu .choice-description {
   font-size: var(--text-sm);
 }
 
+/* `.recording-save-toast` over `.recording-save-actions`. */
+.captures .recording-save-toast {
+  color: var(--text-subtle);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+.captures .recording-save-toast.success {
+  color: var(--positive-text);
+}
+.captures .recording-save-toast.error {
+  color: var(--danger-text);
+}
+/* `.recording-export-progress`: 3 px accent strip along the footer top. */
+.captures progressbar.recording-export-progress,
+.captures progressbar.recording-export-progress > trough {
+  min-height: 3px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: var(--surface-sunken);
+}
+.captures progressbar.recording-export-progress > trough > progress {
+  min-height: 3px;
+  border: none;
+  border-radius: 0;
+  background: var(--theme-accent);
+}
+
 /* ---------------------------------------------------- floating previews ---- */
 
 /* `mini-preview.css`: always the fixed glass palette, over any wallpaper. */

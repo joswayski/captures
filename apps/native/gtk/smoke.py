@@ -643,6 +643,13 @@ def recording_output(binary, scratch):
         saved = wait(lambda: [p for p in elsewhere.iterdir() if p.name.endswith("-edited.gif")],
                      "the saved GIF", timeout=60)[0]
         assert not [p for p in exports.iterdir() if p.suffix == ".gif"], "GIF saved beside source"
+        # The saved toast, Show in Folder, and Save off until something changes.
+        wait(lambda: [n for n, (role, name) in nodes(app) if role == "status bar"
+                      and node_text(n, name).startswith("GIF saved")], "the saved toast")
+        assert has_state(find(app, "push button", "Show in Folder")[0],
+                         Atspi.StateType.SENSITIVE), "Show in Folder is off after Save"
+        wait(lambda: not has_state(save, Atspi.StateType.SENSITIVE),
+             "Save to stay off for the saved settings")
         gif = GdkPixbuf.PixbufAnimation.new_from_file(str(saved))
         assert (gif.get_width(), gif.get_height()) == (320, 180), \
             f"saved {gif.get_width()}×{gif.get_height()}"
