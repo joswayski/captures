@@ -43,6 +43,8 @@ pub enum Id {
     LayersTitle,
     List,
     Row(usize),
+    /// The inline label editor (`textarea aria-label="Edit text on canvas"`).
+    InlineText,
     /// `section aria-label="Tool properties"`.
     Properties,
     /// `.screenshot-shape-picker` (`role="group" aria-label="Shape"`).
@@ -160,6 +162,7 @@ fn children(e: &Editor, id: Id) -> Vec<Id> {
             }
             list
         }
+        Id::Canvas if e.text_active() => vec![Id::InlineText],
         Id::ShapePicker | Id::ColorField(_) => e
             .prop_order()
             .into_iter()
@@ -190,6 +193,7 @@ fn parent(id: Id) -> Option<Id> {
         Id::LayersTitle | Id::Stub(Stub::AddLayer) | Id::List => Id::Layers,
         Id::Row(_) => Id::List,
         Id::ShapePicker | Id::ColorField(_) => Id::Properties,
+        Id::InlineText => Id::Canvas,
         Id::Control(Target::Prop(prop)) => prop_parent(prop),
         Id::Control(Target::Layer(i) | Target::Eye(i) | Target::Lock(i))
         | Id::Stub(Stub::LayerMenu(i)) => Id::Row(i),
@@ -222,6 +226,7 @@ fn rect(e: &Editor, id: Id) -> Rect {
             Rect::new(l.list.x, r.y, l.list.w, r.h)
         }
         Id::Properties => l.properties,
+        Id::InlineText => e.text_rect(),
         Id::ShapePicker => e.picker_rect(),
         Id::ColorField(field) => e.color_field_rect(field),
         Id::Location => l.folder,
@@ -244,6 +249,7 @@ fn name(e: &Editor, id: Id) -> String {
         Id::Layers | Id::LayersTitle => editor_chrome::layers::TITLE.into(),
         Id::Row(i) => e.name(Target::Layer(i)),
         Id::Properties => "Tool properties".into(),
+        Id::InlineText => editor_chrome::text_format::INLINE_LABEL.into(),
         Id::ShapePicker => "Shape".into(),
         Id::ColorField(field) => e.field_label(field),
         Id::Location => "Save location".into(),
@@ -271,7 +277,9 @@ fn control_type(id: Id) -> UIA_CONTROLTYPE_ID {
         Id::Flyout => UIA_MenuControlTypeId,
         Id::List => UIA_ListControlTypeId,
         Id::Row(_) => UIA_ListItemControlTypeId,
-        Id::Filename | Id::Stub(Stub::Width | Stub::Height) => UIA_EditControlTypeId,
+        Id::Filename | Id::InlineText | Id::Stub(Stub::Width | Stub::Height) => {
+            UIA_EditControlTypeId
+        }
         Id::Stub(Stub::Preset | Stub::Format) => UIA_ComboBoxControlTypeId,
         Id::Stub(_) => UIA_ButtonControlTypeId,
         Id::Control(Target::Shape(_)) => UIA_MenuItemControlTypeId,
@@ -346,6 +354,7 @@ fn runtime_id(id: Id) -> [i32; 4] {
         Id::Hint => (16, 0),
         Id::ShapePicker => (17, 0),
         Id::ColorField(field) => (18, field as i32),
+        Id::InlineText => (19, 0),
         Id::Control(t) => {
             let (k, a) = target(t);
             (100 + k, a)
@@ -458,6 +467,7 @@ fn value(e: &Editor, id: Id) -> Option<String> {
             crate::editor::range_text(range, e.range_value(range))
         }
         Id::Filename => e.filename(),
+        Id::InlineText => e.text_value(),
         Id::Location => e.save_location(),
         Id::Stub(stub) => e.stub_value(stub)?,
         _ => return None,
@@ -523,7 +533,7 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                 }
                 Id::Control(_) if toggle_state(e, id).is_some() => pattern == UIA_TogglePatternId,
                 Id::Control(_) => pattern == UIA_InvokePatternId,
-                Id::Filename | Id::Location => pattern == UIA_ValuePatternId,
+                Id::Filename | Id::Location | Id::InlineText => pattern == UIA_ValuePatternId,
                 Id::Stub(stub) if e.stub_value(stub).is_some() => pattern == UIA_ValuePatternId,
                 Id::Stub(_) => pattern == UIA_InvokePatternId,
                 _ => false,
@@ -540,7 +550,8 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
         let id = self.id;
         with(self.hwnd, |e| {
             let enabled = enabled(e, id);
-            let focused = matches!(id, Id::Control(t) if e.focus == Some(t));
+            let focused = matches!(id, Id::Control(t) if e.focus == Some(t))
+                || (id == Id::InlineText && e.text_active());
             let region = matches!(id, Id::Canvas | Id::Layers | Id::Properties);
             Ok(match property {
                 UIA_NamePropertyId => VARIANT::from(BSTR::from(name(e, id))),
@@ -572,7 +583,9 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                 },
                 UIA_AutomationIdPropertyId => VARIANT::from(BSTR::from(format!("editor-{id:?}"))),
                 UIA_FrameworkIdPropertyId => VARIANT::from(BSTR::from("Captures")),
-                UIA_IsKeyboardFocusablePropertyId => VARIANT::from(focusable(e, id)),
+                UIA_IsKeyboardFocusablePropertyId => {
+                    VARIANT::from(focusable(e, id) || id == Id::InlineText)
+                }
                 UIA_HasKeyboardFocusPropertyId => VARIANT::from(focused),
                 UIA_IsEnabledPropertyId => VARIANT::from(enabled),
                 UIA_IsOffscreenPropertyId => VARIANT::from(offscreen(e, id)),
@@ -585,6 +598,7 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                 UIA_ValueValuePropertyId => {
                     value(e, id).map_or_else(VARIANT::default, |v| VARIANT::from(BSTR::from(v)))
                 }
+                UIA_ValueIsReadOnlyPropertyId if id == Id::InlineText => VARIANT::from(false),
                 UIA_ValueIsReadOnlyPropertyId => VARIANT::from(!matches!(
                     id,
                     Id::Control(Target::Slider | Target::Divider | Target::Prop(Prop::Range(_)))
@@ -726,6 +740,9 @@ impl IRawElementProviderFragmentRoot_Impl for Node_Impl {
     }
 
     fn GetFocus(&self) -> Result<IRawElementProviderFragment> {
+        if with(self.hwnd, |e| Ok(e.text_active()))? {
+            return Ok(fragment(self.hwnd, Id::InlineText));
+        }
         let focus = with(self.hwnd, |e| Ok(e.focus))?;
         focus
             .map(|target| fragment(self.hwnd, Id::Control(target)))
@@ -870,10 +887,20 @@ impl IRangeValueProvider_Impl for Node_Impl {
 }
 
 impl IValueProvider_Impl for Node_Impl {
-    fn SetValue(&self, _: &PCWSTR) -> Result<()> {
-        // The filename field is read-only in this slice; ranges take
-        // RangeValue.SetValue.
-        Err(read_only())
+    fn SetValue(&self, value: &PCWSTR) -> Result<()> {
+        // Only the inline label takes text; the filename field is read-only
+        // in this host and ranges take RangeValue.SetValue.
+        if self.id != Id::InlineText {
+            return Err(read_only());
+        }
+        let value = unsafe { value.to_string() }.unwrap_or_default();
+        with(self.hwnd, |e| {
+            if !e.text_active() {
+                return Err(unavailable());
+            }
+            e.set_text_value(&value);
+            Ok(())
+        })
     }
 
     fn Value(&self) -> Result<BSTR> {
@@ -884,7 +911,7 @@ impl IValueProvider_Impl for Node_Impl {
     }
 
     fn IsReadOnly(&self) -> Result<BOOL> {
-        Ok(true.into())
+        Ok((self.id != Id::InlineText).into())
     }
 }
 
@@ -954,6 +981,20 @@ pub fn raise(hwnd: HWND, events: &[(Event, String)]) {
                         4,
                     );
                 }
+                Event::InlineFocus => {
+                    let _ = UiaRaiseAutomationEvent(
+                        &node(hwnd, Id::InlineText),
+                        UIA_AutomationFocusChangedEventId,
+                    );
+                }
+                Event::InlineText => {
+                    let _ = UiaRaiseAutomationPropertyChangedEvent(
+                        &node(hwnd, Id::InlineText),
+                        UIA_ValueValuePropertyId,
+                        &VARIANT::default(),
+                        &VARIANT::from(BSTR::from(detail.as_str())),
+                    );
+                }
                 Event::Notice => {
                     if detail.is_empty() {
                         continue;
@@ -985,6 +1026,7 @@ pub fn describe(e: &Editor, events: Vec<Event>) -> Vec<(Event, String)> {
                 }
                 Event::Value(target) => value(e, Id::Control(target)).unwrap_or_default(),
                 Event::Notice => e.notice_text().map(|(text, _)| text).unwrap_or_default(),
+                Event::InlineText => e.text_value(),
                 _ => String::new(),
             };
             (event, detail)

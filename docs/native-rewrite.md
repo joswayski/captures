@@ -330,8 +330,25 @@ its control; the section body scrolls under the sticky heading by moving
 its visual. UI Automation: check boxes with Toggle, sliders with RangeValue
 and value text, the "Shape" group of pressed buttons, and color-field groups
 named by their legend with swatch buttons. `--tool KEY` starts the editor
-with a rail tool or shape, for renders. Missing so far: shadow X/Y offsets,
-the line and arrow Curve control, text, image and crop sections.
+with a rail tool or shape, for renders. The Text tool
+(`editor/text.rs`) follows the GTK4 protocol: a click places a new
+rounded-box label in the drawing color at the session's initial size (or
+opens the label under it; double-click with Select does too), typing is
+coalesced into one in-flight `UpdateTextInput`, Enter adds a line, and
+Escape, Tab, another tool or a click elsewhere commits with `FinishTextInput`.
+The host draws the open label in the overlay at `inline_editor_layout`
+geometry with its bundled face (an in-memory DirectWrite font set from
+`editor_fonts::bundled`), with selection, IME composition and a caret
+visual that blinks on the compositor; the text model is the Preferences
+field's in multiline mode. Text layers, images and closed shapes show
+selection grips; dragging one previews `LayerEdit::Resize` on the worker
+(one request in flight, `preview_drawing_with_geometry`) and commits once
+on release, with Shift on a corner keeping proportions, so the shared
+`ResizeDrag` gives labels the README's side, top/bottom and corner rules.
+The open label is an Edit with the Value pattern named "Edit text on
+canvas". Missing so far: shadow X/Y offsets, the line and arrow Curve
+control, and the text (style picker, size, format), image and crop
+sections; outlined labels draw without their outline while open.
 Windows: cross-compiled only; Wine renders of Rectangle, Arrow, Freehand
 and Ellipse (dark) match the Tauri harness rows within a pixel. Wine has no
 geometric layer masks, so the custom tile's wedges are unclipped there.

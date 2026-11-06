@@ -493,6 +493,12 @@ impl Gfx {
         }
     }
 
+    /// The DirectWrite factory, for text outside the token styles (the
+    /// editor's inline text in the document's faces).
+    pub fn dwrite(&self) -> &IDWriteFactory {
+        &self.dwrite
+    }
+
     /// The advance of `0` in `style`, for CSS `ch` units.
     pub fn ch(&self, t: &Tokens, style: Style) -> Result<f32> {
         let zeros = self.text(t, style, "0000000000", 100_000.)?;

@@ -71,6 +71,8 @@ pub struct Editor {
     typing: bool,
     /// HTML `maxLength`, in UTF-16 units: typed and pasted text is cut to fit.
     pub max_len: Option<usize>,
+    /// A `<textarea>`: line breaks are kept (as `\n`), not dropped.
+    pub multiline: bool,
 }
 
 impl Editor {
@@ -138,7 +140,7 @@ impl Editor {
 
     /// Replace everything (UIA `SetValue`, a restored query); caret at the end.
     pub fn set_text(&mut self, text: &str) -> Change {
-        let units = single_line(text);
+        let units = self.clean(text);
         if units == self.text {
             return Change::default();
         }
@@ -183,7 +185,7 @@ impl Editor {
 
     /// Typed or pasted text replaces the selection; line breaks are dropped.
     pub fn insert(&mut self, text: &str) -> Change {
-        let units = single_line(text);
+        let units = self.clean(text);
         self.insert_units(&units, true)
     }
 
@@ -313,10 +315,27 @@ impl Editor {
     pub fn commit_composition(&mut self, result: &[u16]) -> Change {
         let had = !self.comp.is_empty();
         self.comp.clear();
-        let mut change = self.insert_units(&single_line_units(result), true);
+        let units = if self.multiline {
+            result.to_vec()
+        } else {
+            single_line_units(result)
+        };
+        let mut change = self.insert_units(&units, true);
         change.text |= had;
         change.caret |= had;
         change
+    }
+
+    /// Text as this model stores it: one line, or `\n` line breaks.
+    fn clean(&self, text: &str) -> Vec<u16> {
+        if self.multiline {
+            text.replace("\r\n", "\n")
+                .replace('\r', "\n")
+                .encode_utf16()
+                .collect()
+        } else {
+            single_line(text)
+        }
     }
 
     pub fn prev(&self, i: usize) -> usize {
@@ -959,6 +978,16 @@ mod tests {
         assert_eq!(e.word_at(4), (4, 6));
         assert_eq!(e.word_at(8), (6, 13));
         assert_eq!(e.word_at(99), (13, 15));
+    }
+
+    #[test]
+    fn multiline_keeps_normalized_line_breaks() {
+        let mut e = Editor {
+            multiline: true,
+            ..Editor::default()
+        };
+        e.insert("a\r\nb\rc\n");
+        assert_eq!(e.text(), "a\nb\nc\n");
     }
 
     #[test]
