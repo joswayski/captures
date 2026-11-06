@@ -1,7 +1,8 @@
 #![allow(non_upper_case_globals)]
 //! UI Automation for Preferences: the window, the section navigation (Invoke
-//! buttons), the header, and each settings card as a group of its controls:
-//! switches (Toggle), the Interface theme and accent choices (radio buttons
+//! buttons that also report the section in view through SelectionItem, like
+//! shipping `aria-current`), the header, and each settings card as a group of
+//! its controls: switches (Toggle), the Interface theme and accent choices (radio buttons
 //! with SelectionItem inside a Selection group), the read-only capture folder
 //! (Value) and Choose… (Invoke). Names come from the shipping titles and
 //! `aria-label`s; descriptions are help text. Providers are node ids that read
@@ -16,7 +17,7 @@ use windows::Win32::UI::Accessibility::*;
 use windows::core::*;
 
 use crate::host::{Host, with_host};
-use crate::scene::{ACCENT_GROUP_LABEL, CARDS, Event, Item, NAV_WIDTH, Rect, Target};
+use crate::scene::{ACCENT_GROUP_LABEL, CARDS, Event, Item, NAV_WIDTH, Rect, SelectKey, Target};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Id {
@@ -37,6 +38,23 @@ pub enum Id {
     /// Save captures to: the read-only folder and Choose….
     Folder,
     Choose,
+    /// The system screenshot-key row's Open.
+    Open,
+    /// A shortcut recorder: a toggle button whose value is its keys.
+    Shortcut(usize),
+    /// A select: ComboBox with ExpandCollapse, Selection and Value.
+    Select(SelectKey),
+    /// An option of the open listbox (ListItem with SelectionItem).
+    Option(SelectKey, usize),
+}
+
+/// The open select and its option count, for the combo box's children.
+type Open = Option<(SelectKey, usize)>;
+
+fn open_list(host: &Host) -> Open {
+    host.scene
+        .open
+        .map(|(key, _)| (key, host.scene.select_options(key).len()))
 }
 
 fn unavailable() -> Error {
@@ -55,6 +73,10 @@ fn target(id: Id) -> Option<Target> {
         Id::Mode(i) => Some(Target::Mode(i)),
         Id::Accent(i) => Some(Target::Theme(i)),
         Id::Choose => Some(Target::Choose),
+        Id::Open => Some(Target::Open),
+        Id::Shortcut(i) => Some(Target::Shortcut(i)),
+        Id::Select(key) => Some(Target::Select(key)),
+        Id::Option(key, i) => Some(Target::Option(key, i)),
         _ => None,
     }
 }
@@ -67,10 +89,14 @@ fn id_of(target: Target) -> Id {
         Target::Mode(i) => Id::Mode(i),
         Target::Theme(i) => Id::Accent(i),
         Target::Choose => Id::Choose,
+        Target::Open => Id::Open,
+        Target::Shortcut(i) => Id::Shortcut(i),
+        Target::Select(key) => Id::Select(key),
+        Target::Option(key, i) => Id::Option(key, i),
     }
 }
 
-fn children(id: Id) -> Vec<Id> {
+fn children(id: Id, open: Open) -> Vec<Id> {
     match id {
         Id::Root => {
             let mut list = vec![Id::Nav, Id::Title, Id::Subtitle, Id::History];
@@ -86,8 +112,22 @@ fn children(id: Id) -> Vec<Id> {
                 Item::Mode => vec![Id::Modes],
                 Item::Accent => vec![Id::Accents],
                 Item::Folder => vec![Id::Folder, Id::Choose],
+                Item::Utility => vec![Id::Open],
+                Item::Shortcuts => (0..preferences::SHORTCUT_ROWS.len())
+                    .map(Id::Shortcut)
+                    .collect(),
+                Item::Select(key) => vec![Id::Select(key)],
+                Item::SelectGrid => vec![
+                    Id::Select(SelectKey::Fps),
+                    Id::Select(SelectKey::Resolution),
+                ],
             })
             .collect(),
+        // Like a Win32 combo box, the open list's items are its children.
+        Id::Select(key) => match open {
+            Some((open, count)) if open == key => (0..count).map(|i| Id::Option(key, i)).collect(),
+            _ => Vec::new(),
+        },
         Id::Modes => (0..APPEARANCE_MODES.len()).map(Id::Mode).collect(),
         Id::Accents => (0..THEMES.len()).map(Id::Accent).collect(),
         _ => Vec::new(),
@@ -105,6 +145,12 @@ fn parent(id: Id) -> Option<Id> {
         Id::Modes => Id::Card(card_of(Item::Mode)?),
         Id::Accents => Id::Card(card_of(Item::Accent)?),
         Id::Folder | Id::Choose => Id::Card(card_of(Item::Folder)?),
+        Id::Open => Id::Card(card_of(Item::Utility)?),
+        Id::Shortcut(_) => Id::Card(card_of(Item::Shortcuts)?),
+        Id::Select(key) => {
+            Id::Card(card_of(Item::Select(key)).or_else(|| card_of(Item::SelectGrid))?)
+        }
+        Id::Option(key, _) => Id::Select(key),
         _ => Id::Root,
     })
 }
@@ -142,15 +188,32 @@ fn name(host: &Host, id: Id) -> String {
         Id::Accent(i) => preferences::theme_accessibility_label(&THEMES[i]),
         Id::Folder => preferences::row("output_directory").title.into(),
         Id::Choose => "Choose…".into(),
+        Id::Open => preferences::shortcut_help(crate::scene::PLATFORM)
+            .system_action
+            .into(),
+        Id::Shortcut(i) => preferences::SHORTCUT_ROWS[i].0.into(),
+        Id::Select(key) => key.label().into(),
+        Id::Option(key, i) => host
+            .scene
+            .select_options(key)
+            .into_iter()
+            .nth(i)
+            .map_or_else(String::new, |(label, _)| label),
     }
 }
 
 fn help(host: &Host, id: Id) -> String {
     match id {
-        Id::Card(card) => SECTIONS[CARDS[card].0].description.into(),
+        Id::Card(card) => crate::scene::card_description(CARDS[card].0),
         Id::Switch(row) => host.scene.rows[row].detail.clone(),
         Id::Modes => preferences::row("appearance").description.into(),
         Id::Accents => preferences::row("theme").description.into(),
+        Id::Open => {
+            let help = preferences::shortcut_help(crate::scene::PLATFORM);
+            format!("{}. {}", help.system_title, help.system_body)
+        }
+        Id::Shortcut(i) => host.scene.shortcut_error(i).into(),
+        Id::Select(key) => preferences::row(key.setting()).description.into(),
         _ => String::new(),
     }
 }
@@ -162,6 +225,9 @@ fn control_type(id: Id) -> UIA_CONTROLTYPE_ID {
         Id::Title | Id::Subtitle => UIA_TextControlTypeId,
         Id::Mode(_) | Id::Accent(_) => UIA_RadioButtonControlTypeId,
         Id::Folder => UIA_EditControlTypeId,
+        Id::Select(_) => UIA_ComboBoxControlTypeId,
+        Id::Option(..) => UIA_ListItemControlTypeId,
+        Id::Open | Id::Shortcut(_) => UIA_ButtonControlTypeId,
         // Like WinUI's ToggleSwitch, switches are buttons with Toggle.
         Id::NavItem(_) | Id::History | Id::Switch(_) | Id::Choose => UIA_ButtonControlTypeId,
     }
@@ -183,14 +249,20 @@ fn runtime_id(id: Id) -> [i32; 3] {
         Id::Accent(i) => (11, i),
         Id::Folder => (12, 0),
         Id::Choose => (13, 0),
+        Id::Open => (14, 0),
+        Id::Shortcut(i) => (15, i),
+        Id::Select(key) => (16, key.index()),
+        Id::Option(key, i) => (17, key.index() * 1000 + i),
     };
     [UiaAppendRuntimeId as i32, kind, index as i32]
 }
 
 fn selected(host: &Host, id: Id) -> bool {
     match id {
+        Id::NavItem(i) => host.scene.active == i,
         Id::Mode(i) => host.scene.mode_index() == i,
         Id::Accent(i) => host.scene.theme_index() == i,
+        Id::Option(key, i) => host.scene.select_index(key) == i,
         _ => false,
     }
 }
@@ -215,6 +287,10 @@ fn offscreen(host: &Host, id: Id) -> bool {
         Id::Root | Id::Nav | Id::NavItem(_) | Id::Title | Id::Subtitle | Id::History
     ) {
         return false;
+    }
+    if let Id::Option(..) = id {
+        let (r, v) = (rect(host, id), host.scene.list_rect());
+        return r.y + r.h <= v.y || r.y >= v.y + v.h;
     }
     let (r, v) = (rect(host, id), host.scene.viewport());
     r.y + r.h <= v.y || r.y >= v.y + v.h
@@ -247,6 +323,7 @@ fn safe_array_unknown(values: &[IUnknown]) -> *mut SAFEARRAY {
     IRawElementProviderFragmentRoot,
     IInvokeProvider,
     IToggleProvider,
+    IExpandCollapseProvider,
     ISelectionProvider,
     ISelectionItemProvider,
     IValueProvider
@@ -270,7 +347,20 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
 
     fn GetPatternProvider(&self, pattern: UIA_PATTERN_ID) -> Result<IUnknown> {
         let supported = match self.id {
-            Id::NavItem(_) | Id::History | Id::Choose => pattern == UIA_InvokePatternId,
+            // Sections also report the one in view (shipping `aria-current`).
+            Id::NavItem(_) => {
+                pattern == UIA_InvokePatternId || pattern == UIA_SelectionItemPatternId
+            }
+            Id::Nav => pattern == UIA_SelectionPatternId,
+            Id::History | Id::Choose | Id::Open => pattern == UIA_InvokePatternId,
+            Id::Shortcut(_) => pattern == UIA_TogglePatternId || pattern == UIA_ValuePatternId,
+            Id::Select(_) => [
+                UIA_ExpandCollapsePatternId,
+                UIA_SelectionPatternId,
+                UIA_ValuePatternId,
+            ]
+            .contains(&pattern),
+            Id::Option(..) => pattern == UIA_SelectionItemPatternId,
             Id::Switch(_) => pattern == UIA_TogglePatternId,
             Id::Modes | Id::Accents => pattern == UIA_SelectionPatternId,
             Id::Mode(_) | Id::Accent(_) => pattern == UIA_SelectionItemPatternId,
@@ -290,7 +380,26 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
             let scene = &host.scene;
             let enabled = match id {
                 Id::Switch(row) => scene.rows[row].enabled,
+                Id::Option(key, i) => scene
+                    .select_options(key)
+                    .get(i)
+                    .is_some_and(|(_, disabled)| !disabled),
                 _ => true,
+            };
+            let value = match id {
+                Id::Folder => Some(scene.settings().output_directory.clone()),
+                Id::Select(key) => Some(scene.select_value(key)),
+                Id::Shortcut(i) => Some(scene.shortcut_value(i)),
+                _ => None,
+            };
+            // Options are `tabIndex={-1}`; the active one is the trigger's
+            // `aria-activedescendant`.
+            let focusable = target(id).is_some() && !matches!(id, Id::Option(..));
+            let focused = match id {
+                Id::Option(key, i) => scene
+                    .open
+                    .is_some_and(|(open, state)| open == key && state.active == i),
+                _ => target(id).is_some() && scene.focus == target(id),
             };
             Ok(match property {
                 UIA_NamePropertyId => VARIANT::from(BSTR::from(name(host, id))),
@@ -304,20 +413,30 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                 }
                 UIA_AutomationIdPropertyId => VARIANT::from(BSTR::from(format!("{id:?}"))),
                 UIA_FrameworkIdPropertyId => VARIANT::from(BSTR::from("Captures")),
-                UIA_IsKeyboardFocusablePropertyId => VARIANT::from(target(id).is_some() && enabled),
-                UIA_HasKeyboardFocusPropertyId => {
-                    VARIANT::from(target(id).is_some() && scene.focus == target(id))
-                }
+                UIA_IsKeyboardFocusablePropertyId => VARIANT::from(focusable && enabled),
+                UIA_HasKeyboardFocusPropertyId => VARIANT::from(focused),
                 UIA_IsEnabledPropertyId => VARIANT::from(enabled),
                 UIA_IsOffscreenPropertyId => VARIANT::from(offscreen(host, id)),
                 UIA_IsControlElementPropertyId | UIA_IsContentElementPropertyId => {
                     VARIANT::from(true)
                 }
                 UIA_SelectionItemIsSelectedPropertyId => VARIANT::from(selected(host, id)),
-                UIA_ValueValuePropertyId if id == Id::Folder => {
-                    VARIANT::from(BSTR::from(scene.settings().output_directory.as_str()))
+                UIA_AriaPropertiesPropertyId if matches!(id, Id::NavItem(_)) => {
+                    let current = if selected(host, id) { "true" } else { "false" };
+                    VARIANT::from(BSTR::from(format!("current={current}")))
                 }
-                UIA_ValueIsReadOnlyPropertyId if id == Id::Folder => VARIANT::from(true),
+                UIA_ValueValuePropertyId if value.is_some() => {
+                    VARIANT::from(BSTR::from(value.unwrap_or_default()))
+                }
+                UIA_ValueIsReadOnlyPropertyId if value.is_some() => VARIANT::from(true),
+                UIA_ExpandCollapseExpandCollapseStatePropertyId => match id {
+                    Id::Select(key) => VARIANT::from(expand_state(host, key).0),
+                    _ => VARIANT::default(),
+                },
+                UIA_ToggleToggleStatePropertyId => match id {
+                    Id::Shortcut(i) => VARIANT::from(toggle_state(host, i).0),
+                    _ => VARIANT::default(),
+                },
                 _ => VARIANT::default(),
             })
         })
@@ -336,6 +455,8 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
 impl IRawElementProviderFragment_Impl for Node_Impl {
     fn Navigate(&self, direction: NavigateDirection) -> Result<IRawElementProviderFragment> {
         let id = self.id;
+        let open = with(|host| Ok(open_list(host)))?;
+        let children = |id| children(id, open);
         let next = match direction {
             NavigateDirection_Parent => parent(id),
             NavigateDirection_FirstChild => children(id).first().copied(),
@@ -408,7 +529,7 @@ impl IRawElementProviderFragmentRoot_Impl for Node_Impl {
             if rect(host, Id::Folder).contains(px, py) {
                 return Ok(Id::Folder);
             }
-            for id in children(Id::Root) {
+            for id in children(Id::Root, None) {
                 if rect(host, id).contains(px, py) {
                     return Ok(id);
                 }
@@ -419,7 +540,12 @@ impl IRawElementProviderFragmentRoot_Impl for Node_Impl {
     }
 
     fn GetFocus(&self) -> Result<IRawElementProviderFragment> {
-        let focus = with(|host| Ok(host.scene.focus))?;
+        let focus = with(|host| {
+            Ok(match host.scene.open {
+                Some((key, state)) => Some(Target::Option(key, state.active)),
+                None => host.scene.focus,
+            })
+        })?;
         focus
             .map(|target| fragment(id_of(target)))
             .ok_or_else(Error::empty)
@@ -448,6 +574,16 @@ impl IToggleProvider_Impl for Node_Impl {
                 }
                 host.activate(Target::Row(row));
             }
+            if let Id::Shortcut(i) = id {
+                // `aria-pressed`: a second toggle stops recording.
+                if host.scene.recording == Some(i) {
+                    host.scene.stop_recording();
+                } else {
+                    host.scene.set_focus(Some(Target::Shortcut(i)), true);
+                    host.scene.start_recording(i);
+                }
+                host.need = true;
+            }
             Ok(())
         })
     }
@@ -456,6 +592,7 @@ impl IToggleProvider_Impl for Node_Impl {
         let id = self.id;
         with(|host| match id {
             Id::Switch(row) if host.scene.rows[row].on => Ok(ToggleState_On),
+            Id::Shortcut(i) => Ok(toggle_state(host, i)),
             _ => Ok(ToggleState_Off),
         })
     }
@@ -466,6 +603,8 @@ impl ISelectionProvider_Impl for Node_Impl {
         let id = self.id;
         let chosen = with(|host| {
             Ok(match id {
+                Id::Select(key) => Id::Option(key, host.scene.select_index(key)),
+                Id::Nav => Id::NavItem(host.scene.active),
                 Id::Modes => Id::Mode(host.scene.mode_index()),
                 _ => Id::Accent(host.scene.theme_index()),
             })
@@ -524,11 +663,65 @@ impl IValueProvider_Impl for Node_Impl {
     }
 
     fn Value(&self) -> Result<BSTR> {
-        with(|host| Ok(BSTR::from(host.scene.settings().output_directory.as_str())))
+        let id = self.id;
+        with(|host| {
+            let scene = &host.scene;
+            Ok(BSTR::from(match id {
+                Id::Select(key) => scene.select_value(key),
+                Id::Shortcut(i) => scene.shortcut_value(i),
+                _ => scene.settings().output_directory.clone(),
+            }))
+        })
     }
 
     fn IsReadOnly(&self) -> Result<BOOL> {
         Ok(true.into())
+    }
+}
+
+fn expand_state(host: &Host, key: SelectKey) -> ExpandCollapseState {
+    if host.scene.open.is_some_and(|(open, _)| open == key) {
+        ExpandCollapseState_Expanded
+    } else {
+        ExpandCollapseState_Collapsed
+    }
+}
+
+fn toggle_state(host: &Host, index: usize) -> ToggleState {
+    if host.scene.recording == Some(index) {
+        ToggleState_On
+    } else {
+        ToggleState_Off
+    }
+}
+
+impl IExpandCollapseProvider_Impl for Node_Impl {
+    fn Expand(&self) -> Result<()> {
+        let id = self.id;
+        with(|host| {
+            if let Id::Select(key) = id {
+                host.scene.set_focus(Some(Target::Select(key)), true);
+                host.scene.open_select(key);
+                host.need = true;
+            }
+            Ok(())
+        })
+    }
+
+    fn Collapse(&self) -> Result<()> {
+        with(|host| {
+            host.scene.close_select();
+            host.need = true;
+            Ok(())
+        })
+    }
+
+    fn ExpandCollapseState(&self) -> Result<ExpandCollapseState> {
+        let id = self.id;
+        with(|host| match id {
+            Id::Select(key) => Ok(expand_state(host, key)),
+            _ => Ok(ExpandCollapseState_LeafNode),
+        })
     }
 }
 
@@ -577,6 +770,81 @@ pub fn raise(events: &[(Event, bool, String)]) {
                         &VARIANT::default(),
                         &VARIANT::from(BSTR::from(detail.as_str())),
                     );
+                }
+                Event::Expanded(key, open) => {
+                    let state = |open: bool| {
+                        VARIANT::from(if open {
+                            ExpandCollapseState_Expanded.0
+                        } else {
+                            ExpandCollapseState_Collapsed.0
+                        })
+                    };
+                    let combo = node(Id::Select(key));
+                    let _ = UiaRaiseAutomationPropertyChangedEvent(
+                        &combo,
+                        UIA_ExpandCollapseExpandCollapseStatePropertyId,
+                        &state(!open),
+                        &state(open),
+                    );
+                    let _ = UiaRaiseStructureChangedEvent(
+                        &combo,
+                        StructureChangeType_ChildrenInvalidated,
+                        runtime_id(Id::Select(key)).as_mut_ptr(),
+                        3,
+                    );
+                    if !open {
+                        // Focus returns to the trigger.
+                        let _ = UiaRaiseAutomationEvent(&combo, UIA_AutomationFocusChangedEventId);
+                    }
+                }
+                Event::Active(key, index) => {
+                    let _ = UiaRaiseAutomationEvent(
+                        &node(Id::Option(key, index)),
+                        UIA_AutomationFocusChangedEventId,
+                    );
+                }
+                Event::Value(target) => {
+                    let _ = UiaRaiseAutomationPropertyChangedEvent(
+                        &node(id_of(target)),
+                        UIA_ValueValuePropertyId,
+                        &VARIANT::default(),
+                        &VARIANT::from(BSTR::from(detail.as_str())),
+                    );
+                }
+                Event::Recording(index, recording) => {
+                    let state = |on: bool| VARIANT::from(if on { 1i32 } else { 0i32 });
+                    let recorder = node(Id::Shortcut(index));
+                    let _ = UiaRaiseAutomationPropertyChangedEvent(
+                        &recorder,
+                        UIA_ToggleToggleStatePropertyId,
+                        &state(!recording),
+                        &state(recording),
+                    );
+                    let _ = UiaRaiseAutomationPropertyChangedEvent(
+                        &recorder,
+                        UIA_ValueValuePropertyId,
+                        &VARIANT::default(),
+                        &VARIANT::from(BSTR::from(detail.as_str())),
+                    );
+                }
+                Event::ShortcutError(index) => {
+                    let recorder = node(Id::Shortcut(index));
+                    let _ = UiaRaiseAutomationPropertyChangedEvent(
+                        &recorder,
+                        UIA_HelpTextPropertyId,
+                        &VARIANT::default(),
+                        &VARIANT::from(BSTR::from(detail.as_str())),
+                    );
+                    // `role="status"`: announce a new error.
+                    if !detail.is_empty() {
+                        let _ = UiaRaiseNotificationEvent(
+                            &recorder,
+                            NotificationKind_Other,
+                            NotificationProcessing_ImportantMostRecent,
+                            &BSTR::from(detail.as_str()),
+                            &BSTR::from("shortcut-error"),
+                        );
+                    }
                 }
             }
         }

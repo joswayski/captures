@@ -99,6 +99,36 @@ fonts, which ignores Direct2D layers. The picker, live re-theming,
 animations, DPI and Narrator need a real Windows run. macOS, Linux:
 unchanged.
 
+The third Windows slice adds the Shortcuts and Recording cards after Capture,
+plus fixes from the first real-hardware run: an external resize now
+presents synchronously, and messages sent from other threads wake the loop.
+Node surfaces also snap both edges to device pixels, which removes the 150%
+seam under the header. The Interface theme and accent groups are each one
+Tab stop with arrow keys, and sidebar sections report the one in view.
+Shortcuts has the platform intro, the Windows screenshot-key row with Open
+(Windows keyboard settings), and seven recorders. A recorder shows key caps,
+records a chord from its scan code through the shared `record_shortcut`
+policy, and shows Invalid messages and `captures-settings` validation errors
+(empty or duplicate shortcuts) below the field. It saves Complete chords and
+cancels on Esc or blur. Recording has the format, frame rate, maximum
+resolution, countdown and microphone selects, then the five toggles in
+`RECORDING_TOGGLES` order. Microphones come from
+`captures-recording-platform` (cpal/WASAPI) on a worker thread, with the
+shared loading and missing-device rows. The selects are token-drawn
+`CustomSelect`s whose listbox is a composition overlay placed by the shared
+`controls::select::layout`. It pops in on the compositor, and the active row
+is the only redraw on hover or arrows. Keys come from `controls::select::key`,
+plus one-second type-ahead, wheel scrolling and outside-click close. UI
+Automation exposes ComboBox (ExpandCollapse, Selection, Value) with ListItem
+options (SelectionItem; the active option is the focused element), recorders
+as toggle buttons with a read-only Value and a notification for new errors,
+and Open as Invoke. Not in shipping: Delete or Backspace on a focused recorder
+restores its default. Global hotkey registration and the GIF export, Updates
+and About cards are not ported yet. Windows: cross-compiled only
+(`x86_64-pc-windows-gnu`) and rendered offscreen under Wine with substitute
+fonts. Resize, the seam fix, key recording, the listbox, microphones and
+Narrator need a real Windows run. macOS, Linux: unchanged.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,

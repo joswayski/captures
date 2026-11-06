@@ -10,12 +10,14 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
+use captures_app::controls::select;
 use captures_app::preferences;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
 use windows::Win32::Graphics::DirectComposition::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Threading::INFINITE;
 use windows::Win32::UI::Accessibility::*;
 use windows::Win32::UI::HiDpi::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
@@ -23,10 +25,14 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
 
 use crate::gfx::{self, Gfx};
-use crate::scene::{Action, Event, Prop, RowKey, Scene, Target};
+use crate::scene::{Action, Event, Kind, Prop, RowKey, Scene, Target};
 use crate::{Options, appearance};
 
 const WM_APP_LOGIN: u32 = WM_APP + 1;
+/// Wakes the run loop after a handler marked the frame dirty.
+const WM_APP_WAKE: u32 = WM_APP + 2;
+/// Microphones from the shared recording stack are ready.
+const WM_APP_MICROPHONES: u32 = WM_APP + 3;
 const WM_MOUSELEAVE: u32 = 0x02A3;
 const TIMER_MOTION: usize = 1;
 const SEGMENTS: usize = 16;
@@ -36,9 +42,18 @@ thread_local! {
 }
 
 /// Run `f` on the host unless it is borrowed (re-entrant messages, UIA calls
-/// during a frame) or not created yet.
+/// during a frame) or not created yet. Whatever `f` leaves dirty is
+/// guaranteed a frame: messages sent from other threads (an external resize,
+/// UIA) are dispatched inside the loop's wait, which would otherwise keep
+/// blocking with `need` set.
 pub fn with_host<R>(f: impl FnOnce(&mut Host) -> R) -> Option<R> {
-    HOST.with(|h| h.try_borrow_mut().ok().and_then(|mut h| h.as_mut().map(f)))
+    HOST.with(|h| {
+        let mut h = h.try_borrow_mut().ok()?;
+        let host = h.as_mut()?;
+        let result = f(host);
+        host.wake();
+        Some(result)
+    })
 }
 
 struct Login {
@@ -55,6 +70,9 @@ pub struct Host {
     pub need: bool,
     _target: IDCompositionTarget,
     visuals: Vec<IDCompositionVisual3>,
+    /// The select chevrons' compositor rotation.
+    rotations: Vec<Option<IDCompositionRotateTransform>>,
+    microphones: Receiver<Vec<(String, String)>>,
     surfaces: Vec<Option<(IDCompositionSurface, (u32, u32))>>,
     /// Static visual offsets in pixels, relative to the parent visual.
     offsets: Vec<(f32, f32)>,
@@ -66,6 +84,8 @@ pub struct Host {
     appearance: Option<String>,
     /// Choose… was activated; the picker opens once the host is released.
     pick_folder: bool,
+    /// A `WM_APP_WAKE` is queued.
+    woken: bool,
 }
 
 impl Host {
@@ -85,8 +105,16 @@ impl Host {
         unsafe {
             let target = dcomp.CreateTargetForHwnd(hwnd, true)?;
             let mut visuals: Vec<IDCompositionVisual3> = Vec::new();
+            let mut rotations = Vec::new();
             for (index, node) in scene.nodes.iter().enumerate() {
                 let visual: IDCompositionVisual3 = dcomp.CreateVisual()?.cast()?;
+                rotations.push(if matches!(node.kind, Kind::Chevron(_)) {
+                    let rotation = dcomp.CreateRotateTransform()?;
+                    visual.SetTransform(&rotation)?;
+                    Some(rotation)
+                } else {
+                    None
+                });
                 if node.group_opacity {
                     visual.SetOpacityMode(DCOMPOSITION_OPACITY_MODE_LAYER)?;
                 }
@@ -117,6 +145,22 @@ impl Host {
                 sender,
             });
             appearance::title_bar(hwnd, &scene.t);
+            // Microphones enumerate (cpal/WASAPI) off the UI thread.
+            let (found, microphones) = channel();
+            let target_hwnd = hwnd.0 as isize;
+            std::thread::spawn(move || {
+                let devices = captures_recording_platform::microphone_devices()
+                    .into_iter()
+                    .map(|device| (device.id, device.name))
+                    .collect();
+                let _ = found.send(devices);
+                let _ = PostMessageW(
+                    Some(HWND(target_hwnd as *mut _)),
+                    WM_APP_MICROPHONES,
+                    WPARAM(0),
+                    LPARAM(0),
+                );
+            });
             Ok(Self {
                 hwnd,
                 g,
@@ -124,6 +168,8 @@ impl Host {
                 need: true,
                 _target: target,
                 visuals,
+                rotations,
+                microphones,
                 surfaces: (0..count).map(|_| None).collect(),
                 offsets: vec![(0., 0.); count],
                 layout: true,
@@ -133,7 +179,32 @@ impl Host {
                 login,
                 appearance: options.appearance.clone(),
                 pick_folder: false,
+                woken: false,
             })
+        }
+    }
+
+    /// Queue a wake message when a frame is due and none is queued.
+    fn wake(&mut self) {
+        if self.need && !self.woken {
+            self.woken = true;
+            unsafe {
+                let _ = PostMessageW(Some(self.hwnd), WM_APP_WAKE, WPARAM(0), LPARAM(0));
+            }
+        }
+    }
+
+    /// Draw and commit now, and wait until the compositor has the frame, so
+    /// a resize never shows the old frame beside uncovered desktop.
+    fn present(&mut self) {
+        self.need = false;
+        if let Err(error) = self.frame() {
+            eprintln!("frame failed: {error:?}");
+        }
+        if let Some(dcomp) = &self.g.dcomp {
+            unsafe {
+                let _ = dcomp.WaitForCommitCompletion();
+            }
         }
     }
 
@@ -147,25 +218,34 @@ impl Host {
     }
 
     fn frame(&mut self) -> Result<()> {
-        if self.layout {
+        if self.layout || self.scene.relayout {
             self.layout = false;
+            self.scene.relayout = false;
             let (w, h) = self.client_dips();
             self.scene.layout(&self.g, w, h)?;
         }
+        self.scene.prepare(&self.g)?;
         let s = self.scene.scale;
         let count = self.scene.nodes.len();
-        // Visual origins in pixels: rounded rect origin minus rounded bleed.
+        // Every node's rect snaps to device pixels by rounding its edges, not
+        // its origin and size, so neighbours that share an edge in DIPs share
+        // it in pixels too: no half-covered row at fractional scales (150%),
+        // where the window has no redirection bitmap and the desktop would
+        // show through. Visual origins are the snapped origin minus the bleed.
         let mut abs = vec![(0f32, 0f32); count];
         let mut origin = vec![(0f32, 0f32); count];
+        let mut snapped = vec![(0f32, 0f32); count];
         for i in 0..count {
             let node = &self.scene.nodes[i];
             let base = node.parent.map_or((0., 0.), |p| abs[p]);
             abs[i] = (base.0 + node.rect.x, base.1 + node.rect.y);
             let bleed = (node.bleed * s).round();
-            origin[i] = (
-                (abs[i].0 * s).round() - bleed,
-                (abs[i].1 * s).round() - bleed,
+            let (left, top) = ((abs[i].0 * s).round(), (abs[i].1 * s).round());
+            snapped[i] = (
+                ((abs[i].0 + node.rect.w) * s).round() - left,
+                ((abs[i].1 + node.rect.h) * s).round() - top,
             );
+            origin[i] = (left - bleed, top - bleed);
         }
         let mut draws = Vec::new();
         unsafe {
@@ -181,22 +261,29 @@ impl Host {
                     visual.SetOffsetY2(offset.1)?;
                     visual.SetOpacity2(node.opacity)?;
                     visual.SetVisible(node.visible)?;
+                    if let Some(rotation) = &self.rotations[i] {
+                        let bleed = (node.bleed * s).round();
+                        rotation.SetCenterX2(bleed + snapped[i].0 / 2.)?;
+                        rotation.SetCenterY2(bleed + snapped[i].1 / 2.)?;
+                        rotation.SetAngle2(node.angle)?;
+                    }
                     if node.clip {
                         let bleed = (node.bleed * s).round();
                         visual.SetClip2(&D2D_RECT_F {
                             left: bleed,
                             top: bleed,
-                            right: bleed + (node.rect.w * s).round(),
-                            bottom: bleed + (node.rect.h * s).round(),
+                            right: bleed + snapped[i].0,
+                            bottom: bleed + snapped[i].1,
                         })?;
                     }
                 }
                 if !node.kind.has_content() {
                     continue;
                 }
+                let bleed = 2. * (node.bleed * s).round();
                 let size = (
-                    ((node.rect.w + 2. * node.bleed) * s).ceil().max(1.) as u32,
-                    ((node.rect.h + 2. * node.bleed) * s).ceil().max(1.) as u32,
+                    (snapped[i].0 + bleed).max(1.) as u32,
+                    (snapped[i].1 + bleed).max(1.) as u32,
                 );
                 if self.surfaces[i]
                     .as_ref()
@@ -215,9 +302,16 @@ impl Host {
         }
         for i in draws {
             let (surface, size) = self.surfaces[i].as_ref().expect("surface");
-            let bleed = (self.scene.nodes[i].bleed * s).round();
+            let node = &self.scene.nodes[i];
+            let bleed = (node.bleed * s).round();
+            // DIPs to pixels per axis, so the rect fills its snapped box.
+            let axis = |px: f32, dips: f32| if dips > 0. { px / dips } else { s };
+            let scale = (
+                axis(snapped[i].0, node.rect.w),
+                axis(snapped[i].1, node.rect.h),
+            );
             let (scene, g) = (&self.scene, &self.g);
-            gfx::draw_surface(surface, *size, s, bleed, |dc| scene.draw(dc, g, i))?;
+            gfx::draw_surface(surface, *size, scale, bleed, |dc| scene.draw(dc, g, i))?;
         }
         self.start_motions()?;
         unsafe { self.g.dcomp.as_ref().ok_or_else(Error::empty)?.Commit()? };
@@ -233,9 +327,16 @@ impl Host {
         for motion in self.scene.motions.iter_mut().filter(|m| !m.applied) {
             motion.applied = true;
             any = true;
+            if motion.fresh {
+                // A new motion starts with the frame that first shows it, so
+                // a slow frame (a re-theme redraws every surface) does not
+                // eat into it. Motions re-issued after a layout keep going.
+                motion.fresh = false;
+                motion.start = std::time::Instant::now();
+            }
             // Offsets are static pixel offsets (at the target) plus the delta.
             let (base, mul) = match motion.prop {
-                Prop::Opacity => (0., 1.),
+                Prop::Opacity | Prop::Angle => (0., 1.),
                 Prop::OffsetX => (self.offsets[motion.node].0 - motion.to * s, s),
                 Prop::OffsetY => (self.offsets[motion.node].1 - motion.to * s, s),
             };
@@ -260,6 +361,11 @@ impl Host {
                     Prop::Opacity => visual.SetOpacity(&animation)?,
                     Prop::OffsetX => visual.SetOffsetX(&animation)?,
                     Prop::OffsetY => visual.SetOffsetY(&animation)?,
+                    Prop::Angle => {
+                        if let Some(rotation) = &self.rotations[motion.node] {
+                            rotation.SetAngle(&animation)?;
+                        }
+                    }
                 }
             }
         }
@@ -280,6 +386,12 @@ impl Host {
                 self.retheme();
             }
             Some(Action::ChooseFolder) => self.pick_folder = true,
+            Some(Action::KeyboardSettings) => {
+                let platform = crate::scene::PLATFORM;
+                if let Err(error) = preferences::open_keyboard_settings(platform) {
+                    eprintln!("{error}");
+                }
+            }
             None => {}
         }
         self.need = true;
@@ -394,9 +506,10 @@ impl Host {
             WM_SIZE => {
                 if lp.0 & 0xffff != 0 && (lp.0 >> 16) & 0xffff != 0 {
                     self.layout = true;
-                    self.need = true;
+                    self.present();
                 }
             }
+            WM_APP_WAKE => self.woken = false,
             WM_TIMER if wp.0 == TIMER_MOTION => {
                 if !self.scene.tick() {
                     unsafe {
@@ -407,6 +520,18 @@ impl Host {
                 self.need = true;
             }
             WM_APP_LOGIN => self.login_results(),
+            WM_APP_MICROPHONES => {
+                if let Some(devices) = self.microphones.try_iter().last() {
+                    self.scene.set_microphones(devices);
+                    self.need = true;
+                }
+            }
+            // Like a DOM blur: recording stops and the listbox closes.
+            WM_KILLFOCUS => {
+                self.scene.blur();
+                self.need = true;
+                return None;
+            }
             WM_SETTINGCHANGE => self.refresh_appearance(),
             WM_MOUSEMOVE => {
                 if !self.tracking {
@@ -431,9 +556,18 @@ impl Host {
                 unsafe { SetCapture(self.hwnd) };
                 let hit = self.scene.hit(x, y);
                 self.scene.pressed = hit;
-                // A click focuses the control without showing the ring.
-                let focus = hit.filter(|t| self.scene.focusable().contains(t));
-                self.scene.set_focus(focus, false);
+                // Options keep focus on their trigger; a click anywhere else
+                // closes the listbox (shipping's outside `pointerdown`).
+                if !matches!(hit, Some(Target::Option(..))) {
+                    if let Some((key, _)) = self.scene.open
+                        && hit != Some(Target::Select(key))
+                    {
+                        self.scene.close_select();
+                    }
+                    // A click focuses the control without showing the ring.
+                    let focus = hit.filter(|t| self.scene.takes_focus(*t));
+                    self.scene.set_focus(focus, false);
+                }
                 self.need = true;
             }
             WM_LBUTTONUP => {
@@ -457,10 +591,17 @@ impl Host {
                     let _ = ScreenToClient(self.hwnd, &mut point);
                 }
                 let (px, py) = (point.x as f32 / s, point.y as f32 / s);
-                if self.scene.viewport().contains(px, py) {
+                if self.scene.list_contains(px, py) {
+                    self.scene
+                        .scroll_list(-delta * appearance::wheel_lines() * 100. / 3.);
+                    self.set_pointer(Some((px, py)));
+                } else if self.scene.viewport().contains(px, py) {
                     // Chromium's 100 px per notch at the default three lines.
                     self.scene
                         .scroll_by(-delta * appearance::wheel_lines() * 100. / 3.);
+                    // An open listbox follows its trigger, like shipping's
+                    // scroll listener.
+                    self.scene.place_list();
                     self.set_pointer(Some((px, py)));
                 }
             }
@@ -480,8 +621,56 @@ impl Host {
                 }
                 return Some(LRESULT(1));
             }
+            WM_KEYDOWN | WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP
+                if self.scene.recording.is_some() =>
+            {
+                let down = matches!(msg, WM_KEYDOWN | WM_SYSKEYDOWN);
+                let alt_f4 = msg == WM_SYSKEYDOWN && VIRTUAL_KEY(wp.0 as u16) == VK_F4;
+                if alt_f4 {
+                    return None;
+                }
+                // Every key goes to the recorder (shipping `preventDefault`);
+                // a modifier's release only refreshes the held keys.
+                if down || crate::keys::is_modifier(wp) {
+                    self.scene.record_key(&crate::keys::event(wp, lp));
+                }
+                self.need = true;
+            }
+            WM_CHAR if self.scene.open.is_some() => {
+                if let Some(ch) = char::from_u32(wp.0 as u32).filter(|c| !c.is_control())
+                    && self.scene.type_ahead(ch)
+                {
+                    self.need = true;
+                } else {
+                    return None;
+                }
+            }
             WM_KEYDOWN => {
                 let vk = VIRTUAL_KEY(wp.0 as u16);
+                let select_key = match vk {
+                    VK_DOWN => Some(select::Key::ArrowDown),
+                    VK_UP => Some(select::Key::ArrowUp),
+                    VK_HOME => Some(select::Key::Home),
+                    VK_END => Some(select::Key::End),
+                    VK_RETURN => Some(select::Key::Enter),
+                    VK_SPACE => Some(select::Key::Space),
+                    VK_ESCAPE => Some(select::Key::Escape),
+                    _ => None,
+                };
+                if let Some(key) = select_key
+                    && self.scene.select_key(key)
+                {
+                    self.need = true;
+                    return Some(LRESULT(0));
+                }
+                // Not in shipping: Delete or Backspace on a focused recorder
+                // restores its default shortcut.
+                if let (VK_DELETE | VK_BACK, Some(Target::Shortcut(index))) = (vk, self.scene.focus)
+                {
+                    self.scene.reset_shortcut(index);
+                    self.need = true;
+                    return Some(LRESULT(0));
+                }
                 let page = self.scene.viewport().h * 0.875;
                 let now = self.scene.scroll_now();
                 match vk {
@@ -491,6 +680,14 @@ impl Host {
                             self.scene.set_focus(Some(focus), true);
                             self.activate(focus);
                         }
+                    }
+                    VK_LEFT | VK_RIGHT | VK_UP | VK_DOWN
+                        if let Some(next) =
+                            self.scene.choice_step(matches!(vk, VK_RIGHT | VK_DOWN)) =>
+                    {
+                        // Radio groups: the arrow moves focus and selection.
+                        self.scene.set_focus(Some(next), true);
+                        self.activate(next);
                     }
                     VK_UP => self.scene.scroll_by(-40.),
                     VK_DOWN => self.scene.scroll_by(40.),
@@ -527,7 +724,18 @@ impl Host {
                     (event, row.on, row.detail.clone())
                 }
                 Event::Folder => (event, false, self.scene.settings().output_directory.clone()),
-                Event::Focus(_) | Event::Selected(_) => (event, false, String::new()),
+                Event::Value(Target::Select(key)) | Event::Expanded(key, _) => {
+                    (event, false, self.scene.select_value(key))
+                }
+                Event::Value(Target::Shortcut(index)) | Event::Recording(index, _) => {
+                    (event, false, self.scene.shortcut_value(index))
+                }
+                Event::ShortcutError(index) => {
+                    (event, false, self.scene.shortcut_error(index).to_owned())
+                }
+                Event::Focus(_) | Event::Selected(_) | Event::Active(..) | Event::Value(_) => {
+                    (event, false, String::new())
+                }
             })
             .collect()
     }
@@ -663,6 +871,7 @@ pub fn run(options: Options) -> Result<()> {
                 DispatchMessageW(&msg);
             }
             let state = with_host(|h| {
+                h.woken = false;
                 if h.need {
                     h.need = false;
                     if let Err(error) = h.frame() {
@@ -682,7 +891,10 @@ pub fn run(options: Options) -> Result<()> {
                 continue;
             }
             if !again {
-                let _ = WaitMessage();
+                // Returns for posted, input and sent messages alike; the
+                // drain above dispatches them and `need` is checked again.
+                let _ =
+                    MsgWaitForMultipleObjectsEx(None, INFINITE, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
             }
         }
     }
