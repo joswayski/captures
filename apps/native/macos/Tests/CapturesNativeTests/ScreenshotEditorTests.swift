@@ -7160,8 +7160,17 @@ final class ScreenshotEditorTests: XCTestCase {
         worker.deferRequests = false
         worker.response = { _ in self.snapshot(id: "shot", unsaved: true,
             layers: [self.textLayer(id: "fresh", text: "recoverable\nΩ🙂")]) }
+        var order: [String] = []
+        worker.onAutosave = { order.append("draft") }
+        worker.onClose = { order.append("close") }
         XCTAssertFalse(controller.windowShouldClose(controller.window))
         XCTAssertEqual(worker.closeCount, 1, "the recovered buffer can finish and close on retry")
+        // The open label is committed, then the draft is flushed before the
+        // session closes, so closing never drops the label being typed.
+        let finish = try XCTUnwrap(worker.requests.last {
+            $0["operation"] as? String == "finish_text_input" })
+        XCTAssertEqual(finish["commit"] as? Bool, true)
+        XCTAssertEqual(order, ["draft", "close"])
         XCTAssertEqual(presence, ["shot", nil, "shot", nil])
     }
 
