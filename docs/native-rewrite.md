@@ -129,6 +129,24 @@ and About cards are not ported yet. Windows: cross-compiled only
 fonts. Resize, the seam fix, key recording, the listbox, microphones and
 Narrator need a real Windows run. macOS, Linux: unchanged.
 
+The fourth Windows slice finishes the Preferences cards in shipping order.
+GIF export is a three-column grid of the shared frame rate, maximum width and
+palette selects, which save through `captures-settings`. Updates shows the
+same development state as the AppKit and wgpu hosts: the build version and
+"Native development" channel, a disabled Check Now at the shared action width
+with "Updates unavailable" below it, then the "Show what's new on update
+notices" switch. It has no update worker, release channel or download;
+shipping's Preview states (available, installing, errors) are not drawn.
+About is shipping's Send feedback row. Its Open is a no-op until the
+Feedback window is ported. Tauri's About has no version, links or licences,
+so neither does this one. UI Automation exposes the version and status as
+text, Check Now as a disabled button and both Open buttons as Invoke, named
+with their row titles. Not yet ported: Preferences Find (it needs a
+token-drawn editable text field), the custom colour editor and the compact
+layout. Windows: cross-compiled only (`x86_64-pc-windows-gnu`) and rendered
+offscreen under Wine with substitute fonts. Narrator and real-hardware
+rendering need a Windows run. macOS, Linux: unchanged.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,

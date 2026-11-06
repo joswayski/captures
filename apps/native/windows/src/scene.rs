@@ -13,8 +13,9 @@ use std::time::Instant;
 use captures_app::controls::select;
 use captures_app::motion::CubicBezier;
 use captures_app::preferences::{
-    self, APPEARANCE_MODES, COUNTDOWN_SECONDS, RECORDING_FORMATS, RECORDING_FPS, RECORDING_TOGGLES,
-    RESOLUTIONS, SECTIONS, SHORTCUT_ROWS, THEMES,
+    self, APPEARANCE_MODES, COUNTDOWN_SECONDS, GIF_FPS, GIF_MAX_WIDTHS, GIF_PALETTE_COLORS,
+    RECORDING_FORMATS, RECORDING_FPS, RECORDING_TOGGLES, RESOLUTIONS, SECTIONS, SHORTCUT_ROWS,
+    THEMES,
 };
 use captures_app::shortcuts::{
     ShortcutKeyEvent, ShortcutPlatform, ShortcutRecording, record_shortcut, shortcut_display_tokens,
@@ -63,15 +64,50 @@ pub enum Item {
     Accent,
     /// Save captures to: the folder field and Choose….
     Folder,
-    /// The system screenshot-key `.settings-utility-row` and its Open button.
-    Utility,
+    /// A `.settings-utility-row`: copy and an Open button.
+    Utility(Utility),
     /// The `.shortcut-list` of recorders, in `SHORTCUT_ROWS` order.
     Shortcuts,
     /// A `.setting-row-inline` with a `CustomSelect`.
     Select(SelectKey),
-    /// The two-column `.setting-grid` of stacked frame rate and resolution.
-    SelectGrid,
+    /// A `.setting-grid` (two or three 1fr columns) of stacked selects.
+    SelectGrid(&'static [SelectKey]),
+    /// Updates: build identity, the Check Now action and its status.
+    Updates,
 }
+
+/// The utility rows' Open buttons.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Utility {
+    /// Shortcuts: Windows screenshot-key settings.
+    Keyboard,
+    /// About: Send feedback.
+    Feedback,
+}
+
+impl Utility {
+    pub fn index(self) -> usize {
+        self as usize
+    }
+
+    /// `(title, detail, action)`.
+    pub fn copy(self) -> (&'static str, &'static str, &'static str) {
+        match self {
+            Self::Keyboard => {
+                let help = preferences::shortcut_help(PLATFORM);
+                (help.system_title, help.system_body, help.system_action)
+            }
+            Self::Feedback => (
+                preferences::FEEDBACK_TITLE,
+                preferences::FEEDBACK_DETAIL,
+                preferences::FEEDBACK_ACTION,
+            ),
+        }
+    }
+}
+
+const RECORDING_GRID: &[SelectKey] = &[SelectKey::Fps, SelectKey::Resolution];
+const GIF_GRID: &[SelectKey] = &[SelectKey::GifFps, SelectKey::GifWidth, SelectKey::GifColors];
 
 /// The Recording card's `CustomSelect`s.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -81,14 +117,21 @@ pub enum SelectKey {
     Resolution,
     Countdown,
     Microphone,
+    GifFps,
+    GifWidth,
+    GifColors,
 }
 
-pub const SELECTS: [SelectKey; 5] = [
+/// Every select, in card order.
+pub const SELECTS: [SelectKey; 8] = [
     SelectKey::Format,
     SelectKey::Fps,
     SelectKey::Resolution,
     SelectKey::Countdown,
     SelectKey::Microphone,
+    SelectKey::GifFps,
+    SelectKey::GifWidth,
+    SelectKey::GifColors,
 ];
 
 impl SelectKey {
@@ -104,6 +147,9 @@ impl SelectKey {
             Self::Resolution => "recording.video_max_resolution",
             Self::Countdown => "recording.countdown_seconds",
             Self::Microphone => "recording.microphone_device_id",
+            Self::GifFps => "recording.gif_fps",
+            Self::GifWidth => "recording.gif_max_width",
+            Self::GifColors => "recording.gif_max_colors",
         }
     }
 
@@ -114,7 +160,7 @@ impl SelectKey {
 }
 
 /// Cards in shipping order: (section index, items).
-pub const CARDS: [(usize, &[Item]); 5] = [
+pub const CARDS: [(usize, &[Item]); 8] = [
     (0, &[Item::Switch(0)]),
     (1, &[Item::Mode, Item::Accent]),
     (
@@ -127,12 +173,12 @@ pub const CARDS: [(usize, &[Item]); 5] = [
             Item::Switch(4),
         ],
     ),
-    (3, &[Item::Utility, Item::Shortcuts]),
+    (3, &[Item::Utility(Utility::Keyboard), Item::Shortcuts]),
     (
         4,
         &[
             Item::Select(SelectKey::Format),
-            Item::SelectGrid,
+            Item::SelectGrid(RECORDING_GRID),
             Item::Select(SelectKey::Countdown),
             Item::Select(SelectKey::Microphone),
             Item::Switch(5),
@@ -142,6 +188,9 @@ pub const CARDS: [(usize, &[Item]); 5] = [
             Item::Switch(9),
         ],
     ),
+    (5, &[Item::SelectGrid(GIF_GRID)]),
+    (6, &[Item::Updates, Item::Switch(10)]),
+    (7, &[Item::Utility(Utility::Feedback)]),
 ];
 pub const FLAGS: [&str; 4] = [
     "auto_copy_to_clipboard",
@@ -199,8 +248,8 @@ pub enum Target {
     Theme(usize),
     /// Save captures to: Choose….
     Choose,
-    /// The system screenshot-key row's Open.
-    Open,
+    /// A utility row's Open.
+    Open(Utility),
     /// A shortcut recorder, in `SHORTCUT_ROWS` order.
     Shortcut(usize),
     /// A select trigger.
@@ -255,8 +304,13 @@ pub enum Kind {
     },
     /// `.settings-utility-action`, resting or hovered.
     Open {
+        which: Utility,
         lit: bool,
     },
+    /// Updates' Check Now, disabled without an update worker.
+    UpdateAction,
+    /// `.update-settings-status`, right-aligned under Check Now.
+    UpdateStatus,
     /// A `.shortcut-row > span`.
     ShortcutLabel(usize),
     /// `.shortcut-recorder`: field, key caps or the prompt.
@@ -372,6 +426,8 @@ pub enum RowKey {
     Flag(usize),
     /// A Recording card switch, by index into `RECORDING_TOGGLES`.
     Recording(usize),
+    /// Updates: show what's new on update notices.
+    Changelog,
 }
 
 pub struct RowState {
@@ -499,7 +555,10 @@ struct Texts {
     check: Option<Text>,
     path: Option<Text>,
     choose: Option<Text>,
-    open: Option<Text>,
+    /// Utility row actions, by `Utility::index`.
+    open: [Option<Text>; 2],
+    update_action: Option<Text>,
+    update_status: Option<Text>,
     shortcut_labels: Vec<Text>,
     /// Key caps per recorder.
     caps: Vec<Vec<Text>>,
@@ -564,8 +623,12 @@ pub struct Scene {
     folder_copy: usize,
     field: usize,
     choose: Layered,
-    utility_copy: usize,
-    open_button: Layered,
+    /// Utility rows' copy and Open, by `Utility::index`.
+    utility_copy: [usize; 2],
+    open_buttons: [Layered; 2],
+    update_copy: usize,
+    update_action: usize,
+    update_status: usize,
     shortcuts: Vec<ShortcutNodes>,
     selects: Vec<SelectNodes>,
     list: ListNodes,
@@ -613,6 +676,14 @@ impl Scene {
                 enabled: true,
             });
         }
+        let row = preferences::row("show_update_changelog");
+        rows.push(RowState {
+            key: RowKey::Changelog,
+            title: row.title,
+            detail: row.description.into(),
+            on: settings.show_update_changelog,
+            enabled: true,
+        });
         let none = Layered {
             base: 0,
             lit: 0,
@@ -663,8 +734,11 @@ impl Scene {
             folder_copy: 0,
             field: 0,
             choose: none,
-            utility_copy: 0,
-            open_button: none,
+            utility_copy: [0; 2],
+            open_buttons: [none; 2],
+            update_copy: 0,
+            update_action: 0,
+            update_status: 0,
             shortcuts: Vec::new(),
             selects: Vec::new(),
             list: ListNodes::default(),
@@ -813,13 +887,21 @@ impl Scene {
                         let ring = self.ring(base, Ring::Full(radius), Target::Choose);
                         self.choose = Layered { base, lit, ring };
                     }
-                    Item::Utility => {
-                        self.utility_copy = copy;
-                        let base = self.add(Some(node), Kind::Open { lit: false }, 2.);
-                        let lit = self.add(Some(base), Kind::Open { lit: true }, 2.);
+                    Item::Utility(which) => {
+                        self.utility_copy[which.index()] = copy;
+                        let open = |lit| Kind::Open { which, lit };
+                        let base = self.add(Some(node), open(false), 2.);
+                        let lit = self.add(Some(base), open(true), 2.);
                         let radius = self.t.n("r-md");
-                        let ring = self.ring(base, Ring::Full(radius), Target::Open);
-                        self.open_button = Layered { base, lit, ring };
+                        let ring = self.ring(base, Ring::Full(radius), Target::Open(which));
+                        self.open_buttons[which.index()] = Layered { base, lit, ring };
+                    }
+                    Item::Updates => {
+                        self.update_copy = copy;
+                        self.update_action = self.add(Some(node), Kind::UpdateAction, 2.);
+                        // `.ui-btn:disabled`.
+                        self.nodes[self.update_action].opacity = 0.45;
+                        self.update_status = self.add(Some(node), Kind::UpdateStatus, 0.);
                     }
                     Item::Shortcuts => {
                         let radius = self.t.n("r-md");
@@ -840,8 +922,8 @@ impl Scene {
                         }
                     }
                     Item::Select(key) => self.add_select(node, key, copy),
-                    Item::SelectGrid => {
-                        for key in [SelectKey::Fps, SelectKey::Resolution] {
+                    Item::SelectGrid(keys) => {
+                        for &key in keys {
                             let copy = self.add(Some(node), Kind::Copy(Item::Select(key)), 0.);
                             self.add_select(node, key, copy);
                         }
@@ -925,7 +1007,9 @@ impl Scene {
                 active: true,
             } => (on(index == self.theme_index()), "dur-2"),
             Kind::Choose { lit: true } => (on(self.hover == Some(Target::Choose)), "dur-2"),
-            Kind::Open { lit: true } => (on(self.hover == Some(Target::Open)), "dur-2"),
+            Kind::Open { which, lit: true } => {
+                (on(self.hover == Some(Target::Open(which))), "dur-2")
+            }
             Kind::RecorderHover(index) => {
                 (on(self.hover == Some(Target::Shortcut(index))), "dur-2")
             }
@@ -1398,19 +1482,14 @@ impl Scene {
                     Some(g.text(&self.t, Style::Mono, &self.settings.output_directory, 1e4)?);
                 Ok(copy_h + s4 + h_lg)
             }
-            Item::Utility => {
+            Item::Utility(which) => {
                 // `.settings-utility-row`: copy, then the `auto` action.
-                let help = preferences::shortcut_help(PLATFORM);
-                let open = g.text(&self.t, Style::Control, help.system_action, 1e4)?;
+                let (title, body, action) = which.copy();
+                let open = g.text(&self.t, Style::Control, action, 1e4)?;
                 let button_w = (open.width + 2. * s5 + 2.).ceil();
                 let copy_w = (width - button_w - s6).max(40.);
-                let title = g.text(&self.t, Style::RowTitle, help.system_title, copy_w)?;
-                let detail = g.text(
-                    &self.t,
-                    Style::RowDescription,
-                    help.system_body,
-                    copy_w.min(measure),
-                )?;
+                let title = g.text(&self.t, Style::RowTitle, title, copy_w)?;
+                let detail = g.text(&self.t, Style::RowDescription, body, copy_w.min(measure))?;
                 let copy_h = title.height + 3. + detail.height;
                 let content_h = copy_h.max(h_md);
                 self.texts.copies.push(CopyText {
@@ -1419,7 +1498,7 @@ impl Scene {
                     detail: Some(detail),
                     gap: 3.,
                 });
-                self.nodes[self.utility_copy].rect =
+                self.nodes[self.utility_copy[which.index()]].rect =
                     Rect::new(x, y + (content_h - copy_h) / 2., copy_w, copy_h);
                 let button = Rect::new(
                     x + width - button_w,
@@ -1427,11 +1506,58 @@ impl Scene {
                     button_w,
                     h_md,
                 );
-                let Layered { base, lit, ring } = self.open_button;
+                let Layered { base, lit, ring } = self.open_buttons[which.index()];
                 self.nodes[base].rect = button;
                 self.nodes[lit].rect = button.at_origin();
                 self.nodes[ring].rect = button.at_origin();
-                self.texts.open = Some(open);
+                self.texts.open[which.index()] = Some(open);
+                Ok(content_h)
+            }
+            Item::Updates => {
+                // Like the other native hosts without an update worker: build
+                // identity on the left; a fixed-width Check Now with the
+                // right-aligned `--text-xs` status 4 px below it.
+                let control_w = preferences::UPDATES_ACTION_WIDTH.min(width / 2.);
+                let copy_w = (width - control_w - s6).max(40.);
+                let title = g.text(
+                    &self.t,
+                    Style::RowTitle,
+                    preferences::UPDATES_VERSION,
+                    copy_w,
+                )?;
+                let detail = g.text(
+                    &self.t,
+                    Style::RowDescription,
+                    preferences::UPDATES_CHANNEL,
+                    copy_w,
+                )?;
+                let copy_h = title.height + 3. + detail.height;
+                self.texts.copies.push(CopyText {
+                    item,
+                    title,
+                    detail: Some(detail),
+                    gap: 3.,
+                });
+                let status =
+                    g.text(&self.t, Style::Small, preferences::UPDATES_TITLE, control_w)?;
+                unsafe {
+                    use windows::Win32::Graphics::DirectWrite::DWRITE_TEXT_ALIGNMENT_TRAILING;
+                    status
+                        .layout
+                        .SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING)?;
+                }
+                let control_h = h_md + s2 + status.height;
+                let content_h = copy_h.max(control_h);
+                self.nodes[self.update_copy].rect =
+                    Rect::new(x, y + (content_h - copy_h) / 2., copy_w, copy_h);
+                let top = (y + (content_h - control_h) / 2.).round();
+                let left = x + width - control_w;
+                self.nodes[self.update_action].rect = Rect::new(left, top, control_w, h_md);
+                self.nodes[self.update_status].rect =
+                    Rect::new(left, top + h_md + s2, control_w, status.height);
+                self.texts.update_action =
+                    Some(g.text(&self.t, Style::Control, preferences::UPDATES_ACTION, 1e4)?);
+                self.texts.update_status = Some(status);
                 Ok(content_h)
             }
             Item::Shortcuts => {
@@ -1517,15 +1643,13 @@ impl Scene {
                 self.place_trigger(key, r);
                 Ok(content_h)
             }
-            Item::SelectGrid => {
-                // `.setting-grid`: two 1fr columns 12 px apart of stacked
-                // rows, title then the full-width select 6 px below.
-                let col_w = (width - s5) / 2.;
+            Item::SelectGrid(keys) => {
+                // `.setting-grid` (`-three`): 1fr columns 12 px apart of
+                // stacked rows, title then the full-width select 6 px below.
+                let columns = keys.len() as f32;
+                let col_w = (width - (columns - 1.) * s5) / columns;
                 let mut height: f32 = 0.;
-                for (col, key) in [SelectKey::Fps, SelectKey::Resolution]
-                    .into_iter()
-                    .enumerate()
-                {
+                for (col, &key) in keys.iter().enumerate() {
                     let cx = x + col as f32 * (col_w + s5);
                     let title = g.text(
                         &self.t,
@@ -1777,14 +1901,14 @@ impl Scene {
                     Item::Mode => list.push(Target::Mode(self.mode_index())),
                     Item::Accent => list.push(Target::Theme(self.theme_index())),
                     Item::Folder => list.push(Target::Choose),
-                    Item::Utility => list.push(Target::Open),
+                    Item::Utility(which) => list.push(Target::Open(which)),
+                    // Check Now is disabled, so it is not a Tab stop.
+                    Item::Updates => {}
                     Item::Shortcuts => {
                         list.extend((0..SHORTCUT_ROWS.len()).map(Target::Shortcut));
                     }
                     Item::Select(key) => list.push(Target::Select(key)),
-                    Item::SelectGrid => {
-                        list.extend([SelectKey::Fps, SelectKey::Resolution].map(Target::Select))
-                    }
+                    Item::SelectGrid(keys) => list.extend(keys.iter().map(|&k| Target::Select(k))),
                 }
             }
         }
@@ -1868,7 +1992,9 @@ impl Scene {
             Target::Mode(index) => self.select_mode(index),
             Target::Theme(index) => self.select_theme(index),
             Target::Choose => Some(Action::ChooseFolder),
-            Target::Open => Some(Action::KeyboardSettings),
+            Target::Open(Utility::Keyboard) => Some(Action::KeyboardSettings),
+            // The Send Feedback window is not part of this host yet.
+            Target::Open(Utility::Feedback) => None,
             Target::Shortcut(index) => {
                 self.start_recording(index);
                 None
@@ -1964,6 +2090,12 @@ impl Scene {
                 self.save();
                 None
             }
+            RowKey::Changelog => {
+                self.set_row(row, on);
+                self.settings.show_update_changelog = on;
+                self.save();
+                None
+            }
         }
     }
 
@@ -2037,6 +2169,16 @@ impl Scene {
                 .into_iter()
                 .map(|entry| (entry.label, !entry.enabled))
                 .collect(),
+            SelectKey::GifFps => {
+                plain(GIF_FPS.iter().map(|f| preferences::fps_label(*f)).collect())
+            }
+            SelectKey::GifWidth => plain(
+                GIF_MAX_WIDTHS
+                    .iter()
+                    .map(|w| preferences::width_label(*w))
+                    .collect(),
+            ),
+            SelectKey::GifColors => plain(GIF_PALETTE_COLORS.iter().map(u16::to_string).collect()),
         }
     }
 
@@ -2089,6 +2231,19 @@ impl Scene {
                     .position(|entry| entry.enabled && entry.id.as_deref() == selected)
                     .unwrap_or(0)
             }
+            // Like `CustomSelect`, an unlisted saved value shows the first.
+            SelectKey::GifFps => GIF_FPS
+                .iter()
+                .position(|fps| *fps == recording.gif_fps)
+                .unwrap_or(0),
+            SelectKey::GifWidth => GIF_MAX_WIDTHS
+                .iter()
+                .position(|w| u32::from(*w) == recording.gif_max_width)
+                .unwrap_or(0),
+            SelectKey::GifColors => GIF_PALETTE_COLORS
+                .iter()
+                .position(|c| *c == recording.gif_max_colors)
+                .unwrap_or(0),
         }
     }
 
@@ -2141,6 +2296,9 @@ impl Scene {
                 let entry = self.microphone_entries().into_iter().nth(index);
                 self.settings.recording.microphone_device_id = entry.and_then(|e| e.id);
             }
+            SelectKey::GifFps => recording.gif_fps = GIF_FPS[index],
+            SelectKey::GifWidth => recording.gif_max_width = u32::from(GIF_MAX_WIDTHS[index]),
+            SelectKey::GifColors => recording.gif_max_colors = GIF_PALETTE_COLORS[index],
         }
         self.save();
         // The trigger is `max-content` wide, so its label can move the row.
@@ -2534,11 +2692,24 @@ impl Scene {
             Target::Mode(i) => self.segments[i],
             Target::Theme(i) => self.chips[i].group,
             Target::Choose => self.choose.base,
-            Target::Open => self.open_button.base,
+            Target::Open(which) => self.open_buttons[which.index()].base,
             Target::Shortcut(i) => self.shortcuts[i].recorder,
             Target::Select(key) => self.selects[key.index()].trigger,
             Target::Option(key, i) => return self.option_rect(key, i),
         })
+    }
+
+    /// Updates' Check Now and status, in client DIPs.
+    pub fn update_rects(&self) -> (Rect, Rect) {
+        (
+            self.absolute(self.update_action),
+            self.absolute(self.update_status),
+        )
+    }
+
+    /// A node's copy block (title and detail), in client DIPs.
+    pub fn update_copy_rect(&self) -> Rect {
+        self.absolute(self.update_copy)
     }
 
     /// An option row of the open listbox, in client DIPs.
@@ -2643,7 +2814,11 @@ impl Scene {
         let controls = (0..APPEARANCE_MODES.len())
             .map(Target::Mode)
             .chain((0..THEMES.len()).map(Target::Theme))
-            .chain([Target::Choose, Target::Open])
+            .chain([
+                Target::Choose,
+                Target::Open(Utility::Keyboard),
+                Target::Open(Utility::Feedback),
+            ])
             .chain((0..SHORTCUT_ROWS.len()).map(Target::Shortcut))
             .chain(SELECTS.map(Target::Select));
         for target in controls {
@@ -2852,7 +3027,7 @@ impl Scene {
                     unsafe { dc.PopAxisAlignedClip() };
                 }
             }
-            Kind::Choose { lit } | Kind::Open { lit } => {
+            Kind::Choose { lit } | Kind::Open { lit, .. } => {
                 let radius = t.n("r-md");
                 let (bg, edge) = if lit {
                     ("control-hover", "border-strong")
@@ -2865,12 +3040,28 @@ impl Scene {
                 gfx::fill_round(dc, all, radius, c(bg))?;
                 gfx::border(dc, all, radius, 1., c(edge))?;
                 let label = match n.kind {
-                    Kind::Open { .. } => &self.texts.open,
+                    Kind::Open { which, .. } => &self.texts.open[which.index()],
                     _ => &self.texts.choose,
                 };
                 if let Some(label) = label {
                     let (x, y) = centered(label, (w - label.width) / 2.);
                     gfx::text(dc, label, x, y, c("text"))?;
+                }
+            }
+            Kind::UpdateAction => {
+                // The resting `.settings-utility-action`; the node fades it.
+                let radius = t.n("r-md");
+                gfx::shadow(dc, all, radius, t.shadow("shadow-xs"))?;
+                gfx::fill_round(dc, all, radius, c("control"))?;
+                gfx::border(dc, all, radius, 1., c("control-border"))?;
+                if let Some(label) = &self.texts.update_action {
+                    let (x, y) = centered(label, (w - label.width) / 2.);
+                    gfx::text(dc, label, x, y, c("text"))?;
+                }
+            }
+            Kind::UpdateStatus => {
+                if let Some(status) = &self.texts.update_status {
+                    gfx::text(dc, status, 0., 0., c("text-subtle"))?;
                 }
             }
             Kind::ShortcutLabel(index) => {

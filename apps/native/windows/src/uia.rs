@@ -17,7 +17,9 @@ use windows::Win32::UI::Accessibility::*;
 use windows::core::*;
 
 use crate::host::{Host, with_host};
-use crate::scene::{ACCENT_GROUP_LABEL, CARDS, Event, Item, NAV_WIDTH, Rect, SelectKey, Target};
+use crate::scene::{
+    ACCENT_GROUP_LABEL, CARDS, Event, Item, NAV_WIDTH, Rect, SelectKey, Target, Utility,
+};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Id {
@@ -38,8 +40,13 @@ pub enum Id {
     /// Save captures to: the read-only folder and Choose….
     Folder,
     Choose,
-    /// The system screenshot-key row's Open.
-    Open,
+    /// A utility row's Open: Windows keyboard settings or Send feedback.
+    Open(Utility),
+    /// Updates: the build identity text, the disabled Check Now and the
+    /// status text (`role="status"`).
+    UpdateVersion,
+    UpdateAction,
+    UpdateStatus,
     /// A shortcut recorder: a toggle button whose value is its keys.
     Shortcut(usize),
     /// A select: ComboBox with ExpandCollapse, Selection and Value.
@@ -73,7 +80,7 @@ fn target(id: Id) -> Option<Target> {
         Id::Mode(i) => Some(Target::Mode(i)),
         Id::Accent(i) => Some(Target::Theme(i)),
         Id::Choose => Some(Target::Choose),
-        Id::Open => Some(Target::Open),
+        Id::Open(which) => Some(Target::Open(which)),
         Id::Shortcut(i) => Some(Target::Shortcut(i)),
         Id::Select(key) => Some(Target::Select(key)),
         Id::Option(key, i) => Some(Target::Option(key, i)),
@@ -89,7 +96,7 @@ fn id_of(target: Target) -> Id {
         Target::Mode(i) => Id::Mode(i),
         Target::Theme(i) => Id::Accent(i),
         Target::Choose => Id::Choose,
-        Target::Open => Id::Open,
+        Target::Open(which) => Id::Open(which),
         Target::Shortcut(i) => Id::Shortcut(i),
         Target::Select(key) => Id::Select(key),
         Target::Option(key, i) => Id::Option(key, i),
@@ -112,15 +119,13 @@ fn children(id: Id, open: Open) -> Vec<Id> {
                 Item::Mode => vec![Id::Modes],
                 Item::Accent => vec![Id::Accents],
                 Item::Folder => vec![Id::Folder, Id::Choose],
-                Item::Utility => vec![Id::Open],
+                Item::Utility(which) => vec![Id::Open(which)],
+                Item::Updates => vec![Id::UpdateVersion, Id::UpdateAction, Id::UpdateStatus],
                 Item::Shortcuts => (0..preferences::SHORTCUT_ROWS.len())
                     .map(Id::Shortcut)
                     .collect(),
                 Item::Select(key) => vec![Id::Select(key)],
-                Item::SelectGrid => vec![
-                    Id::Select(SelectKey::Fps),
-                    Id::Select(SelectKey::Resolution),
-                ],
+                Item::SelectGrid(keys) => keys.iter().map(|&k| Id::Select(k)).collect(),
             })
             .collect(),
         // Like a Win32 combo box, the open list's items are its children.
@@ -145,11 +150,18 @@ fn parent(id: Id) -> Option<Id> {
         Id::Modes => Id::Card(card_of(Item::Mode)?),
         Id::Accents => Id::Card(card_of(Item::Accent)?),
         Id::Folder | Id::Choose => Id::Card(card_of(Item::Folder)?),
-        Id::Open => Id::Card(card_of(Item::Utility)?),
-        Id::Shortcut(_) => Id::Card(card_of(Item::Shortcuts)?),
-        Id::Select(key) => {
-            Id::Card(card_of(Item::Select(key)).or_else(|| card_of(Item::SelectGrid))?)
+        Id::Open(which) => Id::Card(card_of(Item::Utility(which))?),
+        Id::UpdateVersion | Id::UpdateAction | Id::UpdateStatus => {
+            Id::Card(card_of(Item::Updates)?)
         }
+        Id::Shortcut(_) => Id::Card(card_of(Item::Shortcuts)?),
+        Id::Select(key) => Id::Card(card_of(Item::Select(key)).or_else(|| {
+            CARDS.iter().position(|(_, items)| {
+                items
+                    .iter()
+                    .any(|item| matches!(item, Item::SelectGrid(keys) if keys.contains(&key)))
+            })
+        })?),
         Id::Option(key, _) => Id::Select(key),
         _ => Id::Root,
     })
@@ -168,6 +180,9 @@ fn rect(host: &Host, id: Id) -> Rect {
         Id::Modes => scene.mode_rect(),
         Id::Accents => scene.accent_rect(),
         Id::Folder => scene.field_rect(),
+        Id::UpdateVersion => scene.update_copy_rect(),
+        Id::UpdateAction => scene.update_rects().0,
+        Id::UpdateStatus => scene.update_rects().1,
         _ => scene.target_rect(target(id).expect("target")),
     }
 }
@@ -188,9 +203,11 @@ fn name(host: &Host, id: Id) -> String {
         Id::Accent(i) => preferences::theme_accessibility_label(&THEMES[i]),
         Id::Folder => preferences::row("output_directory").title.into(),
         Id::Choose => "Choose…".into(),
-        Id::Open => preferences::shortcut_help(crate::scene::PLATFORM)
-            .system_action
-            .into(),
+        // Shipping repeats "Open"; the row title tells the two apart.
+        Id::Open(which) => format!("{} {}", which.copy().2, which.copy().0),
+        Id::UpdateVersion => preferences::UPDATES_VERSION.into(),
+        Id::UpdateAction => preferences::UPDATES_ACTION.into(),
+        Id::UpdateStatus => preferences::UPDATES_TITLE.into(),
         Id::Shortcut(i) => preferences::SHORTCUT_ROWS[i].0.into(),
         Id::Select(key) => key.label().into(),
         Id::Option(key, i) => host
@@ -208,10 +225,9 @@ fn help(host: &Host, id: Id) -> String {
         Id::Switch(row) => host.scene.rows[row].detail.clone(),
         Id::Modes => preferences::row("appearance").description.into(),
         Id::Accents => preferences::row("theme").description.into(),
-        Id::Open => {
-            let help = preferences::shortcut_help(crate::scene::PLATFORM);
-            format!("{}. {}", help.system_title, help.system_body)
-        }
+        Id::Open(which) => which.copy().1.into(),
+        Id::UpdateVersion => preferences::UPDATES_CHANNEL.into(),
+        Id::UpdateAction | Id::UpdateStatus => preferences::UPDATES_DETAIL.into(),
         Id::Shortcut(i) => host.scene.shortcut_error(i).into(),
         Id::Select(key) => preferences::row(key.setting()).description.into(),
         _ => String::new(),
@@ -222,12 +238,12 @@ fn control_type(id: Id) -> UIA_CONTROLTYPE_ID {
     match id {
         Id::Root => UIA_WindowControlTypeId,
         Id::Nav | Id::Card(_) | Id::Modes | Id::Accents => UIA_GroupControlTypeId,
-        Id::Title | Id::Subtitle => UIA_TextControlTypeId,
+        Id::Title | Id::Subtitle | Id::UpdateVersion | Id::UpdateStatus => UIA_TextControlTypeId,
         Id::Mode(_) | Id::Accent(_) => UIA_RadioButtonControlTypeId,
         Id::Folder => UIA_EditControlTypeId,
         Id::Select(_) => UIA_ComboBoxControlTypeId,
         Id::Option(..) => UIA_ListItemControlTypeId,
-        Id::Open | Id::Shortcut(_) => UIA_ButtonControlTypeId,
+        Id::Open(_) | Id::Shortcut(_) | Id::UpdateAction => UIA_ButtonControlTypeId,
         // Like WinUI's ToggleSwitch, switches are buttons with Toggle.
         Id::NavItem(_) | Id::History | Id::Switch(_) | Id::Choose => UIA_ButtonControlTypeId,
     }
@@ -249,7 +265,10 @@ fn runtime_id(id: Id) -> [i32; 3] {
         Id::Accent(i) => (11, i),
         Id::Folder => (12, 0),
         Id::Choose => (13, 0),
-        Id::Open => (14, 0),
+        Id::Open(which) => (14, which.index()),
+        Id::UpdateVersion => (18, 0),
+        Id::UpdateAction => (19, 0),
+        Id::UpdateStatus => (20, 0),
         Id::Shortcut(i) => (15, i),
         Id::Select(key) => (16, key.index()),
         Id::Option(key, i) => (17, key.index() * 1000 + i),
@@ -352,7 +371,9 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                 pattern == UIA_InvokePatternId || pattern == UIA_SelectionItemPatternId
             }
             Id::Nav => pattern == UIA_SelectionPatternId,
-            Id::History | Id::Choose | Id::Open => pattern == UIA_InvokePatternId,
+            Id::History | Id::Choose | Id::Open(_) | Id::UpdateAction => {
+                pattern == UIA_InvokePatternId
+            }
             Id::Shortcut(_) => pattern == UIA_TogglePatternId || pattern == UIA_ValuePatternId,
             Id::Select(_) => [
                 UIA_ExpandCollapsePatternId,
@@ -380,6 +401,8 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
             let scene = &host.scene;
             let enabled = match id {
                 Id::Switch(row) => scene.rows[row].enabled,
+                // No update worker in this host.
+                Id::UpdateAction => false,
                 Id::Option(key, i) => scene
                     .select_options(key)
                     .get(i)
@@ -555,6 +578,9 @@ impl IRawElementProviderFragmentRoot_Impl for Node_Impl {
 impl IInvokeProvider_Impl for Node_Impl {
     fn Invoke(&self) -> Result<()> {
         let id = self.id;
+        if id == Id::UpdateAction {
+            return Err(HRESULT(UIA_E_ELEMENTNOTENABLED as _).into());
+        }
         with(|host| {
             if let Some(target) = target(id) {
                 host.activate(target);
