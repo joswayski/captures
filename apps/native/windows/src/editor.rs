@@ -220,7 +220,6 @@ pub enum Target {
 /// exposed to UI Automation as disabled.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Stub {
-    Preset,
     AddImages,
     AddLayer,
     LayerMenu(usize),
@@ -1309,7 +1308,13 @@ impl Editor {
             self.control(self.header, target, 0.);
         }
         self.zoom = self.add(Some(self.header), Kind::Zoom, 0.);
-        for target in [Target::Fit, Target::ZoomOut, Target::Slider, Target::ZoomIn] {
+        for target in [
+            Target::Fit,
+            Target::ZoomOut,
+            Target::Slider,
+            Target::ZoomIn,
+            Target::Prop(Prop::Preset),
+        ] {
             self.control(self.zoom, target, 0.);
         }
         let slider = self.layered(Target::Slider).base;
@@ -1495,7 +1500,6 @@ impl Editor {
 
     pub fn stub_name(&self, stub: Stub) -> String {
         match stub {
-            Stub::Preset => header::ZOOM_PRESET.into(),
             Stub::AddImages => header::ADD_IMAGES.into(),
             Stub::AddLayer => editor_chrome::layers::ADD.into(),
             Stub::LayerMenu(i) => self
@@ -1508,18 +1512,9 @@ impl Editor {
         }
     }
 
-    pub fn stub_value(&self, stub: Stub) -> Option<String> {
-        self.presented.as_ref()?;
-        Some(match stub {
-            Stub::Preset => self.zoom_text(),
-            _ => return None,
-        })
-    }
-
     pub fn stub_rect(&self, stub: Stub) -> Rect {
         let l = &self.l;
         match stub {
-            Stub::Preset => l.preset,
             Stub::AddImages => l.add_images,
             Stub::AddLayer => l.add_layer,
             Stub::LayerMenu(i) => {
@@ -1707,6 +1702,8 @@ impl Editor {
                 self.nodes[base].dirty = true;
             }
             self.nodes[self.zoom].dirty = true;
+            self.prop_dirty(Prop::Preset);
+            self.events.push(Event::Value(Target::Prop(Prop::Preset)));
             self.refresh(false);
         }
         self.need = true;
@@ -3058,7 +3055,7 @@ impl Editor {
         let in_props = self.props_view().contains(x, y);
         let header_prop = |t: Target| match t {
             Target::Prop(Prop::Number(n) | Prop::Step(n, _)) => n.is_canvas(),
-            Target::Prop(prop) => Self::in_bg_menu(prop),
+            Target::Prop(prop) => prop == Prop::Preset || Self::in_bg_menu(prop),
             _ => false,
         };
         // Steppers sit inside their number field.
@@ -3110,6 +3107,7 @@ impl Editor {
             Target::ZoomOut,
             Target::Slider,
             Target::ZoomIn,
+            Target::Prop(Prop::Preset),
         ]);
         list.extend((0..RAIL_TOOLS.len()).map(Target::Tool));
         list.push(Target::Divider);
@@ -3344,7 +3342,7 @@ impl Editor {
         let c = |name: &str| t.color(name);
         let (w, h) = (n.rect.w, n.rect.h);
         let all = rect(0., 0., w, h);
-        let (s2, s3, s4, s5) = (t.n("s-2"), t.n("s-3"), t.n("s-4"), t.n("s-5"));
+        let (s2, s3, s5) = (t.n("s-2"), t.n("s-3"), t.n("s-5"));
         match n.kind {
             Kind::Group | Kind::List | Kind::Image => {}
             Kind::Banner => {
@@ -3475,26 +3473,6 @@ impl Editor {
                         c("border-subtle"),
                     )?;
                 }
-                // The preset readout (`select`): not interactive yet.
-                let preset =
-                    Rect::new(self.l.preset.x - self.l.zoom.x, 1., self.l.preset.w, h - 2.);
-                let text = g.text(t, Style::MonoSmall, &self.zoom_text(), 1e4)?;
-                gfx::text(
-                    dc,
-                    &text,
-                    preset.x + s4,
-                    ((h - text.height) / 2.).round(),
-                    c("text"),
-                )?;
-                gfx::icon(
-                    dc,
-                    &g.factory,
-                    "chevron-down",
-                    &[],
-                    (preset.x + preset.w - 16., (h - 10.) / 2., 10.),
-                    1.8,
-                    t.color_alpha("text-subtle", 0.6),
-                )?;
             }
             Kind::Thumb => {
                 gfx::shadow(dc, all, w / 2., t.shadow("shadow-xs"))?;

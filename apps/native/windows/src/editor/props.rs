@@ -58,6 +58,8 @@ pub enum Prop {
     Aspect,
     /// Clear (`false`) or Apply crop (`true`).
     CropAction(bool),
+    /// The zoom group's `Canvas zoom preset` select, in the header.
+    Preset,
 }
 
 /// A `NumberInput` in Tool properties.
@@ -786,6 +788,11 @@ impl Editor {
             return self.bg_prop_rect(prop);
         }
         match prop {
+            // In the zoom group, group-relative.
+            Prop::Preset => {
+                let (p, z) = (self.l.preset, self.l.zoom);
+                Some(Rect::new(p.x - z.x, p.y - z.y, p.w, p.h))
+            }
             // In the header, header-relative.
             Prop::Number(num) if num.is_canvas() => {
                 self.presented.as_ref()?;
@@ -1081,7 +1088,9 @@ impl Editor {
 
     /// Scroll a focused control into the visible band.
     pub(super) fn reveal_prop(&mut self, prop: Prop) {
-        if matches!(prop, Prop::Number(num) | Prop::Step(num, _) if num.is_canvas()) {
+        if matches!(prop, Prop::Number(num) | Prop::Step(num, _) if num.is_canvas())
+            || prop == Prop::Preset
+        {
             return;
         }
         let Some(r) = self.prop_rect(prop) else {
@@ -1127,6 +1136,7 @@ impl Editor {
             | Prop::Range(_)
             | Prop::StyleTrigger
             | Prop::Font
+            | Prop::Preset
             | Prop::Number(_)
             | Prop::Step(..)
             | Prop::Textarea
@@ -1162,6 +1172,7 @@ impl Editor {
                     .map_or_else(|| verb.into(), |aria| format!("{verb} {aria}"))
             }
             Prop::Aspect => super::crop::ASPECT_LABEL.into(),
+            Prop::Preset => header::ZOOM_PRESET.into(),
             Prop::CropAction(false) => super::crop::CLEAR.into(),
             Prop::CropAction(true) => super::crop::APPLY.into(),
             Prop::Textarea => "Text".into(),
@@ -1173,6 +1184,7 @@ impl Editor {
         match prop {
             Prop::Shape(i) => SHAPE_TOOLS[i].name(),
             Prop::Swatch(_, CUSTOM) => colors::CUSTOM_COLOR.into(),
+            Prop::Preset => header::ZOOM_PRESET_TOOLTIP.into(),
             // `title="Canvas width"`.
             Prop::Number(num) if num.is_canvas() => num.label().into(),
             _ => String::new(),
@@ -1246,6 +1258,7 @@ impl Editor {
             Prop::StyleTrigger => self.toggle_menu(MenuKind::Style),
             Prop::Font => self.toggle_menu(MenuKind::Font),
             Prop::Aspect => self.toggle_menu(MenuKind::Aspect),
+            Prop::Preset => self.toggle_menu(MenuKind::Preset),
             Prop::CropAction(false) => self.set_crop(None),
             Prop::CropAction(true) => self.apply_crop(),
             Prop::Step(num, up) => self.nudge(num, up),
@@ -1647,13 +1660,15 @@ impl Editor {
                     2.,
                     t.color_alpha("theme-accent", 0.55),
                 ),
-                Prop::Step(..) => Ok(()),
+                // `.screenshot-editor-zoom-presets { outline: none }`.
+                Prop::Step(..) | Prop::Preset => Ok(()),
             };
         }
         match prop {
             Prop::StyleTrigger => self.draw_style_trigger(dc, layer, (w, h))?,
             Prop::Font => self.draw_select(dc, MenuKind::Font, layer, (w, h))?,
             Prop::Aspect => self.draw_select(dc, MenuKind::Aspect, layer, (w, h))?,
+            Prop::Preset => self.draw_preset(dc, lit, (w, h))?,
             Prop::CropAction(apply) => self.draw_crop_action(dc, apply, lit, (w, h))?,
             Prop::Format(i) => self.draw_format(dc, i, layer, (w, h))?,
             Prop::Number(num) => self.draw_number(dc, num, lit, (w, h))?,

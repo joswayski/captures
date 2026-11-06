@@ -170,7 +170,7 @@ fn children(e: &Editor, id: Id) -> Vec<Id> {
             c(Target::ZoomOut),
             c(Target::Slider),
             c(Target::ZoomIn),
-            Id::Stub(Stub::Preset),
+            c(Target::Prop(Prop::Preset)),
         ],
         Id::Tools => (0..RAIL_TOOLS.len()).map(|i| c(Target::Tool(i))).collect(),
         Id::Flyout => (0..SHAPE_TOOLS.len())
@@ -229,7 +229,7 @@ fn parent(id: Id) -> Option<Id> {
         Id::ColorField(Field::Canvas) => Id::BgMenu,
         Id::Control(Target::Prop(Prop::Number(num))) if num.is_canvas() => Id::CanvasGroup,
         Id::Control(Target::Fit | Target::ZoomOut | Target::Slider | Target::ZoomIn)
-        | Id::Stub(Stub::Preset) => Id::Zoom,
+        | Id::Control(Target::Prop(Prop::Preset)) => Id::Zoom,
         Id::Control(Target::Tool(_)) => Id::Tools,
         Id::Control(Target::Shape(_)) => Id::Flyout,
         Id::LayersTitle | Id::Stub(Stub::AddLayer) | Id::List => Id::Layers,
@@ -311,6 +311,7 @@ fn name(e: &Editor, id: Id) -> String {
             Some((MenuKind::Style, _)) => e.style_label().into(),
             Some((MenuKind::Font, _)) => "Font".into(),
             Some((MenuKind::Aspect, _)) => crate::editor::ASPECT_LABEL.into(),
+            Some((MenuKind::Preset, _)) => editor_chrome::header::ZOOM_PRESET.into(),
             None => String::new(),
         },
         Id::MenuItem(i) => e
@@ -331,6 +332,7 @@ fn trigger_kind(id: Id) -> Option<MenuKind> {
         Id::Control(Target::Prop(Prop::StyleTrigger)) => Some(MenuKind::Style),
         Id::Control(Target::Prop(Prop::Font)) => Some(MenuKind::Font),
         Id::Control(Target::Prop(Prop::Aspect)) => Some(MenuKind::Aspect),
+        Id::Control(Target::Prop(Prop::Preset)) => Some(MenuKind::Preset),
         _ => None,
     }
 }
@@ -345,7 +347,9 @@ fn control_type(e: &Editor, id: Id) -> UIA_CONTROLTYPE_ID {
             UIA_ListItemControlTypeId
         }
         Id::MenuItem(_) => UIA_MenuItemControlTypeId,
-        Id::Control(Target::Prop(Prop::Font | Prop::Aspect)) => UIA_ComboBoxControlTypeId,
+        Id::Control(Target::Prop(Prop::Font | Prop::Aspect | Prop::Preset)) => {
+            UIA_ComboBoxControlTypeId
+        }
         Id::Control(Target::Prop(Prop::Number(_) | Prop::Textarea)) => UIA_EditControlTypeId,
         Id::Root => UIA_WindowControlTypeId,
         Id::Banner
@@ -362,7 +366,7 @@ fn control_type(e: &Editor, id: Id) -> UIA_CONTROLTYPE_ID {
         Id::List => UIA_ListControlTypeId,
         Id::Row(_) => UIA_ListItemControlTypeId,
         Id::Filename | Id::InlineText => UIA_EditControlTypeId,
-        Id::Stub(Stub::Preset | Stub::Format) => UIA_ComboBoxControlTypeId,
+        Id::Stub(Stub::Format) => UIA_ComboBoxControlTypeId,
         Id::Stub(_) => UIA_ButtonControlTypeId,
         Id::Control(Target::Shape(_)) => UIA_MenuItemControlTypeId,
         Id::Control(Target::Slider) => UIA_SliderControlTypeId,
@@ -410,11 +414,11 @@ fn runtime_id(id: Id) -> [i32; 4] {
             Target::Prop(Prop::Format(i)) => (27, i as i32),
             Target::Prop(Prop::Aspect) => (28, 0),
             Target::Prop(Prop::CropAction(apply)) => (29, i32::from(apply)),
+            Target::Prop(Prop::Preset) => (31, 0),
         }
     };
     let stub = |s: Stub| -> (i32, i32) {
         match s {
-            Stub::Preset => (4, 0),
             Stub::AddImages => (5, 0),
             Stub::AddLayer => (6, 0),
             Stub::LayerMenu(i) => (7, i as i32),
@@ -582,14 +586,13 @@ fn value(e: &Editor, id: Id) -> Option<String> {
         Id::Filename => e.filename(),
         Id::InlineText => e.text_value(),
         Id::Control(Target::Prop(prop @ (Prop::Number(_) | Prop::Textarea))) => e.field_text(prop),
-        Id::Control(Target::Prop(prop @ (Prop::Font | Prop::Aspect))) => {
+        Id::Control(Target::Prop(prop @ (Prop::Font | Prop::Aspect | Prop::Preset))) => {
             let kind = trigger_kind(Id::Control(Target::Prop(prop)))?;
             e.menu_selected(kind)
                 .and_then(|i| e.menu_items(kind).into_iter().nth(i))
                 .unwrap_or_default()
         }
         Id::Location => e.save_location(),
-        Id::Stub(stub) => e.stub_value(stub)?,
         _ => return None,
     })
 }
@@ -654,7 +657,7 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                 Id::Control(Target::Prop(Prop::StyleTrigger) | Target::Background) => {
                     pattern == UIA_ExpandCollapsePatternId || pattern == UIA_InvokePatternId
                 }
-                Id::Control(Target::Prop(Prop::Font | Prop::Aspect)) => {
+                Id::Control(Target::Prop(Prop::Font | Prop::Aspect | Prop::Preset)) => {
                     pattern == UIA_ExpandCollapsePatternId || pattern == UIA_ValuePatternId
                 }
                 Id::Control(Target::Prop(Prop::Number(_) | Prop::Textarea)) => {
@@ -671,7 +674,6 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                 Id::Control(_) if toggle_state(e, id).is_some() => pattern == UIA_TogglePatternId,
                 Id::Control(_) => pattern == UIA_InvokePatternId,
                 Id::Filename | Id::Location | Id::InlineText => pattern == UIA_ValuePatternId,
-                Id::Stub(stub) if e.stub_value(stub).is_some() => pattern == UIA_ValuePatternId,
                 Id::Stub(_) => pattern == UIA_InvokePatternId,
                 _ => false,
             })
