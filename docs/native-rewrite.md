@@ -198,6 +198,27 @@ match the Tauri harness at 880×660 (the ✓ needs real Segoe UI). Alt+Down,
 the status timing and Narrator need a real Windows run. macOS, Linux:
 unchanged.
 
+The sixth Windows slice ports the Custom accent's color editor. Selecting
+Custom shows shipping's `.custom-theme-editor` under the accent grid, with
+no rule above it. It has the heading, Reset colors, and two fields (Accent,
+Recording signal), each with a color well and a hex input. The wells open
+the system color dialog (`ChooseColorW`), which is what Chromium shows for
+`input[type="color"]` on Windows. The hex inputs reuse the token-drawn text
+field (uppercase, `maxLength` 7) and commit like `commitHexValue`: on blur,
+Enter or window deactivation, a valid value is normalized with the shared
+`captures_settings::theme::normalize_hex_color` and saved. Anything else,
+or Escape, restores the saved value; Escape does not close Find. Every
+change re-themes live. The custom palette now comes from the shared
+`captures_settings::theme::custom_colors`, as in the wgpu host, instead of a
+local copy. UI Automation follows shipping: a "Custom theme colors" group
+holding the heading and field copy as text, Reset colors (Invoke), "Accent
+color picker" buttons with a read-only Value, and "Accent hex value" Edits
+with Value and Text. The editor is one Find target. Deviation: the
+rainbow wash is drawn without its 32 px blur, mixed into the canvas.
+Windows: cross-compiled only; Wine renders at 880×760 match the Tauri
+harness. The color dialog, typing, Narrator and live re-theme need a real
+Windows run. macOS, Linux: unchanged.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,

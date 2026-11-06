@@ -315,7 +315,10 @@ impl ITextRangeProvider_Impl for Range_Impl {
         with(|host| {
             let n = editor(host, owner)?.len();
             let (s, e) = self.bounds(n);
-            host.scene.field_edit(&host.g, |editor| editor.select(s, e));
+            if let Some(field) = crate::uia::field_id(owner) {
+                let Host { scene, g, .. } = host;
+                scene.field_edit_in(g, field, |editor| editor.select(s, e));
+            }
             host.need = true;
             Ok(())
         })

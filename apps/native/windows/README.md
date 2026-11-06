@@ -5,7 +5,8 @@ DirectComposition, Direct2D, DirectWrite (system Segoe UI Variable) and UI
 Automation, with Captures' own token-drawn controls. See
 [native-rewrite.md](../../../docs/native-rewrite.md#host-direction) for the
 direction and the gates it must pass. Only Preferences exists so far: every
-shipping card, and Find (Ctrl+F) on a reusable text field (`src/textfield.rs`).
+shipping card with the Custom accent's color editor, and Find (Ctrl+F) on a
+reusable text field (`src/textfield.rs`).
 
 ```powershell
 node apps/native/prepare.mjs --output apps/native/windows/resources

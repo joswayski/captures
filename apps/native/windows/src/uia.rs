@@ -6,7 +6,9 @@
 //! with SelectionItem inside a Selection group), the read-only capture folder
 //! (Value) and Choose… (Invoke), and the Find bar (a search landmark with an
 //! Edit that has Value and Text patterns, a live match count and Invoke
-//! buttons). Names come from the shipping titles and
+//! buttons), and the custom color editor (a group with Reset colors, color
+//! wells as buttons with a read-only Value, and hex Edits with Value and
+//! Text). Names come from the shipping titles and
 //! `aria-label`s; descriptions are help text. Providers are node ids that read
 //! live scene state on the UI thread.
 use captures_app::preferences::{self, APPEARANCE_MODES, SECTIONS, THEMES};
@@ -20,8 +22,8 @@ use windows::core::*;
 
 use crate::host::{Host, with_host};
 use crate::scene::{
-    ACCENT_GROUP_LABEL, CARDS, Event, FIND_BUTTONS, FindPart, Item, NAV_WIDTH, Rect, SelectKey,
-    Target, Utility,
+    ACCENT_GROUP_LABEL, CARDS, CUSTOM_GROUP_LABEL, Event, FIND_BUTTONS, FieldId, FindPart, Item,
+    NAV_WIDTH, Rect, SelectKey, Target, Utility,
 };
 use crate::textfield::TextField;
 use crate::uia_text::range;
@@ -64,7 +66,31 @@ pub enum Id {
     Find,
     FindPart(FindPart),
     FindCount,
+    /// `.custom-theme-editor` (`role="group"`).
+    CustomEditor,
+    /// Its copy: title, description, then each field's label and note.
+    CustomText(usize),
+    ResetColors,
+    /// A color's `input[type="color"]`: a button whose value is the color.
+    Well(usize),
+    /// A color's hex `input`.
+    Hex(usize),
 }
+
+/// The editor's children in DOM order.
+const CUSTOM_CHILDREN: [Id; 11] = [
+    Id::CustomText(0),
+    Id::CustomText(1),
+    Id::ResetColors,
+    Id::CustomText(2),
+    Id::Well(0),
+    Id::Hex(0),
+    Id::CustomText(3),
+    Id::CustomText(4),
+    Id::Well(1),
+    Id::Hex(1),
+    Id::CustomText(5),
+];
 
 /// Tree state that changes which children exist.
 #[derive(Clone, Copy, Default)]
@@ -73,6 +99,8 @@ struct Live {
     list: Option<(SelectKey, usize)>,
     /// The find bar is shown.
     find: bool,
+    /// The custom color editor is shown.
+    custom: bool,
     /// The save status is shown.
     status: bool,
 }
@@ -84,6 +112,7 @@ fn live(host: &Host) -> Live {
             .open
             .map(|(key, _)| (key, host.scene.select_options(key).len())),
         find: host.scene.find.open,
+        custom: host.scene.custom_shown(),
         status: host.scene.save_shown(),
     }
 }
@@ -96,20 +125,32 @@ pub(crate) fn with<R>(f: impl FnOnce(&mut Host) -> Result<R>) -> Result<R> {
     with_host(f).unwrap_or_else(|| Err(unavailable()))
 }
 
-/// The text field behind an Edit element.
-pub(crate) fn field(host: &Host, id: Id) -> Option<&TextField> {
+/// The scene field an Edit element is.
+pub(crate) fn field_id(id: Id) -> Option<FieldId> {
     match id {
-        Id::FindPart(FindPart::Input) if host.scene.find.open => Some(host.scene.find_field()),
+        Id::FindPart(FindPart::Input) => Some(FieldId::Find),
+        Id::Hex(i) => Some(FieldId::Hex(i)),
         _ => None,
+    }
+}
+
+/// The text field behind an Edit element, while it is shown.
+pub(crate) fn field(host: &Host, id: Id) -> Option<&TextField> {
+    let field = field_id(id).filter(|&f| host.scene.field_shown(f))?;
+    Some(host.scene.field(field))
+}
+
+/// The Edit element of a scene field.
+fn field_uia(field: FieldId) -> Id {
+    match field {
+        FieldId::Find => Id::FindPart(FindPart::Input),
+        FieldId::Hex(i) => Id::Hex(i),
     }
 }
 
 /// A text field's text box on screen, and pixels per DIP.
 pub(crate) fn field_screen_rect(host: &Host, id: Id) -> (UiaRect, f64) {
-    let r = match id {
-        Id::FindPart(FindPart::Input) => host.scene.find_rects().2,
-        _ => Rect::default(),
-    };
+    let r = field_id(id).map_or_else(Default::default, |f| host.scene.field_box(f));
     (screen_rect(host, r), f64::from(host.scene.scale))
 }
 
@@ -126,6 +167,9 @@ fn target(id: Id) -> Option<Target> {
         Id::Select(key) => Some(Target::Select(key)),
         Id::Option(key, i) => Some(Target::Option(key, i)),
         Id::FindPart(part) => Some(Target::Find(part)),
+        Id::ResetColors => Some(Target::ResetColors),
+        Id::Well(i) => Some(Target::Well(i)),
+        Id::Hex(i) => Some(Target::Hex(i)),
         _ => None,
     }
 }
@@ -143,6 +187,9 @@ fn id_of(target: Target) -> Id {
         Target::Select(key) => Id::Select(key),
         Target::Option(key, i) => Id::Option(key, i),
         Target::Find(part) => Id::FindPart(part),
+        Target::ResetColors => Id::ResetColors,
+        Target::Well(i) => Id::Well(i),
+        Target::Hex(i) => Id::Hex(i),
     }
 }
 
@@ -159,6 +206,7 @@ fn children(id: Id, live: Live) -> Vec<Id> {
             list.extend((0..CARDS.len()).map(Id::Card));
             list
         }
+        Id::CustomEditor => CUSTOM_CHILDREN.to_vec(),
         Id::Find => {
             let mut list = vec![Id::FindPart(FindPart::Input), Id::FindCount];
             list.extend(FIND_BUTTONS.map(Id::FindPart));
@@ -175,6 +223,8 @@ fn children(id: Id, live: Live) -> Vec<Id> {
                 Item::Folder => vec![Id::Folder, Id::Choose],
                 Item::Utility(which) => vec![Id::Open(which)],
                 Item::Updates => vec![Id::UpdateVersion, Id::UpdateAction, Id::UpdateStatus],
+                Item::CustomTheme if live.custom => vec![Id::CustomEditor],
+                Item::CustomTheme => Vec::new(),
                 Item::Shortcuts => (0..preferences::SHORTCUT_ROWS.len())
                     .map(Id::Shortcut)
                     .collect(),
@@ -218,6 +268,8 @@ fn parent(id: Id) -> Option<Id> {
         })?),
         Id::Option(key, _) => Id::Select(key),
         Id::FindPart(_) | Id::FindCount => Id::Find,
+        Id::CustomEditor => Id::Card(card_of(Item::CustomTheme)?),
+        Id::CustomText(_) | Id::ResetColors | Id::Well(_) | Id::Hex(_) => Id::CustomEditor,
         _ => Id::Root,
     })
 }
@@ -240,6 +292,8 @@ fn rect(host: &Host, id: Id) -> Rect {
         Id::UpdateStatus => scene.update_rects().1,
         Id::Find => scene.find_rects().0,
         Id::SaveStatus => scene.save_rect(),
+        Id::CustomEditor => scene.custom_rect(),
+        Id::CustomText(k) => scene.custom_text_rect(k),
         Id::FindCount => scene.find_rects().1,
         _ => scene.target_rect(target(id).expect("target")),
     }
@@ -279,6 +333,17 @@ fn name(host: &Host, id: Id) -> String {
         Id::FindPart(part) => part.label().into(),
         Id::FindCount => host.scene.find_count_label(),
         Id::SaveStatus => host.scene.save_message(),
+        Id::CustomEditor => CUSTOM_GROUP_LABEL.into(),
+        Id::CustomText(0) => preferences::CUSTOM_THEME.title.into(),
+        Id::CustomText(1) => preferences::CUSTOM_THEME.description.into(),
+        Id::CustomText(k) => {
+            let (_, label, note) = preferences::CUSTOM_THEME.fields[(k - 2) / 2];
+            if k.is_multiple_of(2) { label } else { note }.into()
+        }
+        Id::ResetColors => preferences::CUSTOM_THEME.reset.into(),
+        // Shipping `aria-label`s.
+        Id::Well(i) => format!("{} color picker", preferences::CUSTOM_THEME.fields[i].1),
+        Id::Hex(i) => format!("{} hex value", preferences::CUSTOM_THEME.fields[i].1),
     }
 }
 
@@ -293,6 +358,7 @@ fn help(host: &Host, id: Id) -> String {
         Id::UpdateAction | Id::UpdateStatus => preferences::UPDATES_DETAIL.into(),
         Id::Shortcut(i) => host.scene.shortcut_error(i).into(),
         Id::Select(key) => preferences::row(key.setting()).description.into(),
+        Id::Well(i) | Id::Hex(i) => preferences::CUSTOM_THEME.fields[i].2.into(),
         _ => String::new(),
     }
 }
@@ -309,7 +375,11 @@ fn control_type(id: Id) -> UIA_CONTROLTYPE_ID {
         Id::Find => UIA_GroupControlTypeId,
         Id::FindPart(FindPart::Input) => UIA_EditControlTypeId,
         Id::FindPart(_) => UIA_ButtonControlTypeId,
-        Id::FindCount | Id::SaveStatus => UIA_TextControlTypeId,
+        Id::FindCount | Id::SaveStatus | Id::CustomText(_) => UIA_TextControlTypeId,
+        Id::CustomEditor => UIA_GroupControlTypeId,
+        Id::Hex(_) => UIA_EditControlTypeId,
+        // Chromium exposes `input[type="color"]` as a button with a value.
+        Id::ResetColors | Id::Well(_) => UIA_ButtonControlTypeId,
         Id::Open(_) | Id::Shortcut(_) | Id::UpdateAction => UIA_ButtonControlTypeId,
         // Like WinUI's ToggleSwitch, switches are buttons with Toggle.
         Id::NavItem(_) | Id::History | Id::Switch(_) | Id::Choose => UIA_ButtonControlTypeId,
@@ -343,6 +413,11 @@ fn runtime_id(id: Id) -> [i32; 3] {
         Id::FindPart(part) => (22, part.index()),
         Id::FindCount => (23, 0),
         Id::SaveStatus => (24, 0),
+        Id::CustomEditor => (25, 0),
+        Id::CustomText(k) => (26, k),
+        Id::ResetColors => (27, 0),
+        Id::Well(i) => (28, i),
+        Id::Hex(i) => (29, i),
     };
     [UiaAppendRuntimeId as i32, kind, index as i32]
 }
@@ -468,7 +543,9 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
             Id::Modes | Id::Accents => pattern == UIA_SelectionPatternId,
             Id::Mode(_) | Id::Accent(_) => pattern == UIA_SelectionItemPatternId,
             Id::Folder => pattern == UIA_ValuePatternId,
-            Id::FindPart(FindPart::Input) => {
+            Id::ResetColors => pattern == UIA_InvokePatternId,
+            Id::Well(_) => pattern == UIA_InvokePatternId || pattern == UIA_ValuePatternId,
+            Id::FindPart(FindPart::Input) | Id::Hex(_) => {
                 [UIA_ValuePatternId, UIA_TextPatternId, UIA_TextPattern2Id].contains(&pattern)
             }
             Id::FindPart(_) => pattern == UIA_InvokePatternId,
@@ -499,6 +576,8 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
             let value = match id {
                 Id::Folder => Some(scene.settings().output_directory.clone()),
                 Id::FindPart(FindPart::Input) => Some(scene.find_query()),
+                Id::Hex(i) => Some(scene.field_value(FieldId::Hex(i))),
+                Id::Well(i) => Some(scene.custom_value(i).to_owned()),
                 Id::Select(key) => Some(scene.select_value(key)),
                 Id::Shortcut(i) => Some(scene.shortcut_value(i)),
                 _ => None,
@@ -547,7 +626,7 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                     VARIANT::from(BSTR::from(value.unwrap_or_default()))
                 }
                 UIA_ValueIsReadOnlyPropertyId if value.is_some() => {
-                    VARIANT::from(id != Id::FindPart(FindPart::Input))
+                    VARIANT::from(field_id(id).is_none())
                 }
                 UIA_ExpandCollapseExpandCollapseStatePropertyId => match id {
                     Id::Select(key) => VARIANT::from(expand_state(host, key).0),
@@ -793,14 +872,21 @@ impl ISelectionItemProvider_Impl for Node_Impl {
 impl IValueProvider_Impl for Node_Impl {
     fn SetValue(&self, value: &PCWSTR) -> Result<()> {
         let id = self.id;
-        if id != Id::FindPart(FindPart::Input) {
-            // Read-only: Choose… changes the folder.
+        let Some(field) = field_id(id) else {
+            // Read-only: Choose… changes the folder, the picker a color.
             return Err(HRESULT(UIA_E_ELEMENTNOTENABLED as _).into());
-        }
+        };
         let text = unsafe { value.to_string() }.unwrap_or_default();
         with(|host| {
+            if !host.scene.field_shown(field) {
+                return Err(unavailable());
+            }
             let Host { scene, g, .. } = host;
-            scene.field_edit(g, |editor| editor.set_text(&text));
+            scene.field_edit_in(g, field, |editor| editor.set_text(&text));
+            // A hex input commits as if typed and left.
+            if let FieldId::Hex(i) = field {
+                scene.commit_typed_hex(i);
+            }
             host.need = true;
             Ok(())
         })
@@ -814,13 +900,15 @@ impl IValueProvider_Impl for Node_Impl {
                 Id::Select(key) => scene.select_value(key),
                 Id::Shortcut(i) => scene.shortcut_value(i),
                 Id::FindPart(FindPart::Input) => scene.find_query(),
+                Id::Hex(i) => scene.field_value(FieldId::Hex(i)),
+                Id::Well(i) => scene.custom_value(i).to_owned(),
                 _ => scene.settings().output_directory.clone(),
             }))
         })
     }
 
     fn IsReadOnly(&self) -> Result<BOOL> {
-        Ok((self.id != Id::FindPart(FindPart::Input)).into())
+        Ok(field_id(self.id).is_none().into())
     }
 }
 
@@ -854,7 +942,7 @@ impl ITextProvider_Impl for Node_Impl {
         let position = with(|host| {
             let (box_, scale) = field_screen_rect(host, id);
             let x = ((point.x - box_.left) / scale) as f32;
-            Ok(host.scene.field_hit(x + host.scene.find_rects().2.x))
+            Ok(field(host, id).map_or(0, |f| f.hit(x)))
         })?;
         Ok(range(id, position, position))
     }
@@ -888,7 +976,7 @@ impl ITextProvider2_Impl for Node_Impl {
             let caret = field(host, id)
                 .map(|f| f.editor.caret())
                 .ok_or_else(unavailable)?;
-            Ok((caret, host.scene.text_focused()))
+            Ok((caret, host.scene.focused_field() == field_id(id)))
         })?;
         if !active.is_null() {
             unsafe { *active = focused.into() };
@@ -1074,8 +1162,8 @@ pub fn raise(events: &[(Event, bool, String)]) {
                         3,
                     );
                 }
-                Event::FindText => {
-                    let input = node(Id::FindPart(FindPart::Input));
+                Event::FieldText(field) => {
+                    let input = node(field_uia(field));
                     let _ = UiaRaiseAutomationPropertyChangedEvent(
                         &input,
                         UIA_ValueValuePropertyId,
@@ -1084,9 +1172,9 @@ pub fn raise(events: &[(Event, bool, String)]) {
                     );
                     let _ = UiaRaiseAutomationEvent(&input, UIA_Text_TextChangedEventId);
                 }
-                Event::FindCaret => {
+                Event::FieldCaret(field) => {
                     let _ = UiaRaiseAutomationEvent(
-                        &node(Id::FindPart(FindPart::Input)),
+                        &node(field_uia(field)),
                         UIA_Text_TextSelectionChangedEventId,
                     );
                 }
