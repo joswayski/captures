@@ -20,7 +20,7 @@ use windows::Win32::System::Variant::*;
 use windows::Win32::UI::Accessibility::*;
 use windows::core::*;
 
-use crate::editor::{Editor, Event, Field, MenuKind, Prop, Stub, Target, with_editor};
+use crate::editor::{Editor, Event, Field, MenuKind, Num, Prop, Stub, Target, with_editor};
 use crate::scene::Rect;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -146,8 +146,8 @@ fn children(e: &Editor, id: Id) -> Vec<Id> {
             .collect(),
         Id::Banner => vec![Id::BannerText, c(Target::Dismiss)],
         Id::CanvasGroup => vec![
-            Id::Stub(Stub::Width),
-            Id::Stub(Stub::Height),
+            c(Target::Prop(Prop::Number(Num::CanvasWidth))),
+            c(Target::Prop(Prop::Number(Num::CanvasHeight))),
             c(Target::Trim),
             Id::Stub(Stub::Background),
         ],
@@ -210,9 +210,8 @@ fn parent(id: Id) -> Option<Id> {
     Some(match id {
         Id::Root => return None,
         Id::BannerText | Id::Control(Target::Dismiss) => Id::Banner,
-        Id::Stub(Stub::Width | Stub::Height | Stub::Background) | Id::Control(Target::Trim) => {
-            Id::CanvasGroup
-        }
+        Id::Stub(Stub::Background) | Id::Control(Target::Trim) => Id::CanvasGroup,
+        Id::Control(Target::Prop(Prop::Number(num))) if num.is_canvas() => Id::CanvasGroup,
         Id::Control(Target::Fit | Target::ZoomOut | Target::Slider | Target::ZoomIn)
         | Id::Stub(Stub::Preset) => Id::Zoom,
         Id::Control(Target::Tool(_)) => Id::Tools,
@@ -342,9 +341,7 @@ fn control_type(e: &Editor, id: Id) -> UIA_CONTROLTYPE_ID {
         Id::Flyout => UIA_MenuControlTypeId,
         Id::List => UIA_ListControlTypeId,
         Id::Row(_) => UIA_ListItemControlTypeId,
-        Id::Filename | Id::InlineText | Id::Stub(Stub::Width | Stub::Height) => {
-            UIA_EditControlTypeId
-        }
+        Id::Filename | Id::InlineText => UIA_EditControlTypeId,
         Id::Stub(Stub::Preset | Stub::Format) => UIA_ComboBoxControlTypeId,
         Id::Stub(_) => UIA_ButtonControlTypeId,
         Id::Control(Target::Shape(_)) => UIA_MenuItemControlTypeId,
@@ -396,8 +393,6 @@ fn runtime_id(id: Id) -> [i32; 4] {
     };
     let stub = |s: Stub| -> (i32, i32) {
         match s {
-            Stub::Width => (0, 0),
-            Stub::Height => (1, 0),
             Stub::Background => (3, 0),
             Stub::Preset => (4, 0),
             Stub::AddImages => (5, 0),

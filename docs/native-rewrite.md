@@ -579,6 +579,17 @@ rectangle and ring-only overlay redraw stay. The 4K stroke cost needs
 measuring again. Windows: cross-compiled only; the test runs under Wine.
 macOS, Linux: unchanged.
 
+Canvas W and H: the header's Canvas group now has shipping's compact
+`NumberInput`s (`Canvas width`, `Canvas height`, 74 px, text-xs mono,
+centred, 22 px steppers named `Increase Canvas width` and so on). They are
+borderless until hovered or focused, like `.screenshot-canvas-dim`. Typing
+only holds a draft (`onTextChange`); Enter, blur or a stepper commits it
+once, rounded and clamped to 1–16,384, as `Request::ResizeCanvas`, one undo
+step. A draft survives selection changes, and its own caret lives in the
+header. Deviation: an empty field reverts on blur, where shipping's
+`Number("")` resizes the canvas to 1 px. Windows: cross-compiled only, Wine
+renders in light and dark. macOS, Linux: unchanged.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,
