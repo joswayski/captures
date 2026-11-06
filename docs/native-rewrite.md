@@ -219,6 +219,21 @@ Windows: cross-compiled only; Wine renders at 880×760 match the Tauri
 harness. The color dialog, typing, Narrator and live re-theme need a real
 Windows run. macOS, Linux: unchanged.
 
+The seventh Windows slice adds shipping's narrow Preferences layout
+(`@media (max-width: 720px)`). At 720 DIPs or less the sidebar is hidden:
+it leaves hit-testing, the Tab order and the UI Automation tree, as with
+`display: none`. The header and cards span the window. Inline rows (Interface
+theme and the selects) put the control below the copy, `--s-4` apart and
+full width, with the segments in equal thirds. The accent chips and the
+Recording and GIF select grids drop to two columns and wrap, `--s-5` between
+rows; the custom color fields were already two columns. The layout switches
+live: each layout reads the width, and WM_SIZE lays out and presents
+synchronously. Measured against the Tauri harness at 600×660; the cards are
+10 px narrower because the host reserves a classic scrollbar, which the
+headless harness overlays. Windows: cross-compiled only; Wine renders at
+600×660 and 880×660 in light and dark. Live resizing across the breakpoint
+and Narrator need a real Windows run. macOS, Linux: unchanged.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,

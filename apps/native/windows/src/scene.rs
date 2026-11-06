@@ -29,6 +29,9 @@ use crate::tokens::Tokens;
 
 pub const PLATFORM: ShortcutPlatform = ShortcutPlatform::Windows;
 pub const NAV_WIDTH: f32 = 196.;
+/// Shipping's `@media (max-width: 720px)`: the sidebar hides, inline rows
+/// stack and grids drop to two columns.
+const COMPACT_MAX: f32 = 720.;
 /// `.setting-row-inline` control column minimum.
 const SELECT_MIN: f32 = 160.;
 /// `.custom-select-trigger svg` and its path (16-unit box).
@@ -799,6 +802,8 @@ pub struct Scene {
     /// Device pixels per DIP; scroll offsets snap to device pixels.
     pub scale: f32,
     pub reduced_motion: bool,
+    /// The narrow layout (`max-width: 720px`).
+    pub compact: bool,
     pub nodes: Vec<Node>,
     pub children: Vec<Vec<usize>>,
     pub motions: Vec<Motion>,
@@ -947,6 +952,7 @@ impl Scene {
             h: 0.,
             scale: 1.,
             reduced_motion: false,
+            compact: false,
             nodes: Vec::new(),
             children: Vec::new(),
             motions: Vec::new(),
@@ -1480,6 +1486,13 @@ impl Scene {
     pub fn layout(&mut self, g: &Gfx, w: f32, h: f32) -> Result<()> {
         self.w = w;
         self.h = h;
+        // Shipping switches live with the window's width.
+        self.compact = w <= COMPACT_MAX;
+        // `.preferences-nav { display: none }` in the narrow layout.
+        self.nodes[self.nav_bg].visible = !self.compact;
+        if self.compact && matches!(self.focus, Some(Target::Nav(_))) {
+            self.set_focus(None, false);
+        }
         let t = &self.t;
         let n = |name: &str| t.n(name);
         let (s5, s6, s8) = (n("s-5"), n("s-6"), n("s-8"));
@@ -1490,6 +1503,7 @@ impl Scene {
             .iter()
             .map(|section| g.text(t, Style::Nav, section.title, 1e4))
             .collect::<Result<_>>()?;
+        let nav_w = self.nav_w();
         self.nodes[self.nav_bg].rect = Rect::new(0., 0., NAV_WIDTH, h);
         let list_w = NAV_WIDTH - 2. * s5 - 1.;
         let list_y = s6 + 26. + s6;
@@ -1502,7 +1516,7 @@ impl Scene {
         }
 
         // `.preferences-header`: 16/24 padding, min-height 64, 1 px rule.
-        let body_w = (w - NAV_WIDTH).max(0.);
+        let body_w = (w - nav_w).max(0.);
         let title = g.text(t, Style::Title, preferences::TITLE, 1e4)?;
         let subtitle = g.text(t, Style::Subtitle, preferences::SUBTITLE, 1e4)?;
         let history = g.text(t, Style::Button, preferences::HISTORY_ACTION, 1e4)?;
@@ -1520,7 +1534,7 @@ impl Scene {
             (header_h - 1. - row) / 2.
         };
         self.title_y = row_y + (row - block) / 2.;
-        self.nodes[self.header].rect = Rect::new(NAV_WIDTH, 0., body_w, header_h);
+        self.nodes[self.header].rect = Rect::new(nav_w, 0., body_w, header_h);
         self.header_row = (row_y, row);
         self.texts.title = Some(title);
         self.texts.subtitle = Some(subtitle);
@@ -1530,7 +1544,7 @@ impl Scene {
         self.layout_find(g, bar)?;
 
         // `.preferences-scroller` and `.preferences-sections`.
-        let viewport = Rect::new(NAV_WIDTH, header_h, body_w, (h - header_h).max(0.));
+        let viewport = Rect::new(nav_w, header_h, body_w, (h - header_h).max(0.));
         self.nodes[self.viewport].rect = viewport;
         self.measure_cards(g, viewport.w)?;
         if self.content_h > viewport.h {
@@ -1651,12 +1665,14 @@ impl Scene {
                 let rect = Rect::new(s8 + inset, y + top, inner_w, pad + h);
                 self.item_rects.push((item, rect));
                 if item == Item::Accent {
-                    self.grid_rect = Rect::new(
-                        rect.x,
-                        rect.y + rect.h - 2. * CHIP_H - s2,
-                        inner_w,
-                        2. * CHIP_H + s2,
-                    );
+                    let columns = if self.compact {
+                        2
+                    } else {
+                        preferences::THEME_COLUMNS
+                    };
+                    let lines = THEMES.len().div_ceil(columns) as f32;
+                    let grid_h = lines * CHIP_H + (lines - 1.) * s2;
+                    self.grid_rect = Rect::new(rect.x, rect.y + rect.h - grid_h, inner_w, grid_h);
                 }
                 cy = body + h;
             }
@@ -1826,15 +1842,25 @@ impl Scene {
                     .iter()
                     .map(|(_, name)| g.text(&self.t, Style::Segment, name, 1e4))
                     .collect::<Result<_>>()?;
-                let widths: Vec<f32> = self
+                let mut widths: Vec<f32> = self
                     .texts
                     .segments
                     .iter()
                     .map(|label| label.width + 2. * s5)
                     .collect();
-                let track_w = widths.iter().sum::<f32>() + 2. * SEGMENT_INSET;
+                let mut track_w = widths.iter().sum::<f32>() + 2. * SEGMENT_INSET;
+                if self.compact {
+                    // Stretched, the `flex: 1` buttons share it equally.
+                    track_w = width;
+                    let each = (width - 2. * SEGMENT_INSET) / widths.len() as f32;
+                    widths.fill(each);
+                }
                 let track_h = h_sm + 2. * SEGMENT_INSET;
-                let copy_w = (width - track_w - s6).max(40.);
+                let copy_w = if self.compact {
+                    width
+                } else {
+                    (width - track_w - s6).max(40.)
+                };
                 let row = preferences::row("appearance");
                 let title = g.text(&self.t, Style::RowTitle, row.title, copy_w)?;
                 let detail = g.text(
@@ -1844,21 +1870,16 @@ impl Scene {
                     copy_w.min(measure),
                 )?;
                 let copy_h = title.height + 3. + detail.height;
-                let content_h = copy_h.max(track_h);
                 self.texts.copies.push(CopyText {
                     item,
                     title,
                     detail: Some(detail),
                     gap: 3.,
                 });
-                self.nodes[self.mode_copy].rect =
-                    Rect::new(x, y + (content_h - copy_h) / 2., copy_w, copy_h);
-                self.nodes[self.seg_track].rect = Rect::new(
-                    x + width - track_w,
-                    (y + (content_h - track_h) / 2.).round(),
-                    track_w,
-                    track_h,
-                );
+                let (copy, track, content_h) =
+                    self.inline_row((x, y, width), copy_h, (track_w, track_h));
+                self.nodes[self.mode_copy].rect = copy;
+                self.nodes[self.seg_track].rect = track;
                 let mut left = SEGMENT_INSET;
                 for (index, &group) in self.segments.iter().enumerate() {
                     let r = Rect::new(left, SEGMENT_INSET, widths[index], h_sm);
@@ -1895,7 +1916,11 @@ impl Scene {
                     .map(|theme| g.text(&self.t, Style::Chip, theme.name, 1e4))
                     .collect::<Result<_>>()?;
                 self.texts.check = Some(g.text(&self.t, Style::Check, "✓", 1e4)?);
-                let columns = preferences::THEME_COLUMNS;
+                let columns = if self.compact {
+                    2
+                } else {
+                    preferences::THEME_COLUMNS
+                };
                 let col_w = (width - (columns - 1) as f32 * s2) / columns as f32;
                 let grid_y = y + copy_h + s4;
                 for (index, chip) in self.chips.iter().enumerate() {
@@ -2073,7 +2098,11 @@ impl Scene {
                     .ceil()
                     .max(SELECT_MIN)
                     .min((width - s6 - 40.).max(SELECT_MIN));
-                let copy_w = (width - trigger_w - s6).max(40.);
+                let copy_w = if self.compact {
+                    width
+                } else {
+                    (width - trigger_w - s6).max(40.)
+                };
                 let row = preferences::row(key.setting());
                 let title = g.text(&self.t, Style::RowTitle, row.title, copy_w)?;
                 let detail = if row.description.is_empty() {
@@ -2083,31 +2112,39 @@ impl Scene {
                     Some(g.text(&self.t, Style::RowDescription, row.description, w)?)
                 };
                 let copy_h = title.height + detail.as_ref().map_or(0., |d| 3. + d.height);
-                let content_h = copy_h.max(h_md);
                 self.texts.copies.push(CopyText {
                     item,
                     title,
                     detail,
                     gap: 3.,
                 });
+                let (copy_rect, r, content_h) =
+                    self.inline_row((x, y, width), copy_h, (trigger_w, h_md));
                 let copy = self.selects[key.index()].copy;
-                self.nodes[copy].rect = Rect::new(x, y + (content_h - copy_h) / 2., copy_w, copy_h);
-                let r = Rect::new(
-                    x + width - trigger_w,
-                    (y + (content_h - h_md) / 2.).round(),
-                    trigger_w,
-                    h_md,
-                );
+                self.nodes[copy].rect = copy_rect;
                 self.place_trigger(key, r);
                 Ok(content_h)
             }
             Item::SelectGrid(keys) => {
                 // `.setting-grid` (`-three`): 1fr columns 12 px apart of
                 // stacked rows, title then the full-width select 6 px below.
-                let columns = keys.len() as f32;
+                // Narrow, every grid has two columns and wraps, `--s-5`
+                // between rows.
+                let per_row = if self.compact {
+                    keys.len().min(2)
+                } else {
+                    keys.len()
+                };
+                let columns = per_row as f32;
                 let col_w = (width - (columns - 1.) * s5) / columns;
-                let mut height: f32 = 0.;
-                for (col, &key) in keys.iter().enumerate() {
+                let (origin, mut top, mut row_h) = (y, y, 0f32);
+                for (index, &key) in keys.iter().enumerate() {
+                    let col = index % per_row;
+                    if index > 0 && col == 0 {
+                        top += row_h + s5;
+                        row_h = 0.;
+                    }
+                    let y = top;
                     let cx = x + col as f32 * (col_w + s5);
                     let title = g.text(
                         &self.t,
@@ -2128,9 +2165,9 @@ impl Scene {
                     self.place_trigger(key, r);
                     self.sub_boxes
                         .push(Rect::new(cx, y, col_w, title_h + s3 + h_md));
-                    height = height.max(title_h + s3 + h_md);
+                    row_h = row_h.max(title_h + s3 + h_md);
                 }
-                Ok(height)
+                Ok(top + row_h - origin)
             }
         }
     }
@@ -2220,6 +2257,43 @@ impl Scene {
             note_y: 1. + s4 + label_h + s3 + h_md + s3,
         };
         Ok(h)
+    }
+
+    /// The sidebar's width: none in the narrow layout.
+    pub fn nav_w(&self) -> f32 {
+        if self.compact { 0. } else { NAV_WIDTH }
+    }
+
+    /// Lay out a `.setting-row-inline`'s copy and `(control_w, control_h)`
+    /// control at `(x, y)` across `width`. Wide, the control sits right of
+    /// the copy, both centred; narrow, it stretches below the copy, `--s-4`
+    /// apart. Returns the copy and control rects and the row height.
+    fn inline_row(
+        &self,
+        (x, y, width): (f32, f32, f32),
+        copy_h: f32,
+        (control_w, control_h): (f32, f32),
+    ) -> (Rect, Rect, f32) {
+        if self.compact {
+            let gap = self.t.n("s-4");
+            let copy = Rect::new(x, y, width, copy_h);
+            let control = Rect::new(x, (y + copy_h + gap).round(), width, control_h);
+            return (copy, control, copy_h + gap + control_h);
+        }
+        let h = copy_h.max(control_h);
+        let copy = Rect::new(
+            x,
+            y + (h - copy_h) / 2.,
+            width - control_w - self.t.n("s-6"),
+            copy_h,
+        );
+        let control = Rect::new(
+            x + width - control_w,
+            (y + (h - control_h) / 2.).round(),
+            control_w,
+            control_h,
+        );
+        (copy, control, h)
     }
 
     fn viewport_rect(&self) -> Rect {
@@ -2452,7 +2526,9 @@ impl Scene {
 
     /// Tab order: sidebar, header action, then card controls in order.
     pub fn focusable(&self) -> Vec<Target> {
-        let mut list: Vec<Target> = (0..SECTIONS.len()).map(Target::Nav).collect();
+        // The hidden sidebar is not a Tab stop.
+        let sections = if self.compact { 0 } else { SECTIONS.len() };
+        let mut list: Vec<Target> = (0..sections).map(Target::Nav).collect();
         list.push(Target::History);
         if self.find.open {
             list.push(Target::Find(FindPart::Input));
@@ -4061,7 +4137,7 @@ impl Scene {
             sub.map_or(0., |t| t.height),
             title.map_or(0., |t| t.width),
         );
-        let x = NAV_WIDTH + self.t.n("s-8");
+        let x = self.nav_w() + self.t.n("s-8");
         if subtitle {
             Rect::new(x, self.title_y + th + 2., sw, sh)
         } else {
@@ -4087,7 +4163,7 @@ impl Scene {
                 .map(|i| Target::Option(key, i));
         }
         for (i, item) in self.nav_items.iter().enumerate() {
-            if self.absolute(item.base).contains(x, y) {
+            if !self.compact && self.absolute(item.base).contains(x, y) {
                 return Some(Target::Nav(i));
             }
         }
