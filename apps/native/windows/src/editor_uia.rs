@@ -20,7 +20,7 @@ use windows::Win32::System::Variant::*;
 use windows::Win32::UI::Accessibility::*;
 use windows::core::*;
 
-use crate::editor::{Editor, Event, Field, Prop, Stub, Target, with_editor};
+use crate::editor::{Editor, Event, Field, MenuKind, Prop, Stub, Target, with_editor};
 use crate::scene::Rect;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -62,6 +62,10 @@ pub enum Id {
     Hint,
     Control(Target),
     Stub(Stub),
+    /// The open Text style menu (`role="menu"` of `menuitemradio`) or Font
+    /// list (`listbox` of options), and its rows.
+    Menu,
+    MenuItem(usize),
 }
 
 fn unavailable() -> Error {
@@ -125,8 +129,21 @@ fn children(e: &Editor, id: Id) -> Vec<Id> {
                 list.push(c(Target::SaveAsNew));
             }
             list.push(c(Target::Save));
+            // Shipping portals the menu to the end of `body`.
+            if e.open_menu_state().is_some() {
+                list.push(Id::Menu);
+            }
             list
         }
+        Id::Menu => match e.open_menu_state() {
+            Some((kind, _)) => (0..e.menu_items(kind).len()).map(Id::MenuItem).collect(),
+            None => Vec::new(),
+        },
+        Id::Control(Target::Prop(Prop::Number(num))) => [true, false]
+            .into_iter()
+            .map(|up| c(Target::Prop(Prop::Step(num, up))))
+            .filter(|id| matches!(id, Id::Control(t) if e.exists(*t)))
+            .collect(),
         Id::Banner => vec![Id::BannerText, c(Target::Dismiss)],
         Id::CanvasGroup => vec![
             Id::Stub(Stub::Width),
@@ -184,6 +201,7 @@ fn prop_parent(prop: Prop) -> Id {
         Prop::Shape(_) => Id::ShapePicker,
         Prop::Mode(_) => Id::ModeGroup,
         Prop::Swatch(field, _) => Id::ColorField(field),
+        Prop::Step(num, _) => Id::Control(Target::Prop(Prop::Number(num))),
         _ => Id::Properties,
     }
 }
@@ -203,6 +221,7 @@ fn parent(id: Id) -> Option<Id> {
         Id::Row(_) => Id::List,
         Id::ShapePicker | Id::ColorField(_) | Id::ModeGroup => Id::Properties,
         Id::InlineText => Id::Canvas,
+        Id::MenuItem(_) => Id::Menu,
         Id::Control(Target::Prop(prop)) => prop_parent(prop),
         Id::Control(Target::Layer(i) | Target::Eye(i) | Target::Lock(i))
         | Id::Stub(Stub::LayerMenu(i)) => Id::Row(i),
@@ -244,6 +263,8 @@ fn rect(e: &Editor, id: Id) -> Rect {
         Id::Notice | Id::Hint => l.hint,
         Id::Control(target) => e.target_rect(target),
         Id::Stub(stub) => e.stub_rect(stub),
+        Id::Menu => e.menu_rect().unwrap_or_default(),
+        Id::MenuItem(i) => e.menu_item_rect(i),
     }
 }
 
@@ -269,12 +290,40 @@ fn name(e: &Editor, id: Id) -> String {
         Id::Hint => e.hint_text(),
         Id::Control(target) => e.name(target),
         Id::Stub(stub) => e.stub_name(stub),
+        Id::Menu => match e.open_menu_state() {
+            Some((MenuKind::Style, _)) => e.style_label().into(),
+            Some((MenuKind::Font, _)) => "Font".into(),
+            None => String::new(),
+        },
+        Id::MenuItem(i) => e
+            .open_menu_state()
+            .and_then(|(kind, _)| e.menu_items(kind).into_iter().nth(i))
+            .unwrap_or_default(),
         Id::Banner | Id::List => String::new(),
     }
 }
 
-fn control_type(id: Id) -> UIA_CONTROLTYPE_ID {
+fn menu_kind(e: &Editor) -> Option<MenuKind> {
+    e.open_menu_state().map(|(kind, _)| kind)
+}
+
+/// A popup trigger's kind.
+fn trigger_kind(id: Id) -> Option<MenuKind> {
     match id {
+        Id::Control(Target::Prop(Prop::StyleTrigger)) => Some(MenuKind::Style),
+        Id::Control(Target::Prop(Prop::Font)) => Some(MenuKind::Font),
+        _ => None,
+    }
+}
+
+fn control_type(e: &Editor, id: Id) -> UIA_CONTROLTYPE_ID {
+    match id {
+        Id::Menu if menu_kind(e) == Some(MenuKind::Font) => UIA_ListControlTypeId,
+        Id::Menu => UIA_MenuControlTypeId,
+        Id::MenuItem(_) if menu_kind(e) == Some(MenuKind::Font) => UIA_ListItemControlTypeId,
+        Id::MenuItem(_) => UIA_MenuItemControlTypeId,
+        Id::Control(Target::Prop(Prop::Font)) => UIA_ComboBoxControlTypeId,
+        Id::Control(Target::Prop(Prop::Number(_) | Prop::Textarea)) => UIA_EditControlTypeId,
         Id::Root => UIA_WindowControlTypeId,
         Id::Banner
         | Id::CanvasGroup
@@ -331,6 +380,12 @@ fn runtime_id(id: Id) -> [i32; 4] {
             Target::Prop(Prop::Swatch(field, i)) => (18, field as i32 * 16 + i as i32),
             Target::Prop(Prop::Range(range)) => (19, range as i32),
             Target::Prop(Prop::Mode(i)) => (20, i as i32),
+            Target::Prop(Prop::StyleTrigger) => (22, 0),
+            Target::Prop(Prop::Font) => (23, 0),
+            Target::Prop(Prop::Number(num)) => (24, num as i32),
+            Target::Prop(Prop::Step(num, up)) => (25, num as i32 * 2 + i32::from(up)),
+            Target::Prop(Prop::Textarea) => (26, 0),
+            Target::Prop(Prop::Format(i)) => (27, i as i32),
         }
     };
     let stub = |s: Stub| -> (i32, i32) {
@@ -369,6 +424,8 @@ fn runtime_id(id: Id) -> [i32; 4] {
         Id::ColorField(field) => (18, field as i32),
         Id::InlineText => (19, 0),
         Id::ModeGroup => (20, 0),
+        Id::Menu => (21, 0),
+        Id::MenuItem(i) => (22, i as i32),
         Id::Control(t) => {
             let (k, a) = target(t);
             (100 + k, a)
@@ -482,6 +539,11 @@ fn value(e: &Editor, id: Id) -> Option<String> {
         }
         Id::Filename => e.filename(),
         Id::InlineText => e.text_value(),
+        Id::Control(Target::Prop(prop @ (Prop::Number(_) | Prop::Textarea))) => e.field_text(prop),
+        Id::Control(Target::Prop(Prop::Font)) => e
+            .menu_selected(MenuKind::Font)
+            .and_then(|i| e.menu_items(MenuKind::Font).into_iter().nth(i))
+            .unwrap_or_default(),
         Id::Location => e.save_location(),
         Id::Stub(stub) => e.stub_value(stub)?,
         _ => return None,
@@ -540,6 +602,18 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                 Id::Control(Target::Shape(_)) => {
                     pattern == UIA_SelectionItemPatternId || pattern == UIA_InvokePatternId
                 }
+                Id::Control(Target::Prop(Prop::StyleTrigger)) => {
+                    pattern == UIA_ExpandCollapsePatternId || pattern == UIA_InvokePatternId
+                }
+                Id::Control(Target::Prop(Prop::Font)) => {
+                    pattern == UIA_ExpandCollapsePatternId || pattern == UIA_ValuePatternId
+                }
+                Id::Control(Target::Prop(Prop::Number(_) | Prop::Textarea)) => {
+                    pattern == UIA_ValuePatternId
+                }
+                Id::MenuItem(_) => {
+                    pattern == UIA_SelectionItemPatternId || pattern == UIA_InvokePatternId
+                }
                 Id::Control(Target::Tool(i)) if i == shapes() => {
                     pattern == UIA_TogglePatternId
                         || pattern == UIA_ExpandCollapsePatternId
@@ -564,12 +638,19 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
         let id = self.id;
         with(self.hwnd, |e| {
             let enabled = enabled(e, id);
-            let focused = matches!(id, Id::Control(t) if e.focus == Some(t))
-                || (id == Id::InlineText && e.text_active());
+            // The popup's active row is focused while it is open (Preferences
+            // selects do the same).
+            let active = e.open_menu_state().and_then(|(_, active)| active);
+            let focused = match id {
+                Id::MenuItem(i) => active == Some(i),
+                Id::Control(t) => e.focus == Some(t) && active.is_none(),
+                Id::InlineText => e.text_active(),
+                _ => false,
+            };
             let region = matches!(id, Id::Canvas | Id::Layers | Id::Properties);
             Ok(match property {
                 UIA_NamePropertyId => VARIANT::from(BSTR::from(name(e, id))),
-                UIA_ControlTypePropertyId => VARIANT::from(control_type(id).0),
+                UIA_ControlTypePropertyId => VARIANT::from(control_type(e, id).0),
                 UIA_HelpTextPropertyId => match id {
                     Id::Control(target) => VARIANT::from(BSTR::from(e.help(target))),
                     Id::Location => VARIANT::from(BSTR::from(e.save_location())),
@@ -612,7 +693,7 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                 UIA_ValueValuePropertyId => {
                     value(e, id).map_or_else(VARIANT::default, |v| VARIANT::from(BSTR::from(v)))
                 }
-                UIA_ValueIsReadOnlyPropertyId if id == Id::InlineText => VARIANT::from(false),
+                UIA_ValueIsReadOnlyPropertyId if writable(id) => VARIANT::from(false),
                 UIA_ValueIsReadOnlyPropertyId => VARIANT::from(!matches!(
                     id,
                     Id::Control(Target::Slider | Target::Divider | Target::Prop(Prop::Range(_)))
@@ -624,12 +705,14 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                     Id::Control(target @ Target::Shape(_)) => {
                         VARIANT::from(e.pressed(target).unwrap_or(false))
                     }
+                    Id::MenuItem(i) => VARIANT::from(item_selected(e, i)),
                     _ => VARIANT::default(),
                 },
                 UIA_ExpandCollapseExpandCollapseStatePropertyId => match id {
                     Id::Control(Target::Tool(i)) if i == shapes() => {
-                        VARIANT::from(expand_state(e).0)
+                        VARIANT::from(expand_state(e, id).0)
                     }
+                    _ if trigger_kind(id).is_some() => VARIANT::from(expand_state(e, id).0),
                     _ => VARIANT::default(),
                 },
                 _ => VARIANT::default(),
@@ -646,12 +729,28 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
     }
 }
 
-fn expand_state(e: &Editor) -> ExpandCollapseState {
-    if e.flyout {
+fn expand_state(e: &Editor, id: Id) -> ExpandCollapseState {
+    let open = match trigger_kind(id) {
+        Some(kind) => e.menu_open(kind),
+        None => e.flyout,
+    };
+    if open {
         ExpandCollapseState_Expanded
     } else {
         ExpandCollapseState_Collapsed
     }
+}
+
+/// Inputs that take `Value.SetValue`.
+fn writable(id: Id) -> bool {
+    matches!(
+        id,
+        Id::InlineText | Id::Control(Target::Prop(Prop::Number(_) | Prop::Textarea))
+    )
+}
+
+fn item_selected(e: &Editor, index: usize) -> bool {
+    menu_kind(e).is_some_and(|kind| e.menu_selected(kind) == Some(index))
 }
 
 impl IRawElementProviderFragment_Impl for Node_Impl {
@@ -757,6 +856,11 @@ impl IRawElementProviderFragmentRoot_Impl for Node_Impl {
         if with(self.hwnd, |e| Ok(e.text_active()))? {
             return Ok(fragment(self.hwnd, Id::InlineText));
         }
+        if let Some(active) = with(self.hwnd, |e| {
+            Ok(e.open_menu_state().and_then(|(_, active)| active))
+        })? {
+            return Ok(fragment(self.hwnd, Id::MenuItem(active)));
+        }
         let focus = with(self.hwnd, |e| Ok(e.focus))?;
         focus
             .map(|target| fragment(self.hwnd, Id::Control(target)))
@@ -770,6 +874,10 @@ impl Node_Impl {
         with(self.hwnd, |e| match id {
             Id::Control(target) if e.exists(target) && e.enabled(target) => {
                 e.activate(target);
+                Ok(())
+            }
+            Id::MenuItem(i) if menu_kind(e).is_some() => {
+                e.choose_menu(i);
                 Ok(())
             }
             _ => Err(not_enabled()),
@@ -794,23 +902,32 @@ impl IToggleProvider_Impl for Node_Impl {
     }
 }
 
-impl IExpandCollapseProvider_Impl for Node_Impl {
-    fn Expand(&self) -> Result<()> {
+impl Node_Impl {
+    fn expand(&self, open: bool) -> Result<()> {
+        let id = self.id;
         with(self.hwnd, |e| {
-            e.set_flyout(true);
+            match trigger_kind(id) {
+                Some(kind) if e.exists(Target::Prop(kind.trigger())) => e.set_menu(kind, open),
+                Some(_) => return Err(not_enabled()),
+                None => e.set_flyout(open),
+            }
             Ok(())
         })
+    }
+}
+
+impl IExpandCollapseProvider_Impl for Node_Impl {
+    fn Expand(&self) -> Result<()> {
+        self.expand(true)
     }
 
     fn Collapse(&self) -> Result<()> {
-        with(self.hwnd, |e| {
-            e.set_flyout(false);
-            Ok(())
-        })
+        self.expand(false)
     }
 
     fn ExpandCollapseState(&self) -> Result<ExpandCollapseState> {
-        with(self.hwnd, |e| Ok(expand_state(e)))
+        let id = self.id;
+        with(self.hwnd, |e| Ok(expand_state(e, id)))
     }
 }
 
@@ -831,12 +948,20 @@ impl ISelectionItemProvider_Impl for Node_Impl {
         let id = self.id;
         with(self.hwnd, |e| match id {
             Id::Control(target) => Ok(e.pressed(target).unwrap_or(false).into()),
+            Id::MenuItem(i) => Ok(item_selected(e, i).into()),
             _ => Ok(false.into()),
         })
     }
 
     fn SelectionContainer(&self) -> Result<IRawElementProviderSimple> {
-        Ok(node(self.hwnd, Id::Flyout))
+        Ok(node(
+            self.hwnd,
+            if matches!(self.id, Id::MenuItem(_)) {
+                Id::Menu
+            } else {
+                Id::Flyout
+            },
+        ))
     }
 }
 
@@ -902,12 +1027,21 @@ impl IRangeValueProvider_Impl for Node_Impl {
 
 impl IValueProvider_Impl for Node_Impl {
     fn SetValue(&self, value: &PCWSTR) -> Result<()> {
-        // Only the inline label takes text; the filename field is read-only
-        // in this host and ranges take RangeValue.SetValue.
-        if self.id != Id::InlineText {
+        // The inline label and the property inputs take text; the filename
+        // field is read-only in this host and ranges take RangeValue.SetValue.
+        if !writable(self.id) {
             return Err(read_only());
         }
         let value = unsafe { value.to_string() }.unwrap_or_default();
+        if let Id::Control(Target::Prop(prop)) = self.id {
+            return with(self.hwnd, |e| {
+                if !e.exists(Target::Prop(prop)) {
+                    return Err(unavailable());
+                }
+                e.set_field_value(prop, &value);
+                Ok(())
+            });
+        }
         with(self.hwnd, |e| {
             if !e.text_active() {
                 return Err(unavailable());
@@ -925,7 +1059,7 @@ impl IValueProvider_Impl for Node_Impl {
     }
 
     fn IsReadOnly(&self) -> Result<BOOL> {
-        Ok((self.id != Id::InlineText).into())
+        Ok((!writable(self.id)).into())
     }
 }
 
@@ -987,6 +1121,37 @@ pub fn raise(hwnd: HWND, events: &[(Event, String)]) {
                         &VARIANT::from(BSTR::from(detail.as_str())),
                     );
                 }
+                Event::Expanded(target) => {
+                    let trigger = node(hwnd, Id::Control(target));
+                    let open = detail == "open";
+                    let state = |open: bool| {
+                        VARIANT::from(
+                            if open {
+                                ExpandCollapseState_Expanded
+                            } else {
+                                ExpandCollapseState_Collapsed
+                            }
+                            .0,
+                        )
+                    };
+                    let _ = UiaRaiseAutomationPropertyChangedEvent(
+                        &trigger,
+                        UIA_ExpandCollapseExpandCollapseStatePropertyId,
+                        &state(!open),
+                        &state(open),
+                    );
+                    if !open {
+                        // Focus returns to the trigger.
+                        let _ =
+                            UiaRaiseAutomationEvent(&trigger, UIA_AutomationFocusChangedEventId);
+                    }
+                }
+                Event::MenuActive(index) => {
+                    let _ = UiaRaiseAutomationEvent(
+                        &node(hwnd, Id::MenuItem(index)),
+                        UIA_AutomationFocusChangedEventId,
+                    );
+                }
                 Event::Structure => {
                     let _ = UiaRaiseStructureChangedEvent(
                         &node(hwnd, Id::Root),
@@ -1041,6 +1206,10 @@ pub fn describe(e: &Editor, events: Vec<Event>) -> Vec<(Event, String)> {
                 Event::Value(target) => value(e, Id::Control(target)).unwrap_or_default(),
                 Event::Notice => e.notice_text().map(|(text, _)| text).unwrap_or_default(),
                 Event::InlineText => e.text_value(),
+                Event::Expanded(target) => {
+                    let open = trigger_kind(Id::Control(target)).is_some_and(|k| e.menu_open(k));
+                    if open { "open" } else { "closed" }.into()
+                }
                 _ => String::new(),
             };
             (event, detail)

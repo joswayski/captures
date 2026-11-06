@@ -36,7 +36,7 @@ use crate::scene::Rect;
 use crate::textfield::{self, Key};
 
 /// The named treatment new labels start with, as shipping.
-const NEW_TEXT_PRESET: &str = "rounded-box";
+pub(super) const NEW_TEXT_PRESET: &str = "rounded-box";
 /// Selection grips: 11 px accent dots with a white rim.
 const GRIP: f32 = 5.5;
 
@@ -73,6 +73,8 @@ struct View {
     rotation: f32,
     radius: f32,
     color: D2D1_COLOR_F,
+    /// `-webkit-text-stroke` width for outlined labels, else 0.
+    outline: f32,
     plate: Option<D2D1_COLOR_F>,
 }
 
@@ -227,6 +229,35 @@ fn load_bundled(dwrite: &IDWriteFactory) -> Result<IDWriteFontCollection> {
     }
 }
 
+/// A one-line layout of `text` in a bundled editor family (the Text style
+/// previews' Nunito); `None` without the bundled fonts.
+pub(super) fn bundled_text_layout(
+    dwrite: &IDWriteFactory,
+    family: &str,
+    size: f32,
+    weight: DWRITE_FONT_WEIGHT,
+    text: &str,
+) -> Option<IDWriteTextLayout> {
+    let collection = bundled_collection(dwrite)?;
+    let name = HSTRING::from(family);
+    em_metrics(&collection, &name, weight, DWRITE_FONT_STYLE_NORMAL)?;
+    unsafe {
+        let format = dwrite
+            .CreateTextFormat(
+                &name,
+                &collection,
+                weight,
+                DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL,
+                size,
+                w!("en-us"),
+            )
+            .ok()?;
+        let wide: Vec<u16> = text.encode_utf16().collect();
+        dwrite.CreateTextLayout(&wide, &format, 1e4, 1e4).ok()
+    }
+}
+
 /// `(ascent, descent)` per em of `family` in `collection`.
 fn em_metrics(
     collection: &IDWriteFontCollection,
@@ -303,11 +334,11 @@ impl Editor {
                     create: TextCreate {
                         point,
                         text: String::new(),
-                        font_size: p.text_size,
+                        font_size: self.new_text_size(),
                         font_family: "sans".into(),
                         // Shipping places new text in the drawing color.
                         color: style.color.clone(),
-                        style_preset: Some(NEW_TEXT_PRESET.into()),
+                        style_preset: Some(self.text_preset.into()),
                         drop_shadow: style.drop_shadow,
                         drop_shadow_style: style.drop_shadow_style.clone(),
                     },
@@ -592,6 +623,7 @@ impl Editor {
                 rotation: layout.rotation as f32,
                 radius: layout.plate_radius as f32 * s,
                 color: hex_color(&element.color),
+                outline: layout.outline_width as f32 * s,
                 plate: element
                     .background
                     .as_deref()
@@ -651,15 +683,20 @@ impl Editor {
                     gfx::fill(dc, rect(x, y, x + m.width.max(3.), y + m.height), highlight)?;
                 }
             }
-            dc.DrawTextLayout(
-                Vector2 {
-                    X: v.origin.0,
-                    Y: v.origin.1,
-                },
-                &v.layout,
-                &gfx::brush(dc, v.color)?,
-                D2D1_DRAW_TEXT_OPTIONS_NONE,
-            );
+            if v.outline > 0. {
+                // Shipping's textarea: transparent ink with a text stroke.
+                gfx::outline_text(dc, &self.g.factory, &v.layout, v.origin, v.outline, v.color)?;
+            } else {
+                dc.DrawTextLayout(
+                    Vector2 {
+                        X: v.origin.0,
+                        Y: v.origin.1,
+                    },
+                    &v.layout,
+                    &gfx::brush(dc, v.color)?,
+                    D2D1_DRAW_TEXT_OPTIONS_NONE,
+                );
+            }
             if let Some((start, len)) = f.composition() {
                 for m in v.range(start, len) {
                     let (x, y) = (v.origin.0 + m.left, v.origin.1 + m.top + m.height);
