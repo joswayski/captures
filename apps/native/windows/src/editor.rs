@@ -454,6 +454,9 @@ pub struct Editor {
     page_key: (f32, f32, f32, f32),
     /// The overlay's last drawn box, well-relative DIPs.
     overlay_drawn: Option<Rect>,
+    /// The overlay surface was just created and has never been drawn:
+    /// DirectComposition rejects a partial `BeginDraw` on it (E_INVALIDARG).
+    overlay_fresh: bool,
     motions: Vec<Motion>,
     dcomp: Option<IDCompositionDesktopDevice>,
     _target: Option<IDCompositionTarget>,
@@ -853,6 +856,7 @@ impl Editor {
             rows: 0,
             page_key: (0., 0., 0., 0.),
             overlay_drawn: None,
+            overlay_fresh: true,
             motions: Vec::new(),
             dcomp: None,
             _target: None,
@@ -3777,6 +3781,7 @@ impl Editor {
                     node.dirty = true;
                     if node.kind == Kind::Overlay {
                         self.overlay_drawn = None;
+                        self.overlay_fresh = true;
                     }
                 }
                 if node.dirty {
@@ -3786,6 +3791,9 @@ impl Editor {
             }
         }
         self.upload_image()?;
+        // A failed draw keeps its node dirty and does not skip the others or
+        // the commit, so one bad surface cannot freeze the rest of the window.
+        let mut failed = None;
         for i in draws {
             let (surface, size) = self.surfaces[i].as_ref().expect("surface").clone();
             let node = &self.nodes[i];
@@ -3795,15 +3803,22 @@ impl Editor {
                 axis(snapped[i].0, node.rect.w),
                 axis(snapped[i].1, node.rect.h),
             );
-            if node.kind == Kind::Overlay {
-                self.draw_overlay_region(&surface, size, scale)?;
+            let drawn = if node.kind == Kind::Overlay {
+                self.draw_overlay_region(&surface, size, scale)
             } else {
-                gfx::draw_surface(&surface, size, scale, bleed, |dc| self.draw(dc, i))?;
+                gfx::draw_surface(&surface, size, scale, bleed, |dc| self.draw(dc, i))
+            };
+            if let Err(error) = drawn {
+                self.nodes[i].dirty = true;
+                if self.nodes[i].kind == Kind::Overlay {
+                    self.overlay_fresh = true;
+                }
+                failed.get_or_insert(error);
             }
         }
         self.start_motions(&dcomp)?;
         unsafe { dcomp.Commit()? };
-        Ok(())
+        failed.map_or(Ok(()), Err)
     }
 
     /// Redraw only the union of the overlay's old and new content.
@@ -3814,7 +3829,10 @@ impl Editor {
         scale: (f32, f32),
     ) -> Result<()> {
         let now = self.overlay_box();
+        let fresh = std::mem::take(&mut self.overlay_fresh);
         let region = match (self.overlay_drawn, now) {
+            // A new surface is drawn whole once, transparent where empty.
+            _ if fresh => Rect::new(0., 0., size.0 as f32 / scale.0, size.1 as f32 / scale.1),
             (None, None) => return Ok(()),
             (Some(a), None) | (None, Some(a)) => a,
             (Some(a), Some(b)) => {
