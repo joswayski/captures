@@ -10149,7 +10149,7 @@ function PreferencesSections({
           title="Accent color"
           description="Used for the capture action, selection, and focus. Status colors keep their meaning."
           control={
-            <div className="theme-options" role="radiogroup" aria-label="Color theme">
+            <div className="theme-options" role="radiogroup" aria-label="Accent color">
               {COLOR_THEMES.map((theme) => {
                 const previewStyle =
                   theme.id === "custom"

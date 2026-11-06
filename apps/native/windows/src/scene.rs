@@ -50,7 +50,7 @@ const SWATCH: f32 = 18.;
 const SEGMENT_INSET: f32 = 4.;
 pub const FOLDER_DIALOG_TITLE: &str = "Choose capture folder";
 /// The accent grid's shipping accessible name (`aria-label`).
-pub const ACCENT_GROUP_LABEL: &str = "Color theme";
+pub const ACCENT_GROUP_LABEL: &str = "Accent color";
 
 /// One row of a settings card.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
