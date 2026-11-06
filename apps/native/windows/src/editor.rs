@@ -29,7 +29,7 @@ use std::time::Instant;
 
 use captures_app::editor::{
     ClosedShapeCreate, ClosedShapeKind, Document, ElementStyle, FreehandPathCreate, LayerEdit,
-    OpenShapeCreate, OpenShapeKind, Point, Rect as DocRect,
+    OpenShapeCreate, OpenShapeKind, Point, Rect as DocRect, ResizeHandle,
 };
 use captures_app::editor_chrome::{self, RAIL_TOOLS, SHAPE_TOOLS, header};
 use captures_app::editor_export::{self, EstimateState, ExportSource, ExportTarget, SavePlan};
@@ -60,6 +60,7 @@ use crate::tokens::Tokens;
 use crate::{Options, appearance};
 
 mod props;
+mod text;
 pub use props::{Field, Prop, Range, bounds as range_bounds, range_text};
 
 /// `.screenshot-editor { min-width: 860px; min-height: 600px }`; GTK's default.
@@ -193,6 +194,10 @@ pub enum Event {
     Structure,
     /// The export notice changed (`role="status"`).
     Notice,
+    /// The inline text field took focus.
+    InlineFocus,
+    /// The inline text field's value changed.
+    InlineText,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -216,6 +221,8 @@ enum Kind {
     Page,
     Image,
     Overlay,
+    /// The inline text caret, blinking on the compositor.
+    Caret,
     /// `.screenshot-sidebar` background, borders and section rule.
     Sidebar,
     /// `.screenshot-layers-heading`.
@@ -309,6 +316,12 @@ pub struct Presented {
     pub can_redo: bool,
     pub style: ElementStyle,
     pub has_draft: bool,
+    /// The session's active inline text input.
+    pub active_input: Option<text::ActiveInput>,
+    /// Font family keys to the bundled family names.
+    pub font_families: BTreeMap<String, String>,
+    /// Shipping's initial text size for new labels.
+    pub text_size: f64,
     /// Resolved shape and path controls per layer ID.
     pub controls: BTreeMap<String, props::Values>,
     pub source: Option<ExportSource>,
@@ -325,10 +338,18 @@ enum Job {
     },
     Copy,
     Autosave,
+    /// Render an uncommitted gesture without touching history.
+    Preview(Request),
+    /// Publish the session's pixels again (a cancelled preview).
+    Refresh,
 }
+
+/// A preview's changed pixels and selection outlines.
+type Previewed = (Option<Pixels>, BTreeMap<String, [Point; 4]>);
 
 enum Outcome {
     Presented(Box<Presented>),
+    Preview(std::result::Result<Previewed, String>),
     Saved(std::result::Result<(SavePlan, SavedExport), String>),
     Copied(std::result::Result<(Vec<u8>, Vec<u8>), String>),
     Failed(String),
@@ -346,6 +367,13 @@ enum Gesture {
     /// Moving the selected layer by the pointer's document delta.
     Move {
         id: String,
+        start: Point,
+        end: Point,
+    },
+    /// Dragging a selection grip.
+    Resize {
+        id: String,
+        handle: ResizeHandle,
         start: Point,
         end: Point,
     },
@@ -444,6 +472,22 @@ pub struct Editor {
     pending: Option<Request>,
     /// A custom color to ask for once the window is released.
     pick_color: Option<Field>,
+    /// The Text tool's open label.
+    inline: Option<text::Inline>,
+    input_counter: u32,
+    caret: usize,
+    caret_blink: bool,
+    caret_color: Option<[u32; 4]>,
+    high_surrogate: Option<u16>,
+    /// The IME is enabled (only while a label is open).
+    ime: bool,
+    /// Selecting text with the pointer.
+    text_drag: bool,
+    /// A gesture preview is with the worker; another is due after it.
+    preview_busy: bool,
+    preview_dirty: bool,
+    /// The resized layer's outline from the latest preview.
+    preview_outline: Option<[Point; 4]>,
     autosave: DraftAutosave,
     pub w: f32,
     pub h: f32,
@@ -512,9 +556,9 @@ fn open_kind(tool: &str) -> Option<OpenShapeKind> {
     })
 }
 
-/// Rail tools this host does not implement yet: Text and Eraser.
+/// Rail tools this host does not implement yet: Eraser.
 pub fn tool_enabled(index: usize) -> bool {
-    !matches!(RAIL_TOOLS[index].key, "t" | "b")
+    RAIL_TOOLS[index].key != "b"
 }
 
 /// The rail index of the grouped Shapes button.
@@ -589,31 +633,10 @@ struct Published {
     bgra: Arc<Vec<u8>>,
 }
 
-fn present(session: &EditorSession, artifact_id: &str, published: &mut Published) -> Presented {
-    let snapshot = session.snapshot();
-    let layers = snapshot
-        .document
-        .elements
-        .iter()
-        .rev()
-        .map(|element| {
-            let base = element.base();
-            let row = snapshot.layer_rows.get(base.id.as_str());
-            LayerItem {
-                id: base.id.clone(),
-                name: row.map_or_else(|| editor_chrome::layer_name(element), |r| r.name.clone()),
-                kind: row.map_or(editor_chrome::layer_kind(element), |r| r.kind),
-                icon: row.map_or(editor_chrome::layer_icon(element), |r| r.icon),
-                visible: base.visible,
-                locked: base.locked,
-                visibility_label: editor_chrome::visibility_label(element),
-                lock_label: editor_chrome::lock_label(element),
-                menu_label: editor_chrome::menu_label(element),
-            }
-        })
-        .collect();
-    let rgba = session.pixels();
-    let pixels = match &published.rgba {
+/// New pixels against the last published ones: the changed rectangle as
+/// premultiplied BGRA, or `None` when nothing changed.
+fn publish(rgba: Arc<RgbaImage>, published: &mut Published) -> Option<Pixels> {
+    match &published.rgba {
         Some(old) if Arc::ptr_eq(old, &rgba) => None,
         old => {
             let size = (rgba.width(), rgba.height());
@@ -638,7 +661,33 @@ fn present(session: &EditorSession, artifact_id: &str, published: &mut Published
                 }
             })
         }
-    };
+    }
+}
+
+fn present(session: &EditorSession, artifact_id: &str, published: &mut Published) -> Presented {
+    let snapshot = session.snapshot();
+    let layers = snapshot
+        .document
+        .elements
+        .iter()
+        .rev()
+        .map(|element| {
+            let base = element.base();
+            let row = snapshot.layer_rows.get(base.id.as_str());
+            LayerItem {
+                id: base.id.clone(),
+                name: row.map_or_else(|| editor_chrome::layer_name(element), |r| r.name.clone()),
+                kind: row.map_or(editor_chrome::layer_kind(element), |r| r.kind),
+                icon: row.map_or(editor_chrome::layer_icon(element), |r| r.icon),
+                visible: base.visible,
+                locked: base.locked,
+                visibility_label: editor_chrome::visibility_label(element),
+                lock_label: editor_chrome::lock_label(element),
+                menu_label: editor_chrome::menu_label(element),
+            }
+        })
+        .collect();
+    let pixels = publish(session.pixels(), published);
     Presented {
         document: snapshot.document.clone(),
         layers,
@@ -651,6 +700,16 @@ fn present(session: &EditorSession, artifact_id: &str, published: &mut Published
         can_redo: snapshot.can_redo,
         style: snapshot.initial_annotation_style.clone(),
         has_draft: snapshot.has_draft,
+        active_input: snapshot
+            .active_text_input
+            .as_ref()
+            .map(|active| text::ActiveInput {
+                input_id: active.input_id.to_owned(),
+                layer_id: active.layer_id.to_owned(),
+                layout: active.layout.clone(),
+            }),
+        font_families: snapshot.font_families.cloned().unwrap_or_default(),
+        text_size: snapshot.initial_text_size,
         controls: snapshot
             .annotation_controls
             .iter()
@@ -758,6 +817,17 @@ fn spawn_worker(
                         editor_export::publish(&root, &session.pixels(), &plan, options, mode)
                             .map(|saved| (plan, saved)),
                     ),
+                    Job::Preview(request) => Outcome::Preview(
+                        session.preview_drawing_with_geometry(request).map(|frame| {
+                            (
+                                publish(frame.pixels, &mut published),
+                                frame.selection_outlines,
+                            )
+                        }),
+                    ),
+                    Job::Refresh => {
+                        Outcome::Presented(Box::new(present(session, &id, &mut published)))
+                    }
                     Job::Copy => {
                         let pixels = session.pixels();
                         Outcome::Copied(
@@ -874,6 +944,17 @@ impl Editor {
             range_drag: None,
             pending: None,
             pick_color: None,
+            inline: None,
+            input_counter: 0,
+            caret: 0,
+            caret_blink: false,
+            caret_color: None,
+            high_surrogate: None,
+            ime: true,
+            text_drag: false,
+            preview_busy: false,
+            preview_dirty: false,
+            preview_outline: None,
             autosave: DraftAutosave::default(),
             w: SIZE.0,
             h: SIZE.1,
@@ -961,6 +1042,8 @@ impl Editor {
         self.page = self.add(Some(self.well), Kind::Page, PAGE_BLEED);
         self.image_node = self.add(Some(self.well), Kind::Image, 0.);
         self.overlay = self.add(Some(self.well), Kind::Overlay, 0.);
+        self.caret = self.add(Some(self.well), Kind::Caret, 0.);
+        self.nodes[self.caret].visible = false;
         let rail = self.add(Some(root), Kind::Rail, 0.);
         for i in 0..RAIL_TOOLS.len() {
             self.control(rail, Target::Tool(i), 0.);
@@ -1433,6 +1516,9 @@ impl Editor {
         if key == self.tool {
             return;
         }
+        if self.inline.is_some() {
+            self.finish_text();
+        }
         self.tool = key;
         self.gesture = None;
         for i in 0..RAIL_TOOLS.len() {
@@ -1653,19 +1739,7 @@ impl Editor {
                 let shown = self.values();
                 let old_count = self.layer_count();
                 if let Some(pixels) = presented.pixels.clone() {
-                    let resized = self
-                        .image
-                        .as_ref()
-                        .is_none_or(|old| (old.width, old.height) != (pixels.width, pixels.height));
-                    self.upload = Some(match (self.upload.take(), resized) {
-                        // A pending partial upload widens to the whole image.
-                        (Some(_), _) | (None, true) => Pixels {
-                            damage: None,
-                            ..pixels.clone()
-                        },
-                        (None, false) => pixels.clone(),
-                    });
-                    self.image = Some(pixels);
+                    self.take_pixels(pixels);
                 }
                 if first {
                     self.banner = presented.has_draft;
@@ -1728,6 +1802,32 @@ impl Editor {
                 if let Some(next) = self.pending.take() {
                     self.submit(next);
                 }
+                self.received_text();
+            }
+            Outcome::Preview(result) => {
+                self.preview_busy = false;
+                let resizing = matches!(self.gesture, Some(Gesture::Resize { .. }));
+                match result {
+                    // Only a drag still in progress shows its preview; the
+                    // committed result replaces it once the worker publishes.
+                    Ok((pixels, outlines)) => {
+                        if let Some(pixels) = pixels {
+                            self.take_pixels(pixels);
+                        }
+                        if let (true, Some(Gesture::Resize { id, .. })) =
+                            (resizing, self.gesture.as_ref())
+                        {
+                            self.preview_outline = outlines.get(id).copied();
+                            self.overlay_changed();
+                        }
+                    }
+                    Err(error) => self.set_notice(Some((error, true))),
+                }
+                if self.preview_dirty && resizing {
+                    self.preview_resize();
+                }
+                self.need = true;
+                return;
             }
             Outcome::Saved(result) => {
                 self.busy = false;
@@ -1754,9 +1854,28 @@ impl Editor {
                 if let Some(next) = self.pending.take() {
                     self.submit(next);
                 }
+                self.text_failed();
             }
         }
         self.export_changed();
+        self.need = true;
+    }
+
+    /// Queue new pixels for the image surface.
+    fn take_pixels(&mut self, pixels: Pixels) {
+        let resized = self
+            .image
+            .as_ref()
+            .is_none_or(|old| (old.width, old.height) != (pixels.width, pixels.height));
+        self.upload = Some(match (self.upload.take(), resized) {
+            // A pending partial upload widens to the whole image.
+            (Some(_), _) | (None, true) => Pixels {
+                damage: None,
+                ..pixels.clone()
+            },
+            (None, false) => pixels.clone(),
+        });
+        self.image = Some(pixels);
         self.need = true;
     }
 
@@ -1782,11 +1901,40 @@ impl Editor {
 
     // ---- gestures ----
 
-    fn begin(&mut self, x: f32, y: f32) {
+    fn begin(&mut self, x: f32, y: f32, double: bool) {
+        if self.inline.is_some() {
+            // Inside the label places the caret; anywhere else commits it.
+            if self.in_text(x, y) {
+                self.text_click(x, y, double, self.shift_down());
+            } else {
+                self.finish_text();
+            }
+            return;
+        }
         let Some(point) = self.to_document(x, y) else {
             return;
         };
+        if let Some(handle) = self.handle_at(point)
+            && let Some(id) = self.selected.clone()
+        {
+            self.gesture = Some(Gesture::Resize {
+                id,
+                handle,
+                start: point,
+                end: point,
+            });
+            self.preview_outline = None;
+            self.overlay_changed();
+            return;
+        }
         let tool = self.tool;
+        if tool == "t" {
+            self.begin_text(point);
+            return;
+        }
+        if tool == "v" && double && self.edit_text_at(point) {
+            return;
+        }
         let gesture = match tool {
             "v" => {
                 let scale = self.zoom_percent().unwrap_or(100.) / 100.;
@@ -1844,6 +1992,12 @@ impl Editor {
                     *end = point;
                 }
             }
+            Some(Gesture::Resize { end, .. }) => {
+                if let Some(point) = point {
+                    *end = point;
+                }
+                self.preview_resize();
+            }
             Some(Gesture::Freehand(points)) => {
                 if let Some(point) = point {
                     points.push(point);
@@ -1865,8 +2019,21 @@ impl Editor {
             .as_ref()
             .map(|d| (d.style.clone(), d.opacity))
             .unwrap_or_else(|| (ElementStyle::default(), 100.));
+        let lock = self.shift_down();
         let request = match gesture {
             Gesture::Pan { .. } => None,
+            Gesture::Resize {
+                id,
+                handle,
+                start,
+                end,
+            } => {
+                if moved(start, end) {
+                    Some(self.resize_request(&id, handle, end, lock))
+                } else {
+                    None
+                }
+            }
             Gesture::Move { id, start, end } if moved(start, end) => Some(Request::Layer {
                 id,
                 edit: LayerEdit::Translate {
@@ -1926,7 +2093,27 @@ impl Editor {
 
     fn overlay_changed(&mut self) {
         self.nodes[self.overlay].dirty = true;
+        if self.inline.is_some() {
+            self.place_caret();
+        }
         self.need = true;
+    }
+
+    fn shift_down(&self) -> bool {
+        !self.hwnd.is_invalid() && unsafe { GetKeyState(VK_SHIFT.0 as i32) } < 0
+    }
+
+    /// Drop a gesture; a resize that previewed restores the real pixels.
+    fn cancel_gesture(&mut self) -> bool {
+        let Some(gesture) = self.gesture.take() else {
+            return false;
+        };
+        if matches!(gesture, Gesture::Resize { .. }) {
+            self.preview_outline = None;
+            let _ = self.jobs.send(Job::Refresh);
+        }
+        self.overlay_changed();
+        true
     }
 
     // ---- layout ----
@@ -2625,7 +2812,7 @@ impl Editor {
             _ if ctrl => return false,
             VK_DELETE | VK_BACK => self.delete_selected(),
             VK_ESCAPE => {
-                if self.gesture.take().is_none() {
+                if !self.cancel_gesture() {
                     self.set_selected(None);
                 }
                 self.overlay_changed();
@@ -2692,6 +2879,7 @@ impl Editor {
             }
             Kind::Page => self.draw_page(dc, (w, h))?,
             Kind::Overlay => self.draw_overlay(dc)?,
+            Kind::Caret => gfx::fill(dc, all, self.caret_fill())?,
             Kind::Sidebar => {
                 gfx::fill(dc, all, c("surface-raised"))?;
                 gfx::fill(dc, rect(0., 0., 1., h), c("border-subtle"))?;
@@ -3070,6 +3258,7 @@ impl Editor {
             }
             _ => {}
         }
+        points.extend(self.text_corners());
         let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
         for (x, y) in &points {
             x0 = x0.min(*x);
@@ -3078,12 +3267,18 @@ impl Editor {
             y1 = y1.max(*y);
         }
         (!points.is_empty()).then(|| {
-            let pad = 4.;
+            // Room for the stroke and the selection grips.
+            let pad = 10.;
             Rect::new(x0 - pad, y0 - pad, x1 - x0 + 2. * pad, y1 - y0 + 2. * pad)
         })
     }
 
     fn selection_outline(&self) -> Option<[Point; 4]> {
+        if matches!(self.gesture, Some(Gesture::Resize { .. }))
+            && let Some(outline) = self.preview_outline
+        {
+            return Some(outline);
+        }
         let id = self.selected.as_ref()?;
         self.presented.as_ref()?.outlines.get(id).copied()
     }
@@ -3146,7 +3341,8 @@ impl Editor {
             }
             _ => {}
         }
-        Ok(())
+        self.draw_grips(dc)?;
+        self.draw_text(dc)
     }
 
     fn draw_bar(&self, dc: &ID2D1DeviceContext, (w, h): (f32, f32)) -> Result<()> {
@@ -3951,6 +4147,9 @@ impl Editor {
             }
         }
         self.start_motions(&dcomp)?;
+        if std::mem::take(&mut self.caret_blink) {
+            self.blink_caret(&dcomp)?;
+        }
         unsafe { dcomp.Commit()? };
         failed.map_or(Ok(()), Err)
     }
@@ -4114,6 +4313,32 @@ impl Editor {
         Ok(())
     }
 
+    /// Restart the caret's blink, solid first, as a repeating compositor
+    /// animation at the system rate (no timer, no redraw); the IME windows
+    /// follow the caret.
+    fn blink_caret(&mut self, dcomp: &IDCompositionDesktopDevice) -> Result<()> {
+        let Some(visual) = self.visuals[self.caret].clone() else {
+            return Ok(());
+        };
+        unsafe {
+            let blink = GetCaretBlinkTime();
+            if blink == 0 || blink == u32::MAX {
+                visual.SetOpacity2(1.)?;
+            } else {
+                let on = f64::from(blink) / 1000.;
+                let animation = dcomp.CreateAnimation()?;
+                animation.AddCubic(0., 1., 0., 0., 0.)?;
+                animation.AddCubic(on, 0., 0., 0., 0.)?;
+                animation.AddRepeat(2. * on, 2. * on)?;
+                visual.SetOpacity(&animation)?;
+            }
+        }
+        if let Some(rect) = self.ime_rect() {
+            crate::textfield::ime_position(self.hwnd, rect);
+        }
+        Ok(())
+    }
+
     /// Draw and commit now, waiting for the compositor (resize).
     fn present(&mut self) {
         self.need = false;
@@ -4129,6 +4354,12 @@ impl Editor {
 
     /// One frame if due; the run loop calls this after clearing `woken`.
     pub fn service(&mut self) -> (bool, Vec<Event>) {
+        // The IME is on only while a label is open, like a focused textarea.
+        let text = self.inline.is_some();
+        if text != self.ime && !self.hwnd.is_invalid() {
+            crate::textfield::ime_enable(self.hwnd, text);
+            self.ime = text;
+        }
         if self.need {
             self.need = false;
             if let Err(error) = self.frame() {
@@ -4202,9 +4433,8 @@ impl Editor {
                 }
                 self.divider_drag = None;
                 self.slider_drag = false;
-                if self.gesture.take().is_some() {
-                    self.overlay_changed();
-                }
+                self.text_drag = false;
+                self.cancel_gesture();
                 self.refresh(true);
                 return None;
             }
@@ -4228,6 +4458,8 @@ impl Editor {
                     self.set_range(range, value, true);
                 } else if self.slider_drag {
                     self.slide_to(x);
+                } else if self.text_drag {
+                    self.text_drag_to(x, y);
                 } else if self.gesture.is_some() {
                     self.update(x, y);
                 }
@@ -4255,6 +4487,10 @@ impl Editor {
                         });
                     }
                     return Some(LRESULT(0));
+                }
+                // A control takes focus from an open label: commit it.
+                if self.inline.is_some() && hit.is_some() {
+                    self.finish_text();
                 }
                 match hit {
                     Some(Target::Divider) => {
@@ -4286,13 +4522,14 @@ impl Editor {
                     Some(_) => {}
                     None if self.l.well.contains(x, y) && !self.flyout => {
                         self.set_focus(None, false);
-                        self.begin(x, y);
+                        self.begin(x, y, msg == WM_LBUTTONDBLCLK);
                     }
                     None => {}
                 }
                 self.need = true;
             }
             WM_LBUTTONUP | WM_MBUTTONUP => {
+                self.text_drag = false;
                 unsafe {
                     let _ = ReleaseCapture();
                 }
@@ -4362,7 +4599,18 @@ impl Editor {
                         Some(Target::Divider) => IDC_SIZEWE,
                         Some(target) if self.enabled(target) => IDC_HAND,
                         Some(_) => IDC_ARROW,
-                        None if self.l.well.contains(x, y) && self.tool != "v" => IDC_CROSS,
+                        None if self.in_text(x, y) => IDC_IBEAM,
+                        None if self.l.well.contains(x, y) => {
+                            match self.to_document(x, y).and_then(|p| self.handle_at(p)) {
+                                Some(ResizeHandle::N | ResizeHandle::S) => IDC_SIZENS,
+                                Some(ResizeHandle::E | ResizeHandle::W) => IDC_SIZEWE,
+                                Some(ResizeHandle::Nw | ResizeHandle::Se) => IDC_SIZENWSE,
+                                Some(_) => IDC_SIZENESW,
+                                None if self.tool == "t" => IDC_IBEAM,
+                                None if self.tool != "v" => IDC_CROSS,
+                                None => IDC_ARROW,
+                            }
+                        }
                         None => IDC_ARROW,
                     },
                     None => IDC_ARROW,
@@ -4374,11 +4622,24 @@ impl Editor {
             }
             WM_KEYDOWN => {
                 let vk = VIRTUAL_KEY(wp.0 as u16);
-                if !self.key(vk, key_down(VK_CONTROL), key_down(VK_SHIFT)) {
+                let (ctrl, shift) = (key_down(VK_CONTROL), key_down(VK_SHIFT));
+                let consumed = self.inline.is_some() && self.text_key(vk, ctrl, shift);
+                if !consumed && !self.key(vk, ctrl, shift) {
                     return None;
                 }
                 self.need = true;
             }
+            WM_CHAR if self.inline.is_some() => self.text_char(wp.0 as u16),
+            WM_IME_STARTCOMPOSITION if self.inline.is_some() => {
+                // The composition draws inline; no system composition window.
+                if let Some(rect) = self.ime_rect() {
+                    crate::textfield::ime_position(self.hwnd, rect);
+                }
+            }
+            WM_IME_COMPOSITION if self.inline.is_some() => {
+                self.ime_composition(self.hwnd, lp.0 as u32);
+            }
+            WM_IME_ENDCOMPOSITION if self.inline.is_some() => self.ime_end(),
             WM_GETMINMAXINFO => {
                 let size = crate::host::window_size(self.hwnd, MIN_SIZE.0, MIN_SIZE.1);
                 let info = unsafe { &mut *(lp.0 as *mut MINMAXINFO) };
@@ -4659,6 +4920,9 @@ pub fn open(options: &Options, artifact_id: &str) -> Result<()> {
         let dcomp = editor.g.dcomp.clone().ok_or_else(Error::empty)?;
         editor._target = Some(dcomp.CreateTargetForHwnd(hwnd, true)?);
         editor.dcomp = Some(dcomp);
+        // No IME until a label is open, like Chromium.
+        crate::textfield::ime_enable(hwnd, false);
+        editor.ime = false;
         appearance::title_bar(hwnd, &editor.t);
         if options.scene == crate::Scene::Editor {
             editor.start_tool(options);
@@ -4715,6 +4979,13 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 return LRESULT(0);
             }
             WM_ERASEBKGND => return LRESULT(1),
+            WM_IME_SETCONTEXT => {
+                // Labels draw the composition inline.
+                let lp = LPARAM(
+                    lp.0 & !(windows::Win32::UI::Input::Ime::ISC_SHOWUICOMPOSITIONWINDOW as isize),
+                );
+                return DefWindowProcW(hwnd, msg, wp, lp);
+            }
             WM_PAINT => {
                 let _ = windows::Win32::Graphics::Gdi::ValidateRect(Some(hwnd), None);
                 return LRESULT(0);
