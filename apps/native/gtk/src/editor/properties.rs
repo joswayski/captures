@@ -25,7 +25,7 @@ const MODES: [(EraserMode, &str); 3] = [
     (EraserMode::Brush(BrushMode::Restore), "Restore"),
 ];
 
-fn text(value: &str, class: &str) -> gtk::Label {
+pub(super) fn text(value: &str, class: &str) -> gtk::Label {
     let label = gtk::Label::new(Some(value));
     label.add_css_class(class);
     label.set_xalign(0.);
@@ -41,7 +41,7 @@ pub(super) struct RangeSlider {
 }
 
 impl RangeSlider {
-    fn new(
+    pub(super) fn new(
         caption: &str,
         name: &str,
         range: (f64, f64),
@@ -76,6 +76,13 @@ impl RangeSlider {
         RangeSlider { root, scale }
     }
 
+    /// Show `value`; with `force` false a slider the user holds keeps its own.
+    pub(super) fn set(&self, value: f64, force: bool) {
+        if force || !self.scale.has_focus() {
+            self.scale.set_value(value);
+        }
+    }
+
     pub(super) fn value(&self) -> f64 {
         self.scale.value().round()
     }
@@ -83,7 +90,7 @@ impl RangeSlider {
 
 /// Shipping `.screenshot-check-row`: a real check box drawn as the token box
 /// with the shipping check glyph.
-fn check_row(caption: &str, active: bool) -> gtk::ToggleButton {
+pub(super) fn check_row(caption: &str, active: bool) -> gtk::ToggleButton {
     // GtkCheckButton only takes a custom child from GTK 4.8, so this is a
     // toggle that AT-SPI reads as a check box with a checked state.
     let check = gtk::ToggleButton::builder()
@@ -263,10 +270,11 @@ pub(super) struct Properties {
     heading: gtk::Box,
     title: gtk::Label,
     pub(super) eraser: Rc<EraserSection>,
+    pub(super) inspector: super::inspector::Inspector,
 }
 
 impl Properties {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(tokens: &Rc<crate::tokens::Tokens>) -> Self {
         let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
         content.add_css_class("editor-properties");
         let heading = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -277,6 +285,7 @@ impl Properties {
         content.append(&heading);
         let eraser = Rc::new(EraserSection::new());
         content.append(&eraser.root);
+        let inspector = super::inspector::Inspector::new(tokens, &content);
         let root = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
             .vexpand(true)
@@ -289,14 +298,23 @@ impl Properties {
             heading,
             title,
             eraser,
+            inspector,
         }
     }
 
     /// Show the heading and sections for `tool` (and whether a layer is
     /// selected). Select alone shows nothing: the rail already says so.
-    pub(super) fn show(&self, tool: &str, selection: Option<&str>) {
-        let title = match selection {
-            Some(label) if tool == "v" => Some(label.to_owned()),
+    pub(super) fn show(
+        &self,
+        tool: &str,
+        selection: Option<&captures_app::editor::Element>,
+        fonts: &std::collections::BTreeMap<String, String>,
+    ) {
+        // Shipping shows the selected layer's sections under any tool; only
+        // the heading prefers the tool name outside Select.
+        self.inspector.show(selection, fonts);
+        let title = match selection.map(captures_app::editor_chrome::element_label) {
+            Some(label) if tool == "v" => Some(label),
             _ if tool == "v" => None,
             _ => Some(captures_app::editor_chrome::tool_label(tool).to_owned()),
         };

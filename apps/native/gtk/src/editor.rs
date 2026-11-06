@@ -35,6 +35,8 @@ use crate::switch::TokenSwitch;
 use crate::tokens::Tokens;
 use crate::widgets::{Icon, SnapshotArea, icon_button};
 
+mod controls;
+mod inspector;
 mod properties;
 mod text;
 pub use text::register_fonts;
@@ -223,6 +225,7 @@ struct State {
     pointer: Cell<Option<(f64, f64)>>,
     /// A brush preview is rendering; newer strokes wait for it.
     preview_busy: Cell<bool>,
+    queued: RefCell<std::collections::VecDeque<(Option<String>, Request)>>,
     preview_dirty: Cell<bool>,
     /// The previous primary press, for double-click editing.
     last_press: Cell<Option<(std::time::Instant, f64, f64)>>,
@@ -468,7 +471,7 @@ pub fn build(
         .child(&layers)
         .build();
     panel.append(&layer_scroller);
-    let properties = properties::Properties::new();
+    let properties = properties::Properties::new(&tokens);
     let sidebar = properties::sidebar(&panel, &properties.root);
     sidebar.add_css_class("editor-layers");
     sidebar.set_size_request(320, -1);
@@ -562,6 +565,7 @@ pub fn build(
         properties,
         pointer: Cell::default(),
         preview_busy: Cell::default(),
+        queued: RefCell::default(),
         preview_dirty: Cell::default(),
         widgets: Widgets {
             undo,
@@ -892,18 +896,75 @@ impl State {
 
     /// The Properties heading and sections for the tool and selection.
     fn refresh_properties(&self) {
-        let selection = self.selected.borrow().as_ref().and_then(|id| {
-            self.presented.borrow().as_ref().and_then(|presented| {
-                presented
-                    .document
-                    .elements
-                    .iter()
-                    .find(|element| element.base().id == *id)
-                    .map(editor_chrome::element_label)
-            })
+        let presented = self.presented.borrow();
+        let selected = self.selected.borrow();
+        let element = presented.as_ref().and_then(|presented| {
+            let id = selected.as_ref()?;
+            presented
+                .document
+                .elements
+                .iter()
+                .find(|element| element.base().id == *id)
         });
-        self.properties
-            .show(&self.tool.borrow(), selection.as_deref());
+        let fonts = presented
+            .as_ref()
+            .map(|p| p.font_families.clone())
+            .unwrap_or_default();
+        self.properties.show(&self.tool.borrow(), element, &fonts);
+    }
+
+    /// A Properties edit for the selected layer. Edits made while the worker
+    /// is busy queue; a newer live value for the same field replaces the
+    /// queued one, so a slider drag renders at most one frame behind.
+    fn property_edit(&self, edit: inspector::Edit) {
+        let Some(id) = self.selected.borrow().clone() else {
+            return;
+        };
+        let (request, live) = match edit {
+            inspector::Edit::Layer { edit, live } => (
+                Request::Layer {
+                    id: id.clone(),
+                    edit,
+                },
+                live,
+            ),
+            inspector::Edit::Text { patch, live } => (
+                Request::EditText {
+                    id: id.clone(),
+                    patch,
+                },
+                live,
+            ),
+        };
+        let (request, key) = match live {
+            Some(field) => {
+                let key = format!("{field}:{id}");
+                (
+                    Request::Live {
+                        key: key.clone(),
+                        request: Box::new(request),
+                    },
+                    Some(key),
+                )
+            }
+            None => (request, None),
+        };
+        if !self.busy.get() {
+            self.submit(request);
+            return;
+        }
+        let mut queue = self.queued.borrow_mut();
+        if key.is_some() && queue.back().is_some_and(|(queued, _)| *queued == key) {
+            queue.pop_back();
+        }
+        queue.push_back((key, request));
+    }
+
+    /// Send the next queued Properties edit once the worker is free.
+    fn drain_queued(&self) {
+        if let Some((_, request)) = self.queued.borrow_mut().pop_front() {
+            self.submit(request);
+        }
     }
 
     /// Erase/Restore replace the cursor with the brush ring over an image.
@@ -1008,6 +1069,7 @@ impl State {
         match outcome {
             Outcome::Presented(presented) => {
                 self.busy.set(false);
+                self.drain_queued();
                 let first = self.presented.borrow().is_none();
                 let changed_pixels = self
                     .presented
@@ -1095,6 +1157,7 @@ impl State {
             }
             Outcome::Failed(error) => {
                 self.busy.set(false);
+                self.drain_queued();
                 self.text_failed();
                 *self.notice.borrow_mut() = Some((error, true));
                 self.update_export();
@@ -1383,6 +1446,12 @@ impl State {
             }
         });
         self.canvas.add_controller(motion);
+        let weak = Rc::downgrade(self);
+        self.properties.inspector.sink.connect(move |edit| {
+            if let Some(state) = weak.upgrade() {
+                state.property_edit(edit);
+            }
+        });
         let weak = Rc::downgrade(self);
         self.properties.eraser.connect_mode(move || {
             if let Some(state) = weak.upgrade() {

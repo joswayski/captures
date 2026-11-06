@@ -1185,3 +1185,201 @@ window.captures.preview-stack-window {
 .captures scale.range-slider {
   padding: 0 var(--s-5);
 }
+
+/* `ColorField`: 24 px swatch circles in 44 px cells, custom-color tile. */
+.captures flowbox.color-swatches {
+  padding: var(--s-3) 0;
+}
+.captures flowbox.color-swatches > flowboxchild {
+  all: unset;
+}
+.captures button.color-swatch {
+  all: unset;
+  min-width: 22px;
+  min-height: 22px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  box-shadow: var(--shadow-xs);
+}
+.captures button.color-swatch.active {
+  box-shadow: 0 0 0 2px var(--surface-raised), 0 0 0 4px var(--theme-accent);
+}
+.captures button.color-swatch:focus-visible,
+.captures button.custom-color:focus-visible {
+  box-shadow: var(--focus-ring-tight);
+}
+.captures button.custom-color {
+  all: unset;
+  min-width: 22px;
+  min-height: 22px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  box-shadow: var(--shadow-xs);
+}
+
+/* `NumberInput`: field with stacked steppers. */
+.captures .number-input {
+  min-height: 30px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--r-md);
+  background: var(--surface-field);
+}
+.captures .number-input:hover {
+  border-color: var(--border-strong);
+}
+.captures .number-input:focus-within {
+  border-color: var(--theme-accent);
+  box-shadow: var(--focus-ring-tight);
+}
+.captures .number-input.is-disabled {
+  opacity: 0.5;
+}
+.captures .number-input spinbutton {
+  all: unset;
+  min-width: 0;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+.captures .number-input spinbutton > text {
+  all: unset;
+  min-width: 0;
+  padding: var(--s-3) var(--s-4);
+}
+.captures .number-input spinbutton > text > selection {
+  color: var(--theme-accent-ink);
+  background: var(--theme-accent);
+}
+.captures .number-input-steppers {
+  min-width: 26px;
+  border-left: 1px solid var(--border-subtle);
+  background: var(--surface-hover);
+}
+.captures button.number-input-step {
+  all: unset;
+  color: var(--text-subtle);
+}
+.captures button.number-input-step + button.number-input-step {
+  border-top: 1px solid var(--border-subtle);
+}
+.captures button.number-input-step:hover {
+  color: var(--text);
+  background: var(--surface-active);
+}
+
+/* `<select>` and the Text style picker trigger, with their menus. */
+.captures button.select-trigger,
+.captures button.text-style-trigger {
+  all: unset;
+  min-height: 30px;
+  padding: 0 var(--s-4);
+  border: 1px solid var(--control-border);
+  border-radius: var(--r-md);
+  color: var(--text);
+  background: var(--surface-field);
+  font-size: var(--text-sm);
+}
+.captures button.text-style-trigger {
+  min-height: 36px;
+  padding: var(--s-3) var(--s-4);
+  color: var(--text-muted);
+  font-weight: var(--weight-medium);
+}
+.captures button.select-trigger:hover,
+.captures button.text-style-trigger:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+  background: var(--control-hover);
+}
+.captures button.select-trigger.open,
+.captures button.text-style-trigger.open {
+  border-color: var(--theme-accent);
+}
+.captures button.select-trigger:focus-visible,
+.captures button.text-style-trigger:focus-visible {
+  box-shadow: var(--focus-ring-tight);
+}
+popover.captures-menu.choice-menu > contents {
+  padding: var(--s-2);
+}
+popover.captures-menu button.choice-option {
+  all: unset;
+  min-height: 30px;
+  padding: var(--s-2) var(--s-4);
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+popover.captures-menu button.choice-option:hover,
+popover.captures-menu button.choice-option:focus-visible {
+  color: var(--text);
+  background: var(--control-hover);
+}
+popover.captures-menu button.choice-option.active {
+  border-color: var(--theme-accent);
+  color: var(--text);
+  background: var(--surface-selected);
+}
+.captures .text-style-preview,
+popover.captures-menu .text-style-preview {
+  padding: 0 var(--s-2);
+  color: var(--text);
+  font-size: 17px;
+  font-weight: var(--weight-bold);
+}
+.captures .text-style-preview.style-rounded,
+.captures .text-style-preview.style-rounded-box,
+popover.captures-menu .text-style-preview.style-rounded,
+popover.captures-menu .text-style-preview.style-rounded-box {
+  font-family: "Nunito";
+}
+.captures .text-style-preview.style-mono,
+.captures .text-style-preview.style-mono-box,
+popover.captures-menu .text-style-preview.style-mono,
+popover.captures-menu .text-style-preview.style-mono-box {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: var(--weight-semibold);
+}
+.captures .text-style-preview.style-outlined,
+popover.captures-menu .text-style-preview.style-outlined {
+  color: transparent;
+  text-shadow: -1px 0 var(--text), 1px 0 var(--text), 0 -1px var(--text), 0 1px var(--text);
+}
+.captures .text-style-preview.style-box,
+.captures .text-style-preview.style-mono-box,
+.captures .text-style-preview.style-rounded-box,
+popover.captures-menu .text-style-preview.style-box,
+popover.captures-menu .text-style-preview.style-mono-box,
+popover.captures-menu .text-style-preview.style-rounded-box {
+  color: var(--solid-ink);
+  background: var(--solid);
+}
+.captures .text-style-preview.style-rounded-box,
+popover.captures-menu .text-style-preview.style-rounded-box {
+  border-radius: var(--r-lg);
+}
+
+/* Text layer textarea. */
+.captures textview.property-textarea {
+  padding: var(--s-3) var(--s-4);
+  border: 1px solid var(--control-border);
+  border-radius: var(--r-md);
+  color: var(--text);
+  background: var(--surface-field);
+  font-size: var(--text-sm);
+}
+.captures textview.property-textarea > text {
+  background: transparent;
+}
+.captures textview.property-textarea:focus-within {
+  border-color: var(--theme-accent);
+  box-shadow: var(--focus-ring-tight);
+}
+
+/* `.screenshot-drop-shadow-settings`: indented to the Drop shadow label. */
+.captures .drop-shadow-settings {
+  margin-left: 23px;
+}

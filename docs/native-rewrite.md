@@ -363,10 +363,22 @@ ring (shipping's `.screenshot-brush-cursor` sizes, dashed with an accent fill
 for Restore) is a small Cairo node at the pointer, so moving it never
 re-uploads the image. The canvas draws the document background under the
 image, with shipping's checkerboard when it is transparent, as after an
-erase. Other tools' property sections (text, shape style and color), Add
-images, canvas resize, export settings and layer reorder/rename are not in
-the GTK host yet. Release build
-under Xvfb with Cairo on a 640×360 fixture: about 108 MB RSS and near-zero
+erase. Selecting a layer shows shipping's sections for it under any tool:
+shapes and freehand paths get Stroke (closed shapes), stroke color and width,
+Opacity, Drop shadow (color, opacity, blur, X/Y offsets), Filled shape and
+fill color, and Curve or Straighten for lines and arrows; text gets the Text
+style picker (preset samples), the text content, Font and Size, Bold, Italic
+and alignment, Text color, Text background and Drop shadow; images get
+Width/Height (aspect kept) and X/Y, disabled when locked. Controls are real
+widgets: `ColorField` swatches are pressed buttons with the custom tile
+opening GTK's color chooser, `NumberInput` is a GtkSpinButton with token
+steppers, selects are combo-box triggers over radio-item popovers. Each
+change goes to the worker as `Layer` or `EditText`; sliders, typing and
+number fields use `Live` so a drag is one undo step, and while the worker is
+busy a newer value for the same field replaces the queued one. Drawing
+defaults for unselected tools, Add images, canvas resize, export settings
+and layer reorder/rename are not in the GTK host yet. Release build
+under Xvfb with Cairo on a 640×360 fixture: about 110 MB RSS and near-zero
 idle CPU; the egui workbench's own editor scene measures about 173 MB the
 same way, on its built-in document rather than the same image. CI renders
 the editor in both appearances, and `smoke.py` opens it from History, draws
@@ -374,7 +386,9 @@ a rectangle with a real xdotool drag, undoes and redoes it over AT-SPI,
 checks that Save writes a PNG containing it, then types two lines into the
 Text tool's field and checks Escape commits the layer, then reads the
 Eraser's tolerance slider and toggles Contiguous only over AT-SPI and checks
-a Wand click is exactly one undo step. X11 (Xvfb) only; Wayland, Orca
+a Wand click is exactly one undo step. It also turns on a rectangle's drop
+shadow, drags its opacity, picks a fill swatch and checks one Undo reverts
+the whole drag, and toggles a label's Bold and alignment. X11 (Xvfb) only; Wayland, Orca
 and real hardware remain open. Windows, macOS: unchanged.
 
 The fourth GTK4 slice is the floating previews: History's Restore (or

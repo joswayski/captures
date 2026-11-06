@@ -226,6 +226,33 @@ def editor(binary, scratch):
         assert pixels[0] != pixels[1], "the saved PNG does not contain the rectangle"
         print(f"editor: drag drew a layer, undo/redo, saved {written[0].name}")
 
+        # Properties: select the rectangle and edit it through real widgets;
+        # each control reflects the document the worker publishes back.
+        select = find(app, "push button", "Select & move (V)")[0]
+        press(select)
+        wait(lambda: has_state(select, Atspi.StateType.PRESSED), "the Select tool")
+        subprocess.run(["xdotool", "mousemove", str(x + 80), str(y + 50)], check=True)
+        time.sleep(0.2)
+        subprocess.run(["xdotool", "click", "1"], check=True)
+        shadow = wait(lambda: find(app, "check box", "Drop shadow"), "the shape properties")[0]
+        press(shadow)
+        wait(lambda: find(app, "slider", "Shadow blur"), "the shadow settings to open")
+        opacity = find(app, "slider", "Opacity")[0]
+        for value in (80, 60, 40):
+            Atspi.Value.set_current_value(opacity, value)
+            time.sleep(0.15)
+        wait(lambda: Atspi.Value.get_current_value(opacity) == 40, "opacity to settle at 40")
+        press(find(app, "push button", "Fill color: #2d9cff")[0])
+        blue = find(app, "push button", "Fill color: #2d9cff")[0]
+        wait(lambda: has_state(blue, Atspi.StateType.PRESSED), "the blue fill to apply")
+        # Undo reverts the fill, then the whole opacity drag in one step.
+        press(find(app, "push button", "Undo")[0])
+        wait(lambda: not has_state(blue, Atspi.StateType.PRESSED), "Undo to revert the fill")
+        press(find(app, "push button", "Undo")[0])
+        wait(lambda: Atspi.Value.get_current_value(opacity) == 100,
+             "one Undo to revert the opacity drag")
+        print("editor: shape shadow, opacity drag and fill over AT-SPI; drag was one undo step")
+
         # Text: click with the Text tool, type into the real text field (two
         # lines), and Escape commits a layer named after its first line.
         text_tool = find(app, "push button", "Text (T)")[0]
@@ -248,6 +275,16 @@ def editor(binary, scratch):
         wait(lambda: not find(app, "text", "Edit text on canvas"), "the field to close")
         print("editor: Text tool typed two lines into a real text field and committed")
 
+        # The committed label is selected; Bold and Align right round-trip.
+        bold = wait(lambda: find(app, "push button", "Bold"), "the text properties")[0]
+        was_bold = has_state(bold, Atspi.StateType.PRESSED)
+        press(bold)
+        wait(lambda: has_state(bold, Atspi.StateType.PRESSED) != was_bold, "Bold to toggle")
+        right = find(app, "push button", "Align right")[0]
+        press(right)
+        wait(lambda: has_state(right, Atspi.StateType.PRESSED), "Align right to apply")
+        print("editor: text Bold and alignment round-tripped through the session")
+
         # Eraser: its properties are real slider and check box widgets, and a
         # Wand click is one undoable edit (Undo leaves the text layer).
         eraser = find(app, "push button", "Eraser (B)")[0]
@@ -269,9 +306,14 @@ def editor(binary, scratch):
         press(find(app, "push button", "Undo")[0])
         time.sleep(1)
         assert find(app, "list item", "Smoke label · Text"), "Undo removed the text, not the wand"
+        # Then Align right, Bold and finally the label itself.
+        press(find(app, "push button", "Undo")[0])
+        wait(lambda: not has_state(right, Atspi.StateType.PRESSED), "Undo to revert alignment")
+        press(find(app, "push button", "Undo")[0])
+        wait(lambda: has_state(bold, Atspi.StateType.PRESSED) == was_bold, "Undo to revert Bold")
         press(find(app, "push button", "Undo")[0])
         wait(lambda: not find(app, "list item", "Smoke label · Text"),
-             "a second Undo to remove the text")
+             "Undo to remove the text")
         print("editor: Eraser slider and check box over AT-SPI; Wand click was one undo step")
     finally:
         process.terminate()
