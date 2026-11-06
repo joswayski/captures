@@ -794,11 +794,7 @@ impl History {
         }
         match target {
             Target::Back => self.open_preferences = true,
-            Target::Cancel => {
-                self.confirm_all = None;
-                self.events.push(Event::Name(Target::DeleteAll));
-                self.relayout = true;
-            }
+            Target::Cancel => self.disarm_all(),
             Target::DeleteAll => self.delete_all_step(),
             Target::Filter(i) => {
                 if FILTERS[i] != self.filter {
@@ -857,6 +853,18 @@ impl History {
     }
 
     /// Shipping `clearAllHistory`.
+    /// Leave the Delete all confirmation. Cancel disappears with it, so focus
+    /// on Cancel moves to Delete all instead of pointing at a removed control.
+    fn disarm_all(&mut self) {
+        self.confirm_all = None;
+        if self.focus == Some(Target::Cancel) {
+            self.set_focus(Some(Target::DeleteAll), self.focus_visible);
+        }
+        self.events.push(Event::Name(Target::DeleteAll));
+        self.events.push(Event::Structure);
+        self.relayout = true;
+    }
+
     fn delete_all_step(&mut self) {
         if self.items.is_empty() {
             return;
@@ -885,12 +893,27 @@ impl History {
     }
 
     fn run_action(&mut self, serial: u32, action: CardAction) {
-        let directory: PathBuf = captures_settings::load(&self.settings_file)
-            .unwrap_or_default()
-            .output_directory
-            .into();
+        // A settings file that exists but can't be read must not send Save
+        // file to the default Captures folder; only a missing file means
+        // defaults.
+        let directory = captures_settings::load(&self.settings_file)
+            .map(|settings| PathBuf::from(settings.output_directory))
+            .map_err(|error| format!("Couldn’t read settings: {error}"));
         let Some(item) = self.item_mut(serial) else {
             return;
+        };
+        let directory = match directory {
+            Ok(directory) => directory,
+            Err(error) if action == CardAction::SaveFile => {
+                item.error = Some(error);
+                // As a failed save: an error grows the card's row.
+                self.relayout = true;
+                self.restyle(serial);
+                self.events.push(Event::Structure);
+                self.events.push(Event::Alert(Some(serial)));
+                return;
+            }
+            Err(_) => PathBuf::new(),
         };
         item.busy = Some(Busy::Action(action));
         item.error = None;
@@ -964,11 +987,9 @@ impl History {
             }
             Done::Cleared(Err(error)) => {
                 self.deleting_all = false;
-                self.confirm_all = None;
                 self.error = Some(history_view::clear_error(&error));
                 self.events.push(Event::Alert(None));
-                self.events.push(Event::Name(Target::DeleteAll));
-                self.relayout = true;
+                self.disarm_all();
             }
             Done::Saved(serial, Ok(path)) => {
                 if let Some(item) = self.item_mut(serial) {
@@ -1008,10 +1029,7 @@ impl History {
     fn expire(&mut self) {
         let now = Instant::now();
         if self.confirm_all.is_some_and(|at| at <= now) {
-            self.confirm_all = None;
-            self.events.push(Event::Name(Target::DeleteAll));
-            self.events.push(Event::Structure);
-            self.relayout = true;
+            self.disarm_all();
         }
         let expired: Vec<u32> = self
             .items
