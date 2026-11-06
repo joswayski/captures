@@ -74,12 +74,18 @@ impl Editor {
         match num {
             Num::TextSize => self.selected_text().map_or(0., |t| t.font_size),
             Num::NewTextSize => self.new_text_size(),
+            num => self.geometry_value(num),
         }
     }
 
     pub(super) fn set_number(&mut self, num: Num, value: f64) {
-        if value != self.number_value(num) {
-            self.apply_text(TextChange::Size(value));
+        match num {
+            Num::TextSize | Num::NewTextSize => {
+                if value != self.number_value(num) {
+                    self.apply_text(TextChange::Size(value));
+                }
+            }
+            num => self.set_geometry(num, value),
         }
     }
 
@@ -380,9 +386,11 @@ impl Editor {
 
     /// The Font `<select>`, drawn as Captures' `.custom-select-trigger`
     /// inside the property field metrics.
-    pub(super) fn draw_font_select(
+    /// The Font or Aspect ratio select's trigger.
+    pub(super) fn draw_select(
         &self,
         dc: &ID2D1DeviceContext,
+        kind: MenuKind,
         layer: Layer,
         (w, h): (f32, f32),
     ) -> Result<()> {
@@ -390,8 +398,8 @@ impl Editor {
         let c = |name: &str| t.color(name);
         let all = rect(0., 0., w, h);
         let radius = t.n("r-md");
-        let open = self.menu_open(MenuKind::Font);
-        let focused = self.focus == Some(super::Target::Prop(Prop::Font));
+        let open = self.menu_open(kind);
+        let focused = self.focus == Some(super::Target::Prop(kind.trigger()));
         if layer == Layer::Lit {
             if open || focused {
                 return Ok(());
@@ -406,8 +414,8 @@ impl Editor {
         };
         gfx::border(dc, all, radius, 1., border)?;
         let label = self
-            .menu_selected(MenuKind::Font)
-            .and_then(|i| self.menu_items(MenuKind::Font).into_iter().nth(i))
+            .menu_selected(kind)
+            .and_then(|i| self.menu_items(kind).into_iter().nth(i))
             .unwrap_or_default();
         let s4 = t.n("s-4");
         let text = self.g.text(t, Style::Option, &label, 1e4)?;

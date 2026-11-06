@@ -28,9 +28,9 @@ use std::sync::{Arc, Weak};
 use std::time::Instant;
 
 use captures_app::editor::{
-    AlignmentGuide, ClosedShapeCreate, ClosedShapeKind, Document, ElementStyle, FreehandPathCreate,
-    GuideOrientation, LayerEdit, OpenShapeCreate, OpenShapeKind, Point, Rect as DocRect,
-    ResizeHandle,
+    AlignmentGuide, ClosedShapeCreate, ClosedShapeKind, CropDrag, Document, ElementStyle,
+    FreehandPathCreate, GuideOrientation, LayerEdit, OpenShapeCreate, OpenShapeKind, Point,
+    Rect as DocRect, ResizeHandle,
 };
 use captures_app::editor_chrome::{self, RAIL_TOOLS, SHAPE_TOOLS, header};
 use captures_app::editor_export::{self, EstimateState, ExportSource, ExportTarget, SavePlan};
@@ -60,6 +60,8 @@ use crate::scene::Rect;
 use crate::tokens::Tokens;
 use crate::{Options, appearance};
 
+mod crop;
+pub use crop::ASPECT_LABEL;
 mod eraser;
 mod fields;
 mod menu;
@@ -435,7 +437,9 @@ enum Outcome {
 
 #[derive(Clone, Debug, PartialEq)]
 enum Gesture {
-    /// Drawing a shape, line, arrow or crop.
+    /// Staging a crop rectangle.
+    Crop(CropDrag),
+    /// Drawing a shape, line or arrow.
     Shape {
         tool: &'static str,
         start: Point,
@@ -559,6 +563,10 @@ pub struct Editor {
     pick_color: Option<Field>,
     /// Eraser mode and settings, window-local like shipping's.
     pub eraser: props::Eraser,
+    /// The staged crop rectangle (shipping `cropSelection`).
+    pub crop: Option<DocRect>,
+    /// The Aspect ratio select's choice, in `crop::ASPECTS` order.
+    pub crop_aspect: usize,
     /// The Text tool's open label.
     inline: Option<text::Inline>,
     /// The open Text style menu or Font list.
@@ -1119,6 +1127,8 @@ impl Editor {
             edit_seq: 0,
             pick_color: None,
             eraser: props::Eraser::default(),
+            crop: None,
+            crop_aspect: 0,
             inline: None,
             menu: None,
             menu_node: 0,
@@ -1368,6 +1378,7 @@ impl Editor {
             Target::Prop(Prop::Step(num, up)) => {
                 self.exists(target) && !self.step_disabled(num, up)
             }
+            Target::Prop(Prop::Number(num)) => self.exists(target) && !self.num_disabled(num),
             _ => self.exists(target),
         }
     }
@@ -1732,6 +1743,9 @@ impl Editor {
         }
         self.tool = key;
         self.gesture = None;
+        if key != "c" {
+            self.crop = None;
+        }
         for i in 0..RAIL_TOOLS.len() {
             let base = self.layered(Target::Tool(i)).base;
             self.nodes[base].dirty = true;
@@ -1818,8 +1832,14 @@ impl Editor {
                 self.notice = None;
                 self.submit(Request::TrimCanvas);
             }
-            Target::Undo => self.submit(Request::Undo),
-            Target::Redo => self.submit(Request::Redo),
+            Target::Undo => {
+                self.set_crop(None);
+                self.submit(Request::Undo)
+            }
+            Target::Redo => {
+                self.set_crop(None);
+                self.submit(Request::Redo)
+            }
             Target::Fit => self.set_viewport(Viewport::default()),
             Target::ZoomOut => self.zoom_by(1. / KEYBOARD_ZOOM),
             Target::ZoomIn => self.zoom_by(KEYBOARD_ZOOM),
@@ -2242,6 +2262,11 @@ impl Editor {
             self.begin_eraser(point);
             return;
         }
+        if tool == "c" {
+            self.begin_crop(point);
+            self.overlay_changed();
+            return;
+        }
         if tool == "v" && double && self.edit_text_at(point) {
             return;
         }
@@ -2271,7 +2296,7 @@ impl Editor {
                 }
             }
             "p" => Gesture::Freehand(vec![point]),
-            "c" | "a" => Gesture::Shape {
+            "a" => Gesture::Shape {
                 tool,
                 start: point,
                 end: point,
@@ -2298,6 +2323,11 @@ impl Editor {
                 viewport.pan_y += f64::from(y - *y0);
                 self.set_viewport(viewport);
                 return;
+            }
+            Some(Gesture::Crop(_)) => {
+                if let Some(point) = point {
+                    self.update_crop(point);
+                }
             }
             Some(Gesture::Shape { end, .. }) => {
                 if let Some(point) = point {
@@ -2390,18 +2420,8 @@ impl Editor {
             Gesture::Freehand(_) => None,
             Gesture::Brush(points) => self.brush_request(points),
             Gesture::Shape { start, end, .. } if !moved(start, end) => None,
-            Gesture::Shape {
-                tool: "c",
-                start,
-                end,
-            } => Some(Request::Crop {
-                rect: DocRect {
-                    x: start.x.min(end.x).round(),
-                    y: start.y.min(end.y).round(),
-                    width: (end.x - start.x).abs().round(),
-                    height: (end.y - start.y).abs().round(),
-                },
-            }),
+            // The rectangle stays staged for Apply crop.
+            Gesture::Crop(_) => None,
             Gesture::Shape { tool, start, end } => match closed_kind(tool) {
                 Some(shape) => Some(Request::CreateClosedShape {
                     create: ClosedShapeCreate {
@@ -2919,7 +2939,7 @@ impl Editor {
             // (`:focus`, `:focus-within`), other controls for keyboard focus.
             let input = matches!(
                 target,
-                Target::Prop(Prop::Font | Prop::Number(_) | Prop::Textarea)
+                Target::Prop(Prop::Font | Prop::Aspect | Prop::Number(_) | Prop::Textarea)
             );
             let ring = (self.focus_visible || input)
                 && self.focus == Some(target)
@@ -3036,7 +3056,10 @@ impl Editor {
         let changed = focus != self.focus;
         // Inputs and the select draw their focus as an accent border.
         for target in [self.focus, focus].into_iter().flatten() {
-            if let Target::Prop(prop @ (Prop::Font | Prop::Number(_) | Prop::Textarea)) = target {
+            if let Target::Prop(
+                prop @ (Prop::Font | Prop::Aspect | Prop::Number(_) | Prop::Textarea),
+            ) = target
+            {
                 self.prop_dirty(prop);
             }
         }
@@ -3202,6 +3225,7 @@ impl Editor {
                 if !self.cancel_gesture() {
                     self.set_selected(None);
                 }
+                self.set_crop(None);
                 self.overlay_changed();
             }
             _ => {
@@ -3646,11 +3670,6 @@ impl Editor {
             }));
         }
         match &self.gesture {
-            Some(Gesture::Shape { tool: "c", .. }) => {
-                let r = self.image_rect()?;
-                points.push((r.x as f32, r.y as f32));
-                points.push(((r.x + r.width) as f32, (r.y + r.height) as f32));
-            }
             Some(Gesture::Shape { start, end, .. }) => {
                 points.extend([*start, *end].iter().filter_map(|p| self.to_well(*p)));
             }
@@ -3660,6 +3679,13 @@ impl Editor {
             _ => {}
         }
         points.extend(self.text_corners());
+        if self.crop.is_some()
+            && let Some(r) = self.image_rect()
+        {
+            // The dim covers the canvas.
+            points.push((r.x as f32, r.y as f32));
+            points.push(((r.x + r.width) as f32, (r.y + r.height) as f32));
+        }
         let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
         for (x, y) in &points {
             x0 = x0.min(*x);
@@ -3750,27 +3776,7 @@ impl Editor {
                     return Ok(());
                 };
                 let corners = [(a.0, a.1), (b.0, a.1), (b.0, b.1), (a.0, b.1)];
-                if *tool == "c" {
-                    // Dim everything outside the crop.
-                    if let Some(r) = self.image_rect() {
-                        let shade = t.color("capture-shade-window");
-                        let (x0, y0) = (a.0.min(b.0), a.1.min(b.1));
-                        let (x1, y1) = (a.0.max(b.0), a.1.max(b.1));
-                        let (l, tp) = (r.x as f32, r.y as f32);
-                        let (rr, bt) = ((r.x + r.width) as f32, (r.y + r.height) as f32);
-                        for part in [
-                            rect(l, tp, rr, y0.max(tp)),
-                            rect(l, y1.min(bt), rr, bt),
-                            rect(l, y0, x0.max(l), y1),
-                            rect(x1.min(rr), y0, rr, y1),
-                        ] {
-                            if part.right > part.left && part.bottom > part.top {
-                                gfx::fill(dc, part, shade)?;
-                            }
-                        }
-                    }
-                    polyline(dc, &self.g, &corners, true, accent, 1.5)?;
-                } else if open_kind(tool).is_some() {
+                if open_kind(tool).is_some() {
                     polyline(dc, &self.g, &[a, b], false, accent, 2.)?;
                 } else {
                     polyline(dc, &self.g, &corners, true, accent, 1.5)?;
@@ -3783,6 +3789,7 @@ impl Editor {
             }
             _ => {}
         }
+        self.draw_crop(dc)?;
         self.draw_grips(dc)?;
         self.draw_brush_ring(dc)?;
         self.draw_text(dc)
@@ -5060,7 +5067,9 @@ impl Editor {
                             self.set_range(range, value, true);
                         }
                     }
-                    Some(target @ Target::Prop(prop)) if Self::is_field(prop) => {
+                    Some(target @ Target::Prop(prop))
+                        if Self::is_field(prop) && self.enabled(target) =>
+                    {
                         self.set_focus(Some(target), false);
                         self.field_point(x, y, msg == WM_LBUTTONDBLCLK, key_down(VK_SHIFT));
                     }
@@ -5213,7 +5222,9 @@ impl Editor {
                 // Shipping skips its editor shortcuts while an input,
                 // textarea or select has focus: only Tab and the Ctrl zoom
                 // keys pass.
-                if self.field.is_some() || self.focus == Some(Target::Prop(Prop::Font)) {
+                if self.field.is_some()
+                    || matches!(self.focus, Some(Target::Prop(Prop::Font | Prop::Aspect)))
+                {
                     let zoom = ctrl
                         && matches!(
                             vk,
@@ -5729,6 +5740,15 @@ pub fn render_offscreen(
     editor.h = h;
     editor.receive(Outcome::Presented(Box::new(presented)));
     editor.start_tool(options);
+    if let Some([x, y, width, height]) = options.crop {
+        editor.select_tool("c");
+        editor.set_crop(Some(DocRect {
+            x,
+            y,
+            width,
+            height,
+        }));
+    }
     editor.prepare()?;
     Ok(editor)
 }
