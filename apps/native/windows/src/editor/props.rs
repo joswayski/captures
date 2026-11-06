@@ -16,6 +16,7 @@ use captures_app::editor::{
     AnnotationStylePatch, DropShadowStyle, DropShadowStylePatch, ElementStyle, LayerEdit,
     OptionalNullable, TextElement,
 };
+use captures_app::editor_canvas::{self, CurveEdit};
 use captures_app::editor_chrome::{SHAPE_TOOLS, colors, eraser, header, text_format};
 use captures_app::editor_image_background::BrushMode;
 use captures_app::editor_layers::geometry;
@@ -60,6 +61,8 @@ pub enum Prop {
     CropAction(bool),
     /// The zoom group's `Canvas zoom preset` select, in the header.
     Preset,
+    /// A multi-point line's or arrow's Straighten button.
+    Straighten,
 }
 
 /// A `NumberInput` in Tool properties.
@@ -245,6 +248,8 @@ pub enum Range {
     Tolerance,
     BrushSize,
     Softness,
+    /// A line's or arrow's Curve (−100…100).
+    Curve,
 }
 
 /// Shipping `RemoveBackgroundMode`.
@@ -291,6 +296,8 @@ pub enum Note {
     Geometry,
     /// The Crop section's drag or Shift hint.
     Crop,
+    /// A line's or arrow's curve-dot help.
+    Curve,
 }
 
 fn eraser_range(range: Range) -> bool {
@@ -303,6 +310,7 @@ fn marks(range: Range) -> &'static [(f64, &'static str)] {
         Range::Tolerance => &eraser::TOLERANCE_MARKS,
         Range::BrushSize => &eraser::SIZE_MARKS,
         Range::Softness => &eraser::SOFTNESS_MARKS,
+        Range::Curve => &CURVE_MARKS,
         _ => &[],
     }
 }
@@ -325,7 +333,9 @@ const FIELDS: [Field; 5] = [
 ];
 /// The shadow's X and Y offset fields.
 const SHADOW_OFFSETS: [Num; 2] = [Num::ShadowX, Num::ShadowY];
-const RANGES: [Range; 7] = [
+/// The Curve slider's marks.
+const CURVE_MARKS: [(f64, &str); 3] = [(-100., "Left"), (0., "Straight"), (100., "Right")];
+const RANGES: [Range; 8] = [
     Range::Width,
     Range::Opacity,
     Range::ShadowOpacity,
@@ -333,6 +343,7 @@ const RANGES: [Range; 7] = [
     Range::Tolerance,
     Range::BrushSize,
     Range::Softness,
+    Range::Curve,
 ];
 /// `.range-slider.has-marks`: a 2 px gap and the 14 px label row.
 const MARKS_H: f32 = 16.;
@@ -371,6 +382,7 @@ pub fn all() -> Vec<Prop> {
         Prop::Aspect,
         Prop::CropAction(false),
         Prop::CropAction(true),
+        Prop::Straighten,
     ]);
     list
 }
@@ -394,6 +406,18 @@ pub struct Values {
     /// A label's Text color and plate.
     pub text_color: String,
     pub plate: Option<String>,
+    /// A line's or arrow's curve, from the session's `curve_handles`.
+    pub curve: Option<Curve>,
+}
+
+/// The Curve slider or the Straighten button.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Curve {
+    /// `round(arrowBendAmount * 100)`.
+    pub bend: f64,
+    /// At most one control: the slider; more: Straighten.
+    pub slider: bool,
+    pub straighten: &'static str,
 }
 
 impl Values {
@@ -413,6 +437,7 @@ impl Values {
             opacity,
             text_color: String::new(),
             plate: None,
+            curve: None,
         }
     }
 
@@ -443,6 +468,7 @@ impl Values {
             opacity,
             text_color: String::new(),
             plate: None,
+            curve: None,
         }
     }
 
@@ -473,6 +499,7 @@ impl Values {
             Range::Opacity => self.opacity,
             Range::ShadowOpacity => self.shadow_opacity,
             Range::ShadowBlur => self.shadow_blur,
+            Range::Curve => self.curve.map_or(0., |c| c.bend),
             Range::Tolerance | Range::BrushSize | Range::Softness => 0.,
         }
     }
@@ -507,6 +534,7 @@ pub fn bounds(range: Range) -> (f64, f64) {
         Range::Tolerance => eraser::TOLERANCE_RANGE,
         Range::BrushSize => eraser::SIZE_RANGE,
         Range::Softness => eraser::SOFTNESS_RANGE,
+        Range::Curve => (-100., 100.),
     }
 }
 
@@ -520,6 +548,7 @@ pub fn range_label(range: Range) -> &'static str {
         Range::Tolerance => eraser::TOLERANCE_LABEL,
         Range::BrushSize => eraser::SIZE_LABEL,
         Range::Softness => eraser::SOFTNESS_LABEL,
+        Range::Curve => "Curve",
     }
 }
 
@@ -531,6 +560,7 @@ pub fn range_text(range: Range, value: f64) -> String {
         Range::Tolerance => eraser::tolerance_text(value),
         Range::BrushSize => eraser::size_text(value),
         Range::Softness => eraser::softness_text(value),
+        Range::Curve => format!("{}%", value.round()),
     }
 }
 
@@ -560,6 +590,8 @@ pub enum Row {
     Aspect,
     /// `.screenshot-property-actions`: Clear and Apply crop.
     CropActions,
+    /// `.screenshot-property-actions`: Straighten line or arrow.
+    Straighten,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -748,6 +780,14 @@ impl Editor {
         } else {
             shadow(&mut rows);
             fill(&mut rows);
+            if let Some(curve) = v.curve {
+                rows.push(if curve.slider {
+                    Row::Range(Range::Curve)
+                } else {
+                    Row::Straighten
+                });
+                rows.push(Row::Note(Note::Curve));
+            }
         }
         rows
     }
@@ -787,7 +827,7 @@ impl Editor {
                     lines as f32 * line + lines.saturating_sub(1) as f32 * self.t.n("s-4")
                 }
                 Row::Aspect => CAPTION_H + self.t.n("s-3") + SELECT_H,
-                Row::CropActions => SELECT_H,
+                Row::CropActions | Row::Straighten => SELECT_H,
             };
             laid.push(Laid {
                 row,
@@ -903,6 +943,11 @@ impl Editor {
                 let r = self.laid(Row::Aspect)?;
                 Some(Rect::new(r.x, r.y + r.h - SELECT_H, r.w, SELECT_H))
             }
+            Prop::Straighten => {
+                let r = self.laid(Row::Straighten)?;
+                let half = (r.w - self.t.n("s-3")) / 2.;
+                Some(Rect::new(r.x, r.y, half, r.h))
+            }
             Prop::CropAction(apply) => {
                 let r = self.laid(Row::CropActions)?;
                 let gap = self.t.n("s-3");
@@ -979,6 +1024,7 @@ impl Editor {
         match (note, self.eraser.mode) {
             (Note::Geometry, _) => self.geometry_note(),
             (Note::Crop, _) => self.crop_note(),
+            (Note::Curve, _) => editor_canvas::CURVE_HELP,
             (Note::Intro, _) => eraser::INTRO,
             (Note::Hint, EraserMode::Wand) => eraser::wand_hint(self.eraser.contiguous),
             (Note::Hint, EraserMode::Brush(BrushMode::Erase)) => eraser::ERASE_HINT,
@@ -1174,7 +1220,8 @@ impl Editor {
             | Prop::Step(..)
             | Prop::Textarea
             | Prop::Aspect
-            | Prop::CropAction(_) => return None,
+            | Prop::CropAction(_)
+            | Prop::Straighten => return None,
         })
     }
 
@@ -1208,6 +1255,11 @@ impl Editor {
             Prop::Preset => header::ZOOM_PRESET.into(),
             Prop::CropAction(false) => super::crop::CLEAR.into(),
             Prop::CropAction(true) => super::crop::APPLY.into(),
+            Prop::Straighten => self
+                .values()
+                .and_then(|v| v.curve)
+                .map_or("Straighten line", |c| c.straighten)
+                .into(),
             Prop::Textarea => "Text".into(),
             Prop::Format(i) => Editor::format_name(i).into(),
         }
@@ -1252,6 +1304,7 @@ impl Editor {
             Range::Tolerance => eraser::TOLERANCE,
             Range::BrushSize => eraser::SIZE,
             Range::Softness => eraser::SOFTNESS,
+            Range::Curve => "Curve",
         }
     }
 
@@ -1294,6 +1347,7 @@ impl Editor {
             Prop::Preset => self.toggle_menu(MenuKind::Preset),
             Prop::CropAction(false) => self.set_crop(None),
             Prop::CropAction(true) => self.apply_crop(),
+            Prop::Straighten => self.straighten(),
             Prop::Step(num, up) => self.nudge(num, up),
             Prop::Format(i) => self.activate_format(i),
             Prop::Range(_) | Prop::Number(_) | Prop::Textarea => {}
@@ -1397,7 +1451,7 @@ impl Editor {
                     }
                     Change::Range(Range::Width, value) => s.stroke_width = value,
                     Change::Range(Range::Opacity, value) => d.opacity = value,
-                    Change::Range(range, _) if eraser_range(range) => {}
+                    Change::Range(range, _) if eraser_range(range) || range == Range::Curve => {}
                     Change::Range(range, value) => {
                         s.drop_shadow = Some(true);
                         let mut shadow = s.resolved_drop_shadow_style();
@@ -1589,6 +1643,19 @@ impl Editor {
         }
     }
 
+    /// Straighten line or arrow: drop every curve control, one undo step.
+    fn straighten(&mut self) {
+        let Some(Section::Selected(id)) = self.section() else {
+            return;
+        };
+        self.submit(Request::Layer {
+            id,
+            edit: LayerEdit::Curve {
+                edit: CurveEdit::Straighten,
+            },
+        });
+    }
+
     /// Send a live edit now, or after the one in flight (latest wins).
     pub(super) fn submit_live(&mut self, request: Request) {
         if self.busy {
@@ -1711,7 +1778,9 @@ impl Editor {
                 }
                 // Inputs and the select show `--focus-ring-tight` with their
                 // accent border.
-                Prop::CropAction(_) => gfx::ring(dc, all, t.n("r-md"), 2., 4., c("theme-accent")),
+                Prop::CropAction(_) | Prop::Straighten => {
+                    gfx::ring(dc, all, t.n("r-md"), 2., 4., c("theme-accent"))
+                }
                 Prop::Number(num) if num.is_canvas() => gfx::ring(
                     dc,
                     all,
@@ -1738,6 +1807,10 @@ impl Editor {
             Prop::Aspect => self.draw_select(dc, MenuKind::Aspect, layer, (w, h))?,
             Prop::Preset => self.draw_preset(dc, lit, (w, h))?,
             Prop::CropAction(apply) => self.draw_crop_action(dc, apply, lit, (w, h))?,
+            Prop::Straighten => {
+                let label = self.prop_name(prop);
+                self.draw_action(dc, &label, false, lit, (w, h))?
+            }
             Prop::Format(i) => self.draw_format(dc, i, layer, (w, h))?,
             Prop::Number(num) => self.draw_number(dc, num, lit, (w, h))?,
             Prop::Step(num, up) => self.draw_step(dc, num, up, lit, (w, h))?,
@@ -1973,6 +2046,7 @@ impl Editor {
                 Row::Pairs(nums) => list.extend(nums.iter().map(|&n| Prop::Number(n))),
                 Row::Aspect => list.push(Prop::Aspect),
                 Row::CropActions => list.extend([Prop::CropAction(false), Prop::CropAction(true)]),
+                Row::Straighten => list.push(Prop::Straighten),
             }
         }
         list
@@ -2087,6 +2161,14 @@ fn selected_edit(change: &Change, values: Option<&Values>) -> (bool, &'static st
                 ..Default::default()
             }),
         ),
+        // `arrowWithBend`, live while the slider drags.
+        Change::Range(Range::Curve, value) => (
+            true,
+            "curve",
+            LayerEdit::Curve {
+                edit: CurveEdit::Bend { bend: value / 100. },
+            },
+        ),
         // `patchShadow` turns the shadow on with the offset.
         Change::Offset(x_axis, value) => (
             false,
@@ -2148,6 +2230,11 @@ fn preview(v: &mut Values, change: &Change) {
         Change::Check(Check::Contiguous | Check::Solid, _)
         | Change::Color(Field::Canvas, _)
         | Change::Range(Range::Tolerance | Range::BrushSize | Range::Softness, _) => {}
+        Change::Range(Range::Curve, value) => {
+            if let Some(curve) = v.curve.as_mut() {
+                curve.bend = value;
+            }
+        }
     }
 }
 

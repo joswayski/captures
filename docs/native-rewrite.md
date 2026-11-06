@@ -622,6 +622,15 @@ stepper commits it once, rounded and clamped to ±500
 Windows: cross-compiled only, Wine renders in light and dark. macOS, Linux:
 unchanged.
 
+Curve: a selected line or arrow with at most one curve control shows
+shipping's Curve slider (−100…100 %, marks Left, Straight and Right), sent
+live as `CurveEdit::Bend` so a drag is one undo step. With more controls it
+shows `Straighten line` or `Straighten arrow` (`CurveEdit::Straighten`)
+instead, then the shared `CURVE_HELP` paragraph. Both read the session's
+`curve_handles`. Windows: cross-compiled only, Wine renders in light and
+dark for both states (via a temporary fixture hook, since removed). macOS,
+Linux: unchanged.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,

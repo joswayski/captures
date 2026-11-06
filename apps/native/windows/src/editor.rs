@@ -900,10 +900,13 @@ fn present(session: &EditorSession, artifact_id: &str, published: &mut Published
                     .iter()
                     .find(|e| e.base().id == *id)
                     .map_or(100., |e| e.base().opacity);
-                (
-                    (*id).to_owned(),
-                    props::Values::from_controls(controls, opacity),
-                )
+                let mut values = props::Values::from_controls(controls, opacity);
+                values.curve = snapshot.curve_handles.get(id).map(|c| props::Curve {
+                    bend: c.bend_percent,
+                    slider: c.slider,
+                    straighten: c.straighten_label,
+                });
+                ((*id).to_owned(), values)
             })
             .collect(),
         source: snapshot.original_export_path.map(|path| ExportSource {
