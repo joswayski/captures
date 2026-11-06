@@ -4,15 +4,22 @@ The Windows replacement for the egui/wgpu workbench: Win32 windows,
 DirectComposition, Direct2D, DirectWrite (system Segoe UI Variable) and UI
 Automation, with Captures' own token-drawn controls. See
 [native-rewrite.md](../../../docs/native-rewrite.md#host-direction) for the
-direction and the gates it must pass. Only Preferences exists so far: every
-shipping card with the Custom accent's color editor, the narrow layout below
-720 px, and Find (Ctrl+F) on a reusable text field (`src/textfield.rs`).
+direction and the gates it must pass. It has Preferences (every shipping
+card with the Custom accent's color editor, the narrow layout below 720 px,
+and Find on a reusable text field, `src/textfield.rs`) and Capture History
+(`--scene history`).
 
 ```powershell
 node apps/native/prepare.mjs --output apps/native/windows/resources
 cargo +1.95.0 run --manifest-path apps/native/windows/Cargo.toml -- `
-  --settings-file $env:TEMP\captures-windows\settings.json
+  --profile $env:TEMP\captures-windows
 ```
+
+Run it against a disposable profile, never your real settings or folders:
+`--profile DIR` (or `CAPTURES_NATIVE_PROFILE=DIR`) keeps settings in
+`DIR\settings.json`, history in `DIR\history` and a new profile's saves in
+`DIR\Captures`, and never writes the launch-at-login Run key. It replaces
+`--settings-file` and `--history-root`, which remain for CI and fixtures.
 
 `--history-root DIR` enables Start Captures on login for that development
 profile. `--appearance light|dark`, `--size WxH` and `--screenshot out.png`

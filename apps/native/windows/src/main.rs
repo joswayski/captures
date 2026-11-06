@@ -44,6 +44,10 @@ pub struct Options {
     size: Option<(u32, u32)>,
     /// `--find`: render with Find open and this query typed.
     find: Option<String>,
+    /// `--profile DIR` or `CAPTURES_NATIVE_PROFILE`: a disposable profile for
+    /// tests on a real PC. Settings, history and saves stay under DIR, and the
+    /// launch-at-login registry entry is never touched.
+    profile: bool,
 }
 
 #[cfg(windows)]
@@ -56,7 +60,10 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
         screenshot: None,
         size: None,
         find: None,
+        profile: false,
     };
+    let mut profile = std::env::var_os("CAPTURES_NATIVE_PROFILE").map(std::path::PathBuf::from);
+    let mut explicit = false;
     let mut args = args.skip(1);
     while let Some(flag) = args.next() {
         let mut value = || args.next().ok_or_else(|| format!("{flag} needs a value"));
@@ -75,8 +82,15 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
                 }
                 options.appearance = Some(appearance);
             }
-            "--settings-file" => options.settings_file = value()?.into(),
-            "--history-root" => options.history_root = Some(value()?.into()),
+            "--settings-file" => {
+                options.settings_file = value()?.into();
+                explicit = true;
+            }
+            "--history-root" => {
+                options.history_root = Some(value()?.into());
+                explicit = true;
+            }
+            "--profile" => profile = Some(value()?.into()),
             "--screenshot" => options.screenshot = Some(value()?.into()),
             "--find" => options.find = Some(value()?),
             "--size" => {
@@ -88,7 +102,36 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
             _ => return Err(format!("unknown argument {flag}")),
         }
     }
+    if let Some(dir) = profile {
+        if explicit {
+            return Err("--profile replaces --settings-file and --history-root".into());
+        }
+        use_profile(&mut options, &dir)?;
+    }
     Ok(options)
+}
+
+/// Point every path at `dir`, creating it, its history and its Captures
+/// folder. A new profile's settings save into `dir/Captures`.
+#[cfg(windows)]
+fn use_profile(options: &mut Options, dir: &std::path::Path) -> Result<(), String> {
+    let dir = std::path::absolute(dir).map_err(|e| format!("--profile: {e}"))?;
+    let (history, captures) = (dir.join("history"), dir.join("Captures"));
+    for path in [&history, &captures] {
+        std::fs::create_dir_all(path).map_err(|e| format!("--profile {}: {e}", path.display()))?;
+    }
+    let settings_file = dir.join("settings.json");
+    if !settings_file.exists() {
+        let settings = captures_settings::AppSettings {
+            output_directory: captures.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        captures_settings::save(&settings_file, &settings).map_err(|e| e.to_string())?;
+    }
+    options.settings_file = settings_file;
+    options.history_root = Some(history);
+    options.profile = true;
+    Ok(())
 }
 
 #[cfg(windows)]

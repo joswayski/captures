@@ -159,12 +159,17 @@ impl Host {
             }
             let count = scene.nodes.len();
             let (sender, results) = channel();
-            let login = options.history_root.clone().map(|root| Login {
-                root,
-                settings_file: options.settings_file.clone(),
-                results,
-                sender,
-            });
+            // A disposable profile never writes the real Run key.
+            let login = options
+                .history_root
+                .clone()
+                .filter(|_| !options.profile)
+                .map(|root| Login {
+                    root,
+                    settings_file: options.settings_file.clone(),
+                    results,
+                    sender,
+                });
             appearance::title_bar(hwnd, &scene.t);
             // No IME until a text field has focus, like Chromium.
             textfield::ime_enable(hwnd, false);
