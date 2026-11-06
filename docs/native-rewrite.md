@@ -297,6 +297,15 @@ with the Tauri harness (`?view=screenshot-editor&mock=1`). macOS: XCTest
 renders on a macos-26 sidecar (Xcode 26.3) and the hosted macOS workbench.
 Windows, X11 and Wayland: unchanged, since this is AppKit-only.
 
+The AppKit canvas W/H fields are now shipping's compact `NumberInput`: 74×28
+with a 22 pt Increase/Decrease column, centred mono digits, no fill or border
+until hovered (`--border-strong`) or edited (accent border, field fill). Each
+step commits one canvas resize, as shipping's `onTextChange` + `onCommit` do,
+and the 1–16384 bounds disable the matching stepper. The zoom slider thumb still
+differs. macOS: 196 ScreenshotEditorTests pass on a macos-26 sidecar (Xcode
+26.3); header compared with the Tauri harness at 860 pt. Windows, X11, Wayland:
+unchanged (AppKit-only).
+
 The AppKit editor header now lays out like shipping's flex row instead of
 fixed-width controls. Past its natural width both sides shrink in proportion:
 the zoom group through its buttons and slider (24.5 pt buttons at 860 pt), the
@@ -305,8 +314,7 @@ label no longer drops. Zoom cells include their 1 pt dividers (zoom group
 236/260 pt, not 240/264), Trim edges and Background color draw shipping's
 inherited 13 pt regular text, and Background color has its 11 pt chevron.
 Header frames match shipping in macOS WebKit (Playwright, SF fonts) within
-0.6 pt at 860, 900, 1040 and 1400 pt. The canvas W/H fields still lack
-shipping's steppers. macOS: 195 ScreenshotEditorTests pass on a macos-26
+0.6 pt at 860, 900, 1040 and 1400 pt. macOS: 195 ScreenshotEditorTests pass on a macos-26
 sidecar (Xcode 26.3). Windows, X11, Wayland: unchanged (AppKit-only).
 
 The AppKit screenshot editor's minimum window is now Tauri's 860×600

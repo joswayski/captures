@@ -783,6 +783,20 @@ final class TokenNumberField: NSTextField {
     let increaseHalf = TokenStepperHalf(up: true)
     let decreaseHalf = TokenStepperHalf(up: false)
     static let stepperWidth: CGFloat = 26
+    /// Shipping `.number-input.is-compact`: `--r-sm` corners, 22 pt steppers
+    /// and `--s-3` text padding.
+    var compact = false {
+        didSet {
+            (cell as? TokenNumberFieldCell)?.leadingInset = compact ? 6 : 12
+            updateSteppers()
+        }
+    }
+    /// Shipping `.screenshot-canvas-dim .number-input`: no fill or border at
+    /// rest, `--border-strong` on hover, the field fill and accent border while editing.
+    var quiet = false { didSet { updateTrackingAreas(); needsDisplay = true } }
+    private var hovered = false
+    private var hoverTracking: NSTrackingArea?
+    private var stepperColumn: CGFloat { compact ? 22 : Self.stepperWidth }
 
     override class var cellClass: AnyClass? {
         get { TokenNumberFieldCell.self }
@@ -823,6 +837,18 @@ final class TokenNumberField: NSTextField {
         decreaseHalf.setAccessibilityLabel(name.isEmpty ? "Decrease" : "Decrease \(name)")
     }
 
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTracking { removeTrackingArea(hoverTracking) }
+        hoverTracking = nil
+        guard quiet else { return }
+        let tracking = NSTrackingArea(rect: .zero,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
+        addTrackingArea(tracking); hoverTracking = tracking
+    }
+    override func mouseEntered(with event: NSEvent) { hovered = true; needsDisplay = true }
+    override func mouseExited(with event: NSEvent) { hovered = false; needsDisplay = true }
+
     override func resizeSubviews(withOldSize oldSize: NSSize) {
         super.resizeSubviews(withOldSize: oldSize)
         updateSteppers()
@@ -831,9 +857,9 @@ final class TokenNumberField: NSTextField {
     /// Lay out and enable the steppers for the current text and bounds.
     func updateSteppers() {
         let visible = isEnabled && isEditable
-        (cell as? TokenNumberFieldCell)?.trailingInset = visible ? Self.stepperWidth + 4 : 12
-        let column = NSRect(x: bounds.maxX - Self.stepperWidth - 1, y: 1,
-                            width: Self.stepperWidth, height: max(0, bounds.height - 2))
+        (cell as? TokenNumberFieldCell)?.trailingInset = visible ? stepperColumn + 4 : (compact ? 6 : 12)
+        let column = NSRect(x: bounds.maxX - stepperColumn - 1, y: 1,
+                            width: stepperColumn, height: max(0, bounds.height - 2))
         let half = floor(column.height / 2)
         increaseHalf.frame = NSRect(x: column.minX, y: column.minY, width: column.width, height: half)
         decreaseHalf.frame = NSRect(x: column.minX, y: column.minY + half, width: column.width,
@@ -900,25 +926,27 @@ final class TokenNumberField: NSTextField {
 
     override func draw(_ dirtyRect: NSRect) {
         if let tokens {
-            let radius = tokens.number("r-md")
+            let radius = tokens.number(compact ? "r-sm" : "r-md")
             let alpha: CGFloat = isEnabled ? 1 : 0.5
             let editing = currentEditor() != nil
             let outline = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
                                        xRadius: radius, yRadius: radius)
-            tokens.color("surface-field").withAlphaComponent(alpha).setFill(); outline.fill()
+            if !quiet || editing { tokens.color("surface-field").withAlphaComponent(alpha).setFill(); outline.fill() }
             if !increaseHalf.isHidden {
                 NSGraphicsContext.saveGraphicsState()
                 outline.addClip()
-                let column = NSRect(x: bounds.maxX - Self.stepperWidth - 1, y: 0,
-                                    width: Self.stepperWidth + 1, height: bounds.height)
+                let column = NSRect(x: bounds.maxX - stepperColumn - 1, y: 0,
+                                    width: stepperColumn + 1, height: bounds.height)
                 tokens.color("surface-hover").setFill(); column.fill()
                 tokens.color("border-subtle").setFill()
                 NSRect(x: column.minX, y: 0, width: 1, height: bounds.height).fill()
                 NSRect(x: column.minX, y: floor(bounds.midY), width: column.width, height: 1).fill()
                 NSGraphicsContext.restoreGraphicsState()
             }
-            tokens.color(editing ? "theme-accent" : "control-border").withAlphaComponent(alpha).setStroke()
-            outline.lineWidth = 1; outline.stroke()
+            let border: NSColor? = editing ? tokens.color("theme-accent")
+                : !quiet ? tokens.color("control-border")
+                : hovered && isEnabled ? tokens.color("border-strong") : nil
+            if let border { border.withAlphaComponent(alpha).setStroke(); outline.lineWidth = 1; outline.stroke() }
             if editing { drawFocusRing(tokens, in: bounds, radius: radius) }
         }
         super.draw(dirtyRect)
