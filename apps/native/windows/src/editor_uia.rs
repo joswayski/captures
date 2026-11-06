@@ -128,9 +128,12 @@ fn children(e: &Editor, id: Id) -> Vec<Id> {
             list
         }
         Id::Banner => vec![Id::BannerText, c(Target::Dismiss)],
-        Id::CanvasGroup => [Stub::Width, Stub::Height, Stub::Trim, Stub::Background]
-            .map(Id::Stub)
-            .to_vec(),
+        Id::CanvasGroup => vec![
+            Id::Stub(Stub::Width),
+            Id::Stub(Stub::Height),
+            c(Target::Trim),
+            Id::Stub(Stub::Background),
+        ],
         Id::Zoom => vec![
             c(Target::Fit),
             c(Target::ZoomOut),
@@ -189,7 +192,9 @@ fn parent(id: Id) -> Option<Id> {
     Some(match id {
         Id::Root => return None,
         Id::BannerText | Id::Control(Target::Dismiss) => Id::Banner,
-        Id::Stub(Stub::Width | Stub::Height | Stub::Trim | Stub::Background) => Id::CanvasGroup,
+        Id::Stub(Stub::Width | Stub::Height | Stub::Background) | Id::Control(Target::Trim) => {
+            Id::CanvasGroup
+        }
         Id::Control(Target::Fit | Target::ZoomOut | Target::Slider | Target::ZoomIn)
         | Id::Stub(Stub::Preset) => Id::Zoom,
         Id::Control(Target::Tool(_)) => Id::Tools,
@@ -320,6 +325,7 @@ fn runtime_id(id: Id) -> [i32; 4] {
             Target::Copy => (13, 0),
             Target::SaveAsNew => (14, 0),
             Target::Save => (15, 0),
+            Target::Trim => (21, 0),
             Target::Prop(Prop::Shape(i)) => (16, i as i32),
             Target::Prop(Prop::Check(check)) => (17, check as i32),
             Target::Prop(Prop::Swatch(field, i)) => (18, field as i32 * 16 + i as i32),
@@ -331,7 +337,6 @@ fn runtime_id(id: Id) -> [i32; 4] {
         match s {
             Stub::Width => (0, 0),
             Stub::Height => (1, 0),
-            Stub::Trim => (2, 0),
             Stub::Background => (3, 0),
             Stub::Preset => (4, 0),
             Stub::AddImages => (5, 0),
