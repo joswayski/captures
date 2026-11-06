@@ -32,7 +32,7 @@ size from `preview.png`, never the full capture.
 `smoke.py` drives real widgets over AT-SPI (History filter and two-step
 Delete with 1000 entries, a Preferences switch's role, checked state and
 save, and the editor opened from History: an xdotool drag draws a rectangle,
-then Undo, Redo and Save, the Text tool types and commits a label, the Eraser's slider, check box and Wand click (one undo step), shape and text Properties (shadow, opacity drag as one undo step, fill, Bold, alignment), a drawing default fill reaching a new rectangle, Add images through the GTK chooser, and the Canvas toolbar (width, Trim edges, transparent background); Restore into previews: Copy, Close and Delete; and
+then Undo, Redo and Save, the Text tool types and commits a label, the Eraser's slider, check box and Wand click (one undo step), shape and text Properties (shadow, opacity drag as one undo step, fill, Bold, alignment), a drawing default fill reaching a new rectangle, Add images through the GTK chooser, the Canvas toolbar (width, Trim edges, transparent background), Export settings (Compress, 50%, JPEG saved and measured) and Change… save location; Restore into previews: Copy, Close and Delete; and
 the recording editor: keyboard trim, play/pause and Save as new). Run it with `xvfb-run -a dbus-run-session -- /usr/bin/python3
 apps/native/gtk/smoke.py --binary apps/native/gtk/target/debug/captures-gtk`;
 it needs `python3-gi`, `gir1.2-atspi-2.0`, `gir1.2-gdkpixbuf-2.0`, `xdotool`,

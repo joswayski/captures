@@ -715,11 +715,130 @@ popover.captures-menu button.editor-shape-button.active {
 .captures .editor-filename:focus-within {
   border-color: var(--theme-accent);
 }
-.captures .editor-suffix {
-  padding: 0 var(--s-4);
+/* `.filename-format-select`: the suffix is the format select's trigger. */
+.captures .filename-format-select button.select-trigger {
+  min-height: 0;
+  border: 0;
   border-left: 1px solid var(--control-border);
+  border-radius: 0 var(--r-md) var(--r-md) 0;
   color: var(--text-subtle);
+  background: transparent;
+}
+.captures .filename-format-select button.select-trigger:hover,
+.captures .filename-format-select button.select-trigger.open {
+  color: var(--text);
+  background: var(--control-hover);
+}
+.captures button.editor-folder-change {
+  all: unset;
+  color: var(--text-muted);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+}
+.captures button.editor-folder-change:hover {
+  color: var(--text);
+}
+.captures button.editor-folder-change:focus-visible {
+  box-shadow: var(--focus-ring-tight);
+}
+
+/* `.screenshot-export-disclosure` and `.screenshot-export-settings`. */
+.captures button.export-disclosure {
+  all: unset;
+  min-height: var(--h-lg);
+  padding: var(--s-2) var(--s-4) var(--s-2) var(--s-5);
+  border: 1px solid var(--control-border);
+  border-radius: var(--r-md);
+  color: var(--text-muted);
+  background: var(--control);
+}
+.captures button.export-disclosure:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+  background: var(--control-hover);
+}
+.captures button.export-disclosure:focus-visible {
+  box-shadow: var(--focus-ring-tight);
+}
+.captures .export-disclosure-label {
   font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+.captures .export-summary {
+  color: var(--text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+}
+.captures .export-settings {
+  padding: var(--s-5);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-xl);
+  background: var(--surface-sunken);
+}
+.captures .export-caption {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+.captures .export-settings button.select-trigger {
+  min-height: calc(var(--h-md) - 2px);
+}
+.captures .export-settings .number-input {
+  min-height: calc(var(--h-md) - 2px);
+}
+.captures .export-dimensions {
+  color: var(--text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+}
+.captures .export-times {
+  color: var(--text-subtle);
+  font-size: var(--text-xs);
+}
+.captures button.export-lock {
+  all: unset;
+  min-width: 30px;
+  min-height: calc(var(--h-md) - 2px);
+  border: 1px solid var(--control-border);
+  border-radius: var(--r-md);
+  color: var(--text-subtle);
+  background: var(--surface-field);
+}
+.captures button.export-lock.active {
+  border-color: var(--theme-accent);
+  color: var(--theme-accent-ink);
+  background: var(--theme-accent);
+}
+.captures button.export-lock:focus-visible {
+  box-shadow: var(--focus-ring-tight);
+}
+.captures .export-estimate-row {
+  min-height: var(--h-md);
+}
+.captures .export-estimate {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-bold);
+}
+.captures .export-estimate.pending {
+  color: var(--text-subtle);
+}
+.captures .export-delta {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+}
+.captures .export-delta.smaller {
+  color: var(--positive-text);
+}
+.captures .export-delta.larger {
+  color: var(--danger-text);
+}
+popover.captures-menu .choice-description {
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-regular);
 }
 .captures .editor-export-bar button.ui-btn {
   min-height: 34px;

@@ -296,7 +296,11 @@ impl NumberField {
                 focus.is_ancestor(&self.spin) || focus == *self.spin.upcast_ref::<gtk::Widget>()
             });
         if force || !focused {
-            self.spin.set_value(value.round());
+            self.spin.set_value(if self.spin.digits() == 0 {
+                value.round()
+            } else {
+                value
+            });
         }
     }
 
@@ -319,6 +323,10 @@ pub(super) struct Choice {
     caption: gtk::Label,
     name: RefCell<String>,
     options: RefCell<Vec<(String, String)>>,
+    /// Shipping `CustomSelect` `<small>` copy under each option, by index.
+    descriptions: RefCell<Vec<String>>,
+    /// Trigger text that differs from the option label (`triggerLabel`).
+    caption_override: RefCell<Option<String>>,
     value: RefCell<String>,
     preview: Option<gtk::Label>,
     changed: Rc<dyn Fn(String)>,
@@ -372,6 +380,8 @@ impl Choice {
             caption,
             name: RefCell::new(name.to_owned()),
             options: RefCell::default(),
+            descriptions: RefCell::default(),
+            caption_override: RefCell::default(),
             value: RefCell::default(),
             preview,
             changed: Rc::new(changed),
@@ -386,9 +396,41 @@ impl Choice {
     }
 
     pub(super) fn set_options(&self, options: Vec<(String, String)>) {
+        self.descriptions.borrow_mut().clear();
         *self.options.borrow_mut() = options;
         let value = self.value.borrow().clone();
         self.set(&value);
+    }
+
+    /// Options with a description line each (`[id, label, description]`).
+    pub(super) fn set_described(&self, options: Vec<[String; 3]>) {
+        let (options, descriptions) = options
+            .into_iter()
+            .map(|[id, label, description]| ((id, label), description))
+            .unzip();
+        *self.options.borrow_mut() = options;
+        *self.descriptions.borrow_mut() = descriptions;
+        let value = self.value.borrow().clone();
+        self.set(&value);
+    }
+
+    /// Show `caption` on the trigger instead of the chosen label.
+    pub(super) fn set_caption(&self, caption: Option<&str>) {
+        *self.caption_override.borrow_mut() = caption.map(str::to_owned);
+        let value = self.value.borrow().clone();
+        self.set(&value);
+    }
+
+    pub(super) fn set_sensitive(&self, on: bool) {
+        self.trigger.set_sensitive(on);
+    }
+
+    /// Stretch the trigger to its row's height (an inline suffix select).
+    pub(super) fn fill_height(&self) {
+        self.trigger.set_vexpand(true);
+        // Explicit, so the expansion stops here instead of growing the row.
+        self.root.set_vexpand(false);
+        self.caption.set_hexpand(false);
     }
 
     pub(super) fn set(&self, value: &str) {
@@ -399,7 +441,8 @@ impl Choice {
             .iter()
             .find(|(id, _)| id == value)
             .map_or_else(|| value.to_owned(), |(_, label)| label.clone());
-        self.caption.set_label(&label);
+        self.caption
+            .set_label(self.caption_override.borrow().as_deref().unwrap_or(&label));
         if let Some(sample) = &self.preview {
             for class in sample.css_classes() {
                 if class.starts_with("style-") {
@@ -418,14 +461,25 @@ impl Choice {
         popover.add_css_class("captures-menu");
         popover.add_css_class("choice-menu");
         popover.set_has_arrow(false);
-        popover.set_position(gtk::PositionType::Bottom);
+        // Like shipping's listbox, open upward from the lower half of the window.
+        let lower = self.trigger.root().is_some_and(|root| {
+            self.trigger
+                .compute_point(&root, &gtk::graphene::Point::new(0., 0.))
+                .is_some_and(|point| f64::from(point.y()) > f64::from(root.height()) / 2.)
+        });
+        popover.set_position(if lower {
+            gtk::PositionType::Top
+        } else {
+            gtk::PositionType::Bottom
+        });
         let list = gtk::Box::new(gtk::Orientation::Vertical, 2);
         list.set_accessible_role(gtk::AccessibleRole::Menu);
         list.update_property(&[gtk::accessible::Property::Label(&self.name.borrow())]);
         let width = self.trigger.width();
         let current = self.value.borrow().clone();
         let mut focus = None;
-        for (id, label) in self.options.borrow().iter() {
+        let descriptions = self.descriptions.borrow();
+        for (index, (id, label)) in self.options.borrow().iter().enumerate() {
             let option = gtk::Button::new();
             option.add_css_class("choice-option");
             option.set_accessible_role(gtk::AccessibleRole::MenuItemRadio);
@@ -435,10 +489,27 @@ impl Choice {
             }
             let caption = gtk::Label::new(Some(label));
             caption.set_xalign(0.);
-            row.append(&caption);
+            let description = descriptions.get(index).filter(|text| !text.is_empty());
+            if let Some(text) = description {
+                // `.custom-select-option-copy`: the label over its `<small>`.
+                let copy = gtk::Box::new(gtk::Orientation::Vertical, 2);
+                copy.append(&caption);
+                let small = gtk::Label::new(Some(text));
+                small.add_css_class("choice-description");
+                small.set_xalign(0.);
+                small.set_wrap(true);
+                small.set_max_width_chars(40);
+                copy.append(&small);
+                row.append(&copy);
+            } else {
+                row.append(&caption);
+            }
             option.set_child(Some(&row));
             option.set_size_request(width - 8, -1);
             option.update_property(&[gtk::accessible::Property::Label(label)]);
+            if let Some(text) = description {
+                option.update_property(&[gtk::accessible::Property::Description(text)]);
+            }
             let active = *id == current;
             option.update_state(&[gtk::accessible::State::Checked(if active {
                 gtk::AccessibleTristate::True

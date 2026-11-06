@@ -375,6 +375,48 @@ def editor(binary, scratch):
              "the canvas to become transparent")
         subprocess.run(["xdotool", "key", "Escape"], check=True)
         print("editor: canvas width, Trim edges and transparent background over AT-SPI")
+
+        # Export settings: Compress, 50% output and JPEG reach the saved file,
+        # and Est. size is encoded off the UI thread.
+        def choose(trigger, option):
+            press(wait(lambda: [n for n, (role, name) in nodes(app)
+                                if role == "combo box" and name.startswith(trigger)],
+                       f"the {trigger} select")[0])
+            press(wait(lambda: find(app, "radio menu item", option), f"the {option} option")[0])
+
+        disclosure = find(app, "push button", "Export settings")[0]
+        press(disclosure)
+        wait(lambda: has_state(disclosure, Atspi.StateType.EXPANDED), "Export settings to open")
+        document_width = round(Atspi.Value.get_current_value(width))
+        choose("Save quality", "Compress")
+        wait(lambda: find(app, "combo box", "Compression quality: Highest"), "the Compress preset")
+        choose("Output size", "50%")
+        choose("Format", "JPEG")
+        wait(lambda: [n for n, (role, name) in nodes(app)
+                      if role == "label" and name.startswith("≈")], "the Est. size")
+        before = set(out.glob("*.jpg"))
+        save = find(app, "push button", "Save")[0]
+        wait(lambda: has_state(save, Atspi.StateType.SENSITIVE), "Save to enable")
+        press(save)
+        jpeg = wait(lambda: list(set(out.glob("*.jpg")) - before), "Save to write a JPEG")[0]
+        time.sleep(0.5)
+        saved_width = GdkPixbuf.Pixbuf.new_from_file(str(jpeg)).get_width()
+        assert abs(saved_width - document_width / 2) <= 1, \
+            f"50% of {document_width} px saved {saved_width} px"
+        print(f"editor: Export settings saved {jpeg.name} at {saved_width} px (Compress, 50%, JPEG)")
+
+        # Change… picks the folder Save writes to through GTK's chooser.
+        elsewhere = scratch / "Elsewhere"
+        elsewhere.mkdir()
+        press(wait(lambda: find(app, "push button", "Change save location"),
+                   "Change save location")[0])
+        choose_file(app, "Choose save location", "Select", elsewhere)
+        wait(lambda: [n for n, (role, name) in nodes(app)
+                      if role == "label" and name == f"Saving to {elsewhere}"],
+             "the new save location")
+        press(save)
+        wait(lambda: list(elsewhere.glob("*.jpg")), "Save to write into the chosen folder")
+        print("editor: Change… moved Save to another folder")
     finally:
         process.terminate()
         process.wait(timeout=10)

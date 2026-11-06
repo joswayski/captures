@@ -447,8 +447,25 @@ unless the session reports `can_trim`, and Background color opens a card
 with Solid background (off means transparent; on restores the last solid
 color) and a compact swatch grid, as shipping's toolbar does. The smoke
 picks files by pasting the path into the chooser's Location field: typing
-key by key raced GTK 4.14's inline autocompletion in CI. Export settings and
-layer reorder/rename are not in the GTK host yet.
+key by key raced GTK 4.14's inline autocompletion in CI. The save row now
+has shipping's Export settings disclosure (format · size · estimate summary)
+over its panel: Output size (Original, 75%, 50%, Custom with width × height
+and the aspect lock), Save quality with described options, the Compress
+preset, Maximum file size with its KB/MB/GB unit, and Est. size with its
+change versus the original. Every label, rule and description comes from
+`editor_export::present`; the estimate is encoded exactly as Save would, on
+a blocking thread after a 250 ms debounce, and a superseded result is
+dropped. The filename suffix is the format select (PNG, JPEG, WebP; JPEG
+warns about transparency), and Change… picks the save folder through GTK's
+chooser. Selects in the lower half of the window open upward like
+shipping's listbox. GTK 4.14 names a button after its label child, so
+Change…'s text is presentational to keep shipping's "Change save location"
+name. The smoke saves a Compress, 50% JPEG and checks its width, then saves
+into a folder picked with Change…. Not yet: the Compress before/after
+comparison, and Preserve's estimate still re-encodes an unchanged document
+instead of showing the original file size as shipping does (the shared
+model's behavior, as in the egui workbench). Layer reorder/rename are not in
+the GTK host yet.
 Release build
 under Xvfb with Cairo on a 640×360 fixture: about 110 MB RSS and near-zero
 idle CPU; the egui workbench's own editor scene measures about 173 MB the

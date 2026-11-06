@@ -37,6 +37,7 @@ use crate::widgets::{Icon, SnapshotArea, icon_button};
 
 mod canvas_bar;
 mod controls;
+mod export_bar;
 mod inspector;
 mod properties;
 mod text;
@@ -239,6 +240,15 @@ struct State {
     /// The open Add images chooser; GtkNativeDialog does not keep itself alive.
     #[allow(deprecated)]
     chooser: RefCell<Option<gtk::FileChooserNative>>,
+    /// The Est. size shown, the inputs it was (or is being) encoded for,
+    /// its generation and the debounce before the next encode.
+    estimate: Cell<EstimateState>,
+    estimate_key: Cell<Option<(usize, ExportOptions)>>,
+    estimate_generation: Cell<u64>,
+    estimate_timer: RefCell<Option<glib::SourceId>>,
+    /// The History entry's file size, the Preserve baseline.
+    original_bytes: Option<u64>,
+    me: std::rc::Weak<State>,
     preview_dirty: Cell<bool>,
     /// The previous primary press, for double-click editing.
     last_press: Cell<Option<(std::time::Instant, f64, f64)>>,
@@ -257,7 +267,8 @@ struct Widgets {
     layers: gtk::ListBox,
     banner: gtk::Box,
     filename: gtk::Entry,
-    suffix: gtk::Label,
+    export: Rc<export_bar::ExportBar>,
+    change_folder: gtk::Button,
     folder: gtk::Label,
     hint: gtk::Label,
     notice: gtk::Label,
@@ -503,9 +514,26 @@ pub fn build(
     body.append(&sidebar);
     root.append(&body);
 
-    // `.screenshot-export-bar`.
+    // `.screenshot-export-bar`: the Export settings panel over the save row.
+    let footer = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    footer.add_css_class("editor-export-bar");
+    let late: Rc<RefCell<std::rc::Weak<State>>> = Rc::default();
+    let export = {
+        let late = late.clone();
+        export_bar::ExportBar::new(move |options| {
+            if let Some(state) = late.borrow().upgrade() {
+                state.set_options(options);
+            }
+        })
+    };
+    footer.append(&export.panel);
     let bar = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-    bar.add_css_class("editor-export-bar");
+    footer.append(&bar);
+    export.disclosure.set_valign(gtk::Align::End);
+    // `.screenshot-save-row`: minmax(178px, 210px).
+    export.disclosure.set_size_request(210, -1);
+    export.disclosure.set_hexpand(false);
+    bar.append(&export.disclosure);
     let file = gtk::Box::new(gtk::Orientation::Vertical, 4);
     let file_heading = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     file_heading.append(&label("Filename", "editor-field-label"));
@@ -513,6 +541,15 @@ pub fn build(
     folder.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
     folder.set_max_width_chars(28);
     file_heading.append(&folder);
+    // Shipping `aria-label="Change save location"` over "Change…". GTK 4.14
+    // names a button after its label child, so the text is presentational.
+    let change_folder = gtk::Button::new();
+    let change_text = gtk::Label::new(Some("Change…"));
+    change_text.set_accessible_role(gtk::AccessibleRole::Presentation);
+    change_folder.set_child(Some(&change_text));
+    change_folder.add_css_class("editor-folder-change");
+    change_folder.update_property(&[gtk::accessible::Property::Label("Change save location")]);
+    file_heading.append(&change_folder);
     file.append(&file_heading);
     let file_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     file_row.add_css_class("editor-filename");
@@ -520,9 +557,8 @@ pub fn build(
     filename.add_css_class("editor-filename-entry");
     filename.set_width_chars(28);
     filename.update_property(&[gtk::accessible::Property::Label("Filename")]);
-    let suffix = label(".png", "editor-suffix");
     file_row.append(&filename);
-    file_row.append(&suffix);
+    file_row.append(&export.format.root);
     file.append(&file_row);
     bar.append(&file);
     let (copy, _, _) = icon_button("copy", "Copy image", &["ui-btn"]);
@@ -552,10 +588,12 @@ pub fn build(
     let (save, _, _) = icon_button("save", "Save", &["ui-btn", "primary", "editor-save"]);
     save.set_valign(gtk::Align::Center);
     bar.append(&save);
-    root.append(&bar);
+    root.append(&footer);
 
     let output_directory = options.output_directory.clone();
-    let state = Rc::new(State {
+    let original_bytes =
+        editor_export::original_size_bytes(&options.history_root, &options.artifact_id);
+    let state = Rc::new_cyclic(|me| State {
         tokens,
         output_directory,
         default_stem: captures_app::recording_editor_ui::timestamp_stem(&options.created_at),
@@ -591,6 +629,12 @@ pub fn build(
         preview_busy: Cell::default(),
         queued: RefCell::default(),
         chooser: RefCell::default(),
+        estimate: Cell::default(),
+        estimate_key: Cell::default(),
+        estimate_generation: Cell::default(),
+        estimate_timer: RefCell::default(),
+        original_bytes,
+        me: me.clone(),
         preview_dirty: Cell::default(),
         widgets: Widgets {
             undo,
@@ -604,7 +648,8 @@ pub fn build(
             layers,
             banner,
             filename,
-            suffix,
+            export,
+            change_folder,
             folder,
             hint,
             notice,
@@ -614,6 +659,7 @@ pub fn build(
             add_images,
         },
     });
+    *late.borrow_mut() = Rc::downgrade(&state);
     state.connect(&window);
 
     // Deliver worker results on the UI thread.
@@ -734,6 +780,12 @@ impl State {
             }
             drop(target);
             state.update_export();
+        });
+        let weak = Rc::downgrade(self);
+        w.change_folder.connect_clicked(move |_| {
+            if let Some(state) = weak.upgrade() {
+                state.choose_folder();
+            }
         });
         let weak = Rc::downgrade(self);
         w.save_as_new.connect_toggled(move |on| {
@@ -1358,9 +1410,21 @@ impl State {
                 presented.document.height.round() as u32,
             ),
             presented.document.background.is_none(),
-            EstimateState::default(),
+            self.estimate.get(),
         );
-        w.suffix.set_label(&view.suffix);
+        w.export.sync(
+            self.options.get(),
+            &view,
+            (
+                presented.document.width.round() as u32,
+                presented.document.height.round() as u32,
+            ),
+            presented.document.background.is_none(),
+            self.estimate.get().pending,
+        );
+        w.export.set_sensitive(!self.busy.get());
+        w.change_folder.set_sensitive(!self.busy.get());
+        self.schedule_estimate(&presented.pixels);
         w.folder
             .set_label(&format!("Saving to {}", target.directory.display()));
         w.folder
@@ -1383,6 +1447,97 @@ impl State {
             w.save_as_new.activate_toggle_quietly(view.saving_copy);
         }
         w.save_as_new.set_sensitive(!view.format_requires_copy);
+    }
+
+    fn set_options(&self, options: ExportOptions) {
+        self.options.set(options);
+        *self.notice.borrow_mut() = None;
+        self.update_export();
+    }
+
+    /// Re-encode the export off the UI thread once edits or options settle,
+    /// exactly as Save would; a superseded result is dropped.
+    fn schedule_estimate(&self, pixels: &Arc<RgbaImage>) {
+        let options = self.options.get();
+        let key = (Arc::as_ptr(pixels) as usize, options);
+        if self.estimate_key.get() == Some(key) {
+            return;
+        }
+        self.estimate_key.set(Some(key));
+        let generation = self.estimate_generation.get() + 1;
+        self.estimate_generation.set(generation);
+        if let Some(timer) = self.estimate_timer.borrow_mut().take() {
+            timer.remove();
+        }
+        let mut estimate = self.estimate.get();
+        estimate.pending = true;
+        self.estimate.set(estimate);
+        let (pixels, original, me) = (pixels.clone(), self.original_bytes, self.me.clone());
+        let timer =
+            glib::timeout_add_local_once(std::time::Duration::from_millis(250), move || {
+                if let Some(state) = me.upgrade() {
+                    state.estimate_timer.borrow_mut().take();
+                }
+                glib::spawn_future_local(async move {
+                    let result = gtk::gio::spawn_blocking(move || {
+                        editor_export::estimate_export(&pixels, options, original)
+                    })
+                    .await;
+                    let Some(state) = me.upgrade() else { return };
+                    if state.estimate_generation.get() != generation {
+                        return;
+                    }
+                    state.estimate.set(match result {
+                        Ok(Ok(estimate)) => EstimateState {
+                            bytes: Some(estimate.bytes),
+                            baseline_bytes: estimate.baseline_bytes,
+                            pending: false,
+                        },
+                        _ => EstimateState::default(),
+                    });
+                    state.update_export();
+                });
+            });
+        *self.estimate_timer.borrow_mut() = Some(timer);
+    }
+
+    /// Shipping's Change…: pick the folder Save writes to.
+    fn choose_folder(self: &Rc<Self>) {
+        let window = self.canvas.root().and_downcast::<gtk::Window>();
+        #[allow(deprecated)] // `GtkFileDialog` needs GTK 4.10.
+        let chooser = gtk::FileChooserNative::new(
+            Some("Choose save location"),
+            window.as_ref(),
+            gtk::FileChooserAction::SelectFolder,
+            Some("Select"),
+            Some("Cancel"),
+        );
+        if let Some(target) = self.target.borrow().as_ref() {
+            #[allow(deprecated)]
+            let _ = chooser.set_current_folder(Some(&gtk::gio::File::for_path(&target.directory)));
+        }
+        let weak = Rc::downgrade(self);
+        #[allow(deprecated)]
+        chooser.connect_response(move |chooser, response| {
+            let folder = chooser.file().and_then(|file| file.path());
+            chooser.destroy();
+            let Some(state) = weak.upgrade() else { return };
+            state.chooser.borrow_mut().take();
+            if response != gtk::ResponseType::Accept {
+                return;
+            }
+            if let Some(folder) = folder {
+                if let Some(target) = state.target.borrow_mut().as_mut() {
+                    target.set_directory(folder);
+                }
+                *state.notice.borrow_mut() = None;
+                state.sync_filename();
+                state.update_export();
+            }
+        });
+        #[allow(deprecated)]
+        chooser.show();
+        *self.chooser.borrow_mut() = Some(chooser);
     }
 
     fn copy(&self) {
