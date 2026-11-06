@@ -5239,7 +5239,18 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             }
         }
         // Destroyed outside `with_editor`, so `WM_DESTROY` can remove it.
-        if with_editor(hwnd, |e| e.close_ready) == Some(true) {
+        // Taken, not read: DestroyWindow sends messages back into this
+        // wndproc (WM_UAHDESTROYWINDOW), which must not destroy again or the
+        // editor's WM_DESTROY never runs and the process never quits. A late
+        // flush outcome must not re-arm it either, so `closing` ends too.
+        let ready = with_editor(hwnd, |e| {
+            let ready = std::mem::take(&mut e.close_ready);
+            if ready {
+                e.closing = false;
+            }
+            ready
+        });
+        if ready == Some(true) {
             let _ = DestroyWindow(hwnd);
             return LRESULT(0);
         }
