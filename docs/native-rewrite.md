@@ -416,6 +416,22 @@ approximated 10 px accent glow. A click below shipping's 3 px threshold
 neither previews nor moves. Windows: cross-compiled only; guides appear only
 mid-drag, so no offscreen render shows them. macOS, Linux: unchanged.
 
+Win32 editor preview pixels: the worker now sends only the changed
+rectangle, converted to premultiplied BGRA, and the UI patches it into a
+buffer it owns. Before, the worker converted into a shared `Arc` buffer
+that the UI still held, so every preview copied the whole image, and a
+second preview arriving before a frame widened the pending upload to the
+whole image. Now pending uploads merge into one rectangle. At 3840×2160
+(release, Linux, Erase size 28, 60 growing previews, three runs), the
+host's part of a preview went from 9.1–9.6 ms (5.5–5.9 ms full-image diff,
+3.5–3.7 ms copy-on-write) to 5.5–5.9 ms, which is now all diff. That is
+330–350 ms instead of 530–580 ms per stroke, next to the shared preview's
+about 16 ms. The diff stays until the shared preview reports its damage
+rectangle (a `crates/*` change, not made here). The shared preview also
+clones the full frame (about 3.2 ms) before pasting the region. Windows:
+cross-compiled only; the on-screen upload is not run here. macOS, Linux:
+unchanged.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,
