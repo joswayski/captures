@@ -25,6 +25,8 @@ use crate::switch::TokenSwitch;
 use crate::tokens::Tokens;
 use crate::widgets::{Icon, MaxWidth, SnapshotArea};
 
+mod find;
+
 const PLATFORM: ShortcutPlatform = ShortcutPlatform::Linux;
 
 /// Restyle the app for new look settings; see [`Options::on_look`].
@@ -37,6 +39,8 @@ pub struct Options {
     /// Restyle the app for new appearance or accent settings (and whether the
     /// user picked the appearance itself), returning the new tokens.
     pub on_look: OnLook,
+    /// Open Find with this query (`--find`, for parity screenshots).
+    pub find: Option<String>,
 }
 
 /// The page's settings and the widgets that follow them.
@@ -267,14 +271,17 @@ pub fn build(
     body.set_hexpand(true);
     // `.preferences-header`: title and autosave note, then the History action
     // and the save status.
-    let header = gtk::Box::new(gtk::Orientation::Horizontal, tokens.number("s-6") as i32);
+    // Find opens as a second row (`.preferences-find { grid-column: 1 / -1 }`).
+    let header = gtk::Box::new(gtk::Orientation::Vertical, tokens.number("s-6") as i32);
     header.add_css_class("preferences-header");
+    let top = gtk::Box::new(gtk::Orientation::Horizontal, tokens.number("s-6") as i32);
+    header.append(&top);
     let heading = gtk::Box::new(gtk::Orientation::Vertical, 0);
     heading.set_hexpand(true);
     heading.set_valign(gtk::Align::Center);
     heading.append(&label(preferences::TITLE, "header-title"));
     heading.append(&label(preferences::SUBTITLE, "header-description"));
-    header.append(&heading);
+    top.append(&heading);
     let actions = gtk::Box::new(gtk::Orientation::Horizontal, tokens.number("s-4") as i32);
     actions.set_valign(gtk::Align::Center);
     let history = gtk::Button::with_label(preferences::HISTORY_ACTION);
@@ -283,7 +290,7 @@ pub fn build(
     history.connect_clicked(move |_| open_history());
     actions.append(&history);
     actions.append(&prefs.status);
-    header.append(&actions);
+    top.append(&actions);
     body.append(&header);
 
     let sections = gtk::Box::new(gtk::Orientation::Vertical, tokens.number("s-6") as i32);
@@ -295,6 +302,8 @@ pub fn build(
         .build();
     body.append(&scroller);
     root.append(&body);
+    let find = find::build(&window, &sections, &scroller, tokens.number("s-3") as i32);
+    header.append(&find.bar);
 
     let margin = tokens.number("s-6");
     let general = card(&tokens, 0, None);
@@ -375,8 +384,11 @@ pub fn build(
     scroller
         .vadjustment()
         .connect_value_changed(move |_| follow());
+    if let Some(query) = options.find {
+        find.open_with(&query);
+    }
     // The window owns the page state until it closes; controls hold weak refs.
-    let keep = RefCell::new(Some(prefs));
+    let keep = RefCell::new(Some((prefs, find)));
     window.connect_close_request(move |_| {
         keep.borrow_mut().take();
         glib::Propagation::Proceed
@@ -396,6 +408,7 @@ fn card(tokens: &Tokens, section: usize, detail: Option<&str>) -> gtk::Box {
     let card = gtk::Box::new(gtk::Orientation::Vertical, tokens.number("s-5") as i32);
     card.add_css_class("settings-card");
     let header = gtk::Box::new(gtk::Orientation::Vertical, tokens.number("s-2") as i32);
+    header.add_css_class("settings-card-header");
     header.append(&label(SECTIONS[section].title, "card-title"));
     header.append(&capped(
         &description(

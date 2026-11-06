@@ -19,7 +19,8 @@ frame and exit, for parity comparisons. `--scene history --history-root DIR`
 opens Capture History, and `--scene editor --artifact ID --history-root DIR`
 opens the screenshot editor on one History entry, `--scene recording
 --artifact ID` opens the recording editor on a video or GIF, and `--scene preview`
-restores the two newest entries (or `--artifact ID`) as floating previews; `python3 apps/native/history_fixture.py DIR --count 1000`
+restores the two newest entries (or `--artifact ID`) as floating previews, and
+`--find QUERY` opens Preferences Find with a typed query; `python3 apps/native/history_fixture.py DIR --count 1000`
 writes a disposable 1000-entry History (`--video` adds one real FFmpeg
 recording and prints its id). `--exercise` and `--quit-after SECONDS`
 emit the same `ready` and `scripted-action` JSON lines as the wgpu workbench

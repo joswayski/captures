@@ -22,7 +22,7 @@ use gtk::{gio, glib, graphene};
 
 const USAGE: &str = "captures-gtk [--scene preferences|history|editor|recording|preview] [--artifact ID] [--appearance light|dark]\n\
   [--settings-file PATH] [--history-root PATH] [--size WxH]\n\
-  [--screenshot OUT.png] [--exercise] [--quit-after SECONDS]";
+  [--screenshot OUT.png] [--find QUERY] [--exercise] [--quit-after SECONDS]";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Scene {
@@ -52,6 +52,8 @@ struct Options {
     history_root: Option<PathBuf>,
     artifact: Option<String>,
     screenshot: Option<PathBuf>,
+    /// Preferences opens Find with this query.
+    find: Option<String>,
     size: Option<(i32, i32)>,
     exercise: bool,
     quit_after: Option<Duration>,
@@ -65,6 +67,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
         history_root: None,
         artifact: None,
         screenshot: None,
+        find: None,
         size: None,
         exercise: false,
         quit_after: None,
@@ -88,6 +91,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
             "--settings-file" => options.settings_file = value()?.into(),
             "--history-root" => options.history_root = Some(value()?.into()),
             "--screenshot" => options.screenshot = Some(value()?.into()),
+            "--find" => options.find = Some(value()?),
             "--exercise" => options.exercise = true,
             "--quit-after" => {
                 let seconds: f64 = value()?.parse().map_err(|_| "bad --quit-after")?;
@@ -142,6 +146,8 @@ struct Host {
     /// Open recording editors, one per artifact.
     recordings: RefCell<Vec<(String, Rc<recording::RecordingEditor>)>>,
     previews: RefCell<Option<Rc<previews::Previews>>>,
+    /// `--find`, for the first Preferences window.
+    find: RefCell<Option<String>>,
 }
 
 impl Host {
@@ -163,6 +169,7 @@ impl Host {
                         host.apply_look(settings, appearance_changed)
                     }
                 }),
+                find: self.find.borrow_mut().take(),
             },
             {
                 let host = Rc::downgrade(self);
@@ -438,6 +445,7 @@ fn main() -> glib::ExitCode {
             editors: RefCell::default(),
             recordings: RefCell::default(),
             previews: RefCell::default(),
+            find: RefCell::new(options.find.clone()),
         });
         hosts.borrow_mut().push(host.clone());
         let window: gtk::ApplicationWindow = match options.scene {

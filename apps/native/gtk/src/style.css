@@ -2257,3 +2257,72 @@ popover.captures-menu .text-style-preview.style-rounded-box {
 popover.captures-menu.canvas-bg-menu > contents {
   padding: var(--s-4);
 }
+
+/* `.preferences-find`: the header's second row while Find is open. */
+.captures entry.preferences-find-input {
+  all: unset;
+  min-height: var(--h-md);
+  padding: 0 var(--s-4);
+  border: 1px solid var(--control-border);
+  border-radius: var(--r-md);
+  color: var(--text);
+  background: var(--surface-field);
+  font-size: var(--text-md);
+  transition:
+    border-color var(--dur-2) var(--ease-standard),
+    box-shadow var(--dur-2) var(--ease-standard);
+}
+.captures entry.preferences-find-input > text > placeholder {
+  color: var(--text-faint);
+}
+.captures entry.preferences-find-input:hover {
+  border-color: var(--border-strong);
+}
+.captures entry.preferences-find-input:focus-within {
+  border-color: var(--theme-accent);
+  box-shadow: var(--focus-ring-tight);
+}
+.captures .preferences-find-count {
+  color: var(--text-subtle);
+  font-size: var(--text-sm);
+  font-feature-settings: "tnum";
+}
+.captures button.preferences-find-step,
+.captures button.preferences-find-close {
+  all: unset;
+  min-width: 30px;
+  min-height: 30px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--r-md);
+  color: var(--text-subtle);
+  background: var(--control);
+  box-shadow: var(--shadow-xs);
+}
+.captures button.preferences-find-step:hover:not(:disabled),
+.captures button.preferences-find-close:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+  background: var(--control-hover);
+}
+.captures button.preferences-find-step:disabled {
+  opacity: 0.45;
+}
+.captures button.preferences-find-step:focus-visible,
+.captures button.preferences-find-close:focus-visible {
+  border-color: var(--theme-accent);
+  box-shadow: var(--focus-ring-tight);
+}
+/* `.preference-find-match::after` (inset −s-3, r-lg): a spread shadow in the
+   fill colour grows the match's own background by s-3 on every side. */
+.captures .preference-find-match {
+  border-radius: 4px;
+  background-color: var(--surface-selected);
+  box-shadow: 0 0 0 6px var(--surface-selected);
+}
+.captures .preference-find-current {
+  box-shadow:
+    0 0 0 6px var(--surface-selected),
+    0 0 20px 6px alpha(var(--theme-accent), 0.18);
+  outline: 2px solid alpha(var(--theme-accent), 0.62);
+  outline-offset: 6px;
+}

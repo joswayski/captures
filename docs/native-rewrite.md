@@ -805,9 +805,26 @@ Tauri harness card by card, light and dark, at 1080×900 under Xvfb.
 right corner, a 24 FPS GIF select and a recorded Ctrl+Shift+4 Region
 shortcut. Not yet ported: the microphone list (Off and the saved device
 only, until the GTK host has an audio backend), Send feedback (the feedback
-window; Open is disabled), the update worker, Find, the compact layout and
+window; Open is disabled), the update worker, the compact layout and
 live System appearance changes. X11 (Xvfb) on GTK 4.8 and 4.14 only;
 Wayland, Orca and real hardware remain open. Windows, macOS: unchanged.
+
+GTK Preferences Find follows `usePreferencesFind`. Ctrl+F opens the header's
+second row: a real `GtkEntry` inside a Search landmark, the live count
+(Status), and Previous, Next and Close. It matches the same targets as
+shipping's selector (card headers, setting, check, utility and shortcut
+rows, and the custom colour editor) by their visible label text with the
+shared `find_matches`, and shows the shared count label. Matches get the
+selected fill grown by `s-3`; the current match adds the 2 px accent ring
+and glow, and scrolls to the page centre (eased over about 260 ms, or
+instantly when GTK animations are off). Enter, F3, Ctrl+G and their Shift
+forms step and wrap; Escape or Close hides the bar and its highlights but
+keeps the query. A shortcut recorder that is listening keeps its keys, as
+shipping skips Find while recording. `--find QUERY` opens it for parity
+screenshots. `smoke.py` opens Find from the keyboard, checks "1 of 2", steps
+with Ctrl+G and Shift+F3 and closes it with Escape. Compared with the Tauri
+harness at 880×660 (light). X11 (Xvfb) on GTK 4.8 and 4.14 only; Wayland,
+Orca and real hardware remain open. Windows, macOS: unchanged.
 
 ## Progress dashboard
 

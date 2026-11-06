@@ -231,6 +231,26 @@ def preferences(binary, scratch):
         wait(lambda: saved_value("region_shortcut") == "Control+Shift+Digit4", "the shortcut")
         wait(lambda: not has_state(region, Atspi.StateType.PRESSED), "the recorder to stop")
         print("preferences: selects and the shortcut recorder saved")
+
+        # Find: Ctrl+F opens a search landmark; the live count follows the
+        # query and Ctrl+G, and Escape closes it.
+        def find_count():
+            return [node_text(n, name) for n, (role, name) in nodes(app)
+                    if role in ("status bar", "status")]
+
+        subprocess.run(["xdotool", "key", "ctrl+f"], check=True)
+        wait(lambda: [n for role in ("text", "entry") for n in find(app, role, "Find settings")],
+             "the Find settings field")
+        subprocess.run(["xdotool", "type", "--delay", "40", "shortcut"], check=True)
+        wait(lambda: "1 of 2" in find_count(), "Find to count two matches")
+        subprocess.run(["xdotool", "key", "ctrl+g"], check=True)
+        wait(lambda: "2 of 2" in find_count(), "Ctrl+G to step to the second match")
+        subprocess.run(["xdotool", "key", "shift+F3"], check=True)
+        wait(lambda: "1 of 2" in find_count(), "Shift+F3 to step back")
+        subprocess.run(["xdotool", "key", "Escape"], check=True)
+        wait(lambda: not [n for role in ("text", "entry") for n in find(app, role, "Find settings")
+                          if has_state(n, Atspi.StateType.SHOWING)], "Escape to close Find")
+        print("preferences: Find counted, stepped and closed from the keyboard")
     finally:
         process.terminate()
         process.wait(timeout=10)
