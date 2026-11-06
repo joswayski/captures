@@ -1,7 +1,8 @@
 #![allow(non_upper_case_globals)]
 //! UI Automation for Preferences: the window, the section navigation (Invoke
-//! buttons), the header, and each settings card as a group of its controls:
-//! switches (Toggle), the Interface theme and accent choices (radio buttons
+//! buttons that also report the section in view through SelectionItem, like
+//! shipping `aria-current`), the header, and each settings card as a group of
+//! its controls: switches (Toggle), the Interface theme and accent choices (radio buttons
 //! with SelectionItem inside a Selection group), the read-only capture folder
 //! (Value) and Choose… (Invoke). Names come from the shipping titles and
 //! `aria-label`s; descriptions are help text. Providers are node ids that read
@@ -189,6 +190,7 @@ fn runtime_id(id: Id) -> [i32; 3] {
 
 fn selected(host: &Host, id: Id) -> bool {
     match id {
+        Id::NavItem(i) => host.scene.active == i,
         Id::Mode(i) => host.scene.mode_index() == i,
         Id::Accent(i) => host.scene.theme_index() == i,
         _ => false,
@@ -270,7 +272,12 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
 
     fn GetPatternProvider(&self, pattern: UIA_PATTERN_ID) -> Result<IUnknown> {
         let supported = match self.id {
-            Id::NavItem(_) | Id::History | Id::Choose => pattern == UIA_InvokePatternId,
+            // Sections also report the one in view (shipping `aria-current`).
+            Id::NavItem(_) => {
+                pattern == UIA_InvokePatternId || pattern == UIA_SelectionItemPatternId
+            }
+            Id::Nav => pattern == UIA_SelectionPatternId,
+            Id::History | Id::Choose => pattern == UIA_InvokePatternId,
             Id::Switch(_) => pattern == UIA_TogglePatternId,
             Id::Modes | Id::Accents => pattern == UIA_SelectionPatternId,
             Id::Mode(_) | Id::Accent(_) => pattern == UIA_SelectionItemPatternId,
@@ -314,6 +321,10 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                     VARIANT::from(true)
                 }
                 UIA_SelectionItemIsSelectedPropertyId => VARIANT::from(selected(host, id)),
+                UIA_AriaPropertiesPropertyId if matches!(id, Id::NavItem(_)) => {
+                    let current = if selected(host, id) { "true" } else { "false" };
+                    VARIANT::from(BSTR::from(format!("current={current}")))
+                }
                 UIA_ValueValuePropertyId if id == Id::Folder => {
                     VARIANT::from(BSTR::from(scene.settings().output_directory.as_str()))
                 }
@@ -466,6 +477,7 @@ impl ISelectionProvider_Impl for Node_Impl {
         let id = self.id;
         let chosen = with(|host| {
             Ok(match id {
+                Id::Nav => Id::NavItem(host.scene.active),
                 Id::Modes => Id::Mode(host.scene.mode_index()),
                 _ => Id::Accent(host.scene.theme_index()),
             })

@@ -365,11 +365,13 @@ unsafe fn create_d3d() -> Result<ID3D11Device> {
 }
 
 /// Draw a whole composition surface of `size` pixels. The closure works in
-/// DIPs with its origin `bleed_px` pixels inside the surface's top-left corner.
+/// DIPs with its origin `bleed_px` pixels inside the surface's top-left corner;
+/// `scale` maps DIPs to pixels per axis so the node's rect lands exactly on
+/// its device-pixel-snapped box.
 pub fn draw_surface(
     surface: &IDCompositionSurface,
     size: (u32, u32),
-    scale: f32,
+    scale: (f32, f32),
     bleed_px: f32,
     f: impl FnOnce(&ID2D1DeviceContext) -> Result<()>,
 ) -> Result<()> {
@@ -386,10 +388,10 @@ pub fn draw_surface(
         );
         dc.Clear(Some(&D2D1_COLOR_F::default()));
         dc.SetTransform(&Matrix3x2 {
-            M11: scale,
+            M11: scale.0,
             M12: 0.,
             M21: 0.,
-            M22: scale,
+            M22: scale.1,
             M31: offset.x as f32 + bleed_px,
             M32: offset.y as f32 + bleed_px,
         });

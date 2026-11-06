@@ -208,6 +208,8 @@ pub struct Motion {
     pub seconds: f32,
     pub curve: CubicBezier,
     pub applied: bool,
+    /// Not shown yet: the host restarts it from the frame that first shows it.
+    pub fresh: bool,
 }
 
 impl Motion {
@@ -1071,6 +1073,7 @@ impl Scene {
                     seconds,
                     curve,
                     applied: false,
+                    fresh: true,
                 });
             }
         } else {
@@ -1150,6 +1153,7 @@ impl Scene {
             seconds,
             curve,
             applied: false,
+            fresh: true,
         });
     }
 
@@ -1159,6 +1163,8 @@ impl Scene {
         if index != self.active {
             self.active = index;
             self.refresh(true);
+            // Shipping `aria-current` on the section in view.
+            self.events.push(Event::Selected(Target::Nav(index)));
         }
     }
 
@@ -1206,8 +1212,9 @@ impl Scene {
                 match *item {
                     Item::Switch(row) if self.rows[row].enabled => list.push(Target::Row(row)),
                     Item::Switch(_) => {}
-                    Item::Mode => list.extend((0..APPEARANCE_MODES.len()).map(Target::Mode)),
-                    Item::Accent => list.extend((0..THEMES.len()).map(Target::Theme)),
+                    // Radio groups are one Tab stop, at the selection.
+                    Item::Mode => list.push(Target::Mode(self.mode_index())),
+                    Item::Accent => list.push(Target::Theme(self.theme_index())),
                     Item::Folder => list.push(Target::Choose),
                 }
             }
@@ -1215,9 +1222,40 @@ impl Scene {
         list
     }
 
+    /// A control that takes focus when clicked: Tab stops, and any member of
+    /// a radio group (arrows move between them).
+    pub fn takes_focus(&self, target: Target) -> bool {
+        matches!(target, Target::Mode(_) | Target::Theme(_)) || self.focusable().contains(&target)
+    }
+
+    /// Left/Up or Right/Down inside a radio group: the neighbouring choice,
+    /// wrapping, which the host focuses and selects.
+    pub fn choice_step(&self, forward: bool) -> Option<Target> {
+        let step = |index: usize, count: usize| {
+            if forward {
+                (index + 1) % count
+            } else {
+                (index + count - 1) % count
+            }
+        };
+        match self.focus? {
+            Target::Mode(index) => Some(Target::Mode(step(index, APPEARANCE_MODES.len()))),
+            Target::Theme(index) => Some(Target::Theme(step(index, THEMES.len()))),
+            _ => None,
+        }
+    }
+
     pub fn focus_step(&mut self, forward: bool) {
         let list = self.focusable();
-        let index = self.focus.and_then(|f| list.iter().position(|t| *t == f));
+        // Any member of a radio group stands for the group's Tab stop.
+        let group = |target: Target| match target {
+            Target::Mode(_) => Target::Mode(0),
+            Target::Theme(_) => Target::Theme(0),
+            other => other,
+        };
+        let index = self
+            .focus
+            .and_then(|f| list.iter().position(|t| group(*t) == group(f)));
         let next = match (index, forward) {
             (None, true) => 0,
             (None, false) => list.len() - 1,

@@ -16,6 +16,7 @@ use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
 use windows::Win32::Graphics::DirectComposition::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Threading::INFINITE;
 use windows::Win32::UI::Accessibility::*;
 use windows::Win32::UI::HiDpi::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
@@ -27,6 +28,8 @@ use crate::scene::{Action, Event, Prop, RowKey, Scene, Target};
 use crate::{Options, appearance};
 
 const WM_APP_LOGIN: u32 = WM_APP + 1;
+/// Wakes the run loop after a handler marked the frame dirty.
+const WM_APP_WAKE: u32 = WM_APP + 2;
 const WM_MOUSELEAVE: u32 = 0x02A3;
 const TIMER_MOTION: usize = 1;
 const SEGMENTS: usize = 16;
@@ -36,9 +39,18 @@ thread_local! {
 }
 
 /// Run `f` on the host unless it is borrowed (re-entrant messages, UIA calls
-/// during a frame) or not created yet.
+/// during a frame) or not created yet. Whatever `f` leaves dirty is
+/// guaranteed a frame: messages sent from other threads (an external resize,
+/// UIA) are dispatched inside the loop's wait, which would otherwise keep
+/// blocking with `need` set.
 pub fn with_host<R>(f: impl FnOnce(&mut Host) -> R) -> Option<R> {
-    HOST.with(|h| h.try_borrow_mut().ok().and_then(|mut h| h.as_mut().map(f)))
+    HOST.with(|h| {
+        let mut h = h.try_borrow_mut().ok()?;
+        let host = h.as_mut()?;
+        let result = f(host);
+        host.wake();
+        Some(result)
+    })
 }
 
 struct Login {
@@ -66,6 +78,8 @@ pub struct Host {
     appearance: Option<String>,
     /// Choose… was activated; the picker opens once the host is released.
     pick_folder: bool,
+    /// A `WM_APP_WAKE` is queued.
+    woken: bool,
 }
 
 impl Host {
@@ -133,7 +147,32 @@ impl Host {
                 login,
                 appearance: options.appearance.clone(),
                 pick_folder: false,
+                woken: false,
             })
+        }
+    }
+
+    /// Queue a wake message when a frame is due and none is queued.
+    fn wake(&mut self) {
+        if self.need && !self.woken {
+            self.woken = true;
+            unsafe {
+                let _ = PostMessageW(Some(self.hwnd), WM_APP_WAKE, WPARAM(0), LPARAM(0));
+            }
+        }
+    }
+
+    /// Draw and commit now, and wait until the compositor has the frame, so
+    /// a resize never shows the old frame beside uncovered desktop.
+    fn present(&mut self) {
+        self.need = false;
+        if let Err(error) = self.frame() {
+            eprintln!("frame failed: {error:?}");
+        }
+        if let Some(dcomp) = &self.g.dcomp {
+            unsafe {
+                let _ = dcomp.WaitForCommitCompletion();
+            }
         }
     }
 
@@ -154,18 +193,25 @@ impl Host {
         }
         let s = self.scene.scale;
         let count = self.scene.nodes.len();
-        // Visual origins in pixels: rounded rect origin minus rounded bleed.
+        // Every node's rect snaps to device pixels by rounding its edges, not
+        // its origin and size, so neighbours that share an edge in DIPs share
+        // it in pixels too: no half-covered row at fractional scales (150%),
+        // where the window has no redirection bitmap and the desktop would
+        // show through. Visual origins are the snapped origin minus the bleed.
         let mut abs = vec![(0f32, 0f32); count];
         let mut origin = vec![(0f32, 0f32); count];
+        let mut snapped = vec![(0f32, 0f32); count];
         for i in 0..count {
             let node = &self.scene.nodes[i];
             let base = node.parent.map_or((0., 0.), |p| abs[p]);
             abs[i] = (base.0 + node.rect.x, base.1 + node.rect.y);
             let bleed = (node.bleed * s).round();
-            origin[i] = (
-                (abs[i].0 * s).round() - bleed,
-                (abs[i].1 * s).round() - bleed,
+            let (left, top) = ((abs[i].0 * s).round(), (abs[i].1 * s).round());
+            snapped[i] = (
+                ((abs[i].0 + node.rect.w) * s).round() - left,
+                ((abs[i].1 + node.rect.h) * s).round() - top,
             );
+            origin[i] = (left - bleed, top - bleed);
         }
         let mut draws = Vec::new();
         unsafe {
@@ -186,17 +232,18 @@ impl Host {
                         visual.SetClip2(&D2D_RECT_F {
                             left: bleed,
                             top: bleed,
-                            right: bleed + (node.rect.w * s).round(),
-                            bottom: bleed + (node.rect.h * s).round(),
+                            right: bleed + snapped[i].0,
+                            bottom: bleed + snapped[i].1,
                         })?;
                     }
                 }
                 if !node.kind.has_content() {
                     continue;
                 }
+                let bleed = 2. * (node.bleed * s).round();
                 let size = (
-                    ((node.rect.w + 2. * node.bleed) * s).ceil().max(1.) as u32,
-                    ((node.rect.h + 2. * node.bleed) * s).ceil().max(1.) as u32,
+                    (snapped[i].0 + bleed).max(1.) as u32,
+                    (snapped[i].1 + bleed).max(1.) as u32,
                 );
                 if self.surfaces[i]
                     .as_ref()
@@ -215,9 +262,16 @@ impl Host {
         }
         for i in draws {
             let (surface, size) = self.surfaces[i].as_ref().expect("surface");
-            let bleed = (self.scene.nodes[i].bleed * s).round();
+            let node = &self.scene.nodes[i];
+            let bleed = (node.bleed * s).round();
+            // DIPs to pixels per axis, so the rect fills its snapped box.
+            let axis = |px: f32, dips: f32| if dips > 0. { px / dips } else { s };
+            let scale = (
+                axis(snapped[i].0, node.rect.w),
+                axis(snapped[i].1, node.rect.h),
+            );
             let (scene, g) = (&self.scene, &self.g);
-            gfx::draw_surface(surface, *size, s, bleed, |dc| scene.draw(dc, g, i))?;
+            gfx::draw_surface(surface, *size, scale, bleed, |dc| scene.draw(dc, g, i))?;
         }
         self.start_motions()?;
         unsafe { self.g.dcomp.as_ref().ok_or_else(Error::empty)?.Commit()? };
@@ -233,6 +287,13 @@ impl Host {
         for motion in self.scene.motions.iter_mut().filter(|m| !m.applied) {
             motion.applied = true;
             any = true;
+            if motion.fresh {
+                // A new motion starts with the frame that first shows it, so
+                // a slow frame (a re-theme redraws every surface) does not
+                // eat into it. Motions re-issued after a layout keep going.
+                motion.fresh = false;
+                motion.start = std::time::Instant::now();
+            }
             // Offsets are static pixel offsets (at the target) plus the delta.
             let (base, mul) = match motion.prop {
                 Prop::Opacity => (0., 1.),
@@ -394,9 +455,10 @@ impl Host {
             WM_SIZE => {
                 if lp.0 & 0xffff != 0 && (lp.0 >> 16) & 0xffff != 0 {
                     self.layout = true;
-                    self.need = true;
+                    self.present();
                 }
             }
+            WM_APP_WAKE => self.woken = false,
             WM_TIMER if wp.0 == TIMER_MOTION => {
                 if !self.scene.tick() {
                     unsafe {
@@ -432,7 +494,7 @@ impl Host {
                 let hit = self.scene.hit(x, y);
                 self.scene.pressed = hit;
                 // A click focuses the control without showing the ring.
-                let focus = hit.filter(|t| self.scene.focusable().contains(t));
+                let focus = hit.filter(|t| self.scene.takes_focus(*t));
                 self.scene.set_focus(focus, false);
                 self.need = true;
             }
@@ -491,6 +553,14 @@ impl Host {
                             self.scene.set_focus(Some(focus), true);
                             self.activate(focus);
                         }
+                    }
+                    VK_LEFT | VK_RIGHT | VK_UP | VK_DOWN
+                        if let Some(next) =
+                            self.scene.choice_step(matches!(vk, VK_RIGHT | VK_DOWN)) =>
+                    {
+                        // Radio groups: the arrow moves focus and selection.
+                        self.scene.set_focus(Some(next), true);
+                        self.activate(next);
                     }
                     VK_UP => self.scene.scroll_by(-40.),
                     VK_DOWN => self.scene.scroll_by(40.),
@@ -663,6 +733,7 @@ pub fn run(options: Options) -> Result<()> {
                 DispatchMessageW(&msg);
             }
             let state = with_host(|h| {
+                h.woken = false;
                 if h.need {
                     h.need = false;
                     if let Err(error) = h.frame() {
@@ -682,7 +753,10 @@ pub fn run(options: Options) -> Result<()> {
                 continue;
             }
             if !again {
-                let _ = WaitMessage();
+                // Returns for posted, input and sent messages alike; the
+                // drain above dispatches them and `need` is checked again.
+                let _ =
+                    MsgWaitForMultipleObjectsEx(None, INFINITE, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
             }
         }
     }
