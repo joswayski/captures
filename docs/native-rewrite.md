@@ -432,6 +432,12 @@ clones the full frame (about 3.2 ms) before pasting the region. Windows:
 cross-compiled only; the on-screen upload is not run here. macOS, Linux:
 unchanged.
 
+Hardware pass 12 fix: the Win32 Properties heading names the selected layer
+only under Select, a grouped shape tool or Arrow (shipping's
+`toolShowsTransformChrome`). Other tools show their own label, so Eraser
+with a rectangle still selected reads "Eraser", as in Tauri. Windows:
+cross-compiled only. macOS, Linux: unchanged.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,
