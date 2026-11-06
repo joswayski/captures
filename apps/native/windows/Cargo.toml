@@ -17,7 +17,9 @@ serde_json = "1"
 
 [target.'cfg(windows)'.dependencies]
 captures-app = { path = "../../../crates/captures-app" }
+captures-capture = { path = "../../../crates/captures-capture" }
 captures-history = { path = "../../../crates/captures-history" }
+image = { version = "0.25", default-features = false, features = ["png"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 captures-settings = { path = "../../../crates/captures-settings" }
 # Microphone enumeration (cpal/WASAPI) from the shared recording stack.

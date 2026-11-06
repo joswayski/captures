@@ -269,6 +269,49 @@ opacity. Rendering, thumbnail decode at 150%, hover, scrolling, Explorer
 reveal, performance and Narrator need a real Windows run. macOS, Linux:
 unchanged.
 
+The ninth Windows slice is the first screenshot editor slice
+(`apps/native/windows/src/editor.rs`, `editor_uia.rs`), one Win32 window per
+artifact. History's Edit now opens it for screenshots (recordings' Edit,
+Restore and the thumbnail open action stay disabled), and
+`--scene editor --artifact ID` opens it directly or renders it offscreen. It
+follows the GTK4 and AppKit editors and the shared `captures_app::editor_*`
+modules: `editor_chrome` copy and geometry, `editor_viewport` zoom math,
+`EditorSession` on one worker thread (rendering, undo and redo, drafts,
+export and clipboard encoding never run on the UI thread), `editor_export`
+plans with the `timestamp_stem` name, and drafts beside the history root, so
+a `--profile` run stays inside its directory. It has the shipping header
+(the Canvas group, Undo/Redo, the zoom group with Fit, the slider and
+Ctrl+wheel, and Add images), the restored-draft banner, the tool rail with
+Select, Crop, the Shapes flyout (rectangle, ellipse, line, triangle and the
+rest of `SHAPE_TOOLS`), Arrow and Freehand, the checkerboard canvas with
+middle-drag and wheel panning, and the Layers/Properties sidebar with its
+resizable separator (drag, Left/Right by 10 or 40 px with Shift, Home/End,
+Enter or double-click to reset). Layer rows select, hide and lock. The
+export bar has Copy image (PNG plus `CF_DIB`), Save as new file (hidden when
+the format can only save a copy, as shipping does) and Save with its notice
+and hint. Save never falls back to the default folder when the settings file
+exists but can't be read: it reports that error. The image is one surface at
+document resolution, uploaded only where an edit changed pixels, and zoom
+and pan are a compositor transform on its visual. The overlay redraws only
+the union of its old and new boxes, chrome hover and focus are compositor
+fades, and nothing redraws at idle. UI Automation follows the DOM: the
+"Canvas" and "Canvas zoom controls" groups, the "Canvas zoom" slider and the
+separator with RangeValue and value text, the "Screenshot tools" navigation
+of Toggle buttons, Shapes with ExpandCollapse and its menu of SelectionItem
+radio items, the canvas, Layers and Tool properties regions, layer rows with
+Toggle buttons, and a live notice. Missing, drawn and exposed as disabled:
+the Text and Eraser tools, canvas width and height editing, Trim edges,
+Background color, the zoom preset select, Add images and add layer, the
+layer menu, rename and reorder, Export settings, filename editing, Change…
+and the format select. There are no per-tool property sections, no layer
+thumbnails, no recording editor and no image drop. Native Windows checks
+also render the editor from a one-artifact fixture in light and dark.
+Windows: cross-compiled only; Wine renders at 1280×840 in light and dark
+match the Tauri harness layout. Wine needs a substitute mono font, and it
+draws disabled controls at full opacity. Drawing, zoom and pan smoothness,
+DPI, clipboard, saving, performance and Narrator need a real Windows run.
+macOS, Linux: unchanged.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,

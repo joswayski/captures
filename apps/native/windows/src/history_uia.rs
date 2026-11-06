@@ -3,10 +3,11 @@
 //! Preferences, the `h1` and lede, Cancel and Delete all, the "Filter
 //! captures" group of pressed-state buttons (Toggle), the page error
 //! (`role="alert"`), the empty state, and the "Recent captures" region of
-//! `article` cards. Each card has its open button (disabled until this host
-//! has editors), "File missing", the trash button, the date and details, the
-//! dropped-frame warning, its two actions and its error. Every card is in the
-//! tree, virtualised or not; cards outside the viewport report IsOffscreen.
+//! `article` cards. Each card has its open button (disabled: only Edit opens
+//! the editor in this host so far), "File missing", the trash button, the
+//! date and details, the dropped-frame warning, its two actions and its
+//! error. Every card is in the tree, virtualised or not; cards outside the
+//! viewport report IsOffscreen.
 use captures_app::history_view;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::ClientToScreen;
@@ -366,7 +367,7 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
         let id = self.id;
         with(|h| {
             let enabled = match id {
-                // No editor in this host yet.
+                // The thumbnail button isn't wired to the editor yet; Edit is.
                 Id::Open(_) => false,
                 _ => target(id).is_none_or(|t| h.enabled(t)),
             };

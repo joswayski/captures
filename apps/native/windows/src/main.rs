@@ -10,6 +10,10 @@ mod appearance;
 #[cfg(windows)]
 mod dialog;
 #[cfg(windows)]
+mod editor;
+#[cfg(windows)]
+mod editor_uia;
+#[cfg(windows)]
 mod gfx;
 #[cfg(windows)]
 mod history;
@@ -32,11 +36,22 @@ mod uia;
 #[cfg(windows)]
 mod uia_text;
 
+/// The window `--scene` opens first.
+#[cfg(windows)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Scene {
+    Preferences,
+    History,
+    /// `--scene editor --artifact ID`.
+    Editor,
+}
+
 #[cfg(windows)]
 #[derive(Clone)]
 pub struct Options {
-    /// `--scene history`: open Capture History instead of Preferences.
-    history: bool,
+    scene: Scene,
+    /// `--artifact`: the History artifact `--scene editor` opens.
+    artifact: Option<String>,
     appearance: Option<String>,
     settings_file: std::path::PathBuf,
     history_root: Option<std::path::PathBuf>,
@@ -53,7 +68,8 @@ pub struct Options {
 #[cfg(windows)]
 fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
     let mut options = Options {
-        history: false,
+        scene: Scene::Preferences,
+        artifact: None,
         appearance: None,
         settings_file: captures_settings::default_native_settings_path(),
         history_root: None,
@@ -69,9 +85,10 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
         let mut value = || args.next().ok_or_else(|| format!("{flag} needs a value"));
         match flag.as_str() {
             "--scene" => {
-                options.history = match value()?.as_str() {
-                    "preferences" => false,
-                    "history" => true,
+                options.scene = match value()?.as_str() {
+                    "preferences" => Scene::Preferences,
+                    "history" => Scene::History,
+                    "editor" => Scene::Editor,
                     scene => return Err(format!("unsupported scene {scene}")),
                 };
             }
@@ -92,6 +109,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
             }
             "--profile" => profile = Some(value()?.into()),
             "--screenshot" => options.screenshot = Some(value()?.into()),
+            "--artifact" => options.artifact = Some(value()?),
             "--find" => options.find = Some(value()?),
             "--size" => {
                 let size = value()?;
@@ -107,6 +125,9 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
             return Err("--profile replaces --settings-file and --history-root".into());
         }
         use_profile(&mut options, &dir)?;
+    }
+    if options.scene == Scene::Editor && options.artifact.is_none() {
+        return Err("--scene editor needs --artifact ID".into());
     }
     Ok(options)
 }
