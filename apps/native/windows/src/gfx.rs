@@ -54,9 +54,11 @@ pub enum Style {
     Small,
     /// `kbd`
     Kbd,
+    /// `.preferences-find-input` (`--text-md`, `--leading-snug`)
+    Input,
 }
 
-const STYLES: [Style; 17] = [
+const STYLES: [Style; 18] = [
     Style::Brand,
     Style::Nav,
     Style::Title,
@@ -74,6 +76,7 @@ const STYLES: [Style; 17] = [
     Style::Option,
     Style::Small,
     Style::Kbd,
+    Style::Input,
 ];
 
 struct Spec {
@@ -163,6 +166,13 @@ fn spec(style: Style) -> Spec {
             false,
         ),
         Style::Small => spec("text-xs", "weight-regular", None, None, true),
+        Style::Input => spec(
+            "text-md",
+            "weight-regular",
+            None,
+            Some("leading-snug"),
+            false,
+        ),
         Style::Kbd => Spec {
             line: Some(1.3),
             ..spec("text-2xs", "weight-semibold", None, None, false)
@@ -530,6 +540,41 @@ pub fn shadow(
                 },
             )?;
         }
+    }
+    Ok(())
+}
+
+/// A CSS `box-shadow: 0 0 <blur> <color>` glow drawn only outside the
+/// rounded box (CSS clips outer shadows to the outside), as 2 px bands whose
+/// alpha follows the Gaussian tail of a `blur / 2` sigma. No layers or
+/// geometry masks, so a translucent fill above it shows nothing through.
+pub fn glow(
+    dc: &ID2D1DeviceContext,
+    r: D2D_RECT_F,
+    radius: f32,
+    blur: f32,
+    color: D2D1_COLOR_F,
+) -> Result<()> {
+    let sigma = (blur / 2.).max(0.5);
+    let band = 2.;
+    let mut d = 0.;
+    while d < blur {
+        // 0.5·erfc(z) at the band's middle, with Winitzki's erf.
+        let z = (d + band / 2.) / sigma / std::f32::consts::SQRT_2;
+        let a = 0.147;
+        let z2 = z * z;
+        let erf = (1. - (-z2 * (4. / std::f32::consts::PI + a * z2) / (1. + a * z2)).exp()).sqrt();
+        let erfc = 1. - erf;
+        let alpha = color.a * 0.5 * erfc;
+        ring(
+            dc,
+            r,
+            radius,
+            d,
+            d + band,
+            D2D1_COLOR_F { a: alpha, ..color },
+        )?;
+        d += band;
     }
     Ok(())
 }

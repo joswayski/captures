@@ -24,6 +24,7 @@ use windows::Win32::Graphics::Direct2D::ID2D1DeviceContext;
 use windows::core::Result;
 
 use crate::gfx::{self, Gfx, Style, Text, rect};
+use crate::textfield::{Change, Editor, TextField};
 use crate::tokens::Tokens;
 
 pub const PLATFORM: ShortcutPlatform = ShortcutPlatform::Windows;
@@ -52,6 +53,53 @@ const SEGMENT_INSET: f32 = 4.;
 pub const FOLDER_DIALOG_TITLE: &str = "Choose capture folder";
 /// The accent grid's shipping accessible name (`aria-label`).
 pub const ACCENT_GROUP_LABEL: &str = "Accent color";
+/// `.preferences-find-step` and `.preferences-find-close` icons.
+const FIND_ICON: f32 = 14.;
+const FIND_PREVIOUS_PATH: &str = "m4 10 4-4 4 4";
+const FIND_NEXT_PATH: &str = "m4 6 4 4 4-4";
+/// `CloseIcon`, a 24-unit path.
+const FIND_CLOSE_PATH: &str = "m6 6 12 12M18 6 6 18";
+/// `.preferences-find-count` `min-width: 5.5rem`.
+const FIND_COUNT_REMS: f32 = 5.5;
+/// `.preference-find-current::after` glow (`0 0 20px`) and ring room.
+const MATCH_BLEED: f32 = 22.;
+
+/// The parts of Preferences Find (`.preferences-find`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FindPart {
+    Input,
+    Previous,
+    Next,
+    Close,
+}
+
+pub const FIND_BUTTONS: [FindPart; 3] = [FindPart::Previous, FindPart::Next, FindPart::Close];
+
+impl FindPart {
+    pub fn index(self) -> usize {
+        self as usize
+    }
+
+    /// Shipping `aria-label`.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Input => preferences::FIND_PLACEHOLDER,
+            Self::Previous => preferences::FIND_PREVIOUS,
+            Self::Next => preferences::FIND_NEXT,
+            Self::Close => preferences::FIND_CLOSE,
+        }
+    }
+}
+
+/// How many find targets an item has (shipping `PREFERENCE_FIND_SELECTOR`
+/// matches each `.shortcut-row` and each `.setting-grid` cell on its own).
+fn find_count(item: Item) -> usize {
+    match item {
+        Item::Shortcuts => SHORTCUT_ROWS.len(),
+        Item::SelectGrid(keys) => keys.len(),
+        _ => 1,
+    }
+}
 
 /// One row of a settings card.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -256,6 +304,8 @@ pub enum Target {
     Select(SelectKey),
     /// An option in the open listbox; not focusable (the trigger keeps focus).
     Option(SelectKey, usize),
+    /// Preferences Find: the input and its buttons.
+    Find(FindPart),
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -336,6 +386,24 @@ pub enum Kind {
         target: Target,
     },
     Scrollbar,
+    /// `.preferences-find-input`: field and border.
+    FindField,
+    /// `.preferences-find-input:hover` border.
+    FindFieldHover,
+    /// The input's text, selection or placeholder, clipped to its padding.
+    FindText,
+    /// The input's caret; it moves and blinks on the compositor.
+    Caret,
+    /// `.preferences-find-count`.
+    FindCount,
+    /// `.preferences-find-step` or `.preferences-find-close`, resting or hovered.
+    FindButton {
+        part: FindPart,
+        lit: bool,
+    },
+    /// `.preference-find-match::after` behind a find target's content; the
+    /// current match adds the accent ring and glow.
+    Match(usize),
 }
 
 impl Kind {
@@ -470,6 +538,14 @@ pub enum Event {
     Recording(usize, bool),
     /// A recorder's error changed.
     ShortcutError(usize),
+    /// Find opened or closed.
+    FindOpen(bool),
+    /// The find query changed.
+    FindText,
+    /// The find input's caret or selection moved.
+    FindCaret,
+    /// The match count label changed (`aria-live="polite"`).
+    FindCount,
 }
 
 struct RowNodes {
@@ -530,6 +606,47 @@ struct ChipNodes {
     base: usize,
     active: usize,
     ring: usize,
+}
+
+/// The find bar's nodes.
+#[derive(Default)]
+struct FindNodes {
+    field: usize,
+    hover: usize,
+    text: usize,
+    caret: usize,
+    ring: usize,
+    count: usize,
+    /// Previous, Next, Close.
+    buttons: Vec<Layered>,
+}
+
+/// One shipping find target: a card header, row or grid cell.
+struct FindTarget {
+    /// Its `Kind::Match` node, a child of the card behind the content.
+    node: usize,
+    /// Text content, as shipping `textContent` (no separators).
+    text: String,
+    /// The target box in content coordinates (scrolled to the centre).
+    bounds: Rect,
+}
+
+/// Preferences Find state (shipping `usePreferencesFind`).
+pub struct Find {
+    pub open: bool,
+    pub field: TextField,
+    /// The current match, by position in `matches`.
+    index: usize,
+    /// Matching targets, by index into `Scene::find_targets`.
+    matches: Vec<usize>,
+    /// The target drawn as current.
+    current: Option<usize>,
+    /// `scrolledKeyRef`: the query, index and text last scrolled to.
+    scrolled: Option<(String, usize, String)>,
+    /// The count label as laid out in `count`.
+    count_label: String,
+    count: Option<Text>,
+    count_dirty: bool,
 }
 
 struct CopyText {
@@ -633,6 +750,18 @@ pub struct Scene {
     selects: Vec<SelectNodes>,
     list: ListNodes,
     scrollbar: usize,
+    pub find: Find,
+    find_nodes: FindNodes,
+    /// Every find target in document order; nodes are fixed, text and
+    /// boxes follow the layout.
+    find_targets: Vec<FindTarget>,
+    /// Shortcut-row and grid-cell boxes from the last `layout_item`.
+    sub_boxes: Vec<Rect>,
+    /// The window has keyboard focus; the caret shows only then.
+    window_focused: bool,
+    /// The caret moved or appeared: the host restarts its blink and moves
+    /// the IME windows.
+    pub caret_blink: bool,
     // Layout results, DIPs.
     title_y: f32,
     card_rects: Vec<Rect>,
@@ -743,6 +872,22 @@ impl Scene {
             selects: Vec::new(),
             list: ListNodes::default(),
             scrollbar: 0,
+            find: Find {
+                open: false,
+                field: TextField::new(Style::Input, preferences::FIND_PLACEHOLDER),
+                index: 0,
+                matches: Vec::new(),
+                current: None,
+                scrolled: None,
+                count_label: String::new(),
+                count: None,
+                count_dirty: false,
+            },
+            find_nodes: FindNodes::default(),
+            find_targets: Vec::new(),
+            sub_boxes: Vec::new(),
+            window_focused: true,
+            caret_blink: false,
             title_y: 0.,
             card_rects: Vec::new(),
             separators: Vec::new(),
@@ -800,12 +945,25 @@ impl Scene {
         let lit = self.add(Some(base), Kind::History { lit: true }, 0.);
         let ring = self.ring(base, Ring::Full(8.), Target::History);
         self.history = Layered { base, lit, ring };
+        self.build_find();
         self.viewport = self.add(Some(root), Kind::Viewport, 0.);
         self.content = self.add(Some(self.viewport), Kind::Group, 0.);
         let mut row_nodes = Vec::new();
         for (card, (_, items)) in CARDS.iter().enumerate() {
             let node = self.add(Some(self.content), Kind::Card(card), 8.);
             self.cards.push(node);
+            // Highlights sit above the card and below its content.
+            let targets = 1 + items.iter().map(|&item| find_count(item)).sum::<usize>();
+            for _ in 0..targets {
+                let index = self.find_targets.len();
+                let highlight = self.add(Some(node), Kind::Match(index), MATCH_BLEED);
+                self.nodes[highlight].visible = false;
+                self.find_targets.push(FindTarget {
+                    node: highlight,
+                    text: String::new(),
+                    bounds: Rect::default(),
+                });
+            }
             for &item in *items {
                 let copy = self.add(Some(node), Kind::Copy(item), 0.);
                 match item {
@@ -954,6 +1112,43 @@ impl Scene {
         self.refresh(false);
     }
 
+    /// The find bar in the header: input (field, hover border, text, caret,
+    /// focus ring), count and the three buttons. Hidden until opened.
+    fn build_find(&mut self) {
+        let radius = self.t.n("r-md");
+        let header = self.header;
+        let field = self.add(Some(header), Kind::FindField, 0.);
+        let hover = self.add(Some(field), Kind::FindFieldHover, 0.);
+        let text = self.add(Some(field), Kind::FindText, 0.);
+        let caret = self.add(Some(field), Kind::Caret, 0.);
+        self.nodes[caret].visible = false;
+        let ring = self.ring(field, Ring::Field(radius), Target::Find(FindPart::Input));
+        let count = self.add(Some(header), Kind::FindCount, 0.);
+        let mut buttons = Vec::new();
+        for part in FIND_BUTTONS {
+            let base = self.add(Some(header), Kind::FindButton { part, lit: false }, 2.);
+            self.nodes[base].group_opacity = true;
+            let lit = self.add(Some(base), Kind::FindButton { part, lit: true }, 0.);
+            let ring = self.ring(base, Ring::Field(radius), Target::Find(part));
+            buttons.push(Layered { base, lit, ring });
+        }
+        for node in [field, count]
+            .into_iter()
+            .chain(buttons.iter().map(|b| b.base))
+        {
+            self.nodes[node].visible = false;
+        }
+        self.find_nodes = FindNodes {
+            field,
+            hover,
+            text,
+            caret,
+            ring,
+            count,
+            buttons,
+        };
+    }
+
     /// A select trigger with its hover border, chevron and focus ring; in
     /// `SELECTS` order, which is also card order.
     fn add_select(&mut self, card: usize, key: SelectKey, copy: usize) {
@@ -1014,6 +1209,14 @@ impl Scene {
                 (on(self.hover == Some(Target::Shortcut(index))), "dur-2")
             }
             Kind::TriggerHover(key) => (on(self.hover == Some(Target::Select(key))), "dur-2"),
+            Kind::FindFieldHover => (
+                on(self.hover == Some(Target::Find(FindPart::Input))),
+                "dur-2",
+            ),
+            Kind::FindButton { part, lit: true } => (
+                on(self.hover == Some(Target::Find(part)) && self.find_enabled(part)),
+                "dur-2",
+            ),
             _ => return None,
         })
     }
@@ -1053,6 +1256,8 @@ impl Scene {
             // An open select and a recording recorder keep the accent field.
             Target::Select(key) if self.open.is_some_and(|(open, _)| open == key) => true,
             Target::Shortcut(index) if self.recording == Some(index) => true,
+            // `.preferences-find-input:focus`, not only `:focus-visible`.
+            Target::Find(FindPart::Input) => self.focus == Some(target),
             _ => self.focus_visible && self.focus == Some(target),
         }
     }
@@ -1112,13 +1317,24 @@ impl Scene {
         let subtitle = g.text(t, Style::Subtitle, preferences::SUBTITLE, 1e4)?;
         let history = g.text(t, Style::Button, preferences::HISTORY_ACTION, 1e4)?;
         let block = title.height + 2. + subtitle.height;
-        let header_h = (s6 + block.max(item_h) + s6 + 1.).max(64.);
-        self.title_y = (header_h - 1. - block) / 2.;
+        let row = block.max(item_h);
+        // The open find bar is a second grid row, `--s-6` below the first.
+        let header_h = if self.find.open {
+            s6 + row + s6 + item_h + s6 + 1.
+        } else {
+            (s6 + row + s6 + 1.).max(64.)
+        };
+        let row_y = if self.find.open {
+            s6
+        } else {
+            (header_h - 1. - row) / 2.
+        };
+        self.title_y = row_y + (row - block) / 2.;
         self.nodes[self.header].rect = Rect::new(NAV_WIDTH, 0., body_w, header_h);
         let button_w = (history.width + 2. * s5 + 2.).ceil();
         let button = Rect::new(
             body_w - s8 - button_w,
-            ((header_h - 1. - item_h) / 2.).round(),
+            (row_y + (row - item_h) / 2.).round(),
             button_w,
             item_h,
         );
@@ -1128,6 +1344,8 @@ impl Scene {
         self.texts.title = Some(title);
         self.texts.subtitle = Some(subtitle);
         self.texts.history = Some(history);
+        let bar = Rect::new(s8, s6 + row + s6, (body_w - 2. * s8).max(0.), item_h);
+        self.layout_find(g, bar)?;
 
         // `.preferences-scroller` and `.preferences-sections`.
         let viewport = Rect::new(NAV_WIDTH, header_h, body_w, (h - header_h).max(0.));
@@ -1159,6 +1377,11 @@ impl Scene {
             motion.applied = false;
             self.motions.push(motion);
         }
+        // Content changes (a new select label, recorder keys) re-match like
+        // shipping's `contentRevision`; a just-opened bar scrolls here, in
+        // its final viewport.
+        self.find_refresh();
+        self.sync_caret();
         Ok(())
     }
 
@@ -1181,6 +1404,7 @@ impl Scene {
         self.select_texts(g)?;
         let inset = s6 + 1.;
         let mut y = s8;
+        let mut target = 0;
         for (index, items) in CARDS.iter() {
             let section = &SECTIONS[*index];
             let title = g.text(&self.t, Style::CardTitle, section.title, inner_w)?;
@@ -1191,6 +1415,10 @@ impl Scene {
                 inner_w.min(measure),
             )?;
             let mut cy = inset + title.height + s2 + description.height;
+            let header = Rect::new(inset, inset, inner_w, cy - inset);
+            let text = format!("{}{}", section.title, card_description(*index));
+            self.place_find_target(target, (s8, y), header, false, text);
+            target += 1;
             let mut separators = Vec::new();
             for (position, &item) in items.iter().enumerate() {
                 cy += s5;
@@ -1204,7 +1432,21 @@ impl Scene {
                     1. + s5
                 };
                 let body = top + pad;
+                self.sub_boxes.clear();
                 let h = self.layout_item(g, item, (inset, body, inner_w), measure)?;
+                // Find targets: the row's padding box (below its rule), or
+                // each shortcut row and grid cell.
+                let border = if position == 0 { 0. } else { 1. };
+                let padding = Rect::new(inset, top + border, inner_w, pad - border + h);
+                let boxes = match item {
+                    Item::Shortcuts | Item::SelectGrid(_) => std::mem::take(&mut self.sub_boxes),
+                    _ => vec![padding],
+                };
+                let check = matches!(item, Item::Switch(_));
+                for (b, text) in boxes.into_iter().zip(self.find_texts(item)) {
+                    self.place_find_target(target, (s8, y), b, check, text);
+                    target += 1;
+                }
                 let rect = Rect::new(s8 + inset, y + top, inner_w, pad + h);
                 self.item_rects.push((item, rect));
                 if item == Item::Accent {
@@ -1283,6 +1525,16 @@ impl Scene {
                 self.texts.caps[index] = self.cap_texts(g, index)?;
                 self.nodes[self.shortcuts[index].recorder].dirty = true;
             }
+        }
+        if std::mem::take(&mut self.find.count_dirty) {
+            let count = g.text(&self.t, Style::Subtitle, &self.find.count_label, 1e4)?;
+            let node = self.find_nodes.count;
+            // A label wider than `min-width` narrows the input.
+            if count.width.ceil() > self.nodes[node].rect.w {
+                self.relayout = true;
+            }
+            self.find.count = Some(count);
+            self.nodes[node].dirty = true;
         }
         Ok(())
     }
@@ -1602,6 +1854,7 @@ impl Scene {
                     self.texts.shortcut_labels.push(label);
                     self.texts.shortcut_errors.push(error);
                     caps.push(self.cap_texts(g, index)?);
+                    self.sub_boxes.push(Rect::new(x, top, width, row_h));
                     top += row_h + s2;
                 }
                 self.texts.caps = caps;
@@ -1668,6 +1921,8 @@ impl Scene {
                     self.nodes[copy].rect = Rect::new(cx, y, col_w, title_h);
                     let r = Rect::new(cx, (y + title_h + s3).round(), col_w, h_md);
                     self.place_trigger(key, r);
+                    self.sub_boxes
+                        .push(Rect::new(cx, y, col_w, title_h + s3 + h_md));
                     height = height.max(title_h + s3 + h_md);
                 }
                 Ok(height)
@@ -1878,6 +2133,12 @@ impl Scene {
         self.focus = focus;
         self.focus_visible = visible;
         self.refresh(true);
+        let input = Some(Target::Find(FindPart::Input));
+        if (old == input) != (focus == input) {
+            // The selection shows only while the input has focus.
+            self.nodes[self.find_nodes.text].dirty = true;
+        }
+        self.sync_caret();
         if let Some(target) = focus
             && focus != old
         {
@@ -1892,6 +2153,16 @@ impl Scene {
     pub fn focusable(&self) -> Vec<Target> {
         let mut list: Vec<Target> = (0..SECTIONS.len()).map(Target::Nav).collect();
         list.push(Target::History);
+        if self.find.open {
+            list.push(Target::Find(FindPart::Input));
+            // Disabled step buttons are not Tab stops.
+            list.extend(
+                FIND_BUTTONS
+                    .into_iter()
+                    .filter(|&part| self.find_enabled(part))
+                    .map(Target::Find),
+            );
+        }
         for (_, items) in CARDS {
             for item in items {
                 match *item {
@@ -1960,7 +2231,7 @@ impl Scene {
 
     /// Keep a focused control inside the viewport.
     fn reveal(&mut self, target: Target) {
-        if matches!(target, Target::Nav(_) | Target::History) {
+        if matches!(target, Target::Nav(_) | Target::History | Target::Find(_)) {
             return;
         }
         let r = match target {
@@ -2009,6 +2280,15 @@ impl Scene {
             }
             Target::Option(key, index) => {
                 self.choose(key, index);
+                None
+            }
+            Target::Find(FindPart::Input) => None,
+            Target::Find(FindPart::Close) => {
+                self.find_close();
+                None
+            }
+            Target::Find(part) => {
+                self.find_step(part == FindPart::Next);
                 None
             }
         }
@@ -2660,6 +2940,370 @@ impl Scene {
     pub fn blur(&mut self) {
         self.stop_recording();
         self.close_select();
+        self.window_focus(false);
+    }
+
+    // ---- find ----
+
+    /// The find query as typed, including an open IME composition (React's
+    /// `onChange` sees composing text too).
+    pub fn find_query(&self) -> String {
+        String::from_utf16_lossy(&self.find.field.editor.display())
+    }
+
+    /// Shipping `preferenceFindCountLabel`.
+    pub fn find_count_label(&self) -> String {
+        preferences::find_count_label(&self.find_query(), self.find.matches.len(), self.find.index)
+    }
+
+    /// Previous and Next are `disabled` without matches.
+    pub fn find_enabled(&self, part: FindPart) -> bool {
+        match part {
+            FindPart::Previous | FindPart::Next => !self.find.matches.is_empty(),
+            FindPart::Input | FindPart::Close => true,
+        }
+    }
+
+    /// The find input has keyboard focus.
+    pub fn text_focused(&self) -> bool {
+        self.find.open && self.focus == Some(Target::Find(FindPart::Input))
+    }
+
+    /// Text content of an item's find targets, like shipping `textContent`:
+    /// copy and control text run together without separators.
+    fn find_texts(&self, item: Item) -> Vec<String> {
+        let row = preferences::row;
+        match item {
+            Item::Switch(r) => vec![format!("{}{}", self.rows[r].title, self.rows[r].detail)],
+            Item::Mode => {
+                let r = row("appearance");
+                let modes: String = APPEARANCE_MODES.iter().map(|(_, name)| *name).collect();
+                vec![format!("{}{}{modes}", r.title, r.description)]
+            }
+            Item::Accent => {
+                let r = row("theme");
+                let names: String = THEMES.iter().map(|theme| theme.name).collect();
+                vec![format!("{}{}{names}", r.title, r.description)]
+            }
+            Item::Folder => vec![format!("{}Choose…", row("output_directory").title)],
+            Item::Utility(which) => {
+                let (title, body, action) = which.copy();
+                vec![format!("{title}{body}{action}")]
+            }
+            Item::Updates => vec![format!(
+                "{}{}{}{}",
+                preferences::UPDATES_VERSION,
+                preferences::UPDATES_CHANNEL,
+                preferences::UPDATES_ACTION,
+                preferences::UPDATES_TITLE
+            )],
+            Item::Shortcuts => SHORTCUT_ROWS
+                .iter()
+                .enumerate()
+                .map(|(index, (label, _))| {
+                    let keys = self.recorder_keys(index);
+                    let shown = if keys.is_empty() {
+                        preferences::SHORTCUT_PROMPT.to_owned()
+                    } else {
+                        keys.concat()
+                    };
+                    format!("{label}{shown}")
+                })
+                .collect(),
+            Item::Select(key) => {
+                let r = row(key.setting());
+                vec![format!(
+                    "{}{}{}",
+                    r.title,
+                    r.description,
+                    self.select_value(key)
+                )]
+            }
+            Item::SelectGrid(keys) => keys
+                .iter()
+                .map(|&key| format!("{}{}", row(key.setting()).title, self.select_value(key)))
+                .collect(),
+        }
+    }
+
+    /// Place target `index`'s highlight around `b` (its padding box in card
+    /// coordinates, card origin `(ox, oy)` in the content): `inset: -s-3`,
+    /// or the check-row variant below the row's rule.
+    fn place_find_target(
+        &mut self,
+        index: usize,
+        (ox, oy): (f32, f32),
+        b: Rect,
+        check: bool,
+        text: String,
+    ) {
+        let n = |name: &str| self.t.n(name);
+        let (s3, s4, s5) = (n("s-3"), n("s-4"), n("s-5"));
+        let r = if check {
+            let top = s5 - s4;
+            Rect::new(b.x - s4, b.y + top, b.w + 2. * s4, b.h - top + s4)
+        } else {
+            Rect::new(b.x - s3, b.y - s3, b.w + 2. * s3, b.h + 2. * s3)
+        };
+        let target = &mut self.find_targets[index];
+        target.text = text;
+        target.bounds = b.offset(ox, oy);
+        let node = target.node;
+        self.nodes[node].rect = r;
+    }
+
+    /// Lay out the find bar across `bar` (header coordinates): the input
+    /// takes what the count and three square buttons leave, 6 px apart.
+    fn layout_find(&mut self, g: &Gfx, bar: Rect) -> Result<()> {
+        let (s3, s4) = (self.t.n("s-3"), self.t.n("s-4"));
+        let h = bar.h;
+        self.find.count_label = self.find_count_label();
+        let count = g.text(&self.t, Style::Subtitle, &self.find.count_label, 1e4)?;
+        let count_w = (FIND_COUNT_REMS * self.t.n("text-md")).max(count.width.ceil());
+        let mut right = bar.x + bar.w;
+        for index in (0..FIND_BUTTONS.len()).rev() {
+            right -= h;
+            let r = Rect::new(right, bar.y, h, h);
+            let Layered { base, lit, ring } = self.find_nodes.buttons[index];
+            self.nodes[base].rect = r;
+            self.nodes[lit].rect = r.at_origin();
+            self.nodes[ring].rect = r.at_origin();
+            right -= s3;
+        }
+        let FindNodes {
+            field,
+            hover,
+            text,
+            ring,
+            count: count_node,
+            ..
+        } = self.find_nodes;
+        self.nodes[count_node].rect = Rect::new(right - count_w, bar.y, count_w, h);
+        right -= count_w + s3;
+        let r = Rect::new(bar.x, bar.y, (right - bar.x).max(0.), h);
+        self.nodes[field].rect = r;
+        self.nodes[hover].rect = r.at_origin();
+        self.nodes[ring].rect = r.at_origin();
+        // `padding: 0 var(--s-4)` inside the 1 px border.
+        let inset = 1. + s4;
+        let content = Rect::new(inset, 0., (r.w - 2. * inset).max(1.), h);
+        self.nodes[text].rect = content;
+        self.find.field.relayout(g, &self.t, content.w)?;
+        self.find.count = Some(count);
+        self.find.count_dirty = false;
+        let open = self.find.open;
+        for node in [field, count_node]
+            .into_iter()
+            .chain(self.find_nodes.buttons.iter().map(|b| b.base))
+        {
+            self.nodes[node].visible = open;
+        }
+        self.sync_find_buttons();
+        Ok(())
+    }
+
+    /// `.preferences-find-step:disabled` fades to 0.45.
+    fn sync_find_buttons(&mut self) {
+        for (index, part) in FIND_BUTTONS.into_iter().enumerate() {
+            let base = self.find_nodes.buttons[index].base;
+            let opacity = if self.find_enabled(part) { 1. } else { 0.45 };
+            if self.nodes[base].opacity != opacity {
+                self.nodes[base].opacity = opacity;
+                self.nodes[base].props = true;
+            }
+        }
+    }
+
+    /// Recompute matches, highlights, the count and the scroll position
+    /// (shipping's layout effect): the current match scrolls to the centre
+    /// once per query, index and text.
+    fn find_refresh(&mut self) {
+        let query = self.find_query();
+        let matches: Vec<usize> = if self.find.open {
+            (0..self.find_targets.len())
+                .filter(|&i| preferences::find_matches(&self.find_targets[i].text, &query))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let had = !self.find.matches.is_empty();
+        self.find.matches = matches;
+        self.find.index = self
+            .find
+            .index
+            .min(self.find.matches.len().saturating_sub(1));
+        for i in 0..self.find_targets.len() {
+            let node = self.find_targets[i].node;
+            let shown = self.find.matches.contains(&i);
+            if self.nodes[node].visible != shown {
+                self.nodes[node].visible = shown;
+                self.nodes[node].props = true;
+            }
+        }
+        let current = self.find.matches.get(self.find.index).copied();
+        if current != self.find.current {
+            for target in [self.find.current, current].into_iter().flatten() {
+                let node = self.find_targets[target].node;
+                self.nodes[node].dirty = true;
+            }
+            self.find.current = current;
+        }
+        let label = self.find_count_label();
+        if label != self.find.count_label {
+            self.find.count_label = label;
+            self.find.count_dirty = true;
+            self.events.push(Event::FindCount);
+        }
+        if had == self.find.matches.is_empty() {
+            self.sync_find_buttons();
+            // A step button that becomes disabled loses focus.
+            if matches!(
+                self.focus,
+                Some(Target::Find(FindPart::Previous | FindPart::Next))
+            ) && self.find.matches.is_empty()
+            {
+                self.set_focus(None, false);
+            }
+            self.refresh(true);
+        }
+        let Some(current) = current else {
+            return;
+        };
+        let target = &self.find_targets[current];
+        let key = (query, self.find.index, target.text.clone());
+        if self.find.scrolled.as_ref() == Some(&key) {
+            return;
+        }
+        let bounds = target.bounds;
+        self.find.scrolled = Some(key);
+        // `scrollIntoView({ behavior: "smooth", block: "center" })`.
+        let view = self.viewport_rect().h;
+        self.set_scroll(bounds.y + bounds.h / 2. - view / 2., true);
+    }
+
+    /// Ctrl+F (`revealFind`): open the bar, focus the input, select its text.
+    pub fn find_reveal(&mut self, g: &Gfx) {
+        if !self.find.open {
+            self.find.open = true;
+            self.find.scrolled = None;
+            // The header grows a row; matches and scrolling follow the layout.
+            self.relayout = true;
+            self.events.push(Event::FindOpen(true));
+        }
+        self.set_focus(Some(Target::Find(FindPart::Input)), false);
+        self.field_edit(g, Editor::select_all);
+    }
+
+    /// Escape or Close (`closeFind`): highlights clear, the query stays.
+    pub fn find_close(&mut self) {
+        if !self.find.open {
+            return;
+        }
+        self.find.open = false;
+        self.find.scrolled = None;
+        self.relayout = true;
+        if matches!(self.focus, Some(Target::Find(_))) {
+            self.set_focus(None, false);
+        }
+        self.find_refresh();
+        self.events.push(Event::FindOpen(false));
+        self.sync_caret();
+    }
+
+    /// Next or previous match, wrapping (`goToMatch`).
+    pub fn find_step(&mut self, forward: bool) {
+        let count = self.find.matches.len();
+        if count == 0 {
+            return;
+        }
+        self.find.index = if forward {
+            (self.find.index + 1) % count
+        } else {
+            (self.find.index + count - 1) % count
+        };
+        self.find_refresh();
+    }
+
+    /// Edit the find input; text changes restart matching at the first
+    /// match (`updateQuery`).
+    pub fn field_edit(&mut self, g: &Gfx, edit: impl FnOnce(&mut Editor) -> Change) {
+        let change = edit(&mut self.find.field.editor);
+        if !change.any() {
+            return;
+        }
+        match self.find.field.apply(g, &self.t, change) {
+            Ok(redraw) => {
+                if redraw {
+                    self.nodes[self.find_nodes.text].dirty = true;
+                }
+            }
+            Err(error) => eprintln!("text layout failed: {error:?}"),
+        }
+        if change.text {
+            self.find.index = 0;
+            self.find.scrolled = None;
+            self.find_refresh();
+            self.events.push(Event::FindText);
+        }
+        self.events.push(Event::FindCaret);
+        self.sync_caret();
+    }
+
+    /// The text position under client x `x` in the find input.
+    pub fn field_hit(&self, x: f32) -> usize {
+        let r = self.absolute(self.find_nodes.text);
+        self.find.field.hit(x - r.x)
+    }
+
+    /// Place the caret node: shown while the input has focus in an active
+    /// window and nothing is selected (inside a composition too).
+    fn sync_caret(&mut self) {
+        let editor = &self.find.field.editor;
+        let (a, b) = editor.selection();
+        let shown = self.text_focused() && self.window_focused && (a == b || editor.composing());
+        let text = self.nodes[self.find_nodes.text].rect;
+        let (x, y, h) = self.find.field.caret_box(text.x, text.h);
+        let r = Rect::new(x, y, 1., h);
+        let node = &mut self.nodes[self.find_nodes.caret];
+        if node.visible != shown || node.rect != r {
+            node.visible = shown;
+            node.rect = r;
+            node.props = true;
+        }
+        if shown {
+            self.caret_blink = true;
+        }
+    }
+
+    /// The window gained or lost keyboard focus.
+    pub fn window_focus(&mut self, focused: bool) {
+        if self.window_focused != focused {
+            self.window_focused = focused;
+            self.nodes[self.find_nodes.text].dirty = true;
+            self.sync_caret();
+        }
+    }
+
+    /// The caret node, when shown.
+    pub fn caret_node(&self) -> Option<usize> {
+        let caret = self.find_nodes.caret;
+        self.nodes[caret].visible.then_some(caret)
+    }
+
+    /// The find bar, its count and its input's text box, in client DIPs.
+    pub fn find_rects(&self) -> (Rect, Rect, Rect) {
+        let field = self.absolute(self.find_nodes.field);
+        let close = self.absolute(self.find_nodes.buttons[FIND_BUTTONS.len() - 1].base);
+        let bar = Rect::new(field.x, field.y, close.x + close.w - field.x, field.h);
+        (
+            bar,
+            self.absolute(self.find_nodes.count),
+            self.absolute(self.find_nodes.text),
+        )
+    }
+
+    pub fn find_field(&self) -> &TextField {
+        &self.find.field
     }
 
     // ---- geometry for input and accessibility (client DIPs) ----
@@ -2696,6 +3340,8 @@ impl Scene {
             Target::Shortcut(i) => self.shortcuts[i].recorder,
             Target::Select(key) => self.selects[key.index()].trigger,
             Target::Option(key, i) => return self.option_rect(key, i),
+            Target::Find(FindPart::Input) => self.find_nodes.field,
+            Target::Find(part) => self.find_nodes.buttons[part.index() - 1].base,
         })
     }
 
@@ -2807,6 +3453,14 @@ impl Scene {
         }
         if self.absolute(self.history.base).contains(x, y) {
             return Some(Target::History);
+        }
+        if self.find.open {
+            let parts = [FindPart::Input].into_iter().chain(FIND_BUTTONS);
+            for part in parts {
+                if self.target_rect(Target::Find(part)).contains(x, y) {
+                    return Some(Target::Find(part));
+                }
+            }
         }
         if !self.viewport_rect().contains(x, y) {
             return None;
@@ -3204,6 +3858,57 @@ impl Scene {
                 gfx::ring(dc, all, radius, 2., 4., accent_ring)?;
             }
             Kind::Scrollbar => gfx::fill_round(dc, all, w / 2., c("border-strong"))?,
+            Kind::FindField => {
+                let radius = t.n("r-md");
+                gfx::fill_round(dc, all, radius, c("surface-field"))?;
+                gfx::border(dc, all, radius, 1., c("control-border"))?;
+            }
+            Kind::FindFieldHover => {
+                let radius = t.n("r-md");
+                gfx::border(dc, all, radius, 1., c("surface-field"))?;
+                gfx::border(dc, all, radius, 1., c("border-strong"))?;
+            }
+            Kind::FindText => {
+                let focused = self.text_focused() && self.window_focused;
+                self.find.field.draw(dc, t, (0., w, h), focused)?;
+            }
+            Kind::Caret => gfx::fill(dc, all, c("text"))?,
+            Kind::FindCount => {
+                if let Some(count) = &self.find.count {
+                    gfx::text(dc, count, 0., (h - count.height) / 2., c("text-subtle"))?;
+                }
+            }
+            Kind::FindButton { part, lit } => {
+                let radius = t.n("r-md");
+                let (bg, edge, ink) = if lit {
+                    ("control-hover", "border-strong", "text")
+                } else {
+                    ("control", "control-border", "text-subtle")
+                };
+                if !lit {
+                    gfx::shadow(dc, all, radius, t.shadow("shadow-xs"))?;
+                }
+                gfx::fill_round(dc, all, radius, c(bg))?;
+                gfx::border(dc, all, radius, 1., c(edge))?;
+                // 14 px icons, stroke 1.7 user units of their view box.
+                let (d, units) = match part {
+                    FindPart::Previous => (FIND_PREVIOUS_PATH, 16.),
+                    FindPart::Next => (FIND_NEXT_PATH, 16.),
+                    _ => (FIND_CLOSE_PATH, 24.),
+                };
+                let scale = FIND_ICON / units;
+                let (x, y) = ((w - FIND_ICON) / 2., (h - FIND_ICON) / 2.);
+                gfx::path(dc, &g.factory, d, false, (x, y, scale), 1.7 * scale, c(ink))?;
+            }
+            Kind::Match(index) => {
+                let radius = t.n("r-lg");
+                if self.find.current == Some(index) {
+                    // `0 0 0 2px` accent at 0.62 and a `0 0 20px` glow at 0.18.
+                    gfx::glow(dc, all, radius, 20., t.color_alpha("theme-accent", 0.18))?;
+                    gfx::ring(dc, all, radius, 0., 2., t.color_alpha("theme-accent", 0.62))?;
+                }
+                gfx::fill_round(dc, all, radius, c("surface-selected"))?;
+            }
         }
         Ok(())
     }

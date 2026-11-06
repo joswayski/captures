@@ -4,7 +4,9 @@
 //! shipping `aria-current`), the header, and each settings card as a group of
 //! its controls: switches (Toggle), the Interface theme and accent choices (radio buttons
 //! with SelectionItem inside a Selection group), the read-only capture folder
-//! (Value) and Choose… (Invoke). Names come from the shipping titles and
+//! (Value) and Choose… (Invoke), and the Find bar (a search landmark with an
+//! Edit that has Value and Text patterns, a live match count and Invoke
+//! buttons). Names come from the shipping titles and
 //! `aria-label`s; descriptions are help text. Providers are node ids that read
 //! live scene state on the UI thread.
 use captures_app::preferences::{self, APPEARANCE_MODES, SECTIONS, THEMES};
@@ -18,8 +20,11 @@ use windows::core::*;
 
 use crate::host::{Host, with_host};
 use crate::scene::{
-    ACCENT_GROUP_LABEL, CARDS, Event, Item, NAV_WIDTH, Rect, SelectKey, Target, Utility,
+    ACCENT_GROUP_LABEL, CARDS, Event, FIND_BUTTONS, FindPart, Item, NAV_WIDTH, Rect, SelectKey,
+    Target, Utility,
 };
+use crate::textfield::TextField;
+use crate::uia_text::range;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Id {
@@ -53,23 +58,54 @@ pub enum Id {
     Select(SelectKey),
     /// An option of the open listbox (ListItem with SelectionItem).
     Option(SelectKey, usize),
+    /// Find (`role="search"`), its input and buttons, and the live count.
+    Find,
+    FindPart(FindPart),
+    FindCount,
 }
 
-/// The open select and its option count, for the combo box's children.
-type Open = Option<(SelectKey, usize)>;
+/// Tree state that changes which children exist.
+#[derive(Clone, Copy, Default)]
+struct Live {
+    /// The open select and its option count, for the combo box's children.
+    list: Option<(SelectKey, usize)>,
+    /// The find bar is shown.
+    find: bool,
+}
 
-fn open_list(host: &Host) -> Open {
-    host.scene
-        .open
-        .map(|(key, _)| (key, host.scene.select_options(key).len()))
+fn live(host: &Host) -> Live {
+    Live {
+        list: host
+            .scene
+            .open
+            .map(|(key, _)| (key, host.scene.select_options(key).len())),
+        find: host.scene.find.open,
+    }
 }
 
 fn unavailable() -> Error {
     HRESULT(UIA_E_ELEMENTNOTAVAILABLE as _).into()
 }
 
-fn with<R>(f: impl FnOnce(&mut Host) -> Result<R>) -> Result<R> {
+pub(crate) fn with<R>(f: impl FnOnce(&mut Host) -> Result<R>) -> Result<R> {
     with_host(f).unwrap_or_else(|| Err(unavailable()))
+}
+
+/// The text field behind an Edit element.
+pub(crate) fn field(host: &Host, id: Id) -> Option<&TextField> {
+    match id {
+        Id::FindPart(FindPart::Input) if host.scene.find.open => Some(host.scene.find_field()),
+        _ => None,
+    }
+}
+
+/// A text field's text box on screen, and pixels per DIP.
+pub(crate) fn field_screen_rect(host: &Host, id: Id) -> (UiaRect, f64) {
+    let r = match id {
+        Id::FindPart(FindPart::Input) => host.scene.find_rects().2,
+        _ => Rect::default(),
+    };
+    (screen_rect(host, r), f64::from(host.scene.scale))
 }
 
 fn target(id: Id) -> Option<Target> {
@@ -84,6 +120,7 @@ fn target(id: Id) -> Option<Target> {
         Id::Shortcut(i) => Some(Target::Shortcut(i)),
         Id::Select(key) => Some(Target::Select(key)),
         Id::Option(key, i) => Some(Target::Option(key, i)),
+        Id::FindPart(part) => Some(Target::Find(part)),
         _ => None,
     }
 }
@@ -100,14 +137,23 @@ fn id_of(target: Target) -> Id {
         Target::Shortcut(i) => Id::Shortcut(i),
         Target::Select(key) => Id::Select(key),
         Target::Option(key, i) => Id::Option(key, i),
+        Target::Find(part) => Id::FindPart(part),
     }
 }
 
-fn children(id: Id, open: Open) -> Vec<Id> {
+fn children(id: Id, live: Live) -> Vec<Id> {
     match id {
         Id::Root => {
             let mut list = vec![Id::Nav, Id::Title, Id::Subtitle, Id::History];
+            if live.find {
+                list.push(Id::Find);
+            }
             list.extend((0..CARDS.len()).map(Id::Card));
+            list
+        }
+        Id::Find => {
+            let mut list = vec![Id::FindPart(FindPart::Input), Id::FindCount];
+            list.extend(FIND_BUTTONS.map(Id::FindPart));
             list
         }
         Id::Nav => (0..SECTIONS.len()).map(Id::NavItem).collect(),
@@ -129,7 +175,7 @@ fn children(id: Id, open: Open) -> Vec<Id> {
             })
             .collect(),
         // Like a Win32 combo box, the open list's items are its children.
-        Id::Select(key) => match open {
+        Id::Select(key) => match live.list {
             Some((open, count)) if open == key => (0..count).map(|i| Id::Option(key, i)).collect(),
             _ => Vec::new(),
         },
@@ -163,6 +209,7 @@ fn parent(id: Id) -> Option<Id> {
             })
         })?),
         Id::Option(key, _) => Id::Select(key),
+        Id::FindPart(_) | Id::FindCount => Id::Find,
         _ => Id::Root,
     })
 }
@@ -183,6 +230,8 @@ fn rect(host: &Host, id: Id) -> Rect {
         Id::UpdateVersion => scene.update_copy_rect(),
         Id::UpdateAction => scene.update_rects().0,
         Id::UpdateStatus => scene.update_rects().1,
+        Id::Find => scene.find_rects().0,
+        Id::FindCount => scene.find_rects().1,
         _ => scene.target_rect(target(id).expect("target")),
     }
 }
@@ -216,6 +265,10 @@ fn name(host: &Host, id: Id) -> String {
             .into_iter()
             .nth(i)
             .map_or_else(String::new, |(label, _)| label),
+        // `role="search"` has no label in shipping.
+        Id::Find => String::new(),
+        Id::FindPart(part) => part.label().into(),
+        Id::FindCount => host.scene.find_count_label(),
     }
 }
 
@@ -243,6 +296,10 @@ fn control_type(id: Id) -> UIA_CONTROLTYPE_ID {
         Id::Folder => UIA_EditControlTypeId,
         Id::Select(_) => UIA_ComboBoxControlTypeId,
         Id::Option(..) => UIA_ListItemControlTypeId,
+        Id::Find => UIA_GroupControlTypeId,
+        Id::FindPart(FindPart::Input) => UIA_EditControlTypeId,
+        Id::FindPart(_) => UIA_ButtonControlTypeId,
+        Id::FindCount => UIA_TextControlTypeId,
         Id::Open(_) | Id::Shortcut(_) | Id::UpdateAction => UIA_ButtonControlTypeId,
         // Like WinUI's ToggleSwitch, switches are buttons with Toggle.
         Id::NavItem(_) | Id::History | Id::Switch(_) | Id::Choose => UIA_ButtonControlTypeId,
@@ -272,6 +329,9 @@ fn runtime_id(id: Id) -> [i32; 3] {
         Id::Shortcut(i) => (15, i),
         Id::Select(key) => (16, key.index()),
         Id::Option(key, i) => (17, key.index() * 1000 + i),
+        Id::Find => (21, 0),
+        Id::FindPart(part) => (22, part.index()),
+        Id::FindCount => (23, 0),
     };
     [UiaAppendRuntimeId as i32, kind, index as i32]
 }
@@ -303,7 +363,15 @@ fn screen_rect(host: &Host, r: Rect) -> UiaRect {
 fn offscreen(host: &Host, id: Id) -> bool {
     if matches!(
         id,
-        Id::Root | Id::Nav | Id::NavItem(_) | Id::Title | Id::Subtitle | Id::History
+        Id::Root
+            | Id::Nav
+            | Id::NavItem(_)
+            | Id::Title
+            | Id::Subtitle
+            | Id::History
+            | Id::Find
+            | Id::FindPart(_)
+            | Id::FindCount
     ) {
         return false;
     }
@@ -325,7 +393,7 @@ fn safe_array_i32(values: &[i32]) -> *mut SAFEARRAY {
     }
 }
 
-fn safe_array_unknown(values: &[IUnknown]) -> *mut SAFEARRAY {
+pub(crate) fn safe_array_unknown(values: &[IUnknown]) -> *mut SAFEARRAY {
     unsafe {
         let array = SafeArrayCreateVector(VT_UNKNOWN, 0, values.len() as u32);
         for (i, value) in values.iter().enumerate() {
@@ -345,7 +413,9 @@ fn safe_array_unknown(values: &[IUnknown]) -> *mut SAFEARRAY {
     IExpandCollapseProvider,
     ISelectionProvider,
     ISelectionItemProvider,
-    IValueProvider
+    IValueProvider,
+    ITextProvider,
+    ITextProvider2
 )]
 pub struct Node {
     id: Id,
@@ -386,6 +456,10 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
             Id::Modes | Id::Accents => pattern == UIA_SelectionPatternId,
             Id::Mode(_) | Id::Accent(_) => pattern == UIA_SelectionItemPatternId,
             Id::Folder => pattern == UIA_ValuePatternId,
+            Id::FindPart(FindPart::Input) => {
+                [UIA_ValuePatternId, UIA_TextPatternId, UIA_TextPattern2Id].contains(&pattern)
+            }
+            Id::FindPart(_) => pattern == UIA_InvokePatternId,
             _ => false,
         };
         if supported {
@@ -407,10 +481,12 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                     .select_options(key)
                     .get(i)
                     .is_some_and(|(_, disabled)| !disabled),
+                Id::FindPart(part) => scene.find_enabled(part),
                 _ => true,
             };
             let value = match id {
                 Id::Folder => Some(scene.settings().output_directory.clone()),
+                Id::FindPart(FindPart::Input) => Some(scene.find_query()),
                 Id::Select(key) => Some(scene.select_value(key)),
                 Id::Shortcut(i) => Some(scene.shortcut_value(i)),
                 _ => None,
@@ -434,6 +510,11 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                 UIA_LandmarkTypePropertyId if id == Id::Nav => {
                     VARIANT::from(UIA_NavigationLandmarkTypeId.0)
                 }
+                UIA_LandmarkTypePropertyId if id == Id::Find => {
+                    VARIANT::from(UIA_SearchLandmarkTypeId.0)
+                }
+                // `aria-live="polite"`.
+                UIA_LiveSettingPropertyId if id == Id::FindCount => VARIANT::from(Polite.0),
                 UIA_AutomationIdPropertyId => VARIANT::from(BSTR::from(format!("{id:?}"))),
                 UIA_FrameworkIdPropertyId => VARIANT::from(BSTR::from("Captures")),
                 UIA_IsKeyboardFocusablePropertyId => VARIANT::from(focusable && enabled),
@@ -451,7 +532,9 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                 UIA_ValueValuePropertyId if value.is_some() => {
                     VARIANT::from(BSTR::from(value.unwrap_or_default()))
                 }
-                UIA_ValueIsReadOnlyPropertyId if value.is_some() => VARIANT::from(true),
+                UIA_ValueIsReadOnlyPropertyId if value.is_some() => {
+                    VARIANT::from(id != Id::FindPart(FindPart::Input))
+                }
                 UIA_ExpandCollapseExpandCollapseStatePropertyId => match id {
                     Id::Select(key) => VARIANT::from(expand_state(host, key).0),
                     _ => VARIANT::default(),
@@ -478,8 +561,8 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
 impl IRawElementProviderFragment_Impl for Node_Impl {
     fn Navigate(&self, direction: NavigateDirection) -> Result<IRawElementProviderFragment> {
         let id = self.id;
-        let open = with(|host| Ok(open_list(host)))?;
-        let children = |id| children(id, open);
+        let live = with(|host| Ok(live(host)))?;
+        let children = |id| children(id, live);
         let next = match direction {
             NavigateDirection_Parent => parent(id),
             NavigateDirection_FirstChild => children(id).first().copied(),
@@ -552,8 +635,14 @@ impl IRawElementProviderFragmentRoot_Impl for Node_Impl {
             if rect(host, Id::Folder).contains(px, py) {
                 return Ok(Id::Folder);
             }
-            for id in children(Id::Root, None) {
+            let live = live(host);
+            for id in children(Id::Root, live) {
                 if rect(host, id).contains(px, py) {
+                    for child in children(id, live) {
+                        if id == Id::Find && rect(host, child).contains(px, py) {
+                            return Ok(child);
+                        }
+                    }
                     return Ok(id);
                 }
             }
@@ -582,6 +671,11 @@ impl IInvokeProvider_Impl for Node_Impl {
             return Err(HRESULT(UIA_E_ELEMENTNOTENABLED as _).into());
         }
         with(|host| {
+            if let Id::FindPart(part) = id
+                && !host.scene.find_enabled(part)
+            {
+                return Err(HRESULT(UIA_E_ELEMENTNOTENABLED as _).into());
+            }
             if let Some(target) = target(id) {
                 host.activate(target);
             }
@@ -683,9 +777,19 @@ impl ISelectionItemProvider_Impl for Node_Impl {
 }
 
 impl IValueProvider_Impl for Node_Impl {
-    fn SetValue(&self, _: &PCWSTR) -> Result<()> {
-        // Read-only: Choose… changes the folder.
-        Err(HRESULT(UIA_E_ELEMENTNOTENABLED as _).into())
+    fn SetValue(&self, value: &PCWSTR) -> Result<()> {
+        let id = self.id;
+        if id != Id::FindPart(FindPart::Input) {
+            // Read-only: Choose… changes the folder.
+            return Err(HRESULT(UIA_E_ELEMENTNOTENABLED as _).into());
+        }
+        let text = unsafe { value.to_string() }.unwrap_or_default();
+        with(|host| {
+            let Host { scene, g, .. } = host;
+            scene.field_edit(g, |editor| editor.set_text(&text));
+            host.need = true;
+            Ok(())
+        })
     }
 
     fn Value(&self) -> Result<BSTR> {
@@ -695,13 +799,87 @@ impl IValueProvider_Impl for Node_Impl {
             Ok(BSTR::from(match id {
                 Id::Select(key) => scene.select_value(key),
                 Id::Shortcut(i) => scene.shortcut_value(i),
+                Id::FindPart(FindPart::Input) => scene.find_query(),
                 _ => scene.settings().output_directory.clone(),
             }))
         })
     }
 
     fn IsReadOnly(&self) -> Result<BOOL> {
-        Ok(true.into())
+        Ok((self.id != Id::FindPart(FindPart::Input)).into())
+    }
+}
+
+impl ITextProvider_Impl for Node_Impl {
+    fn GetSelection(&self) -> Result<*mut SAFEARRAY> {
+        let id = self.id;
+        let (a, b) = with(|host| {
+            field(host, id)
+                .map(|f| f.editor.selection())
+                .ok_or_else(unavailable)
+        })?;
+        Ok(safe_array_unknown(&[range(id, a, b).cast()?]))
+    }
+
+    fn GetVisibleRanges(&self) -> Result<*mut SAFEARRAY> {
+        let id = self.id;
+        let n = with(|host| {
+            field(host, id)
+                .map(|f| f.editor.len())
+                .ok_or_else(unavailable)
+        })?;
+        Ok(safe_array_unknown(&[range(id, 0, n).cast()?]))
+    }
+
+    fn RangeFromChild(&self, _child: Ref<IRawElementProviderSimple>) -> Result<ITextRangeProvider> {
+        Err(E_INVALIDARG.into())
+    }
+
+    fn RangeFromPoint(&self, point: &UiaPoint) -> Result<ITextRangeProvider> {
+        let id = self.id;
+        let position = with(|host| {
+            let (box_, scale) = field_screen_rect(host, id);
+            let x = ((point.x - box_.left) / scale) as f32;
+            Ok(host.scene.field_hit(x + host.scene.find_rects().2.x))
+        })?;
+        Ok(range(id, position, position))
+    }
+
+    fn DocumentRange(&self) -> Result<ITextRangeProvider> {
+        let id = self.id;
+        let n = with(|host| {
+            field(host, id)
+                .map(|f| f.editor.len())
+                .ok_or_else(unavailable)
+        })?;
+        Ok(range(id, 0, n))
+    }
+
+    fn SupportedTextSelection(&self) -> Result<SupportedTextSelection> {
+        Ok(SupportedTextSelection_Single)
+    }
+}
+
+impl ITextProvider2_Impl for Node_Impl {
+    fn RangeFromAnnotation(
+        &self,
+        _annotation: Ref<IRawElementProviderSimple>,
+    ) -> Result<ITextRangeProvider> {
+        Err(E_INVALIDARG.into())
+    }
+
+    fn GetCaretRange(&self, active: *mut BOOL) -> Result<ITextRangeProvider> {
+        let id = self.id;
+        let (caret, focused) = with(|host| {
+            let caret = field(host, id)
+                .map(|f| f.editor.caret())
+                .ok_or_else(unavailable)?;
+            Ok((caret, host.scene.text_focused()))
+        })?;
+        if !active.is_null() {
+            unsafe { *active = focused.into() };
+        }
+        Ok(range(id, caret, caret))
     }
 }
 
@@ -852,6 +1030,41 @@ pub fn raise(events: &[(Event, bool, String)]) {
                         &VARIANT::default(),
                         &VARIANT::from(BSTR::from(detail.as_str())),
                     );
+                }
+                Event::FindOpen(_) => {
+                    let root = node(Id::Root);
+                    let _ = UiaRaiseStructureChangedEvent(
+                        &root,
+                        StructureChangeType_ChildrenInvalidated,
+                        runtime_id(Id::Root).as_mut_ptr(),
+                        3,
+                    );
+                }
+                Event::FindText => {
+                    let input = node(Id::FindPart(FindPart::Input));
+                    let _ = UiaRaiseAutomationPropertyChangedEvent(
+                        &input,
+                        UIA_ValueValuePropertyId,
+                        &VARIANT::default(),
+                        &VARIANT::from(BSTR::from(detail.as_str())),
+                    );
+                    let _ = UiaRaiseAutomationEvent(&input, UIA_Text_TextChangedEventId);
+                }
+                Event::FindCaret => {
+                    let _ = UiaRaiseAutomationEvent(
+                        &node(Id::FindPart(FindPart::Input)),
+                        UIA_Text_TextSelectionChangedEventId,
+                    );
+                }
+                Event::FindCount => {
+                    let count = node(Id::FindCount);
+                    let _ = UiaRaiseAutomationPropertyChangedEvent(
+                        &count,
+                        UIA_NamePropertyId,
+                        &VARIANT::default(),
+                        &VARIANT::from(BSTR::from(detail.as_str())),
+                    );
+                    let _ = UiaRaiseAutomationEvent(&count, UIA_LiveRegionChangedEventId);
                 }
                 Event::ShortcutError(index) => {
                     let recorder = node(Id::Shortcut(index));

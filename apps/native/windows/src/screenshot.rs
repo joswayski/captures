@@ -27,6 +27,13 @@ pub fn render(options: &Options, path: &std::path::Path) -> Result<()> {
         .unwrap_or((spec.width as u32, spec.height as u32));
     let mut scene = Scene::new(tokens, options.settings_file.clone(), detail.into());
     scene.layout(&g, w as f32, h as f32)?;
+    if let Some(query) = &options.find {
+        // As if Ctrl+F was pressed and the query typed.
+        scene.find_reveal(&g);
+        scene.layout(&g, w as f32, h as f32)?;
+        scene.field_edit(&g, |editor| editor.set_text(query));
+        scene.prepare(&g)?;
+    }
     unsafe {
         let props = |options| D2D1_BITMAP_PROPERTIES1 {
             pixelFormat: D2D1_PIXEL_FORMAT {
