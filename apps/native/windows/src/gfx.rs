@@ -58,9 +58,13 @@ pub enum Style {
     Input,
     /// `.preferences-save-status`
     Status,
+    /// `.custom-theme-color-control input[type="text"]`: mono `--text-xs`.
+    Hex,
+    /// `.custom-theme-field > small`
+    Note,
 }
 
-const STYLES: [Style; 19] = [
+const STYLES: [Style; 21] = [
     Style::Brand,
     Style::Nav,
     Style::Title,
@@ -80,6 +84,8 @@ const STYLES: [Style; 19] = [
     Style::Kbd,
     Style::Input,
     Style::Status,
+    Style::Hex,
+    Style::Note,
 ];
 
 struct Spec {
@@ -89,6 +95,8 @@ struct Spec {
     leading: Option<&'static str>,
     /// A literal CSS `line-height` multiplier when there is no token.
     line: Option<f32>,
+    /// A literal CSS `letter-spacing` in em when there is no token.
+    letter: Option<f32>,
     wrap: bool,
     mono: bool,
 }
@@ -100,6 +108,7 @@ fn spec(style: Style) -> Spec {
         tracking,
         leading,
         line: None,
+        letter: None,
         wrap,
         mono: false,
     };
@@ -169,6 +178,24 @@ fn spec(style: Style) -> Spec {
             false,
         ),
         Style::Small => spec("text-xs", "weight-regular", None, None, true),
+        Style::Hex => Spec {
+            mono: true,
+            letter: Some(0.02),
+            ..spec(
+                "text-xs",
+                "weight-regular",
+                None,
+                Some("leading-snug"),
+                false,
+            )
+        },
+        Style::Note => spec(
+            "text-xs",
+            "weight-regular",
+            None,
+            Some("leading-snug"),
+            true,
+        ),
         Style::Status => spec(
             "text-xs",
             "weight-medium",
@@ -326,12 +353,16 @@ impl Gfx {
             let layout =
                 self.dwrite
                     .CreateTextLayout(&wide, format, max_width.max(1.), 100_000.)?;
-            if let Some(tracking) = spec.tracking {
+            let letter = spec
+                .tracking
+                .map(|tracking| t.em(tracking, size))
+                .or(spec.letter.map(|em| em * size));
+            if let Some(letter) = letter {
                 // CSS `letter-spacing` adds after every character.
                 let layout1: IDWriteTextLayout1 = layout.cast()?;
                 layout1.SetCharacterSpacing(
                     0.,
-                    t.em(tracking, size),
+                    letter,
                     0.,
                     DWRITE_TEXT_RANGE {
                         startPosition: 0,
@@ -571,6 +602,69 @@ pub fn shadow(
     Ok(())
 }
 
+/// A CSS `linear-gradient(<angle>deg, …)` of `(position, 0xRRGGBB)` stops
+/// interpolated in sRGB, filling the rounded rect at `alpha`.
+pub fn gradient(
+    dc: &ID2D1DeviceContext,
+    (r, radius): (D2D_RECT_F, f32),
+    angle: f32,
+    hues: &[(f32, u32)],
+    alpha: f32,
+) -> Result<()> {
+    gradient_over(dc, (r, radius), r, angle, hues, alpha)
+}
+
+/// [`gradient`] whose gradient line spans `line` (a CSS box with an inset)
+/// while it fills only `r`.
+pub fn gradient_over(
+    dc: &ID2D1DeviceContext,
+    (r, radius): (D2D_RECT_F, f32),
+    line: D2D_RECT_F,
+    angle: f32,
+    hues: &[(f32, u32)],
+    alpha: f32,
+) -> Result<()> {
+    let (w, h) = (line.right - line.left, line.bottom - line.top);
+    let stops: Vec<D2D1_GRADIENT_STOP> = hues
+        .iter()
+        .map(|&(position, rgb)| D2D1_GRADIENT_STOP {
+            position,
+            color: D2D1_COLOR_F {
+                r: ((rgb >> 16) & 0xff) as f32 / 255.,
+                g: ((rgb >> 8) & 0xff) as f32 / 255.,
+                b: (rgb & 0xff) as f32 / 255.,
+                a: alpha,
+            },
+        })
+        .collect();
+    unsafe {
+        // The plain render-target overloads (sRGB, 8-bit stops).
+        let target: &ID2D1RenderTarget = dc;
+        let collection =
+            target.CreateGradientStopCollection(&stops, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
+        let angle = angle.to_radians();
+        let (dx, dy) = (angle.sin(), -angle.cos());
+        let half = (w * dx.abs() + h * dy.abs()) / 2.;
+        let (cx, cy) = (line.left + w / 2., line.top + h / 2.);
+        let brush = target.CreateLinearGradientBrush(
+            &D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
+                startPoint: Vector2 {
+                    X: cx - dx * half,
+                    Y: cy - dy * half,
+                },
+                endPoint: Vector2 {
+                    X: cx + dx * half,
+                    Y: cy + dy * half,
+                },
+            },
+            None,
+            &collection,
+        )?;
+        dc.FillRoundedRectangle(&rounded(r, radius), &brush);
+    }
+    Ok(())
+}
+
 /// A CSS `box-shadow: 0 0 <blur> <color>` glow drawn only outside the
 /// rounded box (CSS clips outer shadows to the outside), as 2 px bands whose
 /// alpha follows the Gaussian tail of a `blur / 2` sigma. No layers or
@@ -718,7 +812,7 @@ pub fn swatch(
     radius: f32,
     colors: Option<(D2D1_COLOR_F, D2D1_COLOR_F)>,
 ) -> Result<()> {
-    let (w, h) = (r.right - r.left, r.bottom - r.top);
+    let w = r.right - r.left;
     unsafe {
         match colors {
             Some((accent, signal)) => {
@@ -762,8 +856,8 @@ pub fn swatch(
                 filled?;
             }
             None => {
-                // `.theme-option-custom`'s `linear-gradient(120deg, hsl(…))` stops in sRGB.
-                let hues: [(f32, u32); 7] = [
+                // `.theme-option-custom`'s `linear-gradient(120deg, hsl(…))`.
+                let hues = [
                     (0., 0xff475a),
                     (0.18, 0xffab3d),
                     (0.34, 0xf7e845),
@@ -772,44 +866,7 @@ pub fn swatch(
                     (0.84, 0xc357f4),
                     (1., 0xff52ae),
                 ];
-                let stops: Vec<D2D1_GRADIENT_STOP> = hues
-                    .iter()
-                    .map(|&(position, rgb)| D2D1_GRADIENT_STOP {
-                        position,
-                        color: D2D1_COLOR_F {
-                            r: ((rgb >> 16) & 0xff) as f32 / 255.,
-                            g: ((rgb >> 8) & 0xff) as f32 / 255.,
-                            b: (rgb & 0xff) as f32 / 255.,
-                            a: 1.,
-                        },
-                    })
-                    .collect();
-                // The plain render-target overloads (sRGB, 8-bit stops).
-                let target: &ID2D1RenderTarget = dc;
-                let collection = target.CreateGradientStopCollection(
-                    &stops,
-                    D2D1_GAMMA_2_2,
-                    D2D1_EXTEND_MODE_CLAMP,
-                )?;
-                let angle = 120f32.to_radians();
-                let (dx, dy) = (angle.sin(), -angle.cos());
-                let half = (w * dx.abs() + h * dy.abs()) / 2.;
-                let (cx, cy) = (r.left + w / 2., r.top + h / 2.);
-                let gradient = target.CreateLinearGradientBrush(
-                    &D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
-                        startPoint: Vector2 {
-                            X: cx - dx * half,
-                            Y: cy - dy * half,
-                        },
-                        endPoint: Vector2 {
-                            X: cx + dx * half,
-                            Y: cy + dy * half,
-                        },
-                    },
-                    None,
-                    &collection,
-                )?;
-                dc.FillRoundedRectangle(&rounded(r, radius), &gradient);
+                gradient(dc, (r, radius), 120., &hues, 1.)?;
             }
         }
     }

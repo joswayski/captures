@@ -140,6 +140,8 @@ pub enum Item {
     SelectGrid(&'static [SelectKey]),
     /// Updates: build identity, the Check Now action and its status.
     Updates,
+    /// `.custom-theme-editor`, shown while the Custom accent is selected.
+    CustomTheme,
 }
 
 /// The utility rows' Open buttons.
@@ -228,7 +230,7 @@ impl SelectKey {
 /// Cards in shipping order: (section index, items).
 pub const CARDS: [(usize, &[Item]); 8] = [
     (0, &[Item::Switch(0)]),
-    (1, &[Item::Mode, Item::Accent]),
+    (1, &[Item::Mode, Item::Accent, Item::CustomTheme]),
     (
         2,
         &[
@@ -324,7 +326,51 @@ pub enum Target {
     Option(SelectKey, usize),
     /// Preferences Find: the input and its buttons.
     Find(FindPart),
+    /// Custom colors: Reset colors.
+    ResetColors,
+    /// Custom colors: a field's RGB picker (`input[type="color"]`), Accent
+    /// then Recording signal.
+    Well(usize),
+    /// Custom colors: a field's hex input.
+    Hex(usize),
 }
+
+/// The host's editable text fields.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FieldId {
+    Find,
+    /// A custom color's hex input, Accent then Recording signal.
+    Hex(usize),
+}
+
+pub const FIELDS: [FieldId; 3] = [FieldId::Find, FieldId::Hex(0), FieldId::Hex(1)];
+
+impl FieldId {
+    pub fn target(self) -> Target {
+        match self {
+            Self::Find => Target::Find(FindPart::Input),
+            Self::Hex(i) => Target::Hex(i),
+        }
+    }
+}
+
+/// `.custom-theme-editor::before`'s `linear-gradient(115deg, hsl(…))`.
+const CUSTOM_RAINBOW: [(f32, u32); 8] = [
+    (0., 0xff3d57),
+    (0.17, 0xffad33),
+    (0.3, 0xf9e639),
+    (0.45, 0x35de6e),
+    (0.6, 0x36d3f2),
+    (0.75, 0x4d79ff),
+    (0.89, 0xc952f4),
+    (1., 0xff47a9),
+];
+/// `.custom-theme-color-control input[type="color"]` width.
+const WELL_W: f32 = 36.;
+/// `input[type="text"]` `maxLength`.
+const HEX_MAX: usize = 7;
+/// The editor's `role="group"` `aria-label`.
+pub const CUSTOM_GROUP_LABEL: &str = "Custom theme colors";
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Kind {
@@ -406,12 +452,22 @@ pub enum Kind {
     Scrollbar,
     /// `.preferences-save-status`.
     SaveStatus,
+    /// `.custom-theme-editor`: panel, heading copy and the field boxes.
+    CustomEditor,
+    /// `.custom-theme-editor-heading button`, resting or hovered.
+    Reset {
+        lit: bool,
+    },
+    /// A custom color's `input[type="color"]` well.
+    Well(usize),
+    /// A custom color's hex `input` box.
+    HexBox(usize),
     /// `.preferences-find-input`: field and border.
     FindField,
     /// `.preferences-find-input:hover` border.
     FindFieldHover,
-    /// The input's text, selection or placeholder, clipped to its padding.
-    FindText,
+    /// A text field's text, selection or placeholder, clipped to its padding.
+    FieldText(FieldId),
     /// The input's caret; it moves and blinks on the compositor.
     Caret,
     /// `.preferences-find-count`.
@@ -536,6 +592,9 @@ pub enum Action {
     ChooseFolder,
     /// Open Windows keyboard settings.
     KeyboardSettings,
+    /// Show the system color picker for a custom color, outside the host
+    /// borrow.
+    PickColor(usize),
 }
 
 /// Accessibility notifications, raised by the host outside its borrow.
@@ -562,10 +621,10 @@ pub enum Event {
     SaveStatus,
     /// Find opened or closed.
     FindOpen(bool),
-    /// The find query changed.
-    FindText,
-    /// The find input's caret or selection moved.
-    FindCaret,
+    /// A text field's text changed.
+    FieldText(FieldId),
+    /// A text field's caret or selection moved.
+    FieldCaret(FieldId),
     /// The match count label changed (`aria-live="polite"`).
     FindCount,
 }
@@ -641,6 +700,30 @@ struct FindNodes {
     count: usize,
     /// Previous, Next, Close.
     buttons: Vec<Layered>,
+}
+
+/// The custom color editor's nodes.
+struct CustomNodes {
+    editor: usize,
+    reset: Layered,
+    wells: [usize; 2],
+    boxes: [usize; 2],
+    texts: [usize; 2],
+    carets: [usize; 2],
+}
+
+/// The custom color editor's copy and where it sits (editor coordinates).
+#[derive(Default)]
+struct CustomLayout {
+    title: Option<Text>,
+    description: Option<Text>,
+    reset: Option<Text>,
+    labels: Vec<Text>,
+    notes: Vec<Text>,
+    /// Field boxes (`.custom-theme-field`).
+    fields: [Rect; 2],
+    /// Note tops, inside the field boxes.
+    note_y: f32,
 }
 
 /// One shipping find target: a card header, row or grid cell.
@@ -793,6 +876,12 @@ pub struct Scene {
     sub_boxes: Vec<Rect>,
     /// The window has keyboard focus; the caret shows only then.
     window_focused: bool,
+    /// The custom colors' hex inputs, Accent then Recording signal.
+    hex_fields: [TextField; 2],
+    custom: CustomNodes,
+    custom_layout: CustomLayout,
+    /// The custom colors changed: the host rebuilds the tokens.
+    pub retheme: bool,
     /// The caret moved or appeared: the host restarts its blink and moves
     /// the IME windows.
     pub caret_blink: bool,
@@ -929,6 +1018,20 @@ impl Scene {
             find_targets: Vec::new(),
             sub_boxes: Vec::new(),
             window_focused: true,
+            hex_fields: [
+                TextField::new(Style::Hex, ""),
+                TextField::new(Style::Hex, ""),
+            ],
+            custom: CustomNodes {
+                editor: 0,
+                reset: none,
+                wells: [0; 2],
+                boxes: [0; 2],
+                texts: [0; 2],
+                carets: [0; 2],
+            },
+            custom_layout: CustomLayout::default(),
+            retheme: false,
             caret_blink: false,
             title_y: 0.,
             card_rects: Vec::new(),
@@ -939,6 +1042,13 @@ impl Scene {
             content_w: 0.,
             scroll: 0.,
         };
+        for i in 0..2 {
+            let value = scene.custom_value(i).to_uppercase();
+            let field = &mut scene.hex_fields[i];
+            field.uppercase = true;
+            field.editor.max_len = Some(HEX_MAX);
+            field.editor.set_text(&value);
+        }
         scene.build();
         scene
     }
@@ -1098,6 +1208,11 @@ impl Scene {
                         let ring = self.ring(base, Ring::Full(radius), Target::Open(which));
                         self.open_buttons[which.index()] = Layered { base, lit, ring };
                     }
+                    Item::CustomTheme => {
+                        // The editor draws its own copy.
+                        self.nodes[copy].visible = false;
+                        self.build_custom(node);
+                    }
                     Item::Updates => {
                         self.update_copy = copy;
                         self.update_action = self.add(Some(node), Kind::UpdateAction, 2.);
@@ -1163,7 +1278,7 @@ impl Scene {
         let header = self.header;
         let field = self.add(Some(header), Kind::FindField, 0.);
         let hover = self.add(Some(field), Kind::FindFieldHover, 0.);
-        let text = self.add(Some(field), Kind::FindText, 0.);
+        let text = self.add(Some(field), Kind::FieldText(FieldId::Find), 0.);
         let caret = self.add(Some(field), Kind::Caret, 0.);
         self.nodes[caret].visible = false;
         let ring = self.ring(field, Ring::Field(radius), Target::Find(FindPart::Input));
@@ -1190,6 +1305,34 @@ impl Scene {
             ring,
             count,
             buttons,
+        };
+    }
+
+    /// The custom color editor: panel, Reset colors (hover layer, ring), and
+    /// per field a color well and a hex input with its text and caret.
+    fn build_custom(&mut self, card: usize) {
+        let (r_sm, r_md) = (self.t.n("r-sm"), self.t.n("r-md"));
+        let editor = self.add(Some(card), Kind::CustomEditor, 0.);
+        let base = self.add(Some(editor), Kind::Reset { lit: false }, 2.);
+        let lit = self.add(Some(base), Kind::Reset { lit: true }, 2.);
+        let ring = self.ring(base, Ring::Full(r_md), Target::ResetColors);
+        let (mut wells, mut boxes, mut texts, mut carets) = ([0; 2], [0; 2], [0; 2], [0; 2]);
+        for i in 0..2 {
+            wells[i] = self.add(Some(editor), Kind::Well(i), 0.);
+            self.ring(wells[i], Ring::Field(r_sm), Target::Well(i));
+            boxes[i] = self.add(Some(editor), Kind::HexBox(i), 0.);
+            texts[i] = self.add(Some(boxes[i]), Kind::FieldText(FieldId::Hex(i)), 0.);
+            carets[i] = self.add(Some(boxes[i]), Kind::Caret, 0.);
+            self.nodes[carets[i]].visible = false;
+            self.ring(boxes[i], Ring::Field(r_sm), Target::Hex(i));
+        }
+        self.custom = CustomNodes {
+            editor,
+            reset: Layered { base, lit, ring },
+            wells,
+            boxes,
+            texts,
+            carets,
         };
     }
 
@@ -1253,6 +1396,7 @@ impl Scene {
                 (on(self.hover == Some(Target::Shortcut(index))), "dur-2")
             }
             Kind::TriggerHover(key) => (on(self.hover == Some(Target::Select(key))), "dur-2"),
+            Kind::Reset { lit: true } => (on(self.hover == Some(Target::ResetColors)), "dur-2"),
             Kind::FindFieldHover => (
                 on(self.hover == Some(Target::Find(FindPart::Input))),
                 "dur-2",
@@ -1301,7 +1445,9 @@ impl Scene {
             Target::Select(key) if self.open.is_some_and(|(open, _)| open == key) => true,
             Target::Shortcut(index) if self.recording == Some(index) => true,
             // `.preferences-find-input:focus`, not only `:focus-visible`.
-            Target::Find(FindPart::Input) => self.focus == Some(target),
+            Target::Find(FindPart::Input) | Target::Hex(_) | Target::Well(_) => {
+                self.focus == Some(target)
+            }
             _ => self.focus_visible && self.focus == Some(target),
         }
     }
@@ -1457,6 +1603,25 @@ impl Scene {
             target += 1;
             let mut separators = Vec::new();
             for (position, &item) in items.iter().enumerate() {
+                if item == Item::CustomTheme {
+                    // A plain grid child: `--s-5` below the accent row, with
+                    // its own border and no rule above.
+                    let shown = self.custom_shown();
+                    self.nodes[self.custom.editor].visible = shown;
+                    let (b, text) = if shown {
+                        let top = cy + s5;
+                        let h = self.layout_item(g, item, (inset, top, inner_w), measure)?;
+                        cy = top + h;
+                        let text = self.find_texts(item).concat();
+                        (Rect::new(inset, top, inner_w, h), text)
+                    } else {
+                        (Rect::default(), String::new())
+                    };
+                    self.place_find_target(target, (s8, y), b, false, text);
+                    target += 1;
+                    self.item_rects.push((item, b.offset(s8, y)));
+                    continue;
+                }
                 cy += s5;
                 let top = cy;
                 // `.settings-card > * + *` rules; the first item after the
@@ -1804,6 +1969,7 @@ impl Scene {
                 self.texts.open[which.index()] = Some(open);
                 Ok(content_h)
             }
+            Item::CustomTheme => self.layout_custom(g, (x, y, width)),
             Item::Updates => {
                 // Like the other native hosts without an update worker: build
                 // identity on the left; a fixed-width Check Now with the
@@ -1967,6 +2133,93 @@ impl Scene {
                 Ok(height)
             }
         }
+    }
+
+    /// Lay out the custom color editor at `(x, y)` across `width` (card
+    /// coordinates); returns its height.
+    fn layout_custom(&mut self, g: &Gfx, (x, y, width): (f32, f32, f32)) -> Result<f32> {
+        let n = |name: &str| self.t.n(name);
+        let (s3, s4, s5, s6) = (n("s-3"), n("s-4"), n("s-5"), n("s-6"));
+        let (h_sm, h_md) = (n("h-sm"), n("h-md"));
+        let copy = preferences::CUSTOM_THEME;
+        let t = &self.t;
+        // `.custom-theme-editor`: 1 px border, `--s-5` padding.
+        let pad = 1. + s5;
+        let inner_w = (width - 2. * pad).max(1.);
+        let reset = g.text(t, Style::Control, copy.reset, 1e4)?;
+        let reset_w = (reset.width + 2. * s5 + 2.).ceil();
+        let copy_w = (inner_w - reset_w - s6).max(40.);
+        let title = g.text(t, Style::RowTitle, copy.title, copy_w)?;
+        // `max-width: 44ch` of the `--text-sm` description.
+        let measure = 44. * g.ch(t, Style::CardDescription)?;
+        let description = g.text(
+            t,
+            Style::RowDescription,
+            copy.description,
+            copy_w.min(measure),
+        )?;
+        let heading_h = (title.height + 3. + description.height).max(h_sm);
+        let reset_rect = Rect::new(pad + inner_w - reset_w, pad, reset_w, h_sm);
+        // `.custom-theme-fields`: two 1fr columns `--s-4` apart, `--s-5` below.
+        let top = pad + heading_h + s5;
+        let col_w = (inner_w - s4) / 2.;
+        let mut labels = Vec::new();
+        let mut notes = Vec::new();
+        for (_, label, note) in copy.fields {
+            // `.custom-theme-field`: 1 px border, `--s-4` padding.
+            let field_w = (col_w - 2. * (1. + s4)).max(1.);
+            labels.push(g.text(t, Style::Button, label, field_w)?);
+            notes.push(g.text(t, Style::Note, note, field_w)?);
+        }
+        let label_h = labels.iter().map(|l| l.height).fold(0., f32::max);
+        let note_h = notes.iter().map(|l| l.height).fold(0., f32::max);
+        let control_y = top + 1. + s4 + label_h + s3;
+        let field_h = 1. + s4 + label_h + s3 + h_md + s3 + note_h + s4 + 1.;
+        let mut fields = [Rect::default(); 2];
+        for (i, field) in fields.iter_mut().enumerate() {
+            let fx = pad + i as f32 * (col_w + s4);
+            *field = Rect::new(fx, top, col_w, field_h);
+            let cx = fx + 1. + s4;
+            let content_w = col_w - 2. * (1. + s4);
+            let well = Rect::new(cx, control_y, WELL_W, h_md);
+            let hex = Rect::new(
+                cx + WELL_W + s3,
+                control_y,
+                (content_w - WELL_W - s3).max(1.),
+                h_md,
+            );
+            self.nodes[self.custom.wells[i]].rect = well;
+            self.nodes[self.custom.boxes[i]].rect = hex;
+            for &child in &self.children[self.custom.wells[i]] {
+                self.nodes[child].rect = well.at_origin();
+            }
+            // `padding: 1px var(--s-3)` inside the 1 px border.
+            let text = Rect::new(1. + s3, 0., (hex.w - 2. * (1. + s3)).max(1.), h_md);
+            let (text_node, caret) = (self.custom.texts[i], self.custom.carets[i]);
+            self.nodes[text_node].rect = text;
+            for &child in &self.children[self.custom.boxes[i]] {
+                if child != text_node && child != caret {
+                    self.nodes[child].rect = hex.at_origin();
+                }
+            }
+            self.hex_fields[i].relayout(g, &self.t, text.w)?;
+        }
+        let h = pad + heading_h + s5 + field_h + pad;
+        self.nodes[self.custom.editor].rect = Rect::new(x, y, width, h);
+        let Layered { base, lit, ring } = self.custom.reset;
+        self.nodes[base].rect = reset_rect;
+        self.nodes[lit].rect = reset_rect.at_origin();
+        self.nodes[ring].rect = reset_rect.at_origin();
+        self.custom_layout = CustomLayout {
+            title: Some(title),
+            description: Some(description),
+            reset: Some(reset),
+            labels,
+            notes,
+            fields,
+            note_y: 1. + s4 + label_h + s3 + h_md + s3,
+        };
+        Ok(h)
     }
 
     fn viewport_rect(&self) -> Rect {
@@ -2172,10 +2425,19 @@ impl Scene {
         self.focus = focus;
         self.focus_visible = visible;
         self.refresh(true);
-        let input = Some(Target::Find(FindPart::Input));
-        if (old == input) != (focus == input) {
-            // The selection shows only while the input has focus.
-            self.nodes[self.find_nodes.text].dirty = true;
+        for id in FIELDS {
+            let target = Some(id.target());
+            if (old == target) != (focus == target) {
+                // The selection shows only while the input has focus.
+                let text = self.field_nodes(id).0;
+                self.nodes[text].dirty = true;
+            }
+        }
+        // A hex input commits on blur (shipping `onBlur`).
+        if let Some(Target::Hex(i)) = old
+            && focus != old
+        {
+            self.commit_hex(i);
         }
         self.sync_caret();
         if let Some(target) = focus
@@ -2214,6 +2476,14 @@ impl Scene {
                     Item::Utility(which) => list.push(Target::Open(which)),
                     // Check Now is disabled, so it is not a Tab stop.
                     Item::Updates => {}
+                    // DOM order: Reset colors, then each color and hex input.
+                    Item::CustomTheme if self.custom_shown() => {
+                        list.push(Target::ResetColors);
+                        for i in 0..2 {
+                            list.extend([Target::Well(i), Target::Hex(i)]);
+                        }
+                    }
+                    Item::CustomTheme => {}
                     Item::Shortcuts => {
                         list.extend((0..SHORTCUT_ROWS.len()).map(Target::Shortcut));
                     }
@@ -2321,7 +2591,14 @@ impl Scene {
                 self.choose(key, index);
                 None
             }
-            Target::Find(FindPart::Input) => None,
+            Target::Find(FindPart::Input) | Target::Hex(_) => None,
+            Target::ResetColors => {
+                let defaults: captures_settings::CustomThemeSettings =
+                    serde_json::from_value(serde_json::json!({})).ok()?;
+                self.set_custom_theme(defaults);
+                None
+            }
+            Target::Well(i) => Some(Action::PickColor(i)),
             Target::Find(FindPart::Close) => {
                 self.find_close();
                 None
@@ -3115,9 +3392,140 @@ impl Scene {
         }
     }
 
-    /// The find input has keyboard focus.
+    /// A text field has keyboard focus.
     pub fn text_focused(&self) -> bool {
-        self.find.open && self.focus == Some(Target::Find(FindPart::Input))
+        self.focused_field().is_some()
+    }
+
+    /// The text field with keyboard focus, if it is shown.
+    pub fn focused_field(&self) -> Option<FieldId> {
+        let focus = self.focus?;
+        FIELDS
+            .into_iter()
+            .find(|&id| id.target() == focus && self.field_shown(id))
+    }
+
+    /// The text field a target is, if any.
+    pub fn field_of(&self, target: Option<Target>) -> Option<FieldId> {
+        FIELDS
+            .into_iter()
+            .find(|&id| Some(id.target()) == target && self.field_shown(id))
+    }
+
+    pub fn field_shown(&self, id: FieldId) -> bool {
+        match id {
+            FieldId::Find => self.find.open,
+            FieldId::Hex(_) => self.custom_shown(),
+        }
+    }
+
+    pub fn field(&self, id: FieldId) -> &TextField {
+        match id {
+            FieldId::Find => &self.find.field,
+            FieldId::Hex(i) => &self.hex_fields[i],
+        }
+    }
+
+    /// `(text node, caret node)` of a field.
+    fn field_nodes(&self, id: FieldId) -> (usize, usize) {
+        match id {
+            FieldId::Find => (self.find_nodes.text, self.find_nodes.caret),
+            FieldId::Hex(i) => (self.custom.texts[i], self.custom.carets[i]),
+        }
+    }
+
+    /// A field's text as typed (the find query includes an open composition).
+    pub fn field_value(&self, id: FieldId) -> String {
+        String::from_utf16_lossy(&self.field(id).editor.display())
+    }
+
+    /// A field's text box in client DIPs.
+    pub fn field_box(&self, id: FieldId) -> Rect {
+        self.absolute(self.field_nodes(id).0)
+    }
+
+    // ---- custom colors ----
+
+    /// The Custom accent is selected, so its editor shows.
+    pub fn custom_shown(&self) -> bool {
+        THEMES[self.theme_index()].id == "custom"
+    }
+
+    /// A saved custom color, Accent then Recording signal.
+    pub fn custom_value(&self, i: usize) -> &str {
+        let theme = &self.settings.custom_theme;
+        if i == 0 { &theme.accent } else { &theme.signal }
+    }
+
+    /// Save custom colors (shipping `setCustomTheme`): the Custom accent is
+    /// selected, the palette re-themes and the hex inputs show the values.
+    fn set_custom_theme(&mut self, theme: captures_settings::CustomThemeSettings) {
+        let was_custom = self.custom_shown();
+        let changed = theme != self.settings.custom_theme;
+        if !changed && was_custom {
+            return;
+        }
+        let old = std::mem::replace(&mut self.settings.custom_theme, theme);
+        if let Ok(custom) = serde_json::from_value(serde_json::json!("custom")) {
+            self.settings.theme = custom;
+        }
+        self.save();
+        self.retheme = true;
+        for i in 0..2 {
+            self.reset_hex_text(i);
+            let before = if i == 0 { &old.accent } else { &old.signal };
+            if before != self.custom_value(i) {
+                self.events.push(Event::Value(Target::Well(i)));
+            }
+        }
+        if !was_custom {
+            let custom = THEMES.iter().position(|theme| theme.id == "custom");
+            if let Some(index) = custom {
+                self.events.push(Event::Selected(Target::Theme(index)));
+            }
+            self.refresh(true);
+        }
+    }
+
+    /// The system color picker chose `hex` for custom color `i`.
+    pub fn set_custom_color(&mut self, i: usize, hex: String) {
+        let mut theme = self.settings.custom_theme.clone();
+        if i == 0 {
+            theme.accent = hex;
+        } else {
+            theme.signal = hex;
+        }
+        self.set_custom_theme(theme);
+    }
+
+    /// Commit hex input `i` (shipping `commitHexValue`): a valid color saves
+    /// normalized; anything else restores the saved value.
+    fn commit_hex(&mut self, i: usize) {
+        let draft = String::from_utf16_lossy(self.hex_fields[i].editor.units());
+        match captures_settings::theme::normalize_hex_color(&draft) {
+            Ok(value) if value != self.custom_value(i) => self.set_custom_color(i, value),
+            _ => self.reset_hex_text(i),
+        }
+    }
+
+    /// UIA `SetValue` on a hex input: commit it like a blur.
+    pub fn commit_typed_hex(&mut self, i: usize) {
+        self.commit_hex(i);
+    }
+
+    /// Escape in a hex input: back to the saved value.
+    pub fn revert_hex(&mut self, i: usize) {
+        self.reset_hex_text(i);
+    }
+
+    /// Show the saved value in hex input `i` (`key={value}` remounts it).
+    fn reset_hex_text(&mut self, i: usize) {
+        let value = self.custom_value(i).to_uppercase();
+        if self.hex_fields[i].editor.set_text(&value).text {
+            // The next layout lays the text out again.
+            self.relayout = true;
+            self.events.push(Event::FieldText(FieldId::Hex(i)));
+        }
     }
 
     /// Text content of an item's find targets, like shipping `textContent`:
@@ -3140,6 +3548,15 @@ impl Scene {
             Item::Utility(which) => {
                 let (title, body, action) = which.copy();
                 vec![format!("{title}{body}{action}")]
+            }
+            Item::CustomTheme => {
+                let copy = preferences::CUSTOM_THEME;
+                let mut text = format!("{}{}{}", copy.title, copy.description, copy.reset);
+                for (_, label, note) in copy.fields {
+                    text.push_str(label);
+                    text.push_str(note);
+                }
+                vec![text]
             }
             Item::Updates => vec![format!(
                 "{}{}{}{}",
@@ -3375,54 +3792,79 @@ impl Scene {
         self.find_refresh();
     }
 
-    /// Edit the find input; text changes restart matching at the first
-    /// match (`updateQuery`).
+    /// Edit the focused text field.
     pub fn field_edit(&mut self, g: &Gfx, edit: impl FnOnce(&mut Editor) -> Change) {
-        let change = edit(&mut self.find.field.editor);
+        if let Some(id) = self.focused_field() {
+            self.field_edit_in(g, id, edit);
+        }
+    }
+
+    /// Edit field `id`; find text changes restart matching at the first
+    /// match (`updateQuery`). Hex inputs commit on blur, not here.
+    pub fn field_edit_in(
+        &mut self,
+        g: &Gfx,
+        id: FieldId,
+        edit: impl FnOnce(&mut Editor) -> Change,
+    ) {
+        let field = match id {
+            FieldId::Find => &mut self.find.field,
+            FieldId::Hex(i) => &mut self.hex_fields[i],
+        };
+        let change = edit(&mut field.editor);
         if !change.any() {
             return;
         }
-        match self.find.field.apply(g, &self.t, change) {
-            Ok(redraw) => {
-                if redraw {
-                    self.nodes[self.find_nodes.text].dirty = true;
-                }
+        match field.apply(g, &self.t, change) {
+            Ok(true) => {
+                let text = self.field_nodes(id).0;
+                self.nodes[text].dirty = true;
             }
+            Ok(false) => {}
             Err(error) => eprintln!("text layout failed: {error:?}"),
         }
         if change.text {
-            self.find.index = 0;
-            self.find.scrolled = None;
-            self.find_refresh();
-            self.events.push(Event::FindText);
+            if id == FieldId::Find {
+                self.find.index = 0;
+                self.find.scrolled = None;
+                self.find_refresh();
+            }
+            self.events.push(Event::FieldText(id));
         }
-        self.events.push(Event::FindCaret);
+        self.events.push(Event::FieldCaret(id));
         self.sync_caret();
     }
 
-    /// The text position under client x `x` in the find input.
+    /// The text position under client x `x` in the focused field.
     pub fn field_hit(&self, x: f32) -> usize {
-        let r = self.absolute(self.find_nodes.text);
-        self.find.field.hit(x - r.x)
+        self.focused_field().map_or(0, |id| {
+            let r = self.field_box(id);
+            self.field(id).hit(x - r.x)
+        })
     }
 
-    /// Place the caret node: shown while the input has focus in an active
-    /// window and nothing is selected (inside a composition too).
+    /// Place the caret nodes: one shows while its field has focus in an
+    /// active window and nothing is selected (inside a composition too).
     fn sync_caret(&mut self) {
-        let editor = &self.find.field.editor;
-        let (a, b) = editor.selection();
-        let shown = self.text_focused() && self.window_focused && (a == b || editor.composing());
-        let text = self.nodes[self.find_nodes.text].rect;
-        let (x, y, h) = self.find.field.caret_box(text.x, text.h);
-        let r = Rect::new(x, y, 1., h);
-        let node = &mut self.nodes[self.find_nodes.caret];
-        if node.visible != shown || node.rect != r {
-            node.visible = shown;
-            node.rect = r;
-            node.props = true;
-        }
-        if shown {
-            self.caret_blink = true;
+        let focused = self.focused_field();
+        for id in FIELDS {
+            let field = self.field(id);
+            let (a, b) = field.editor.selection();
+            let shown =
+                focused == Some(id) && self.window_focused && (a == b || field.editor.composing());
+            let (text, caret) = self.field_nodes(id);
+            let text = self.nodes[text].rect;
+            let (x, y, h) = field.caret_box(text.x, text.h);
+            let r = Rect::new(x, y, 1., h);
+            let node = &mut self.nodes[caret];
+            if node.visible != shown || node.rect != r {
+                node.visible = shown;
+                node.rect = r;
+                node.props = true;
+            }
+            if shown {
+                self.caret_blink = true;
+            }
         }
     }
 
@@ -3430,15 +3872,24 @@ impl Scene {
     pub fn window_focus(&mut self, focused: bool) {
         if self.window_focused != focused {
             self.window_focused = focused;
-            self.nodes[self.find_nodes.text].dirty = true;
+            if let Some(id) = self.focused_field() {
+                let text = self.field_nodes(id).0;
+                self.nodes[text].dirty = true;
+            }
+            // Like a DOM blur, a hex input commits when the window deactivates.
+            if !focused && let Some(Target::Hex(i)) = self.focus {
+                self.commit_hex(i);
+            }
             self.sync_caret();
         }
     }
 
     /// The caret node, when shown.
     pub fn caret_node(&self) -> Option<usize> {
-        let caret = self.find_nodes.caret;
-        self.nodes[caret].visible.then_some(caret)
+        FIELDS
+            .into_iter()
+            .map(|id| self.field_nodes(id).1)
+            .find(|&caret| self.nodes[caret].visible)
     }
 
     /// The find bar, its count and its input's text box, in client DIPs.
@@ -3453,8 +3904,43 @@ impl Scene {
         )
     }
 
-    pub fn find_field(&self) -> &TextField {
-        &self.find.field
+    /// The custom color editor, in client DIPs.
+    pub fn custom_rect(&self) -> Rect {
+        self.absolute(self.custom.editor)
+    }
+
+    /// The editor's copy in client DIPs: title, description, then each
+    /// field's label and note.
+    pub fn custom_text_rect(&self, k: usize) -> Rect {
+        let layout = &self.custom_layout;
+        let editor = self.custom_rect();
+        let pad = 1. + self.t.n("s-5");
+        let inset = 1. + self.t.n("s-4");
+        let size = |text: &Option<Text>| text.as_ref().map_or((0., 0.), |t| (t.width, t.height));
+        let r = match k {
+            0 => {
+                let (w, h) = size(&layout.title);
+                Rect::new(pad, pad, w, h)
+            }
+            1 => {
+                let (w, h) = size(&layout.description);
+                Rect::new(pad, pad + size(&layout.title).1 + 3., w, h)
+            }
+            _ => {
+                let i = (k - 2) / 2;
+                let f = layout.fields[i];
+                if k.is_multiple_of(2) {
+                    let text = layout.labels.get(i);
+                    let (w, h) = text.map_or((0., 0.), |t| (t.width, t.height));
+                    Rect::new(f.x + inset, f.y + inset, w, h)
+                } else {
+                    let text = layout.notes.get(i);
+                    let (w, h) = text.map_or((0., 0.), |t| (t.width, t.height));
+                    Rect::new(f.x + inset, f.y + layout.note_y, w, h)
+                }
+            }
+        };
+        r.offset(editor.x, editor.y)
     }
 
     // ---- geometry for input and accessibility (client DIPs) ----
@@ -3493,6 +3979,9 @@ impl Scene {
             Target::Option(key, i) => return self.option_rect(key, i),
             Target::Find(FindPart::Input) => self.find_nodes.field,
             Target::Find(part) => self.find_nodes.buttons[part.index() - 1].base,
+            Target::ResetColors => self.custom.reset.base,
+            Target::Well(i) => self.custom.wells[i],
+            Target::Hex(i) => self.custom.boxes[i],
         })
     }
 
@@ -3626,7 +4115,15 @@ impl Scene {
             ])
             .chain((0..SHORTCUT_ROWS.len()).map(Target::Shortcut))
             .chain(SELECTS.map(Target::Select));
-        for target in controls {
+        let custom = [
+            Target::ResetColors,
+            Target::Well(0),
+            Target::Hex(0),
+            Target::Well(1),
+            Target::Hex(1),
+        ];
+        let custom = custom.into_iter().filter(|_| self.custom_shown());
+        for target in controls.chain(custom) {
             if self.target_rect(target).contains(x, y) {
                 return Some(target);
             }
@@ -3832,7 +4329,7 @@ impl Scene {
                     unsafe { dc.PopAxisAlignedClip() };
                 }
             }
-            Kind::Choose { lit } | Kind::Open { lit, .. } => {
+            Kind::Choose { lit } | Kind::Open { lit, .. } | Kind::Reset { lit } => {
                 let radius = t.n("r-md");
                 let (bg, edge) = if lit {
                     ("control-hover", "border-strong")
@@ -3846,6 +4343,7 @@ impl Scene {
                 gfx::border(dc, all, radius, 1., c(edge))?;
                 let label = match n.kind {
                     Kind::Open { which, .. } => &self.texts.open[which.index()],
+                    Kind::Reset { .. } => &self.custom_layout.reset,
                     _ => &self.texts.choose,
                 };
                 if let Some(label) = label {
@@ -4053,9 +4551,65 @@ impl Scene {
                 gfx::border(dc, all, radius, 1., c("surface-field"))?;
                 gfx::border(dc, all, radius, 1., c("border-strong"))?;
             }
-            Kind::FindText => {
-                let focused = self.text_focused() && self.window_focused;
-                self.find.field.draw(dc, t, (0., w, h), focused)?;
+            Kind::FieldText(id) => {
+                let focused = self.focused_field() == Some(id) && self.window_focused;
+                self.field(id).draw(dc, t, (0., w, h), focused)?;
+            }
+            Kind::CustomEditor => {
+                let layout = &self.custom_layout;
+                let radius = t.n("r-lg");
+                // `::before`: the rainbow at 0.12 over `inset: -30px`, mixed
+                // into the opaque canvas here so no stop carries alpha. Its
+                // 32 px blur is not drawn; the gradient is already smooth.
+                let canvas = c("surface-canvas");
+                let mixed: Vec<(f32, u32)> = CUSTOM_RAINBOW
+                    .iter()
+                    .map(|&(at, rgb)| {
+                        let mix = |shift: u32, base: f32| {
+                            let hue = ((rgb >> shift) & 0xff) as f32 / 255.;
+                            ((base + (hue - base) * 0.12) * 255.).round() as u32
+                        };
+                        (
+                            at,
+                            mix(16, canvas.r) << 16 | mix(8, canvas.g) << 8 | mix(0, canvas.b),
+                        )
+                    })
+                    .collect();
+                let line = rect(-30., -30., w + 30., h + 30.);
+                gfx::gradient_over(dc, (all, radius), line, 115., &mixed, 1.)?;
+                gfx::border(dc, all, radius, 1., c("border"))?;
+                let pad = 1. + t.n("s-5");
+                if let (Some(title), Some(description)) = (&layout.title, &layout.description) {
+                    gfx::text(dc, title, pad, pad, c("text"))?;
+                    let y = pad + title.height + 3.;
+                    gfx::text(dc, description, pad, y, c("text-subtle"))?;
+                }
+                let inset = 1. + t.n("s-4");
+                for (i, f) in layout.fields.iter().enumerate() {
+                    let r = rect(f.x, f.y, f.x + f.w, f.y + f.h);
+                    gfx::fill_round(dc, r, t.n("r-md"), c("surface-raised"))?;
+                    gfx::border(dc, r, t.n("r-md"), 1., c("border-subtle"))?;
+                    if let Some(label) = layout.labels.get(i) {
+                        gfx::text(dc, label, f.x + inset, f.y + inset, c("text"))?;
+                    }
+                    if let Some(note) = layout.notes.get(i) {
+                        let y = f.y + layout.note_y;
+                        gfx::text(dc, note, f.x + inset, y, c("text-subtle"))?;
+                    }
+                }
+            }
+            Kind::Well(i) => {
+                // `padding: 3px` inside the 1 px border; a 3 px-round swatch.
+                let radius = t.n("r-sm");
+                gfx::fill_round(dc, all, radius, c("surface-field"))?;
+                gfx::border(dc, all, radius, 1., c("control-border"))?;
+                let swatch = rect(4., 4., w - 4., h - 4.);
+                gfx::fill_round(dc, swatch, 3., hex_color(self.custom_value(i)))?;
+            }
+            Kind::HexBox(_) => {
+                let radius = t.n("r-sm");
+                gfx::fill_round(dc, all, radius, c("surface-field"))?;
+                gfx::border(dc, all, radius, 1., c("control-border"))?;
             }
             Kind::Caret => gfx::fill(dc, all, c("text"))?,
             Kind::FindCount => {
@@ -4203,6 +4757,22 @@ impl Scene {
             }
         }
         Ok(())
+    }
+}
+
+/// A saved `#rrggbb` color for drawing.
+fn hex_color(value: &str) -> windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F {
+    let channel = |i: usize| {
+        value
+            .get(i..i + 2)
+            .and_then(|v| u8::from_str_radix(v, 16).ok())
+            .map_or(0., |v| f32::from(v) / 255.)
+    };
+    windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F {
+        r: channel(1),
+        g: channel(3),
+        b: channel(5),
+        a: 1.,
     }
 }
 

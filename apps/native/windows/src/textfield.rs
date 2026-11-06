@@ -69,6 +69,8 @@ pub struct Editor {
     redo: Vec<Snapshot>,
     /// The last edit was typing, so the next typed text joins its undo step.
     typing: bool,
+    /// HTML `maxLength`, in UTF-16 units: typed and pasted text is cut to fit.
+    pub max_len: Option<usize>,
 }
 
 impl Editor {
@@ -142,6 +144,9 @@ impl Editor {
         }
         self.checkpoint(false);
         self.text = units;
+        if let Some(max) = self.max_len {
+            self.text.truncate(max);
+        }
         self.caret = self.text.len();
         self.anchor = self.caret;
         self.comp.clear();
@@ -184,6 +189,14 @@ impl Editor {
 
     fn insert_units(&mut self, units: &[u16], typing: bool) -> Change {
         let (a, b) = self.selection();
+        let room = self.max_len.map_or(units.len(), |max| {
+            max.saturating_sub(self.text.len() - (b - a))
+        });
+        let mut units = &units[..units.len().min(room)];
+        // Never keep half a surrogate pair.
+        if units.last().is_some_and(|&u| is_high(u)) {
+            units = &units[..units.len() - 1];
+        }
         if units.is_empty() && a == b {
             return Change::default();
         }
@@ -466,6 +479,8 @@ mod view {
         line_height: f32,
         /// The selection the text was last drawn with.
         drawn_selection: (usize, usize),
+        /// CSS `text-transform: uppercase` (ASCII, so positions still match).
+        pub uppercase: bool,
     }
 
     impl TextField {
@@ -480,6 +495,7 @@ mod view {
                 scroll: 0.,
                 line_height: 0.,
                 drawn_selection: (0, 0),
+                uppercase: false,
             }
         }
 
@@ -487,7 +503,15 @@ mod view {
         /// resize of the text box to `width`.
         pub fn relayout(&mut self, g: &Gfx, t: &Tokens, width: f32) -> Result<()> {
             self.width = width.max(1.);
-            let display = String::from_utf16_lossy(&self.editor.display());
+            let mut units = self.editor.display();
+            if self.uppercase {
+                for unit in &mut units {
+                    if (u16::from(b'a')..=u16::from(b'z')).contains(unit) {
+                        *unit -= 32;
+                    }
+                }
+            }
+            let display = String::from_utf16_lossy(&units);
             let text = g.text(t, self.style, &display, 1e5)?;
             if let Some((start, length)) = self.editor.composition() {
                 unsafe {
@@ -978,6 +1002,23 @@ mod tests {
         assert_eq!(e.text(), "");
         e.key(Key::Redo, false, false);
         assert_eq!(e.text(), "cur");
+    }
+
+    #[test]
+    fn max_len_cuts_typed_and_pasted_text_like_html() {
+        let mut e = editor("");
+        e.max_len = Some(7);
+        e.insert("#32d3ff00");
+        assert_eq!(e.text(), "#32d3ff");
+        e.insert("a");
+        assert_eq!(e.text(), "#32d3ff");
+        // Replacing a selection frees its room.
+        e.select(1, 3);
+        e.insert("ABC");
+        assert_eq!(e.text(), "#ABd3ff");
+        e.select_all();
+        e.insert("#12345😀");
+        assert_eq!(e.text(), "#12345");
     }
 
     #[test]

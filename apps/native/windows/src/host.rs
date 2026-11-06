@@ -26,7 +26,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
 
 use crate::gfx::{self, Gfx};
-use crate::scene::{Action, Event, FindPart, Kind, Prop, RowKey, Scene, Target};
+use crate::scene::{Action, Event, FieldId, Kind, Prop, RowKey, Scene, Target};
 use crate::textfield::{self, Key};
 use crate::{Options, appearance};
 
@@ -88,6 +88,8 @@ pub struct Host {
     appearance: Option<String>,
     /// Choose… was activated; the picker opens once the host is released.
     pick_folder: bool,
+    /// A custom color well was activated; its picker opens likewise.
+    pick_color: Option<usize>,
     /// A `WM_APP_WAKE` was posted since the loop last checked `need`.
     woken: bool,
     /// The IME is associated (a text field has focus).
@@ -193,6 +195,7 @@ impl Host {
                 login,
                 appearance: options.appearance.clone(),
                 pick_folder: false,
+                pick_color: None,
                 woken: false,
                 ime: false,
                 dragging: false,
@@ -236,6 +239,12 @@ impl Host {
     }
 
     fn frame(&mut self) -> Result<()> {
+        if std::mem::take(&mut self.scene.retheme) {
+            // Custom colors changed; this frame lays out in the new palette.
+            let need = self.need;
+            self.retheme();
+            self.need = need;
+        }
         let text = self.scene.text_focused();
         if text != self.ime {
             textfield::ime_enable(self.hwnd, text);
@@ -387,10 +396,12 @@ impl Host {
     }
 
     /// Ctrl+C, Ctrl+X, Ctrl+V (and Ctrl+Insert, Shift+Delete, Shift+Insert)
-    /// in the find input; true when consumed.
+    /// in the focused text field; true when consumed.
     fn clipboard_key(&mut self, vk: VIRTUAL_KEY, ctrl: bool, shift: bool) -> bool {
-        let editor = &self.scene.find_field().editor;
-        let selected = editor.selected_text();
+        let Some(id) = self.scene.focused_field() else {
+            return false;
+        };
+        let selected = self.scene.field(id).editor.selected_text();
         match vk {
             VK_C | VK_INSERT if ctrl && !shift => {
                 if !selected.is_empty() {
@@ -445,7 +456,7 @@ impl Host {
             return false;
         }
         let plain = !event.ctrl_key && !event.alt_key && !event.meta_key;
-        let input = self.scene.text_focused();
+        let input = self.scene.focused_field() == Some(FieldId::Find);
         let step = match vk {
             VK_ESCAPE if plain => {
                 self.scene.find_close();
@@ -461,10 +472,26 @@ impl Host {
         true
     }
 
-    /// Editing keys for the focused find input; true when consumed.
+    /// Editing keys for the focused text field; true when consumed.
     fn text_key(&mut self, vk: VIRTUAL_KEY, ctrl: bool, shift: bool, alt: bool) -> bool {
         if alt {
             return false;
+        }
+        // A hex input: Enter commits by blurring, Escape restores the saved
+        // value and blurs; neither reaches Find.
+        if let Some(FieldId::Hex(i)) = self.scene.focused_field() {
+            match vk {
+                VK_RETURN => {
+                    self.scene.set_focus(None, false);
+                    return true;
+                }
+                VK_ESCAPE => {
+                    self.scene.revert_hex(i);
+                    self.scene.set_focus(None, false);
+                    return true;
+                }
+                _ => {}
+            }
         }
         let key = match vk {
             VK_LEFT => Some(Key::Left),
@@ -559,6 +586,7 @@ impl Host {
                 self.retheme();
             }
             Some(Action::ChooseFolder) => self.pick_folder = true,
+            Some(Action::PickColor(i)) => self.pick_color = Some(i),
             Some(Action::KeyboardSettings) => {
                 let platform = crate::scene::PLATFORM;
                 if let Err(error) = preferences::open_keyboard_settings(platform) {
@@ -638,6 +666,27 @@ impl Host {
         let tokens = appearance::tokens(self.appearance.as_deref(), self.scene.settings());
         if tokens.appearance != self.scene.t.appearance {
             self.retheme();
+        }
+    }
+
+    /// Show the system color picker for custom color `i` (Chromium's
+    /// `input[type="color"]` on Windows); called with the host released.
+    fn choose_color(hwnd: HWND, i: usize) {
+        let Some(current) = with_host(|h| {
+            h.pick_color = None;
+            h.scene.custom_value(i).to_owned()
+        }) else {
+            return;
+        };
+        match crate::dialog::pick_color(hwnd, &current) {
+            Ok(Some(hex)) => {
+                with_host(|h| {
+                    h.scene.set_custom_color(i, hex);
+                    h.need = true;
+                });
+            }
+            Ok(None) => {}
+            Err(error) => eprintln!("color picker failed: {error}"),
         }
     }
 
@@ -778,7 +827,7 @@ impl Host {
                     let focus = hit.filter(|t| self.scene.takes_focus(*t));
                     self.scene.set_focus(focus, false);
                 }
-                if hit == Some(Target::Find(FindPart::Input)) {
+                if self.scene.field_of(hit).is_some() {
                     self.field_click(msg == WM_LBUTTONDBLCLK, x, y, shift);
                 }
                 self.need = true;
@@ -829,7 +878,7 @@ impl Host {
                     Target::Find(part) => self.scene.find_enabled(part),
                     _ => true,
                 });
-                let cursor = if hit == Some(Target::Find(FindPart::Input)) {
+                let cursor = if self.scene.field_of(hit).is_some() {
                     IDC_IBEAM
                 } else if hand {
                     IDC_HAND
@@ -906,8 +955,8 @@ impl Host {
                 }
                 let ctrl = unsafe { GetKeyState(VK_CONTROL.0 as i32) } < 0;
                 let alt = unsafe { GetKeyState(VK_MENU.0 as i32) } < 0;
-                if self.find_key(vk, wp, lp)
-                    || (self.scene.text_focused() && self.text_key(vk, ctrl, shift, alt))
+                if (self.scene.text_focused() && self.text_key(vk, ctrl, shift, alt))
+                    || self.find_key(vk, wp, lp)
                 {
                     self.need = true;
                     return Some(LRESULT(0));
@@ -969,10 +1018,13 @@ impl Host {
         Some(LRESULT(0))
     }
 
-    /// A press in the find input: place the caret (Shift extends), select
+    /// A press in a text field: place the caret (Shift extends), select
     /// a word on double-click and everything on a third click.
     fn field_click(&mut self, double: bool, x: f32, y: f32, shift: bool) {
-        if self.scene.find_field().editor.composing() {
+        let Some(id) = self.scene.focused_field() else {
+            return;
+        };
+        if self.scene.field(id).editor.composing() {
             textfield::ime_complete(self.hwnd);
         }
         let position = self.scene.field_hit(x);
@@ -981,7 +1033,7 @@ impl Host {
             at.elapsed() < time && (px - x).abs() < 4. && (py - y).abs() < 4.
         };
         if double {
-            let (start, end) = self.scene.find_field().editor.word_at(position);
+            let (start, end) = self.scene.field(id).editor.word_at(position);
             self.scene
                 .field_edit(&self.g, |editor| editor.select(start, end));
             self.double_click = Some((std::time::Instant::now(), x, y));
@@ -1036,7 +1088,10 @@ impl Host {
                 Event::ShortcutError(index) => {
                     (event, false, self.scene.shortcut_error(index).to_owned())
                 }
-                Event::FindText => (event, false, self.scene.find_query()),
+                Event::FieldText(id) => (event, false, self.scene.field_value(id)),
+                Event::Value(Target::Well(i)) => {
+                    (event, false, self.scene.custom_value(i).to_owned())
+                }
                 Event::SaveStatus => (event, false, self.scene.save_message()),
                 Event::FindCount => (event, false, self.scene.find_count_label()),
                 Event::Focus(_)
@@ -1044,7 +1099,7 @@ impl Host {
                 | Event::Active(..)
                 | Event::Value(_)
                 | Event::FindOpen(_)
-                | Event::FindCaret => (event, false, String::new()),
+                | Event::FieldCaret(_) => (event, false, String::new()),
             })
             .collect()
     }
@@ -1192,9 +1247,9 @@ pub fn run(options: Options) -> Result<()> {
                         eprintln!("frame failed: {error:?}");
                     }
                 }
-                (h.need, h.take_events(), h.pick_folder)
+                (h.need, h.take_events(), h.pick_folder, h.pick_color)
             });
-            let Some((again, events, pick_folder)) = state else {
+            let Some((again, events, pick_folder, pick_color)) = state else {
                 continue;
             };
             if !events.is_empty() {
@@ -1202,6 +1257,10 @@ pub fn run(options: Options) -> Result<()> {
             }
             if pick_folder {
                 Host::choose_folder(hwnd);
+                continue;
+            }
+            if let Some(i) = pick_color {
+                Host::choose_color(hwnd, i);
                 continue;
             }
             if !again {
