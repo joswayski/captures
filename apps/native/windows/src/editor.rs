@@ -59,6 +59,9 @@ use crate::scene::Rect;
 use crate::tokens::Tokens;
 use crate::{Options, appearance};
 
+mod props;
+pub use props::{Field, Prop, Range, bounds as range_bounds, range_text};
+
 /// `.screenshot-editor { min-width: 860px; min-height: 600px }`; GTK's default.
 pub const SIZE: (f32, f32) = (1280., 840.);
 const MIN_SIZE: (f32, f32) = (860., 600.);
@@ -157,6 +160,8 @@ pub enum Target {
     Copy,
     SaveAsNew,
     Save,
+    /// A Tool properties control.
+    Prop(Prop),
 }
 
 /// Shipping controls this host does not implement yet: drawn disabled and
@@ -219,6 +224,8 @@ enum Kind {
     List,
     /// `.screenshot-properties-heading`.
     Properties,
+    /// The Properties section under the heading: legends and its rule.
+    PropsBody,
     /// `.screenshot-export-bar`.
     Bar,
     /// The zoom group's frame, the disabled preset readout and Add images.
@@ -302,6 +309,8 @@ pub struct Presented {
     pub can_redo: bool,
     pub style: ElementStyle,
     pub has_draft: bool,
+    /// Resolved shape and path controls per layer ID.
+    pub controls: BTreeMap<String, props::Values>,
     pub source: Option<ExportSource>,
     /// New pixels, when they changed.
     pub pixels: Option<Pixels>,
@@ -422,6 +431,19 @@ pub struct Editor {
     slider_drag: bool,
     pub flyout: bool,
     pub list_scroll: f32,
+    /// New-tool defaults, adopted once from the session.
+    defaults: Option<props::Defaults>,
+    props: Vec<props::Laid>,
+    props_height: f32,
+    pub props_scroll: f32,
+    props_clip: usize,
+    props_body: usize,
+    /// A slider drag in progress and its value.
+    range_drag: Option<(Range, f64)>,
+    /// The latest live edit waiting for the one in flight.
+    pending: Option<Request>,
+    /// A custom color to ask for once the window is released.
+    pick_color: Option<Field>,
     autosave: DraftAutosave,
     pub w: f32,
     pub h: f32,
@@ -629,6 +651,22 @@ fn present(session: &EditorSession, artifact_id: &str, published: &mut Published
         can_redo: snapshot.can_redo,
         style: snapshot.initial_annotation_style.clone(),
         has_draft: snapshot.has_draft,
+        controls: snapshot
+            .annotation_controls
+            .iter()
+            .map(|(id, controls)| {
+                let opacity = snapshot
+                    .document
+                    .elements
+                    .iter()
+                    .find(|e| e.base().id == *id)
+                    .map_or(100., |e| e.base().opacity);
+                (
+                    (*id).to_owned(),
+                    props::Values::from_controls(controls, opacity),
+                )
+            })
+            .collect(),
         source: snapshot.original_export_path.map(|path| ExportSource {
             artifact_id: snapshot
                 .source_artifact_id
@@ -827,6 +865,15 @@ impl Editor {
             slider_drag: false,
             flyout: false,
             list_scroll: 0.,
+            defaults: None,
+            props: Vec::new(),
+            props_height: 0.,
+            props_scroll: 0.,
+            props_clip: 0,
+            props_body: 0,
+            range_drag: None,
+            pending: None,
+            pick_color: None,
             autosave: DraftAutosave::default(),
             w: SIZE.0,
             h: SIZE.1,
@@ -923,6 +970,17 @@ impl Editor {
         self.list = self.add(Some(sidebar), Kind::List, 0.);
         self.nodes[self.list].clip = true;
         self.properties = self.add(Some(sidebar), Kind::Properties, 0.);
+        self.props_clip = self.add(Some(self.properties), Kind::Group, 0.);
+        self.nodes[self.props_clip].clip = true;
+        self.props_body = self.add(Some(self.props_clip), Kind::PropsBody, 0.);
+        for prop in props::all() {
+            let bleed = if matches!(prop, Prop::Swatch(..)) {
+                4.
+            } else {
+                0.
+            };
+            self.control(self.props_body, Target::Prop(prop), bleed);
+        }
         self.control(root, Target::Divider, 0.);
         self.header = self.add(Some(root), Kind::Header, 0.);
         self.banner_node = self.add(Some(root), Kind::Banner, 0.);
@@ -994,6 +1052,7 @@ impl Editor {
             Target::Layer(i) | Target::Eye(i) | Target::Lock(i) => i < self.layer_count(),
             // Shipping hides the toggle when the format can only save a copy.
             Target::SaveAsNew => self.export_view().is_some_and(|v| !v.format_requires_copy),
+            Target::Prop(prop) => self.prop_exists(prop),
             _ => true,
         }
     }
@@ -1027,6 +1086,7 @@ impl Editor {
             Target::Eye(i) => !self.layer(i)?.visible,
             Target::Lock(i) => self.layer(i)?.locked,
             Target::SaveAsNew => self.export_view().is_some_and(|v| v.saving_copy),
+            Target::Prop(prop) => return self.prop_pressed(prop),
             _ => return None,
         })
     }
@@ -1068,6 +1128,7 @@ impl Editor {
             Target::Copy => "Copy image".into(),
             Target::SaveAsNew => "Save as new file".into(),
             Target::Save => "Save".into(),
+            Target::Prop(prop) => self.prop_name(prop),
         }
     }
 
@@ -1082,6 +1143,7 @@ impl Editor {
             Target::Divider => "Drag to resize · Double-click to reset".into(),
             Target::SaveAsNew => "Save as a new file and leave the original untouched".into(),
             Target::Save => self.export_view().map(|v| v.hint).unwrap_or_default(),
+            Target::Prop(prop) => self.prop_help(prop),
             _ => String::new(),
         }
     }
@@ -1382,10 +1444,29 @@ impl Editor {
             let base = self.layered(Target::Shape(i)).base;
             self.nodes[base].dirty = true;
         }
-        self.nodes[self.properties].dirty = true;
+        self.range_drag = None;
+        self.props_scroll = 0.;
+        self.props_changed();
         self.overlay_changed();
         self.refresh(false);
         self.need = true;
+    }
+
+    /// `--tool KEY`: start with a rail tool or a grouped shape.
+    fn start_tool(&mut self, options: &Options) {
+        let Some(key) = options.tool.as_deref() else {
+            return;
+        };
+        let rail = RAIL_TOOLS
+            .iter()
+            .enumerate()
+            .find(|(i, t)| t.key == key && tool_enabled(*i))
+            .map(|(_, t)| t.key);
+        let shape = SHAPE_TOOLS.iter().find(|t| t.key == key).map(|t| t.key);
+        match rail.or(shape) {
+            Some(key) => self.select_tool(key),
+            None => eprintln!("--tool {key}: not an editor tool here"),
+        }
     }
 
     pub fn set_flyout(&mut self, open: bool) {
@@ -1487,6 +1568,7 @@ impl Editor {
                 self.events.push(Event::Toggled(Target::SaveAsNew));
             }
             Target::Save => self.save(),
+            Target::Prop(prop) => self.activate_prop(prop),
         }
         self.need = true;
     }
@@ -1534,7 +1616,9 @@ impl Editor {
             let base = self.layered(Target::Layer(i)).base;
             self.nodes[base].dirty = true;
         }
-        self.nodes[self.properties].dirty = true;
+        self.range_drag = None;
+        self.props_scroll = 0.;
+        self.props_changed();
         self.overlay_changed();
         self.need = true;
     }
@@ -1560,6 +1644,13 @@ impl Editor {
             Outcome::Presented(presented) => {
                 self.busy = false;
                 let first = self.presented.is_none();
+                if self.defaults.is_none() {
+                    self.defaults = Some(props::Defaults {
+                        style: presented.style.clone(),
+                        opacity: 100.,
+                    });
+                }
+                let shown = self.values();
                 let old_count = self.layer_count();
                 if let Some(pixels) = presented.pixels.clone() {
                     let resized = self
@@ -1617,7 +1708,6 @@ impl Editor {
                                 | Target::Redo,
                             _
                         ) | Kind::LayersHeading
-                            | Kind::Properties
                             | Kind::Bar
                     ) {
                         node.dirty = true;
@@ -1628,9 +1718,16 @@ impl Editor {
                     self.nodes[self.header].dirty = true;
                     self.relayout = true;
                 }
+                self.keep_drag();
+                if first || self.values() != shown {
+                    self.props_changed();
+                }
                 self.overlay_changed();
                 self.events.push(Event::Toggled(Target::Undo));
                 self.relayout = true;
+                if let Some(next) = self.pending.take() {
+                    self.submit(next);
+                }
             }
             Outcome::Saved(result) => {
                 self.busy = false;
@@ -1654,6 +1751,9 @@ impl Editor {
             Outcome::Failed(error) => {
                 self.busy = false;
                 self.set_notice(Some((error, true)));
+                if let Some(next) = self.pending.take() {
+                    self.submit(next);
+                }
             }
         }
         self.export_changed();
@@ -1760,11 +1860,11 @@ impl Editor {
         };
         let scale = self.zoom_percent().unwrap_or(100.) / 100.;
         let moved = |a: Point, b: Point| (b.x - a.x).hypot(b.y - a.y) * scale >= DRAG_MIN;
-        let style = self
-            .presented
+        let (style, opacity) = self
+            .defaults
             .as_ref()
-            .map(|p| p.style.clone())
-            .unwrap_or_default();
+            .map(|d| (d.style.clone(), d.opacity))
+            .unwrap_or_else(|| (ElementStyle::default(), 100.));
         let request = match gesture {
             Gesture::Pan { .. } => None,
             Gesture::Move { id, start, end } if moved(start, end) => Some(Request::Layer {
@@ -1779,7 +1879,7 @@ impl Editor {
                 create: FreehandPathCreate {
                     points,
                     style,
-                    opacity: 100.,
+                    opacity,
                 },
             }),
             Gesture::Freehand(_) => None,
@@ -1803,7 +1903,7 @@ impl Editor {
                         start,
                         end,
                         style,
-                        opacity: 100.,
+                        opacity,
                     },
                 }),
                 None => open_kind(tool).map(|shape| Request::CreateOpenShape {
@@ -1812,7 +1912,7 @@ impl Editor {
                         start,
                         end,
                         style,
-                        opacity: 100.,
+                        opacity,
                     },
                 }),
             },
@@ -2017,6 +2117,7 @@ impl Editor {
 
         l.buttons = buttons;
         self.l = l;
+        self.layout_props(l.properties.w);
         self.place();
         Ok(())
     }
@@ -2047,6 +2148,21 @@ impl Editor {
         );
         self.set_rect(self.list, local(l.list, l.sidebar));
         self.set_rect(self.properties, local(l.properties, l.sidebar));
+        let view = self.props_view();
+        self.props_scroll = self
+            .props_scroll
+            .min((self.props_height - view.h).max(0.))
+            .max(0.);
+        self.set_rect(
+            self.props_clip,
+            Rect::new(0., view.y - l.properties.y, view.w, view.h),
+        );
+        self.set_rect(
+            self.props_body,
+            Rect::new(0., -self.props_scroll, view.w, self.props_height.max(1.)),
+        );
+        let has_props = !self.props.is_empty();
+        self.set_visible(self.props_body, has_props);
         self.set_rect(self.zoom, local(l.zoom, l.header));
         self.set_rect(self.flyout_node, l.flyout);
         for (target, layered) in self.controls.clone() {
@@ -2076,6 +2192,7 @@ impl Editor {
                 Target::Fit | Target::ZoomOut | Target::Slider | Target::ZoomIn => {
                     l.buttons[button_slot(target)]
                 }
+                Target::Prop(prop) => self.prop_rect(prop).unwrap_or_default(),
                 _ => local(l.buttons[button_slot(target)], origin),
             };
             self.set_rect(layered.base, r);
@@ -2303,10 +2420,12 @@ impl Editor {
             }
             return None;
         }
+        let in_props = self.props_view().contains(x, y);
         self.controls
             .iter()
             .map(|(t, _)| *t)
             .filter(|t| !matches!(t, Target::Layer(_) | Target::Eye(_) | Target::Lock(_)))
+            .filter(|t| in_props || !matches!(t, Target::Prop(_)))
             .find(|&t| inside(t))
     }
 
@@ -2343,6 +2462,7 @@ impl Editor {
         for i in 0..self.layer_count() {
             list.extend([Target::Layer(i), Target::Eye(i), Target::Lock(i)]);
         }
+        list.extend(self.prop_order().into_iter().map(Target::Prop));
         list.extend([Target::Copy, Target::SaveAsNew, Target::Save]);
         list.retain(|&t| self.exists(t) && self.enabled(t));
         list
@@ -2358,6 +2478,9 @@ impl Editor {
         if let (Some(Target::Layer(i) | Target::Eye(i) | Target::Lock(i)), true) = (focus, visible)
         {
             self.reveal_row(i);
+        }
+        if let (Some(Target::Prop(prop)), true) = (focus, visible) {
+            self.reveal_prop(prop);
         }
         if changed && let Some(target) = focus {
             self.events.push(Event::Focus(target));
@@ -2406,6 +2529,12 @@ impl Editor {
 
     /// Editor shortcuts and focused-control keys; true when consumed.
     fn key(&mut self, vk: VIRTUAL_KEY, ctrl: bool, shift: bool) -> bool {
+        if let Some(Target::Prop(Prop::Range(range))) = self.focus
+            && !ctrl
+            && self.range_key(range, vk.0)
+        {
+            return true;
+        }
         // The separator keeps every key but Tab (shipping `stopPropagation`).
         if self.focus == Some(Target::Divider) && vk != VK_TAB {
             let step = if shift { 40. } else { 10. };
@@ -2632,6 +2761,7 @@ impl Editor {
                 )?;
             }
             Kind::Bar => self.draw_bar(dc, (w, h))?,
+            Kind::PropsBody => self.draw_props_body(dc, w)?,
             Kind::Zoom => {
                 let radius = t.n("r-lg");
                 gfx::fill_round(dc, all, radius, c("surface-sunken"))?;
@@ -3213,6 +3343,9 @@ impl Editor {
         layer: Layer,
         (w, h): (f32, f32),
     ) -> Result<()> {
+        if let Target::Prop(prop) = target {
+            return self.draw_prop(dc, prop, layer, (w, h));
+        }
         let t = &self.t;
         let g = &self.g;
         let c = |name: &str| t.color(name);
@@ -3548,6 +3681,7 @@ impl Editor {
                 gfx::text(dc, &text, x + 15. + s3, (h - text.height) / 2., ink)?;
                 let _ = s5;
             }
+            Target::Prop(_) => {}
         }
         Ok(())
     }
@@ -4063,6 +4197,9 @@ impl Editor {
             }
             WM_KILLFOCUS => {
                 self.pressed = None;
+                if let Some((range, value)) = self.range_drag {
+                    self.set_range(range, value, false);
+                }
                 self.divider_drag = None;
                 self.slider_drag = false;
                 if self.gesture.take().is_some() {
@@ -4086,6 +4223,9 @@ impl Editor {
                 }
                 if let Some((x0, w0)) = self.divider_drag {
                     self.resize_sidebar(Some(w0 + x0 - x));
+                } else if let Some((range, _)) = self.range_drag {
+                    let value = self.range_at(range, x);
+                    self.set_range(range, value, true);
                 } else if self.slider_drag {
                     self.slide_to(x);
                 } else if self.gesture.is_some() {
@@ -4131,6 +4271,14 @@ impl Editor {
                         self.slider_drag = true;
                         self.slide_to(x);
                     }
+                    Some(target @ Target::Prop(Prop::Range(range))) => {
+                        self.set_focus(Some(target), false);
+                        // The caption is part of the label; only the slider drags.
+                        if y >= self.target_rect(target).y + props::SLIDER_TOP {
+                            let value = self.range_at(range, x);
+                            self.set_range(range, value, true);
+                        }
+                    }
                     Some(target) if self.enabled(target) => {
                         self.pressed = Some(target);
                         self.set_focus(Some(target), false);
@@ -4152,6 +4300,9 @@ impl Editor {
                     self.refresh(true);
                 }
                 self.slider_drag = false;
+                if let Some((range, value)) = self.range_drag {
+                    self.set_range(range, value, false);
+                }
                 if self.gesture.is_some() {
                     self.finish();
                 }
@@ -4176,6 +4327,8 @@ impl Editor {
                 let pixels = delta * appearance::wheel_lines() * 100. / 3.;
                 if self.l.list.contains(px, py) && msg == WM_MOUSEWHEEL {
                     self.scroll_list(-pixels);
+                } else if self.props_view().contains(px, py) && msg == WM_MOUSEWHEEL {
+                    self.scroll_props(-pixels);
                 } else if self.l.well.contains(px, py) {
                     if msg == WM_MOUSEWHEEL && key_down(VK_CONTROL) {
                         if let (Some(factor), Some(percent)) = (
@@ -4270,7 +4423,11 @@ fn button_slot(target: Target) -> usize {
         // One slot per rail tool.
         Target::Tool(i) => 11 + i,
         // Laid out from their own rects, never through `Layout::buttons`.
-        Target::Shape(_) | Target::Layer(_) | Target::Eye(_) | Target::Lock(_) => SLOTS - 1,
+        Target::Shape(_)
+        | Target::Layer(_)
+        | Target::Eye(_)
+        | Target::Lock(_)
+        | Target::Prop(_) => SLOTS - 1,
     }
 }
 
@@ -4503,6 +4660,9 @@ pub fn open(options: &Options, artifact_id: &str) -> Result<()> {
         editor._target = Some(dcomp.CreateTargetForHwnd(hwnd, true)?);
         editor.dcomp = Some(dcomp);
         appearance::title_bar(hwnd, &editor.t);
+        if options.scene == crate::Scene::Editor {
+            editor.start_tool(options);
+        }
         EDITORS.with(|e| e.borrow_mut().push(editor));
         let _ = ShowWindow(hwnd, SW_SHOW);
     }
@@ -4583,7 +4743,20 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             }
             _ => {}
         }
-        if let Some(Some(result)) = with_editor(hwnd, |e| e.handle(msg, wp, lp)) {
+        let handled = with_editor(hwnd, |e| e.handle(msg, wp, lp));
+        // The custom color dialog is modal: ask with the window released.
+        if let Some(Some((field, seed))) =
+            with_editor(hwnd, |e| e.pick_color.take().map(|f| (f, e.color_seed(f))))
+        {
+            match crate::dialog::pick_color(hwnd, &seed) {
+                Ok(Some(hex)) => {
+                    with_editor(hwnd, |e| e.set_color(field, hex));
+                }
+                Ok(None) => {}
+                Err(error) => eprintln!("color picker failed: {error}"),
+            }
+        }
+        if let Some(Some(result)) = handled {
             return result;
         }
         DefWindowProcW(hwnd, msg, wp, lp)
@@ -4622,6 +4795,7 @@ pub fn render_offscreen(
     editor.w = w;
     editor.h = h;
     editor.receive(Outcome::Presented(Box::new(presented)));
+    editor.start_tool(options);
     editor.prepare()?;
     Ok(editor)
 }

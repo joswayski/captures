@@ -59,6 +59,8 @@ pub struct Options {
     size: Option<(u32, u32)>,
     /// `--find`: render with Find open and this query typed.
     find: Option<String>,
+    /// `--tool KEY`: the editor's starting tool (a rail or shape key).
+    tool: Option<String>,
     /// `--profile DIR` or `CAPTURES_NATIVE_PROFILE`: a disposable profile for
     /// tests on a real PC. Settings, history and saves stay under DIR, and the
     /// launch-at-login registry entry is never touched.
@@ -76,6 +78,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
         screenshot: None,
         size: None,
         find: None,
+        tool: None,
         profile: false,
     };
     let mut profile = std::env::var_os("CAPTURES_NATIVE_PROFILE").map(std::path::PathBuf::from);
@@ -111,6 +114,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
             "--screenshot" => options.screenshot = Some(value()?.into()),
             "--artifact" => options.artifact = Some(value()?),
             "--find" => options.find = Some(value()?),
+            "--tool" => options.tool = Some(value()?),
             "--size" => {
                 let size = value()?;
                 let (w, h) = size.split_once('x').ok_or("--size is WIDTHxHEIGHT")?;

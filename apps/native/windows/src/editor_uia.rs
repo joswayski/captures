@@ -20,7 +20,7 @@ use windows::Win32::System::Variant::*;
 use windows::Win32::UI::Accessibility::*;
 use windows::core::*;
 
-use crate::editor::{Editor, Event, Stub, Target, with_editor};
+use crate::editor::{Editor, Event, Field, Prop, Stub, Target, with_editor};
 use crate::scene::Rect;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -45,6 +45,10 @@ pub enum Id {
     Row(usize),
     /// `section aria-label="Tool properties"`.
     Properties,
+    /// `.screenshot-shape-picker` (`role="group" aria-label="Shape"`).
+    ShapePicker,
+    /// A `ColorField` fieldset, named by its legend.
+    ColorField(Field),
     /// `output aria-label="Save location"`.
     Location,
     /// `input aria-label="Saved filename"`.
@@ -142,7 +146,35 @@ fn children(e: &Editor, id: Id) -> Vec<Id> {
             c(Target::Lock(i)),
             Id::Stub(Stub::LayerMenu(i)),
         ],
+        Id::Properties => {
+            let mut list = Vec::new();
+            for prop in e.prop_order() {
+                let id = match prop {
+                    Prop::Shape(_) => Id::ShapePicker,
+                    Prop::Swatch(field, _) => Id::ColorField(field),
+                    prop => c(Target::Prop(prop)),
+                };
+                if !list.contains(&id) {
+                    list.push(id);
+                }
+            }
+            list
+        }
+        Id::ShapePicker | Id::ColorField(_) => e
+            .prop_order()
+            .into_iter()
+            .filter(|&prop| prop_parent(prop) == id)
+            .map(|prop| c(Target::Prop(prop)))
+            .collect(),
         _ => Vec::new(),
+    }
+}
+
+fn prop_parent(prop: Prop) -> Id {
+    match prop {
+        Prop::Shape(_) => Id::ShapePicker,
+        Prop::Swatch(field, _) => Id::ColorField(field),
+        _ => Id::Properties,
     }
 }
 
@@ -157,6 +189,8 @@ fn parent(id: Id) -> Option<Id> {
         Id::Control(Target::Shape(_)) => Id::Flyout,
         Id::LayersTitle | Id::Stub(Stub::AddLayer) | Id::List => Id::Layers,
         Id::Row(_) => Id::List,
+        Id::ShapePicker | Id::ColorField(_) => Id::Properties,
+        Id::Control(Target::Prop(prop)) => prop_parent(prop),
         Id::Control(Target::Layer(i) | Target::Eye(i) | Target::Lock(i))
         | Id::Stub(Stub::LayerMenu(i)) => Id::Row(i),
         _ => Id::Root,
@@ -188,6 +222,8 @@ fn rect(e: &Editor, id: Id) -> Rect {
             Rect::new(l.list.x, r.y, l.list.w, r.h)
         }
         Id::Properties => l.properties,
+        Id::ShapePicker => e.picker_rect(),
+        Id::ColorField(field) => e.color_field_rect(field),
         Id::Location => l.folder,
         Id::Filename => l.filename,
         Id::Notice | Id::Hint => l.hint,
@@ -208,6 +244,8 @@ fn name(e: &Editor, id: Id) -> String {
         Id::Layers | Id::LayersTitle => editor_chrome::layers::TITLE.into(),
         Id::Row(i) => e.name(Target::Layer(i)),
         Id::Properties => "Tool properties".into(),
+        Id::ShapePicker => "Shape".into(),
+        Id::ColorField(field) => e.field_label(field),
         Id::Location => "Save location".into(),
         Id::Filename => "Saved filename".into(),
         Id::Notice => e.notice_text().map(|(text, _)| text).unwrap_or_default(),
@@ -227,7 +265,9 @@ fn control_type(id: Id) -> UIA_CONTROLTYPE_ID {
         | Id::Tools
         | Id::Canvas
         | Id::Layers
-        | Id::Properties => UIA_GroupControlTypeId,
+        | Id::Properties
+        | Id::ShapePicker
+        | Id::ColorField(_) => UIA_GroupControlTypeId,
         Id::Flyout => UIA_MenuControlTypeId,
         Id::List => UIA_ListControlTypeId,
         Id::Row(_) => UIA_ListItemControlTypeId,
@@ -237,7 +277,8 @@ fn control_type(id: Id) -> UIA_CONTROLTYPE_ID {
         Id::Control(Target::Shape(_)) => UIA_MenuItemControlTypeId,
         Id::Control(Target::Slider) => UIA_SliderControlTypeId,
         Id::Control(Target::Divider) => UIA_SeparatorControlTypeId,
-        Id::Control(Target::SaveAsNew) => UIA_CheckBoxControlTypeId,
+        Id::Control(Target::SaveAsNew | Target::Prop(Prop::Check(_))) => UIA_CheckBoxControlTypeId,
+        Id::Control(Target::Prop(Prop::Range(_))) => UIA_SliderControlTypeId,
         Id::Control(_) => UIA_ButtonControlTypeId,
         Id::BannerText | Id::LayersTitle | Id::Location | Id::Notice | Id::Hint => {
             UIA_TextControlTypeId
@@ -264,6 +305,10 @@ fn runtime_id(id: Id) -> [i32; 4] {
             Target::Copy => (13, 0),
             Target::SaveAsNew => (14, 0),
             Target::Save => (15, 0),
+            Target::Prop(Prop::Shape(i)) => (16, i as i32),
+            Target::Prop(Prop::Check(check)) => (17, check as i32),
+            Target::Prop(Prop::Swatch(field, i)) => (18, field as i32 * 16 + i as i32),
+            Target::Prop(Prop::Range(range)) => (19, range as i32),
         }
     };
     let stub = |s: Stub| -> (i32, i32) {
@@ -299,6 +344,8 @@ fn runtime_id(id: Id) -> [i32; 4] {
         Id::Filename => (14, 0),
         Id::Notice => (15, 0),
         Id::Hint => (16, 0),
+        Id::ShapePicker => (17, 0),
+        Id::ColorField(field) => (18, field as i32),
         Id::Control(t) => {
             let (k, a) = target(t);
             (100 + k, a)
@@ -335,6 +382,10 @@ fn offscreen(e: &Editor, id: Id) -> bool {
         | Id::Stub(Stub::LayerMenu(_)) => {
             let (r, list) = (rect(e, id), e.l.list);
             r.y + r.h <= list.y || r.y >= list.y + list.h
+        }
+        Id::ShapePicker | Id::ColorField(_) | Id::Control(Target::Prop(_)) => {
+            let (r, view) = (rect(e, id), e.props_view());
+            r.y + r.h <= view.y || r.y >= view.y + view.h
         }
         _ => false,
     }
@@ -384,6 +435,16 @@ fn range(e: &Editor, id: Id) -> Option<(f64, f64, f64, f64, f64)> {
                 40.,
             ))
         }
+        Id::Control(Target::Prop(Prop::Range(range))) => {
+            let (min, max) = crate::editor::range_bounds(range);
+            Some((
+                e.range_value(range),
+                min,
+                max,
+                1.,
+                ((max - min) / 10.).round(),
+            ))
+        }
         _ => None,
     }
 }
@@ -393,6 +454,9 @@ fn value(e: &Editor, id: Id) -> Option<String> {
     Some(match id {
         Id::Control(Target::Slider) => e.slider_text(),
         Id::Control(Target::Divider) => format!("{} pixels wide", e.sidebar_width()),
+        Id::Control(Target::Prop(Prop::Range(range))) => {
+            crate::editor::range_text(range, e.range_value(range))
+        }
         Id::Filename => e.filename(),
         Id::Location => e.save_location(),
         Id::Stub(stub) => e.stub_value(stub)?,
@@ -446,7 +510,7 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
         let id = self.id;
         let supported = with(self.hwnd, |e| {
             Ok(match id {
-                Id::Control(Target::Slider | Target::Divider) => {
+                Id::Control(Target::Slider | Target::Divider | Target::Prop(Prop::Range(_))) => {
                     pattern == UIA_RangeValuePatternId || pattern == UIA_ValuePatternId
                 }
                 Id::Control(Target::Shape(_)) => {
@@ -521,9 +585,10 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                 UIA_ValueValuePropertyId => {
                     value(e, id).map_or_else(VARIANT::default, |v| VARIANT::from(BSTR::from(v)))
                 }
-                UIA_ValueIsReadOnlyPropertyId => {
-                    VARIANT::from(!matches!(id, Id::Control(Target::Slider | Target::Divider)))
-                }
+                UIA_ValueIsReadOnlyPropertyId => VARIANT::from(!matches!(
+                    id,
+                    Id::Control(Target::Slider | Target::Divider | Target::Prop(Prop::Range(_)))
+                )),
                 UIA_RangeValueValuePropertyId => {
                     range(e, id).map_or_else(VARIANT::default, |r| VARIANT::from(r.0))
                 }
@@ -753,6 +818,11 @@ impl IRangeValueProvider_Impl for Node_Impl {
                     e.zoom_to(value.clamp(5., 800.), None)
                 }
                 Id::Control(Target::Divider) => e.resize_sidebar(Some(value as f32)),
+                Id::Control(Target::Prop(Prop::Range(range)))
+                    if e.exists(Target::Prop(Prop::Range(range))) =>
+                {
+                    e.set_range(range, value, false)
+                }
                 _ => return Err(not_enabled()),
             }
             Ok(())
