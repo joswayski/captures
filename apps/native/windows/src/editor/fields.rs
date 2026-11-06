@@ -67,14 +67,7 @@ impl Editor {
         if let Some(edit) = self.field.as_ref().filter(|e| e.prop == prop) {
             return String::from_utf16_lossy(edit.field.units());
         }
-        match prop {
-            Prop::Textarea => self
-                .selected_text()
-                .map(|t| t.text.clone())
-                .unwrap_or_default(),
-            Prop::Number(num) => js_number(self.number_value(num)),
-            _ => String::new(),
-        }
+        self.document_text(prop)
     }
 
     /// Focus moved onto (`Some`) or off a field: start or end its edit.
@@ -119,10 +112,16 @@ impl Editor {
     /// The document's value of the focused field.
     fn document_text(&self, prop: Prop) -> String {
         match prop {
-            Prop::Textarea => self
-                .selected_text()
-                .map(|t| t.text.clone())
-                .unwrap_or_default(),
+            // Shipping's textarea shows an open label's text as it is typed.
+            Prop::Textarea => match &self.inline {
+                Some(inline) if self.selected.as_deref() == Some(inline.id.as_str()) => {
+                    self.text_value()
+                }
+                _ => self
+                    .selected_text()
+                    .map(|t| t.text.clone())
+                    .unwrap_or_default(),
+            },
             Prop::Number(num) => js_number(self.number_value(num)),
             _ => String::new(),
         }

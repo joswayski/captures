@@ -2,6 +2,8 @@
 //! DirectComposition desktop device, and DirectWrite on the system font
 //! collection (Captures' `--font-sans` resolves to Segoe UI Variable Text on
 //! Windows 11 and Segoe UI before it).
+use std::cell::RefCell;
+
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::*;
 use windows::Win32::Graphics::Direct2D::*;
@@ -1034,22 +1036,55 @@ pub fn outline_text(
     width: f32,
     color: D2D1_COLOR_F,
 ) -> Result<()> {
+    let stroke = unsafe {
+        factory.CreateStrokeStyle(
+            &D2D1_STROKE_STYLE_PROPERTIES1 {
+                miterLimit: 10.,
+                ..Default::default()
+            },
+            None,
+        )?
+    };
     let renderer: IDWriteTextRenderer = Outliner {
-        dc: dc.clone(),
+        dc: Some(dc.clone()),
         factory: factory.clone(),
-        brush: brush(dc, color)?,
+        paint: Some((brush(dc, color)?, stroke.cast()?)),
         width,
+        ink: RefCell::new(Vec::new()),
     }
     .into();
     unsafe { layout.Draw(None, &renderer, x, y) }
 }
 
+/// The ink of each glyph run in `layout` as `(baseline, top, bottom)`,
+/// layout-relative; `outline` widens it by half that stroke.
+pub fn ink_runs(
+    factory: &ID2D1Factory1,
+    layout: &IDWriteTextLayout,
+    outline: f32,
+) -> Result<Vec<(f32, f32, f32)>> {
+    let meter = Outliner {
+        dc: None,
+        factory: factory.clone(),
+        paint: None,
+        width: outline,
+        ink: RefCell::new(Vec::new()),
+    };
+    let renderer: IDWriteTextRenderer = meter.into();
+    unsafe { layout.Draw(None, &renderer, 0., 0.)? };
+    // SAFETY: `renderer` was made from an `Outliner` just above.
+    let meter = unsafe { renderer.as_impl() };
+    Ok(meter.ink.take())
+}
+
+/// Strokes glyph outlines, or with no device context only measures them.
 #[implement(IDWriteTextRenderer)]
 struct Outliner {
-    dc: ID2D1DeviceContext,
+    dc: Option<ID2D1DeviceContext>,
     factory: ID2D1Factory1,
-    brush: ID2D1SolidColorBrush,
+    paint: Option<(ID2D1SolidColorBrush, ID2D1StrokeStyle)>,
     width: f32,
+    ink: RefCell<Vec<(f32, f32, f32)>>,
 }
 
 impl IDWritePixelSnapping_Impl for Outliner_Impl {
@@ -1064,8 +1099,10 @@ impl IDWritePixelSnapping_Impl for Outliner_Impl {
         t: *mut DWRITE_MATRIX,
     ) -> Result<()> {
         unsafe {
-            let mut m = Matrix3x2::default();
-            self.dc.GetTransform(&mut m);
+            let mut m = Matrix3x2::identity();
+            if let Some(dc) = &self.dc {
+                dc.GetTransform(&mut m);
+            }
             *t = DWRITE_MATRIX {
                 m11: m.M11,
                 m12: m.M12,
@@ -1115,16 +1152,21 @@ impl IDWriteTextRenderer_Impl for Outliner_Impl {
                 &sink.cast::<ID2D1SimplifiedGeometrySink>()?,
             )?;
             sink.Close()?;
+            let (Some(dc), Some((brush, stroke))) = (&self.dc, &self.paint) else {
+                let b = geometry.GetBounds(None)?;
+                if b.bottom > b.top {
+                    let pad = self.width / 2.;
+                    self.ink
+                        .borrow_mut()
+                        .push((y, y + b.top - pad, y + b.bottom + pad));
+                }
+                return Ok(());
+            };
             let mut base = Matrix3x2::default();
-            self.dc.GetTransform(&mut base);
-            self.dc.SetTransform(&(Matrix3x2::translation(x, y) * base));
-            self.dc.DrawGeometry(
-                &geometry,
-                &self.brush,
-                self.width,
-                None::<&ID2D1StrokeStyle>,
-            );
-            self.dc.SetTransform(&base);
+            dc.GetTransform(&mut base);
+            dc.SetTransform(&(Matrix3x2::translation(x, y) * base));
+            dc.DrawGeometry(&geometry, brush, self.width, stroke);
+            dc.SetTransform(&base);
         }
         Ok(())
     }

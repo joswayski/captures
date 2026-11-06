@@ -510,6 +510,16 @@ outside the window). The wheel path scrolls in a synthetic Wine test; why
 it did nothing on hardware is not reproduced here. Windows:
 cross-compiled only. macOS, Linux: unchanged.
 
+The open label's text (hardware pass 13) no longer sits on the CSS
+baseline: the committed render centres each row's ink in its 1.25-em line
+box, so the inline editor measures the first row's glyph outlines and
+places that ink the same way, and the label no longer jumps on commit
+(for Nunito Bold at 48 px the ink moves up about 6.7 px). Later rows keep
+uniform line spacing, so a multi-line label whose rows have different ink
+heights can still shift by a pixel or two. As in shipping, the Properties
+Text field shows the open label's text and follows typing. Windows:
+cross-compiled only. macOS, Linux: unchanged.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,
