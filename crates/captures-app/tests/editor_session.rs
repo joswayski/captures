@@ -5807,3 +5807,143 @@ fn new_text_takes_the_drawing_defaults_shadow_like_shipping() {
         4.
     );
 }
+
+#[test]
+fn incremental_brush_previews_equal_full_renders() {
+    let data = tempfile::tempdir().unwrap();
+    let source = RgbaImage::from_fn(400, 300, |x, y| {
+        Rgba([
+            (x * 7 % 256) as u8,
+            (y * 5 % 256) as u8,
+            ((x ^ y) % 256) as u8,
+            255,
+        ])
+    });
+    let capture = captures_app::persist_screenshot(
+        &data.path().join("history"),
+        &source,
+        CaptureMode::Region,
+    )
+    .unwrap();
+    let open = || {
+        EditorSession::open_with_fonts(
+            OpenRequest {
+                history_root: data.path().join("history"),
+                drafts_root: data.path().join("drafts"),
+                artifact_id: capture.entry.id.clone(),
+                source_artifact_id: None,
+            },
+            Some(captures_app::editor_fonts::bundled()),
+        )
+        .unwrap()
+    };
+    // The image at `placement` (x, y, width, height), under a shadowed
+    // rotated shape, a freehand path and a shadowed label. The stroke
+    // crosses the shape, where previews render everything, and then runs
+    // where only the image paints, where they render just the stroke's area.
+    let decorate = |editor: &mut EditorSession, (x, y, width, height): (f64, f64, f64, f64)| {
+        let mut document = editor.snapshot().document.clone();
+        let Element::Image(image) = &mut document.elements[0] else {
+            panic!()
+        };
+        image.base.x = x;
+        image.base.y = y;
+        image.width = width;
+        image.height = height;
+        let mut document = serde_json::to_value(document).unwrap();
+        let elements = document["elements"].as_array_mut().unwrap();
+        elements.push(
+            json!({"id":"shape","kind":"shape","shape":"rectangle","x":120.4,"y":90.7,
+            "endX":210.2,"endY":150.9,"controls":[],"rotation":0.3,"locked":false,"visible":true,
+            "opacity":80,"blendMode":"source-over","style":{"color":"#ff3b5c","fill":"#2d9cff",
+            "strokeWidth":6,"dropShadow":true,"dropShadowStyle":{"color":"#000000","opacity":60,
+            "blur":9,"offsetX":4,"offsetY":7}}}),
+        );
+        elements.push(
+            json!({"id":"path","kind":"path","points":[{"x":60.3,"y":200.1},
+            {"x":140.6,"y":180.2},{"x":220.8,"y":230.9}],"x":0,"y":0,"locked":false,"visible":true,
+            "opacity":100,"blendMode":"source-over","style":{"color":"#36c96b","fill":null,
+            "strokeWidth":5}}),
+        );
+        elements.push(
+            json!({"id":"label","kind":"text","x":150.5,"y":40.25,"text":"Brush",
+            "fontSize":28,"width":160,"autoWidth":true,"fontFamily":"rounded","bold":true,
+            "italic":false,"align":"left","color":"#ffffff","background":"#111318",
+            "roundedBackground":true,"outlined":false,"dropShadow":true,"locked":false,
+            "visible":true,"opacity":100,"blendMode":"source-over"}),
+        );
+        editor
+            .execute(Request::Commit {
+                document: serde_json::from_value(document).unwrap(),
+            })
+            .unwrap();
+    };
+    let stroke: Vec<(f64, f64)> = (0..6)
+        .map(|i| (100. + f64::from(i) * 12.5, 120. + f64::from(i % 5) * 9.25))
+        .chain((0..12).map(|i| (262. + f64::from(i) * 9.75, 268. + f64::from(i % 3) * 8.5)))
+        .collect();
+    let sized = |points: &[(f64, f64)], mode: &str, size: f64| -> Request {
+        serde_json::from_value(json!({
+            "operation": "paint_image_background", "mode": mode, "size": size, "softness": 35,
+            "points": points.iter().map(|(x, y)| json!({"x": x, "y": y})).collect::<Vec<_>>(),
+        }))
+        .unwrap()
+    };
+    let brush = |points: &[(f64, f64)], mode: &str| sized(points, mode, 14.);
+    // Whole-pixel placements and a fractional offset at natural size sample
+    // the same source pixels exactly. When only the stroke's area renders, a
+    // scaled image's bilinear weights come from an origin moved by whole
+    // pixels; f32 rounds them a little differently, so a channel may land one
+    // premultiplied level away (more once divided by a low erased alpha).
+    for (placement, exact) in [
+        ((0., 0., 400., 300.), true),
+        ((7., -3., 400., 300.), true),
+        ((3.25, -1.5, 400., 300.), true),
+        ((3.25, -1.5, 390., 292.5), false),
+    ] {
+        let mut editor = open();
+        decorate(&mut editor, placement);
+        let mut fresh = open();
+        decorate(&mut fresh, placement);
+        for mode in ["erase", "restore"] {
+            for n in 1..=stroke.len() {
+                let incremental = editor.preview_drawing(brush(&stroke[..n], mode)).unwrap();
+                // Every preview extends the retained stroke; full renders
+                // to compare with are slow, so check every third and the last.
+                if n % 3 != 0 && n != stroke.len() {
+                    continue;
+                }
+                // Another brush in between drops `fresh`'s retained stroke,
+                // so it renders the whole stroke and frame.
+                fresh
+                    .preview_drawing(sized(&stroke[..n], mode, 9.))
+                    .unwrap();
+                let full = fresh.preview_drawing(brush(&stroke[..n], mode)).unwrap();
+                if exact {
+                    assert!(
+                        *incremental == *full,
+                        "{placement:?} {mode} preview {n} differs"
+                    );
+                    continue;
+                }
+                for (a, b) in incremental.pixels().zip(full.pixels()) {
+                    let premultiplied =
+                        |p: &Rgba<u8>, c: usize| f64::from(p[c]) * f64::from(p[3]) / 255.;
+                    assert!(
+                        a[3].abs_diff(b[3]) <= 1
+                            && (0..3).all(|c| {
+                                (premultiplied(a, c) - premultiplied(b, c)).abs() <= 1.5
+                            }),
+                        "{placement:?} {mode} preview {n}: {a:?} vs {b:?}"
+                    );
+                }
+            }
+            editor.execute(brush(&stroke, mode)).unwrap();
+            fresh.execute(brush(&stroke, mode)).unwrap();
+            assert!(
+                *editor.pixels() == *fresh.pixels(),
+                "{placement:?} {mode} commit differs"
+            );
+        }
+    }
+}

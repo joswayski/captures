@@ -23,6 +23,22 @@ pub fn paint_stroke(
     hardness: f64,
     mode: BrushMode,
 ) -> Result<u64, String> {
+    paint_stroke_from(working, original, points, 0, radius, hardness, mode)
+}
+
+/// [`paint_stroke`] continued: `working` already holds the stroke's first
+/// `painted` points, so only the segments the rest add are stamped. Stamps
+/// are sequential, so painting a stroke in parts gives exactly the pixels of
+/// painting it at once. `painted == 0` is [`paint_stroke`].
+pub fn paint_stroke_from(
+    working: &mut RgbaImage,
+    original: Option<&RgbaImage>,
+    points: &[(u32, u32)],
+    painted: usize,
+    radius: f64,
+    hardness: f64,
+    mode: BrushMode,
+) -> Result<u64, String> {
     if working.width() == 0 || working.height() == 0 {
         return Err("working image dimensions must be nonzero".into());
     }
@@ -53,15 +69,20 @@ pub fn paint_stroke(
     };
 
     let hardness = hardness.clamp(0.0, 1.0);
-    let mut changed = stamp(
-        working,
-        original,
-        (f64::from(points[0].0), f64::from(points[0].1)),
-        radius,
-        hardness,
-        mode,
-    );
-    for pair in points.windows(2) {
+    let mut changed = if painted == 0 {
+        stamp(
+            working,
+            original,
+            (f64::from(points[0].0), f64::from(points[0].1)),
+            radius,
+            hardness,
+            mode,
+        )
+    } else {
+        0
+    };
+    let start = painted.saturating_sub(1).min(points.len());
+    for pair in points[start..].windows(2) {
         let from = pair[0];
         let to = pair[1];
         let dx = f64::from(to.0) - f64::from(from.0);

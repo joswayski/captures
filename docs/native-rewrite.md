@@ -389,6 +389,24 @@ Windows: cross-compiled only. macOS, Linux: unchanged. The GTK4 host's
 close handler also autosaves without finishing an open label first, so it
 may have the same gap; not checked on hardware or changed here.
 
+Incremental background-brush preview (shared `EditorSession`, used by the
+Win32, GTK4 and AppKit editors through the same requests): a growing stroke
+keeps its edited image between previews and stamps only the new segments
+(`editor_image_background::paint_stroke_from`). Where nothing but the
+brushed image paints near the new segments (each other layer's stroke,
+arrow heads, outline and drop shadow, with margin), only their area is
+rendered again, as its own canvas moved by whole pixels, and pasted into
+the previous frame; otherwise the whole frame renders as before. A test
+checks every few prefixes of an erase and a restore stroke against fresh
+full renders: identical for whole-pixel and fractional offsets at natural
+size, and within one premultiplied level for a scaled image, whose bilinear
+weights f32 rounds differently from a moved origin. At 3840×2160 (release,
+Linux, Erase size 28, 60 growing previews) a preview went from a 74.6 ms
+median to 16.1 ms (the stroke 4.53 s to 1.06 s); crossing a rectangle,
+where previews near it render everything, from 50.6 ms to 23.9 ms (3.04 s to
+1.70 s). Commits are unchanged. Windows: cross-compiled only. Linux: shared
+tests run. macOS: not run; the AppKit host's requests are unchanged.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,

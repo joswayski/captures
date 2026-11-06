@@ -117,10 +117,11 @@ const CLOSE_FLUSH_MS: u32 = 400;
 /// The most quitting, logging off or reopening an artifact waits for a
 /// closed editor's worker to finish its queue, so a slow disk cannot hang it.
 const WORKER_EXIT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
-/// Brush and grip previews re-render the whole document on the worker (about
-/// 45 ms at 3840×2160); a pointer reports far more often than that is
-/// useful, so they go at most this often, and never keep the worker busy
-/// more than half the time.
+/// Brush and grip previews render on the worker (a grip re-renders the
+/// whole document, about 45 ms at 3840×2160; a brush only its new stroke's
+/// area where nothing else paints, about 16 ms); a pointer reports far more
+/// often than that is useful, so they go at most this often, and never keep
+/// the worker busy more than half the time.
 const PREVIEW_INTERVAL: std::time::Duration = std::time::Duration::from_millis(33);
 
 thread_local! {

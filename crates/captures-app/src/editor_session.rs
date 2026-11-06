@@ -27,10 +27,10 @@ use crate::{
         FreehandPathCreate, ImageElement, LayerEdit, OpenShapeCreate, OptionalNullable, Point,
         Rect, TextBounds, TextElement, image_bounds,
     },
-    editor_image_background::{BrushMode, paint_stroke},
+    editor_image_background::{BrushMode, paint_stroke, paint_stroke_from},
     editor_render::{
-        MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS, measured_text_bounds, prepare_text_edit, render,
-        render_with_text,
+        MAX_RENDER_DIMENSION, MAX_RENDER_PIXELS, drop_shadow_padding, measured_text_bounds,
+        prepare_text_edit, render, render_with_text,
     },
 };
 
@@ -477,6 +477,36 @@ pub struct EditorSession {
     /// next live edit with the same key amends that undo step.
     live: Option<(String, Document)>,
     thumbnails: crate::editor_layers::ThumbnailCache,
+    /// The background-brush preview in progress, if any.
+    brush: Option<BrushStroke>,
+}
+
+/// A resolved background-brush request (see `EditorSession::brush_setup`).
+struct BrushSetup {
+    index: usize,
+    /// The natural pixels of the request's points inside the image.
+    samples: Vec<(u32, u32)>,
+    current: Arc<RgbaImage>,
+    original: Option<Arc<RgbaImage>>,
+    radius: f64,
+    hardness: f64,
+}
+
+/// A background-brush preview retained between pointer moves.
+struct BrushStroke {
+    /// The committed document the stroke started from.
+    base: Document,
+    index: usize,
+    /// Brush size and softness bits and the mode.
+    key: (u64, u64, BrushMode),
+    /// Samples already stamped onto `image`.
+    samples: Vec<(u32, u32)>,
+    image: Arc<RgbaImage>,
+    changed: u64,
+    /// The candidate document, its image source pointing at `source`.
+    document: Document,
+    source: String,
+    frame: Option<DrawingPreview>,
 }
 
 /// Immutable copied contents retained by an accepted Paste. Successful offsets
@@ -645,6 +675,167 @@ fn render_frame(
     }
 }
 
+/// Render again only the canvas pixels that a background-brush change to
+/// the image at `index` can reach, and paste them over `previous`, the full
+/// frame before the change. `damage` is the changed natural-pixel rectangle
+/// `(x0, y0, x1, y1)`, end exclusive.
+///
+/// The area is drawn as its own canvas, moved by whole device pixels, with
+/// only the image on it. So it is used only where nothing else paints: other
+/// layers are not exactly translation invariant in f32 (a rotated shape's
+/// pivot, clipping and blur edges round differently), and would leave seams.
+/// Moving by whole pixels keeps the image's sampling phase the same; only
+/// the f32 rounding of a scaled image's bilinear weights can differ, by at
+/// most one level. `None` means render the whole frame instead.
+fn render_frame_region(
+    document: &Document,
+    index: usize,
+    assets: &BTreeMap<String, Arc<RgbaImage>>,
+    mut fonts: Option<&mut SessionFonts>,
+    previous: &RgbaImage,
+    damage: (u32, u32, u32, u32),
+) -> Result<Option<RgbaImage>, String> {
+    let (width, height) = previous.dimensions();
+    if document.width != f64::from(width) || document.height != f64::from(height) {
+        return Ok(None);
+    }
+    let Some(Element::Image(image)) = document.elements.get(index) else {
+        return Ok(None);
+    };
+    if image.base.rotation() != 0.
+        || image.resolved_orientation() != crate::editor::ImageOrientation::Normal
+        || image.natural_width < 1.
+        || image.natural_height < 1.
+    {
+        return Ok(None);
+    }
+    // Canvas pixels sample their natural pixel and, filtered, its
+    // neighbours; anti-aliasing of the image's own edge adds one more.
+    let (scale_x, scale_y) = (
+        image.width / image.natural_width,
+        image.height / image.natural_height,
+    );
+    let span = |from: u32, to: u32, natural: f64, origin: f64, scale: f64, max: u32| {
+        let start = origin + (f64::from(from) - 1.).max(0.) * scale;
+        let end = origin + (f64::from(to) + 1.).min(natural) * scale;
+        (
+            (start.floor() - 1.).clamp(0., f64::from(max)) as u32,
+            (end.ceil() + 1.).clamp(0., f64::from(max)) as u32,
+        )
+    };
+    let (left, right) = span(
+        damage.0,
+        damage.2,
+        image.natural_width,
+        image.base.x,
+        scale_x,
+        width,
+    );
+    let (top, bottom) = span(
+        damage.1,
+        damage.3,
+        image.natural_height,
+        image.base.y,
+        scale_y,
+        height,
+    );
+    if right <= left || bottom <= top {
+        return Ok(Some(previous.clone()));
+    }
+    // Past half the canvas a full render costs about the same.
+    if u64::from(right - left) * u64::from(bottom - top) * 2 > u64::from(width) * u64::from(height)
+    {
+        return Ok(None);
+    }
+    let area = Rect {
+        x: f64::from(left),
+        y: f64::from(top),
+        width: f64::from(right - left),
+        height: f64::from(bottom - top),
+    };
+    for (other, element) in document.elements.iter().enumerate() {
+        if other == index || !element.base().visible {
+            continue;
+        }
+        let Some(reach) = paint_reach(element, fonts.as_deref_mut())? else {
+            return Ok(None);
+        };
+        if reach.x < area.x + area.width
+            && area.x < reach.x + reach.width
+            && reach.y < area.y + area.height
+            && area.y < reach.y + reach.height
+        {
+            return Ok(None);
+        }
+    }
+    let mut moved = image.clone();
+    moved.base.x -= area.x;
+    moved.base.y -= area.y;
+    let sub = Document {
+        width: area.width,
+        height: area.height,
+        background: document.background.clone(),
+        elements: vec![Element::Image(moved)],
+        extra: document.extra.clone(),
+    };
+    let rendered = render_frame(&sub, assets, fonts)?;
+    let mut pixels = previous.clone();
+    let row = (right - left) as usize * 4;
+    for (y, from) in (top..bottom).zip(rendered.as_raw().chunks_exact(row)) {
+        let to = (y as usize * width as usize + left as usize) * 4;
+        pixels.as_mut()[to..to + row].copy_from_slice(from);
+    }
+    Ok(Some(pixels))
+}
+
+/// A generous bound of everything `element` can paint, with its stroke,
+/// arrow heads, outline and drop shadow; `None` when a label can't be
+/// measured.
+fn paint_reach(
+    element: &Element,
+    fonts: Option<&mut SessionFonts>,
+) -> Result<Option<Rect>, String> {
+    let shadow = |style: &crate::editor::ElementStyle| {
+        if style.has_drop_shadow() {
+            f64::from(drop_shadow_padding(style))
+        } else {
+            0.
+        }
+    };
+    let (bounds, margin) = match element {
+        Element::Image(image) => (image_bounds(image), 0.),
+        Element::Shape(shape) => (
+            element.painted_bounds()?,
+            shape.style.stroke_width * 4. + shadow(&shape.style),
+        ),
+        Element::Path(path) => (
+            element.painted_bounds()?,
+            path.style.stroke_width * 4. + shadow(&path.style),
+        ),
+        Element::Text(text) => {
+            let Some(fonts) = fonts else {
+                return Ok(None);
+            };
+            let measured = fonts.bounds(text)?;
+            // Any rotation and pivot stays within the full diagonal.
+            let spin = if text.base.rotation() == 0. {
+                0.
+            } else {
+                measured.width.hypot(measured.height)
+            };
+            let style = crate::editor_text::shadow_style(text, text.font_size);
+            (measured, spin + text.font_size * 0.5 + shadow(&style))
+        }
+    };
+    let margin = margin + 4.;
+    Ok(Some(Rect {
+        x: bounds.x - margin,
+        y: bounds.y - margin,
+        width: bounds.width + margin * 2.,
+        height: bounds.height + margin * 2.,
+    }))
+}
+
 fn prepare_frame(
     document: &Document,
     assets: &BTreeMap<String, Arc<RgbaImage>>,
@@ -807,6 +998,7 @@ impl EditorSession {
             text_input: None,
             live: None,
             thumbnails: crate::editor_layers::ThumbnailCache::default(),
+            brush: None,
         })
     }
 
@@ -1225,13 +1417,16 @@ impl EditorSession {
         Ok(())
     }
 
-    fn background_brush_edit(
+    /// Validate a background-brush request and resolve what it paints: the
+    /// topmost visible image under its first point, the points inside that
+    /// image with their natural pixels, and the brush in natural pixels.
+    fn brush_setup(
         &self,
         points: Vec<Point>,
         size: f64,
         softness: f64,
         mode: BrushMode,
-    ) -> Result<Option<(usize, RgbaImage)>, String> {
+    ) -> Result<BrushSetup, String> {
         if points.is_empty()
             || points
                 .iter()
@@ -1269,7 +1464,8 @@ impl EditorSession {
         let current = self
             .assets
             .get(&image.src)
-            .ok_or("The editor image asset is unavailable.")?;
+            .ok_or("The editor image asset is unavailable.")?
+            .clone();
         let original = match mode {
             BrushMode::Erase => None,
             BrushMode::Restore => {
@@ -1280,7 +1476,7 @@ impl EditorSession {
                     self.assets
                         .get(source)
                         .ok_or("The retained original image asset is unavailable.")?
-                        .as_ref(),
+                        .clone(),
                 )
             }
         };
@@ -1290,13 +1486,151 @@ impl EditorSession {
             image.natural_width
         };
         let radius = (size * displayed_natural_width / image.width.max(1.) * 0.5).max(1.);
-        let hardness = 1. - softness.clamp(0., 100.) / 100.;
-        let mut edited = (**current).clone();
-        let changed = paint_stroke(&mut edited, original, &samples, radius, hardness, mode)?;
+        Ok(BrushSetup {
+            index,
+            samples,
+            current,
+            original,
+            radius,
+            hardness: 1. - softness.clamp(0., 100.) / 100.,
+        })
+    }
+
+    fn background_brush_edit(
+        &self,
+        points: Vec<Point>,
+        size: f64,
+        softness: f64,
+        mode: BrushMode,
+    ) -> Result<Option<(usize, RgbaImage)>, String> {
+        let setup = self.brush_setup(points, size, softness, mode)?;
+        let mut edited = (*setup.current).clone();
+        let changed = paint_stroke(
+            &mut edited,
+            setup.original.as_deref(),
+            &setup.samples,
+            setup.radius,
+            setup.hardness,
+            mode,
+        )?;
         if changed == 0 {
             return Ok(None);
         }
-        Ok(Some((index, edited)))
+        Ok(Some((setup.index, edited)))
+    }
+
+    /// The background-brush preview, extended as the host's stroke grows:
+    /// only the new segments are stamped onto the retained edited image, and
+    /// only the document area they can reach is rendered again. A stroke that
+    /// is not an extension of the retained one, or a changed document,
+    /// starts over with a full render. The result equals
+    /// `prepare_frame` of the whole stroke.
+    fn preview_brush(
+        &mut self,
+        points: Vec<Point>,
+        size: f64,
+        softness: f64,
+        mode: BrushMode,
+    ) -> Result<DrawingPreview, String> {
+        let setup = self.brush_setup(points, size, softness, mode)?;
+        let current = self.history.current();
+        let retained = self.brush.take().filter(|stroke| {
+            stroke.base == *current
+                && stroke.index == setup.index
+                && stroke.key == (size.to_bits(), softness.to_bits(), mode)
+                && setup.samples.starts_with(&stroke.samples)
+        });
+        let mut stroke = match retained {
+            Some(stroke) => stroke,
+            None => {
+                validate_import_dimensions(
+                    setup.current.width(),
+                    setup.current.height(),
+                    retained_asset_pixels(&self.assets)?,
+                )?;
+                let asset_id =
+                    fresh_id(|id| self.assets.contains_key(&format!("{ASSET_PREFIX}{id}")));
+                let source = format!("{ASSET_PREFIX}{asset_id}");
+                let mut document = current.clone();
+                let Element::Image(image) = &mut document.elements[setup.index] else {
+                    unreachable!()
+                };
+                if !matches!(image.original_src, OptionalNullable::Value(_)) {
+                    image.original_src = OptionalNullable::Value(image.src.clone());
+                }
+                image.src = source.clone();
+                document.background = None;
+                BrushStroke {
+                    base: current.clone(),
+                    index: setup.index,
+                    key: (size.to_bits(), softness.to_bits(), mode),
+                    samples: Vec::new(),
+                    image: setup.current.clone(),
+                    changed: 0,
+                    document,
+                    source,
+                    frame: None,
+                }
+            }
+        };
+        let painted = stroke.samples.len();
+        let added = paint_stroke_from(
+            Arc::make_mut(&mut stroke.image),
+            setup.original.as_deref(),
+            &setup.samples,
+            painted,
+            setup.radius,
+            setup.hardness,
+            mode,
+        )?;
+        stroke.changed += added;
+        stroke.samples = setup.samples;
+        if stroke.changed == 0 {
+            self.brush = Some(stroke);
+            return Ok(self.frame.clone());
+        }
+        let mut assets = self.assets.clone();
+        assets.insert(stroke.source.clone(), stroke.image.clone());
+        // The natural pixels the new stamps can change (`stamp` covers
+        // `floor(c - r)..=ceil(c + r)`), end exclusive.
+        let reach = setup.radius.max(0.5).ceil() as u32 + 1;
+        let damage = stroke.samples[painted.saturating_sub(1)..].iter().fold(
+            None::<(u32, u32, u32, u32)>,
+            |bounds, &(x, y)| {
+                let (x0, y0, x1, y1) = bounds.unwrap_or((x, y, x, y));
+                Some((x0.min(x), y0.min(y), x1.max(x), y1.max(y)))
+            },
+        );
+        let frame = match (stroke.frame.take(), damage) {
+            (Some(frame), _) if added == 0 => frame,
+            (Some(frame), Some((x0, y0, x1, y1))) => {
+                let damage = (
+                    x0.saturating_sub(reach),
+                    y0.saturating_sub(reach),
+                    x1.saturating_add(reach + 1),
+                    y1.saturating_add(reach + 1),
+                );
+                match render_frame_region(
+                    &stroke.document,
+                    stroke.index,
+                    &assets,
+                    self.fonts.as_mut(),
+                    &frame.pixels,
+                    damage,
+                )? {
+                    Some(pixels) => DrawingPreview {
+                        pixels: Arc::new(pixels),
+                        ..frame
+                    },
+                    None => prepare_frame(&stroke.document, &assets, self.fonts.as_mut())?,
+                }
+            }
+            _ => prepare_frame(&stroke.document, &assets, self.fonts.as_mut())?,
+        };
+        drop(assets);
+        stroke.frame = Some(frame.clone());
+        self.brush = Some(stroke);
+        Ok(frame)
     }
 
     fn image_background_candidate(
@@ -1619,13 +1953,9 @@ impl EditorSession {
             mode,
         } = request
         {
-            let Some((index, edited)) = self.background_brush_edit(points, size, softness, mode)?
-            else {
-                return Ok(self.frame.clone());
-            };
-            let (document, assets) = self.image_background_candidate(index, edited)?;
-            return prepare_frame(&document, &assets, self.fonts.as_mut());
+            return self.preview_brush(points, size, softness, mode);
         }
+        self.brush = None;
         let mut document = self.history.current().clone();
         let mut guides = Vec::new();
         match request {
@@ -1681,6 +2011,8 @@ impl EditorSession {
     }
 
     pub fn execute(&mut self, request: Request) -> Result<(), String> {
+        // Any request ends a brush preview; its retained pixels go with it.
+        self.brush = None;
         if self.text_input.is_some() {
             match request {
                 Request::Snapshot => return Ok(()),
