@@ -216,7 +216,16 @@ jobs:
               --size 1100x760 --screenshot "$RUNNER_TEMP/editor-$appearance.png"
             test -s "$RUNNER_TEMP/editor-$appearance.png"
           done
-      - name: AT-SPI smoke (History, Preferences, screenshot editor)
+      - name: Render the floating previews headlessly in both appearances
+        run: |
+          for appearance in light dark; do
+            GSK_RENDERER=cairo xvfb-run -a apps/native/gtk/target/debug/captures-gtk \
+              --scene preview --history-root "$RUNNER_TEMP/history" \
+              --appearance "$appearance" --settings-file "$RUNNER_TEMP/settings.json" \
+              --screenshot "$RUNNER_TEMP/preview-$appearance.png"
+            test -s "$RUNNER_TEMP/preview-$appearance.png"
+          done
+      - name: AT-SPI smoke (History, Preferences, screenshot editor, previews)
         timeout-minutes: 5
         run: xvfb-run -a dbus-run-session -- /usr/bin/python3 apps/native/gtk/smoke.py --binary apps/native/gtk/target/debug/captures-gtk
 

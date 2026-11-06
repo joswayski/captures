@@ -5,6 +5,7 @@
 mod editor;
 mod history;
 mod preferences;
+mod previews;
 mod style;
 mod switch;
 mod tokens;
@@ -18,7 +19,7 @@ use std::time::{Duration, Instant};
 use gtk::prelude::*;
 use gtk::{gio, glib, graphene};
 
-const USAGE: &str = "captures-gtk [--scene preferences|history|editor] [--artifact ID] [--appearance light|dark]\n\
+const USAGE: &str = "captures-gtk [--scene preferences|history|editor|preview] [--artifact ID] [--appearance light|dark]\n\
   [--settings-file PATH] [--history-root PATH] [--size WxH]\n\
   [--screenshot OUT.png] [--exercise] [--quit-after SECONDS]";
 
@@ -27,6 +28,7 @@ enum Scene {
     Preferences,
     History,
     Editor,
+    Preview,
 }
 
 impl Scene {
@@ -35,6 +37,7 @@ impl Scene {
             Scene::Preferences => "preferences",
             Scene::History => "history",
             Scene::Editor => "editor",
+            Scene::Preview => "preview",
         }
     }
 }
@@ -72,6 +75,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
                     "preferences" => Scene::Preferences,
                     "history" => Scene::History,
                     "editor" => Scene::Editor,
+                    "preview" => Scene::Preview,
                     other => return Err(format!("unsupported scene {other}")),
                 }
             }
@@ -125,6 +129,7 @@ struct Host {
     history: RefCell<Option<Rc<history::History>>>,
     /// Open screenshot editors, one per artifact.
     editors: RefCell<Vec<(String, Rc<editor::Editor>)>>,
+    previews: RefCell<Option<Rc<previews::Previews>>>,
 }
 
 impl Host {
@@ -185,7 +190,14 @@ impl Host {
                         }
                     }
                 }),
-                restore: Box::new(|_| {}),
+                restore: Box::new({
+                    let host = Rc::downgrade(self);
+                    move |entry| {
+                        if let Some(host) = host.upgrade() {
+                            host.show_preview(entry.clone());
+                        }
+                    }
+                }),
             },
         ));
         let host = Rc::downgrade(self);
@@ -201,6 +213,40 @@ impl Host {
 }
 
 impl Host {
+    /// The floating preview stack, created on first Restore.
+    fn show_preview(
+        self: &Rc<Self>,
+        entry: captures_history::HistoryEntry,
+    ) -> Rc<previews::Previews> {
+        let existing = self.previews.borrow().clone();
+        let previews = existing.unwrap_or_else(|| {
+            let edit = Rc::downgrade(self);
+            let changed = Rc::downgrade(self);
+            let previews = Rc::new(previews::build(
+                &self.app,
+                self.history_root.clone(),
+                previews::Actions {
+                    edit: Box::new(move |entry| {
+                        if let Some(host) = edit.upgrade() {
+                            host.show_editor(&entry.id, entry.mode, &entry.created_at);
+                        }
+                    }),
+                    changed: Box::new(move || {
+                        if let Some(host) = changed.upgrade()
+                            && let Some(history) = host.history.borrow().as_ref()
+                        {
+                            history.reload();
+                        }
+                    }),
+                },
+            ));
+            *self.previews.borrow_mut() = Some(previews.clone());
+            previews
+        });
+        previews.restore(entry);
+        previews
+    }
+
     /// The screenshot editor for one History artifact; reopening focuses it.
     fn show_editor(
         self: &Rc<Self>,
@@ -293,6 +339,7 @@ fn main() -> glib::ExitCode {
             preferences: RefCell::default(),
             history: RefCell::default(),
             editors: RefCell::default(),
+            previews: RefCell::default(),
         });
         hosts.borrow_mut().push(host.clone());
         let window: gtk::ApplicationWindow = match options.scene {
@@ -305,6 +352,28 @@ fn main() -> glib::ExitCode {
                     .and_then(|entries| entries.into_iter().find(|e| e.id == id));
                 let (mode, created_at) = entry.map(|e| (e.mode, e.created_at)).unwrap_or_default();
                 host.show_editor(&id, mode, &created_at).window.clone()
+            }
+            // `--artifact ID` restores one entry; otherwise the two newest.
+            Scene::Preview => {
+                let entries = captures_history::load(&host.history_root, chrono::Utc::now())
+                    .unwrap_or_default();
+                let mut chosen: Vec<_> = match &options.artifact {
+                    Some(id) => entries.into_iter().filter(|e| e.id == *id).collect(),
+                    None => entries.into_iter().take(2).collect(),
+                };
+                chosen.reverse();
+                let mut shown = None;
+                for entry in chosen {
+                    shown = Some(host.show_preview(entry));
+                }
+                match shown {
+                    Some(previews) => previews.window.clone(),
+                    None => {
+                        eprintln!("no History entries to preview");
+                        app.quit();
+                        return;
+                    }
+                }
             }
         };
         if let Some((w, h)) = options.size {
@@ -372,6 +441,11 @@ fn exercise(host: &Rc<Host>, scene: Scene, started: Instant) {
                     let appearance = if cycle % 2 == 0 { "dark" } else { "light" };
                     let tokens = tokens::Tokens::variant(appearance, "mustard");
                     host.provider.load_from_data(&style::css(&tokens));
+                }
+                Scene::Preview => {
+                    if let Some(previews) = host.previews.borrow().as_ref() {
+                        previews.toggle_collapsed();
+                    }
                 }
                 Scene::Editor => {
                     if let Some((_, editor)) = host.editors.borrow().first() {

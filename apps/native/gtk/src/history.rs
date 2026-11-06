@@ -821,7 +821,8 @@ impl Slot {
             if spacers.len() <= slot {
                 spacers.push(gtk::Box::new(gtk::Orientation::Vertical, 0));
             }
-            self.inner.append(&spacers[slot]);
+            // A spacer may still be here from an earlier pass.
+            reparent(&spacers[slot], &self.inner);
         }
         true
     }
@@ -1215,7 +1216,7 @@ impl CardView {
     }
 }
 
-fn media_path(root: &Path, entry: &HistoryEntry) -> PathBuf {
+pub fn media_path(root: &Path, entry: &HistoryEntry) -> PathBuf {
     if entry.kind.is_recording() {
         entry
             .recording_media_path(root)
@@ -1255,40 +1256,19 @@ fn run_action(state: &Rc<State>, card: &Rc<CardView>, entry: &HistoryEntry, acti
             });
         }
         CardAction::SaveImage | CardAction::SaveFile => {
-            let source = media_path(&state.root, entry);
             let window = card.root.root().and_downcast::<gtk::Window>();
-            #[allow(deprecated)] // `GtkFileDialog` needs GTK 4.10.
-            let chooser = gtk::FileChooserNative::new(
-                Some(action.label()),
-                window.as_ref(),
-                gtk::FileChooserAction::Save,
-                Some("Save"),
-                Some("Cancel"),
-            );
-            #[allow(deprecated)]
-            chooser.set_current_name(
-                &source
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "capture.png".into()),
-            );
             let weak = Rc::downgrade(card);
             let weak_state = Rc::downgrade(state);
-            #[allow(deprecated)]
-            chooser.connect_response(move |chooser, response| {
-                let target = chooser.file().and_then(|file| file.path());
-                chooser.destroy();
-                let (Some(target), gtk::ResponseType::Accept) = (target, response) else {
-                    return;
-                };
-                if let Err(error) = std::fs::copy(&source, &target)
-                    && let (Some(card), Some(state)) = (weak.upgrade(), weak_state.upgrade())
-                {
-                    card.fail(&state, format!("Couldn’t save: {error}"));
-                }
-            });
-            #[allow(deprecated)]
-            chooser.show();
+            save_copy(
+                window.as_ref(),
+                action.label(),
+                media_path(&state.root, entry),
+                move |error| {
+                    if let (Some(card), Some(state)) = (weak.upgrade(), weak_state.upgrade()) {
+                        card.fail(&state, error);
+                    }
+                },
+            );
         }
         CardAction::ShowInFolder => {
             let path = entry
@@ -1299,6 +1279,43 @@ fn run_action(state: &Rc<State>, card: &Rc<CardView>, entry: &HistoryEntry, acti
             reveal(&path);
         }
     }
+}
+
+/// Ask where to save a copy of `source`, then copy it there.
+pub fn save_copy(
+    window: Option<&gtk::Window>,
+    title: &str,
+    source: PathBuf,
+    failed: impl Fn(String) + 'static,
+) {
+    #[allow(deprecated)] // `GtkFileDialog` needs GTK 4.10.
+    let chooser = gtk::FileChooserNative::new(
+        Some(title),
+        window,
+        gtk::FileChooserAction::Save,
+        Some("Save"),
+        Some("Cancel"),
+    );
+    #[allow(deprecated)]
+    chooser.set_current_name(
+        &source
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "capture.png".into()),
+    );
+    #[allow(deprecated)]
+    chooser.connect_response(move |chooser, response| {
+        let target = chooser.file().and_then(|file| file.path());
+        chooser.destroy();
+        let (Some(target), gtk::ResponseType::Accept) = (target, response) else {
+            return;
+        };
+        if let Err(error) = std::fs::copy(&source, &target) {
+            failed(format!("Couldn’t save: {error}"));
+        }
+    });
+    #[allow(deprecated)]
+    chooser.show();
 }
 
 /// Select the file in the desktop's file manager

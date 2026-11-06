@@ -8,7 +8,8 @@ entry from disk through the two-step Delete. Preferences: a switch row exposes
 the switch role and checked state, and toggling it saves the setting.
 Editor: History's Edit opens the screenshot editor; a real pointer drag
 (xdotool) draws a rectangle layer, Undo and Redo go through AT-SPI, and Save
-writes a new PNG.
+writes a new PNG. Previews: Restore opens floating preview cards; Copy shows
+its status chip, Close dismisses a card and Delete removes its entry from disk.
 
 Run under `xvfb-run -a dbus-run-session --`, with `--binary` pointing at a
 built `captures-gtk`. Needs python3-gi and gir1.2-atspi-2.0.
@@ -216,6 +217,38 @@ def editor(binary, scratch):
         process.wait(timeout=10)
 
 
+def previews(binary, scratch):
+    root = scratch / "preview-history"
+    write_history_entries(root, 3)
+    process = launch(binary, "--scene", "history", "--history-root", str(root),
+                     "--settings-file", str(scratch / "preview-settings.json"),
+                     "--size", "1020x720")
+    try:
+        app = wait(lambda: application(process.pid), "the app on the accessibility bus")
+        cards = lambda: find(app, "image", "Screenshot preview")
+        restores = wait(lambda: find(app, "push button", "Restore"), "Restore buttons")
+        press(restores[0])
+        wait(lambda: len(cards()) == 1, "one preview card")
+        press(wait(lambda: len(find(app, "push button", "Restore")) > 1
+                   and find(app, "push button", "Restore"), "a second Restore")[1])
+        wait(lambda: len(cards()) == 2, "two preview cards")
+        press(find(app, "push button", "Copy")[0])
+        # The status role's AT-SPI name differs across GTK releases.
+        wait(lambda: [n for n, (_, name) in nodes(app) if name == "Copied to clipboard"],
+             "the Copied chip")
+        press(find(app, "push button", "Close")[0])
+        wait(lambda: len(cards()) == 1, "Close to dismiss a card")
+        before = len(list(root.iterdir()))
+        press(find(app, "push button", "Delete")[0])
+        wait(lambda: len(list(root.iterdir())) == before - 1, "Delete to remove the entry")
+        wait(lambda: not cards(), "the last card to leave")
+        wait(lambda: find(app, "push button", "All 2"), "History to reload")
+        print("previews: restore, copy, close and delete passed")
+    finally:
+        process.terminate()
+        process.wait(timeout=10)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", required=True)
@@ -228,6 +261,7 @@ def main():
         history(args.binary, scratch)
         preferences(args.binary, scratch)
         editor(args.binary, scratch)
+        previews(args.binary, scratch)
 
 
 if __name__ == "__main__":

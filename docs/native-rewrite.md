@@ -109,7 +109,7 @@ rows near the viewport hold cards and thumbnails, decoded at card size from
 renderer, release build) the process RSS is about 99 MB with 6 live cards,
 against 249 MB when every retained list row built its cards; Preferences
 alone is about 89 MB. These are orb numbers, not the real-hardware gate, and
-not yet compared with egui measured the same way. Restore, the
+not yet compared with egui measured the same way. The
 recording editor and Save image/file's GTK 4.10 file dialog are wired to
 stubs or the legacy chooser. CI renders History in both appearances and runs
 `apps/native/gtk/smoke.py` over AT-SPI (filter, two-step delete from disk,
@@ -136,7 +136,23 @@ same way, on its built-in document rather than the same image. CI renders
 the editor in both appearances, and `smoke.py` opens it from History, draws
 a rectangle with a real xdotool drag, undoes and redoes it over AT-SPI and
 checks that Save writes a PNG containing it. X11 (Xvfb) only; Wayland, Orca
-and real hardware remain open. Restore still goes to a stub. Windows, macOS:
+and real hardware remain open. Windows, macOS: unchanged.
+
+The fourth GTK4 slice is the floating previews: History's Restore (or
+`--scene preview`) adds a card to one undecorated stack window with the
+shipping card (cover thumbnail from `preview.png`, size chip), hover and
+keyboard-focus controls over a blurred, dimmed image (Close, Delete, Edit,
+Copy with its clipboard chip, Save file or Show in Folder), file drag out,
+the stale-pointer hover lock, and the Clear all and Minimize controls. Delete
+removes the History entry and reloads History. Only the hovered card
+redraws. Not ported: the collapsed 3D pile pose (Minimize keeps only the
+newest card), arrive/exit motion, overflow scrolling, and stack placement:
+GTK4 cannot position windows, so the compositor places the stack; a
+Wayland layer-shell or X11 hint path is still needed. Release build under
+Xvfb with Cairo, two cards: about 94 MB RSS against about 155 MB for the egui
+workbench's preview scene measured the same way. CI renders it in both
+appearances and `smoke.py` restores two cards from History, copies, closes
+one and deletes the other from disk. X11 (Xvfb) only. Windows, macOS:
 unchanged.
 
 ## Progress dashboard

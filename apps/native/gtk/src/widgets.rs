@@ -210,10 +210,13 @@ impl MaxWidth {
 
 mod thumbnail_imp {
     use super::*;
+    use captures_app::preview_chrome;
 
     #[derive(Default)]
     pub struct Thumbnail {
         pub texture: std::cell::RefCell<Option<gtk::gdk::Texture>>,
+        pub cover: std::cell::Cell<bool>,
+        pub dimmed: std::cell::Cell<bool>,
     }
 
     #[glib::object_subclass]
@@ -245,13 +248,45 @@ mod thumbnail_imp {
             if w <= 0. || h <= 0. || tw <= 0. || th <= 0. {
                 return;
             }
-            // `object-fit: contain`, centered.
-            let scale = (w / tw).min(h / th);
+            // `object-fit: contain` or `cover`, centered.
+            let cover = self.cover.get();
+            let scale = if cover {
+                (w / tw).max(h / th)
+            } else {
+                (w / tw).min(h / th)
+            };
+            // Mini-preview hover: `blur(2px) brightness(.5)` and `scale(1.015)`.
+            let dimmed = self.dimmed.get();
+            let scale = if dimmed {
+                scale * preview_chrome::HOVER_MEDIA_SCALE as f32
+            } else {
+                scale
+            };
             let (dw, dh) = (tw * scale, th * scale);
+            if dimmed {
+                let b = preview_chrome::HOVER_MEDIA_BRIGHTNESS as f32;
+                snapshot.push_color_matrix(
+                    &graphene::Matrix::from_float([
+                        b, 0., 0., 0., 0., b, 0., 0., 0., 0., b, 0., 0., 0., 0., 1.,
+                    ]),
+                    &graphene::Vec4::new(0., 0., 0., 0.),
+                );
+                snapshot.push_blur(preview_chrome::HOVER_MEDIA_BLUR);
+            }
+            if cover {
+                snapshot.push_clip(&graphene::Rect::new(0., 0., w, h));
+            }
             snapshot.append_texture(
                 &texture,
                 &graphene::Rect::new((w - dw) / 2., (h - dh) / 2., dw, dh),
             );
+            if cover {
+                snapshot.pop();
+            }
+            if dimmed {
+                snapshot.pop();
+                snapshot.pop();
+            }
         }
     }
 }
@@ -273,6 +308,18 @@ impl Default for Thumbnail {
 impl Thumbnail {
     pub fn has_texture(&self) -> bool {
         self.imp().texture.borrow().is_some()
+    }
+
+    pub fn set_dimmed(&self, dimmed: bool) {
+        if self.imp().dimmed.replace(dimmed) != dimmed {
+            self.queue_draw();
+        }
+    }
+
+    /// Fill the widget (`object-fit: cover`) instead of fitting inside it.
+    pub fn set_cover(&self, cover: bool) {
+        self.imp().cover.set(cover);
+        self.queue_draw();
     }
 
     pub fn set_texture(&self, texture: Option<gtk::gdk::Texture>) {

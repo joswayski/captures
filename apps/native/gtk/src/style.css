@@ -755,3 +755,110 @@ popover.captures-menu button.editor-shape-button.active {
 .captures button.ui-btn.editor-save {
   padding: 0 var(--s-6);
 }
+
+/* ---------------------------------------------------- floating previews ---- */
+
+/* `mini-preview.css`: always the fixed glass palette, over any wallpaper. */
+window.captures.preview-stack-window {
+  background: transparent;
+}
+.captures .preview-card {
+  border-radius: var(--thumbnail-card-radius);
+  box-shadow:
+    var(--shadow-md),
+    0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+.captures .preview-card .preview-overlay,
+.captures .preview-card button.preview-overlay {
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+.captures .preview-card.hover .preview-overlay,
+.captures .preview-card.hover button.preview-overlay {
+  opacity: 1;
+}
+.captures .preview-meta {
+  padding: 3px var(--s-3);
+  border-radius: var(--r-xs);
+  color: var(--glass-text);
+  background: rgba(10, 10, 14, 0.66);
+  font-size: var(--text-2xs);
+  transition: opacity 150ms ease;
+}
+.captures .preview-card.hover .preview-meta {
+  opacity: 0;
+}
+.captures .preview-chip {
+  padding: 3px var(--s-4);
+  border: 1px solid rgba(53, 163, 93, 0.55);
+  border-radius: var(--r-pill);
+  color: #eafff0;
+  background: rgba(10, 22, 15, 0.9);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+}
+.captures .preview-chip.error {
+  border-color: var(--danger-border);
+  color: var(--glass-text);
+  background: var(--glass-strong);
+}
+.captures button.preview-icon-button,
+.captures button.preview-stack-control {
+  all: unset;
+  min-width: 26px;
+  min-height: 26px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-md);
+  color: var(--glass-text);
+  background: var(--glass-strong);
+  box-shadow: var(--shadow-sm);
+  transition:
+    color 140ms ease,
+    background-color 140ms ease;
+}
+.captures button.preview-icon-button:hover {
+  background: var(--glass-raised);
+}
+.captures button.preview-icon-button.delete {
+  color: var(--theme-signal-text);
+}
+.captures button.preview-icon-button.delete:hover {
+  color: #fff;
+  background: var(--theme-signal);
+}
+.captures button.preview-stack-control {
+  background: var(--glass-strong-solid);
+}
+.captures button.preview-stack-control:hover {
+  border-color: var(--glass-border-strong);
+  background: var(--glass-raised-solid);
+}
+.captures button.preview-icon-button:focus-visible,
+.captures button.preview-stack-control:focus-visible,
+.captures button.preview-main-button:focus-visible {
+  box-shadow:
+    var(--shadow-sm),
+    0 0 0 2px alpha(var(--theme-accent), 0.7);
+}
+.captures button.preview-main-button {
+  all: unset;
+  min-height: 30px;
+  border: 1px solid var(--glass-border-strong);
+  border-radius: var(--r-md);
+  color: var(--glass-text);
+  background: var(--glass-strong);
+  box-shadow: var(--shadow-sm);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+}
+.captures button.preview-main-button:hover {
+  background: var(--glass-raised);
+}
+.captures button.preview-main-button.primary {
+  border-color: transparent;
+  color: var(--theme-accent-ink);
+  background: var(--theme-accent);
+}
+.captures button.preview-main-button.primary:hover {
+  background: var(--theme-accent-hover);
+}
