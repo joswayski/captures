@@ -23,7 +23,7 @@ use windows::core::*;
 use crate::host::{Host, with_host};
 use crate::scene::{
     ACCENT_GROUP_LABEL, CARDS, CUSTOM_GROUP_LABEL, Event, FIND_BUTTONS, FieldId, FindPart, Item,
-    NAV_WIDTH, Rect, SelectKey, Target, Utility,
+    Rect, SelectKey, Target, Utility,
 };
 use crate::textfield::TextField;
 use crate::uia_text::range;
@@ -101,6 +101,8 @@ struct Live {
     find: bool,
     /// The custom color editor is shown.
     custom: bool,
+    /// The narrow layout hides the sidebar.
+    compact: bool,
     /// The save status is shown.
     status: bool,
 }
@@ -113,6 +115,7 @@ fn live(host: &Host) -> Live {
             .map(|(key, _)| (key, host.scene.select_options(key).len())),
         find: host.scene.find.open,
         custom: host.scene.custom_shown(),
+        compact: host.scene.compact,
         status: host.scene.save_shown(),
     }
 }
@@ -196,7 +199,13 @@ fn id_of(target: Target) -> Id {
 fn children(id: Id, live: Live) -> Vec<Id> {
     match id {
         Id::Root => {
-            let mut list = vec![Id::Nav, Id::Title, Id::Subtitle, Id::History];
+            // `display: none` drops the sidebar from the tree when narrow.
+            let mut list = if live.compact {
+                Vec::new()
+            } else {
+                vec![Id::Nav]
+            };
+            list.extend([Id::Title, Id::Subtitle, Id::History]);
             if live.status {
                 list.push(Id::SaveStatus);
             }
@@ -278,7 +287,7 @@ fn rect(host: &Host, id: Id) -> Rect {
     let scene = &host.scene;
     match id {
         Id::Root => Rect::new(0., 0., scene.w, scene.h),
-        Id::Nav => Rect::new(0., 0., NAV_WIDTH, scene.h),
+        Id::Nav => Rect::new(0., 0., scene.nav_w(), scene.h),
         Id::Title => scene.header_text_rect(false),
         Id::Subtitle => scene.header_text_rect(true),
         Id::Card(card) => scene.card_rect(card),
