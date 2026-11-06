@@ -603,6 +603,16 @@ inside. UIA: the card is a pane named `Canvas background` after the page,
 like shipping's portal. Windows: cross-compiled only, Wine renders in light
 and dark with the card open. macOS, Linux: unchanged.
 
+Zoom presets: the zoom group's readout is now shipping's `Canvas zoom
+preset` select (`title="Zoom presets"`), drawn in the Preferences select
+listbox. Its options are Fit, the current manual zoom when it isn't a
+preset, then 50%, 100% and 200%. Fit fits; any other option zooms about
+the viewport centre, as `setManualZoom` does. It takes the shared select
+keys and sits in the Tab order after Zoom in. Like shipping's `outline:
+none` select, it shows no hover fill or focus ring. UIA: ComboBox with
+ExpandCollapse and Value. Windows: cross-compiled only, Wine renders in
+light and dark with the list open. macOS, Linux: unchanged.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,

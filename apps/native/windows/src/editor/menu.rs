@@ -9,6 +9,7 @@
 //! Focus stays on the trigger, as in shipping, and the popup closes on
 //! choice, Escape, Tab, an outside press or when its trigger goes away.
 use captures_app::controls::select;
+use captures_app::editor_chrome::{self, header};
 use captures_app::editor_text::{self, TEXT_STYLE_PRESETS};
 use windows::Win32::Graphics::Direct2D::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
@@ -27,6 +28,8 @@ pub enum MenuKind {
     Font,
     /// The Crop section's Aspect ratio select.
     Aspect,
+    /// The header's Canvas zoom preset select.
+    Preset,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -50,7 +53,7 @@ pub const MENU_BLEED: f32 = 36.;
 impl MenuKind {
     /// A `.custom-select-listbox` (`role="listbox"`), not a menu.
     pub fn is_select(self) -> bool {
-        matches!(self, MenuKind::Font | MenuKind::Aspect)
+        matches!(self, MenuKind::Font | MenuKind::Aspect | MenuKind::Preset)
     }
 
     /// The trigger that owns the popup.
@@ -59,6 +62,7 @@ impl MenuKind {
             MenuKind::Style => Prop::StyleTrigger,
             MenuKind::Font => Prop::Font,
             MenuKind::Aspect => Prop::Aspect,
+            MenuKind::Preset => Prop::Preset,
         }
     }
 }
@@ -80,7 +84,28 @@ impl Editor {
                 .iter()
                 .map(|(label, _)| (*label).to_owned())
                 .collect(),
+            MenuKind::Preset => self
+                .preset_options()
+                .into_iter()
+                .map(|(_, label)| label)
+                .collect(),
         }
+    }
+
+    /// The zoom preset `<option>`s: Fit (`None`), a manual zoom that isn't a
+    /// preset, then `SCREENSHOT_ZOOM_OPTIONS`.
+    pub fn preset_options(&self) -> Vec<(Option<f64>, String)> {
+        let mut options = vec![(None, "Fit".to_owned())];
+        let zoom = self.viewport.zoom_percent;
+        if !self.fit_mode() && !header::ZOOM_PRESETS.contains(&zoom) {
+            options.push((Some(zoom), editor_chrome::zoom_label(zoom)));
+        }
+        options.extend(
+            header::ZOOM_PRESETS
+                .iter()
+                .map(|&p| (Some(p), format!("{p}%"))),
+        );
+        options
     }
 
     /// The Font select's `(family key, label)` options.
@@ -105,6 +130,10 @@ impl Editor {
                     .position(|(key, _)| key == family)
             }
             MenuKind::Aspect => Some(self.crop_aspect),
+            MenuKind::Preset => {
+                let value = (!self.fit_mode()).then_some(self.viewport.zoom_percent);
+                self.preset_options().iter().position(|(v, _)| *v == value)
+            }
         }
     }
 
@@ -194,7 +223,7 @@ impl Editor {
                 width - 2. - 2. * s2,
                 STYLE_ROW,
             ),
-            MenuKind::Font | MenuKind::Aspect => {
+            MenuKind::Font | MenuKind::Aspect | MenuKind::Preset => {
                 let h = self.option_h();
                 Rect::new(1. + s2, 1. + s2 + index as f32 * h, width - 2. - 2. * s2, h)
             }
@@ -248,7 +277,7 @@ impl Editor {
                     .min((self.w - trigger.w - VIEWPORT_PADDING).max(VIEWPORT_PADDING));
                 Rect::new(left, top, trigger.w, h)
             }
-            MenuKind::Font | MenuKind::Aspect => {
+            MenuKind::Font | MenuKind::Aspect | MenuKind::Preset => {
                 let (s4, s6) = (self.t.n("s-4"), self.t.n("s-6"));
                 let label_w = self
                     .menu_items(menu.kind)
@@ -365,6 +394,12 @@ impl Editor {
                     self.crop_aspect = index;
                 }
             }
+            // `activateFitZoom()` or `setManualZoom(Number(value))`.
+            MenuKind::Preset => match self.preset_options().get(index) {
+                Some((None, _)) => self.activate(Target::Fit),
+                Some(&(Some(percent), _)) => self.zoom_to(percent, None),
+                None => {}
+            },
         }
         self.events
             .push(Event::Value(Target::Prop(menu.kind.trigger())));
@@ -382,6 +417,7 @@ impl Editor {
             Prop::StyleTrigger => MenuKind::Style,
             Prop::Font => MenuKind::Font,
             Prop::Aspect => MenuKind::Aspect,
+            Prop::Preset => MenuKind::Preset,
             _ => return false,
         };
         let key = match vk {
@@ -434,6 +470,38 @@ impl Editor {
 
     // ---- drawing ----
 
+    /// `.screenshot-editor-zoom-presets`: the value in mono `--text-xs` at
+    /// `padding-left: var(--s-4)` and the select's chevron; no hover fill or
+    /// outline in shipping (`outline: none`).
+    pub(super) fn draw_preset(
+        &self,
+        dc: &ID2D1DeviceContext,
+        lit: bool,
+        (w, h): (f32, f32),
+    ) -> Result<()> {
+        if lit {
+            return Ok(());
+        }
+        let t = &self.t;
+        let text = self.g.text(t, Style::MonoSmall, &self.zoom_text(), 1e4)?;
+        gfx::text(
+            dc,
+            &text,
+            t.n("s-4"),
+            ((h - text.height) / 2.).round(),
+            t.color("text"),
+        )?;
+        gfx::icon(
+            dc,
+            &self.g.factory,
+            "chevron-down",
+            &[],
+            (w - 16., (h - 10.) / 2., 10.),
+            1.8,
+            t.color_alpha("text-subtle", 0.6),
+        )
+    }
+
     /// The panel and every row at rest.
     pub(super) fn draw_menu(&self, dc: &ID2D1DeviceContext, (w, h): (f32, f32)) -> Result<()> {
         let Some(menu) = self.menu else {
@@ -444,7 +512,7 @@ impl Editor {
         // `.screenshot-text-style-menu` (`--r-xl`) and the listbox (`--r-lg`).
         let radius = match menu.kind {
             MenuKind::Style => t.n("r-xl"),
-            MenuKind::Font | MenuKind::Aspect => t.n("r-lg"),
+            MenuKind::Font | MenuKind::Aspect | MenuKind::Preset => t.n("r-lg"),
         };
         gfx::shadow(dc, all, radius, t.shadow("shadow-lg"))?;
         gfx::fill_round(dc, all, radius, t.color("surface-overlay"))?;
@@ -513,7 +581,7 @@ impl Editor {
                     ink,
                 )?;
             }
-            MenuKind::Font | MenuKind::Aspect => {
+            MenuKind::Font | MenuKind::Aspect | MenuKind::Preset => {
                 if lit {
                     gfx::fill_round(dc, b, t.n("r-sm"), c("surface-hover"))?;
                 }
