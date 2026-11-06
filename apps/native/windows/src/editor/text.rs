@@ -377,6 +377,36 @@ impl Editor {
         self.drain_text();
     }
 
+    /// An open label has an IME composition in progress.
+    pub(crate) fn composing(&self) -> bool {
+        self.inline.as_ref().is_some_and(|i| i.field.composing())
+    }
+
+    /// Closing: queue the label's newest text and its commit behind any
+    /// request in flight (jobs run in order), so the draft flush queued next
+    /// includes it, as shipping and the AppKit host commit on close. A Begin
+    /// still in flight is ahead of these; a failed one leaves nothing to
+    /// commit, and a stale Update or Finish only fails harmlessly.
+    pub(super) fn queue_text_close(&mut self) {
+        let Some(inline) = self.inline.take() else {
+            return;
+        };
+        if !inline.started && !inline.in_flight {
+            return;
+        }
+        let text = String::from_utf16_lossy(inline.field.units());
+        if text != inline.accepted {
+            let _ = self.jobs.send(Job::Apply(Request::UpdateTextInput {
+                input_id: inline.id.clone(),
+                text,
+            }));
+        }
+        let _ = self.jobs.send(Job::Apply(Request::FinishTextInput {
+            input_id: inline.id,
+            commit: true,
+        }));
+    }
+
     /// Send the newest text, or Finish, when the worker is free.
     fn drain_text(&mut self) {
         let Some(inline) = self.inline.as_mut() else {

@@ -1281,6 +1281,9 @@ pub fn run(options: Options) -> Result<()> {
             while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
                 if msg.message == WM_QUIT {
                     HOST.with(|h| h.borrow_mut().take());
+                    // Closed editors may still be committing labels and
+                    // writing drafts; returning would end the process.
+                    crate::editor::wait_for_workers();
                     return Ok(());
                 }
                 let _ = TranslateMessage(&msg);

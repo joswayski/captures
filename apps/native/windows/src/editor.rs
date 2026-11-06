@@ -23,8 +23,8 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use captures_app::editor::{
@@ -109,6 +109,14 @@ const WM_MOUSELEAVE: u32 = 0x02A3;
 const TIMER_MOTION: usize = 1;
 const TIMER_AUTOSAVE: usize = 2;
 const TIMER_PREVIEW: usize = 3;
+const TIMER_CLOSE: usize = 4;
+/// How long a closed editor's hidden window waits for its draft flush before
+/// it is destroyed anyway, as shipping's `SCREENSHOT_EDITOR_DRAFT_CLOSE_FLUSH_MS`.
+/// The worker keeps going after that (see `wait_for_workers`).
+const CLOSE_FLUSH_MS: u32 = 400;
+/// The most quitting, logging off or reopening an artifact waits for a
+/// closed editor's worker to finish its queue, so a slow disk cannot hang it.
+const WORKER_EXIT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 /// Brush and grip previews re-render the whole document on the worker (about
 /// 45 ms at 3840×2160); a pointer reports far more often than that is
 /// useful, so they go at most this often, and never keep the worker busy
@@ -117,6 +125,29 @@ const PREVIEW_INTERVAL: std::time::Duration = std::time::Duration::from_millis(3
 
 thread_local! {
     static EDITORS: RefCell<Vec<Editor>> = const { RefCell::new(Vec::new()) };
+    /// Every editor worker by artifact ID, including closed editors' workers
+    /// still finishing their queue.
+    static WORKERS: RefCell<Vec<(String, std::thread::JoinHandle<()>)>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+/// Wait, at most until `deadline`, for `workers` to finish.
+fn join_until(workers: Vec<std::thread::JoinHandle<()>>, deadline: Instant) {
+    for worker in workers {
+        while !worker.is_finished() && Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        if worker.is_finished() {
+            let _ = worker.join();
+        }
+    }
+}
+
+/// Before the process exits: let closed editors' workers finish committing
+/// open labels and writing drafts, for at most `WORKER_EXIT_WAIT`.
+pub fn wait_for_workers() {
+    let workers: Vec<_> = WORKERS.with(|w| w.borrow_mut().drain(..).map(|(_, w)| w).collect());
+    join_until(workers, Instant::now() + WORKER_EXIT_WAIT);
 }
 
 /// Run `f` on the editor window `hwnd` unless it is borrowed or closed;
@@ -348,6 +379,8 @@ enum Job {
     },
     Copy,
     Autosave,
+    /// Closing: write the draft, then report `Outcome::Flushed`.
+    Flush,
     /// Render an uncommitted gesture without touching history.
     Preview(Request),
     /// Publish the session's pixels again (a cancelled preview).
@@ -363,6 +396,8 @@ enum Outcome {
     Saved(std::result::Result<(SavePlan, SavedExport), String>),
     Copied(std::result::Result<(Vec<u8>, Vec<u8>), String>),
     Failed(String),
+    /// `Job::Flush` finished.
+    Flushed,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -449,7 +484,6 @@ pub struct Editor {
     reduced_motion: bool,
     jobs: Sender<Job>,
     outcomes: Receiver<Outcome>,
-    session: Arc<Mutex<Option<EditorSession>>>,
     pub presented: Option<Presented>,
     /// The last pixels, for new surfaces and the offscreen renderer.
     image: Option<Pixels>,
@@ -555,6 +589,11 @@ pub struct Editor {
     /// A `WM_APP_WAKE` was posted since the loop last checked `need`.
     pub(crate) woken: bool,
     pub events: Vec<Event>,
+    /// Close was requested: the window is hidden while the worker commits
+    /// an open label and flushes the draft.
+    closing: bool,
+    /// The flush finished or timed out; `wndproc` destroys the window.
+    close_ready: bool,
 }
 
 fn closed_kind(tool: &str) -> Option<ClosedShapeKind> {
@@ -783,41 +822,43 @@ fn dib(image: &RgbaImage) -> Vec<u8> {
 }
 
 fn spawn_worker(
-    session: Arc<Mutex<Option<EditorSession>>>,
     root: PathBuf,
     id: String,
     inbox: Receiver<Job>,
     results: Sender<Outcome>,
     hwnd: isize,
-) {
+    previous: Vec<std::thread::JoinHandle<()>>,
+) -> std::thread::JoinHandle<()> {
     std::thread::Builder::new()
         .name("captures-editor".into())
         .spawn(move || {
+            // A just-closed editor for this artifact may still be committing
+            // its label and writing the draft this session restores.
+            join_until(previous, Instant::now() + WORKER_EXIT_WAIT);
             let mut published = Published::default();
             let send = |outcome| {
                 let sent = results.send(outcome).is_ok();
                 post(hwnd, WM_APP_OUTCOME);
                 sent
             };
-            match EditorSession::open_with_fonts(
+            let mut session = match EditorSession::open_with_fonts(
                 open_request(&root, &id),
                 Some(captures_app::editor_fonts::bundled()),
             ) {
                 Ok(opened) => {
                     let first = present(&opened, &id, &mut published);
-                    *session.lock().expect("session") = Some(opened);
                     if !send(Outcome::Presented(Box::new(first))) {
                         return;
                     }
+                    opened
                 }
                 Err(error) => {
                     send(Outcome::Failed(error));
                     return;
                 }
-            }
+            };
             while let Ok(job) = inbox.recv() {
-                let mut guard = session.lock().expect("session");
-                let Some(session) = guard.as_mut() else { break };
+                let session = &mut session;
                 let outcome = match job {
                     Job::Apply(request) => match session.execute(request) {
                         Ok(()) => {
@@ -860,22 +901,26 @@ fn spawn_worker(
                         }
                         continue;
                     }
+                    Job::Flush => {
+                        if let Err(error) = session.execute(Request::AutosaveDraft {
+                            updated_at_ms: now_ms(),
+                        }) {
+                            eprintln!("draft flush on close failed: {error}");
+                        }
+                        Outcome::Flushed
+                    }
                 };
-                drop(guard);
-                if !send(outcome) {
-                    break;
-                }
+                // A closed window no longer takes results, but the jobs
+                // queued before it closed (its open label's Finish and the
+                // draft flush) still run; the loop ends once they are done.
+                send(outcome);
             }
         })
-        .expect("editor worker");
+        .expect("editor worker")
 }
 
-/// The worker's job queue, its replies and the session it shares.
-type Worker = (
-    Sender<Job>,
-    Receiver<Outcome>,
-    Arc<Mutex<Option<EditorSession>>>,
-);
+/// The worker's job queue and its replies.
+type Worker = (Sender<Job>, Receiver<Outcome>);
 
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
@@ -905,10 +950,10 @@ impl Editor {
                     Some(format!("Couldn’t read settings: {error}")),
                 ),
             };
-        let (jobs, outcomes, session) = worker.unwrap_or_else(|| {
+        let (jobs, outcomes) = worker.unwrap_or_else(|| {
             let (jobs, _) = channel();
             let (_, outcomes) = channel();
-            (jobs, outcomes, Arc::default())
+            (jobs, outcomes)
         });
         let mut editor = Editor {
             hwnd,
@@ -925,7 +970,6 @@ impl Editor {
             reduced_motion: false,
             jobs,
             outcomes,
-            session,
             presented: None,
             image: None,
             upload: None,
@@ -1016,6 +1060,8 @@ impl Editor {
             relayout: true,
             woken: false,
             events: Vec::new(),
+            closing: false,
+            close_ready: false,
         };
         editor.build();
         editor
@@ -1877,6 +1923,7 @@ impl Editor {
                 Ok(()) => self.set_notice(Some(("Copied image".into(), false))),
                 Err(error) => self.set_notice(Some((format!("Couldn’t copy: {error}"), true))),
             },
+            Outcome::Flushed => self.close_ready = self.closing,
             Outcome::Failed(error) => {
                 self.busy = false;
                 self.set_notice(Some((error, true)));
@@ -1911,20 +1958,60 @@ impl Editor {
     fn arm_autosave(&mut self) {
         if let Some(due) = self.autosave.deadline()
             && !self.hwnd.is_invalid()
+            && !self.closing
         {
             let ms = due.saturating_duration_since(Instant::now()).as_millis() as u32;
             unsafe { SetTimer(Some(self.hwnd), TIMER_AUTOSAVE, ms.max(1), None) };
         }
     }
 
-    /// Flush a pending draft on close, as shipping's autosave does.
-    fn flush_draft(&mut self) {
-        if let Ok(mut session) = self.session.lock()
-            && let Some(session) = session.as_mut()
-        {
-            let _ = session.execute(Request::AutosaveDraft {
-                updated_at_ms: now_ms(),
-            });
+    /// The close button, Alt+F4 or the system menu. Shipping commits an
+    /// open label and flushes the draft before the window goes; the window
+    /// hides at once and is destroyed when the flush reports back, or after
+    /// `CLOSE_FLUSH_MS` (the worker still finishes the queue then).
+    fn request_close(&mut self) {
+        if self.closing {
+            return;
+        }
+        self.queue_close();
+        unsafe {
+            let _ = ShowWindow(self.hwnd, SW_HIDE);
+            SetTimer(Some(self.hwnd), TIMER_CLOSE, CLOSE_FLUSH_MS, None);
+        }
+    }
+
+    /// Queue, behind every accepted edit, the open label's commit and the
+    /// final draft flush. Autosave skips while a label is open, so without
+    /// the commit a label typed just before closing would be lost.
+    fn queue_close(&mut self) {
+        if self.closing {
+            return;
+        }
+        self.closing = true;
+        self.gesture = None;
+        if !self.hwnd.is_invalid() {
+            unsafe {
+                let _ = KillTimer(Some(self.hwnd), TIMER_AUTOSAVE);
+            }
+        }
+        // The newest coalesced live edit, then the label, then the draft.
+        if let Some(next) = self.pending.take() {
+            let _ = self.jobs.send(Job::Apply(next));
+        }
+        self.queue_text_close();
+        let _ = self.jobs.send(Job::Flush);
+    }
+
+    /// `WM_ENDSESSION`: the process may end once this returns, so wait,
+    /// bounded, for the flush here.
+    fn flush_now(&mut self) {
+        self.queue_close();
+        let deadline = Instant::now() + WORKER_EXIT_WAIT;
+        while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+            match self.outcomes.recv_timeout(left) {
+                Ok(Outcome::Flushed) | Err(_) => break,
+                Ok(_) => {}
+            }
         }
     }
 
@@ -4459,6 +4546,12 @@ impl Editor {
                     self.receive(outcome);
                 }
             }
+            WM_TIMER if wp.0 == TIMER_CLOSE => {
+                unsafe {
+                    let _ = KillTimer(Some(self.hwnd), TIMER_CLOSE);
+                }
+                self.close_ready = true;
+            }
             WM_TIMER if wp.0 == TIMER_AUTOSAVE => {
                 unsafe {
                     let _ = KillTimer(Some(self.hwnd), TIMER_AUTOSAVE);
@@ -4933,7 +5026,7 @@ pub fn open(options: &Options, artifact_id: &str) -> Result<()> {
     let existing = EDITORS.with(|e| {
         e.try_borrow().ok().and_then(|e| {
             e.iter()
-                .find(|x| x.artifact_id == artifact_id)
+                .find(|x| x.artifact_id == artifact_id && !x.closing)
                 .map(|x| x.hwnd)
         })
     });
@@ -4986,15 +5079,24 @@ pub fn open(options: &Options, artifact_id: &str) -> Result<()> {
         );
         let (jobs, inbox) = channel();
         let (results, outcomes) = channel();
-        let session: Arc<Mutex<Option<EditorSession>>> = Arc::default();
-        spawn_worker(
-            session.clone(),
+        let previous = WORKERS.with(|w| {
+            let mut w = w.borrow_mut();
+            w.retain(|(_, worker)| !worker.is_finished());
+            let (same, others): (Vec<_>, Vec<_>) = std::mem::take(&mut *w)
+                .into_iter()
+                .partition(|(id, _)| id == artifact_id);
+            *w = others;
+            same.into_iter().map(|(_, worker)| worker).collect()
+        });
+        let worker = spawn_worker(
             root,
             artifact_id.to_owned(),
             inbox,
             results,
             hwnd.0 as isize,
+            previous,
         );
+        WORKERS.with(|w| w.borrow_mut().push((artifact_id.to_owned(), worker)));
         let mode = entry.mode.unwrap_or(CaptureMode::Region);
         let mut editor = Editor::new(
             hwnd,
@@ -5004,7 +5106,7 @@ pub fn open(options: &Options, artifact_id: &str) -> Result<()> {
             artifact_id.to_owned(),
             &entry.created_at,
             mode,
-            Some((jobs, outcomes, session)),
+            Some((jobs, outcomes)),
         );
         editor.scale = GetDpiForWindow(hwnd) as f32 / 96.;
         editor.reduced_motion = appearance::reduced_motion();
@@ -5061,12 +5163,30 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                     let index = e.iter().position(|editor| editor.hwnd == hwnd)?;
                     Some(e.remove(index))
                 });
+                // Any other teardown still commits the label and writes the
+                // draft; the worker finishes its queue after this window.
                 if let Some(mut editor) = closed {
-                    editor.flush_draft();
+                    editor.queue_close();
                 }
                 if !crate::host::exists() && !crate::history::exists() && !exists() {
                     PostQuitMessage(0);
                 }
+                return LRESULT(0);
+            }
+            WM_CLOSE => {
+                // Commit an open composition with the editor released, so
+                // its result string reaches the label before it is finished.
+                if with_editor(hwnd, |e| e.composing()) == Some(true) {
+                    crate::textfield::ime_complete(hwnd);
+                }
+                with_editor(hwnd, |e| e.request_close());
+                return LRESULT(0);
+            }
+            WM_ENDSESSION if wp.0 != 0 => {
+                if with_editor(hwnd, |e| e.composing()) == Some(true) {
+                    crate::textfield::ime_complete(hwnd);
+                }
+                with_editor(hwnd, |e| e.flush_now());
                 return LRESULT(0);
             }
             WM_ERASEBKGND => return LRESULT(1),
@@ -5117,6 +5237,11 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 Ok(None) => {}
                 Err(error) => eprintln!("color picker failed: {error}"),
             }
+        }
+        // Destroyed outside `with_editor`, so `WM_DESTROY` can remove it.
+        if with_editor(hwnd, |e| e.close_ready) == Some(true) {
+            let _ = DestroyWindow(hwnd);
+            return LRESULT(0);
         }
         if let Some(Some(result)) = handled {
             return result;
