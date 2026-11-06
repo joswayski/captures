@@ -503,7 +503,7 @@ describe("Preferences", () => {
     render(<Preferences />);
 
     expect(
-      await within(await screen.findByRole("radiogroup", { name: "Color theme" })).findAllByRole(
+      await within(await screen.findByRole("radiogroup", { name: "Accent color" })).findAllByRole(
         "radio",
       ),
     ).toHaveLength(10);
