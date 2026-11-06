@@ -1009,7 +1009,7 @@ impl Editor {
         }
     }
 
-    /// Render a grip drag or brush stroke so far on the worker, one
+    /// Render a move, grip drag or brush stroke so far on the worker, one
     /// request at a time.
     pub(super) fn preview_gesture(&mut self) {
         if self.preview_busy {
@@ -1047,6 +1047,14 @@ impl Editor {
                 let lock = self.shift_down();
                 self.resize_request(&id, handle, end, lock)
             }
+            Some(Gesture::Move { id, start, end }) => Request::Layer {
+                id,
+                edit: LayerEdit::DragMove {
+                    delta_x: end.x - start.x,
+                    delta_y: end.y - start.y,
+                    display_scale: self.zoom_percent().unwrap_or(100.) / 100.,
+                },
+            },
             Some(Gesture::Brush(points)) => match self.brush_request(points) {
                 Some(request) => request,
                 None => return,
