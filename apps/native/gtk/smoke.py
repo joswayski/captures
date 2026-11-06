@@ -237,10 +237,14 @@ def previews(binary, scratch):
         # name differs across GTK releases, so match the chip by name.
         stack = wait(lambda: find(app, "frame", "Captures Previews"), "the previews window")[0]
         press(find(stack, "push button", "Copy")[0])
-        chip = wait(lambda: [name for _, (_, name) in nodes(stack)
-                             if name and (name == "Copied to clipboard"
-                                          or name.startswith("Couldn’t copy"))],
-                    "the Copied chip", timeout=10)
+        try:
+            chip = wait(lambda: [name for _, (_, name) in nodes(stack)
+                                 if name and (name == "Copied to clipboard"
+                                              or name.startswith("Couldn’t copy"))],
+                        "the Copied chip", timeout=10)
+        except AssertionError:
+            print("previews tree:", [identity for _, identity in nodes(stack)], flush=True)
+            raise
         assert chip == ["Copied to clipboard"], f"copy reported {chip}"
         press(find(app, "push button", "Close")[0])
         wait(lambda: len(cards()) == 1, "Close to dismiss a card")
