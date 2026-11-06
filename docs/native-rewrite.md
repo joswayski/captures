@@ -520,6 +520,19 @@ heights can still shift by a pixel or two. As in shipping, the Properties
 Text field shows the open label's text and follows typing. Windows:
 cross-compiled only. macOS, Linux: unchanged.
 
+4K brush strokes on the UI thread (hardware pass 13): the image is now a
+tiled `IDCompositionVirtualSurface`. A brush preview changes about 7,200
+pixels of a 3840×2160 frame, but a partial `BeginDraw` on a plain surface
+can carry the rest of its previous buffer (about 33 MB) into the new one;
+tiles keep each update to the tiles it touches. That cost scaled with the
+image, as pass 13 measured, and fell when a stroke crossed a rectangle
+and previews slowed to full renders. The overlay also stops redrawing
+from the selection outline to the brush ring on every pointer move: when
+only the ring moves, it redraws just the ring's old and new boxes. This
+can't be timed without Windows (Wine has no DirectComposition), so the
+per-preview gain is reasoned from sizes and needs a hardware run.
+Windows: cross-compiled only. macOS, Linux: unchanged.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,

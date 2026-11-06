@@ -625,7 +625,7 @@ pub struct Editor {
     /// Where the page was last drawn relative to the image, for its redraw.
     page_key: (f32, f32, f32, f32),
     /// The overlay's last drawn box, well-relative DIPs.
-    overlay_drawn: Option<Rect>,
+    overlay_drawn: (Option<Rect>, Option<Rect>),
     /// The overlay surface was just created and has never been drawn:
     /// DirectComposition rejects a partial `BeginDraw` on it (E_INVALIDARG).
     overlay_fresh: bool,
@@ -1167,7 +1167,7 @@ impl Editor {
             controls: Vec::new(),
             rows: 0,
             page_key: (0., 0., 0., 0.),
-            overlay_drawn: None,
+            overlay_drawn: (None, None),
             overlay_fresh: true,
             motions: Vec::new(),
             dcomp: None,
@@ -3615,7 +3615,16 @@ impl Editor {
     }
 
     /// Selection outline and the in-progress gesture, well-relative.
-    fn overlay_box(&self) -> Option<Rect> {
+    /// The overlay's content box without the brush ring, and the ring's:
+    /// a ring that moves alone redraws only where it was and is.
+    fn overlay_parts(&self) -> (Option<Rect>, Option<Rect>) {
+        let ring = self
+            .brush_ring()
+            .map(|(x, y, r)| Rect::new(x - r - 13., y - r - 13., 2. * r + 26., 2. * r + 26.));
+        (self.overlay_rest(), ring)
+    }
+
+    fn overlay_rest(&self) -> Option<Rect> {
         let mut points: Vec<(f32, f32)> = Vec::new();
         let offset = self.move_offset();
         if !self.guides.is_empty()
@@ -3648,9 +3657,6 @@ impl Editor {
             _ => {}
         }
         points.extend(self.text_corners());
-        if let Some((x, y, r)) = self.brush_ring() {
-            points.extend([(x - r - 3., y - r - 3.), (x + r + 3., y + r + 3.)]);
-        }
         let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
         for (x, y) in &points {
             x0 = x0.min(*x);
@@ -4571,7 +4577,7 @@ impl Editor {
                     self.surfaces[i] = Some((surface, size));
                     node.dirty = true;
                     if node.kind == Kind::Overlay {
-                        self.overlay_drawn = None;
+                        self.overlay_drawn = (None, None);
                         self.overlay_fresh = true;
                     }
                 }
@@ -4622,20 +4628,31 @@ impl Editor {
         size: (u32, u32),
         scale: (f32, f32),
     ) -> Result<()> {
-        let now = self.overlay_box();
+        let now = self.overlay_parts();
         let fresh = std::mem::take(&mut self.overlay_fresh);
-        let region = match (self.overlay_drawn, now) {
+        let either = |a: Option<Rect>, b: Option<Rect>| match (a, b) {
+            (Some(a), Some(b)) => Some(cover(a, b)),
+            (a, b) => a.or(b),
+        };
+        let was = self.overlay_drawn;
+        let region = if fresh {
             // A new surface is drawn whole once, transparent where empty.
-            _ if fresh => Rect::new(0., 0., size.0 as f32 / scale.0, size.1 as f32 / scale.1),
-            (None, None) => return Ok(()),
-            (Some(a), None) | (None, Some(a)) => a,
-            (Some(a), Some(b)) => {
-                let (x0, y0) = (a.x.min(b.x), a.y.min(b.y));
-                let (x1, y1) = ((a.x + a.w).max(b.x + b.w), (a.y + a.h).max(b.y + b.h));
-                Rect::new(x0, y0, x1 - x0, y1 - y0)
-            }
+            Some(Rect::new(
+                0.,
+                0.,
+                size.0 as f32 / scale.0,
+                size.1 as f32 / scale.1,
+            ))
+        } else if was.0 == now.0 {
+            // Only the brush ring moved (or nothing did).
+            either(was.1, now.1)
+        } else {
+            either(either(was.0, was.1), either(now.0, now.1))
         };
         self.overlay_drawn = now;
+        let Some(region) = region else {
+            return Ok(());
+        };
         let px = RECT {
             left: ((region.x * scale.0).floor() as i32).clamp(0, size.0 as i32),
             top: ((region.y * scale.1).floor() as i32).clamp(0, size.1 as i32),
@@ -4692,7 +4709,9 @@ impl Editor {
             .as_ref()
             .is_none_or(|(_, have)| *have != size);
         if fresh {
-            let surface = self.g.surface(size.0, size.1)?;
+            // Brush previews update a few thousand pixels of a frame that can
+            // be 3840×2160; tiles keep each update that small.
+            let surface = self.g.virtual_surface(size.0, size.1)?;
             unsafe { visual.SetContent(&surface)? };
             self.surfaces[i] = Some((surface, size));
             self.nodes[i].props = true;
@@ -5283,6 +5302,13 @@ fn button_slot(target: Target) -> usize {
 }
 
 /// A D2D bitmap of `pixels` inside `(x, y, w, h)`.
+/// The rectangle covering both.
+fn cover(a: Rect, b: Rect) -> Rect {
+    let (x0, y0) = (a.x.min(b.x), a.y.min(b.y));
+    let (x1, y1) = ((a.x + a.w).max(b.x + b.w), (a.y + a.h).max(b.y + b.h));
+    Rect::new(x0, y0, x1 - x0, y1 - y0)
+}
+
 fn bitmap(
     dc: &ID2D1DeviceContext,
     pixels: &Image,

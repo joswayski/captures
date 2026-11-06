@@ -565,6 +565,23 @@ impl Gfx {
             )
         }
     }
+
+    /// A tiled surface for large content updated in small rectangles: a
+    /// partial `BeginDraw` touches only the tiles it covers, where a plain
+    /// surface may have to carry the rest of its previous buffer over.
+    pub fn virtual_surface(&self, w: u32, h: u32) -> Result<IDCompositionSurface> {
+        let dcomp = self.dcomp.as_ref().ok_or_else(Error::empty)?;
+        unsafe {
+            dcomp
+                .CreateVirtualSurface(
+                    w.max(1),
+                    h.max(1),
+                    DXGI_FORMAT_B8G8R8A8_UNORM,
+                    DXGI_ALPHA_MODE_PREMULTIPLIED,
+                )?
+                .cast()
+        }
+    }
 }
 
 unsafe fn create_d3d() -> Result<ID3D11Device> {
