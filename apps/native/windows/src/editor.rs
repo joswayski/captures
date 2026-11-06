@@ -3181,8 +3181,13 @@ impl Editor {
         Ok(())
     }
 
+    /// Shipping `propertiesTitle`: the selected layer only under a tool that
+    /// shows transform chrome (`toolShowsTransformChrome`: Select, a grouped
+    /// shape or Arrow); other tools, such as Eraser, show their own label.
     fn properties_title(&self) -> String {
-        let selection = self.selected.as_ref().and_then(|id| {
+        let transform =
+            self.tool == "v" || closed_kind(self.tool).is_some() || open_kind(self.tool).is_some();
+        let selection = self.selected.as_ref().filter(|_| transform).and_then(|id| {
             self.presented.as_ref().and_then(|p| {
                 p.document
                     .elements
