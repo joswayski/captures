@@ -373,3 +373,63 @@ impl WidthWatch {
         widget
     }
 }
+
+type Draw = Box<dyn Fn(&gtk::Snapshot, f32, f32)>;
+
+mod area_imp {
+    use super::*;
+
+    #[derive(Default)]
+    pub struct SnapshotArea {
+        pub draw: std::cell::RefCell<Option<Draw>>,
+    }
+
+    #[glib::object_subclass]
+    impl ObjectSubclass for SnapshotArea {
+        const NAME: &'static str = "CapturesSnapshotArea";
+        type Type = super::SnapshotArea;
+        type ParentType = gtk::Widget;
+
+        fn class_init(klass: &mut Self::Class) {
+            klass.set_css_name("captures-area");
+        }
+    }
+
+    impl ObjectImpl for SnapshotArea {}
+
+    impl WidgetImpl for SnapshotArea {
+        fn measure(&self, _orientation: gtk::Orientation, _for_size: i32) -> (i32, i32, i32, i32) {
+            (0, 0, -1, -1)
+        }
+
+        fn snapshot(&self, snapshot: &gtk::Snapshot) {
+            let widget = self.obj();
+            if let Some(draw) = self.draw.borrow().as_ref() {
+                draw(snapshot, widget.width() as f32, widget.height() as f32);
+            }
+        }
+    }
+}
+
+glib::wrapper! {
+    /// A retained surface that records its render nodes with a callback.
+    /// GTK keeps the nodes until `queue_draw`, so pointer motion over other
+    /// widgets never re-records it, and textures it appends are uploaded once
+    /// and then only transformed.
+    pub struct SnapshotArea(ObjectSubclass<area_imp::SnapshotArea>)
+        @extends gtk::Widget,
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
+}
+
+impl SnapshotArea {
+    pub fn new(draw: impl Fn(&gtk::Snapshot, f32, f32) + 'static) -> Self {
+        let widget: Self = glib::Object::new();
+        *widget.imp().draw.borrow_mut() = Some(Box::new(draw));
+        widget
+    }
+
+    pub fn set_draw(&self, draw: impl Fn(&gtk::Snapshot, f32, f32) + 'static) {
+        *self.imp().draw.borrow_mut() = Some(Box::new(draw));
+        self.queue_draw();
+    }
+}

@@ -461,3 +461,297 @@ popover.captures-menu button.menu-item:hover,
 popover.captures-menu button.menu-item:focus-visible {
   background: var(--surface-hover);
 }
+
+/* ------------------------------------------------- screenshot editor ---- */
+
+/* `editor-image.css`: header, 56 px rail, canvas, 320 px Layers, export bar. */
+.captures .screenshot-editor {
+  color: var(--text);
+  background: var(--surface-canvas);
+  font-size: var(--text-md);
+}
+.captures .editor-header {
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-raised);
+}
+.captures .editor-header-main {
+  min-height: 52px;
+  padding: 0 var(--s-5);
+}
+.captures .editor-draft-banner {
+  padding: var(--s-3) var(--s-5);
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--caution-text);
+  background: var(--caution-surface);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+.captures .editor-draft-banner button.ui-btn {
+  min-height: 26px;
+  color: inherit;
+}
+/* `.screenshot-canvas-toolbar`: one quiet 34 px surface. */
+.captures .editor-group {
+  min-height: 26px;
+  padding: 3px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg);
+  background: var(--surface-sunken);
+}
+.captures .editor-group-label {
+  padding: 0 var(--s-3) 0 var(--s-4);
+  color: var(--text-subtle);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+.captures .editor-canvas-size {
+  padding-right: var(--s-4);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+.captures button.editor-icon-button {
+  all: unset;
+  min-width: 30px;
+  min-height: 30px;
+  border-radius: var(--r-md);
+  color: var(--text-muted);
+}
+.captures button.editor-icon-button:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+.captures button.editor-icon-button:disabled {
+  opacity: 0.32;
+}
+.captures .editor-zoom {
+  min-height: 32px;
+  margin-left: var(--s-2);
+  padding: 0;
+}
+.captures button.editor-zoom-button {
+  all: unset;
+  min-width: 30px;
+  border-right: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+}
+.captures button.editor-zoom-button:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+.captures .editor-zoom-label {
+  padding: 0 var(--s-4);
+  border-right: 1px solid var(--border-subtle);
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+.captures .editor-zoom > :last-child {
+  border-right: none;
+}
+
+/* `.screenshot-tool-rail`. */
+.captures .editor-rail {
+  min-width: 43px;
+  padding: var(--s-4) var(--s-3);
+  border-right: 1px solid var(--border-subtle);
+  background: var(--surface-raised);
+}
+.captures button.editor-rail-button {
+  all: unset;
+  min-width: 36px;
+  min-height: 36px;
+  border: 1px solid transparent;
+  border-radius: var(--r-lg);
+  color: var(--text-muted);
+  transition:
+    color var(--dur-2) var(--ease-standard),
+    background-color var(--dur-2) var(--ease-standard);
+}
+.captures button.editor-rail-button:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+.captures button.editor-rail-button.active {
+  color: var(--theme-accent-ink);
+  background: var(--theme-accent);
+}
+.captures button.editor-rail-button:disabled {
+  opacity: 0.32;
+}
+.captures button.editor-rail-button:focus-visible,
+.captures button.editor-shape-button:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+popover.captures-menu button.editor-shape-button {
+  all: unset;
+  min-width: 44px;
+  min-height: 40px;
+  border-radius: var(--r-md);
+  color: var(--text-muted);
+}
+popover.captures-menu button.editor-shape-button:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+popover.captures-menu button.editor-shape-button.active {
+  color: var(--theme-accent-ink);
+  background: var(--theme-accent);
+}
+.captures .editor-canvas:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--theme-accent);
+}
+
+/* `.screenshot-sidebar` / `.screenshot-layers`. */
+.captures .editor-layers {
+  border-left: 1px solid var(--border-subtle);
+  background: var(--surface-raised);
+}
+.captures .editor-layers-heading {
+  min-height: 47px;
+  margin-bottom: var(--s-3);
+  padding: 0 var(--s-4) 0 var(--s-5);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.captures .editor-layers-title {
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+}
+.captures .editor-layer-count {
+  min-width: 11px;
+  min-height: 19px;
+  padding: 0 var(--s-2);
+  border-radius: var(--r-pill);
+  color: var(--text-subtle);
+  background: var(--surface-sunken);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+}
+.captures list.editor-layer-list {
+  all: unset;
+  padding: 0 var(--s-4);
+}
+.captures list.editor-layer-list > row.editor-layer-row {
+  all: unset;
+  margin: 2px 0;
+  padding: var(--s-3);
+  border: 1px solid transparent;
+  border-radius: var(--r-lg);
+}
+.captures list.editor-layer-list > row.editor-layer-row:hover {
+  background: var(--surface-hover);
+}
+.captures list.editor-layer-list > row.editor-layer-row:selected {
+  border-color: alpha(var(--theme-accent), 0.4);
+  background: var(--surface-selected);
+}
+.captures list.editor-layer-list > row.editor-layer-row:focus-visible {
+  box-shadow: inset 0 0 0 2px alpha(var(--theme-accent), 0.5);
+}
+.captures .editor-layer-preview {
+  min-width: 42px;
+  min-height: 30px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text-muted);
+  background: var(--canvas-checker-b);
+}
+.captures .editor-layer-name {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+.captures .editor-layer-kind {
+  color: var(--text-subtle);
+  font-size: var(--text-xs);
+}
+.captures button.editor-layer-action {
+  all: unset;
+  min-width: 25px;
+  min-height: 28px;
+  border-radius: var(--r-sm);
+  color: var(--text-subtle);
+  opacity: 0.5;
+}
+.captures button.editor-layer-action:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+  opacity: 1;
+}
+.captures .editor-layer-lock {
+  min-width: 25px;
+  min-height: 28px;
+  border-radius: var(--r-sm);
+  color: var(--accent-active-text);
+  background: var(--surface-selected);
+}
+
+/* `.screenshot-export-bar` save row. */
+.captures .editor-export-bar {
+  padding: var(--s-4) var(--s-5);
+  border-top: 1px solid var(--border-subtle);
+  background: var(--surface-raised);
+}
+.captures .editor-field-label {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+.captures .editor-folder {
+  color: var(--text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+}
+.captures .editor-filename {
+  min-height: 34px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--r-md);
+  background: var(--surface-field);
+}
+.captures entry.editor-filename-entry {
+  all: unset;
+  min-width: 200px;
+  padding: 0 var(--s-4);
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+.captures entry.editor-filename-entry > text > selection {
+  color: var(--theme-accent-ink);
+  background: var(--theme-accent);
+}
+.captures .editor-filename:focus-within {
+  border-color: var(--theme-accent);
+}
+.captures .editor-suffix {
+  padding: 0 var(--s-4);
+  border-left: 1px solid var(--control-border);
+  color: var(--text-subtle);
+  font-size: var(--text-sm);
+}
+.captures .editor-export-bar button.ui-btn {
+  min-height: 34px;
+}
+.captures .editor-notice {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+.captures .editor-notice.success {
+  color: var(--positive-text);
+}
+.captures .editor-notice.error {
+  color: var(--danger-text);
+}
+.captures .editor-hint {
+  color: var(--text-subtle);
+  font-size: var(--text-xs);
+}
+.captures .editor-hint.warning {
+  color: var(--caution-text);
+}
+.captures .editor-switch-label {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+.captures button.ui-btn.editor-save {
+  padding: 0 var(--s-6);
+}

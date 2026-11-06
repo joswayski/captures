@@ -6,6 +6,9 @@ History: a 1000-entry on-disk fixture is reachable by name and role, keeps far
 fewer card widgets than entries alive (virtualized), filters, and deletes one
 entry from disk through the two-step Delete. Preferences: a switch row exposes
 the switch role and checked state, and toggling it saves the setting.
+Editor: History's Edit opens the screenshot editor; a real pointer drag
+(xdotool) draws a rectangle layer, Undo and Redo go through AT-SPI, and Save
+writes a new PNG.
 
 Run under `xvfb-run -a dbus-run-session --`, with `--binary` pointing at a
 built `captures-gtk`. Needs python3-gi and gir1.2-atspi-2.0.
@@ -22,7 +25,8 @@ import time
 import gi
 
 gi.require_version("Atspi", "2.0")
-from gi.repository import Atspi, GLib  # noqa: E402
+gi.require_version("GdkPixbuf", "2.0")
+from gi.repository import Atspi, GdkPixbuf, GLib  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from history_fixture import write_history_entries  # noqa: E402
@@ -149,6 +153,69 @@ def preferences(binary, scratch):
         process.wait(timeout=10)
 
 
+def editor(binary, scratch):
+    root = scratch / "editor-history"
+    write_history_entries(root, 3)
+    out = scratch / "exports"
+    out.mkdir()
+    settings = scratch / "editor-settings.json"
+    saved = json.loads((scratch / "preferences.json").read_text())
+    saved["output_directory"] = str(out)
+    settings.write_text(json.dumps(saved))
+    process = launch(binary, "--scene", "history", "--history-root", str(root),
+                     "--settings-file", str(settings), "--size", "1020x720")
+    try:
+        app = wait(lambda: application(process.pid), "the app on the accessibility bus")
+        press(wait(lambda: find(app, "push button", "Open screenshot in editor"), "Edit")[0])
+        canvas = wait(lambda: find(app, "image", "Screenshot canvas"), "the editor canvas")[0]
+        wait(lambda: find(app, "list item", "Original screenshot · Locked background"),
+             "the background layer")
+        press(wait(lambda: find(app, "push button", "Shapes · Rectangle (R)"), "Shapes")[0])
+        press(wait(lambda: find(app, "push button", "Rectangle (R)"), "the Shapes flyout")[0])
+        # The closing flyout keeps its input grab until it is gone.
+        wait(lambda: not find(app, "push button", "Rectangle (R)"), "the flyout to close")
+        # Drag across the middle of the canvas with the real pointer.
+        window = subprocess.run(["xdotool", "search", "--sync", "--name",
+                                 "Captures Screenshot Editor"],
+                                capture_output=True, text=True, check=True).stdout.split()[0]
+        geometry = dict(line.strip().split(": ", 1) for line in subprocess.run(
+            ["xdotool", "getwindowgeometry", "--shell", window],
+            capture_output=True, text=True, check=True).stdout.replace("=", ": ").splitlines())
+        extents = canvas.get_extents(Atspi.CoordType.WINDOW)
+        # Near the canvas's top-left: xvfb-run's default screen is 640×480,
+        # smaller than the editor window.
+        x = int(geometry["X"]) + extents.x + 150
+        y = int(geometry["Y"]) + extents.y + 150
+        # GTK must see the pointer enter before the press, or it drops the drag.
+        subprocess.run(["xdotool", "mousemove", str(x), str(y)], check=True)
+        time.sleep(0.2)
+        subprocess.run(["xdotool", "mousedown", "1"], check=True)
+        for step in range(1, 11):
+            subprocess.run(["xdotool", "mousemove", str(x + step * 16), str(y + step * 10)],
+                           check=True)
+            time.sleep(0.03)
+        subprocess.run(["xdotool", "mouseup", "1"], check=True)
+        layer = lambda: [n for n, (role, name) in nodes(app)
+                         if role == "list item" and name.startswith("Rectangle")]
+        wait(layer, "a rectangle layer from the drag")
+        press(find(app, "push button", "Undo")[0])
+        wait(lambda: not layer(), "Undo to remove the rectangle")
+        press(find(app, "push button", "Redo")[0])
+        wait(layer, "Redo to restore the rectangle")
+        # Saving also adds a History entry, so pick the source first.
+        source = next(root.glob("*/capture.png"))
+        press(find(app, "push button", "Save")[0])
+        written = wait(lambda: list(out.glob("*.png")), "Save to write a PNG")
+        time.sleep(0.5)
+        pixels = [GdkPixbuf.Pixbuf.new_from_file(str(path)).get_pixels()
+                  for path in (source, written[0])]
+        assert pixels[0] != pixels[1], "the saved PNG does not contain the rectangle"
+        print(f"editor: drag drew a layer, undo/redo, saved {written[0].name}")
+    finally:
+        process.terminate()
+        process.wait(timeout=10)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", required=True)
@@ -160,6 +227,7 @@ def main():
         scratch = Path(scratch)
         history(args.binary, scratch)
         preferences(args.binary, scratch)
+        editor(args.binary, scratch)
 
 
 if __name__ == "__main__":

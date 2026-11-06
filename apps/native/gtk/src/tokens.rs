@@ -83,6 +83,18 @@ impl Tokens {
             .join(", ")
     }
 
+    /// A `box-shadow` token's layers as `(x, y, blur, spread, color)`, for
+    /// GtkSnapshot outset shadows.
+    pub fn shadow(&self, name: &str) -> Vec<(f32, f32, f32, f32, gdk::RGBA)> {
+        self.shadows[name]
+            .iter()
+            .map(|s| {
+                let [r, g, b, a] = s.color;
+                (s.x, s.y, s.blur, s.spread, gdk::RGBA::new(r, g, b, a))
+            })
+            .collect()
+    }
+
     /// An em-based token (`tracking-tight`) in pixels at `size`.
     pub fn em(&self, name: &str, size: f32) -> f32 {
         let value = self.raw.get(name).map(String::as_str).unwrap_or("0em");

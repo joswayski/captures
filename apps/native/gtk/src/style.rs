@@ -54,6 +54,13 @@ pub fn css(t: &Tokens) -> String {
             "image-hover" => {
                 mix(t.rgba("surface-sunken"), t.rgba("theme-accent"), 0.12).to_string()
             }
+            // Shipping's `[data-appearance="dark"]` swap for active quiet
+            // buttons: readable accent on light, accent text on dark.
+            "accent-active-text" => t.css(if t.rgba("text").red() < 0.5 {
+                "theme-accent-readable"
+            } else {
+                "theme-accent-text"
+            }),
             name if name.starts_with("shadow-") => t.shadow_css(name),
             // `--lh-{leading}-{size}`: CSS `line-height: var(--leading-…)` at
             // `font-size: var(--text-…)`, as pixels.

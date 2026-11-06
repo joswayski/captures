@@ -109,12 +109,34 @@ rows near the viewport hold cards and thumbnails, decoded at card size from
 renderer, release build) the process RSS is about 99 MB with 6 live cards,
 against 249 MB when every retained list row built its cards; Preferences
 alone is about 89 MB. These are orb numbers, not the real-hardware gate, and
-not yet compared with egui measured the same way. Edit, Restore, the
+not yet compared with egui measured the same way. Restore, the
 recording editor and Save image/file's GTK 4.10 file dialog are wired to
 stubs or the legacy chooser. CI renders History in both appearances and runs
 `apps/native/gtk/smoke.py` over AT-SPI (filter, two-step delete from disk,
 Preferences switch role, checked state and save). Verified on X11 (Xvfb)
 only; Wayland, Orca and real hardware remain open. Windows, macOS:
+unchanged.
+
+The third GTK4 slice is the screenshot editor, opened by History's Edit (one
+window per artifact) or `--scene editor --artifact ID`. It has the shipping
+header (draft banner, canvas size, undo/redo, Fit and zoom), the tool rail
+with the Shapes flyout, the canvas, the Layers list (select, show/hide,
+locked background) and the export save row (filename, folder, Copy image,
+notice and hint, Save as new file, Save). Select/move, crop, the five closed
+shapes, line, arrow and freehand work through the shared `EditorSession` on a
+worker thread, with the shared `editor_export` plan and `timestamp_stem` name.
+The canvas is retained: the composited image is uploaded as one texture only
+when the session's pixels change, while zoom, pan and in-progress strokes
+redraw only small Cairo nodes over it. Text, blur, the property panel, Add
+images, canvas resize, export settings and layer reorder/rename are not in
+the GTK host yet (Text and Blur rail buttons are disabled). Release build
+under Xvfb with Cairo on a 640×360 fixture: about 106 MB RSS and near-zero
+idle CPU; the egui workbench's own editor scene measures about 173 MB the
+same way, on its built-in document rather than the same image. CI renders
+the editor in both appearances, and `smoke.py` opens it from History, draws
+a rectangle with a real xdotool drag, undoes and redoes it over AT-SPI and
+checks that Save writes a PNG containing it. X11 (Xvfb) only; Wayland, Orca
+and real hardware remain open. Restore still goes to a stub. Windows, macOS:
 unchanged.
 
 ## Progress dashboard

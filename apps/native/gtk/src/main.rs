@@ -2,6 +2,7 @@
 //! own token-drawn surfaces and controls. Runs beside the wgpu workbench
 //! until it passes the feature, screenshot, performance and accessibility
 //! gates in `docs/native-rewrite.md`.
+mod editor;
 mod history;
 mod preferences;
 mod style;
@@ -17,7 +18,7 @@ use std::time::{Duration, Instant};
 use gtk::prelude::*;
 use gtk::{gio, glib, graphene};
 
-const USAGE: &str = "captures-gtk [--scene preferences|history] [--appearance light|dark]\n\
+const USAGE: &str = "captures-gtk [--scene preferences|history|editor] [--artifact ID] [--appearance light|dark]\n\
   [--settings-file PATH] [--history-root PATH] [--size WxH]\n\
   [--screenshot OUT.png] [--exercise] [--quit-after SECONDS]";
 
@@ -25,6 +26,7 @@ const USAGE: &str = "captures-gtk [--scene preferences|history] [--appearance li
 enum Scene {
     Preferences,
     History,
+    Editor,
 }
 
 impl Scene {
@@ -32,6 +34,7 @@ impl Scene {
         match self {
             Scene::Preferences => "preferences",
             Scene::History => "history",
+            Scene::Editor => "editor",
         }
     }
 }
@@ -41,6 +44,7 @@ struct Options {
     appearance: Option<String>,
     settings_file: PathBuf,
     history_root: Option<PathBuf>,
+    artifact: Option<String>,
     screenshot: Option<PathBuf>,
     size: Option<(i32, i32)>,
     exercise: bool,
@@ -53,6 +57,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
         appearance: None,
         settings_file: captures_settings::default_native_settings_path(),
         history_root: None,
+        artifact: None,
         screenshot: None,
         size: None,
         exercise: false,
@@ -66,9 +71,11 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
                 options.scene = match value()?.as_str() {
                     "preferences" => Scene::Preferences,
                     "history" => Scene::History,
+                    "editor" => Scene::Editor,
                     other => return Err(format!("unsupported scene {other}")),
                 }
             }
+            "--artifact" => options.artifact = Some(value()?),
             "--appearance" => options.appearance = Some(value()?),
             "--settings-file" => options.settings_file = value()?.into(),
             "--history-root" => options.history_root = Some(value()?.into()),
@@ -93,6 +100,9 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
             _ => return Err(format!("unknown argument {flag}\n{USAGE}")),
         }
     }
+    if options.scene == Scene::Editor && options.artifact.is_none() {
+        return Err("--scene editor needs --artifact ID".into());
+    }
     Ok(options)
 }
 
@@ -113,6 +123,8 @@ struct Host {
     history_root: PathBuf,
     preferences: RefCell<Option<gtk::ApplicationWindow>>,
     history: RefCell<Option<Rc<history::History>>>,
+    /// Open screenshot editors, one per artifact.
+    editors: RefCell<Vec<(String, Rc<editor::Editor>)>>,
 }
 
 impl Host {
@@ -165,7 +177,14 @@ impl Host {
                         host.show_preferences();
                     }
                 }),
-                edit: Box::new(|_| {}),
+                edit: Box::new({
+                    let host = Rc::downgrade(self);
+                    move |entry| {
+                        if let Some(host) = host.upgrade() {
+                            host.show_editor(&entry.id, entry.mode, &entry.created_at);
+                        }
+                    }
+                }),
                 restore: Box::new(|_| {}),
             },
         ));
@@ -178,6 +197,50 @@ impl Host {
         *self.history.borrow_mut() = Some(history.clone());
         history.window.present();
         history
+    }
+}
+
+impl Host {
+    /// The screenshot editor for one History artifact; reopening focuses it.
+    fn show_editor(
+        self: &Rc<Self>,
+        artifact_id: &str,
+        mode: Option<captures_capture::CaptureMode>,
+        created_at: &str,
+    ) -> Rc<editor::Editor> {
+        if let Some((_, editor)) = self
+            .editors
+            .borrow()
+            .iter()
+            .find(|(id, _)| id == artifact_id)
+        {
+            editor.present();
+            return editor.clone();
+        }
+        let settings = captures_settings::load(&self.settings_file).unwrap_or_default();
+        let editor = Rc::new(editor::build(
+            &self.app,
+            self.tokens.clone(),
+            editor::Options {
+                history_root: self.history_root.clone(),
+                artifact_id: artifact_id.to_owned(),
+                output_directory: settings.output_directory.into(),
+                created_at: created_at.to_owned(),
+            },
+            mode.unwrap_or(captures_capture::CaptureMode::Region),
+        ));
+        let host = Rc::downgrade(self);
+        let id = artifact_id.to_owned();
+        editor.window.connect_destroy(move |_| {
+            if let Some(host) = host.upgrade() {
+                host.editors.borrow_mut().retain(|(open, _)| *open != id);
+            }
+        });
+        self.editors
+            .borrow_mut()
+            .push((artifact_id.to_owned(), editor.clone()));
+        editor.present();
+        editor
     }
 }
 
@@ -229,11 +292,20 @@ fn main() -> glib::ExitCode {
                 .unwrap_or_else(captures_app::default_history_root),
             preferences: RefCell::default(),
             history: RefCell::default(),
+            editors: RefCell::default(),
         });
         hosts.borrow_mut().push(host.clone());
         let window: gtk::ApplicationWindow = match options.scene {
             Scene::Preferences => host.show_preferences(),
             Scene::History => host.show_history().window.clone(),
+            Scene::Editor => {
+                let id = options.artifact.clone().expect("checked in parse");
+                let entry = captures_history::load(&host.history_root, chrono::Utc::now())
+                    .ok()
+                    .and_then(|entries| entries.into_iter().find(|e| e.id == id));
+                let (mode, created_at) = entry.map(|e| (e.mode, e.created_at)).unwrap_or_default();
+                host.show_editor(&id, mode, &created_at).window.clone()
+            }
         };
         if let Some((w, h)) = options.size {
             window.set_default_size(w, h);
@@ -300,6 +372,11 @@ fn exercise(host: &Rc<Host>, scene: Scene, started: Instant) {
                     let appearance = if cycle % 2 == 0 { "dark" } else { "light" };
                     let tokens = tokens::Tokens::variant(appearance, "mustard");
                     host.provider.load_from_data(&style::css(&tokens));
+                }
+                Scene::Editor => {
+                    if let Some((_, editor)) = host.editors.borrow().first() {
+                        editor.set_zoom(if cycle % 2 == 0 { 200. } else { 50. });
+                    }
                 }
                 Scene::History => {
                     if let Some(history) = host.history.borrow().as_ref() {
