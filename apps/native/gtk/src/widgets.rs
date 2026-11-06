@@ -304,6 +304,8 @@ mod thumbnail_imp {
         pub texture: std::cell::RefCell<Option<gtk::gdk::Texture>>,
         pub cover: std::cell::Cell<bool>,
         pub dimmed: std::cell::Cell<bool>,
+        /// The hover image (blur radius, texture), built once per texture.
+        pub dimmed_texture: std::cell::RefCell<Option<(f32, gtk::gdk::Texture)>>,
     }
 
     #[glib::object_subclass]
@@ -350,16 +352,27 @@ mod thumbnail_imp {
                 scale
             };
             let (dw, dh) = (tw * scale, th * scale);
-            if dimmed {
-                let b = preview_chrome::HOVER_MEDIA_BRIGHTNESS as f32;
-                snapshot.push_color_matrix(
-                    &graphene::Matrix::from_float([
-                        b, 0., 0., 0., 0., b, 0., 0., 0., 0., b, 0., 0., 0., 0., 1.,
-                    ]),
-                    &graphene::Vec4::new(0., 0., 0., 0.),
-                );
-                snapshot.push_blur(preview_chrome::HOVER_MEDIA_BLUR);
-            }
+            // The blurred, dimmed image is baked once and then drawn as a
+            // plain texture: the Cairo renderer blurs only the damaged clip,
+            // which left seams wherever the hover controls repainted.
+            let texture = if dimmed {
+                let sigma = preview_chrome::HOVER_MEDIA_BLUR as f32 / scale;
+                let mut cached = self.dimmed_texture.borrow_mut();
+                match cached.as_ref() {
+                    Some((radius, baked)) if *radius == sigma => baked.clone(),
+                    _ => {
+                        let baked = super::dim_and_blur(
+                            &texture,
+                            sigma,
+                            preview_chrome::HOVER_MEDIA_BRIGHTNESS as f32,
+                        );
+                        *cached = Some((sigma, baked.clone()));
+                        baked
+                    }
+                }
+            } else {
+                texture
+            };
             if cover {
                 snapshot.push_clip(&graphene::Rect::new(0., 0., w, h));
             }
@@ -368,10 +381,6 @@ mod thumbnail_imp {
                 &graphene::Rect::new((w - dw) / 2., (h - dh) / 2., dw, dh),
             );
             if cover {
-                snapshot.pop();
-            }
-            if dimmed {
-                snapshot.pop();
                 snapshot.pop();
             }
         }
@@ -411,7 +420,70 @@ impl Thumbnail {
 
     pub fn set_texture(&self, texture: Option<gtk::gdk::Texture>) {
         *self.imp().texture.borrow_mut() = texture;
+        self.imp().dimmed_texture.borrow_mut().take();
         self.queue_draw();
+    }
+}
+
+/// Shipping's hover media filter, `blur(σ) brightness(b)`, baked into a new
+/// texture: three box passes approximate the Gaussian (σ in texture pixels).
+fn dim_and_blur(texture: &gtk::gdk::Texture, sigma: f32, brightness: f32) -> gtk::gdk::Texture {
+    let (width, height) = (texture.width() as usize, texture.height() as usize);
+    let stride = width * 4;
+    // `download` writes Cairo's native-endian premultiplied ARGB32.
+    let mut pixels = vec![0u8; stride * height];
+    texture.download(&mut pixels, stride);
+    let box_width = (4.0 * sigma * sigma + 1.0).sqrt();
+    let radius = ((box_width - 1.0) / 2.0).round().max(0.0) as usize;
+    if radius > 0 {
+        let mut scratch = vec![0u8; pixels.len()];
+        for _ in 0..3 {
+            box_pass(&pixels, &mut scratch, (width, height), radius, true);
+            box_pass(&scratch, &mut pixels, (width, height), radius, false);
+        }
+    }
+    for pixel in pixels.chunks_exact_mut(4) {
+        for channel in &mut pixel[..3] {
+            *channel = (f32::from(*channel) * brightness).round() as u8;
+        }
+    }
+    gtk::gdk::MemoryTexture::new(
+        width as i32,
+        height as i32,
+        gtk::gdk::MemoryFormat::B8g8r8a8Premultiplied,
+        &glib::Bytes::from_owned(pixels),
+        stride,
+    )
+    .upcast()
+}
+
+/// One sliding-window box blur along rows or columns, clamped at the edges.
+fn box_pass(
+    src: &[u8],
+    dst: &mut [u8],
+    (width, height): (usize, usize),
+    radius: usize,
+    rows: bool,
+) {
+    let (len, lines, step, line_step) = if rows {
+        (width, height, 4, width * 4)
+    } else {
+        (height, width, width * 4, 4)
+    };
+    let span = (2 * radius + 1) as u32;
+    let last = len as isize - 1;
+    for line in 0..lines {
+        let base = line * line_step;
+        for channel in 0..4 {
+            let at = |i: isize| u32::from(src[base + i.clamp(0, last) as usize * step + channel]);
+            let r = radius as isize;
+            let mut sum: u32 = (-r..=r).map(at).sum();
+            for i in 0..len as isize {
+                dst[base + i as usize * step + channel] = ((sum + span / 2) / span) as u8;
+                sum += at(i + r + 1);
+                sum -= at(i - r);
+            }
+        }
     }
 }
 

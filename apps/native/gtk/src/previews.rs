@@ -23,6 +23,8 @@ pub struct Actions {
     pub edit: Box<dyn Fn(&HistoryEntry)>,
     /// A preview's Delete removed a History entry from disk.
     pub changed: Box<dyn Fn()>,
+    /// Whether an editor window is open on this artifact.
+    pub editing: Box<dyn Fn(&str) -> bool>,
 }
 
 pub struct Previews {
@@ -160,6 +162,11 @@ impl Previews {
     pub fn toggle_collapsed(&self) {
         self.state.toggle_collapsed();
     }
+
+    /// Shipping's `thumbnail-editor-active` ring follows the editor windows.
+    pub fn sync_editing(&self) {
+        self.state.sync_editing();
+    }
 }
 
 impl State {
@@ -169,10 +176,21 @@ impl State {
             self.list.append(&card.root);
             self.cards.borrow_mut().push(card);
         }
+        self.sync_editing();
         // A restore always shows the whole stack.
         self.stack.borrow_mut().set_collapsed(false);
         self.relayout();
         self.window.present();
+    }
+
+    fn sync_editing(&self) {
+        for card in self.cards.borrow().iter() {
+            if (self.actions.editing)(&card.entry.id) {
+                card.root.add_css_class("editor-active");
+            } else {
+                card.root.remove_css_class("editor-active");
+            }
+        }
     }
 
     fn dismiss(&self, id: &str) {

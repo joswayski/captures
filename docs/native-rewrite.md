@@ -715,8 +715,12 @@ Wayland layer-shell or X11 hint path is still needed. Release build under
 Xvfb with Cairo, two cards: about 94 MB RSS against about 155 MB for the egui
 workbench's preview scene measured the same way. CI renders it in both
 appearances and `smoke.py` restores two cards from History, copies, closes
-one and deletes the other from disk. X11 (Xvfb) only. Windows, macOS:
-unchanged.
+one and deletes the other from disk. A card whose screenshot or recording
+editor is open carries shipping's `thumbnail-editor-active` accent ring until
+that editor closes. The hover image's blur and dimming are baked into a
+texture once per card instead of a per-frame blur node: GTK's Cairo renderer
+blurred only the damaged clip, which left visible seams around the hover
+controls. X11 (Xvfb) only. Windows, macOS: unchanged.
 
 The fifth GTK4 slice is the recording editor, opened by History's Edit on a
 video or GIF (one window per artifact) or `--scene recording --artifact ID`.

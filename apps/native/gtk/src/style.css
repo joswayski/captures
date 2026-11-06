@@ -1701,6 +1701,13 @@ window.captures.preview-stack-window {
     var(--shadow-md),
     0 0 0 1px rgba(255, 255, 255, 0.08);
 }
+/* `.thumbnail-editor-active`: one solid accent ring while its editor is open. */
+.captures .preview-card.editor-active {
+  box-shadow:
+    var(--shadow-md),
+    0 0 0 2px alpha(var(--theme-accent), 0.9),
+    0 0 14px alpha(var(--theme-accent), 0.28);
+}
 .captures .preview-card .preview-overlay,
 .captures .preview-card button.preview-overlay {
   opacity: 0;

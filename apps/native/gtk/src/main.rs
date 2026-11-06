@@ -265,6 +265,7 @@ impl Host {
         let previews = existing.unwrap_or_else(|| {
             let edit = Rc::downgrade(self);
             let changed = Rc::downgrade(self);
+            let editing = Rc::downgrade(self);
             let previews = Rc::new(previews::build(
                 &self.app,
                 self.history_root.clone(),
@@ -281,6 +282,12 @@ impl Host {
                             history.reload();
                         }
                     }),
+                    editing: Box::new(move |id| {
+                        editing.upgrade().is_some_and(|host| {
+                            host.editors.borrow().iter().any(|(open, _)| open == id)
+                                || host.recordings.borrow().iter().any(|(open, _)| open == id)
+                        })
+                    }),
                 },
             ));
             *self.previews.borrow_mut() = Some(previews.clone());
@@ -288,6 +295,12 @@ impl Host {
         });
         previews.restore(entry);
         previews
+    }
+
+    fn sync_preview_editing(&self) {
+        if let Some(previews) = self.previews.borrow().as_ref() {
+            previews.sync_editing();
+        }
     }
 
     /// Edit opens the editor that matches the artifact's kind.
@@ -326,12 +339,14 @@ impl Host {
         editor.window.connect_close_request(move |_| {
             if let Some(host) = host.upgrade() {
                 host.recordings.borrow_mut().retain(|(open, _)| *open != id);
+                host.sync_preview_editing();
             }
             glib::Propagation::Proceed
         });
         self.recordings
             .borrow_mut()
             .push((artifact_id.to_owned(), editor.clone()));
+        self.sync_preview_editing();
         editor.present();
         editor
     }
@@ -369,12 +384,14 @@ impl Host {
         editor.window.connect_close_request(move |_| {
             if let Some(host) = host.upgrade() {
                 host.editors.borrow_mut().retain(|(open, _)| *open != id);
+                host.sync_preview_editing();
             }
             glib::Propagation::Proceed
         });
         self.editors
             .borrow_mut()
             .push((artifact_id.to_owned(), editor.clone()));
+        self.sync_preview_editing();
         editor.present();
         editor
     }
