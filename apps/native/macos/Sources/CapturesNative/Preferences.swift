@@ -1341,6 +1341,13 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         let chipWidth = (contentWidth - gap * CGFloat(columns - 1)) / CGFloat(columns)
         let theme = settings.string("theme", "mustard")
         let mode = dark ? "dark" : "light"
+        let rows = (PreferencesPolicy.themes.count + columns - 1) / columns
+        // Shipping `.theme-options`: a radiogroup named by its visible label.
+        let group = Surface(frame: NSRect(x: inset, y: y, width: contentWidth,
+                                          height: CGFloat(rows) * 34 + CGFloat(max(0, rows - 1)) * gap))
+        group.setAccessibilityElement(true)
+        group.setAccessibilityRole(.radioGroup); group.setAccessibilityLabel(accent.title)
+        card.addSubview(group)
         for (index, choice) in PreferencesPolicy.themes.enumerated() {
             let frame = NSRect(x: inset + CGFloat(index % columns) * (chipWidth + gap),
                 y: y + CGFloat(index / columns) * (34 + gap), width: chipWidth, height: 34)
@@ -1355,10 +1362,10 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
             }
             chip.toolTip = choice.detail
             chip.active = theme == choice.id
-            card.addSubview(chip)
+            chip.frame.origin = NSPoint(x: frame.minX - inset, y: frame.minY - y)
+            group.addSubview(chip)
         }
-        let rows = (PreferencesPolicy.themes.count + columns - 1) / columns
-        y += CGFloat(rows) * 34 + CGFloat(max(0, rows - 1)) * gap
+        y += group.frame.height
         if theme == "custom" {
             y = divider(y, card)
             y = customThemeEditor(y, card: card)
