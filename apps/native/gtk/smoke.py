@@ -615,6 +615,18 @@ def recording_output(binary, scratch):
             press(wait(lambda: find(app, "radio menu item", option), option)[0])
             wait(lambda: not find(app, "radio menu item", option), f"the {trigger} menu to close")
 
+        # Compress shows the before/after comparison over the preview.
+        choose("Save quality", "Compress")
+        split = wait(lambda: find(app, "slider", "Before and after comparison"),
+                     "the encoded comparison", timeout=40)[0]
+        Atspi.Value.set_current_value(split, 25)
+        wait(lambda: round(Atspi.Value.get_current_value(split)) == 25, "the split at 25%")
+        press(find(app, "push button", "Hide compression comparison")[0])
+        show = wait(lambda: find(app, "push button", "Show before / after"), "Show before / after")
+        press(show[0])
+        wait(lambda: find(app, "slider", "Before and after comparison"), "the comparison back")
+        print("recording: Compress before/after comparison: split, Hide and Show")
+
         press(find(app, "check box", "Crop recording")[0])
         width = find(app, "spin button", "Width")[0]
         Atspi.Value.set_current_value(width, 320)
@@ -625,7 +637,7 @@ def recording_output(binary, scratch):
              "Output resolution to follow the crop")
         choose("Format", "GIF")
         wait(lambda: find(app, "heading", "GIF settings"), "the GIF settings card")
-        assert find(app, "combo box", "Save quality: Compress"), "GIF did not switch to Compress"
+        assert find(app, "combo box", "Save quality: Compress"), "GIF did not stay on Compress"
         switch = [n for role in ("switch", "check box", "toggle button")
                   for n in find(app, role, "Save as new file")][0]
         wait(lambda: has_state(switch, Atspi.StateType.CHECKED), "GIF to save a new file")

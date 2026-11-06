@@ -657,8 +657,14 @@ uncropped source frame under the dim, accent box, size badge and eight
 handles, drawn as retained nodes; dragging moves or resizes it in source
 pixels. The handles are drawn, not widgets: assistive technologies use the
 crop spin buttons. Change… picks the folder Save writes to (Save as new and
-replace both use it, as shipping). Not ported: the recording compression
-preview. The footer follows shipping's action area: a 3 px progress strip
+replace both use it, as shipping). Compress or Maximum file size (MP4 or
+GIF) shows shipping's `CompressionPreview` over the paused preview: the
+session's `export_comparison` encodes the accepted frame after 350 ms of
+quiet, the After side is drawn right of the divider with a veil while it
+encodes, and the badges, Hide, handle and split range are the screenshot
+editor's real widgets; Play moves below the handle as shipping. Playback or
+the crop box hides it, Hide surfaces Comparison · Show before / after in Save
+quality, and a new quality mode brings it back. The footer follows shipping's action area: a 3 px progress strip
 while saving, Cancel (stops the encode; "Save cancelled."), Show in Folder
 for the last saved file, a one-line toast that clears after 4 s, and Save
 staying off until the settings differ from the last save. Release build under Xvfb with Cairo on
@@ -667,7 +673,8 @@ the egui workbench has no recording-editor scene to measure against. CI
 installs FFmpeg, renders it in both appearances, and `smoke.py` opens it from
 History, trims 1 s with the keyboard over AT-SPI, plays and pauses, and
 checks that Save as new writes a 3 s `-edited` MP4 and leaves the source
-unchanged; a second step crops to 320 × 180 with the aspect lock, switches
+unchanged; a second step moves the Compress comparison split, hides and
+shows it, then crops to 320 × 180 with the aspect lock, switches
 to GIF (GIF settings, Compress, Save as new forced on) and checks the saved
 GIF's size in a folder chosen through Change…, then the saved toast, Show in
 Folder and Save staying off. X11 (Xvfb) only; Wayland, Orca and real hardware remain open.

@@ -36,7 +36,7 @@ use crate::tokens::Tokens;
 use crate::widgets::{Icon, SnapshotArea, icon_button};
 
 mod canvas_bar;
-mod compare;
+pub(crate) mod compare;
 pub(crate) mod controls;
 mod export_bar;
 mod inspector;

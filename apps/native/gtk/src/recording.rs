@@ -27,6 +27,7 @@ use gtk::prelude::*;
 use gtk::{gdk, gio, glib, graphene, gsk};
 use image::RgbaImage;
 
+use crate::editor::compare::Compare;
 use crate::switch::TokenSwitch;
 use crate::tokens::Tokens;
 use crate::widgets::{Icon, SnapshotArea, icon_button};
@@ -106,6 +107,8 @@ enum Job {
     SourceFrame(u64),
     /// Shipping's background Est. size, for this request generation.
     Estimate(u64, CancelToken),
+    /// The before/after comparison at the accepted position.
+    Compare(u64, CancelToken),
 }
 
 enum Outcome {
@@ -117,6 +120,8 @@ enum Outcome {
     Saved(Result<(PathBuf, Option<Box<Presented>>), String>),
     SourceFrame(u64, Arc<RgbaImage>),
     Estimate(u64, Result<ExportEstimate, String>),
+    /// Generation, then the accepted revision and the before/after frames.
+    Compare(u64, Result<(u64, Arc<RgbaImage>, Arc<RgbaImage>), String>),
 }
 
 /// Bundled sidecars when present, else `CAPTURES_FFMPEG`/`CAPTURES_FFPROBE`,
@@ -216,6 +221,16 @@ fn worker(
                             Err(_) => continue,
                         }
                     }
+                    Job::Compare(generation, cancel) => Outcome::Compare(
+                        generation,
+                        session.export_comparison(&cancel).map(|comparison| {
+                            (
+                                comparison.revision,
+                                comparison.before_frame(),
+                                comparison.after_frame(),
+                            )
+                        }),
+                    ),
                     Job::Estimate(generation, cancel) => {
                         Outcome::Estimate(generation, session.estimate_save_export(&cancel))
                     }
@@ -312,6 +327,18 @@ struct State {
     /// The last saved file and the settings it was saved with: Save stays
     /// off until something changes (`alreadySaved`).
     saved: RefCell<Option<(PathBuf, String)>>,
+    /// Shipping's `CompressionPreview` (`is-embed is-cover`) over the preview.
+    compare: Rc<Compare>,
+    /// The comparison's Before frame, drawn under the After side.
+    compare_before: RefCell<Option<gdk::Texture>>,
+    /// The accepted revision the shown comparison was encoded for.
+    compare_revision: Cell<Option<u64>>,
+    compare_pending: Cell<bool>,
+    compare_generation: Cell<u64>,
+    compare_cancel: RefCell<Option<CancelToken>>,
+    compare_timer: RefCell<Option<glib::SourceId>>,
+    /// The quality mode last shown; a new mode brings a hidden comparison back.
+    last_mode: Cell<Option<ui::QualityMode>>,
     /// Clears a success toast after shipping's 4 s.
     toast_timer: RefCell<Option<glib::SourceId>>,
     #[allow(deprecated)] // `GtkFileDialog` needs GTK 4.10.
@@ -323,6 +350,7 @@ struct Widgets {
     title: gtk::Label,
     warning: gtk::Label,
     preview: SnapshotArea,
+    viewport: gtk::Overlay,
     play: gtk::Button,
     play_icon: Icon,
     loop_button: gtk::Button,
@@ -384,6 +412,7 @@ pub fn build(app: &gtk::Application, tokens: Rc<Tokens>, options: Options) -> Re
     let latest = LatestFrame::default();
     let looping = Arc::<AtomicBool>::default();
     worker(&options, inbox, results, latest.clone(), looping.clone());
+    let state_cell: Rc<RefCell<std::rc::Weak<State>>> = Rc::default();
 
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
     root.add_css_class("recording-editor");
@@ -435,6 +464,26 @@ pub fn build(app: &gtk::Application, tokens: Rc<Tokens>, options: Options) -> Re
     play.set_halign(gtk::Align::Center);
     play.set_valign(gtk::Align::Center);
     play.update_property(&[gtk::accessible::Property::Label("Play preview")]);
+    let compare = {
+        let state_cell = state_cell.clone();
+        Compare::new(move || {
+            if let Some(state) = state_cell.borrow().upgrade() {
+                state.w.preview.queue_draw();
+                state.w.viewport.queue_allocate();
+            }
+        })
+    };
+    for widget in [
+        compare.before.upcast_ref::<gtk::Widget>(),
+        compare.after.upcast_ref(),
+        compare.range.upcast_ref(),
+        compare.hide.upcast_ref(),
+        compare.handle.upcast_ref(),
+    ] {
+        widget.set_visible(false);
+        viewport.add_overlay(widget);
+    }
+    // Over the comparison, as shipping's `z-index: 2`.
     viewport.add_overlay(&play);
     card.append(&viewport);
     body.append(&card);
@@ -517,7 +566,6 @@ pub fn build(app: &gtk::Application, tokens: Rc<Tokens>, options: Options) -> Re
     filename.add_css_class("editor-filename-entry");
     filename.set_width_chars(30);
     filename.update_property(&[gtk::accessible::Property::Label("Saved filename")]);
-    let state_cell: Rc<RefCell<std::rc::Weak<State>>> = Rc::default();
     let output = Output::new({
         let state_cell = state_cell.clone();
         move |change| {
@@ -610,6 +658,14 @@ pub fn build(app: &gtk::Application, tokens: Rc<Tokens>, options: Options) -> Re
         estimate_cancel: RefCell::default(),
         estimate_timer: RefCell::default(),
         chooser: RefCell::default(),
+        compare,
+        compare_before: RefCell::default(),
+        compare_revision: Cell::default(),
+        compare_pending: Cell::default(),
+        compare_generation: Cell::default(),
+        compare_cancel: RefCell::default(),
+        compare_timer: RefCell::default(),
+        last_mode: Cell::default(),
         export_cancel: RefCell::default(),
         saved: RefCell::default(),
         toast_timer: RefCell::default(),
@@ -617,6 +673,7 @@ pub fn build(app: &gtk::Application, tokens: Rc<Tokens>, options: Options) -> Re
             title,
             warning,
             preview,
+            viewport,
             play,
             play_icon,
             loop_button,
@@ -782,6 +839,82 @@ impl State {
                 state.w.filename.set_text(&source);
             }
             state.update_footer();
+        });
+
+        // The comparison sits over the drawn image; its handle drags the split.
+        let weak = Rc::downgrade(self);
+        w.viewport.connect_get_child_position(move |_, child| {
+            let state = weak.upgrade()?;
+            let (x, y, width, height) = state.image_bounds.get();
+            if child == state.w.play.upcast_ref::<gtk::Widget>() {
+                // Shipping keeps Play clear of the centered compare handle.
+                if !state.compare.handle.is_visible() {
+                    return None;
+                }
+                let (_, natural) = child.preferred_size();
+                let (w, h) = (natural.width(), natural.height());
+                let bottom = y + height - state.tokens.number("s-5") - 40.;
+                return Some(gdk::Rectangle::new(
+                    (x + width / 2.) as i32 - w / 2,
+                    bottom as i32 - h,
+                    w,
+                    h,
+                ));
+            }
+            if !state.compare.owns(child) {
+                return None;
+            }
+            state
+                .compare
+                .position(child, &graphene::Rect::new(x, y, width, height))
+        });
+        let split_drag = gtk::GestureDrag::new();
+        split_drag.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let weak = Rc::downgrade(self);
+        split_drag.connect_drag_begin(move |gesture, x, y| {
+            let Some(state) = weak.upgrade() else { return };
+            let handle = &state.compare.handle;
+            let inside = handle.is_visible()
+                && handle.is_sensitive()
+                && handle
+                    .compute_bounds(&state.w.viewport)
+                    .is_some_and(|b| b.contains_point(&graphene::Point::new(x as f32, y as f32)));
+            gesture.set_state(if inside {
+                gtk::EventSequenceState::Claimed
+            } else {
+                gtk::EventSequenceState::Denied
+            });
+        });
+        let weak = Rc::downgrade(self);
+        split_drag.connect_drag_update(move |gesture, dx, _| {
+            let Some(state) = weak.upgrade() else { return };
+            let Some((x, _)) = gesture.start_point() else {
+                return;
+            };
+            let (left, _, width, _) = state.image_bounds.get();
+            state
+                .compare
+                .set_split(captures_app::compression_compare::split_at(
+                    x + dx - f64::from(left),
+                    f64::from(width),
+                ));
+            state.w.preview.queue_draw();
+            state.w.viewport.queue_allocate();
+        });
+        w.viewport.add_controller(split_drag);
+        let weak = Rc::downgrade(self);
+        self.compare.hide.connect_clicked(move |_| {
+            if let Some(state) = weak.upgrade() {
+                state.compare.dismissed.set(true);
+                state.refresh_compare();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.output.show_compare.connect_clicked(move |_| {
+            if let Some(state) = weak.upgrade() {
+                state.compare.dismissed.set(false);
+                state.refresh_compare();
+            }
         });
 
         // Preview: drag the crop box or a handle in source pixels.
@@ -1002,6 +1135,28 @@ impl State {
                         Err(_) => Estimate::default(),
                     });
                     self.output.sync(self.estimate.get());
+                    self.refresh_compare();
+                }
+            }
+            Outcome::Compare(generation, result) => {
+                if generation == self.compare_generation.get() {
+                    self.compare_cancel.borrow_mut().take();
+                    self.compare_pending.set(false);
+                    let current = self.presented.borrow().as_ref().map(|p| p.revision);
+                    match result {
+                        Ok((revision, before, after)) if Some(revision) == current => {
+                            *self.compare_before.borrow_mut() = Some(texture_of(&before));
+                            *self.compare.texture.borrow_mut() = Some(texture_of(&after));
+                            self.compare_revision.set(Some(revision));
+                        }
+                        Ok(_) => {}
+                        // Shipping shows the error in place of the After side.
+                        Err(_) => {
+                            self.compare.texture.borrow_mut().take();
+                            self.compare_before.borrow_mut().take();
+                        }
+                    }
+                    self.refresh_compare();
                 }
             }
             Outcome::Thumbnails(thumbnails) => {
@@ -1083,6 +1238,7 @@ impl State {
         if changed {
             self.request_source_frame(revision);
             self.schedule_estimate();
+            self.schedule_compare();
         }
         self.output.sync(self.estimate.get());
     }
@@ -1114,8 +1270,79 @@ impl State {
             self.request_source_frame(revision);
         }
         self.output.sync(self.estimate.get());
+        let mode = self.output.mode();
+        if self.last_mode.replace(Some(mode)) != Some(mode) {
+            // Shipping brings a hidden comparison back with a new mode.
+            self.compare.dismissed.set(false);
+        }
+        self.refresh_compare();
         self.w.preview.queue_draw();
         self.schedule_apply();
+    }
+
+    fn compare_visible(&self) -> bool {
+        captures_app::compression_compare::recording_visible(
+            self.output.compresses(),
+            self.playing.borrow().is_some(),
+            self.compare.dismissed.get(),
+        ) && self.output.crop_shown().is_none()
+    }
+
+    /// Show or hide the comparison widgets and the Show before / after field.
+    fn refresh_compare(&self) {
+        let visible = self.compare_visible();
+        let current = self.presented.borrow().as_ref().map(|p| p.revision);
+        let fresh = current.is_some() && self.compare_revision.get() == current;
+        let before = self.output.source().map(|source| source.size_bytes);
+        let after = self.estimate.get().bytes;
+        self.compare.sync(
+            visible,
+            before,
+            after,
+            self.compare_pending.get() || !fresh,
+            false,
+        );
+        self.output
+            .set_show_compare(self.output.compresses() && self.compare.dismissed.get());
+        self.w.viewport.queue_allocate();
+        self.w.preview.queue_draw();
+    }
+
+    /// Encode a fresh comparison after shipping's 350 ms of quiet.
+    fn schedule_compare(self: &Rc<Self>) {
+        if let Some(id) = self.compare_timer.borrow_mut().take() {
+            id.remove();
+        }
+        if let Some(cancel) = self.compare_cancel.borrow_mut().take() {
+            cancel.cancel();
+        }
+        self.compare_generation
+            .set(self.compare_generation.get() + 1);
+        self.compare_pending.set(false);
+        if !self.output.compresses() || self.playing.borrow().is_some() {
+            self.refresh_compare();
+            return;
+        }
+        let weak = Rc::downgrade(self);
+        let id = glib::timeout_add_local_once(
+            Duration::from_millis(captures_app::compression_compare::REFRESH_DELAY_MS),
+            move || {
+                let Some(state) = weak.upgrade() else { return };
+                state.compare_timer.borrow_mut().take();
+                if !state.output.compresses() || state.saving.get() {
+                    return;
+                }
+                let cancel = CancelToken::default();
+                *state.compare_cancel.borrow_mut() = Some(cancel.clone());
+                state.compare_pending.set(true);
+                state.refresh_compare();
+                let _ = state
+                    .jobs
+                    .send(Job::Compare(state.compare_generation.get(), cancel));
+            },
+        );
+        *self.compare_timer.borrow_mut() = Some(id);
+        self.refresh_compare();
     }
 
     /// Supersede any estimate; a new one starts after shipping's debounce.
@@ -1172,7 +1399,9 @@ impl State {
     }
 
     fn toggle_play(&self) {
-        if let Some(cancel) = self.playing.borrow_mut().take() {
+        // Release the borrow first: the playing UI reads `playing` again.
+        let playing = self.playing.borrow_mut().take();
+        if let Some(cancel) = playing {
             cancel.cancel();
             self.set_playing_ui(false);
             return;
@@ -1203,6 +1432,8 @@ impl State {
             "Play preview"
         };
         self.w.play.set_tooltip_text(Some(name));
+        // Playback hides the comparison, as shipping's `!previewPlaying`.
+        self.refresh_compare();
         self.w
             .play
             .update_property(&[gtk::accessible::Property::Label(name)]);
@@ -1572,9 +1803,14 @@ impl State {
             &graphene::Rect::new(0., 0., width, height),
         );
         let crop_view = self.crop_view();
+        let comparing = self.compare_visible();
+        let before = comparing
+            .then(|| self.compare_before.borrow().clone())
+            .flatten();
         let Some(texture) = crop_view
             .as_ref()
             .map(|(_, texture)| texture.clone())
+            .or(before)
             .or_else(|| self.frame.borrow().clone())
         else {
             return;
@@ -1599,8 +1835,38 @@ impl State {
         self.image_bounds.set((bounds.x(), bounds.y(), dw, dh));
         if let Some((crop, _)) = crop_view {
             self.draw_crop(snapshot, &bounds, scale, crop);
+        } else if comparing {
+            self.draw_compare(snapshot, &bounds);
         }
         snapshot.pop();
+    }
+
+    /// The After encode right of the divider, the divider, and the veil
+    /// while a new comparison encodes (shipping `is-cover`).
+    fn draw_compare(&self, snapshot: &gtk::Snapshot, bounds: &graphene::Rect) {
+        let t = &self.tokens;
+        if let Some(after) = self.compare.texture.borrow().as_ref() {
+            let x = bounds.x() + bounds.width() * self.compare.split.get() as f32;
+            snapshot.push_clip(&graphene::Rect::new(
+                x,
+                bounds.y(),
+                bounds.x() + bounds.width() - x,
+                bounds.height(),
+            ));
+            snapshot.append_texture(after, bounds);
+            snapshot.pop();
+            snapshot.append_color(
+                &gdk::RGBA::new(0., 0., 0., 0.35),
+                &graphene::Rect::new(x - 2., bounds.y(), 4., bounds.height()),
+            );
+            snapshot.append_color(
+                &t.rgba("glass-text"),
+                &graphene::Rect::new(x - 1., bounds.y(), 2., bounds.height()),
+            );
+        }
+        if self.compare_pending.get() {
+            snapshot.append_color(&t.rgba("glass-veil"), bounds);
+        }
     }
 
     /// Shipping `.editor-crop-layer`: dims, the accent box, its size badge

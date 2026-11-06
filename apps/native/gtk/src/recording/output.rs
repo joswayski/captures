@@ -7,6 +7,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use captures_app::compression_compare as compare;
 use captures_app::editor_export::FileSizeUnit;
 use captures_app::recording_editor_ui::{
     self as ui, DEFAULT_COMPRESS_PRESET, EstimateInput, QualityMode, ResolutionChoice,
@@ -177,6 +178,8 @@ pub(super) struct Output {
     preset_field: gtk::Box,
     preset: Rc<Choice>,
     maximum_field: gtk::Box,
+    show_field: gtk::Box,
+    pub(super) show_compare: gtk::Button,
     limit: NumberField,
     unit: Rc<Choice>,
     estimate: gtk::Label,
@@ -503,6 +506,14 @@ impl Output {
         limit.root.set_hexpand(true);
         size_limit.append(&limit.root);
         size_limit.append(&unit.root);
+        // Shipping's Comparison · Show before / after, while it is hidden.
+        let show_compare = gtk::Button::with_label(compare::SHOW);
+        show_compare.add_css_class("ui-btn");
+        show_compare.add_css_class("export-show-compare");
+        show_compare.set_halign(gtk::Align::Start);
+        let show_field = field(compare::SHOW_CAPTION, &show_compare, "");
+        show_field.set_visible(false);
+        quality_card.append(&show_field);
         let maximum_field = field("Maximum file size", &size_limit, "");
         quality_card.append(&maximum_field);
         let estimate = gtk::Label::new(None);
@@ -650,6 +661,8 @@ impl Output {
             preset_field,
             preset,
             maximum_field,
+            show_field,
+            show_compare,
             limit,
             unit,
             estimate,
@@ -754,6 +767,20 @@ impl Output {
             self.model.crop.set(crop);
             self.sync_crop();
         }
+    }
+
+    /// `canPreviewCompression`: Compress or Maximum, for MP4 or GIF.
+    pub(super) fn compresses(&self) -> bool {
+        self.model.mode.get() != QualityMode::Preserve && self.format() != VideoFormat::WebM
+    }
+
+    pub(super) fn mode(&self) -> QualityMode {
+        self.model.mode.get()
+    }
+
+    /// Show the Comparison field while the comparison is hidden.
+    pub(super) fn set_show_compare(&self, visible: bool) {
+        self.show_field.set_visible(visible);
     }
 
     /// Shipping estimates only without Maximum mode and for non-WebM output.

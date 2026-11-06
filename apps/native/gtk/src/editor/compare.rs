@@ -12,19 +12,19 @@ use captures_app::compression_compare as compare;
 use gtk::prelude::*;
 use gtk::{gdk, graphene};
 
-pub(super) struct Compare {
-    pub(super) before: gtk::Label,
-    pub(super) after: gtk::Box,
+pub(crate) struct Compare {
+    pub(crate) before: gtk::Label,
+    pub(crate) after: gtk::Box,
     after_text: gtk::Label,
     savings: gtk::Label,
-    pub(super) hide: gtk::Button,
-    pub(super) handle: gtk::Button,
-    pub(super) range: gtk::Scale,
+    pub(crate) hide: gtk::Button,
+    pub(crate) handle: gtk::Button,
+    pub(crate) range: gtk::Scale,
     /// The divider's place across the image, 0.06–0.94.
-    pub(super) split: Rc<Cell<f64>>,
+    pub(crate) split: Rc<Cell<f64>>,
     /// The decoded encode Save would write, uploaded once per encode.
-    pub(super) texture: RefCell<Option<gdk::Texture>>,
-    pub(super) dismissed: Cell<bool>,
+    pub(crate) texture: RefCell<Option<gdk::Texture>>,
+    pub(crate) dismissed: Cell<bool>,
     /// The image's on-screen width, for handle drags.
     image_width: Cell<f64>,
     syncing: Rc<Cell<bool>>,
@@ -51,7 +51,7 @@ impl Compare {
     /// `moved` runs after the range moves the split, to redraw the canvas.
     /// The editor drags the handle from the overlay, whose coordinates stay
     /// put while the handle follows the pointer.
-    pub(super) fn new(moved: impl Fn() + 'static) -> Rc<Self> {
+    pub(crate) fn new(moved: impl Fn() + 'static) -> Rc<Self> {
         let moved: Rc<dyn Fn()> = Rc::new(moved);
         let split = Rc::new(Cell::new(compare::DEFAULT_SPLIT));
         let syncing = Rc::new(Cell::new(false));
@@ -108,7 +108,7 @@ impl Compare {
         })
     }
 
-    pub(super) fn set_split(&self, split: f64) {
+    pub(crate) fn set_split(&self, split: f64) {
         let split = compare::clamp_split(split);
         self.split.set(split);
         self.syncing.set(true);
@@ -117,7 +117,7 @@ impl Compare {
     }
 
     /// Show or hide the widgets and fill the badges.
-    pub(super) fn sync(
+    pub(crate) fn sync(
         &self,
         visible: bool,
         before: Option<u64>,
@@ -147,7 +147,7 @@ impl Compare {
         self.range.set_can_target(!drawing);
     }
 
-    pub(super) fn owns(&self, widget: &gtk::Widget) -> bool {
+    pub(crate) fn owns(&self, widget: &gtk::Widget) -> bool {
         [
             self.before.upcast_ref::<gtk::Widget>(),
             self.after.upcast_ref(),
@@ -159,7 +159,7 @@ impl Compare {
     }
 
     /// Where `widget` sits over the visible part of the image `rect`.
-    pub(super) fn position(
+    pub(crate) fn position(
         &self,
         widget: &gtk::Widget,
         rect: &graphene::Rect,
