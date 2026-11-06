@@ -233,10 +233,18 @@ impl Editor {
             patch,
         };
         match live {
-            Some(key) => self.submit_live(Request::Live {
-                key: format!("{id}:{key}"),
-                request: Box::new(request),
-            }),
+            // Shipping commits every Size step and every keystroke of the
+            // Text field as its own undo step (`updateSelected`); a unique
+            // key keeps them apart while `submit_live` still queues only the
+            // latest behind a busy worker.
+            Some(key) => {
+                self.edit_seq += 1;
+                let key = format!("{id}:{key}:{}", self.edit_seq);
+                self.submit_live(Request::Live {
+                    key,
+                    request: Box::new(request),
+                });
+            }
             None => self.submit(request),
         }
     }

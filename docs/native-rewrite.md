@@ -533,6 +533,16 @@ can't be timed without Windows (Wine has no DirectComposition), so the
 per-preview gain is reasoned from sizes and needs a hardware run.
 Windows: cross-compiled only. macOS, Linux: unchanged.
 
+Label undo steps (hardware pass 13): shipping commits every Size change
+(stepper, arrow key or valid typed value) and every keystroke of the Text
+field as its own undo step, so this host no longer folds them per focus
+session. Changes made while the worker is still busy are still sent as one
+(only the latest waits), so very fast typing can merge a few steps. The
+steppers stay "Increase" and "Decrease", as shipping's Size field has no
+`ariaLabel`, and the colour swatches stay plain buttons (Invoke), as
+shipping's carry no `aria-pressed`. Windows: cross-compiled only. macOS,
+Linux: unchanged.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,
