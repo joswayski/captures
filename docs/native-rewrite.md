@@ -490,6 +490,14 @@ per-preview cost fell from 5.6–6.0 ms to 0.02 ms, and a preview from
 7,200 pixels per preview, since the damage is a bound rather than a diff.
 Windows: cross-compiled only. macOS, Linux: unchanged.
 
+Properties after undo and redo (hardware pass 13): a reply that changes
+the selected layer now redraws the panel even when the shared control
+values are equal, so a label's Bold, Italic, alignment, Style, Font and
+Size repaint, including their hover layer. A focused Size or Text field
+follows the document like shipping's `draft.source`: a value it did not
+set itself replaces its text, unless a queued edit already supersedes the
+reply. Windows: cross-compiled only. macOS, Linux: unchanged.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,

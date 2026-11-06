@@ -807,7 +807,7 @@ impl Editor {
         self.nodes[self.props_body].dirty = true;
         for (target, layered) in &self.controls {
             if matches!(target, Target::Prop(_)) {
-                for node in [layered.base, layered.ring] {
+                for node in [layered.base, layered.lit, layered.ring] {
                     self.nodes[node].dirty = true;
                 }
             }
@@ -1172,6 +1172,7 @@ impl Editor {
     pub(super) fn prop_dirty(&mut self, prop: Prop) {
         let layered = self.layered(Target::Prop(prop));
         self.nodes[layered.base].dirty = true;
+        self.nodes[layered.lit].dirty = true;
         self.nodes[layered.ring].dirty = true;
         self.need = true;
     }
