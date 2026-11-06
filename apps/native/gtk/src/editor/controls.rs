@@ -425,6 +425,10 @@ impl Choice {
         self.trigger.set_sensitive(on);
     }
 
+    pub(crate) fn set_tooltip(&self, text: &str) {
+        self.trigger.set_tooltip_text(Some(text));
+    }
+
     /// Stretch the trigger to its row's height (an inline suffix select).
     pub(crate) fn fill_height(&self) {
         self.trigger.set_vexpand(true);

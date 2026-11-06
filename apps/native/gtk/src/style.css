@@ -897,12 +897,72 @@ popover.layer-menu button.layer-menu-action.danger .layer-menu-icon {
   color: var(--text);
   background: var(--surface-hover);
 }
-.captures .editor-zoom-label {
+.captures button.editor-zoom-button.active {
+  color: var(--accent-active-text);
+  background: var(--surface-selected);
+}
+.captures button.editor-zoom-button:disabled {
+  opacity: 0.32;
+}
+/* `.screenshot-editor-zoom-slider`: an unfilled 3 px track and a 12 px thumb. */
+.captures .editor-zoom-slider-wrap {
   padding: 0 var(--s-4);
   border-right: 1px solid var(--border-subtle);
+}
+.captures scale.editor-zoom-slider {
+  all: unset;
+  min-height: 18px;
+}
+.captures scale.editor-zoom-slider > trough {
+  all: unset;
+  min-height: 3px;
+  margin: 7px 0;
+  border-radius: 999px;
+  background: var(--n-6);
+}
+.captures scale.editor-zoom-slider > trough > highlight {
+  all: unset;
+}
+.captures scale.editor-zoom-slider > trough > slider {
+  all: unset;
+  min-width: 10px;
+  min-height: 10px;
+  margin: -5px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-xs);
+}
+.captures scale.editor-zoom-slider:focus-visible > trough > slider {
+  box-shadow: var(--focus-ring-tight);
+}
+/* `.screenshot-editor-zoom-presets`: a borderless mono select. */
+.captures button.editor-layers-add {
+  all: unset;
+  min-width: 28px;
+  min-height: 28px;
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  color: var(--text-muted);
+}
+.captures button.editor-layers-add:hover {
   color: var(--text);
-  font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
+  background: var(--surface-hover);
+}
+.captures button.editor-layers-add:focus-visible {
+  box-shadow: var(--focus-ring-tight);
+}
+.captures .editor-zoom-presets button.select-trigger {
+  min-height: 0;
+  padding: 0 var(--s-3) 0 var(--s-4);
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+.captures .editor-zoom-presets button.select-trigger:hover {
+  background: var(--surface-hover);
 }
 .captures .editor-zoom > :last-child {
   border-right: none;
@@ -925,6 +985,9 @@ popover.layer-menu button.layer-menu-action.danger .layer-menu-icon {
   transition:
     color var(--dur-2) var(--ease-standard),
     background-color var(--dur-2) var(--ease-standard);
+}
+.captures .editor-flyout-cue {
+  opacity: 0.72;
 }
 .captures button.editor-rail-button:hover {
   color: var(--text);
@@ -1179,9 +1242,6 @@ popover.captures-menu button.editor-shape-button.active {
   background: var(--glass-strong);
   box-shadow: var(--glass-shadow);
   font-size: var(--text-sm);
-}
-.captures button.compare-handle > label {
-  margin: 0 auto;
 }
 .captures button.compare-handle:focus-visible,
 .captures button.compare-hide:focus-visible {
@@ -1559,11 +1619,6 @@ popover.captures-menu .choice-description {
 .captures .editor-card button.editor-aspect-lock {
   margin-top: var(--s-6);
   margin-bottom: var(--s-4);
-}
-.captures .editor-quality-mode-field,
-.captures .editor-quality-preset,
-.captures .editor-field-help {
-  max-width: 430px;
 }
 .captures .editor-field-help {
   margin-top: var(--s-3);

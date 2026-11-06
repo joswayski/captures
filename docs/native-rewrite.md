@@ -693,7 +693,12 @@ a Wand click is exactly one undo step. It also turns on a rectangle's drop
 shadow, drags its opacity, picks a fill swatch and checks one Undo reverts
 the whole drag, and toggles a label's Bold and alignment; before drawing it
 picks a default fill swatch and checks the new rectangle uses it, and Add
-images imports a PNG through the real chooser as one undo step. X11 (Xvfb) only; Wayland, Orca
+images imports a PNG through the real chooser as one undo step. The header's
+zoom group now follows shipping: Fit, −, a logarithmic zoom slider, + and a
+preset select (Fit, the current value, 50%, 100%, 200%) that stays in sync
+when Fit's scale changes with the window. The Layers heading has shipping's
+Add image layer button, row quick actions are grouped so names keep their
+width, and the Shapes rail button carries the flyout's corner cue. X11 (Xvfb) only; Wayland, Orca
 and real hardware remain open. Windows, macOS: unchanged.
 
 The fourth GTK4 slice is the floating previews: History's Restore (or

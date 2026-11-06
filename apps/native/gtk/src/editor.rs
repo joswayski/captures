@@ -224,6 +224,8 @@ enum Gesture {
 
 /// A layer drop target: the row id and which side of it.
 type DropTarget = (String, LayerPlacement);
+/// Set after construction, once the editor state can be captured.
+type PresetHandler = Rc<RefCell<Option<Box<dyn Fn(String)>>>>;
 
 pub struct Editor {
     pub window: gtk::ApplicationWindow,
@@ -285,6 +287,11 @@ struct State {
     compare: Rc<compare::Compare>,
     /// Whether the last canvas frame suppressed it (a gesture or inline text).
     compare_suppressed: Cell<bool>,
+    /// Set while the zoom readouts follow the viewport, so the slider's
+    /// change handler ignores it.
+    zoom_syncing: Cell<bool>,
+    /// The percent the zoom readouts last showed (Fit follows the window).
+    zoom_synced: Cell<f64>,
     preview_dirty: Cell<bool>,
     /// The previous primary press, for double-click editing.
     last_press: Cell<Option<(std::time::Instant, f64, f64)>>,
@@ -295,7 +302,12 @@ struct Widgets {
     undo: gtk::Button,
     redo: gtk::Button,
     canvas_bar: Rc<canvas_bar::CanvasBar>,
-    zoom_label: gtk::Label,
+    /// Fit, Zoom out and Zoom in.
+    zoom_buttons: [gtk::Button; 3],
+    zoom_slider: gtk::Scale,
+    zoom_preset: Rc<controls::Choice>,
+    /// The preset select's handler, bound once the state exists.
+    zoom_preset_changed: PresetHandler,
     rail: Vec<(String, gtk::Button)>,
     shapes: gtk::Button,
     shapes_icon: Icon,
@@ -312,6 +324,7 @@ struct Widgets {
     save_as_new: TokenSwitch,
     copy: gtk::Button,
     add_images: gtk::Button,
+    add_layer: gtk::Button,
 }
 
 fn label(text: &str, class: &str) -> gtk::Label {
@@ -463,15 +476,43 @@ pub fn build(
     let fit = icon_only("fit", 14, header::FIT_TOOLTIP, "editor-zoom-button");
     fit.update_property(&[gtk::accessible::Property::Label(header::FIT)]);
     let zoom_out = icon_only("minus", 14, header::ZOOM_OUT, "editor-zoom-button");
-    let zoom_label = label("Fit", "editor-zoom-label");
-    zoom_label.set_width_chars(6);
-    zoom_label.set_xalign(0.5);
+    // `.screenshot-editor-zoom-slider`: shipping's logarithmic 5–800% range.
+    let zoom_slider = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0., 1., 0.001);
+    zoom_slider.add_css_class("editor-zoom-slider");
+    zoom_slider.set_draw_value(false);
+    zoom_slider.set_tooltip_text(Some(header::ZOOM_SLIDER_TOOLTIP));
+    zoom_slider.update_property(&[gtk::accessible::Property::Label(header::ZOOM_SLIDER)]);
+    let slider_wrap = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    slider_wrap.add_css_class("editor-zoom-slider-wrap");
+    // The slider fills `zoom_slider_width` less the wrap's `--s-4` padding.
+    zoom_slider.set_size_request(
+        editor_chrome::header_layout(1280.).zoom_slider_width as i32 - 16,
+        -1,
+    );
+    slider_wrap.append(&zoom_slider);
     let zoom_in = icon_only("plus", 14, header::ZOOM_IN, "editor-zoom-button");
+    let zoom_preset_changed: PresetHandler = Rc::default();
+    let zoom_preset = {
+        let changed = zoom_preset_changed.clone();
+        controls::Choice::new(None, header::ZOOM_PRESET, false, move |value| {
+            if let Some(changed) = changed.borrow().as_ref() {
+                changed(value);
+            }
+        })
+    };
+    zoom_preset.root.add_css_class("editor-zoom-presets");
+    zoom_preset.root.set_size_request(
+        editor_chrome::header_layout(1280.).zoom_preset_width as i32,
+        -1,
+    );
+    zoom_preset.fill_height();
+    zoom_preset.set_tooltip(header::ZOOM_PRESET_TOOLTIP);
     for widget in [
         fit.upcast_ref::<gtk::Widget>(),
         zoom_out.upcast_ref(),
-        zoom_label.upcast_ref(),
+        slider_wrap.upcast_ref(),
         zoom_in.upcast_ref(),
+        zoom_preset.root.upcast_ref(),
     ] {
         zoom.append(widget);
     }
@@ -497,7 +538,46 @@ pub fn build(
         let button = gtk::Button::new();
         button.add_css_class("editor-rail-button");
         let icon = Icon::new(tool.icon, 18).with_stroke(1.75);
-        button.set_child(Some(&icon));
+        if tool.key == editor_chrome::SHAPES_KEY {
+            // Shipping's flyout cue: a 7 px corner wedge in the text colour.
+            let overlay = gtk::Overlay::new();
+            // The button's 36 px content box, so the cue sits in its corner
+            // (expanding would stretch the rail instead).
+            overlay.set_size_request(36, 36);
+            icon.set_halign(gtk::Align::Center);
+            icon.set_valign(gtk::Align::Center);
+            overlay.set_child(Some(&icon));
+            let wedge = SnapshotArea::new(|_, _, _| {});
+            let weak = wedge.downgrade();
+            wedge.set_draw(move |snapshot, w, h| {
+                let Some(wedge) = weak.upgrade() else { return };
+                #[allow(deprecated)] // `gtk_widget_get_color` needs GTK 4.10.
+                let color = wedge.style_context().color();
+                let cr = snapshot.append_cairo(&graphene::Rect::new(0., 0., w, h));
+                cr.set_source_rgba(
+                    f64::from(color.red()),
+                    f64::from(color.green()),
+                    f64::from(color.blue()),
+                    f64::from(color.alpha()),
+                );
+                cr.move_to(f64::from(w), 0.);
+                cr.line_to(f64::from(w), f64::from(h));
+                cr.line_to(0., f64::from(h));
+                cr.close_path();
+                let _ = cr.fill();
+            });
+            wedge.set_margin_end(4);
+            wedge.set_margin_bottom(4);
+            wedge.add_css_class("editor-flyout-cue");
+            wedge.set_size_request(7, 7);
+            wedge.set_halign(gtk::Align::End);
+            wedge.set_valign(gtk::Align::End);
+            wedge.set_can_target(false);
+            overlay.add_overlay(&wedge);
+            button.set_child(Some(&overlay));
+        } else {
+            button.set_child(Some(&icon));
+        }
         let name = if tool.key == editor_chrome::SHAPES_KEY {
             editor_chrome::shapes_tooltip("rectangle")
         } else {
@@ -550,6 +630,12 @@ pub fn build(
     layer_count.add_css_class("editor-layer-count");
     layer_count.set_valign(gtk::Align::Center);
     heading.append(&layer_count);
+    // `.screenshot-layers-heading button`: Add image layer.
+    let add_layer = icon_only("plus", 16, editor_chrome::layers::ADD, "editor-layers-add");
+    add_layer.set_hexpand(true);
+    add_layer.set_halign(gtk::Align::End);
+    add_layer.set_valign(gtk::Align::Center);
+    heading.append(&add_layer);
     panel.append(&heading);
     let layers = gtk::ListBox::new();
     layers.add_css_class("editor-layer-list");
@@ -696,12 +782,17 @@ pub fn build(
         thumbnails: RefCell::default(),
         compare,
         compare_suppressed: Cell::default(),
+        zoom_syncing: Cell::default(),
+        zoom_synced: Cell::default(),
         preview_dirty: Cell::default(),
         widgets: Widgets {
             undo,
             redo,
             canvas_bar,
-            zoom_label,
+            zoom_buttons: [fit, zoom_out, zoom_in],
+            zoom_slider,
+            zoom_preset,
+            zoom_preset_changed,
             rail: rail_buttons,
             shapes: shapes.expect("shapes tool"),
             shapes_icon: shapes_icon.expect("shapes icon"),
@@ -718,6 +809,7 @@ pub fn build(
             save_as_new,
             copy,
             add_images,
+            add_layer,
         },
     });
     *late.borrow_mut() = Rc::downgrade(&state);
@@ -782,24 +874,38 @@ impl State {
                 state.submit(Request::Redo);
             }
         });
-        let zoom = self.widgets.zoom_label.parent().expect("zoom group");
-        let mut child = zoom.first_child();
-        let mut index = 0;
-        while let Some(button) = child {
-            if let Some(button) = button.downcast_ref::<gtk::Button>() {
-                let weak = Rc::downgrade(self);
-                button.connect_clicked(move |_| {
-                    let Some(state) = weak.upgrade() else { return };
-                    match index {
-                        0 => state.set_viewport(Viewport::default()),
-                        1 => state.zoom_by(1. / 1.25),
-                        _ => state.zoom_by(1.25),
-                    }
-                });
-                index += 1;
-            }
-            child = button.next_sibling();
+        for (index, button) in self.widgets.zoom_buttons.iter().enumerate() {
+            let weak = Rc::downgrade(self);
+            button.connect_clicked(move |_| {
+                let Some(state) = weak.upgrade() else { return };
+                match index {
+                    0 => state.set_viewport(Viewport::default()),
+                    1 => state.zoom_by(1. / 1.25),
+                    _ => state.zoom_by(1.25),
+                }
+            });
         }
+        let weak = Rc::downgrade(self);
+        self.widgets
+            .zoom_slider
+            .connect_value_changed(move |slider| {
+                let Some(state) = weak.upgrade() else { return };
+                if state.zoom_syncing.get() {
+                    return;
+                }
+                if let Some(percent) = editor_viewport::zoom_from_slider(slider.value()) {
+                    state.zoom_to(percent, None);
+                }
+            });
+        let weak = Rc::downgrade(self);
+        *self.widgets.zoom_preset_changed.borrow_mut() = Some(Box::new(move |value| {
+            let Some(state) = weak.upgrade() else { return };
+            match value.parse::<f64>() {
+                Ok(percent) => state.zoom_to(percent, None),
+                Err(_) => state.set_viewport(Viewport::default()),
+            }
+        }));
+        self.sync_zoom();
         for (key, button) in &w.rail {
             let weak = Rc::downgrade(self);
             let key = key.clone();
@@ -989,16 +1095,57 @@ impl State {
 
     fn set_viewport(&self, viewport: Viewport) {
         self.viewport.set(viewport);
-        self.widgets
-            .zoom_label
-            .set_label(&if viewport.zoom_percent == 0. {
-                "Fit".to_owned()
-            } else {
-                editor_chrome::zoom_label(viewport.zoom_percent)
-            });
+        self.sync_zoom();
         // Only the canvas node changes; the texture is reused as is.
         self.canvas.queue_draw();
         self.style_text_field();
+    }
+
+    /// Shipping's zoom readouts: Fit's active state, the slider at the
+    /// displayed percent, the limits on − and +, and the preset select (with
+    /// the manual value when it is not a preset).
+    fn sync_zoom(&self) {
+        let viewport = self.viewport.get();
+        let fit = viewport.zoom_percent == 0.;
+        let Some(shown) = self.zoom_percent() else {
+            return;
+        };
+        self.zoom_synced.set(shown);
+        let w = &self.widgets;
+        if fit {
+            w.zoom_buttons[0].add_css_class("active");
+        } else {
+            w.zoom_buttons[0].remove_css_class("active");
+        }
+        w.zoom_buttons[1].set_sensitive(shown > 5.05);
+        w.zoom_buttons[2].set_sensitive(shown < 799.95);
+        self.zoom_syncing.set(true);
+        if let Some(position) = editor_viewport::zoom_slider_position(shown) {
+            w.zoom_slider.set_value(position);
+        }
+        self.zoom_syncing.set(false);
+        let label = editor_chrome::zoom_label(shown);
+        w.zoom_slider
+            .update_property(&[gtk::accessible::Property::ValueText(&if fit {
+                format!("Fit ({label})")
+            } else {
+                label
+            })]);
+        let mut options = vec![("fit".to_owned(), "Fit".to_owned())];
+        let manual = viewport.zoom_percent.to_string();
+        if !fit && !header::ZOOM_PRESETS.contains(&viewport.zoom_percent) {
+            options.push((
+                manual.clone(),
+                editor_chrome::zoom_label(viewport.zoom_percent),
+            ));
+        }
+        options.extend(
+            header::ZOOM_PRESETS
+                .iter()
+                .map(|preset| (preset.to_string(), format!("{preset}%"))),
+        );
+        w.zoom_preset.set_options(options);
+        w.zoom_preset.set(if fit { "fit" } else { &manual });
     }
 
     fn zoom_to(&self, percent: f64, anchor: Option<(f64, f64)>) {
@@ -1430,7 +1577,10 @@ impl State {
             if layer.locked {
                 row.add_css_class("locked");
             }
-            let content = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+            let content = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            // `.screenshot-layer-quick-actions`: 25 px buttons 2 px apart.
+            let actions = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+            actions.set_valign(gtk::Align::Center);
             // `.screenshot-layer-grip`: a reorder cue, dimmed when locked.
             let grip = Icon::new("grip", 16).with_stroke(1.6);
             grip.add_css_class("editor-layer-grip");
@@ -1504,7 +1654,7 @@ impl State {
                     });
                 }
             });
-            content.append(&eye);
+            actions.append(&eye);
             // Shipping's lock toggle: `active` (accent) while locked.
             let lock = icon_only(
                 if layer.locked { "lock" } else { "unlock" },
@@ -1533,7 +1683,7 @@ impl State {
                     });
                 }
             });
-            content.append(&lock);
+            actions.append(&lock);
             let more = icon_only(
                 "more",
                 15,
@@ -1554,7 +1704,8 @@ impl State {
                     state.toggle_layer_menu(&id, button);
                 }
             });
-            content.append(&more);
+            actions.append(&more);
+            content.append(&actions);
             row.set_child(Some(&content));
             row.update_property(&[gtk::accessible::Property::Label(&format!(
                 "{} · {}",
@@ -2144,8 +2295,20 @@ impl State {
     fn connect_canvas(self: &Rc<Self>, window: &gtk::ApplicationWindow) {
         let weak = Rc::downgrade(self);
         self.canvas.set_draw(move |snapshot, width, height| {
-            if let Some(state) = weak.upgrade() {
-                state.draw(snapshot, width, height);
+            let Some(state) = weak.upgrade() else { return };
+            state.draw(snapshot, width, height);
+            // Fit's percent follows the window; refresh the readouts after
+            // this frame rather than restyling the header mid-snapshot.
+            if let Some(shown) = state.zoom_percent()
+                && (shown - state.zoom_synced.get()).abs() > 0.05
+            {
+                state.zoom_synced.set(shown);
+                let weak = Rc::downgrade(&state);
+                glib::idle_add_local_once(move || {
+                    if let Some(state) = weak.upgrade() {
+                        state.sync_zoom();
+                    }
+                });
             }
         });
 
@@ -2327,6 +2490,12 @@ impl State {
         self.canvas.add_controller(motion);
         let weak = Rc::downgrade(self);
         self.widgets.add_images.connect_clicked(move |_| {
+            if let Some(state) = weak.upgrade() {
+                state.choose_images();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.widgets.add_layer.connect_clicked(move |_| {
             if let Some(state) = weak.upgrade() {
                 state.choose_images();
             }
