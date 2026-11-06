@@ -247,6 +247,8 @@ pub enum Event {
     Expanded(Target),
     /// The open popup's highlighted row moved.
     MenuActive(usize),
+    /// The Properties body scrolled.
+    Scrolled,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -295,6 +297,9 @@ enum Kind {
     MenuLit,
     /// A focused property input's caret, blinking on the compositor.
     FieldCaret,
+    /// The Properties scrollbar thumb (`base.css` `::-webkit-scrollbar`),
+    /// moved on the compositor while scrolling.
+    PropsThumb,
     Ctl(Target, Layer),
 }
 
@@ -540,6 +545,10 @@ pub struct Editor {
     pub props_scroll: f32,
     props_clip: usize,
     props_body: usize,
+    props_thumb: usize,
+    /// A thumb drag: the pointer y and the scroll it started from.
+    thumb_drag: Option<(f32, f32)>,
+    thumb_hover: bool,
     /// A slider drag in progress and its value.
     range_drag: Option<(Range, f64)>,
     /// The latest live edit waiting for the one in flight.
@@ -1100,6 +1109,9 @@ impl Editor {
             props_scroll: 0.,
             props_clip: 0,
             props_body: 0,
+            props_thumb: 0,
+            thumb_drag: None,
+            thumb_hover: false,
             range_drag: None,
             pending: None,
             pick_color: None,
@@ -1248,6 +1260,8 @@ impl Editor {
         }
         self.field_caret = self.add(Some(self.props_body), Kind::FieldCaret, 0.);
         self.nodes[self.field_caret].visible = false;
+        self.props_thumb = self.add(Some(self.properties), Kind::PropsThumb, 0.);
+        self.nodes[self.props_thumb].visible = false;
         self.control(root, Target::Divider, 0.);
         self.header = self.add(Some(root), Kind::Header, 0.);
         self.control(self.header, Target::Trim, 0.);
@@ -2677,6 +2691,7 @@ impl Editor {
         );
         let has_props = !self.props.is_empty();
         self.set_visible(self.props_body, has_props);
+        self.place_props_thumb();
         self.set_rect(self.zoom, local(l.zoom, l.header));
         self.set_rect(self.flyout_node, l.flyout);
         for (target, layered) in self.controls.clone() {
@@ -3326,6 +3341,17 @@ impl Editor {
             }
             Kind::Bar => self.draw_bar(dc, (w, h))?,
             Kind::PropsBody => self.draw_props_body(dc, w)?,
+            Kind::PropsThumb => {
+                // A 10 px gutter; the thumb's 3 px transparent border leaves
+                // a 4 px pill.
+                let pill = rect(3., 3., (w - 3.).max(3.), (h - 3.).max(3.));
+                let color = if self.thumb_hover || self.thumb_drag.is_some() {
+                    c("text-faint")
+                } else {
+                    c("border-strong")
+                };
+                gfx::fill_round(dc, pill, ((w - 6.) / 2.).max(0.), color)?;
+            }
             Kind::Zoom => {
                 let radius = t.n("r-lg");
                 gfx::fill_round(dc, all, radius, c("surface-sunken"))?;
@@ -4915,7 +4941,9 @@ impl Editor {
                     }
                     self.tracking = true;
                 }
-                if let Some((x0, w0)) = self.divider_drag {
+                if let Some((y0, from)) = self.thumb_drag {
+                    self.drag_props_thumb(y - y0, from);
+                } else if let Some((x0, w0)) = self.divider_drag {
                     self.resize_sidebar(Some(w0 + x0 - x));
                 } else if let Some((range, _)) = self.range_drag {
                     let value = self.range_at(range, x);
@@ -4936,6 +4964,7 @@ impl Editor {
                     }
                 }
                 self.set_pointer(Some((x, y)));
+                self.hover_props_thumb(Some((x, y)));
                 // The brush ring follows the pointer in the overlay.
                 if self.brush_mode().is_some() {
                     self.overlay_changed();
@@ -4944,6 +4973,7 @@ impl Editor {
             WM_MOUSELEAVE => {
                 self.tracking = false;
                 self.set_pointer(None);
+                self.hover_props_thumb(None);
                 if self.tool == "b" {
                     self.overlay_changed();
                 }
@@ -4967,6 +4997,9 @@ impl Editor {
                     if hit != Some(Target::Prop(menu.kind.trigger())) {
                         self.close_menu();
                     }
+                }
+                if msg != WM_MBUTTONDOWN && self.press_props_scrollbar(x, y) {
+                    return Some(LRESULT(0));
                 }
                 if msg == WM_MBUTTONDOWN {
                     if self.l.well.contains(x, y) {
@@ -5041,6 +5074,10 @@ impl Editor {
                 }
                 if self.divider_drag.take().is_some() {
                     self.refresh(true);
+                }
+                if self.thumb_drag.take().is_some() {
+                    self.nodes[self.props_thumb].dirty = true;
+                    self.hover_props_thumb(Some((x, y)));
                 }
                 self.slider_drag = false;
                 if let Some((range, value)) = self.range_drag {

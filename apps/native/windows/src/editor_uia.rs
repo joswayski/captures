@@ -471,6 +471,26 @@ fn offscreen(e: &Editor, id: Id) -> bool {
     }
 }
 
+/// The Properties body's vertical scroll position, 0 to 100, or
+/// `UIA_ScrollPatternNoScroll` when it fits.
+fn scroll_percent(e: &Editor) -> f64 {
+    let max = e.props_max();
+    if max <= 0. {
+        UIA_ScrollPatternNoScroll
+    } else {
+        f64::from(e.props_scroll / max * 100.)
+    }
+}
+
+/// A control inside the scrolled Properties body: the property its
+/// `ScrollIntoView` reveals.
+fn scroll_item(id: Id) -> Option<Prop> {
+    match id {
+        Id::Control(Target::Prop(prop)) => Some(prop),
+        _ => None,
+    }
+}
+
 fn safe_array_i32(values: &[i32]) -> *mut SAFEARRAY {
     unsafe {
         let array = SafeArrayCreateVector(VT_I4, 0, values.len() as u32);
@@ -559,7 +579,9 @@ fn value(e: &Editor, id: Id) -> Option<String> {
     IExpandCollapseProvider,
     ISelectionItemProvider,
     IRangeValueProvider,
-    IValueProvider
+    IValueProvider,
+    IScrollProvider,
+    IScrollItemProvider
 )]
 pub struct Node {
     hwnd: HWND,
@@ -596,6 +618,9 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
         let id = self.id;
         let supported = with(self.hwnd, |e| {
             Ok(match id {
+                // `.screenshot-properties` is `overflow-y: auto`.
+                Id::Properties => pattern == UIA_ScrollPatternId,
+                _ if pattern == UIA_ScrollItemPatternId => scroll_item(id).is_some(),
                 Id::Control(Target::Slider | Target::Divider | Target::Prop(Prop::Range(_))) => {
                     pattern == UIA_RangeValuePatternId || pattern == UIA_ValuePatternId
                 }
@@ -1152,6 +1177,14 @@ pub fn raise(hwnd: HWND, events: &[(Event, String)]) {
                         UIA_AutomationFocusChangedEventId,
                     );
                 }
+                Event::Scrolled => {
+                    let _ = UiaRaiseAutomationPropertyChangedEvent(
+                        &node(hwnd, Id::Properties),
+                        UIA_ScrollVerticalScrollPercentPropertyId,
+                        &VARIANT::default(),
+                        &VARIANT::from(detail.parse::<f64>().unwrap_or(0.)),
+                    );
+                }
                 Event::Structure => {
                     let _ = UiaRaiseStructureChangedEvent(
                         &node(hwnd, Id::Root),
@@ -1206,6 +1239,7 @@ pub fn describe(e: &Editor, events: Vec<Event>) -> Vec<(Event, String)> {
                 Event::Value(target) => value(e, Id::Control(target)).unwrap_or_default(),
                 Event::Notice => e.notice_text().map(|(text, _)| text).unwrap_or_default(),
                 Event::InlineText => e.text_value(),
+                Event::Scrolled => scroll_percent(e).to_string(),
                 Event::Expanded(target) => {
                     let open = trigger_kind(Id::Control(target)).is_some_and(|k| e.menu_open(k));
                     if open { "open" } else { "closed" }.into()
@@ -1215,4 +1249,78 @@ pub fn describe(e: &Editor, events: Vec<Event>) -> Vec<(Event, String)> {
             (event, detail)
         })
         .collect()
+}
+
+impl IScrollProvider_Impl for Node_Impl {
+    fn Scroll(&self, horizontal: ScrollAmount, vertical: ScrollAmount) -> Result<()> {
+        if horizontal != ScrollAmount_NoAmount {
+            return Err(HRESULT(UIA_E_INVALIDOPERATION as _).into());
+        }
+        with(self.hwnd, |e| {
+            let page = (e.props_view().h - 40.).max(40.);
+            let delta = match vertical {
+                ScrollAmount_LargeDecrement => -page,
+                ScrollAmount_LargeIncrement => page,
+                ScrollAmount_SmallDecrement => -40.,
+                ScrollAmount_SmallIncrement => 40.,
+                _ => 0.,
+            };
+            e.scroll_by(delta);
+            Ok(())
+        })
+    }
+
+    fn SetScrollPercent(&self, horizontal: f64, vertical: f64) -> Result<()> {
+        if horizontal != UIA_ScrollPatternNoScroll {
+            return Err(HRESULT(UIA_E_INVALIDOPERATION as _).into());
+        }
+        with(self.hwnd, |e| {
+            if vertical != UIA_ScrollPatternNoScroll {
+                e.set_props_percent(vertical as f32);
+            }
+            Ok(())
+        })
+    }
+
+    fn HorizontalScrollPercent(&self) -> Result<f64> {
+        Ok(UIA_ScrollPatternNoScroll)
+    }
+
+    fn VerticalScrollPercent(&self) -> Result<f64> {
+        with(self.hwnd, |e| Ok(scroll_percent(e)))
+    }
+
+    fn HorizontalViewSize(&self) -> Result<f64> {
+        Ok(100.)
+    }
+
+    fn VerticalViewSize(&self) -> Result<f64> {
+        with(self.hwnd, |e| {
+            let (view, max) = (e.props_view().h, e.props_max());
+            Ok(f64::from(if max <= 0. {
+                100.
+            } else {
+                view / (view + max) * 100.
+            }))
+        })
+    }
+
+    fn HorizontallyScrollable(&self) -> Result<BOOL> {
+        Ok(false.into())
+    }
+
+    fn VerticallyScrollable(&self) -> Result<BOOL> {
+        with(self.hwnd, |e| Ok((e.props_max() > 0.).into()))
+    }
+}
+
+impl IScrollItemProvider_Impl for Node_Impl {
+    fn ScrollIntoView(&self) -> Result<()> {
+        let id = self.id;
+        with(self.hwnd, |e| {
+            let prop = scroll_item(id).ok_or_else(not_enabled)?;
+            e.reveal(prop);
+            Ok(())
+        })
+    }
 }

@@ -498,6 +498,18 @@ follows the document like shipping's `draft.source`: a value it did not
 set itself replaces its text, unless a queued edit already supersedes the
 reply. Windows: cross-compiled only. macOS, Linux: unchanged.
 
+Properties scrolling (hardware pass 13): the Properties body gets
+shipping's thin scrollbar (`base.css`: a 10 px gutter, a 4 px
+`--border-strong` pill that turns `--text-faint` on hover). It is its own
+surface, moved on the compositor; the thumb drags and the track pages.
+Tool properties exposes the UIA Scroll pattern and raises its scroll
+percent when it moves, and every control in it exposes ScrollItem, so a
+UIA client can bring an offscreen control into view before clicking at
+its rectangle (clicks at an offscreen control's reported rectangle land
+outside the window). The wheel path scrolls in a synthetic Wine test; why
+it did nothing on hardware is not reproduced here. Windows:
+cross-compiled only. macOS, Linux: unchanged.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,
