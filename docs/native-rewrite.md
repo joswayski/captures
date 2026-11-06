@@ -378,6 +378,17 @@ label's type while setting its wrap width; a test covers it. Windows:
 cross-compiled only. macOS, Linux: the shared side-grip fix applies to
 their editors too; not run there.
 
+Hardware pass 9 fix: closing a Win32 editor with a label open no longer
+drops the label. Close hides the window and queues, behind every accepted
+edit, the newest coalesced live edit, the label's text and its commit (as
+shipping and the AppKit host commit on close), then the draft flush; the
+window goes when the flush reports back or after shipping's 400 ms close
+budget. The worker finishes its queue after the window is gone; quitting,
+`WM_ENDSESSION` and reopening the same capture wait for it for at most 5 s.
+Windows: cross-compiled only. macOS, Linux: unchanged. The GTK4 host's
+close handler also autosaves without finishing an open label first, so it
+may have the same gap; not checked on hardware or changed here.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,
