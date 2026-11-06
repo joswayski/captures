@@ -447,6 +447,21 @@ pub struct DrawingPreview {
     pub text_bounds: TextBounds,
     pub selection_outlines: BTreeMap<String, [Point; 4]>,
     pub guides: Vec<AlignmentGuide>,
+    /// Where `pixels` can differ from an earlier frame, when the preview
+    /// knows it (a growing background-brush stroke); `None` means anywhere.
+    pub damage: Option<PreviewDamage>,
+}
+
+/// `DrawingPreview::pixels` equal the frame `since` points to everywhere
+/// outside `rect`. A host that still shows that frame (compare with
+/// `Weak::ptr_eq` or `Weak::as_ptr`) needs to update only `rect`. `since` is
+/// weak, so a host that keeps only its identity lets the next preview reuse
+/// the frame's pixels instead of copying them.
+#[derive(Clone, Debug)]
+pub struct PreviewDamage {
+    pub since: std::sync::Weak<RgbaImage>,
+    /// `(x, y, width, height)` in canvas pixels; may be empty.
+    pub rect: (u32, u32, u32, u32),
 }
 
 pub struct EditorSession {
@@ -675,10 +690,15 @@ fn render_frame(
     }
 }
 
+/// A frame with one region pasted in, and that canvas rectangle `(x, y, w, h)`.
+type PastedRegion = (Arc<RgbaImage>, (u32, u32, u32, u32));
+
 /// Render again only the canvas pixels that a background-brush change to
 /// the image at `index` can reach, and paste them over `previous`, the full
-/// frame before the change. `damage` is the changed natural-pixel rectangle
-/// `(x0, y0, x1, y1)`, end exclusive.
+/// frame before the change, with the pasted canvas rectangle `(x, y, w, h)`.
+/// `previous` is reused in place when nothing else holds it, else copied.
+/// `damage` is the changed natural-pixel rectangle `(x0, y0, x1, y1)`, end
+/// exclusive.
 ///
 /// The area is drawn as its own canvas, moved by whole device pixels, with
 /// only the image on it. So it is used only where nothing else paints: other
@@ -692,9 +712,9 @@ fn render_frame_region(
     index: usize,
     assets: &BTreeMap<String, Arc<RgbaImage>>,
     mut fonts: Option<&mut SessionFonts>,
-    previous: &RgbaImage,
+    previous: Arc<RgbaImage>,
     damage: (u32, u32, u32, u32),
-) -> Result<Option<RgbaImage>, String> {
+) -> Result<Option<PastedRegion>, String> {
     let (width, height) = previous.dimensions();
     if document.width != f64::from(width) || document.height != f64::from(height) {
         return Ok(None);
@@ -740,7 +760,7 @@ fn render_frame_region(
         height,
     );
     if right <= left || bottom <= top {
-        return Ok(Some(previous.clone()));
+        return Ok(Some((previous, (left, top, 0, 0))));
     }
     // Past half the canvas a full render costs about the same.
     if u64::from(right - left) * u64::from(bottom - top) * 2 > u64::from(width) * u64::from(height)
@@ -779,13 +799,18 @@ fn render_frame_region(
         extra: document.extra.clone(),
     };
     let rendered = render_frame(&sub, assets, fonts)?;
-    let mut pixels = previous.clone();
+    // Always a new allocation, so a host's `Weak` to `previous` never
+    // matches the changed frame.
+    let mut pixels = Arc::try_unwrap(previous).unwrap_or_else(|shared| (*shared).clone());
     let row = (right - left) as usize * 4;
     for (y, from) in (top..bottom).zip(rendered.as_raw().chunks_exact(row)) {
         let to = (y as usize * width as usize + left as usize) * 4;
         pixels.as_mut()[to..to + row].copy_from_slice(from);
     }
-    Ok(Some(pixels))
+    Ok(Some((
+        Arc::new(pixels),
+        (left, top, right - left, bottom - top),
+    )))
 }
 
 /// A generous bound of everything `element` can paint, with its stroke,
@@ -888,6 +913,7 @@ fn prepare_geometry(
         text_bounds,
         selection_outlines,
         guides: Vec::new(),
+        damage: None,
     })
 }
 
@@ -1610,17 +1636,28 @@ impl EditorSession {
                     x1.saturating_add(reach + 1),
                     y1.saturating_add(reach + 1),
                 );
+                let since = Arc::downgrade(&frame.pixels);
+                let DrawingPreview {
+                    pixels,
+                    text_bounds,
+                    selection_outlines,
+                    guides,
+                    ..
+                } = frame;
                 match render_frame_region(
                     &stroke.document,
                     stroke.index,
                     &assets,
                     self.fonts.as_mut(),
-                    &frame.pixels,
+                    pixels,
                     damage,
                 )? {
-                    Some(pixels) => DrawingPreview {
-                        pixels: Arc::new(pixels),
-                        ..frame
+                    Some((pixels, rect)) => DrawingPreview {
+                        pixels,
+                        text_bounds,
+                        selection_outlines,
+                        guides,
+                        damage: Some(PreviewDamage { since, rect }),
                     },
                     None => prepare_frame(&stroke.document, &assets, self.fonts.as_mut())?,
                 }

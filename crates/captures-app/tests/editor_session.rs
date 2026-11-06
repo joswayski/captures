@@ -5809,6 +5809,74 @@ fn new_text_takes_the_drawing_defaults_shadow_like_shipping() {
 }
 
 #[test]
+fn brush_preview_damage_bounds_every_change() {
+    let data = tempfile::tempdir().unwrap();
+    let source = RgbaImage::from_fn(240, 160, |x, y| {
+        Rgba([(x * 3 % 256) as u8, (y * 5 % 256) as u8, 90, 255])
+    });
+    let capture = captures_app::persist_screenshot(
+        &data.path().join("history"),
+        &source,
+        CaptureMode::Region,
+    )
+    .unwrap();
+    let mut editor = EditorSession::open_with_fonts(
+        OpenRequest {
+            history_root: data.path().join("history"),
+            drafts_root: data.path().join("drafts"),
+            artifact_id: capture.entry.id.clone(),
+            source_artifact_id: None,
+        },
+        Some(captures_app::editor_fonts::bundled()),
+    )
+    .unwrap();
+    let stroke: Vec<(f64, f64)> = (0..10)
+        .map(|i| (30. + f64::from(i) * 17.5, 40. + f64::from(i % 4) * 11.25))
+        .collect();
+    let brush = |points: &[(f64, f64)]| -> Request {
+        serde_json::from_value(json!({
+            "operation": "paint_image_background", "mode": "erase", "size": 16, "softness": 40,
+            "points": points.iter().map(|(x, y)| json!({"x": x, "y": y})).collect::<Vec<_>>(),
+        }))
+        .unwrap()
+    };
+    let first = editor
+        .preview_drawing_with_geometry(brush(&stroke[..1]))
+        .unwrap();
+    assert!(
+        first.damage.is_none(),
+        "a stroke's first preview renders everything"
+    );
+    // Holding the previous frame forces a copy; the claim must hold either way.
+    let mut previous = first.pixels;
+    for n in 2..=stroke.len() {
+        let frame = editor
+            .preview_drawing_with_geometry(brush(&stroke[..n]))
+            .unwrap();
+        let damage = frame.damage.expect("a growing stroke reports its damage");
+        assert!(
+            std::sync::Weak::ptr_eq(&damage.since, &Arc::downgrade(&previous)),
+            "preview {n} is relative to the frame before it"
+        );
+        assert!(!Arc::ptr_eq(&frame.pixels, &previous));
+        let (x, y, w, h) = damage.rect;
+        assert!(x + w <= 240 && y + h <= 160);
+        for (px, py, pixel) in frame.pixels.enumerate_pixels() {
+            if px >= x && px < x + w && py >= y && py < y + h {
+                continue;
+            }
+            assert_eq!(
+                pixel,
+                previous.get_pixel(px, py),
+                "preview {n} changed ({px}, {py}) outside {:?}",
+                damage.rect
+            );
+        }
+        previous = frame.pixels;
+    }
+}
+
+#[test]
 fn incremental_brush_previews_equal_full_renders() {
     let data = tempfile::tempdir().unwrap();
     let source = RgbaImage::from_fn(400, 300, |x, y| {
