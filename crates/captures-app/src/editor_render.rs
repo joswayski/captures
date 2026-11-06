@@ -360,6 +360,11 @@ fn text_layers(
     Ok(layers)
 }
 
+/// How far a layer's drop shadow can paint past its geometry.
+pub(crate) fn drop_shadow_padding(style: &ElementStyle) -> f32 {
+    drop_shadow(style).painted_bounds_padding()
+}
+
 fn drop_shadow(style: &ElementStyle) -> DropShadow {
     const DEFAULT_OPACITY: f64 = 45.0;
 
