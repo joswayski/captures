@@ -34,6 +34,9 @@ use crate::switch::TokenSwitch;
 use crate::tokens::Tokens;
 use crate::widgets::{Icon, SnapshotArea, icon_button};
 
+mod text;
+pub use text::register_fonts;
+
 /// Shipping Fit: `(clientWidth - 56) / width`, so 28 px a side.
 const FIT_INSET: f64 = 28.;
 
@@ -56,6 +59,18 @@ struct Presented {
     style: ElementStyle,
     has_draft: bool,
     source: Option<ExportSource>,
+    initial_text_size: f64,
+    /// Document family keys to installed face names (`"rounded"` → Nunito).
+    font_families: BTreeMap<String, String>,
+    active_input: Option<ActiveInput>,
+}
+
+/// The session's live text input, when one is active.
+#[derive(Clone)]
+struct ActiveInput {
+    input_id: String,
+    layer_id: String,
+    layout: Option<captures_app::editor_text::InlineEditorLayout>,
 }
 
 struct LayerItem {
@@ -123,6 +138,16 @@ fn present(session: &EditorSession, artifact_id: &str) -> Presented {
         can_redo: snapshot.can_redo,
         style: snapshot.initial_annotation_style.clone(),
         has_draft: snapshot.has_draft,
+        initial_text_size: snapshot.initial_text_size,
+        font_families: snapshot.font_families.cloned().unwrap_or_default(),
+        active_input: snapshot
+            .active_text_input
+            .as_ref()
+            .map(|input| ActiveInput {
+                input_id: input.input_id.to_owned(),
+                layer_id: input.layer_id.to_owned(),
+                layout: input.layout.clone(),
+            }),
         source: snapshot.original_export_path.map(|path| ExportSource {
             artifact_id: snapshot
                 .source_artifact_id
@@ -180,6 +205,14 @@ struct State {
     notice: RefCell<Option<(String, bool)>>,
     busy: Cell<bool>,
     canvas: SnapshotArea,
+    /// The Text tool's inline field over the canvas.
+    text_overlay: gtk::Overlay,
+    text_field: text::TextField,
+    inline: RefCell<Option<text::Inline>>,
+    text_size: Cell<f64>,
+    input_counter: Cell<u64>,
+    /// The previous primary press, for double-click editing.
+    last_press: Cell<Option<(std::time::Instant, f64, f64)>>,
     widgets: Widgets,
 }
 
@@ -397,7 +430,11 @@ pub fn build(
     canvas.add_css_class("editor-canvas");
     canvas.set_accessible_role(gtk::AccessibleRole::Img);
     canvas.update_property(&[gtk::accessible::Property::Label("Screenshot canvas")]);
-    body.append(&canvas);
+    let text_overlay = gtk::Overlay::new();
+    text_overlay.set_child(Some(&canvas));
+    let text_field = text::TextField::new();
+    text_overlay.add_overlay(&text_field.view);
+    body.append(&text_overlay);
     let panel = gtk::Box::new(gtk::Orientation::Vertical, 0);
     panel.add_css_class("editor-layers");
     panel.set_size_request(320, -1);
@@ -500,6 +537,12 @@ pub fn build(
         notice: RefCell::default(),
         busy: Cell::new(true),
         canvas: canvas.clone(),
+        text_overlay,
+        text_field,
+        inline: RefCell::default(),
+        text_size: Cell::new(24.),
+        input_counter: Cell::default(),
+        last_press: Cell::default(),
         widgets: Widgets {
             undo,
             redo,
@@ -675,7 +718,7 @@ fn open_kind(tool: &str) -> Option<OpenShapeKind> {
 }
 
 /// Tools that are not in the GTK host yet; their rail buttons stay disabled.
-const PENDING_TOOLS: [&str; 2] = ["t", "b"];
+const PENDING_TOOLS: [&str; 1] = ["b"];
 
 fn set_class(widget: &impl IsA<gtk::Widget>, class: &str, on: bool) {
     if on {
@@ -774,6 +817,7 @@ impl State {
             });
         // Only the canvas node changes; the texture is reused as is.
         self.canvas.queue_draw();
+        self.style_text_field();
     }
 
     fn zoom_to(&self, percent: f64, anchor: Option<(f64, f64)>) {
@@ -804,6 +848,9 @@ impl State {
         if PENDING_TOOLS.contains(&key) {
             return;
         }
+        if self.text_active() {
+            self.finish_text();
+        }
         let shape = SHAPE_TOOLS.iter().find(|tool| tool.key == key);
         if let Some(shape) = shape {
             *self.last_shape.borrow_mut() = key.to_owned();
@@ -825,8 +872,11 @@ impl State {
                 gtk::AccessibleTristate::False
             })]);
         }
-        self.canvas
-            .set_cursor_from_name(Some(if key == "v" { "default" } else { "crosshair" }));
+        self.canvas.set_cursor_from_name(Some(match key {
+            "v" => "default",
+            "t" => "text",
+            _ => "crosshair",
+        }));
     }
 
     /// The Shapes flyout (`repeat(3, 44px)`).
@@ -896,6 +946,7 @@ impl State {
                 w.redo.set_sensitive(presented.can_redo);
                 w.layer_count.set_label(&presented.layers.len().to_string());
                 if first {
+                    self.text_size.set(presented.initial_text_size);
                     w.banner.set_visible(presented.has_draft);
                     *self.target.borrow_mut() = Some(ExportTarget::new(
                         presented.source.clone(),
@@ -921,6 +972,7 @@ impl State {
                     self.sync_filename();
                 }
                 self.update_export();
+                self.received_text();
                 self.canvas.queue_draw();
             }
             Outcome::Saved(result) => {
@@ -940,6 +992,7 @@ impl State {
             }
             Outcome::Failed(error) => {
                 self.busy.set(false);
+                self.text_failed();
                 *self.notice.borrow_mut() = Some((error, true));
                 self.update_export();
                 self.canvas.queue_draw();
@@ -1148,6 +1201,37 @@ impl State {
         });
         self.canvas.add_controller(drag);
 
+        // The inline text field: typing, Escape and leaving it commit.
+        let weak = Rc::downgrade(self);
+        self.text_field.view.buffer().connect_changed(move |_| {
+            if let Some(state) = weak.upgrade() {
+                state.text_changed();
+            }
+        });
+        let keys = gtk::EventControllerKey::new();
+        let weak = Rc::downgrade(self);
+        keys.connect_key_pressed(move |_, key, _, _| {
+            if key == gdk::Key::Escape
+                && let Some(state) = weak.upgrade()
+            {
+                state.finish_text();
+                return glib::Propagation::Stop;
+            }
+            glib::Propagation::Proceed
+        });
+        self.text_field.view.add_controller(keys);
+        let focus = gtk::EventControllerFocus::new();
+        let weak = Rc::downgrade(self);
+        focus.connect_leave(move |_| {
+            if let Some(state) = weak.upgrade() {
+                state.finish_text();
+            }
+        });
+        self.text_field.view.add_controller(focus);
+        let weak = Rc::downgrade(self);
+        self.text_overlay
+            .connect_get_child_position(move |_, _| weak.upgrade()?.text_field_rect());
+
         // Middle-button drag pans with any tool.
         let pan = gtk::GestureDrag::new();
         pan.set_button(gdk::BUTTON_MIDDLE);
@@ -1234,7 +1318,9 @@ impl State {
             .canvas
             .root()
             .and_then(|root| root.focus())
-            .is_some_and(|focus| focus.is::<gtk::Text>() || focus.is::<gtk::Entry>());
+            .is_some_and(|focus| {
+                focus.is::<gtk::Text>() || focus.is::<gtk::Entry>() || focus.is::<gtk::TextView>()
+            });
         let name = key
             .to_lower()
             .name()
@@ -1257,7 +1343,7 @@ impl State {
                 }
                 self.canvas.queue_draw();
             }
-            (_, "v" | "c" | "a" | "p") => self.select_tool(&name),
+            (_, "v" | "c" | "a" | "p" | "t") => self.select_tool(&name),
             (_, letter) => {
                 let Some(tool) = SHAPE_TOOLS.iter().find(|tool| {
                     tool.shortcut
@@ -1276,6 +1362,27 @@ impl State {
             return;
         };
         let tool = self.tool.borrow().clone();
+        if tool == "t" {
+            self.begin_text(point);
+            return;
+        }
+        if self.text_active() {
+            self.finish_text();
+        }
+        // A second Select press on a text label within the double-click time
+        // edits it in place (one gesture, so focus stays in the field).
+        let now = std::time::Instant::now();
+        let double = self
+            .last_press
+            .replace(Some((now, x, y)))
+            .is_some_and(|(at, px, py)| {
+                let limit = gtk::Settings::default().map_or(400, |s| s.gtk_double_click_time());
+                now.duration_since(at).as_millis() <= limit as u128 && (x - px).hypot(y - py) <= 5.
+            });
+        if tool == "v" && double && self.edit_text_at(point) {
+            self.last_press.set(None);
+            return;
+        }
         let gesture = match tool.as_str() {
             "v" => {
                 let hit = self.presented.borrow().as_ref().and_then(|presented| {
@@ -1342,6 +1449,9 @@ impl State {
                 drop(gesture);
                 self.viewport.set(viewport);
                 self.canvas.queue_draw();
+                if self.text_active() {
+                    self.text_overlay.queue_allocate();
+                }
                 return;
             }
             Some(Gesture::Shape { end, .. } | Gesture::Move { end, .. }) => {

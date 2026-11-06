@@ -71,6 +71,19 @@ def nodes(root):
         stack.extend(reversed(children))
 
 
+def node_text(node, name):
+    """The accessible name, else the live Text content: GTK 4.14's AT-SPI
+    cache can keep a label's first (empty) name after its text changes."""
+    if name:
+        return name
+    try:
+        if "Text" in node.get_interfaces():
+            return Atspi.Text.get_text(node, 0, -1)
+    except GLib.Error:
+        pass
+    return ""
+
+
 def find(root, role, name):
     return [node for node, identity in nodes(root) if identity == (role, name)]
 
@@ -90,8 +103,7 @@ def press(node):
 
 
 def launch(binary, *args):
-    env = dict(os.environ, GSK_RENDERER="cairo", GTK_A11Y="atspi", NO_AT_BRIDGE="0",
-               CAPTURES_GTK_TRACE="1")
+    env = dict(os.environ, GSK_RENDERER="cairo", GTK_A11Y="atspi", NO_AT_BRIDGE="0")
     return subprocess.Popen([binary, *args], env=env, stdout=subprocess.DEVNULL)
 
 
@@ -213,6 +225,28 @@ def editor(binary, scratch):
                   for path in (source, written[0])]
         assert pixels[0] != pixels[1], "the saved PNG does not contain the rectangle"
         print(f"editor: drag drew a layer, undo/redo, saved {written[0].name}")
+
+        # Text: click with the Text tool, type into the real text field (two
+        # lines), and Escape commits a layer named after its first line.
+        text_tool = find(app, "push button", "Text (T)")[0]
+        press(text_tool)
+        # AT-SPI activation clicks after GTK's short press animation.
+        wait(lambda: has_state(text_tool, Atspi.StateType.PRESSED), "the Text tool")
+        subprocess.run(["xdotool", "mousemove", str(x + 40), str(y + 60)], check=True)
+        time.sleep(0.2)
+        subprocess.run(["xdotool", "click", "1"], check=True)
+        field = wait(lambda: find(app, "text", "Text layer"), "the inline text field")[0]
+        wait(lambda: has_state(field, Atspi.StateType.FOCUSED), "the field to take focus")
+        subprocess.run(["xdotool", "type", "--delay", "40", "Smoke label"], check=True)
+        subprocess.run(["xdotool", "key", "Return"], check=True)
+        subprocess.run(["xdotool", "type", "--delay", "40", "second"], check=True)
+        typed = Atspi.Text.get_text(field, 0, -1)
+        assert typed == "Smoke label\nsecond", f"the field holds {typed!r}"
+        subprocess.run(["xdotool", "key", "Escape"], check=True)
+        wait(lambda: find(app, "list item", "Smoke label · Text"),
+             "Escape to commit the text layer")
+        wait(lambda: not find(app, "text", "Text layer"), "the field to close")
+        print("editor: Text tool typed two lines into a real text field and committed")
     finally:
         process.terminate()
         process.wait(timeout=10)
@@ -234,14 +268,15 @@ def previews(binary, scratch):
                    and find(app, "push button", "Restore"), "a second Restore")[1])
         wait(lambda: len(cards()) == 2, "two preview cards")
         # The chip shows for 2.5 s; walk only the previews window so a slow
-        # runner's full-tree walk cannot miss it. The status role's AT-SPI
-        # name differs across GTK releases, so match the chip by name.
+        # runner's full-tree walk cannot miss it. The status role differs
+        # across GTK releases, so match the chip by its text.
         stack = wait(lambda: find(app, "frame", "Captures Previews"), "the previews window")[0]
         press(find(stack, "push button", "Copy")[0])
         try:
-            chip = wait(lambda: [name for _, (_, name) in nodes(stack)
-                                 if name and (name == "Copied to clipboard"
-                                              or name.startswith("Couldn’t copy"))],
+            chip = wait(lambda: [text for text in (node_text(n, name)
+                                                   for n, (_, name) in nodes(stack))
+                                 if text == "Copied to clipboard"
+                                 or text.startswith("Couldn’t copy")],
                         "the Copied chip", timeout=10)
         except AssertionError:
             print("previews tree:", [identity for _, identity in nodes(stack)], flush=True)

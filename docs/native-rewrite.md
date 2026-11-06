@@ -156,15 +156,25 @@ shapes, line, arrow and freehand work through the shared `EditorSession` on a
 worker thread, with the shared `editor_export` plan and `timestamp_stem` name.
 The canvas is retained: the composited image is uploaded as one texture only
 when the session's pixels change, while zoom, pan and in-progress strokes
-redraw only small Cairo nodes over it. Text, blur, the property panel, Add
-images, canvas resize, export settings and layer reorder/rename are not in
-the GTK host yet (Text and Blur rail buttons are disabled). Release build
+redraw only small Cairo nodes over it. The Text tool (T, or double-click a
+label with Select) opens shipping's inline field: a real `GtkTextView` over
+the canvas owns typing, IME, selection and AT-SPI and draws the label in the
+bundled faces (registered with fontconfig) at the session's inline layout,
+because the session leaves an edited label out of its preview. Typing is
+coalesced into one in-flight `UpdateTextInput`; Escape, leaving the field or
+switching tools commits, as in shipping. New labels use shipping's Rounded
+Box treatment in the drawing color at the capture-relative size. The field
+does not yet draw outlined labels' stroke or rotate with a rotated label.
+Blur, the property panel, Add images, canvas resize, export settings and
+layer reorder/rename are not in the GTK host yet (the Blur rail button is
+disabled). Release build
 under Xvfb with Cairo on a 640×360 fixture: about 106 MB RSS and near-zero
 idle CPU; the egui workbench's own editor scene measures about 173 MB the
 same way, on its built-in document rather than the same image. CI renders
 the editor in both appearances, and `smoke.py` opens it from History, draws
-a rectangle with a real xdotool drag, undoes and redoes it over AT-SPI and
-checks that Save writes a PNG containing it. X11 (Xvfb) only; Wayland, Orca
+a rectangle with a real xdotool drag, undoes and redoes it over AT-SPI,
+checks that Save writes a PNG containing it, then types two lines into the
+Text tool's field and checks Escape commits the layer. X11 (Xvfb) only; Wayland, Orca
 and real hardware remain open. Windows, macOS: unchanged.
 
 The fourth GTK4 slice is the floating previews: History's Restore (or

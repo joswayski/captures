@@ -352,6 +352,7 @@ fn main() -> glib::ExitCode {
         }
     };
     let started = Instant::now();
+    editor::register_fonts();
     let app = gtk::Application::builder()
         .application_id("es.captur.Captures.Gtk")
         .flags(gio::ApplicationFlags::NON_UNIQUE)
