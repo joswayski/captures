@@ -80,10 +80,13 @@ pub enum Num {
     /// The header's compact Canvas W and H (`.screenshot-canvas-dim`).
     CanvasWidth,
     CanvasHeight,
+    /// `DropShadowFields`' X and Y offset.
+    ShadowX,
+    ShadowY,
 }
 
 impl Num {
-    pub const ALL: [Num; 8] = [
+    pub const ALL: [Num; 10] = [
         Num::TextSize,
         Num::NewTextSize,
         Num::LayerWidth,
@@ -92,6 +95,8 @@ impl Num {
         Num::LayerY,
         Num::CropWidth,
         Num::CropHeight,
+        Num::ShadowX,
+        Num::ShadowY,
     ];
 
     /// `(min, max)` of the shipping `NumberInput`; X and Y have none.
@@ -102,6 +107,7 @@ impl Num {
             Num::LayerX | Num::LayerY => (f64::NEG_INFINITY, f64::INFINITY),
             Num::CropWidth | Num::CropHeight => (0., f64::INFINITY),
             Num::CanvasWidth | Num::CanvasHeight => (1., geometry::MAX_SIZE),
+            Num::ShadowX | Num::ShadowY => (-SHADOW_OFFSET_MAX, SHADOW_OFFSET_MAX),
         }
     }
 
@@ -116,6 +122,8 @@ impl Num {
             Num::LayerY => "Y",
             Num::CanvasWidth => "W",
             Num::CanvasHeight => "H",
+            Num::ShadowX => "X offset",
+            Num::ShadowY => "Y offset",
         }
     }
 
@@ -131,6 +139,8 @@ impl Num {
             Num::CropHeight => "Crop height",
             Num::CanvasWidth => header::CANVAS_WIDTH,
             Num::CanvasHeight => header::CANVAS_HEIGHT,
+            Num::ShadowX => "Shadow X offset",
+            Num::ShadowY => "Shadow Y offset",
         })
     }
 
@@ -157,6 +167,12 @@ impl Num {
         matches!(self, Num::CanvasWidth | Num::CanvasHeight)
     }
 
+    /// Fields with `onCommit`: typing only holds a draft, and Enter, blur or
+    /// a stepper commits it once, rounded.
+    pub fn commits_once(self) -> bool {
+        self.is_canvas() || matches!(self, Num::ShadowX | Num::ShadowY)
+    }
+
     /// `.number-input-steppers`, 22 px when compact.
     pub fn steppers_w(self) -> f32 {
         if self.is_canvas() { 22. } else { 26. }
@@ -179,6 +195,10 @@ pub enum TextChange {
     Italic,
     Align(&'static str),
 }
+
+/// `DROP_SHADOW_OFFSET_MAX` (captures-image), which shipping's offset
+/// fields clamp to.
+const SHADOW_OFFSET_MAX: f64 = 500.;
 
 /// The Bold and Italic buttons, then the alignments.
 pub const FORMATS: usize = 2 + text_format::ALIGN.len();
@@ -303,6 +323,8 @@ const FIELDS: [Field; 5] = [
     Field::Text,
     Field::Plate,
 ];
+/// The shadow's X and Y offset fields.
+const SHADOW_OFFSETS: [Num; 2] = [Num::ShadowX, Num::ShadowY];
 const RANGES: [Range; 7] = [
     Range::Width,
     Range::Opacity,
@@ -366,6 +388,8 @@ pub struct Values {
     pub shadow_color: String,
     pub shadow_opacity: f64,
     pub shadow_blur: f64,
+    pub shadow_x: f64,
+    pub shadow_y: f64,
     pub opacity: f64,
     /// A label's Text color and plate.
     pub text_color: String,
@@ -384,6 +408,8 @@ impl Values {
             shadow_color: c.drop_shadow_style.color.clone(),
             shadow_opacity: c.drop_shadow_style.opacity,
             shadow_blur: c.drop_shadow_style.blur,
+            shadow_x: c.drop_shadow_style.offset_x,
+            shadow_y: c.drop_shadow_style.offset_y,
             opacity,
             text_color: String::new(),
             plate: None,
@@ -412,6 +438,8 @@ impl Values {
             shadow_color: shadow.color,
             shadow_opacity: shadow.opacity,
             shadow_blur: shadow.blur,
+            shadow_x: shadow.offset_x,
+            shadow_y: shadow.offset_y,
             opacity,
             text_color: String::new(),
             plate: None,
@@ -464,6 +492,8 @@ pub enum Change {
     Color(Field, String),
     Check(Check, bool),
     Range(Range, f64),
+    /// A shadow offset: X (`true`) or Y.
+    Offset(bool, f64),
 }
 
 /// `(min, max)` from the shipping `RangeSlider`s.
@@ -652,6 +682,7 @@ impl Editor {
                     Row::Color(Field::Shadow),
                     Row::Range(Range::ShadowOpacity),
                     Row::Range(Range::ShadowBlur),
+                    Row::Pairs(&SHADOW_OFFSETS),
                 ]);
             }
         };
@@ -705,6 +736,7 @@ impl Editor {
                     Row::Color(Field::Shadow),
                     Row::Range(Range::ShadowOpacity),
                     Row::Range(Range::ShadowBlur),
+                    Row::Pairs(&SHADOW_OFFSETS),
                 ]);
             }
         };
@@ -730,6 +762,7 @@ impl Editor {
             let indent = match row {
                 Row::Color(Field::Shadow)
                 | Row::Range(Range::ShadowOpacity | Range::ShadowBlur) => INDENT,
+                Row::Pairs(nums) if nums == SHADOW_OFFSETS => INDENT,
                 _ => 0.,
             };
             let rw = w - indent;
@@ -1352,6 +1385,16 @@ impl Editor {
                     Change::Check(Check::Shadow, on) => s.drop_shadow = Some(on),
                     Change::Check(Check::Contiguous | Check::Plate | Check::Solid, _)
                     | Change::Color(Field::Text | Field::Plate | Field::Canvas, _) => {}
+                    Change::Offset(x_axis, value) => {
+                        s.drop_shadow = Some(true);
+                        let mut shadow = s.resolved_drop_shadow_style();
+                        if x_axis {
+                            shadow.offset_x = value;
+                        } else {
+                            shadow.offset_y = value;
+                        }
+                        s.drop_shadow_style = Some(shadow);
+                    }
                     Change::Range(Range::Width, value) => s.stroke_width = value,
                     Change::Range(Range::Opacity, value) => d.opacity = value,
                     Change::Range(range, _) if eraser_range(range) => {}
@@ -1404,6 +1447,15 @@ impl Editor {
                 self.props_changed();
             }
             Change::Color(..) => self.props_changed(),
+            Change::Offset(x_axis, _) => {
+                let num = if x_axis { Num::ShadowX } else { Num::ShadowY };
+                self.events
+                    .push(Event::Value(Target::Prop(Prop::Number(num))));
+                self.prop_dirty(Prop::Number(num));
+                for up in [true, false] {
+                    self.prop_dirty(Prop::Step(num, up));
+                }
+            }
         }
     }
 
@@ -1487,6 +1539,22 @@ impl Editor {
                     } else {
                         "shadow-blur"
                     },
+                    TextPatch {
+                        drop_shadow: Some(true),
+                        drop_shadow_style: Some(with_shadow(&shadow)),
+                        ..Default::default()
+                    },
+                )
+            }
+            Change::Offset(x_axis, value) => {
+                if x_axis {
+                    shadow.offset_x = value;
+                } else {
+                    shadow.offset_y = value;
+                }
+                (
+                    false,
+                    "shadow-offset",
                     TextPatch {
                         drop_shadow: Some(true),
                         drop_shadow_style: Some(with_shadow(&shadow)),
@@ -2019,6 +2087,20 @@ fn selected_edit(change: &Change, values: Option<&Values>) -> (bool, &'static st
                 ..Default::default()
             }),
         ),
+        // `patchShadow` turns the shadow on with the offset.
+        Change::Offset(x_axis, value) => (
+            false,
+            "shadow-offset",
+            style(AnnotationStylePatch {
+                drop_shadow: Some(true),
+                drop_shadow_style: Some(DropShadowStylePatch {
+                    offset_x: x_axis.then_some(value),
+                    offset_y: (!x_axis).then_some(value),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        ),
         Change::Range(_, value) => (
             true,
             "shadow-blur",
@@ -2055,6 +2137,14 @@ fn preview(v: &mut Values, change: &Change) {
         Change::Color(Field::Text, color) => v.text_color = color,
         Change::Color(Field::Plate, color) => v.plate = Some(color),
         Change::Check(Check::Plate, on) => v.plate = on.then(|| TEXT_PLATE.into()),
+        Change::Offset(x_axis, value) => {
+            v.shadow = true;
+            if x_axis {
+                v.shadow_x = value;
+            } else {
+                v.shadow_y = value;
+            }
+        }
         Change::Check(Check::Contiguous | Check::Solid, _)
         | Change::Color(Field::Canvas, _)
         | Change::Range(Range::Tolerance | Range::BrushSize | Range::Softness, _) => {}

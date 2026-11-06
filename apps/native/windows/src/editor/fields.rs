@@ -173,7 +173,7 @@ impl Editor {
         let parsed = text.trim().parse::<f64>().ok().filter(|v| v.is_finite());
         let (min, max) = num.bounds();
         let committed = parsed.map(|value| {
-            let value = if num.is_canvas() {
+            let value = if num.commits_once() {
                 value.round()
             } else {
                 value
@@ -186,7 +186,7 @@ impl Editor {
         self.own_source(Prop::Number(num));
         self.prop_dirty(Prop::Number(num));
         match committed {
-            Some(value) if num.is_canvas() => js_number(value),
+            Some(value) if num.commits_once() => js_number(value),
             _ => js_number(self.number_value(num)),
         }
     }
@@ -445,7 +445,7 @@ impl Editor {
             Prop::Textarea => self.apply_text(super::props::TextChange::Content(text)),
             // `onTextChange`: Canvas W and H only hold a draft until Enter,
             // blur or a stepper commits it.
-            Prop::Number(num) if num.is_canvas() => {}
+            Prop::Number(num) if num.commits_once() => {}
             Prop::Number(num) => {
                 let parsed = if text.trim().is_empty() {
                     None
