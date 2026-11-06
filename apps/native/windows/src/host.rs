@@ -84,7 +84,7 @@ pub struct Host {
     appearance: Option<String>,
     /// Choose… was activated; the picker opens once the host is released.
     pick_folder: bool,
-    /// A `WM_APP_WAKE` is queued.
+    /// A `WM_APP_WAKE` was posted since the loop last checked `need`.
     woken: bool,
 }
 
@@ -509,7 +509,10 @@ impl Host {
                     self.present();
                 }
             }
-            WM_APP_WAKE => self.woken = false,
+            // Only the loop clears `woken`, after the drain: clearing it here
+            // let `with_host` repost while `need` was still set, so the drain
+            // never ended and no frame ran.
+            WM_APP_WAKE => {}
             WM_TIMER if wp.0 == TIMER_MOTION => {
                 if !self.scene.tick() {
                     unsafe {

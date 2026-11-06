@@ -102,6 +102,9 @@ unchanged.
 The third Windows slice adds the Shortcuts and Recording cards after Capture,
 plus fixes from the first real-hardware run: an external resize now
 presents synchronously, and messages sent from other threads wake the loop.
+(The second run found that this wake message reposted itself during the
+drain, spinning a core and starving input and frames; only the loop now
+clears the pending-wake flag.)
 Node surfaces also snap both edges to device pixels, which removes the 150%
 seam under the header. The Interface theme and accent groups are each one
 Tab stop with arrow keys, and sidebar sections report the one in view.
