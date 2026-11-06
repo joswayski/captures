@@ -152,6 +152,284 @@ window.captures {
   opacity: 0.55;
 }
 
+/* `.preferences-save-status`: Saved, or a save error, beside History. */
+.captures .preferences-save-status {
+  min-height: 24px;
+  padding: 0 var(--s-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  color: var(--text-muted);
+  background: var(--surface-raised);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+.captures .preferences-save-status.saved {
+  border-color: transparent;
+  color: var(--positive-text);
+  background: var(--positive-surface);
+}
+.captures .preferences-save-status.error {
+  border-color: transparent;
+  color: var(--danger-text);
+  background: var(--danger-surface);
+}
+.captures .preferences-save-mark {
+  border-radius: var(--r-pill);
+  font-size: 9px;
+  font-weight: var(--weight-bold);
+}
+.captures .preferences-save-status.saved .preferences-save-mark {
+  color: var(--positive-ink);
+  background: var(--positive);
+}
+
+/* `.ui-segmented`: Interface theme. */
+.captures .ui-segmented {
+  padding: 3px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg);
+  background: var(--surface-sunken);
+}
+.captures .ui-segmented button.segment {
+  all: unset;
+  min-height: var(--h-sm);
+  padding: 0 var(--s-5);
+  border-radius: var(--r-sm);
+  color: var(--text-subtle);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  transition: color var(--dur-3) var(--ease-standard);
+}
+.captures .ui-segmented button.segment:hover {
+  color: var(--text);
+}
+.captures .ui-segmented button.segment.active {
+  color: var(--text);
+  background: var(--surface-raised);
+  box-shadow:
+    var(--shadow-xs),
+    inset 0 0 0 1px var(--border-subtle);
+}
+.captures .ui-segmented button.segment:focus-visible {
+  box-shadow: var(--focus-ring-tight);
+}
+
+/* `.theme-options`: accent chips. */
+.captures button.theme-option {
+  all: unset;
+  min-height: 32px;
+  padding: 0 var(--s-3);
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  color: var(--text-muted);
+  transition:
+    border-color var(--dur-2) var(--ease-standard),
+    background-color var(--dur-2) var(--ease-standard),
+    box-shadow var(--dur-2) var(--ease-standard);
+}
+.captures button.theme-option:hover {
+  background: var(--surface-hover);
+}
+.captures button.theme-option:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+.captures button.theme-option.active {
+  border-color: var(--border);
+  color: var(--text);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-xs);
+}
+.captures .theme-option-name {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+.captures .theme-option-check {
+  color: var(--accent-active-text);
+  font-size: 10px;
+  font-weight: var(--weight-bold);
+  opacity: 0;
+}
+.captures button.theme-option.active .theme-option-check {
+  opacity: 1;
+}
+
+/* `.custom-theme-editor`: a faint rainbow wash behind two colour fields. */
+.captures .custom-theme-editor {
+  padding: var(--s-5);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background-color: var(--surface-canvas);
+  background-image: linear-gradient(
+    115deg,
+    rgba(255, 61, 82, 0.12),
+    rgba(255, 158, 51, 0.12) 17%,
+    rgba(246, 225, 61, 0.12) 30%,
+    rgba(59, 222, 116, 0.12) 45%,
+    rgba(69, 200, 245, 0.12) 60%,
+    rgba(77, 124, 255, 0.12) 75%,
+    rgba(190, 82, 240, 0.12) 89%,
+    rgba(255, 71, 172, 0.12)
+  );
+}
+.captures .custom-theme-field {
+  padding: var(--s-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  background: var(--surface-raised);
+}
+.captures .custom-theme-label {
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+.captures .custom-theme-color-control {
+  margin-top: var(--s-3);
+}
+.captures button.custom-theme-picker {
+  all: unset;
+  padding: 3px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--r-sm);
+  background: var(--surface-field);
+}
+.captures button.custom-theme-picker:focus-visible {
+  border-color: var(--theme-accent);
+  box-shadow: var(--focus-ring-tight);
+}
+.captures entry.custom-theme-hex {
+  all: unset;
+  min-height: 30px;
+  padding: 0 var(--s-3);
+  border: 1px solid var(--control-border);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  background: var(--surface-field);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+.captures entry.custom-theme-hex:focus-within {
+  border-color: var(--theme-accent);
+  box-shadow: var(--focus-ring-tight);
+}
+.captures .custom-theme-help {
+  margin-top: var(--s-3);
+  color: var(--text-subtle);
+  font-size: var(--text-xs);
+}
+
+/* `.directory-input`: the capture folder and Choose…. */
+.captures entry.directory-entry {
+  all: unset;
+  min-height: 34px;
+  padding: 0 var(--s-5);
+  border: 1px solid var(--control-border);
+  border-radius: var(--r-md);
+  color: var(--text);
+  background: var(--surface-field);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  transition:
+    border-color var(--dur-2) var(--ease-standard),
+    box-shadow var(--dur-2) var(--ease-standard);
+}
+.captures entry.directory-entry:hover {
+  border-color: var(--border-strong);
+}
+.captures entry.directory-entry:focus-within {
+  border-color: var(--theme-accent);
+  box-shadow: var(--focus-ring-tight);
+}
+.captures entry > text > selection {
+  color: var(--theme-accent-ink);
+  background: var(--theme-accent);
+}
+
+/* `.mini-preview-placement`: four corners on a little screen. */
+.captures .mini-preview-placement-screen {
+  padding: 7px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  background: var(--surface-sunken);
+  box-shadow: var(--shadow-xs);
+}
+.captures button.mini-preview-placement-corner {
+  all: unset;
+  min-width: 20px;
+  min-height: 20px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--surface-raised);
+}
+.captures button.mini-preview-placement-corner:hover {
+  border-color: var(--theme-accent);
+}
+.captures button.mini-preview-placement-corner.active {
+  border-color: transparent;
+  background: var(--theme-accent);
+}
+.captures button.mini-preview-placement-corner:focus-visible {
+  box-shadow:
+    0 0 0 2px var(--surface-sunken),
+    0 0 0 4px var(--theme-accent);
+}
+.captures .mini-preview-placement.disabled {
+  opacity: 0.55;
+}
+
+/* `.shortcut-list`: label, then the recorder of key caps. */
+.captures .shortcut-label {
+  color: var(--text);
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+}
+.captures button.shortcut-recorder {
+  all: unset;
+  min-height: 28px;
+  padding: 2px var(--s-4);
+  border: 1px solid var(--control-border);
+  border-radius: var(--r-md);
+  color: var(--text);
+  background: var(--surface-field);
+  transition:
+    border-color var(--dur-2) var(--ease-standard),
+    box-shadow var(--dur-2) var(--ease-standard);
+}
+.captures button.shortcut-recorder:hover {
+  border-color: var(--border-strong);
+}
+.captures button.shortcut-recorder:focus-visible,
+.captures button.shortcut-recorder.shortcut-recording {
+  border-color: var(--theme-accent);
+  box-shadow: var(--focus-ring-tight);
+}
+.captures .shortcut-prompt {
+  color: var(--text-faint);
+  font-size: var(--text-sm);
+}
+.captures .shortcut-error {
+  margin-top: var(--s-2);
+  color: var(--danger-text);
+  font-size: var(--text-xs);
+}
+/* `kbd` (`styles/base.css`). */
+.captures .kbd {
+  min-width: 10px;
+  padding: 2px 5px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: var(--r-xs);
+  color: var(--text-muted);
+  background: var(--surface-raised);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+}
+
+/* `.update-settings-row`: build identity beside the update action. */
+.captures .update-settings-status {
+  color: var(--text-subtle);
+  font-size: var(--text-sm);
+}
+
 /* ---------------------------------------------------------- buttons ---- */
 
 /* `.ui-btn` (primitives.css): a 32 px border box. */

@@ -764,6 +764,42 @@ GIF's size in a folder chosen through Change…, then the saved toast, Show in
 Folder and Save staying off. X11 (Xvfb) only; Wayland, Orca and real hardware remain open.
 Windows, macOS: unchanged.
 
+The sixth GTK4 slice finishes the Preferences cards in shipping order, built
+from the shared `captures_app::preferences` copy and option lists. Every
+control writes one setting by its persisted path and saves through
+`captures-settings`, with shipping's Changes saved pill (2 s) or save error
+beside Capture History…. Appearance has the Interface theme segments
+(pressed state) and the accent chips as one AT-SPI radio group with
+`theme_accessibility_label` names and Cairo-drawn swatches (accent with the
+signal wedge, Custom's rainbow); Custom opens the custom colour editor (RGB
+picker through GTK's colour chooser, hex field, Reset colors), and the
+shared `custom_colors` palette feeds the tokens. A new appearance or accent
+reloads the stylesheet for every window and retints the page's switches and
+swatches; other windows' token-drawn widgets pick it up when next built.
+Capture adds Save captures to (monospace path field and Choose… through the
+GTK folder chooser), Show mini previews, the four-corner Mini preview
+position picker (radio buttons; off with previews off), the dependent mini
+preview and recording-control rows (the latter disabled with shipping's
+Linux copy), Screenshot format and Screenshot countdown. Shortcuts has the
+GNOME utility row (Open runs the shared `open_keyboard_settings`) and the
+seven recorders: click, press a combination, and the GDK key is translated
+to its unshifted DOM `code` for the shared `record_shortcut`, with key caps,
+the prompt, Esc and focus loss cancelling, and the invalid-key message.
+Recording (format, frames per second, maximum resolution, countdown,
+Default microphone and the five toggles), GIF export (three selects),
+Updates (Version, Native development, the disabled Check Now with Updates
+unavailable, Show what's new) and About follow. Descriptions keep shipping's
+52ch measure (44ch in the custom editor) using a measured `1ch`, because
+GTK's `max-width-chars` measures in the default font. Compared with the
+Tauri harness card by card, light and dark, at 1080×900 under Xvfb.
+`smoke.py` saves Dark, Cobalt (checked), a typed Custom accent, the Top
+right corner, a 24 FPS GIF select and a recorded Ctrl+Shift+4 Region
+shortcut. Not yet ported: the microphone list (Off and the saved device
+only, until the GTK host has an audio backend), Send feedback (the feedback
+window; Open is disabled), the update worker, Find, the compact layout and
+live System appearance changes. X11 (Xvfb) on GTK 4.8 and 4.14 only;
+Wayland, Orca and real hardware remain open. Windows, macOS: unchanged.
+
 ## Progress dashboard
 
 We are delivering stage 4 workflow slices and stage 5 editor slices.

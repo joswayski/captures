@@ -38,6 +38,42 @@ impl Tokens {
             .expect("mustard tokens")
     }
 
+    /// The look `settings` asks for: `appearance` (`light` or `dark`, with
+    /// System following GTK's dark preference), the accent theme, and the
+    /// derived palette for Custom. `forced` overrides the appearance.
+    pub fn for_settings(
+        settings: &captures_settings::AppSettings,
+        forced: Option<&str>,
+    ) -> (String, Tokens) {
+        use captures_settings::Appearance;
+        let appearance = forced.map(str::to_owned).unwrap_or_else(|| {
+            let dark =
+                gtk::Settings::default().is_some_and(|s| s.is_gtk_application_prefer_dark_theme());
+            match settings.appearance {
+                Appearance::Light => "light".into(),
+                Appearance::Dark => "dark".into(),
+                _ if dark => "dark".into(),
+                _ => "light".into(),
+            }
+        });
+        let theme = serde_json::to_value(settings.theme)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .unwrap_or_else(|| "mustard".into());
+        let mut tokens = Tokens::variant(&appearance, &theme);
+        if theme == "custom" {
+            let custom = &settings.custom_theme;
+            if let Ok(colors) = captures_settings::theme::custom_colors(
+                &custom.accent,
+                &custom.signal,
+                appearance == "light",
+            ) {
+                tokens.colors.extend(colors);
+            }
+        }
+        (appearance, tokens)
+    }
+
     pub fn number(&self, name: &str) -> f32 {
         self.numbers[name]
     }

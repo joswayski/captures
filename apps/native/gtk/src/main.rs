@@ -126,7 +126,10 @@ fn emit(event: &str, mut fields: serde_json::Value) {
 /// Windows shared across the app: one Preferences and one History.
 struct Host {
     app: gtk::Application,
-    tokens: Rc<tokens::Tokens>,
+    /// The current look; Preferences replaces it when Appearance changes.
+    tokens: RefCell<Rc<tokens::Tokens>>,
+    /// `--appearance`, until the user picks one in Preferences.
+    forced_appearance: RefCell<Option<String>>,
     provider: gtk::CssProvider,
     settings_file: PathBuf,
     /// The live profile's History, when Captures runs as the app.
@@ -149,10 +152,17 @@ impl Host {
         }
         let window = preferences::build(
             &self.app,
-            self.tokens.clone(),
+            self.tokens.borrow().clone(),
             preferences::Options {
                 settings_file: self.settings_file.clone(),
                 history_root: self.live_history_root.clone(),
+                on_look: Box::new({
+                    let host = Rc::downgrade(self);
+                    move |settings, appearance_changed| {
+                        let host = host.upgrade().expect("host outlives Preferences");
+                        host.apply_look(settings, appearance_changed)
+                    }
+                }),
             },
             {
                 let host = Rc::downgrade(self);
@@ -179,6 +189,24 @@ impl Host {
         window
     }
 
+    /// Restyle every window for the look `settings` asks for. Widgets that
+    /// draw from tokens pick the new look up when they are next built.
+    fn apply_look(
+        &self,
+        settings: &captures_settings::AppSettings,
+        appearance_changed: bool,
+    ) -> Rc<tokens::Tokens> {
+        if appearance_changed {
+            self.forced_appearance.borrow_mut().take();
+        }
+        let forced = self.forced_appearance.borrow().clone();
+        let (_, tokens) = tokens::Tokens::for_settings(settings, forced.as_deref());
+        let tokens = Rc::new(tokens);
+        self.provider.load_from_data(&style::css(&tokens));
+        *self.tokens.borrow_mut() = tokens.clone();
+        tokens
+    }
+
     fn show_history(self: &Rc<Self>) -> Rc<history::History> {
         if let Some(history) = self.history.borrow().as_ref() {
             history.window.present();
@@ -188,7 +216,7 @@ impl Host {
         let host = Rc::downgrade(self);
         let history = Rc::new(history::build(
             &self.app,
-            self.tokens.clone(),
+            self.tokens.borrow().clone(),
             self.history_root.clone(),
             history::Actions {
                 open_preferences: Box::new(move || {
@@ -285,7 +313,7 @@ impl Host {
         let settings = captures_settings::load(&self.settings_file).unwrap_or_default();
         let editor = Rc::new(recording::build(
             &self.app,
-            self.tokens.clone(),
+            self.tokens.borrow().clone(),
             recording::Options {
                 history_root: self.history_root.clone(),
                 artifact_id: artifact_id.to_owned(),
@@ -327,7 +355,7 @@ impl Host {
         let settings = captures_settings::load(&self.settings_file).unwrap_or_default();
         let editor = Rc::new(editor::build(
             &self.app,
-            self.tokens.clone(),
+            self.tokens.borrow().clone(),
             editor::Options {
                 history_root: self.history_root.clone(),
                 artifact_id: artifact_id.to_owned(),
@@ -373,25 +401,14 @@ fn main() -> glib::ExitCode {
             return;
         };
         let settings = captures_settings::load(&options.settings_file).unwrap_or_default();
-        let appearance = options.appearance.clone().unwrap_or_else(|| {
-            let dark =
-                gtk::Settings::default().is_some_and(|s| s.is_gtk_application_prefer_dark_theme());
-            match settings.appearance {
-                captures_settings::Appearance::Light => "light".into(),
-                captures_settings::Appearance::Dark => "dark".into(),
-                _ if dark => "dark".into(),
-                _ => "light".into(),
-            }
-        });
-        let theme = serde_json::to_value(settings.theme)
-            .ok()
-            .and_then(|value| value.as_str().map(str::to_owned))
-            .unwrap_or_else(|| "mustard".into());
-        let tokens = Rc::new(tokens::Tokens::variant(&appearance, &theme));
+        let (appearance, tokens) =
+            tokens::Tokens::for_settings(&settings, options.appearance.as_deref());
+        let tokens = Rc::new(tokens);
         let provider = style::install(&tokens);
         let host = Rc::new(Host {
             app: app.clone(),
-            tokens,
+            tokens: RefCell::new(tokens),
+            forced_appearance: RefCell::new(options.appearance.clone()),
             provider,
             settings_file: options.settings_file.clone(),
             live_history_root: options.history_root.clone(),

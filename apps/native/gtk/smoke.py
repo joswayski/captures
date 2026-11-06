@@ -182,6 +182,55 @@ def preferences(binary, scratch):
         saved = wait(lambda: settings.exists() and json.loads(settings.read_text()), "settings file")
         assert saved["auto_copy_to_clipboard"] == (not before), saved
         print("preferences: switch role, checked state and save passed")
+
+        def saved_value(*path):
+            value = json.loads(settings.read_text())
+            for key in path:
+                value = value[key]
+            return value
+
+        # Interface theme, accent chips and the corner picker are real
+        # pressed / radio widgets, and each writes its setting.
+        press(wait(lambda: find(app, "push button", "Dark"), "the Dark segment")[0])
+        wait(lambda: saved_value("appearance") == "dark", "Dark to save")
+        cobalt = wait(lambda: find(app, "radio button", "Cobalt: True blue and coral"),
+                      "the Cobalt chip")[0]
+        press(cobalt)
+        wait(lambda: has_state(cobalt, Atspi.StateType.CHECKED), "Cobalt to be checked")
+        wait(lambda: saved_value("theme") == "cobalt", "Cobalt to save")
+        press(wait(lambda: find(app, "radio button", "Custom: Build your own RGB palette"),
+                   "the Custom chip")[0])
+        hex_field = wait(lambda: [n for role in ("text", "entry")
+                                  for n in find(app, role, "Accent hex value")], "Accent hex")[0]
+        editable = hex_field.get_editable_text_iface()
+        editable.delete_text(0, 7)
+        editable.insert_text(0, "#12AB34", 7)
+        wait(lambda: saved_value("custom_theme", "accent") == "#12ab34", "the custom accent")
+        press(wait(lambda: find(app, "radio button", "Top right"), "the Top right corner")[0])
+        wait(lambda: saved_value("mini_preview_placement") == "top_right", "Top right to save")
+        print("preferences: Interface theme, accent chips, custom colour and corner saved")
+
+        # Selects write numbers for numeric settings. The sidebar scrolls the
+        # card into view first, so the menu has a monitor to open on.
+        press(find(app, "push button", "GIF export")[0])
+        press(wait(lambda: [n for n, (role, name) in nodes(app)
+                            if role == "combo box" and name.startswith("GIF frames per second")],
+                   "the GIF frames per second select")[0])
+        press(wait(lambda: find(app, "radio menu item", "24 FPS"), "24 FPS")[0])
+        wait(lambda: saved_value("recording", "gif_fps") == 24, "24 FPS to save")
+
+        # The recorder takes the next combination, as shipping's ShortcutInput.
+        region = wait(lambda: find(app, "push button", "Region"), "the Region recorder")[0]
+        press(region)
+        wait(lambda: has_state(region, Atspi.StateType.PRESSED), "the recorder to listen")
+        window = subprocess.run(["xdotool", "search", "--sync", "--onlyvisible",
+                                 "--pid", str(process.pid), "--name", "^Preferences$"],
+                                capture_output=True, text=True, check=True).stdout.split()[0]
+        subprocess.run(["xdotool", "windowfocus", "--sync", window], check=True)
+        subprocess.run(["xdotool", "key", "ctrl+shift+4"], check=True)
+        wait(lambda: saved_value("region_shortcut") == "Control+Shift+Digit4", "the shortcut")
+        wait(lambda: not has_state(region, Atspi.StateType.PRESSED), "the recorder to stop")
+        print("preferences: selects and the shortcut recorder saved")
     finally:
         process.terminate()
         process.wait(timeout=10)
