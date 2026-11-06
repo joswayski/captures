@@ -108,6 +108,12 @@ pub(crate) const WM_APP_WAKE: u32 = WM_APP + 22;
 const WM_MOUSELEAVE: u32 = 0x02A3;
 const TIMER_MOTION: usize = 1;
 const TIMER_AUTOSAVE: usize = 2;
+const TIMER_PREVIEW: usize = 3;
+/// Brush and grip previews re-render the whole document on the worker (about
+/// 45 ms at 3840×2160); a pointer reports far more often than that is
+/// useful, so they go at most this often, and never keep the worker busy
+/// more than half the time.
+const PREVIEW_INTERVAL: std::time::Duration = std::time::Duration::from_millis(33);
 
 thread_local! {
     static EDITORS: RefCell<Vec<Editor>> = const { RefCell::new(Vec::new()) };
@@ -494,6 +500,12 @@ pub struct Editor {
     /// A gesture preview is with the worker; another is due after it.
     preview_busy: bool,
     preview_dirty: bool,
+    /// When the last preview went to the worker, when the worker may take
+    /// the next (idle at least as long as the last one took), and whether a
+    /// timer will send it.
+    preview_sent: Option<Instant>,
+    preview_ready: Option<Instant>,
+    preview_timer: bool,
     /// The resized layer's outline from the latest preview.
     preview_outline: Option<[Point; 4]>,
     autosave: DraftAutosave,
@@ -959,6 +971,9 @@ impl Editor {
             text_drag: false,
             preview_busy: false,
             preview_dirty: false,
+            preview_sent: None,
+            preview_ready: None,
+            preview_timer: false,
             preview_outline: None,
             autosave: DraftAutosave::default(),
             w: SIZE.0,
@@ -1817,6 +1832,8 @@ impl Editor {
             }
             Outcome::Preview(result) => {
                 self.preview_busy = false;
+                let now = Instant::now();
+                self.preview_ready = self.preview_sent.map(|sent| now + (now - sent));
                 let resizing = matches!(self.gesture, Some(Gesture::Resize { .. }));
                 let previewing = resizing || matches!(self.gesture, Some(Gesture::Brush(_)));
                 match result {
@@ -2880,6 +2897,9 @@ impl Editor {
         match n.kind {
             Kind::Group | Kind::List | Kind::Image => {}
             Kind::Banner => {
+                // `--caution-surface` is translucent over the header's
+                // surface; the window itself has no redirection bitmap.
+                gfx::fill(dc, all, c("surface-raised"))?;
                 gfx::fill(dc, all, c("caution-surface"))?;
                 gfx::fill(dc, rect(0., h - 1., w, h), c("border-subtle"))?;
                 let text = g.text(t, Style::Button, header::DRAFT_RESTORED, 1e4)?;
@@ -4109,7 +4129,11 @@ impl Editor {
                         visual.SetOffsetX2(offset.0)?;
                         visual.SetOffsetY2(offset.1)?;
                     }
-                    visual.SetOpacity2(node.opacity)?;
+                    // The caret's opacity belongs to its blink animation: a
+                    // static value here would replace it after any relayout.
+                    if node.kind != Kind::Caret {
+                        visual.SetOpacity2(node.opacity)?;
+                    }
                     visual.SetVisible(node.visible)?;
                     if node.clip {
                         let bleed = (node.bleed * s).round();
@@ -4436,11 +4460,26 @@ impl Editor {
                 }
             }
             WM_TIMER if wp.0 == TIMER_AUTOSAVE => {
-                if self.autosave.take_due(Instant::now()) {
-                    unsafe {
-                        let _ = KillTimer(Some(self.hwnd), TIMER_AUTOSAVE);
+                unsafe {
+                    let _ = KillTimer(Some(self.hwnd), TIMER_AUTOSAVE);
+                }
+                // The session refuses drafts while a label is open; closing
+                // it arms the save again (`DraftAutosave::take_due`).
+                if self.inline.is_none() {
+                    if self.autosave.take_due(Instant::now()) {
+                        let _ = self.jobs.send(Job::Autosave);
+                    } else {
+                        self.arm_autosave();
                     }
-                    let _ = self.jobs.send(Job::Autosave);
+                }
+            }
+            WM_TIMER if wp.0 == TIMER_PREVIEW => {
+                unsafe {
+                    let _ = KillTimer(Some(self.hwnd), TIMER_PREVIEW);
+                }
+                self.preview_timer = false;
+                if self.preview_dirty {
+                    self.preview_gesture();
                 }
             }
             WM_TIMER if wp.0 == TIMER_MOTION => {

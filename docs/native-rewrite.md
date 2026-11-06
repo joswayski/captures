@@ -365,6 +365,19 @@ and Ellipse (dark) match the Tauri harness rows within a pixel. Wine has no
 geometric layer masks, so the custom tile's wedges are unclipped there.
 macOS, Linux: unchanged.
 
+Hardware pass 8 fixes on the second editor slice: the inline label's caret
+keeps blinking after a relayout (only its compositor animation sets its
+opacity), the restored-draft banner is opaque over the header surface,
+draft autosave waits while a label is open instead of failing, and brush and
+grip previews go at most every 33 ms with the worker idle at least as long
+as the last preview took. A full brush preview re-renders the document in
+the shared session (about 45 ms at 3840×2160, measured on Linux), so
+an incremental shared preview remains the real fix. In `captures-app`, a
+side grip no longer snaps its perpendicular edges, which had rescaled a
+label's type while setting its wrap width; a test covers it. Windows:
+cross-compiled only. macOS, Linux: the shared side-grip fix applies to
+their editors too; not run there.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,

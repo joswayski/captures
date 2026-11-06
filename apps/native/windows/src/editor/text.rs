@@ -462,6 +462,8 @@ impl Editor {
         self.set_visible(self.caret, false);
         self.events.push(Event::Structure);
         self.overlay_changed();
+        // A draft save that came due while the label was open.
+        self.arm_autosave();
     }
 
     /// Lay the inline text out where the session says it sits.
@@ -984,6 +986,30 @@ impl Editor {
             self.preview_dirty = true;
             return;
         }
+        let now = std::time::Instant::now();
+        let ready = [
+            self.preview_sent.map(|sent| sent + super::PREVIEW_INTERVAL),
+            self.preview_ready,
+        ]
+        .into_iter()
+        .flatten()
+        .max();
+        if let Some(ready) = ready.filter(|ready| *ready > now) {
+            self.preview_dirty = true;
+            if !self.preview_timer && !self.hwnd.is_invalid() {
+                let wait = (ready - now).as_millis() as u32;
+                unsafe {
+                    windows::Win32::UI::WindowsAndMessaging::SetTimer(
+                        Some(self.hwnd),
+                        super::TIMER_PREVIEW,
+                        wait.max(1),
+                        None,
+                    )
+                };
+                self.preview_timer = true;
+            }
+            return;
+        }
         let request = match self.gesture.clone() {
             Some(Gesture::Resize {
                 id, handle, end, ..
@@ -999,6 +1025,7 @@ impl Editor {
         };
         self.preview_busy = true;
         self.preview_dirty = false;
+        self.preview_sent = Some(now);
         let _ = self.jobs.send(Job::Preview(request));
     }
 }
