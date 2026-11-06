@@ -56,9 +56,11 @@ pub enum Style {
     Kbd,
     /// `.preferences-find-input` (`--text-md`, `--leading-snug`)
     Input,
+    /// `.preferences-save-status`
+    Status,
 }
 
-const STYLES: [Style; 18] = [
+const STYLES: [Style; 19] = [
     Style::Brand,
     Style::Nav,
     Style::Title,
@@ -77,6 +79,7 @@ const STYLES: [Style; 18] = [
     Style::Small,
     Style::Kbd,
     Style::Input,
+    Style::Status,
 ];
 
 struct Spec {
@@ -166,6 +169,13 @@ fn spec(style: Style) -> Spec {
             false,
         ),
         Style::Small => spec("text-xs", "weight-regular", None, None, true),
+        Style::Status => spec(
+            "text-xs",
+            "weight-medium",
+            None,
+            Some("leading-snug"),
+            false,
+        ),
         Style::Input => spec(
             "text-md",
             "weight-regular",
@@ -346,6 +356,23 @@ impl Gfx {
                 width: metrics.width,
                 height: metrics.height,
             })
+        }
+    }
+
+    /// Clip one-line `text` at `width` with a trailing ellipsis (CSS
+    /// `text-overflow: ellipsis`).
+    pub fn ellipsis(&self, text: &Text, width: f32) -> Result<()> {
+        unsafe {
+            text.layout.SetMaxWidth(width.max(1.))?;
+            let sign = self.dwrite.CreateEllipsisTrimmingSign(&text.layout)?;
+            text.layout.SetTrimming(
+                &DWRITE_TRIMMING {
+                    granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER,
+                    delimiter: 0,
+                    delimiterCount: 0,
+                },
+                &sign,
+            )
         }
     }
 

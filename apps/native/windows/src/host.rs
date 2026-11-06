@@ -37,6 +37,8 @@ const WM_APP_WAKE: u32 = WM_APP + 2;
 const WM_APP_MICROPHONES: u32 = WM_APP + 3;
 const WM_MOUSELEAVE: u32 = 0x02A3;
 const TIMER_MOTION: usize = 1;
+/// "Changes saved" returns to idle after shipping's two seconds.
+const TIMER_SAVED: usize = 2;
 const SEGMENTS: usize = 16;
 
 thread_local! {
@@ -337,6 +339,9 @@ impl Host {
             gfx::draw_surface(surface, *size, scale, bleed, |dc| scene.draw(dc, g, i))?;
         }
         self.start_motions()?;
+        if std::mem::take(&mut self.scene.saved_timer) {
+            unsafe { SetTimer(Some(self.hwnd), TIMER_SAVED, 2000, None) };
+        }
         if std::mem::take(&mut self.scene.caret_blink) {
             self.blink_caret()?;
         }
@@ -681,6 +686,13 @@ impl Host {
             // let `with_host` repost while `need` was still set, so the drain
             // never ended and no frame ran.
             WM_APP_WAKE => {}
+            WM_TIMER if wp.0 == TIMER_SAVED => {
+                unsafe {
+                    let _ = KillTimer(Some(self.hwnd), TIMER_SAVED);
+                }
+                self.scene.clear_saved();
+                self.need = true;
+            }
             WM_TIMER if wp.0 == TIMER_MOTION => {
                 if !self.scene.tick() {
                     unsafe {
@@ -854,6 +866,24 @@ impl Host {
                     return None;
                 }
             }
+            // Alt chords arrive as system keys. Alt+Down and Alt+Up open a
+            // focused select (shipping opens on any-modifier arrows, like a
+            // Windows combo box); Alt+F4, Alt+Space and the rest stay with
+            // DefWindowProc.
+            WM_SYSKEYDOWN
+                if matches!(VIRTUAL_KEY(wp.0 as u16), VK_DOWN | VK_UP)
+                    && matches!(self.scene.focus, Some(Target::Select(_))) =>
+            {
+                let key = if VIRTUAL_KEY(wp.0 as u16) == VK_DOWN {
+                    select::Key::ArrowDown
+                } else {
+                    select::Key::ArrowUp
+                };
+                if !self.scene.select_key(key) {
+                    return None;
+                }
+                self.need = true;
+            }
             WM_KEYDOWN => {
                 let vk = VIRTUAL_KEY(wp.0 as u16);
                 let select_key = match vk {
@@ -1005,6 +1035,7 @@ impl Host {
                     (event, false, self.scene.shortcut_error(index).to_owned())
                 }
                 Event::FindText => (event, false, self.scene.find_query()),
+                Event::SaveStatus => (event, false, self.scene.save_message()),
                 Event::FindCount => (event, false, self.scene.find_count_label()),
                 Event::Focus(_)
                 | Event::Selected(_)
