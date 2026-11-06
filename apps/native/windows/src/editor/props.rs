@@ -86,10 +86,12 @@ pub enum Num {
     /// `DropShadowFields`' X and Y offset.
     ShadowX,
     ShadowY,
+    /// The transform section's Shift rotation snap.
+    RotationSnap,
 }
 
 impl Num {
-    pub const ALL: [Num; 10] = [
+    pub const ALL: [Num; 11] = [
         Num::TextSize,
         Num::NewTextSize,
         Num::LayerWidth,
@@ -100,6 +102,7 @@ impl Num {
         Num::CropHeight,
         Num::ShadowX,
         Num::ShadowY,
+        Num::RotationSnap,
     ];
 
     /// `(min, max)` of the shipping `NumberInput`; X and Y have none.
@@ -111,6 +114,7 @@ impl Num {
             Num::CropWidth | Num::CropHeight => (0., f64::INFINITY),
             Num::CanvasWidth | Num::CanvasHeight => (1., geometry::MAX_SIZE),
             Num::ShadowX | Num::ShadowY => (-SHADOW_OFFSET_MAX, SHADOW_OFFSET_MAX),
+            Num::RotationSnap => (1., 180.),
         }
     }
 
@@ -127,6 +131,7 @@ impl Num {
             Num::CanvasHeight => "H",
             Num::ShadowX => "X offset",
             Num::ShadowY => "Y offset",
+            Num::RotationSnap => ROTATION_SNAP,
         }
     }
 
@@ -144,6 +149,7 @@ impl Num {
             Num::CanvasHeight => header::CANVAS_HEIGHT,
             Num::ShadowX => "Shadow X offset",
             Num::ShadowY => "Shadow Y offset",
+            Num::RotationSnap => ROTATION_SNAP,
         })
     }
 
@@ -198,6 +204,8 @@ pub enum TextChange {
     Italic,
     Align(&'static str),
 }
+
+const ROTATION_SNAP: &str = "Shift rotation snap";
 
 /// `DROP_SHADOW_OFFSET_MAX` (captures-image), which shipping's offset
 /// fields clamp to.
@@ -298,6 +306,8 @@ pub enum Note {
     Crop,
     /// A line's or arrow's curve-dot help.
     Curve,
+    /// The transform section's Shift hint.
+    Rotation,
 }
 
 fn eraser_range(range: Range) -> bool {
@@ -592,6 +602,8 @@ pub enum Row {
     CropActions,
     /// `.screenshot-property-actions`: Straighten line or arrow.
     Straighten,
+    /// The border between two `.screenshot-property-section`s.
+    Rule,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -672,8 +684,29 @@ impl Editor {
         }
     }
 
-    /// The rows for the current section, in shipping order.
+    /// Shipping's `transformSelected`: a selection while Select or a shape
+    /// tool is active. The rotate handle itself is not in this host yet.
+    fn transform_selected(&self) -> bool {
+        let shape_tool = self.tool == "a" || SHAPE_TOOLS.iter().any(|s| s.key == self.tool);
+        self.selected.is_some() && (self.tool == "v" || shape_tool)
+    }
+
+    /// The rows: the transform section, then the current section.
     fn prop_rows(&self) -> Vec<Row> {
+        let rows = self.section_rows();
+        if !self.transform_selected() {
+            return rows;
+        }
+        let mut all = vec![Row::Number(Num::RotationSnap), Row::Note(Note::Rotation)];
+        if !rows.is_empty() {
+            all.push(Row::Rule);
+            all.extend(rows);
+        }
+        all
+    }
+
+    /// The rows for the current section, in shipping order.
+    fn section_rows(&self) -> Vec<Row> {
         if self.section() == Some(Section::Eraser) {
             let mut rows = vec![Row::Note(Note::Intro), Row::Modes];
             if self.eraser.mode == EraserMode::Wand {
@@ -828,6 +861,7 @@ impl Editor {
                 }
                 Row::Aspect => CAPTION_H + self.t.n("s-3") + SELECT_H,
                 Row::CropActions | Row::Straighten => SELECT_H,
+                Row::Rule => 1.,
             };
             laid.push(Laid {
                 row,
@@ -1025,6 +1059,12 @@ impl Editor {
             (Note::Geometry, _) => self.geometry_note(),
             (Note::Crop, _) => self.crop_note(),
             (Note::Curve, _) => editor_canvas::CURVE_HELP,
+            (Note::Rotation, _) => {
+                return format!(
+                    "Hold Shift while dragging the rotate handle to snap in {}° increments.",
+                    super::fields::js_number(self.rotation_snap)
+                );
+            }
             (Note::Intro, _) => eraser::INTRO,
             (Note::Hint, EraserMode::Wand) => eraser::wand_hint(self.eraser.contiguous),
             (Note::Hint, EraserMode::Brush(BrushMode::Erase)) => eraser::ERASE_HINT,
@@ -1692,6 +1732,10 @@ impl Editor {
             return Ok(());
         };
         for laid in &self.props {
+            if laid.row == Row::Rule {
+                let y = laid.rect.y;
+                gfx::fill(dc, rect(0., y, w, y + 1.), t.color("border-subtle"))?;
+            }
             if let Row::Note(note) = laid.row {
                 let text = self.note_layout(note, laid.rect.w)?;
                 gfx::text(dc, &text, laid.rect.x, laid.rect.y, t.color("text-subtle"))?;
@@ -2047,6 +2091,7 @@ impl Editor {
                 Row::Aspect => list.push(Prop::Aspect),
                 Row::CropActions => list.extend([Prop::CropAction(false), Prop::CropAction(true)]),
                 Row::Straighten => list.push(Prop::Straighten),
+                Row::Rule => {}
             }
         }
         list
