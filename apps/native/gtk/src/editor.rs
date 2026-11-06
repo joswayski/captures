@@ -19,8 +19,9 @@ use captures_app::editor::{
     ClosedShapeCreate, ClosedShapeKind, Document, ElementStyle, FreehandPathCreate, LayerEdit,
     OpenShapeCreate, OpenShapeKind, Point, Rect,
 };
-use captures_app::editor_chrome::{self, RAIL_TOOLS, SHAPE_TOOLS, header};
+use captures_app::editor_chrome::{self, RAIL_TOOLS, SHAPE_TOOLS, brush_cursor, header};
 use captures_app::editor_export::{self, EstimateState, ExportSource, ExportTarget};
+use captures_app::editor_image_background::BrushMode;
 use captures_app::editor_session::{
     EditorSession, ExportFormat, ExportOptions, ExportQuality, ExportSize, OpenRequest, PngOptions,
     Request,
@@ -34,6 +35,7 @@ use crate::switch::TokenSwitch;
 use crate::tokens::Tokens;
 use crate::widgets::{Icon, SnapshotArea, icon_button};
 
+mod properties;
 mod text;
 pub use text::register_fonts;
 
@@ -84,6 +86,8 @@ struct LayerItem {
 
 enum Job {
     Apply(Request),
+    /// An uncommitted brush stroke, rendered without touching history.
+    Preview(Request),
     Save {
         plan: editor_export::SavePlan,
         options: ExportOptions,
@@ -93,6 +97,7 @@ enum Job {
 
 enum Outcome {
     Presented(Box<Presented>),
+    Preview(Result<Arc<RgbaImage>, String>),
     Saved(
         Result<
             (
@@ -167,6 +172,8 @@ enum Gesture {
         end: Point,
     },
     Freehand(Vec<Point>),
+    /// An Eraser Erase/Restore stroke.
+    Brush(Vec<Point>),
     /// Moving the selected layer by the pointer's document delta.
     Move {
         id: String,
@@ -211,6 +218,12 @@ struct State {
     inline: RefCell<Option<text::Inline>>,
     text_size: Cell<f64>,
     input_counter: Cell<u64>,
+    properties: properties::Properties,
+    /// The pointer over the canvas, for the brush ring and wheel zoom.
+    pointer: Cell<Option<(f64, f64)>>,
+    /// A brush preview is rendering; newer strokes wait for it.
+    preview_busy: Cell<bool>,
+    preview_dirty: Cell<bool>,
     /// The previous primary press, for double-click editing.
     last_press: Cell<Option<(std::time::Instant, f64, f64)>>,
     widgets: Widgets,
@@ -305,6 +318,7 @@ pub fn build(
                             Ok(()) => Outcome::Presented(Box::new(present(session, &id))),
                             Err(error) => Outcome::Failed(error),
                         },
+                        Job::Preview(request) => Outcome::Preview(session.preview_drawing(request)),
                         Job::Save {
                             plan,
                             options,
@@ -436,8 +450,6 @@ pub fn build(
     text_overlay.add_overlay(&text_field.view);
     body.append(&text_overlay);
     let panel = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    panel.add_css_class("editor-layers");
-    panel.set_size_request(320, -1);
     let heading = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     heading.add_css_class("editor-layers-heading");
     heading.append(&label("Layers", "editor-layers-title"));
@@ -456,7 +468,11 @@ pub fn build(
         .child(&layers)
         .build();
     panel.append(&layer_scroller);
-    body.append(&panel);
+    let properties = properties::Properties::new();
+    let sidebar = properties::sidebar(&panel, &properties.root);
+    sidebar.add_css_class("editor-layers");
+    sidebar.set_size_request(320, -1);
+    body.append(&sidebar);
     root.append(&body);
 
     // `.screenshot-export-bar`.
@@ -543,6 +559,10 @@ pub fn build(
         text_size: Cell::new(24.),
         input_counter: Cell::default(),
         last_press: Cell::default(),
+        properties,
+        pointer: Cell::default(),
+        preview_busy: Cell::default(),
+        preview_dirty: Cell::default(),
         widgets: Widgets {
             undo,
             redo,
@@ -717,9 +737,6 @@ fn open_kind(tool: &str) -> Option<OpenShapeKind> {
     })
 }
 
-/// Tools that are not in the GTK host yet; their rail buttons stay disabled.
-const PENDING_TOOLS: [&str; 1] = ["b"];
-
 fn set_class(widget: &impl IsA<gtk::Widget>, class: &str, on: bool) {
     if on {
         widget.add_css_class(class);
@@ -845,9 +862,6 @@ impl State {
     }
 
     fn select_tool(&self, key: &str) {
-        if PENDING_TOOLS.contains(&key) {
-            return;
-        }
         if self.text_active() {
             self.finish_text();
         }
@@ -872,10 +886,81 @@ impl State {
                 gtk::AccessibleTristate::False
             })]);
         }
-        self.canvas.set_cursor_from_name(Some(match key {
+        self.refresh_properties();
+        self.sync_cursor();
+    }
+
+    /// The Properties heading and sections for the tool and selection.
+    fn refresh_properties(&self) {
+        let selection = self.selected.borrow().as_ref().and_then(|id| {
+            self.presented.borrow().as_ref().and_then(|presented| {
+                presented
+                    .document
+                    .elements
+                    .iter()
+                    .find(|element| element.base().id == *id)
+                    .map(editor_chrome::element_label)
+            })
+        });
+        self.properties
+            .show(&self.tool.borrow(), selection.as_deref());
+    }
+
+    /// Erase/Restore replace the cursor with the brush ring over an image.
+    fn brush_mode(&self) -> Option<BrushMode> {
+        match (self.tool.borrow().as_str(), self.properties.eraser.mode()) {
+            ("b", properties::EraserMode::Brush(mode)) => Some(mode),
+            _ => None,
+        }
+    }
+
+    fn sync_cursor(&self) {
+        let key = self.tool.borrow().clone();
+        let ring = self.brush_mode().is_some() && self.brush_hover() == brush_cursor::Hover::Ring;
+        self.canvas.set_cursor_from_name(Some(match key.as_str() {
+            _ if ring => "none",
+            "b" if self.brush_mode().is_some() => "not-allowed",
             "v" => "default",
             "t" => "text",
             _ => "crosshair",
+        }));
+    }
+
+    fn brush_hover(&self) -> brush_cursor::Hover {
+        let over_image = self
+            .pointer
+            .get()
+            .and_then(|(x, y)| self.to_document(x, y))
+            .is_some_and(|point| {
+                self.presented.borrow().as_ref().is_some_and(|presented| {
+                    captures_app::editor_image_background::wand_target(&presented.document, point)
+                        .is_some()
+                })
+            });
+        let stroking = matches!(*self.gesture.borrow(), Some(Gesture::Brush(_)));
+        let panning = matches!(*self.gesture.borrow(), Some(Gesture::Pan { .. }));
+        brush_cursor::hover(over_image, stroking, panning)
+    }
+
+    /// Render the stroke so far on the worker, one request at a time.
+    fn preview_brush(&self) {
+        if self.preview_busy.get() {
+            self.preview_dirty.set(true);
+            return;
+        }
+        let (Some(Gesture::Brush(points)), Some(mode)) =
+            (self.gesture.borrow().clone(), self.brush_mode())
+        else {
+            return;
+        };
+        self.preview_busy.set(true);
+        self.preview_dirty.set(false);
+        let eraser = &self.properties.eraser;
+        let _ = self.jobs.send(Job::Preview(Request::PaintImageBackground {
+            points,
+            size: eraser.size.value(),
+            softness: eraser.softness.value(),
+            mode,
         }));
     }
 
@@ -972,8 +1057,26 @@ impl State {
                     self.sync_filename();
                 }
                 self.update_export();
+                self.refresh_properties();
                 self.received_text();
                 self.canvas.queue_draw();
+            }
+            Outcome::Preview(result) => {
+                self.preview_busy.set(false);
+                let stroking = matches!(*self.gesture.borrow(), Some(Gesture::Brush(_)));
+                match result {
+                    // Only a stroke still in progress shows its preview; the
+                    // committed result replaces it once the worker publishes.
+                    Ok(pixels) if stroking => {
+                        *self.texture.borrow_mut() = Some(texture_of(&pixels));
+                        self.canvas.queue_draw();
+                    }
+                    Ok(_) => {}
+                    Err(error) => *self.notice.borrow_mut() = Some((error, true)),
+                }
+                if self.preview_dirty.get() {
+                    self.preview_brush();
+                }
             }
             Outcome::Saved(result) => {
                 self.busy.set(false);
@@ -1260,11 +1363,33 @@ impl State {
         self.canvas.add_controller(pan);
 
         // Pointer position anchors wheel zoom.
-        let pointer = Rc::new(Cell::new(None::<(f64, f64)>));
         let motion = gtk::EventControllerMotion::new();
-        let at = pointer.clone();
-        motion.connect_motion(move |_, x, y| at.set(Some((x, y))));
+        let weak = Rc::downgrade(self);
+        motion.connect_motion(move |_, x, y| {
+            let Some(state) = weak.upgrade() else { return };
+            state.pointer.set(Some((x, y)));
+            // Only the brush ring follows the pointer; nothing else redraws.
+            if state.brush_mode().is_some() {
+                state.sync_cursor();
+                state.canvas.queue_draw();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        motion.connect_leave(move |_| {
+            let Some(state) = weak.upgrade() else { return };
+            state.pointer.set(None);
+            if state.brush_mode().is_some() {
+                state.canvas.queue_draw();
+            }
+        });
         self.canvas.add_controller(motion);
+        let weak = Rc::downgrade(self);
+        self.properties.eraser.connect_mode(move || {
+            if let Some(state) = weak.upgrade() {
+                state.sync_cursor();
+                state.canvas.queue_draw();
+            }
+        });
         let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::BOTH_AXES);
         let weak = Rc::downgrade(self);
         scroll.connect_scroll(move |controller, dx, dy| {
@@ -1279,7 +1404,7 @@ impl State {
                     editor_viewport::wheel_zoom_factor(dy * 50.),
                     state.zoom_percent(),
                 ) {
-                    state.zoom_to(percent * factor, pointer.get());
+                    state.zoom_to(percent * factor, state.pointer.get());
                 }
             } else {
                 let mut viewport = state.viewport.get();
@@ -1304,11 +1429,6 @@ impl State {
             }
         });
         window.add_controller(keys);
-        for (key, button) in &self.widgets.rail {
-            if PENDING_TOOLS.contains(&key.as_str()) {
-                button.set_sensitive(false);
-            }
-        }
     }
 
     fn key(&self, key: gdk::Key, modifiers: gdk::ModifierType) -> bool {
@@ -1343,7 +1463,7 @@ impl State {
                 }
                 self.canvas.queue_draw();
             }
-            (_, "v" | "c" | "a" | "p" | "t") => self.select_tool(&name),
+            (_, "v" | "c" | "a" | "p" | "t" | "b") => self.select_tool(&name),
             (_, letter) => {
                 let Some(tool) = SHAPE_TOOLS.iter().find(|tool| {
                     tool.shortcut
@@ -1381,6 +1501,25 @@ impl State {
             });
         if tool == "v" && double && self.edit_text_at(point) {
             self.last_press.set(None);
+            return;
+        }
+        if tool == "b" {
+            let eraser = &self.properties.eraser;
+            match eraser.mode() {
+                properties::EraserMode::Wand => {
+                    *self.notice.borrow_mut() = None;
+                    self.submit(Request::RemoveImageBackground {
+                        point,
+                        tolerance: eraser.tolerance.value(),
+                        contiguous: eraser.contiguous.is_active(),
+                    });
+                }
+                properties::EraserMode::Brush(_) => {
+                    *self.gesture.borrow_mut() = Some(Gesture::Brush(vec![point]));
+                    self.preview_brush();
+                    self.canvas.queue_draw();
+                }
+            }
             return;
         }
         let gesture = match tool.as_str() {
@@ -1436,6 +1575,7 @@ impl State {
         if selected.is_none() {
             list.unselect_all();
         }
+        self.refresh_properties();
     }
 
     fn update(&self, x: f64, y: f64, dx: f64, dy: f64) {
@@ -1463,6 +1603,17 @@ impl State {
                 if let Some(point) = point {
                     points.push(point);
                 }
+            }
+            Some(Gesture::Brush(points)) => {
+                // Off-canvas points still paint, as shipping's stroke does.
+                if let Some(point) = self.to_document(x, y) {
+                    points.push(point);
+                }
+                drop(gesture);
+                self.pointer.set(Some((x, y)));
+                self.preview_brush();
+                self.canvas.queue_draw();
+                return;
             }
             None => return,
         }
@@ -1500,6 +1651,16 @@ impl State {
                 },
             }),
             Gesture::Freehand(_) => None,
+            Gesture::Brush(points) => {
+                self.preview_dirty.set(false);
+                let eraser = &self.properties.eraser;
+                self.brush_mode().map(|mode| Request::PaintImageBackground {
+                    points,
+                    size: eraser.size.value(),
+                    softness: eraser.softness.value(),
+                    mode,
+                })
+            }
             Gesture::Shape { start, end, .. } if !moved(start, end) => None,
             Gesture::Shape { tool, start, end } if tool == "c" => Some(Request::Crop {
                 rect: Rect {
@@ -1560,6 +1721,38 @@ impl State {
         let edge = gsk::RoundedRect::from_rect(bounds, 0.);
         for (x, y, blur, spread, color) in t.shadow("shadow-lg") {
             snapshot.append_outset_shadow(&edge, &color, x, y, spread, blur);
+        }
+        // `.screenshot-canvas-surface`: the document background under the
+        // image, so erased pixels show it (a checkerboard when transparent).
+        let background = self
+            .presented
+            .borrow()
+            .as_ref()
+            .map(|presented| presented.document.background.clone())
+            // A brush stroke previews the candidate, whose background the
+            // session clears to transparent, as the commit will.
+            .map(|background| {
+                background.filter(|_| !matches!(*self.gesture.borrow(), Some(Gesture::Brush(_))))
+            });
+        match background {
+            Some(None) => {
+                let tile = graphene::Rect::new(bounds.x(), bounds.y(), 16., 16.);
+                snapshot.push_repeat(&bounds, Some(&tile));
+                snapshot.append_color(&t.rgba("canvas-checker-b"), &tile);
+                let a = t.rgba("canvas-checker-a");
+                snapshot.append_color(&a, &graphene::Rect::new(bounds.x(), bounds.y(), 8., 8.));
+                snapshot.append_color(
+                    &a,
+                    &graphene::Rect::new(bounds.x() + 8., bounds.y() + 8., 8., 8.),
+                );
+                snapshot.pop();
+            }
+            Some(Some(color)) => {
+                let color = gdk::RGBA::parse(color.as_str())
+                    .unwrap_or_else(|_| gdk::RGBA::new(0.969, 0.969, 0.961, 1.));
+                snapshot.append_color(&color, &bounds);
+            }
+            None => {}
         }
         snapshot.append_texture(&texture, &bounds);
         let border = t.rgba("border");
@@ -1650,6 +1843,75 @@ impl State {
             }
             _ => {}
         }
+        self.draw_brush_ring(snapshot);
+    }
+
+    /// Shipping `.screenshot-brush-cursor`: a ring the brush's document size
+    /// at the current zoom, in its own small Cairo node.
+    fn draw_brush_ring(&self, snapshot: &gtk::Snapshot) {
+        let (Some(mode), Some((x, y))) = (self.brush_mode(), self.pointer.get()) else {
+            return;
+        };
+        if self.brush_hover() != brush_cursor::Hover::Ring {
+            return;
+        }
+        let scale = self.zoom_percent().unwrap_or(100.) / 100.;
+        let diameter = brush_cursor::screen_diameter(self.properties.eraser.size.value(), scale);
+        let radius = diameter / 2.;
+        let pad = 3.;
+        let bounds = graphene::Rect::new(
+            (x - radius - pad) as f32,
+            (y - radius - pad) as f32,
+            (diameter + 2. * pad) as f32,
+            (diameter + 2. * pad) as f32,
+        );
+        let cr = snapshot.append_cairo(&bounds);
+        let rgba =
+            |cr: &gtk::cairo::Context, [r, g, b, a]: [f64; 4]| cr.set_source_rgba(r, g, b, a);
+        let ring = brush_cursor::RING_WIDTH;
+        cr.arc(x, y, radius - ring / 2., 0., std::f64::consts::TAU);
+        match mode {
+            BrushMode::Erase => rgba(&cr, brush_cursor::ERASE_FILL_RGBA),
+            BrushMode::Restore => {
+                let accent = self.tokens.rgba("theme-accent");
+                cr.set_source_rgba(
+                    accent.red().into(),
+                    accent.green().into(),
+                    accent.blue().into(),
+                    brush_cursor::RESTORE_FILL_ACCENT_ALPHA,
+                );
+            }
+        }
+        let _ = cr.fill();
+        // Halo outside, then the ring (dashed for Restore), then the inset.
+        cr.set_line_width(brush_cursor::HALO_WIDTH);
+        rgba(&cr, brush_cursor::HALO_RGBA);
+        cr.arc(
+            x,
+            y,
+            radius + brush_cursor::HALO_WIDTH / 2.,
+            0.,
+            std::f64::consts::TAU,
+        );
+        let _ = cr.stroke();
+        cr.set_line_width(ring);
+        rgba(&cr, brush_cursor::RING_RGBA);
+        if mode == BrushMode::Restore {
+            cr.set_dash(&brush_cursor::RESTORE_DASH, 0.);
+        }
+        cr.arc(x, y, radius - ring / 2., 0., std::f64::consts::TAU);
+        let _ = cr.stroke();
+        cr.set_dash(&[], 0.);
+        cr.set_line_width(brush_cursor::INSET_WIDTH);
+        rgba(&cr, brush_cursor::INSET_RGBA);
+        cr.arc(
+            x,
+            y,
+            (radius - ring - brush_cursor::INSET_WIDTH / 2.).max(0.),
+            0.,
+            std::f64::consts::TAU,
+        );
+        let _ = cr.stroke();
     }
 }
 

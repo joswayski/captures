@@ -1044,3 +1044,144 @@ window.captures.preview-stack-window {
 .captures button.preview-main-button.primary:hover {
   background: var(--theme-accent-hover);
 }
+
+/* `.screenshot-properties` under the layers (`.screenshot-sidebar`). */
+.captures scrolledwindow.editor-properties-scroller {
+  border-top: 1px solid var(--border-subtle);
+  border-left: 1px solid var(--border-subtle);
+  background: var(--surface-raised);
+}
+.captures .editor-properties {
+  padding: 0 var(--s-5) var(--s-8);
+}
+.captures .editor-properties-heading {
+  min-height: 48px;
+  margin: 0 calc(-1 * var(--s-5)) var(--s-4);
+  padding: 0 var(--s-5);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.captures .editor-properties-title {
+  color: var(--text);
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+}
+.captures .property-section {
+  padding: var(--s-5) 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.captures .property-caption,
+.captures .check-caption {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+.captures .property-hint {
+  color: var(--text-subtle);
+  font-size: var(--text-xs);
+}
+.captures .range-value {
+  color: var(--text-subtle);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  font-feature-settings: "tnum";
+}
+
+/* `.range-slider`: 4 px pill track, accent progress, 14 px raised thumb. */
+.captures scale.range-slider {
+  all: unset;
+  min-height: 20px;
+}
+.captures scale.range-slider > trough {
+  all: unset;
+  min-height: 4px;
+  margin: 8px 0;
+  border-radius: 999px;
+  background: var(--n-6);
+}
+.captures scale.range-slider > trough > highlight {
+  all: unset;
+  border-radius: 999px;
+  background: var(--theme-accent);
+}
+.captures scale.range-slider > trough > slider {
+  all: unset;
+  min-width: 12px;
+  min-height: 12px;
+  margin: -5px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-sm);
+}
+.captures scale.range-slider:focus-visible > trough > slider {
+  box-shadow: var(--focus-ring-tight);
+}
+.captures scale.range-slider > marks {
+  all: unset;
+  margin-top: 2px;
+}
+.captures scale.range-slider > marks > mark {
+  all: unset;
+}
+.captures scale.range-slider > marks > mark > indicator {
+  all: unset;
+  min-height: 0;
+  min-width: 0;
+}
+.captures scale.range-slider > marks > mark > label {
+  color: var(--text-subtle);
+  font-size: var(--text-2xs);
+}
+
+/* `.screenshot-check-row`: 15 px token box with the accent check. */
+.captures button.check-row {
+  all: unset;
+  min-height: 28px;
+}
+.captures button.check-row .check-box {
+  min-width: 13px;
+  min-height: 13px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-xs);
+  color: var(--theme-accent-ink);
+  background: var(--surface-field);
+}
+.captures button.check-row:checked .check-box {
+  border-color: var(--theme-accent);
+  background: var(--theme-accent);
+}
+.captures button.check-row:focus-visible .check-box {
+  box-shadow: var(--focus-ring-tight);
+}
+
+/* `.screenshot-format-buttons button`. */
+.captures button.format-button {
+  all: unset;
+  min-height: 30px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm);
+  color: var(--text-muted);
+  background: var(--control);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+}
+.captures button.format-button > label {
+  margin: 0 var(--s-2);
+}
+.captures button.format-button:hover {
+  color: var(--text);
+  background: var(--control-hover);
+}
+.captures button.format-button.active {
+  border-color: var(--theme-accent);
+  color: var(--theme-accent-ink);
+  background: var(--theme-accent);
+}
+.captures button.format-button:focus-visible {
+  box-shadow: var(--focus-ring-tight);
+}
+/* GTK centers mark labels on their ticks; the inset keeps 0 and the maximum
+   inside the panel, as shipping's inset mark row does. */
+.captures scale.range-slider {
+  padding: 0 var(--s-5);
+}

@@ -235,7 +235,7 @@ def editor(binary, scratch):
         subprocess.run(["xdotool", "mousemove", str(x + 40), str(y + 60)], check=True)
         time.sleep(0.2)
         subprocess.run(["xdotool", "click", "1"], check=True)
-        field = wait(lambda: find(app, "text", "Text layer"), "the inline text field")[0]
+        field = wait(lambda: find(app, "text", "Edit text on canvas"), "the inline text field")[0]
         wait(lambda: has_state(field, Atspi.StateType.FOCUSED), "the field to take focus")
         subprocess.run(["xdotool", "type", "--delay", "40", "Smoke label"], check=True)
         subprocess.run(["xdotool", "key", "Return"], check=True)
@@ -245,8 +245,34 @@ def editor(binary, scratch):
         subprocess.run(["xdotool", "key", "Escape"], check=True)
         wait(lambda: find(app, "list item", "Smoke label · Text"),
              "Escape to commit the text layer")
-        wait(lambda: not find(app, "text", "Text layer"), "the field to close")
+        wait(lambda: not find(app, "text", "Edit text on canvas"), "the field to close")
         print("editor: Text tool typed two lines into a real text field and committed")
+
+        # Eraser: its properties are real slider and check box widgets, and a
+        # Wand click is one undoable edit (Undo leaves the text layer).
+        eraser = find(app, "push button", "Eraser (B)")[0]
+        press(eraser)
+        wait(lambda: has_state(eraser, Atspi.StateType.PRESSED), "the Eraser tool")
+        slider = wait(lambda: find(app, "slider", "Color tolerance"), "the tolerance slider")[0]
+        assert Atspi.Value.get_current_value(slider) == 36, "tolerance starts at 36"
+        contiguous = find(app, "check box", "Contiguous only")[0]
+        assert has_state(contiguous, Atspi.StateType.CHECKED), "Contiguous starts checked"
+        press(contiguous)
+        wait(lambda: not has_state(contiguous, Atspi.StateType.CHECKED), "Contiguous to clear")
+        press(contiguous)
+        wait(lambda: has_state(contiguous, Atspi.StateType.CHECKED), "Contiguous to check")
+        subprocess.run(["xdotool", "mousemove", str(x + 300), str(y + 120)], check=True)
+        time.sleep(0.2)
+        subprocess.run(["xdotool", "click", "1"], check=True)
+        # The worker publishes the wand edit, then Undo reverts only it.
+        time.sleep(1.5)
+        press(find(app, "push button", "Undo")[0])
+        time.sleep(1)
+        assert find(app, "list item", "Smoke label · Text"), "Undo removed the text, not the wand"
+        press(find(app, "push button", "Undo")[0])
+        wait(lambda: not find(app, "list item", "Smoke label · Text"),
+             "a second Undo to remove the text")
+        print("editor: Eraser slider and check box over AT-SPI; Wand click was one undo step")
     finally:
         process.terminate()
         process.wait(timeout=10)

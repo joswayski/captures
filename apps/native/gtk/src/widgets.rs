@@ -208,6 +208,93 @@ impl MaxWidth {
     }
 }
 
+mod split_imp {
+    use super::*;
+
+    #[derive(Default)]
+    pub struct SplitColumn {
+        pub top_min: Cell<i32>,
+    }
+
+    #[glib::object_subclass]
+    impl ObjectSubclass for SplitColumn {
+        const NAME: &'static str = "CapturesSplitColumn";
+        type Type = super::SplitColumn;
+        type ParentType = gtk::Widget;
+
+        fn class_init(klass: &mut Self::Class) {
+            klass.set_accessible_role(gtk::AccessibleRole::Group);
+        }
+    }
+
+    impl ObjectImpl for SplitColumn {
+        fn dispose(&self) {
+            while let Some(child) = self.obj().first_child() {
+                child.unparent();
+            }
+        }
+    }
+
+    impl WidgetImpl for SplitColumn {
+        fn measure(&self, orientation: gtk::Orientation, for_size: i32) -> (i32, i32, i32, i32) {
+            let (mut min, mut natural) = (0, 0);
+            let mut child = self.obj().first_child();
+            while let Some(c) = child {
+                let (cmin, cnat, _, _) = c.measure(orientation, for_size);
+                if orientation == gtk::Orientation::Horizontal {
+                    min = min.max(cmin);
+                    natural = natural.max(cnat);
+                } else {
+                    min += cmin;
+                    natural += cnat;
+                }
+                child = c.next_sibling();
+            }
+            if orientation == gtk::Orientation::Vertical {
+                min = min.max(self.top_min.get());
+            }
+            (min, natural.max(min), -1, -1)
+        }
+
+        fn size_allocate(&self, width: i32, height: i32, _baseline: i32) {
+            let Some(top) = self.obj().first_child() else {
+                return;
+            };
+            // `minmax(top_min, 40%) minmax(0, 1fr)`.
+            let top_height = ((f64::from(height) * 0.4).round() as i32)
+                .max(self.top_min.get())
+                .max(top.measure(gtk::Orientation::Vertical, width).0)
+                .min(height);
+            top.allocate(width, top_height, -1, None);
+            if let Some(bottom) = top.next_sibling() {
+                let rest =
+                    (height - top_height).max(bottom.measure(gtk::Orientation::Vertical, width).0);
+                let at = gtk::gsk::Transform::new()
+                    .translate(&graphene::Point::new(0., top_height as f32));
+                bottom.allocate(width, rest, -1, Some(at));
+            }
+        }
+    }
+}
+
+glib::wrapper! {
+    /// Two children stacked: the first takes 40% of the height (at least
+    /// `top_min`), the second the rest, as a two-row CSS grid.
+    pub struct SplitColumn(ObjectSubclass<split_imp::SplitColumn>)
+        @extends gtk::Widget,
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
+}
+
+impl SplitColumn {
+    pub fn new(top: &impl IsA<gtk::Widget>, bottom: &impl IsA<gtk::Widget>, top_min: i32) -> Self {
+        let widget: Self = glib::Object::new();
+        widget.imp().top_min.set(top_min);
+        top.set_parent(&widget);
+        bottom.set_parent(&widget);
+        widget
+    }
+}
+
 mod thumbnail_imp {
     use super::*;
     use captures_app::preview_chrome;

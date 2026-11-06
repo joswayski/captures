@@ -183,16 +183,33 @@ coalesced into one in-flight `UpdateTextInput`; Escape, leaving the field or
 switching tools commits, as in shipping. New labels use shipping's Rounded
 Box treatment in the drawing color at the capture-relative size. The field
 does not yet draw outlined labels' stroke or rotate with a rotated label.
-Blur, the property panel, Add images, canvas resize, export settings and
-layer reorder/rename are not in the GTK host yet (the Blur rail button is
-disabled). Release build
-under Xvfb with Cairo on a 640×360 fixture: about 106 MB RSS and near-zero
+The rail's B key is shipping's Eraser (`remove-bg`); the plan's "Blur"
+slice is this tool, since shipping has no blur tool. The sidebar now lays
+Layers over Properties as shipping's `minmax(188px, 40%) 1fr` grid, and the
+Properties panel opens with the tool name and shows the Eraser section:
+Wand/Erase/Restore mode buttons, `RangeSlider`s (Tolerance, Size, Softness)
+as restyled `GtkScale`s with marks, a value readout and AT-SPI value text,
+and Contiguous only as a token-drawn toggle that AT-SPI reads as a check box
+with a checked state (GtkCheckButton takes a custom child only from GTK 4.8).
+A Wand click submits `RemoveImageBackground`; an Erase/Restore stroke
+previews through `preview_drawing` on the worker, one request in flight and
+the latest stroke queued, then commits one `PaintImageBackground`. The brush
+ring (shipping's `.screenshot-brush-cursor` sizes, dashed with an accent fill
+for Restore) is a small Cairo node at the pointer, so moving it never
+re-uploads the image. The canvas draws the document background under the
+image, with shipping's checkerboard when it is transparent, as after an
+erase. Other tools' property sections (text, shape style and color), Add
+images, canvas resize, export settings and layer reorder/rename are not in
+the GTK host yet. Release build
+under Xvfb with Cairo on a 640×360 fixture: about 108 MB RSS and near-zero
 idle CPU; the egui workbench's own editor scene measures about 173 MB the
 same way, on its built-in document rather than the same image. CI renders
 the editor in both appearances, and `smoke.py` opens it from History, draws
 a rectangle with a real xdotool drag, undoes and redoes it over AT-SPI,
 checks that Save writes a PNG containing it, then types two lines into the
-Text tool's field and checks Escape commits the layer. X11 (Xvfb) only; Wayland, Orca
+Text tool's field and checks Escape commits the layer, then reads the
+Eraser's tolerance slider and toggles Contiguous only over AT-SPI and checks
+a Wand click is exactly one undo step. X11 (Xvfb) only; Wayland, Orca
 and real hardware remain open. Windows, macOS: unchanged.
 
 The fourth GTK4 slice is the floating previews: History's Restore (or

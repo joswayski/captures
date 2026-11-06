@@ -53,7 +53,9 @@ impl TextField {
         view.set_visible(false);
         view.set_halign(gtk::Align::Start);
         view.set_valign(gtk::Align::Start);
-        view.update_property(&[gtk::accessible::Property::Label("Text layer")]);
+        view.update_property(&[gtk::accessible::Property::Label(
+            captures_app::editor_chrome::text_format::INLINE_LABEL,
+        )]);
         let css = gtk::CssProvider::new();
         view.style_context()
             .add_provider(&css, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION + 1);
