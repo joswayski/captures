@@ -1900,6 +1900,18 @@ impl Editor {
         self.need = true;
     }
 
+    /// The selected layer as the session last presented it.
+    fn selected_element(&self) -> Option<captures_app::editor::Element> {
+        let id = self.selected.as_deref()?;
+        self.presented
+            .as_ref()?
+            .document
+            .elements
+            .iter()
+            .find(|e| e.base().id == id)
+            .cloned()
+    }
+
     fn set_selected(&mut self, id: Option<String>) {
         if id == self.selected {
             return;
@@ -1953,6 +1965,10 @@ impl Editor {
                     });
                 }
                 let shown = self.values();
+                // Label formatting (Bold, alignment, Style, Font, Size, text)
+                // is not in `values`; any change to the selected layer
+                // redraws the panel, as after an undo or redo.
+                let shown_layer = self.selected_element();
                 let old_count = self.layer_count();
                 if let Some(pixels) = presented.pixels.take() {
                     self.take_pixels(pixels);
@@ -2009,8 +2025,13 @@ impl Editor {
                     self.relayout = true;
                 }
                 self.keep_drag();
-                if first || self.values() != shown {
+                if first || self.values() != shown || self.selected_element() != shown_layer {
                     self.props_changed();
+                    // A reply that a queued edit already supersedes must not
+                    // reset the text being typed.
+                    if self.pending.is_none() {
+                        self.sync_field();
+                    }
                 }
                 self.overlay_changed();
                 self.events.push(Event::Toggled(Target::Undo));

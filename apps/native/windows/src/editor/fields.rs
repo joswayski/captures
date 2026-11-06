@@ -35,6 +35,10 @@ pub struct FieldEdit {
     line_height: f32,
     /// Horizontal scroll (number) or vertical scroll (textarea).
     scroll: f32,
+    /// The value the field last took from, or gave to, the document:
+    /// shipping's `draft.source`. A different document value (an undo)
+    /// replaces the text.
+    source: String,
 }
 
 /// `String(value)` for a JavaScript number.
@@ -92,7 +96,8 @@ impl Editor {
         }
         let mut field = textfield::Editor::default();
         field.multiline = prop == Prop::Textarea;
-        field.set_text(&self.field_text(prop));
+        let source = self.field_text(prop);
+        field.set_text(&source);
         // Chromium selects an `<input>`'s text when Tab focuses it; a
         // textarea keeps the caret at its start.
         if keyboard && prop != Prop::Textarea {
@@ -106,8 +111,43 @@ impl Editor {
             layout: None,
             line_height: 0.,
             scroll: 0.,
+            source,
         });
         self.field_relayout();
+    }
+
+    /// The document's value of the focused field.
+    fn document_text(&self, prop: Prop) -> String {
+        match prop {
+            Prop::Textarea => self
+                .selected_text()
+                .map(|t| t.text.clone())
+                .unwrap_or_default(),
+            Prop::Number(num) => js_number(self.number_value(num)),
+            _ => String::new(),
+        }
+    }
+
+    /// The session presented the document again: like shipping's
+    /// `draft.source !== value`, a value the field didn't set replaces its
+    /// text, caret at the end.
+    pub(super) fn sync_field(&mut self) {
+        let Some(prop) = self.field.as_ref().map(|e| e.prop) else {
+            return;
+        };
+        let value = self.document_text(prop);
+        let Some(edit) = self.field.as_mut() else {
+            return;
+        };
+        if edit.source == value {
+            return;
+        }
+        edit.source.clone_from(&value);
+        if String::from_utf16_lossy(edit.field.units()) != value {
+            edit.field.set_text(&value);
+            edit.field.move_to(edit.field.len(), false);
+            self.field_relayout();
+        }
     }
 
     /// Leave the focused field: numbers commit like `NumberInput`'s blur.
@@ -134,6 +174,7 @@ impl Editor {
             let (min, max) = num.bounds();
             self.set_number(num, value.clamp(min, max));
         }
+        self.own_source(Prop::Number(num));
         self.prop_dirty(Prop::Number(num));
     }
 
@@ -325,6 +366,16 @@ impl Editor {
             }
             _ => {}
         }
+        self.own_source(prop);
+    }
+
+    /// The field set the document's value itself: its reply must not reset
+    /// the text being typed.
+    fn own_source(&mut self, prop: Prop) {
+        let value = self.document_text(prop);
+        if let Some(edit) = self.field.as_mut().filter(|e| e.prop == prop) {
+            edit.source = value;
+        }
     }
 
     /// A stepper or ArrowUp/ArrowDown (`NumberInput.nudge`).
@@ -338,6 +389,7 @@ impl Editor {
         let (min, max) = num.bounds();
         let next = number::step_from(&shown, 1., up, Some(min), Some(max));
         self.set_number(num, next);
+        self.own_source(Prop::Number(num));
         if let Some(edit) = self.field.as_mut().filter(|e| e.prop == Prop::Number(num)) {
             edit.field.set_text(&js_number(next));
             edit.field.move_to(edit.field.len(), false);
