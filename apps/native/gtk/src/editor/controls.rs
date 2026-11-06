@@ -19,7 +19,7 @@ use crate::widgets::{Icon, SnapshotArea};
 const SHADOW_BLUR_MAX: f64 = 100.;
 const SHADOW_OFFSET_MAX: f64 = 500.;
 
-pub(super) fn pressed(widget: &impl IsA<gtk::Widget>, on: bool) {
+pub(crate) fn pressed(widget: &impl IsA<gtk::Widget>, on: bool) {
     let widget = widget.as_ref();
     if on {
         widget.add_css_class("active");
@@ -34,7 +34,7 @@ pub(super) fn pressed(widget: &impl IsA<gtk::Widget>, on: bool) {
 }
 
 /// A shipping property `<label>`: caption over its control.
-pub(super) fn field(caption: &str, control: &impl IsA<gtk::Widget>) -> gtk::Box {
+pub(crate) fn field(caption: &str, control: &impl IsA<gtk::Widget>) -> gtk::Box {
     let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
     root.add_css_class("property-field");
     root.append(&text(caption, "property-caption"));
@@ -43,7 +43,7 @@ pub(super) fn field(caption: &str, control: &impl IsA<gtk::Widget>) -> gtk::Box 
 }
 
 /// `.screenshot-number-pair`: two equal columns.
-pub(super) fn pair(a: &impl IsA<gtk::Widget>, b: &impl IsA<gtk::Widget>) -> gtk::Box {
+pub(crate) fn pair(a: &impl IsA<gtk::Widget>, b: &impl IsA<gtk::Widget>) -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     row.set_homogeneous(true);
     row.append(a);
@@ -51,7 +51,7 @@ pub(super) fn pair(a: &impl IsA<gtk::Widget>, b: &impl IsA<gtk::Widget>) -> gtk:
     row
 }
 
-pub(super) fn hex(rgba: &gdk::RGBA) -> String {
+pub(crate) fn hex(rgba: &gdk::RGBA) -> String {
     let byte = |v: f32| (v.clamp(0., 1.) * 255.).round() as u8;
     format!(
         "#{:02x}{:02x}{:02x}",
@@ -66,8 +66,8 @@ fn parse(value: &str) -> gdk::RGBA {
 }
 
 /// Shipping `ColorField`: a legend over eight swatches and a custom tile.
-pub(super) struct ColorField {
-    pub(super) root: gtk::Box,
+pub(crate) struct ColorField {
+    pub(crate) root: gtk::Box,
     legend: gtk::Label,
     grid: gtk::FlowBox,
     tiles: Vec<(&'static str, gtk::Button)>,
@@ -75,7 +75,7 @@ pub(super) struct ColorField {
 }
 
 impl ColorField {
-    pub(super) fn new(
+    pub(crate) fn new(
         tokens: &Rc<Tokens>,
         label: &str,
         changed: impl Fn(String) + 'static,
@@ -194,7 +194,7 @@ impl ColorField {
 
     /// Swatches only; the legend stays for assistive tech (`compact`).
     /// `minmax(36px, 1fr)` cells across the canvas background card.
-    pub(super) fn compact(&self) {
+    pub(crate) fn compact(&self) {
         self.legend.set_visible(false);
         let layout = colors::grid(colors::MENU_WIDTH - 24., colors::COMPACT_CELL);
         self.grid.set_max_children_per_line(layout.columns as u32);
@@ -206,7 +206,7 @@ impl ColorField {
         }
     }
 
-    pub(super) fn set_label(&self, label: &str) {
+    pub(crate) fn set_label(&self, label: &str) {
         self.legend.set_label(label);
         self.root
             .update_property(&[gtk::accessible::Property::Label(label)]);
@@ -216,7 +216,7 @@ impl ColorField {
         }
     }
 
-    pub(super) fn set(&self, value: &str) {
+    pub(crate) fn set(&self, value: &str) {
         *self.value.borrow_mut() = value.to_owned();
         for (swatch, button) in &self.tiles {
             pressed(button, colors::swatch_active(value, swatch));
@@ -243,13 +243,13 @@ fn hue(t: f64) -> (f64, f64, f64) {
 
 /// Shipping `NumberInput`: a real spin button (AT-SPI role, value and typed
 /// entry) with its stock buttons hidden for the stacked token steppers.
-pub(super) struct NumberField {
-    pub(super) root: gtk::Box,
-    pub(super) spin: gtk::SpinButton,
+pub(crate) struct NumberField {
+    pub(crate) root: gtk::Box,
+    pub(crate) spin: gtk::SpinButton,
 }
 
 impl NumberField {
-    pub(super) fn new(name: &str, range: (f64, f64), changed: impl Fn(f64) + 'static) -> Self {
+    pub(crate) fn new(name: &str, range: (f64, f64), changed: impl Fn(f64) + 'static) -> Self {
         let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         root.add_css_class("number-input");
         let spin = gtk::SpinButton::with_range(range.0, range.1, 1.);
@@ -287,7 +287,7 @@ impl NumberField {
     }
 
     /// Show `value`; with `force` false a field the user is in keeps its text.
-    pub(super) fn set(&self, value: f64, force: bool) {
+    pub(crate) fn set(&self, value: f64, force: bool) {
         let focused = self
             .spin
             .root()
@@ -304,7 +304,7 @@ impl NumberField {
         }
     }
 
-    pub(super) fn set_sensitive(&self, on: bool) {
+    pub(crate) fn set_sensitive(&self, on: bool) {
         self.root.set_sensitive(on);
         if on {
             self.root.remove_css_class("is-disabled");
@@ -317,8 +317,8 @@ impl NumberField {
 /// A shipping `<select>` or Text style picker: a trigger with the current
 /// choice over a `captures-menu` popover of radio rows. `preview` adds the
 /// Text style sample in front of each label.
-pub(super) struct Choice {
-    pub(super) root: gtk::Box,
+pub(crate) struct Choice {
+    pub(crate) root: gtk::Box,
     trigger: gtk::Button,
     caption: gtk::Label,
     name: RefCell<String>,
@@ -332,7 +332,7 @@ pub(super) struct Choice {
     changed: Rc<dyn Fn(String)>,
 }
 
-pub(super) fn style_preview(preset: &str) -> gtk::Label {
+pub(crate) fn style_preview(preset: &str) -> gtk::Label {
     let sample = gtk::Label::new(Some("Text"));
     sample.add_css_class("text-style-preview");
     sample.add_css_class(&format!("style-{preset}"));
@@ -343,7 +343,7 @@ pub(super) fn style_preview(preset: &str) -> gtk::Label {
 }
 
 impl Choice {
-    pub(super) fn new(
+    pub(crate) fn new(
         legend: Option<&gtk::Label>,
         name: &str,
         preview: bool,
@@ -395,7 +395,7 @@ impl Choice {
         choice
     }
 
-    pub(super) fn set_options(&self, options: Vec<(String, String)>) {
+    pub(crate) fn set_options(&self, options: Vec<(String, String)>) {
         self.descriptions.borrow_mut().clear();
         *self.options.borrow_mut() = options;
         let value = self.value.borrow().clone();
@@ -403,7 +403,7 @@ impl Choice {
     }
 
     /// Options with a description line each (`[id, label, description]`).
-    pub(super) fn set_described(&self, options: Vec<[String; 3]>) {
+    pub(crate) fn set_described(&self, options: Vec<[String; 3]>) {
         let (options, descriptions) = options
             .into_iter()
             .map(|[id, label, description]| ((id, label), description))
@@ -415,25 +415,25 @@ impl Choice {
     }
 
     /// Show `caption` on the trigger instead of the chosen label.
-    pub(super) fn set_caption(&self, caption: Option<&str>) {
+    pub(crate) fn set_caption(&self, caption: Option<&str>) {
         *self.caption_override.borrow_mut() = caption.map(str::to_owned);
         let value = self.value.borrow().clone();
         self.set(&value);
     }
 
-    pub(super) fn set_sensitive(&self, on: bool) {
+    pub(crate) fn set_sensitive(&self, on: bool) {
         self.trigger.set_sensitive(on);
     }
 
     /// Stretch the trigger to its row's height (an inline suffix select).
-    pub(super) fn fill_height(&self) {
+    pub(crate) fn fill_height(&self) {
         self.trigger.set_vexpand(true);
         // Explicit, so the expansion stops here instead of growing the row.
         self.root.set_vexpand(false);
         self.caption.set_hexpand(false);
     }
 
-    pub(super) fn set(&self, value: &str) {
+    pub(crate) fn set(&self, value: &str) {
         *self.value.borrow_mut() = value.to_owned();
         let label = self
             .options
@@ -555,7 +555,7 @@ impl Choice {
 
 /// One drop-shadow change: the toggle, or a style value (`live` when it
 /// comes from a slider drag that should fold into one undo step).
-pub(super) enum ShadowEdit {
+pub(crate) enum ShadowEdit {
     Enabled(bool),
     Style {
         patch: DropShadowStylePatch,
@@ -564,8 +564,8 @@ pub(super) enum ShadowEdit {
 }
 
 /// Shipping `DropShadowFields`.
-pub(super) struct DropShadow {
-    pub(super) root: gtk::Box,
+pub(crate) struct DropShadow {
+    pub(crate) root: gtk::Box,
     check: gtk::ToggleButton,
     settings: gtk::Box,
     color: Rc<ColorField>,
@@ -577,7 +577,7 @@ pub(super) struct DropShadow {
 }
 
 impl DropShadow {
-    pub(super) fn new(tokens: &Rc<Tokens>, edit: impl Fn(ShadowEdit) + 'static) -> Self {
+    pub(crate) fn new(tokens: &Rc<Tokens>, edit: impl Fn(ShadowEdit) + 'static) -> Self {
         let edit: Rc<dyn Fn(ShadowEdit)> = Rc::new(edit);
         let syncing = Rc::new(Cell::new(false));
         let root = gtk::Box::new(gtk::Orientation::Vertical, 12);
@@ -689,7 +689,7 @@ impl DropShadow {
         }
     }
 
-    pub(super) fn sync(&self, enabled: bool, style: &DropShadowStyle, force: bool) {
+    pub(crate) fn sync(&self, enabled: bool, style: &DropShadowStyle, force: bool) {
         self.syncing.set(true);
         self.check.set_active(enabled);
         self.settings.set_visible(enabled);

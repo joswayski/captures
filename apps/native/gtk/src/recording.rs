@@ -18,7 +18,11 @@ use captures_app::recording_editor::{
 };
 use captures_app::recording_editor_ui::{self as ui, SaveDefaults};
 use captures_app::recording_timeline::{TimelineTrimDrag, TimelineTrimEdge};
-use captures_media::{CancelToken, EditSpec, ExportFormat, ExportSpec, MediaToolchain};
+use captures_media::{
+    CancelToken, CropDragHandle, CropRect, EditSpec, ExportEstimate, ExportSpec, MediaMetadata,
+    MediaToolchain,
+};
+use captures_settings::{RecordingSettings, VideoFormat};
 use gtk::prelude::*;
 use gtk::{gdk, glib, graphene, gsk};
 use image::RgbaImage;
@@ -27,10 +31,15 @@ use crate::switch::TokenSwitch;
 use crate::tokens::Tokens;
 use crate::widgets::{Icon, SnapshotArea, icon_button};
 
+mod output;
+use output::{Change, Estimate, Output, Source};
+
 pub struct Options {
     pub history_root: PathBuf,
     pub artifact_id: String,
     pub output_directory: PathBuf,
+    /// Recording preferences: the preferred format and GIF defaults.
+    pub preferences: RecordingSettings,
 }
 
 /// The accepted session state the UI renders.
@@ -43,6 +52,9 @@ struct Presented {
     duration_ms: u64,
     mime_type: String,
     dropped_frames: u64,
+    source: MediaMetadata,
+    has_system_audio: bool,
+    has_microphone_audio: bool,
 }
 
 impl Presented {
@@ -57,6 +69,9 @@ impl Presented {
             duration_ms: snapshot.editor.source.duration_ms.unwrap_or(1).max(1),
             mime_type: snapshot.editor.source.mime_type.clone(),
             dropped_frames: snapshot.editor.dropped_frames,
+            source: snapshot.editor.source.clone(),
+            has_system_audio: snapshot.editor.has_system_audio,
+            has_microphone_audio: snapshot.editor.has_microphone_audio,
         }
     }
 
@@ -64,8 +79,20 @@ impl Presented {
         self.edit.trim_end_ms.unwrap_or(self.duration_ms)
     }
 
-    fn gif(&self) -> bool {
-        self.save_export.format == ExportFormat::Gif
+    fn trim_end_opt(&self) -> Option<u64> {
+        self.edit.trim_end_ms
+    }
+
+    fn source(&self) -> Source {
+        Source {
+            width: self.source.width,
+            height: self.source.height,
+            kind: self.source.kind,
+            format: Source::format_of(&self.mime_type),
+            has_system_audio: self.has_system_audio,
+            has_microphone_audio: self.has_microphone_audio,
+            size_bytes: self.source.size_bytes,
+        }
     }
 }
 
@@ -75,6 +102,10 @@ enum Job {
     Save(RecordingSaveRequest, CancelToken),
     Replace(PathBuf, CancelToken),
     Thumbnails,
+    /// The uncropped source frame under the crop box, for this revision.
+    SourceFrame(u64),
+    /// Shipping's background Est. size, for this request generation.
+    Estimate(u64, CancelToken),
 }
 
 enum Outcome {
@@ -84,6 +115,8 @@ enum Outcome {
     PlaybackEnded(Result<(), String>),
     Progress(String),
     Saved(Result<(PathBuf, Option<Box<Presented>>), String>),
+    SourceFrame(u64, Arc<RgbaImage>),
+    Estimate(u64, Result<ExportEstimate, String>),
 }
 
 /// Bundled sidecars when present, else `CAPTURES_FFMPEG`/`CAPTURES_FFPROBE`,
@@ -174,6 +207,15 @@ fn worker(
                         Ok(thumbnails) => Outcome::Thumbnails(thumbnails),
                         Err(_) => continue,
                     },
+                    Job::SourceFrame(revision) => {
+                        match session.source_frame(&CancelToken::default()) {
+                            Ok(frame) => Outcome::SourceFrame(revision, frame),
+                            Err(_) => continue,
+                        }
+                    }
+                    Job::Estimate(generation, cancel) => {
+                        Outcome::Estimate(generation, session.estimate_save_export(&cancel))
+                    }
                     Job::Play(position, cancel) => {
                         let result = (|| {
                             let mut playback = session.looping_playback(
@@ -250,6 +292,18 @@ struct State {
     busy: Cell<bool>,
     /// An export is running; playback waits for it.
     saving: Cell<bool>,
+    preferences: RecordingSettings,
+    output: Rc<Output>,
+    /// The uncropped source frame (and its revision) under the crop box.
+    source_frame: RefCell<Option<(u64, gdk::Texture)>>,
+    /// Where the preview last drew its frame, in widget points.
+    image_bounds: Cell<(f32, f32, f32, f32)>,
+    crop_drag: Cell<Option<(CropDragHandle, CropRect)>>,
+    estimate: Cell<Estimate>,
+    /// Supersedes the running estimate and names the next one.
+    estimate_generation: Cell<u64>,
+    estimate_cancel: RefCell<Option<CancelToken>>,
+    estimate_timer: RefCell<Option<glib::SourceId>>,
     w: Widgets,
 }
 
@@ -269,7 +323,6 @@ struct Widgets {
     handles: [gtk::Scale; 2],
     folder: gtk::Label,
     filename: gtk::Entry,
-    suffix: gtk::Label,
     save_as_new: TokenSwitch,
     save: gtk::Button,
     status: gtk::Label,
@@ -439,9 +492,18 @@ pub fn build(app: &gtk::Application, tokens: Rc<Tokens>, options: Options) -> Re
     filename.add_css_class("editor-filename-entry");
     filename.set_width_chars(30);
     filename.update_property(&[gtk::accessible::Property::Label("Saved filename")]);
-    let suffix = label(".mp4", "editor-suffix");
+    let state_cell: Rc<RefCell<std::rc::Weak<State>>> = Rc::default();
+    let output = Output::new({
+        let state_cell = state_cell.clone();
+        move |change| {
+            if let Some(state) = state_cell.borrow().upgrade() {
+                state.output_changed(change);
+            }
+        }
+    });
+    body.append(&output.root);
     row.append(&filename);
-    row.append(&suffix);
+    row.append(&output.format.root);
     file.append(&row);
     columns.append(&file);
     let as_new = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -487,6 +549,15 @@ pub fn build(app: &gtk::Application, tokens: Rc<Tokens>, options: Options) -> Re
         directory: RefCell::new(options.output_directory),
         busy: Cell::new(true),
         saving: Cell::default(),
+        preferences: options.preferences,
+        output,
+        source_frame: RefCell::default(),
+        image_bounds: Cell::default(),
+        crop_drag: Cell::default(),
+        estimate: Cell::default(),
+        estimate_generation: Cell::default(),
+        estimate_cancel: RefCell::default(),
+        estimate_timer: RefCell::default(),
         w: Widgets {
             title,
             warning,
@@ -503,12 +574,12 @@ pub fn build(app: &gtk::Application, tokens: Rc<Tokens>, options: Options) -> Re
             handles,
             folder,
             filename,
-            suffix,
             save_as_new,
             save,
             status,
         },
     });
+    *state_cell.borrow_mut() = Rc::downgrade(&state);
     state.connect(&window);
     state.set_zoom(false);
     // Start on Play, not the filename entry, so nothing looks edited.
@@ -631,6 +702,57 @@ impl State {
             }
             state.update_footer();
         });
+
+        // Preview: drag the crop box or a handle in source pixels.
+        let crop_drag = gtk::GestureDrag::new();
+        let weak = Rc::downgrade(self);
+        crop_drag.connect_drag_begin(move |gesture, x, y| {
+            let Some(state) = weak.upgrade() else { return };
+            match (state.crop_handle_at(x, y), state.output.crop_shown()) {
+                (Some(handle), Some(crop)) => state.crop_drag.set(Some((handle, crop))),
+                _ => {
+                    gesture.set_state(gtk::EventSequenceState::Denied);
+                }
+            }
+        });
+        let weak = Rc::downgrade(self);
+        crop_drag.connect_drag_update(move |_, dx, dy| {
+            let Some(state) = weak.upgrade() else { return };
+            let (Some((handle, from)), Some((_, texture))) =
+                (state.crop_drag.get(), state.crop_view())
+            else {
+                return;
+            };
+            let scale = f64::from(state.image_bounds.get().2) / f64::from(texture.width().max(1));
+            state
+                .output
+                .drag_crop(from, handle, dx / scale.max(1e-6), dy / scale.max(1e-6));
+            state.w.preview.queue_draw();
+        });
+        let weak = Rc::downgrade(self);
+        crop_drag.connect_drag_end(move |_, _, _| {
+            if let Some(state) = weak.upgrade()
+                && state.crop_drag.take().is_some()
+            {
+                state.output_changed(Change::Edit);
+            }
+        });
+        w.preview.add_controller(crop_drag);
+        let motion = gtk::EventControllerMotion::new();
+        let weak = Rc::downgrade(self);
+        motion.connect_motion(move |_, x, y| {
+            let Some(state) = weak.upgrade() else { return };
+            use CropDragHandle::*;
+            let cursor = state.crop_handle_at(x, y).map(|handle| match handle {
+                Move => "move",
+                North | South => "ns-resize",
+                East | West => "ew-resize",
+                NorthEast | SouthWest => "nesw-resize",
+                NorthWest | SouthEast => "nwse-resize",
+            });
+            state.w.preview.set_cursor_from_name(cursor);
+        });
+        w.preview.add_controller(motion);
 
         // Track: drag a handle to trim, or press elsewhere to seek.
         let drag = gtk::GestureDrag::new();
@@ -765,13 +887,41 @@ impl State {
                 *self.source_stem.borrow_mut() = defaults.stem.clone();
                 self.w.filename.set_text(&defaults.stem);
                 self.w.loop_button.set_visible(!gif_source);
+                self.output.open(presented.source(), &self.preferences);
+                let initial = self
+                    .output
+                    .specs(presented.edit.trim_start_ms, presented.edit.trim_end_ms);
+                let accepted = (presented.edit.clone(), presented.save_export.clone());
                 self.accept(*presented);
                 let _ = self.jobs.send(Job::Thumbnails);
+                // Shipping's initial format, quality and GIF defaults.
+                if initial.is_some_and(|initial| initial != accepted) {
+                    self.output_changed(Change::Format);
+                }
             }
             Outcome::Presented(Ok(presented)) => self.accept(*presented),
             Outcome::Presented(Err(error)) => {
                 self.busy.set(false);
                 self.notify(&error, true);
+            }
+            Outcome::SourceFrame(revision, frame) => {
+                *self.source_frame.borrow_mut() = Some((revision, texture_of(&frame)));
+                self.w.preview.queue_draw();
+            }
+            Outcome::Estimate(generation, result) => {
+                if generation == self.estimate_generation.get() {
+                    self.estimate_cancel.borrow_mut().take();
+                    // Shipping never shows an estimate failure as an error.
+                    self.estimate.set(match result {
+                        Ok(estimate) => Estimate {
+                            bytes: Some(estimate.size_bytes),
+                            exact: estimate.exact,
+                            pending: false,
+                        },
+                        Err(_) => Estimate::default(),
+                    });
+                    self.output.sync(self.estimate.get());
+                }
             }
             Outcome::Thumbnails(thumbnails) => {
                 *self.filmstrip.borrow_mut() = Some(texture_of(thumbnails.pixels()));
@@ -794,7 +944,7 @@ impl State {
                 self.saving.set(false);
                 match result {
                     Ok((path, presented)) => {
-                        let gif = self.presented.borrow().as_ref().is_some_and(Presented::gif);
+                        let gif = self.output.format() == VideoFormat::Gif;
                         let size = std::fs::metadata(&path).map_or(0, |m| m.len());
                         self.notify(&ui::saved_message(gif, size), false);
                         if let Some(presented) = presented {
@@ -811,7 +961,7 @@ impl State {
 
     /// The session accepted an edit or seek: refresh the retained frame only
     /// when the revision moved.
-    fn accept(&self, presented: Presented) {
+    fn accept(self: &Rc<Self>, presented: Presented) {
         let changed = self
             .presented
             .borrow()
@@ -821,6 +971,7 @@ impl State {
             *self.frame.borrow_mut() = Some(texture_of(&presented.frame));
             self.w.preview.queue_draw();
         }
+        let revision = presented.revision;
         if self.drag.get().is_none() && self.pending_apply.borrow().is_none() {
             self.trim.set((
                 presented.edit.trim_start_ms as f64,
@@ -830,15 +981,86 @@ impl State {
         if self.playing.borrow().is_none() {
             self.playhead.set(presented.position_ms);
         }
-        self.w.suffix.set_label(match presented.save_export.format {
-            ExportFormat::Gif => ".gif",
-            ExportFormat::WebM => ".webm",
-            ExportFormat::Mp4 => ".mp4",
-        });
         *self.presented.borrow_mut() = Some(presented);
         self.busy.set(false);
         self.trim_changed();
         self.update_footer();
+        if changed {
+            self.request_source_frame(revision);
+            self.schedule_estimate();
+        }
+        self.output.sync(self.estimate.get());
+    }
+
+    /// The crop box needs the uncropped frame at the accepted position.
+    fn request_source_frame(&self, revision: u64) {
+        let current = self
+            .source_frame
+            .borrow()
+            .as_ref()
+            .is_some_and(|(shown, _)| *shown == revision);
+        if self.output.crop_shown().is_some() && self.playing.borrow().is_none() && !current {
+            let _ = self.jobs.send(Job::SourceFrame(revision));
+        }
+    }
+
+    /// A card control changed: show it, then apply it live.
+    fn output_changed(self: &Rc<Self>, change: Change) {
+        if change == Change::Format {
+            // Shipping `updateOutputFormat`: another format saves a copy.
+            let source = self.output.source().map(|source| source.format);
+            if source != Some(self.output.format()) && !self.w.save_as_new.is_on() {
+                self.w.save_as_new.activate_toggle();
+            }
+        }
+        if change == Change::CropShown
+            && let Some(revision) = self.presented.borrow().as_ref().map(|p| p.revision)
+        {
+            self.request_source_frame(revision);
+        }
+        self.output.sync(self.estimate.get());
+        self.w.preview.queue_draw();
+        self.schedule_apply();
+    }
+
+    /// Supersede any estimate; a new one starts after shipping's debounce.
+    fn cancel_estimate(&self) {
+        if let Some(id) = self.estimate_timer.borrow_mut().take() {
+            id.remove();
+        }
+        if let Some(cancel) = self.estimate_cancel.borrow_mut().take() {
+            cancel.cancel();
+        }
+        self.estimate_generation
+            .set(self.estimate_generation.get() + 1);
+        let mut estimate = self.estimate.get();
+        estimate.pending = false;
+        self.estimate.set(estimate);
+    }
+
+    fn schedule_estimate(self: &Rc<Self>) {
+        self.cancel_estimate();
+        let weak = Rc::downgrade(self);
+        let id = glib::timeout_add_local_once(
+            Duration::from_millis(ui::ESTIMATE_DEBOUNCE_MS),
+            move || {
+                let Some(state) = weak.upgrade() else { return };
+                state.estimate_timer.borrow_mut().take();
+                if !state.output.wants_estimate() || state.saving.get() {
+                    return;
+                }
+                let cancel = CancelToken::default();
+                *state.estimate_cancel.borrow_mut() = Some(cancel.clone());
+                let mut estimate = state.estimate.get();
+                estimate.pending = true;
+                state.estimate.set(estimate);
+                state.output.sync(estimate);
+                let _ = state
+                    .jobs
+                    .send(Job::Estimate(state.estimate_generation.get(), cancel));
+            },
+        );
+        *self.estimate_timer.borrow_mut() = Some(id);
     }
 
     fn present_playback_frame(&self) {
@@ -1003,24 +1225,26 @@ impl State {
             move || {
                 let Some(state) = weak.upgrade() else { return };
                 state.pending_apply.borrow_mut().take();
-                let Some(mut edit) = state
-                    .presented
-                    .borrow()
-                    .as_ref()
-                    .map(|presented| presented.edit.clone())
-                else {
-                    return;
-                };
                 let (start, end) = state.trim.get();
                 let duration = state.duration();
-                edit.trim_start_ms = start.round() as u64;
                 let end = (end.round() as u64).min(duration);
-                edit.trim_end_ms = (end < duration).then_some(end);
+                // An invalid Maximum limit stays unapplied, and Save waits.
+                let Some((edit, export)) = state
+                    .output
+                    .specs(start.round() as u64, (end < duration).then_some(end))
+                else {
+                    state.update_footer();
+                    return;
+                };
+                state.cancel_estimate();
                 state.busy.set(true);
                 state.update_footer();
                 let _ = state
                     .jobs
-                    .send(Job::Apply(RecordingEditorRequestV2::UpdateEdit { edit }));
+                    .send(Job::Apply(RecordingEditorRequestV2::UpdatePreview {
+                        edit,
+                        export,
+                    }));
             },
         );
         *self.pending_apply.borrow_mut() = Some(id);
@@ -1032,10 +1256,9 @@ impl State {
 
     fn destination(&self) -> PathBuf {
         let stem = self.w.filename.text();
-        let suffix = self.w.suffix.label();
         self.directory
             .borrow()
-            .join(format!("{}{}", stem.trim(), suffix))
+            .join(format!("{}{}", stem.trim(), self.output.extension()))
     }
 
     fn update_footer(&self) {
@@ -1044,19 +1267,30 @@ impl State {
             .set_label(&format!("Saving to {}", self.directory.borrow().display()));
         let stem = w.filename.text();
         let error = ui::filename_error(&stem);
-        if self.original.borrow().is_none() && !w.save_as_new.is_on() {
+        // Shipping's `formatRequiresCopy`: another format is always a copy.
+        let requires_copy = self.original.borrow().is_none()
+            || self
+                .output
+                .source()
+                .is_some_and(|source| source.format != self.output.format());
+        if requires_copy && !w.save_as_new.is_on() {
             w.save_as_new.activate_toggle_quietly(true);
         }
-        w.save_as_new
-            .set_sensitive(self.original.borrow().is_some());
+        w.save_as_new.set_sensitive(!requires_copy);
+        let valid = self.presented.borrow().as_ref().is_some_and(|p| {
+            self.output
+                .specs(p.edit.trim_start_ms, p.trim_end_opt())
+                .is_some()
+        });
         w.save.set_sensitive(
-            error.is_none()
-                && self.presented.borrow().is_some()
-                && !self.busy.get()
-                && self.pending_apply.borrow().is_none(),
+            error.is_none() && valid && !self.busy.get() && self.pending_apply.borrow().is_none(),
         );
-        if let Some(error) = error {
-            self.notify(error, true);
+        match error {
+            Some(error) => self.notify(error, true),
+            // `set_text` passes through an empty filename; clear its error
+            // once the name is valid again, as shipping's `setError("")`.
+            None if self.w.status.label() == ui::FILENAME_ERROR => self.notify("", false),
+            None => {}
         }
     }
 
@@ -1072,10 +1306,11 @@ impl State {
         if let Some(cancel) = self.playing.borrow_mut().take() {
             cancel.cancel();
         }
-        if export.format == ExportFormat::WebM {
+        if self.output.format() == VideoFormat::WebM {
             self.notify(ui::WEBM_EXPORT_ERROR, true);
             return;
         }
+        self.cancel_estimate();
         self.busy.set(true);
         self.saving.set(true);
         self.update_footer();
@@ -1107,13 +1342,56 @@ impl State {
         set_class(&self.w.status, "success", !error && !text.is_empty());
     }
 
+    /// The crop box over the uncropped source, when both are ready: shipping
+    /// plays and previews the source under its crop layer.
+    fn crop_view(&self) -> Option<(CropRect, gdk::Texture)> {
+        let crop = self.output.crop_shown()?;
+        if self.playing.borrow().is_some() {
+            return None;
+        }
+        let texture = self.source_frame.borrow().as_ref()?.1.clone();
+        Some((crop, texture))
+    }
+
+    /// The crop handle (or the box itself) under a preview point.
+    fn crop_handle_at(&self, x: f64, y: f64) -> Option<CropDragHandle> {
+        let (crop, texture) = self.crop_view()?;
+        let (bx, by, bw, _) = self.image_bounds.get();
+        let scale = f64::from(bw) / f64::from(texture.width().max(1));
+        let left = f64::from(bx) + f64::from(crop.x) * scale;
+        let top = f64::from(by) + f64::from(crop.y) * scale;
+        let right = left + f64::from(crop.width) * scale;
+        let bottom = top + f64::from(crop.height) * scale;
+        let (cx, cy) = ((left + right) / 2., (top + bottom) / 2.);
+        use CropDragHandle::*;
+        [
+            (NorthWest, left, top),
+            (NorthEast, right, top),
+            (SouthEast, right, bottom),
+            (SouthWest, left, bottom),
+            (North, cx, top),
+            (East, right, cy),
+            (South, cx, bottom),
+            (West, left, cy),
+        ]
+        .into_iter()
+        .find(|(_, hx, hy)| (x - hx).abs() <= 8. && (y - hy).abs() <= 8.)
+        .map(|(handle, _, _)| handle)
+        .or_else(|| (x >= left && x <= right && y >= top && y <= bottom).then_some(Move))
+    }
+
     fn draw_preview(&self, snapshot: &gtk::Snapshot, width: f32, height: f32) {
         let t = &self.tokens;
         snapshot.append_color(
             &t.rgba("surface-sunken"),
             &graphene::Rect::new(0., 0., width, height),
         );
-        let Some(texture) = self.frame.borrow().clone() else {
+        let crop_view = self.crop_view();
+        let Some(texture) = crop_view
+            .as_ref()
+            .map(|(_, texture)| texture.clone())
+            .or_else(|| self.frame.borrow().clone())
+        else {
             return;
         };
         let pad = 12.;
@@ -1133,7 +1411,95 @@ impl State {
         snapshot.append_texture(&texture, &bounds);
         snapshot.pop();
         snapshot.append_border(&rounded, &[1.; 4], &[t.rgba("border"); 4]);
+        self.image_bounds.set((bounds.x(), bounds.y(), dw, dh));
+        if let Some((crop, _)) = crop_view {
+            self.draw_crop(snapshot, &bounds, scale, crop);
+        }
         snapshot.pop();
+    }
+
+    /// Shipping `.editor-crop-layer`: dims, the accent box, its size badge
+    /// and eight handles, as retained nodes over the source texture.
+    fn draw_crop(
+        &self,
+        snapshot: &gtk::Snapshot,
+        image: &graphene::Rect,
+        scale: f32,
+        crop: CropRect,
+    ) {
+        let t = &self.tokens;
+        let accent = t.rgba("theme-accent");
+        let ink = t.rgba("theme-accent-ink");
+        let rect = graphene::Rect::new(
+            image.x() + crop.x as f32 * scale,
+            image.y() + crop.y as f32 * scale,
+            crop.width as f32 * scale,
+            crop.height as f32 * scale,
+        );
+        let dim = gdk::RGBA::new(3. / 255., 4. / 255., 6. / 255., 0.62);
+        let (l, r) = (rect.x(), rect.x() + rect.width());
+        let (top, bottom) = (rect.y(), rect.y() + rect.height());
+        let (il, ir) = (image.x(), image.x() + image.width());
+        let (it, ib) = (image.y(), image.y() + image.height());
+        for dimmed in [
+            graphene::Rect::new(il, it, ir - il, top - it),
+            graphene::Rect::new(il, bottom, ir - il, ib - bottom),
+            graphene::Rect::new(il, top, l - il, bottom - top),
+            graphene::Rect::new(r, top, ir - r, bottom - top),
+        ] {
+            if dimmed.width() > 0. && dimmed.height() > 0. {
+                snapshot.append_color(&dim, &dimmed);
+            }
+        }
+        let outer = graphene::Rect::new(l - 1.5, top - 1.5, rect.width() + 3., rect.height() + 3.);
+        snapshot.append_border(
+            &gsk::RoundedRect::from_rect(outer, 0.),
+            &[1.; 4],
+            &[gdk::RGBA::new(0., 0., 0., 0.6); 4],
+        );
+        snapshot.append_border(
+            &gsk::RoundedRect::from_rect(rect, 0.),
+            &[1.5; 4],
+            &[accent; 4],
+        );
+        // The size badge, centered at the box's top.
+        let layout = self
+            .w
+            .preview
+            .create_pango_layout(Some(&format!("{} × {}", crop.width, crop.height)));
+        let mut font = gtk::pango::FontDescription::new();
+        font.set_weight(gtk::pango::Weight::Semibold);
+        font.set_absolute_size(f64::from(t.number("text-2xs")) * f64::from(gtk::pango::SCALE));
+        layout.set_font_description(Some(&font));
+        let (_, logical) = layout.pixel_extents();
+        let (bw, bh) = (logical.width() as f32 + 16., logical.height() as f32 + 6.);
+        let badge = graphene::Rect::new(l + (rect.width() - bw) / 2., top + 8., bw, bh);
+        let rounded = gsk::RoundedRect::from_rect(badge, t.number("r-xs"));
+        snapshot.push_rounded_clip(&rounded);
+        snapshot.append_color(&accent, &badge);
+        snapshot.pop();
+        snapshot.save();
+        snapshot.translate(&graphene::Point::new(badge.x() + 8., badge.y() + 3.));
+        snapshot.append_layout(&layout, &ink);
+        snapshot.restore();
+        let (cx, cy) = ((l + r) / 2., (top + bottom) / 2.);
+        for (hx, hy) in [
+            (l, top),
+            (cx, top),
+            (r, top),
+            (r, cy),
+            (r, bottom),
+            (cx, bottom),
+            (l, bottom),
+            (l, cy),
+        ] {
+            let handle =
+                gsk::RoundedRect::from_rect(graphene::Rect::new(hx - 5.5, hy - 5.5, 11., 11.), 3.);
+            snapshot.push_rounded_clip(&handle);
+            snapshot.append_color(&accent, handle.bounds());
+            snapshot.pop();
+            snapshot.append_border(&handle, &[2.; 4], &[ink; 4]);
+        }
     }
 
     fn draw_track(&self, snapshot: &gtk::Snapshot, _width: f32, height: f32) {

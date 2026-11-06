@@ -1237,6 +1237,97 @@ popover.captures-menu .choice-description {
   box-shadow: var(--shadow-lg);
 }
 
+/* `.recording-editor-grid`: the output option cards under the timeline. */
+.captures grid.recording-editor-grid {
+  margin-top: var(--s-5);
+}
+.captures grid.recording-editor-grid > .editor-card {
+  margin-bottom: var(--s-5);
+}
+.captures .editor-card {
+  padding: var(--s-6);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-xl);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-sm);
+}
+.captures .editor-card-title {
+  margin-bottom: var(--s-5);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-bold);
+}
+.captures .editor-field {
+  color: var(--text-subtle);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+.captures .editor-field + .editor-field,
+.captures .editor-field-help + .editor-field {
+  margin-top: var(--s-5);
+}
+.captures .editor-number-grid {
+  margin-top: var(--s-4);
+}
+.captures .editor-number-grid .editor-field {
+  font-size: var(--text-xs);
+}
+.captures .editor-number-grid .editor-field + .editor-field {
+  margin-top: 0;
+}
+.captures .editor-card button.check-row.compact {
+  margin-top: var(--s-4);
+  font-size: var(--text-sm);
+}
+.captures .editor-card button.editor-aspect-lock {
+  margin-top: var(--s-6);
+  margin-bottom: var(--s-4);
+}
+.captures .editor-quality-mode-field,
+.captures .editor-quality-preset,
+.captures .editor-field-help {
+  max-width: 430px;
+}
+.captures .editor-field-help {
+  margin-top: var(--s-3);
+  color: var(--text-subtle);
+  font-size: var(--text-xs);
+}
+.captures .recording-output-estimate {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  font-feature-settings: "tnum";
+}
+.captures .recording-output-estimate.pending {
+  color: var(--text-subtle);
+}
+.captures .recording-output-estimate-delta {
+  padding: 2px var(--s-3);
+  border-radius: var(--r-pill);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+}
+.captures .recording-output-estimate-delta.is-smaller {
+  color: var(--positive-text);
+  background: var(--positive-surface);
+}
+.captures .recording-output-estimate-delta.is-larger {
+  color: var(--danger-text);
+  background: var(--danger-surface);
+}
+.captures .editor-audio-warning {
+  border-color: var(--caution-surface);
+  color: var(--caution-text);
+  background: var(--caution-surface);
+  font-size: var(--text-sm);
+}
+.captures .editor-volume {
+  margin: var(--s-4) 0;
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+
 /* ---------------------------------------------------- floating previews ---- */
 
 /* `mini-preview.css`: always the fixed glass palette, over any wallpaper. */

@@ -37,11 +37,11 @@ use crate::widgets::{Icon, SnapshotArea, icon_button};
 
 mod canvas_bar;
 mod compare;
-mod controls;
+pub(crate) mod controls;
 mod export_bar;
 mod inspector;
 mod layer_menu;
-mod properties;
+pub(crate) mod properties;
 mod text;
 pub use text::register_fonts;
 

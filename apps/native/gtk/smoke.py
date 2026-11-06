@@ -596,6 +596,53 @@ def editor_close_keeps_open_text(binary, scratch):
         process.wait(timeout=10)
 
 
+def recording_output(binary, scratch):
+    """Output options: crop with the aspect lock, GIF format (its settings
+    card, Save as new file forced on) and a real Save at the cropped size."""
+    root = scratch / "output-history"
+    write_video_entry(root, seconds=2)
+    exports = root.with_name(root.name + "-exports")
+    process = launch(binary, "--scene", "history", "--history-root", str(root),
+                     "--settings-file", str(scratch / "preferences.json"), "--size", "1020x720")
+    try:
+        app = wait(lambda: application(process.pid), "the app on the accessibility bus")
+        press(wait(lambda: find(app, "push button", "Open video in editor"), "video Edit")[0])
+        wait(lambda: find(app, "heading", "Crop & size"), "the Crop & size card")
+
+        def choose(trigger, option):
+            press(wait(lambda: [n for n, (role, name) in nodes(app)
+                                if role == "combo box" and name.startswith(trigger)], trigger)[0])
+            press(wait(lambda: find(app, "radio menu item", option), option)[0])
+            wait(lambda: not find(app, "radio menu item", option), f"the {trigger} menu to close")
+
+        press(find(app, "check box", "Crop recording")[0])
+        width = find(app, "spin button", "Width")[0]
+        Atspi.Value.set_current_value(width, 320)
+        height = find(app, "spin button", "Height")[0]
+        wait(lambda: Atspi.Value.get_current_value(height) == 180,
+             "the aspect lock to set Height 180")
+        wait(lambda: find(app, "combo box", "Output resolution: Original — 320 × 180"),
+             "Output resolution to follow the crop")
+        choose("Format", "GIF")
+        wait(lambda: find(app, "heading", "GIF settings"), "the GIF settings card")
+        assert find(app, "combo box", "Save quality: Compress"), "GIF did not switch to Compress"
+        switch = [n for role in ("switch", "check box", "toggle button")
+                  for n in find(app, role, "Save as new file")][0]
+        wait(lambda: has_state(switch, Atspi.StateType.CHECKED), "GIF to save a new file")
+        save = find(app, "push button", "Save")[0]
+        wait(lambda: has_state(save, Atspi.StateType.SENSITIVE), "Save to enable")
+        press(save)
+        saved = wait(lambda: [p for p in exports.iterdir() if p.name.endswith("-edited.gif")],
+                     "the saved GIF", timeout=60)[0]
+        gif = GdkPixbuf.PixbufAnimation.new_from_file(str(saved))
+        assert (gif.get_width(), gif.get_height()) == (320, 180), \
+            f"saved {gif.get_width()}×{gif.get_height()}"
+        print(f"recording: cropped to 320×180 and saved {saved.name} as GIF")
+    finally:
+        process.terminate()
+        process.wait(timeout=10)
+
+
 def previews(binary, scratch):
     root = scratch / "preview-history"
     write_history_entries(root, 3)
@@ -706,6 +753,7 @@ def main():
         editor(args.binary, scratch)
         editor_close_keeps_open_text(args.binary, scratch)
         recording(args.binary, scratch)
+        recording_output(args.binary, scratch)
         previews(args.binary, scratch)
 
 

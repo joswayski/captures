@@ -290,6 +290,7 @@ impl Host {
                 history_root: self.history_root.clone(),
                 artifact_id: artifact_id.to_owned(),
                 output_directory: settings.output_directory.into(),
+                preferences: settings.recording,
             },
         ));
         let host = Rc::downgrade(self);

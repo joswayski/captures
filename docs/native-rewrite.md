@@ -565,15 +565,31 @@ with shipping's `-edited` name, Save or replace the original). Playback
 frames replace one texture; trim drags only redraw the track nodes and apply
 after the shared live-apply delay. The handles are restyled `GtkScale`s, so
 AT-SPI reports their value range on every GTK 4 release, and arrows move
-them 100 ms (1 s with Shift). Not ported: the output option cards (crop,
-format, quality, size, audio), the Change… folder button and format menu,
+them 100 ms (1 s with Shift). The output option cards follow (shipping
+`.recording-editor-grid`): GIF settings (frame rate, maximum width, seeded
+from Preferences), Crop & size (Crop recording, X/Y/Width/Height spin
+buttons, Lock aspect ratio through the shared `CropRect` rules, Output
+resolution with Custom width × height), Save quality (Preserve for MP4 only,
+Compress presets, Maximum file size with its unit, Est. size with the
+shared debounced background estimate and delta), Audio (per-source mute and
+0–200% volume, Convert to mono) and the GIF audio note, plus the filename's
+format select (another format forces Save as new file, as
+`updateOutputFormat`). Edits are applied live as `UpdatePreview` with
+shipping's `buildExportRequestSpecs`; an invalid Maximum limit stays
+unapplied and disables Save. With Crop recording on, the preview shows the
+uncropped source frame under the dim, accent box, size badge and eight
+handles, drawn as retained nodes; dragging moves or resizes it in source
+pixels. The handles are drawn, not widgets: assistive technologies use the
+crop spin buttons. Not ported: the Change… folder button, the recording
 compression preview, and save toasts. Release build under Xvfb with Cairo on
 a 4 s 640×360 fixture: about 100 MB RSS and about 10 ms of CPU per 5 s idle;
 the egui workbench has no recording-editor scene to measure against. CI
 installs FFmpeg, renders it in both appearances, and `smoke.py` opens it from
 History, trims 1 s with the keyboard over AT-SPI, plays and pauses, and
 checks that Save as new writes a 3 s `-edited` MP4 and leaves the source
-unchanged. X11 (Xvfb) only; Wayland, Orca and real hardware remain open.
+unchanged; a second step crops to 320 × 180 with the aspect lock, switches
+to GIF (GIF settings, Compress, Save as new forced on) and checks the saved
+GIF's size. X11 (Xvfb) only; Wayland, Orca and real hardware remain open.
 Windows, macOS: unchanged.
 
 ## Progress dashboard

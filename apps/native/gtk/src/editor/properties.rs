@@ -25,7 +25,7 @@ const MODES: [(EraserMode, &str); 3] = [
     (EraserMode::Brush(BrushMode::Restore), "Restore"),
 ];
 
-pub(super) fn text(value: &str, class: &str) -> gtk::Label {
+pub(crate) fn text(value: &str, class: &str) -> gtk::Label {
     let label = gtk::Label::new(Some(value));
     label.add_css_class(class);
     label.set_xalign(0.);
@@ -35,13 +35,13 @@ pub(super) fn text(value: &str, class: &str) -> gtk::Label {
 
 /// Shipping `RangeSlider` inside its property `<label>`: caption, value
 /// readout, accent-filled track and the mark labels under it.
-pub(super) struct RangeSlider {
-    pub(super) root: gtk::Box,
-    pub(super) scale: gtk::Scale,
+pub(crate) struct RangeSlider {
+    pub(crate) root: gtk::Box,
+    pub(crate) scale: gtk::Scale,
 }
 
 impl RangeSlider {
-    pub(super) fn new(
+    pub(crate) fn new(
         caption: &str,
         name: &str,
         range: (f64, f64),
@@ -77,20 +77,20 @@ impl RangeSlider {
     }
 
     /// Show `value`; with `force` false a slider the user holds keeps its own.
-    pub(super) fn set(&self, value: f64, force: bool) {
+    pub(crate) fn set(&self, value: f64, force: bool) {
         if force || !self.scale.has_focus() {
             self.scale.set_value(value);
         }
     }
 
-    pub(super) fn value(&self) -> f64 {
+    pub(crate) fn value(&self) -> f64 {
         self.scale.value().round()
     }
 }
 
 /// Shipping `.screenshot-check-row`: a real check box drawn as the token box
 /// with the shipping check glyph.
-pub(super) fn check_row(caption: &str, active: bool) -> gtk::ToggleButton {
+pub(crate) fn check_row(caption: &str, active: bool) -> gtk::ToggleButton {
     // GtkCheckButton only takes a custom child from GTK 4.8, so this is a
     // toggle that AT-SPI reads as a check box with a checked state.
     let check = gtk::ToggleButton::builder()
