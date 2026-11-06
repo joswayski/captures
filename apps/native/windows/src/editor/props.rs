@@ -775,11 +775,98 @@ impl Editor {
     }
 
     pub(super) fn scroll_props(&mut self, delta: f32) {
-        let max = (self.props_height - self.props_view().h).max(0.);
-        let next = (self.props_scroll + delta).clamp(0., max);
+        let next = (self.props_scroll + delta).clamp(0., self.props_max());
         if next != self.props_scroll {
             self.props_scroll = next;
             self.place();
+            self.events.push(Event::Scrolled);
+            self.need = true;
+        }
+    }
+
+    /// UIA `Scroll.SetScrollPercent` on Tool properties.
+    pub fn set_props_percent(&mut self, percent: f32) {
+        let target = self.props_max() * percent.clamp(0., 100.) / 100.;
+        self.scroll_props(target - self.props_scroll);
+    }
+
+    /// UIA `ScrollItem.ScrollIntoView`, like a focused control.
+    pub fn reveal(&mut self, prop: Prop) {
+        self.reveal_prop(prop);
+    }
+
+    pub fn scroll_by(&mut self, delta: f32) {
+        self.scroll_props(delta);
+    }
+
+    /// How far the Properties body scrolls.
+    pub fn props_max(&self) -> f32 {
+        (self.props_height - self.props_view().h).max(0.)
+    }
+
+    /// The scrollbar's 10 px gutter and its thumb, in client DIPs; `None`
+    /// when nothing overflows.
+    fn props_scrollbar(&self) -> Option<(Rect, Rect)> {
+        let (view, max) = (self.props_view(), self.props_max());
+        if max <= 0. || self.props.is_empty() || view.h <= 0. {
+            return None;
+        }
+        let track = Rect::new(view.x + view.w - 10., view.y, 10., view.h);
+        let h = (view.h * view.h / self.props_height).max(20.).min(view.h);
+        let y = view.y + (view.h - h) * self.props_scroll / max;
+        Some((track, Rect::new(track.x, y, track.w, h)))
+    }
+
+    pub(super) fn place_props_thumb(&mut self) {
+        let thumb = self.props_scrollbar().map(|(_, thumb)| thumb);
+        if let Some(r) = thumb {
+            let p = self.l.properties;
+            self.set_rect(self.props_thumb, Rect::new(r.x - p.x, r.y - p.y, r.w, r.h));
+        }
+        self.set_visible(self.props_thumb, thumb.is_some());
+        if thumb.is_none() {
+            self.thumb_drag = None;
+            self.thumb_hover = false;
+        }
+    }
+
+    /// A press on the scrollbar: the thumb drags, the track pages.
+    pub(super) fn press_props_scrollbar(&mut self, x: f32, y: f32) -> bool {
+        let Some((track, thumb)) = self.props_scrollbar() else {
+            return false;
+        };
+        if !track.contains(x, y) {
+            return false;
+        }
+        if thumb.contains(x, y) {
+            self.thumb_drag = Some((y, self.props_scroll));
+            self.nodes[self.props_thumb].dirty = true;
+            self.need = true;
+        } else {
+            let page = (self.props_view().h - 40.).max(40.);
+            self.scroll_props(if y < thumb.y { -page } else { page });
+        }
+        true
+    }
+
+    /// Thumb travel maps onto the body's scroll range.
+    pub(super) fn drag_props_thumb(&mut self, dy: f32, from: f32) {
+        let Some((track, thumb)) = self.props_scrollbar() else {
+            return;
+        };
+        let travel = (track.h - thumb.h).max(1.);
+        let target = from + dy * self.props_max() / travel;
+        self.scroll_props(target - self.props_scroll);
+    }
+
+    pub(super) fn hover_props_thumb(&mut self, pointer: Option<(f32, f32)>) {
+        let hover = pointer.is_some_and(|(x, y)| {
+            self.props_scrollbar()
+                .is_some_and(|(_, thumb)| thumb.contains(x, y))
+        });
+        if hover != self.thumb_hover {
+            self.thumb_hover = hover;
+            self.nodes[self.props_thumb].dirty = true;
             self.need = true;
         }
     }
