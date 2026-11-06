@@ -501,6 +501,11 @@ impl State {
 
     fn copy(&self, card: &Rc<Card>) {
         let path = media_path(&self.history_root, &card.entry);
+        // Temporary CI trace for GTK 4.14's missing Copied chip.
+        let trace = std::env::var_os("CAPTURES_GTK_TRACE").is_some();
+        if trace {
+            eprintln!("trace: copy {}", path.display());
+        }
         let weak = Rc::downgrade(card);
         glib::spawn_future_local(async move {
             let texture = gio::spawn_blocking(move || {
@@ -508,6 +513,9 @@ impl State {
             })
             .await
             .unwrap_or_else(|_| Err("the copy worker stopped".into()));
+            if trace {
+                eprintln!("trace: copy decoded {:?}", texture.as_ref().map(|_| ()));
+            }
             let Some(card) = weak.upgrade() else { return };
             match texture {
                 Ok(texture) => {
@@ -571,6 +579,9 @@ impl Card {
     }
 
     fn notify(self: &Rc<Self>, text: &str, error: bool) {
+        if std::env::var_os("CAPTURES_GTK_TRACE").is_some() {
+            eprintln!("trace: notify {text}");
+        }
         self.chip.set_label(text);
         self.chip
             .update_property(&[gtk::accessible::Property::Label(text)]);

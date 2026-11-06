@@ -90,7 +90,8 @@ def press(node):
 
 
 def launch(binary, *args):
-    env = dict(os.environ, GSK_RENDERER="cairo", GTK_A11Y="atspi", NO_AT_BRIDGE="0")
+    env = dict(os.environ, GSK_RENDERER="cairo", GTK_A11Y="atspi", NO_AT_BRIDGE="0",
+               CAPTURES_GTK_TRACE="1")
     return subprocess.Popen([binary, *args], env=env, stdout=subprocess.DEVNULL)
 
 
@@ -324,8 +325,8 @@ def main():
         history(args.binary, scratch)
         preferences(args.binary, scratch)
         editor(args.binary, scratch)
-        previews(args.binary, scratch)
         recording(args.binary, scratch)
+        previews(args.binary, scratch)
 
 
 if __name__ == "__main__":
