@@ -7,6 +7,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use captures_app::compression_compare;
 use captures_app::editor_export::{self, DEFAULT_MAX_SIZE_BYTES, ExportBarView, FileSizeUnit};
 use captures_app::editor_session::{ExportFormat, ExportOptions, ExportQuality, ExportSize};
 use gtk::prelude::*;
@@ -38,6 +39,9 @@ pub(super) struct ExportBar {
     maximum_box: gtk::Box,
     estimate: gtk::Label,
     delta: gtk::Label,
+    /// Shipping's Comparison · Show before / after, while it is hidden.
+    show_box: gtk::Box,
+    pub(super) show_compare: gtk::Button,
     model: Rc<Model>,
 }
 
@@ -353,6 +357,15 @@ impl ExportBar {
             "export-estimate-control",
             &estimate_row,
         ));
+        let show_compare = gtk::Button::with_label(compression_compare::SHOW);
+        show_compare.add_css_class("export-show-compare");
+        let show_box = control(
+            compression_compare::SHOW_CAPTION,
+            "export-compare-control",
+            &show_compare,
+        );
+        show_box.set_visible(false);
+        panel.append(&show_box);
 
         // `.screenshot-export-disclosure`.
         let disclosure = gtk::Button::new();
@@ -410,6 +423,8 @@ impl ExportBar {
             maximum_box,
             estimate,
             delta,
+            show_box,
+            show_compare,
             model,
         });
         let weak = Rc::downgrade(&bar);
@@ -520,6 +535,14 @@ impl ExportBar {
 
     pub(super) fn set_sensitive(&self, on: bool) {
         self.format.set_sensitive(on);
+    }
+
+    pub(super) fn is_open(&self) -> bool {
+        self.panel.is_visible()
+    }
+
+    pub(super) fn set_show_compare(&self, visible: bool) {
+        self.show_box.set_visible(visible);
     }
 }
 

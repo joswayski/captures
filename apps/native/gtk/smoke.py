@@ -418,6 +418,21 @@ def editor(binary, scratch):
         wait(lambda: list(elsewhere.glob("*.jpg")), "Save to write into the chosen folder")
         print("editor: Change… moved Save to another folder")
 
+        # Compress with Export settings open shows the before/after split.
+        wait(lambda: find(app, "push button", "Drag to compare before and after"),
+             "the compression comparison")
+        wait(lambda: [n for n, (role, name) in nodes(app)
+                      if role == "label" and name.startswith("After · ")
+                      and "Processing" not in name], "the After badge size")
+        Atspi.Value.set_current_value(find(app, "slider", "Before and after comparison")[0], 25)
+        press(find(app, "push button", "Hide compression comparison")[0])
+        show = wait(lambda: find(app, "push button", "Show before / after"), "Show before / after")
+        assert not find(app, "push button", "Drag to compare before and after"), "Hide kept the split"
+        press(show[0])
+        wait(lambda: find(app, "push button", "Drag to compare before and after"),
+             "Show before / after to restore the comparison")
+        print("editor: Compress before/after comparison: split, Hide and Show")
+
         # Layers: double-click renames an image layer in its row, and dragging
         # its row below the next layer reorders it. The 640 px screen cannot
         # show the layers panel, so slide the window left for the pointer.

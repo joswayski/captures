@@ -866,6 +866,68 @@ popover.captures-menu button.editor-shape-button.active {
   box-shadow: var(--focus-ring-tight);
 }
 
+/* `CompressionPreview` over the canvas: fixed glass pills and handle. */
+.captures .compare-pill {
+  padding: var(--s-2) var(--s-4);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-pill);
+  color: var(--glass-text);
+  background: var(--glass-strong);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+.captures button.compare-hide {
+  all: unset;
+  padding: var(--s-2) var(--s-4);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-pill);
+  color: var(--glass-text);
+  background: var(--glass-strong);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+.captures button.compare-hide:hover {
+  border-color: var(--glass-border-strong);
+  background: var(--glass-raised);
+}
+.captures .compare-savings {
+  color: var(--positive-text);
+}
+.captures button.compare-handle {
+  all: unset;
+  border: 1px solid var(--glass-border-strong);
+  border-radius: 999px;
+  color: var(--glass-text);
+  background: var(--glass-strong);
+  box-shadow: var(--glass-shadow);
+  font-size: var(--text-sm);
+}
+.captures button.compare-handle > label {
+  margin: 0 auto;
+}
+.captures button.compare-handle:focus-visible,
+.captures button.compare-hide:focus-visible {
+  box-shadow: var(--focus-ring-tight);
+}
+.captures scale.compare-range {
+  opacity: 0;
+}
+.captures button.export-show-compare {
+  all: unset;
+  min-height: calc(var(--h-md) - 2px);
+  padding: 0 var(--s-4);
+  border: 1px solid var(--control-border);
+  border-radius: var(--r-md);
+  color: var(--text);
+  background: var(--control);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+.captures button.export-show-compare:hover {
+  border-color: var(--border-strong);
+  background: var(--control-hover);
+}
+
 /* `.screenshot-export-disclosure` and `.screenshot-export-settings`. */
 .captures button.export-disclosure {
   all: unset;

@@ -485,8 +485,7 @@ chooser. Selects in the lower half of the window open upward like
 shipping's listbox. GTK 4.14 names a button after its label child, so
 Change…'s text is presentational to keep shipping's "Change save location"
 name. The smoke saves a Compress, 50% JPEG and checks its width, then saves
-into a folder picked with Change…. Not yet: the Compress before/after
-comparison, and Preserve's estimate still re-encodes an unchanged document
+into a folder picked with Change…. Preserve's estimate still re-encodes an unchanged document
 instead of showing the original file size as shipping does (the shared
 model's behavior, as in the egui workbench). Layer rows now carry shipping's
 grip (dimmed on locked layers). Dragging a row onto another places it above
@@ -509,7 +508,18 @@ card. Layer rows now show live thumbnails: the worker calls
 `refresh_layer_thumbnails` after each edit (only changed layers re-render,
 at most 64 px), the row draws the cached image cover-fit in a 44 × 32 well
 like `.screenshot-layer-preview img`, and the host uploads a texture only
-when the session hands it a new image; rows without one keep the kind icon.
+when the session hands it a new image; rows without one keep the kind icon. The
+Compress before/after comparison now covers the canvas while Compress or
+Maximum file size is chosen and Export settings are open (shipping
+`is-cover`): the canvas draws the decoded encode right of the divider into
+its retained nodes, plus the divider and a glass veil while an encode runs;
+the Before/After badges (with the savings figure), Hide, the round handle and
+the full-width split range are real widgets for AT-SPI. One background
+encode feeds both the After side and Est. size. A canvas gesture or inline
+text hides it, a drawing tool leaves only the handle draggable, Hide brings
+up Comparison · Show before / after in Export settings, and a new quality
+mode shows it again. Like Change…, the handle and Hide keep their visible
+text presentational so GTK 4.14 reports shipping's names.
 Release build
 under Xvfb with Cairo on a 640×360 fixture: about 110 MB RSS and near-zero
 idle CPU; the egui workbench's own editor scene measures about 173 MB the

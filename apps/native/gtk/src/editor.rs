@@ -36,6 +36,7 @@ use crate::tokens::Tokens;
 use crate::widgets::{Icon, SnapshotArea, icon_button};
 
 mod canvas_bar;
+mod compare;
 mod controls;
 mod export_bar;
 mod inspector;
@@ -265,7 +266,7 @@ struct State {
     /// The Est. size shown, the inputs it was (or is being) encoded for,
     /// its generation and the debounce before the next encode.
     estimate: Cell<EstimateState>,
-    estimate_key: Cell<Option<(usize, ExportOptions)>>,
+    estimate_key: Cell<Option<(usize, ExportOptions, bool)>>,
     estimate_generation: Cell<u64>,
     estimate_timer: RefCell<Option<glib::SourceId>>,
     /// The History entry's file size, the Preserve baseline.
@@ -280,6 +281,10 @@ struct State {
     pending_select: RefCell<Option<String>>,
     /// Uploaded row thumbnails by layer id, keyed by the image they show.
     thumbnails: RefCell<std::collections::HashMap<String, (usize, gdk::Texture)>>,
+    /// The Compress before/after comparison over the canvas.
+    compare: Rc<compare::Compare>,
+    /// Whether the last canvas frame suppressed it (a gesture or inline text).
+    compare_suppressed: Cell<bool>,
     preview_dirty: Cell<bool>,
     /// The previous primary press, for double-click editing.
     last_press: Cell<Option<(std::time::Instant, f64, f64)>>,
@@ -519,6 +524,23 @@ pub fn build(
     text_overlay.set_child(Some(&canvas));
     let text_field = text::TextField::new();
     text_overlay.add_overlay(&text_field.view);
+    let compare = {
+        let (canvas, overlay) = (canvas.clone(), text_overlay.clone());
+        compare::Compare::new(move || {
+            canvas.queue_draw();
+            overlay.queue_allocate();
+        })
+    };
+    for widget in [
+        compare.before.upcast_ref::<gtk::Widget>(),
+        compare.after.upcast_ref(),
+        compare.hide.upcast_ref(),
+        compare.range.upcast_ref(),
+        compare.handle.upcast_ref(),
+    ] {
+        widget.set_visible(false);
+        text_overlay.add_overlay(widget);
+    }
     body.append(&text_overlay);
     let panel = gtk::Box::new(gtk::Orientation::Vertical, 0);
     let heading = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -672,6 +694,8 @@ pub fn build(
         layer_menu: RefCell::default(),
         pending_select: RefCell::default(),
         thumbnails: RefCell::default(),
+        compare,
+        compare_suppressed: Cell::default(),
         preview_dirty: Cell::default(),
         widgets: Widgets {
             undo,
@@ -1895,6 +1919,10 @@ impl State {
         w.export.set_sensitive(!self.busy.get());
         w.change_folder.set_sensitive(!self.busy.get());
         self.schedule_estimate(&presented.pixels);
+        let compresses = self.options.get().quality != ExportQuality::Preserve;
+        w.export
+            .set_show_compare(compresses && self.compare.dismissed.get());
+        self.refresh_compare();
         w.folder
             .set_label(&format!("Saving to {}", target.directory.display()));
         w.folder
@@ -1920,7 +1948,11 @@ impl State {
     }
 
     fn set_options(&self, options: ExportOptions) {
-        self.options.set(options);
+        let previous = self.options.replace(options);
+        if previous.quality != options.quality {
+            // Shipping brings a hidden comparison back on a new quality mode.
+            self.compare.dismissed.set(false);
+        }
         *self.notice.borrow_mut() = None;
         self.update_export();
     }
@@ -1929,7 +1961,8 @@ impl State {
     /// exactly as Save would; a superseded result is dropped.
     fn schedule_estimate(&self, pixels: &Arc<RgbaImage>) {
         let options = self.options.get();
-        let key = (Arc::as_ptr(pixels) as usize, options);
+        let comparing = self.compare_visible();
+        let key = (Arc::as_ptr(pixels) as usize, options, comparing);
         if self.estimate_key.get() == Some(key) {
             return;
         }
@@ -1950,25 +1983,80 @@ impl State {
                 }
                 glib::spawn_future_local(async move {
                     let result = gtk::gio::spawn_blocking(move || {
-                        editor_export::estimate_export(&pixels, options, original)
+                        if !comparing {
+                            return editor_export::estimate_export(&pixels, options, original)
+                                .map(|estimate| (estimate, None));
+                        }
+                        // One encode serves the comparison's After side and the
+                        // estimate; compression modes compare with lossless PNG.
+                        let (after, bytes) =
+                            captures_app::compression_compare::encode_after(&pixels, options)?;
+                        let baseline = captures_history::encode_png(&pixels)
+                            .map_err(|error| error.to_string())?
+                            .len() as u64;
+                        Ok((
+                            editor_export::ExportEstimate {
+                                bytes,
+                                baseline_bytes: Some(baseline),
+                            },
+                            Some(after),
+                        ))
                     })
                     .await;
                     let Some(state) = me.upgrade() else { return };
                     if state.estimate_generation.get() != generation {
                         return;
                     }
-                    state.estimate.set(match result {
-                        Ok(Ok(estimate)) => EstimateState {
+                    state.estimate.set(match &result {
+                        Ok(Ok((estimate, _))) => EstimateState {
                             bytes: Some(estimate.bytes),
                             baseline_bytes: estimate.baseline_bytes,
                             pending: false,
                         },
                         _ => EstimateState::default(),
                     });
+                    if let Ok(Ok((_, Some(after)))) = &result {
+                        *state.compare.texture.borrow_mut() = Some(texture_of(after));
+                        state.canvas.queue_draw();
+                    }
                     state.update_export();
                 });
             });
         *self.estimate_timer.borrow_mut() = Some(timer);
+    }
+
+    /// Shipping `showCompressCompare`.
+    fn compare_visible(&self) -> bool {
+        captures_app::compression_compare::screenshot_visible(
+            self.options.get().quality != ExportQuality::Preserve,
+            self.widgets.export.is_open(),
+            self.compare.dismissed.get(),
+        )
+    }
+
+    fn compare_suppressed_now(&self) -> bool {
+        self.gesture.borrow().is_some() || self.text_active()
+    }
+
+    /// Show the comparison's widgets and badges for the current state.
+    fn refresh_compare(&self) {
+        let visible = self.compare_visible();
+        if !visible {
+            self.compare.texture.borrow_mut().take();
+        }
+        let estimate = self.estimate.get();
+        let suppressed = self.compare_suppressed_now();
+        self.compare_suppressed.set(suppressed);
+        let drawing = !matches!(self.tool.borrow().as_str(), "v" | "h");
+        self.compare.sync(
+            visible && !suppressed,
+            estimate.baseline_bytes,
+            estimate.bytes,
+            estimate.pending,
+            drawing,
+        );
+        self.text_overlay.queue_allocate();
+        self.canvas.queue_draw();
     }
 
     /// Shipping's Change…: pick the folder Save writes to.
@@ -2114,7 +2202,79 @@ impl State {
         self.text_field.view.add_controller(focus);
         let weak = Rc::downgrade(self);
         self.text_overlay
-            .connect_get_child_position(move |_, _| weak.upgrade()?.text_field_rect());
+            .connect_get_child_position(move |_, child| {
+                let state = weak.upgrade()?;
+                if !state.compare.owns(child) {
+                    return state.text_field_rect();
+                }
+                let rect = state.image_rect()?;
+                // Only the part of the image inside the canvas carries the controls.
+                let (cw, ch) = (state.canvas.width() as f32, state.canvas.height() as f32);
+                let x = (rect.x as f32).max(0.);
+                let y = (rect.y as f32).max(0.);
+                let visible = graphene::Rect::new(
+                    x,
+                    y,
+                    ((rect.x + rect.width) as f32).min(cw) - x,
+                    ((rect.y + rect.height) as f32).min(ch) - y,
+                );
+                state.compare.position(child, &visible)
+            });
+        // The comparison handle drags the divider with any tool. The drag
+        // lives on the overlay, so its coordinates do not move with the handle.
+        let split_drag = gtk::GestureDrag::new();
+        split_drag.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let weak = Rc::downgrade(self);
+        split_drag.connect_drag_begin(move |gesture, x, y| {
+            let Some(state) = weak.upgrade() else { return };
+            let handle = &state.compare.handle;
+            let inside = handle.is_visible()
+                && handle.is_sensitive()
+                && handle
+                    .compute_bounds(&state.text_overlay)
+                    .is_some_and(|b| b.contains_point(&graphene::Point::new(x as f32, y as f32)));
+            gesture.set_state(if inside {
+                gtk::EventSequenceState::Claimed
+            } else {
+                gtk::EventSequenceState::Denied
+            });
+        });
+        let weak = Rc::downgrade(self);
+        split_drag.connect_drag_update(move |gesture, dx, _| {
+            let Some(state) = weak.upgrade() else { return };
+            let (Some((x, _)), Some(rect)) = (gesture.start_point(), state.image_rect()) else {
+                return;
+            };
+            state
+                .compare
+                .set_split(captures_app::compression_compare::split_at(
+                    x + dx - rect.x,
+                    rect.width,
+                ));
+            state.canvas.queue_draw();
+            state.text_overlay.queue_allocate();
+        });
+        self.text_overlay.add_controller(split_drag);
+        let weak = Rc::downgrade(self);
+        self.compare.hide.connect_clicked(move |_| {
+            if let Some(state) = weak.upgrade() {
+                state.compare.dismissed.set(true);
+                state.update_export();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.widgets.export.show_compare.connect_clicked(move |_| {
+            if let Some(state) = weak.upgrade() {
+                state.compare.dismissed.set(false);
+                state.update_export();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.widgets.export.disclosure.connect_clicked(move |_| {
+            if let Some(state) = weak.upgrade() {
+                state.update_export();
+            }
+        });
 
         // Middle-button drag pans with any tool.
         let pan = gtk::GestureDrag::new();
@@ -2512,6 +2672,47 @@ impl State {
         self.canvas.queue_draw();
     }
 
+    /// The After encode right of the divider, the divider, and the veil while
+    /// a new encode runs (shipping `is-cover`).
+    fn draw_compare(&self, snapshot: &gtk::Snapshot, bounds: &graphene::Rect) {
+        let suppressed = self.compare_suppressed_now();
+        if suppressed != self.compare_suppressed.get() {
+            // Widgets cannot change during a snapshot; update them after it.
+            let me = self.me.clone();
+            glib::idle_add_local_once(move || {
+                if let Some(state) = me.upgrade() {
+                    state.refresh_compare();
+                }
+            });
+        }
+        if suppressed || !self.compare_visible() {
+            return;
+        }
+        let t = &self.tokens;
+        if let Some(after) = self.compare.texture.borrow().as_ref() {
+            let x = bounds.x() + bounds.width() * self.compare.split.get() as f32;
+            snapshot.push_clip(&graphene::Rect::new(
+                x,
+                bounds.y(),
+                bounds.x() + bounds.width() - x,
+                bounds.height(),
+            ));
+            snapshot.append_texture(after, bounds);
+            snapshot.pop();
+            snapshot.append_color(
+                &gdk::RGBA::new(0., 0., 0., 0.35),
+                &graphene::Rect::new(x - 2., bounds.y(), 4., bounds.height()),
+            );
+            snapshot.append_color(
+                &t.rgba("glass-text"),
+                &graphene::Rect::new(x - 1., bounds.y(), 2., bounds.height()),
+            );
+        }
+        if self.estimate.get().pending {
+            snapshot.append_color(&t.rgba("glass-veil"), bounds);
+        }
+    }
+
     fn draw(&self, snapshot: &gtk::Snapshot, width: f32, height: f32) {
         let t = &self.tokens;
         let light = t.rgba("text").red() < 0.5;
@@ -2577,6 +2778,7 @@ impl State {
             0.,
         );
         snapshot.append_border(&outline, &[1.; 4], &[border; 4]);
+        self.draw_compare(snapshot, &bounds);
 
         let accent = t.rgba("theme-accent");
         let gesture = self.gesture.borrow().clone();
