@@ -234,6 +234,41 @@ headless harness overlays. Windows: cross-compiled only; Wine renders at
 600×660 and 880×660 in light and dark. Live resizing across the breakpoint
 and Narrator need a real Windows run. macOS, Linux: unchanged.
 
+The eighth Windows slice adds Capture History as a second Win32 window
+(`apps/native/windows/src/history.rs`, 1020×720, min 640×440). Preferences'
+Capture History… opens it, Back to Preferences returns, and
+`--scene history` opens it directly (with `--screenshot` for offscreen
+renders). It follows shipping `CaptureHistory`/`HistoryCard` with the copy,
+card model, dates and grid geometry from `captures_app::history_view`. It
+has the header (Back, title, 60ch lede, two-step Delete all with Cancel and a
+4 s timeout), filter pills with counts (empty filters disabled), the page
+error, the loading, empty and filtered-empty states, and the auto-fill card
+grid (one column at 720 px or less). Cards show a thumbnail, the two-step
+trash (a missing recording goes in one click), date, details, dropped-frame
+warning, two actions and an inline error that grows its row. Entries load
+off the UI thread. `preview.png` is decoded through WIC at display size on
+one worker thread, with a 36-thumbnail cache. The grid is virtualised: card
+slots exist only for rows in the viewport, and a card that scrolls out
+releases every surface. Hover layers, focus rings and the 2 px card lift are
+compositor animations, and nothing redraws at idle. Recordings' Save file
+(`SaveRecording` into the Captures folder) and Show in Folder
+(`SHOpenFolderAndSelectItems`) work. Tab, Enter/Space, arrow keys between
+cards (`Grid::step`), Page Up/Down, Home/End and the wheel all work. UI
+Automation mirrors the DOM: the filter group with Toggle buttons
+(`aria-pressed`), the "Recent captures" region of article groups, Invoke
+buttons whose names follow the two-step states, an h1, alerts and
+IsOffscreen for virtualised cards. Missing: Edit, Restore and the thumbnail
+open action are disabled until this host has editors and floating previews;
+there is no secondary-click menu (Copy image, Save image), no file drag
+out, no interrupted-recording recovery section, and no live reload on
+`capture-history-changed` (reopening reloads). Native Windows checks also
+render History in light and dark from a 24-entry fixture. Windows: cross-compiled only; Wine renders
+at 1020×720 (fixture and empty, light and dark) match the Tauri harness
+layout. Wine draws disabled buttons at full opacity because it lacks layer
+opacity. Rendering, thumbnail decode at 150%, hover, scrolling, Explorer
+reveal, performance and Narrator need a real Windows run. macOS, Linux:
+unchanged.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,

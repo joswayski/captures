@@ -276,10 +276,27 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "--screenshot ($appearance) exited $LASTEXITCODE" }
             if (-not (Test-Path $png) -or (Get-Item $png).Length -eq 0) { throw "$png is empty" }
           }
+      - name: Render History offscreen in both appearances
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'history'
+          python apps/native/history_fixture.py $root --count 24
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $settings = Join-Path $env:RUNNER_TEMP 'settings.json'
+          foreach ($appearance in 'light', 'dark') {
+            $png = Join-Path $env:RUNNER_TEMP "history-$appearance.png"
+            & apps/native/windows/target/debug/captures-windows.exe `
+              --scene history --history-root $root `
+              --appearance $appearance --settings-file $settings `
+              --size 1020x720 --screenshot $png
+            if ($LASTEXITCODE -ne 0) { throw "--screenshot history ($appearance) exited $LASTEXITCODE" }
+            if (-not (Test-Path $png) -or (Get-Item $png).Length -eq 0) { throw "$png is empty" }
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: native-windows-preferences
-          path: ${{ runner.temp }}/preferences-*.png
+          path: |
+            ${{ runner.temp }}/preferences-*.png
+            ${{ runner.temp }}/history-*.png
           if-no-files-found: error
 
   rust:

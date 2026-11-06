@@ -631,8 +631,10 @@ name = "captures-windows"
 version = "0.1.0"
 dependencies = [
  "captures-app",
+ "captures-history",
  "captures-recording-platform",
  "captures-settings",
+ "chrono",
  "serde",
  "serde_json",
  "windows 0.62.2",

@@ -598,6 +598,8 @@ pub enum Action {
     /// Show the system color picker for a custom color, outside the host
     /// borrow.
     PickColor(usize),
+    /// Open Capture History, outside the host borrow.
+    OpenHistory,
 }
 
 /// Accessibility notifications, raised by the host outside its borrow.
@@ -2642,8 +2644,7 @@ impl Scene {
                 }
                 None
             }
-            // Capture History is not part of this host yet.
-            Target::History => None,
+            Target::History => Some(Action::OpenHistory),
             Target::Row(row) => self.toggle(row),
             Target::Mode(index) => self.select_mode(index),
             Target::Theme(index) => self.select_theme(index),
