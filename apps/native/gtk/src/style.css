@@ -1411,3 +1411,24 @@ popover.captures-menu .text-style-preview.style-rounded-box {
 .captures button.shape-pick:focus-visible {
   box-shadow: var(--focus-ring-tight);
 }
+
+/* `.screenshot-add-image` in the header's history actions. */
+.captures button.editor-add-image {
+  all: unset;
+  min-height: 32px;
+  margin-left: var(--s-2);
+  padding: 0 var(--s-5);
+  border: 1px solid var(--control-border);
+  border-radius: var(--r-md);
+  color: var(--text);
+  background: var(--control);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+.captures button.editor-add-image:hover {
+  border-color: var(--border-strong);
+  background: var(--control-hover);
+}
+.captures button.editor-add-image:focus-visible {
+  box-shadow: var(--focus-ring-tight);
+}

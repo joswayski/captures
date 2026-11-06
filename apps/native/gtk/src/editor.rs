@@ -90,6 +90,12 @@ enum Job {
     Apply(Request),
     /// An uncommitted brush stroke, rendered without touching history.
     Preview(Request),
+    /// Decode image files and import them as one edit.
+    Import {
+        paths: Vec<PathBuf>,
+        selected_id: Option<String>,
+        point: Option<Point>,
+    },
     Save {
         plan: editor_export::SavePlan,
         options: ExportOptions,
@@ -99,6 +105,8 @@ enum Job {
 
 enum Outcome {
     Presented(Box<Presented>),
+    /// Images were imported; select the last new layer.
+    Imported(Box<Presented>, String),
     Preview(Result<Arc<RgbaImage>, String>),
     Saved(
         Result<
@@ -225,6 +233,9 @@ struct State {
     /// A brush preview is rendering; newer strokes wait for it.
     preview_busy: Cell<bool>,
     queued: RefCell<std::collections::VecDeque<(Option<String>, Request)>>,
+    /// The open Add images chooser; GtkNativeDialog does not keep itself alive.
+    #[allow(deprecated)]
+    chooser: RefCell<Option<gtk::FileChooserNative>>,
     preview_dirty: Cell<bool>,
     /// The previous primary press, for double-click editing.
     last_press: Cell<Option<(std::time::Instant, f64, f64)>>,
@@ -250,6 +261,7 @@ struct Widgets {
     save: gtk::Button,
     save_as_new: TokenSwitch,
     copy: gtk::Button,
+    add_images: gtk::Button,
 }
 
 fn label(text: &str, class: &str) -> gtk::Label {
@@ -321,6 +333,16 @@ pub fn build(
                             Err(error) => Outcome::Failed(error),
                         },
                         Job::Preview(request) => Outcome::Preview(session.preview_drawing(request)),
+                        Job::Import {
+                            paths,
+                            selected_id,
+                            point,
+                        } => match captures_app::editor_image_decode::decode_imports(paths)
+                            .and_then(|images| session.import_images(images, selected_id, point))
+                        {
+                            Ok(layer) => Outcome::Imported(Box::new(present(session, &id)), layer),
+                            Err(error) => Outcome::Failed(error),
+                        },
                         Job::Save {
                             plan,
                             options,
@@ -405,6 +427,9 @@ pub fn build(
         zoom.append(widget);
     }
     right.append(&zoom);
+    let (add_images, _, _) = icon_button("image", header::ADD_IMAGES, &["editor-add-image"]);
+    add_images.set_valign(gtk::Align::Center);
+    right.append(&add_images);
     main.append(&right);
     header_box.append(&banner);
     header_box.append(&main);
@@ -564,6 +589,7 @@ pub fn build(
         pointer: Cell::default(),
         preview_busy: Cell::default(),
         queued: RefCell::default(),
+        chooser: RefCell::default(),
         preview_dirty: Cell::default(),
         widgets: Widgets {
             undo,
@@ -584,6 +610,7 @@ pub fn build(
             save,
             save_as_new,
             copy,
+            add_images,
         },
     });
     state.connect(&window);
@@ -958,6 +985,63 @@ impl State {
         queue.push_back((key, request));
     }
 
+    /// Import image files as one edit, below the selection or at `point`.
+    fn import_files(&self, paths: Vec<PathBuf>, point: Option<Point>) {
+        if paths.is_empty() {
+            return;
+        }
+        if self.text_active() {
+            self.finish_text();
+        }
+        *self.notice.borrow_mut() = None;
+        self.busy.set(true);
+        let _ = self.jobs.send(Job::Import {
+            paths,
+            selected_id: self.selected.borrow().clone(),
+            point,
+        });
+    }
+
+    /// Shipping's Add images: a multi-select image picker.
+    fn choose_images(self: &Rc<Self>) {
+        let window = self.canvas.root().and_downcast::<gtk::Window>();
+        #[allow(deprecated)] // `GtkFileDialog` needs GTK 4.10.
+        let chooser = gtk::FileChooserNative::new(
+            Some(header::ADD_IMAGES),
+            window.as_ref(),
+            gtk::FileChooserAction::Open,
+            Some("Add"),
+            Some("Cancel"),
+        );
+        let filter = gtk::FileFilter::new();
+        filter.set_name(Some("Images"));
+        filter.add_mime_type("image/*");
+        #[allow(deprecated)]
+        {
+            chooser.add_filter(&filter);
+            chooser.set_select_multiple(true);
+        }
+        let weak = Rc::downgrade(self);
+        #[allow(deprecated)]
+        chooser.connect_response(move |chooser, response| {
+            let files = chooser.files();
+            chooser.destroy();
+            let Some(state) = weak.upgrade() else { return };
+            state.chooser.borrow_mut().take();
+            if response != gtk::ResponseType::Accept {
+                return;
+            }
+            let paths = (0..files.n_items())
+                .filter_map(|i| files.item(i).and_downcast::<gtk::gio::File>())
+                .filter_map(|file| file.path())
+                .collect();
+            state.import_files(paths, None);
+        });
+        #[allow(deprecated)]
+        chooser.show();
+        *self.chooser.borrow_mut() = Some(chooser);
+    }
+
     /// Send the next queued Properties edit once the worker is free.
     fn drain_queued(&self) {
         if let Some((_, request)) = self.queued.borrow_mut().pop_front() {
@@ -1065,6 +1149,12 @@ impl State {
 
     fn receive(self: &Rc<Self>, outcome: Outcome) {
         match outcome {
+            Outcome::Imported(presented, layer) => {
+                self.receive(Outcome::Presented(presented));
+                *self.selected.borrow_mut() = Some(layer);
+                self.rebuild_selection();
+                self.canvas.queue_draw();
+            }
             Outcome::Presented(presented) => {
                 self.busy.set(false);
                 self.drain_queued();
@@ -1446,6 +1536,25 @@ impl State {
             }
         });
         self.canvas.add_controller(motion);
+        let weak = Rc::downgrade(self);
+        self.widgets.add_images.connect_clicked(move |_| {
+            if let Some(state) = weak.upgrade() {
+                state.choose_images();
+            }
+        });
+        // Dropped files import at the drop point, as shipping's drop guide.
+        let drop = gtk::DropTarget::new(gdk::FileList::static_type(), gdk::DragAction::COPY);
+        let weak = Rc::downgrade(self);
+        drop.connect_drop(move |_, value, x, y| {
+            let (Some(state), Ok(files)) = (weak.upgrade(), value.get::<gdk::FileList>()) else {
+                return false;
+            };
+            let paths: Vec<_> = files.files().iter().filter_map(|f| f.path()).collect();
+            let point = state.to_document(x, y);
+            state.import_files(paths, point);
+            true
+        });
+        self.canvas.add_controller(drop);
         let weak = Rc::downgrade(self);
         self.properties.inspector.defaults.connect_pick(move |key| {
             if let Some(state) = weak.upgrade() {

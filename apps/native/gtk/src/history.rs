@@ -1299,10 +1299,14 @@ pub fn save_copy(
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| "capture.png".into()),
     );
+    // GtkNativeDialog does not keep itself alive: the handler holds the
+    // chooser until it responds, then drops it.
+    let keep = std::rc::Rc::new(std::cell::RefCell::new(Some(chooser.clone())));
     #[allow(deprecated)]
     chooser.connect_response(move |chooser, response| {
         let target = chooser.file().and_then(|file| file.path());
         chooser.destroy();
+        keep.borrow_mut().take();
         let (Some(target), gtk::ResponseType::Accept) = (target, response) else {
             return;
         };

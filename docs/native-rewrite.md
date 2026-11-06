@@ -380,8 +380,15 @@ selected, drawing tools show shipping's defaults (Shapes picker, Stroke,
 color, Size, Opacity, Filled shape and fill, Drop shadow) and Text shows New
 text style, New text size and Drop shadow; new shapes, paths and labels use
 them. Like shipping, they stay local to the window and out of history.
-Escape now also clears the Layers highlight. Add images, canvas resize,
-export settings and layer reorder/rename are not in the GTK host yet.
+Escape now also clears the Layers highlight. The header's Add images opens
+GTK's file chooser (several images at once; `GtkFileDialog` needs GTK
+4.10), and files dropped on the canvas import at the drop point. The worker
+decodes them with `editor_image_decode::decode_imports` and imports the batch
+with `import_images` as one undo step, placed and canvas-expanded as shipping
+does; the last new layer is selected. History's Save image/file chooser now
+stays alive until it answers (GtkNativeDialog does not keep itself alive, so
+it never appeared). Canvas resize, export settings and layer reorder/rename
+are not in the GTK host yet.
 Release build
 under Xvfb with Cairo on a 640×360 fixture: about 110 MB RSS and near-zero
 idle CPU; the egui workbench's own editor scene measures about 173 MB the
@@ -394,7 +401,8 @@ Eraser's tolerance slider and toggles Contiguous only over AT-SPI and checks
 a Wand click is exactly one undo step. It also turns on a rectangle's drop
 shadow, drags its opacity, picks a fill swatch and checks one Undo reverts
 the whole drag, and toggles a label's Bold and alignment; before drawing it
-picks a default fill swatch and checks the new rectangle uses it. X11 (Xvfb) only; Wayland, Orca
+picks a default fill swatch and checks the new rectangle uses it, and Add
+images imports a PNG through the real chooser as one undo step. X11 (Xvfb) only; Wayland, Orca
 and real hardware remain open. Windows, macOS: unchanged.
 
 The fourth GTK4 slice is the floating previews: History's Restore (or

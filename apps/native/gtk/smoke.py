@@ -30,7 +30,7 @@ gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Atspi, GdkPixbuf, GLib  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from history_fixture import write_history_entries, write_video_entry  # noqa: E402
+from history_fixture import fixture_png, write_history_entries, write_video_entry  # noqa: E402
 
 
 def wait(predicate, what, timeout=20):
@@ -324,6 +324,26 @@ def editor(binary, scratch):
         wait(lambda: not find(app, "list item", "Smoke label · Text"),
              "Undo to remove the text")
         print("editor: Eraser slider and check box over AT-SPI; Wand click was one undo step")
+
+        # Add images: the real GTK chooser imports a PNG as one selected layer.
+        picked = scratch / "Pasted logo.png"
+        picked.write_bytes(fixture_png(accent=(45, 156, 255)))
+        press(find(app, "push button", "Add images")[0])
+        dialog = subprocess.run(["xdotool", "search", "--sync", "--name", "^Add images$"],
+                                capture_output=True, text=True, check=True).stdout.split()[0]
+        time.sleep(0.5)
+        subprocess.run(["xdotool", "windowfocus", "--sync", dialog], check=True)
+        subprocess.run(["xdotool", "key", "--window", dialog, "ctrl+l"], check=True)
+        time.sleep(0.3)
+        subprocess.run(["xdotool", "type", "--window", dialog, "--delay", "20", str(picked)],
+                       check=True)
+        time.sleep(0.3)
+        subprocess.run(["xdotool", "key", "--window", dialog, "Return"], check=True)
+        wait(lambda: find(app, "list item", "Pasted logo.png · Image"), "the imported image layer")
+        wait(lambda: find(app, "spin button", "Layer width"), "the image properties")
+        press(find(app, "push button", "Undo")[0])
+        wait(lambda: not find(app, "list item", "Pasted logo.png · Image"), "Undo to remove it")
+        print("editor: Add images imported a PNG through the GTK chooser as one undo step")
     finally:
         process.terminate()
         process.wait(timeout=10)
