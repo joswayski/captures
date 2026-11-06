@@ -359,6 +359,12 @@ with the Tauri harness (`?view=screenshot-editor&mock=1`). macOS: XCTest
 renders on a macos-26 sidecar (Xcode 26.3) and the hosted macOS workbench.
 Windows, X11 and Wayland: unchanged, since this is AppKit-only.
 
+AppKit Preferences now groups the ten accent chips in one radio group named
+"Accent color", the visible label (shipping and Win32 also changed their
+accessible name from "Color theme" in #1237). macOS: the full CapturesNative
+suite (634 tests) passes on a macos-26 sidecar (Xcode 26.3). Windows, X11,
+Wayland: unchanged (AppKit-only).
+
 The AppKit editor zoom slider now draws shipping's `.screenshot-editor-zoom-slider`:
 a 12 pt `--surface-raised` thumb with a `--border-strong` ring on an unfilled
 3 pt `--n-6` track. Fixing it exposed a token-alpha bug across 42 AppKit drawing

@@ -218,6 +218,11 @@ final class LoginItemTests: XCTestCase {
             XCTAssertTrue(text.contains(title), title)
         }
         XCTAssertEqual(PreferencesPolicy.text("shortcuts.system_title"), "macOS Screenshot shortcuts")
+        // The accent chips form one radio group named by its visible label.
+        let accentGroup = try XCTUnwrap(views(root, Surface.self).first {
+            $0.accessibilityRole() == .radioGroup && $0.accessibilityLabel() == "Accent color"
+        })
+        XCTAssertEqual(views(accentGroup, ThemeChipButton.self).count, PreferencesPolicy.themes.count)
 
         // Shipping option labels, not raw persisted values.
         let menus = views(root, ClosurePopUpButton.self)
