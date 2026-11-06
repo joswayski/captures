@@ -237,6 +237,9 @@ export function CustomSelect({
           } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
             event.preventDefault();
             if (!open) openMenu();
+            // Alt+arrow closes an open list and keeps the current choice, like
+            // Windows combo boxes and the ARIA combobox pattern.
+            else if (event.altKey) closeMenu();
             else moveActive(event.key === "ArrowDown" ? 1 : -1);
           } else if (event.key === "Home" && open) {
             event.preventDefault();

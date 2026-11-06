@@ -102,6 +102,14 @@ describe("CustomSelect", () => {
 
     fireEvent.keyDown(trigger, { key: " " });
     expect(trigger).toHaveAttribute("aria-expanded", "true");
+
+    // Alt+arrow closes without choosing the highlighted option.
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    fireEvent.keyDown(trigger, { key: "ArrowUp", altKey: true });
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(trigger).toHaveTextContent("Two");
+    fireEvent.keyDown(trigger, { key: "ArrowDown", altKey: true });
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
   });
 
   it("keeps the selected option visible when opening and navigating a long menu", () => {
