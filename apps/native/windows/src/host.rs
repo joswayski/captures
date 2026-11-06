@@ -867,14 +867,16 @@ impl Host {
                 }
             }
             // Alt chords arrive as system keys. Alt+Down and Alt+Up open a
-            // focused select (shipping opens on any-modifier arrows, like a
-            // Windows combo box); Alt+F4, Alt+Space and the rest stay with
-            // DefWindowProc.
+            // focused select, or close an open one keeping the current choice
+            // (Windows combo boxes, ARIA combobox); Alt+F4, Alt+Space and the
+            // rest stay with DefWindowProc.
             WM_SYSKEYDOWN
                 if matches!(VIRTUAL_KEY(wp.0 as u16), VK_DOWN | VK_UP)
                     && matches!(self.scene.focus, Some(Target::Select(_))) =>
             {
-                let key = if VIRTUAL_KEY(wp.0 as u16) == VK_DOWN {
+                let key = if self.scene.open.is_some() {
+                    select::Key::Escape
+                } else if VIRTUAL_KEY(wp.0 as u16) == VK_DOWN {
                     select::Key::ArrowDown
                 } else {
                     select::Key::ArrowUp
