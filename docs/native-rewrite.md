@@ -613,6 +613,15 @@ none` select, it shows no hover fill or focus ring. UIA: ComboBox with
 ExpandCollapse and Value. Windows: cross-compiled only, Wine renders in
 light and dark with the list open. macOS, Linux: unchanged.
 
+Shadow offsets: Drop shadow now ends with shipping's X offset and Y offset
+number pair (`Shadow X offset`, `Shadow Y offset`, steppers `Increase Shadow
+X offset` and so on) for new-tool defaults, a selected shape or path, and a
+label. As in `DropShadowFields`, typing only holds a draft; Enter, blur or a
+stepper commits it once, rounded and clamped to ±500
+(`DROP_SHADOW_OFFSET_MAX`), and turns the shadow on, one undo step.
+Windows: cross-compiled only, Wine renders in light and dark. macOS, Linux:
+unchanged.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,
