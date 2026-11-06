@@ -102,6 +102,26 @@ def press(node):
     assert Atspi.Action.do_action(node, index), f"action failed on {node.get_name()}"
 
 
+def choose_file(app, title, accept, path):
+    """Pick `path` in GTK's own file chooser: open its Location field (Ctrl+L
+    once the dialog has focus), paste the whole path, then press `accept`.
+    Typing key by key races the field's inline autocompletion on GTK 4.14,
+    and AT-SPI text edits do not reach it."""
+    dialog = subprocess.run(["xdotool", "search", "--sync", "--name", f"^{title}$"],
+                            capture_output=True, text=True, check=True).stdout.split()[0]
+    # GTK 4.8 names the stock button "Add Add"; GTK 4.14 names it "Add".
+    button = wait(lambda: [n for n, (role, name) in nodes(app)
+                           if role == "push button" and name in (accept, f"{accept} {accept}")],
+                  f"the {title} dialog")[0]
+    subprocess.run(["xclip", "-selection", "clipboard"], input=str(path), text=True, check=True)
+    subprocess.run(["xdotool", "windowfocus", "--sync", dialog], check=True)
+    subprocess.run(["xdotool", "key", "ctrl+l"], check=True)
+    time.sleep(0.5)
+    subprocess.run(["xdotool", "key", "ctrl+a", "ctrl+v"], check=True)
+    time.sleep(0.5)
+    press(button)
+
+
 def launch(binary, *args):
     env = dict(os.environ, GSK_RENDERER="cairo", GTK_A11Y="atspi", NO_AT_BRIDGE="0")
     return subprocess.Popen([binary, *args], env=env, stdout=subprocess.DEVNULL)
@@ -329,21 +349,32 @@ def editor(binary, scratch):
         picked = scratch / "Pasted logo.png"
         picked.write_bytes(fixture_png(accent=(45, 156, 255)))
         press(find(app, "push button", "Add images")[0])
-        dialog = subprocess.run(["xdotool", "search", "--sync", "--name", "^Add images$"],
-                                capture_output=True, text=True, check=True).stdout.split()[0]
-        time.sleep(0.5)
-        subprocess.run(["xdotool", "windowfocus", "--sync", dialog], check=True)
-        subprocess.run(["xdotool", "key", "--window", dialog, "ctrl+l"], check=True)
-        time.sleep(0.3)
-        subprocess.run(["xdotool", "type", "--window", dialog, "--delay", "20", str(picked)],
-                       check=True)
-        time.sleep(0.3)
-        subprocess.run(["xdotool", "key", "--window", dialog, "Return"], check=True)
+        choose_file(app, "Add images", "Add", picked)
         wait(lambda: find(app, "list item", "Pasted logo.png · Image"), "the imported image layer")
         wait(lambda: find(app, "spin button", "Layer width"), "the image properties")
         press(find(app, "push button", "Undo")[0])
         wait(lambda: not find(app, "list item", "Pasted logo.png · Image"), "Undo to remove it")
         print("editor: Add images imported a PNG through the GTK chooser as one undo step")
+
+        # Canvas toolbar: W resizes, Trim edges shrinks back to the visible
+        # layers, and Solid background off makes the canvas transparent.
+        width = find(app, "spin button", "Canvas width")[0]
+        Atspi.Value.set_current_value(width, 800)
+        trim = find(app, "push button", "Trim edges")[0]
+        wait(lambda: has_state(trim, Atspi.StateType.SENSITIVE), "Trim edges to enable at 800 px")
+        press(trim)
+        # The rectangle's drop shadow counts as visible content, so the trimmed
+        # width can exceed the 640 px capture slightly.
+        wait(lambda: Atspi.Value.get_current_value(width) < 700, "Trim edges to shrink the canvas")
+        background = next(n for n, (role, name) in nodes(app)
+                          if role == "push button" and name.startswith("Background color: #"))
+        press(background)
+        solid = wait(lambda: find(app, "check box", "Solid background"), "the background card")[0]
+        press(solid)
+        wait(lambda: find(app, "push button", "Background color: transparent"),
+             "the canvas to become transparent")
+        subprocess.run(["xdotool", "key", "Escape"], check=True)
+        print("editor: canvas width, Trim edges and transparent background over AT-SPI")
     finally:
         process.terminate()
         process.wait(timeout=10)

@@ -35,6 +35,7 @@ use crate::switch::TokenSwitch;
 use crate::tokens::Tokens;
 use crate::widgets::{Icon, SnapshotArea, icon_button};
 
+mod canvas_bar;
 mod controls;
 mod inspector;
 mod properties;
@@ -60,6 +61,7 @@ struct Presented {
     outlines: BTreeMap<String, [Point; 4]>,
     can_undo: bool,
     can_redo: bool,
+    can_trim: bool,
     style: ElementStyle,
     has_draft: bool,
     source: Option<ExportSource>,
@@ -151,6 +153,7 @@ fn present(session: &EditorSession, artifact_id: &str) -> Presented {
             .collect(),
         can_undo: snapshot.can_undo,
         can_redo: snapshot.can_redo,
+        can_trim: snapshot.can_trim,
         style: snapshot.initial_annotation_style.clone(),
         has_draft: snapshot.has_draft,
         initial_text_size: snapshot.initial_text_size,
@@ -245,7 +248,7 @@ struct State {
 struct Widgets {
     undo: gtk::Button,
     redo: gtk::Button,
-    canvas_size: gtk::Label,
+    canvas_bar: Rc<canvas_bar::CanvasBar>,
     zoom_label: gtk::Label,
     rail: Vec<(String, gtk::Button)>,
     shapes: gtk::Button,
@@ -388,14 +391,12 @@ pub fn build(
     main.add_css_class("editor-header-main");
     let left = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     left.set_hexpand(true);
-    let canvas_group = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    canvas_group.add_css_class("editor-group");
-    canvas_group.set_valign(gtk::Align::Center);
-    canvas_group.append(&label(header::CANVAS, "editor-group-label"));
-    let canvas_size = label("", "editor-canvas-size");
-    canvas_size.update_property(&[gtk::accessible::Property::Label(header::CANVAS)]);
-    canvas_group.append(&canvas_size);
-    left.append(&canvas_group);
+    // Requests from the canvas toolbar reach the worker once State exists.
+    let canvas_jobs = jobs.clone();
+    let canvas_bar = canvas_bar::CanvasBar::new(&tokens, move |request| {
+        let _ = canvas_jobs.send(Job::Apply(request));
+    });
+    left.append(&canvas_bar.root);
     main.append(&left);
     let right = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     let undo = icon_only("undo", 16, header::UNDO, "editor-icon-button");
@@ -594,7 +595,7 @@ pub fn build(
         widgets: Widgets {
             undo,
             redo,
-            canvas_size,
+            canvas_bar,
             zoom_label,
             rail: rail_buttons,
             shapes: shapes.expect("shapes tool"),
@@ -1173,10 +1174,12 @@ impl State {
                     .as_ref()
                     .map_or(0, |old| old.layers.len());
                 let w = &self.widgets;
-                w.canvas_size.set_label(&format!(
-                    "{} × {}",
-                    presented.document.width, presented.document.height
-                ));
+                w.canvas_bar.sync(
+                    presented.document.width,
+                    presented.document.height,
+                    presented.document.background.as_deref(),
+                    presented.can_trim,
+                );
                 w.undo.set_sensitive(presented.can_undo);
                 w.redo.set_sensitive(presented.can_redo);
                 w.layer_count.set_label(&presented.layers.len().to_string());

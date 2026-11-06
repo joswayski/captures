@@ -69,6 +69,7 @@ fn parse(value: &str) -> gdk::RGBA {
 pub(super) struct ColorField {
     pub(super) root: gtk::Box,
     legend: gtk::Label,
+    grid: gtk::FlowBox,
     tiles: Vec<(&'static str, gtk::Button)>,
     value: Rc<RefCell<String>>,
 }
@@ -183,11 +184,26 @@ impl ColorField {
         let field = Rc::new(ColorField {
             root,
             legend,
+            grid,
             tiles,
             value,
         });
         field.set_label(label);
         field
+    }
+
+    /// Swatches only; the legend stays for assistive tech (`compact`).
+    /// `minmax(36px, 1fr)` cells across the canvas background card.
+    pub(super) fn compact(&self) {
+        self.legend.set_visible(false);
+        let layout = colors::grid(colors::MENU_WIDTH - 24., colors::COMPACT_CELL);
+        self.grid.set_max_children_per_line(layout.columns as u32);
+        self.grid.set_row_spacing(6);
+        let mut child = self.grid.first_child();
+        while let Some(slot) = child {
+            slot.set_size_request(colors::COMPACT_CELL as i32, -1);
+            child = slot.next_sibling();
+        }
     }
 
     pub(super) fn set_label(&self, label: &str) {

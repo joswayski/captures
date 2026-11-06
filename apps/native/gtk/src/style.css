@@ -504,12 +504,6 @@ popover.captures-menu button.menu-item:focus-visible {
   font-size: var(--text-xs);
   font-weight: var(--weight-medium);
 }
-.captures .editor-canvas-size {
-  padding-right: var(--s-4);
-  color: var(--text);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-}
 .captures button.editor-icon-button {
   all: unset;
   min-width: 30px;
@@ -1431,4 +1425,71 @@ popover.captures-menu .text-style-preview.style-rounded-box {
 }
 .captures button.editor-add-image:focus-visible {
   box-shadow: var(--focus-ring-tight);
+}
+
+/* `.screenshot-canvas-toolbar`: W × H fields, Trim edges, Background color. */
+.captures .canvas-toolbar {
+  min-height: 26px;
+}
+.captures .canvas-dim-label {
+  color: var(--text-subtle);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+.captures .canvas-dim .number-input {
+  min-height: 26px;
+  border-color: transparent;
+  border-radius: var(--r-sm);
+  background: transparent;
+}
+.captures .canvas-dim .number-input:focus-within {
+  border-color: var(--theme-accent);
+  background: var(--surface-field);
+}
+.captures .canvas-dim .number-input spinbutton > text {
+  padding: var(--s-1) var(--s-3);
+  font-size: var(--text-xs);
+}
+.captures .canvas-dim .number-input-steppers {
+  min-width: 18px;
+  border-left-color: transparent;
+  background: transparent;
+}
+.captures .canvas-toolbar-split {
+  min-width: 1px;
+  min-height: 16px;
+  margin: 0 var(--s-2);
+  background: var(--border);
+}
+.captures button.canvas-tool {
+  all: unset;
+  min-height: 26px;
+  padding: 0 var(--s-4);
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+.captures button.canvas-tool:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+.captures button.canvas-tool:disabled {
+  opacity: 0.45;
+}
+.captures button.canvas-tool:focus-visible {
+  box-shadow: var(--focus-ring-tight);
+}
+.captures button.canvas-bg-trigger {
+  padding-right: var(--s-3);
+}
+.captures button.canvas-bg-trigger.open {
+  border-color: var(--theme-accent);
+}
+.captures .canvas-bg-chevron {
+  color: var(--text-subtle);
+}
+popover.captures-menu.canvas-bg-menu > contents {
+  padding: var(--s-4);
 }

@@ -440,8 +440,15 @@ decodes them with `editor_image_decode::decode_imports` and imports the batch
 with `import_images` as one undo step, placed and canvas-expanded as shipping
 does; the last new layer is selected. History's Save image/file chooser now
 stays alive until it answers (GtkNativeDialog does not keep itself alive, so
-it never appeared). Canvas resize, export settings and layer reorder/rename
-are not in the GTK host yet.
+it never appeared). The header's Canvas toolbar replaces the old size label:
+W and H number fields resize the canvas (typing and steppers commit
+`ResizeCanvas`), Trim edges trims to the visible layers and is disabled
+unless the session reports `can_trim`, and Background color opens a card
+with Solid background (off means transparent; on restores the last solid
+color) and a compact swatch grid, as shipping's toolbar does. The smoke
+picks files by pasting the path into the chooser's Location field: typing
+key by key raced GTK 4.14's inline autocompletion in CI. Export settings and
+layer reorder/rename are not in the GTK host yet.
 Release build
 under Xvfb with Cairo on a 640×360 fixture: about 110 MB RSS and near-zero
 idle CPU; the egui workbench's own editor scene measures about 173 MB the
