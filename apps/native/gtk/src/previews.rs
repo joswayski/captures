@@ -270,7 +270,9 @@ impl State {
         let chip = gtk::Label::new(None);
         chip.add_css_class("preview-chip");
         chip.set_accessible_role(gtk::AccessibleRole::Status);
-        chip.set_visible(false);
+        // A live region stays in the tree and only its text changes: newer
+        // GTK does not announce a status node that appears already filled.
+        chip.set_opacity(0.);
         bottom.append(&meta);
         bottom.append(&chip);
         root.add_overlay(&bottom);
@@ -577,14 +579,17 @@ impl Card {
         } else {
             self.chip.remove_css_class("error");
         }
-        self.chip.set_visible(true);
+        self.chip.set_opacity(1.);
         let weak = Rc::downgrade(self);
         let shown = text.to_owned();
         glib::timeout_add_local_once(Duration::from_millis(2_500), move || {
             if let Some(card) = weak.upgrade()
                 && card.chip.label() == shown
             {
-                card.chip.set_visible(false);
+                card.chip.set_opacity(0.);
+                card.chip.set_label("");
+                card.chip
+                    .update_property(&[gtk::accessible::Property::Label("")]);
             }
         });
     }
