@@ -407,6 +407,15 @@ where previews near it render everything, from 50.6 ms to 23.9 ms (3.04 s to
 1.70 s). Commits are unchanged. Windows: cross-compiled only. Linux: shared
 tests run. macOS: not run; the AppKit host's requests are unchanged.
 
+Win32 editor snap guides: moving a layer now previews through the shared
+`LayerEdit::DragMove` on the worker, one request in flight and throttled like
+grips, and commits the same snapped move (it was an unsnapped `Translate`).
+Moves and grip resizes draw the preview's alignment guides like
+`.screenshot-align-snap-guide`: a 2 px accent line across the canvas with an
+approximated 10 px accent glow. A click below shipping's 3 px threshold
+neither previews nor moves. Windows: cross-compiled only; guides appear only
+mid-drag, so no offscreen render shows them. macOS, Linux: unchanged.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,

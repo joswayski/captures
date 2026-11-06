@@ -28,8 +28,9 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Instant;
 
 use captures_app::editor::{
-    ClosedShapeCreate, ClosedShapeKind, Document, ElementStyle, FreehandPathCreate, LayerEdit,
-    OpenShapeCreate, OpenShapeKind, Point, Rect as DocRect, ResizeHandle,
+    AlignmentGuide, ClosedShapeCreate, ClosedShapeKind, Document, ElementStyle, FreehandPathCreate,
+    GuideOrientation, LayerEdit, OpenShapeCreate, OpenShapeKind, Point, Rect as DocRect,
+    ResizeHandle,
 };
 use captures_app::editor_chrome::{self, RAIL_TOOLS, SHAPE_TOOLS, header};
 use captures_app::editor_export::{self, EstimateState, ExportSource, ExportTarget, SavePlan};
@@ -389,7 +390,11 @@ enum Job {
 }
 
 /// A preview's changed pixels and selection outlines.
-type Previewed = (Option<Pixels>, BTreeMap<String, [Point; 4]>);
+type Previewed = (
+    Option<Pixels>,
+    BTreeMap<String, [Point; 4]>,
+    Vec<AlignmentGuide>,
+);
 
 enum Outcome {
     Presented(Box<Presented>),
@@ -543,6 +548,8 @@ pub struct Editor {
     preview_timer: bool,
     /// The resized layer's outline from the latest preview.
     preview_outline: Option<[Point; 4]>,
+    /// Shipping's alignment snap guides from the latest move or grip preview.
+    guides: Vec<AlignmentGuide>,
     autosave: DraftAutosave,
     pub w: f32,
     pub h: f32,
@@ -880,6 +887,7 @@ fn spawn_worker(
                             (
                                 publish(frame.pixels, &mut published),
                                 frame.selection_outlines,
+                                frame.guides,
                             )
                         }),
                     ),
@@ -1020,6 +1028,7 @@ impl Editor {
             preview_ready: None,
             preview_timer: false,
             preview_outline: None,
+            guides: Vec::new(),
             autosave: DraftAutosave::default(),
             w: SIZE.0,
             h: SIZE.1,
@@ -1881,19 +1890,21 @@ impl Editor {
                 self.preview_busy = false;
                 let now = Instant::now();
                 self.preview_ready = self.preview_sent.map(|sent| now + (now - sent));
-                let resizing = matches!(self.gesture, Some(Gesture::Resize { .. }));
-                let previewing = resizing || matches!(self.gesture, Some(Gesture::Brush(_)));
+                let layer = match &self.gesture {
+                    Some(Gesture::Resize { id, .. } | Gesture::Move { id, .. }) => Some(id.clone()),
+                    _ => None,
+                };
+                let previewing = layer.is_some() || matches!(self.gesture, Some(Gesture::Brush(_)));
                 match result {
                     // Only a drag still in progress shows its preview; the
                     // committed result replaces it once the worker publishes.
-                    Ok((pixels, outlines)) => {
+                    Ok((pixels, outlines, guides)) => {
                         if let Some(pixels) = pixels {
                             self.take_pixels(pixels);
                         }
-                        if let (true, Some(Gesture::Resize { id, .. })) =
-                            (resizing, self.gesture.as_ref())
-                        {
-                            self.preview_outline = outlines.get(id).copied();
+                        if let Some(id) = layer {
+                            self.preview_outline = outlines.get(&id).copied();
+                            self.guides = guides;
                             self.overlay_changed();
                         }
                     }
@@ -2094,6 +2105,8 @@ impl Editor {
             },
             _ => return,
         };
+        self.preview_outline = None;
+        self.guides.clear();
         self.gesture = Some(gesture);
         self.overlay_changed();
     }
@@ -2108,9 +2121,20 @@ impl Editor {
                 self.set_viewport(viewport);
                 return;
             }
-            Some(Gesture::Shape { end, .. } | Gesture::Move { end, .. }) => {
+            Some(Gesture::Shape { end, .. }) => {
                 if let Some(point) = point {
                     *end = point;
+                }
+            }
+            Some(Gesture::Move { start, end, .. }) => {
+                if let Some(point) = point {
+                    *end = point;
+                }
+                // A click selects without moving (shipping's `didMove`).
+                let distance = (end.x - start.x).hypot(end.y - start.y);
+                let scale = self.zoom_percent().unwrap_or(100.) / 100.;
+                if distance * scale >= DRAG_MIN || self.preview_outline.is_some() {
+                    self.preview_gesture();
                 }
             }
             Some(Gesture::Resize { end, .. }) => {
@@ -2139,6 +2163,7 @@ impl Editor {
         let Some(gesture) = self.gesture.take() else {
             return;
         };
+        self.guides.clear();
         let scale = self.zoom_percent().unwrap_or(100.) / 100.;
         let moved = |a: Point, b: Point| (b.x - a.x).hypot(b.y - a.y) * scale >= DRAG_MIN;
         let (style, opacity) = self
@@ -2161,14 +2186,22 @@ impl Editor {
                     None
                 }
             }
+            // Commit what the preview showed: shipping's snapped move.
             Gesture::Move { id, start, end } if moved(start, end) => Some(Request::Layer {
                 id,
-                edit: LayerEdit::Translate {
+                edit: LayerEdit::DragMove {
                     delta_x: end.x - start.x,
                     delta_y: end.y - start.y,
+                    display_scale: scale,
                 },
             }),
-            Gesture::Move { .. } => None,
+            Gesture::Move { .. } => {
+                // Back under the click threshold: drop any preview.
+                if self.preview_outline.take().is_some() {
+                    let _ = self.jobs.send(Job::Refresh);
+                }
+                None
+            }
             Gesture::Freehand(points) if points.len() >= 2 => Some(Request::CreateFreehandPath {
                 create: FreehandPathCreate {
                     points,
@@ -2236,7 +2269,11 @@ impl Editor {
         let Some(gesture) = self.gesture.take() else {
             return false;
         };
-        if matches!(gesture, Gesture::Resize { .. } | Gesture::Brush(_)) {
+        self.guides.clear();
+        if matches!(
+            gesture,
+            Gesture::Resize { .. } | Gesture::Brush(_) | Gesture::Move { .. }
+        ) {
             self.preview_outline = None;
             let _ = self.jobs.send(Job::Refresh);
         }
@@ -3344,10 +3381,14 @@ impl Editor {
     /// Selection outline and the in-progress gesture, well-relative.
     fn overlay_box(&self) -> Option<Rect> {
         let mut points: Vec<(f32, f32)> = Vec::new();
-        let offset = match &self.gesture {
-            Some(Gesture::Move { start, end, .. }) => (end.x - start.x, end.y - start.y),
-            _ => (0., 0.),
-        };
+        let offset = self.move_offset();
+        if !self.guides.is_empty()
+            && let Some(r) = self.image_rect()
+        {
+            // Guides span the canvas, with room for their glow.
+            points.push((r.x as f32 - 12., r.y as f32 - 12.));
+            points.push(((r.x + r.width) as f32 + 12., (r.y + r.height) as f32 + 12.));
+        }
         if let Some(outline) = self.selection_outline() {
             points.extend(outline.iter().filter_map(|p| {
                 self.to_well(Point {
@@ -3388,9 +3429,22 @@ impl Editor {
         })
     }
 
+    /// How far to shift the selection outline: a move not previewed yet
+    /// follows the pointer; a previewed one has its snapped outline.
+    fn move_offset(&self) -> (f64, f64) {
+        match &self.gesture {
+            Some(Gesture::Move { start, end, .. }) if self.preview_outline.is_none() => {
+                (end.x - start.x, end.y - start.y)
+            }
+            _ => (0., 0.),
+        }
+    }
+
     fn selection_outline(&self) -> Option<[Point; 4]> {
-        if matches!(self.gesture, Some(Gesture::Resize { .. }))
-            && let Some(outline) = self.preview_outline
+        if matches!(
+            self.gesture,
+            Some(Gesture::Resize { .. } | Gesture::Move { .. })
+        ) && let Some(outline) = self.preview_outline
         {
             return Some(outline);
         }
@@ -3398,13 +3452,41 @@ impl Editor {
         self.presented.as_ref()?.outlines.get(id).copied()
     }
 
+    /// `.screenshot-align-snap-guide`: a 2 px accent line across the
+    /// canvas, centred on the snapped edge, with a 10 px accent glow
+    /// (`box-shadow: 0 0 10px rgba(accent, 0.75)`, approximated by wider,
+    /// fainter strokes).
+    fn draw_guides(&self, dc: &ID2D1DeviceContext) -> Result<()> {
+        let (Some(r), Some((dw, dh))) = (self.image_rect(), self.document_size()) else {
+            return Ok(());
+        };
+        let (x0, y0) = (r.x as f32, r.y as f32);
+        let (x1, y1) = ((r.x + r.width) as f32, (r.y + r.height) as f32);
+        for guide in &self.guides {
+            let line = match guide.orientation {
+                GuideOrientation::Vertical => {
+                    let x = (r.x + guide.position / dw * r.width) as f32;
+                    [(x, y0), (x, y1)]
+                }
+                GuideOrientation::Horizontal => {
+                    let y = (r.y + guide.position / dh * r.height) as f32;
+                    [(x0, y), (x1, y)]
+                }
+            };
+            for (width, alpha) in [(14., 0.12), (8., 0.22), (4., 0.4)] {
+                let glow = self.t.color_alpha("theme-accent", alpha);
+                polyline(dc, &self.g, &line, false, glow, width)?;
+            }
+            polyline(dc, &self.g, &line, false, self.t.color("theme-accent"), 2.)?;
+        }
+        Ok(())
+    }
+
     fn draw_overlay(&self, dc: &ID2D1DeviceContext) -> Result<()> {
         let t = &self.t;
         let accent = t.color("theme-accent");
-        let offset = match &self.gesture {
-            Some(Gesture::Move { start, end, .. }) => (end.x - start.x, end.y - start.y),
-            _ => (0., 0.),
-        };
+        let offset = self.move_offset();
+        self.draw_guides(dc)?;
         if let Some(outline) = self.selection_outline() {
             let screen: Vec<(f32, f32)> = outline
                 .iter()
