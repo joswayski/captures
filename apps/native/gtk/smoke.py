@@ -232,10 +232,16 @@ def previews(binary, scratch):
         press(wait(lambda: len(find(app, "push button", "Restore")) > 1
                    and find(app, "push button", "Restore"), "a second Restore")[1])
         wait(lambda: len(cards()) == 2, "two preview cards")
-        press(find(app, "push button", "Copy")[0])
-        # The status role's AT-SPI name differs across GTK releases.
-        wait(lambda: [n for n, (_, name) in nodes(app) if name == "Copied to clipboard"],
-             "the Copied chip")
+        # The chip shows for 2.5 s; walk only the previews window so a slow
+        # runner's full-tree walk cannot miss it. The status role's AT-SPI
+        # name differs across GTK releases, so match the chip by name.
+        stack = wait(lambda: find(app, "frame", "Captures Previews"), "the previews window")[0]
+        press(find(stack, "push button", "Copy")[0])
+        chip = wait(lambda: [name for _, (_, name) in nodes(stack)
+                             if name and (name == "Copied to clipboard"
+                                          or name.startswith("Couldn’t copy"))],
+                    "the Copied chip", timeout=10)
+        assert chip == ["Copied to clipboard"], f"copy reported {chip}"
         press(find(app, "push button", "Close")[0])
         wait(lambda: len(cards()) == 1, "Close to dismiss a card")
         before = len(list(root.iterdir()))
