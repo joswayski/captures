@@ -252,7 +252,7 @@ final class CaptureButton: NSButton {
             }
         } else if solid {
             tokens.color(cell?.isHighlighted == true ? "solid-hover" : "solid")
-                .withAlphaComponent(isEnabled ? 1 : 0.4).setFill()
+                .faded(isEnabled ? 1 : 0.4).setFill()
             path.fill()
         } else {
             let fill = !isEnabled ? (glass ? "glass" : "surface-sunken")
@@ -272,7 +272,7 @@ final class CaptureButton: NSButton {
         let font = NSFont.systemFont(ofSize: textSize ?? tokens.number("text-md"),
                                      weight: textWeight ?? (solid || primary ? .semibold : .medium)) // Shipping primaries are semibold.
         var foreground = solid
-            ? tokens.color("solid-ink").withAlphaComponent(isEnabled ? 1 : 0.4)
+            ? tokens.color("solid-ink").faded(isEnabled ? 1 : 0.4)
             : tokens.color(isEnabled
             ? (signal ? "theme-signal"
                 : primary ? "theme-accent-ink" : glass ? "glass-text" : "text")
@@ -291,7 +291,7 @@ final class CaptureButton: NSButton {
             foreground = selected
                 ? tokens.color(dark ? "theme-accent-text" : "theme-accent-readable")
                 : tokens.color(isEnabled && (hovered || cell?.isHighlighted == true) ? "text" : "text-muted")
-                    .withAlphaComponent(isEnabled ? 1 : 0.32)
+                    .faded(isEnabled ? 1 : 0.32)
         }
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font, .foregroundColor: foreground,
@@ -316,7 +316,7 @@ final class CaptureButton: NSButton {
         (label as NSString).draw(at: CGPoint(x: startX + iconWidth,
             y: (bounds.height - size.height) / 2), withAttributes: attributes)
         if trailingChevron {
-            tokens.color("text-subtle").withAlphaComponent(isEnabled ? 1 : 0.32).setStroke()
+            tokens.color("text-subtle").faded(isEnabled ? 1 : 0.32).setStroke()
             ShippingIcons.stroke("editor-chevron-down", in: NSRect(x: startX + iconWidth + size.width + 6,
                 y: (bounds.height - 11) / 2, width: 11, height: 11), width: iconStrokeWidth)
         }

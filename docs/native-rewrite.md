@@ -297,12 +297,22 @@ with the Tauri harness (`?view=screenshot-editor&mock=1`). macOS: XCTest
 renders on a macos-26 sidecar (Xcode 26.3) and the hosted macOS workbench.
 Windows, X11 and Wayland: unchanged, since this is AppKit-only.
 
+The AppKit editor zoom slider now draws shipping's `.screenshot-editor-zoom-slider`:
+a 12 pt `--surface-raised` thumb with a `--border-strong` ring on an unfilled
+3 pt `--n-6` track. Fixing it exposed a token-alpha bug across 42 AppKit drawing
+sites: disabled-state fading used `withAlphaComponent(alpha)`, which replaced a
+translucent token's own alpha, so enabled `--border-strong`, `--border`,
+`--border-subtle` and `--control-border` strokes drew near-opaque. They now
+scale the token alpha (`NSColor.faded`) like CSS `opacity`. macOS: the full
+CapturesNative suite (634 tests) passes on a macos-26 sidecar (Xcode 26.3, with
+ffmpeg); header compared with the Tauri harness at 860 pt. Windows, X11,
+Wayland: unchanged (AppKit-only).
+
 The AppKit canvas W/H fields are now shipping's compact `NumberInput`: 74×28
 with a 22 pt Increase/Decrease column, centred mono digits, no fill or border
 until hovered (`--border-strong`) or edited (accent border, field fill). Each
 step commits one canvas resize, as shipping's `onTextChange` + `onCommit` do,
-and the 1–16384 bounds disable the matching stepper. The zoom slider thumb still
-differs. macOS: 196 ScreenshotEditorTests pass on a macos-26 sidecar (Xcode
+and the 1–16384 bounds disable the matching stepper. macOS: 196 ScreenshotEditorTests pass on a macos-26 sidecar (Xcode
 26.3); header compared with the Tauri harness at 860 pt. Windows, X11, Wayland:
 unchanged (AppKit-only).
 

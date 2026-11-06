@@ -414,15 +414,15 @@ final class PreferenceSwitchButton: PreferenceHoverButton {
         let track = switchRect
         let path = NSBezierPath(roundedRect: track.insetBy(dx: 0.5, dy: 0.5), xRadius: 9, yRadius: 9)
         if isOn {
-            tokens.color("theme-accent").withAlphaComponent(alpha).setFill(); path.fill()
+            tokens.color("theme-accent").faded(alpha).setFill(); path.fill()
         } else {
-            tokens.color("surface-sunken").withAlphaComponent(alpha).setFill(); path.fill()
+            tokens.color("surface-sunken").faded(alpha).setFill(); path.fill()
             tokens.color(isEnabled && hovered ? "text-subtle" : "border-strong")
-                .withAlphaComponent(alpha).setStroke()
+                .faded(alpha).setStroke()
             path.lineWidth = 1; path.stroke()
         }
         let knob = NSRect(x: track.minX + 3 + (isOn ? 13 : 0), y: track.midY - 6.5, width: 13, height: 13)
-        tokens.color(isOn ? "theme-accent-ink" : "text-subtle").withAlphaComponent(alpha).setFill()
+        tokens.color(isOn ? "theme-accent-ink" : "text-subtle").faded(alpha).setFill()
         NSBezierPath(ovalIn: knob).fill()
         if isFocused { drawFocusRing(tokens, in: track.insetBy(dx: -2, dy: -2), radius: 11) }
     }

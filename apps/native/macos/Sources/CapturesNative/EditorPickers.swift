@@ -87,7 +87,7 @@ final class ColorSwatchButton: NSButton {
         let alpha: CGFloat = isEnabled ? 1 : 0.4
         if active {
             // `box-shadow: 0 0 0 2px var(--editor-panel), 0 0 0 4px var(--theme-accent)`.
-            tokens.color("theme-accent").withAlphaComponent(alpha).setFill()
+            tokens.color("theme-accent").faded(alpha).setFill()
             NSBezierPath(ovalIn: circle.insetBy(dx: -4, dy: -4)).fill()
             tokens.color("surface-raised").setFill()
             NSBezierPath(ovalIn: circle.insetBy(dx: -2, dy: -2)).fill()

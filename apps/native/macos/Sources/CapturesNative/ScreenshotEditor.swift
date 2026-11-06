@@ -4,6 +4,10 @@ import UniformTypeIdentifiers
 /// Keep NSSlider's native drawing and logarithmic 0–1 track, but expose the
 /// shipping 5–800% zoom contract to keyboard and accessibility clients.
 private final class EditorZoomSlider: NSSlider {
+    override class var cellClass: AnyClass? {
+        get { TokenSliderCell.self }
+        set { super.cellClass = newValue }
+    }
     override func accessibilityValue() -> Any? {
         NativeEditorViewport.sliderZoom(position: doubleValue).map { NSNumber(value: $0) }
     }
@@ -1466,18 +1470,18 @@ final class EditorMakeCopySwitch: NSButton {
         let on = state == .on
         let track = NSRect(x: 0, y: ((bounds.height - 16) / 2).rounded(), width: 28, height: 16)
         let path = NSBezierPath(roundedRect: track.insetBy(dx: 0.5, dy: 0.5), xRadius: 7.5, yRadius: 7.5)
-        tokens.color(on ? "theme-accent" : "surface-field").withAlphaComponent(alpha).setFill(); path.fill()
+        tokens.color(on ? "theme-accent" : "surface-field").faded(alpha).setFill(); path.fill()
         if !on {
-            tokens.color(isEnabled && hovered ? "text-faint" : "border-strong").withAlphaComponent(alpha).setStroke()
+            tokens.color(isEnabled && hovered ? "text-faint" : "border-strong").faded(alpha).setStroke()
             path.lineWidth = 1; path.stroke()
         }
         // The 10 pt knob sits 2 pt inside the 1 pt border and travels 12 pt.
         let knob = NSRect(x: track.minX + 3 + (on ? 12 : 0), y: track.minY + 3, width: 10, height: 10)
-        tokens.color(on ? "theme-accent-ink" : "text-subtle").withAlphaComponent(alpha).setFill()
+        tokens.color(on ? "theme-accent-ink" : "text-subtle").faded(alpha).setFill()
         NSBezierPath(ovalIn: knob).fill()
         if window?.firstResponder === self { drawFocusRing(tokens, in: track.insetBy(dx: -2, dy: -2), radius: 10) }
         var attributes = labelAttributes
-        attributes[.foregroundColor] = tokens.color("text-muted").withAlphaComponent(alpha)
+        attributes[.foregroundColor] = tokens.color("text-muted").faded(alpha)
         let size = (Self.label as NSString).size(withAttributes: attributes)
         (Self.label as NSString).draw(at: NSPoint(x: track.maxX + tokens.number("s-3"),
             y: (bounds.height - size.height) / 2), withAttributes: attributes)
@@ -3264,6 +3268,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         zoomOutButton.toolTip = EditorChrome.text("header", "zoom_out")
         zoomSlider.isContinuous = true
         zoomSlider.controlSize = .small
+        if let cell = zoomSlider.cell as? TokenSliderCell {
+            cell.thumb = 12; cell.trackHeight = 3; cell.fillsProgress = false
+        }
         zoomSlider.setAccessibilityLabel(EditorChrome.text("header", "zoom_slider"))
         zoomSlider.target = self; zoomSlider.action = #selector(changeZoomSlider)
         zoomGroup.addSubview(zoomSlider)
@@ -7802,6 +7809,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                       canvasWidth, canvasHeight] {
             field.tokens = tokens
         }
+        (zoomSlider.cell as? TokenSliderCell)?.tokens = tokens; zoomSlider.needsDisplay = true
         for section in layerMenuSections { section.title.textColor = tokens.color("text-subtle") }
         let menuControls: [CaptureButton?] = [rotateLeftButton, rotateRightButton, flipHorizontalButton,
                                               flipVerticalButton, bringFrontButton, sendBackButton,
