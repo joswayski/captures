@@ -89,6 +89,7 @@ struct State {
     loading: Cell<bool>,
     filter: Cell<Filter>,
     columns: Cell<usize>,
+    compact: Cell<bool>,
     /// Width of one card column, for thumbnail decode size.
     column_width: Cell<f64>,
     error: RefCell<Option<String>>,
@@ -138,6 +139,7 @@ pub fn build(
         loading: Cell::new(true),
         filter: Cell::default(),
         columns: Cell::new(1),
+        compact: Cell::new(false),
         column_width: Cell::new(400.),
         error: RefCell::default(),
         confirming: RefCell::default(),
@@ -208,6 +210,13 @@ pub fn build(
         let grid = history_view::grid_in_window(shell, compact);
         let columns = grid.columns;
         state.column_width.set(grid.card_width);
+        if state.compact.replace(compact) != compact {
+            let state = state.clone();
+            glib::idle_add_local_once(move || {
+                let gap = state.tokens.number("s-5") as i32;
+                state.header.set_compact(compact, gap);
+            });
+        }
         if columns != state.columns.get() {
             state.columns.set(columns);
             // Never change the model during allocation.
@@ -629,6 +638,8 @@ fn label(text: &str, class: &str) -> gtk::Label {
 /// `.history-header`: Back to Preferences, title and lede, Delete all.
 struct Header {
     root: gtk::Box,
+    /// Title copy beside the actions; a column in a compact window.
+    row: gtk::Box,
     back: gtk::Button,
     actions: gtk::Box,
     cancel: gtk::Button,
@@ -679,6 +690,7 @@ impl Header {
         error.set_accessible_role(gtk::AccessibleRole::Alert);
         Header {
             root,
+            row,
             back,
             actions,
             cancel,
@@ -686,6 +698,24 @@ impl Header {
             delete_all_label,
             error,
         }
+    }
+}
+
+impl Header {
+    /// `@media (max-width: 720px) .history-header`: a column, actions at
+    /// the start, `gap: var(--s-5)`.
+    fn set_compact(&self, compact: bool, gap: i32) {
+        self.row.set_orientation(if compact {
+            gtk::Orientation::Vertical
+        } else {
+            gtk::Orientation::Horizontal
+        });
+        self.row.set_spacing(if compact { gap } else { 24 });
+        self.actions.set_halign(if compact {
+            gtk::Align::Start
+        } else {
+            gtk::Align::Fill
+        });
     }
 }
 

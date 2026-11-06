@@ -897,8 +897,8 @@ Tauri harness card by card, light and dark, at 1080×900 under Xvfb.
 right corner, a 24 FPS GIF select and a recorded Ctrl+Shift+4 Region
 shortcut. Not yet ported: the microphone list (Off and the saved device
 only, until the GTK host has an audio backend), Send feedback (the feedback
-window; Open is disabled), the update worker, the compact layout and
-live System appearance changes. X11 (Xvfb) on GTK 4.8 and 4.14 only;
+window; Open is disabled), the update worker and live System appearance
+changes. X11 (Xvfb) on GTK 4.8 and 4.14 only;
 Wayland, Orca and real hardware remain open. Windows, macOS: unchanged.
 
 GTK Preferences Find follows `usePreferencesFind`. Ctrl+F opens the header's
@@ -916,6 +916,22 @@ shipping skips Find while recording. `--find QUERY` opens it for parity
 screenshots. `smoke.py` opens Find from the keyboard, checks "1 of 2", steps
 with Ctrl+G and Shift+F3 and closes it with Escape. Compared with the Tauri
 harness at 880×660 (light). X11 (Xvfb) on GTK 4.8 and 4.14 only; Wayland,
+Orca and real hardware remain open. Windows, macOS: unchanged.
+
+GTK compact windows (≤720 px, shared `app_windows::compact`) follow
+shipping's `@media (max-width: 720px)` rules. Preferences hides the section
+nav, stacks inline rows with stretched controls (the mini preview corner
+picker stays at the end), shares the Interface theme track equally, and puts
+the accent chips and the three GIF selects in two columns; switch, shortcut
+and utility rows never stack. History stacks its header with Delete all
+under the description. The layout follows the live window width and is also
+decided from the requested width before the first layout, because the wide
+layout's minimum (nav plus page, 687 px) would otherwise hold a narrow
+window open wider. Select grids now use shipping's `s-5` gaps and `s-3`
+label spacing in both layouts. Compared with the Tauri harness at 640 px,
+whole page; a live resize across 720 px was checked under openbox, and
+`smoke.py` opens a 640 px Preferences window and checks the nav is gone
+(Xvfb has no window manager to resize a live window). X11 only; Wayland,
 Orca and real hardware remain open. Windows, macOS: unchanged.
 
 ## Progress dashboard

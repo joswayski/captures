@@ -23,7 +23,7 @@ use serde_json::Value;
 use crate::editor::controls::{Choice, pressed};
 use crate::switch::TokenSwitch;
 use crate::tokens::Tokens;
-use crate::widgets::{Icon, MaxWidth, SnapshotArea};
+use crate::widgets::{Icon, MaxWidth, SnapshotArea, WidthWatch};
 
 mod find;
 
@@ -242,10 +242,38 @@ pub fn build(
     });
 
     let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    window.set_child(Some(&root));
+    // Shipping's `@media (max-width: 720px)` layout, applied after allocation.
+    let compact_now: Rc<Cell<Option<bool>>> = Rc::default();
+    let root_for_realize = root.clone();
+    let watch = WidthWatch::new(&root, {
+        let (root, compact_now) = (root.clone(), compact_now.clone());
+        move |width| {
+            let compact = captures_app::app_windows::compact(width as f32);
+            if compact_now.replace(Some(compact)) != Some(compact) {
+                let root = root.clone();
+                glib::idle_add_local_once(move || apply_compact(root.upcast_ref(), compact));
+            }
+        }
+    });
+    window.set_child(Some(&watch));
+    // Also decide from the requested width before layout: the wide layout's
+    // minimum (nav plus page) would otherwise hold a narrow window wider.
+    let from_default = move |window: &gtk::ApplicationWindow| {
+        let compact = captures_app::app_windows::compact(window.default_width() as f32);
+        if compact_now.replace(Some(compact)) != Some(compact) {
+            apply_compact(root_for_realize.upcast_ref(), compact);
+        }
+    };
+    let from_default = Rc::new(from_default);
+    window.connect_realize({
+        let from_default = from_default.clone();
+        move |window| from_default(window)
+    });
+    window.connect_default_width_notify(move |window| from_default(window));
 
     // `.preferences-nav`: brand, then the section list.
     let nav = gtk::Box::new(gtk::Orientation::Vertical, tokens.number("s-6") as i32);
+    nav.set_widget_name("preferences-nav");
     nav.add_css_class("preferences-nav");
     nav.set_size_request(196, -1);
     let brand = gtk::Box::new(gtk::Orientation::Horizontal, tokens.number("s-4") as i32);
@@ -396,6 +424,71 @@ pub fn build(
     window
 }
 
+/// Shipping's compact rules (`windows.css`, `@media (max-width: 720px)`):
+/// the nav hides, inline rows stack with stretched controls (the corner
+/// picker stays at the end), three-select grids and accent chips use two
+/// columns, and segmented controls share the track equally. Switch,
+/// shortcut and utility rows are not inline rows, so they never stack.
+fn apply_compact(widget: &gtk::Widget, compact: bool) {
+    if widget.widget_name() == "preferences-nav" {
+        widget.set_visible(!compact);
+        return;
+    }
+    if widget.has_css_class("setting-row-inline")
+        && let Some(row) = widget.downcast_ref::<gtk::Box>()
+    {
+        row.set_orientation(if compact {
+            gtk::Orientation::Vertical
+        } else {
+            gtk::Orientation::Horizontal
+        });
+        // `gap: var(--s-4) var(--s-6)`.
+        row.set_spacing(if compact { 8 } else { 24 });
+        if let Some(control) = row.last_child() {
+            control.set_halign(if compact && !control.has_css_class("keep-end") {
+                gtk::Align::Fill
+            } else {
+                gtk::Align::End
+            });
+        }
+    }
+    if widget.has_css_class("ui-segmented")
+        && let Some(segments) = widget.downcast_ref::<gtk::Box>()
+    {
+        segments.set_homogeneous(compact);
+    }
+    let columns = if widget.has_css_class("setting-grid-three") {
+        Some(if compact { 2 } else { 3 })
+    } else if widget.has_css_class("theme-options") {
+        Some(preferences::theme_columns(compact))
+    } else {
+        None
+    };
+    if let (Some(columns), Some(grid)) = (columns, widget.downcast_ref::<gtk::Grid>()) {
+        let mut children = Vec::new();
+        let mut child = grid.first_child();
+        while let Some(widget) = child {
+            child = widget.next_sibling();
+            children.push(widget);
+        }
+        for (index, child) in children.iter().enumerate() {
+            grid.remove(child);
+            grid.attach(
+                child,
+                (index % columns) as i32,
+                (index / columns) as i32,
+                1,
+                1,
+            );
+        }
+    }
+    let mut child = widget.first_child();
+    while let Some(widget) = child {
+        apply_compact(&widget, compact);
+        child = widget.next_sibling();
+    }
+}
+
 /// The scrolled page inside the viewport, whose coordinates do not move
 /// with the scroll offset.
 fn content(scroller: &gtk::ScrolledWindow) -> gtk::Widget {
@@ -455,8 +548,10 @@ fn copy(title: &str, detail: &str, cap: bool) -> (gtk::Box, gtk::Label) {
 /// `.setting-row-inline`: copy on the left, the control on the right.
 fn inline_row(title: &str, detail: &str, control: &impl IsA<gtk::Widget>) -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 24);
+    row.add_css_class("setting-row-inline");
     row.append(&copy(title, detail, true).0);
     let control = control.as_ref();
+    control.add_css_class("setting-control");
     control.set_valign(gtk::Align::Center);
     control.set_halign(gtk::Align::End);
     row.append(control);
@@ -597,11 +692,24 @@ fn select_grid(
     card: &gtk::Box,
     fields: Vec<(&'static str, Vec<(String, String)>)>,
 ) {
-    let grid = gtk::Box::new(gtk::Orientation::Horizontal, 20);
-    grid.set_homogeneous(true);
-    for (path, options) in fields {
+    let grid = gtk::Grid::new();
+    grid.add_css_class("setting-grid");
+    // `.setting-grid-three` drops to two columns in a compact window.
+    if fields.len() == 3 {
+        grid.add_css_class("setting-grid-three");
+    }
+    grid.set_column_homogeneous(true);
+    // `.setting-grid { gap: var(--s-5) }`.
+    let gap = prefs.tokens.borrow().number("s-5") as u32;
+    grid.set_column_spacing(gap);
+    grid.set_row_spacing(gap);
+    let columns = fields.len() as i32;
+    for (index, (path, options)) in fields.into_iter().enumerate() {
         let choice = select(prefs, path, options);
-        grid.append(&stack_row(preferences::row(path).title, "", &choice.root));
+        let field = stack_row(preferences::row(path).title, "", &choice.root);
+        // `.setting-grid .setting-row { gap: var(--s-3) }`.
+        field.set_spacing(prefs.tokens.borrow().number("s-3") as i32);
+        grid.attach(&field, index as i32 % columns, index as i32 / columns, 1, 1);
     }
     add(card, &grid);
 }
@@ -616,7 +724,11 @@ fn utility_row(title: &str, body: &str, action: &str) -> (gtk::Box, gtk::Button)
     if let Some(child) = button.child() {
         child.set_accessible_role(gtk::AccessibleRole::Presentation);
     }
-    (inline_row(title, body, &button), button)
+    // Shipping's utility rows are their own grid and never stack.
+    let row = inline_row(title, body, &button);
+    row.remove_css_class("setting-row-inline");
+    row.add_css_class("settings-utility-row");
+    (row, button)
 }
 
 /// A button with a construct-time accessible role (radio choices).
@@ -1066,6 +1178,8 @@ fn capture_card(prefs: &Rc<Prefs>, window: &gtk::ApplicationWindow) -> gtk::Box 
     picker.append(&screen);
     picker.append(&placement);
     let row = preferences::row("mini_preview_placement");
+    // `.mini-preview-placement { justify-items: end }`, even when stacked.
+    picker.add_css_class("keep-end");
     let placement_row = inline_row(row.title, row.description, &picker);
     add(&card, &placement_row);
 

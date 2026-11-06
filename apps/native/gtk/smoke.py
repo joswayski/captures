@@ -251,6 +251,21 @@ def preferences(binary, scratch):
         wait(lambda: not [n for role in ("text", "entry") for n in find(app, role, "Find settings")
                           if has_state(n, Atspi.StateType.SHOWING)], "Escape to close Find")
         print("preferences: Find counted, stepped and closed from the keyboard")
+
+    finally:
+        process.terminate()
+        process.wait(timeout=10)
+
+    # Compact (≤720 px): a narrow window opens without the section nav.
+    # GTK hides it from the accessibility tree; Xvfb has no window manager
+    # to resize a live window, so open a second, narrow one.
+    process = launch(binary, "--settings-file", str(settings), "--size", "640x660")
+    try:
+        app = wait(lambda: application(process.pid), "the narrow Preferences window")
+        wait(lambda: find(app, "push button", "Capture History…"), "the narrow page")
+        time.sleep(0.5)
+        assert not find(app, "push button", "Shortcuts"), "the nav stayed in a compact window"
+        print("preferences: a compact window hides the section nav")
     finally:
         process.terminate()
         process.wait(timeout=10)
