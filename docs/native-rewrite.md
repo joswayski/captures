@@ -465,6 +465,19 @@ and of the Text tool look right in light and dark (substitute fonts); the
 popups, typing, IME and UIA need a real Windows run. macOS, Linux:
 unchanged.
 
+Shared brush-preview damage: `DrawingPreview` gains an additive `damage`
+field. A growing background-brush stroke reports the canvas rectangle it
+changed and a `Weak` to the frame it changed it from; every other preview
+reports `None`. The region paste reuses the previous frame in place when
+nothing else holds it, instead of cloning the whole frame, and still
+returns a new allocation, so the `Weak` never matches the changed frame. A
+test checks that no pixel outside the rectangle differs from the frame
+before; the incremental-equals-full test still passes. At 3840×2160
+(Linux release, Erase size 28, 60 previews) the shared preview's median
+fell from 22.6–22.8 ms to 11.3–11.9 ms. GTK4, AppKit and the
+FFI ignore the new field. Windows, Linux: shared tests run on Linux.
+macOS: not run; its FFI response is unchanged.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,
