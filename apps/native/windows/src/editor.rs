@@ -23,8 +23,8 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{Arc, Weak};
 use std::time::Instant;
 
 use captures_app::editor::{
@@ -37,7 +37,7 @@ use captures_app::editor_export::{self, EstimateState, ExportSource, ExportTarge
 use captures_app::editor_output::SavedExport;
 use captures_app::editor_session::{
     DraftAutosave, EditorSession, ExportFormat, ExportOptions, ExportQuality, ExportSize,
-    OpenRequest, PngOptions, Request,
+    OpenRequest, PngOptions, PreviewDamage, Request,
 };
 use captures_app::editor_viewport::{self, Viewport};
 use captures_app::motion::CubicBezier;
@@ -722,34 +722,95 @@ fn diff(old: &RgbaImage, new: &RgbaImage) -> Option<(u32, u32, u32, u32)> {
     ))
 }
 
-/// The worker's last published pixels, kept to diff the next edit against.
+/// What the worker last published. `base` is the last frame published
+/// without preview damage, which the next diff compares with. While a brush
+/// stroke reports its damage, `chain` holds only the identity of the frame on
+/// screen and the union of everything it changed since `base`: keeping it
+/// weak lets the shared session reuse that frame for the next preview
+/// instead of copying it.
 #[derive(Default)]
 struct Published {
-    rgba: Option<Arc<RgbaImage>>,
+    base: Option<Arc<RgbaImage>>,
+    chain: Option<(Weak<RgbaImage>, PixelRect)>,
 }
 
-/// New pixels against the last published ones: the changed rectangle as
+/// `(x, y, width, height)` in canvas pixels.
+type PixelRect = (u32, u32, u32, u32);
+
+impl Published {
+    /// Whether `frame` is the frame on screen.
+    fn shows(&self, frame: *const RgbaImage) -> bool {
+        match &self.chain {
+            Some((shown, _)) => std::ptr::eq(shown.as_ptr(), frame),
+            None => self
+                .base
+                .as_ref()
+                .is_some_and(|base| std::ptr::eq(Arc::as_ptr(base), frame)),
+        }
+    }
+}
+
+/// New pixels against the ones on screen: the changed rectangle as
 /// premultiplied BGRA (all of it after a resize), or `None` when nothing
-/// changed.
-fn publish(rgba: Arc<RgbaImage>, published: &mut Published) -> Option<Pixels> {
+/// changed. A preview's own damage replaces the full-image diff when it is
+/// relative to the frame on screen.
+fn publish(
+    rgba: Arc<RgbaImage>,
+    damage: Option<PreviewDamage>,
+    published: &mut Published,
+) -> Option<Pixels> {
     let size = rgba.dimensions();
-    let damage = match &published.rgba {
-        Some(old) if Arc::ptr_eq(old, &rgba) => return None,
-        Some(old) if old.dimensions() == size => Some(diff(old, &rgba)?),
-        _ => None,
-    };
-    let bgra = convert(&rgba, damage.unwrap_or((0, 0, size.0, size.1)));
-    published.rgba = Some(rgba);
-    Some(Pixels {
+    if published.shows(Arc::as_ptr(&rgba)) {
+        return None;
+    }
+    let pixels = |rect: Option<(u32, u32, u32, u32)>| Pixels {
         width: size.0,
         height: size.1,
-        bgra,
-        damage,
-    })
+        bgra: convert(&rgba, rect.unwrap_or((0, 0, size.0, size.1))),
+        damage: rect,
+    };
+    if let Some(damage) = damage
+        && published.shows(damage.since.as_ptr())
+        && published
+            .base
+            .as_ref()
+            .is_some_and(|b| b.dimensions() == size)
+    {
+        let shown = published
+            .chain
+            .as_ref()
+            .map_or(damage.rect, |(_, u)| union(*u, damage.rect));
+        published.chain = Some((Arc::downgrade(&rgba), shown));
+        return (!empty(damage.rect)).then(|| pixels(Some(damage.rect)));
+    }
+    // Everything the chain showed differs from `base` too.
+    let chained = published.chain.take().map(|(_, shown)| shown);
+    let changed = match &published.base {
+        Some(old) if old.dimensions() == size => {
+            match (diff(old, &rgba), chained.filter(|r| !empty(*r))) {
+                (Some(a), Some(b)) => Some(Some(union(a, b))),
+                (Some(r), None) | (None, Some(r)) => Some(Some(r)),
+                (None, None) => None,
+            }
+        }
+        _ => Some(None),
+    };
+    published.base = Some(rgba.clone());
+    changed.map(pixels)
 }
 
-/// The rectangle covering both `a` and `b`.
+fn empty((_, _, w, h): (u32, u32, u32, u32)) -> bool {
+    w == 0 || h == 0
+}
+
+/// The rectangle covering both `a` and `b`; an empty one adds nothing.
 fn union(a: (u32, u32, u32, u32), b: (u32, u32, u32, u32)) -> (u32, u32, u32, u32) {
+    if empty(a) {
+        return b;
+    }
+    if empty(b) {
+        return a;
+    }
     let (x0, y0) = (a.0.min(b.0), a.1.min(b.1));
     let (x1, y1) = ((a.0 + a.2).max(b.0 + b.2), (a.1 + a.3).max(b.1 + b.3));
     (x0, y0, x1 - x0, y1 - y0)
@@ -778,7 +839,7 @@ fn present(session: &EditorSession, artifact_id: &str, published: &mut Published
             }
         })
         .collect();
-    let pixels = publish(session.pixels(), published);
+    let pixels = publish(session.pixels(), None, published);
     Presented {
         document: snapshot.document.clone(),
         layers,
@@ -914,7 +975,7 @@ fn spawn_worker(
                     Job::Preview(request) => Outcome::Preview(
                         session.preview_drawing_with_geometry(request).map(|frame| {
                             (
-                                publish(frame.pixels, &mut published),
+                                publish(frame.pixels, frame.damage, &mut published),
                                 frame.selection_outlines,
                                 frame.guides,
                             )
