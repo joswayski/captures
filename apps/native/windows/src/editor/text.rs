@@ -977,22 +977,28 @@ impl Editor {
         }
     }
 
-    /// Render the drag so far on the worker, one request at a time.
-    pub(super) fn preview_resize(&mut self) {
+    /// Render a grip drag or brush stroke so far on the worker, one
+    /// request at a time.
+    pub(super) fn preview_gesture(&mut self) {
         if self.preview_busy {
             self.preview_dirty = true;
             return;
         }
-        let Some(Gesture::Resize {
-            id, handle, end, ..
-        }) = self.gesture.clone()
-        else {
-            return;
+        let request = match self.gesture.clone() {
+            Some(Gesture::Resize {
+                id, handle, end, ..
+            }) => {
+                let lock = self.shift_down();
+                self.resize_request(&id, handle, end, lock)
+            }
+            Some(Gesture::Brush(points)) => match self.brush_request(points) {
+                Some(request) => request,
+                None => return,
+            },
+            _ => return,
         };
-        let lock = self.shift_down();
         self.preview_busy = true;
         self.preview_dirty = false;
-        let request = self.resize_request(&id, handle, end, lock);
         let _ = self.jobs.send(Job::Preview(request));
     }
 }

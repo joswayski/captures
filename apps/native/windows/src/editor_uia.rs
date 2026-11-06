@@ -51,6 +51,8 @@ pub enum Id {
     ShapePicker,
     /// A `ColorField` fieldset, named by its legend.
     ColorField(Field),
+    /// `role="group" aria-label="Eraser mode"`.
+    ModeGroup,
     /// `output aria-label="Save location"`.
     Location,
     /// `input aria-label="Saved filename"`.
@@ -153,6 +155,7 @@ fn children(e: &Editor, id: Id) -> Vec<Id> {
             for prop in e.prop_order() {
                 let id = match prop {
                     Prop::Shape(_) => Id::ShapePicker,
+                    Prop::Mode(_) => Id::ModeGroup,
                     Prop::Swatch(field, _) => Id::ColorField(field),
                     prop => c(Target::Prop(prop)),
                 };
@@ -163,7 +166,7 @@ fn children(e: &Editor, id: Id) -> Vec<Id> {
             list
         }
         Id::Canvas if e.text_active() => vec![Id::InlineText],
-        Id::ShapePicker | Id::ColorField(_) => e
+        Id::ShapePicker | Id::ColorField(_) | Id::ModeGroup => e
             .prop_order()
             .into_iter()
             .filter(|&prop| prop_parent(prop) == id)
@@ -176,6 +179,7 @@ fn children(e: &Editor, id: Id) -> Vec<Id> {
 fn prop_parent(prop: Prop) -> Id {
     match prop {
         Prop::Shape(_) => Id::ShapePicker,
+        Prop::Mode(_) => Id::ModeGroup,
         Prop::Swatch(field, _) => Id::ColorField(field),
         _ => Id::Properties,
     }
@@ -192,7 +196,7 @@ fn parent(id: Id) -> Option<Id> {
         Id::Control(Target::Shape(_)) => Id::Flyout,
         Id::LayersTitle | Id::Stub(Stub::AddLayer) | Id::List => Id::Layers,
         Id::Row(_) => Id::List,
-        Id::ShapePicker | Id::ColorField(_) => Id::Properties,
+        Id::ShapePicker | Id::ColorField(_) | Id::ModeGroup => Id::Properties,
         Id::InlineText => Id::Canvas,
         Id::Control(Target::Prop(prop)) => prop_parent(prop),
         Id::Control(Target::Layer(i) | Target::Eye(i) | Target::Lock(i))
@@ -228,6 +232,7 @@ fn rect(e: &Editor, id: Id) -> Rect {
         Id::Properties => l.properties,
         Id::InlineText => e.text_rect(),
         Id::ShapePicker => e.picker_rect(),
+        Id::ModeGroup => e.modes_rect(),
         Id::ColorField(field) => e.color_field_rect(field),
         Id::Location => l.folder,
         Id::Filename => l.filename,
@@ -251,6 +256,7 @@ fn name(e: &Editor, id: Id) -> String {
         Id::Properties => "Tool properties".into(),
         Id::InlineText => editor_chrome::text_format::INLINE_LABEL.into(),
         Id::ShapePicker => "Shape".into(),
+        Id::ModeGroup => "Eraser mode".into(),
         Id::ColorField(field) => e.field_label(field),
         Id::Location => "Save location".into(),
         Id::Filename => "Saved filename".into(),
@@ -273,6 +279,7 @@ fn control_type(id: Id) -> UIA_CONTROLTYPE_ID {
         | Id::Layers
         | Id::Properties
         | Id::ShapePicker
+        | Id::ModeGroup
         | Id::ColorField(_) => UIA_GroupControlTypeId,
         Id::Flyout => UIA_MenuControlTypeId,
         Id::List => UIA_ListControlTypeId,
@@ -317,6 +324,7 @@ fn runtime_id(id: Id) -> [i32; 4] {
             Target::Prop(Prop::Check(check)) => (17, check as i32),
             Target::Prop(Prop::Swatch(field, i)) => (18, field as i32 * 16 + i as i32),
             Target::Prop(Prop::Range(range)) => (19, range as i32),
+            Target::Prop(Prop::Mode(i)) => (20, i as i32),
         }
     };
     let stub = |s: Stub| -> (i32, i32) {
@@ -355,6 +363,7 @@ fn runtime_id(id: Id) -> [i32; 4] {
         Id::ShapePicker => (17, 0),
         Id::ColorField(field) => (18, field as i32),
         Id::InlineText => (19, 0),
+        Id::ModeGroup => (20, 0),
         Id::Control(t) => {
             let (k, a) = target(t);
             (100 + k, a)
@@ -392,7 +401,7 @@ fn offscreen(e: &Editor, id: Id) -> bool {
             let (r, list) = (rect(e, id), e.l.list);
             r.y + r.h <= list.y || r.y >= list.y + list.h
         }
-        Id::ShapePicker | Id::ColorField(_) | Id::Control(Target::Prop(_)) => {
+        Id::ShapePicker | Id::ColorField(_) | Id::ModeGroup | Id::Control(Target::Prop(_)) => {
             let (r, view) = (rect(e, id), e.props_view());
             r.y + r.h <= view.y || r.y >= view.y + view.h
         }

@@ -59,6 +59,7 @@ use crate::scene::Rect;
 use crate::tokens::Tokens;
 use crate::{Options, appearance};
 
+mod eraser;
 mod props;
 mod text;
 pub use props::{Field, Prop, Range, bounds as range_bounds, range_text};
@@ -370,6 +371,8 @@ enum Gesture {
         start: Point,
         end: Point,
     },
+    /// An Erase or Restore brush stroke.
+    Brush(Vec<Point>),
     /// Dragging a selection grip.
     Resize {
         id: String,
@@ -472,6 +475,8 @@ pub struct Editor {
     pending: Option<Request>,
     /// A custom color to ask for once the window is released.
     pick_color: Option<Field>,
+    /// Eraser mode and settings, window-local like shipping's.
+    pub eraser: props::Eraser,
     /// The Text tool's open label.
     inline: Option<text::Inline>,
     input_counter: u32,
@@ -554,11 +559,6 @@ fn open_kind(tool: &str) -> Option<OpenShapeKind> {
         "a" => OpenShapeKind::Arrow,
         _ => return None,
     })
-}
-
-/// Rail tools this host does not implement yet: Eraser.
-pub fn tool_enabled(index: usize) -> bool {
-    RAIL_TOOLS[index].key != "b"
 }
 
 /// The rail index of the grouped Shapes button.
@@ -944,6 +944,7 @@ impl Editor {
             range_drag: None,
             pending: None,
             pick_color: None,
+            eraser: props::Eraser::default(),
             inline: None,
             input_counter: 0,
             caret: 0,
@@ -1149,7 +1150,7 @@ impl Editor {
             Target::ZoomOut => p.is_some() && percent > ZOOM_MIN + 0.05,
             Target::ZoomIn => p.is_some() && percent < ZOOM_MAX - 0.05,
             Target::Fit | Target::Slider => p.is_some(),
-            Target::Tool(i) => tool_enabled(i),
+            Target::Tool(_) => true,
             Target::Save => {
                 self.export_view()
                     .is_some_and(|v| v.plan.is_some() && v.error.is_none())
@@ -1546,7 +1547,7 @@ impl Editor {
         let rail = RAIL_TOOLS
             .iter()
             .enumerate()
-            .find(|(i, t)| t.key == key && tool_enabled(*i))
+            .find(|(_, t)| t.key == key)
             .map(|(_, t)| t.key);
         let shape = SHAPE_TOOLS.iter().find(|t| t.key == key).map(|t| t.key);
         match rail.or(shape) {
@@ -1807,6 +1808,7 @@ impl Editor {
             Outcome::Preview(result) => {
                 self.preview_busy = false;
                 let resizing = matches!(self.gesture, Some(Gesture::Resize { .. }));
+                let previewing = resizing || matches!(self.gesture, Some(Gesture::Brush(_)));
                 match result {
                     // Only a drag still in progress shows its preview; the
                     // committed result replaces it once the worker publishes.
@@ -1823,8 +1825,8 @@ impl Editor {
                     }
                     Err(error) => self.set_notice(Some((error, true))),
                 }
-                if self.preview_dirty && resizing {
-                    self.preview_resize();
+                if self.preview_dirty && previewing {
+                    self.preview_gesture();
                 }
                 self.need = true;
                 return;
@@ -1932,6 +1934,10 @@ impl Editor {
             self.begin_text(point);
             return;
         }
+        if tool == "b" {
+            self.begin_eraser(point);
+            return;
+        }
         if tool == "v" && double && self.edit_text_at(point) {
             return;
         }
@@ -1996,7 +2002,13 @@ impl Editor {
                 if let Some(point) = point {
                     *end = point;
                 }
-                self.preview_resize();
+                self.preview_gesture();
+            }
+            Some(Gesture::Brush(points)) => {
+                if let Some(point) = point {
+                    points.push(point);
+                }
+                self.preview_gesture();
             }
             Some(Gesture::Freehand(points)) => {
                 if let Some(point) = point {
@@ -2050,6 +2062,7 @@ impl Editor {
                 },
             }),
             Gesture::Freehand(_) => None,
+            Gesture::Brush(points) => self.brush_request(points),
             Gesture::Shape { start, end, .. } if !moved(start, end) => None,
             Gesture::Shape {
                 tool: "c",
@@ -2108,7 +2121,7 @@ impl Editor {
         let Some(gesture) = self.gesture.take() else {
             return false;
         };
-        if matches!(gesture, Gesture::Resize { .. }) {
+        if matches!(gesture, Gesture::Resize { .. } | Gesture::Brush(_)) {
             self.preview_outline = None;
             let _ = self.jobs.send(Job::Refresh);
         }
@@ -2827,9 +2840,7 @@ impl Editor {
                     .iter()
                     .position(|t| t.key == key && t.key != editor_chrome::SHAPES_KEY)
                 {
-                    if tool_enabled(i) {
-                        self.activate(Target::Tool(i));
-                    }
+                    self.activate(Target::Tool(i));
                 } else if let Some(i) = SHAPE_TOOLS
                     .iter()
                     .position(|t| t.shortcut.is_some_and(|s| s.eq_ignore_ascii_case(&key)))
@@ -3259,6 +3270,9 @@ impl Editor {
             _ => {}
         }
         points.extend(self.text_corners());
+        if let Some((x, y, r)) = self.brush_ring() {
+            points.extend([(x - r - 3., y - r - 3.), (x + r + 3., y + r + 3.)]);
+        }
         let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
         for (x, y) in &points {
             x0 = x0.min(*x);
@@ -3342,6 +3356,7 @@ impl Editor {
             _ => {}
         }
         self.draw_grips(dc)?;
+        self.draw_brush_ring(dc)?;
         self.draw_text(dc)
     }
 
@@ -4464,10 +4479,17 @@ impl Editor {
                     self.update(x, y);
                 }
                 self.set_pointer(Some((x, y)));
+                // The brush ring follows the pointer in the overlay.
+                if self.brush_mode().is_some() {
+                    self.overlay_changed();
+                }
             }
             WM_MOUSELEAVE => {
                 self.tracking = false;
                 self.set_pointer(None);
+                if self.tool == "b" {
+                    self.overlay_changed();
+                }
             }
             WM_LBUTTONDOWN | WM_LBUTTONDBLCLK | WM_MBUTTONDOWN => {
                 unsafe { SetCapture(self.hwnd) };
@@ -4592,6 +4614,19 @@ impl Editor {
             WM_SETCURSOR => {
                 if (lp.0 & 0xffff) as u32 != HTCLIENT {
                     return None;
+                }
+                if let Some((x, y)) = self.pointer
+                    && self.tool == "b"
+                    && self.divider_drag.is_none()
+                    && self.l.well.contains(x, y)
+                    && self.hit(x, y).is_none()
+                {
+                    // `None` hides the system cursor under the brush ring.
+                    let shape = self.eraser_cursor(x, y);
+                    unsafe {
+                        SetCursor(shape.and_then(|c| LoadCursorW(None, c).ok()));
+                    }
+                    return Some(LRESULT(1));
                 }
                 let cursor = match self.pointer {
                     _ if self.divider_drag.is_some() => IDC_SIZEWE,
