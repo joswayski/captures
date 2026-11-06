@@ -97,6 +97,7 @@ pub(super) fn test_preview(pixels: std::sync::Arc<image::RgbaImage>) -> DrawingP
         text_bounds: Default::default(),
         selection_outlines: Default::default(),
         guides: Vec::new(),
+        damage: None,
     }
 }
 
