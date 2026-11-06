@@ -417,6 +417,55 @@ def editor(binary, scratch):
         press(save)
         wait(lambda: list(elsewhere.glob("*.jpg")), "Save to write into the chosen folder")
         print("editor: Change… moved Save to another folder")
+
+        # Layers: double-click renames an image layer in its row, and dragging
+        # its row below the next layer reorders it. The 640 px screen cannot
+        # show the layers panel, so slide the window left for the pointer.
+        press(find(app, "push button", "Add images")[0])
+        choose_file(app, "Add images", "Add", picked)
+        wait(lambda: find(app, "list item", "Pasted logo.png · Image"), "the imported image layer")
+        subprocess.run(["xdotool", "windowmove", window, "-500", "0"], check=True)
+        time.sleep(0.5)
+
+        def row_center(row):
+            extents = row.get_extents(Atspi.CoordType.WINDOW)
+            return extents.x - 500 + extents.width // 2, extents.y + extents.height // 2
+
+        def rows():
+            return [name for _, (role, name) in nodes(app)
+                    if role == "list item" and " · " in name]
+
+        logo = find(app, "list item", "Pasted logo.png · Image")[0]
+        x, y = row_center(logo)
+        subprocess.run(["xdotool", "mousemove", str(x), str(y)], check=True)
+        time.sleep(0.2)
+        subprocess.run(["xdotool", "click", "--repeat", "2", "--delay", "80", "1"], check=True)
+        wait(lambda: find(app, "text", "Rename layer"), "the Rename layer field")
+        time.sleep(0.5)  # The row's entry takes focus on idle.
+        subprocess.run(["xdotool", "key", "ctrl+a"], check=True)
+        subprocess.run(["xdotool", "type", "--delay", "20", "  Logo  "], check=True)
+        subprocess.run(["xdotool", "key", "Return"], check=True)
+        wait(lambda: find(app, "list item", "Logo · Image"), "the trimmed new layer name")
+        before = rows()
+        assert before[0] == "Logo · Image", f"unexpected layer order {before}"
+        below = find(app, "list item", before[1])[0]
+        x, y = row_center(find(app, "list item", "Logo · Image")[0])
+        _, target_y = row_center(below)
+        target_y += below.get_extents(Atspi.CoordType.WINDOW).height // 4
+        subprocess.run(["xdotool", "mousemove", str(x), str(y)], check=True)
+        time.sleep(0.2)
+        subprocess.run(["xdotool", "mousedown", "1"], check=True)
+        for step in range(1, 11):
+            subprocess.run(["xdotool", "mousemove", str(x),
+                            str(y + (target_y - y) * step // 10)], check=True)
+            time.sleep(0.03)
+        subprocess.run(["xdotool", "mouseup", "1"], check=True)
+        wait(lambda: rows()[:2] == [before[1], "Logo · Image"],
+             f"the drag to move Logo below {before[1]}")
+        press(find(app, "push button", "Undo")[0])
+        wait(lambda: rows()[:2] == before[:2], "Undo to restore the layer order")
+        subprocess.run(["xdotool", "windowmove", window, "0", "0"], check=True)
+        print(f"editor: renamed an image layer to Logo and dragged it below {before[1]}")
     finally:
         process.terminate()
         process.wait(timeout=10)

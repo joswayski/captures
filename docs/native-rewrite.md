@@ -464,8 +464,16 @@ name. The smoke saves a Compress, 50% JPEG and checks its width, then saves
 into a folder picked with Change…. Not yet: the Compress before/after
 comparison, and Preserve's estimate still re-encodes an unchanged document
 instead of showing the original file size as shipping does (the shared
-model's behavior, as in the egui workbench). Layer reorder/rename are not in
-the GTK host yet.
+model's behavior, as in the egui workbench). Layer rows now carry shipping's
+grip (dimmed on locked layers). Dragging a row onto another places it above
+or below by the target's half, with the dragged row faded and an accent drop
+line, and commits one `LayerEdit::Reorder` (the session keeps locked layers
+and their neighbours fixed). Double-clicking an image layer's name opens an
+inline "Rename layer" entry: Enter or leaving commits a trimmed nonempty
+name as `LayerEdit::Rename`, Escape cancels. The smoke renames an imported
+image and drags it below the next layer with the real pointer, then undoes.
+Not yet: the per-layer settings menu (Appearance, Transform, Arrange,
+Combine, Delete) and layer thumbnails instead of kind icons.
 Release build
 under Xvfb with Cairo on a 640×360 fixture: about 110 MB RSS and near-zero
 idle CPU; the egui workbench's own editor scene measures about 173 MB the

@@ -642,6 +642,46 @@ popover.captures-menu button.editor-shape-button.active {
 .captures list.editor-layer-list > row.editor-layer-row:focus-visible {
   box-shadow: inset 0 0 0 2px alpha(var(--theme-accent), 0.5);
 }
+/* Reorder: the dragged row fades, the target shows shipping's accent line. */
+.captures list.editor-layer-list > row.editor-layer-row.dragging {
+  opacity: 0.42;
+}
+.captures list.editor-layer-list > row.editor-layer-row.drop-before {
+  box-shadow:
+    inset 0 2px 0 0 var(--theme-accent),
+    inset 0 6px 6px -6px alpha(var(--theme-accent), 0.5);
+}
+.captures list.editor-layer-list > row.editor-layer-row.drop-after {
+  box-shadow:
+    inset 0 -2px 0 0 var(--theme-accent),
+    inset 0 -6px 6px -6px alpha(var(--theme-accent), 0.5);
+}
+.captures .editor-layer-grip {
+  color: var(--text-subtle);
+  opacity: 0.5;
+}
+.captures list.editor-layer-list > row.editor-layer-row:not(.locked):hover .editor-layer-grip {
+  color: var(--text-muted);
+  opacity: 1;
+}
+.captures list.editor-layer-list > row.editor-layer-row.locked .editor-layer-grip {
+  opacity: 0.35;
+}
+.captures entry.editor-layer-rename {
+  all: unset;
+  min-height: 23px;
+  padding: 0 var(--s-3);
+  border: 1px solid var(--theme-accent);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  background: var(--surface-field);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+.captures entry.editor-layer-rename > text > selection {
+  color: var(--theme-accent-ink);
+  background: var(--theme-accent);
+}
 .captures .editor-layer-preview {
   min-width: 42px;
   min-height: 30px;

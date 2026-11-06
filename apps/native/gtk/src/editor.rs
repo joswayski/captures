@@ -17,7 +17,7 @@ use std::sync::mpsc;
 
 use captures_app::editor::{
     ClosedShapeCreate, ClosedShapeKind, Document, ElementStyle, FreehandPathCreate, LayerEdit,
-    OpenShapeCreate, OpenShapeKind, Point, Rect,
+    LayerPlacement, OpenShapeCreate, OpenShapeKind, Point, Rect,
 };
 use captures_app::editor_chrome::{self, RAIL_TOOLS, SHAPE_TOOLS, brush_cursor, header};
 use captures_app::editor_export::{self, EstimateState, ExportSource, ExportTarget};
@@ -202,6 +202,9 @@ enum Gesture {
     },
 }
 
+/// A layer drop target: the row id and which side of it.
+type DropTarget = (String, LayerPlacement);
+
 pub struct Editor {
     pub window: gtk::ApplicationWindow,
     state: Rc<State>,
@@ -249,6 +252,10 @@ struct State {
     /// The History entry's file size, the Preserve baseline.
     original_bytes: Option<u64>,
     me: std::rc::Weak<State>,
+    /// The image layer whose name is being edited in its row.
+    renaming: RefCell<Option<String>>,
+    /// A layer row drag: the moved id, and the drop target once it moves.
+    layer_drag: RefCell<Option<(String, Option<DropTarget>)>>,
     preview_dirty: Cell<bool>,
     /// The previous primary press, for double-click editing.
     last_press: Cell<Option<(std::time::Instant, f64, f64)>>,
@@ -635,6 +642,8 @@ pub fn build(
         estimate_timer: RefCell::default(),
         original_bytes,
         me: me.clone(),
+        renaming: RefCell::default(),
+        layer_drag: RefCell::default(),
         preview_dirty: Cell::default(),
         widgets: Widgets {
             undo,
@@ -757,6 +766,7 @@ impl State {
             *state.selected.borrow_mut() = Some(id);
             state.canvas.queue_draw();
         });
+        self.connect_layer_drag();
         let weak = Rc::downgrade(self);
         w.copy.connect_clicked(move |_| {
             if let Some(state) = weak.upgrade() {
@@ -1331,11 +1341,25 @@ impl State {
             return;
         };
         let selected = self.selected.borrow().clone();
+        let renaming = self.renaming.borrow().clone();
         for layer in &presented.layers {
             let row = gtk::ListBoxRow::new();
             row.set_widget_name(&layer.id);
             row.add_css_class("editor-layer-row");
+            if layer.locked {
+                row.add_css_class("locked");
+            }
             let content = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+            // `.screenshot-layer-grip`: a reorder cue, dimmed when locked.
+            let grip = Icon::new("grip", 16).with_stroke(1.6);
+            grip.add_css_class("editor-layer-grip");
+            grip.set_size_request(12, -1);
+            grip.set_tooltip_text(Some(if layer.locked {
+                "Layer is locked"
+            } else {
+                "Drag to reorder"
+            }));
+            content.append(&grip);
             let preview = gtk::Box::new(gtk::Orientation::Vertical, 0);
             preview.add_css_class("editor-layer-preview");
             let icon = Icon::new(layer.icon, 16).with_stroke(1.7);
@@ -1345,9 +1369,28 @@ impl State {
             let copy = gtk::Box::new(gtk::Orientation::Vertical, 2);
             copy.set_hexpand(true);
             copy.set_valign(gtk::Align::Center);
-            let name = label(&layer.name, "editor-layer-name");
-            name.set_ellipsize(gtk::pango::EllipsizeMode::End);
-            copy.append(&name);
+            let image = layer.kind == "Image";
+            if image && renaming.as_deref() == Some(layer.id.as_str()) {
+                copy.append(&self.rename_field(&layer.id, &layer.name));
+            } else {
+                let name = label(&layer.name, "editor-layer-name");
+                name.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                if image {
+                    name.set_tooltip_text(Some("Double-click to rename"));
+                    let click = gtk::GestureClick::new();
+                    let weak = Rc::downgrade(self);
+                    let id = layer.id.clone();
+                    click.connect_pressed(move |_, presses, _, _| {
+                        if presses == 2
+                            && let Some(state) = weak.upgrade()
+                        {
+                            state.begin_rename(&id);
+                        }
+                    });
+                    row.add_controller(click);
+                }
+                copy.append(&name);
+            }
             copy.append(&label(layer.kind, "editor-layer-kind"));
             content.append(&copy);
             let eye = icon_only(
@@ -1387,6 +1430,182 @@ impl State {
                 list.select_row(Some(&row));
             }
         }
+    }
+
+    /// Shipping `beginLayerRename`: image layers only, selected, Select tool.
+    fn begin_rename(self: &Rc<Self>, id: &str) {
+        *self.selected.borrow_mut() = Some(id.to_owned());
+        self.select_tool("v");
+        *self.renaming.borrow_mut() = Some(id.to_owned());
+        self.rebuild_layers();
+    }
+
+    /// The row's name entry: Enter or leaving commits a nonempty trimmed
+    /// name, Escape cancels.
+    fn rename_field(self: &Rc<Self>, id: &str, name: &str) -> gtk::Entry {
+        let entry = gtk::Entry::new();
+        entry.add_css_class("editor-layer-rename");
+        entry.set_text(name);
+        entry.update_property(&[gtk::accessible::Property::Label("Rename layer")]);
+        let finish = {
+            let weak = Rc::downgrade(self);
+            let id = id.to_owned();
+            let old = name.to_owned();
+            move |entry: &gtk::Entry, commit: bool| {
+                let Some(state) = weak.upgrade() else { return };
+                if state.renaming.borrow().as_deref() != Some(id.as_str()) {
+                    return;
+                }
+                state.renaming.borrow_mut().take();
+                let name = entry.text().trim().to_owned();
+                if commit && !name.is_empty() && name != old {
+                    state.submit(Request::Layer {
+                        id: id.clone(),
+                        edit: LayerEdit::Rename { name },
+                    });
+                }
+                let state = state.clone();
+                glib::idle_add_local_once(move || {
+                    state.rebuild_layers();
+                    GtkWindowExt::set_focus(
+                        &state
+                            .canvas
+                            .root()
+                            .and_downcast::<gtk::Window>()
+                            .expect("window"),
+                        Some(&state.canvas),
+                    );
+                });
+            }
+        };
+        let finish = Rc::new(finish);
+        {
+            let finish = finish.clone();
+            entry.connect_activate(move |entry| finish(entry, true));
+        }
+        let keys = gtk::EventControllerKey::new();
+        {
+            let finish = finish.clone();
+            let entry = entry.clone();
+            keys.connect_key_pressed(move |_, key, _, _| {
+                if key == gdk::Key::Escape {
+                    finish(&entry, false);
+                    glib::Propagation::Stop
+                } else {
+                    glib::Propagation::Proceed
+                }
+            });
+        }
+        entry.add_controller(keys);
+        let focus = gtk::EventControllerFocus::new();
+        {
+            let entry = entry.clone();
+            focus.connect_leave(move |_| finish(&entry, true));
+        }
+        entry.add_controller(focus);
+        glib::idle_add_local_once({
+            let entry = entry.clone();
+            move || {
+                entry.grab_focus();
+                entry.select_region(0, -1);
+            }
+        });
+        entry
+    }
+
+    /// Shipping drags a layer row onto another: the top or bottom half of
+    /// the target places it before (above) or after (below) that layer.
+    /// Locked layers do not move; the session keeps locked neighbours fixed.
+    fn connect_layer_drag(self: &Rc<Self>) {
+        let list = self.widgets.layers.clone();
+        let drag = gtk::GestureDrag::new();
+        let weak = Rc::downgrade(self);
+        drag.connect_drag_begin(move |_, _, y| {
+            let Some(state) = weak.upgrade() else { return };
+            let start = state.widgets.layers.row_at_y(y as i32).filter(|row| {
+                !row.has_css_class("locked")
+                    && state.renaming.borrow().as_deref() != Some(row.widget_name().as_str())
+            });
+            *state.layer_drag.borrow_mut() = start.map(|row| (row.widget_name().to_string(), None));
+        });
+        let weak = Rc::downgrade(self);
+        drag.connect_drag_update(move |gesture, _, dy| {
+            let Some(state) = weak.upgrade() else { return };
+            let Some((_, y)) = gesture.start_point() else {
+                return;
+            };
+            let mut current = state.layer_drag.borrow_mut();
+            let Some((moved, target)) = current.as_mut() else {
+                return;
+            };
+            if target.is_none() && dy.abs() < 6. {
+                return;
+            }
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            let list = &state.widgets.layers;
+            let y = y + dy;
+            let over = list
+                .row_at_y(y as i32)
+                .filter(|row| row.widget_name().as_str() != moved.as_str());
+            *target = Some(match over {
+                Some(row) => {
+                    let top = row
+                        .compute_point(list, &graphene::Point::new(0., 0.))
+                        .map_or(0., |point| f64::from(point.y()));
+                    let placement = if y < top + f64::from(row.height()) / 2. {
+                        LayerPlacement::Before
+                    } else {
+                        LayerPlacement::After
+                    };
+                    (row.widget_name().to_string(), placement)
+                }
+                None => (String::new(), LayerPlacement::Before),
+            });
+            let mut child = list.first_child();
+            while let Some(row) = child {
+                let name = row.widget_name();
+                set_class(&row, "dragging", name.as_str() == moved.as_str());
+                let (id, placement) = target.as_ref().expect("target");
+                let here = name.as_str() == id.as_str();
+                set_class(
+                    &row,
+                    "drop-before",
+                    here && matches!(placement, LayerPlacement::Before),
+                );
+                set_class(
+                    &row,
+                    "drop-after",
+                    here && matches!(placement, LayerPlacement::After),
+                );
+                child = row.next_sibling();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        drag.connect_drag_end(move |_, _, _| {
+            let Some(state) = weak.upgrade() else { return };
+            let finished = state.layer_drag.borrow_mut().take();
+            let mut child = state.widgets.layers.first_child();
+            while let Some(row) = child {
+                for class in ["dragging", "drop-before", "drop-after"] {
+                    row.remove_css_class(class);
+                }
+                child = row.next_sibling();
+            }
+            if let Some((moved, Some((target_id, placement)))) = finished
+                && !target_id.is_empty()
+            {
+                *state.selected.borrow_mut() = Some(moved.clone());
+                state.select_tool("v");
+                state.submit(Request::Layer {
+                    id: moved,
+                    edit: LayerEdit::Reorder {
+                        target_id,
+                        placement,
+                    },
+                });
+            }
+        });
+        list.add_controller(drag);
     }
 
     fn update_export(&self) {
