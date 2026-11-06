@@ -143,6 +143,8 @@ pub fn exists() -> bool {
 pub enum Target {
     /// The restored-draft banner's Dismiss.
     Dismiss,
+    /// The Canvas group's Trim edges.
+    Trim,
     Undo,
     Redo,
     Fit,
@@ -172,7 +174,6 @@ pub enum Target {
 pub enum Stub {
     Width,
     Height,
-    Trim,
     Background,
     Preset,
     AddImages,
@@ -317,6 +318,8 @@ pub struct Presented {
     pub can_redo: bool,
     pub style: ElementStyle,
     pub has_draft: bool,
+    /// Shipping `canTrimEdges`.
+    pub can_trim: bool,
     /// The session's active inline text input.
     pub active_input: Option<text::ActiveInput>,
     /// Font family keys to the bundled family names.
@@ -700,6 +703,7 @@ fn present(session: &EditorSession, artifact_id: &str, published: &mut Published
         can_redo: snapshot.can_redo,
         style: snapshot.initial_annotation_style.clone(),
         has_draft: snapshot.has_draft,
+        can_trim: snapshot.can_trim,
         active_input: snapshot
             .active_text_input
             .as_ref()
@@ -1067,6 +1071,7 @@ impl Editor {
         }
         self.control(root, Target::Divider, 0.);
         self.header = self.add(Some(root), Kind::Header, 0.);
+        self.control(self.header, Target::Trim, 0.);
         self.banner_node = self.add(Some(root), Kind::Banner, 0.);
         self.control(self.banner_node, Target::Dismiss, 0.);
         for target in [Target::Undo, Target::Redo] {
@@ -1146,6 +1151,7 @@ impl Editor {
         let percent = self.zoom_percent().unwrap_or(100.);
         match target {
             Target::Undo => p.is_some_and(|p| p.can_undo),
+            Target::Trim => p.is_some_and(|p| p.can_trim) && !self.busy,
             Target::Redo => p.is_some_and(|p| p.can_redo),
             Target::ZoomOut => p.is_some() && percent > ZOOM_MIN + 0.05,
             Target::ZoomIn => p.is_some() && percent < ZOOM_MAX - 0.05,
@@ -1185,6 +1191,7 @@ impl Editor {
     pub fn name(&self, target: Target) -> String {
         match target {
             Target::Dismiss => header::DRAFT_DISMISS_LABEL.into(),
+            Target::Trim => header::TRIM.into(),
             Target::Undo => header::UNDO.into(),
             Target::Redo => header::REDO.into(),
             Target::Fit => header::FIT.into(),
@@ -1220,6 +1227,7 @@ impl Editor {
     pub fn help(&self, target: Target) -> String {
         match target {
             Target::Fit => header::FIT_TOOLTIP.into(),
+            Target::Trim => header::TRIM_TOOLTIP.into(),
             Target::Slider => header::ZOOM_SLIDER_TOOLTIP.into(),
             Target::Tool(i) if RAIL_TOOLS[i].key == editor_chrome::SHAPES_KEY => {
                 editor_chrome::shapes_tooltip(SHAPE_TOOLS[self.last_shape].key)
@@ -1236,7 +1244,6 @@ impl Editor {
         match stub {
             Stub::Width => header::CANVAS_WIDTH.into(),
             Stub::Height => header::CANVAS_HEIGHT.into(),
-            Stub::Trim => header::TRIM.into(),
             Stub::Background => editor_chrome::colors::BACKGROUND.into(),
             Stub::Preset => header::ZOOM_PRESET.into(),
             Stub::AddImages => header::ADD_IMAGES.into(),
@@ -1266,7 +1273,6 @@ impl Editor {
         match stub {
             Stub::Width => l.width_box,
             Stub::Height => l.height_box,
-            Stub::Trim => l.trim,
             Stub::Background => l.background,
             Stub::Preset => l.preset,
             Stub::AddImages => l.add_images,
@@ -1594,6 +1600,10 @@ impl Editor {
                 if self.focus == Some(Target::Dismiss) {
                     self.focus = None;
                 }
+            }
+            Target::Trim => {
+                self.notice = None;
+                self.submit(Request::TrimCanvas);
             }
             Target::Undo => self.submit(Request::Undo),
             Target::Redo => self.submit(Request::Redo),
@@ -2189,6 +2199,7 @@ impl Editor {
         l.height_box = Rect::new(x + dim.width + s2, mid + 4., CANVAS_FIELD, 28.);
         x += dim_w + 2. + s2 + 1. + s2 + 2.;
         l.trim = Rect::new(x, mid + 4., 2. + 2. * s4 + 13. + s3 + trim.width, 28.);
+        set(Target::Trim, l.trim);
         x += l.trim.w + 2.;
         l.background = Rect::new(
             x,
@@ -2650,6 +2661,7 @@ impl Editor {
             list.push(Target::Dismiss);
         }
         list.extend([
+            Target::Trim,
             Target::Undo,
             Target::Redo,
             Target::Fit,
@@ -2871,6 +2883,9 @@ impl Editor {
                 gfx::fill(dc, all, c("caution-surface"))?;
                 gfx::fill(dc, rect(0., h - 1., w, h), c("border-subtle"))?;
                 let text = g.text(t, Style::Button, header::DRAFT_RESTORED, 1e4)?;
+                // Never under Dismiss (`gap: var(--s-5)`) in a narrow window.
+                let dismiss = self.l.buttons[button_slot(Target::Dismiss)];
+                g.ellipsis(&text, (dismiss.x - 2. * s5).max(1.))?;
                 gfx::text(
                     dc,
                     &text,
@@ -3092,30 +3107,8 @@ impl Editor {
             rect(split, group.top + 9., split + 1., group.top + 25.),
             c("border"),
         )?;
-        // Trim edges and Background color: not in this host yet (disabled).
+        // Background color: not in this host yet (disabled).
         let dim = |name: &str| t.color_alpha(name, 0.4);
-        let trim = local(l.trim);
-        gfx::icon(
-            dc,
-            &g.factory,
-            "trim",
-            &[],
-            (
-                trim.left + 1. + s4,
-                (trim.top + trim.bottom - 13.) / 2.,
-                13.,
-            ),
-            1.8,
-            dim("text-muted"),
-        )?;
-        let text = g.text(t, Style::Button, header::TRIM, 1e4)?;
-        gfx::text(
-            dc,
-            &text,
-            trim.left + 1. + s4 + 13. + s3,
-            cy(&text),
-            dim("text-muted"),
-        )?;
         let bg = local(l.background);
         let chip = rect(
             bg.left + 1. + s4,
@@ -3607,6 +3600,29 @@ impl Editor {
                     (w - text.width) / 2.,
                     (h - text.height) / 2.,
                     c("caution-text"),
+                )?;
+            }
+            Target::Trim => {
+                if lit {
+                    gfx::fill_round(dc, all, r_md, c("surface-hover"))?;
+                }
+                let ink = c(if lit { "text" } else { "text-muted" });
+                gfx::icon(
+                    dc,
+                    &g.factory,
+                    "trim",
+                    &[],
+                    (1. + s4, (h - 13.) / 2., 13.),
+                    1.8,
+                    ink,
+                )?;
+                let text = g.text(t, Style::Button, header::TRIM, 1e4)?;
+                gfx::text(
+                    dc,
+                    &text,
+                    1. + s4 + 13. + s3,
+                    ((h - text.height) / 2.).round(),
+                    ink,
                 )?;
             }
             Target::Undo | Target::Redo => {
@@ -4699,8 +4715,8 @@ impl Editor {
     }
 }
 
-/// `Layout::buttons`: eleven fixed controls, the rail, and a spare.
-const SLOTS: usize = 11 + RAIL_TOOLS.len() + 1;
+/// `Layout::buttons`: twelve fixed controls, the rail, and a spare.
+const SLOTS: usize = 12 + RAIL_TOOLS.len() + 1;
 
 /// Where each button's rect lives in `Layout::buttons`.
 fn button_slot(target: Target) -> usize {
@@ -4716,8 +4732,9 @@ fn button_slot(target: Target) -> usize {
         Target::Copy => 8,
         Target::SaveAsNew => 9,
         Target::Save => 10,
+        Target::Trim => 11,
         // One slot per rail tool.
-        Target::Tool(i) => 11 + i,
+        Target::Tool(i) => 12 + i,
         // Laid out from their own rects, never through `Layout::buttons`.
         Target::Shape(_)
         | Target::Layer(_)
