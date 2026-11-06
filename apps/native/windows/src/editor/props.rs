@@ -1,5 +1,6 @@
 //! The sidebar's Tool properties (`.screenshot-properties`): shipping's
-//! new-tool defaults and selected shape or path sections from
+//! new-tool defaults and selected shape, path or label sections (the
+//! label's in `text_section`) from
 //! `ScreenshotEditor.tsx`, laid out at the `editor-image.css` and
 //! `primitives.css` metrics. Each control is a retained node like the rest
 //! of the editor chrome: hover and focus move on the compositor, a value
@@ -12,17 +13,20 @@
 //! to the session as layer edits, slider drags as `Request::Live` so a drag
 //! is one undo step.
 use captures_app::editor::{
-    AnnotationStylePatch, DropShadowStylePatch, ElementStyle, LayerEdit, OptionalNullable,
+    AnnotationStylePatch, DropShadowStyle, DropShadowStylePatch, ElementStyle, LayerEdit,
+    OptionalNullable, TextElement,
 };
-use captures_app::editor_chrome::{SHAPE_TOOLS, colors, eraser};
+use captures_app::editor_chrome::{SHAPE_TOOLS, colors, eraser, text_format};
 use captures_app::editor_image_background::BrushMode;
-use captures_app::editor_session::{AnnotationControls, Request};
+use captures_app::editor_session::{AnnotationControls, Request, TextPatch};
+use captures_app::editor_text::{self, TEXT_STYLE_PRESETS};
 use windows::Win32::Graphics::Direct2D::Common::*;
 use windows::Win32::Graphics::Direct2D::*;
 use windows::Win32::Graphics::DirectWrite::DWRITE_TEXT_ALIGNMENT_TRAILING;
 use windows::core::*;
 use windows_numerics::Vector2;
 
+use super::menu::MenuKind;
 use super::{Editor, Event, Layer, Target, closed_kind, hex_color, polyline};
 use crate::gfx::{self, Style, rect};
 use crate::scene::Rect;
@@ -38,7 +42,68 @@ pub enum Prop {
     Range(Range),
     /// An Eraser mode button, in `MODES` order.
     Mode(usize),
+    /// The Text style (or New text style) picker's trigger.
+    StyleTrigger,
+    /// The selected label's Font select.
+    Font,
+    /// A `NumberInput`, and its stepper (`true` for Increase).
+    Number(Num),
+    Step(Num, bool),
+    /// The Text section's textarea.
+    Textarea,
+    /// A Text format button: Bold, Italic, then `text_format::ALIGN`.
+    Format(usize),
 }
+
+/// A `NumberInput` in Tool properties.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Num {
+    /// The selected label's Size.
+    TextSize,
+    /// The Text tool's New text size.
+    NewTextSize,
+}
+
+impl Num {
+    pub const ALL: [Num; 2] = [Num::TextSize, Num::NewTextSize];
+
+    /// `(min, max)` of the shipping `NumberInput`.
+    pub fn bounds(self) -> (f64, f64) {
+        match self {
+            Num::TextSize | Num::NewTextSize => (8., 512.),
+        }
+    }
+
+    /// The `<label>` caption and the input's accessible name.
+    pub fn label(self) -> &'static str {
+        match self {
+            Num::TextSize => "Size",
+            Num::NewTextSize => "New text size",
+        }
+    }
+}
+
+/// One edit from the Text section.
+#[derive(Clone, Debug, PartialEq)]
+pub enum TextChange {
+    Preset(&'static str),
+    Content(String),
+    Family(String),
+    Size(f64),
+    Bold,
+    Italic,
+    Align(&'static str),
+}
+
+/// The Bold and Italic buttons, then the alignments.
+pub const FORMATS: usize = 2 + text_format::ALIGN.len();
+/// The plate the Text background check adds (shipping `#111318`).
+const TEXT_PLATE: &str = "#111318";
+/// `.screenshot-text-style-trigger { min-height: 38px }`.
+const TRIGGER_H: f32 = 38.;
+/// `select { min-height: var(--h-md) }`; the number input adds its border.
+const SELECT_H: f32 = 32.;
+const NUMBER_H: f32 = 34.;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Check {
@@ -47,6 +112,8 @@ pub enum Check {
     Shadow,
     /// The Wand's Contiguous only.
     Contiguous,
+    /// The Text section's Text background.
+    Plate,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,6 +121,9 @@ pub enum Field {
     Stroke,
     Fill,
     Shadow,
+    /// Text color and the plate's Background color.
+    Text,
+    Plate,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -126,8 +196,20 @@ fn marks(range: Range) -> &'static [(f64, &'static str)] {
 
 /// The custom-color tile's index after the swatches.
 pub const CUSTOM: usize = colors::SWATCHES.len();
-const CHECKS: [Check; 4] = [Check::Stroke, Check::Fill, Check::Shadow, Check::Contiguous];
-const FIELDS: [Field; 3] = [Field::Stroke, Field::Fill, Field::Shadow];
+const CHECKS: [Check; 5] = [
+    Check::Stroke,
+    Check::Fill,
+    Check::Shadow,
+    Check::Contiguous,
+    Check::Plate,
+];
+const FIELDS: [Field; 5] = [
+    Field::Stroke,
+    Field::Fill,
+    Field::Shadow,
+    Field::Text,
+    Field::Plate,
+];
 const RANGES: [Range; 7] = [
     Range::Width,
     Range::Opacity,
@@ -166,6 +248,10 @@ pub fn all() -> Vec<Prop> {
     }
     list.extend(RANGES.map(Prop::Range));
     list.extend((0..MODES.len()).map(Prop::Mode));
+    list.extend([Prop::StyleTrigger, Prop::Textarea, Prop::Font]);
+    // Steppers are built as children of their field.
+    list.extend(Num::ALL.map(Prop::Number));
+    list.extend((0..FORMATS).map(Prop::Format));
     list
 }
 
@@ -183,6 +269,9 @@ pub struct Values {
     pub shadow_opacity: f64,
     pub shadow_blur: f64,
     pub opacity: f64,
+    /// A label's Text color and plate.
+    pub text_color: String,
+    pub plate: Option<String>,
 }
 
 impl Values {
@@ -198,6 +287,18 @@ impl Values {
             shadow_opacity: c.drop_shadow_style.opacity,
             shadow_blur: c.drop_shadow_style.blur,
             opacity,
+            text_color: String::new(),
+            plate: None,
+        }
+    }
+
+    /// A label: its shadow as shipping's `textDropShadowStyle`.
+    fn from_text(text: &TextElement) -> Self {
+        let style = editor_text::shadow_style(text, text.font_size);
+        Values {
+            text_color: text.color.clone(),
+            plate: text.background.clone(),
+            ..Values::from_style(&style, false, text.base.opacity)
         }
     }
 
@@ -214,6 +315,8 @@ impl Values {
             shadow_opacity: shadow.opacity,
             shadow_blur: shadow.blur,
             opacity,
+            text_color: String::new(),
+            plate: None,
         }
     }
 
@@ -223,6 +326,7 @@ impl Values {
             Check::Fill => self.fill.is_some(),
             Check::Shadow => self.shadow,
             Check::Contiguous => false,
+            Check::Plate => self.plate.is_some(),
         }
     }
 
@@ -231,6 +335,8 @@ impl Values {
             Field::Stroke => &self.color,
             Field::Fill => self.fill.as_deref().unwrap_or(&self.color),
             Field::Shadow => &self.shadow_color,
+            Field::Text => &self.text_color,
+            Field::Plate => self.plate.as_deref().unwrap_or(TEXT_PLATE),
         }
     }
 
@@ -309,6 +415,16 @@ pub enum Row {
     Check(Check),
     Color(Field),
     Range(Range),
+    /// The Text style picker (legend and trigger).
+    StylePicker,
+    /// The Text textarea under its caption.
+    Textarea,
+    /// `.screenshot-number-pair`: Font and Size.
+    FontSize,
+    /// A full-width `NumberInput` under its caption.
+    Number(Num),
+    /// `.screenshot-format-buttons`.
+    Formats,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -323,6 +439,10 @@ pub enum Section {
     Eraser,
     Defaults,
     Selected(String),
+    /// A selected label.
+    Text(String),
+    /// The Text tool without a selection.
+    TextDefaults,
 }
 
 /// The Properties body's top: the heading's 8 px margin and the section's
@@ -330,13 +450,16 @@ pub enum Section {
 pub const BODY_TOP: f32 = 20.;
 
 impl Editor {
-    /// Shipping's section for the current tool and selection. Text, image
-    /// and crop sections are not in this host yet.
+    /// Shipping's section for the current tool and selection. Image and
+    /// crop sections are not in this host yet.
     pub fn section(&self) -> Option<Section> {
         if self.tool == "b" {
             return Some(Section::Eraser);
         }
         if let Some(id) = &self.selected {
+            if self.selected_text().is_some() {
+                return Some(Section::Text(id.clone()));
+            }
             let p = self.presented.as_ref()?;
             return p
                 .controls
@@ -344,7 +467,8 @@ impl Editor {
                 .then(|| Section::Selected(id.clone()));
         }
         match self.tool {
-            "v" | "c" | "b" | "t" => None,
+            "t" => Some(Section::TextDefaults),
+            "v" | "c" | "b" => None,
             _ => Some(Section::Defaults),
         }
     }
@@ -353,6 +477,13 @@ impl Editor {
         match self.section()? {
             Section::Eraser => None,
             Section::Selected(id) => self.presented.as_ref()?.controls.get(&id).cloned(),
+            Section::Text(_) => Some(Values::from_text(self.selected_text()?)),
+            Section::TextDefaults => {
+                // Shipping `textDropShadowStyle` at the new text size.
+                let d = self.defaults.as_ref()?;
+                let style = editor_text::new_text_shadow_style(&d.style, self.new_text_size());
+                Some(Values::from_style(&style, false, d.opacity))
+            }
             Section::Defaults => {
                 let d = self.defaults.as_ref()?;
                 Some(Values::from_style(
@@ -379,6 +510,39 @@ impl Editor {
         let (Some(section), Some(v)) = (self.section(), self.values()) else {
             return Vec::new();
         };
+        let shadow_rows = |rows: &mut Vec<Row>| {
+            rows.push(Row::Check(Check::Shadow));
+            if v.shadow {
+                rows.extend([
+                    Row::Color(Field::Shadow),
+                    Row::Range(Range::ShadowOpacity),
+                    Row::Range(Range::ShadowBlur),
+                ]);
+            }
+        };
+        match section {
+            Section::Text(_) => {
+                let mut rows = vec![
+                    Row::StylePicker,
+                    Row::Textarea,
+                    Row::FontSize,
+                    Row::Formats,
+                    Row::Color(Field::Text),
+                    Row::Check(Check::Plate),
+                ];
+                if v.plate.is_some() {
+                    rows.push(Row::Color(Field::Plate));
+                }
+                shadow_rows(&mut rows);
+                return rows;
+            }
+            Section::TextDefaults => {
+                let mut rows = vec![Row::StylePicker, Row::Number(Num::NewTextSize)];
+                shadow_rows(&mut rows);
+                return rows;
+            }
+            _ => {}
+        }
         let defaults = section == Section::Defaults;
         let mut rows = Vec::new();
         if defaults && SHAPE_TOOLS.iter().any(|s| s.key == self.tool) {
@@ -447,6 +611,11 @@ impl Editor {
                 Row::Check(_) => CHECK_H,
                 Row::Color(_) => CAPTION_H + self.t.n("s-4") + grid_height(rw),
                 Row::Range(_) => CAPTION_H + self.t.n("s-3") + SLIDER_H,
+                // A legend or `<label>` caption over its control.
+                Row::StylePicker => CAPTION_H + self.t.n("s-3") + TRIGGER_H,
+                Row::Textarea => CAPTION_H + self.t.n("s-3") + super::fields::TEXTAREA_H,
+                Row::FontSize | Row::Number(_) => CAPTION_H + self.t.n("s-3") + NUMBER_H,
+                Row::Formats => text_format::BUTTON_HEIGHT as f32,
             };
             laid.push(Laid {
                 row,
@@ -496,6 +665,48 @@ impl Editor {
                 Some(Rect::new(r.x + i as f32 * (cell + gap), r.y, cell, r.h))
             }
             Prop::Range(range) => self.laid(Row::Range(range)),
+            Prop::StyleTrigger => {
+                let r = self.laid(Row::StylePicker)?;
+                Some(Rect::new(r.x, r.y + r.h - TRIGGER_H, r.w, TRIGGER_H))
+            }
+            Prop::Textarea => {
+                let r = self.laid(Row::Textarea)?;
+                let h = super::fields::TEXTAREA_H;
+                Some(Rect::new(r.x, r.y + r.h - h, r.w, h))
+            }
+            Prop::Font | Prop::Number(Num::TextSize) => {
+                let r = self.laid(Row::FontSize)?;
+                let gap = self.t.n("s-4");
+                let half = (r.w - gap) / 2.;
+                let top = r.y + r.h - NUMBER_H;
+                Some(if prop == Prop::Font {
+                    Rect::new(r.x, top, half, SELECT_H)
+                } else {
+                    Rect::new(r.x + half + gap, top, half, NUMBER_H)
+                })
+            }
+            Prop::Number(num) => {
+                let r = self.laid(Row::Number(num))?;
+                Some(Rect::new(r.x, r.y + r.h - NUMBER_H, r.w, NUMBER_H))
+            }
+            // Inside its number field: the top or bottom half of the column.
+            Prop::Step(num, up) => {
+                let field = self.prop_rect(Prop::Number(num))?;
+                let x = field.w - 1. - super::fields::STEPPERS_W;
+                let mid = (field.h / 2.).round();
+                Some(if up {
+                    Rect::new(x, 1., super::fields::STEPPERS_W, mid - 1.)
+                } else {
+                    Rect::new(x, mid + 1., super::fields::STEPPERS_W, field.h - mid - 2.)
+                })
+            }
+            Prop::Format(i) => {
+                let r = self.laid(Row::Formats)?;
+                let gap = self.t.n("s-2");
+                let columns = text_format::COLUMNS as f32;
+                let cell = (r.w - (columns - 1.) * gap) / columns;
+                Some(Rect::new(r.x + i as f32 * (cell + gap), r.y, cell, r.h))
+            }
             Prop::Swatch(field, i) => {
                 let r = self.laid(Row::Color(field))?;
                 let grid = colors::grid(f64::from(r.w), colors::CELL);
@@ -613,7 +824,14 @@ impl Editor {
             Prop::Shape(i) => SHAPE_TOOLS[i].key == self.tool,
             Prop::Check(check) => self.check_on(check),
             Prop::Mode(i) => self.eraser.mode == MODES[i].0,
-            Prop::Swatch(..) | Prop::Range(_) => return None,
+            Prop::Format(i) => self.format_on(i),
+            Prop::Swatch(..)
+            | Prop::Range(_)
+            | Prop::StyleTrigger
+            | Prop::Font
+            | Prop::Number(_)
+            | Prop::Step(..)
+            | Prop::Textarea => return None,
         })
     }
 
@@ -627,6 +845,21 @@ impl Editor {
             }
             Prop::Range(range) => range_label(range).into(),
             Prop::Mode(i) => MODES[i].1.into(),
+            Prop::StyleTrigger => {
+                let preset = self.style_preset();
+                let label = TEXT_STYLE_PRESETS
+                    .iter()
+                    .find(|p| p.id == preset)
+                    .map_or("", |p| p.label);
+                format!("{}: {label}", self.style_label())
+            }
+            Prop::Font => "Font".into(),
+            Prop::Number(num) => num.label().into(),
+            // `NumberInput` without an `ariaLabel`.
+            Prop::Step(_, true) => "Increase".into(),
+            Prop::Step(_, false) => "Decrease".into(),
+            Prop::Textarea => "Text".into(),
+            Prop::Format(i) => Editor::format_name(i).into(),
         }
     }
 
@@ -650,6 +883,8 @@ impl Editor {
             Field::Stroke => colors::COLOR.into(),
             Field::Fill => colors::FILL_COLOR.into(),
             Field::Shadow => colors::SHADOW_COLOR.into(),
+            Field::Text => colors::TEXT_COLOR.into(),
+            Field::Plate => colors::BACKGROUND.into(),
         }
     }
 
@@ -696,7 +931,11 @@ impl Editor {
             Prop::Swatch(field, i) => {
                 self.apply(Change::Color(field, colors::SWATCHES[i].to_owned()))
             }
-            Prop::Range(_) => {}
+            Prop::StyleTrigger => self.toggle_menu(MenuKind::Style),
+            Prop::Font => self.toggle_menu(MenuKind::Font),
+            Prop::Step(num, up) => self.nudge(num, up),
+            Prop::Format(i) => self.activate_format(i),
+            Prop::Range(_) | Prop::Number(_) | Prop::Textarea => {}
         }
     }
 
@@ -757,7 +996,13 @@ impl Editor {
                 Change::Range(Range::Softness, value) => self.eraser.softness = value,
                 _ => return,
             },
-            Section::Defaults => {
+            Section::Text(id) => {
+                let Some((live, key, patch)) = self.text_edit(&change) else {
+                    return;
+                };
+                self.edit_text(&id, patch, live.then_some(key));
+            }
+            Section::Defaults | Section::TextDefaults => {
                 let Some(d) = self.defaults.as_mut() else {
                     return;
                 };
@@ -776,7 +1021,8 @@ impl Editor {
                         s.fill = on.then(|| s.color.clone());
                     }
                     Change::Check(Check::Shadow, on) => s.drop_shadow = Some(on),
-                    Change::Check(Check::Contiguous, _) => {}
+                    Change::Check(Check::Contiguous | Check::Plate, _)
+                    | Change::Color(Field::Text | Field::Plate, _) => {}
                     Change::Range(Range::Width, value) => s.stroke_width = value,
                     Change::Range(Range::Opacity, value) => d.opacity = value,
                     Change::Range(range, _) if eraser_range(range) => {}
@@ -832,7 +1078,98 @@ impl Editor {
         }
     }
 
-    fn prop_dirty(&mut self, prop: Prop) {
+    /// The label edit a Text-section change makes: `(live, fold key,
+    /// patch)`. Shadow edits write the whole resolved style, as shipping's
+    /// `DropShadowFields` does.
+    fn text_edit(&self, change: &Change) -> Option<(bool, &'static str, TextPatch)> {
+        let text = self.selected_text()?;
+        let mut shadow =
+            editor_text::shadow_style(text, text.font_size).resolved_drop_shadow_style();
+        let with_shadow = |shadow: &DropShadowStyle| DropShadowStylePatch {
+            color: Some(shadow.color.clone()),
+            opacity: Some(shadow.opacity),
+            blur: Some(shadow.blur),
+            offset_x: Some(shadow.offset_x),
+            offset_y: Some(shadow.offset_y),
+        };
+        Some(match change.clone() {
+            Change::Color(Field::Text, color) => (
+                false,
+                "color",
+                TextPatch {
+                    color: Some(color),
+                    ..Default::default()
+                },
+            ),
+            Change::Color(Field::Plate, color) => (
+                false,
+                "background",
+                TextPatch {
+                    background: OptionalNullable::Value(color),
+                    ..Default::default()
+                },
+            ),
+            // A plate replaces an outline or rounded plate.
+            Change::Check(Check::Plate, on) => (
+                false,
+                "background",
+                TextPatch {
+                    background: if on {
+                        OptionalNullable::Value(TEXT_PLATE.into())
+                    } else {
+                        OptionalNullable::Null
+                    },
+                    outlined: on.then_some(false),
+                    rounded_background: on.then_some(false),
+                    ..Default::default()
+                },
+            ),
+            Change::Check(Check::Shadow, on) => (
+                false,
+                "shadow",
+                TextPatch {
+                    drop_shadow: Some(on),
+                    drop_shadow_style: Some(with_shadow(&shadow)),
+                    ..Default::default()
+                },
+            ),
+            Change::Color(Field::Shadow, color) => {
+                shadow.color = color;
+                (
+                    false,
+                    "shadow-color",
+                    TextPatch {
+                        drop_shadow: Some(true),
+                        drop_shadow_style: Some(with_shadow(&shadow)),
+                        ..Default::default()
+                    },
+                )
+            }
+            Change::Range(range @ (Range::ShadowOpacity | Range::ShadowBlur), value) => {
+                if range == Range::ShadowOpacity {
+                    shadow.opacity = value;
+                } else {
+                    shadow.blur = value;
+                }
+                (
+                    true,
+                    if range == Range::ShadowOpacity {
+                        "shadow-opacity"
+                    } else {
+                        "shadow-blur"
+                    },
+                    TextPatch {
+                        drop_shadow: Some(true),
+                        drop_shadow_style: Some(with_shadow(&shadow)),
+                        ..Default::default()
+                    },
+                )
+            }
+            _ => return None,
+        })
+    }
+
+    pub(super) fn prop_dirty(&mut self, prop: Prop) {
         let layered = self.layered(Target::Prop(prop));
         self.nodes[layered.base].dirty = true;
         self.nodes[layered.ring].dirty = true;
@@ -855,7 +1192,7 @@ impl Editor {
     }
 
     /// Send a live edit now, or after the one in flight (latest wins).
-    fn submit_live(&mut self, request: Request) {
+    pub(super) fn submit_live(&mut self, request: Request) {
         if self.busy {
             self.pending = Some(request);
         } else {
@@ -896,6 +1233,19 @@ impl Editor {
                     .text(t, Style::Button, &self.field_label(field), 1e4)?;
                 gfx::text(dc, &legend, laid.rect.x, laid.rect.y, t.color("text-muted"))?;
             }
+            // Legends and `<label>` captions over the Text controls.
+            let captions: &[(Prop, &str)] = match laid.row {
+                Row::StylePicker => &[(Prop::StyleTrigger, self.style_label())],
+                Row::Textarea => &[(Prop::Textarea, "Text")],
+                Row::FontSize => &[(Prop::Font, "Font"), (Prop::Number(Num::TextSize), "Size")],
+                Row::Number(num) => &[(Prop::Number(num), num.label())],
+                _ => &[],
+            };
+            for (prop, caption) in captions {
+                let x = self.prop_rect(*prop).map_or(laid.rect.x, |r| r.x);
+                let text = self.g.text(t, Style::Button, caption, 1e4)?;
+                gfx::text(dc, &text, x, laid.rect.y, t.color("text-muted"))?;
+            }
         }
         let y = last.rect.y + last.rect.h + t.n("s-5");
         gfx::fill(dc, rect(0., y, w, y + 1.), t.color("border-subtle"))?;
@@ -933,9 +1283,29 @@ impl Editor {
                     let r = rect(x, y, x + THUMB, y + THUMB);
                     gfx::ring(dc, r, THUMB / 2., 0., 2., c("theme-accent"))
                 }
+                Prop::StyleTrigger | Prop::Format(_) => {
+                    gfx::ring(dc, all, t.n("r-md"), 2., 4., c("theme-accent"))
+                }
+                // Inputs and the select show `--focus-ring-tight` with their
+                // accent border.
+                Prop::Font | Prop::Number(_) | Prop::Textarea => gfx::ring(
+                    dc,
+                    all,
+                    t.n("r-md"),
+                    0.,
+                    2.,
+                    t.color_alpha("theme-accent", 0.55),
+                ),
+                Prop::Step(..) => Ok(()),
             };
         }
         match prop {
+            Prop::StyleTrigger => self.draw_style_trigger(dc, layer, (w, h))?,
+            Prop::Font => self.draw_font_select(dc, layer, (w, h))?,
+            Prop::Format(i) => self.draw_format(dc, i, layer, (w, h))?,
+            Prop::Number(num) => self.draw_number(dc, num, lit, (w, h))?,
+            Prop::Step(num, up) => self.draw_step(dc, num, up, lit, (w, h))?,
+            Prop::Textarea => self.draw_textarea(dc, lit, (w, h))?,
             Prop::Mode(i) => {
                 let active = self.eraser.mode == MODES[i].0;
                 let radius = t.n("r-sm");
@@ -1154,6 +1524,11 @@ impl Editor {
                 Row::Check(check) => list.push(Prop::Check(check)),
                 Row::Color(field) => list.extend((0..=CUSTOM).map(|i| Prop::Swatch(field, i))),
                 Row::Range(range) => list.push(Prop::Range(range)),
+                Row::StylePicker => list.push(Prop::StyleTrigger),
+                Row::Textarea => list.push(Prop::Textarea),
+                Row::FontSize => list.extend([Prop::Font, Prop::Number(Num::TextSize)]),
+                Row::Number(num) => list.push(Prop::Number(num)),
+                Row::Formats => list.extend((0..FORMATS).map(Prop::Format)),
             }
         }
         list
@@ -1166,6 +1541,7 @@ pub fn check_label(check: Check) -> &'static str {
         Check::Fill => "Filled shape",
         Check::Shadow => "Drop shadow",
         Check::Contiguous => eraser::CONTIGUOUS,
+        Check::Plate => "Text background",
     }
 }
 
@@ -1233,6 +1609,9 @@ fn selected_edit(change: &Change, values: Option<&Values>) -> (bool, &'static st
             )
         }
         Change::Check(Check::Contiguous, _) => unreachable!("Eraser settings never edit a layer"),
+        Change::Check(Check::Plate, _) | Change::Color(Field::Text | Field::Plate, _) => {
+            unreachable!("Text settings edit through `EditText`")
+        }
         Change::Check(Check::Shadow, on) => (
             false,
             "shadow",
@@ -1293,6 +1672,9 @@ fn preview(v: &mut Values, change: &Change) {
             v.shadow = true;
             v.shadow_blur = value;
         }
+        Change::Color(Field::Text, color) => v.text_color = color,
+        Change::Color(Field::Plate, color) => v.plate = Some(color),
+        Change::Check(Check::Plate, on) => v.plate = on.then(|| TEXT_PLATE.into()),
         Change::Check(Check::Contiguous, _)
         | Change::Range(Range::Tolerance | Range::BrushSize | Range::Softness, _) => {}
     }

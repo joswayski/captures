@@ -61,8 +61,12 @@ use crate::tokens::Tokens;
 use crate::{Options, appearance};
 
 mod eraser;
+mod fields;
+mod menu;
 mod props;
 mod text;
+mod text_section;
+pub use menu::MenuKind;
 pub use props::{Field, Prop, Range, bounds as range_bounds, range_text};
 
 /// `.screenshot-editor { min-width: 860px; min-height: 600px }`; GTK's default.
@@ -239,6 +243,10 @@ pub enum Event {
     InlineFocus,
     /// The inline text field's value changed.
     InlineText,
+    /// A popup trigger opened or closed (ExpandCollapse state).
+    Expanded(Target),
+    /// The open popup's highlighted row moved.
+    MenuActive(usize),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -282,6 +290,11 @@ enum Kind {
     Thumb,
     /// `.screenshot-tool-flyout`.
     Flyout,
+    /// The Text style menu or the Font list, and its highlighted row.
+    Menu,
+    MenuLit,
+    /// A focused property input's caret, blinking on the compositor.
+    FieldCaret,
     Ctl(Target, Layer),
 }
 
@@ -537,6 +550,19 @@ pub struct Editor {
     pub eraser: props::Eraser,
     /// The Text tool's open label.
     inline: Option<text::Inline>,
+    /// The open Text style menu or Font list.
+    menu: Option<menu::Menu>,
+    menu_node: usize,
+    menu_lit: usize,
+    /// The menu row under a press, chosen on release.
+    menu_press: Option<usize>,
+    /// The focused property input and its caret.
+    field: Option<fields::FieldEdit>,
+    field_caret: usize,
+    /// Shipping `defaultTextStyle` and `defaultFontSize`: window-local; the
+    /// size starts at the session's `text_size`.
+    text_preset: &'static str,
+    text_size: Option<f64>,
     input_counter: u32,
     caret: usize,
     caret_blink: bool,
@@ -1018,6 +1044,14 @@ impl Editor {
             pick_color: None,
             eraser: props::Eraser::default(),
             inline: None,
+            menu: None,
+            menu_node: 0,
+            menu_lit: 0,
+            menu_press: None,
+            field: None,
+            field_caret: 0,
+            text_preset: text::NEW_TEXT_PRESET,
+            text_size: None,
             input_counter: 0,
             caret: 0,
             caret_blink: false,
@@ -1141,8 +1175,18 @@ impl Editor {
             } else {
                 0.
             };
-            self.control(self.props_body, Target::Prop(prop), bleed);
+            let base = self
+                .control(self.props_body, Target::Prop(prop), bleed)
+                .base;
+            // A number field's steppers sit inside it.
+            if let Prop::Number(num) = prop {
+                for up in [true, false] {
+                    self.control(base, Target::Prop(Prop::Step(num, up)), 0.);
+                }
+            }
         }
+        self.field_caret = self.add(Some(self.props_body), Kind::FieldCaret, 0.);
+        self.nodes[self.field_caret].visible = false;
         self.control(root, Target::Divider, 0.);
         self.header = self.add(Some(root), Kind::Header, 0.);
         self.control(self.header, Target::Trim, 0.);
@@ -1167,6 +1211,11 @@ impl Editor {
         for i in 0..SHAPE_TOOLS.len() {
             self.control(self.flyout_node, Target::Shape(i), 0.);
         }
+        // Property popups float above everything.
+        self.menu_node = self.add(Some(root), Kind::Menu, menu::MENU_BLEED);
+        self.nodes[self.menu_node].visible = false;
+        self.menu_lit = self.add(Some(self.menu_node), Kind::MenuLit, 0.);
+        self.nodes[self.menu_lit].visible = false;
     }
 
     /// Rows for `count` layers.
@@ -1238,6 +1287,9 @@ impl Editor {
             }
             Target::SaveAsNew => self.exists(target) && !self.busy,
             Target::Copy => self.image.is_some(),
+            Target::Prop(Prop::Step(num, up)) => {
+                self.exists(target) && !self.step_disabled(num, up)
+            }
             _ => self.exists(target),
         }
     }
@@ -1621,6 +1673,15 @@ impl Editor {
 
     /// `--tool KEY`: start with a rail tool or a grouped shape.
     fn start_tool(&mut self, options: &Options) {
+        if let Some(id) = &options.select {
+            if self.layer_count() > 0
+                && (0..self.layer_count()).any(|i| self.layer(i).is_some_and(|l| l.id == *id))
+            {
+                self.set_selected(Some(id.clone()));
+            } else {
+                eprintln!("--select {id}: no such layer");
+            }
+        }
         let Some(key) = options.tool.as_deref() else {
             return;
         };
@@ -1783,6 +1844,15 @@ impl Editor {
             return;
         }
         self.selected = id;
+        // A property input shows the new selection's values; nothing it
+        // held is pending (valid entries apply as they are typed).
+        if self.field.take().is_some() {
+            self.set_visible(self.field_caret, false);
+            if matches!(self.focus, Some(Target::Prop(_))) {
+                self.focus = None;
+            }
+        }
+        self.close_menu();
         for i in 0..self.rows {
             let base = self.layered(Target::Layer(i)).base;
             self.nodes[base].dirty = true;
@@ -2566,6 +2636,15 @@ impl Editor {
         }
         self.place_thumb();
         self.place_canvas();
+        // A focused input whose control went away (another section) ends.
+        if let Some(prop) = self.field.as_ref().map(|e| e.prop)
+            && !self.prop_exists(prop)
+        {
+            self.field = None;
+            self.set_visible(self.field_caret, false);
+        }
+        self.field_relayout();
+        self.place_menu();
     }
 
     /// A Layers row (list-relative, scrolled) or its toggle (row-relative).
@@ -2736,8 +2815,15 @@ impl Editor {
                 self.nodes[layered.lit].opacity = to;
                 self.nodes[layered.lit].props = true;
             }
-            let ring =
-                self.focus_visible && self.focus == Some(target) && target != Target::Divider;
+            // Inputs and selects show their focus ring for any focus
+            // (`:focus`, `:focus-within`), other controls for keyboard focus.
+            let input = matches!(
+                target,
+                Target::Prop(Prop::Font | Prop::Number(_) | Prop::Textarea)
+            );
+            let ring = (self.focus_visible || input)
+                && self.focus == Some(target)
+                && target != Target::Divider;
             if self.nodes[layered.ring].visible != ring {
                 self.nodes[layered.ring].visible = ring;
                 self.nodes[layered.ring].props = true;
@@ -2747,6 +2833,8 @@ impl Editor {
                     0.32
                 }
                 Target::Tool(_) => 0.4,
+                // A stepper draws its own disabled ink.
+                Target::Prop(Prop::Step(..)) => 1.,
                 _ => 0.45,
             };
             let opacity = if enabled { 1. } else { faded };
@@ -2783,6 +2871,16 @@ impl Editor {
             return None;
         }
         let in_props = self.props_view().contains(x, y);
+        // Steppers sit inside their number field.
+        let step = self
+            .controls
+            .iter()
+            .map(|(t, _)| *t)
+            .filter(|t| matches!(t, Target::Prop(Prop::Step(..))))
+            .find(|&t| in_props && inside(t));
+        if step.is_some() {
+            return step;
+        }
         self.controls
             .iter()
             .map(|(t, _)| *t)
@@ -2836,8 +2934,21 @@ impl Editor {
             return;
         }
         let changed = focus != self.focus;
+        // Inputs and the select draw their focus as an accent border.
+        for target in [self.focus, focus].into_iter().flatten() {
+            if let Target::Prop(prop @ (Prop::Font | Prop::Number(_) | Prop::Textarea)) = target {
+                self.prop_dirty(prop);
+            }
+        }
         self.focus = focus;
         self.focus_visible = visible;
+        if self
+            .menu
+            .is_some_and(|m| focus != Some(Target::Prop(m.kind.trigger())))
+        {
+            self.close_menu();
+        }
+        self.field_focus(focus, visible);
         if let (Some(Target::Layer(i) | Target::Eye(i) | Target::Lock(i)), true) = (focus, visible)
         {
             self.reveal_row(i);
@@ -3060,6 +3171,9 @@ impl Editor {
             Kind::Page => self.draw_page(dc, (w, h))?,
             Kind::Overlay => self.draw_overlay(dc)?,
             Kind::Caret => gfx::fill(dc, all, self.caret_fill())?,
+            Kind::FieldCaret => gfx::fill(dc, all, c("text"))?,
+            Kind::Menu => self.draw_menu(dc, (w, h))?,
+            Kind::MenuLit => self.draw_menu_lit(dc, (w, h))?,
             Kind::Sidebar => {
                 gfx::fill(dc, all, c("surface-raised"))?;
                 gfx::fill(dc, rect(0., 0., 1., h), c("border-subtle"))?;
@@ -4315,7 +4429,7 @@ impl Editor {
                     }
                     // The caret's opacity belongs to its blink animation: a
                     // static value here would replace it after any relayout.
-                    if node.kind != Kind::Caret {
+                    if !matches!(node.kind, Kind::Caret | Kind::FieldCaret) {
                         visual.SetOpacity2(node.opacity)?;
                     }
                     visual.SetVisible(node.visible)?;
@@ -4557,7 +4671,13 @@ impl Editor {
     /// animation at the system rate (no timer, no redraw); the IME windows
     /// follow the caret.
     fn blink_caret(&mut self, dcomp: &IDCompositionDesktopDevice) -> Result<()> {
-        let Some(visual) = self.visuals[self.caret].clone() else {
+        // The label's caret, or a focused property input's.
+        let node = if self.field.is_some() {
+            self.field_caret
+        } else {
+            self.caret
+        };
+        let Some(visual) = self.visuals[node].clone() else {
             return Ok(());
         };
         unsafe {
@@ -4573,7 +4693,7 @@ impl Editor {
                 visual.SetOpacity(&animation)?;
             }
         }
-        if let Some(rect) = self.ime_rect() {
+        if let Some(rect) = self.field_ime_rect().or_else(|| self.ime_rect()) {
             crate::textfield::ime_position(self.hwnd, rect);
         }
         Ok(())
@@ -4594,8 +4714,9 @@ impl Editor {
 
     /// One frame if due; the run loop calls this after clearing `woken`.
     pub fn service(&mut self) -> (bool, Vec<Event>) {
-        // The IME is on only while a label is open, like a focused textarea.
-        let text = self.inline.is_some();
+        // The IME is on only while a label is open or a property input has
+        // focus, like a focused textarea.
+        let text = self.inline.is_some() || self.field.is_some();
         if text != self.ime && !self.hwnd.is_invalid() {
             crate::textfield::ime_enable(self.hwnd, text);
             self.ime = text;
@@ -4719,10 +4840,18 @@ impl Editor {
                     self.set_range(range, value, true);
                 } else if self.slider_drag {
                     self.slide_to(x);
+                } else if self.text_drag && self.field.is_some() {
+                    self.field_point(x, y, false, true);
                 } else if self.text_drag {
                     self.text_drag_to(x, y);
                 } else if self.gesture.is_some() {
                     self.update(x, y);
+                }
+                if self.menu.is_some_and(|m| m.rect.contains(x, y)) {
+                    let row = self.menu_item_at(x, y);
+                    if row.is_some() {
+                        self.set_menu_active(row);
+                    }
                 }
                 self.set_pointer(Some((x, y)));
                 // The brush ring follows the pointer in the overlay.
@@ -4745,6 +4874,17 @@ impl Editor {
                     && hit != Some(Target::Tool(shapes_index()))
                 {
                     self.set_flyout(false);
+                }
+                // An open popup takes presses inside it; one outside closes
+                // it (its trigger toggles it instead).
+                if let Some(menu) = self.menu {
+                    if menu.rect.contains(x, y) {
+                        self.menu_press = self.menu_item_at(x, y);
+                        return Some(LRESULT(0));
+                    }
+                    if hit != Some(Target::Prop(menu.kind.trigger())) {
+                        self.close_menu();
+                    }
                 }
                 if msg == WM_MBUTTONDOWN {
                     if self.l.well.contains(x, y) {
@@ -4783,6 +4923,15 @@ impl Editor {
                             self.set_range(range, value, true);
                         }
                     }
+                    Some(target @ Target::Prop(prop)) if Self::is_field(prop) => {
+                        self.set_focus(Some(target), false);
+                        self.field_point(x, y, msg == WM_LBUTTONDBLCLK, key_down(VK_SHIFT));
+                    }
+                    // Steppers (`tabIndex=-1`) leave focus where it is.
+                    Some(target @ Target::Prop(Prop::Step(..))) if self.enabled(target) => {
+                        self.pressed = Some(target);
+                        self.refresh(true);
+                    }
                     Some(target) if self.enabled(target) => {
                         self.pressed = Some(target);
                         self.set_focus(Some(target), false);
@@ -4800,6 +4949,13 @@ impl Editor {
                 self.text_drag = false;
                 unsafe {
                     let _ = ReleaseCapture();
+                }
+                if let Some(row) = self.menu_press.take() {
+                    if self.menu_item_at(x, y) == Some(row) {
+                        self.choose_menu(row);
+                    }
+                    self.need = true;
+                    return Some(LRESULT(0));
                 }
                 if self.divider_drag.take().is_some() {
                     self.refresh(true);
@@ -4830,6 +4986,9 @@ impl Editor {
                 }
                 let (px, py) = (point.x as f32 / s, point.y as f32 / s);
                 let pixels = delta * appearance::wheel_lines() * 100. / 3.;
+                if self.menu.is_some_and(|m| m.rect.contains(px, py)) {
+                    return Some(LRESULT(0));
+                }
                 if self.l.list.contains(px, py) && msg == WM_MOUSEWHEEL {
                     self.scroll_list(-pixels);
                 } else if self.props_view().contains(px, py) && msg == WM_MOUSEWHEEL {
@@ -4876,8 +5035,10 @@ impl Editor {
                 }
                 let cursor = match self.pointer {
                     _ if self.divider_drag.is_some() => IDC_SIZEWE,
+                    Some((x, y)) if self.menu.is_some_and(|m| m.rect.contains(x, y)) => IDC_HAND,
                     Some((x, y)) => match self.hit(x, y) {
                         Some(Target::Divider) => IDC_SIZEWE,
+                        Some(Target::Prop(prop)) if Self::is_field(prop) => IDC_IBEAM,
                         Some(target) if self.enabled(target) => IDC_HAND,
                         Some(_) => IDC_ARROW,
                         None if self.in_text(x, y) => IDC_IBEAM,
@@ -4904,12 +5065,40 @@ impl Editor {
             WM_KEYDOWN => {
                 let vk = VIRTUAL_KEY(wp.0 as u16);
                 let (ctrl, shift) = (key_down(VK_CONTROL), key_down(VK_SHIFT));
+                if self.menu_key(vk) {
+                    self.need = true;
+                    return Some(LRESULT(0));
+                }
+                // Shipping skips its editor shortcuts while an input,
+                // textarea or select has focus: only Tab and the Ctrl zoom
+                // keys pass.
+                if self.field.is_some() || self.focus == Some(Target::Prop(Prop::Font)) {
+                    let zoom = ctrl
+                        && matches!(
+                            vk,
+                            VK_OEM_PLUS | VK_ADD | VK_OEM_MINUS | VK_SUBTRACT | VK_0 | VK_NUMPAD0
+                        );
+                    let consumed = self.field.is_some() && self.field_key(vk, ctrl, shift);
+                    if !consumed && !((vk == VK_TAB || zoom) && self.key(vk, ctrl, shift)) {
+                        return None;
+                    }
+                    self.need = true;
+                    return Some(LRESULT(0));
+                }
                 let consumed = self.inline.is_some() && self.text_key(vk, ctrl, shift);
                 if !consumed && !self.key(vk, ctrl, shift) {
                     return None;
                 }
                 self.need = true;
             }
+            WM_CHAR if self.field.is_some() => self.field_char(wp.0 as u16),
+            WM_IME_STARTCOMPOSITION if self.field.is_some() => {
+                if let Some(rect) = self.field_ime_rect() {
+                    crate::textfield::ime_position(self.hwnd, rect);
+                }
+            }
+            WM_IME_COMPOSITION if self.field.is_some() => self.field_ime(lp.0 as u32),
+            WM_IME_ENDCOMPOSITION if self.field.is_some() => self.field_ime_end(),
             WM_CHAR if self.inline.is_some() => self.text_char(wp.0 as u16),
             WM_IME_STARTCOMPOSITION if self.inline.is_some() => {
                 // The composition draws inline; no system composition window.

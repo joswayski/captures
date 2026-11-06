@@ -81,9 +81,15 @@ pub enum Style {
     MonoTiny,
     /// Canvas W/H values and the zoom preset (mono `--text-xs`).
     MonoSmall,
+    /// `.screenshot-text-style-preview`: 17 px bold, tighter, `line-height: 1`.
+    Preview,
+    /// `.screenshot-text-style-preview.style-mono`: mono 15 px semibold.
+    PreviewMono,
+    /// `.screenshot-format-buttons em`: the Italic button's "I".
+    Italic,
 }
 
-const STYLES: [Style; 30] = [
+const STYLES: [Style; 33] = [
     Style::Brand,
     Style::Nav,
     Style::Title,
@@ -114,6 +120,9 @@ const STYLES: [Style; 30] = [
     Style::Tiny,
     Style::MonoTiny,
     Style::MonoSmall,
+    Style::Preview,
+    Style::PreviewMono,
+    Style::Italic,
 ];
 
 struct Spec {
@@ -127,6 +136,15 @@ struct Spec {
     letter: Option<f32>,
     wrap: bool,
     mono: bool,
+    /// A literal CSS `font-size` in px when there is no token.
+    px: Option<f32>,
+    italic: bool,
+}
+
+impl Spec {
+    fn size(&self, t: &Tokens) -> f32 {
+        self.px.unwrap_or_else(|| t.n(self.size))
+    }
 }
 
 fn spec(style: Style) -> Spec {
@@ -139,6 +157,8 @@ fn spec(style: Style) -> Spec {
         letter: None,
         wrap,
         mono: false,
+        px: None,
+        italic: false,
     };
     match style {
         Style::Brand => spec(
@@ -295,6 +315,27 @@ fn spec(style: Style) -> Spec {
                 false,
             )
         },
+        Style::Preview => Spec {
+            px: Some(17.),
+            line: Some(1.),
+            ..spec(
+                "text-md",
+                "weight-bold",
+                Some("tracking-tighter"),
+                None,
+                false,
+            )
+        },
+        Style::PreviewMono => Spec {
+            px: Some(15.),
+            line: Some(1.),
+            mono: true,
+            ..spec("text-md", "weight-semibold", None, None, false)
+        },
+        Style::Italic => Spec {
+            italic: true,
+            ..spec("text-sm", "weight-semibold", None, None, false)
+        },
         Style::Kbd => Spec {
             line: Some(1.3),
             ..spec("text-2xs", "weight-semibold", None, None, false)
@@ -379,9 +420,11 @@ impl Gfx {
             let mut formats = Vec::new();
             for style in STYLES {
                 let spec = spec(style);
-                let (size, weight) = (tokens.n(spec.size), tokens.n(spec.weight));
+                let (size, weight) = (spec.size(tokens), tokens.n(spec.weight));
                 let family = &HSTRING::from(if spec.mono { mono } else { family });
-                let format: IDWriteTextFormat = match axes.as_ref().and_then(|f| {
+                // Segoe UI Variable has no italic axis: oblique like Chromium.
+                let axes = axes.as_ref().filter(|_| !spec.italic);
+                let format: IDWriteTextFormat = match axes.and_then(|f| {
                     f.CreateTextFormat(
                         family,
                         None,
@@ -399,7 +442,11 @@ impl Gfx {
                         family,
                         None,
                         DWRITE_FONT_WEIGHT(weight as i32),
-                        DWRITE_FONT_STYLE_NORMAL,
+                        if spec.italic {
+                            DWRITE_FONT_STYLE_ITALIC
+                        } else {
+                            DWRITE_FONT_STYLE_NORMAL
+                        },
                         DWRITE_FONT_STRETCH_NORMAL,
                         size,
                         w!("en-us"),
@@ -427,7 +474,7 @@ impl Gfx {
     /// Lay out `text` as `style`, wrapping at `max_width` when the style wraps.
     pub fn text(&self, t: &Tokens, style: Style, text: &str, max_width: f32) -> Result<Text> {
         let spec = spec(style);
-        let size = t.n(spec.size);
+        let size = spec.size(t);
         let wide: Vec<u16> = text.encode_utf16().collect();
         let format = &self
             .formats
@@ -974,4 +1021,146 @@ pub fn swatch(
             a: 0.16,
         },
     )
+}
+
+/// Draw `layout` as glyph outlines only, `width` DIPs wide and centred on
+/// each outline: CSS `color: transparent; -webkit-text-stroke`, for outlined
+/// labels and the Outlined style preview.
+pub fn outline_text(
+    dc: &ID2D1DeviceContext,
+    factory: &ID2D1Factory1,
+    layout: &IDWriteTextLayout,
+    (x, y): (f32, f32),
+    width: f32,
+    color: D2D1_COLOR_F,
+) -> Result<()> {
+    let renderer: IDWriteTextRenderer = Outliner {
+        dc: dc.clone(),
+        factory: factory.clone(),
+        brush: brush(dc, color)?,
+        width,
+    }
+    .into();
+    unsafe { layout.Draw(None, &renderer, x, y) }
+}
+
+#[implement(IDWriteTextRenderer)]
+struct Outliner {
+    dc: ID2D1DeviceContext,
+    factory: ID2D1Factory1,
+    brush: ID2D1SolidColorBrush,
+    width: f32,
+}
+
+impl IDWritePixelSnapping_Impl for Outliner_Impl {
+    fn IsPixelSnappingDisabled(&self, _: *const core::ffi::c_void) -> Result<BOOL> {
+        // Outlines are geometry: no baseline snapping.
+        Ok(true.into())
+    }
+
+    fn GetCurrentTransform(
+        &self,
+        _: *const core::ffi::c_void,
+        t: *mut DWRITE_MATRIX,
+    ) -> Result<()> {
+        unsafe {
+            let mut m = Matrix3x2::default();
+            self.dc.GetTransform(&mut m);
+            *t = DWRITE_MATRIX {
+                m11: m.M11,
+                m12: m.M12,
+                m21: m.M21,
+                m22: m.M22,
+                dx: m.M31,
+                dy: m.M32,
+            };
+        }
+        Ok(())
+    }
+
+    fn GetPixelsPerDip(&self, _: *const core::ffi::c_void) -> Result<f32> {
+        Ok(1.)
+    }
+}
+
+impl IDWriteTextRenderer_Impl for Outliner_Impl {
+    fn DrawGlyphRun(
+        &self,
+        _: *const core::ffi::c_void,
+        x: f32,
+        y: f32,
+        _: DWRITE_MEASURING_MODE,
+        run: *const DWRITE_GLYPH_RUN,
+        _: *const DWRITE_GLYPH_RUN_DESCRIPTION,
+        _: Ref<IUnknown>,
+    ) -> Result<()> {
+        unsafe {
+            let run = &*run;
+            let Some(face) = run.fontFace.as_ref() else {
+                return Ok(());
+            };
+            if run.glyphCount == 0 {
+                return Ok(());
+            }
+            let geometry = self.factory.CreatePathGeometry()?;
+            let sink = geometry.Open()?;
+            face.GetGlyphRunOutline(
+                run.fontEmSize,
+                run.glyphIndices,
+                Some(run.glyphAdvances),
+                (!run.glyphOffsets.is_null()).then_some(run.glyphOffsets),
+                run.glyphCount,
+                run.isSideways.as_bool(),
+                run.bidiLevel % 2 == 1,
+                &sink.cast::<ID2D1SimplifiedGeometrySink>()?,
+            )?;
+            sink.Close()?;
+            let mut base = Matrix3x2::default();
+            self.dc.GetTransform(&mut base);
+            self.dc.SetTransform(&(Matrix3x2::translation(x, y) * base));
+            self.dc.DrawGeometry(
+                &geometry,
+                &self.brush,
+                self.width,
+                None::<&ID2D1StrokeStyle>,
+            );
+            self.dc.SetTransform(&base);
+        }
+        Ok(())
+    }
+
+    fn DrawUnderline(
+        &self,
+        _: *const core::ffi::c_void,
+        _: f32,
+        _: f32,
+        _: *const DWRITE_UNDERLINE,
+        _: Ref<IUnknown>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    fn DrawStrikethrough(
+        &self,
+        _: *const core::ffi::c_void,
+        _: f32,
+        _: f32,
+        _: *const DWRITE_STRIKETHROUGH,
+        _: Ref<IUnknown>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    fn DrawInlineObject(
+        &self,
+        _: *const core::ffi::c_void,
+        _: f32,
+        _: f32,
+        _: Ref<IDWriteInlineObject>,
+        _: BOOL,
+        _: BOOL,
+        _: Ref<IUnknown>,
+    ) -> Result<()> {
+        Ok(())
+    }
 }

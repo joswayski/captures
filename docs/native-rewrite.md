@@ -438,6 +438,33 @@ only under Select, a grouped shape tool or Arrow (shipping's
 with a rectangle still selected reads "Eraser", as in Tauri. Windows:
 cross-compiled only. macOS, Linux: unchanged.
 
+Win32 editor Text sections: a selected label shows shipping's Text style
+picker (a menu of the seven presets, each with its preview), the Text
+textarea, the Font select and the Size number input, Bold, Italic and the
+three alignments, Text color, Text background with its Background color,
+and the drop-shadow rows. The Text tool shows New text style and New text
+size, which are window-local like shipping's defaults and used for new
+labels. Edits go to the shared session as `EditText`; typing and Size are
+live, so each field is one undo step. A preset keeps an existing plate
+color. The new number input (26 px stepper column, Enter or blur commits,
+arrows nudge) and the textarea both use the shared text-field model, with
+the clipboard, IMM32 and a caret that blinks on the compositor. The popups
+are retained surfaces with a compositor-moved highlight row, placed by
+shipping's `positionMenu` and the shared select layout. While an input or
+the select has focus, editor shortcuts stay off, as in shipping. UIA:
+the style trigger is a Button with ExpandCollapse, its menu has
+SelectionItem menu items, Font is a ComboBox over a list, the inputs are
+writable Edit/Value controls with Increase and Decrease buttons, and the
+format buttons are toggles. An open outlined label draws as a glyph-outline
+stroke. `--select LAYER` renders with a layer selected. Deviations: the
+style menu also takes arrow keys (shipping's is pointer-only), and the Font
+select uses Captures' listbox instead of the system dropdown. Gaps: Shift
+rotation snap (the host has no rotate handle yet) and the textarea's
+resize grip. Windows: cross-compiled only; Wine renders of a selected label
+and of the Text tool look right in light and dark (substitute fonts); the
+popups, typing, IME and UIA need a real Windows run. macOS, Linux:
+unchanged.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,

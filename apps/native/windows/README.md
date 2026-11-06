@@ -26,7 +26,8 @@ Run it against a disposable profile, never your real settings or folders:
 profile. `--appearance light|dark`, `--size WxH` and `--screenshot out.png`
 render one frame offscreen (Direct2D bitmap, WIC PNG) and exit, for parity
 comparisons; `--find QUERY` renders it with Find open and the query typed, and
-`--tool KEY` starts the editor with a rail tool or shape. On other platforms the binary is a stub, so `cargo check` and
+`--tool KEY` starts the editor with a rail tool or shape, and `--select LAYER`
+with that layer selected. On other platforms the binary is a stub, so `cargo check` and
 `clippy` still run; cross-check with `--target x86_64-pc-windows-gnu`.
 
 Each scene node (`src/scene.rs`) owns one composition surface. Hover and
