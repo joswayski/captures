@@ -485,8 +485,16 @@ and their neighbours fixed). Double-clicking an image layer's name opens an
 inline "Rename layer" entry: Enter or leaving commits a trimmed nonempty
 name as `LayerEdit::Rename`, Escape cancels. The smoke renames an imported
 image and drags it below the next layer with the real pointer, then undoes.
-Not yet: the per-layer settings menu (Appearance, Transform, Arrange,
-Combine, Delete) and layer thumbnails instead of kind icons.
+Rows now end with shipping's quick actions: show/hide, a lock toggle
+(accent while locked) and ⋯, which opens the layer settings card: Blend mode
+and Opacity (a live slider folded into one undo step), Transform tiles for
+image layers, Arrange (Bring to front, Send to back), Combine (Merge down,
+Merge visible, Flatten image, enabled from the session's `merge_down_ids`,
+`can_merge_visible` and `can_flatten`) and the Duplicate/Delete footer. The
+card hangs off the Layers panel rather than the row, because every edit
+rebuilds the rows, and resyncs after each published document. The smoke
+sets opacity, sends a layer to back, duplicates it and flattens through the
+card. Not yet: layer thumbnails instead of kind icons.
 Release build
 under Xvfb with Cairo on a 640×360 fixture: about 110 MB RSS and near-zero
 idle CPU; the egui workbench's own editor scene measures about 173 MB the

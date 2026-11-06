@@ -466,6 +466,30 @@ def editor(binary, scratch):
         wait(lambda: rows()[:2] == before[:2], "Undo to restore the layer order")
         subprocess.run(["xdotool", "windowmove", window, "0", "0"], check=True)
         print(f"editor: renamed an image layer to Logo and dragged it below {before[1]}")
+
+        # The ⋯ layer settings card: opacity, Send to back, Duplicate, Flatten.
+        def layer_menu(name):
+            press(wait(lambda: find(app, "push button", f"Layer settings for {name}"),
+                       f"the {name} settings button")[0])
+            return wait(lambda: find(app, "dialog", f"Layer settings for {name}"),
+                        f"the {name} settings card")[0]
+
+        card = layer_menu("Logo")
+        Atspi.Value.set_current_value(find(card, "slider", "Layer opacity")[0], 50)
+        time.sleep(0.5)
+        press(find(card, "push button", "Send to back")[0])
+        wait(lambda: rows()[-2:] == ["Logo · Image", "Original screenshot · Locked background"],
+             "Send to back to stop above the locked background")
+        count = len(rows())
+        card = layer_menu("Logo")
+        opacity = Atspi.Value.get_current_value(find(card, "slider", "Layer opacity")[0])
+        assert round(opacity) == 50, f"the card reopened at {opacity}% opacity"
+        press(find(card, "push button", "Duplicate")[0])
+        wait(lambda: len(rows()) == count + 1, "Duplicate to add a layer")
+        card = layer_menu("Logo")
+        press(find(card, "push button", "Flatten image")[0])
+        wait(lambda: len(rows()) == 1, "Flatten image to leave one layer")
+        print("editor: layer card set opacity, sent to back, duplicated and flattened")
     finally:
         process.terminate()
         process.wait(timeout=10)

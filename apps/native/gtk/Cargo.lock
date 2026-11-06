@@ -513,6 +513,7 @@ dependencies = [
  "image",
  "serde",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]

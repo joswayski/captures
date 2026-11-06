@@ -462,6 +462,92 @@ popover.captures-menu button.menu-item:focus-visible {
   background: var(--surface-hover);
 }
 
+/* `.screenshot-layer-menu-panel`: the per-layer settings card. */
+popover.captures-menu.layer-menu > contents {
+  padding: 0;
+}
+popover.layer-menu .layer-menu-section {
+  padding: var(--s-5);
+  border-bottom: 1px solid var(--border-subtle);
+}
+popover.layer-menu .layer-menu-combine {
+  border-bottom: 0;
+}
+popover.layer-menu .layer-menu-title {
+  color: var(--text-subtle);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.5px;
+}
+popover.layer-menu .layer-menu-field-label,
+popover.layer-menu .property-caption {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+popover.layer-menu button.layer-menu-tile {
+  all: unset;
+  min-height: 34px;
+  padding: 0 var(--s-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  color: var(--text-muted);
+  background: var(--control);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+popover.layer-menu button.layer-menu-tile:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+  background: var(--control-hover);
+}
+popover.layer-menu button.layer-menu-action {
+  all: unset;
+  min-height: 32px;
+  padding: 0 var(--s-4);
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  color: var(--text);
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+}
+popover.layer-menu button.layer-menu-action:hover {
+  background: var(--surface-hover);
+}
+popover.layer-menu button.layer-menu-action:disabled,
+popover.layer-menu button.layer-menu-tile:disabled {
+  opacity: 0.4;
+}
+popover.layer-menu button.layer-menu-action:focus-visible,
+popover.layer-menu button.layer-menu-tile:focus-visible {
+  box-shadow: var(--focus-ring-tight);
+}
+popover.layer-menu .layer-menu-icon {
+  color: var(--text-muted);
+}
+popover.layer-menu .layer-menu-footer {
+  padding: var(--s-4);
+  border-top: 1px solid var(--border-subtle);
+  border-radius: 0 0 var(--r-lg) var(--r-lg);
+  background: var(--surface-sunken);
+}
+popover.layer-menu .layer-menu-footer button.layer-menu-action {
+  border-color: var(--border-subtle);
+  background: var(--control);
+}
+popover.layer-menu .layer-menu-footer button.layer-menu-action:hover {
+  border-color: var(--border-strong);
+  background: var(--control-hover);
+}
+popover.layer-menu .layer-menu-footer button.layer-menu-action.danger {
+  border-color: var(--danger-border);
+  color: var(--danger-text);
+  background: var(--danger-surface);
+}
+popover.layer-menu button.layer-menu-action.danger .layer-menu-icon {
+  color: var(--danger-text);
+}
+
 /* ------------------------------------------------- screenshot editor ---- */
 
 /* `editor-image.css`: header, 56 px rail, canvas, 320 px Layers, export bar. */
@@ -711,12 +797,10 @@ popover.captures-menu button.editor-shape-button.active {
   background: var(--surface-hover);
   opacity: 1;
 }
-.captures .editor-layer-lock {
-  min-width: 25px;
-  min-height: 28px;
-  border-radius: var(--r-sm);
+.captures button.editor-layer-action.active {
   color: var(--accent-active-text);
   background: var(--surface-selected);
+  opacity: 1;
 }
 
 /* `.screenshot-export-bar` save row. */

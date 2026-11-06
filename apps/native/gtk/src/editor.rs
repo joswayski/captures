@@ -39,6 +39,7 @@ mod canvas_bar;
 mod controls;
 mod export_bar;
 mod inspector;
+mod layer_menu;
 mod properties;
 mod text;
 pub use text::register_fonts;
@@ -63,6 +64,10 @@ struct Presented {
     can_undo: bool,
     can_redo: bool,
     can_trim: bool,
+    /// Layers Merge down applies to (each above an unlocked neighbour).
+    merge_down_ids: Vec<String>,
+    can_merge_visible: bool,
+    can_flatten: bool,
     style: ElementStyle,
     has_draft: bool,
     source: Option<ExportSource>,
@@ -155,6 +160,13 @@ fn present(session: &EditorSession, artifact_id: &str) -> Presented {
         can_undo: snapshot.can_undo,
         can_redo: snapshot.can_redo,
         can_trim: snapshot.can_trim,
+        merge_down_ids: snapshot
+            .merge_down_ids
+            .iter()
+            .map(|id| (*id).to_owned())
+            .collect(),
+        can_merge_visible: snapshot.can_merge_visible,
+        can_flatten: snapshot.can_flatten,
         style: snapshot.initial_annotation_style.clone(),
         has_draft: snapshot.has_draft,
         initial_text_size: snapshot.initial_text_size,
@@ -256,6 +268,9 @@ struct State {
     renaming: RefCell<Option<String>>,
     /// A layer row drag: the moved id, and the drop target once it moves.
     layer_drag: RefCell<Option<(String, Option<DropTarget>)>>,
+    /// The open layer settings card, and the layer a menu action selects.
+    layer_menu: RefCell<Option<Rc<layer_menu::LayerMenu>>>,
+    pending_select: RefCell<Option<String>>,
     preview_dirty: Cell<bool>,
     /// The previous primary press, for double-click editing.
     last_press: Cell<Option<(std::time::Instant, f64, f64)>>,
@@ -644,6 +659,8 @@ pub fn build(
         me: me.clone(),
         renaming: RefCell::default(),
         layer_drag: RefCell::default(),
+        layer_menu: RefCell::default(),
+        pending_select: RefCell::default(),
         preview_dirty: Cell::default(),
         widgets: Widgets {
             undo,
@@ -1267,9 +1284,15 @@ impl State {
                     {
                         *selected = None;
                     }
+                    if let Some(id) = self.pending_select.borrow_mut().take()
+                        && presented.layers.iter().any(|l| l.id == id)
+                    {
+                        *selected = Some(id);
+                    }
                 }
                 *self.presented.borrow_mut() = Some(*presented);
                 self.rebuild_layers();
+                self.sync_layer_menu();
                 if first {
                     self.sync_filename();
                 }
@@ -1414,12 +1437,56 @@ impl State {
                 }
             });
             content.append(&eye);
-            if layer.locked {
-                let lock = Icon::new("lock", 15).with_stroke(1.7);
-                lock.add_css_class("editor-layer-lock");
-                lock.set_valign(gtk::Align::Center);
-                content.append(&lock);
-            }
+            // Shipping's lock toggle: `active` (accent) while locked.
+            let lock = icon_only(
+                if layer.locked { "lock" } else { "unlock" },
+                15,
+                &format!(
+                    "{} {}",
+                    if layer.locked { "Unlock" } else { "Lock" },
+                    layer.name
+                ),
+                "editor-layer-action",
+            );
+            lock.set_tooltip_text(Some(if layer.locked {
+                "Unlock layer"
+            } else {
+                "Lock layer"
+            }));
+            set_class(&lock, "active", layer.locked);
+            let weak = Rc::downgrade(self);
+            let (id, locked) = (layer.id.clone(), layer.locked);
+            lock.connect_clicked(move |_| {
+                if let Some(state) = weak.upgrade() {
+                    *state.selected.borrow_mut() = Some(id.clone());
+                    state.submit(Request::Layer {
+                        id: id.clone(),
+                        edit: LayerEdit::Lock { locked: !locked },
+                    });
+                }
+            });
+            content.append(&lock);
+            let more = icon_only(
+                "more",
+                15,
+                &captures_app::editor_layers::menu::settings_label(&layer.name),
+                "editor-layer-action",
+            );
+            more.set_tooltip_text(Some("Layer settings and actions"));
+            let open = self
+                .layer_menu
+                .borrow()
+                .as_ref()
+                .is_some_and(|menu| menu.id == layer.id);
+            set_class(&more, "active", open);
+            let weak = Rc::downgrade(self);
+            let id = layer.id.clone();
+            more.connect_clicked(move |button| {
+                if let Some(state) = weak.upgrade() {
+                    state.toggle_layer_menu(&id, button);
+                }
+            });
+            content.append(&more);
             row.set_child(Some(&content));
             row.update_property(&[gtk::accessible::Property::Label(&format!(
                 "{} · {}",
@@ -1429,6 +1496,128 @@ impl State {
             if selected.as_deref() == Some(layer.id.as_str()) {
                 list.select_row(Some(&row));
             }
+        }
+    }
+
+    /// Open (or close) the ⋯ settings card for `id` beside its row.
+    fn toggle_layer_menu(self: &Rc<Self>, id: &str, anchor: &gtk::Button) {
+        let open = self.layer_menu.borrow_mut().take();
+        if let Some(menu) = open {
+            menu.popover.popdown();
+            if menu.id == id {
+                return;
+            }
+        }
+        let element = {
+            let presented = self.presented.borrow();
+            let Some(element) = presented.as_ref().and_then(|p| {
+                p.document
+                    .elements
+                    .iter()
+                    .find(|element| element.base().id == id)
+                    .cloned()
+            }) else {
+                return;
+            };
+            element
+        };
+        if self.text_active() {
+            self.finish_text();
+        }
+        *self.selected.borrow_mut() = Some(id.to_owned());
+        self.select_tool("v");
+        let name = self
+            .presented
+            .borrow()
+            .as_ref()
+            .and_then(|p| p.layers.iter().find(|l| l.id == id).map(|l| l.name.clone()))
+            .unwrap_or_default();
+        let weak = Rc::downgrade(self);
+        let menu = layer_menu::LayerMenu::new(&element, &name, move |action| {
+            if let Some(state) = weak.upgrade() {
+                state.layer_menu_action(action);
+            }
+        });
+        // The rows are rebuilt after every edit, so the card hangs off the
+        // Layers panel and points at the ⋯ button's place.
+        let host = self
+            .widgets
+            .layers
+            .ancestor(gtk::ScrolledWindow::static_type())
+            .and_then(|scroller| scroller.parent())
+            .expect("layers panel");
+        menu.popover.set_parent(&host);
+        if let Some(bounds) = anchor.compute_bounds(&host) {
+            menu.popover.set_pointing_to(Some(&gdk::Rectangle::new(
+                bounds.x() as i32,
+                bounds.y() as i32,
+                bounds.width() as i32,
+                bounds.height() as i32,
+            )));
+        }
+        let weak = Rc::downgrade(self);
+        let id = id.to_owned();
+        menu.popover.connect_closed(move |popover| {
+            let popover = popover.clone();
+            glib::idle_add_local_once(move || popover.unparent());
+            let Some(state) = weak.upgrade() else { return };
+            let current = state
+                .layer_menu
+                .borrow()
+                .as_ref()
+                .is_some_and(|menu| menu.id == id);
+            if current {
+                state.layer_menu.borrow_mut().take();
+                state.rebuild_layers();
+            }
+        });
+        *self.layer_menu.borrow_mut() = Some(menu.clone());
+        self.sync_layer_menu();
+        self.rebuild_layers();
+        self.canvas.queue_draw();
+        menu.popover.popup();
+    }
+
+    fn sync_layer_menu(&self) {
+        let Some(menu) = self.layer_menu.borrow().clone() else {
+            return;
+        };
+        let presented = self.presented.borrow();
+        let Some(presented) = presented.as_ref() else {
+            return;
+        };
+        let elements = &presented.document.elements;
+        match elements.iter().position(|e| e.base().id == menu.id) {
+            Some(index) => menu.sync(
+                &elements[index],
+                index,
+                elements.len(),
+                &layer_menu::Caps {
+                    merge_down_ids: &presented.merge_down_ids,
+                    can_merge_visible: presented.can_merge_visible,
+                    can_flatten: presented.can_flatten,
+                },
+            ),
+            None => menu.popover.popdown(),
+        }
+    }
+
+    fn layer_menu_action(self: &Rc<Self>, action: layer_menu::Action) {
+        let close = match action {
+            layer_menu::Action::Layer { edit, live, close } => {
+                self.property_edit(inspector::Edit::Layer { edit, live });
+                close
+            }
+            layer_menu::Action::Document { request, select } => {
+                *self.pending_select.borrow_mut() = select;
+                self.submit(request);
+                true
+            }
+        };
+        // Clone first: popdown emits `closed`, which clears the menu.
+        let menu = self.layer_menu.borrow().clone();
+        if close && let Some(menu) = menu {
+            menu.popover.popdown();
         }
     }
 
