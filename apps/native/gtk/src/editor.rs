@@ -92,6 +92,9 @@ struct LayerItem {
     icon: &'static str,
     visible: bool,
     locked: bool,
+    /// The session's cached ≤64 px row preview; the same `Arc` until the
+    /// layer changes, so the host uploads each thumbnail once.
+    thumbnail: Option<Arc<RgbaImage>>,
 }
 
 enum Job {
@@ -128,7 +131,10 @@ enum Outcome {
     Failed(String),
 }
 
-fn present(session: &EditorSession, artifact_id: &str) -> Presented {
+/// Refresh the row thumbnails (only changed layers re-render), then present.
+fn present(session: &mut EditorSession, artifact_id: &str) -> Presented {
+    session.refresh_layer_thumbnails();
+    let session = &*session;
     let snapshot = session.snapshot();
     let layers = snapshot
         .document
@@ -145,6 +151,7 @@ fn present(session: &EditorSession, artifact_id: &str) -> Presented {
                 icon: row.map_or(editor_chrome::layer_icon(element), |r| r.icon),
                 visible: base.visible,
                 locked: base.locked,
+                thumbnail: session.layer_thumbnail(&base.id),
             }
         })
         .collect();
@@ -271,6 +278,8 @@ struct State {
     /// The open layer settings card, and the layer a menu action selects.
     layer_menu: RefCell<Option<Rc<layer_menu::LayerMenu>>>,
     pending_select: RefCell<Option<String>>,
+    /// Uploaded row thumbnails by layer id, keyed by the image they show.
+    thumbnails: RefCell<std::collections::HashMap<String, (usize, gdk::Texture)>>,
     preview_dirty: Cell<bool>,
     /// The previous primary press, for double-click editing.
     last_press: Cell<Option<(std::time::Instant, f64, f64)>>,
@@ -351,8 +360,9 @@ pub fn build(
                     Some(captures_app::editor_fonts::bundled()),
                 );
                 match opened {
-                    Ok(opened) => {
-                        let _ = results.send(Outcome::Presented(Box::new(present(&opened, &id))));
+                    Ok(mut opened) => {
+                        let _ =
+                            results.send(Outcome::Presented(Box::new(present(&mut opened, &id))));
                         *session.lock().expect("session") = Some(opened);
                     }
                     Err(error) => {
@@ -661,6 +671,7 @@ pub fn build(
         layer_drag: RefCell::default(),
         layer_menu: RefCell::default(),
         pending_select: RefCell::default(),
+        thumbnails: RefCell::default(),
         preview_dirty: Cell::default(),
         widgets: Widgets {
             undo,
@@ -864,6 +875,25 @@ fn texture_of(pixels: &RgbaImage) -> gdk::Texture {
         width as usize * 4,
     )
     .upcast()
+}
+
+/// `.screenshot-layer-preview img { object-fit: cover }` over the checkerboard.
+fn thumbnail_area(texture: gdk::Texture) -> SnapshotArea {
+    let area = SnapshotArea::new(move |snapshot, width, height| {
+        let (tw, th) = (texture.width() as f32, texture.height() as f32);
+        let scale = (width / tw).max(height / th);
+        let (dw, dh) = (tw * scale, th * scale);
+        snapshot.push_clip(&graphene::Rect::new(0., 0., width, height));
+        snapshot.append_texture(
+            &texture,
+            &graphene::Rect::new((width - dw) / 2., (height - dh) / 2., dw, dh),
+        );
+        snapshot.pop();
+    });
+    area.set_size_request(42, 30);
+    area.set_overflow(gtk::Overflow::Hidden);
+    area.set_accessible_role(gtk::AccessibleRole::Presentation);
+    area
 }
 
 impl State {
@@ -1363,6 +1393,9 @@ impl State {
         let Some(presented) = presented.as_ref() else {
             return;
         };
+        self.thumbnails
+            .borrow_mut()
+            .retain(|id, _| presented.layers.iter().any(|layer| layer.id == *id));
         let selected = self.selected.borrow().clone();
         let renaming = self.renaming.borrow().clone();
         for layer in &presented.layers {
@@ -1385,9 +1418,19 @@ impl State {
             content.append(&grip);
             let preview = gtk::Box::new(gtk::Orientation::Vertical, 0);
             preview.add_css_class("editor-layer-preview");
-            let icon = Icon::new(layer.icon, 16).with_stroke(1.7);
-            icon.set_vexpand(true);
-            preview.append(&icon);
+            // `.screenshot-layer-preview`: a fixed 44 × 32 well.
+            preview.set_size_request(42, 30);
+            preview.set_hexpand(false);
+            preview.set_valign(gtk::Align::Center);
+            preview.set_overflow(gtk::Overflow::Hidden);
+            match self.thumbnail_texture(&layer.id, layer.thumbnail.as_ref()) {
+                Some(texture) => preview.append(&thumbnail_area(texture)),
+                None => {
+                    let icon = Icon::new(layer.icon, 16).with_stroke(1.7);
+                    icon.set_vexpand(true);
+                    preview.append(&icon);
+                }
+            }
             content.append(&preview);
             let copy = gtk::Box::new(gtk::Orientation::Vertical, 2);
             copy.set_hexpand(true);
@@ -1497,6 +1540,25 @@ impl State {
                 list.select_row(Some(&row));
             }
         }
+    }
+
+    /// The uploaded texture for a layer's thumbnail, reused while the session
+    /// keeps the same image; textures for removed layers are dropped.
+    fn thumbnail_texture(&self, id: &str, image: Option<&Arc<RgbaImage>>) -> Option<gdk::Texture> {
+        let mut cache = self.thumbnails.borrow_mut();
+        let Some(image) = image else {
+            cache.remove(id);
+            return None;
+        };
+        let key = Arc::as_ptr(image) as usize;
+        if let Some((cached, texture)) = cache.get(id)
+            && *cached == key
+        {
+            return Some(texture.clone());
+        }
+        let texture = texture_of(image);
+        cache.insert(id.to_owned(), (key, texture.clone()));
+        Some(texture)
     }
 
     /// Open (or close) the ⋯ settings card for `id` beside its row.

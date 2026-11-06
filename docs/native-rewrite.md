@@ -494,7 +494,11 @@ Merge visible, Flatten image, enabled from the session's `merge_down_ids`,
 card hangs off the Layers panel rather than the row, because every edit
 rebuilds the rows, and resyncs after each published document. The smoke
 sets opacity, sends a layer to back, duplicates it and flattens through the
-card. Not yet: layer thumbnails instead of kind icons.
+card. Layer rows now show live thumbnails: the worker calls
+`refresh_layer_thumbnails` after each edit (only changed layers re-render,
+at most 64 px), the row draws the cached image cover-fit in a 44 × 32 well
+like `.screenshot-layer-preview img`, and the host uploads a texture only
+when the session hands it a new image; rows without one keep the kind icon.
 Release build
 under Xvfb with Cairo on a 640×360 fixture: about 110 MB RSS and near-zero
 idle CPU; the egui workbench's own editor scene measures about 173 MB the
