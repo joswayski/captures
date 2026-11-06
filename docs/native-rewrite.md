@@ -150,6 +150,37 @@ layout. Windows: cross-compiled only (`x86_64-pc-windows-gnu`) and rendered
 offscreen under Wine with substitute fonts. Narrator and real-hardware
 rendering need a Windows run. macOS, Linux: unchanged.
 
+The fifth Windows slice adds a reusable token-drawn single-line text field
+(`apps/native/windows/src/textfield.rs`) and builds shipping's Preferences
+Find on it. The field keeps UTF-16 text with a caret, an anchor and an
+inline IME composition. It supports click, drag, double-click word and
+triple-click selection; Home/End, arrows and Ctrl+arrows, with Shift to
+extend; Backspace/Delete by character or word; Ctrl+A/C/X/V, Ctrl+Insert,
+Shift+Insert, Shift+Delete and Ctrl+Z/Y undo. IMM32 composition is drawn
+inline with an underline, and the candidate window is placed at the caret.
+The IME is associated only while a field has focus. The caret is its own
+composition visual: it moves by offset, and it blinks at the system rate as a
+repeating compositor animation, with no timer or redraw. Typing redraws only
+the input's text surface. UI Automation exposes the input as an Edit with
+Value (writable) and Text/Text2 patterns (character and word ranges, caret,
+selection and bounds), inside a search landmark with the live match count
+and Invoke buttons. Find follows `usePreferencesFind`: Ctrl+F opens the bar
+as a second header row and selects the query. It matches card headers,
+rows, shortcut rows and grid cells by their text content with the shared
+`find_matches`, and shows the shared count label ("1 of 2", "No results").
+Matches get the selected fill, and the current match gets the accent ring
+and glow, each on its own retained surface behind the card content. The
+current match smooth-scrolls to the centre. Enter, F3, Ctrl+G and their
+Shift forms step and wrap. Escape or Close hides the bar but keeps the
+query. `--find <query>` renders the bar with a typed query. Not ported: the
+custom colour editor and compact layout. Windows: cross-compiled only
+(`x86_64-pc-windows-gnu`); Linux runs the editing model's unit tests. Under
+Wine (substitute fonts) the layout matches the Tauri harness at 880×660.
+Wine's DirectWrite has no hit-testing and its Direct2D does not apply
+layers, so the caret position, the selection and the disabled-button fade
+need a real Windows run. So do typing, IME (Japanese, Chinese, Korean),
+clipboard, Narrator and performance. macOS, Linux: unchanged.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,

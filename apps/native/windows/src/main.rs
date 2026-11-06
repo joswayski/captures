@@ -19,10 +19,14 @@ mod keys;
 mod scene;
 #[cfg(windows)]
 mod screenshot;
+// The editing model builds everywhere so its tests run on any OS.
+mod textfield;
 #[cfg(windows)]
 mod tokens;
 #[cfg(windows)]
 mod uia;
+#[cfg(windows)]
+mod uia_text;
 
 #[cfg(windows)]
 pub struct Options {
@@ -31,6 +35,8 @@ pub struct Options {
     history_root: Option<std::path::PathBuf>,
     screenshot: Option<std::path::PathBuf>,
     size: Option<(u32, u32)>,
+    /// `--find`: render with Find open and this query typed.
+    find: Option<String>,
 }
 
 #[cfg(windows)]
@@ -41,6 +47,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
         history_root: None,
         screenshot: None,
         size: None,
+        find: None,
     };
     let mut args = args.skip(1);
     while let Some(flag) = args.next() {
@@ -62,6 +69,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
             "--settings-file" => options.settings_file = value()?.into(),
             "--history-root" => options.history_root = Some(value()?.into()),
             "--screenshot" => options.screenshot = Some(value()?.into()),
+            "--find" => options.find = Some(value()?),
             "--size" => {
                 let size = value()?;
                 let (w, h) = size.split_once('x').ok_or("--size is WIDTHxHEIGHT")?;

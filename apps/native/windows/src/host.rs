@@ -20,12 +20,14 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::INFINITE;
 use windows::Win32::UI::Accessibility::*;
 use windows::Win32::UI::HiDpi::*;
+use windows::Win32::UI::Input::Ime::ISC_SHOWUICOMPOSITIONWINDOW;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
 
 use crate::gfx::{self, Gfx};
-use crate::scene::{Action, Event, Kind, Prop, RowKey, Scene, Target};
+use crate::scene::{Action, Event, FindPart, Kind, Prop, RowKey, Scene, Target};
+use crate::textfield::{self, Key};
 use crate::{Options, appearance};
 
 const WM_APP_LOGIN: u32 = WM_APP + 1;
@@ -86,6 +88,14 @@ pub struct Host {
     pick_folder: bool,
     /// A `WM_APP_WAKE` was posted since the loop last checked `need`.
     woken: bool,
+    /// The IME is associated (a text field has focus).
+    ime: bool,
+    /// The pointer is selecting text in the find input.
+    dragging: bool,
+    /// A `WM_CHAR` high surrogate waiting for its low half.
+    high_surrogate: Option<u16>,
+    /// The last double-click in a text field, for triple-click select all.
+    double_click: Option<(std::time::Instant, f32, f32)>,
 }
 
 impl Host {
@@ -145,6 +155,8 @@ impl Host {
                 sender,
             });
             appearance::title_bar(hwnd, &scene.t);
+            // No IME until a text field has focus, like Chromium.
+            textfield::ime_enable(hwnd, false);
             // Microphones enumerate (cpal/WASAPI) off the UI thread.
             let (found, microphones) = channel();
             let target_hwnd = hwnd.0 as isize;
@@ -180,6 +192,10 @@ impl Host {
                 appearance: options.appearance.clone(),
                 pick_folder: false,
                 woken: false,
+                ime: false,
+                dragging: false,
+                high_surrogate: None,
+                double_click: None,
             })
         }
     }
@@ -218,6 +234,11 @@ impl Host {
     }
 
     fn frame(&mut self) -> Result<()> {
+        let text = self.scene.text_focused();
+        if text != self.ime {
+            textfield::ime_enable(self.hwnd, text);
+            self.ime = text;
+        }
         if self.layout || self.scene.relayout {
             self.layout = false;
             self.scene.relayout = false;
@@ -277,7 +298,9 @@ impl Host {
                         })?;
                     }
                 }
-                if !node.kind.has_content() {
+                // Hidden nodes (find highlights, rings, the listbox) get a
+                // surface when first shown; `dirty` waits until then.
+                if !node.kind.has_content() || !node.visible {
                     continue;
                 }
                 let bleed = 2. * (node.bleed * s).round();
@@ -314,8 +337,153 @@ impl Host {
             gfx::draw_surface(surface, *size, scale, bleed, |dc| scene.draw(dc, g, i))?;
         }
         self.start_motions()?;
+        if std::mem::take(&mut self.scene.caret_blink) {
+            self.blink_caret()?;
+        }
         unsafe { self.g.dcomp.as_ref().ok_or_else(Error::empty)?.Commit()? };
         Ok(())
+    }
+
+    /// Restart the caret's blink, solid first, as a repeating compositor
+    /// animation at the system blink rate: no timer and no redraw while it
+    /// blinks. The IME windows follow the caret.
+    fn blink_caret(&mut self) -> Result<()> {
+        let Some(node) = self.scene.caret_node() else {
+            return Ok(());
+        };
+        let dcomp = self.g.dcomp.clone().ok_or_else(Error::empty)?;
+        let visual = &self.visuals[node];
+        unsafe {
+            let blink = GetCaretBlinkTime();
+            if blink == 0 || blink == INFINITE {
+                visual.SetOpacity2(1.)?;
+            } else {
+                let on = f64::from(blink) / 1000.;
+                let animation = dcomp.CreateAnimation()?;
+                animation.AddCubic(0., 1., 0., 0., 0.)?;
+                animation.AddCubic(on, 0., 0., 0., 0.)?;
+                animation.AddRepeat(2. * on, 2. * on)?;
+                visual.SetOpacity(&animation)?;
+            }
+        }
+        self.position_ime();
+        Ok(())
+    }
+
+    /// Put the IME composition and candidate windows at the caret.
+    fn position_ime(&self) {
+        let Some(node) = self.scene.caret_node() else {
+            return;
+        };
+        let r = self.scene.absolute(node);
+        let s = self.scene.scale;
+        let px = |v: f32| (v * s).round() as i32;
+        textfield::ime_position(self.hwnd, (px(r.x), px(r.y), px(r.h)));
+    }
+
+    /// Ctrl+C, Ctrl+X, Ctrl+V (and Ctrl+Insert, Shift+Delete, Shift+Insert)
+    /// in the find input; true when consumed.
+    fn clipboard_key(&mut self, vk: VIRTUAL_KEY, ctrl: bool, shift: bool) -> bool {
+        let editor = &self.scene.find_field().editor;
+        let selected = editor.selected_text();
+        match vk {
+            VK_C | VK_INSERT if ctrl && !shift => {
+                if !selected.is_empty() {
+                    textfield::copy(self.hwnd, &selected);
+                }
+            }
+            VK_X if ctrl && !shift => self.cut(),
+            VK_DELETE if shift && !ctrl => self.cut(),
+            VK_V if ctrl && !shift => self.paste(),
+            VK_INSERT if shift && !ctrl => self.paste(),
+            _ => return false,
+        }
+        true
+    }
+
+    fn cut(&mut self) {
+        let hwnd = self.hwnd;
+        self.scene.field_edit(&self.g, |editor| {
+            match editor.cut() {
+                Some(text) => {
+                    textfield::copy(hwnd, &text);
+                    // `cut` already removed it; report the change.
+                    textfield::Change {
+                        text: true,
+                        caret: true,
+                    }
+                }
+                None => textfield::Change::default(),
+            }
+        });
+    }
+
+    fn paste(&mut self) {
+        if let Some(text) = textfield::paste(self.hwnd) {
+            self.scene
+                .field_edit(&self.g, |editor| editor.insert(&text));
+        }
+    }
+
+    /// Shipping `preferencesFindCommand` for a key that reached the window
+    /// (a focused select handled its own keys first); true when consumed.
+    fn find_key(&mut self, vk: VIRTUAL_KEY, wp: WPARAM, lp: LPARAM) -> bool {
+        let event = crate::keys::event(wp, lp);
+        let exactly = |ctrl: bool, shift: bool| {
+            event.ctrl_key == ctrl && event.shift_key == shift && !event.alt_key && !event.meta_key
+        };
+        if event.code == "KeyF" && exactly(true, false) {
+            self.scene.find_reveal(&self.g);
+            return true;
+        }
+        if !self.scene.find.open {
+            return false;
+        }
+        let plain = !event.ctrl_key && !event.alt_key && !event.meta_key;
+        let input = self.scene.text_focused();
+        let step = match vk {
+            VK_ESCAPE if plain => {
+                self.scene.find_close();
+                return true;
+            }
+            VK_F3 if plain => !event.shift_key,
+            VK_RETURN if plain && input => !event.shift_key,
+            _ if event.code == "KeyG" && exactly(true, false) => true,
+            _ if event.code == "KeyG" && exactly(true, true) => false,
+            _ => return false,
+        };
+        self.scene.find_step(step);
+        true
+    }
+
+    /// Editing keys for the focused find input; true when consumed.
+    fn text_key(&mut self, vk: VIRTUAL_KEY, ctrl: bool, shift: bool, alt: bool) -> bool {
+        if alt {
+            return false;
+        }
+        let key = match vk {
+            VK_LEFT => Some(Key::Left),
+            VK_RIGHT => Some(Key::Right),
+            VK_HOME => Some(Key::Home),
+            VK_END => Some(Key::End),
+            VK_BACK => Some(Key::Backspace),
+            VK_DELETE if !shift => Some(Key::Delete),
+            VK_A if ctrl && !shift => Some(Key::SelectAll),
+            VK_Z if ctrl && !shift => Some(Key::Undo),
+            VK_Z | VK_Y if ctrl => Some(Key::Redo),
+            _ => None,
+        };
+        if let Some(key) = key {
+            self.scene
+                .field_edit(&self.g, |editor| editor.key(key, shift, ctrl));
+            return true;
+        }
+        if self.clipboard_key(vk, ctrl, shift) {
+            return true;
+        }
+        // Space types through `WM_CHAR`; a single-line input keeps Up and
+        // Down from scrolling the page.
+        matches!(vk, VK_SPACE | VK_UP | VK_DOWN)
     }
 
     /// Hand new scene motions to the compositor as piecewise-linear samples
@@ -532,8 +700,30 @@ impl Host {
             // Like a DOM blur: recording stops and the listbox closes.
             WM_KILLFOCUS => {
                 self.scene.blur();
+                self.dragging = false;
                 self.need = true;
                 return None;
+            }
+            WM_SETFOCUS => {
+                self.scene.window_focus(true);
+                self.need = true;
+                return None;
+            }
+            WM_IME_STARTCOMPOSITION if self.scene.text_focused() => {
+                // The composition draws inline; no system composition window.
+                self.position_ime();
+            }
+            WM_IME_COMPOSITION if self.scene.text_focused() => {
+                let (hwnd, flags) = (self.hwnd, lp.0 as u32);
+                self.scene.field_edit(&self.g, |editor| {
+                    textfield::ime_composition(hwnd, flags, editor)
+                });
+                self.need = true;
+            }
+            WM_IME_ENDCOMPOSITION if self.scene.text_focused() => {
+                self.scene
+                    .field_edit(&self.g, |editor| editor.commit_composition(&[]));
+                self.need = true;
             }
             WM_SETTINGCHANGE => self.refresh_appearance(),
             WM_MOUSEMOVE => {
@@ -549,13 +739,18 @@ impl Host {
                     }
                     self.tracking = true;
                 }
+                if self.dragging {
+                    let position = self.scene.field_hit(x);
+                    self.scene
+                        .field_edit(&self.g, |editor| editor.move_to(position, true));
+                }
                 self.set_pointer(Some((x, y)));
             }
             WM_MOUSELEAVE => {
                 self.tracking = false;
                 self.set_pointer(None);
             }
-            WM_LBUTTONDOWN => {
+            WM_LBUTTONDOWN | WM_LBUTTONDBLCLK => {
                 unsafe { SetCapture(self.hwnd) };
                 let hit = self.scene.hit(x, y);
                 self.scene.pressed = hit;
@@ -571,12 +766,16 @@ impl Host {
                     let focus = hit.filter(|t| self.scene.takes_focus(*t));
                     self.scene.set_focus(focus, false);
                 }
+                if hit == Some(Target::Find(FindPart::Input)) {
+                    self.field_click(msg == WM_LBUTTONDBLCLK, x, y, shift);
+                }
                 self.need = true;
             }
             WM_LBUTTONUP => {
                 unsafe {
                     let _ = ReleaseCapture();
                 }
+                self.dragging = false;
                 let hit = self.scene.hit(x, y);
                 if let Some(pressed) = self.scene.pressed.take()
                     && hit == Some(pressed)
@@ -612,15 +811,21 @@ impl Host {
                 if (lp.0 & 0xffff) as u32 != HTCLIENT {
                     return None;
                 }
-                let hand = self
-                    .pointer
-                    .and_then(|(x, y)| self.scene.hit(x, y))
-                    .is_some_and(|t| match t {
-                        Target::Row(row) => self.scene.rows[row].enabled,
-                        _ => true,
-                    });
+                let hit = self.pointer.and_then(|(x, y)| self.scene.hit(x, y));
+                let hand = hit.is_some_and(|t| match t {
+                    Target::Row(row) => self.scene.rows[row].enabled,
+                    Target::Find(part) => self.scene.find_enabled(part),
+                    _ => true,
+                });
+                let cursor = if hit == Some(Target::Find(FindPart::Input)) {
+                    IDC_IBEAM
+                } else if hand {
+                    IDC_HAND
+                } else {
+                    IDC_ARROW
+                };
                 unsafe {
-                    SetCursor(LoadCursorW(None, if hand { IDC_HAND } else { IDC_ARROW }).ok());
+                    SetCursor(LoadCursorW(None, cursor).ok());
                 }
                 return Some(LRESULT(1));
             }
@@ -639,6 +844,7 @@ impl Host {
                 }
                 self.need = true;
             }
+            WM_CHAR if self.scene.text_focused() => self.text_char(wp.0 as u16),
             WM_CHAR if self.scene.open.is_some() => {
                 if let Some(ch) = char::from_u32(wp.0 as u32).filter(|c| !c.is_control())
                     && self.scene.type_ahead(ch)
@@ -666,6 +872,14 @@ impl Host {
                     self.need = true;
                     return Some(LRESULT(0));
                 }
+                let ctrl = unsafe { GetKeyState(VK_CONTROL.0 as i32) } < 0;
+                let alt = unsafe { GetKeyState(VK_MENU.0 as i32) } < 0;
+                if self.find_key(vk, wp, lp)
+                    || (self.scene.text_focused() && self.text_key(vk, ctrl, shift, alt))
+                {
+                    self.need = true;
+                    return Some(LRESULT(0));
+                }
                 // Not in shipping: Delete or Backspace on a focused recorder
                 // restores its default shortcut.
                 if let (VK_DELETE | VK_BACK, Some(Target::Shortcut(index))) = (vk, self.scene.focus)
@@ -677,7 +891,13 @@ impl Host {
                 let page = self.scene.viewport().h * 0.875;
                 let now = self.scene.scroll_now();
                 match vk {
-                    VK_TAB => self.scene.focus_step(!shift),
+                    VK_TAB => {
+                        self.scene.focus_step(!shift);
+                        // Tabbing into a text input selects its text.
+                        if self.scene.text_focused() {
+                            self.scene.field_edit(&self.g, |editor| editor.select_all());
+                        }
+                    }
                     VK_SPACE | VK_RETURN => {
                         if let Some(focus) = self.scene.focus {
                             self.scene.set_focus(Some(focus), true);
@@ -717,6 +937,54 @@ impl Host {
         Some(LRESULT(0))
     }
 
+    /// A press in the find input: place the caret (Shift extends), select
+    /// a word on double-click and everything on a third click.
+    fn field_click(&mut self, double: bool, x: f32, y: f32, shift: bool) {
+        if self.scene.find_field().editor.composing() {
+            textfield::ime_complete(self.hwnd);
+        }
+        let position = self.scene.field_hit(x);
+        let near = |(at, px, py): (std::time::Instant, f32, f32)| {
+            let time = std::time::Duration::from_millis(u64::from(unsafe { GetDoubleClickTime() }));
+            at.elapsed() < time && (px - x).abs() < 4. && (py - y).abs() < 4.
+        };
+        if double {
+            let (start, end) = self.scene.find_field().editor.word_at(position);
+            self.scene
+                .field_edit(&self.g, |editor| editor.select(start, end));
+            self.double_click = Some((std::time::Instant::now(), x, y));
+        } else if self.double_click.take().is_some_and(near) {
+            self.scene.field_edit(&self.g, |editor| editor.select_all());
+        } else {
+            self.scene
+                .field_edit(&self.g, |editor| editor.move_to(position, shift));
+            self.dragging = true;
+        }
+    }
+
+    /// A `WM_CHAR` for the find input; surrogate pairs arrive in halves and
+    /// control characters (Ctrl+letters, Backspace, Enter) do not type.
+    fn text_char(&mut self, unit: u16) {
+        let units = match unit {
+            0xD800..=0xDBFF => {
+                self.high_surrogate = Some(unit);
+                return;
+            }
+            0xDC00..=0xDFFF => match self.high_surrogate.take() {
+                Some(high) => vec![high, unit],
+                None => return,
+            },
+            _ => vec![unit],
+        };
+        let text = String::from_utf16_lossy(&units);
+        if text.chars().any(char::is_control) {
+            return;
+        }
+        self.scene
+            .field_edit(&self.g, |editor| editor.insert(&text));
+        self.need = true;
+    }
+
     /// Scene events with the state they report, for `uia::raise`.
     fn take_events(&mut self) -> Vec<(Event, bool, String)> {
         std::mem::take(&mut self.scene.events)
@@ -736,9 +1004,14 @@ impl Host {
                 Event::ShortcutError(index) => {
                     (event, false, self.scene.shortcut_error(index).to_owned())
                 }
-                Event::Focus(_) | Event::Selected(_) | Event::Active(..) | Event::Value(_) => {
-                    (event, false, String::new())
-                }
+                Event::FindText => (event, false, self.scene.find_query()),
+                Event::FindCount => (event, false, self.scene.find_count_label()),
+                Event::Focus(_)
+                | Event::Selected(_)
+                | Event::Active(..)
+                | Event::Value(_)
+                | Event::FindOpen(_)
+                | Event::FindCaret => (event, false, String::new()),
             })
             .collect()
     }
@@ -787,6 +1060,11 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 return LRESULT(0);
             }
             WM_ERASEBKGND => return LRESULT(1),
+            WM_IME_SETCONTEXT => {
+                // Text fields draw the composition inline.
+                let lp = LPARAM(lp.0 & !(ISC_SHOWUICOMPOSITIONWINDOW as isize));
+                return DefWindowProcW(hwnd, msg, wp, lp);
+            }
             WM_PAINT => {
                 let _ = ValidateRect(Some(hwnd), None);
                 return LRESULT(0);
