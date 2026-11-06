@@ -312,6 +312,31 @@ draws disabled controls at full opacity. Drawing, zoom and pan smoothness,
 DPI, clipboard, saving, performance and Narrator need a real Windows run.
 macOS, Linux: unchanged.
 
+The tenth Windows slice is the second screenshot editor slice
+(`apps/native/windows/src/editor/props.rs`). Tool properties now has
+shipping's sections from `ScreenshotEditor.tsx`: new-tool defaults for the
+shapes, Arrow and Freehand (the Shape picker for grouped shapes, Stroke,
+Color or Stroke color, Size, Opacity, Filled shape and Fill color, Drop
+shadow with Shadow color, Opacity and Blur) and the same controls for a
+selected shape or freehand path, in shipping's order for each. Defaults are
+window-local, seeded once from the session's `initial_annotation_style`
+like GTK and AppKit; edits to a selection are layer edits, and slider drags
+are `Request::Live` edits (one undo step, the latest waiting behind the one
+in flight). Swatches, the active ring and the custom tile follow
+`editor_chrome::colors` (`grid`, `swatch_active`, `custom_seed`); the custom
+tile opens the system color dialog. Each control is its own retained node,
+so hover and focus are compositor fades and a value change redraws only
+its control; the section body scrolls under the sticky heading by moving
+its visual. UI Automation: check boxes with Toggle, sliders with RangeValue
+and value text, the "Shape" group of pressed buttons, and color-field groups
+named by their legend with swatch buttons. `--tool KEY` starts the editor
+with a rail tool or shape, for renders. Missing so far: shadow X/Y offsets,
+the line and arrow Curve control, text, image and crop sections.
+Windows: cross-compiled only; Wine renders of Rectangle, Arrow, Freehand
+and Ellipse (dark) match the Tauri harness rows within a pixel. Wine has no
+geometric layer masks, so the custom tile's wedges are unclipped there.
+macOS, Linux: unchanged.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,
