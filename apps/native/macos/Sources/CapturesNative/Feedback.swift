@@ -134,18 +134,18 @@ final class FeedbackCategoryButton: PreferenceHoverButton {
         let width: CGFloat = active ? 2 : 1
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: width / 2, dy: width / 2),
                                 xRadius: radius, yRadius: radius)
-        tokens.color(fill).withAlphaComponent(alpha).setFill(); path.fill()
-        tokens.color(border).withAlphaComponent(alpha).setStroke(); path.lineWidth = width; path.stroke()
+        tokens.color(fill).faded(alpha).setFill(); path.fill()
+        tokens.color(border).faded(alpha).setStroke(); path.lineWidth = width; path.stroke()
         let textWidth = max(1, bounds.width - padding * 2)
         let titleHeight = FeedbackController.textHeight(optionTitle, font: titleFont, width: textWidth)
         (optionTitle as NSString).draw(with: NSRect(x: padding, y: padding, width: textWidth, height: titleHeight),
             options: [.usesLineFragmentOrigin, .usesFontLeading],
-            attributes: [.font: titleFont, .foregroundColor: tokens.color("text").withAlphaComponent(alpha)])
+            attributes: [.font: titleFont, .foregroundColor: tokens.color("text").faded(alpha)])
         let detailTop = padding + titleHeight + 3
         (optionDetail as NSString).draw(with: NSRect(x: padding, y: detailTop, width: textWidth,
                                                      height: max(0, bounds.height - detailTop)),
             options: [.usesLineFragmentOrigin, .usesFontLeading],
-            attributes: [.font: detailFont, .foregroundColor: tokens.color("text-subtle").withAlphaComponent(alpha)])
+            attributes: [.font: detailFont, .foregroundColor: tokens.color("text-subtle").faded(alpha)])
         if isFocused { drawFocusRing(tokens, in: bounds, radius: radius) }
     }
 }
@@ -173,10 +173,10 @@ final class FeedbackSendButton: PreferenceHoverButton {
         let radius = tokens.number("r-md")
         let path = NSBezierPath(roundedRect: bounds, xRadius: radius, yRadius: radius)
         tokens.color(isEnabled && (hovered || cell?.isHighlighted == true) ? "theme-accent-hover" : "theme-accent")
-            .withAlphaComponent(alpha).setFill()
+            .faded(alpha).setFill()
         path.fill()
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: labelFont, .foregroundColor: tokens.color("theme-accent-ink").withAlphaComponent(alpha),
+            .font: labelFont, .foregroundColor: tokens.color("theme-accent-ink").faded(alpha),
         ]
         let size = (title as NSString).size(withAttributes: attributes)
         (title as NSString).draw(at: NSPoint(x: (bounds.width - size.width) / 2, y: (bounds.height - size.height) / 2),

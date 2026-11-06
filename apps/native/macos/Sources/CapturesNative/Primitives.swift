@@ -346,7 +346,7 @@ final class ClosurePopUpButton: NSPopUpButton {
         if focused && selectStyle != .inline { drawFocusRing(tokens, in: bounds, radius: radius) }
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: tokens.number("text-sm")),
-            .foregroundColor: ink.withAlphaComponent(alpha),
+            .foregroundColor: ink.faded(alpha),
         ]
         let padding = tokens.number(selectStyle == .inline ? "s-3" : "s-4")
         let text = titleOfSelectedItem ?? title
@@ -379,7 +379,7 @@ final class ClosurePopUpButton: NSPopUpButton {
         let chevron = NSBezierPath()
         chevron.move(to: point(4, edge)); chevron.line(to: point(8, tip)); chevron.line(to: point(12, edge))
         chevron.lineWidth = 1.7 * scale; chevron.lineCapStyle = .round; chevron.lineJoinStyle = .round
-        glyph.withAlphaComponent(alpha).setStroke(); chevron.stroke()
+        glyph.faded(alpha).setStroke(); chevron.stroke()
     }
 }
 
@@ -542,14 +542,14 @@ final class TokenSelectListView: NSView {
             let width = max(0, row.maxX - inset - 14 - tokens.number("s-6") - x)
             let label = NSAttributedString(string: option.title, attributes: [
                 .font: NSFont.systemFont(ofSize: tokens.number("text-sm"), weight: chosen ? .medium : .regular),
-                .foregroundColor: (chosen || highlighted ? text : muted).withAlphaComponent(alpha),
+                .foregroundColor: (chosen || highlighted ? text : muted).faded(alpha),
             ])
             let labelHeight = ceil(label.size().height)
             var top = row.midY - labelHeight / 2
             if let detail = option.detail {
                 let small = NSAttributedString(string: detail, attributes: [
                     .font: NSFont.systemFont(ofSize: tokens.number("text-xs")),
-                    .foregroundColor: faint.withAlphaComponent(alpha),
+                    .foregroundColor: faint.faded(alpha),
                 ])
                 let smallHeight = ceil(small.size().height)
                 top = row.midY - (labelHeight + 2 + smallHeight) / 2
@@ -566,7 +566,7 @@ final class TokenSelectListView: NSView {
             mark.line(to: NSPoint(x: box.minX + 6, y: box.minY + 10.5))
             mark.line(to: NSPoint(x: box.minX + 11, y: box.minY + 4))
             mark.lineWidth = 1.7; mark.lineCapStyle = .round; mark.lineJoinStyle = .round
-            check.withAlphaComponent(alpha).setStroke(); mark.stroke()
+            check.faded(alpha).setStroke(); mark.stroke()
         }
     }
 }
@@ -822,7 +822,7 @@ final class TokenNumberField: NSTextField {
 
     private func updateTextColor() {
         guard let tokens else { return }
-        textColor = tokens.color("text").withAlphaComponent(isEnabled ? 1 : 0.5)
+        textColor = tokens.color("text").faded(isEnabled ? 1 : 0.5)
     }
     override var stringValue: String {
         didSet {
@@ -931,7 +931,7 @@ final class TokenNumberField: NSTextField {
             let editing = currentEditor() != nil
             let outline = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
                                        xRadius: radius, yRadius: radius)
-            if !quiet || editing { tokens.color("surface-field").withAlphaComponent(alpha).setFill(); outline.fill() }
+            if !quiet || editing { tokens.color("surface-field").faded(alpha).setFill(); outline.fill() }
             if !increaseHalf.isHidden {
                 NSGraphicsContext.saveGraphicsState()
                 outline.addClip()
@@ -946,7 +946,7 @@ final class TokenNumberField: NSTextField {
             let border: NSColor? = editing ? tokens.color("theme-accent")
                 : !quiet ? tokens.color("control-border")
                 : hovered && isEnabled ? tokens.color("border-strong") : nil
-            if let border { border.withAlphaComponent(alpha).setStroke(); outline.lineWidth = 1; outline.stroke() }
+            if let border { border.faded(alpha).setStroke(); outline.lineWidth = 1; outline.stroke() }
             if editing { drawFocusRing(tokens, in: bounds, radius: radius) }
         }
         super.draw(dirtyRect)
@@ -957,25 +957,30 @@ final class TokenNumberField: NSTextField {
 /// the accent up to a 14 pt raised thumb, with the token focus ring.
 final class TokenSliderCell: NSSliderCell {
     var tokens: Tokens?
-    private static let thumb: CGFloat = 14
+    /// Shipping `RangeSlider` defaults; the editor zoom slider uses a 12 pt
+    /// thumb on a 3 pt unfilled track (`.screenshot-editor-zoom-slider`).
+    var thumb: CGFloat = 14
+    var trackHeight: CGFloat = 4
+    var fillsProgress = true
 
     override func knobRect(flipped: Bool) -> NSRect {
         let base = super.knobRect(flipped: flipped)
-        return NSRect(x: base.midX - Self.thumb / 2, y: base.midY - Self.thumb / 2,
-                      width: Self.thumb, height: Self.thumb)
+        return NSRect(x: base.midX - thumb / 2, y: base.midY - thumb / 2,
+                      width: thumb, height: thumb)
     }
 
     override func drawBar(inside rect: NSRect, flipped: Bool) {
         guard let tokens else { return super.drawBar(inside: rect, flipped: flipped) }
         let alpha: CGFloat = isEnabled ? 1 : 0.45
-        let track = NSRect(x: rect.minX, y: rect.midY - 2, width: rect.width, height: 4)
-        tokens.color("n-6").withAlphaComponent(alpha).setFill()
-        NSBezierPath(roundedRect: track, xRadius: 2, yRadius: 2).fill()
+        let track = NSRect(x: rect.minX, y: rect.midY - trackHeight / 2, width: rect.width, height: trackHeight)
+        tokens.color("n-6").faded(alpha).setFill()
+        NSBezierPath(roundedRect: track, xRadius: trackHeight / 2, yRadius: trackHeight / 2).fill()
+        guard fillsProgress else { return }
         let knob = knobRect(flipped: flipped)
         let filled = NSRect(x: track.minX, y: track.minY, width: max(0, knob.midX - track.minX),
                             height: track.height)
-        tokens.color("theme-accent").withAlphaComponent(alpha).setFill()
-        NSBezierPath(roundedRect: filled, xRadius: 2, yRadius: 2).fill()
+        tokens.color("theme-accent").faded(alpha).setFill()
+        NSBezierPath(roundedRect: filled, xRadius: trackHeight / 2, yRadius: trackHeight / 2).fill()
     }
 
     override func drawKnob(_ knobRect: NSRect) {
@@ -989,10 +994,10 @@ final class TokenSliderCell: NSSliderCell {
         shadow.set()
         tokens.color("surface-raised").setFill(); circle.fill()
         NSGraphicsContext.restoreGraphicsState()
-        tokens.color("border-strong").withAlphaComponent(alpha).setStroke()
+        tokens.color("border-strong").faded(alpha).setStroke()
         circle.lineWidth = 1; circle.stroke()
         if let view = controlView, view.window?.firstResponder === view {
-            drawFocusRing(tokens, in: knobRect.insetBy(dx: -3, dy: -3), radius: Self.thumb / 2 + 2)
+            drawFocusRing(tokens, in: knobRect.insetBy(dx: -3, dy: -3), radius: thumb / 2 + 2)
         }
     }
 }

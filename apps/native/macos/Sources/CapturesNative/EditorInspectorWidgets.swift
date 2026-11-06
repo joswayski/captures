@@ -229,17 +229,17 @@ final class EditorFormatButton: NSButton {
         let shape = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: radius, yRadius: radius)
         let ink: NSColor
         if active {
-            tokens.color("theme-accent").withAlphaComponent(alpha).setFill(); shape.fill()
-            tokens.color("theme-accent").withAlphaComponent(alpha).setStroke()
-            ink = tokens.color("theme-accent-ink").withAlphaComponent(alpha)
+            tokens.color("theme-accent").faded(alpha).setFill(); shape.fill()
+            tokens.color("theme-accent").faded(alpha).setStroke()
+            ink = tokens.color("theme-accent-ink").faded(alpha)
             shape.lineWidth = 1; shape.stroke()
         } else if borderless {
             if hovered { tokens.color("surface-hover").setFill(); shape.fill() }
-            ink = tokens.color(hovered ? "text" : "text-muted").withAlphaComponent(alpha)
+            ink = tokens.color(hovered ? "text" : "text-muted").faded(alpha)
         } else {
-            tokens.color(hovered ? "control-hover" : "control").withAlphaComponent(alpha).setFill(); shape.fill()
-            tokens.color("border-subtle").withAlphaComponent(alpha).setStroke()
-            ink = tokens.color(hovered ? "text" : "text-muted").withAlphaComponent(alpha)
+            tokens.color(hovered ? "control-hover" : "control").faded(alpha).setFill(); shape.fill()
+            tokens.color("border-subtle").faded(alpha).setStroke()
+            ink = tokens.color(hovered ? "text" : "text-muted").faded(alpha)
             shape.lineWidth = 1; shape.stroke()
         }
         switch glyph {

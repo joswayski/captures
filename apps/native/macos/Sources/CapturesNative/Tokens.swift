@@ -119,6 +119,10 @@ enum BoxShadowLayers {
 }
 
 extension NSColor {
+    /// CSS `opacity` on a token: scales the token's own alpha, so a translucent
+    /// border such as `--border-strong` stays translucent.
+    func faded(_ opacity: CGFloat) -> NSColor { withAlphaComponent(alphaComponent * opacity) }
+
     convenience init?(hex: String) {
         guard let value = PreferencesController.normalizeHex(hex), let rgb = Int(value.dropFirst(), radix: 16) else { return nil }
         self.init(srgbRed: CGFloat((rgb >> 16) & 255) / 255, green: CGFloat((rgb >> 8) & 255) / 255,

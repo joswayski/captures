@@ -272,7 +272,7 @@ final class HistoryButton: NSButton {
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: radius, yRadius: radius)
         if let fill { fill.withAlphaComponent(fill.alphaComponent * alpha).setFill(); path.fill() }
         if let border { border.withAlphaComponent(border.alphaComponent * alpha).setStroke(); path.lineWidth = 1; path.stroke() }
-        let foreground = text.withAlphaComponent(alpha)
+        let foreground = text.faded(alpha)
         let font = NSFont.systemFont(ofSize: tokens.number("text-sm"),
                                      weight: style == .primary ? .semibold : .medium)
         let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: foreground]
@@ -1064,15 +1064,15 @@ final class HistoryFilterPill: NSButton {
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: radius, yRadius: radius)
         let hover = isEnabled && hovered && !active
         if active {
-            tokens.color("surface-raised").withAlphaComponent(alpha).setFill(); path.fill()
-            tokens.color("border").withAlphaComponent(alpha).setStroke(); path.lineWidth = 1; path.stroke()
+            tokens.color("surface-raised").faded(alpha).setFill(); path.fill()
+            tokens.color("border").faded(alpha).setStroke(); path.lineWidth = 1; path.stroke()
         } else if hover {
             tokens.color("surface-hover").setFill(); path.fill()
         }
-        let text = tokens.color(active || hover ? "text" : "text-subtle").withAlphaComponent(alpha)
+        let text = tokens.color(active || hover ? "text" : "text-subtle").faded(alpha)
         let labelAttributes: [NSAttributedString.Key: Any] = [.font: pillFont, .foregroundColor: text]
         let countAttributes: [NSAttributedString.Key: Any] = [
-            .font: pillFont, .foregroundColor: tokens.color("text-faint").withAlphaComponent(alpha),
+            .font: pillFont, .foregroundColor: tokens.color("text-faint").faded(alpha),
         ]
         let labelSize = (label as NSString).size(withAttributes: labelAttributes)
         let x = tokens.number("s-4"), y = (bounds.height - labelSize.height) / 2
