@@ -566,6 +566,19 @@ zoom. `--crop X,Y,W,H` renders a staged crop. Not yet: Apply crop's
 a hardware check. Windows: cross-compiled only, Wine renders in light and
 dark. macOS, Linux: unchanged.
 
+Stale row after undo (hardware pass 14): after two Erase strokes and two
+undos a 1 px line stayed along the bottom and left edges of stroke 1's
+padded damage, through zoom changes, while Save was correct. A new host test
+drives a real session through previews, commits and undos, with the
+worker's `publish` and the UI's `patch`, and the UI's copy matches the
+session after every step, so the pixel path is exact. What remained was
+the tiled `IDCompositionVirtualSurface` from the 4K brush work: a 1-device-
+pixel seam along the edges of earlier partial updates fits it, not a wrong
+texel. The image is a plain surface again, as in pass 13; the shared damage
+rectangle and ring-only overlay redraw stay. The 4K stroke cost needs
+measuring again. Windows: cross-compiled only; the test runs under Wine.
+macOS, Linux: unchanged.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,

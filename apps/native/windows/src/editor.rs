@@ -2145,24 +2145,8 @@ impl Editor {
     /// Patch new pixels into `image` and widen the pending upload to them.
     fn take_pixels(&mut self, pixels: Pixels) {
         self.need = true;
-        if let (Some(image), Some(damage)) = (&mut self.image, pixels.damage)
-            && (image.width, image.height) == (pixels.width, pixels.height)
-        {
-            let (x, y, w, _) = damage;
-            let row = w as usize * 4;
-            for (r, from) in pixels.bgra.chunks_exact(row).enumerate() {
-                let to = ((y as usize + r) * image.width as usize + x as usize) * 4;
-                image.bgra[to..to + row].copy_from_slice(from);
-            }
-            self.upload = Some(self.upload.map_or(damage, |pending| union(pending, damage)));
-            return;
-        }
-        self.upload = Some((0, 0, pixels.width, pixels.height));
-        self.image = Some(Image {
-            width: pixels.width,
-            height: pixels.height,
-            bgra: pixels.bgra,
-        });
+        let damage = patch(&mut self.image, pixels);
+        self.upload = Some(self.upload.map_or(damage, |pending| union(pending, damage)));
     }
 
     fn arm_autosave(&mut self) {
@@ -4719,9 +4703,9 @@ impl Editor {
             .as_ref()
             .is_none_or(|(_, have)| *have != size);
         if fresh {
-            // Brush previews update a few thousand pixels of a frame that can
-            // be 3840×2160; tiles keep each update that small.
-            let surface = self.g.virtual_surface(size.0, size.1)?;
+            // A plain surface: partial updates to a tiled virtual surface left
+            // a stale 1 px seam along old update edges on hardware (pass 14).
+            let surface = self.g.surface(size.0, size.1)?;
             unsafe { visual.SetContent(&surface)? };
             self.surfaces[i] = Some((surface, size));
             self.nodes[i].props = true;
@@ -5316,6 +5300,29 @@ fn button_slot(target: Target) -> usize {
 }
 
 /// A D2D bitmap of `pixels` inside `(x, y, w, h)`.
+/// Patch published pixels into the UI's copy and return the rectangle that
+/// changed (all of it when the image is new or resized).
+fn patch(image: &mut Option<Image>, pixels: Pixels) -> PixelRect {
+    if let (Some(image), Some(damage)) = (image.as_mut(), pixels.damage)
+        && (image.width, image.height) == (pixels.width, pixels.height)
+    {
+        let (x, y, w, _) = damage;
+        let row = w as usize * 4;
+        for (r, from) in pixels.bgra.chunks_exact(row).enumerate() {
+            let to = ((y as usize + r) * image.width as usize + x as usize) * 4;
+            image.bgra[to..to + row].copy_from_slice(from);
+        }
+        return damage;
+    }
+    let full = (0, 0, pixels.width, pixels.height);
+    *image = Some(Image {
+        width: pixels.width,
+        height: pixels.height,
+        bgra: pixels.bgra,
+    });
+    full
+}
+
 /// The rectangle covering both.
 fn cover(a: Rect, b: Rect) -> Rect {
     let (x0, y0) = (a.x.min(b.x), a.y.min(b.y));
@@ -5751,4 +5758,100 @@ pub fn render_offscreen(
     }
     editor.prepare()?;
     Ok(editor)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use captures_app::editor_image_background::BrushMode;
+    use image::Rgba;
+
+    /// Hardware pass 14: after two Erase strokes and two undos a row at the
+    /// edge of stroke 1's damage stayed on screen. Drive the worker's
+    /// `publish` and the UI's `patch` exactly as the editor does and check the
+    /// UI's copy against the session after every step.
+    #[test]
+    fn ui_pixels_follow_brush_previews_commits_and_undos() {
+        let data = std::env::temp_dir().join(format!("captures-win-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&data);
+        let root = data.join("history");
+        let source = RgbaImage::from_fn(640, 360, |x, y| {
+            Rgba([(x * 3 % 256) as u8, (y * 5 % 256) as u8, 90, 255])
+        });
+        let capture =
+            captures_app::persist_screenshot(&root, &source, CaptureMode::Region).unwrap();
+        let mut session = EditorSession::open_with_fonts(
+            open_request(&root, &capture.entry.id),
+            Some(captures_app::editor_fonts::bundled()),
+        )
+        .unwrap();
+        let mut published = Published::default();
+        let mut ui: Option<Image> = None;
+        let check = |session: &EditorSession, ui: &Option<Image>, step: &str| {
+            let want = convert(&session.pixels(), (0, 0, 640, 360));
+            let have = &ui.as_ref().unwrap().bgra;
+            if let Some(i) = (0..want.len()).find(|&i| want[i] != have[i]) {
+                let px = i / 4;
+                panic!(
+                    "{step}: UI pixel ({}, {}) is {:?}, session has {:?}",
+                    px % 640,
+                    px / 640,
+                    &have[px * 4..px * 4 + 4],
+                    &want[px * 4..px * 4 + 4]
+                );
+            }
+        };
+        let show = |pixels: Option<Pixels>, ui: &mut Option<Image>| {
+            if let Some(pixels) = pixels {
+                patch(ui, pixels);
+            }
+        };
+        show(publish(session.pixels(), None, &mut published), &mut ui);
+        check(&session, &ui, "open");
+        let strokes: [Vec<Point>; 2] = [
+            (0..40)
+                .map(|i| Point {
+                    x: 150. + f64::from(i) * 9.,
+                    y: 120. + f64::from(i % 5) * 3.,
+                })
+                .collect(),
+            (0..40)
+                .map(|i| Point {
+                    x: 160. + f64::from(i) * 9.,
+                    y: 150. + f64::from(i % 7) * 2.5,
+                })
+                .collect(),
+        ];
+        let brush = |points: &[Point]| Request::PaintImageBackground {
+            points: points.to_vec(),
+            size: 28.,
+            softness: 18.,
+            mode: BrushMode::Erase,
+        };
+        for (s, stroke) in strokes.iter().enumerate() {
+            for n in 1..=stroke.len() {
+                let frame = session
+                    .preview_drawing_with_geometry(brush(&stroke[..n]))
+                    .unwrap();
+                show(
+                    publish(frame.pixels.clone(), frame.damage, &mut published),
+                    &mut ui,
+                );
+                let want = convert(&frame.pixels, (0, 0, 640, 360));
+                assert!(
+                    want == ui.as_ref().unwrap().bgra,
+                    "stroke {s} preview {n} differs from the UI"
+                );
+            }
+            session.execute(brush(stroke)).unwrap();
+            show(publish(session.pixels(), None, &mut published), &mut ui);
+            check(&session, &ui, &format!("stroke {s} committed"));
+        }
+        for u in 1..=2 {
+            session.execute(Request::Undo).unwrap();
+            show(publish(session.pixels(), None, &mut published), &mut ui);
+            check(&session, &ui, &format!("undo {u}"));
+        }
+        let _ = std::fs::remove_dir_all(&data);
+    }
 }
