@@ -1056,6 +1056,9 @@ pub fn outline_text(
     let stroke = unsafe {
         factory.CreateStrokeStyle(
             &D2D1_STROKE_STYLE_PROPERTIES1 {
+                // Shipping's canvas (`lineJoin = "round"`) and the shared
+                // renderer stroke labels with round joins, not miters.
+                lineJoin: D2D1_LINE_JOIN_ROUND,
                 miterLimit: 10.,
                 ..Default::default()
             },

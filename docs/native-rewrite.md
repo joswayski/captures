@@ -543,6 +543,12 @@ steppers stay "Increase" and "Decrease", as shipping's Size field has no
 shipping's carry no `aria-pressed`. Windows: cross-compiled only. macOS,
 Linux: unchanged.
 
+An open outlined label strokes its glyphs with round joins, like shipping's
+canvas (`lineJoin = "round"`) and the shared committed render, so the W
+apexes no longer spike while it is open. Shipping's own textarea uses
+WebKit's text stroke, which mitres; this host matches the committed look
+instead. Windows: cross-compiled only. macOS, Linux: unchanged.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,
