@@ -16,7 +16,8 @@ use windows_numerics::{Matrix3x2, Vector2};
 
 use crate::tokens::{Shadow, Tokens};
 
-/// Text roles in the Preferences and History windows, each a shipping CSS rule.
+/// Text roles in the Preferences, History and editor windows, each a shipping
+/// CSS rule.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Style {
     /// `.preferences-nav-brand strong`
@@ -74,9 +75,15 @@ pub enum Style {
     Body,
     /// `.history-edit` (`.ui-btn-primary`: semibold)
     Strong,
+    /// `.screenshot-export-folder` copy and buttons (`--text-2xs`, medium).
+    Tiny,
+    /// `.screenshot-export-folder code` (mono `--text-2xs`).
+    MonoTiny,
+    /// Canvas W/H values and the zoom preset (mono `--text-xs`).
+    MonoSmall,
 }
 
-const STYLES: [Style; 27] = [
+const STYLES: [Style; 30] = [
     Style::Brand,
     Style::Nav,
     Style::Title,
@@ -104,6 +111,9 @@ const STYLES: [Style; 27] = [
     Style::Error,
     Style::Body,
     Style::Strong,
+    Style::Tiny,
+    Style::MonoTiny,
+    Style::MonoSmall,
 ];
 
 struct Spec {
@@ -258,6 +268,33 @@ fn spec(style: Style) -> Spec {
             Some("leading-snug"),
             false,
         ),
+        Style::Tiny => spec(
+            "text-2xs",
+            "weight-medium",
+            None,
+            Some("leading-snug"),
+            false,
+        ),
+        Style::MonoTiny => Spec {
+            mono: true,
+            ..spec(
+                "text-2xs",
+                "weight-regular",
+                None,
+                Some("leading-snug"),
+                false,
+            )
+        },
+        Style::MonoSmall => Spec {
+            mono: true,
+            ..spec(
+                "text-xs",
+                "weight-regular",
+                None,
+                Some("leading-snug"),
+                false,
+            )
+        },
         Style::Kbd => Spec {
             line: Some(1.3),
             ..spec("text-2xs", "weight-semibold", None, None, false)

@@ -1,4 +1,4 @@
-//! `--screenshot`: paint one frame of Preferences or History into a Direct2D
+//! `--screenshot`: paint one frame of Preferences, History or the editor into a Direct2D
 //! bitmap and encode it as PNG through WIC, without opening a window.
 use windows::Win32::Foundation::{E_FAIL, GENERIC_WRITE};
 use windows::Win32::Graphics::Direct2D::Common::*;
@@ -8,6 +8,7 @@ use windows::Win32::Graphics::Imaging::*;
 use windows::Win32::System::Com::*;
 use windows::core::*;
 
+use crate::Scene as Window;
 use crate::gfx::Gfx;
 use crate::scene::Scene;
 use crate::{Options, appearance};
@@ -19,19 +20,27 @@ pub fn render(options: &Options, path: &std::path::Path) -> Result<()> {
     let settings = captures_settings::load(&options.settings_file).unwrap_or_default();
     let tokens = appearance::tokens(options.appearance.as_deref(), &settings);
     let g = Gfx::new(&tokens, false)?;
-    let spec = if options.history {
-        captures_app::app_windows::HISTORY
-    } else {
-        captures_app::app_windows::PREFERENCES
+    let (w, h) = match options.scene {
+        Window::Preferences => {
+            let spec = captures_app::app_windows::PREFERENCES;
+            (spec.width, spec.height)
+        }
+        Window::History => {
+            let spec = captures_app::app_windows::HISTORY;
+            (spec.width, spec.height)
+        }
+        Window::Editor => crate::editor::SIZE,
     };
-    let (w, h) = options
-        .size
-        .unwrap_or((spec.width as u32, spec.height as u32));
+    let (w, h) = options.size.unwrap_or((w as u32, h as u32));
     let canvas = tokens.color("surface-canvas");
-    let page: Box<Paint> = if options.history {
+    let page: Box<Paint> = if options.scene == Window::History {
         let history =
             crate::history::render_offscreen(options, g.clone(), tokens, (w as f32, h as f32))?;
         Box::new(move |dc| history.paint(dc, 1.))
+    } else if options.scene == Window::Editor {
+        let editor =
+            crate::editor::render_offscreen(options, g.clone(), tokens, (w as f32, h as f32))?;
+        Box::new(move |dc| editor.paint(dc, 1.))
     } else {
         let platform = captures_app::shortcuts::ShortcutPlatform::Windows;
         let detail = match &options.history_root {

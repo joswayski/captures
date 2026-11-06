@@ -291,12 +291,30 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "--screenshot history ($appearance) exited $LASTEXITCODE" }
             if (-not (Test-Path $png) -or (Get-Item $png).Length -eq 0) { throw "$png is empty" }
           }
+      - name: Render the screenshot editor offscreen in both appearances
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'editor-history'
+          python apps/native/history_fixture.py $root --count 1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $artifact = (Get-ChildItem $root -Directory | Select-Object -First 1).Name
+          if (-not $artifact) { throw "history_fixture.py made no artifact" }
+          $settings = Join-Path $env:RUNNER_TEMP 'settings.json'
+          foreach ($appearance in 'light', 'dark') {
+            $png = Join-Path $env:RUNNER_TEMP "editor-$appearance.png"
+            & apps/native/windows/target/debug/captures-windows.exe `
+              --scene editor --artifact $artifact --history-root $root `
+              --appearance $appearance --settings-file $settings `
+              --size 1280x840 --screenshot $png
+            if ($LASTEXITCODE -ne 0) { throw "--screenshot editor ($appearance) exited $LASTEXITCODE" }
+            if (-not (Test-Path $png) -or (Get-Item $png).Length -eq 0) { throw "$png is empty" }
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: native-windows-preferences
           path: |
             ${{ runner.temp }}/preferences-*.png
             ${{ runner.temp }}/history-*.png
+            ${{ runner.temp }}/editor-*.png
           if-no-files-found: error
 
   rust:

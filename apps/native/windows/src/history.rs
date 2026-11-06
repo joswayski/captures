@@ -161,10 +161,15 @@ pub struct Item {
 }
 
 impl Item {
-    /// Edit opens an editor and Restore a floating preview; neither exists in
-    /// this host yet, so both stay disabled.
+    /// Edit opens the screenshot editor; the recording editor and Restore's
+    /// floating preview don't exist in this host yet, so those stay disabled.
     pub fn action_enabled(&self, action: CardAction) -> bool {
-        self.busy.is_none() && matches!(action, CardAction::SaveFile | CardAction::ShowInFolder)
+        self.busy.is_none()
+            && match action {
+                CardAction::SaveFile | CardAction::ShowInFolder => true,
+                CardAction::Edit => !self.entry.kind.is_recording() && !self.card.missing,
+                _ => false,
+            }
     }
 
     pub fn action_label(&self, action: CardAction) -> &'static str {
@@ -438,6 +443,8 @@ pub struct History {
     pub events: Vec<Event>,
     /// Back to Preferences was activated; the loop opens it.
     pub open_preferences: bool,
+    /// Edit was chosen: the run loop opens this artifact's editor.
+    pub open_editor: Option<String>,
 }
 
 impl History {
@@ -534,6 +541,7 @@ impl History {
             timer: false,
             events: Vec::new(),
             open_preferences: false,
+            open_editor: None,
         };
         history.build();
         Ok(history)
@@ -893,6 +901,11 @@ impl History {
     }
 
     fn run_action(&mut self, serial: u32, action: CardAction) {
+        if action == CardAction::Edit {
+            // One window per artifact; the run loop opens or raises it.
+            self.open_editor = self.item(serial).map(|item| item.entry.id.clone());
+            return;
+        }
         // A settings file that exists but can't be read must not send Save
         // file to the default Captures folder; only a missing file means
         // defaults.
@@ -2564,7 +2577,9 @@ impl History {
     }
 
     /// One frame if due; the run loop calls this and clears `woken` first.
-    pub fn service(&mut self) -> (bool, Vec<Event>, bool) {
+    /// Returns whether another frame is due, the accessibility events, and
+    /// whether Preferences or an editor (by artifact id) should open.
+    pub fn service(&mut self) -> (bool, Vec<Event>, bool, Option<String>) {
         if self.need {
             self.need = false;
             if let Err(error) = self.frame() {
@@ -2575,6 +2590,7 @@ impl History {
             self.need,
             std::mem::take(&mut self.events),
             std::mem::take(&mut self.open_preferences),
+            self.open_editor.take(),
         )
     }
 
@@ -2978,7 +2994,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                         h.take();
                     }
                 });
-                if !crate::host::exists() {
+                if !crate::host::exists() && !crate::editor::exists() {
                     PostQuitMessage(0);
                 }
                 return LRESULT(0);

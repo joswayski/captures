@@ -6,8 +6,9 @@ Automation, with Captures' own token-drawn controls. See
 [native-rewrite.md](../../../docs/native-rewrite.md#host-direction) for the
 direction and the gates it must pass. It has Preferences (every shipping
 card with the Custom accent's color editor, the narrow layout below 720 px,
-and Find on a reusable text field, `src/textfield.rs`) and Capture History
-(`--scene history`).
+and Find on a reusable text field, `src/textfield.rs`), Capture History
+(`--scene history`) and a first screenshot editor slice, opened by History's
+Edit or `--scene editor --artifact ID` (`src/editor.rs`).
 
 ```powershell
 node apps/native/prepare.mjs --output apps/native/windows/resources

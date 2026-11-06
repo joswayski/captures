@@ -1164,7 +1164,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                     }
                 });
                 // The last window quits.
-                if !crate::history::exists() {
+                if !crate::history::exists() && !crate::editor::exists() {
                     PostQuitMessage(0);
                 }
                 return LRESULT(0);
@@ -1235,7 +1235,7 @@ pub fn open(options: &Options) -> Result<()> {
         )?;
         let (w, h) = options
             .size
-            .filter(|_| !options.history)
+            .filter(|_| options.scene == crate::Scene::Preferences)
             .map_or((spec.width, spec.height), |(w, h)| (w as f32, h as f32));
         let (ww, wh) = window_size(hwnd, w, h);
         let _ = SetWindowPos(
@@ -1268,10 +1268,13 @@ pub fn run(options: Options) -> Result<()> {
         };
         RegisterClassW(&class);
         crate::history::register(instance.into())?;
-        if options.history {
-            crate::history::open(&options, options.size)?;
-        } else {
-            open(&options)?;
+        crate::editor::register(instance.into())?;
+        match options.scene {
+            crate::Scene::Preferences => open(&options)?,
+            crate::Scene::History => crate::history::open(&options, options.size)?,
+            crate::Scene::Editor => {
+                crate::editor::open(&options, options.artifact.as_deref().unwrap_or_default())?
+            }
         }
         loop {
             let mut msg = MSG::default();
@@ -1303,17 +1306,41 @@ pub fn run(options: Options) -> Result<()> {
             // History's frame, like Preferences': only the loop clears `woken`.
             let history = crate::history::with_history(|h| {
                 h.woken = false;
-                let (again, events, preferences) = h.service();
-                (again, crate::history_uia::describe(h, events), preferences)
+                let (again, events, preferences, editor) = h.service();
+                (
+                    again,
+                    crate::history_uia::describe(h, events),
+                    preferences,
+                    editor,
+                )
             });
             let mut again = false;
-            if let Some((again_h, events, preferences)) = history {
+            if let Some((again_h, events, preferences, editor)) = history {
                 again |= again_h;
                 if !events.is_empty() {
                     crate::history_uia::raise(&events);
                 }
                 if preferences && let Err(error) = open(&options) {
                     eprintln!("couldn't open Preferences: {error}");
+                }
+                if let Some(id) = editor
+                    && let Err(error) = crate::editor::open(&options, &id)
+                {
+                    eprintln!("couldn't open the editor for {id}: {error}");
+                }
+            }
+            // Each editor's frame; again only the loop clears `woken`.
+            for hwnd in crate::editor::windows() {
+                let serviced = crate::editor::with_editor(hwnd, |e| {
+                    e.woken = false;
+                    let (again, events) = e.service();
+                    (again, crate::editor_uia::describe(e, events))
+                });
+                if let Some((again_e, events)) = serviced {
+                    again |= again_e;
+                    if !events.is_empty() {
+                        crate::editor_uia::raise(hwnd, &events);
+                    }
                 }
             }
             if let Some((hwnd, again_p, events, pick_folder, pick_color, open_history)) = state {
