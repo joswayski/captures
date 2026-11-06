@@ -338,14 +338,23 @@ pub struct LayerItem {
     pub menu_label: String,
 }
 
-/// The document's pixels as premultiplied BGRA, and what changed.
-#[derive(Clone)]
+/// Changed document pixels as premultiplied BGRA: only the `damage`
+/// rectangle `(x, y, w, h)`, packed row by row, or with no damage the whole
+/// `width`×`height` image. Only the changed area crosses threads and gets
+/// converted; the UI patches it into its own `Image`.
 pub struct Pixels {
     pub width: u32,
     pub height: u32,
-    pub bgra: Arc<Vec<u8>>,
-    /// The changed rectangle `(x, y, w, h)`, or the whole image.
+    pub bgra: Vec<u8>,
     pub damage: Option<(u32, u32, u32, u32)>,
+}
+
+/// The UI's copy of the document's pixels as premultiplied BGRA, owned by
+/// the UI alone so a patch never copies the whole image.
+pub struct Image {
+    pub width: u32,
+    pub height: u32,
+    pub bgra: Vec<u8>,
 }
 
 /// What the worker publishes after every edit.
@@ -492,9 +501,9 @@ pub struct Editor {
     outcomes: Receiver<Outcome>,
     pub presented: Option<Presented>,
     /// The last pixels, for new surfaces and the offscreen renderer.
-    image: Option<Pixels>,
-    /// Pixels still to upload to the image surface.
-    upload: Option<Pixels>,
+    image: Option<Image>,
+    /// The rectangle of `image` still to upload to the image surface.
+    upload: Option<(u32, u32, u32, u32)>,
     pub viewport: Viewport,
     pub tool: &'static str,
     pub last_shape: usize,
@@ -637,25 +646,24 @@ fn post(hwnd: isize, msg: u32) {
     }
 }
 
-/// Straight RGBA to premultiplied BGRA inside `(x, y, w, h)`.
-fn convert(src: &RgbaImage, dst: &mut [u8], (x, y, w, h): (u32, u32, u32, u32)) {
+/// Straight RGBA inside `(x, y, w, h)` as packed premultiplied BGRA.
+fn convert(src: &RgbaImage, (x, y, w, h): (u32, u32, u32, u32)) -> Vec<u8> {
     let width = src.width() as usize;
     let raw = src.as_raw();
+    let mut out = Vec::with_capacity(w as usize * h as usize * 4);
     for row in y as usize..(y + h) as usize {
         let start = (row * width + x as usize) * 4;
-        let end = start + w as usize * 4;
-        for (s, d) in raw[start..end]
-            .chunks_exact(4)
-            .zip(dst[start..end].chunks_exact_mut(4))
-        {
-            let a = u32::from(s[3]);
-            let pm = |c: u8| ((u32::from(c) * a + 127) / 255) as u8;
-            d[0] = pm(s[2]);
-            d[1] = pm(s[1]);
-            d[2] = pm(s[0]);
-            d[3] = s[3];
-        }
+        out.extend(
+            raw[start..start + w as usize * 4]
+                .chunks_exact(4)
+                .flat_map(|s| {
+                    let a = u32::from(s[3]);
+                    let pm = |c: u8| ((u32::from(c) * a + 127) / 255) as u8;
+                    [pm(s[2]), pm(s[1]), pm(s[0]), s[3]]
+                }),
+        );
     }
+    out
 }
 
 /// The rectangle where two equally sized images differ, if any.
@@ -692,38 +700,33 @@ fn diff(old: &RgbaImage, new: &RgbaImage) -> Option<(u32, u32, u32, u32)> {
 #[derive(Default)]
 struct Published {
     rgba: Option<Arc<RgbaImage>>,
-    bgra: Arc<Vec<u8>>,
 }
 
 /// New pixels against the last published ones: the changed rectangle as
-/// premultiplied BGRA, or `None` when nothing changed.
+/// premultiplied BGRA (all of it after a resize), or `None` when nothing
+/// changed.
 fn publish(rgba: Arc<RgbaImage>, published: &mut Published) -> Option<Pixels> {
-    match &published.rgba {
-        Some(old) if Arc::ptr_eq(old, &rgba) => None,
-        old => {
-            let size = (rgba.width(), rgba.height());
-            let same = old.as_ref().is_some_and(|o| o.dimensions() == size);
-            let damage = if same {
-                diff(old.as_ref().expect("old"), &rgba)
-            } else {
-                Some((0, 0, size.0, size.1))
-            };
-            published.rgba = Some(rgba.clone());
-            damage.map(|damage| {
-                let bgra = Arc::make_mut(&mut published.bgra);
-                if !same {
-                    *bgra = vec![0; (size.0 * size.1 * 4) as usize];
-                }
-                convert(&rgba, bgra, damage);
-                Pixels {
-                    width: size.0,
-                    height: size.1,
-                    bgra: published.bgra.clone(),
-                    damage: same.then_some(damage),
-                }
-            })
-        }
-    }
+    let size = rgba.dimensions();
+    let damage = match &published.rgba {
+        Some(old) if Arc::ptr_eq(old, &rgba) => return None,
+        Some(old) if old.dimensions() == size => Some(diff(old, &rgba)?),
+        _ => None,
+    };
+    let bgra = convert(&rgba, damage.unwrap_or((0, 0, size.0, size.1)));
+    published.rgba = Some(rgba);
+    Some(Pixels {
+        width: size.0,
+        height: size.1,
+        bgra,
+        damage,
+    })
+}
+
+/// The rectangle covering both `a` and `b`.
+fn union(a: (u32, u32, u32, u32), b: (u32, u32, u32, u32)) -> (u32, u32, u32, u32) {
+    let (x0, y0) = (a.0.min(b.0), a.1.min(b.1));
+    let (x1, y1) = ((a.0 + a.2).max(b.0 + b.2), (a.1 + a.3).max(b.1 + b.3));
+    (x0, y0, x1 - x0, y1 - y0)
 }
 
 fn present(session: &EditorSession, artifact_id: &str, published: &mut Published) -> Presented {
@@ -1809,7 +1812,7 @@ impl Editor {
 
     fn receive(&mut self, outcome: Outcome) {
         match outcome {
-            Outcome::Presented(presented) => {
+            Outcome::Presented(mut presented) => {
                 self.busy = false;
                 let first = self.presented.is_none();
                 if self.defaults.is_none() {
@@ -1820,7 +1823,7 @@ impl Editor {
                 }
                 let shown = self.values();
                 let old_count = self.layer_count();
-                if let Some(pixels) = presented.pixels.clone() {
+                if let Some(pixels) = presented.pixels.take() {
                     self.take_pixels(pixels);
                 }
                 if first {
@@ -1950,21 +1953,27 @@ impl Editor {
     }
 
     /// Queue new pixels for the image surface.
+    /// Patch new pixels into `image` and widen the pending upload to them.
     fn take_pixels(&mut self, pixels: Pixels) {
-        let resized = self
-            .image
-            .as_ref()
-            .is_none_or(|old| (old.width, old.height) != (pixels.width, pixels.height));
-        self.upload = Some(match (self.upload.take(), resized) {
-            // A pending partial upload widens to the whole image.
-            (Some(_), _) | (None, true) => Pixels {
-                damage: None,
-                ..pixels.clone()
-            },
-            (None, false) => pixels.clone(),
-        });
-        self.image = Some(pixels);
         self.need = true;
+        if let (Some(image), Some(damage)) = (&mut self.image, pixels.damage)
+            && (image.width, image.height) == (pixels.width, pixels.height)
+        {
+            let (x, y, w, _) = damage;
+            let row = w as usize * 4;
+            for (r, from) in pixels.bgra.chunks_exact(row).enumerate() {
+                let to = ((y as usize + r) * image.width as usize + x as usize) * 4;
+                image.bgra[to..to + row].copy_from_slice(from);
+            }
+            self.upload = Some(self.upload.map_or(damage, |pending| union(pending, damage)));
+            return;
+        }
+        self.upload = Some((0, 0, pixels.width, pixels.height));
+        self.image = Some(Image {
+            width: pixels.width,
+            height: pixels.height,
+            bgra: pixels.bgra,
+        });
     }
 
     fn arm_autosave(&mut self) {
@@ -4443,12 +4452,12 @@ impl Editor {
     /// Upload new pixels: a new surface when the size changed, else only
     /// the changed rectangle.
     fn upload_image(&mut self) -> Result<()> {
-        let Some(pixels) = self.upload.take() else {
+        let (Some(pending), Some(pixels)) = (self.upload.take(), &self.image) else {
             return Ok(());
         };
         let i = self.image_node;
         let Some(visual) = self.visuals[i].clone() else {
-            self.upload = Some(pixels);
+            self.upload = Some(pending);
             return Ok(());
         };
         let size = (pixels.width, pixels.height);
@@ -4461,9 +4470,10 @@ impl Editor {
             self.surfaces[i] = Some((surface, size));
             self.nodes[i].props = true;
         }
-        let (x, y, w, h) = match (fresh, pixels.damage) {
-            (false, Some(damage)) => damage,
-            _ => (0, 0, size.0, size.1),
+        let (x, y, w, h) = if fresh {
+            (0, 0, size.0, size.1)
+        } else {
+            pending
         };
         if w == 0 || h == 0 {
             return Ok(());
@@ -4484,7 +4494,7 @@ impl Editor {
             let area = rect(ox, oy, ox + w as f32, oy + h as f32);
             dc.PushAxisAlignedClip(&area, D2D1_ANTIALIAS_MODE_ALIASED);
             dc.Clear(Some(&D2D1_COLOR_F::default()));
-            let result = bitmap(&dc, &pixels, (x, y, w, h)).map(|bitmap| {
+            let result = bitmap(&dc, pixels, (x, y, w, h)).map(|bitmap| {
                 let target: &ID2D1RenderTarget = &dc;
                 target.DrawBitmap(
                     &bitmap,
@@ -4962,7 +4972,7 @@ fn button_slot(target: Target) -> usize {
 /// A D2D bitmap of `pixels` inside `(x, y, w, h)`.
 fn bitmap(
     dc: &ID2D1DeviceContext,
-    pixels: &Pixels,
+    pixels: &Image,
     (x, y, w, h): (u32, u32, u32, u32),
 ) -> Result<ID2D1Bitmap1> {
     let pitch = pixels.width * 4;
