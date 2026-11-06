@@ -163,11 +163,16 @@ impl Host {
                 }
             },
         );
+        // Forget windows on close, not destroy: GTK 4 emits `destroy` only
+        // once the last reference drops, and these handles are references,
+        // so a closed window would be re-presented without its toplevel
+        // entry (gone from AT-SPI) and with its stale state.
         let host = Rc::downgrade(self);
-        window.connect_destroy(move |_| {
+        window.connect_close_request(move |_| {
             if let Some(host) = host.upgrade() {
                 host.preferences.borrow_mut().take();
             }
+            glib::Propagation::Proceed
         });
         *self.preferences.borrow_mut() = Some(window.clone());
         window.present();
@@ -210,10 +215,11 @@ impl Host {
             },
         ));
         let host = Rc::downgrade(self);
-        history.window.connect_destroy(move |_| {
+        history.window.connect_close_request(move |_| {
             if let Some(host) = host.upgrade() {
                 host.history.borrow_mut().take();
             }
+            glib::Propagation::Proceed
         });
         *self.history.borrow_mut() = Some(history.clone());
         history.window.present();
@@ -288,10 +294,11 @@ impl Host {
         ));
         let host = Rc::downgrade(self);
         let id = artifact_id.to_owned();
-        editor.window.connect_destroy(move |_| {
+        editor.window.connect_close_request(move |_| {
             if let Some(host) = host.upgrade() {
                 host.recordings.borrow_mut().retain(|(open, _)| *open != id);
             }
+            glib::Propagation::Proceed
         });
         self.recordings
             .borrow_mut()
@@ -330,10 +337,11 @@ impl Host {
         ));
         let host = Rc::downgrade(self);
         let id = artifact_id.to_owned();
-        editor.window.connect_destroy(move |_| {
+        editor.window.connect_close_request(move |_| {
             if let Some(host) = host.upgrade() {
                 host.editors.borrow_mut().retain(|(open, _)| *open != id);
             }
+            glib::Propagation::Proceed
         });
         self.editors
             .borrow_mut()

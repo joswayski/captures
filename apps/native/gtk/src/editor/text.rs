@@ -263,6 +263,30 @@ impl State {
         self.drain_text();
     }
 
+    /// Closing with the field open: commit its text on the locked session
+    /// before the draft flush, which refuses to write while text input is
+    /// active, so the open label reaches the draft as in shipping. A request
+    /// still queued for the worker fails afterwards on the stale token.
+    pub(super) fn commit_text_for_close(
+        &self,
+        session: &mut captures_app::editor_session::EditorSession,
+    ) {
+        let Some(inline) = self.inline.borrow_mut().take() else {
+            return;
+        };
+        let text = self.text_field.text();
+        if text != inline.accepted {
+            let _ = session.execute(Request::UpdateTextInput {
+                input_id: inline.id.clone(),
+                text,
+            });
+        }
+        let _ = session.execute(Request::FinishTextInput {
+            input_id: inline.id,
+            commit: true,
+        });
+    }
+
     fn drain_text(&self) {
         let text = self.text_field.text();
         let mut slot = self.inline.borrow_mut();

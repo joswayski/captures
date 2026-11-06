@@ -510,6 +510,92 @@ def editor(binary, scratch):
         process.wait(timeout=10)
 
 
+def close_window(window):
+    """Ask `window` to close with WM_DELETE_WINDOW, as a taskbar or a Wayland
+    compositor does: unlike a window manager's Alt+F4 there is no keyboard
+    grab, so a focused text field does not commit on focus loss first."""
+    import ctypes
+
+    class ClientMessage(ctypes.Structure):
+        _fields_ = [("type", ctypes.c_int), ("serial", ctypes.c_ulong),
+                    ("send_event", ctypes.c_int), ("display", ctypes.c_void_p),
+                    ("window", ctypes.c_ulong), ("message_type", ctypes.c_ulong),
+                    ("format", ctypes.c_int), ("data", ctypes.c_long * 5)]
+
+    class Event(ctypes.Union):
+        _fields_ = [("xclient", ClientMessage), ("pad", ctypes.c_long * 24)]
+
+    x11 = ctypes.CDLL("libX11.so.6")
+    x11.XOpenDisplay.restype = ctypes.c_void_p
+    x11.XInternAtom.restype = ctypes.c_ulong
+    x11.XInternAtom.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+    x11.XSendEvent.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_long,
+                               ctypes.c_void_p]
+    x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+    display = x11.XOpenDisplay(None)
+    event = Event()
+    message = event.xclient
+    message.type = 33  # ClientMessage
+    message.display = display
+    message.window = int(window)
+    message.format = 32
+    message.message_type = x11.XInternAtom(display, b"WM_PROTOCOLS", 0)
+    message.data[0] = x11.XInternAtom(display, b"WM_DELETE_WINDOW", 0)
+    x11.XSendEvent(display, int(window), 0, 0, ctypes.byref(event))
+    x11.XCloseDisplay(display)
+
+
+def editor_close_keeps_open_text(binary, scratch):
+    """Closing the editor with a text label still open commits it into the
+    draft: reopening the capture restores both labels."""
+    root = scratch / "draft-history"
+    write_history_entries(root, 1)
+    process = launch(binary, "--scene", "history", "--history-root", str(root),
+                     "--settings-file", str(scratch / "draft-settings.json"), "--size", "1020x720")
+    try:
+        app = wait(lambda: application(process.pid), "the app on the accessibility bus")
+
+        def open_editor():
+            press(wait(lambda: find(app, "push button", "Open screenshot in editor"), "Edit")[0])
+            wait(lambda: find(app, "list item", "Original screenshot · Locked background"),
+                 "the background layer")
+            return subprocess.run(["xdotool", "search", "--sync", "--name",
+                                   "Captures Screenshot Editor"],
+                                  capture_output=True, text=True, check=True).stdout.split()[0]
+
+        def label(window, dx, words):
+            tool = find(app, "push button", "Text (T)")[0]
+            press(tool)
+            wait(lambda: has_state(tool, Atspi.StateType.PRESSED), "the Text tool")
+            subprocess.run(["xdotool", "windowfocus", "--sync", window], check=True)
+            # Near the canvas's top-left: xvfb-run's default screen is 640×480.
+            canvas = find(app, "image", "Screenshot canvas")[0]
+            extents = canvas.get_extents(Atspi.CoordType.WINDOW)
+            subprocess.run(["xdotool", "mousemove", "--window", window,
+                            str(extents.x + 120 + dx), str(extents.y + 120)], check=True)
+            time.sleep(0.2)
+            subprocess.run(["xdotool", "click", "1"], check=True)
+            field = wait(lambda: find(app, "text", "Edit text on canvas"), "the inline field")[0]
+            wait(lambda: has_state(field, Atspi.StateType.FOCUSED), "the field to take focus")
+            subprocess.run(["xdotool", "type", "--delay", "40", words], check=True)
+            wait(lambda: find(app, "list item", f"{words} · Text"), f"the {words} layer")
+
+        window = open_editor()
+        label(window, 0, "abc")
+        subprocess.run(["xdotool", "key", "Escape"], check=True)
+        wait(lambda: not find(app, "text", "Edit text on canvas"), "Escape to commit abc")
+        label(window, 150, "OPEN")
+        close_window(window)
+        wait(lambda: not find(app, "image", "Screenshot canvas"), "the editor to close")
+        open_editor()
+        wait(lambda: find(app, "list item", "OPEN · Text") and find(app, "list item", "abc · Text"),
+             "the reopened draft to restore both labels")
+        print("editor: closing with a label open kept it and the committed one in the draft")
+    finally:
+        process.terminate()
+        process.wait(timeout=10)
+
+
 def previews(binary, scratch):
     root = scratch / "preview-history"
     write_history_entries(root, 3)
@@ -618,6 +704,7 @@ def main():
         history(args.binary, scratch)
         preferences(args.binary, scratch)
         editor(args.binary, scratch)
+        editor_close_keeps_open_text(args.binary, scratch)
         recording(args.binary, scratch)
         previews(args.binary, scratch)
 

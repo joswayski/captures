@@ -745,6 +745,7 @@ pub fn build(
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_millis() as u64);
+            state.commit_text_for_close(session);
             let _ = session.execute(Request::AutosaveDraft { updated_at_ms: now });
         }
         glib::Propagation::Proceed
