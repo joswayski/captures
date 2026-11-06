@@ -181,6 +181,23 @@ layers, so the caret position, the selection and the disabled-button fade
 need a real Windows run. So do typing, IME (Japanese, Chinese, Korean),
 clipboard, Narrator and performance. macOS, Linux: unchanged.
 
+Two parity fixes from the third real-hardware pass follow. Alt+Down and
+Alt+Up now open a focused select, as in shipping and in Windows combo boxes.
+They arrive as system keys, and Alt+F4 and the system menu still go to
+DefWindowProc. The header now shows shipping's save status to the right of
+Capture History…: "Changes saved" with ✓ for two seconds, or "Couldn’t save
+changes: …" with ! until the next save. It is a token-drawn pill on its own
+surface and pops in; History moves by offset. Every failed `captures-settings`
+save is routed through it, including duplicate or empty shortcuts. Saves are
+synchronous, so shipping's brief "Saving changes…" state is skipped. UI
+Automation exposes the status as polite live text and raises a notification
+when it changes. The recorder's own error line now follows shipping: it
+shows only invalid recordings and clears on Esc, blur, completion and the
+next recording. Windows: cross-compiled only. Under Wine the pill positions
+match the Tauri harness at 880×660 (the ✓ needs real Segoe UI). Alt+Down,
+the status timing and Narrator need a real Windows run. macOS, Linux:
+unchanged.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,

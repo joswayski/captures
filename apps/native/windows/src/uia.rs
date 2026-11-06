@@ -58,6 +58,8 @@ pub enum Id {
     Select(SelectKey),
     /// An option of the open listbox (ListItem with SelectionItem).
     Option(SelectKey, usize),
+    /// The header save status (`role="status"`).
+    SaveStatus,
     /// Find (`role="search"`), its input and buttons, and the live count.
     Find,
     FindPart(FindPart),
@@ -71,6 +73,8 @@ struct Live {
     list: Option<(SelectKey, usize)>,
     /// The find bar is shown.
     find: bool,
+    /// The save status is shown.
+    status: bool,
 }
 
 fn live(host: &Host) -> Live {
@@ -80,6 +84,7 @@ fn live(host: &Host) -> Live {
             .open
             .map(|(key, _)| (key, host.scene.select_options(key).len())),
         find: host.scene.find.open,
+        status: host.scene.save_shown(),
     }
 }
 
@@ -145,6 +150,9 @@ fn children(id: Id, live: Live) -> Vec<Id> {
     match id {
         Id::Root => {
             let mut list = vec![Id::Nav, Id::Title, Id::Subtitle, Id::History];
+            if live.status {
+                list.push(Id::SaveStatus);
+            }
             if live.find {
                 list.push(Id::Find);
             }
@@ -231,6 +239,7 @@ fn rect(host: &Host, id: Id) -> Rect {
         Id::UpdateAction => scene.update_rects().0,
         Id::UpdateStatus => scene.update_rects().1,
         Id::Find => scene.find_rects().0,
+        Id::SaveStatus => scene.save_rect(),
         Id::FindCount => scene.find_rects().1,
         _ => scene.target_rect(target(id).expect("target")),
     }
@@ -269,6 +278,7 @@ fn name(host: &Host, id: Id) -> String {
         Id::Find => String::new(),
         Id::FindPart(part) => part.label().into(),
         Id::FindCount => host.scene.find_count_label(),
+        Id::SaveStatus => host.scene.save_message(),
     }
 }
 
@@ -299,7 +309,7 @@ fn control_type(id: Id) -> UIA_CONTROLTYPE_ID {
         Id::Find => UIA_GroupControlTypeId,
         Id::FindPart(FindPart::Input) => UIA_EditControlTypeId,
         Id::FindPart(_) => UIA_ButtonControlTypeId,
-        Id::FindCount => UIA_TextControlTypeId,
+        Id::FindCount | Id::SaveStatus => UIA_TextControlTypeId,
         Id::Open(_) | Id::Shortcut(_) | Id::UpdateAction => UIA_ButtonControlTypeId,
         // Like WinUI's ToggleSwitch, switches are buttons with Toggle.
         Id::NavItem(_) | Id::History | Id::Switch(_) | Id::Choose => UIA_ButtonControlTypeId,
@@ -332,6 +342,7 @@ fn runtime_id(id: Id) -> [i32; 3] {
         Id::Find => (21, 0),
         Id::FindPart(part) => (22, part.index()),
         Id::FindCount => (23, 0),
+        Id::SaveStatus => (24, 0),
     };
     [UiaAppendRuntimeId as i32, kind, index as i32]
 }
@@ -372,6 +383,7 @@ fn offscreen(host: &Host, id: Id) -> bool {
             | Id::Find
             | Id::FindPart(_)
             | Id::FindCount
+            | Id::SaveStatus
     ) {
         return false;
     }
@@ -514,7 +526,9 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                     VARIANT::from(UIA_SearchLandmarkTypeId.0)
                 }
                 // `aria-live="polite"`.
-                UIA_LiveSettingPropertyId if id == Id::FindCount => VARIANT::from(Polite.0),
+                UIA_LiveSettingPropertyId if matches!(id, Id::FindCount | Id::SaveStatus) => {
+                    VARIANT::from(Polite.0)
+                }
                 UIA_AutomationIdPropertyId => VARIANT::from(BSTR::from(format!("{id:?}"))),
                 UIA_FrameworkIdPropertyId => VARIANT::from(BSTR::from("Captures")),
                 UIA_IsKeyboardFocusablePropertyId => VARIANT::from(focusable && enabled),
@@ -1030,6 +1044,26 @@ pub fn raise(events: &[(Event, bool, String)]) {
                         &VARIANT::default(),
                         &VARIANT::from(BSTR::from(detail.as_str())),
                     );
+                }
+                Event::SaveStatus => {
+                    let root = node(Id::Root);
+                    let _ = UiaRaiseStructureChangedEvent(
+                        &root,
+                        StructureChangeType_ChildrenInvalidated,
+                        runtime_id(Id::Root).as_mut_ptr(),
+                        3,
+                    );
+                    if !detail.is_empty() {
+                        let status = node(Id::SaveStatus);
+                        let _ = UiaRaiseAutomationEvent(&status, UIA_LiveRegionChangedEventId);
+                        let _ = UiaRaiseNotificationEvent(
+                            &status,
+                            NotificationKind_ActionCompleted,
+                            NotificationProcessing_MostRecent,
+                            &BSTR::from(detail.as_str()),
+                            &BSTR::from("save-status"),
+                        );
+                    }
                 }
                 Event::FindOpen(_) => {
                     let root = node(Id::Root);

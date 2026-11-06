@@ -64,6 +64,24 @@ const FIND_COUNT_REMS: f32 = 5.5;
 /// `.preference-find-current::after` glow (`0 0 20px`) and ring room.
 const MATCH_BLEED: f32 = 22.;
 
+/// `.preferences-save-status`: the header's save feedback. Saves are
+/// synchronous here, so shipping's transient "Saving changes…" state has
+/// nothing to show and is skipped.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub enum SaveStatus {
+    #[default]
+    Idle,
+    /// "Changes saved" with ✓, for two seconds.
+    Saved,
+    /// "Couldn’t save changes: …" with !, until the next save.
+    Error(String),
+}
+
+/// `.preferences-save-status > span`.
+const SAVE_MARK: f32 = 13.;
+/// `.preferences-save-error` `max-width`; others use `42vw`.
+const SAVE_ERROR_MAX: f32 = 360.;
+
 /// The parts of Preferences Find (`.preferences-find`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum FindPart {
@@ -386,6 +404,8 @@ pub enum Kind {
         target: Target,
     },
     Scrollbar,
+    /// `.preferences-save-status`.
+    SaveStatus,
     /// `.preferences-find-input`: field and border.
     FindField,
     /// `.preferences-find-input:hover` border.
@@ -538,6 +558,8 @@ pub enum Event {
     Recording(usize, bool),
     /// A recorder's error changed.
     ShortcutError(usize),
+    /// The header save status changed (`role="status"`).
+    SaveStatus,
     /// Find opened or closed.
     FindOpen(bool),
     /// The find query changed.
@@ -752,6 +774,18 @@ pub struct Scene {
     scrollbar: usize,
     pub find: Find,
     find_nodes: FindNodes,
+    save_status: SaveStatus,
+    save_node: usize,
+    /// The save status changed: the header actions are placed again.
+    save_dirty: bool,
+    /// The status appeared: it pops in (`ui-pop-in`).
+    save_pop: bool,
+    /// "Changes saved" was shown: the host (re)starts its 2 s timer.
+    pub saved_timer: bool,
+    save_text: Option<Text>,
+    save_mark: Option<Text>,
+    /// `(top, height)` of the header's first grid row.
+    header_row: (f32, f32),
     /// Every find target in document order; nodes are fixed, text and
     /// boxes follow the layout.
     find_targets: Vec<FindTarget>,
@@ -884,6 +918,14 @@ impl Scene {
                 count_dirty: false,
             },
             find_nodes: FindNodes::default(),
+            save_status: SaveStatus::Idle,
+            save_node: 0,
+            save_dirty: false,
+            save_pop: false,
+            saved_timer: false,
+            save_text: None,
+            save_mark: None,
+            header_row: (0., 0.),
             find_targets: Vec::new(),
             sub_boxes: Vec::new(),
             window_focused: true,
@@ -945,6 +987,8 @@ impl Scene {
         let lit = self.add(Some(base), Kind::History { lit: true }, 0.);
         let ring = self.ring(base, Ring::Full(8.), Target::History);
         self.history = Layered { base, lit, ring };
+        self.save_node = self.add(Some(self.header), Kind::SaveStatus, 0.);
+        self.nodes[self.save_node].visible = false;
         self.build_find();
         self.viewport = self.add(Some(root), Kind::Viewport, 0.);
         self.content = self.add(Some(self.viewport), Kind::Group, 0.);
@@ -1331,19 +1375,11 @@ impl Scene {
         };
         self.title_y = row_y + (row - block) / 2.;
         self.nodes[self.header].rect = Rect::new(NAV_WIDTH, 0., body_w, header_h);
-        let button_w = (history.width + 2. * s5 + 2.).ceil();
-        let button = Rect::new(
-            body_w - s8 - button_w,
-            (row_y + (row - item_h) / 2.).round(),
-            button_w,
-            item_h,
-        );
-        self.nodes[self.history.base].rect = button;
-        self.nodes[self.history.lit].rect = button.at_origin();
-        self.nodes[self.history.ring].rect = button.at_origin();
+        self.header_row = (row_y, row);
         self.texts.title = Some(title);
         self.texts.subtitle = Some(subtitle);
         self.texts.history = Some(history);
+        self.place_header_actions(g)?;
         let bar = Rect::new(s8, s6 + row + s6, (body_w - 2. * s8).max(0.), item_h);
         self.layout_find(g, bar)?;
 
@@ -1525,6 +1561,9 @@ impl Scene {
                 self.texts.caps[index] = self.cap_texts(g, index)?;
                 self.nodes[self.shortcuts[index].recorder].dirty = true;
             }
+        }
+        if std::mem::take(&mut self.save_dirty) {
+            self.place_header_actions(g)?;
         }
         if std::mem::take(&mut self.find.count_dirty) {
             let count = g.text(&self.t, Style::Subtitle, &self.find.count_label, 1e4)?;
@@ -2296,9 +2335,119 @@ impl Scene {
 
     fn save(&mut self) {
         match captures_settings::save(&self.settings_file, &self.settings) {
-            Ok(saved) => self.settings = saved,
-            Err(error) => eprintln!("{}", preferences::save_error(&error.to_string())),
+            Ok(saved) => {
+                self.settings = saved;
+                self.set_save_status(SaveStatus::Saved);
+            }
+            Err(error) => self.save_failed(&error.to_string()),
         }
+    }
+
+    /// Every failed settings save reports through the header status.
+    fn save_failed(&mut self, error: &str) {
+        let message = preferences::save_error(error);
+        eprintln!("{message}");
+        self.set_save_status(SaveStatus::Error(message));
+    }
+
+    fn set_save_status(&mut self, status: SaveStatus) {
+        if status == SaveStatus::Saved {
+            // Each save restarts the two seconds.
+            self.saved_timer = true;
+        }
+        if status == self.save_status {
+            return;
+        }
+        self.save_pop |= self.save_status == SaveStatus::Idle;
+        self.save_status = status;
+        self.save_dirty = true;
+        self.events.push(Event::SaveStatus);
+    }
+
+    /// The saved timer fired: "Changes saved" goes away; an error stays.
+    pub fn clear_saved(&mut self) {
+        if self.save_status == SaveStatus::Saved {
+            self.set_save_status(SaveStatus::Idle);
+        }
+    }
+
+    /// The status text (its UIA name); empty when idle.
+    pub fn save_message(&self) -> String {
+        match &self.save_status {
+            SaveStatus::Idle => String::new(),
+            SaveStatus::Saved => preferences::SAVED.into(),
+            SaveStatus::Error(message) => message.clone(),
+        }
+    }
+
+    pub fn save_shown(&self) -> bool {
+        self.save_status != SaveStatus::Idle
+    }
+
+    pub fn save_rect(&self) -> Rect {
+        self.absolute(self.save_node)
+    }
+
+    /// `.preferences-header-actions`, right-aligned `--s-4` apart: Capture
+    /// History… then the save status. Only the status redraws; History
+    /// moves by offset.
+    fn place_header_actions(&mut self, g: &Gfx) -> Result<()> {
+        let n = |name: &str| self.t.n(name);
+        let (s3, s4, s5, s8) = (n("s-3"), n("s-4"), n("s-5"), n("s-8"));
+        let (h_sm, h_md) = (n("h-sm"), n("h-md"));
+        let body_w = self.nodes[self.header].rect.w;
+        let (row_y, row) = self.header_row;
+        let mut right = body_w - s8;
+        let node = self.save_node;
+        let shown = self.save_shown();
+        if shown {
+            let message = self.save_message();
+            let text = g.text(&self.t, Style::Status, &message, 1e4)?;
+            let max = match self.save_status {
+                SaveStatus::Error(_) => SAVE_ERROR_MAX,
+                _ => 0.42 * self.w,
+            };
+            // 1 px border, `2px var(--s-4)` padding, the mark, `--s-3` gap.
+            let chrome = 2. * (1. + s4) + SAVE_MARK + s3;
+            let text_w = text.width.min((max - chrome).max(0.));
+            if text_w < text.width {
+                g.ellipsis(&text, text_w)?;
+            }
+            let mark = match self.save_status {
+                SaveStatus::Error(_) => "!",
+                _ => "✓",
+            };
+            self.save_mark = Some(g.text(&self.t, Style::Check, mark, 1e4)?);
+            self.save_text = Some(text);
+            let w = (chrome + text_w).ceil();
+            let y = (row_y + (row - h_sm) / 2.).round();
+            self.nodes[node].rect = Rect::new(right - w, y, w, h_sm);
+            right -= w + s4;
+            if std::mem::take(&mut self.save_pop) {
+                self.animate_curve(node, Prop::Opacity, (0., 1.), "dur-2", "ease-out");
+                self.animate_curve(node, Prop::OffsetY, (y - 4., y), "dur-2", "ease-out");
+            }
+        } else {
+            self.motions.retain(|m| m.node != node);
+            self.nodes[node].opacity = 1.;
+        }
+        self.nodes[node].visible = shown;
+        self.nodes[node].dirty = true;
+        self.nodes[node].props = true;
+        let label_w = self.texts.history.as_ref().map_or(0., |t| t.width);
+        let button_w = (label_w + 2. * s5 + 2.).ceil();
+        let button = Rect::new(
+            right - button_w,
+            (row_y + (row - h_md) / 2.).round(),
+            button_w,
+            h_md,
+        );
+        let Layered { base, lit, ring } = self.history;
+        self.nodes[base].rect = button;
+        self.nodes[base].props = true;
+        self.nodes[lit].rect = button.at_origin();
+        self.nodes[ring].rect = button.at_origin();
+        Ok(())
     }
 
     fn select_mode(&mut self, index: usize) -> Option<Action> {
@@ -2878,9 +3027,7 @@ impl Scene {
             }
             ShortcutRecording::Complete { shortcut, .. } => {
                 self.stop_recording();
-                if let Err(message) = self.set_shortcut(index, shortcut) {
-                    self.set_shortcut_error(index, message);
-                }
+                self.set_shortcut(index, shortcut);
             }
         }
     }
@@ -2888,24 +3035,28 @@ impl Scene {
     /// Restore a recorder's default shortcut from `captures-settings`.
     pub fn reset_shortcut(&mut self, index: usize) {
         self.stop_recording();
-        let result = self.set_shortcut(index, shortcut_default(index));
-        self.set_shortcut_error(index, result.err().unwrap_or_default());
+        self.set_shortcut(index, shortcut_default(index));
     }
 
-    /// Save a recorded shortcut; settings validation rejects empty and
-    /// duplicate shortcuts, which keeps the old one and reports why.
-    fn set_shortcut(&mut self, index: usize, value: String) -> std::result::Result<(), String> {
+    /// Save a recorded shortcut. Settings validation rejects empty and
+    /// duplicate shortcuts: the old one stays and the header status says
+    /// why, as in shipping, where the recorder line shows only `invalid`
+    /// recordings.
+    fn set_shortcut(&mut self, index: usize, value: String) {
         if shortcut_ref(&self.settings, index) == value {
-            return Ok(());
+            return;
         }
         let mut next = self.settings.clone();
         *shortcut_mut(&mut next, index) = value;
-        let saved = captures_settings::save(&self.settings_file, &next)
-            .map_err(|error| preferences::save_error(&error.to_string()))?;
-        self.settings = saved;
-        self.caps_dirty[index] = true;
-        self.events.push(Event::Value(Target::Shortcut(index)));
-        Ok(())
+        match captures_settings::save(&self.settings_file, &next) {
+            Ok(saved) => {
+                self.settings = saved;
+                self.caps_dirty[index] = true;
+                self.events.push(Event::Value(Target::Shortcut(index)));
+                self.set_save_status(SaveStatus::Saved);
+            }
+            Err(error) => self.save_failed(&error.to_string()),
+        }
     }
 
     fn set_shortcut_error(&mut self, index: usize, message: String) {
@@ -3858,6 +4009,40 @@ impl Scene {
                 gfx::ring(dc, all, radius, 2., 4., accent_ring)?;
             }
             Kind::Scrollbar => gfx::fill_round(dc, all, w / 2., c("border-strong"))?,
+            Kind::SaveStatus => {
+                // `.preferences-save-saved` / `-error`: no border, tinted pill.
+                let (bg, ink, mark_bg, mark_ink) = match self.save_status {
+                    SaveStatus::Idle => return Ok(()),
+                    SaveStatus::Saved => (
+                        "positive-surface",
+                        "positive-text",
+                        Some("positive"),
+                        "positive-ink",
+                    ),
+                    SaveStatus::Error(_) => ("danger-surface", "danger-text", None, "danger-text"),
+                };
+                gfx::fill_round(dc, all, h / 2., c(bg))?;
+                let left = 1. + t.n("s-4");
+                let top = ((h - SAVE_MARK) / 2.).round();
+                let circle = rect(left, top, left + SAVE_MARK, top + SAVE_MARK);
+                if let Some(mark_bg) = mark_bg {
+                    gfx::fill_round(dc, circle, SAVE_MARK / 2., c(mark_bg))?;
+                }
+                if let Some(mark) = &self.save_mark {
+                    let x = left + (SAVE_MARK - mark.width) / 2.;
+                    gfx::text(
+                        dc,
+                        mark,
+                        x,
+                        top + (SAVE_MARK - mark.height) / 2.,
+                        c(mark_ink),
+                    )?;
+                }
+                if let Some(text) = &self.save_text {
+                    let x = left + SAVE_MARK + t.n("s-3");
+                    gfx::text(dc, text, x, (h - text.height) / 2., c(ink))?;
+                }
+            }
             Kind::FindField => {
                 let radius = t.n("r-md");
                 gfx::fill_round(dc, all, radius, c("surface-field"))?;
