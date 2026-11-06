@@ -127,23 +127,42 @@ jobs:
           cache-workspaces: apps/native/gtk
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
       # captures-app links the shared capture stack (PipeWire, D-Bus, X11/Wayland, ALSA).
-      # A stalled apt mirror once hung this step for the whole job; time out
-      # each attempt and retry instead.
+      # The Azure apt mirror sometimes trickles: downloads run separately so
+      # each retry resumes partial files, later attempts switch to
+      # archive.ubuntu.com, and the .debs are cached between runs.
+      - name: Restore cached apt packages
+        uses: actions/cache@v4
+        with:
+          path: ~/apt-archives
+          key: native-gtk-apt-ubuntu-24.04-v1
       - name: Install GTK4 and capture-stack libraries
-        timeout-minutes: 12
+        timeout-minutes: 15
         run: |
-          for attempt in 1 2 3; do
-            if timeout 240 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update &&
-               timeout 300 sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y \
-                 libgtk-4-dev xvfb xdotool dbus-x11 at-spi2-core python3-gi gir1.2-atspi-2.0 gir1.2-gdkpixbuf-2.0 \
-                 libpipewire-0.3-dev libclang-dev libdbus-1-dev libwayland-dev libxkbcommon-dev \
-                 libx11-dev libxi-dev libxrandr-dev libxcb1-dev libasound2-dev libegl-dev libgbm-dev; then
-              exit 0
+          packages="libgtk-4-dev xvfb xdotool dbus-x11 at-spi2-core python3-gi gir1.2-atspi-2.0
+            gir1.2-gdkpixbuf-2.0 libpipewire-0.3-dev libclang-dev libdbus-1-dev libwayland-dev
+            libxkbcommon-dev libx11-dev libxi-dev libxrandr-dev libxcb1-dev libasound2-dev
+            libegl-dev libgbm-dev"
+          if compgen -G "$HOME/apt-archives/*.deb" > /dev/null; then
+            sudo cp "$HOME"/apt-archives/*.deb /var/cache/apt/archives/
+          fi
+          apt_opts="-o Acquire::Retries=3 -o Acquire::http::Timeout=30"
+          downloaded=
+          for attempt in 1 2 3 4; do
+            if [ "$attempt" -ge 3 ]; then
+              echo "http://archive.ubuntu.com/ubuntu/" | sudo tee /etc/apt/apt-mirrors.txt
             fi
-            echo "apt attempt $attempt failed; retrying"
-            sleep 15
+            if timeout 180 sudo apt-get $apt_opts update &&
+               timeout 240 sudo apt-get $apt_opts install -y --download-only $packages; then
+              downloaded=1
+              break
+            fi
+            echo "apt download attempt $attempt failed; retrying"
+            sleep 10
           done
-          exit 1
+          test -n "$downloaded"
+          sudo apt-get install -y --no-download $packages
+          mkdir -p "$HOME/apt-archives"
+          cp /var/cache/apt/archives/*.deb "$HOME/apt-archives/"
       - run: node apps/native/prepare.mjs --output apps/native/gtk/resources
       - run: cargo +1.95.0 fmt --manifest-path apps/native/gtk/Cargo.toml --all -- --check
       - run: cargo +1.95.0 clippy --manifest-path apps/native/gtk/Cargo.toml --locked --all-targets -- -D warnings
