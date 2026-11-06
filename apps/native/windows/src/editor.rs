@@ -568,6 +568,8 @@ pub struct Editor {
     pub crop: Option<DocRect>,
     /// The Aspect ratio select's choice, in `crop::ASPECTS` order.
     pub crop_aspect: usize,
+    /// Shipping's window-local `rotationSnapDegrees`.
+    pub rotation_snap: f64,
     /// The Text tool's open label.
     inline: Option<text::Inline>,
     /// The open Text style menu or Font list.
@@ -1140,6 +1142,7 @@ impl Editor {
             eraser: props::Eraser::default(),
             crop: None,
             crop_aspect: 0,
+            rotation_snap: captures_app::editor::DEFAULT_ROTATION_SNAP_DEGREES,
             inline: None,
             menu: None,
             menu_node: 0,

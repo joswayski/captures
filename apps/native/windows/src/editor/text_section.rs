@@ -74,6 +74,7 @@ impl Editor {
         match num {
             Num::TextSize => self.selected_text().map_or(0., |t| t.font_size),
             Num::NewTextSize => self.new_text_size(),
+            Num::RotationSnap => self.rotation_snap,
             Num::ShadowX => self.values().map_or(0., |v| v.shadow_x.round()),
             Num::ShadowY => self.values().map_or(0., |v| v.shadow_y.round()),
             Num::CanvasWidth | Num::CanvasHeight => self
@@ -91,6 +92,15 @@ impl Editor {
                 }
             }
             Num::CanvasWidth | Num::CanvasHeight => self.resize_canvas(num, value),
+            // `setRotationSnapDegrees(clamp(round(degrees)))`; the note
+            // in the body repeats it.
+            Num::RotationSnap => {
+                let value = value.round().clamp(1., 180.);
+                if value != self.rotation_snap {
+                    self.rotation_snap = value;
+                    self.props_changed();
+                }
+            }
             Num::ShadowX | Num::ShadowY => {
                 if value != self.number_value(num) {
                     self.apply(super::props::Change::Offset(num == Num::ShadowX, value));

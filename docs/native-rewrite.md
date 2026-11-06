@@ -631,6 +631,16 @@ instead, then the shared `CURVE_HELP` paragraph. Both read the session's
 dark for both states (via a temporary fixture hook, since removed). macOS,
 Linux: unchanged.
 
+Shift rotation snap: with a selection under Select or a shape tool
+(shipping's `transformSelected`), Properties opens with its own section:
+the `Shift rotation snap` number field (1–180, default 15, rounded, steppers
+`Increase Shift rotation snap`) and the paragraph "Hold Shift while dragging
+the rotate handle to snap in N° increments.", then a rule and the
+selection's section. The value is window-local, as in shipping. Gap: this
+host has no rotate handle yet, so nothing reads the value until rotation is
+ported. Windows: cross-compiled only, Wine renders in light and dark
+against the harness. macOS, Linux: unchanged.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,
