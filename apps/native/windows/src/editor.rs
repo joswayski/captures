@@ -60,6 +60,7 @@ use crate::scene::Rect;
 use crate::tokens::Tokens;
 use crate::{Options, appearance};
 
+mod background;
 mod crop;
 pub use crop::ASPECT_LABEL;
 mod eraser;
@@ -69,7 +70,7 @@ mod props;
 mod text;
 mod text_section;
 pub use menu::MenuKind;
-pub use props::{Field, Num, Prop, Range, bounds as range_bounds, range_text};
+pub use props::{CUSTOM, Check, Field, Num, Prop, Range, bounds as range_bounds, range_text};
 
 /// `.screenshot-editor { min-width: 860px; min-height: 600px }`; GTK's default.
 pub const SIZE: (f32, f32) = (1280., 840.);
@@ -211,13 +212,14 @@ pub enum Target {
     Save,
     /// A Tool properties control.
     Prop(Prop),
+    /// The Canvas group's Background color trigger.
+    Background,
 }
 
 /// Shipping controls this host does not implement yet: drawn disabled and
 /// exposed to UI Automation as disabled.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Stub {
-    Background,
     Preset,
     AddImages,
     AddLayer,
@@ -292,6 +294,8 @@ enum Kind {
     Thumb,
     /// `.screenshot-tool-flyout`.
     Flyout,
+    /// `.screenshot-canvas-bg-menu`.
+    BgMenu,
     /// The Text style menu or the Font list, and its highlighted row.
     Menu,
     MenuLit,
@@ -629,6 +633,11 @@ pub struct Editor {
     zoom: usize,
     thumb: usize,
     flyout_node: usize,
+    /// The Background color card, whether it's open, and shipping's
+    /// `lastSolid`.
+    bg_menu: usize,
+    bg_open: bool,
+    last_solid: String,
     controls: Vec<(Target, Layered)>,
     /// Layer rows built so far; rows past the layer count are hidden.
     rows: usize,
@@ -1178,6 +1187,9 @@ impl Editor {
             zoom: 0,
             thumb: 0,
             flyout_node: 0,
+            bg_menu: 0,
+            bg_open: false,
+            last_solid: editor_chrome::colors::DEFAULT_CANVAS_BACKGROUND.into(),
             controls: Vec::new(),
             rows: 0,
             page_key: (0., 0., 0., 0.),
@@ -1290,6 +1302,7 @@ impl Editor {
         self.header_caret = self.add(Some(self.header), Kind::FieldCaret, 0.);
         self.nodes[self.header_caret].visible = false;
         self.control(self.header, Target::Trim, 0.);
+        self.control(self.header, Target::Background, 0.);
         self.banner_node = self.add(Some(root), Kind::Banner, 0.);
         self.control(self.banner_node, Target::Dismiss, 0.);
         for target in [Target::Undo, Target::Redo] {
@@ -1310,6 +1323,17 @@ impl Editor {
         self.nodes[self.flyout_node].visible = false;
         for i in 0..SHAPE_TOOLS.len() {
             self.control(self.flyout_node, Target::Shape(i), 0.);
+        }
+        // The Background color card, portalled after the page content.
+        self.bg_menu = self.add(Some(root), Kind::BgMenu, 24.);
+        self.nodes[self.bg_menu].visible = false;
+        for prop in Self::bg_menu_props() {
+            let bleed = if matches!(prop, Prop::Swatch(..)) {
+                4.
+            } else {
+                0.
+            };
+            self.control(self.bg_menu, Target::Prop(prop), bleed);
         }
         // Property popups float above everything.
         self.menu_node = self.add(Some(root), Kind::Menu, menu::MENU_BLEED);
@@ -1378,7 +1402,7 @@ impl Editor {
             Target::Redo => p.is_some_and(|p| p.can_redo),
             Target::ZoomOut => p.is_some() && percent > ZOOM_MIN + 0.05,
             Target::ZoomIn => p.is_some() && percent < ZOOM_MAX - 0.05,
-            Target::Fit | Target::Slider => p.is_some(),
+            Target::Fit | Target::Slider | Target::Background => p.is_some(),
             Target::Tool(_) => true,
             Target::Save => {
                 self.export_view()
@@ -1447,6 +1471,7 @@ impl Editor {
             Target::SaveAsNew => "Save as new file".into(),
             Target::Save => "Save".into(),
             Target::Prop(prop) => self.prop_name(prop),
+            Target::Background => self.background_label(),
         }
     }
 
@@ -1455,6 +1480,7 @@ impl Editor {
         match target {
             Target::Fit => header::FIT_TOOLTIP.into(),
             Target::Trim => header::TRIM_TOOLTIP.into(),
+            Target::Background => editor_chrome::colors::BACKGROUND_TOOLTIP.into(),
             Target::Slider => header::ZOOM_SLIDER_TOOLTIP.into(),
             Target::Tool(i) if RAIL_TOOLS[i].key == editor_chrome::SHAPES_KEY => {
                 editor_chrome::shapes_tooltip(SHAPE_TOOLS[self.last_shape].key)
@@ -1469,7 +1495,6 @@ impl Editor {
 
     pub fn stub_name(&self, stub: Stub) -> String {
         match stub {
-            Stub::Background => editor_chrome::colors::BACKGROUND.into(),
             Stub::Preset => header::ZOOM_PRESET.into(),
             Stub::AddImages => header::ADD_IMAGES.into(),
             Stub::AddLayer => editor_chrome::layers::ADD.into(),
@@ -1494,7 +1519,6 @@ impl Editor {
     pub fn stub_rect(&self, stub: Stub) -> Rect {
         let l = &self.l;
         match stub {
-            Stub::Background => l.background,
             Stub::Preset => l.preset,
             Stub::AddImages => l.add_images,
             Stub::AddLayer => l.add_layer,
@@ -1855,6 +1879,7 @@ impl Editor {
                 self.notice = None;
                 self.submit(Request::TrimCanvas);
             }
+            Target::Background => self.set_bg_menu(!self.bg_open),
             Target::Undo => {
                 self.set_crop(None);
                 self.submit(Request::Undo)
@@ -2062,6 +2087,10 @@ impl Editor {
                     (old.document.width, old.document.height)
                         != (presented.document.width, presented.document.height)
                 });
+                let background_changed = self
+                    .presented
+                    .as_ref()
+                    .is_none_or(|old| old.document.background != presented.document.background);
                 self.presented = Some(*presented);
                 self.selected = selected;
                 self.ensure_rows(count);
@@ -2097,6 +2126,13 @@ impl Editor {
                     if self.pending.is_none() {
                         self.sync_field();
                     }
+                }
+                if background_changed {
+                    self.follow_background();
+                    self.bg_dirty();
+                    self.nodes[self.page].dirty = true;
+                    self.events
+                        .push(Event::Toggled(Target::Prop(Prop::Check(Check::Solid))));
                 }
                 self.keep_drag();
                 if first || self.values() != shown || self.selected_element() != shown_layer {
@@ -2568,6 +2604,7 @@ impl Editor {
             2. + s4 + 14. + s3 + background.width + s3 + 11. + s3,
             28.,
         );
+        set(Target::Background, l.background);
         x += l.background.w + 3. + 1.;
         l.canvas_group = Rect::new(s5, mid, x - s5, CONTROL_H);
 
@@ -2738,6 +2775,8 @@ impl Editor {
         self.place_props_thumb();
         self.set_rect(self.zoom, local(l.zoom, l.header));
         self.set_rect(self.flyout_node, l.flyout);
+        let bg_menu = self.bg_menu_rect();
+        self.set_rect(self.bg_menu, bg_menu);
         for (target, layered) in self.controls.clone() {
             let parent = self.nodes[layered.base].parent.expect("parent");
             let origin = match self.nodes[parent].kind {
@@ -2746,6 +2785,7 @@ impl Editor {
                 Kind::Banner => l.banner,
                 Kind::Bar => l.bar,
                 Kind::Flyout => l.flyout,
+                Kind::BgMenu => Rect::default(),
                 Kind::Zoom | Kind::List | Kind::Ctl(..) => Rect::default(),
                 _ => Rect::default(),
             };
@@ -2998,6 +3038,10 @@ impl Editor {
                 return None;
             }
         }
+        // The open Background card takes the points over it.
+        if self.bg_open && self.bg_menu_rect().contains(x, y) {
+            return Self::bg_menu_props().map(Target::Prop).find(|&t| inside(t));
+        }
         if inside(Target::Divider) {
             return Some(Target::Divider);
         }
@@ -3012,7 +3056,11 @@ impl Editor {
             return None;
         }
         let in_props = self.props_view().contains(x, y);
-        let header_prop = |t: Target| matches!(t, Target::Prop(Prop::Number(n) | Prop::Step(n, _)) if n.is_canvas());
+        let header_prop = |t: Target| match t {
+            Target::Prop(Prop::Number(n) | Prop::Step(n, _)) => n.is_canvas(),
+            Target::Prop(prop) => Self::in_bg_menu(prop),
+            _ => false,
+        };
         // Steppers sit inside their number field.
         let step = self
             .controls
@@ -3055,6 +3103,7 @@ impl Editor {
             Target::Prop(Prop::Number(Num::CanvasWidth)),
             Target::Prop(Prop::Number(Num::CanvasHeight)),
             Target::Trim,
+            Target::Background,
             Target::Undo,
             Target::Redo,
             Target::Fit,
@@ -3069,6 +3118,10 @@ impl Editor {
         }
         list.extend(self.prop_order().into_iter().map(Target::Prop));
         list.extend([Target::Copy, Target::SaveAsNew, Target::Save]);
+        // Shipping portals the open card to the end of `body`.
+        if self.bg_open {
+            list.extend(Self::bg_menu_props().map(Target::Prop));
+        }
         list.retain(|&t| self.exists(t) && self.enabled(t));
         list
     }
@@ -3150,6 +3203,11 @@ impl Editor {
 
     /// Editor shortcuts and focused-control keys; true when consumed.
     fn key(&mut self, vk: VIRTUAL_KEY, ctrl: bool, shift: bool) -> bool {
+        // `closeOnEscape` runs before anything else sees the key.
+        if self.bg_open && vk == VK_ESCAPE {
+            self.set_bg_menu(false);
+            return true;
+        }
         if let Some(Target::Prop(Prop::Range(range))) = self.focus
             && !ctrl
             && self.range_key(range, vk.0)
@@ -3450,6 +3508,7 @@ impl Editor {
                 gfx::border(dc, all, radius, 1., c("border-subtle"))?;
             }
             Kind::Ctl(target, layer) => self.draw_control(dc, target, layer, (w, h))?,
+            Kind::BgMenu => self.draw_bg_menu(dc, (w, h))?,
         }
         Ok(())
     }
@@ -3516,42 +3575,7 @@ impl Editor {
             rect(split, group.top + 9., split + 1., group.top + 25.),
             c("border"),
         )?;
-        // Background color: not in this host yet (disabled).
         let dim = |name: &str| t.color_alpha(name, 0.4);
-        let bg = local(l.background);
-        let chip = rect(
-            bg.left + 1. + s4,
-            (bg.top + bg.bottom - 14.) / 2.,
-            bg.left + 1. + s4 + 14.,
-            (bg.top + bg.bottom + 14.) / 2.,
-        );
-        let fill = self
-            .presented
-            .as_ref()
-            .and_then(|p| p.document.background.clone())
-            .map_or_else(|| c("canvas-checker-b"), |hex| hex_color(&hex));
-        gfx::fill_round(
-            dc,
-            chip,
-            t.n("r-xs"),
-            D2D1_COLOR_F {
-                a: fill.a * 0.4,
-                ..fill
-            },
-        )?;
-        gfx::border(dc, chip, t.n("r-xs"), 1., dim("border-strong"))?;
-        let text = g.text(t, Style::Button, editor_chrome::colors::BACKGROUND, 1e4)?;
-        let x = chip.right + s3;
-        gfx::text(dc, &text, x, cy(&text), dim("text-muted"))?;
-        gfx::icon(
-            dc,
-            &g.factory,
-            "chevron-down",
-            &[],
-            (x + text.width + s3, (bg.top + bg.bottom - 11.) / 2., 11.),
-            1.8,
-            dim("text-subtle"),
-        )?;
         // Add images: not in this host yet (disabled `.screenshot-add-image`).
         let add = local(l.add_images);
         let radius = t.n("r-md");
@@ -4068,6 +4092,7 @@ impl Editor {
                     ink,
                 )?;
             }
+            Target::Background => self.draw_bg_trigger(dc, lit, (w, h))?,
             Target::Undo | Target::Redo => {
                 if lit {
                     gfx::fill_round(dc, all, r_md, c("surface-hover"))?;
@@ -5017,6 +5042,13 @@ impl Editor {
                 {
                     self.set_flyout(false);
                 }
+                // `closeOutside`: a press outside the card and its trigger.
+                if self.bg_open
+                    && !self.bg_menu_rect().contains(x, y)
+                    && hit != Some(Target::Background)
+                {
+                    self.set_bg_menu(false);
+                }
                 // An open popup takes presses inside it; one outside closes
                 // it (its trigger toggles it instead).
                 if let Some(menu) = self.menu {
@@ -5288,7 +5320,7 @@ impl Editor {
 }
 
 /// `Layout::buttons`: twelve fixed controls, the rail, and a spare.
-const SLOTS: usize = 12 + RAIL_TOOLS.len() + 1;
+const SLOTS: usize = 13 + RAIL_TOOLS.len() + 1;
 
 /// Where each button's rect lives in `Layout::buttons`.
 fn button_slot(target: Target) -> usize {
@@ -5307,6 +5339,7 @@ fn button_slot(target: Target) -> usize {
         Target::Trim => 11,
         // One slot per rail tool.
         Target::Tool(i) => 12 + i,
+        Target::Background => 12 + RAIL_TOOLS.len(),
         // Laid out from their own rects, never through `Layout::buttons`.
         Target::Shape(_)
         | Target::Layer(_)

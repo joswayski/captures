@@ -197,6 +197,8 @@ pub enum Check {
     Contiguous,
     /// The Text section's Text background.
     Plate,
+    /// The Background color card's Solid background.
+    Solid,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -207,6 +209,8 @@ pub enum Field {
     /// Text color and the plate's Background color.
     Text,
     Plate,
+    /// The Background color card's compact field.
+    Canvas,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -417,7 +421,7 @@ impl Values {
             Check::Stroke => self.stroke,
             Check::Fill => self.fill.is_some(),
             Check::Shadow => self.shadow,
-            Check::Contiguous => false,
+            Check::Contiguous | Check::Solid => false,
             Check::Plate => self.plate.is_some(),
         }
     }
@@ -429,6 +433,7 @@ impl Values {
             Field::Shadow => &self.shadow_color,
             Field::Text => &self.text_color,
             Field::Plate => self.plate.as_deref().unwrap_or(TEXT_PLATE),
+            Field::Canvas => colors::DEFAULT_CANVAS_BACKGROUND,
         }
     }
 
@@ -777,6 +782,9 @@ impl Editor {
 
     /// A control's rect, body-relative.
     pub(super) fn prop_rect(&self, prop: Prop) -> Option<Rect> {
+        if Self::in_bg_menu(prop) {
+            return self.bg_prop_rect(prop);
+        }
         match prop {
             // In the header, header-relative.
             Prop::Number(num) if num.is_canvas() => {
@@ -943,12 +951,16 @@ impl Editor {
     pub fn check_on(&self, check: Check) -> bool {
         match check {
             Check::Contiguous => self.eraser.contiguous,
+            Check::Solid => self.background().is_some(),
             check => self.values().is_some_and(|v| v.checked(check)),
         }
     }
 
     /// A color field's rect in client DIPs.
     pub fn color_field_rect(&self, field: Field) -> Rect {
+        if field == Field::Canvas {
+            return self.bg_field_rect();
+        }
         self.row_rect(Row::Color(field))
     }
 
@@ -1161,6 +1173,8 @@ impl Editor {
         match prop {
             Prop::Shape(i) => SHAPE_TOOLS[i].name(),
             Prop::Swatch(_, CUSTOM) => colors::CUSTOM_COLOR.into(),
+            // `title="Canvas width"`.
+            Prop::Number(num) if num.is_canvas() => num.label().into(),
             _ => String::new(),
         }
     }
@@ -1179,6 +1193,7 @@ impl Editor {
             Field::Shadow => colors::SHADOW_COLOR.into(),
             Field::Text => colors::TEXT_COLOR.into(),
             Field::Plate => colors::BACKGROUND.into(),
+            Field::Canvas => colors::CANVAS_BACKGROUND.into(),
         }
     }
 
@@ -1207,6 +1222,9 @@ impl Editor {
     }
 
     pub fn activate_prop(&mut self, prop: Prop) {
+        if Self::in_bg_menu(prop) {
+            return self.activate_bg(prop);
+        }
         match prop {
             Prop::Shape(i) => self.select_tool(SHAPE_TOOLS[i].key),
             Prop::Mode(i) => {
@@ -1319,8 +1337,8 @@ impl Editor {
                         s.fill = on.then(|| s.color.clone());
                     }
                     Change::Check(Check::Shadow, on) => s.drop_shadow = Some(on),
-                    Change::Check(Check::Contiguous | Check::Plate, _)
-                    | Change::Color(Field::Text | Field::Plate, _) => {}
+                    Change::Check(Check::Contiguous | Check::Plate | Check::Solid, _)
+                    | Change::Color(Field::Text | Field::Plate | Field::Canvas, _) => {}
                     Change::Range(Range::Width, value) => s.stroke_width = value,
                     Change::Range(Range::Opacity, value) => d.opacity = value,
                     Change::Range(range, _) if eraser_range(range) => {}
@@ -1501,11 +1519,17 @@ impl Editor {
 
     /// The custom-color dialog's answer.
     pub fn set_color(&mut self, field: Field, hex: String) {
+        if field == Field::Canvas {
+            return self.set_background(Some(hex));
+        }
         self.apply(Change::Color(field, hex));
     }
 
     /// `#rrggbb` the custom-color dialog starts from.
     pub fn color_seed(&self, field: Field) -> String {
+        if field == Field::Canvas {
+            return colors::custom_seed(&self.swatch_value());
+        }
         self.values()
             .map(|v| colors::custom_seed(v.color(field)))
             .unwrap_or_else(|| "#000000".into())
@@ -1740,10 +1764,15 @@ impl Editor {
                     return Ok(());
                 }
                 let r = TILE / 2.;
-                let Some(v) = self.values() else {
-                    return Ok(());
+                let value = if field == Field::Canvas {
+                    self.swatch_value()
+                } else {
+                    let Some(v) = self.values() else {
+                        return Ok(());
+                    };
+                    v.color(field).to_owned()
                 };
-                if colors::swatch_active(v.color(field), colors::SWATCHES[i]) {
+                if colors::swatch_active(&value, colors::SWATCHES[i]) {
                     gfx::fill_round(
                         dc,
                         rect(-4., -4., w + 4., h + 4.),
@@ -1874,6 +1903,7 @@ pub fn check_label(check: Check) -> &'static str {
         Check::Shadow => "Drop shadow",
         Check::Contiguous => eraser::CONTIGUOUS,
         Check::Plate => "Text background",
+        Check::Solid => colors::SOLID_BACKGROUND,
     }
 }
 
@@ -1941,6 +1971,9 @@ fn selected_edit(change: &Change, values: Option<&Values>) -> (bool, &'static st
             )
         }
         Change::Check(Check::Contiguous, _) => unreachable!("Eraser settings never edit a layer"),
+        Change::Check(Check::Solid, _) | Change::Color(Field::Canvas, _) => {
+            unreachable!("The canvas background is a document edit")
+        }
         Change::Check(Check::Plate, _) | Change::Color(Field::Text | Field::Plate, _) => {
             unreachable!("Text settings edit through `EditText`")
         }
@@ -2007,7 +2040,8 @@ fn preview(v: &mut Values, change: &Change) {
         Change::Color(Field::Text, color) => v.text_color = color,
         Change::Color(Field::Plate, color) => v.plate = Some(color),
         Change::Check(Check::Plate, on) => v.plate = on.then(|| TEXT_PLATE.into()),
-        Change::Check(Check::Contiguous, _)
+        Change::Check(Check::Contiguous | Check::Solid, _)
+        | Change::Color(Field::Canvas, _)
         | Change::Range(Range::Tolerance | Range::BrushSize | Range::Softness, _) => {}
     }
 }
