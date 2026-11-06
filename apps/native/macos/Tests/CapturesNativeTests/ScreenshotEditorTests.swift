@@ -852,6 +852,39 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(worker.requests.count, 2, "disabled history actions stay disabled")
     }
 
+    func testCanvasSizeSteppersCommitOneResizeLikeShipping() throws {
+        _ = NSApplication.shared
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", width: 640, height: 360))
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+        controller.window.setContentSize(NSSize(width: 1400, height: 800))
+        controller.root.layoutSubtreeIfNeeded()
+        let width = try XCTUnwrap(try field("Canvas width", in: controller.root) as? TokenNumberField)
+        let height = try XCTUnwrap(try field("Canvas height", in: controller.root) as? TokenNumberField)
+        // Shipping compact `NumberInput`: 74 x 28 with a 22 pt stepper column.
+        XCTAssertEqual(width.frame.size, NSSize(width: 74, height: 28))
+        XCTAssertEqual(width.increaseHalf.frame.width, 22)
+        XCTAssertFalse(width.increaseHalf.isHidden)
+        XCTAssertEqual(width.increaseHalf.accessibilityLabel(), "Increase Canvas width")
+        // Shipping steps call onTextChange and onCommit: one resize per press.
+        // The fake worker answers with the resized document.
+        worker.snapshot = snapshot(id: "shot", width: 641, height: 360)
+        XCTAssertTrue(width.increaseHalf.accessibilityPerformPress())
+        XCTAssertEqual(worker.requests.count, 1)
+        XCTAssertEqual(worker.requests.last?["operation"] as? String, "resize_canvas")
+        XCTAssertEqual(worker.requests.last?["width"] as? Double, 641)
+        XCTAssertEqual(worker.requests.last?["height"] as? Double, 360)
+        XCTAssertEqual(width.stringValue, "641")
+        XCTAssertTrue(height.decreaseHalf.accessibilityPerformPress())
+        XCTAssertEqual(worker.requests.last?["width"] as? Double, 641)
+        XCTAssertEqual(worker.requests.last?["height"] as? Double, 359)
+        // The 1 pt floor disables Decrease, as shipping's `min={1}` does.
+        height.stringValue = "1"
+        XCTAssertFalse(height.decreaseHalf.available)
+        XCTAssertTrue(height.increaseHalf.available)
+    }
+
     func testZoomSliderUsesSharedLogScaleAndRetainsDocumentAndOutput() throws {
         _ = NSApplication.shared
         for appearance in ["light", "dark"] {

@@ -1582,8 +1582,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     /// Shipping's read-only crop Width/Height (`readOnly` inputs).
     private let cropWidth = NSTextField()
     private let cropHeight = NSTextField()
-    private let canvasWidth = NSTextField()
-    private let canvasHeight = NSTextField()
+    private let canvasWidth = TokenNumberField()
+    private let canvasHeight = TokenNumberField()
     private var backgroundSolid: NSButton!
     private var backgroundSwatches: ColorSwatchRow!
     /// Shipping `lastSolid`: restored when Solid background is turned back on.
@@ -2553,8 +2553,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             let letter = labels[axis == 0 ? 1 : 3]
             let letterWidth = widths[axis == 0 ? 1 : 3] - gap - EditorChrome.metric("canvas_field")
             place(letter, at: x, width: letterWidth)
-            field.frame = NSRect(x: x + letterWidth + gap, y: (height - 22) / 2,
-                                 width: EditorChrome.metric("canvas_field"), height: 22)
+            field.frame = NSRect(x: x + letterWidth + gap, y: (height - 28) / 2,
+                                 width: EditorChrome.metric("canvas_field"), height: 28)
             x += widths[axis == 0 ? 1 : 3] + 2
             if axis == 0 {
                 place(labels[2], at: x, width: widths[2])
@@ -3177,11 +3177,17 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             canvasToolbarLabels.append(label); canvasToolbar.addSubview(label)
         }
         for (field, key) in [(canvasWidth, "canvas_width"), (canvasHeight, "canvas_height")] {
+            // Shipping compact `NumberInput` in `.screenshot-canvas-dim`: centred
+            // mono digits, 22 pt steppers, quiet until hovered or edited.
             configure(field, frame: .zero, label: EditorChrome.text("header", key), parent: canvasToolbar)
-            field.alignment = .left; field.isBordered = false; field.drawsBackground = false
-            field.focusRingType = .exterior
-            field.font = .systemFont(ofSize: tokens.number("text-sm"))
+            field.tokens = tokens; field.compact = true; field.quiet = true; field.delegate = self
+            field.alignment = .center
+            field.font = .monospacedSystemFont(ofSize: tokens.number("text-xs"), weight: .regular)
             field.toolTip = EditorChrome.text("header", key)
+            field.minimum = { 1 }
+            field.maximum = { Self.maximumLayerSize }
+            // A step commits at once, like shipping's `onTextChange` + `onCommit`.
+            field.stepped = { [weak self] _ in self?.canvasSizeCommitted() }
             // Enter or leaving the field commits one canvas resize, as in shipping.
             field.target = self; field.action = #selector(canvasSizeCommitted)
             field.cell?.sendsActionOnEndEditing = true
@@ -7759,7 +7765,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         zoomDividers.forEach { $0.layer?.backgroundColor = border }
         canvasSplit.layer?.backgroundColor = tokens.color("border").cgColor
         canvasToolbarLabels.forEach { $0.textColor = tokens.color("text-subtle") }
-        for field in [canvasWidth, canvasHeight] { field.textColor = tokens.color("text") }
         backgroundCard.layer?.backgroundColor = tokens.color("surface-overlay").cgColor
         backgroundSwatches?.tokens = tokens
         backgroundCard.layer?.borderColor = tokens.color("border").cgColor
@@ -7793,7 +7798,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 item.image = TextStyleChip.image(for: preset, tokens: tokens)
             }
         }
-        for field in [layerWidth, layerHeight, layerX, layerY, rotationSnap, createTextSize, textSize] {
+        for field in [layerWidth, layerHeight, layerX, layerY, rotationSnap, createTextSize, textSize,
+                      canvasWidth, canvasHeight] {
             field.tokens = tokens
         }
         for section in layerMenuSections { section.title.textColor = tokens.color("text-subtle") }
