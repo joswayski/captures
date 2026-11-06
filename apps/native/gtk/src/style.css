@@ -1202,7 +1202,9 @@ window.captures.preview-stack-window {
   box-shadow: var(--shadow-xs);
 }
 .captures button.color-swatch.active {
-  box-shadow: 0 0 0 2px var(--surface-raised), 0 0 0 4px var(--theme-accent);
+  box-shadow:
+    0 0 0 2px var(--surface-raised),
+    0 0 0 4px var(--theme-accent);
 }
 .captures button.color-swatch:focus-visible,
 .captures button.custom-color:focus-visible {
@@ -1346,7 +1348,11 @@ popover.captures-menu .text-style-preview.style-mono-box {
 .captures .text-style-preview.style-outlined,
 popover.captures-menu .text-style-preview.style-outlined {
   color: transparent;
-  text-shadow: -1px 0 var(--text), 1px 0 var(--text), 0 -1px var(--text), 0 1px var(--text);
+  text-shadow:
+    -1px 0 var(--text),
+    1px 0 var(--text),
+    0 -1px var(--text),
+    0 1px var(--text);
 }
 .captures .text-style-preview.style-box,
 .captures .text-style-preview.style-mono-box,
