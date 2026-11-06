@@ -1,0 +1,1184 @@
+//! The recording editor (`?view=recording-editor`): one History video or GIF
+//! opened through the shared `RecordingEditorSession` on a worker thread.
+//! The preview shows the session's retained frame as one texture, replaced
+//! only when the accepted revision changes or playback delivers a frame; the
+//! timeline's filmstrip is one sprite texture decoded once. Trim handles,
+//! the playhead and the shade outside the trim are small nodes over it.
+use std::cell::{Cell, RefCell};
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use std::sync::atomic::AtomicBool;
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use captures_app::recording_editor::{
+    RecordingEditorOpenRequest, RecordingEditorRequestV2, RecordingEditorSession,
+    RecordingSaveRequest, RecordingTimelineThumbnails, ReplacedRecording, SavedRecording,
+};
+use captures_app::recording_editor_ui::{self as ui, SaveDefaults};
+use captures_app::recording_timeline::{TimelineTrimDrag, TimelineTrimEdge};
+use captures_media::{CancelToken, EditSpec, ExportFormat, ExportSpec, MediaToolchain};
+use gtk::prelude::*;
+use gtk::{gdk, glib, graphene, gsk};
+use image::RgbaImage;
+
+use crate::switch::TokenSwitch;
+use crate::tokens::Tokens;
+use crate::widgets::{Icon, SnapshotArea, icon_button};
+
+pub struct Options {
+    pub history_root: PathBuf,
+    pub artifact_id: String,
+    pub output_directory: PathBuf,
+}
+
+/// The accepted session state the UI renders.
+struct Presented {
+    frame: Arc<RgbaImage>,
+    revision: u64,
+    position_ms: u64,
+    edit: EditSpec,
+    save_export: ExportSpec,
+    duration_ms: u64,
+    mime_type: String,
+    dropped_frames: u64,
+}
+
+impl Presented {
+    fn of(session: &RecordingEditorSession) -> Self {
+        let snapshot = session.snapshot_v2();
+        Self {
+            frame: session.frame(),
+            revision: snapshot.editor.revision,
+            position_ms: snapshot.editor.position_ms,
+            edit: snapshot.editor.edit.clone(),
+            save_export: snapshot.save_export.clone(),
+            duration_ms: snapshot.editor.source.duration_ms.unwrap_or(1).max(1),
+            mime_type: snapshot.editor.source.mime_type.clone(),
+            dropped_frames: snapshot.editor.dropped_frames,
+        }
+    }
+
+    fn trim_end(&self) -> u64 {
+        self.edit.trim_end_ms.unwrap_or(self.duration_ms)
+    }
+
+    fn gif(&self) -> bool {
+        self.save_export.format == ExportFormat::Gif
+    }
+}
+
+enum Job {
+    Apply(RecordingEditorRequestV2),
+    Play(u64, CancelToken),
+    Save(RecordingSaveRequest, CancelToken),
+    Replace(PathBuf, CancelToken),
+    Thumbnails,
+}
+
+enum Outcome {
+    Opened(Box<Presented>, Option<PathBuf>, SaveDefaults),
+    Presented(Result<Box<Presented>, String>),
+    Thumbnails(RecordingTimelineThumbnails),
+    PlaybackEnded(Result<(), String>),
+    Progress(String),
+    Saved(Result<(PathBuf, Option<Box<Presented>>), String>),
+}
+
+/// Bundled sidecars when present, else `CAPTURES_FFMPEG`/`CAPTURES_FFPROBE`,
+/// else the system's `ffmpeg` and `ffprobe` on PATH.
+/// The newest playback frame (position, pixels); the UI takes it at 60 Hz
+/// and older frames are dropped.
+type LatestFrame = Arc<Mutex<Option<(u64, Arc<RgbaImage>)>>>;
+
+fn toolchain() -> MediaToolchain {
+    let target = format!("{}-unknown-linux-gnu", std::env::consts::ARCH);
+    let sidecars = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../desktop/src-tauri/binaries");
+    let tool = |name: &str, variable: &str| {
+        std::env::var_os(variable)
+            .map(PathBuf::from)
+            .or_else(|| {
+                let path = sidecars.join(format!("{name}-{target}"));
+                path.is_file().then_some(path)
+            })
+            .unwrap_or_else(|| PathBuf::from(name))
+    };
+    MediaToolchain::new(
+        tool("ffmpeg", "CAPTURES_FFMPEG"),
+        tool("ffprobe", "CAPTURES_FFPROBE"),
+    )
+}
+
+fn texture_of(pixels: &RgbaImage) -> gdk::Texture {
+    let (width, height) = pixels.dimensions();
+    gdk::MemoryTexture::new(
+        width as i32,
+        height as i32,
+        gdk::MemoryFormat::R8g8b8a8,
+        &glib::Bytes::from(pixels.as_raw().as_slice()),
+        width as usize * 4,
+    )
+    .upcast()
+}
+
+fn worker(
+    options: &Options,
+    jobs: mpsc::Receiver<Job>,
+    out: mpsc::Sender<Outcome>,
+    latest: LatestFrame,
+    looping: Arc<AtomicBool>,
+) {
+    let (root, id, directory) = (
+        options.history_root.clone(),
+        options.artifact_id.clone(),
+        options.output_directory.clone(),
+    );
+    std::thread::Builder::new()
+        .name("captures-recording-editor".into())
+        .spawn(move || {
+            let mut session = match RecordingEditorSession::open(
+                RecordingEditorOpenRequest {
+                    history_root: root,
+                    artifact_id: id,
+                },
+                toolchain(),
+            ) {
+                Ok(session) => {
+                    let _ = out.send(Outcome::Opened(
+                        Box::new(Presented::of(&session)),
+                        session.original_save_path().map(Path::to_owned),
+                        session.save_defaults(&directory),
+                    ));
+                    session
+                }
+                Err(error) => {
+                    let _ = out.send(Outcome::Presented(Err(error)));
+                    return;
+                }
+            };
+            let progress = |progress: captures_media::ExportProgress| {
+                let _ =
+                    out.send(Outcome::Progress(progress.message.clone().unwrap_or_else(
+                        || ui::export_stage_label(progress.stage).to_owned(),
+                    )));
+            };
+            while let Ok(job) = jobs.recv() {
+                let outcome = match job {
+                    Job::Apply(request) => Outcome::Presented(
+                        session
+                            .execute_v2(request)
+                            .map(|()| Box::new(Presented::of(&session))),
+                    ),
+                    Job::Thumbnails => match session.timeline_thumbnails(&CancelToken::default()) {
+                        Ok(thumbnails) => Outcome::Thumbnails(thumbnails),
+                        Err(_) => continue,
+                    },
+                    Job::Play(position, cancel) => {
+                        let result = (|| {
+                            let mut playback = session.looping_playback(
+                                position,
+                                true,
+                                looping.clone(),
+                                &cancel,
+                            )?;
+                            while let Some(frame) = playback.next_frame()? {
+                                if cancel.is_cancelled() {
+                                    break;
+                                }
+                                *latest.lock().expect("frame") =
+                                    Some((frame.position_ms, frame.pixels()));
+                            }
+                            Ok(())
+                        })();
+                        Outcome::PlaybackEnded(if cancel.is_cancelled() {
+                            Ok(())
+                        } else {
+                            result
+                        })
+                    }
+                    Job::Save(request, cancel) => {
+                        Outcome::Saved(session.save_new(request, &cancel, progress).map(|saved| {
+                            match saved {
+                                SavedRecording::Saved { path, .. }
+                                | SavedRecording::SavedWithoutHistory { path, .. } => (path, None),
+                            }
+                        }))
+                    }
+                    Job::Replace(destination, cancel) => Outcome::Saved(
+                        session
+                            .replace_original_at(&destination, &cancel, progress)
+                            .map(|ReplacedRecording::Replaced { path, .. }| {
+                                (path, Some(Box::new(Presented::of(&session))))
+                            })
+                            .map_err(|error| error.message),
+                    ),
+                };
+                if out.send(outcome).is_err() {
+                    break;
+                }
+            }
+        })
+        .expect("recording editor worker");
+}
+
+pub struct RecordingEditor {
+    pub window: gtk::ApplicationWindow,
+    _state: Rc<State>,
+}
+
+struct State {
+    tokens: Rc<Tokens>,
+    jobs: mpsc::Sender<Job>,
+    latest: LatestFrame,
+    looping: Arc<AtomicBool>,
+    presented: RefCell<Option<Presented>>,
+    frame: RefCell<Option<gdk::Texture>>,
+    filmstrip: RefCell<Option<gdk::Texture>>,
+    /// Staged trim and playhead (source-relative ms) while the session is
+    /// behind; applied after `LIVE_APPLY_DELAY_MS` of quiet.
+    trim: Cell<(f64, f64)>,
+    playhead: Cell<u64>,
+    drag: Cell<Option<(TimelineTrimEdge, TimelineTrimDrag)>>,
+    pending_apply: RefCell<Option<glib::SourceId>>,
+    playing: RefCell<Option<CancelToken>>,
+    one_to_one: Cell<bool>,
+    original: RefCell<Option<PathBuf>>,
+    /// The default save name, before Save as new adds `-edited`.
+    source_stem: RefCell<String>,
+    directory: RefCell<PathBuf>,
+    busy: Cell<bool>,
+    /// An export is running; playback waits for it.
+    saving: Cell<bool>,
+    w: Widgets,
+}
+
+struct Widgets {
+    title: gtk::Label,
+    warning: gtk::Label,
+    preview: SnapshotArea,
+    play: gtk::Button,
+    play_icon: Icon,
+    loop_button: gtk::Button,
+    fit: gtk::Button,
+    actual: gtk::Button,
+    range: gtk::Label,
+    selected: gtk::Label,
+    track: SnapshotArea,
+    track_overlay: gtk::Overlay,
+    handles: [gtk::Scale; 2],
+    folder: gtk::Label,
+    filename: gtk::Entry,
+    suffix: gtk::Label,
+    save_as_new: TokenSwitch,
+    save: gtk::Button,
+    status: gtk::Label,
+}
+
+fn label(text: &str, class: &str) -> gtk::Label {
+    let label = gtk::Label::new(Some(text));
+    label.add_css_class(class);
+    label.set_xalign(0.);
+    label
+}
+
+fn segment(text: &str) -> gtk::Button {
+    let button = gtk::Button::with_label(text);
+    button.add_css_class("recording-segment");
+    button
+}
+
+fn set_class(widget: &impl IsA<gtk::Widget>, class: &str, on: bool) {
+    if on {
+        widget.add_css_class(class);
+    } else {
+        widget.remove_css_class(class);
+    }
+}
+
+/// `.timeline-trim-handle`: twice the 4 px track inset, 3 px past each edge.
+const HANDLE_WIDTH: i32 = 8;
+const HANDLE_OVERHANG: i32 = 3;
+
+pub fn build(app: &gtk::Application, tokens: Rc<Tokens>, options: Options) -> RecordingEditor {
+    let window = gtk::ApplicationWindow::builder()
+        .application(app)
+        .title(captures_app::app_windows::RECORDING_EDITOR_TITLE)
+        .default_width(1100)
+        .default_height(820)
+        .build();
+    window.add_css_class("captures");
+    window.set_size_request(760, 560);
+
+    let (jobs, inbox) = mpsc::channel();
+    let (results, outcomes) = mpsc::channel();
+    let latest = LatestFrame::default();
+    let looping = Arc::<AtomicBool>::default();
+    worker(&options, inbox, results, latest.clone(), looping.clone());
+
+    let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    root.add_css_class("recording-editor");
+    let scroller = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vexpand(true)
+        .build();
+    let body = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    body.add_css_class("recording-editor-body");
+    let title = label(ui::TITLE_RECORDING, "recording-editor-title");
+    title.set_accessible_role(gtk::AccessibleRole::Heading);
+    body.append(&title);
+    let warning = label("", "recording-editor-warning");
+    warning.set_wrap(true);
+    warning.set_visible(false);
+    body.append(&warning);
+
+    // `.recording-editor-preview`: toolbar over the sunken viewport.
+    let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    card.add_css_class("recording-card");
+    let toolbar = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    toolbar.add_css_class("recording-preview-toolbar");
+    let heading = label("Preview", "recording-preview-heading");
+    heading.set_hexpand(true);
+    toolbar.append(&heading);
+    let (loop_button, _, _) = icon_button("loop", "Loop preview", &["recording-loop"]);
+    toolbar.append(&loop_button);
+    let zoom = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    zoom.add_css_class("recording-segments");
+    zoom.set_valign(gtk::Align::Center);
+    let fit = segment("Fit");
+    let actual = segment("100%");
+    zoom.append(&fit);
+    zoom.append(&actual);
+    toolbar.append(&zoom);
+    card.append(&toolbar);
+    let viewport = gtk::Overlay::new();
+    viewport.add_css_class("recording-preview-viewport");
+    let preview = SnapshotArea::new(|_, _, _| {});
+    preview.set_size_request(-1, 380);
+    preview.set_hexpand(true);
+    preview.set_accessible_role(gtk::AccessibleRole::Img);
+    preview.update_property(&[gtk::accessible::Property::Label("Recording preview")]);
+    viewport.set_child(Some(&preview));
+    let play = gtk::Button::new();
+    play.add_css_class("recording-play");
+    let play_icon = Icon::new("resume", 22).with_stroke(2.);
+    play.set_child(Some(&play_icon));
+    play.set_halign(gtk::Align::Center);
+    play.set_valign(gtk::Align::Center);
+    play.update_property(&[gtk::accessible::Property::Label("Play preview")]);
+    viewport.add_overlay(&play);
+    card.append(&viewport);
+    body.append(&card);
+
+    // `.timeline`: summary row over the filmstrip track.
+    let timeline = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    timeline.add_css_class("recording-card");
+    timeline.add_css_class("recording-timeline");
+    let summary = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    summary.add_css_class("timeline-summary");
+    let range = label("", "timeline-range");
+    range.set_hexpand(true);
+    let selected = label("", "timeline-selected");
+    summary.append(&range);
+    summary.append(&selected);
+    timeline.append(&summary);
+    let track_overlay = gtk::Overlay::new();
+    let track = SnapshotArea::new(|_, _, _| {});
+    track.add_css_class("timeline-track");
+    track.set_size_request(-1, ui::TIMELINE_TRACK_HEIGHT as i32);
+    track.set_hexpand(true);
+    track.set_cursor_from_name(Some("col-resize"));
+    track.set_margin_top(HANDLE_OVERHANG);
+    track.set_margin_bottom(HANDLE_OVERHANG);
+    track.update_property(&[gtk::accessible::Property::Label("Timeline")]);
+    track_overlay.set_child(Some(&track));
+    let handles = ["Trim start", "Trim end"].map(|name| {
+        // A restyled GtkRange: real slider semantics (AT-SPI Value on every
+        // GTK 4 release) drawn as `.timeline-trim-handle`'s accent bar.
+        let handle = gtk::Scale::new(
+            gtk::Orientation::Horizontal,
+            Some(&gtk::Adjustment::new(0., 0., 1., 100., 1_000., 0.)),
+        );
+        handle.add_css_class("timeline-handle");
+        handle.set_draw_value(false);
+        handle.set_halign(gtk::Align::Start);
+        handle.set_size_request(
+            HANDLE_WIDTH,
+            ui::TIMELINE_TRACK_HEIGHT as i32 + 2 * HANDLE_OVERHANG,
+        );
+        handle.set_focusable(true);
+        handle.set_can_target(false);
+        handle.update_property(&[gtk::accessible::Property::Label(name)]);
+        track_overlay.add_overlay(&handle);
+        handle
+    });
+    timeline.append(&track_overlay);
+    body.append(&timeline);
+    scroller.set_child(Some(&body));
+    root.append(&scroller);
+
+    // The save footer (`.recording-save-bar`).
+    // `.recording-save-footer` centers its filename, switch and action columns.
+    let bar = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    bar.add_css_class("recording-save-bar");
+    let columns = gtk::Box::new(gtk::Orientation::Horizontal, 16);
+    columns.set_halign(gtk::Align::Center);
+    columns.set_hexpand(true);
+    bar.append(&columns);
+    let file = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    let file_heading = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    file_heading.append(&label("Filename", "editor-field-label"));
+    let folder = label("", "editor-folder");
+    folder.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+    folder.set_max_width_chars(36);
+    file_heading.append(&folder);
+    file.append(&file_heading);
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    row.add_css_class("editor-filename");
+    let filename = gtk::Entry::new();
+    filename.add_css_class("editor-filename-entry");
+    filename.set_width_chars(30);
+    filename.update_property(&[gtk::accessible::Property::Label("Saved filename")]);
+    let suffix = label(".mp4", "editor-suffix");
+    row.append(&filename);
+    row.append(&suffix);
+    file.append(&row);
+    columns.append(&file);
+    let as_new = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    as_new.set_valign(gtk::Align::End);
+    let save_as_new = TokenSwitch::new(tokens.clone(), false);
+    save_as_new.update_property(&[gtk::accessible::Property::Label("Save as new file")]);
+    as_new.append(&save_as_new);
+    as_new.append(&label("Save as new file", "editor-switch-label"));
+    columns.append(&as_new);
+    let actions = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    actions.set_size_request(340, -1);
+    let status = label("", "editor-notice");
+    status.set_hexpand(true);
+    status.set_xalign(1.);
+    status.set_wrap(true);
+    status.set_valign(gtk::Align::Center);
+    status.set_accessible_role(gtk::AccessibleRole::Status);
+    actions.append(&status);
+    let (save, _, _) = icon_button("save", "Save", &["ui-btn", "primary", "editor-save"]);
+    save.set_valign(gtk::Align::End);
+    save.set_sensitive(false);
+    actions.append(&save);
+    columns.append(&actions);
+    root.append(&bar);
+    window.set_child(Some(&root));
+
+    let state = Rc::new(State {
+        tokens,
+        jobs,
+        latest,
+        looping,
+        presented: RefCell::default(),
+        frame: RefCell::default(),
+        filmstrip: RefCell::default(),
+        trim: Cell::new((0., 1.)),
+        playhead: Cell::new(0),
+        drag: Cell::new(None),
+        pending_apply: RefCell::default(),
+        playing: RefCell::default(),
+        one_to_one: Cell::new(false),
+        original: RefCell::default(),
+        source_stem: RefCell::default(),
+        directory: RefCell::new(options.output_directory),
+        busy: Cell::new(true),
+        saving: Cell::default(),
+        w: Widgets {
+            title,
+            warning,
+            preview,
+            play,
+            play_icon,
+            loop_button,
+            fit,
+            actual,
+            range,
+            selected,
+            track,
+            track_overlay,
+            handles,
+            folder,
+            filename,
+            suffix,
+            save_as_new,
+            save,
+            status,
+        },
+    });
+    state.connect(&window);
+    state.set_zoom(false);
+    // Start on Play, not the filename entry, so nothing looks edited.
+    GtkWindowExt::set_focus(&window, Some(&state.w.play));
+
+    let weak = Rc::downgrade(&state);
+    glib::timeout_add_local(Duration::from_millis(16), move || {
+        let Some(state) = weak.upgrade() else {
+            return glib::ControlFlow::Break;
+        };
+        while let Ok(outcome) = outcomes.try_recv() {
+            state.receive(outcome);
+        }
+        state.present_playback_frame();
+        glib::ControlFlow::Continue
+    });
+    let weak = Rc::downgrade(&state);
+    window.connect_close_request(move |_| {
+        if let Some(state) = weak.upgrade()
+            && let Some(cancel) = state.playing.borrow_mut().take()
+        {
+            cancel.cancel();
+        }
+        glib::Propagation::Proceed
+    });
+    RecordingEditor {
+        window,
+        _state: state,
+    }
+}
+
+impl RecordingEditor {
+    pub fn present(&self) {
+        self.window.present();
+    }
+
+    /// `--exercise`: move the trim start in or out by a second and re-apply.
+    pub fn nudge_trim(&self, inward: bool) {
+        let state = &self._state;
+        let (start, end) = state.trim.get();
+        let start = if inward {
+            (start + 1_000.).min(end - 100.)
+        } else {
+            0.
+        };
+        state.trim.set((start.max(0.), end));
+        state.trim_changed();
+        state.schedule_apply();
+    }
+}
+
+impl State {
+    fn connect(self: &Rc<Self>, window: &gtk::ApplicationWindow) {
+        let w = &self.w;
+        let weak = Rc::downgrade(self);
+        w.preview.set_draw(move |snapshot, width, height| {
+            if let Some(state) = weak.upgrade() {
+                state.draw_preview(snapshot, width, height);
+            }
+        });
+        let weak = Rc::downgrade(self);
+        w.track.set_draw(move |snapshot, width, height| {
+            if let Some(state) = weak.upgrade() {
+                state.draw_track(snapshot, width, height);
+            }
+        });
+        let weak = Rc::downgrade(self);
+        w.play.connect_clicked(move |_| {
+            if let Some(state) = weak.upgrade() {
+                state.toggle_play();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        w.loop_button.connect_clicked(move |button| {
+            if let Some(state) = weak.upgrade() {
+                let on = !state.looping.load(std::sync::atomic::Ordering::Relaxed);
+                state
+                    .looping
+                    .store(on, std::sync::atomic::Ordering::Relaxed);
+                set_class(button, "active", on);
+                button.update_state(&[gtk::accessible::State::Pressed(if on {
+                    gtk::AccessibleTristate::True
+                } else {
+                    gtk::AccessibleTristate::False
+                })]);
+            }
+        });
+        for (button, one_to_one) in [(&w.fit, false), (&w.actual, true)] {
+            let weak = Rc::downgrade(self);
+            button.connect_clicked(move |_| {
+                if let Some(state) = weak.upgrade() {
+                    state.set_zoom(one_to_one);
+                }
+            });
+        }
+        let weak = Rc::downgrade(self);
+        w.save.connect_clicked(move |_| {
+            if let Some(state) = weak.upgrade() {
+                state.save();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        w.filename.connect_changed(move |_| {
+            if let Some(state) = weak.upgrade() {
+                state.update_footer();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        // `setMakeCopy`: a copy beside the original gets the `-edited` name,
+        // and turning it off restores the source name if it was untouched.
+        w.save_as_new.connect_toggled(move |on| {
+            let Some(state) = weak.upgrade() else { return };
+            let source = state.source_stem.borrow().clone();
+            let edited = ui::edited_file_stem(&source);
+            let current = state.w.filename.text();
+            if on && current == source {
+                state.w.filename.set_text(&edited);
+            } else if !on && current == edited {
+                state.w.filename.set_text(&source);
+            }
+            state.update_footer();
+        });
+
+        // Track: drag a handle to trim, or press elsewhere to seek.
+        let drag = gtk::GestureDrag::new();
+        let weak = Rc::downgrade(self);
+        drag.connect_drag_begin(move |_, x, _| {
+            if let Some(state) = weak.upgrade() {
+                state.track_begin(x);
+            }
+        });
+        let weak = Rc::downgrade(self);
+        drag.connect_drag_update(move |gesture, dx, _| {
+            if let (Some(state), Some((x, _))) = (weak.upgrade(), gesture.start_point()) {
+                state.track_update(x + dx);
+            }
+        });
+        let weak = Rc::downgrade(self);
+        drag.connect_drag_end(move |_, _, _| {
+            if let Some(state) = weak.upgrade()
+                && state.drag.take().is_some()
+            {
+                state.schedule_apply();
+            }
+        });
+        w.track.add_controller(drag);
+        let weak = Rc::downgrade(self);
+        // Handles follow the trim at every allocation, so resizing keeps them
+        // on the selection without a resize signal.
+        w.track_overlay.connect_get_child_position(move |_, child| {
+            let state = weak.upgrade()?;
+            let index = state.w.handles.iter().position(|handle| handle == child)?;
+            let (left, width) = state.track_rect();
+            let value = [state.trim.get().0, state.trim.get().1][index];
+            let x = left + value / state.duration().max(1) as f64 * width;
+            Some(gdk::Rectangle::new(
+                x as i32 - HANDLE_WIDTH / 2,
+                0,
+                HANDLE_WIDTH,
+                ui::TIMELINE_TRACK_HEIGHT as i32 + 2 * HANDLE_OVERHANG,
+            ))
+        });
+
+        // Keyboard trim: arrows move the focused handle by 100 ms (1 s with Shift).
+        for (index, handle) in w.handles.iter().enumerate() {
+            let keys = gtk::EventControllerKey::new();
+            keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+            let weak = Rc::downgrade(self);
+            keys.connect_key_pressed(move |_, key, _, modifiers| {
+                let Some(state) = weak.upgrade() else {
+                    return glib::Propagation::Proceed;
+                };
+                let step = if modifiers.contains(gdk::ModifierType::SHIFT_MASK) {
+                    1_000.
+                } else {
+                    100.
+                };
+                let delta = match key {
+                    gdk::Key::Left => -step,
+                    gdk::Key::Right => step,
+                    _ => return glib::Propagation::Proceed,
+                };
+                let (start, end) = state.trim.get();
+                let duration = state.duration() as f64;
+                state.trim.set(if index == 0 {
+                    (((start + delta).clamp(0., end - 1.)), end)
+                } else {
+                    (start, (end + delta).clamp(start + 1., duration))
+                });
+                state.trim_changed();
+                state.schedule_apply();
+                glib::Propagation::Stop
+            });
+            handle.add_controller(keys);
+            // Assistive technologies set the value directly.
+            let weak = Rc::downgrade(self);
+            handle.connect_value_changed(move |handle| {
+                let Some(state) = weak.upgrade() else { return };
+                let (start, end) = state.trim.get();
+                let value = handle.value();
+                let next = if index == 0 {
+                    (value.clamp(0., end - 1.), end)
+                } else {
+                    (start, value.clamp(start + 1., state.duration() as f64))
+                };
+                if next != (start, end) {
+                    state.trim.set(next);
+                    state.trim_changed();
+                    state.schedule_apply();
+                }
+            });
+        }
+
+        let keys = gtk::EventControllerKey::new();
+        let weak = Rc::downgrade(self);
+        keys.connect_key_pressed(move |_, key, _, _| {
+            let Some(state) = weak.upgrade() else {
+                return glib::Propagation::Proceed;
+            };
+            let typing = state.w.filename.has_focus()
+                || state
+                    .w
+                    .preview
+                    .root()
+                    .and_then(|root| root.focus())
+                    .is_some_and(|focus| focus.is::<gtk::Text>());
+            if key == gdk::Key::space && !typing {
+                state.toggle_play();
+                return glib::Propagation::Stop;
+            }
+            glib::Propagation::Proceed
+        });
+        window.add_controller(keys);
+    }
+
+    fn duration(&self) -> u64 {
+        self.presented
+            .borrow()
+            .as_ref()
+            .map_or(1, |presented| presented.duration_ms)
+    }
+
+    fn receive(self: &Rc<Self>, outcome: Outcome) {
+        match outcome {
+            Outcome::Opened(presented, original, defaults) => {
+                let gif_source = presented.mime_type.contains("gif");
+                self.w.title.set_label(ui::title(&presented.mime_type));
+                if let Some(text) = ui::dropped_frames_warning(presented.dropped_frames) {
+                    self.w.warning.set_label(&text);
+                    self.w.warning.set_visible(true);
+                }
+                *self.original.borrow_mut() = original;
+                *self.directory.borrow_mut() = PathBuf::from(&defaults.directory);
+                *self.source_stem.borrow_mut() = defaults.stem.clone();
+                self.w.filename.set_text(&defaults.stem);
+                self.w.loop_button.set_visible(!gif_source);
+                self.accept(*presented);
+                let _ = self.jobs.send(Job::Thumbnails);
+            }
+            Outcome::Presented(Ok(presented)) => self.accept(*presented),
+            Outcome::Presented(Err(error)) => {
+                self.busy.set(false);
+                self.notify(&error, true);
+            }
+            Outcome::Thumbnails(thumbnails) => {
+                *self.filmstrip.borrow_mut() = Some(texture_of(thumbnails.pixels()));
+                self.w.track.queue_draw();
+            }
+            Outcome::PlaybackEnded(result) => {
+                self.playing.borrow_mut().take();
+                self.set_playing_ui(false);
+                if let Err(error) = result {
+                    self.notify(&error, true);
+                }
+                // Retain the paused frame as the accepted position.
+                let _ = self.jobs.send(Job::Apply(RecordingEditorRequestV2::Seek {
+                    position_ms: self.playhead.get(),
+                }));
+            }
+            Outcome::Progress(text) => self.notify(&text, false),
+            Outcome::Saved(result) => {
+                self.busy.set(false);
+                self.saving.set(false);
+                match result {
+                    Ok((path, presented)) => {
+                        let gif = self.presented.borrow().as_ref().is_some_and(Presented::gif);
+                        let size = std::fs::metadata(&path).map_or(0, |m| m.len());
+                        self.notify(&ui::saved_message(gif, size), false);
+                        if let Some(presented) = presented {
+                            *self.original.borrow_mut() = Some(path);
+                            self.accept(*presented);
+                        }
+                    }
+                    Err(error) => self.notify(&error, true),
+                }
+                self.update_footer();
+            }
+        }
+    }
+
+    /// The session accepted an edit or seek: refresh the retained frame only
+    /// when the revision moved.
+    fn accept(&self, presented: Presented) {
+        let changed = self
+            .presented
+            .borrow()
+            .as_ref()
+            .is_none_or(|old| old.revision != presented.revision);
+        if changed && self.playing.borrow().is_none() {
+            *self.frame.borrow_mut() = Some(texture_of(&presented.frame));
+            self.w.preview.queue_draw();
+        }
+        if self.drag.get().is_none() && self.pending_apply.borrow().is_none() {
+            self.trim.set((
+                presented.edit.trim_start_ms as f64,
+                presented.trim_end() as f64,
+            ));
+        }
+        if self.playing.borrow().is_none() {
+            self.playhead.set(presented.position_ms);
+        }
+        self.w.suffix.set_label(match presented.save_export.format {
+            ExportFormat::Gif => ".gif",
+            ExportFormat::WebM => ".webm",
+            ExportFormat::Mp4 => ".mp4",
+        });
+        *self.presented.borrow_mut() = Some(presented);
+        self.busy.set(false);
+        self.trim_changed();
+        self.update_footer();
+    }
+
+    fn present_playback_frame(&self) {
+        if self.playing.borrow().is_none() {
+            return;
+        }
+        let Some((position, pixels)) = self.latest.lock().expect("frame").take() else {
+            return;
+        };
+        self.playhead.set(position);
+        *self.frame.borrow_mut() = Some(texture_of(&pixels));
+        self.w.preview.queue_draw();
+        self.w.track.queue_draw();
+    }
+
+    fn toggle_play(&self) {
+        if let Some(cancel) = self.playing.borrow_mut().take() {
+            cancel.cancel();
+            self.set_playing_ui(false);
+            return;
+        }
+        // A pending trim apply is fine: the worker plays after it. Saving is not.
+        if self.presented.borrow().is_none() || self.saving.get() {
+            return;
+        }
+        let (start, end) = self.trim.get();
+        let mut from = self.playhead.get();
+        if (from as f64) < start || (from as f64) >= end - 1. {
+            from = start as u64;
+        }
+        let cancel = CancelToken::default();
+        *self.playing.borrow_mut() = Some(cancel.clone());
+        self.set_playing_ui(true);
+        let _ = self.jobs.send(Job::Play(from, cancel));
+    }
+
+    fn set_playing_ui(&self, playing: bool) {
+        self.w
+            .play_icon
+            .set_name(if playing { "pause" } else { "resume" });
+        set_class(&self.w.play, "playing", playing);
+        let name = if playing {
+            "Pause preview"
+        } else {
+            "Play preview"
+        };
+        self.w.play.set_tooltip_text(Some(name));
+        self.w
+            .play
+            .update_property(&[gtk::accessible::Property::Label(name)]);
+    }
+
+    fn set_zoom(&self, one_to_one: bool) {
+        self.one_to_one.set(one_to_one);
+        set_class(&self.w.fit, "active", !one_to_one);
+        set_class(&self.w.actual, "active", one_to_one);
+        self.w.preview.queue_draw();
+    }
+
+    fn track_rect(&self) -> (f64, f64) {
+        let inset = 4.;
+        (
+            inset,
+            (f64::from(self.w.track.width()) - 2. * inset).max(1.),
+        )
+    }
+
+    fn track_begin(&self, x: f64) {
+        let duration = self.duration() as f64;
+        let (left, width) = self.track_rect();
+        let (start, end) = self.trim.get();
+        let to_x = |time: f64| left + time / duration * width;
+        let near = |time: f64| (x - to_x(time)).abs() <= f64::from(HANDLE_WIDTH);
+        let edge = if near(start) && (!near(end) || (x - to_x(start)) < (to_x(end) - x)) {
+            Some(TimelineTrimEdge::Start)
+        } else if near(end) {
+            Some(TimelineTrimEdge::End)
+        } else {
+            None
+        };
+        match edge.and_then(|edge| {
+            TimelineTrimDrag::begin(edge, x, start, end, duration).map(|drag| (edge, drag))
+        }) {
+            Some(drag) => {
+                if let Some(cancel) = self.playing.borrow_mut().take() {
+                    cancel.cancel();
+                }
+                self.drag.set(Some(drag));
+            }
+            None => self.seek_to_x(x),
+        }
+    }
+
+    fn track_update(&self, x: f64) {
+        let Some((edge, drag)) = self.drag.get() else {
+            self.seek_to_x(x);
+            return;
+        };
+        let (left, width) = self.track_rect();
+        let Some(update) = drag.update(x, left, width) else {
+            return;
+        };
+        self.drag.set(Some((edge, update.drag)));
+        let (start, end) = self.trim.get();
+        self.trim.set(match edge {
+            TimelineTrimEdge::Start => (update.time_ms, end),
+            TimelineTrimEdge::End => (start, update.time_ms),
+        });
+        self.trim_changed();
+    }
+
+    fn seek_to_x(&self, x: f64) {
+        let (left, width) = self.track_rect();
+        let Some(time) = captures_app::recording_timeline::timeline_time_at_client_x(
+            x,
+            left,
+            width,
+            self.duration() as f64,
+        ) else {
+            return;
+        };
+        if let Some(cancel) = self.playing.borrow_mut().take() {
+            cancel.cancel();
+        }
+        self.playhead.set(time as u64);
+        self.w.track.queue_draw();
+        let _ = self.jobs.send(Job::Apply(RecordingEditorRequestV2::Seek {
+            position_ms: time as u64,
+        }));
+    }
+
+    /// Redraw the trim nodes and labels for the staged trim.
+    fn trim_changed(&self) {
+        let (start, end) = self.trim.get();
+        let duration = self.duration();
+        let summary = ui::trim_summary(start as u64, end as u64, duration);
+        self.w.range.set_label(&summary.range);
+        self.w.selected.set_label(&summary.selected);
+        for (handle, value) in self.w.handles.iter().zip([start, end]) {
+            let adjustment = handle.adjustment();
+            adjustment.set_upper(duration as f64);
+            adjustment.set_value(value);
+            handle.update_property(&[gtk::accessible::Property::ValueText(
+                &ui::format_editor_time(value as u64, duration),
+            )]);
+        }
+        self.place_handles();
+        self.w.track.queue_draw();
+    }
+
+    fn place_handles(&self) {
+        self.w.track_overlay.queue_allocate();
+    }
+
+    fn schedule_apply(self: &Rc<Self>) {
+        if let Some(id) = self.pending_apply.borrow_mut().take() {
+            id.remove();
+        }
+        let weak = Rc::downgrade(self);
+        let id = glib::timeout_add_local_once(
+            Duration::from_millis(ui::LIVE_APPLY_DELAY_MS),
+            move || {
+                let Some(state) = weak.upgrade() else { return };
+                state.pending_apply.borrow_mut().take();
+                let Some(mut edit) = state
+                    .presented
+                    .borrow()
+                    .as_ref()
+                    .map(|presented| presented.edit.clone())
+                else {
+                    return;
+                };
+                let (start, end) = state.trim.get();
+                let duration = state.duration();
+                edit.trim_start_ms = start.round() as u64;
+                let end = (end.round() as u64).min(duration);
+                edit.trim_end_ms = (end < duration).then_some(end);
+                state.busy.set(true);
+                state.update_footer();
+                let _ = state
+                    .jobs
+                    .send(Job::Apply(RecordingEditorRequestV2::UpdateEdit { edit }));
+            },
+        );
+        *self.pending_apply.borrow_mut() = Some(id);
+    }
+
+    fn saving_copy(&self) -> bool {
+        self.original.borrow().is_none() || self.w.save_as_new.is_on()
+    }
+
+    fn destination(&self) -> PathBuf {
+        let stem = self.w.filename.text();
+        let suffix = self.w.suffix.label();
+        self.directory
+            .borrow()
+            .join(format!("{}{}", stem.trim(), suffix))
+    }
+
+    fn update_footer(&self) {
+        let w = &self.w;
+        w.folder
+            .set_label(&format!("Saving to {}", self.directory.borrow().display()));
+        let stem = w.filename.text();
+        let error = ui::filename_error(&stem);
+        if self.original.borrow().is_none() && !w.save_as_new.is_on() {
+            w.save_as_new.activate_toggle_quietly(true);
+        }
+        w.save_as_new
+            .set_sensitive(self.original.borrow().is_some());
+        w.save.set_sensitive(
+            error.is_none()
+                && self.presented.borrow().is_some()
+                && !self.busy.get()
+                && self.pending_apply.borrow().is_none(),
+        );
+        if let Some(error) = error {
+            self.notify(error, true);
+        }
+    }
+
+    fn save(&self) {
+        let Some(export) = self
+            .presented
+            .borrow()
+            .as_ref()
+            .map(|presented| presented.save_export.clone())
+        else {
+            return;
+        };
+        if let Some(cancel) = self.playing.borrow_mut().take() {
+            cancel.cancel();
+        }
+        if export.format == ExportFormat::WebM {
+            self.notify(ui::WEBM_EXPORT_ERROR, true);
+            return;
+        }
+        self.busy.set(true);
+        self.saving.set(true);
+        self.update_footer();
+        self.notify(
+            ui::export_stage_label(captures_media::ExportStage::Preparing),
+            false,
+        );
+        let cancel = CancelToken::default();
+        let destination = self.destination();
+        let _ = self.jobs.send(if self.saving_copy() {
+            Job::Save(
+                RecordingSaveRequest {
+                    destination,
+                    export,
+                },
+                cancel,
+            )
+        } else {
+            Job::Replace(destination, cancel)
+        });
+    }
+
+    fn notify(&self, text: &str, error: bool) {
+        self.w.status.set_label(text);
+        self.w
+            .status
+            .update_property(&[gtk::accessible::Property::Label(text)]);
+        set_class(&self.w.status, "error", error);
+        set_class(&self.w.status, "success", !error && !text.is_empty());
+    }
+
+    fn draw_preview(&self, snapshot: &gtk::Snapshot, width: f32, height: f32) {
+        let t = &self.tokens;
+        snapshot.append_color(
+            &t.rgba("surface-sunken"),
+            &graphene::Rect::new(0., 0., width, height),
+        );
+        let Some(texture) = self.frame.borrow().clone() else {
+            return;
+        };
+        let pad = 12.;
+        let (tw, th) = (texture.width() as f32, texture.height() as f32);
+        let scale = if self.one_to_one.get() {
+            1.
+        } else {
+            ((width - 2. * pad) / tw)
+                .min((height - 2. * pad) / th)
+                .max(0.01)
+        };
+        let (dw, dh) = (tw * scale, th * scale);
+        let bounds = graphene::Rect::new((width - dw) / 2., (height - dh) / 2., dw, dh);
+        snapshot.push_clip(&graphene::Rect::new(0., 0., width, height));
+        let rounded = gsk::RoundedRect::from_rect(bounds, t.number("r-md"));
+        snapshot.push_rounded_clip(&rounded);
+        snapshot.append_texture(&texture, &bounds);
+        snapshot.pop();
+        snapshot.append_border(&rounded, &[1.; 4], &[t.rgba("border"); 4]);
+        snapshot.pop();
+    }
+
+    fn draw_track(&self, snapshot: &gtk::Snapshot, _width: f32, height: f32) {
+        let t = &self.tokens;
+        let (left, track_width) = self.track_rect();
+        let (left, track_width) = (left as f32, track_width as f32);
+        // `.timeline-filmstrip`: inset by `--timeline-inset` on every side.
+        let strip = graphene::Rect::new(left, left, track_width, height - 2. * left);
+        let rounded = gsk::RoundedRect::from_rect(strip, t.number("r-xs"));
+        snapshot.push_rounded_clip(&rounded);
+        match self.filmstrip.borrow().clone() {
+            Some(texture) => snapshot.append_texture(&texture, &strip),
+            None => snapshot.append_color(&t.rgba("n-6"), &strip),
+        }
+        snapshot.pop();
+        let duration = self.duration().max(1) as f32;
+        let x = |time: f64| left + time as f32 / duration * track_width;
+        let (start, end) = self.trim.get();
+        // `.timeline-excluded`: a canvas-tinted veil outside the trim.
+        let canvas = t.rgba("surface-canvas");
+        let dark = canvas.red() + canvas.green() + canvas.blue() < 1.5;
+        let veil = if dark {
+            gdk::RGBA::new(5. / 255., 6. / 255., 8. / 255., 0.66)
+        } else {
+            gdk::RGBA::new(245. / 255., 245. / 255., 247. / 255., 0.76)
+        };
+        snapshot.append_color(&veil, &graphene::Rect::new(0., 0., x(start), height));
+        let right = x(end);
+        snapshot.append_color(
+            &veil,
+            &graphene::Rect::new(right, 0., left * 2. + track_width - right, height),
+        );
+        // `.timeline-playhead`: a 2 px text-colour line with a rounded tab.
+        let head = x(self.playhead.get() as f64);
+        let ink = t.rgba("text");
+        snapshot.append_color(&ink, &graphene::Rect::new(head - 1., 0., 2., height));
+        let tab = gsk::RoundedRect::new(
+            graphene::Rect::new(head - 5., 0., 10., 6.),
+            graphene::Size::new(3., 3.),
+            graphene::Size::new(3., 3.),
+            graphene::Size::new(1., 1.),
+            graphene::Size::new(1., 1.),
+        );
+        snapshot.push_rounded_clip(&tab);
+        snapshot.append_color(&ink, tab.bounds());
+        snapshot.pop();
+    }
+}

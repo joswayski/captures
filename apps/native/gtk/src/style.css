@@ -756,6 +756,188 @@ popover.captures-menu button.editor-shape-button.active {
   padding: 0 var(--s-6);
 }
 
+/* ------------------------------------------------- recording editor ---- */
+
+/* `editor-video.css`: header, preview card, trim timeline, save footer. */
+.captures .recording-editor {
+  color: var(--text);
+  background: var(--surface-canvas);
+  font-size: var(--text-md);
+}
+.captures .recording-editor-body {
+  padding: var(--s-8) var(--s-8) var(--s-6);
+}
+.captures .recording-editor-title {
+  margin-bottom: var(--s-6);
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--recording-title-tracking);
+}
+.captures .recording-editor-warning {
+  margin-bottom: var(--s-5);
+  padding: var(--s-4) var(--s-5);
+  border-radius: var(--r-md);
+  color: var(--caution-text);
+  background: var(--caution-surface);
+  font-size: var(--text-sm);
+}
+.captures .recording-card {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-xl);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-sm);
+}
+.captures .recording-preview-toolbar {
+  min-height: 45px;
+  padding: 0 var(--s-5);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.captures .recording-preview-heading {
+  color: var(--text-muted);
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+}
+.captures button.recording-loop {
+  all: unset;
+  min-height: 26px;
+  padding: 0 var(--s-4);
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  color: var(--text-subtle);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  transition:
+    color var(--dur-2) var(--ease-standard),
+    background-color var(--dur-2) var(--ease-standard);
+}
+.captures button.recording-loop:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+.captures button.recording-loop.active {
+  border-color: var(--border);
+  color: var(--text);
+  background: var(--surface-active);
+}
+.captures button.recording-loop:focus-visible {
+  box-shadow: var(--focus-ring-tight);
+}
+.captures .recording-segments {
+  min-width: 124px;
+  padding: 3px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg);
+  background: var(--surface-sunken);
+}
+.captures button.recording-segment {
+  all: unset;
+  min-height: var(--h-sm);
+  padding: 0 var(--s-5);
+  border-radius: var(--r-sm);
+  color: var(--text-subtle);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  transition: color var(--dur-3) var(--ease-standard);
+}
+.captures button.recording-segment:hover {
+  color: var(--text);
+}
+.captures button.recording-segment.active {
+  color: var(--text);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-xs);
+}
+.captures button.recording-segment:focus-visible {
+  box-shadow: var(--focus-ring-tight);
+}
+.captures .recording-preview-viewport {
+  border-radius: 0 0 var(--r-xl) var(--r-xl);
+  background: var(--surface-sunken);
+}
+.captures button.recording-play {
+  all: unset;
+  min-width: 54px;
+  min-height: 54px;
+  border: 1px solid var(--glass-border-strong);
+  border-radius: 50%;
+  color: var(--theme-accent-ink);
+  background: var(--theme-accent);
+  box-shadow: var(--shadow-lg);
+  transition:
+    opacity var(--dur-2) var(--ease-standard),
+    background-color var(--dur-2) var(--ease-standard);
+}
+.captures button.recording-play:hover {
+  background: var(--theme-accent-hover);
+}
+.captures button.recording-play.playing {
+  opacity: 0;
+}
+.captures button.recording-play.playing:hover,
+.captures button.recording-play:focus-visible {
+  opacity: 1;
+}
+.captures button.recording-play:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+.captures .recording-timeline {
+  margin-top: var(--s-5);
+  padding: var(--s-5) var(--s-6) var(--s-6);
+}
+.captures .timeline-summary {
+  margin-bottom: var(--s-4);
+  font-size: var(--text-sm);
+  font-feature-settings: "tnum";
+}
+.captures .timeline-range {
+  color: var(--text);
+  font-weight: var(--weight-semibold);
+}
+.captures .timeline-selected {
+  color: var(--text-subtle);
+}
+.captures .timeline-track {
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-sunken);
+}
+.captures scale.timeline-handle {
+  all: unset;
+  border-radius: var(--r-xs);
+  background-color: var(--theme-accent);
+  /* Two hairline grips read as a drag affordance. */
+  background-image:
+    linear-gradient(alpha(var(--theme-accent-ink), 0.45), alpha(var(--theme-accent-ink), 0.45)),
+    linear-gradient(alpha(var(--theme-accent-ink), 0.45), alpha(var(--theme-accent-ink), 0.45));
+  background-size: 1px 14px;
+  background-position:
+    2px center,
+    5px center;
+  background-repeat: no-repeat;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.28),
+    var(--shadow-sm);
+}
+.captures scale.timeline-handle trough,
+.captures scale.timeline-handle highlight,
+.captures scale.timeline-handle fill,
+.captures scale.timeline-handle slider {
+  all: unset;
+  min-width: 0;
+  min-height: 0;
+}
+.captures scale.timeline-handle:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+}
+.captures .recording-save-bar {
+  min-height: 44px;
+  padding: var(--s-4) var(--s-7);
+  border-top: 1px solid var(--border-subtle);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-lg);
+}
+
 /* ---------------------------------------------------- floating previews ---- */
 
 /* `mini-preview.css`: always the fixed glass palette, over any wallpaper. */

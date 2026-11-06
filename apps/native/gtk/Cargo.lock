@@ -506,6 +506,7 @@ dependencies = [
  "captures-app",
  "captures-capture",
  "captures-history",
+ "captures-media",
  "captures-settings",
  "chrono",
  "gtk4",

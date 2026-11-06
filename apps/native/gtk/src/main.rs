@@ -6,6 +6,7 @@ mod editor;
 mod history;
 mod preferences;
 mod previews;
+mod recording;
 mod style;
 mod switch;
 mod tokens;
@@ -19,7 +20,7 @@ use std::time::{Duration, Instant};
 use gtk::prelude::*;
 use gtk::{gio, glib, graphene};
 
-const USAGE: &str = "captures-gtk [--scene preferences|history|editor|preview] [--artifact ID] [--appearance light|dark]\n\
+const USAGE: &str = "captures-gtk [--scene preferences|history|editor|recording|preview] [--artifact ID] [--appearance light|dark]\n\
   [--settings-file PATH] [--history-root PATH] [--size WxH]\n\
   [--screenshot OUT.png] [--exercise] [--quit-after SECONDS]";
 
@@ -28,6 +29,7 @@ enum Scene {
     Preferences,
     History,
     Editor,
+    Recording,
     Preview,
 }
 
@@ -37,6 +39,7 @@ impl Scene {
             Scene::Preferences => "preferences",
             Scene::History => "history",
             Scene::Editor => "editor",
+            Scene::Recording => "recording",
             Scene::Preview => "preview",
         }
     }
@@ -75,6 +78,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
                     "preferences" => Scene::Preferences,
                     "history" => Scene::History,
                     "editor" => Scene::Editor,
+                    "recording" => Scene::Recording,
                     "preview" => Scene::Preview,
                     other => return Err(format!("unsupported scene {other}")),
                 }
@@ -104,8 +108,11 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
             _ => return Err(format!("unknown argument {flag}\n{USAGE}")),
         }
     }
-    if options.scene == Scene::Editor && options.artifact.is_none() {
-        return Err("--scene editor needs --artifact ID".into());
+    if matches!(options.scene, Scene::Editor | Scene::Recording) && options.artifact.is_none() {
+        return Err(format!(
+            "--scene {} needs --artifact ID",
+            options.scene.name()
+        ));
     }
     Ok(options)
 }
@@ -129,6 +136,8 @@ struct Host {
     history: RefCell<Option<Rc<history::History>>>,
     /// Open screenshot editors, one per artifact.
     editors: RefCell<Vec<(String, Rc<editor::Editor>)>>,
+    /// Open recording editors, one per artifact.
+    recordings: RefCell<Vec<(String, Rc<recording::RecordingEditor>)>>,
     previews: RefCell<Option<Rc<previews::Previews>>>,
 }
 
@@ -186,7 +195,7 @@ impl Host {
                     let host = Rc::downgrade(self);
                     move |entry| {
                         if let Some(host) = host.upgrade() {
-                            host.show_editor(&entry.id, entry.mode, &entry.created_at);
+                            host.edit(entry);
                         }
                     }
                 }),
@@ -228,7 +237,7 @@ impl Host {
                 previews::Actions {
                     edit: Box::new(move |entry| {
                         if let Some(host) = edit.upgrade() {
-                            host.show_editor(&entry.id, entry.mode, &entry.created_at);
+                            host.edit(entry);
                         }
                     }),
                     changed: Box::new(move || {
@@ -245,6 +254,50 @@ impl Host {
         });
         previews.restore(entry);
         previews
+    }
+
+    /// Edit opens the editor that matches the artifact's kind.
+    fn edit(self: &Rc<Self>, entry: &captures_history::HistoryEntry) {
+        if entry.kind.is_recording() {
+            self.show_recording(&entry.id);
+        } else {
+            self.show_editor(&entry.id, entry.mode, &entry.created_at);
+        }
+    }
+
+    /// The recording editor for one History recording; reopening focuses it.
+    fn show_recording(self: &Rc<Self>, artifact_id: &str) -> Rc<recording::RecordingEditor> {
+        if let Some((_, editor)) = self
+            .recordings
+            .borrow()
+            .iter()
+            .find(|(id, _)| id == artifact_id)
+        {
+            editor.present();
+            return editor.clone();
+        }
+        let settings = captures_settings::load(&self.settings_file).unwrap_or_default();
+        let editor = Rc::new(recording::build(
+            &self.app,
+            self.tokens.clone(),
+            recording::Options {
+                history_root: self.history_root.clone(),
+                artifact_id: artifact_id.to_owned(),
+                output_directory: settings.output_directory.into(),
+            },
+        ));
+        let host = Rc::downgrade(self);
+        let id = artifact_id.to_owned();
+        editor.window.connect_destroy(move |_| {
+            if let Some(host) = host.upgrade() {
+                host.recordings.borrow_mut().retain(|(open, _)| *open != id);
+            }
+        });
+        self.recordings
+            .borrow_mut()
+            .push((artifact_id.to_owned(), editor.clone()));
+        editor.present();
+        editor
     }
 
     /// The screenshot editor for one History artifact; reopening focuses it.
@@ -339,6 +392,7 @@ fn main() -> glib::ExitCode {
             preferences: RefCell::default(),
             history: RefCell::default(),
             editors: RefCell::default(),
+            recordings: RefCell::default(),
             previews: RefCell::default(),
         });
         hosts.borrow_mut().push(host.clone());
@@ -352,6 +406,10 @@ fn main() -> glib::ExitCode {
                     .and_then(|entries| entries.into_iter().find(|e| e.id == id));
                 let (mode, created_at) = entry.map(|e| (e.mode, e.created_at)).unwrap_or_default();
                 host.show_editor(&id, mode, &created_at).window.clone()
+            }
+            Scene::Recording => {
+                let id = options.artifact.clone().expect("checked in parse");
+                host.show_recording(&id).window.clone()
             }
             // `--artifact ID` restores one entry; otherwise the two newest.
             Scene::Preview => {
@@ -450,6 +508,12 @@ fn exercise(host: &Rc<Host>, scene: Scene, started: Instant) {
                 Scene::Editor => {
                     if let Some((_, editor)) = host.editors.borrow().first() {
                         editor.set_zoom(if cycle % 2 == 0 { 200. } else { 50. });
+                    }
+                }
+                // Trim nudges re-stage the edit like the workbench's trim exercise.
+                Scene::Recording => {
+                    if let Some((_, editor)) = host.recordings.borrow().first() {
+                        editor.nudge_trim(cycle % 2 == 0);
                     }
                 }
                 Scene::History => {

@@ -30,7 +30,7 @@ gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Atspi, GdkPixbuf, GLib  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from history_fixture import write_history_entries  # noqa: E402
+from history_fixture import write_history_entries, write_video_entry  # noqa: E402
 
 
 def wait(predicate, what, timeout=20):
@@ -259,6 +259,59 @@ def previews(binary, scratch):
         process.wait(timeout=10)
 
 
+def recording(binary, scratch):
+    root = scratch / "recording-history"
+    write_video_entry(root, seconds=4)
+    exports = root.with_name(root.name + "-exports")
+    original = set(exports.iterdir())
+    source_bytes = next(iter(original)).read_bytes()
+    process = launch(binary, "--scene", "history", "--history-root", str(root),
+                     "--settings-file", str(scratch / "preferences.json"), "--size", "1020x720")
+    try:
+        app = wait(lambda: application(process.pid), "the app on the accessibility bus")
+        press(wait(lambda: find(app, "push button", "Open video in editor"), "video Edit")[0])
+        # GTK 4.8 can expose a new top level as "filler"; match it by title.
+        editor = wait(lambda: [n for n, (_, name) in nodes(app) if name == "Captures Editor"],
+                      "the recording editor")[0]
+        start = wait(lambda: find(editor, "slider", "Trim start"), "the Trim start slider")[0]
+        end = find(editor, "slider", "Trim end")[0]
+        wait(lambda: Atspi.Value.get_maximum_value(end) == 4000, "the 4 s duration")
+        assert Atspi.Value.get_current_value(end) == 4000, "Trim end is not at the end"
+        # Focus starts on Play; Tab reaches Trim start, Shift+Right moves it 1 s.
+        # Without a window manager, keys go to the window under the pointer.
+        window = subprocess.run(["xdotool", "search", "--sync", "--name", "Captures Editor"],
+                                capture_output=True, text=True, check=True).stdout.split()[0]
+        subprocess.run(["xdotool", "mousemove", "--window", window, "300", "20"], check=True)
+        time.sleep(0.2)
+        subprocess.run(["xdotool", "key", "Tab", "shift+Right"], check=True)
+        wait(lambda: Atspi.Value.get_current_value(start) == 1000, "Trim start at 1 s")
+        play = find(editor, "push button", "Play preview")[0]
+        press(play)
+        wait(lambda: play.get_name() == "Pause preview", "playback to start")
+        press(play)
+        wait(lambda: play.get_name() == "Play preview", "playback to pause")
+        switch = [n for role in ("switch", "check box", "toggle button")
+                  for n in find(editor, role, "Save as new file")][0]
+        press(switch)
+        wait(lambda: has_state(switch, Atspi.StateType.CHECKED), "Save as new file on")
+        save = find(editor, "push button", "Save")[0]
+        wait(lambda: has_state(save, Atspi.StateType.SENSITIVE), "Save to enable")
+        press(save)
+        # Save as new names the copy `<source>-edited`; exports land in a
+        # hidden temporary file first, so wait for the final name.
+        written = exports / f"{next(iter(original)).stem}-edited.mp4"
+        wait(written.exists, "Save to write the -edited MP4", timeout=60)
+        seconds = float(subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0",
+             str(written)], capture_output=True, text=True, check=True).stdout)
+        assert abs(seconds - 3.0) < 0.2, f"saved {seconds:.2f} s, expected the 3 s trim"
+        assert next(iter(original)).read_bytes() == source_bytes, "Save as new changed the source"
+        print(f"recording: keyboard trim, play/pause, saved {written.name} ({seconds:.2f} s)")
+    finally:
+        process.terminate()
+        process.wait(timeout=10)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", required=True)
@@ -272,6 +325,7 @@ def main():
         preferences(args.binary, scratch)
         editor(args.binary, scratch)
         previews(args.binary, scratch)
+        recording(args.binary, scratch)
 
 
 if __name__ == "__main__":

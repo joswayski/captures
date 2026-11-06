@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import struct
+import subprocess
 import uuid
 import zlib
 
@@ -81,12 +82,44 @@ def write_history_entries(root: Path, count: int):
         (directory / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
 
 
+def write_video_entry(root: Path, seconds=4) -> str:
+    """One real 640x360 mpeg4 recording (ffmpeg testsrc2) with its
+    first frame as preview.png, for the recording editor; returns its id."""
+    root.mkdir(parents=True, exist_ok=True)
+    entry_id = str(uuid.uuid4())
+    directory = root / entry_id
+    directory.mkdir()
+    media = directory / "media.mp4"
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+                    f"testsrc2=size=640x360:rate=30:duration={seconds}",
+                    "-c:v", "mpeg4", "-q:v", "2", "-an", str(media)], check=True)
+    subprocess.run(["ffmpeg", "-v", "error", "-i", str(media), "-frames:v", "1",
+                    str(directory / "preview.png")], check=True)
+    # Recordings keep their exported file outside History, as `saved_path`.
+    exports = root.with_name(root.name + "-exports")
+    exports.mkdir(exist_ok=True)
+    saved = exports / f"Recording {entry_id[:8]}.mp4"
+    saved.write_bytes(media.read_bytes())
+    (directory / "metadata.json").write_text(json.dumps({
+        "id": entry_id, "kind": "video", "preview_url": "", "full_url": "",
+        "width": 640, "height": 360, "size_bytes": media.stat().st_size,
+        "created_at": datetime.now(timezone.utc).isoformat(), "mime_type": "video/mp4",
+        "duration_ms": seconds * 1000, "dropped_frames": 0, "saved_path": str(saved),
+        "target": {"type": "display", "display_id": "fixture"},
+    }), encoding="utf-8")
+    return entry_id
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path)
     parser.add_argument("--count", type=int, help="write this many mixed entries")
+    parser.add_argument("--video", action="store_true",
+                        help="add one real ffmpeg recording and print its id")
     args = parser.parse_args()
-    if args.count is None:
+    if args.video:
+        print(write_video_entry(args.root))
+    elif args.count is None:
         write_history(args.root)
     else:
         write_history_entries(args.root, args.count)

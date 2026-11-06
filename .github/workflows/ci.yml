@@ -154,14 +154,14 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/apt-archives
-          key: native-gtk-apt-ubuntu-24.04-v1
+          key: native-gtk-apt-ubuntu-24.04-v2
       - name: Install GTK4 and capture-stack libraries
         timeout-minutes: 15
         run: |
           packages="libgtk-4-dev xvfb xdotool dbus-x11 at-spi2-core python3-gi gir1.2-atspi-2.0
             gir1.2-gdkpixbuf-2.0 libpipewire-0.3-dev libclang-dev libdbus-1-dev libwayland-dev
             libxkbcommon-dev libx11-dev libxi-dev libxrandr-dev libxcb1-dev libasound2-dev
-            libegl-dev libgbm-dev"
+            libegl-dev libgbm-dev ffmpeg"
           if compgen -G "$HOME/apt-archives/*.deb" > /dev/null; then
             sudo cp "$HOME"/apt-archives/*.deb /var/cache/apt/archives/
           fi
@@ -225,7 +225,18 @@ jobs:
               --screenshot "$RUNNER_TEMP/preview-$appearance.png"
             test -s "$RUNNER_TEMP/preview-$appearance.png"
           done
-      - name: AT-SPI smoke (History, Preferences, screenshot editor, previews)
+      # The recording editor decodes a real fixture video with the system FFmpeg.
+      - name: Render the recording editor headlessly in both appearances
+        run: |
+          artifact="$(python3 apps/native/history_fixture.py "$RUNNER_TEMP/recording-history" --video)"
+          for appearance in light dark; do
+            GSK_RENDERER=cairo xvfb-run -a apps/native/gtk/target/debug/captures-gtk \
+              --scene recording --artifact "$artifact" --history-root "$RUNNER_TEMP/recording-history" \
+              --appearance "$appearance" --settings-file "$RUNNER_TEMP/settings.json" \
+              --size 1100x760 --screenshot "$RUNNER_TEMP/recording-$appearance.png"
+            test -s "$RUNNER_TEMP/recording-$appearance.png"
+          done
+      - name: AT-SPI smoke (History, Preferences, editors, previews)
         timeout-minutes: 5
         run: xvfb-run -a dbus-run-session -- /usr/bin/python3 apps/native/gtk/smoke.py --binary apps/native/gtk/target/debug/captures-gtk
 

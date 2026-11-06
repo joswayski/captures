@@ -1230,11 +1230,7 @@ fn run_action(state: &Rc<State>, card: &Rc<CardView>, entry: &HistoryEntry, acti
     state.card_errors.borrow_mut().remove(&entry.id);
     card.restyle(state);
     match action {
-        CardAction::Edit if entry.kind == ArtifactKind::Screenshot => (state.actions.edit)(entry),
-        CardAction::Edit => card.fail(
-            state,
-            "The recording editor is not in the GTK host yet.".into(),
-        ),
+        CardAction::Edit => (state.actions.edit)(entry),
         CardAction::Restore => (state.actions.restore)(entry),
         CardAction::Copy => {
             let path = media_path(&state.root, entry);

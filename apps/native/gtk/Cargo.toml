@@ -18,5 +18,6 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 captures-app = { path = "../../../crates/captures-app" }
 captures-capture = { path = "../../../crates/captures-capture" }
+captures-media = { path = "../../../crates/captures-media" }
 captures-history = { path = "../../../crates/captures-history" }
 captures-settings = { path = "../../../crates/captures-settings" }

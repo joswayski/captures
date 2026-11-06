@@ -46,8 +46,10 @@ pub fn css(t: &Tokens) -> String {
             "focus" => focus.clone(),
             // `--focus-ring` (`styles/base.css`).
             "focus-ring" => format!("0 0 0 2px {}, 0 0 0 4px {focus}", t.css("surface-canvas")),
+            "focus-ring-tight" => format!("0 0 0 2px {focus}"),
             "brand-tracking" => tracking("tracking-tight", "text-md"),
             "header-tracking" => tracking("tracking-tighter", "text-xl"),
+            "recording-title-tracking" => tracking("tracking-tighter", "text-2xl"),
             "title-tracking" => tracking("tracking-tighter", "text-3xl"),
             "card-tracking" => tracking("tracking-tight", "text-lg"),
             "sm-tracking" => tracking("tracking-tight", "text-sm"),

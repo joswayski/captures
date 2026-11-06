@@ -109,9 +109,8 @@ rows near the viewport hold cards and thumbnails, decoded at card size from
 renderer, release build) the process RSS is about 99 MB with 6 live cards,
 against 249 MB when every retained list row built its cards; Preferences
 alone is about 89 MB. These are orb numbers, not the real-hardware gate, and
-not yet compared with egui measured the same way. The
-recording editor and Save image/file's GTK 4.10 file dialog are wired to
-stubs or the legacy chooser. CI renders History in both appearances and runs
+not yet compared with egui measured the same way. Save image/file uses the
+legacy chooser because GtkFileDialog needs GTK 4.10. CI renders History in both appearances and runs
 `apps/native/gtk/smoke.py` over AT-SPI (filter, two-step delete from disk,
 Preferences switch role, checked state and save). Verified on X11 (Xvfb)
 only; Wayland, Orca and real hardware remain open. Windows, macOS:
@@ -154,6 +153,29 @@ workbench's preview scene measured the same way. CI renders it in both
 appearances and `smoke.py` restores two cards from History, copies, closes
 one and deletes the other from disk. X11 (Xvfb) only. Windows, macOS:
 unchanged.
+
+The fifth GTK4 slice is the recording editor, opened by History's Edit on a
+video or GIF (one window per artifact) or `--scene recording --artifact ID`.
+It runs the shared `RecordingEditorSession` and FFmpeg toolchain on a worker
+thread: the shipping title and dropped-frame warning, the preview card (Loop
+preview for video, Fit/100%, the accent play button with Space to toggle),
+the trim timeline (filmstrip sprite decoded once and stretched across the
+track like shipping's tiles, canvas-tinted veil outside the trim, playhead,
+two accent handles), and the save footer (filename, folder, Save as new file
+with shipping's `-edited` name, Save or replace the original). Playback
+frames replace one texture; trim drags only redraw the track nodes and apply
+after the shared live-apply delay. The handles are restyled `GtkScale`s, so
+AT-SPI reports their value range on every GTK 4 release, and arrows move
+them 100 ms (1 s with Shift). Not ported: the output option cards (crop,
+format, quality, size, audio), the Change… folder button and format menu,
+compression preview, and save toasts. Release build under Xvfb with Cairo on
+a 4 s 640×360 fixture: about 100 MB RSS and about 10 ms of CPU per 5 s idle;
+the egui workbench has no recording-editor scene to measure against. CI
+installs FFmpeg, renders it in both appearances, and `smoke.py` opens it from
+History, trims 1 s with the keyboard over AT-SPI, plays and pauses, and
+checks that Save as new writes a 3 s `-edited` MP4 and leaves the source
+unchanged. X11 (Xvfb) only; Wayland, Orca and real hardware remain open.
+Windows, macOS: unchanged.
 
 ## Progress dashboard
 
