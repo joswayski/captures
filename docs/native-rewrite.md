@@ -1808,6 +1808,18 @@ Real GNOME/KDE, GPU, Orca, multi-monitor and HiDPI Wayland acceptance remains op
 Windows and macOS hosts are unchanged; native remains opt-in, with no public
 promotion, packaging or updater changes.
 
+GTK screenshot countdown (`countdown.rs`): delayed X11 confirmations show the
+remaining seconds on the selected display, with shipping's glass scrim, typography,
+entrance/cancellation motions and Escape hint. Real GTK labels expose the number
+and cancellation instruction over AT-SPI; disabling GTK animations skips motion.
+The existing capture owner retains its generation, cancellation and commit gate.
+After the monotonic deadline, the countdown unmaps before compositor settlement
+and pixel acquisition. Escape saves nothing and restores hidden previews.
+Wayland Window displays the countdown before requesting its portal picker;
+already-approved portal stills and explicit frozen-controls captures skip it.
+Recording/HUD remains separate work; this does not promote native or change the
+macOS/Windows implementations.
+
 ## Progress dashboard
 
 We are delivering stage 4 workflow slices and stage 5 editor slices.

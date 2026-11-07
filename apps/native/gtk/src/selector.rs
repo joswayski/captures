@@ -19,7 +19,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use captures_app::capture_flow::{self, CaptureFlow, Countdown, PortalCapture};
+use captures_app::capture_flow::{self, CaptureFlow, PortalCapture};
 use captures_app::capture_menu::{self, GuidanceTarget};
 use captures_app::region::RegionSession;
 use captures_app::selection::{self, Bounds, DragMode, DragOptions, Point, Rect};
@@ -203,6 +203,11 @@ impl Host {
 
     /// `display`: the display New Capture switches to.
     fn select_on(self: &Rc<Self>, kind: Kind, display: Option<String>, target: MenuTarget) {
+        // An exiting countdown still owns hidden windows and cleanup even
+        // after Escape has released its shared generation.
+        if self.capture.borrow().is_some() {
+            return self.capture_failed("A capture is already in progress");
+        }
         let settings = captures_settings::load(&self.settings_file).unwrap_or_default();
         let portal = wayland(self);
         let flow = if portal {
@@ -1624,6 +1629,11 @@ impl Overlay {
         let Some(source) = self.source.borrow_mut().take() else {
             return;
         };
+        let display = match &source {
+            Source::Region(region) | Source::Menu { region, .. } => Some(region.display().clone()),
+            Source::Window(window) => Some(window.display().clone()),
+            Source::Portal(_) => None,
+        };
         let generation = host.capture.borrow().as_ref().map_or(0, Flow::generation);
         let (overlay, root, scale) = (
             self.clone(),
@@ -1633,13 +1643,7 @@ impl Overlay {
             }),
         );
         glib::spawn_future_local(async move {
-            let countdown = Countdown::new(Instant::now(), seconds);
-            while countdown.remaining(Instant::now()) > 0 {
-                glib::timeout_future(Duration::from_millis(50)).await;
-                if !capture_flow::is_current(generation) {
-                    break;
-                }
-            }
+            crate::countdown::wait(&host, generation, seconds, display.as_ref()).await;
             glib::timeout_future(SETTLE).await;
             let after_countdown = seconds > 0;
             let include_cursor = overlay.settings.show_cursor_in_screenshots;

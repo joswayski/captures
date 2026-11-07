@@ -4,6 +4,7 @@
 //! gates in `docs/native-rewrite.md`.
 mod capture;
 mod capture_bar;
+mod countdown;
 mod editor;
 mod feedback;
 mod history;

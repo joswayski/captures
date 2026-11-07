@@ -208,6 +208,9 @@ Window and Full screen controls. Screenshot Display opens these controls for
 confirmation; repeating the active target shortcut freezes the visible controls
 into a new selection on X11. On Wayland, Full screen saves the already-approved
 portal still without asking again; Window uses the compositor's picker.
+Delayed screenshots show the remaining seconds with Escape cancellation and
+reduced-motion support. Already-approved portal stills and explicit frozen-controls
+captures skip the countdown rather than recapturing.
 Record mode and its HUD remain separate migration work. Physical Linux desktop,
 GPU, accessibility and mixed-DPI acceptance remain open.
 

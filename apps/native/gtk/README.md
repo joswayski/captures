@@ -60,9 +60,12 @@ Screenshot portal still with every Captures window unmapped, then persists
 that still without another consent request. The preview stack leaves the screen
 first unless Preferences includes it in captures. A saved capture joins History and the preview stack,
 and auto-copy uses `arboard` (wlr-data-control on Wayland, which needs no
-input serial), as shipping does. The configured countdown delays X11 capture
-(except the explicit frozen-controls capture), but has no on-screen countdown
-yet. `--capture region` and `--capture window`
+input serial), as shipping does. The configured countdown shows shipping's
+remaining seconds, glass scrim and Escape hint on the selected X11 display,
+with accessible labels and reduced-motion support. Escape cancels without saving
+and restores hidden previews; the countdown leaves the screen before acquisition.
+Wayland Window shows it before the portal picker. Already-approved portal stills
+and explicit frozen-controls captures skip it. `--capture region` and `--capture window`
 open shipping's selectors: on X11 an unmanaged overlay over the frozen display
 under the pointer (the shared `RegionSession` / `WindowSession`), with the
 glass guidance chip, "Click and drag" feedback on an empty click, Shift for a

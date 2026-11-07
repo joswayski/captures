@@ -9,7 +9,7 @@
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use captures_app::capture_flow::{CaptureFlow, Countdown};
+use captures_app::capture_flow::CaptureFlow;
 use captures_capture::CaptureMode;
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
@@ -56,6 +56,11 @@ impl Host {
     /// Window, through a window-only ScreenCast grant (the portal's own
     /// picker replaces the window overlay there).
     pub(crate) fn capture_now(self: &Rc<Self>, mode: CaptureMode) {
+        // Cancellation releases the shared generation before the exit
+        // animation and hidden-window cleanup finish. Keep that owner intact.
+        if self.capture.borrow().is_some() {
+            return self.capture_failed("A capture is already in progress");
+        }
         let settings = captures_settings::load(&self.settings_file).unwrap_or_default();
         let seconds = settings.screenshot_countdown_seconds;
         let portal = wayland(self);
@@ -89,23 +94,17 @@ impl Host {
         for window in &hidden {
             window.set_visible(false);
         }
-        let countdown = Countdown::new(Instant::now(), seconds);
         let started = Instant::now();
         let host = Rc::downgrade(self);
         glib::spawn_future_local(async move {
-            // The countdown is a monotonic deadline (no GTK overlay yet).
-            while countdown.remaining(Instant::now()) > 0 {
-                glib::timeout_future(Duration::from_millis(50)).await;
-                if !captures_app::capture_flow::is_current(generation) {
-                    break;
-                }
-            }
-            if !hidden.is_empty() {
-                glib::timeout_future(SETTLE).await;
-            }
-            let Some(root) = host.upgrade().map(|host| host.history_root.clone()) else {
+            let Some(owner) = host.upgrade() else {
                 return;
             };
+            crate::countdown::wait(&owner, generation, seconds, None).await;
+            // The countdown itself must leave the compositor too, even
+            // when the profile had no other visible windows to hide.
+            glib::timeout_future(SETTLE).await;
+            let root = owner.history_root.clone();
             let include_cursor = settings.show_cursor_in_screenshots;
             let result = gio::spawn_blocking(move || {
                 capture(root, generation, portal, mode, include_cursor)

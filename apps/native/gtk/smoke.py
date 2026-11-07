@@ -1417,9 +1417,18 @@ def private_desktop(scratch, name, still=None):
     a11y = subprocess.run(["gdbus", "call", "--session", "--dest", "org.a11y.Bus",
                            "--object-path", "/org/a11y/bus", "--method", "org.a11y.Bus.GetAddress"],
                           capture_output=True, text=True, check=True).stdout.strip()[2:-3]
+    data = scratch / f"{name}-bus-data"
+    if still:
+        # Some D-Bus versions require an activation entry even when the
+        # fixture already owns the name. Never launch a real desktop portal;
+        # a lost fixture owner must fail rather than start a second service.
+        services = data / "dbus-1/services"
+        services.mkdir(parents=True)
+        (services / "org.freedesktop.portal.Desktop.service").write_text(
+            "[D-BUS Service]\nName=org.freedesktop.portal.Desktop\nExec=/bin/false\n")
     bus = subprocess.Popen(["dbus-daemon", "--session", "--nofork", "--print-address=1"],
                            stdout=subprocess.PIPE, text=True,
-                           env=dict(os.environ, AT_SPI_BUS_ADDRESS=a11y))
+                           env=dict(os.environ, AT_SPI_BUS_ADDRESS=a11y, XDG_DATA_HOME=str(data)))
     address = bus.stdout.readline().strip()
     env = dict(os.environ, DBUS_SESSION_BUS_ADDRESS=address, DBUS_SYSTEM_BUS_ADDRESS=address,
                AT_SPI_BUS_ADDRESS=a11y, GSK_RENDERER="cairo", GTK_A11Y="none")
@@ -1697,7 +1706,21 @@ def selectors(binary, scratch):
             print(f"selectors: Region guidance, feedback and Escape; a drag saved "
                   f"{size[0]}×{size[1]} {'from the portal still' if portal else 'from X11'}")
 
-            # Window.
+            # Wayland Window counts down before asking the portal. Escape
+            # here must not request consent or publish another artifact.
+            if portal:
+                settings = json.loads(live.settings.read_text())
+                live.settings.write_text(json.dumps(dict(settings, screenshot_countdown_seconds=4)))
+                saved_before = len(live.saved())
+                before = live.run("window", env)
+                wait(lambda: find(live.app(), "frame", "Captures Screenshot Countdown"),
+                     "the pre-consent countdown")
+                DESKTOP.key("Escape")
+                assert live.outcome(before)["event"] == "capture-cancelled", live.events()
+                assert '"CreateSession"' not in fixture_log.read_text(), "cancel requested consent"
+                assert len(live.saved()) == saved_before
+
+            # Window (after the configured countdown on Wayland).
             before = live.run("window", env)
             if portal:
                 assert live.outcome(before)["event"] == "capture-cancelled", live.events()
@@ -1869,8 +1892,11 @@ def new_capture(binary, scratch):
                      "repeated Display to freeze the controls")
                 assert len(live.outcomes()) == before, "repeat captured without confirmation"
                 app, primary = bar(before)
+                countdowns = len([e for e in live.events() if e["event"] == "countdown"])
                 press(primary)
                 captured = capture(before, display, "display")
+                assert len([e for e in live.events() if e["event"] == "countdown"]) == countdowns, \
+                    "explicit frozen capture showed a countdown"
                 expected = GdkPixbuf.Pixbuf.new_from_file(str(visible))
                 saved = GdkPixbuf.Pixbuf.new_from_file(str(live.root / captured["id"] / "capture.png"))
                 # Not a blank desktop: include the left controls and their text,
@@ -1887,7 +1913,7 @@ def new_capture(binary, scratch):
                 # Cancel a confirmed countdown, restore its hidden preview,
                 # then capture again in the same resident process.
                 live.settings.write_text(json.dumps(dict(settings, show_mini_previews=True,
-                                                         screenshot_countdown_seconds=2)))
+                                                         screenshot_countdown_seconds=4)))
                 before = live.run("display", env)
                 app, primary = bar(before)
                 press(primary)
@@ -1903,16 +1929,41 @@ def new_capture(binary, scratch):
                     assert preview not in DESKTOP.visible(live.process.pid), "preview not hidden"
                     app, primary = bar(before)
                     press(primary)
+                    countdown = wait(lambda: find(live.app(), "frame", "Captures Screenshot Countdown"),
+                                     "the visible countdown", timeout=3)[0]
+                    initial = wait(lambda: [int(node_text(n, name)) for n, (role, name) in nodes(countdown)
+                                            if role == "label" and node_text(n, name).isdigit()],
+                                   "countdown's remaining seconds")[0]
+                    assert 1 < initial <= 4, initial
+                    assert find(countdown, "alert", f"Screenshot in {initial}. Press Esc to cancel")
+                    assert find(countdown, "label", "Press Esc to cancel")
+                    assert_accessible(countdown, "Screenshot countdown")
                     if cancel:
-                        time.sleep(0.15)
                         DESKTOP.key("Escape")
                         assert live.outcome(before)["event"] == "capture-cancelled", live.events()
                         assert len(live.saved()) == saved_before, "cancelled countdown persisted"
                         wait(lambda: preview in DESKTOP.visible(live.process.pid),
                              "hidden preview restored after cancellation")
+                        background = scratch / "countdown-background.png"
+                        subprocess.run(["import", "-window", "root", str(background)], check=True)
                     else:
-                        capture(before, display, "display")
+                        wait(lambda: any(node_text(n, name) == str(initial - 1)
+                                         for n, (_, name) in nodes(countdown)),
+                             "countdown's next second")
+                        captured = capture(before, display, "display")
                         assert len(live.saved()) == saved_before + 1
+                        saved = GdkPixbuf.Pixbuf.new_from_file(
+                            str(live.root / captured["id"] / "capture.png"))
+                        expected = GdkPixbuf.Pixbuf.new_from_file(str(background))
+                        # Independent desktop pixels, away from previews: the
+                        # countdown's centre and scrim must have left the screen.
+                        for x, y in ((250, 320), (640, 512)):
+                            at = y * saved.get_rowstride() + x * saved.get_n_channels()
+                            ref = y * expected.get_rowstride() + x * expected.get_n_channels()
+                            assert saved.get_pixels()[at:at + 3] == expected.get_pixels()[ref:ref + 3], \
+                                "countdown pixels leaked into the capture"
+                    assert not find(live.app(), "frame", "Captures Screenshot Countdown"), \
+                        "countdown remained after completion"
                 live.settings.write_text(json.dumps(settings))
 
             # Window.

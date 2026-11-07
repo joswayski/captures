@@ -35,6 +35,19 @@ window.captures {
   font-size: var(--text-xs);
 }
 
+/* The snapshot owns the animated scrim; the real labels remain in AT-SPI. */
+window.captures.countdown-window {
+  background: transparent;
+}
+.captures .countdown-number {
+  color: var(--glass-text);
+  text-shadow: 0 3px 24px rgba(0, 0, 0, 0.6);
+}
+.captures .countdown-copy {
+  color: var(--glass-text-muted);
+  text-shadow: 0 3px 24px rgba(0, 0, 0, 0.6);
+}
+
 /* ------------------------------------------------------- preferences ---- */
 
 .captures .preferences-nav {
