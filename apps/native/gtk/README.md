@@ -166,5 +166,6 @@ apps/native/gtk/smoke.py --binary apps/native/gtk/target/debug/captures-gtk`.
 instead (the `sway` from `apps/native/build_wayland_compositor_fixture.sh` on
 `PATH`, and `apps/native/wayland_drag_probe` built for its virtual pointer and
 keyboard; no X display). It needs `python3-gi`, `gir1.2-atspi-2.0`, `gir1.2-gdkpixbuf-2.0`, `xdotool`,
-`at-spi2-core` and `ffmpeg`. The recording editor uses `CAPTURES_FFMPEG` and
+`at-spi2-core` and `ffmpeg`, plus ImageMagick's `import` for the X11 controls-pixel comparison.
+The recording editor uses `CAPTURES_FFMPEG` and
 `CAPTURES_FFPROBE`, then the desktop app's sidecars, then `ffmpeg` on `PATH`.
