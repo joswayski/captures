@@ -1247,6 +1247,20 @@ dark (background 239,239,242 to 11,11,14) and `prefer-light` turned it back.
 CI has no portal, so the smoke does not cover it. KDE Plasma, Wayland and
 real desktops not verified. Windows, macOS: unchanged.
 
+GTK accessibility pass: every GTK window's AT-SPI tree was walked on GTK 4.8
+under Xvfb, by Preferences, History with 1000 entries, the screenshot
+editor, the recording editor, the previews and Send Feedback (405, 164, 116,
+113, 36 and 54 nodes). None had a control or image without a name or text,
+a focusable editable field without a name, or a focusable generic node
+(panel, filler, label, section). The one gap found was the recording
+editor's drawn crop handles, which now are slider widgets. `smoke.py` keeps
+the check as `assert_accessible` on each of those windows, the staged
+screenshot crop and the recording crop, so CI fails on an unnamed control
+on GTK 4.14 too. The check is structural only: names, roles and focus
+order, not what Orca speaks. Orca, Wayland, KDE Plasma and real hardware
+remain unverified, so the accessibility gate is not closed. Windows, macOS:
+unchanged.
+
 ## Progress dashboard
 
 We are delivering stage 4 workflow slices and stage 5 editor slices.

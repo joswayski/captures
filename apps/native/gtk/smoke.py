@@ -100,6 +100,30 @@ def has_state(node, state):
         return False
 
 
+# Roles a screen reader announces by name, and roles that mean nothing alone.
+NAMED_ROLES = {"push button", "toggle button", "check box", "radio button", "switch",
+               "combo box", "slider", "spin button", "menu item", "radio menu item",
+               "check menu item", "link", "image", "tab", "page tab", "progress bar"}
+GENERIC_ROLES = {"filler", "panel", "unknown", "redundant object", "section", "label",
+                 "generic"}
+
+
+def assert_accessible(root, what):
+    """The accessibility gate's tree check: every control and image has a
+    name (or text), editable text has a name, and nothing focusable is a
+    generic container a screen reader cannot describe."""
+    problems = []
+    for node, (role, name) in nodes(root):
+        focusable = has_state(node, Atspi.StateType.FOCUSABLE)
+        if role in NAMED_ROLES and not node_text(node, name):
+            problems.append(f"unnamed {role}")
+        elif role in ("text", "entry") and focusable and not name:
+            problems.append(f"unnamed editable {role}")
+        if focusable and role in GENERIC_ROLES:
+            problems.append(f"focusable {role} {name!r}")
+    assert not problems, f"{what}: {sorted(set(problems))}"
+
+
 def press(node):
     names = [Atspi.Action.get_action_name(node, i) for i in range(Atspi.Action.get_n_actions(node))]
     assert names, f"{node.get_name()} has no action"
@@ -140,6 +164,7 @@ def history(binary, scratch):
     try:
         app = wait(lambda: application(process.pid), "the app on the accessibility bus")
         wait(lambda: find(app, "push button", "All 1000"), "1000 loaded entries")
+        assert_accessible(app, "History")
         assert find(app, "heading", "Capture History"), "no Capture History heading"
         everything = find(app, "push button", "All 1000")[0]
         assert has_state(everything, Atspi.StateType.PRESSED), "All filter is not pressed"
@@ -186,6 +211,7 @@ def preferences(binary, scratch):
         # GTK maps the switch role to AT-SPI "switch" or, before 4.10, "check box".
         switch = wait(lambda: [n for role in ("switch", "check box", "toggle button")
                                for n in find(app, role, title)], "the clipboard switch")[0]
+        assert_accessible(app, "Preferences")
         before = has_state(switch, Atspi.StateType.CHECKED)
         press(switch)
         wait(lambda: has_state(switch, Atspi.StateType.CHECKED) != before, "checked to flip")
@@ -310,6 +336,7 @@ def editor(binary, scratch):
         canvas = wait(lambda: find(app, "image", "Screenshot canvas"), "the editor canvas")[0]
         wait(lambda: find(app, "list item", "Original screenshot · Locked background"),
              "the background layer")
+        assert_accessible(app, "the screenshot editor")
         press(wait(lambda: find(app, "push button", "Shapes · Rectangle (R)"), "Shapes")[0])
         press(wait(lambda: find(app, "push button", "Rectangle (R)"), "the Shapes flyout")[0])
         # The closing flyout keeps its input grab until it is gone.
@@ -485,6 +512,7 @@ def editor(binary, scratch):
 
         crop_width = drag_crop()
         crop_height = find(app, "spin button", "Crop height")[0]
+        assert_accessible(app, "the staged crop")
         staged = Atspi.Value.get_current_value(crop_width)
         assert staged > 0 and staged == Atspi.Value.get_current_value(crop_height), \
             "the 1 : 1 crop is not square"
@@ -786,6 +814,7 @@ def recording_output(binary, scratch):
         wait(lambda: len([name for _, (role, name) in nodes(app)
                           if role == "slider" and name.startswith("Recording crop")]) == 8,
              "the eight crop handle sliders")
+        assert_accessible(app, "the recording crop")
         east = find(app, "slider", "Recording crop east handle")[0]
         left = Atspi.Value.get_current_value(find(app, "spin button", "X")[0])
         assert Atspi.Value.get_current_value(east) == left + 320, "east handle off the crop edge"
@@ -843,6 +872,7 @@ def previews(binary, scratch):
         restores = wait(lambda: find(app, "push button", "Restore"), "Restore buttons")
         press(restores[0])
         wait(lambda: len(cards()) == 1, "one preview card")
+        assert_accessible(app, "the previews")
         press(wait(lambda: len(find(app, "push button", "Restore")) > 1
                    and find(app, "push button", "Restore"), "a second Restore")[1])
         wait(lambda: len(cards()) == 2, "two preview cards")
@@ -929,6 +959,7 @@ def feedback(binary, scratch):
         wait(lambda: [n for n, (_, name) in nodes(form)
                       if node_text(n, name) == "Fixture mode — sending feedback is disabled."],
              "the fixture note")
+        assert_accessible(form, "Send Feedback")
         send = find(form, "push button", "Send feedback")[0]
         assert not has_state(send, Atspi.StateType.SENSITIVE), "a fixture can send"
         print("feedback: Preferences opens the fixture form with Send off")
@@ -1031,6 +1062,7 @@ def recording(binary, scratch):
         editor = wait(lambda: [n for n, (_, name) in nodes(app) if name == "Captures Editor"],
                       "the recording editor")[0]
         start = wait(lambda: find(editor, "slider", "Trim start"), "the Trim start slider")[0]
+        assert_accessible(editor, "the recording editor")
         end = find(editor, "slider", "Trim end")[0]
         wait(lambda: Atspi.Value.get_maximum_value(end) == 4000, "the 4 s duration")
         assert Atspi.Value.get_current_value(end) == 4000, "Trim end is not at the end"

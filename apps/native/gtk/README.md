@@ -41,7 +41,7 @@ to 200 rows alive before GTK 4.12, so only rows near the viewport hold cards
 (from a shared pool) and thumbnail textures, decoded off the UI thread at card
 size from `preview.png`, never the full capture.
 
-`smoke.py` drives real widgets over AT-SPI (History filter and two-step
+`smoke.py` checks every window it opens for unnamed controls and focusable generic nodes, and drives real widgets over AT-SPI (History filter and two-step
 Delete with 1000 entries, Preferences (a switch's role, checked state and
 save, Interface theme, accent chips, a custom accent, the preview corner, a
 select and the shortcut recorder), and the editor opened from History: an xdotool drag draws a rectangle,
