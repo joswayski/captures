@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use captures_app::motion::{Animation, Motion, Transition, Tween};
 use captures_app::preview::{self, CollapsedCardPose};
-use captures_app::preview_motion::{self, DustParticle, ExitKind, StackExits, StackFan};
+use captures_app::preview_motion::{self, DragSway, DustParticle, ExitKind, StackExits, StackFan};
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
 use gtk::{glib, graphene, gsk};
@@ -66,6 +66,9 @@ mod imp {
         pub exit_motion: Cell<Option<super::ExitMotion>>,
         /// An exit ended and its card left the pile.
         pub on_exited: RefCell<Option<Box<dyn Fn()>>>,
+        /// A carried pile's gravity (`None`: ±1 from its corner).
+        pub gravity: Cell<Option<f64>>,
+        pub carry: Cell<super::Carry>,
     }
 
     #[glib::object_subclass]
@@ -132,6 +135,24 @@ mod imp {
             }
         }
     }
+}
+
+/// The collapsed pile being carried (shipping `CollapsedThumbnailStackDrag`
+/// with its sway): the fan holds until it has gathered, then the rear cards
+/// lean with `DragSway`; dropping eases the lean back over the fan's
+/// staggered transition.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Carry {
+    /// When the press became a carry, until the drop.
+    since: Option<f64>,
+    /// The lean is live.
+    ready: bool,
+    sway: DragSway,
+    /// The latest desktop pointer, and the one the sway last sampled.
+    pointer: Option<(f64, f64)>,
+    last: Option<((f64, f64), f64)>,
+    /// The lean at the drop, and when it began easing back.
+    released: Option<((f64, f64), f64)>,
 }
 
 /// Exit and reject timings, resolved once from the tokens.
@@ -259,6 +280,101 @@ impl Pile {
 
     pub fn connect_expand(&self, expand: impl Fn() + 'static) {
         *self.imp().on_expand.borrow_mut() = Some(Box::new(expand));
+    }
+
+    /// The collapsed pile's hit target, which a carry starts on.
+    pub fn expand_button(&self) -> gtk::Button {
+        self.imp().expand.borrow().clone().expect("expand button")
+    }
+
+    /// A carried pile's gravity, or `None` for its corner's.
+    pub fn set_gravity(&self, gravity: Option<f64>) {
+        if self.imp().gravity.replace(gravity) != gravity {
+            self.queue_allocate();
+        }
+    }
+
+    pub fn carry_start(&self) {
+        let imp = self.imp();
+        imp.carry.set(Carry {
+            since: Some(self.now_ms()),
+            ..Carry::default()
+        });
+        imp.hovered.set(true);
+        self.animate();
+    }
+
+    /// The pointer on the desktop, in logical pixels.
+    #[cfg_attr(not(feature = "x11"), allow(dead_code))]
+    pub fn carry_pointer(&self, x: f64, y: f64) {
+        let imp = self.imp();
+        let mut carry = imp.carry.get();
+        carry.pointer = Some((x, y));
+        imp.carry.set(carry);
+        self.animate();
+    }
+
+    pub fn carry_end(&self) {
+        let imp = self.imp();
+        let lean = imp.carry.get().sway.offset();
+        imp.carry.set(Carry {
+            released: (lean != (0., 0.)).then_some((lean, self.now_ms())),
+            ..Carry::default()
+        });
+        self.animate();
+    }
+
+    /// Advance the lean one frame: a still pointer is a zero step, so the
+    /// spring settles when the carry pauses.
+    fn tick_carry(&self) {
+        let imp = self.imp();
+        let mut carry = imp.carry.get();
+        let Some(since) = carry.since else { return };
+        let (now, reduced) = (self.now_ms(), self.reduced());
+        let deepest = imp.cards.borrow().len().saturating_sub(1);
+        let gather = StackFan::settle_ms(deepest, &self.tweens().1);
+        if !carry.ready && (reduced || now - since >= gather) {
+            carry.ready = true;
+            carry.sway = DragSway::default();
+            carry.last = carry.pointer.map(|point| (point, now));
+        }
+        if carry.ready
+            && let Some(point) = carry.pointer
+        {
+            let (step, dt) = carry.last.map_or(
+                ((0., 0.), preview_motion::DRAG_SWAY_DEFAULT_DT_MS),
+                |(last, at)| ((point.0 - last.0, point.1 - last.1), now - at),
+            );
+            carry.sway.tick(step.0, step.1, dt, reduced);
+            carry.last = Some((point, now));
+        }
+        imp.carry.set(carry);
+    }
+
+    /// Each depth's lean now.
+    fn lean(&self, depth: usize, now: f64, tween: &Tween, reduced: bool) -> (f64, f64) {
+        let carry = self.imp().carry.get();
+        if carry.ready {
+            return carry.sway.offset();
+        }
+        let Some(((x, y), at)) = carry.released else {
+            return (0., 0.);
+        };
+        let left = 1. - tween.progress(now - at - preview_motion::fan_delay_ms(depth), reduced);
+        (x * left, y * left)
+    }
+
+    fn carry_moving(&self, now: f64, deepest: usize, tween: &Tween, reduced: bool) -> bool {
+        let imp = self.imp();
+        let mut carry = imp.carry.get();
+        if let Some((_, at)) = carry.released {
+            if tween.running(now - at - preview_motion::fan_delay_ms(deepest), reduced) {
+                return true;
+            }
+            carry.released = None;
+            imp.carry.set(carry);
+        }
+        (carry.since.is_some() && !carry.ready) || (carry.ready && !carry.sway.settled())
     }
 
     pub fn connect_exited(&self, exited: impl Fn() + 'static) {
@@ -464,6 +580,10 @@ impl Pile {
 
     fn set_hovered(&self, hovered: bool) {
         let imp = self.imp();
+        // A carried window moves under the pointer: the fan stays open.
+        if !hovered && imp.carry.get().since.is_some() {
+            return;
+        }
         imp.hovered.set(hovered);
         if !imp.collapsed.get() {
             return;
@@ -564,6 +684,7 @@ impl Pile {
         }
         self.add_tick_callback(|pile, _| {
             pile.prune_exits();
+            pile.tick_carry();
             pile.queue_resize();
             if !pile.imp().dust.borrow().is_empty() {
                 pile.queue_draw();
@@ -596,6 +717,7 @@ impl Pile {
             || !imp.arrivals.borrow().is_empty()
             || !imp.rejects.borrow().is_empty()
             || !imp.exits.borrow().is_empty()
+            || self.carry_moving(now, deepest, &fan, reduced)
     }
 
     fn exit_motion(&self) -> ExitMotion {
@@ -699,7 +821,7 @@ impl Pile {
         let reduced = self.reduced();
         let progress = self.collapse_progress(now);
         let top = imp.top_anchor.get();
-        let gravity = if top { -1. } else { 1. };
+        let gravity = imp.gravity.get().unwrap_or(if top { -1. } else { 1. });
         let (_, fan_tween, arrive) = self.tweens();
         let motion = self.exit_motion();
         let settle = preview_motion::settle_tween();
@@ -724,7 +846,12 @@ impl Pile {
                 preview::card_layout_in(count, index, false, top, false).map_or(0., |l| l.y);
             let front = preview::collapsed_padding(count);
             let rest = preview::collapsed_card_pose(&card.id, depth, false, gravity, top);
-            let fanned = preview::collapsed_card_pose(&card.id, depth, true, gravity, top);
+            let lean = self.lean(depth, now, &fan_tween, reduced);
+            let fanned = if lean == (0., 0.) {
+                preview::collapsed_card_pose(&card.id, depth, true, gravity, top)
+            } else {
+                preview::collapsed_card_sway_pose(&card.id, depth, gravity, top, lean)
+            };
             let (fan_pose, _) = fan.progress(&card.id, depth, now, &fan_tween, reduced);
             let pose = mix(rest, fanned, fan_pose);
             let half = (CARD_WIDTH / 2., preview::THUMBNAIL_CARD_HEIGHT / 2.);

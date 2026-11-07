@@ -13,7 +13,7 @@ use captures_app::preview::{self, PreviewDropLanding, PreviewStack};
 use captures_app::preview_motion::ExitKind;
 use captures_history::HistoryEntry;
 use gtk::prelude::*;
-use gtk::{gdk, gio, glib};
+use gtk::{gdk, gio, glib, graphene};
 
 use crate::history::{media_path, reveal, save_copy};
 use crate::tokens::Tokens;
@@ -25,6 +25,9 @@ use pile::{Pile, PileCard};
 mod x11;
 
 pub const TITLE: &str = "Captures Previews";
+/// Shipping's eight-point radial threshold before a press on the collapsed
+/// pile carries it instead of expanding it.
+const STACK_DRAG_THRESHOLD: f64 = 8.;
 
 pub struct Actions {
     pub edit: Box<dyn Fn(&HistoryEntry)>,
@@ -67,8 +70,15 @@ struct State {
     actions: Actions,
     /// The current file drag landed on this stack (shipping rejects it).
     self_drop: Cell<bool>,
-    #[cfg(feature = "x11")]
     placement: captures_settings::MiniPreviewPlacement,
+    /// A carried pile's origin and the corner it now expands from, until
+    /// the stack empties (shipping's session-only dragged origin).
+    dragged: Cell<
+        Option<(
+            preview::ThumbnailStackOrigin,
+            captures_settings::MiniPreviewPlacement,
+        )>,
+    >,
     #[cfg(feature = "x11")]
     placer: Option<Rc<x11::Placer>>,
 }
@@ -132,13 +142,14 @@ pub fn build(
         minimize: minimize.clone(),
         actions,
         self_drop: Cell::new(false),
-        #[cfg(feature = "x11")]
         placement,
+        dragged: Cell::new(None),
         #[cfg(feature = "x11")]
         placer: x11::Placer::new(&gtk::prelude::WidgetExt::display(&window)).map(Rc::new),
     });
     #[cfg(feature = "x11")]
     place_on_x11(&state);
+    carry_pile(&state);
     let weak = Rc::downgrade(&state);
     clear.connect_clicked(move |_| {
         if let Some(state) = weak.upgrade() {
@@ -249,6 +260,54 @@ fn place_on_x11(state: &Rc<State>) {
     });
 }
 
+/// Shipping's collapsed-pile carry: past an 8 px threshold a press on the
+/// pile moves the window instead of expanding it. On X11 the stack follows
+/// the pointer through `move_collapsed_stack`, re-anchoring to the nearest
+/// corner, while the rear cards lean with `DragSway`; elsewhere the
+/// compositor moves the window.
+fn carry_pile(state: &Rc<State>) {
+    let drag = gtk::GestureDrag::new();
+    // Ahead of the button's own click, which a carry cancels.
+    drag.set_propagation_phase(gtk::PropagationPhase::Capture);
+    // The press in window coordinates, and whether it became a carry.
+    let grab = Rc::new(Cell::new(None::<((f64, f64), bool)>));
+    let (weak, at) = (Rc::downgrade(state), grab.clone());
+    drag.connect_drag_begin(move |gesture, x, y| {
+        let Some(state) = weak.upgrade() else { return };
+        let point = gesture.widget().and_then(|widget| {
+            widget.compute_point(&state.window, &graphene::Point::new(x as f32, y as f32))
+        });
+        at.set(point.map(|point| ((f64::from(point.x()), f64::from(point.y())), false)));
+    });
+    let (weak, at) = (Rc::downgrade(state), grab.clone());
+    drag.connect_drag_update(move |gesture, dx, dy| {
+        let (Some(state), Some((press, carrying))) = (weak.upgrade(), at.get()) else {
+            return;
+        };
+        if !carrying {
+            if dx.hypot(dy) < STACK_DRAG_THRESHOLD {
+                return;
+            }
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            if !state.can_carry() {
+                at.set(None);
+                state.begin_move(gesture, press);
+                return;
+            }
+            state.pile.carry_start();
+        }
+        at.set(Some((press, true)));
+        state.carry_to(press);
+    });
+    let weak = Rc::downgrade(state);
+    drag.connect_drag_end(move |_, _, _| {
+        if let (Some(state), Some((_, true))) = (weak.upgrade(), grab.take()) {
+            state.pile.carry_end();
+        }
+    });
+    state.pile.expand_button().add_controller(drag);
+}
+
 impl Previews {
     /// History's Restore: add `entry` as the newest card, or show it again.
     pub fn restore(&self, entry: HistoryEntry) {
@@ -345,14 +404,81 @@ impl State {
     fn place(&self, surface: &gdk4_x11::X11Surface, follow_pointer: bool) {
         let stack = self.stack.borrow();
         if let Some(placer) = self.placer.as_ref() {
+            let dragged = self.dragged.get();
             placer.place(
                 surface,
                 stack.ids().len(),
                 stack.is_collapsed(),
-                self.placement,
+                (
+                    dragged.map_or(self.placement, |(_, placement)| placement),
+                    dragged.map(|(origin, _)| origin),
+                ),
                 follow_pointer,
             );
         }
+    }
+
+    /// Whether this host can carry the pile itself (X11 with a placer).
+    fn can_carry(&self) -> bool {
+        #[cfg(feature = "x11")]
+        if self.placer.is_some() {
+            return true;
+        }
+        false
+    }
+
+    /// Hand the press to the compositor's own window move (Wayland).
+    fn begin_move(&self, gesture: &gtk::GestureDrag, (x, y): (f64, f64)) {
+        let (Some(surface), Some(device)) = (self.window.surface(), gesture.device()) else {
+            return;
+        };
+        if let Ok(toplevel) = surface.downcast::<gdk::Toplevel>() {
+            toplevel.begin_move(
+                &device,
+                gesture.current_button() as i32,
+                x,
+                y,
+                gesture.current_event_time(),
+            );
+        }
+    }
+
+    /// Move the carried pile so the press stays under the pointer.
+    fn carry_to(&self, (press_x, press_y): (f64, f64)) {
+        #[cfg(feature = "x11")]
+        {
+            let Some(placer) = self.placer.as_ref() else {
+                return;
+            };
+            let Some(surface) = self.window.surface().and_downcast::<gdk4_x11::X11Surface>() else {
+                return;
+            };
+            let (Some((x, y)), Some(bounds)) =
+                (placer.pointer(&surface), placer.bounds(&surface, true))
+            else {
+                return;
+            };
+            self.pile.carry_pointer(x, y);
+            let count = self.stack.borrow().ids().len();
+            let current = self
+                .dragged
+                .get()
+                .map_or(self.placement, |(_, placement)| placement);
+            let (origin, next) =
+                preview::move_collapsed_stack(bounds, count, x - press_x, y - press_y, current);
+            self.dragged.set(Some((origin, next)));
+            self.pile.set_top_anchor(next.is_top());
+            self.pile.set_right_anchor(next.is_right());
+            self.pile.set_gravity(Some(preview::collapsed_stack_gravity(
+                bounds,
+                count,
+                Some(origin),
+                next,
+            )));
+            self.place(&surface, true);
+        }
+        #[cfg(not(feature = "x11"))]
+        let _ = (press_x, press_y);
     }
 
     fn toggle_collapsed(&self) {
@@ -366,9 +492,13 @@ impl State {
     fn relayout(&self) {
         let stack = self.stack.borrow();
         if stack.ids().is_empty() {
-            // Exiting cards finish first.
+            // Exiting cards finish first; an empty stack forgets its carry.
             if self.pile.is_empty() {
                 self.window.set_visible(false);
+                self.dragged.set(None);
+                self.pile.set_top_anchor(self.placement.is_top());
+                self.pile.set_right_anchor(self.placement.is_right());
+                self.pile.set_gravity(None);
             }
             return;
         }

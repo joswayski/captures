@@ -916,8 +916,9 @@ button covers the pile with the accent ring on hover or focus; rear cards
 leave the accessibility tree. Timing resolves the shared `motion` specs
 against GTK's tokens, and with GTK animations off (GNOME's Reduce
 animation) every change lands at once with no frame ticks. `smoke.py`
-minimizes to the pile and expands it over AT-SPI. Exit motion (ported
-later, below), the drag sway and overflow scrolling remain open.
+minimizes to the pile and expands it over AT-SPI. Exit motion and the
+carry with its drag sway (both ported later, below) and overflow scrolling
+remain open.
 X11 (Xvfb) only. Windows, macOS: unchanged.
 
 On X11 the GTK stack now takes shipping's placement. The window is 340 px
@@ -963,9 +964,27 @@ shakes the card (`thumbnail-drop-reject`), an accepted copy elsewhere removes
 it, and anything else keeps it. The pile's clock is now the monotonic clock:
 an idle frame clock's last frame time is stale, and it started each exit
 already partly played. Checked by recording Close, Delete, Clear all and a
-drop back on the stack under Xvfb (GTK 4.8). Not done: carrying the
-collapsed pile (it moves the window and re-anchors the stack, with
-`DragSway` leaning the rear cards) and overflow scrolling. Wayland and real
+drop back on the stack under Xvfb (GTK 4.8). Wayland and real hardware not
+verified. Windows, macOS: unchanged.
+
+The collapsed GTK pile can now be carried. Past shipping's 8 px threshold a
+press on the pile's hit target becomes a carry instead of Expand. On X11 the
+window follows the desktop pointer with the press point held under it:
+`move_collapsed_stack` clamps it to the work area and re-anchors it to the
+nearest corner with shipping's ±0.2 hysteresis, and the pile takes
+`collapsed_stack_gravity` for the dragged position. While carried, the fan
+stays open until it has gathered (`StackFan::settle_ms`). Then the rear cards
+lean with the shared `DragSway` spring (`collapsed_card_sway_pose`), stepped
+once per frame so the lean settles when the pointer pauses, and the drop
+eases it back over the fan's per-depth stagger. The dragged origin and corner
+last until the stack empties, as shipping's session-only origin; expanding
+afterwards opens from the new corner. On Wayland, where a client cannot
+place its window, the press goes to the compositor's own move
+(`gdk::Toplevel::begin_move`) without re-anchoring or sway. Checked under a
+1920×1080 Xvfb (GTK 4.8): a carry from the bottom-left corner up and right
+moved the window from 0,756 to 702,288 with the rear card leaning, it stayed
+collapsed on drop, and a later click expanded it from the top anchor. Not
+done: overflow scrolling. Wayland, a real window manager's drag and real
 hardware not verified. Windows, macOS: unchanged.
 
 The fifth GTK4 slice is the recording editor, opened by History's Edit on a

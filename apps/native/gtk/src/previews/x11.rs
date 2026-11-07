@@ -3,7 +3,7 @@
 //! above other windows on every workspace and out of the taskbar and pager.
 //! GTK4 has no move API, so the X window is configured directly. Wayland
 //! compositors place toplevels themselves.
-use captures_app::preview::{self, ThumbnailMonitorBounds};
+use captures_app::preview::{self, ThumbnailMonitorBounds, ThumbnailStackOrigin};
 use captures_settings::MiniPreviewPlacement;
 use gdk4_x11::{X11Display, X11Monitor, X11Surface};
 use gtk::prelude::*;
@@ -102,45 +102,68 @@ impl Placer {
         let _ = self.connection.flush();
     }
 
-    /// Move the window to its corner of the work area, keeping the anchored
-    /// edge put for the window's current height. A newly shown stack follows
-    /// the pointer's monitor; later moves stay on the window's monitor.
+    /// The monitor's bounds in physical pixels at the GDK scale.
+    pub fn bounds(
+        &self,
+        surface: &X11Surface,
+        follow_pointer: bool,
+    ) -> Option<ThumbnailMonitorBounds> {
+        let monitor = self.monitor(surface, follow_pointer)?;
+        let scale = monitor.scale_factor();
+        let (full, work) = (monitor.geometry(), monitor.workarea());
+        Some(ThumbnailMonitorBounds {
+            work_x: work.x() * scale,
+            work_y: work.y() * scale,
+            work_width: (work.width() * scale).max(0) as u32,
+            work_height: (work.height() * scale).max(0) as u32,
+            full_x: full.x() * scale,
+            full_y: full.y() * scale,
+            full_width: (full.width() * scale).max(0) as u32,
+            full_height: (full.height() * scale).max(0) as u32,
+            scale_factor: f64::from(scale),
+        })
+    }
+
+    /// The pointer on the desktop in logical pixels. A carried window moves
+    /// under the pointer, so widget coordinates cannot track the carry.
+    pub fn pointer(&self, surface: &X11Surface) -> Option<(f64, f64)> {
+        let pointer = self
+            .connection
+            .query_pointer(self.root)
+            .ok()?
+            .reply()
+            .ok()?;
+        let scale = f64::from(self.monitor(surface, true)?.scale_factor());
+        Some((
+            f64::from(pointer.root_x) / scale,
+            f64::from(pointer.root_y) / scale,
+        ))
+    }
+
+    /// Move the window to its corner of the work area, or to a carried
+    /// `origin`, keeping the anchored edge put for the window's current
+    /// height. A newly shown or carried stack follows the pointer's monitor;
+    /// later moves stay on the window's monitor.
     pub fn place(
         &self,
         surface: &X11Surface,
         count: usize,
         collapsed: bool,
-        placement: MiniPreviewPlacement,
+        (placement, origin): (MiniPreviewPlacement, Option<ThumbnailStackOrigin>),
         follow_pointer: bool,
     ) {
-        let Some(monitor) = self.monitor(surface, follow_pointer) else {
+        let Some(bounds) = self.bounds(surface, follow_pointer) else {
             return;
         };
-        let scale = monitor.scale_factor();
-        let (full, work) = (monitor.geometry(), monitor.workarea());
-        let geometry = preview::thumbnail_geometry(
-            ThumbnailMonitorBounds {
-                work_x: work.x() * scale,
-                work_y: work.y() * scale,
-                work_width: (work.width() * scale).max(0) as u32,
-                work_height: (work.height() * scale).max(0) as u32,
-                full_x: full.x() * scale,
-                full_y: full.y() * scale,
-                full_width: (full.width() * scale).max(0) as u32,
-                full_height: (full.height() * scale).max(0) as u32,
-                scale_factor: f64::from(scale),
-            },
-            count.max(1),
-            collapsed,
-            None,
-            placement,
-        );
+        let scale = bounds.scale_factor;
+        let geometry =
+            preview::thumbnail_geometry(bounds, count.max(1), collapsed, origin, placement);
         let y = if geometry.anchor.is_top() {
             geometry.y
         } else {
             geometry.y + geometry.height - f64::from(surface.height())
         };
-        let device = |logical: f64| (logical * f64::from(scale)).round() as i32;
+        let device = |logical: f64| (logical * scale).round() as i32;
         let position = ConfigureWindowAux::new().x(device(geometry.x)).y(device(y));
         let _ = self.connection.configure_window(xid(surface), &position);
         let _ = self.connection.flush();
