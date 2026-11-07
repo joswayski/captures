@@ -26,6 +26,7 @@ use crate::tokens::Tokens;
 use crate::widgets::{Icon, MaxWidth, SnapshotArea, WidthWatch};
 
 mod find;
+mod updates;
 
 const PLATFORM: ShortcutPlatform = ShortcutPlatform::Linux;
 
@@ -63,6 +64,8 @@ struct Prefs {
     status: gtk::Box,
     status_label: gtk::Label,
     status_generation: Rc<Cell<u64>>,
+    /// The Updates card's Preview worker, while the page is open.
+    updates: RefCell<Option<Rc<updates::Updates>>>,
 }
 
 impl Prefs {
@@ -243,6 +246,7 @@ pub fn build(
         status,
         status_label,
         status_generation: Rc::default(),
+        updates: RefCell::default(),
     });
 
     let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -1608,11 +1612,15 @@ fn updates_card(prefs: &Rc<Prefs>) -> gtk::Box {
     let card = card(&tokens, 6, None);
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 24);
     row.add_css_class("update-settings-row");
-    let (identity, _) = copy(
+    let (identity, channel) = copy(
         preferences::UPDATES_VERSION,
         preferences::UPDATES_CHANNEL,
         false,
     );
+    let version = identity
+        .first_child()
+        .and_downcast::<gtk::Label>()
+        .expect("setting title");
     identity.set_valign(gtk::Align::Start);
     row.append(&identity);
     let actions = gtk::Box::new(gtk::Orientation::Vertical, tokens.number("s-3") as i32);
@@ -1621,17 +1629,27 @@ fn updates_card(prefs: &Rc<Prefs>) -> gtk::Box {
     check.add_css_class("ui-btn");
     check.set_size_request(preferences::UPDATES_ACTION_WIDTH as i32, -1);
     check.set_halign(gtk::Align::End);
-    check.set_sensitive(false);
-    check.set_tooltip_text(Some(preferences::UPDATES_DETAIL));
-    check.update_property(&[gtk::accessible::Property::Description(
-        preferences::UPDATES_DETAIL,
-    )]);
     actions.append(&check);
     let status = label(preferences::UPDATES_TITLE, "update-settings-status");
     status.set_xalign(1.);
     actions.append(&status);
     row.append(&actions);
     add(&card, &row);
+    // Download and verify, for a Preview AppImage (the worker's staging).
+    let (acquisition, acquire) = utility_row(
+        "Package verification",
+        "Temporary storage only; nothing is installed or executed.",
+        "Download and verify",
+    );
+    add(&card, &acquisition);
+    *prefs.updates.borrow_mut() = Some(updates::connect(updates::Widgets {
+        version,
+        channel,
+        check,
+        status,
+        acquisition,
+        acquire,
+    }));
     setting_switch(prefs, &card, "show_update_changelog", "");
     card
 }

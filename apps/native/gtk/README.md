@@ -31,6 +31,10 @@ for `profile.py`-style measurement. Needs `libgtk-4-dev` (GTK 4.6 or newer).
 The default `x11` feature places the preview stack on X11 (work-area corner,
 keep-above, every workspace); `--no-default-features` builds without it, and
 Wayland compositors place the stack themselves.
+Preferences' Updates card checks only the native Preview channel, and only in
+a build with `CAPTURES_NATIVE_PREVIEW_VERSION` and
+`CAPTURES_NATIVE_PREVIEW_PUBLIC_KEY` set; development builds never make an
+update request, and the GTK host never installs.
 
 History is one virtualized `GtkListView` of card rows. GtkListView keeps up
 to 200 rows alive before GTK 4.12, so only rows near the viewport hold cards

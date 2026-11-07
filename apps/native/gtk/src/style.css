@@ -429,6 +429,9 @@ window.captures {
   color: var(--text-subtle);
   font-size: var(--text-sm);
 }
+.captures .update-settings-status.failed {
+  color: var(--danger-text);
+}
 
 /* ---------------------------------------------------------- buttons ---- */
 

@@ -187,6 +187,9 @@ def preferences(binary, scratch):
         saved = wait(lambda: settings.exists() and json.loads(settings.read_text()), "settings file")
         assert saved["auto_copy_to_clipboard"] == (not before), saved
         print("preferences: switch role, checked state and save passed")
+        # A development build has no Preview identity: no update worker.
+        check_now = find(app, "push button", "Check Now")[0]
+        assert not has_state(check_now, Atspi.StateType.SENSITIVE), "dev build can check"
 
         def saved_value(*path):
             value = json.loads(settings.read_text())

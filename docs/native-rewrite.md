@@ -1014,8 +1014,8 @@ Tauri harness card by card, light and dark, at 1080×900 under Xvfb.
 `smoke.py` saves Dark, Cobalt (checked), a typed Custom accent, the Top
 right corner, a 24 FPS GIF select and a recorded Ctrl+Shift+4 Region
 shortcut. Not yet ported: the microphone list (Off and the saved device
-only, until the GTK host has an audio backend), Send feedback (ported
-later, below), the update worker and live System appearance
+only, until the GTK host has an audio backend), Send feedback and the
+update worker (both ported later, below) and live System appearance
 changes. X11 (Xvfb) on GTK 4.8 and 4.14 only;
 Wayland, Orca and real hardware remain open. Windows, macOS: unchanged.
 
@@ -1069,9 +1069,11 @@ stays off, with the shared fixture note, as AppKit's non-live workbench.
 Shipping's computed sizes were matched rather than its stylesheet: the
 message box is seven `--leading-snug` lines (shipping's 148 px minimum loses
 to the shared input rule), and GTK's content-box `min-height` is converted
-from shipping's border boxes. Send keeps the rounded, dimmed-when-disabled
-primary button AppKit uses. Shipping's `.feedback-submit` misses the shared
-`.ui-btn` shape rule, so Tauri draws it square and never dims it.
+from shipping's border boxes. Deviation (intentional, so the native ports
+match each other; the owner can override it): Send keeps the rounded,
+dimmed-when-disabled primary button AppKit draws. Shipping's
+`.feedback-submit` misses the shared `.ui-btn` shape rule, so Tauri draws
+it square and never dims it; that is a missing rule, not a design choice.
 `smoke.py` opens the fixture from About (Send off). Against a loopback
 service, it walks the form by keyboard (nothing starts focused; Tab reaches
 the message and contact), sends one draft (checks category `idea`, contact,
@@ -1086,6 +1088,34 @@ after its text. The rows now use a label child, so both versions expose
 "Open: Send feedback" and "Open: GNOME screenshot shortcuts". X11 (Xvfb) on
 GTK 4.8 and 4.14 only; Wayland, Orca and real hardware remain open.
 Windows, macOS: unchanged.
+
+The GTK Updates card runs the shared update worker on the native Preview
+channel only. An installed Preview build (`CAPTURES_NATIVE_PREVIEW_VERSION`
+and its public key, as `scripts/native-preview-build.mjs` sets) starts
+`CheckWorker::preview` and checks automatically. The card then follows the
+worker's `Presentation`: "Captures <version> · Preview · Experimental",
+Check Now, the status (danger text on failure) and, for an AppImage, a
+Package verification row with Download and verify, live progress, Cancel
+download and Retry download. The worker keeps the existing full and delta
+acquisition and download format unchanged. It wakes the GTK main loop
+through `MainContext::invoke`, and closing Preferences joins it off the UI
+thread. Development builds make no request and keep "Updates unavailable"
+with Check Now off. There is no development endpoint, stable or production
+channel. "Restart and install" is not offered: the Linux Preview package is
+still the wgpu build, so `ReleaseInfo` labels it `Renderer::Wgpu` and
+installing it would replace this host. A `Renderer::Gtk` and GTK
+packaging come first. Checked against the live channel with a test Preview
+build (2026.1.1, shipping key, isolated HOME): the automatic check showed
+"Preview 2026.11.605 available". With `APPIMAGE` set, Download and verify
+fetched 102,668,792 bytes with progress; Cancel returned to available and
+left the staging directory empty. A full download ended in "Native update
+signature verification failed." That refusal is correct: the channel's
+Linux asset is the Tauri AppImage, whose signed file name is not the native
+`Captures-<version>-linux-x86_64.AppImage`. The debug-build check of 103 MB
+also showed "Downloading N of N" for minutes, because the shared Preview
+path reports no Verifying state. `smoke.py` checks that a development
+build's Check Now stays off. X11 (Xvfb) only; Wayland and real hardware
+remain open. Windows, macOS: unchanged.
 
 ## Progress dashboard
 
