@@ -771,6 +771,17 @@ Run key or firewall. macOS, X11 and Wayland are unchanged.
 Tauri's 1.35 CSS-pixel annotation stroke floor and preview opacity still need
 the separate shared-thumbnail slice; this host-only change does not add them.
 
+Win32 screenshot export footers now follow Tauri's 1040-DIP breakpoint:
+status spans a second, left-aligned row at compact widths, while export and
+filename columns flex around Copy, Save and the optional save-as-new toggle.
+Wrapped status can grow the footer, and errors replace the ordinary hint as
+they already do in UIA. A regression reproduced the original minimum-width
+overlap; 20 Windows tests passed under Wine, including 860/1040/1041/1280-DIP
+idle/success/error states with and without the toggle. Light/dark Direct2D
+renders at those widths were inspected. Windows cross-build/clippy, workspace
+tests/fmt/clippy and npm check passed; real-PC acceptance is pending. The
+recording footer, macOS, X11 and Wayland hosts are unchanged by this fix.
+
 Win32 recording editor slice 1 adds `--scene recording --artifact ID` and
 enables History's recording Edit action. The shared `RecordingEditorSession`
 lives on a worker with explicit FFmpeg/FFprobe overrides, Windows Tauri
