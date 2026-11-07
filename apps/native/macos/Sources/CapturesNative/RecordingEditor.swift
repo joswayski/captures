@@ -2496,8 +2496,12 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         let playing = playbackState == .playing || resumeAfterSeek
         let atEnd = position == trimTimeline.endMilliseconds
         let resume = playing && (!atEnd || playbackLoopEnabled)
+        // The export end is exclusive. Accept the last position inside the
+        // staged trim so comparison uses that same preview, not a hidden seek.
+        // General source scrubbing uses its separate seek path.
         let position = min(playing && atEnd && playbackLoopEnabled
-            ? trimTimeline.startMilliseconds : position, duration - 1)
+            ? trimTimeline.startMilliseconds : min(position, trimTimeline.endMilliseconds - 1),
+            duration - 1)
         let object: [String: Any] = ["operation": "update_preview_at", "edit": edit,
                                      "export": export, "position_ms": position]
         applyWork?.cancel(); applyWork = nil; applyWorkKey = nil; applyFailedKey = nil
