@@ -246,6 +246,24 @@ impl Placer {
         let _ = self.connection.flush();
     }
 
+    /// A capture selector over a whole display: unmanaged (no frame, focus
+    /// or placement of its own, above panels) at the display's origin in X
+    /// pixels and size. Call before the first map.
+    pub fn cover(&self, surface: &X11Surface, (x, y, width, height): (i32, i32, u32, u32)) {
+        let attributes = ChangeWindowAttributesAux::new().override_redirect(1);
+        let _ = self
+            .connection
+            .change_window_attributes(xid(surface), &attributes);
+        let geometry = ConfigureWindowAux::new()
+            .x(x)
+            .y(y)
+            .width(width)
+            .height(height)
+            .stack_mode(x11rb::protocol::xproto::StackMode::ABOVE);
+        let _ = self.connection.configure_window(xid(surface), &geometry);
+        let _ = self.connection.flush();
+    }
+
     fn monitor(&self, surface: &X11Surface, follow_pointer: bool) -> Option<X11Monitor> {
         let display = surface.display();
         let pointer = follow_pointer

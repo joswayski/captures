@@ -30,8 +30,8 @@ pixels. Valid edits debounce for 250 ms; invalid drafts stay local until blur.
 Save waits for the accepted preview settings, and failed previews restore those
 settings. Numeric fields expose UIA Value, menus ExpandCollapse/SelectionItem,
 volumes RangeValue and audio checkboxes Toggle. Output controls passed physical
-pass 25; the source-preview correction awaits its focused retest. The preview
-retains source geometry independently of the export dimensions.
+pass 25; pass 26 accepted source-sized preview and playback independent of export
+dimensions, including stable custom-field steppers and retained audio edits.
 Graphical crop has eight handles and interior movement; numeric source-pixel
 bounds, aspect lock, keyboard movement and UIA ranges share the crop geometry.
 Crop still awaits physical acceptance; Wine tests and offscreen renders are not

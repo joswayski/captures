@@ -12,6 +12,7 @@ mod onboarding;
 mod preferences;
 mod previews;
 mod recording;
+mod selector;
 mod style;
 mod switch;
 mod system_look;
@@ -33,7 +34,7 @@ const USAGE: &str = "captures-gtk [--scene preferences|history|editor|recording|
   [--settings-file PATH] [--history-root PATH] [--size WxH] [--feedback-endpoint URL]\n\
   [--screenshot OUT.png] [--find QUERY] [--count N] [--exercise] [--quit-after SECONDS]\n\
   [--open-media PATH]... [-- FILE...]\n\
-  --live [--captures-autostart] [--capture display] [--history-root PATH] [--settings-file PATH] [--open-media PATH]... [-- FILE...]";
+  --live [--captures-autostart] [--capture display|region|window] [--history-root PATH] [--settings-file PATH] [--open-media PATH]... [-- FILE...]";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Scene {
@@ -91,8 +92,9 @@ struct Options {
     live: bool,
     /// `--captures-autostart`: a quiet launch that opens no window.
     quiet: bool,
-    /// `--capture display`: take a screenshot once the live app is ready.
-    capture: bool,
+    /// `--capture display|region|window`: start that screenshot once the
+    /// live app is ready.
+    capture: Option<tray::Action>,
     /// `--update NAME`: the fixture status `--scene update` shows.
     update: String,
 }
@@ -116,7 +118,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
         settings_given: false,
         live: false,
         quiet: false,
-        capture: false,
+        capture: None,
         update: "available".into(),
     };
     let mut args = args.skip(1);
@@ -153,10 +155,14 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
             }
             "--live" => options.live = true,
             "--captures-autostart" => options.quiet = true,
-            "--capture" => match value()?.as_str() {
-                "display" => options.capture = true,
-                other => return Err(format!("unsupported capture {other}")),
-            },
+            "--capture" => {
+                options.capture = Some(match value()?.as_str() {
+                    "display" => tray::Action::CaptureDisplay,
+                    "region" => tray::Action::CaptureRegion,
+                    "window" => tray::Action::CaptureWindow,
+                    other => return Err(format!("unsupported capture {other}")),
+                })
+            }
             "--history-root" => options.history_root = Some(value()?.into()),
             "--screenshot" => options.screenshot = Some(value()?.into()),
             "--find" => options.find = Some(value()?),
@@ -196,7 +202,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
                 .into(),
         );
     }
-    if (options.quiet || options.capture) && !options.live {
+    if (options.quiet || options.capture.is_some()) && !options.live {
         return Err("--captures-autostart and --capture need --live".into());
     }
     if matches!(options.scene, Scene::Editor | Scene::Recording) && options.artifact.is_none() {
@@ -255,6 +261,8 @@ struct Host {
     crash: RefCell<Option<std::sync::Arc<captures_app::crash::Session>>>,
     /// The launch notice, while shown.
     startup_notice: RefCell<Option<gtk::ApplicationWindow>>,
+    /// The Region or Window overlay, while open (`selector.rs`).
+    selector: RefCell<Option<selector::Handle>>,
 }
 
 impl Host {
@@ -774,6 +782,12 @@ fn main() -> glib::ExitCode {
         let Some(options) = options.borrow_mut().take() else {
             return;
         };
+        // Shipping's X11 WM_CLASS, which the shared window list reads to
+        // keep Captures' own notices out of Window capture targets.
+        #[cfg(feature = "x11")]
+        if let Some(display) = gtk::gdk::Display::default().and_downcast::<gdk4_x11::X11Display>() {
+            display.set_program_class("Captures");
+        }
         if options.appearance.is_none() {
             system_look::start();
         }
@@ -811,6 +825,7 @@ fn main() -> glib::ExitCode {
             tray: RefCell::default(),
             crash: RefCell::default(),
             startup_notice: RefCell::default(),
+            selector: RefCell::default(),
         });
         hosts.borrow_mut().push(host.clone());
         let weak = Rc::downgrade(&host);
@@ -832,8 +847,11 @@ fn main() -> glib::ExitCode {
                     "windows": app.windows().len(),
                 }),
             );
-            if options.capture {
-                host.capture_display();
+            match options.capture {
+                Some(tray::Action::CaptureRegion) => host.capture_region(),
+                Some(tray::Action::CaptureWindow) => host.capture_window(),
+                Some(_) => host.capture_display(),
+                None => {}
             }
             if let Some(after) = options.quit_after {
                 let app = app.clone();

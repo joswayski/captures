@@ -10,6 +10,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use captures_app::capture_flow::{CaptureFlow, Countdown};
+use captures_capture::CaptureMode;
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 
@@ -17,7 +18,7 @@ use crate::{Host, emit};
 
 /// Shipping `CAPTURE_HUD_HIDE_SETTLE_MS`: a hidden surface's last frame
 /// leaves the compositor before the screen is read.
-const SETTLE: Duration = Duration::from_millis(40);
+pub(crate) const SETTLE: Duration = Duration::from_millis(40);
 
 /// Owns the one capture in flight; dropping it ends the flow.
 pub enum Flow {
@@ -26,10 +27,17 @@ pub enum Flow {
 }
 
 impl Flow {
-    fn generation(&self) -> u64 {
+    pub(crate) fn generation(&self) -> u64 {
         match self {
             Flow::X11(flow) => flow.generation(),
             Flow::Portal(flow) => flow.generation(),
+        }
+    }
+
+    pub(crate) fn cancel(&self) {
+        match self {
+            Flow::X11(flow) => flow.cancel(),
+            Flow::Portal(flow) => flow.cancel(),
         }
     }
 }
@@ -47,6 +55,13 @@ impl Host {
     /// Screenshot Display. One capture at a time; a second request while
     /// one runs reports the shared "already in progress" error.
     pub fn capture_display(self: &Rc<Self>) {
+        self.capture_now(CaptureMode::Display);
+    }
+
+    /// Display on X11 or through the Screenshot portal; on Wayland also
+    /// Window, through a window-only ScreenCast grant (the portal's own
+    /// picker replaces the window overlay there).
+    pub(crate) fn capture_now(self: &Rc<Self>, mode: CaptureMode) {
         let settings = captures_settings::load(&self.settings_file).unwrap_or_default();
         let seconds = settings.screenshot_countdown_seconds;
         let portal = wayland(self);
@@ -98,10 +113,11 @@ impl Host {
                 return;
             };
             let include_cursor = settings.show_cursor_in_screenshots;
-            let result =
-                gio::spawn_blocking(move || capture(root, generation, portal, include_cursor))
-                    .await
-                    .unwrap_or_else(|_| Err("the capture worker stopped".into()));
+            let result = gio::spawn_blocking(move || {
+                capture(root, generation, portal, mode, include_cursor)
+            })
+            .await
+            .unwrap_or_else(|_| Err("the capture worker stopped".into()));
             for window in &hidden {
                 window.set_visible(true);
             }
@@ -109,12 +125,7 @@ impl Host {
             host.capture.borrow_mut().take();
             match result {
                 Ok(Some(artifact)) => {
-                    emit(
-                        "captured",
-                        serde_json::json!({"id": artifact.entry.id, "mode": "display",
-                        "portal": portal, "ms": started.elapsed().as_secs_f64() * 1000.}),
-                    );
-                    host.captured(artifact, &settings);
+                    host.captured(artifact, &settings, portal, started);
                 }
                 Ok(None) => emit("capture-cancelled", serde_json::json!({"portal": portal})),
                 Err(error) => host.capture_failed(&error),
@@ -124,11 +135,18 @@ impl Host {
 
     /// A saved capture: History reloads, the newest card joins the preview
     /// stack, and auto-copy puts it on the clipboard.
-    fn captured(
+    pub(crate) fn captured(
         self: &Rc<Self>,
         artifact: captures_app::Artifact,
         settings: &captures_settings::AppSettings,
+        portal: bool,
+        started: Instant,
     ) {
+        emit(
+            "captured",
+            serde_json::json!({"id": artifact.entry.id, "mode": artifact.entry.mode,
+            "portal": portal, "ms": started.elapsed().as_secs_f64() * 1000.}),
+        );
         if let Some(history) = self.history.borrow().as_ref() {
             history.reload();
         }
@@ -150,7 +168,7 @@ impl Host {
         }
     }
 
-    fn capture_failed(&self, error: &str) {
+    pub(crate) fn capture_failed(&self, error: &str) {
         emit("capture-failed", serde_json::json!({"error": error}));
         self.show_error(error);
     }
@@ -184,30 +202,14 @@ fn capture(
     root: std::path::PathBuf,
     generation: u64,
     portal: bool,
+    mode: CaptureMode,
     include_cursor: bool,
 ) -> Result<Option<captures_app::Artifact>, String> {
     if portal {
-        return captures_app::capture_portal_screenshot(
-            &root,
-            generation,
-            captures_capture::CaptureMode::Display,
-            include_cursor,
-        )
-        .map_err(|error| error.to_string());
+        return captures_app::capture_portal_screenshot(&root, generation, mode, include_cursor)
+            .map_err(|error| error.to_string());
     }
-    // Shipping starts on the display under the pointer, looked up fresh.
-    let backend = captures_capture::XcapBackend;
-    let display_id = captures_capture::pointer_position()
-        .and_then(|point| backend.display_id_at_point(point))
-        .or_else(|| {
-            let displays = backend.displays().ok()?;
-            displays
-                .iter()
-                .find(|display| display.is_primary)
-                .or(displays.first())
-                .map(|display| display.id.clone())
-        })
-        .ok_or("No display is available for capture.")?;
+    let display_id = pointer_display()?;
     match captures_app::execute(captures_app::Request::CaptureDisplay {
         root,
         display_id,
@@ -219,4 +221,21 @@ fn capture(
         Err(captures_app::Error::Cancelled) => Ok(None),
         Err(error) => Err(error.to_string()),
     }
+}
+
+/// Shipping starts on the display under the pointer, looked up fresh, else
+/// the primary display.
+pub(crate) fn pointer_display() -> Result<String, String> {
+    let backend = captures_capture::XcapBackend;
+    captures_capture::pointer_position()
+        .and_then(|point| backend.display_id_at_point(point))
+        .or_else(|| {
+            let displays = backend.displays().ok()?;
+            displays
+                .iter()
+                .find(|display| display.is_primary)
+                .or(displays.first())
+                .map(|display| display.id.clone())
+        })
+        .ok_or_else(|| "No display is available for capture.".into())
 }
