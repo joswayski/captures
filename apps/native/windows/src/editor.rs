@@ -97,6 +97,9 @@ const HEADING_H: f32 = 48.;
 /// A layer row (`min-height: 54px` plus its border) and its 2 px margins.
 const ROW_H: f32 = 56.;
 const ROW_GAP: f32 = 4.;
+/// `screenshot-cta-pulse`: 5 px spread over 2.4 s.
+const PULSE_SPREAD: f32 = 5.;
+const PULSE_SECONDS: f32 = 2.4;
 /// `.screenshot-layer-quick-actions > button`.
 const QUICK: (f32, f32) = (25., 28.);
 /// `.screenshot-make-copy` switch.
@@ -310,6 +313,8 @@ enum Kind {
     PropsThumb,
     /// The Layers drop line while a row is dragged.
     DropLine,
+    /// Apply crop's `screenshot-cta-pulse` ring, faded on the compositor.
+    Pulse,
     Ctl(Target, Layer),
 }
 
@@ -670,6 +675,9 @@ pub struct Editor {
     list: usize,
     /// Above the rows (created later): the rename caret and drop line.
     list_over: usize,
+    /// Apply crop's pulse ring, and whether its new visual needs the animation.
+    pulse: usize,
+    pulse_fresh: bool,
     properties: usize,
     bar: usize,
     header: usize,
@@ -1257,6 +1265,8 @@ impl Editor {
             layers_heading: 0,
             list: 0,
             list_over: 0,
+            pulse: 0,
+            pulse_fresh: false,
             properties: 0,
             bar: 0,
             header: 0,
@@ -1352,6 +1362,11 @@ impl Editor {
         self.props_clip = self.add(Some(self.properties), Kind::Group, 0.);
         self.nodes[self.props_clip].clip = true;
         self.props_body = self.add(Some(self.props_clip), Kind::PropsBody, 0.);
+        // Under Apply crop, like its `box-shadow`; at rest (the keyframes'
+        // 0%) it shows nothing.
+        self.pulse = self.add(Some(self.props_body), Kind::Pulse, PULSE_SPREAD + 1.);
+        self.nodes[self.pulse].visible = false;
+        self.nodes[self.pulse].opacity = 0.;
         for prop in props::all() {
             let bleed = if matches!(prop, Prop::Swatch(..)) {
                 4.
@@ -2873,6 +2888,13 @@ impl Editor {
         let has_props = !self.props.is_empty();
         self.set_visible(self.props_body, has_props);
         self.place_props_thumb();
+        match self.prop_rect(Prop::CropAction(true)) {
+            Some(apply) => {
+                self.set_rect(self.pulse, apply);
+                self.set_visible(self.pulse, has_props);
+            }
+            None => self.set_visible(self.pulse, false),
+        }
         self.set_rect(self.zoom, local(l.zoom, l.header));
         self.set_rect(self.flyout_node, l.flyout);
         let bg_menu = self.bg_menu_rect();
@@ -3488,6 +3510,15 @@ impl Editor {
             Kind::Caret => gfx::fill(dc, all, self.caret_fill())?,
             Kind::FieldCaret => gfx::fill(dc, all, c("text"))?,
             Kind::DropLine => self.draw_drop_line(dc, w)?,
+            // `box-shadow: 0 0 0 5px rgba(accent, 0.22)` at the 50% keyframe.
+            Kind::Pulse => gfx::ring(
+                dc,
+                all,
+                t.n("r-sm"),
+                0.,
+                PULSE_SPREAD,
+                t.color_alpha("theme-accent", 0.22),
+            )?,
             Kind::Menu => self.draw_menu(dc, (w, h))?,
             Kind::MenuLit => self.draw_menu_lit(dc, (w, h))?,
             Kind::Sidebar => {
@@ -4632,6 +4663,10 @@ impl Editor {
                             .AddVisual(&visual, false, None::<&IDCompositionVisual>)?,
                         None => self._target.as_ref().expect("target").SetRoot(&visual)?,
                     }
+                    if self.nodes[i].kind == Kind::Pulse {
+                        visual.SetOpacity2(0.)?;
+                        self.pulse_fresh = true;
+                    }
                     if self.nodes[i].kind == Kind::Image {
                         visual.SetBitmapInterpolationMode(
                             DCOMPOSITION_BITMAP_INTERPOLATION_MODE_LINEAR,
@@ -4672,7 +4707,7 @@ impl Editor {
                     }
                     // The caret's opacity belongs to its blink animation: a
                     // static value here would replace it after any relayout.
-                    if !matches!(node.kind, Kind::Caret | Kind::FieldCaret) {
+                    if !matches!(node.kind, Kind::Caret | Kind::FieldCaret | Kind::Pulse) {
                         visual.SetOpacity2(node.opacity)?;
                     }
                     visual.SetVisible(node.visible)?;
@@ -4743,6 +4778,9 @@ impl Editor {
             }
         }
         self.start_motions(&dcomp)?;
+        if std::mem::take(&mut self.pulse_fresh) {
+            self.pulse_crop(&dcomp)?;
+        }
         if std::mem::take(&mut self.caret_blink) {
             self.blink_caret(&dcomp)?;
         }
@@ -4941,6 +4979,26 @@ impl Editor {
             .or_else(|| self.ime_rect())
         {
             crate::textfield::ime_position(self.hwnd, rect);
+        }
+        Ok(())
+    }
+
+    /// `screenshot-cta-pulse 2.4s ease-in-out infinite`: the ring's opacity
+    /// rises and falls on the compositor, set once on its visual (no timer,
+    /// no redraw). The spread stays at 5 px; only the alpha moves.
+    fn pulse_crop(&mut self, dcomp: &IDCompositionDesktopDevice) -> Result<()> {
+        let Some(visual) = self.visuals[self.pulse].clone() else {
+            return Ok(());
+        };
+        let half = f64::from(PULSE_SECONDS) / 2.;
+        // Smoothstep halves: 3u² − 2u³ up, then its mirror down.
+        let (q, c) = (3. / (half * half), -2. / (half * half * half));
+        unsafe {
+            let animation = dcomp.CreateAnimation()?;
+            animation.AddCubic(0., 0., 0., q as f32, c as f32)?;
+            animation.AddCubic(half, 1., 0., -q as f32, -c as f32)?;
+            animation.AddRepeat(2. * half, 2. * half)?;
+            visual.SetOpacity(&animation)?;
         }
         Ok(())
     }
