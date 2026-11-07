@@ -34,6 +34,10 @@ fn children(w: &Recording) -> Vec<Id> {
     ids.push(Id::Location);
     ids.extend(
         [
+            Target::Loop,
+            Target::Fit,
+            Target::Actual,
+            Target::Play,
             Target::Change,
             Target::Filename,
             Target::Copy,
@@ -56,7 +60,7 @@ fn name(w: &Recording, id: Id) -> String {
         Id::Warning => w.warning().unwrap_or_default(),
         Id::Location => "Save location".into(),
         Id::Status => w.status.clone(),
-        Id::Control(t) => t.label().into(),
+        Id::Control(t) => w.target_label(t).into(),
     }
 }
 
@@ -70,6 +74,7 @@ fn value(w: &Recording, id: Id) -> String {
 
 fn rect(w: &Recording, id: Id) -> Rect {
     match id {
+        Id::Control(Target::Play) => w.play_clip(),
         Id::Control(t) => w.target_rect(t),
         Id::Root => Rect::new(0., 0., w.width, w.height),
         Id::Title => w.title_rect(),
@@ -138,7 +143,9 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
     fn GetPatternProvider(&self, pattern: UIA_PATTERN_ID) -> Result<IUnknown> {
         let supported = match self.id {
             Id::Control(Target::Filename) | Id::Location => pattern == UIA_ValuePatternId,
-            Id::Control(Target::Copy) => pattern == UIA_TogglePatternId,
+            Id::Control(Target::Copy | Target::Loop | Target::Fit | Target::Actual) => {
+                pattern == UIA_TogglePatternId
+            }
             Id::Control(_) => pattern == UIA_InvokePatternId,
             _ => false,
         };
@@ -181,7 +188,10 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                     VARIANT::from(true)
                 }
                 UIA_IsOffscreenPropertyId => {
-                    VARIANT::from(matches!(self.id,Id::Control(t) if !w.shown(t)))
+                    let r = rect(w, self.id);
+                    VARIANT::from(
+                        r.w <= 0. || r.h <= 0. || matches!(self.id,Id::Control(t) if !w.shown(t)),
+                    )
                 }
                 UIA_HeadingLevelPropertyId if self.id == Id::Title => {
                     VARIANT::from(HeadingLevel1.0)
@@ -193,8 +203,14 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                 UIA_ValueIsReadOnlyPropertyId => {
                     VARIANT::from(self.id != Id::Control(Target::Filename) || !enabled)
                 }
-                UIA_ToggleToggleStatePropertyId if self.id == Id::Control(Target::Copy) => {
-                    VARIANT::from(if w.make_copy { 1i32 } else { 0i32 })
+                UIA_ToggleToggleStatePropertyId => {
+                    if let Id::Control(t) = self.id
+                        && let Some(on) = w.toggled(t)
+                    {
+                        VARIANT::from(i32::from(on))
+                    } else {
+                        VARIANT::default()
+                    }
                 }
                 _ => VARIANT::default(),
             })
@@ -320,11 +336,11 @@ impl IToggleProvider_Impl for Node_Impl {
     }
     fn ToggleState(&self) -> Result<ToggleState> {
         with(self.hwnd, |w| {
-            Ok(if w.make_copy {
-                ToggleState_On
-            } else {
-                ToggleState_Off
-            })
+            let Id::Control(t) = self.id else {
+                return Err(Error::from(E_INVALIDARG));
+            };
+            let on = w.toggled(t).ok_or_else(|| Error::from(E_INVALIDARG))?;
+            Ok(if on { ToggleState_On } else { ToggleState_Off })
         })
     }
 }
@@ -358,6 +374,8 @@ pub fn describe(w: &Recording, events: Vec<Event>) -> Vec<(Event, String)> {
                 Event::Value => w.text(),
                 Event::Copy => w.make_copy.to_string(),
                 Event::Status => w.status.clone(),
+                Event::Name(t) => w.target_label(t).into(),
+                Event::Toggle(t) => w.toggled(t).unwrap_or(false).to_string(),
                 _ => String::new(),
             };
             (event, text)
@@ -386,13 +404,26 @@ pub fn raise(hwnd: HWND, events: &[(Event, String)]) {
                         &VARIANT::from(BSTR::from(text)),
                     );
                 }
-                Event::Copy => {
+                Event::Copy | Event::Toggle(_) => {
+                    let target = if let Event::Toggle(t) = *event {
+                        t
+                    } else {
+                        Target::Copy
+                    };
                     let on = text == "true";
                     let _ = UiaRaiseAutomationPropertyChangedEvent(
-                        &node(hwnd, Id::Control(Target::Copy)),
+                        &node(hwnd, Id::Control(target)),
                         UIA_ToggleToggleStatePropertyId,
                         &VARIANT::from(if on { 0i32 } else { 1i32 }),
                         &VARIANT::from(if on { 1i32 } else { 0i32 }),
+                    );
+                }
+                Event::Name(target) => {
+                    let _ = UiaRaiseAutomationPropertyChangedEvent(
+                        &node(hwnd, Id::Control(target)),
+                        UIA_NamePropertyId,
+                        &VARIANT::default(),
+                        &VARIANT::from(BSTR::from(text)),
                     );
                 }
                 Event::Status => {

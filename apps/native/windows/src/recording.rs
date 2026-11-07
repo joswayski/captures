@@ -1,6 +1,6 @@
-//! Recording editor slice 1: a retained window and save footer, backed by
-//! the shared media session. Playback, timeline and output cards follow in
-//! separate slices; this is an opt-in workbench, not the shipping editor.
+//! Retained recording preview and save footer, backed by the shared media
+//! session. Timeline and output cards follow in separate slices; this is
+//! an opt-in workbench, not the shipping editor.
 use std::cell::RefCell;
 use std::path::PathBuf;
 
@@ -24,12 +24,15 @@ use crate::textfield::{self, Change, Key, TextField};
 use crate::tokens::Tokens;
 use crate::{Options, appearance};
 
+mod preview;
 mod worker;
+use preview::Preview;
 use worker::{Job, Outcome, Presented, Worker};
 
 pub const SIZE: (f32, f32) = (1280., 840.);
 const WM_OUTCOME: u32 = WM_APP + 31;
 const WM_WAKE: u32 = WM_APP + 32;
+const WM_FRAME: u32 = WM_APP + 33;
 const WM_MOUSELEAVE: u32 = 0x02A3;
 
 thread_local! {
@@ -67,9 +70,17 @@ pub enum Target {
     Cancel,
     Reveal,
     Save,
+    Play,
+    Loop,
+    Fit,
+    Actual,
 }
 
-const TARGETS: [Target; 6] = [
+const TARGETS: [Target; 10] = [
+    Target::Loop,
+    Target::Fit,
+    Target::Actual,
+    Target::Play,
     Target::Change,
     Target::Filename,
     Target::Copy,
@@ -87,7 +98,15 @@ impl Target {
             Self::Cancel => "Cancel",
             Self::Reveal => "Show in Folder",
             Self::Save => "Save",
+            Self::Play => "Play preview",
+            Self::Loop => "Loop preview",
+            Self::Fit => "Fit",
+            Self::Actual => "100%",
         }
+    }
+
+    fn is_preview(self) -> bool {
+        matches!(self, Self::Play | Self::Loop | Self::Fit | Self::Actual)
     }
 }
 
@@ -98,6 +117,8 @@ pub enum Event {
     Copy,
     Status,
     Structure,
+    Toggle(Target),
+    Name(Target),
 }
 
 // Each control and the caret has its own retained surface. A progress tick
@@ -107,7 +128,9 @@ const FOOTER: usize = 1;
 const STATUS: usize = 2;
 const PROGRESS: usize = 3;
 const CARET: usize = 4;
-const COUNT: usize = 5 + TARGETS.len();
+const PREVIEW: usize = 5;
+const CONTROL_START: usize = 6;
+const COUNT: usize = CONTROL_START + TARGETS.len();
 
 struct Layer {
     visual: IDCompositionVisual3,
@@ -130,6 +153,7 @@ pub struct Recording {
     rects: [Rect; COUNT],
     worker: Worker,
     presented: Option<Presented>,
+    preview: Preview,
     pub filename: TextField,
     pub directory: PathBuf,
     source_directory: PathBuf,
@@ -223,6 +247,7 @@ impl Recording {
             rects: [Rect::default(); COUNT],
             worker,
             presented: None,
+            preview: Preview::default(),
             filename: TextField::new(Style::Option, ""),
             directory,
             source_directory: PathBuf::new(),
@@ -320,6 +345,10 @@ impl Recording {
         match target {
             Target::Cancel => self.saving,
             Target::Reveal => self.saved.is_some() && !self.saving,
+            Target::Play | Target::Loop => self
+                .presented
+                .as_ref()
+                .is_some_and(|p| p.mime_type != "image/gif"),
             _ => true,
         }
     }
@@ -335,6 +364,7 @@ impl Recording {
             return false;
         }
         match target {
+            Target::Play => self.presented.as_ref().is_some_and(|p| p.duration_ms > 0),
             Target::Save => {
                 self.saved_fingerprint.as_ref() != Some(&(self.destination(), self.make_copy))
             }
@@ -351,9 +381,15 @@ impl Recording {
     }
 
     pub fn hit(&self, x: f32, y: f32) -> Option<Target> {
+        if self.shown(Target::Play)
+            && self.preview_view().contains(x, y)
+            && self.preview_media().contains(x, y)
+        {
+            return Some(Target::Play);
+        }
         TARGETS
             .into_iter()
-            .find(|&t| self.shown(t) && self.target_rect(t).contains(x, y))
+            .find(|&t| t != Target::Play && self.shown(t) && self.target_rect(t).contains(x, y))
     }
 
     fn layout(&mut self) -> Result<()> {
@@ -404,6 +440,7 @@ impl Recording {
         self.filename
             .relayout(&self.g, &self.t, filename_w - 76. - n("s-4"))?;
         self.place_caret();
+        self.layout_preview();
         self.dirty.fill(true);
         Ok(())
     }
@@ -422,6 +459,9 @@ impl Recording {
         let changed = self.focus != target;
         self.focus = target;
         self.focus_visible = visible;
+        if visible && target == Some(Target::Play) {
+            self.reveal_play();
+        }
         if let Some(target) = target {
             self.dirty[slot(target)] = true;
             if changed {
@@ -467,6 +507,27 @@ impl Recording {
             return;
         }
         match target {
+            Target::Play => {
+                if self.preview.playing {
+                    self.stop_preview();
+                } else {
+                    self.start_preview();
+                }
+            }
+            Target::Loop => {
+                self.worker
+                    .looping
+                    .fetch_xor(true, std::sync::atomic::Ordering::Relaxed);
+                self.dirty[slot(target)] = true;
+                self.events.push(Event::Toggle(target));
+            }
+            Target::Fit | Target::Actual => {
+                self.preview.actual = target == Target::Actual;
+                self.preview.scroll = (0., 0.);
+                self.layout_preview();
+                self.events.push(Event::Toggle(Target::Fit));
+                self.events.push(Event::Toggle(Target::Actual));
+            }
             Target::Filename => self.set_focus(Some(target), true),
             Target::Change => self.pick_folder = true,
             Target::Copy => {
@@ -492,6 +553,7 @@ impl Recording {
                 }
             }
             Target::Reveal => {
+                self.stop_preview();
                 if let Some(path) = &self.saved {
                     let _ = self.worker.jobs.send(Job::Reveal(path.clone()));
                 }
@@ -513,6 +575,7 @@ impl Recording {
                     destination: self.destination(),
                     export: presented.export.clone(),
                 };
+                self.stop_preview();
                 if self
                     .worker
                     .jobs
@@ -556,7 +619,16 @@ impl Recording {
                         self.source_stem = p.defaults.stem.clone();
                         self.make_copy = p.original.is_none();
                         self.set_value(&p.defaults.stem);
+                        self.set_preview_frame(p.frame.clone());
+                        let gif = p.mime_type == "image/gif";
                         self.presented = Some(p);
+                        self.layout_preview();
+                        if gif && !self.hwnd.is_invalid() && !self.closing {
+                            self.worker
+                                .looping
+                                .store(true, std::sync::atomic::Ordering::Relaxed);
+                            self.start_preview();
+                        }
                     }
                     Err(error) => self.notify(&error, true),
                 }
@@ -578,7 +650,10 @@ impl Recording {
                         if let Some(p) = saved.replaced {
                             self.source_directory = PathBuf::from(&p.defaults.directory);
                             self.source_stem = p.defaults.stem.clone();
+                            self.set_preview_frame(p.frame.clone());
+                            self.preview.position_ms = 0;
                             self.presented = Some(p);
+                            self.layout_preview();
                             self.dirty[BACK] = true;
                         }
                         if let Some(warning) = saved.warning {
@@ -611,9 +686,31 @@ impl Recording {
                     };
                     self.set_focus(Some(target), self.focus_visible);
                 }
+                if self.extension() == "gif" && !self.closing && !self.hwnd.is_invalid() {
+                    self.start_preview();
+                }
             }
-            Outcome::Revealed(Err(error)) => self.notify(&error, true),
-            Outcome::Revealed(Ok(())) => {}
+            Outcome::Revealed(result) => {
+                if let Err(error) = result {
+                    self.notify(&error, true);
+                }
+                if self.extension() == "gif" && !self.closing && !self.hwnd.is_invalid() {
+                    self.start_preview();
+                }
+            }
+            Outcome::PlaybackEnded(generation, result) => {
+                self.take_preview_frame();
+                if generation == self.preview.generation {
+                    self.worker.playback_cancel.take();
+                    self.preview.playing = false;
+                    self.preview.position_ms = 0;
+                    self.dirty[slot(Target::Play)] = true;
+                    self.events.push(Event::Name(Target::Play));
+                    if let Err(error) = result {
+                        self.notify(&error, true);
+                    }
+                }
+            }
             Outcome::Closed => {
                 self.close_ready = true;
             }
@@ -748,8 +845,12 @@ impl Recording {
                 }
             }
             CARET => gfx::fill(dc, local, t.color("text"))?,
+            PREVIEW => self.draw_preview(dc)?,
             _ => {
-                let target = TARGETS[index - 5];
+                let target = TARGETS[index - CONTROL_START];
+                if target.is_preview() {
+                    return self.draw_preview_control(dc, target);
+                }
                 let active = self.hover == Some(target) && self.enabled(target);
                 let focused = self.focus == Some(target) && self.focus_visible;
                 if target == Target::Filename {
@@ -877,7 +978,7 @@ impl Recording {
     }
 
     fn bleed(&self, index: usize) -> f32 {
-        if index >= 5 { 4. } else { 0. }
+        if index >= CONTROL_START { 4. } else { 0. }
     }
 
     fn opacity(&self, index: usize) -> f32 {
@@ -887,9 +988,14 @@ impl Recording {
                     && self.enabled(Target::Filename)
                     && self.filename.editor.selection().0 == self.filename.editor.selection().1,
             )
-        } else if index >= 5 {
-            let target = TARGETS[index - 5];
-            if !self.shown(target) {
+        } else if index >= CONTROL_START {
+            let target = TARGETS[index - CONTROL_START];
+            if !self.shown(target)
+                || (target == Target::Play
+                    && self.preview.playing
+                    && !self.preview.hovered
+                    && !(self.focus == Some(target) && self.focus_visible))
+            {
                 0.
             } else if !self.enabled(target) {
                 0.5
@@ -911,16 +1017,16 @@ impl Recording {
             }
             let r = self.rects[index];
             let bleed = self.bleed(index);
+            let clip = if index == slot(Target::Play) {
+                self.preview_view()
+            } else {
+                Rect::new(r.x - bleed, r.y - bleed, r.w + 2. * bleed, r.h + 2. * bleed)
+            };
             unsafe {
                 dc.SetTransform(&Matrix3x2::identity());
                 dc.PushLayer(
                     &D2D1_LAYER_PARAMETERS1 {
-                        contentBounds: gfx::rect(
-                            r.x - bleed,
-                            r.y - bleed,
-                            r.x + r.w + bleed,
-                            r.y + r.h + bleed,
-                        ),
+                        contentBounds: gfx::rect(clip.x, clip.y, clip.x + clip.w, clip.y + clip.h),
                         opacity,
                         maskTransform: Matrix3x2::identity(),
                         ..Default::default()
@@ -978,6 +1084,15 @@ impl Recording {
             unsafe {
                 visual.SetOffsetX2((r.x * s).round() - bleed)?;
                 visual.SetOffsetY2((r.y * s).round() - bleed)?;
+                if index == slot(Target::Play) {
+                    let clip = self.preview_view();
+                    visual.SetClip2(&gfx::rect(
+                        (clip.x - r.x) * s + bleed,
+                        (clip.y - r.y) * s + bleed,
+                        (clip.x + clip.w - r.x) * s + bleed,
+                        (clip.y + clip.h - r.y) * s + bleed,
+                    ))?;
+                }
                 let opacity = self.opacity(index);
                 visual.SetOpacity2(opacity)?;
                 if index == CARET && opacity > 0. {
@@ -1081,6 +1196,7 @@ impl Recording {
     fn handle(&mut self, msg: u32, wp: WPARAM, lp: LPARAM) -> Option<LRESULT> {
         match msg {
             WM_OUTCOME => self.outcomes(),
+            WM_FRAME => self.take_preview_frame(),
             WM_WAKE => {}
             WM_SIZE if wp.0 != SIZE_MINIMIZED as usize => {
                 self.width = (lp.0 as u32 & 0xffff) as f32 / self.scale;
@@ -1104,6 +1220,12 @@ impl Recording {
                     ((lp.0 >> 16) as u16 as i16) as f32 / self.scale,
                 );
                 let hit = self.hit(x, y);
+                let over_media =
+                    self.preview_view().contains(x, y) && self.preview_media().contains(x, y);
+                if over_media != self.preview.hovered {
+                    self.preview.hovered = over_media;
+                    self.dirty[slot(Target::Play)] = true;
+                }
                 if self.hover != hit {
                     if let Some(t) = self.hover {
                         self.dirty[slot(t)] = true;
@@ -1174,8 +1296,38 @@ impl Recording {
             }
             WM_MOUSELEAVE => {
                 self.tracking = false;
+                self.preview.hovered = false;
+                self.dirty[slot(Target::Play)] = true;
                 if let Some(t) = self.hover.take() {
                     self.dirty[slot(t)] = true;
+                }
+            }
+            WM_MOUSEWHEEL | WM_MOUSEHWHEEL => {
+                let mut point = POINT {
+                    x: lp.0 as u16 as i16 as i32,
+                    y: (lp.0 >> 16) as u16 as i16 as i32,
+                };
+                unsafe {
+                    let _ = windows::Win32::Graphics::Gdi::ScreenToClient(self.hwnd, &mut point);
+                }
+                if self
+                    .preview_view()
+                    .contains(point.x as f32 / self.scale, point.y as f32 / self.scale)
+                {
+                    let delta =
+                        (wp.0 >> 16) as u16 as i16 as f32 / 120. * appearance::wheel_lines() * 100.
+                            / 3.;
+                    let shift = unsafe { GetKeyState(VK_SHIFT.0 as i32) } < 0;
+                    if msg == WM_MOUSEHWHEEL {
+                        self.preview.scroll.0 += delta;
+                    } else if shift {
+                        self.preview.scroll.0 -= delta;
+                    } else {
+                        self.preview.scroll.1 -= delta;
+                    }
+                    self.clamp_preview_scroll();
+                    self.place_play();
+                    self.dirty[PREVIEW] = true;
                 }
             }
             WM_KEYDOWN => self.key(VIRTUAL_KEY(wp.0 as u16)),
@@ -1215,7 +1367,7 @@ impl Recording {
 }
 
 fn slot(target: Target) -> usize {
-    5 + TARGETS.iter().position(|&t| t == target).expect("target")
+    CONTROL_START + TARGETS.iter().position(|&t| t == target).expect("target")
 }
 
 pub fn register(instance: HINSTANCE) -> Result<()> {

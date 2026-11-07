@@ -738,7 +738,7 @@ and Explorer reveal. Replacement preserves the shared session's identity and
 compensation checks; close waits for cancellation/cleanup instead of ending
 the process during an export. Corrupt settings fail rather than redirecting
 saves to a default folder. UIA exposes Value, Toggle and Invoke for the footer.
-This is the shell only: the canvas is empty until preview/playback slice 2;
+Slice 1 contains only the shell; preview/playback is added in slice 2 below;
 timeline, output cards, format preferences, crop/comparison and Text-pattern
 acceptance remain open. This slice saves MP4/GIF sources in their original
 format and rejects WebM export. No release or workflow changes.
@@ -748,10 +748,31 @@ normal/minimum sizes, light/dark, dropped-frame warning and open-error state.
 Wine uses substitute fonts, not Windows typography acceptance. Temporary worker
 tests (removed) verified copy format/bytes, cancelled-copy without publication,
 replacement/recovery-byte equality and close for MP4/GIF, with the separate
-Windows staging-flush access fix. Real-PC rendering, UIA/input, save/cancel and
-close checks remain pending. macOS, X11 and Wayland: existing recording
+Windows staging-flush access fix. Real-PC pass 18 at 150% verified live
+light/dark normal/minimum rendering, UIA/input, MP4/GIF copy/replacement hashes,
+cancel without stage leftovers, and close during encoding (110 ms to exit).
+Its follow-up verified separated Save focus rings without clipping or moving
+controls; a disappearing Cancel returns focus to Save or, after successful
+completion, Show in Folder. macOS, X11 and Wayland: existing recording
 hosts unchanged; no shared-crate API changes in this slice. Native remains
 opt-in and is not a public-channel replacement.
+
+Win32 recording slice 2 adds retained decoded preview frames, video play/pause
+with source audio and Loop preview, GIF autoplay without video-only controls,
+and Fit/100% sizing. Wheel/Shift+wheel scroll the actual-size preview; keyboard
+focus reveals its clipped play button. The worker keeps only the newest frame
+and wakes the UI when that mailbox becomes nonempty; generation IDs discard
+frames and completions from cancelled playback. Save/reveal/close cancel the
+stream before using the session. No idle redraw timer is added.
+Windows: temporary actual-worker tests under Wine passed changing MP4 frames,
+pause stability, rapid pause/resume, loop wrap, GIF autoplay, actual-size
+clamping/focus reveal and cancellation/close (42–64 ms). Those tests were
+removed. Light/dark normal/minimum Direct2D renders were inspected with
+synthetic media. Physical compositor/audio, UIA/keyboard, pointer transitions
+and performance acceptance remain open. Preview scrollbars, the complete
+scrollable page and later timeline/output/crop controls are still pending.
+macOS, X11 and Wayland: unchanged, not reverified; no shared API, release or
+workflow changes. This is not a native parity or public-channel gate.
 
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
