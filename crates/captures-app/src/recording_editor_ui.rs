@@ -12,6 +12,8 @@ pub const TITLE_RECORDING: &str = "Edit recording";
 pub const TITLE_GIF: &str = "Edit GIF";
 pub const GIF_AUDIO_NOTE: &str = "GIFs do not include recorded audio.";
 pub const FILENAME_ERROR: &str = "Enter a filename without folders or reserved characters.";
+/// Save with a Maximum file size draft below 100 KB or not a decimal number.
+pub const MAXIMUM_SIZE_ERROR: &str = "Enter a maximum file size of at least 100 KB.";
 pub const ESTIMATE_HELP: &str = "Estimated saved file size for the current edits and settings";
 pub const DELTA_HELP: &str = "Change versus the original recording file";
 pub const GIF_FRAME_RATES: [u16; 7] = [8, 10, 12, 15, 20, 24, 30];

@@ -511,10 +511,7 @@ impl Recording {
                 self.presented.as_ref().is_some_and(|p| p.duration_ms > 0)
             }
             Target::Save => {
-                (self.output.values.mode != ui::QualityMode::Maximum
-                    || self.maximum_limit() == Some(self.output.values.maximum_bytes))
-                    && self.saved_fingerprint.as_ref()
-                        != Some(&(self.destination(), self.make_copy))
+                self.saved_fingerprint.as_ref() != Some(&(self.destination(), self.make_copy))
                     && self.presented.as_ref().is_some_and(|p| {
                         let (edit, export) = self.output.values.specs(
                             p.width,
@@ -848,6 +845,13 @@ impl Recording {
             Target::Save => {
                 if let Some(error) = ui::filename_error(&self.text()) {
                     self.notify(error, true);
+                    return;
+                }
+                // An invalid draft never saves the previously accepted limit.
+                if self.output.values.mode == ui::QualityMode::Maximum
+                    && self.maximum_limit().is_none()
+                {
+                    self.notify(ui::MAXIMUM_SIZE_ERROR, true);
                     return;
                 }
                 if self.extension() == "webm" {

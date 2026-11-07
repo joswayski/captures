@@ -208,10 +208,22 @@ pub mod number {
 
     fn round_to(value: f64, places: usize) -> f64 {
         if places == 0 {
-            value.round()
-        } else {
-            format!("{value:.places$}").parse().unwrap_or(value)
+            return value.round();
         }
+        // `toFixed` rounds an exact binary tie (0.25 → "0.3") away from zero;
+        // Rust's formatter rounds it to even ("0.2"). Step off the tie first.
+        let exact = format!("{value:.1100}");
+        let digits = exact.trim_end_matches('0');
+        let tie = digits.ends_with('5')
+            && digits
+                .split_once('.')
+                .is_some_and(|(_, f)| f.len() == places + 1);
+        let value = if tie {
+            f64::from_bits(value.to_bits() + 1)
+        } else {
+            value
+        };
+        format!("{value:.places$}").parse().unwrap_or(value)
     }
 
     /// Round to the step's precision and drop trailing zeros (1.50 → "1.5").
@@ -391,6 +403,12 @@ mod tests {
         assert_eq!(number::step_from("5", 1., true, Some(0.), Some(10.)), 6.);
         assert_eq!(number::step_from("10", 1., true, Some(0.), Some(10.)), 10.);
         assert_eq!(number::step_from("0.2", 0.1, true, None, None), 0.3);
+        // Exact binary ties round like `toFixed`; near-ties stay nearest.
+        assert_eq!(number::step_from("0.15", 0.1, true, None, None), 0.3);
+        assert_eq!(number::step_from("0.35", 0.1, false, None, None), 0.2);
+        assert_eq!(number::step_from("-0.15", 0.1, false, None, None), -0.3);
+        assert_eq!(number::format_stepped(0.125, 0.01), "0.13");
+        assert_eq!(number::format_stepped(1.005, 0.01), "1");
         assert_eq!(number::step_from("", 1., true, Some(2.), None), 3.);
         assert_eq!(number::step_from("abc", 1., false, None, None), -1.);
         assert_eq!(number::format_stepped(1.50, 0.1), "1.5");

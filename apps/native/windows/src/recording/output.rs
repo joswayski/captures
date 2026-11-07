@@ -259,22 +259,21 @@ impl Recording {
 
     pub(super) fn sync_output_fields(&mut self) {
         for target in TARGETS.into_iter().filter(|t| t.is_number()) {
-            let value = self.number_value(target);
+            // The size limit is exact decimal bytes, never an f64 round trip.
+            let text = if target == Target::MaximumSize {
+                let v = &self.output.values;
+                v.maximum_unit.value(v.maximum_bytes)
+            } else {
+                self.number_value(target).to_string()
+            };
             self.output.fields[target.field_index()]
                 .editor
-                .set_text(&value.to_string());
+                .set_text(&text);
         }
     }
 
-    fn number_value(&self, target: Target) -> f64 {
+    fn number_value(&self, target: Target) -> u32 {
         let v = &self.output.values;
-        if target == Target::MaximumSize {
-            return v
-                .maximum_unit
-                .value(v.maximum_bytes)
-                .parse()
-                .expect("decimal size");
-        }
         match target {
             Target::Width => v.custom.0,
             Target::Height => v.custom.1,
@@ -284,7 +283,6 @@ impl Recording {
             Target::CropHeight => v.crop.height,
             _ => unreachable!("numeric field"),
         }
-        .into()
     }
 
     pub fn number_bounds(&self, target: Target) -> (f64, f64) {
@@ -310,15 +308,8 @@ impl Recording {
         (min.into(), max.into())
     }
 
-    fn set_number_value(&mut self, target: Target, value: f64) {
+    fn set_number_value(&mut self, target: Target, value: u32) {
         let v = &mut self.output.values;
-        if target == Target::MaximumSize {
-            if let Some(bytes) = v.maximum_unit.bytes(&value.to_string()) {
-                v.maximum_bytes = bytes;
-            }
-            return;
-        }
-        let value = value.round() as u32;
         match target {
             Target::Width => v.custom.0 = value,
             Target::Height => v.custom.1 = value,
@@ -436,10 +427,18 @@ impl Recording {
             Target::GifWidth => v.maximum_width = ui::GIF_MAXIMUM_WIDTHS[index],
             Target::Quality => v.quality = ui::COMPRESS_PRESETS[index],
             Target::MaximumUnit => {
-                v.maximum_unit = FileSizeUnit::ALL[index];
-                self.output.fields[Target::MaximumSize.field_index()]
-                    .editor
-                    .set_text(&v.maximum_unit.value(v.maximum_bytes));
+                // Shipping converts the typed draft, valid or not, and leaves
+                // text it cannot read. Exact bytes, unlike its 8-digit display.
+                let field = &mut self.output.fields[Target::MaximumSize.field_index()];
+                let text = String::from_utf16_lossy(field.editor.units());
+                let next = FileSizeUnit::ALL[index];
+                if let Some(bytes) = v.maximum_unit.bytes(&text) {
+                    field.editor.set_text(&next.value(bytes));
+                }
+                v.maximum_unit = next;
+                if let Some(bytes) = self.maximum_limit() {
+                    self.output.values.maximum_bytes = bytes;
+                }
                 self.events.push(Event::OutputValue(Target::MaximumSize));
             }
             Target::QualityMode => {
@@ -605,6 +604,9 @@ impl Recording {
                     self.output.values.maximum_bytes = bytes;
                     self.output_changed(target);
                 } else {
+                    // Keep the accepted limit, but no longer call it saved:
+                    // Save reports the invalid draft instead (shipping).
+                    self.saved_fingerprint = None;
                     self.cancel_compare();
                     self.refresh_footer();
                 }
@@ -622,7 +624,7 @@ impl Recording {
                 .ok()
                 .filter(|v| v.is_finite() && *v >= min && *v <= max)
         {
-            self.set_number_value(target, value);
+            self.set_number_value(target, value.round() as u32);
             self.output_changed(target);
         }
     }
@@ -631,23 +633,27 @@ impl Recording {
         let Some(t) = self.focus.filter(|t| t.is_number()) else {
             return;
         };
-        let current = self.number_value(t);
-        let (min, max) = self.number_bounds(t);
-        let value = self
-            .output_value(t)
-            .trim()
-            .parse::<f64>()
-            .ok()
-            .filter(|v| v.is_finite())
-            .map_or(current, |v| v.clamp(min, max));
-        if value != current {
-            self.set_number_value(t, value);
-            self.output_changed(t);
+        // Shipping's size limit is free text: blur neither clamps nor
+        // rewrites it, so an invalid draft stays visible for Save to report.
+        if t != Target::MaximumSize {
+            let current = self.number_value(t);
+            let (min, max) = self.number_bounds(t);
+            let value = self
+                .output_value(t)
+                .trim()
+                .parse::<f64>()
+                .ok()
+                .filter(|v| v.is_finite())
+                .map_or(current, |v| v.clamp(min, max).round() as u32);
+            if value != current {
+                self.set_number_value(t, value);
+                self.output_changed(t);
+            }
+            let value = self.number_value(t);
+            self.output.fields[t.field_index()]
+                .editor
+                .set_text(&value.to_string());
         }
-        let value = self.number_value(t);
-        self.output.fields[t.field_index()]
-            .editor
-            .set_text(&value.to_string());
         let r = self.target_rect(t);
         let _ = self.output.fields[t.field_index()].relayout(
             &self.g,
@@ -655,14 +661,6 @@ impl Recording {
             r.w - 26. - 2. * self.t.n("s-4"),
         );
         self.dirty[slot(t)] = true;
-        if t == Target::MaximumSize {
-            self.dirty[OUTPUT] = true;
-            self.refresh_footer();
-            self.events.push(Event::OutputValue(t));
-            if !self.timeline.pending {
-                self.schedule_compare();
-            }
-        }
     }
 
     pub(super) fn output_key(&mut self, key: VIRTUAL_KEY, ctrl: bool, shift: bool) -> bool {
@@ -749,21 +747,24 @@ impl Recording {
     }
 
     fn step_output_number(&mut self, t: Target, up: bool) {
+        let (min, max) = self.number_bounds(t);
+        if t == Target::MaximumSize {
+            // Shipping steps the draft itself; unreadable text starts at the
+            // 100 KB minimum.
+            let step = match self.output.values.maximum_unit {
+                FileSizeUnit::Kb => 1.,
+                FileSizeUnit::Mb => 0.1,
+                FileSizeUnit::Gb => 0.0001,
+            };
+            let v = number::step_from(&self.output_value(t), step, up, Some(min), Some(max));
+            self.set_output_number(t, &number::format_stepped(v, step));
+            return;
+        }
         let mut text = self.output_value(t);
         if text.trim().is_empty() {
             text = self.number_value(t).to_string();
         }
-        let (min, max) = self.number_bounds(t);
-        let step = if t == Target::MaximumSize {
-            match self.output.values.maximum_unit {
-                FileSizeUnit::Kb => 1.,
-                FileSizeUnit::Mb => 0.1,
-                FileSizeUnit::Gb => 0.0001,
-            }
-        } else {
-            1.
-        };
-        let v = number::step_from(&text, step, up, Some(min), Some(max));
+        let v = number::step_from(&text, 1., up, Some(min), Some(max));
         self.set_output_number(t, &v.to_string());
     }
 
@@ -965,9 +966,14 @@ impl Recording {
             }
             self.rects[slot(Target::CompareShow)] = Rect::new(x + pad, field_y, qw, h);
             if self.shown(Target::CompareShow) {
-                field_y += h + gap + 18. + self.t.n("s-3");
+                field_y += h + gap;
             }
             if self.shown(Target::MaximumSize) {
+                // Room for the field label when Show before / after took
+                // the slot Save quality left for one.
+                if self.shown(Target::CompareShow) {
+                    field_y += 18. + self.t.n("s-3");
+                }
                 let width = qw - 92. - self.t.n("s-4");
                 self.rects[slot(Target::MaximumSize)] = Rect::new(x + pad, field_y, width, h);
                 self.rects[slot(Target::MaximumUnit)] =
