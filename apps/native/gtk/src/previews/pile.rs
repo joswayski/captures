@@ -18,7 +18,9 @@ use gtk::{glib, graphene, gsk};
 use crate::tokens::Tokens;
 use crate::widgets::Thumbnail;
 
-const WIDTH: f32 = preview::THUMBNAIL_WIDTH as f32;
+/// Shipping's 340 px window holds 284 px cards inside 28 px side padding.
+pub const CARD_WIDTH: f64 = preview::THUMBNAIL_WIDTH - 2. * preview::THUMBNAIL_PADDING;
+const WIDTH: f32 = CARD_WIDTH as f32;
 const HEIGHT: f32 = preview::THUMBNAIL_CARD_HEIGHT as f32;
 
 /// One card the pile places.
@@ -76,15 +78,19 @@ mod imp {
     impl WidgetImpl for Pile {
         fn measure(&self, orientation: gtk::Orientation, _for_size: i32) -> (i32, i32, i32, i32) {
             let size = if orientation == gtk::Orientation::Horizontal {
-                preview::THUMBNAIL_WIDTH + 2. * preview::THUMBNAIL_PADDING
+                preview::THUMBNAIL_WIDTH
             } else {
+                let obj = self.obj();
                 let count = self.cards.borrow().len();
-                let progress = self.obj().collapse_progress(self.obj().now_ms());
-                lerp(
-                    preview::stack_height(count),
-                    preview::collapsed_frame_height(count),
-                    progress,
-                )
+                let (_, since) = self.fly.get();
+                let now = obj.now_ms();
+                // Shipping retains the frame through the fly, so the
+                // window resizes and moves once, not on every frame.
+                if obj.tweens().0.running(now - since, obj.reduced()) {
+                    preview::stack_height(count).max(preview::collapsed_frame_height(count))
+                } else {
+                    obj.content_height(obj.collapse_progress(now))
+                }
             };
             let size = size.round() as i32;
             (size, size, -1, -1)
@@ -272,6 +278,15 @@ impl Pile {
             / 1000.
     }
 
+    fn content_height(&self, progress: f64) -> f64 {
+        let count = self.imp().cards.borrow().len();
+        lerp(
+            preview::stack_height(count),
+            preview::collapsed_frame_height(count),
+            progress,
+        )
+    }
+
     fn collapse_progress(&self, now: f64) -> f64 {
         let imp = self.imp();
         let (from, since) = imp.fly.get();
@@ -373,6 +388,12 @@ impl Pile {
         let cards = imp.cards.borrow();
         let count = cards.len();
         let pad = preview::THUMBNAIL_PADDING;
+        // A retained frame keeps the cards on the anchored edge.
+        let offset = if top {
+            0.
+        } else {
+            f64::from(height) - self.content_height(progress)
+        };
         for (index, card) in cards.iter().enumerate() {
             let depth = count - 1 - index;
             let expanded =
@@ -382,12 +403,9 @@ impl Pile {
             let fanned = preview::collapsed_card_pose(&card.id, depth, true, gravity, top);
             let (fan_pose, _) = fan.progress(&card.id, depth, now, &fan_tween, reduced);
             let pose = mix(rest, fanned, fan_pose);
-            let half = (
-                preview::THUMBNAIL_WIDTH / 2.,
-                preview::THUMBNAIL_CARD_HEIGHT / 2.,
-            );
+            let half = (CARD_WIDTH / 2., preview::THUMBNAIL_CARD_HEIGHT / 2.);
             let centre_x = pad + half.0 + pose.dx * progress;
-            let centre_y = lerp(expanded + half.1, front + half.1 + pose.dy, progress);
+            let centre_y = offset + lerp(expanded + half.1, front + half.1 + pose.dy, progress);
             let mut scale = (
                 lerp(1., pose.scale_x, progress),
                 lerp(1., pose.scale_y, progress),
@@ -418,7 +436,7 @@ impl Pile {
         if let Some(expand) = imp.expand.borrow().as_ref()
             && expand.is_visible()
         {
-            let front = preview::collapsed_padding(count) as f32;
+            let front = (offset + preview::collapsed_padding(count)) as f32;
             let transform =
                 gsk::Transform::new().translate(&graphene::Point::new(pad as f32, front));
             expand.allocate(WIDTH as i32, HEIGHT as i32, -1, Some(transform));

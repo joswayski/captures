@@ -20,6 +20,8 @@ use crate::widgets::{Icon, Thumbnail, icon_button};
 
 mod pile;
 use pile::{Pile, PileCard};
+#[cfg(feature = "x11")]
+mod x11;
 
 pub const TITLE: &str = "Captures Previews";
 
@@ -60,6 +62,10 @@ struct State {
     pile: Pile,
     minimize: gtk::Button,
     actions: Actions,
+    #[cfg(feature = "x11")]
+    placement: captures_settings::MiniPreviewPlacement,
+    #[cfg(feature = "x11")]
+    placer: Option<Rc<x11::Placer>>,
 }
 
 fn icon_control(icon: &str, label: &str, classes: &[&str]) -> gtk::Button {
@@ -119,7 +125,13 @@ pub fn build(
         pile: pile.clone(),
         minimize: minimize.clone(),
         actions,
+        #[cfg(feature = "x11")]
+        placement,
+        #[cfg(feature = "x11")]
+        placer: x11::Placer::new(&gtk::prelude::WidgetExt::display(&window)).map(Rc::new),
     });
+    #[cfg(feature = "x11")]
+    place_on_x11(&state);
     let weak = Rc::downgrade(&state);
     clear.connect_clicked(move |_| {
         if let Some(state) = weak.upgrade() {
@@ -162,6 +174,54 @@ pub fn build(
         }
     });
     Previews { window, state }
+}
+
+/// Shipping's stack placement on X11: skip the taskbar and pager before the
+/// first map, pin above once the window manager takes the window on, and
+/// keep the anchored edge put as the window resizes.
+#[cfg(feature = "x11")]
+fn place_on_x11(state: &Rc<State>) {
+    if state.placer.is_none() {
+        return;
+    }
+    let weak = Rc::downgrade(state);
+    state.window.connect_realize(move |window| {
+        let Some(surface) = window.surface().and_downcast::<gdk4_x11::X11Surface>() else {
+            return;
+        };
+        surface.set_skip_taskbar_hint(true);
+        surface.set_skip_pager_hint(true);
+        let Some(state) = weak.upgrade() else {
+            return;
+        };
+        state.place(&surface, true);
+        let weak = Rc::downgrade(&state);
+        surface.connect_notify_local(Some("mapped"), move |surface, _| {
+            if let Some(state) = weak.upgrade()
+                && surface.is_mapped()
+            {
+                state.place(surface, true);
+            }
+        });
+        let (weak, pinned) = (Rc::downgrade(&state), surface.downgrade());
+        if let Some(placer) = state.placer.as_ref() {
+            placer.watch_managed(&surface, move || {
+                if let (Some(state), Some(surface)) = (weak.upgrade(), pinned.upgrade())
+                    && let Some(placer) = state.placer.as_ref()
+                {
+                    placer.pin(&surface);
+                    // The window manager may have placed it on its own.
+                    state.place(&surface, false);
+                }
+            });
+        }
+        let weak = Rc::downgrade(&state);
+        surface.connect_height_notify(move |surface| {
+            if let Some(state) = weak.upgrade() {
+                state.place(surface, false);
+            }
+        });
+    });
 }
 
 impl Previews {
@@ -232,6 +292,20 @@ impl State {
         self.relayout();
     }
 
+    #[cfg(feature = "x11")]
+    fn place(&self, surface: &gdk4_x11::X11Surface, follow_pointer: bool) {
+        let stack = self.stack.borrow();
+        if let Some(placer) = self.placer.as_ref() {
+            placer.place(
+                surface,
+                stack.ids().len(),
+                stack.is_collapsed(),
+                self.placement,
+                follow_pointer,
+            );
+        }
+    }
+
     fn toggle_collapsed(&self) {
         let collapsed = !self.stack.borrow().is_collapsed();
         self.stack.borrow_mut().set_collapsed(collapsed);
@@ -268,7 +342,7 @@ impl State {
         let image = Thumbnail::default();
         image.set_cover(true);
         image.set_size_request(
-            preview::THUMBNAIL_WIDTH as i32,
+            pile::CARD_WIDTH as i32,
             preview::THUMBNAIL_CARD_HEIGHT as i32,
         );
         let recording = entry.kind.is_recording();
@@ -516,7 +590,7 @@ impl State {
         glib::spawn_future_local(async move {
             let pixbuf = gio::spawn_blocking(move || {
                 ["preview.png", "capture.png"].iter().find_map(|name| {
-                    let width = (preview::THUMBNAIL_WIDTH * 2.) as i32;
+                    let width = (pile::CARD_WIDTH * 2.) as i32;
                     gdk::gdk_pixbuf::Pixbuf::from_file_at_scale(
                         directory.join(name),
                         width,

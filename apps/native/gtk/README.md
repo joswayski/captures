@@ -25,6 +25,9 @@ writes a disposable 1000-entry History (`--video` adds one real FFmpeg
 recording and prints its id). `--exercise` and `--quit-after SECONDS`
 emit the same `ready` and `scripted-action` JSON lines as the wgpu workbench
 for `profile.py`-style measurement. Needs `libgtk-4-dev` (GTK 4.6 or newer).
+The default `x11` feature places the preview stack on X11 (work-area corner,
+keep-above, every workspace); `--no-default-features` builds without it, and
+Wayland compositors place the stack themselves.
 
 History is one virtualized `GtkListView` of card rows. GtkListView keeps up
 to 200 rows alive before GTK 4.12, so only rows near the viewport hold cards

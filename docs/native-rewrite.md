@@ -832,6 +832,30 @@ minimizes to the pile and expands it over AT-SPI. Exit motion (dismiss
 streak, delete dust), the drag sway and overflow scrolling remain open.
 X11 (Xvfb) only. Windows, macOS: unchanged.
 
+On X11 the GTK stack now takes shipping's placement. The window is 340 px
+wide with 284 px cards inside 28 px side padding, as `mini-preview.css`
+(the first GTK pile drew 340 px cards in a 396 px window). It skips the
+taskbar and pager before the first map. Once the window manager sets ICCCM
+`WM_STATE` it asks for keep-above and every workspace (`_NET_WM_STATE_ABOVE`
+plus both `_NET_WM_STATE_STICKY` and `_NET_WM_DESKTOP` = all, since Openbox
+only honors the latter), as Tauri's thumbnail window. The X window then
+moves to `thumbnail_geometry`'s corner of the monitor under the pointer
+(GDK's per-monitor work area, physical pixels at the GDK scale), and each
+resize keeps the anchored edge put. As shipping's retained frame, the pile
+keeps the taller height through a fly, so the window resizes and moves once
+per Minimize or expand instead of every frame. Checked in 1920×1080 Xvfb
+with and without Openbox: bottom-left lands at x=0 with its bottom edge at
+1020 (1080 less the 48 px auto-hide reserve and 12 px gap); top-right at
+1580,12; both anchored edges hold across collapse and expand, and Openbox
+reports ABOVE and all desktops. Not done: a non-focusable window (Tauri sets
+`focusable(false)`; GTK4 has no accept-focus API, and keyboard access to the
+stack relies on focus), restoring a dragged stack origin, and Wayland, where
+GTK4 cannot position toplevels: the compositor places the stack until a
+`gtk4-layer-shell` path for wlroots and KDE compositors lands; GNOME has no
+layer-shell. The X11 path is the default `x11` Cargo feature, so a
+Wayland-only GTK build can drop it. Wayland, multi-monitor and real
+hardware not verified. Windows, macOS: unchanged.
+
 The fifth GTK4 slice is the recording editor, opened by History's Edit on a
 video or GIF (one window per artifact) or `--scene recording --artifact ID`.
 It runs the shared `RecordingEditorSession` and FFmpeg toolchain on a worker

@@ -22,3 +22,10 @@ captures-capture = { path = "../../../crates/captures-capture" }
 captures-media = { path = "../../../crates/captures-media" }
 captures-history = { path = "../../../crates/captures-history" }
 captures-settings = { path = "../../../crates/captures-settings" }
+# X11 stack placement; Wayland compositors place windows themselves.
+gdk4-x11 = { version = "0.9", optional = true }
+x11rb = { version = "0.13", optional = true }
+
+[features]
+default = ["x11"]
+x11 = ["dep:gdk4-x11", "dep:x11rb"]
