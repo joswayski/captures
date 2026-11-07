@@ -41,6 +41,8 @@ pub struct Options {
     pub on_look: OnLook,
     /// Open Find with this query (`--find`, for parity screenshots).
     pub find: Option<String>,
+    /// About's Send feedback.
+    pub open_feedback: Box<dyn Fn()>,
 }
 
 /// The page's settings and the widgets that follow them.
@@ -50,6 +52,7 @@ struct Prefs {
     settings: RefCell<AppSettings>,
     settings_file: PathBuf,
     on_look: OnLook,
+    open_feedback: Box<dyn Fn()>,
     /// Called after every save with the settings as written.
     listeners: RefCell<Vec<Listener>>,
     /// Token-drawn widgets that restyle with the look.
@@ -151,7 +154,7 @@ fn pointer(path: &str) -> String {
     format!("/{}", path.replace('.', "/"))
 }
 
-fn label(text: &str, class: &str) -> gtk::Label {
+pub(crate) fn label(text: &str, class: &str) -> gtk::Label {
     let label = gtk::Label::new(Some(text));
     label.add_css_class(class);
     label.set_xalign(0.);
@@ -159,7 +162,7 @@ fn label(text: &str, class: &str) -> gtk::Label {
 }
 
 /// Wrapping secondary copy.
-fn description(text: &str, class: &str) -> gtk::Label {
+pub(crate) fn description(text: &str, class: &str) -> gtk::Label {
     let label = label(text, class);
     label.set_wrap(true);
     label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
@@ -173,7 +176,7 @@ thread_local! {
 }
 
 /// Measure `1ch` for [`capped`] once the stylesheet is installed.
-fn measure_ch(tokens: &Tokens) {
+pub(crate) fn measure_ch(tokens: &Tokens) {
     let layout = gtk::Label::new(None).create_pango_layout(Some("0"));
     let mut font = layout.context().font_description().unwrap_or_default();
     font.set_absolute_size(f64::from(tokens.number("text-sm")) * f64::from(gtk::pango::SCALE));
@@ -183,7 +186,7 @@ fn measure_ch(tokens: &Tokens) {
 
 /// Shipping `max-width: {chars}ch` around wrapping copy. GTK's
 /// `max-width-chars` measures with the default font, not the label's.
-fn capped(label: &gtk::Label, chars: f32) -> MaxWidth {
+pub(crate) fn capped(label: &gtk::Label, chars: f32) -> MaxWidth {
     MaxWidth::new(label, (chars * CH.get()).round() as i32)
 }
 
@@ -232,6 +235,7 @@ pub fn build(
         settings: RefCell::new(settings),
         settings_file: options.settings_file,
         on_look: options.on_look,
+        open_feedback: options.open_feedback,
         listeners: RefCell::default(),
         switches: RefCell::default(),
         swatches: RefCell::default(),
@@ -716,14 +720,14 @@ fn select_grid(
 
 /// `.settings-utility-row`: title and body, then an action button.
 fn utility_row(title: &str, body: &str, action: &str) -> (gtk::Box, gtk::Button) {
-    let button = gtk::Button::with_label(action);
+    // A label child, not `with_label`: GTK 4.14 names a label-mode button
+    // after its text and drops the accessible label, so both rows read "Open".
+    let button = gtk::Button::new();
+    button.set_child(Some(&gtk::Label::new(Some(action))));
     button.add_css_class("ui-btn");
     button.update_property(&[gtk::accessible::Property::Label(&format!(
         "{action}: {title}"
     ))]);
-    if let Some(child) = button.child() {
-        child.set_accessible_role(gtk::AccessibleRole::Presentation);
-    }
     // Shipping's utility rows are their own grid and never stack.
     let row = inline_row(title, body, &button);
     row.remove_css_class("setting-row-inline");
@@ -732,13 +736,13 @@ fn utility_row(title: &str, body: &str, action: &str) -> (gtk::Box, gtk::Button)
 }
 
 /// A button with a construct-time accessible role (radio choices).
-fn role_button(role: gtk::AccessibleRole) -> gtk::Button {
+pub(crate) fn role_button(role: gtk::AccessibleRole) -> gtk::Button {
     glib::Object::builder::<gtk::Button>()
         .property("accessible-role", role)
         .build()
 }
 
-fn checked(widget: &impl IsA<gtk::Widget>, on: bool) {
+pub(crate) fn checked(widget: &impl IsA<gtk::Widget>, on: bool) {
     let widget = widget.as_ref();
     if on {
         widget.add_css_class("active");
@@ -1640,8 +1644,12 @@ fn about_card(prefs: &Rc<Prefs>) -> gtk::Box {
         preferences::FEEDBACK_DETAIL,
         preferences::FEEDBACK_ACTION,
     );
-    // The feedback window is not part of the GTK host yet.
-    open.set_sensitive(false);
+    let prefs = Rc::downgrade(prefs);
+    open.connect_clicked(move |_| {
+        if let Some(prefs) = prefs.upgrade() {
+            (prefs.open_feedback)();
+        }
+    });
     add(&card, &row);
     card
 }

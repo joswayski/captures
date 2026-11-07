@@ -3,6 +3,7 @@
 //! until it passes the feature, screenshot, performance and accessibility
 //! gates in `docs/native-rewrite.md`.
 mod editor;
+mod feedback;
 mod history;
 mod preferences;
 mod previews;
@@ -20,8 +21,8 @@ use std::time::{Duration, Instant};
 use gtk::prelude::*;
 use gtk::{gio, glib, graphene};
 
-const USAGE: &str = "captures-gtk [--scene preferences|history|editor|recording|preview] [--artifact ID] [--appearance light|dark]\n\
-  [--settings-file PATH] [--history-root PATH] [--size WxH]\n\
+const USAGE: &str = "captures-gtk [--scene preferences|history|editor|recording|preview|feedback] [--artifact ID] [--appearance light|dark]\n\
+  [--settings-file PATH] [--history-root PATH] [--size WxH] [--feedback-endpoint URL]\n\
   [--screenshot OUT.png] [--find QUERY] [--exercise] [--quit-after SECONDS]";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -31,6 +32,7 @@ enum Scene {
     Editor,
     Recording,
     Preview,
+    Feedback,
 }
 
 impl Scene {
@@ -41,6 +43,7 @@ impl Scene {
             Scene::Editor => "editor",
             Scene::Recording => "recording",
             Scene::Preview => "preview",
+            Scene::Feedback => "feedback",
         }
     }
 }
@@ -54,6 +57,8 @@ struct Options {
     screenshot: Option<PathBuf>,
     /// Preferences opens Find with this query.
     find: Option<String>,
+    /// Where Send feedback posts; without it the form is a fixture.
+    feedback_endpoint: Option<String>,
     size: Option<(i32, i32)>,
     exercise: bool,
     quit_after: Option<Duration>,
@@ -68,6 +73,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
         artifact: None,
         screenshot: None,
         find: None,
+        feedback_endpoint: None,
         size: None,
         exercise: false,
         quit_after: None,
@@ -83,6 +89,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
                     "editor" => Scene::Editor,
                     "recording" => Scene::Recording,
                     "preview" => Scene::Preview,
+                    "feedback" => Scene::Feedback,
                     other => return Err(format!("unsupported scene {other}")),
                 }
             }
@@ -92,6 +99,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
             "--history-root" => options.history_root = Some(value()?.into()),
             "--screenshot" => options.screenshot = Some(value()?.into()),
             "--find" => options.find = Some(value()?),
+            "--feedback-endpoint" => options.feedback_endpoint = Some(value()?),
             "--exercise" => options.exercise = true,
             "--quit-after" => {
                 let seconds: f64 = value()?.parse().map_err(|_| "bad --quit-after")?;
@@ -148,6 +156,8 @@ struct Host {
     previews: RefCell<Option<Rc<previews::Previews>>>,
     /// `--find`, for the first Preferences window.
     find: RefCell<Option<String>>,
+    feedback: RefCell<Option<gtk::ApplicationWindow>>,
+    feedback_endpoint: Option<String>,
 }
 
 impl Host {
@@ -170,6 +180,14 @@ impl Host {
                     }
                 }),
                 find: self.find.borrow_mut().take(),
+                open_feedback: Box::new({
+                    let host = Rc::downgrade(self);
+                    move || {
+                        if let Some(host) = host.upgrade() {
+                            host.show_feedback();
+                        }
+                    }
+                }),
             },
             {
                 let host = Rc::downgrade(self);
@@ -192,6 +210,29 @@ impl Host {
             glib::Propagation::Proceed
         });
         *self.preferences.borrow_mut() = Some(window.clone());
+        window.present();
+        window
+    }
+
+    /// Send Feedback: one window, reused while open.
+    fn show_feedback(self: &Rc<Self>) -> gtk::ApplicationWindow {
+        if let Some(window) = self.feedback.borrow().as_ref() {
+            window.present();
+            return window.clone();
+        }
+        let window = feedback::build(
+            &self.app,
+            &self.tokens.borrow(),
+            self.feedback_endpoint.clone(),
+        );
+        let host = Rc::downgrade(self);
+        window.connect_close_request(move |_| {
+            if let Some(host) = host.upgrade() {
+                host.feedback.borrow_mut().take();
+            }
+            glib::Propagation::Proceed
+        });
+        *self.feedback.borrow_mut() = Some(window.clone());
         window.present();
         window
     }
@@ -451,10 +492,13 @@ fn main() -> glib::ExitCode {
             recordings: RefCell::default(),
             previews: RefCell::default(),
             find: RefCell::new(options.find.clone()),
+            feedback: RefCell::default(),
+            feedback_endpoint: options.feedback_endpoint.clone(),
         });
         hosts.borrow_mut().push(host.clone());
         let window: gtk::ApplicationWindow = match options.scene {
             Scene::Preferences => host.show_preferences(),
+            Scene::Feedback => host.show_feedback(),
             Scene::History => host.show_history().window.clone(),
             Scene::Editor => {
                 let id = options.artifact.clone().expect("checked in parse");
@@ -578,6 +622,8 @@ fn exercise(host: &Rc<Host>, scene: Scene, started: Instant) {
                         history.scroll_to_end(cycle % 2 == 0);
                     }
                 }
+                // A static form: nothing to exercise.
+                Scene::Feedback => {}
             }
             emit(
                 "scripted-action",

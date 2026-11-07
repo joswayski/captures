@@ -53,6 +53,7 @@ pub fn css(t: &Tokens) -> String {
             "title-tracking" => tracking("tracking-tighter", "text-3xl"),
             "card-tracking" => tracking("tracking-tight", "text-lg"),
             "sm-tracking" => tracking("tracking-tight", "text-sm"),
+            "eyebrow-tracking" => tracking("tracking-wide", "text-2xs"),
             "image-hover" => {
                 mix(t.rgba("surface-sunken"), t.rgba("theme-accent"), 0.12).to_string()
             }

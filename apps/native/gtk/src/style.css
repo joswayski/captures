@@ -2343,3 +2343,170 @@ popover.captures-menu.canvas-bg-menu > contents {
     0 0 0 1px alpha(var(--theme-accent), 0.85),
     0 0 18px alpha(var(--theme-accent), 0.24);
 }
+
+/* ------------------------------------------------------------ feedback ---- */
+
+/* `Feedback.tsx` and the `.feedback*` rules in `windows.css`. */
+.captures .feedback {
+  padding: var(--s-9) var(--s-8) var(--s-11);
+  background: var(--surface-canvas);
+}
+.captures .eyebrow {
+  color: var(--text-subtle);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--eyebrow-tracking);
+}
+.captures .feedback-title {
+  margin-top: var(--s-2);
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--recording-title-tracking);
+}
+.captures .help-text {
+  color: var(--text-subtle);
+  font-size: var(--text-sm);
+  line-height: var(--lh-snug-sm);
+}
+.captures .feedback-intro {
+  margin-top: var(--s-4);
+}
+.captures .field-label {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+.captures .feedback-meta-title {
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--brand-tracking);
+}
+.captures .feedback-meta-term {
+  color: var(--text-subtle);
+  font-size: var(--text-sm);
+}
+.captures .feedback-meta-value {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+.captures button.feedback-category {
+  all: unset;
+  /* Shipping's 62px border box. */
+  min-height: calc(62px - 2 * var(--s-4) - 2px);
+  padding: var(--s-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  color: var(--text-muted);
+  background: var(--surface-canvas);
+  transition:
+    border-color var(--dur-2) var(--ease-standard),
+    background-color var(--dur-2) var(--ease-standard),
+    box-shadow var(--dur-2) var(--ease-standard);
+}
+.captures button.feedback-category:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+}
+.captures button.feedback-category.active {
+  border-color: var(--theme-accent);
+  background: var(--surface-selected);
+  box-shadow: inset 0 0 0 1px var(--theme-accent);
+}
+.captures button.feedback-category:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+.captures .feedback-category-name {
+  color: var(--text);
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+}
+.captures .feedback-category-detail {
+  color: var(--text-subtle);
+  font-size: var(--text-xs);
+  line-height: var(--lh-snug-xs);
+}
+.captures .feedback-optional {
+  padding: 1px var(--s-3);
+  border-radius: var(--r-pill);
+  color: var(--text-subtle);
+  background: var(--surface-sunken);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--eyebrow-tracking);
+}
+.captures textview.feedback-message {
+  /* Shipping's `rows={7}` at `--leading-snug`: its 148px minimum loses to
+     the shared input rule, so seven lines set the height. */
+  min-height: calc(7 * var(--lh-snug-md));
+  padding: var(--s-4) var(--s-5);
+  border: 1px solid var(--control-border);
+  border-radius: var(--r-md);
+  color: var(--text);
+  background: var(--surface-field);
+  font-size: var(--text-md);
+  transition:
+    border-color var(--dur-2) var(--ease-standard),
+    box-shadow var(--dur-2) var(--ease-standard);
+}
+.captures textview.feedback-message > text {
+  background: transparent;
+}
+.captures textview.feedback-message:hover {
+  border-color: var(--border-strong);
+}
+.captures textview.feedback-message:focus-within {
+  border-color: var(--theme-accent);
+  box-shadow: var(--focus-ring-tight);
+}
+.captures .feedback-placeholder {
+  margin: calc(var(--s-4) + 1px) calc(var(--s-5) + 1px);
+  color: var(--text-faint);
+  font-size: var(--text-md);
+}
+.captures entry.feedback-contact {
+  all: unset;
+  /* Shipping's border box; GTK sizes the content box. */
+  min-height: calc(var(--h-lg) - 2px);
+  padding: 0 var(--s-5);
+  border: 1px solid var(--control-border);
+  border-radius: var(--r-md);
+  color: var(--text);
+  background: var(--surface-field);
+  font-size: var(--text-md);
+  transition:
+    border-color var(--dur-2) var(--ease-standard),
+    box-shadow var(--dur-2) var(--ease-standard);
+}
+.captures entry.feedback-contact > text > placeholder {
+  color: var(--text-faint);
+}
+.captures entry.feedback-contact:hover {
+  border-color: var(--border-strong);
+}
+.captures entry.feedback-contact:focus-within {
+  border-color: var(--theme-accent);
+  box-shadow: var(--focus-ring-tight);
+}
+.captures .feedback-status {
+  padding: var(--s-3) var(--s-4);
+  border-radius: var(--r-md);
+  font-size: var(--text-sm);
+  line-height: var(--lh-snug-sm);
+}
+.captures .feedback-status-ok {
+  color: var(--positive-text);
+  background: var(--positive-surface);
+}
+.captures .feedback-status-error {
+  color: var(--danger-text);
+  background: var(--danger-surface);
+}
+.captures .feedback-status-note {
+  color: var(--text-muted);
+  background: var(--surface-sunken);
+}
+.captures button.ui-btn.feedback-submit {
+  min-height: var(--h-lg);
+  padding: 0 var(--s-6);
+}

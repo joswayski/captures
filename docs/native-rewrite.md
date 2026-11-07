@@ -1014,8 +1014,8 @@ Tauri harness card by card, light and dark, at 1080×900 under Xvfb.
 `smoke.py` saves Dark, Cobalt (checked), a typed Custom accent, the Top
 right corner, a 24 FPS GIF select and a recorded Ctrl+Shift+4 Region
 shortcut. Not yet ported: the microphone list (Off and the saved device
-only, until the GTK host has an audio backend), Send feedback (the feedback
-window; Open is disabled), the update worker and live System appearance
+only, until the GTK host has an audio backend), Send feedback (ported
+later, below), the update worker and live System appearance
 changes. X11 (Xvfb) on GTK 4.8 and 4.14 only;
 Wayland, Orca and real hardware remain open. Windows, macOS: unchanged.
 
@@ -1051,6 +1051,41 @@ whole page; a live resize across 720 px was checked under openbox, and
 `smoke.py` opens a 640 px Preferences window and checks the nav is gone
 (Xvfb has no window manager to resize a live window). X11 only; Wayland,
 Orca and real hardware remain open. Windows, macOS: unchanged.
+
+GTK Send Feedback ports `Feedback.tsx`: Preferences' About Open (or
+`--scene feedback`) opens one titled, resizable 640×700 window (minimum
+460×460) with the eyebrow, title and 56ch intro. Next come the Included
+automatically card, with the version and system label loaded on a worker as
+`captures_feedback::native::context`, and the form card. Bug, Idea and Other
+are radio buttons with the accent selection, in two columns at shipping's
+≤720 px width and three above it. The message is a `GtkTextView` with the
+category's placeholder, clamped to 8,000 characters. Contact is an entry
+with the optional pill, limited to 200. Send fills the row with the sent
+(status) or error (alert) note. Copy, limits and `can_submit` come from
+`captures_app::feedback`, and sending uses `captures-feedback`'s client on
+a worker, so its 60 s cooldown and validation are shared. Nothing sends by
+default: without `--feedback-endpoint URL` the form is a fixture whose Send
+stays off, with the shared fixture note, as AppKit's non-live workbench.
+Shipping's computed sizes were matched rather than its stylesheet: the
+message box is seven `--leading-snug` lines (shipping's 148 px minimum loses
+to the shared input rule), and GTK's content-box `min-height` is converted
+from shipping's border boxes. Send keeps the rounded, dimmed-when-disabled
+primary button AppKit uses. Shipping's `.feedback-submit` misses the shared
+`.ui-btn` shape rule, so Tauri draws it square and never dims it.
+`smoke.py` opens the fixture from About (Send off). Against a loopback
+service, it walks the form by keyboard (nothing starts focused; Tab reaches
+the message and contact), sends one draft (checks category `idea`, contact,
+`source` and `os` in the received JSON, the sent note and the cleared
+message), and sees the cooldown alert refuse a second. Compared with the
+Tauri harness at 640×700 and 640×1000 in light and dark. Not ported: the
+textarea's vertical resize grip and crash-diagnostic attachments. The
+smoke also caught an accessibility bug in Preferences' utility rows. On GTK
+4.14, About's Open had an empty name, and without its presentation child
+both Open buttons read just "Open", because GTK names a label-mode button
+after its text. The rows now use a label child, so both versions expose
+"Open: Send feedback" and "Open: GNOME screenshot shortcuts". X11 (Xvfb) on
+GTK 4.8 and 4.14 only; Wayland, Orca and real hardware remain open.
+Windows, macOS: unchanged.
 
 ## Progress dashboard
 

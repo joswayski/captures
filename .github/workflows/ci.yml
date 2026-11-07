@@ -236,8 +236,16 @@ jobs:
               --size 1100x760 --screenshot "$RUNNER_TEMP/recording-$appearance.png"
             test -s "$RUNNER_TEMP/recording-$appearance.png"
           done
-      - name: AT-SPI smoke (History, Preferences, editors, previews)
-        timeout-minutes: 5
+      - name: Render the Feedback form headlessly in both appearances
+        run: |
+          for appearance in light dark; do
+            GSK_RENDERER=cairo xvfb-run -a apps/native/gtk/target/debug/captures-gtk \
+              --scene feedback --appearance "$appearance" --settings-file "$RUNNER_TEMP/settings.json" \
+              --screenshot "$RUNNER_TEMP/feedback-$appearance.png"
+            test -s "$RUNNER_TEMP/feedback-$appearance.png"
+          done
+      - name: AT-SPI smoke (History, Preferences, editors, previews, Feedback)
+        timeout-minutes: 6
         run: xvfb-run -a dbus-run-session -- /usr/bin/python3 apps/native/gtk/smoke.py --binary apps/native/gtk/target/debug/captures-gtk
 
   # The Windows host that replaces the egui/wgpu UI on Windows (see

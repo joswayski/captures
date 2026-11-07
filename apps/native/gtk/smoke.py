@@ -10,17 +10,22 @@ Editor: History's Edit opens the screenshot editor; a real pointer drag
 (xdotool) draws a rectangle layer, Undo and Redo go through AT-SPI, and Save
 writes a new PNG. Previews: Restore opens floating preview cards; Copy shows
 its status chip, Close dismisses a card and Delete removes its entry from disk.
+Feedback: Preferences' About opens the form as a fixture whose Send stays off;
+with a loopback endpoint, keyboard entry sends one draft and the client's
+cooldown refuses a second.
 
 Run under `xvfb-run -a dbus-run-session --`, with `--binary` pointing at a
 built `captures-gtk`. Needs python3-gi and gir1.2-atspi-2.0.
 """
 import argparse
+from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 import gi
@@ -808,6 +813,105 @@ def previews(binary, scratch):
         process.wait(timeout=10)
 
 
+def feedback(binary, scratch):
+    # Without an endpoint the form is a fixture: Send stays off.
+    process = launch(binary, "--settings-file", str(scratch / "feedback-settings.json"),
+                     "--size", "880x660")
+    try:
+        app = wait(lambda: application(process.pid), "the app on the accessibility bus")
+        press(wait(lambda: find(app, "push button", "Open: Send feedback"), "About's Open")[0])
+        form = wait(lambda: [n for n, (_, name) in nodes(app) if name == "Send Feedback"],
+                    "the Send Feedback window")[0]
+        wait(lambda: [n for n, (_, name) in nodes(form)
+                      if node_text(n, name) == "Fixture mode — sending feedback is disabled."],
+             "the fixture note")
+        send = find(form, "push button", "Send feedback")[0]
+        assert not has_state(send, Atspi.StateType.SENSITIVE), "a fixture can send"
+        print("feedback: Preferences opens the fixture form with Send off")
+    finally:
+        process.terminate()
+        process.wait(timeout=10)
+
+    received = []
+
+    class Service(BaseHTTPRequestHandler):
+        def do_POST(self):
+            received.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+            body = b'{"ok":true}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Service)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    endpoint = f"http://127.0.0.1:{server.server_port}/api/feedback"
+    process = launch(binary, "--scene", "feedback", "--feedback-endpoint", endpoint,
+                     "--settings-file", str(scratch / "feedback-settings.json"))
+    try:
+        app = wait(lambda: application(process.pid), "the app on the accessibility bus")
+        bug = wait(lambda: find(app, "radio button", "Bug"), "the Bug category")[0]
+        idea = find(app, "radio button", "Idea")[0]
+        wait(lambda: has_state(bug, Atspi.StateType.CHECKED), "Bug to start checked")
+        press(idea)
+        wait(lambda: has_state(idea, Atspi.StateType.CHECKED)
+             and not has_state(bug, Atspi.StateType.CHECKED), "Idea to take the check")
+        send = find(app, "push button", "Send feedback")[0]
+        # GTK 4.14's cache keeps the first name, "…": also read live text.
+        def shows_system(node, name):
+            texts = [name]
+            if "Text" in node.get_interfaces():
+                texts.append(Atspi.Text.get_text(node, 0, -1))
+            return any(text.startswith("linux · ") for text in texts)
+
+        wait(lambda: [n for n, (_, name) in nodes(app) if shows_system(n, name)],
+             "the system details")
+        assert not has_state(send, Atspi.StateType.SENSITIVE), "Send is on without a message"
+        # Keyboard only: nothing starts focused, so Tab walks the three
+        # categories into the message, then on to the contact field. Without
+        # a window manager, keys go to the window under the pointer.
+        window = subprocess.run(["xdotool", "search", "--sync", "--name", "^Send Feedback$"],
+                                capture_output=True, text=True, check=True).stdout.split()[0]
+        subprocess.run(["xdotool", "mousemove", "--window", window, "20", "20"], check=True)
+        time.sleep(0.2)
+        subprocess.run(["xdotool", "key", "Tab", "Tab", "Tab", "Tab"], check=True)
+        subprocess.run(["xdotool", "type", "--delay", "40", "Toolbar overlaps"], check=True)
+        subprocess.run(["xdotool", "key", "Tab"], check=True)
+        subprocess.run(["xdotool", "type", "--delay", "40", "@captures"], check=True)
+        wait(lambda: has_state(send, Atspi.StateType.SENSITIVE), "Send to enable")
+        press(send)
+        wait(lambda: received, "the loopback service to receive the draft")
+        sent = received[0]
+        assert (sent["message"], sent["category"], sent["contact"], sent["source"],
+                sent["os"]) == ("Toolbar overlaps", "idea", "@captures", "desktop",
+                                "linux"), sent
+        wait(lambda: [n for n, (_, name) in nodes(app)
+                      if node_text(n, name) == "Thanks — feedback sent."], "the sent note")
+        message = [n for n, (role, name) in nodes(app) if name == "Message"
+                   and role != "label" and "Text" in n.get_interfaces()][0]
+        wait(lambda: Atspi.Text.get_text(message, 0, -1) == "", "the message to clear")
+        # A second draft inside a minute stops at the client's cooldown.
+        # Sending disabled the fields, which dropped focus as shipping's
+        # browser does: Shift+Tab reaches Contact, then the message.
+        subprocess.run(["xdotool", "key", "shift+Tab", "shift+Tab"], check=True)
+        subprocess.run(["xdotool", "type", "--delay", "40", "Again"], check=True)
+        wait(lambda: has_state(send, Atspi.StateType.SENSITIVE), "Send to enable again")
+        press(send)
+        wait(lambda: [n for n, (_, name) in nodes(app) if node_text(n, name)
+                      == "Please wait a minute before sending more feedback."],
+             "the cooldown alert")
+        assert len(received) == 1, received
+        print("feedback: keyboard draft sent to a loopback service; cooldown refused a second")
+    finally:
+        process.terminate()
+        process.wait(timeout=10)
+        server.shutdown()
+
+
 def recording(binary, scratch):
     root = scratch / "recording-history"
     write_video_entry(root, seconds=4)
@@ -877,6 +981,7 @@ def main():
         recording(args.binary, scratch)
         recording_output(args.binary, scratch)
         previews(args.binary, scratch)
+        feedback(args.binary, scratch)
 
 
 if __name__ == "__main__":
