@@ -405,6 +405,23 @@ impl Editor {
             .push(Event::Value(Target::Prop(menu.kind.trigger())));
     }
 
+    /// Alt+Down or Alt+Up (a system key) on a focused select: opens it, or
+    /// closes an open one keeping its choice, like the Preferences selects
+    /// and Windows combo boxes. The Text style picker is a button.
+    pub(super) fn menu_alt_key(&mut self, vk: VIRTUAL_KEY) -> bool {
+        let Some(Target::Prop(prop @ (Prop::Font | Prop::Aspect | Prop::Preset))) = self.focus
+        else {
+            return false;
+        };
+        if !matches!(vk, VK_DOWN | VK_UP) {
+            return false;
+        }
+        if self.menu.is_some_and(|m| m.kind.trigger() == prop) {
+            return self.menu_key(VK_ESCAPE);
+        }
+        self.menu_key(vk)
+    }
+
     /// Keys for a focused popup trigger; true when consumed. Both popups use
     /// the shared select keys while open; a closed Font select also opens
     /// on the arrows, a closed Text style picker only on Enter and Space

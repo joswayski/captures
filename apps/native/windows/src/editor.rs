@@ -5304,6 +5304,14 @@ impl Editor {
                 }
                 self.need = true;
             }
+            // Alt chords arrive as system keys; Alt+F4, Alt+Space and the
+            // rest stay with DefWindowProc.
+            WM_SYSKEYDOWN => {
+                if !self.menu_alt_key(VIRTUAL_KEY(wp.0 as u16)) {
+                    return None;
+                }
+                self.need = true;
+            }
             WM_CHAR if self.field.is_some() => self.field_char(wp.0 as u16),
             WM_IME_STARTCOMPOSITION if self.field.is_some() => {
                 if let Some(rect) = self.field_ime_rect() {
