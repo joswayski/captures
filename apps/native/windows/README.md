@@ -30,13 +30,19 @@ pixels. Valid edits debounce for 250 ms; invalid drafts stay local until blur.
 Save waits for the accepted preview settings, and failed previews restore those
 settings. Numeric fields expose UIA Value, menus ExpandCollapse/SelectionItem,
 volumes RangeValue and audio checkboxes Toggle. Output controls passed physical
-pass 25; the source-preview correction awaits its focused retest. The preview
+pass 25; pass 26 accepted the source-preview correction. The preview
 retains source geometry independently of the export dimensions.
 Graphical crop has eight handles and interior movement; numeric source-pixel
 bounds, aspect lock, keyboard movement and UIA ranges share the crop geometry.
-Crop still awaits physical acceptance; Wine tests and offscreen renders are not
-that gate. Comparison, format switching and MP4 quality/size-budget controls
-remain migration work.
+Crop and comparison still await physical acceptance; Wine tests and offscreen
+renders are not that gate. MP4 Preserve/Compress presets and GIF compression use
+the shared encoded comparison, with a 6–94% split, keyboard/UIA range, Hide/Show,
+processing/error feedback and estimated size badges. New edits cancel old work;
+only matching generations, accepted revisions and source positions can display.
+Comparison hides during MP4 playback; crop controls remain above it.
+GIF comparison is a static sample; Hide restores source autoplay.
+Format switching and hard size budgets remain
+migration work.
 This slice preserves the source's MP4/GIF format; WebM saves report unsupported.
 The filename exposes UIA Value, the copy switch
 and preview modes expose Toggle, and actions Invoke. Timeline/playback passed

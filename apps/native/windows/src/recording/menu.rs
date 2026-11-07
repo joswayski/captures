@@ -48,7 +48,10 @@ impl Recording {
     }
 
     fn menu_row_height(&self, t: Target) -> f32 {
-        if matches!(t, Target::Resolution | Target::Quality) {
+        if matches!(
+            t,
+            Target::Resolution | Target::Quality | Target::QualityMode
+        ) {
             64.
         } else {
             self.t.n("h-md") + 2. * self.t.n("s-2")
