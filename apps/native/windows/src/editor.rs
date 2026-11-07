@@ -5069,6 +5069,11 @@ impl Editor {
         let y = ((lp.0 >> 16) & 0xffff) as i16 as f32 / s;
         let key_down = |vk: VIRTUAL_KEY| unsafe { GetKeyState(vk.0 as i32) } < 0;
         match msg {
+            // No menu bar: lone Alt/F10 must not enter a modal menu loop.
+            // Alt+Space carries a character in lParam and still reaches Windows.
+            WM_SYSCOMMAND if wp.0 & 0xfff0 == SC_KEYMENU as usize && lp.0 == 0 => {
+                return Some(LRESULT(0));
+            }
             WM_SIZE => {
                 if lp.0 & 0xffff != 0 && (lp.0 >> 16) & 0xffff != 0 {
                     self.relayout = true;
@@ -6165,6 +6170,20 @@ mod tests {
             (1280., 840.),
         )
         .unwrap();
+        assert_eq!(
+            e.handle(WM_SYSCOMMAND, WPARAM((SC_KEYMENU | 3) as usize), LPARAM(0)),
+            Some(LRESULT(0)),
+            "lone Alt must not enter the system menu loop"
+        );
+        assert_eq!(
+            e.handle(WM_SYSCOMMAND, WPARAM(SC_KEYMENU as usize), LPARAM(32)),
+            None,
+            "Alt+Space still belongs to Windows"
+        );
+        assert_eq!(
+            e.handle(WM_SYSCOMMAND, WPARAM(SC_CLOSE as usize), LPARAM(0)),
+            None
+        );
         let key = |e: &mut Editor, vk: VIRTUAL_KEY| {
             e.handle(WM_KEYDOWN, WPARAM(vk.0 as usize), LPARAM(0));
         };

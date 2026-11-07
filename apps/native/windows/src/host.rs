@@ -739,6 +739,10 @@ impl Host {
         let y = ((lp.0 >> 16) & 0xffff) as i16 as f32 / s;
         let shift = unsafe { GetKeyState(VK_SHIFT.0 as i32) } < 0;
         match msg {
+            // No menu bar: suppress lone Alt/F10, not Alt+Space or other chords.
+            WM_SYSCOMMAND if wp.0 & 0xfff0 == SC_KEYMENU as usize && lp.0 == 0 => {
+                return Some(LRESULT(0));
+            }
             WM_SIZE => {
                 if lp.0 & 0xffff != 0 && (lp.0 >> 16) & 0xffff != 0 {
                     self.layout = true;
