@@ -10,6 +10,7 @@ use captures_app::editor_chrome::eraser;
 use captures_app::editor_image_background::BrushMode;
 use gtk::prelude::*;
 
+use super::controls::{Choice, NumberField, field, pair};
 use crate::widgets::Icon;
 
 /// Shipping `RemoveBackgroundMode`.
@@ -264,12 +265,132 @@ impl EraserSection {
     }
 }
 
+/// Shipping's Aspect ratio options: `(value, label, width / height)`.
+const CROP_ASPECTS: [(&str, &str, Option<f64>); 5] = [
+    ("free", "Free", None),
+    ("1:1", "1 : 1", Some(1.)),
+    ("4:3", "4 : 3", Some(4. / 3.)),
+    ("3:2", "3 : 2", Some(3. / 2.)),
+    ("16:9", "16 : 9", Some(16. / 9.)),
+];
+const CROP_KEEP_HINT: &str = "Hold Shift while dragging to keep this aspect ratio.";
+const CROP_DRAG_HINT: &str = "Drag over the area you want to keep. Start from outside the canvas \
+                              to crop to an edge. Hold Shift to lock the current aspect ratio.";
+
+/// The Crop section (`tool === "crop"`): the Aspect ratio select, then the
+/// staged crop's read-only Width and Height with Clear and Apply crop, or
+/// the drag hint while nothing is staged.
+pub(super) struct CropSection {
+    pub(super) root: gtk::Box,
+    aspect: Rc<Cell<Option<f64>>>,
+    /// The select's click handler only holds it weakly.
+    _aspect_choice: Rc<Choice>,
+    staged: gtk::Box,
+    width: NumberField,
+    height: NumberField,
+    pub(super) clear: gtk::Button,
+    pub(super) apply: gtk::Button,
+    hint: gtk::Label,
+}
+
+impl CropSection {
+    fn new() -> Self {
+        let root = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        root.add_css_class("property-section");
+        let aspect = Rc::new(Cell::new(None));
+        let choice = {
+            let aspect = aspect.clone();
+            Choice::new(
+                Some(&text("Aspect ratio", "property-caption")),
+                "Aspect ratio",
+                false,
+                move |value| {
+                    let ratio = CROP_ASPECTS.iter().find(|(id, ..)| *id == value);
+                    aspect.set(ratio.and_then(|(.., ratio)| *ratio));
+                },
+            )
+        };
+        choice.set_options(
+            CROP_ASPECTS
+                .iter()
+                .map(|(id, label, _)| ((*id).to_owned(), (*label).to_owned()))
+                .collect(),
+        );
+        choice.set("free");
+        root.append(&choice.root);
+        let staged = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        // Shipping's read-only `<input>`s: values a reader can review, not edit.
+        let read_only = |name: &str| {
+            let number = NumberField::new(name, (0., f64::from(u32::MAX)), |_| {});
+            number.spin.set_editable(false);
+            number.spin.set_can_focus(true);
+            if let Some(steppers) = number.root.last_child() {
+                steppers.set_visible(false);
+            }
+            number
+        };
+        let width = read_only("Crop width");
+        let height = read_only("Crop height");
+        staged.append(&pair(
+            &field("Width", &width.root),
+            &field("Height", &height.root),
+        ));
+        let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        actions.set_homogeneous(true);
+        let clear = gtk::Button::with_label("Clear");
+        clear.add_css_class("property-action");
+        let apply = gtk::Button::with_label("Apply crop");
+        apply.add_css_class("property-action");
+        apply.add_css_class("primary");
+        apply.add_css_class("cta-pulse");
+        actions.append(&clear);
+        actions.append(&apply);
+        staged.append(&actions);
+        root.append(&staged);
+        let hint = text(CROP_DRAG_HINT, "property-hint");
+        root.append(&hint);
+        let section = CropSection {
+            root,
+            aspect,
+            _aspect_choice: choice,
+            staged,
+            width,
+            height,
+            clear,
+            apply,
+            hint,
+        };
+        section.sync(None);
+        section
+    }
+
+    /// The chosen aspect ratio (width / height), or a free crop.
+    pub(super) fn aspect(&self) -> Option<f64> {
+        self.aspect.get()
+    }
+
+    /// Show the staged crop's size and actions, or the drag hint.
+    pub(super) fn sync(&self, crop: Option<captures_app::editor::Rect>) {
+        self.staged.set_visible(crop.is_some());
+        self.hint.set_label(if crop.is_some() {
+            CROP_KEEP_HINT
+        } else {
+            CROP_DRAG_HINT
+        });
+        if let Some(crop) = crop {
+            self.width.set(crop.width, true);
+            self.height.set(crop.height, true);
+        }
+    }
+}
+
 /// `.screenshot-properties`: heading plus the active sections.
 pub(super) struct Properties {
     pub(super) root: gtk::ScrolledWindow,
     heading: gtk::Box,
     title: gtk::Label,
     pub(super) eraser: Rc<EraserSection>,
+    pub(super) crop: CropSection,
     pub(super) inspector: super::inspector::Inspector,
 }
 
@@ -285,6 +406,8 @@ impl Properties {
         content.append(&heading);
         let eraser = Rc::new(EraserSection::new());
         content.append(&eraser.root);
+        let crop = CropSection::new();
+        content.append(&crop.root);
         let inspector = super::inspector::Inspector::new(tokens, &content);
         let root = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
@@ -298,6 +421,7 @@ impl Properties {
             heading,
             title,
             eraser,
+            crop,
             inspector,
         }
     }
@@ -324,6 +448,7 @@ impl Properties {
         self.heading.set_visible(title.is_some());
         self.title.set_label(title.as_deref().unwrap_or_default());
         self.eraser.root.set_visible(tool == "b");
+        self.crop.root.set_visible(tool == "c");
     }
 }
 

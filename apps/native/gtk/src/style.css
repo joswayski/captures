@@ -1933,6 +1933,55 @@ window.captures.preview-stack-window {
   box-shadow: var(--focus-ring-tight);
 }
 
+/* `.screenshot-property-actions button`: Clear and Apply crop. */
+.captures button.property-action {
+  all: unset;
+  min-height: var(--h-md);
+  border: 1px solid var(--control-border);
+  border-radius: var(--r-md);
+  color: var(--text);
+  background: var(--control);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+.captures button.property-action > label {
+  margin: 0 var(--s-2);
+}
+.captures button.property-action:hover {
+  border-color: var(--border-strong);
+  background: var(--control-hover);
+}
+.captures button.property-action:disabled {
+  opacity: 0.45;
+}
+.captures button.property-action.primary {
+  border-color: transparent;
+  color: var(--theme-accent-ink);
+  background: var(--theme-accent);
+  font-weight: var(--weight-semibold);
+}
+.captures button.property-action.primary:hover {
+  background: var(--theme-accent-hover);
+}
+.captures button.property-action.primary.cta-pulse {
+  animation: screenshot-cta-pulse 2.4s ease-in-out infinite;
+}
+.captures button.property-action:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+}
+@keyframes screenshot-cta-pulse {
+  0% {
+    box-shadow: 0 0 0 0 alpha(var(--theme-accent), 0);
+  }
+  50% {
+    box-shadow: 0 0 0 5px alpha(var(--theme-accent), 0.22);
+  }
+  100% {
+    box-shadow: 0 0 0 0 alpha(var(--theme-accent), 0);
+  }
+}
+
 /* `.screenshot-format-buttons button`. */
 .captures button.format-button {
   all: unset;

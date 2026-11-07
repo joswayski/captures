@@ -462,6 +462,46 @@ def editor(binary, scratch):
         wait(lambda: not find(app, "list item", "Pasted logo.png · Image"), "Undo to remove it")
         print("editor: Add images imported a PNG through the GTK chooser as one undo step")
 
+        # Crop stages its rectangle (1 : 1 here) until Apply crop, as shipping.
+        crop_tool = find(app, "push button", "Crop (C)")[0]
+        press(crop_tool)
+        wait(lambda: has_state(crop_tool, Atspi.StateType.PRESSED), "the Crop tool")
+        press(wait(lambda: [n for n, (role, name) in nodes(app)
+                            if role == "combo box" and name.startswith("Aspect ratio")],
+                   "the Aspect ratio select")[0])
+        press(wait(lambda: find(app, "radio menu item", "1 : 1"), "the 1 : 1 option")[0])
+        wait(lambda: not find(app, "radio menu item", "1 : 1"), "the aspect menu to close")
+
+        def drag_crop():
+            subprocess.run(["xdotool", "mousemove", str(x), str(y)], check=True)
+            time.sleep(0.2)
+            subprocess.run(["xdotool", "mousedown", "1"], check=True)
+            for step in range(1, 11):
+                subprocess.run(["xdotool", "mousemove", str(x + step * 16), str(y + step * 6)],
+                               check=True)
+                time.sleep(0.03)
+            subprocess.run(["xdotool", "mouseup", "1"], check=True)
+            return wait(lambda: find(app, "spin button", "Crop width"), "the staged crop")[0]
+
+        crop_width = drag_crop()
+        crop_height = find(app, "spin button", "Crop height")[0]
+        staged = Atspi.Value.get_current_value(crop_width)
+        assert staged > 0 and staged == Atspi.Value.get_current_value(crop_height), \
+            "the 1 : 1 crop is not square"
+        canvas_width = find(app, "spin button", "Canvas width")[0]
+        before = Atspi.Value.get_current_value(canvas_width)
+        assert before != staged, "the drag cropped before Apply crop"
+        press(find(app, "push button", "Clear")[0])
+        wait(lambda: not find(app, "spin button", "Crop width"), "Clear to drop the crop")
+        crop_width = drag_crop()
+        staged = Atspi.Value.get_current_value(crop_width)
+        press(find(app, "push button", "Apply crop")[0])
+        wait(lambda: Atspi.Value.get_current_value(canvas_width) == staged, "Apply crop to crop")
+        wait(lambda: has_state(select, Atspi.StateType.PRESSED), "Apply crop to return to Select")
+        press(find(app, "push button", "Undo")[0])
+        wait(lambda: Atspi.Value.get_current_value(canvas_width) == before, "Undo to uncrop")
+        print(f"editor: Crop staged a 1 : 1 {staged:.0f} px square, Clear, Apply crop and Undo")
+
         # Canvas toolbar: W resizes, Trim edges shrinks back to the visible
         # layers, and Solid background off makes the canvas transparent.
         width = find(app, "spin button", "Canvas width")[0]

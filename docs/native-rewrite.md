@@ -773,6 +773,18 @@ Wand/Erase/Restore mode buttons, `RangeSlider`s (Tolerance, Size, Softness)
 as restyled `GtkScale`s with marks, a value readout and AT-SPI value text,
 and Contiguous only as a token-drawn toggle that AT-SPI reads as a check box
 with a checked state (GtkCheckButton takes a custom child only from GTK 4.8).
+The Crop tool stages its rectangle through the shared `CropDrag` (Aspect
+ratio presets and the Shift lock) instead of cropping on release, as
+shipping's `cropSelection`: Properties shows the Aspect ratio select, the
+read-only Crop width and Crop height, Clear and Apply crop (with its
+`screenshot-cta-pulse` halo as a GTK CSS animation), and the Shift hint, or
+the drag hint with nothing staged. Apply crop commits `Request::Crop`,
+selects nothing and returns to Select; Escape, Undo, Redo or another tool
+drop the staged crop. The overlay dims outside it with `rgba(5,6,8,.64)` in
+whole-pixel strips, draws the white 8/5 dashed outline and the `W × H` tag
+at screen size as small nodes over the retained image. `smoke.py` stages a
+1 : 1 crop with a real drag, checks it is square and uncommitted, clears it,
+then applies one, checks the canvas width and Select, and undoes it.
 A Wand click submits `RemoveImageBackground`; an Erase/Restore stroke
 previews through `preview_drawing` on the worker, one request in flight and
 the latest stroke queued, then commits one `PaintImageBackground`. The brush

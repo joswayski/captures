@@ -16,8 +16,8 @@ use std::sync::Arc;
 use std::sync::mpsc;
 
 use captures_app::editor::{
-    ClosedShapeCreate, ClosedShapeKind, Document, ElementStyle, FreehandPathCreate, LayerEdit,
-    LayerPlacement, OpenShapeCreate, OpenShapeKind, Point, Rect,
+    ClosedShapeCreate, ClosedShapeKind, CropDrag, Document, ElementStyle, FreehandPathCreate,
+    LayerEdit, LayerPlacement, OpenShapeCreate, OpenShapeKind, Point, Rect,
 };
 use captures_app::editor_chrome::{self, RAIL_TOOLS, SHAPE_TOOLS, brush_cursor, header};
 use captures_app::editor_export::{self, EstimateState, ExportSource, ExportTarget};
@@ -206,6 +206,8 @@ enum Gesture {
         end: Point,
     },
     Freehand(Vec<Point>),
+    /// Staging a crop rectangle through the shared drag geometry.
+    Crop(CropDrag),
     /// An Eraser Erase/Restore stroke.
     Brush(Vec<Point>),
     /// Moving the selected layer by the pointer's document delta.
@@ -246,6 +248,8 @@ struct State {
     last_shape: RefCell<String>,
     selected: RefCell<Option<String>>,
     gesture: RefCell<Option<Gesture>>,
+    /// Shipping's `cropSelection`: staged until Apply crop.
+    crop: Cell<Option<Rect>>,
     target: RefCell<Option<ExportTarget>>,
     options: Cell<ExportOptions>,
     notice: RefCell<Option<(String, bool)>>,
@@ -747,6 +751,7 @@ pub fn build(
         last_shape: RefCell::new("rectangle".into()),
         selected: RefCell::default(),
         gesture: RefCell::default(),
+        crop: Cell::default(),
         target: RefCell::default(),
         options: Cell::new(ExportOptions {
             format: ExportFormat::Png,
@@ -1029,6 +1034,10 @@ fn thumbnail_area(texture: gdk::Texture) -> SnapshotArea {
 
 impl State {
     fn submit(&self, request: Request) {
+        // Shipping drops a staged crop with Undo and Redo.
+        if matches!(request, Request::Undo | Request::Redo) {
+            self.set_crop(None);
+        }
         self.busy.set(true);
         let _ = self.jobs.send(Job::Apply(request));
     }
@@ -1187,6 +1196,9 @@ impl State {
                 .update_property(&[gtk::accessible::Property::Label(&name)]);
         }
         *self.tool.borrow_mut() = key.to_owned();
+        if key != "c" {
+            self.set_crop(None);
+        }
         for (rail_key, button) in &self.widgets.rail {
             let active =
                 rail_key == key || (rail_key == editor_chrome::SHAPES_KEY && shape.is_some());
@@ -2316,17 +2328,22 @@ impl State {
         let drag = gtk::GestureDrag::new();
         drag.set_button(gdk::BUTTON_PRIMARY);
         let weak = Rc::downgrade(self);
-        drag.connect_drag_begin(move |_, x, y| {
+        let shift = |gesture: &gtk::GestureDrag| {
+            gesture
+                .current_event_state()
+                .contains(gdk::ModifierType::SHIFT_MASK)
+        };
+        drag.connect_drag_begin(move |gesture, x, y| {
             if let Some(state) = weak.upgrade() {
                 state.canvas.grab_focus();
-                state.begin(x, y);
+                state.begin(x, y, shift(gesture));
             }
         });
         let weak = Rc::downgrade(self);
         drag.connect_drag_update(move |gesture, dx, dy| {
             let Some(state) = weak.upgrade() else { return };
             if let Some((x, y)) = gesture.start_point() {
-                state.update(x + dx, y + dy, dx, dy);
+                state.update(x + dx, y + dy, dx, dy, shift(gesture));
             }
         });
         let weak = Rc::downgrade(self);
@@ -2456,7 +2473,7 @@ impl State {
         let weak = Rc::downgrade(self);
         pan.connect_drag_update(move |_, dx, dy| {
             if let Some(state) = weak.upgrade() {
-                state.update(0., 0., dx, dy);
+                state.update(0., 0., dx, dy, false);
             }
         });
         let weak = Rc::downgrade(self);
@@ -2523,6 +2540,18 @@ impl State {
         self.properties.inspector.sink.connect(move |edit| {
             if let Some(state) = weak.upgrade() {
                 state.property_edit(edit);
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.properties.crop.apply.connect_clicked(move |_| {
+            if let Some(state) = weak.upgrade() {
+                state.apply_crop();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.properties.crop.clear.connect_clicked(move |_| {
+            if let Some(state) = weak.upgrade() {
+                state.set_crop(None);
             }
         });
         let weak = Rc::downgrade(self);
@@ -2600,7 +2629,10 @@ impl State {
             _ if control || typing => return false,
             (_, "Delete" | "BackSpace") => self.delete_selected(),
             (_, "Escape") => {
-                if self.gesture.borrow_mut().take().is_none() {
+                let gesture = self.gesture.borrow_mut().take();
+                if self.crop.get().is_some() {
+                    self.set_crop(None);
+                } else if gesture.is_none() {
                     self.selected.borrow_mut().take();
                     // Clear the Layers highlight and show the tool's defaults.
                     self.rebuild_selection();
@@ -2621,7 +2653,7 @@ impl State {
         true
     }
 
-    fn begin(&self, x: f64, y: f64) {
+    fn begin(&self, x: f64, y: f64, shift: bool) {
         let Some(point) = self.to_document(x, y) else {
             return;
         };
@@ -2667,6 +2699,22 @@ impl State {
             return;
         }
         let gesture = match tool.as_str() {
+            "c" => {
+                let Some((width, height)) = self.document_size() else {
+                    return;
+                };
+                let bounds = Rect {
+                    x: 0.,
+                    y: 0.,
+                    width,
+                    height,
+                };
+                self.selected.borrow_mut().take();
+                self.rebuild_selection();
+                let drag = CropDrag::new(point, bounds, self.properties.crop.aspect(), shift);
+                self.set_crop(Some(drag.rect()));
+                Gesture::Crop(drag)
+            }
             "v" => {
                 let hit = self.presented.borrow().as_ref().and_then(|presented| {
                     let scale = self.zoom_percent().unwrap_or(100.) / 100.;
@@ -2722,10 +2770,17 @@ impl State {
         self.refresh_properties();
     }
 
-    fn update(&self, x: f64, y: f64, dx: f64, dy: f64) {
+    fn update(&self, x: f64, y: f64, dx: f64, dy: f64, shift: bool) {
         let point = self.to_document(x, y);
         let mut gesture = self.gesture.borrow_mut();
         match gesture.as_mut() {
+            Some(Gesture::Crop(drag)) => {
+                let Some(point) = point else { return };
+                let rect = drag.update(point, self.properties.crop.aspect(), shift);
+                drop(gesture);
+                self.set_crop(Some(rect));
+                return;
+            }
             Some(Gesture::Pan { from, .. }) => {
                 let mut viewport = *from;
                 viewport.pan_x += dx;
@@ -2803,14 +2858,8 @@ impl State {
                 })
             }
             Gesture::Shape { start, end, .. } if !moved(start, end) => None,
-            Gesture::Shape { tool, start, end } if tool == "c" => Some(Request::Crop {
-                rect: Rect {
-                    x: start.x.min(end.x).round(),
-                    y: start.y.min(end.y).round(),
-                    width: (end.x - start.x).abs().round(),
-                    height: (end.y - start.y).abs().round(),
-                },
-            }),
+            // The rectangle stays staged for Apply crop.
+            Gesture::Crop(_) => None,
             Gesture::Shape { tool, start, end } => {
                 if let Some(shape) = closed_kind(&tool) {
                     Some(Request::CreateClosedShape {
@@ -2981,33 +3030,7 @@ impl State {
                 let (Some(a), Some(b)) = (self.to_screen(*start), self.to_screen(*end)) else {
                     return;
                 };
-                if tool == "c" {
-                    // Dim everything outside the crop.
-                    let shade = t.rgba("capture-shade-window");
-                    let (x0, y0) = (a.0.min(b.0) as f32, a.1.min(b.1) as f32);
-                    let (x1, y1) = (a.0.max(b.0) as f32, a.1.max(b.1) as f32);
-                    let r = bounds;
-                    for part in [
-                        graphene::Rect::new(r.x(), r.y(), r.width(), (y0 - r.y()).max(0.)),
-                        graphene::Rect::new(
-                            r.x(),
-                            y1,
-                            r.width(),
-                            (r.y() + r.height() - y1).max(0.),
-                        ),
-                        graphene::Rect::new(r.x(), y0, (x0 - r.x()).max(0.), y1 - y0),
-                        graphene::Rect::new(x1, y0, (r.x() + r.width() - x1).max(0.), y1 - y0),
-                    ] {
-                        snapshot.append_color(&shade, &part);
-                    }
-                    stroke(
-                        snapshot,
-                        &[(a.0, a.1), (b.0, a.1), (b.0, b.1), (a.0, b.1)],
-                        true,
-                        accent,
-                        1.5,
-                    );
-                } else if open_kind(tool).is_some() {
+                if open_kind(tool).is_some() {
                     stroke(snapshot, &[a, b], false, accent, 2.);
                 } else {
                     stroke(
@@ -3026,7 +3049,87 @@ impl State {
             }
             _ => {}
         }
+        self.draw_crop(snapshot, &bounds);
         self.draw_brush_ring(snapshot);
+    }
+
+    /// Stage, change or drop the crop rectangle.
+    fn set_crop(&self, crop: Option<Rect>) {
+        if self.crop.replace(crop) == crop {
+            return;
+        }
+        self.properties.crop.sync(crop);
+        self.canvas.queue_draw();
+    }
+
+    /// Shipping `applyCrop`: crop, then back to Select with nothing selected.
+    fn apply_crop(&self) {
+        let Some(rect) = self.crop.get() else { return };
+        self.set_crop(None);
+        self.selected.borrow_mut().take();
+        self.rebuild_selection();
+        self.submit(Request::Crop { rect });
+        self.select_tool("v");
+    }
+
+    /// Shipping `drawEditorOverlays`' crop: the dimmed outside, a white
+    /// 8/5 dashed outline and the `W × H` tag, constant in screen size.
+    fn draw_crop(&self, snapshot: &gtk::Snapshot, image: &graphene::Rect) {
+        let Some(crop) = self.crop.get() else { return };
+        let (Some(a), Some(b)) = (
+            self.to_screen(Point {
+                x: crop.x,
+                y: crop.y,
+            }),
+            self.to_screen(Point {
+                x: crop.x + crop.width,
+                y: crop.y + crop.height,
+            }),
+        ) else {
+            return;
+        };
+        let (x0, y0, x1, y1) = (a.0 as f32, a.1 as f32, b.0 as f32, b.1 as f32);
+        let shade = gdk::RGBA::new(5. / 255., 6. / 255., 8. / 255., 0.64);
+        // Whole-pixel strips: translucent edges meeting at a fraction seam.
+        let (il, it) = (image.x(), image.y());
+        let (ir, ib) = (il + image.width(), it + image.height());
+        let [il, it, ir, ib, x0, y0, x1, y1] = [il, it, ir, ib, x0, y0, x1, y1].map(f32::round);
+        for part in [
+            graphene::Rect::new(il, it, ir - il, y0 - it),
+            graphene::Rect::new(il, y1, ir - il, ib - y1),
+            graphene::Rect::new(il, y0, x0 - il, y1 - y0),
+            graphene::Rect::new(x1, y0, ir - x1, y1 - y0),
+        ] {
+            if part.width() > 0. && part.height() > 0. {
+                snapshot.append_color(&shade, &part);
+            }
+        }
+        let outline = graphene::Rect::new(x0 - 2., y0 - 2., x1 - x0 + 4., y1 - y0 + 4.);
+        let cr = snapshot.append_cairo(&outline);
+        cr.set_source_rgb(1., 1., 1.);
+        cr.set_line_width(2.);
+        cr.set_dash(&[8., 5.], 0.);
+        cr.rectangle(a.0, a.1, b.0 - a.0, b.1 - a.1);
+        let _ = cr.stroke();
+        drop(cr);
+        let layout = self
+            .canvas
+            .create_pango_layout(Some(&format!("{} × {}", crop.width, crop.height)));
+        let mut font = gtk::pango::FontDescription::new();
+        font.set_weight(gtk::pango::Weight::Bold);
+        font.set_absolute_size(12. * f64::from(gtk::pango::SCALE));
+        layout.set_font_description(Some(&font));
+        let (_, logical) = layout.pixel_extents();
+        let (tw, th) = (logical.width() as f32, logical.height() as f32);
+        let (lw, cx) = (tw + 14., (x0 + x1) / 2.);
+        snapshot.append_color(
+            &gdk::RGBA::new(17. / 255., 18. / 255., 22. / 255., 1.),
+            &graphene::Rect::new(cx - lw / 2., y0 + 8., lw, 24.),
+        );
+        snapshot.save();
+        snapshot.translate(&graphene::Point::new(cx - tw / 2., y0 + 20. - th / 2.));
+        snapshot.append_layout(&layout, &gdk::RGBA::WHITE);
+        snapshot.restore();
     }
 
     /// Shipping `.screenshot-brush-cursor`: a ring the brush's document size
