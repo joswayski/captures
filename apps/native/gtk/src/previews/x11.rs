@@ -264,6 +264,18 @@ impl Placer {
         let _ = self.connection.flush();
     }
 
+    /// The window manager ignores an override-redirect selector. Give its
+    /// controls real keyboard focus after mapping, not only GTK widget focus.
+    pub fn focus_selector(&self, surface: &X11Surface) {
+        surface.display().sync();
+        let _ = self.connection.set_input_focus(
+            x11rb::protocol::xproto::InputFocus::POINTER_ROOT,
+            xid(surface),
+            x11rb::CURRENT_TIME,
+        );
+        let _ = self.connection.flush();
+    }
+
     fn monitor(&self, surface: &X11Surface, follow_pointer: bool) -> Option<X11Monitor> {
         let display = surface.display();
         let pointer = follow_pointer

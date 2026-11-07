@@ -144,7 +144,7 @@ class X11:
     xclip and WM_DELETE_WINDOW. Keys use xdotool names."""
 
     def window(self, title, pid=None):
-        args = ["xdotool", "search", "--sync"]
+        args = ["xdotool", "search", "--all", "--sync"]
         args += ["--onlyvisible", "--pid", str(pid)] if pid else []
         return subprocess.run([*args, "--name", title], capture_output=True, text=True,
                               check=True).stdout.split()[0]
@@ -198,7 +198,7 @@ class X11:
         subprocess.run(["xclip", "-selection", "clipboard"], input=text, text=True, check=True)
 
     def visible(self, pid):
-        return subprocess.run(["xdotool", "search", "--onlyvisible", "--pid", str(pid),
+        return subprocess.run(["xdotool", "search", "--all", "--onlyvisible", "--pid", str(pid),
                                "--name", "."], capture_output=True, text=True).stdout.split()
 
     def paste_types(self):
@@ -1344,7 +1344,7 @@ def desktop_fixture(log, still):
 
     def call(connection, sender, path, interface, method, params, invocation):
         if method == "GetActive":
-            invocation.return_value(GLib.Variant("(b)", (False,)))
+            invocation.return_value(GLib.Variant("(b)", (Path(log).with_suffix(".locked").exists(),)))
             return
         if method == "RegisterStatusNotifierHost":
             invocation.return_value(None)
@@ -1458,6 +1458,7 @@ def capture(binary, scratch):
     log = scratch / "capture.log"
     process = None
     with private_desktop(scratch, "capture", still if portal else None) as (env, fixture_log):
+        env = dict(env, GTK_A11Y="atspi", NO_AT_BRIDGE="0")
         try:
             with log.open("w") as stream:
                 process = subprocess.Popen([binary, "--live", "--history-root", str(root),
@@ -1470,6 +1471,14 @@ def capture(binary, scratch):
             if portal:
                 wait(lambda: "request" in fixture_log.read_text(), "the portal request")
                 assert not DESKTOP.visible(process.pid), "a Captures window was mapped for the portal"
+            app = wait(lambda: application(process.pid), "the capture app")
+            # Sway's tree excludes layer surfaces; AT-SPI covers both hosts.
+            wait(lambda: find(app, "frame", "Captures New Capture"), "New Capture controls")
+            assert not list(root.glob("*/metadata.json")), "Display captured before confirmation"
+            if not portal:
+                selector = DESKTOP.window("^Captures New Capture$", process.pid)
+                DESKTOP.point_into(selector, 40, 40)
+            DESKTOP.key("Return")
             captured = wait(lambda: [e for e in events() if e["event"].startswith("capture")],
                             "the capture", timeout=30)[0]
             assert captured["event"] == "captured", events()
@@ -1479,7 +1488,7 @@ def capture(binary, scratch):
                 assert (entry["width"], entry["height"]) == still_size, entry
             else:
                 assert entry["width"] > 0 and entry["height"] > 0, entry
-            DESKTOP.window("^Captures Previews$", process.pid)
+            wait(lambda: find(app, "frame", "Captures Previews"), "the preview stack")
             wait(lambda: "image/png" in DESKTOP.paste_types(), "auto-copy to the clipboard")
             if portal:
                 DESKTOP.window("Preferences$", process.pid)
@@ -1558,6 +1567,76 @@ class X11Window:
         self.x11.XCloseDisplay(self.display)
 
 
+class LiveCaptures:
+    """Live apps, one per `--capture` run, over one settings file, History
+    and event log; a new run replaces the previous process."""
+
+    SETTINGS = {
+        "settings_schema_version": 5, "onboarding_completed": True,
+        "region_shortcut": "Ctrl+Shift+F7", "window_shortcut": "Ctrl+Shift+F8",
+        "display_shortcut": "Ctrl+Shift+F9", "new_capture_shortcut": "Ctrl+Shift+F10",
+        "launch_at_login": False, "show_mini_previews": False, "auto_copy_to_clipboard": False}
+
+    def __init__(self, binary, scratch, name):
+        self.binary, self.process = binary, None
+        self.root = scratch / f"{name}-history"
+        self.settings = scratch / f"{name}-settings.json"
+        self.settings.write_text(json.dumps(
+            dict(self.SETTINGS, output_directory=str(scratch / f"{name}-exports"))))
+        self.log = scratch / f"{name}.log"
+        self.log.write_text("")
+
+    def events(self):
+        return [json.loads(line) for line in self.log.read_text().splitlines()
+                if line.startswith("{")]
+
+    def outcomes(self):
+        return [e for e in self.events() if e["event"] in ("captured", "capture-cancelled",
+                                                           "capture-failed")]
+
+    def run(self, kind, env):
+        """Start `--capture kind`; returns the outcome count before it."""
+        self.stop()
+        before = len(self.outcomes())
+        self.overlays = len([e for e in self.events() if e["event"] == "selector"])
+        with self.log.open("a") as stream:
+            self.process = subprocess.Popen(
+                [self.binary, "--live", "--history-root", str(self.root),
+                 "--settings-file", str(self.settings), "--capture", kind],
+                env=dict(env, GSK_RENDERER="cairo", GTK_A11Y="atspi", NO_AT_BRIDGE="0"),
+                stdout=stream)
+        return before
+
+    def shown(self, kind):
+        """The overlay the latest run opened."""
+        return wait(lambda: [e for e in self.events() if e["event"] == "selector"][self.overlays:],
+                    f"the {kind} overlay")[0]
+
+    def outcome(self, before):
+        return wait(lambda: self.outcomes()[before:], "the capture outcome", timeout=30)[0]
+
+    def app(self):
+        return wait(lambda: application(self.process.pid), "the app on the accessibility bus")
+
+    def entry(self, artifact):
+        return json.loads((self.root / artifact / "metadata.json").read_text())
+
+    def saved(self):
+        return list(self.root.glob("*/metadata.json"))
+
+    def stop(self):
+        if self.process and self.process.poll() is None:
+            self.process.terminate()
+            self.process.wait(timeout=10)
+
+
+def guidance(app, title):
+    return wait(lambda: [n for n, (role, name) in nodes(app)
+                         if role in ("status", "status bar")
+                         and [c for c, (_, text) in nodes(n) if node_text(c, text) == title]],
+                f"the {title!r} guidance")
+
+
 def selectors(binary, scratch):
     """Screenshot Region and Window through the shared capture flow. X11: the
     display under the pointer, frozen, in an unmanaged overlay over AT-SPI; a
@@ -1568,67 +1647,24 @@ def selectors(binary, scratch):
     saves that crop; Window goes to the portal's own window picker (refused
     by the fixture, so it cancels)."""
     portal = isinstance(DESKTOP, Wayland)
-    root = scratch / "selector-history"
-    settings = scratch / "selector-settings.json"
-    settings.write_text(json.dumps({
-        "settings_schema_version": 5, "onboarding_completed": True,
-        "output_directory": str(scratch / "selector-exports"),
-        "region_shortcut": "Ctrl+Shift+F7", "window_shortcut": "Ctrl+Shift+F8",
-        "display_shortcut": "Ctrl+Shift+F9", "new_capture_shortcut": "Ctrl+Shift+F10",
-        "launch_at_login": False, "show_mini_previews": False, "auto_copy_to_clipboard": False}))
+    live = LiveCaptures(binary, scratch, "selectors")
     accent = (200, 90, 160)
     still = scratch / "selector still.png"
     still.write_bytes(fixture_png(Wayland.WIDTH, Wayland.HEIGHT, accent=accent))
-    log = scratch / "selectors.log"
-    log.write_text("")
     # X11 uses the session's fixture; the portal needs a private bus.
     desktop = (private_desktop(scratch, "selectors", still) if portal
                else contextlib.nullcontext((dict(os.environ), FIXTURE_LOG)))
     window = None if portal else X11Window("Fixture window", 60, 240, 260, 160)
-    process = None
-
-    def events():
-        return [json.loads(line) for line in log.read_text().splitlines() if line.startswith("{")]
-
-    def outcomes():
-        return [e for e in events() if e["event"] in ("captured", "capture-cancelled",
-                                                      "capture-failed")]
-
-    def run(kind):
-        nonlocal process
-        if process and process.poll() is None:
-            process.terminate()
-            process.wait(timeout=10)
-        before = len(outcomes())
-        with log.open("a") as stream:
-            process = subprocess.Popen([binary, "--live", "--history-root", str(root),
-                                        "--settings-file", str(settings), "--capture", kind],
-                                       env=dict(env, GSK_RENDERER="cairo", GTK_A11Y="atspi",
-                                                NO_AT_BRIDGE="0"), stdout=stream)
-        return before
-
-    def outcome(before):
-        return wait(lambda: outcomes()[before:], "the capture outcome", timeout=30)[0]
 
     def overlay(label):
-        app = wait(lambda: application(process.pid), "the app on the accessibility bus")
+        app = live.app()
         return app, wait(lambda: find(app, "panel", label), label)[0]
-
-    def guidance(app, title):
-        return wait(lambda: [n for n, (role, name) in nodes(app)
-                             if role in ("status", "status bar")
-                             and [c for c, (_, text) in nodes(n) if node_text(c, text) == title]],
-                    f"the {title!r} guidance")
-
-    def entry(artifact):
-        return json.loads((root / artifact / "metadata.json").read_text())
 
     try:
         with desktop as (env, fixture_log):
             # Region: guidance, an empty click's feedback, then Escape.
-            before = run("region")
-            shown = wait(lambda: [e for e in events() if e["event"] == "selector"][before:],
-                         "the region overlay")[0]
+            before = live.run("region", env)
+            shown = live.shown("region")
             assert (shown["kind"], shown["portal"], shown["frozen"]) == ("region", portal, True)
             if portal:
                 assert '"CreateSession"' not in fixture_log.read_text()
@@ -1638,38 +1674,37 @@ def selectors(binary, scratch):
             DESKTOP.click(500, 420)
             guidance(app, "Click and drag to select a region")
             DESKTOP.key("Escape")
-            assert outcome(before)["event"] == "capture-cancelled", events()
-            assert not list(root.glob("*/metadata.json")), "a cancelled overlay saved a capture"
+            assert live.outcome(before)["event"] == "capture-cancelled", live.events()
+            assert not live.saved(), "a cancelled overlay saved a capture"
 
             # Region: a drag saves exactly the selection. On Wayland it lies
             # in the still's accent block, so its pixels prove the crop.
-            before = run("region")
+            before = live.run("region", env)
             overlay("Capture region selector")
             if portal:
                 DESKTOP.drag(900, 60, 1200, 210)
             else:
                 DESKTOP.drag(100, 280, 220, 340)
-            captured = outcome(before)
-            assert captured["event"] == "captured", events()
-            region = entry(captured["id"])
+            captured = live.outcome(before)
+            assert captured["event"] == "captured", live.events()
+            region = live.entry(captured["id"])
             size = (300, 150) if portal else (120, 60)
             assert (region["mode"], region["width"], region["height"]) == ("region", *size), region
             if portal:
-                saved = GdkPixbuf.Pixbuf.new_from_file(str(root / captured["id"] / "capture.png"))
+                saved = GdkPixbuf.Pixbuf.new_from_file(str(live.root / captured["id"] / "capture.png"))
                 at = 75 * saved.get_rowstride() + 150 * saved.get_n_channels()
                 assert tuple(saved.get_pixels()[at:at + 3]) == accent, "the crop missed the still"
             print(f"selectors: Region guidance, feedback and Escape; a drag saved "
                   f"{size[0]}×{size[1]} {'from the portal still' if portal else 'from X11'}")
 
             # Window.
-            before = run("window")
+            before = live.run("window", env)
             if portal:
-                assert outcome(before)["event"] == "capture-cancelled", events()
+                assert live.outcome(before)["event"] == "capture-cancelled", live.events()
                 assert '"CreateSession"' in fixture_log.read_text(), "no window picker request"
                 print("selectors: Window went to the ScreenCast window picker; refusal cancelled")
             else:
-                shown = wait(lambda: [e for e in events() if e["event"] == "selector"
-                                      and e["kind"] == "window"], "the window overlay")[0]
+                shown = live.shown("window")
                 assert shown["windows"] == 1, shown
                 app, group = overlay("Capture window selector")
                 subprocess.run(["xdotool", "mousemove", "190", "320"], check=True)
@@ -1677,16 +1712,259 @@ def selectors(binary, scratch):
                      "the hovered window target")
                 guidance(app, "Select a window to continue")
                 DESKTOP.click(190, 320)
-                captured = outcome(before)
-                assert captured["event"] == "captured", events()
-                saved = entry(captured["id"])
+                captured = live.outcome(before)
+                assert captured["event"] == "captured", live.events()
+                saved = live.entry(captured["id"])
                 assert (saved["mode"], saved["width"], saved["height"]) == ("window", 260, 160), \
                     saved
                 print("selectors: Window named the hovered window and saved it at 260×160")
     finally:
-        if process and process.poll() is None:
-            process.terminate()
-            process.wait(timeout=10)
+        live.stop()
+        if window:
+            window.close()
+
+
+def new_capture(binary, scratch):
+    """New Capture in Screenshot mode: shipping's bar as real controls over
+    AT-SPI (Record unavailable until the GTK host records), Close cancels,
+    a drag plus Enter saves exactly the region, and Full screen saves the
+    display. X11 also picks the fixture window and saves it; on Wayland the
+    region crops the portal still, Full screen persists that same still
+    without a second request, and Window goes to the ScreenCast picker (refused,
+    so it cancels)."""
+    portal = isinstance(DESKTOP, Wayland)
+    live = LiveCaptures(binary, scratch, "new-capture")
+    accent = (90, 160, 200)
+    still = scratch / "new capture still.png"
+    still.write_bytes(fixture_png(Wayland.WIDTH, Wayland.HEIGHT, accent=accent))
+    desktop = (private_desktop(scratch, "new-capture", still) if portal
+               else contextlib.nullcontext((dict(os.environ), FIXTURE_LOG)))
+    window = None if portal else X11Window("Fixture window", 60, 240, 260, 160)
+    enabled = Atspi.StateType.SENSITIVE
+
+    def bar(before):
+        assert live.shown("new-capture")["kind"] == "new-capture"
+        # Its own frame: the live launch also opens Preferences.
+        app = wait(lambda: find(live.app(), "frame", "Captures New Capture"), "New Capture")[0]
+        primary = wait(lambda: find(app, "push button", "Take screenshot"),
+                       "the Take screenshot button")[0]
+        return app, primary
+
+    def segment(app, name):
+        # A toggle button from GTK 4.10; 4.8 reports a push button.
+        return wait(lambda: find(app, "toggle button", name) or find(app, "push button", name),
+                    name)[0]
+
+    def target(app, name):
+        press(segment(app, name))
+
+    def capture(before, size, mode):
+        captured = live.outcome(before)
+        assert captured["event"] == "captured", live.events()
+        saved = live.entry(captured["id"])
+        assert (saved["mode"], saved["width"], saved["height"]) == (mode, *size), saved
+        return captured
+
+    try:
+        with desktop as (env, fixture_log):
+            # The bar: shipping's controls, then Close cancels.
+            before = live.run("new", env)
+            app, primary = bar(before)
+            for name in ("Screenshot", "Region", "Window", "Full screen"):
+                assert has_state(segment(app, name), enabled), name
+            for name in ("Screenshot", "Region"):
+                assert has_state(segment(app, name), Atspi.StateType.PRESSED) or has_state(
+                    segment(app, name), Atspi.StateType.CHECKED), f"{name} not pressed"
+            assert not has_state(segment(app, "Record"), enabled), "Record before recording"
+            assert [n for n, (role, name) in nodes(app) if role == "combo box"
+                    and name.startswith("Region aspect ratio")], "no Aspect select"
+            assert not has_state(primary, enabled), "Take screenshot before a region"
+            guidance(app, "Drag to select a region")
+            assert_accessible(app, "New Capture")
+            press(find(app, "push button", "Close capture controls")[0])
+            assert live.outcome(before)["event"] == "capture-cancelled", live.events()
+            assert not live.saved(), "Close saved a capture"
+
+            # Region: a drag enables Take screenshot; Enter saves it.
+            before = live.run("new", env)
+            app, primary = bar(before)
+            if portal:
+                DESKTOP.drag(900, 60, 1200, 210)
+            else:
+                DESKTOP.drag(100, 280, 220, 340)
+            wait(lambda: has_state(primary, enabled), "Take screenshot after a region")
+            DESKTOP.key("Return")
+            captured = capture(before, (300, 150) if portal else (120, 60), "region")
+            if portal:
+                saved = GdkPixbuf.Pixbuf.new_from_file(str(live.root / captured["id"] / "capture.png"))
+                at = 75 * saved.get_rowstride() + 150 * saved.get_n_channels()
+                assert tuple(saved.get_pixels()[at:at + 3]) == accent, "the crop missed the still"
+
+            # Full screen: the display card, then Take screenshot. On X11 the
+            # saved screenshot chords switch the open bar in place (no "already
+            # in progress"), and Enter on the clicked, focused Full screen
+            # segment confirms instead of re-activating it.
+            def registrations():
+                return [e for e in live.events() if e["event"] == "shortcuts" and e["ok"]]
+            registered = len(registrations())
+            before = live.run("new", env)
+            app, primary = bar(before)
+            requests = fixture_log.read_text().count('"method": "Screenshot"')
+
+            def pressed(name):
+                node = segment(app, name)
+                return has_state(node, Atspi.StateType.PRESSED) or has_state(
+                    node, Atspi.StateType.CHECKED)
+            if portal:
+                target(app, "Full screen")
+            else:
+                wait(lambda: registrations()[registered:], "shortcut registration")
+                DESKTOP.key("ctrl+shift+F9")
+                wait(lambda: pressed("Full screen"), "the Display chord to pick Full screen")
+                DESKTOP.key("ctrl+shift+F8")
+                wait(lambda: pressed("Window"), "the Window chord to pick Window")
+                assert not [e for e in live.events() if e["event"] == "capture-failed"], \
+                    live.events()
+                extents = segment(app, "Full screen").get_extents(Atspi.CoordType.WINDOW)
+                DESKTOP.click(extents.x + extents.width // 2, extents.y + extents.height // 2)
+                wait(lambda: pressed("Full screen"), "the clicked Full screen segment")
+            wait(lambda: [n for n, (role, name) in nodes(app) if role == "combo box"
+                          and name.startswith("Display")], "the Display select")
+            wait(lambda: has_state(primary, enabled), "Take screenshot for Full screen")
+            if portal:
+                press(primary)
+            else:
+                assert has_state(segment(app, "Full screen"), Atspi.StateType.FOCUSED)
+                DESKTOP.key("Return")
+            display = (Wayland.WIDTH, Wayland.HEIGHT) if portal else (1280, 1024)
+            captured = capture(before, display, "display")
+            if portal:
+                assert fixture_log.read_text().count('"method": "Screenshot"') == requests, \
+                    "Full screen requested a second Screenshot grant"
+                saved = GdkPixbuf.Pixbuf.new_from_file(str(live.root / captured["id"] / "capture.png"))
+                original = GdkPixbuf.Pixbuf.new_from_file(str(still))
+                # The RGB fixture becomes an RGBA History PNG; compare every
+                # decoded pixel with an opaque alpha channel on both sides.
+                assert saved.add_alpha(False, 0, 0, 0).get_pixels() == original.add_alpha(
+                    False, 0, 0, 0).get_pixels(), "Full screen changed the still"
+
+            if not portal:
+                # Repeating Display freezes the visible controls into the next
+                # still even with freeze off and a countdown configured. Compare
+                # an asymmetric crop containing the bar with the visible pixels.
+                settings = json.loads(live.settings.read_text())
+                live.settings.write_text(json.dumps(dict(settings, freeze_screen=False,
+                                                         screenshot_countdown_seconds=2)))
+                before = live.run("display", env)
+                app, primary = bar(before)
+                wait(lambda: any(e["event"] == "shortcuts" and e["ok"]
+                                 for e in live.events()), "the Display binding")
+                DESKTOP.point_into(DESKTOP.window("^Captures New Capture$", live.process.pid), 40, 40)
+                time.sleep(0.3)
+                visible = scratch / "visible-controls.png"
+                subprocess.run(["import", "-window", "root", str(visible)], check=True)
+                overlays = len([e for e in live.events() if e["event"] == "selector"])
+                DESKTOP.key("ctrl+shift+F9")
+                wait(lambda: len([e for e in live.events() if e["event"] == "selector"]) > overlays,
+                     "repeated Display to freeze the controls")
+                assert len(live.outcomes()) == before, "repeat captured without confirmation"
+                app, primary = bar(before)
+                press(primary)
+                captured = capture(before, display, "display")
+                expected = GdkPixbuf.Pixbuf.new_from_file(str(visible))
+                saved = GdkPixbuf.Pixbuf.new_from_file(str(live.root / captured["id"] / "capture.png"))
+                # Not a blank desktop: include the left controls and their text,
+                # away from the pointer and focus-dependent primary action.
+                for pixels in (expected, saved):
+                    assert pixels.get_n_channels() in (3, 4)
+                def crop(pixels):
+                    data, stride, channels = (pixels.get_pixels(), pixels.get_rowstride(),
+                                              pixels.get_n_channels())
+                    return bytes(v for y in range(920, 970) for x in range(220, 650)
+                                 for v in data[y * stride + x * channels:][:3])
+                assert crop(saved) == crop(expected), "repeat lost the visible controls pixels"
+
+                # Cancel a confirmed countdown, restore its hidden preview,
+                # then capture again in the same resident process.
+                live.settings.write_text(json.dumps(dict(settings, show_mini_previews=True,
+                                                         screenshot_countdown_seconds=2)))
+                before = live.run("display", env)
+                app, primary = bar(before)
+                press(primary)
+                capture(before, display, "display")
+                preview = DESKTOP.window("^Captures Previews$", live.process.pid)
+                saved_before = len(live.saved())
+                for cancel in (True, False):
+                    before = len(live.outcomes())
+                    shown = len([e for e in live.events() if e["event"] == "selector"])
+                    DESKTOP.key("ctrl+shift+F9")
+                    wait(lambda: len([e for e in live.events() if e["event"] == "selector"]) > shown,
+                         "a fresh Display selection after confirmation")
+                    assert preview not in DESKTOP.visible(live.process.pid), "preview not hidden"
+                    app, primary = bar(before)
+                    press(primary)
+                    if cancel:
+                        time.sleep(0.15)
+                        DESKTOP.key("Escape")
+                        assert live.outcome(before)["event"] == "capture-cancelled", live.events()
+                        assert len(live.saved()) == saved_before, "cancelled countdown persisted"
+                        wait(lambda: preview in DESKTOP.visible(live.process.pid),
+                             "hidden preview restored after cancellation")
+                    else:
+                        capture(before, display, "display")
+                        assert len(live.saved()) == saved_before + 1
+                live.settings.write_text(json.dumps(settings))
+
+            # Window.
+            before = live.run("new", env)
+            app, primary = bar(before)
+            target(app, "Window")
+            guidance(app, "Select a window to continue")
+            if portal:
+                press(primary)
+                assert live.outcome(before)["event"] == "capture-cancelled", live.events()
+                assert '"CreateSession"' in fixture_log.read_text(), "no window picker request"
+                # The session can lock after consent but before confirmation.
+                # Neither the selector watcher nor persistence may publish it.
+                before = live.run("display", env)
+                bar(before)
+                saved_before = len(live.saved())
+                lock = fixture_log.with_suffix(".locked")
+                lock.touch()
+                try:
+                    DESKTOP.key("Return")
+                    assert live.outcome(before)["event"] in ("capture-cancelled", "capture-failed")
+                    assert len(live.saved()) == saved_before, "locked portal still reached History"
+                finally:
+                    lock.unlink()
+            else:
+                assert not has_state(primary, enabled), "Take screenshot before a window"
+                DESKTOP.click(190, 320)
+                wait(lambda: has_state(primary, enabled), "Take screenshot after a window")
+                press(primary)
+                capture(before, (260, 160), "window")
+
+                # Without a window list (no _NET_CLIENT_LIST_STACKING) the
+                # bar still opens, Window is disabled and Full screen saves.
+                window.close()
+                window = None
+                before = live.run("new", env)
+                app, primary = bar(before)
+                assert not has_state(segment(app, "Window"), enabled), "Window without windows"
+                target(app, "Full screen")
+                wait(lambda: has_state(primary, enabled), "Take screenshot for Full screen")
+                press(primary)
+                capture(before, display, "display")
+            print("new_capture: bar over AT-SPI, Close cancelled; Region (Enter), Full screen "
+                  + ("saved the exact portal still without another grant; lock-after-consent "
+                     "saved nothing; Window went to the ScreenCast picker"
+                     if portal else "(chords switched the bar in place, Enter on the focused "
+                     "segment, repeat preserved controls pixels, countdown cancellation "
+                     "restored previews and allowed another capture) and the picked window "
+                     "saved from X11; without a window "
+                     "list Window was disabled and Full screen still saved"))
+    finally:
+        live.stop()
         if window:
             window.close()
 
@@ -1757,8 +2035,8 @@ def tray(binary, scratch):
                           "Preferences", "Send Feedback…", "Check for Updates…", "-",
                           "Quit Captures"], labels
         enabled = [label for _, label, on in rows if on and label != "-"]
-        assert enabled == ["Screenshot Region", "Screenshot Window", "Screenshot Display",
-                           "Capture History…", "Open Save Location",
+        assert enabled == ["New Capture…", "Screenshot Region", "Screenshot Window",
+                           "Screenshot Display", "Capture History…", "Open Save Location",
                            "Preferences", "Send Feedback…", "Quit Captures"], enabled
         # The quiet launch shows only the launch notice, which leaves by itself.
         wait(lambda: {"event": "startup-notice-closed", "by": "timeout"} in events(),
@@ -1768,6 +2046,10 @@ def tray(binary, scratch):
         DESKTOP.window("^Capture History$", process.pid)
         if not isinstance(DESKTOP, Wayland):
             click("Screenshot Display")
+            selector = DESKTOP.window("^Captures New Capture$", process.pid)
+            assert not list(root.glob("*/metadata.json")), "tray Display bypassed the controls"
+            DESKTOP.point_into(selector, 40, 40)
+            DESKTOP.key("Return")
             wait(lambda: [e for e in events() if e["event"] == "captured"], "the tray capture")
             assert len(list(root.glob("*/metadata.json"))) == 1
         click("Quit Captures", exits=True)
@@ -1863,6 +2145,10 @@ def shortcuts(binary, scratch):
             print("shortcuts: the GlobalShortcuts portal owner started on Wayland")
             return
         DESKTOP.key("ctrl+shift+F9")
+        selector = DESKTOP.window("^Captures New Capture$", process.pid)
+        assert captures() == 0, "Display shortcut bypassed the controls"
+        DESKTOP.point_into(selector, 40, 40)
+        DESKTOP.key("Return")
         wait(lambda: captures() == 1, "Ctrl+Shift+F9 to capture the display")
         settings.with_suffix(".tmp").write_text(json.dumps(dict(values,
                                                                 display_shortcut="Ctrl+Shift+F6")))
@@ -1872,6 +2158,10 @@ def shortcuts(binary, scratch):
         time.sleep(1.5)
         assert captures() == 1, "the old chord still captured"
         DESKTOP.key("ctrl+shift+F6")
+        selector = DESKTOP.window("^Captures New Capture$", process.pid)
+        assert captures() == 1, "rebound Display shortcut bypassed the controls"
+        DESKTOP.point_into(selector, 40, 40)
+        DESKTOP.key("Return")
         wait(lambda: captures() == 2, "Ctrl+Shift+F6 to capture the display")
         print("shortcuts: the saved Display chord captured; a changed chord took over")
     finally:
@@ -2058,7 +2348,7 @@ def crash_review(binary, scratch):
 
 STEPS = [history, preferences, editor, editor_close_keeps_open_text, recording,
          recording_output, previews, preview_overflow, feedback, open_with, live, capture, selectors,
-         tray, shortcuts, setup, crash_review, notices]
+         new_capture, tray, shortcuts, setup, crash_review, notices]
 FIXTURE_LOG = None
 
 

@@ -10,6 +10,10 @@ publish = false
 # the shipping workspace's toolchain, lockfile, dependencies or packaging.
 [workspace]
 
+[patch.crates-io]
+# Match the shipping/workbench X11 Escape-ungrab fix.
+global-hotkey = { path = "../../../crates/vendor/global-hotkey" }
+
 [dependencies]
 gtk = { package = "gtk4", version = "0.9", features = ["v4_6"] }
 serde = { version = "1", features = ["derive"] }

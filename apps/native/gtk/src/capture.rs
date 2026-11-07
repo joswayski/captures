@@ -52,12 +52,6 @@ pub fn wayland(host: &Host) -> bool {
 }
 
 impl Host {
-    /// Screenshot Display. One capture at a time; a second request while
-    /// one runs reports the shared "already in progress" error.
-    pub fn capture_display(self: &Rc<Self>) {
-        self.capture_now(CaptureMode::Display);
-    }
-
     /// Display on X11 or through the Screenshot portal; on Wayland also
     /// Window, through a window-only ScreenCast grant (the portal's own
     /// picker replaces the window overlay there).

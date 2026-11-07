@@ -115,7 +115,7 @@ const MENU: [Row; 15] = [
 fn available(action: Action) -> bool {
     !matches!(
         action,
-        Action::NewCapture | Action::RecordRegion | Action::RecordWindow | Action::RecordDisplay
+        Action::RecordRegion | Action::RecordWindow | Action::RecordDisplay
     )
 }
 
@@ -306,6 +306,7 @@ pub fn run(host: &Rc<Host>, action: Action) {
         Action::CaptureDisplay => host.capture_display(),
         Action::CaptureRegion => host.capture_region(),
         Action::CaptureWindow => host.capture_window(),
+        Action::NewCapture => host.new_capture(),
         Action::History => {
             host.show_history();
         }
@@ -333,9 +334,6 @@ pub fn run(host: &Rc<Host>, action: Action) {
         }
         Action::Quit => host.app.quit(),
         // Disabled in the menu until the GTK host has these captures.
-        Action::NewCapture
-        | Action::RecordRegion
-        | Action::RecordWindow
-        | Action::RecordDisplay => {}
+        Action::RecordRegion | Action::RecordWindow | Action::RecordDisplay => {}
     }
 }

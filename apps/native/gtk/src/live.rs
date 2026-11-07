@@ -194,6 +194,16 @@ fn sync_shortcuts(host: &Rc<Host>, settings: &captures_settings::AppSettings) {
     });
 }
 
+/// While New Capture selects, the shared routes hand it every chord
+/// despite the running capture flow; `None` once it closes or confirms.
+pub(crate) fn route_shortcuts_to_selector(generation: Option<u64>) {
+    SHORTCUTS.with(|cell| {
+        if let Some(shortcuts) = cell.borrow().as_ref() {
+            shortcuts.set_selector_generation(generation);
+        }
+    });
+}
+
 /// Run queued shortcut presses on the main loop.
 fn drain_shortcuts() {
     let Some(host) = HOST.with(|resident| resident.borrow().upgrade()) else {
@@ -205,9 +215,9 @@ fn drain_shortcuts() {
             CaptureShortcut::Display => host.capture_display(),
             CaptureShortcut::Region => host.capture_region(),
             CaptureShortcut::Window => host.capture_window(),
+            CaptureShortcut::NewCapture => host.new_capture(),
             // Not in the GTK host yet; their tray rows are disabled too.
-            CaptureShortcut::NewCapture
-            | CaptureShortcut::RecordRegion
+            CaptureShortcut::RecordRegion
             | CaptureShortcut::RecordWindow
             | CaptureShortcut::RecordDisplay => {}
         }

@@ -329,6 +329,8 @@ pub(crate) struct Choice {
     caption_override: RefCell<Option<String>>,
     value: RefCell<String>,
     preview: Option<gtk::Label>,
+    /// The listbox uses the media palette (`.custom-select-listbox-glass`).
+    glass: std::cell::Cell<bool>,
     changed: Rc<dyn Fn(String)>,
 }
 
@@ -385,6 +387,7 @@ impl Choice {
             caption_override: RefCell::default(),
             value: RefCell::default(),
             preview,
+            glass: std::cell::Cell::new(false),
             changed: Rc::new(changed),
         });
         let weak = Rc::downgrade(&choice);
@@ -394,6 +397,11 @@ impl Choice {
             }
         });
         choice
+    }
+
+    /// Open the listbox on the media palette, for selects on glass.
+    pub(crate) fn set_glass(&self) {
+        self.glass.set(true);
     }
 
     pub(crate) fn set_options(&self, options: Vec<(String, String)>) {
@@ -465,6 +473,9 @@ impl Choice {
         let popover = gtk::Popover::new();
         popover.add_css_class("captures-menu");
         popover.add_css_class("choice-menu");
+        if self.glass.get() {
+            popover.add_css_class("glass");
+        }
         popover.set_has_arrow(false);
         // Like shipping's listbox, open upward from the lower half of the window.
         let lower = self.trigger.root().is_some_and(|root| {

@@ -638,13 +638,24 @@ pub fn capture_portal_screenshot(
         return Ok(None);
     };
 
-    // A lock can race the portal round trip. Fail closed before making History
-    // durable, even when the portal already returned pixels.
+    persist_capture_still(root, generation, &image, mode)
+}
+
+/// Persist a confirmed Linux still without capturing again. The caller retains
+/// its CaptureFlow or PortalCapture; stale or duplicate completions save nothing.
+#[cfg(target_os = "linux")]
+pub fn persist_capture_still(
+    root: &Path,
+    generation: u64,
+    image: &RgbaImage,
+    mode: CaptureMode,
+) -> Result<Option<Artifact>, Error> {
+    // A lock can race either the portal round trip or selection confirmation.
     if !captures_session::capture_session_available() {
         capture_flow::cancel(generation);
         return Err(CaptureError::SessionUnavailable.into());
     }
-    persist_portal_screenshot(root, generation, &image, mode, capture_flow::commit)
+    persist_portal_screenshot(root, generation, image, mode, capture_flow::commit)
 }
 
 /// Acquire the frozen desktop still that a Wayland region selection draws

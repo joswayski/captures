@@ -203,6 +203,14 @@ data and do not join the public update channel. The detailed native development
 notes below describe implemented slices, not completion of physical acceptance
 or approval to replace the public app.
 
+The opt-in GTK host's **New Capture** supports Screenshot mode with Region,
+Window and Full screen controls. Screenshot Display opens these controls for
+confirmation; repeating the active target shortcut freezes the visible controls
+into a new selection on X11. On Wayland, Full screen saves the already-approved
+portal still without asking again; Window uses the compositor's picker.
+Record mode and its HUD remain separate migration work. Physical Linux desktop,
+GPU, accessibility and mixed-DPI acceptance remain open.
+
 The Win32 workbench can open recordings from History, preview video and GIFs,
 switch between Fit and 100%, scrub and trim a thumbnail timeline, and save copies
 or replace the original with cancellation and Show in Folder. The timeline supports

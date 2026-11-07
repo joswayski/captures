@@ -3,6 +3,7 @@
 //! until it passes the feature, screenshot, performance and accessibility
 //! gates in `docs/native-rewrite.md`.
 mod capture;
+mod capture_bar;
 mod editor;
 mod feedback;
 mod history;
@@ -34,7 +35,7 @@ const USAGE: &str = "captures-gtk [--scene preferences|history|editor|recording|
   [--settings-file PATH] [--history-root PATH] [--size WxH] [--feedback-endpoint URL]\n\
   [--screenshot OUT.png] [--find QUERY] [--count N] [--exercise] [--quit-after SECONDS]\n\
   [--open-media PATH]... [-- FILE...]\n\
-  --live [--captures-autostart] [--capture display|region|window] [--history-root PATH] [--settings-file PATH] [--open-media PATH]... [-- FILE...]";
+  --live [--captures-autostart] [--capture display|region|window|new] [--history-root PATH] [--settings-file PATH] [--open-media PATH]... [-- FILE...]";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Scene {
@@ -160,6 +161,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
                     "display" => tray::Action::CaptureDisplay,
                     "region" => tray::Action::CaptureRegion,
                     "window" => tray::Action::CaptureWindow,
+                    "new" => tray::Action::NewCapture,
                     other => return Err(format!("unsupported capture {other}")),
                 })
             }
@@ -850,6 +852,7 @@ fn main() -> glib::ExitCode {
             match options.capture {
                 Some(tray::Action::CaptureRegion) => host.capture_region(),
                 Some(tray::Action::CaptureWindow) => host.capture_window(),
+                Some(tray::Action::NewCapture) => host.new_capture(),
                 Some(_) => host.capture_display(),
                 None => {}
             }

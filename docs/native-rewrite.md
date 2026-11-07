@@ -1775,6 +1775,39 @@ and without `layer-shell`, and the ScreenCast refusal cancelling Window. Real
 window managers, multi-monitor and HiDPI Wayland remain unverified.
 Windows, macOS: unchanged.
 
+GTK live-app mode, step 8: New Capture in Screenshot mode (`capture_bar.rs`
+and `selector.rs`). The tray, saved New Capture shortcut and `--capture new`
+open shipping's glass controls over Region; Screenshot Display opens the same
+bar on Full screen. Real GTK controls expose Close, Screenshot/Record (Record
+unavailable), Region/Window/Full screen, Aspect or Display, and Take screenshot
+over AT-SPI. Region supports creating, moving and corner-resizing with aspect
+locking; Window retains the clicked target; Full screen shows display identity.
+Enter confirms from the surface, segments or primary action, not Close or a
+select; Escape/Close cancel. X11 explicitly focuses the unmanaged bar window.
+Target shortcuts switch in place; repeating the current target freezes the
+visible controls before replacing the selector and skips countdown recapture.
+Display switching retains the target. Wayland Region crops its portal still;
+Full screen persists that same still through the shared session/commit gate,
+preserving pixels and Display metadata without another Screenshot grant.
+Window remains the compositor's ScreenCast picker. Wayland repeat capture is
+portal-mediated, not a guarantee that a compositor includes the controls.
+Verified: full GTK 4.8 X11 and headless Sway smoke (fullscreen and layer-shell),
+GTK 4.14 targeted capture/selector/menu/tray/shortcut smoke, both GTK test
+configurations and all four X11/layer-shell clippy combinations, the repository
+check, and shared-workspace Rust tests/clippy/fmt. Checks cover exact portal-still
+pixels with no second consent request, lock-after-consent refusal, the repeated
+target preserving controls pixels, Enter from the focused segment, and countdown
+cancellation restoring previews before another capture succeeds. A disposable
+forced cancellation at the countdown handoff failed with close-first ordering
+and passed after moving close after the successful handoff. Four 2560×1600
+Tauri/GTK render comparisons and a pointer-interaction recording were inspected.
+The shared `--glass-shadow` and default GSK renderer remain unchanged: a minimal
+software-GL reproduction bands on llvmpipe but is clean on zink/lavapipe and
+Cairo; this is not a real-GPU result. Recording/HUD is the next separate slice.
+Real GNOME/KDE, GPU, Orca, multi-monitor and HiDPI Wayland acceptance remains open.
+Windows and macOS hosts are unchanged; native remains opt-in, with no public
+promotion, packaging or updater changes.
+
 ## Progress dashboard
 
 We are delivering stage 4 workflow slices and stage 5 editor slices.
