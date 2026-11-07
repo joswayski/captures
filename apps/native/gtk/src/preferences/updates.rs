@@ -5,8 +5,12 @@
 //! the static "Updates unavailable" copy and never make a request. There is
 //! no development endpoint, production or stable channel here.
 //!
-//! "Restart and install" is not offered: the Linux Preview package is still
-//! the wgpu build, so installing it would replace this host.
+//! "Restart and install" shows disabled with a note: the Linux Preview
+//! package is still the wgpu build, so installing it would replace this host.
+
+/// Why a verified Preview cannot install from this host.
+pub const INSTALL_NOTE: &str =
+    "Installing is not available in this native build. Download the latest Preview from captur.es.";
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
@@ -32,6 +36,7 @@ pub struct Updates {
     status: gtk::Label,
     acquisition: gtk::Box,
     acquire: gtk::Button,
+    note: gtk::Label,
 }
 
 impl Drop for Updates {
@@ -51,6 +56,8 @@ pub struct Widgets {
     /// The "Package verification" row and its button.
     pub acquisition: gtk::Box,
     pub acquire: gtk::Button,
+    /// Shown under the row while install is unavailable.
+    pub note: gtk::Label,
 }
 
 /// Start the Preview worker for an installed Preview build and keep the
@@ -85,6 +92,7 @@ pub fn connect(widgets: Widgets) -> Rc<Updates> {
         status: widgets.status,
         acquisition: widgets.acquisition,
         acquire: widgets.acquire,
+        note: widgets.note,
     });
     OPEN.with(|open| *open.borrow_mut() = Rc::downgrade(&updates));
     let weak = Rc::downgrade(&updates);
@@ -162,17 +170,25 @@ impl Updates {
         self.check.set_tooltip_text(Some(detail));
         self.check
             .update_property(&[gtk::accessible::Property::Description(detail)]);
-        let button = copy
-            .and_then(|copy| copy.acquisition)
-            .filter(|button| button.action != Action::Install);
+        let button = copy.and_then(|copy| copy.acquisition);
+        let install = button
+            .as_ref()
+            .is_some_and(|button| button.action == Action::Install);
         self.acquisition.set_visible(button.is_some());
+        self.note.set_visible(install);
         if let Some(button) = button {
             if let Some(label) = self.acquire.child().and_downcast::<gtk::Label>() {
                 label.set_text(&button.label);
             }
             self.acquire
                 .update_property(&[gtk::accessible::Property::Label(&button.label)]);
-            self.acquire.set_sensitive(button.enabled);
+            self.acquire.set_sensitive(button.enabled && !install);
+            self.acquire
+                .update_property(&[gtk::accessible::Property::Description(if install {
+                    INSTALL_NOTE
+                } else {
+                    ""
+                })]);
         }
     }
 }

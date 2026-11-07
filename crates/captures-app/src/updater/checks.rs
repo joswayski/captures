@@ -165,7 +165,7 @@ impl Pending {
                 verified.stage(directory, token).map(Stage::Development)
             }
             Self::Preview(update) => update
-                .download(directory, token, progress)
+                .download_verifying(directory, token, progress, verifying)
                 .map(Stage::Preview),
         }
     }

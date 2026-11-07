@@ -244,7 +244,19 @@ impl Pending {
         &self,
         directory: &Path,
         cancel: &CancelToken,
+        progress: impl FnMut(u64, u64),
+    ) -> Result<Download, Error> {
+        self.download_verifying(directory, cancel, progress, || {})
+    }
+
+    /// [`Pending::download`], reporting `verifying` once every byte has
+    /// arrived and before the signature and hash checks run.
+    pub fn download_verifying(
+        &self,
+        directory: &Path,
+        cancel: &CancelToken,
         mut progress: impl FnMut(u64, u64),
+        verifying: impl FnOnce(),
     ) -> Result<Download, Error> {
         check_cancel(cancel)?;
         let mut response = successful(
@@ -274,6 +286,7 @@ impl Pending {
             bytes.extend_from_slice(&buffer[..count]);
             progress(bytes.len() as u64, total);
         }
+        verifying();
         verify(
             &self.key,
             &self.signature,
@@ -886,7 +899,23 @@ mod tests {
             let cancel = CancelToken::default();
             let pending = client.check(&cancel).unwrap().unwrap();
             let directory = tempfile::tempdir().unwrap();
-            let result = pending.download(directory.path(), &cancel, |_, _| {});
+            // Verifying follows the last byte, once, whether or not the
+            // package then passes.
+            let events = std::cell::RefCell::new(Vec::new());
+            let result = pending.download_verifying(
+                directory.path(),
+                &cancel,
+                |downloaded, _| events.borrow_mut().push(Some(downloaded)),
+                || events.borrow_mut().push(None),
+            );
+            let events = events.into_inner();
+            assert_eq!(events.last(), Some(&None), "{events:?}");
+            assert_eq!(events.iter().filter(|event| event.is_none()).count(), 1);
+            assert_eq!(
+                events[events.len() - 2],
+                Some(downloaded.len() as u64),
+                "{events:?}"
+            );
             if valid {
                 let downloaded = result.unwrap();
                 assert_eq!(

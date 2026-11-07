@@ -1642,6 +1642,8 @@ fn updates_card(prefs: &Rc<Prefs>) -> gtk::Box {
         "Download and verify",
     );
     add(&card, &acquisition);
+    let note = description(updates::INSTALL_NOTE, "setting-description");
+    card.append(&note);
     *prefs.updates.borrow_mut() = Some(updates::connect(updates::Widgets {
         version,
         channel,
@@ -1649,6 +1651,7 @@ fn updates_card(prefs: &Rc<Prefs>) -> gtk::Box {
         status,
         acquisition,
         acquire,
+        note,
     }));
     setting_switch(prefs, &card, "show_update_changelog", "");
     card

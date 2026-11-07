@@ -1101,19 +1101,27 @@ acquisition and download format unchanged. It wakes the GTK main loop
 through `MainContext::invoke`, and closing Preferences joins it off the UI
 thread. Development builds make no request and keep "Updates unavailable"
 with Check Now off. There is no development endpoint, stable or production
-channel. "Restart and install" is not offered: the Linux Preview package is
-still the wgpu build, so `ReleaseInfo` labels it `Renderer::Wgpu` and
-installing it would replace this host. A `Renderer::Gtk` and GTK
-packaging come first. Checked against the live channel with a test Preview
+channel. "Restart and install" shows disabled, with the note "Installing is
+not available in this native build. Download the latest Preview from
+captur.es.": the Linux Preview package is still the wgpu build
+(`ReleaseInfo` labels it `Renderer::Wgpu`), and swapping its host would
+promote a native client, which waits for the four gates and the owner. That
+staged-and-installable state needs a published native Linux package, so it
+was not reached here. Checked against the live channel with a test Preview
 build (2026.1.1, shipping key, isolated HOME): the automatic check showed
 "Preview 2026.11.605 available". With `APPIMAGE` set, Download and verify
 fetched 102,668,792 bytes with progress; Cancel returned to available and
 left the staging directory empty. A full download ended in "Native update
 signature verification failed." That refusal is correct: the channel's
 Linux asset is the Tauri AppImage, whose signed file name is not the native
-`Captures-<version>-linux-x86_64.AppImage`. The debug-build check of 103 MB
-also showed "Downloading N of N" for minutes, because the shared Preview
-path reports no Verifying state. `smoke.py` checks that a development
+`Captures-<version>-linux-x86_64.AppImage`. That run also showed
+"Downloading N of N" for minutes while the debug build verified 103 MB:
+the shared Preview path never reported Verifying. It now does, for every
+host: `preview::Pending::download_verifying` signals once every byte has
+arrived, before the signature and hash checks, and `CheckWorker` passes its
+Verifying event through. The existing Preview download test asserts it
+arrives exactly once, after the last progress, for valid and refused
+packages. `smoke.py` checks that a development
 build's Check Now stays off. X11 (Xvfb) only; Wayland and real hardware
 remain open. Windows, macOS: unchanged.
 
