@@ -687,6 +687,27 @@ the end of `body`) stays open when Tab leaves it and, on an outside press,
 closes with focus on the root (the canvas isn't focusable). Windows:
 cross-compiled only. macOS, Linux: unchanged.
 
+Layer rename and reorder: double-clicking an image layer's row opens
+shipping's inline rename (`.screenshot-layer-copy input`, 25 px, accent
+border on `--editor-field`, name selected) on the shared single-line text
+field with IMM32, clipboard and a compositor-blinking caret over the list.
+Enter or blur commits a trimmed, changed, nonempty name
+(`LayerEdit::Rename`); Escape cancels; the row is `tabIndex=-1` meanwhile and
+UIA exposes the input as an Edit named "Rename layer" with Value. Dragging an
+unlocked row past the system drag threshold fades it to 0.42 on the
+compositor and moves a 2 px accent drop line with its 8 px glow 4 px above or
+below the row under the pointer, by pointer half; release reorders with
+`LayerEdit::Reorder` and selects the moved layer with Select, like
+`dropLayer`. Escape cancels a drag. Deviations: the dragged row is not scaled
+to 0.985; Tauri has no keyboard reorder, so Alt+Up and Alt+Down on a focused
+row move its layer one place (locked layers and their neighbours stay put,
+as in the shared reorder) and focus follows it; the layer menu (Bring to
+front, Send to back) is still a stub. Windows: cross-compiled only, Wine
+renders of the open rename (light, dark) and the drop line through a
+temporary, removed hook; Wine's DirectWrite stubs `HitTestTextRange`, so the
+selected name draws without its highlight there (as in Preferences Find).
+macOS, Linux: unchanged.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,
