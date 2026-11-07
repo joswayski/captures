@@ -27,7 +27,11 @@ captures-recording-platform = { path = "../../../crates/captures-recording-platf
 # X11 stack placement; Wayland compositors place windows themselves.
 gdk4-x11 = { version = "0.9", optional = true }
 x11rb = { version = "0.13", optional = true }
+# wlr-layer-shell stack placement (wlroots, KDE): needs the gtk4-layer-shell
+# C library (`build_layer_shell.sh`); used only where the compositor offers it.
+gtk4-layer-shell = { version = "0.5", optional = true }
 
 [features]
 default = ["x11"]
 x11 = ["dep:gdk4-x11", "dep:x11rb"]
+layer-shell = ["dep:gtk4-layer-shell"]

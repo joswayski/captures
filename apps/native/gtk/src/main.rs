@@ -24,7 +24,8 @@ use gtk::{gio, glib, graphene};
 
 const USAGE: &str = "captures-gtk [--scene preferences|history|editor|recording|preview|feedback] [--artifact ID] [--appearance light|dark]\n\
   [--settings-file PATH] [--history-root PATH] [--size WxH] [--feedback-endpoint URL]\n\
-  [--screenshot OUT.png] [--find QUERY] [--exercise] [--quit-after SECONDS]";
+  [--screenshot OUT.png] [--find QUERY] [--count N] [--exercise] [--quit-after SECONDS]\n\
+  [--open-media PATH]... [-- FILE...]";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Scene {
@@ -61,8 +62,14 @@ struct Options {
     /// Where Send feedback posts; without it the form is a fixture.
     feedback_endpoint: Option<String>,
     size: Option<(i32, i32)>,
+    /// How many of the newest entries `--scene preview` restores.
+    count: usize,
     exercise: bool,
     quit_after: Option<Duration>,
+    /// Open With: files to import into History and edit.
+    open: Vec<PathBuf>,
+    /// `--scene` was given; without it, files open only their editors.
+    scene_given: bool,
 }
 
 fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
@@ -76,14 +83,18 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
         find: None,
         feedback_endpoint: None,
         size: None,
+        count: 2,
         exercise: false,
         quit_after: None,
+        open: Vec::new(),
+        scene_given: false,
     };
     let mut args = args.skip(1);
     while let Some(flag) = args.next() {
         let mut value = || args.next().ok_or_else(|| format!("{flag} needs a value"));
         match flag.as_str() {
             "--scene" => {
+                options.scene_given = true;
                 options.scene = match value()?.as_str() {
                     "preferences" => Scene::Preferences,
                     "history" => Scene::History,
@@ -101,6 +112,10 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
             "--screenshot" => options.screenshot = Some(value()?.into()),
             "--find" => options.find = Some(value()?),
             "--feedback-endpoint" => options.feedback_endpoint = Some(value()?),
+            "--open-media" => options.open.push(value()?.into()),
+            // Everything after `--` is a local path (Open With).
+            "--" => options.open.extend(args.by_ref().map(PathBuf::from)),
+            "--count" => options.count = value()?.parse().map_err(|_| "bad --count")?,
             "--exercise" => options.exercise = true,
             "--quit-after" => {
                 let seconds: f64 = value()?.parse().map_err(|_| "bad --quit-after")?;
@@ -159,6 +174,8 @@ struct Host {
     find: RefCell<Option<String>>,
     feedback: RefCell<Option<gtk::ApplicationWindow>>,
     feedback_endpoint: Option<String>,
+    /// Holds the app while Open With imports run before any window opens.
+    opening: RefCell<Option<gio::ApplicationHoldGuard>>,
 }
 
 impl Host {
@@ -378,6 +395,78 @@ impl Host {
         }
     }
 
+    /// Open With: import each file into History off the UI thread, as
+    /// shipping does, then open its editor. A file already in History opens
+    /// that entry; one already being edited focuses its window.
+    fn open_media(self: &Rc<Self>, paths: Vec<PathBuf>) {
+        let Some(path) = paths.first().cloned() else {
+            self.opening.borrow_mut().take();
+            return;
+        };
+        let root = self.history_root.clone();
+        let open_artifact_ids = self
+            .editors
+            .borrow()
+            .iter()
+            .map(|(id, _)| id)
+            .chain(self.recordings.borrow().iter().map(|(id, _)| id))
+            .cloned()
+            .collect();
+        let host = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let (ffmpeg, ffprobe) = recording::media_tools();
+            let request = captures_app::Request::OpenMedia {
+                root,
+                path: path.clone(),
+                open_artifact_ids,
+                ffmpeg: Some(ffmpeg),
+                ffprobe: Some(ffprobe),
+            };
+            let result = gio::spawn_blocking(move || captures_app::execute(request))
+                .await
+                .map_err(|_| "the import worker stopped".to_owned())
+                .and_then(|result| result.map_err(|error| error.to_string()));
+            let Some(host) = host.upgrade() else { return };
+            match result {
+                Ok(captures_app::Response::OpenedMedia { artifact, .. }) => {
+                    emit("media-opened", serde_json::json!({"id": artifact.entry.id}));
+                    if let Some(history) = host.history.borrow().as_ref() {
+                        history.reload();
+                    }
+                    host.edit(&artifact.entry);
+                }
+                Ok(_) => unreachable!("OpenMedia returns OpenedMedia"),
+                Err(error) => {
+                    emit(
+                        "media-open-failed",
+                        serde_json::json!({"path": path, "error": error}),
+                    );
+                    host.show_error(&error);
+                }
+            }
+            host.open_media(paths[1..].to_vec());
+        });
+    }
+
+    /// Shipping's open-media error: the system's "Captures" message dialog
+    /// with an OK button.
+    #[allow(deprecated)] // GtkAlertDialog needs GTK 4.10.
+    fn show_error(&self, error: &str) {
+        let dialog = gtk::MessageDialog::builder()
+            .title("Captures")
+            .text(error)
+            .message_type(gtk::MessageType::Error)
+            .buttons(gtk::ButtonsType::Ok)
+            .modal(true)
+            .build();
+        if let Some(parent) = self.app.active_window() {
+            dialog.set_transient_for(Some(&parent));
+        }
+        dialog.set_application(Some(&self.app));
+        dialog.connect_response(|dialog, _| dialog.destroy());
+        dialog.present();
+    }
+
     /// Edit opens the editor that matches the artifact's kind.
     fn edit(self: &Rc<Self>, entry: &captures_history::HistoryEntry) {
         if entry.kind.is_recording() {
@@ -519,6 +608,7 @@ fn main() -> glib::ExitCode {
             find: RefCell::new(options.find.clone()),
             feedback: RefCell::default(),
             feedback_endpoint: options.feedback_endpoint.clone(),
+            opening: RefCell::default(),
         });
         hosts.borrow_mut().push(host.clone());
         let weak = Rc::downgrade(&host);
@@ -527,6 +617,19 @@ fn main() -> glib::ExitCode {
                 host.follow_system();
             }
         });
+        // Open With alone opens only the files' editors, as shipping.
+        if !options.open.is_empty() {
+            host.open_media(options.open.clone());
+            if !options.scene_given {
+                if let Some(after) = options.quit_after {
+                    let app = app.clone();
+                    glib::timeout_add_local_once(after, move || app.quit());
+                }
+                // Keep running while the imports have no window yet.
+                *host.opening.borrow_mut() = Some(app.hold());
+                return;
+            }
+        }
         let window: gtk::ApplicationWindow = match options.scene {
             Scene::Preferences => host.show_preferences(),
             Scene::Feedback => host.show_feedback(),
@@ -543,13 +646,13 @@ fn main() -> glib::ExitCode {
                 let id = options.artifact.clone().expect("checked in parse");
                 host.show_recording(&id).window.clone()
             }
-            // `--artifact ID` restores one entry; otherwise the two newest.
+            // `--artifact ID` restores one entry; otherwise the `--count` newest.
             Scene::Preview => {
                 let entries = captures_history::load(&host.history_root, chrono::Utc::now())
                     .unwrap_or_default();
                 let mut chosen: Vec<_> = match &options.artifact {
                     Some(id) => entries.into_iter().filter(|e| e.id == *id).collect(),
-                    None => entries.into_iter().take(2).collect(),
+                    None => entries.into_iter().take(options.count).collect(),
                 };
                 chosen.reverse();
                 let mut shown = None;

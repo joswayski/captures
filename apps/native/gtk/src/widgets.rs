@@ -192,12 +192,20 @@ impl MaxWidth {
     /// `max-width-chars`, which GTK otherwise ignores once the label is
     /// allocated more.
     pub const NATURAL: i32 = -1;
+    /// No cap: the child takes the whole allocation.
+    pub const UNBOUNDED: i32 = i32::MAX;
 
     pub fn new(child: &impl IsA<gtk::Widget>, max: i32) -> Self {
         let widget: Self = glib::Object::new();
         widget.imp().max.set(max);
         child.set_parent(&widget);
         widget
+    }
+
+    pub fn set_max(&self, max: i32) {
+        if self.imp().max.replace(max) != max {
+            self.queue_resize();
+        }
     }
 
     /// Like [`MaxWidth::new`], centered (`margin: 0 auto`).
@@ -302,6 +310,8 @@ mod thumbnail_imp {
     pub struct Thumbnail {
         pub texture: std::cell::RefCell<Option<gtk::gdk::Texture>>,
         pub cover: std::cell::Cell<bool>,
+        /// Fill the width at the image's aspect and clip the rest.
+        pub fill_width: std::cell::Cell<bool>,
         pub dimmed: std::cell::Cell<bool>,
         /// Collapsed-pile media blur (`blur(…px)`, no dimming).
         pub blur: std::cell::Cell<f32>,
@@ -313,6 +323,10 @@ mod thumbnail_imp {
         pub streak: std::cell::Cell<Option<super::Streak>>,
         /// Baked streak steps by index, for the current base look.
         pub streak_textures: std::cell::RefCell<Vec<(usize, gtk::gdk::Texture)>>,
+        /// A control over the image with `backdrop-filter: blur(12px)`.
+        pub frost: std::cell::RefCell<Option<glib::WeakRef<gtk::Widget>>>,
+        /// The blurred backdrop under it: (where it was baked, texture).
+        pub frost_texture: std::cell::RefCell<Option<(graphene::Rect, gtk::gdk::Texture)>>,
     }
 
     #[glib::object_subclass]
@@ -340,7 +354,7 @@ mod thumbnail_imp {
             let Some((texture, mut rect)) = widget.drawn() else {
                 return;
             };
-            let cover = self.cover.get();
+            let cover = self.cover.get() || self.fill_width.get();
             let texture = match self.streak.get() {
                 Some(streak) => {
                     // Stretch about the centre, inside the card's clip.
@@ -362,6 +376,9 @@ mod thumbnail_imp {
                 snapshot.push_clip(&graphene::Rect::new(0., 0., w, h));
             }
             snapshot.append_texture(&texture, &rect);
+            if self.streak.get().is_none() {
+                widget.draw_frost(snapshot, &texture, &rect);
+            }
             if cover {
                 snapshot.pop();
             }
@@ -369,7 +386,69 @@ mod thumbnail_imp {
     }
 }
 
+/// Shipping's `backdrop-filter: blur(12px)`.
+const FROST_BLUR: f32 = 12.;
+
 impl Thumbnail {
+    /// Blur the image under `chip` (a sibling overlay), as shipping's History
+    /// delete button frosts what it covers. Over a uniform background the
+    /// blurred image composited on that background is the blurred backdrop,
+    /// so only the image is blurred; once per texture and chip position.
+    pub fn set_frost(&self, chip: Option<&impl IsA<gtk::Widget>>) {
+        *self.imp().frost.borrow_mut() = chip.map(|chip| chip.as_ref().downgrade());
+        self.imp().frost_texture.borrow_mut().take();
+        self.queue_draw();
+    }
+
+    fn draw_frost(
+        &self,
+        snapshot: &gtk::Snapshot,
+        texture: &gtk::gdk::Texture,
+        drawn: &graphene::Rect,
+    ) {
+        let imp = self.imp();
+        let Some(chip) = imp.frost.borrow().as_ref().and_then(glib::WeakRef::upgrade) else {
+            return;
+        };
+        if !chip.is_visible() {
+            return;
+        }
+        let Some(bounds) = chip.compute_bounds(self) else {
+            return;
+        };
+        // The baked region: the chip plus three standard deviations.
+        let margin = 3. * FROST_BLUR;
+        let region = graphene::Rect::new(
+            (bounds.x() - margin).floor(),
+            (bounds.y() - margin).floor(),
+            (bounds.width() + 2. * margin).ceil(),
+            (bounds.height() + 2. * margin).ceil(),
+        );
+        let cached = imp
+            .frost_texture
+            .borrow()
+            .as_ref()
+            .filter(|(at, _)| at == &region)
+            .map(|(_, baked)| baked.clone());
+        let baked = match cached {
+            Some(baked) => baked,
+            None => {
+                let Some(baked) = frost_backdrop(texture, drawn, &region, self.scale_factor())
+                else {
+                    return;
+                };
+                *imp.frost_texture.borrow_mut() = Some((region, baked.clone()));
+                baked
+            }
+        };
+        let radius = graphene::Size::new(8., 8.);
+        snapshot.push_rounded_clip(&gtk::gsk::RoundedRect::new(
+            bounds, radius, radius, radius, radius,
+        ));
+        snapshot.append_texture(&baked, &region);
+        snapshot.pop();
+    }
+
     /// The texture as drawn now (plain, or the baked hover / pile filter)
     /// and where it lands in the widget, before any clip.
     pub fn drawn(&self) -> Option<(gtk::gdk::Texture, graphene::Rect)> {
@@ -410,7 +489,9 @@ mod thumbnail_draw {
             if w <= 0. || h <= 0. || tw <= 0. || th <= 0. {
                 return None;
             }
-            Some(if self.cover.get() {
+            Some(if self.fill_width.get() {
+                w / tw
+            } else if self.cover.get() {
                 (w / tw).max(h / th)
             } else {
                 (w / tw).min(h / th)
@@ -468,10 +549,14 @@ mod thumbnail_draw {
             } else {
                 texture
             };
-            Some((
-                texture,
-                graphene::Rect::new((w - dw) / 2., (h - dh) / 2., dw, dh),
-            ))
+            // Shipping History grows the image box to the image and clips it at
+            // the bottom; a shorter image stays centered.
+            let y = if self.fill_width.get() && dh > h {
+                0.
+            } else {
+                (h - dh) / 2.
+            };
+            Some((texture, graphene::Rect::new((w - dw) / 2., y, dw, dh)))
         }
     }
 }
@@ -543,6 +628,14 @@ impl Thumbnail {
         }
     }
 
+    /// Shipping History's `<img width: 100%>`: the image's height follows its
+    /// aspect (the percentage height does not resolve), and the frame clips
+    /// what overflows at the bottom.
+    pub fn set_fill_width(&self, on: bool) {
+        self.imp().fill_width.set(on);
+        self.queue_draw();
+    }
+
     /// Fill the widget (`object-fit: cover`) instead of fitting inside it.
     pub fn set_cover(&self, cover: bool) {
         self.imp().cover.set(cover);
@@ -551,6 +644,7 @@ impl Thumbnail {
 
     pub fn set_texture(&self, texture: Option<gtk::gdk::Texture>) {
         *self.imp().texture.borrow_mut() = texture;
+        self.imp().frost_texture.borrow_mut().take();
         self.imp().dimmed_texture.borrow_mut().take();
         self.imp().streak_textures.borrow_mut().clear();
         self.queue_draw();
@@ -571,6 +665,56 @@ impl Thumbnail {
 /// Shipping's hover media filter, `blur(σ) brightness(b)`, baked into a new
 /// texture: three box passes approximate the Gaussian (σ in texture pixels).
 /// Without `vertical` it blurs along rows only (the Close streak).
+/// The image's pixels under `region` (widget points) at device scale,
+/// transparent where the image does not reach, blurred by [`FROST_BLUR`].
+fn frost_backdrop(
+    texture: &gtk::gdk::Texture,
+    drawn: &graphene::Rect,
+    region: &graphene::Rect,
+    scale: i32,
+) -> Option<gtk::gdk::Texture> {
+    let scale = scale.max(1) as f32;
+    let (width, height) = (
+        (region.width() * scale) as usize,
+        (region.height() * scale) as usize,
+    );
+    let (tw, th) = (texture.width() as usize, texture.height() as usize);
+    if width == 0 || height == 0 || tw == 0 || th == 0 || drawn.width() <= 0. {
+        return None;
+    }
+    let mut source = vec![0u8; tw * th * 4];
+    texture.download(&mut source, tw * 4);
+    // Nearest sampling is plenty under a 12 px blur.
+    let per_point = tw as f32 / drawn.width();
+    let mut pixels = vec![0u8; width * height * 4];
+    for y in 0..height {
+        let py = region.y() + (y as f32 + 0.5) / scale;
+        let ty = ((py - drawn.y()) * per_point).floor();
+        if ty < 0. || ty >= th as f32 {
+            continue;
+        }
+        for x in 0..width {
+            let px = region.x() + (x as f32 + 0.5) / scale;
+            let tx = ((px - drawn.x()) * per_point).floor();
+            if tx < 0. || tx >= tw as f32 {
+                continue;
+            }
+            let from = (ty as usize * tw + tx as usize) * 4;
+            let to = (y * width + x) * 4;
+            pixels[to..to + 4].copy_from_slice(&source[from..from + 4]);
+        }
+    }
+    let region_texture: gtk::gdk::Texture = gtk::gdk::MemoryTexture::new(
+        width as i32,
+        height as i32,
+        gtk::gdk::MemoryFormat::B8g8r8a8Premultiplied,
+        &glib::Bytes::from_owned(pixels),
+        width * 4,
+    )
+    .upcast();
+    Some(dim_and_blur(&region_texture, FROST_BLUR * scale, 1., true))
+}
+
 fn dim_and_blur(
     texture: &gtk::gdk::Texture,
     sigma: f32,

@@ -106,6 +106,14 @@ fn scaled(value: u32, numerator: u32, denominator: u32) -> u32 {
 }
 
 impl ExportBar {
+    /// Shipping's `max-width: 1040px` control widths.
+    pub(super) fn set_compact(&self, compact: bool) {
+        self.preset_box
+            .set_size_request(if compact { 136 } else { 148 }, -1);
+        self.maximum_box
+            .set_size_request(if compact { 176 } else { 212 }, -1);
+    }
+
     pub(super) fn new(changed: impl Fn(ExportOptions) + 'static) -> Rc<Self> {
         let model = Rc::new(Model {
             options: Cell::new(None),

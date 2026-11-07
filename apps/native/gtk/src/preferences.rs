@@ -197,9 +197,12 @@ pub fn restyle(tokens: Rc<Tokens>) {
 pub(crate) fn measure_ch(tokens: &Tokens) {
     let layout = gtk::Label::new(None).create_pango_layout(Some("0"));
     let mut font = layout.context().font_description().unwrap_or_default();
-    font.set_absolute_size(f64::from(tokens.number("text-sm")) * f64::from(gtk::pango::SCALE));
+    // Measured at 100× and scaled back: hinted metrics round each advance
+    // to a whole pixel, and a rounded 8 px widens a 56ch cap by 20 px.
+    let size = f64::from(tokens.number("text-sm")) * 100.;
+    font.set_absolute_size(size * f64::from(gtk::pango::SCALE));
     layout.set_font_description(Some(&font));
-    CH.set(layout.pixel_size().0 as f32);
+    CH.set(layout.size().0 as f32 / gtk::pango::SCALE as f32 / 100.);
 }
 
 /// Shipping `max-width: {chars}ch` around wrapping copy. GTK's
@@ -562,7 +565,13 @@ fn copy(title: &str, detail: &str, cap: bool) -> (gtk::Box, gtk::Label) {
     let detail_label = description(detail, "setting-description");
     detail_label.set_visible(!detail.is_empty());
     if cap {
-        copy.append(&capped(&detail_label, 52.));
+        // The wrapper follows the description, so a hidden one adds no gap.
+        let capped = capped(&detail_label, 52.);
+        detail_label
+            .bind_property("visible", &capped, "visible")
+            .sync_create()
+            .build();
+        copy.append(&capped);
     } else {
         copy.append(&detail_label);
     }
@@ -571,7 +580,8 @@ fn copy(title: &str, detail: &str, cap: bool) -> (gtk::Box, gtk::Label) {
 
 /// `.setting-row-inline`: copy on the left, the control on the right.
 fn inline_row(title: &str, detail: &str, control: &impl IsA<gtk::Widget>) -> gtk::Box {
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 24);
+    // `.setting-row` column gap: `var(--s-6)`.
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 16);
     row.add_css_class("setting-row-inline");
     row.append(&copy(title, detail, true).0);
     let control = control.as_ref();
@@ -584,7 +594,8 @@ fn inline_row(title: &str, detail: &str, control: &impl IsA<gtk::Widget>) -> gtk
 
 /// `.setting-row-stack`: the title over a full-width control.
 fn stack_row(title: &str, detail: &str, control: &impl IsA<gtk::Widget>) -> gtk::Box {
-    let row = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    // `.setting-row` row gap: `var(--s-4)`.
+    let row = gtk::Box::new(gtk::Orientation::Vertical, 8);
     row.append(&copy(title, detail, true).0);
     row.append(control);
     row
@@ -1324,7 +1335,8 @@ fn shortcuts_card(prefs: &Rc<Prefs>) -> gtk::Box {
 /// Shipping `ShortcutInput`: click, then press the combination; Esc or
 /// leaving the recorder cancels.
 fn shortcut_row(prefs: &Rc<Prefs>, title: &'static str, path: String) -> gtk::Box {
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 24);
+    // `.shortcut-row`: `gap: var(--s-6)`.
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 16);
     row.add_css_class("shortcut-row");
     let name = label(title, "shortcut-label");
     name.set_hexpand(true);
@@ -1334,7 +1346,8 @@ fn shortcut_row(prefs: &Rc<Prefs>, title: &'static str, path: String) -> gtk::Bo
     let recorder = gtk::Button::new();
     recorder.add_css_class("shortcut-recorder");
     recorder.update_relation(&[gtk::accessible::Relation::LabelledBy(&[name.upcast_ref()])]);
-    let keys = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    // `.shortcut-recorder`: `gap: var(--s-3)` between key caps.
+    let keys = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     recorder.set_child(Some(&keys));
     control.append(&recorder);
     let error = label("", "shortcut-error");

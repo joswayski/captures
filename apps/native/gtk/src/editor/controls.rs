@@ -338,6 +338,7 @@ pub(crate) fn style_preview(preset: &str) -> gtk::Label {
     sample.add_css_class(&format!("style-{preset}"));
     sample.set_width_chars(1);
     sample.set_size_request(72, 24);
+    sample.set_valign(gtk::Align::Center);
     sample.set_accessible_role(gtk::AccessibleRole::Presentation);
     sample
 }

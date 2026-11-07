@@ -1072,11 +1072,10 @@ with and without Openbox: bottom-left lands at x=0 with its bottom edge at
 reports ABOVE and all desktops. Not done: a non-focusable window (Tauri sets
 `focusable(false)`; GTK4 has no accept-focus API, and keyboard access to the
 stack relies on focus), restoring a dragged stack origin, and Wayland, where
-GTK4 cannot position toplevels: the compositor places the stack until a
-`gtk4-layer-shell` path for wlroots and KDE compositors lands; GNOME has no
-layer-shell. The X11 path is the default `x11` Cargo feature, so a
-Wayland-only GTK build can drop it. Wayland, multi-monitor and real
-hardware not verified. Windows, macOS: unchanged.
+GTK4 cannot position toplevels (see the layer-shell placement below; GNOME
+has no layer-shell). The X11 path is the default `x11` Cargo feature, so a
+Wayland-only GTK build can drop it. Multi-monitor and real hardware not
+verified. Windows, macOS: unchanged.
 
 GTK preview cards now leave with shipping's exits, driven by the shared
 `preview_motion::StackExits` the AppKit and wgpu hosts use. Close keeps the
@@ -1382,6 +1381,74 @@ on GTK 4.14 too. The check is structural only: names, roles and focus
 order, not what Orca speaks. Orca, Wayland, KDE Plasma and real hardware
 remain unverified, so the accessibility gate is not closed. Windows, macOS:
 unchanged.
+
+GTK on Wayland: `smoke.py --wayland` runs the whole AT-SPI smoke on the
+private headless Sway 1.9 fixture (`build_wayland_compositor_fixture.sh`)
+with no X display. Input crosses the compositor through the
+`wayland_drag_probe` virtual pointer and keyboard, windows are found and
+closed through Sway IPC, and the clipboard is `wl-copy`. GDK's Wayland
+backend reads the double-click time from GSettings, so the run uses a
+private keyfile backend that allows the injector's slower clicks. Every
+step that passes on X11 passes there too.
+
+With the opt-in `layer-shell` feature, the preview stack becomes a
+wlr-layer-shell surface on the Top layer, but only when the compositor
+offers the protocol and the display is Wayland. It is anchored to
+shipping's corner with `thumbnail_geometry`'s gaps as margins, and its
+keyboard mode is on-demand. A carried pile moves through its margins: the
+pointer's output position is the surface origin plus the pointer in the
+window. Elsewhere, GNOME included, nothing changes.
+
+Checked on the 1280 × 1024 headless Sway output with gtk4-layer-shell
+1.3.0, pinned and built by `apps/native/gtk/build_layer_shell.sh`:
+- The stack is no longer a Sway toplevel.
+- Bottom-left cards span x 28–312 with their bottom edge at 952 (1024 less
+  the 48 px auto-hide reserve, the 12 px gap and the 12 px padding), as on
+  X11.
+- Top-right cards end at x 1252 and start at y 24.
+- Collapse keeps the anchored edge, and a carry from bottom-left to the top
+  right re-anchors there and expands downward.
+
+CI builds the library and runs clippy with the feature. KDE, GNOME and real
+hardware not verified. Windows, macOS: unchanged.
+
+GTK Open With: `--open-media PATH` and `-- FILE...` import each file
+through the shared `OpenMedia` request on a worker thread, then open the
+matching editor. A file already in History reuses its entry, and an open
+editor is focused. Without `--scene`, no Preferences window opens. A
+failure shows shipping's "Captures" error dialog with the shared reason.
+`smoke.py` covers a PNG, an MP4 and a refused text file on X11 and Wayland.
+
+Not done: forwarding files to an already running instance (the GTK host is
+still `NON_UNIQUE`), the desktop file and MIME registration, the tray,
+global shortcuts, onboarding, crash diagnostics, and the update and launch
+notices. All of these need a GTK live-app mode (profile election and the
+capture flow) first. Windows, macOS: unchanged.
+
+GTK resource gate (Xvfb 1280 × 800 in an Ubuntu 24.04 container on two
+vCPUs, GTK 4.14; release builds; the shipping Tauri 2026.11.07.3 `.deb`).
+Each value is the median of three runs of the same journey: Preferences
+idle, pointer hover and wheel scroll for 20 s each, then Capture History with
+1000 entries opened and scrolled. CPU sums the whole process tree as a
+percentage of one core; memory is the tree's PSS.
+
+| | GTK (GL renderer, llvmpipe) | GTK (`GSK_RENDERER=cairo`) | wgpu | Tauri |
+| --- | --- | --- | --- | --- |
+| Launch to first painted frame | 1337 ms | 273 ms | 424 ms | 2950 ms |
+| Idle CPU | 0.0% | 0.0% | 0.0% | 0.5% |
+| Hover CPU | 8.3% | 5.5% | 118.8% | 70.0% |
+| Scroll CPU | 6.7% | 3.5% | 118.8% | 52.5% |
+| Preferences PSS / RSS | 245 / 271 MB | 109 / 137 MB | 210 / 233 MB | 617 / 1188 MB |
+| History open | 94 ms | 94 ms | 112 ms | 429 ms |
+| History scroll CPU | 40.1% | 17.8% | 156.9% | 137.5% |
+| History PSS / RSS | 325 / 352 MB | 126 / 155 MB | 229 / 252 MB | 1044 / 1777 MB |
+| Processes | 1 | 1 | 1 | 7 |
+
+The default GL renderer runs in software here (llvmpipe), as wgpu's Vulkan
+does, and costs about 1.1 s of startup and 135 MB. Against wgpu, the GTK
+host passes on every row only with the cairo renderer; with GL it loses on
+startup and memory. Real GPUs, Wayland and longer churn not measured.
+Windows, macOS: unchanged.
 
 ## Progress dashboard
 

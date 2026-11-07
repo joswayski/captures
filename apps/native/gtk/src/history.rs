@@ -958,6 +958,7 @@ impl CardView {
         let open = gtk::Button::new();
         open.add_css_class("history-image-open");
         let thumbnail = Thumbnail::default();
+        thumbnail.set_fill_width(true);
         thumbnail.set_hexpand(true);
         thumbnail.set_vexpand(true);
         open.set_child(Some(&thumbnail));
@@ -976,6 +977,7 @@ impl CardView {
         delete.set_halign(gtk::Align::End);
         delete.set_valign(gtk::Align::Start);
         wrap.add_overlay(&delete);
+        thumbnail.set_frost(Some(&delete));
         root.append(&wrap);
 
         let body = gtk::Box::new(gtk::Orientation::Vertical, 4);
@@ -1121,7 +1123,11 @@ impl CardView {
                 continue;
             };
             text.set_label(action.label());
-            icon.set_name(action.icon().unwrap_or("folder"));
+            // Copy and Show in Folder are text-only, as shipping.
+            icon.set_visible(action.icon().is_some());
+            if let Some(name) = action.icon() {
+                icon.set_name(name);
+            }
             button.set_tooltip_text(action.tooltip());
             button.update_property(&[gtk::accessible::Property::Label(action.label())]);
             set_class(button, "primary", slot == 0);
@@ -1146,7 +1152,9 @@ impl CardView {
         let id = self.id.borrow().clone();
         let scale = self.root.scale_factor().max(1);
         let width = state.column_width.get().ceil() as i32;
-        let size = (width.max(1) * scale, 168 * scale);
+        // Decoded at the card's width: the frame clips the height.
+        let width = width.max(1) * scale;
+        let size = (width, width * 8);
         let key = id.clone();
         state
             .thumbnails
