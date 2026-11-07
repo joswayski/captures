@@ -184,6 +184,8 @@ pub(super) struct Output {
     unit: Rc<Choice>,
     estimate: gtk::Label,
     delta: gtk::Label,
+    crop_card: gtk::Box,
+    quality_card: gtk::Box,
     audio_card: gtk::Box,
     system: (gtk::Box, gtk::ToggleButton, RangeSlider),
     microphone: (gtk::Box, gtk::ToggleButton, RangeSlider),
@@ -647,6 +649,8 @@ impl Output {
         let output = Rc::new(Output {
             root,
             format,
+            crop_card: crop_card.clone(),
+            quality_card: quality_card.clone(),
             gif_card,
             gif_fps,
             gif_width,
@@ -704,6 +708,28 @@ impl Output {
     }
 
     /// The editor opened `source`: shipping's per-artifact initial state.
+    /// Shipping's `max-width: 820px` grid: one column, Crop & size over
+    /// Save quality.
+    pub(super) fn set_compact(&self, compact: bool) {
+        let grid = &self.root;
+        for card in [&self.crop_card, &self.quality_card] {
+            grid.remove(card);
+        }
+        grid.remove(&self.audio_card);
+        grid.remove(&self.audio_note);
+        if compact {
+            grid.attach(&self.crop_card, 0, 1, 2, 1);
+            grid.attach(&self.quality_card, 0, 2, 2, 1);
+            grid.attach(&self.audio_card, 0, 3, 2, 1);
+            grid.attach(&self.audio_note, 0, 4, 2, 1);
+        } else {
+            grid.attach(&self.crop_card, 0, 1, 1, 1);
+            grid.attach(&self.quality_card, 1, 1, 1, 1);
+            grid.attach(&self.audio_card, 0, 2, 2, 1);
+            grid.attach(&self.audio_note, 0, 3, 2, 1);
+        }
+    }
+
     pub(super) fn open(&self, source: Source, preferences: &RecordingSettings) {
         let model = &self.model;
         let format = match source.format {

@@ -155,7 +155,8 @@ open "http://127.0.0.1:1420/?view=startup&mock=1&stage=1&caret=top&caret_x=148"
 
 - `mock` installs the sample backend (`apps/desktop/ui/src/dev/previewBackend.ts`).
 - `stage` paints a sample desktop behind transparent overlay windows.
-- Other parameters set variants: `mode`, `target`, `state`, `update`, `platform`, `granted`, `drafts`, `captures`, `count`, `placement`, `changelog`, `reject`.
+- Other parameters set variants: `mode`, `target`, `state`, `update`, `platform`, `granted`, `drafts`, `captures`, `count`, `placement`, `changelog`, `reject`, `history`.
+- `history=empty` shows Capture History with no entries.
 - `changelog=0` hides stacked release notes on the update notice (Preferences default is on).
 - `caret=top` or `caret=bottom` plus `caret_x` places the tray-pointing triangle on the update and launch notices.
 - `placement` sets the mini-preview home corner in the thumbnail and Preferences harness (`top-left`, `top-right`, `bottom-left`, `bottom-right`).

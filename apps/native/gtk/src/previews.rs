@@ -21,6 +21,8 @@ use crate::widgets::{Icon, Thumbnail, icon_button};
 
 mod pile;
 use pile::{Pile, PileCard};
+#[cfg(feature = "layer-shell")]
+mod layer_shell;
 #[cfg(feature = "x11")]
 mod x11;
 
@@ -81,6 +83,9 @@ struct State {
     >,
     #[cfg(feature = "x11")]
     placer: Option<Rc<x11::Placer>>,
+    /// The window is a wlr-layer-shell surface (wlroots, KDE).
+    #[cfg(feature = "layer-shell")]
+    layered: bool,
 }
 
 fn icon_control(icon: &str, label: &str, classes: &[&str]) -> gtk::Button {
@@ -109,6 +114,8 @@ pub fn build(
         .build();
     window.add_css_class("captures");
     window.add_css_class("preview-stack-window");
+    #[cfg(feature = "layer-shell")]
+    let layered = layer_shell::init(&window);
 
     // The shared control gutter beside the stack's anchored edge.
     let controls = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -146,6 +153,8 @@ pub fn build(
         dragged: Cell::new(None),
         #[cfg(feature = "x11")]
         placer: x11::Placer::new(&gtk::prelude::WidgetExt::display(&window)).map(Rc::new),
+        #[cfg(feature = "layer-shell")]
+        layered,
     });
     #[cfg(feature = "x11")]
     place_on_x11(&state);
@@ -297,7 +306,7 @@ fn carry_pile(state: &Rc<State>) {
             state.pile.carry_start();
         }
         at.set(Some((press, true)));
-        state.carry_to(press);
+        state.carry_to(press, (press.0 + dx, press.1 + dy));
     });
     let weak = Rc::downgrade(state);
     drag.connect_drag_end(move |_, _, _| {
@@ -316,6 +325,23 @@ impl Previews {
 
     pub fn toggle_collapsed(&self) {
         self.state.toggle_collapsed();
+    }
+
+    /// Auto-copy finished for a capture's card: its clipboard chip.
+    pub fn copied(&self, id: &str, result: Result<(), String>) {
+        let card = self
+            .state
+            .cards
+            .borrow()
+            .iter()
+            .find(|card| card.entry.id == id)
+            .cloned();
+        if let Some(card) = card {
+            match result {
+                Ok(()) => card.notify("Copied to clipboard", false),
+                Err(error) => card.notify(&format!("Couldn’t copy: {error}"), true),
+            }
+        }
     }
 
     /// Shipping's `thumbnail-editor-active` ring follows the editor windows.
@@ -422,6 +448,11 @@ impl State {
     /// `available_height`): the X11 work area, or on other backends the
     /// monitor less the same gaps.
     fn available_height(&self) -> Option<f64> {
+        #[cfg(feature = "layer-shell")]
+        if self.layered {
+            let work = preview::work_area(layer_shell::bounds(&self.window)?);
+            return Some((work.height - work.bottom_gap - preview::THUMBNAIL_PADDING).max(1.));
+        }
         let surface = self.window.surface()?;
         #[cfg(feature = "x11")]
         if let (Some(placer), Ok(surface)) = (
@@ -440,13 +471,37 @@ impl State {
         )
     }
 
-    /// Whether this host can carry the pile itself (X11 with a placer).
+    /// Whether this host can carry the pile itself (X11 with a placer, or
+    /// a layer surface).
     fn can_carry(&self) -> bool {
         #[cfg(feature = "x11")]
         if self.placer.is_some() {
             return true;
         }
+        #[cfg(feature = "layer-shell")]
+        if self.layered {
+            return true;
+        }
         false
+    }
+
+    /// Anchor a layer surface to its corner or carried origin.
+    #[cfg(feature = "layer-shell")]
+    fn place_layer(&self) {
+        if !self.layered {
+            return;
+        }
+        let stack = self.stack.borrow();
+        let dragged = self.dragged.get();
+        layer_shell::place(
+            &self.window,
+            stack.ids().len(),
+            stack.is_collapsed(),
+            (
+                dragged.map_or(self.placement, |(_, placement)| placement),
+                dragged.map(|(origin, _)| origin),
+            ),
+        );
     }
 
     /// Hand the press to the compositor's own window move (Wayland).
@@ -466,7 +521,24 @@ impl State {
     }
 
     /// Move the carried pile so the press stays under the pointer.
-    fn carry_to(&self, (press_x, press_y): (f64, f64)) {
+    /// `current` is the pointer in window coordinates; a layer surface
+    /// places it on the output through its own margins, as Wayland gives
+    /// clients no global pointer.
+    fn carry_to(&self, (press_x, press_y): (f64, f64), current: (f64, f64)) {
+        #[cfg(feature = "layer-shell")]
+        if self.layered {
+            let (Some((left, top)), Some(bounds)) = (
+                layer_shell::origin(&self.window),
+                layer_shell::bounds(&self.window),
+            ) else {
+                return;
+            };
+            let (x, y) = (left + current.0, top + current.1);
+            self.carry_with(bounds, (x, y), (press_x, press_y));
+            self.place_layer();
+            return;
+        }
+        let _ = current;
         #[cfg(feature = "x11")]
         {
             let Some(placer) = self.placer.as_ref() else {
@@ -480,6 +552,23 @@ impl State {
             else {
                 return;
             };
+            self.carry_with(bounds, (x, y), (press_x, press_y));
+            self.place(&surface, true);
+        }
+        #[cfg(not(feature = "x11"))]
+        let _ = (press_x, press_y);
+    }
+
+    /// Shipping's carry from the pointer on the desktop: re-anchor to the
+    /// nearest corner and lean the rear cards.
+    #[cfg(any(feature = "x11", feature = "layer-shell"))]
+    fn carry_with(
+        &self,
+        bounds: preview::ThumbnailMonitorBounds,
+        (x, y): (f64, f64),
+        (press_x, press_y): (f64, f64),
+    ) {
+        {
             self.pile.carry_pointer(x, y);
             let count = self.stack.borrow().ids().len();
             let current = self
@@ -497,10 +586,7 @@ impl State {
                 Some(origin),
                 next,
             )));
-            self.place(&surface, true);
         }
-        #[cfg(not(feature = "x11"))]
-        let _ = (press_x, press_y);
     }
 
     fn toggle_collapsed(&self) {
@@ -539,6 +625,8 @@ impl State {
         self.minimize
             .update_property(&[gtk::accessible::Property::Label(label)]);
         self.pile.set_max_height(self.available_height());
+        #[cfg(feature = "layer-shell")]
+        self.place_layer();
         // Undecorated, non-resizable: let the window shrink to the stack.
         self.window.set_default_size(-1, -1);
     }

@@ -33,7 +33,7 @@ use image::RgbaImage;
 
 use crate::switch::TokenSwitch;
 use crate::tokens::Tokens;
-use crate::widgets::{Icon, SnapshotArea, icon_button};
+use crate::widgets::{Icon, MaxWidth, SnapshotArea, WidthWatch, icon_button};
 
 mod canvas_bar;
 pub(crate) mod compare;
@@ -42,6 +42,7 @@ mod export_bar;
 mod inspector;
 mod layer_menu;
 pub(crate) mod properties;
+mod sidebar_resize;
 mod text;
 pub use text::register_fonts;
 
@@ -430,7 +431,20 @@ pub fn build(
 
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
     root.add_css_class("screenshot-editor");
-    window.set_child(Some(&root));
+    // Shipping's `@media (max-width: 1040px)` layout, bound once the chrome
+    // exists below.
+    type Relayout = Rc<RefCell<Option<Rc<dyn Fn(i32)>>>>;
+    let relayout: Relayout = Rc::default();
+    let watch = WidthWatch::new(&root, {
+        let relayout = relayout.clone();
+        move |width| {
+            if let Some(relayout) = relayout.borrow().clone() {
+                // Layout may not change during allocation.
+                glib::idle_add_local_once(move || relayout(width));
+            }
+        }
+    });
+    window.set_child(Some(&watch));
 
     // `.screenshot-editor-header`.
     let header_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -456,13 +470,23 @@ pub fn build(
     main.add_css_class("editor-header-main");
     let left = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     left.set_hexpand(true);
+    // Shipping clips the canvas toolbar in a narrow window instead of
+    // widening the window: no scrollbar, and no minimum width.
+    let left_clip = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::External)
+        .vscrollbar_policy(gtk::PolicyType::Never)
+        .propagate_natural_width(true)
+        .propagate_natural_height(true)
+        .hexpand(true)
+        .child(&left)
+        .build();
     // Requests from the canvas toolbar reach the worker once State exists.
     let canvas_jobs = jobs.clone();
     let canvas_bar = canvas_bar::CanvasBar::new(&tokens, move |request| {
         let _ = canvas_jobs.send(Job::Apply(request));
     });
     left.append(&canvas_bar.root);
-    main.append(&left);
+    main.append(&left_clip);
     let right = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     let undo = icon_only("undo", 16, header::UNDO, "editor-icon-button");
     let redo = icon_only("redo", 16, header::REDO, "editor-icon-button");
@@ -625,6 +649,7 @@ pub fn build(
         widget.set_visible(false);
         text_overlay.add_overlay(widget);
     }
+    text_overlay.set_hexpand(true);
     body.append(&text_overlay);
     let panel = gtk::Box::new(gtk::Orientation::Vertical, 0);
     let heading = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -654,9 +679,25 @@ pub fn build(
     let properties = properties::Properties::new(&tokens);
     let sidebar = properties::sidebar(&panel, &properties.root);
     sidebar.add_css_class("editor-layers");
-    sidebar.set_size_request(320, -1);
     body.append(&sidebar);
-    root.append(&body);
+    // The resize separator straddles the panel's left edge.
+    let resize = sidebar_resize::SidebarResize::new(&tokens, &sidebar);
+    let body_overlay = gtk::Overlay::new();
+    body_overlay.set_child(Some(&body));
+    body_overlay.add_overlay(&resize.handle);
+    {
+        let sidebar = sidebar.clone();
+        body_overlay.connect_get_child_position(move |overlay, _| {
+            let at = sidebar.compute_point(overlay, &graphene::Point::new(0., 0.))?;
+            Some(gdk::Rectangle::new(
+                at.x().round() as i32 - sidebar_resize::HANDLE / 2,
+                at.y().round() as i32,
+                sidebar_resize::HANDLE,
+                sidebar.height(),
+            ))
+        });
+    }
+    root.append(&body_overlay);
 
     // `.screenshot-export-bar`: the Export settings panel over the save row.
     let footer = gtk::Box::new(gtk::Orientation::Vertical, 12);
@@ -674,7 +715,8 @@ pub fn build(
     let bar = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     footer.append(&bar);
     export.disclosure.set_valign(gtk::Align::End);
-    // `.screenshot-save-row`: minmax(178px, 210px).
+    // `.screenshot-save-row`: minmax(178px, 210px), or minmax(170px, 200px)
+    // in a compact window (`relayout`).
     export.disclosure.set_size_request(210, -1);
     export.disclosure.set_hexpand(false);
     bar.append(&export.disclosure);
@@ -683,6 +725,9 @@ pub fn build(
     file_heading.append(&label("Filename", "editor-field-label"));
     let folder = label("", "editor-folder");
     folder.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+    // `.recording-destination`: flex 1, packed to the end.
+    folder.set_hexpand(true);
+    folder.set_xalign(1.);
     folder.set_max_width_chars(28);
     file_heading.append(&folder);
     // Shipping `aria-label="Change save location"` over "Change…". GTK 4.14
@@ -699,12 +744,17 @@ pub fn build(
     file_row.add_css_class("editor-filename");
     let filename = gtk::Entry::new();
     filename.add_css_class("editor-filename-entry");
-    filename.set_width_chars(28);
+    // The column (`minmax(240px, 390px)`) sizes the field, not its text.
+    filename.set_width_chars(1);
+    filename.set_max_width_chars(80);
+    filename.set_hexpand(true);
     filename.update_property(&[gtk::accessible::Property::Label("Filename")]);
     file_row.append(&filename);
     file_row.append(&export.format.root);
     file.append(&file_row);
-    bar.append(&file);
+    file.set_size_request(240, -1);
+    let file_column = MaxWidth::new(&file, 390);
+    bar.append(&file_column);
     let (copy, _, _) = icon_button("copy", "Copy image", &["ui-btn"]);
     copy.set_valign(gtk::Align::End);
     bar.append(&copy);
@@ -733,6 +783,76 @@ pub fn build(
     save.set_valign(gtk::Align::Center);
     bar.append(&save);
     root.append(&footer);
+    *relayout.borrow_mut() = Some(Rc::new({
+        let compact_now: Cell<Option<bool>> = Cell::default();
+        let resize = resize.clone();
+        let (undo, redo) = (undo.clone(), redo.clone());
+        let (zoom_slider, zoom_preset) = (zoom_slider.clone(), zoom_preset.root.clone());
+        let (footer, bar, status, copy) =
+            (footer.clone(), bar.clone(), status.clone(), copy.clone());
+        let (disclosure, file, file_column) =
+            (export.disclosure.clone(), file.clone(), file_column.clone());
+        let (notice, hint) = (notice.clone(), hint.clone());
+        let export = export.clone();
+        move |width: i32| {
+            resize.set_editor_width(width);
+            let layout = editor_chrome::header_layout(f64::from(width));
+            let compact = !layout.show_history;
+            if compact_now.replace(Some(compact)) == Some(compact) {
+                return;
+            }
+            undo.set_visible(!compact);
+            redo.set_visible(!compact);
+            zoom_slider.set_size_request(layout.zoom_slider_width as i32 - 16, -1);
+            zoom_preset.set_size_request(layout.zoom_preset_width as i32, -1);
+            export.set_compact(compact);
+            // `.screenshot-save-row`: the status takes its own row under
+            // the controls, left-aligned, and the filename column grows.
+            bar.set_spacing(if compact { 8 } else { 12 });
+            disclosure.set_size_request(if compact { 200 } else { 210 }, -1);
+            file.set_size_request(if compact { 230 } else { 240 }, -1);
+            file_column.set_max(if compact { MaxWidth::UNBOUNDED } else { 390 });
+            file_column.set_hexpand(compact);
+            let xalign = if compact { 0. } else { 1. };
+            notice.set_xalign(xalign);
+            hint.set_xalign(xalign);
+            hint.set_justify(if compact {
+                gtk::Justification::Left
+            } else {
+                gtk::Justification::Right
+            });
+            let home = if compact {
+                footer.upcast_ref::<gtk::Widget>()
+            } else {
+                bar.upcast_ref()
+            };
+            if status.parent().as_ref() != Some(home) {
+                status.unparent();
+                if compact {
+                    footer.append(&status);
+                } else {
+                    bar.insert_child_after(&status, Some(&copy));
+                }
+            }
+            status.set_size_request(-1, if compact { 20 } else { -1 });
+        }
+    }));
+    // Also decide from the requested width before the first layout: the
+    // wide layout's minimum would otherwise hold a narrow window wider.
+    {
+        let relayout = relayout.clone();
+        let decide = move |window: &gtk::ApplicationWindow| {
+            if let Some(relayout) = relayout.borrow().clone() {
+                relayout(window.default_width());
+            }
+        };
+        let decide = Rc::new(decide);
+        window.connect_realize({
+            let decide = decide.clone();
+            move |window| decide(window)
+        });
+        window.connect_default_width_notify(move |window| decide(window));
+    }
 
     let output_directory = options.output_directory.clone();
     let original_bytes =
@@ -917,6 +1037,13 @@ impl State {
             button.connect_clicked(move |button| {
                 let Some(state) = weak.upgrade() else { return };
                 if key == editor_chrome::SHAPES_KEY {
+                    // Shipping: from another tool, Shapes switches to the
+                    // last shape and opens the flyout.
+                    let tool = state.tool.borrow().clone();
+                    if !SHAPE_TOOLS.iter().any(|shape| shape.key == tool) {
+                        let last = state.last_shape.borrow().clone();
+                        state.select_tool(&last);
+                    }
                     state.shapes_menu(button);
                 } else {
                     state.select_tool(&key);
@@ -1013,12 +1140,16 @@ fn texture_of(pixels: &RgbaImage) -> gdk::Texture {
     .upcast()
 }
 
-/// `.screenshot-layer-preview img { object-fit: cover }` over the checkerboard.
-fn thumbnail_area(texture: gdk::Texture) -> SnapshotArea {
+/// Image layers cover the well; annotation canvases already include padding.
+fn thumbnail_area(texture: gdk::Texture, image: bool) -> SnapshotArea {
     let area = SnapshotArea::new(move |snapshot, width, height| {
         let (tw, th) = (texture.width() as f32, texture.height() as f32);
         let scale = (width / tw).max(height / th);
-        let (dw, dh) = (tw * scale, th * scale);
+        let (dw, dh) = if image {
+            (tw * scale, th * scale)
+        } else {
+            (width, height)
+        };
         snapshot.push_clip(&graphene::Rect::new(0., 0., width, height));
         snapshot.append_texture(
             &texture,
@@ -1405,13 +1536,16 @@ impl State {
     fn shapes_menu(self: &Rc<Self>, anchor: &gtk::Button) {
         let popover = gtk::Popover::new();
         popover.add_css_class("captures-menu");
+        popover.add_css_class("shape-flyout");
         popover.set_has_arrow(false);
         popover.set_position(gtk::PositionType::Right);
+        // Shipping centres it on the rail button, 10 px to its right.
+        popover.set_offset(8, 0);
         let grid = gtk::Grid::new();
-        grid.set_row_spacing(2);
-        grid.set_column_spacing(2);
+        grid.set_row_spacing(4);
+        grid.set_column_spacing(4);
         for (index, tool) in SHAPE_TOOLS.iter().enumerate() {
-            let button = icon_only(tool.icon, 18, &tool.name(), "editor-shape-button");
+            let button = icon_only(tool.icon, 22, &tool.name(), "editor-shape-button");
             set_class(&button, "active", *self.last_shape.borrow() == tool.key);
             let weak = Rc::downgrade(self);
             let popover_weak = popover.downgrade();
@@ -1611,7 +1745,7 @@ impl State {
             preview.set_valign(gtk::Align::Center);
             preview.set_overflow(gtk::Overflow::Hidden);
             match self.thumbnail_texture(&layer.id, layer.thumbnail.as_ref()) {
-                Some(texture) => preview.append(&thumbnail_area(texture)),
+                Some(texture) => preview.append(&thumbnail_area(texture, layer.kind == "Image")),
                 None => {
                     let icon = Icon::new(layer.icon, 16).with_stroke(1.7);
                     icon.set_vexpand(true);
@@ -1644,7 +1778,9 @@ impl State {
                 }
                 copy.append(&name);
             }
-            copy.append(&label(layer.kind, "editor-layer-kind"));
+            let kind = label(layer.kind, "editor-layer-kind");
+            kind.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            copy.append(&kind);
             content.append(&copy);
             let eye = icon_only(
                 if layer.visible { "eye" } else { "eye-off" },

@@ -692,7 +692,7 @@ const DRAFTS: RecordingDraftManifest[] = flag("drafts")
 const RESPONSES: Record<string, unknown> = {
   get_settings: SETTINGS,
   get_update_status: updateStatus(),
-  get_capture_history: HISTORY,
+  get_capture_history: query().get("history") === "empty" ? [] : HISTORY,
   get_recording_drafts: DRAFTS,
   get_artifact: ARTIFACT,
   get_recording_artifact: RECORDING,

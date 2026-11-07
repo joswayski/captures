@@ -384,7 +384,7 @@ window.captures {
 }
 .captures button.shortcut-recorder {
   all: unset;
-  min-height: 28px;
+  min-height: 26px;
   padding: 2px var(--s-4);
   border: 1px solid var(--control-border);
   border-radius: var(--r-md);
@@ -690,6 +690,8 @@ window.captures {
   line-height: var(--lh-snug-xs);
 }
 .captures .history-empty {
+  /* `.history-shell`'s row gap after the header or toolbar. */
+  margin-top: var(--s-6);
   min-height: 320px;
 }
 .captures .history-empty-icon {
@@ -1007,10 +1009,15 @@ popover.layer-menu button.layer-menu-action.danger .layer-menu-icon {
 .captures button.editor-shape-button:focus-visible {
   box-shadow: var(--focus-ring);
 }
+/* `.screenshot-tool-flyout`: `repeat(3, 44px)` with `--s-2` gaps. */
+popover.captures-menu.shape-flyout > contents {
+  min-width: 0;
+  padding: var(--s-3);
+}
 popover.captures-menu button.editor-shape-button {
   all: unset;
   min-width: 44px;
-  min-height: 40px;
+  min-height: 44px;
   border-radius: var(--r-md);
   color: var(--text-muted);
 }
@@ -1171,7 +1178,7 @@ popover.captures-menu button.editor-shape-button.active {
 }
 .captures entry.editor-filename-entry {
   all: unset;
-  min-width: 200px;
+  min-width: 0;
   padding: 0 var(--s-4);
   color: var(--text);
   font-size: var(--text-sm);
@@ -1184,6 +1191,9 @@ popover.captures-menu button.editor-shape-button.active {
   border-color: var(--theme-accent);
 }
 /* `.filename-format-select`: the suffix is the format select's trigger. */
+.captures .filename-format-select {
+  min-width: 76px;
+}
 .captures .filename-format-select button.select-trigger {
   min-height: 0;
   border: 0;
@@ -1856,7 +1866,8 @@ window.captures.preview-stack-window {
 }
 .captures .property-hint {
   color: var(--text-subtle);
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
+  line-height: var(--lh-snug-sm);
 }
 .captures .range-value {
   color: var(--text-subtle);
@@ -2049,7 +2060,7 @@ window.captures.preview-stack-window {
 
 /* `NumberInput`: field with stacked steppers. */
 .captures .number-input {
-  min-height: 30px;
+  min-height: 32px;
   border: 1px solid var(--control-border);
   border-radius: var(--r-md);
   background: var(--surface-field);
@@ -2110,7 +2121,7 @@ window.captures.preview-stack-window {
   font-size: var(--text-sm);
 }
 .captures button.text-style-trigger {
-  min-height: 36px;
+  min-height: 24px;
   padding: var(--s-3) var(--s-4);
   color: var(--text-muted);
   font-weight: var(--weight-medium);

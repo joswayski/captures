@@ -30,7 +30,7 @@ pub fn render(
     document: &Document,
     assets: &BTreeMap<String, Arc<RgbaImage>>,
 ) -> Result<RgbaImage, String> {
-    render_inner(document, assets, None)
+    render_inner(document, assets, None, 1.)
 }
 
 /// Opt in to paragraph text using caller-owned fonts. `families` maps
@@ -47,13 +47,26 @@ pub fn render_with_text(
     renderer: &mut TextRenderer,
     families: &BTreeMap<String, String>,
 ) -> Result<RgbaImage, String> {
-    render_inner(document, assets, Some((renderer, families)))
+    render_inner(document, assets, Some((renderer, families)), 1.)
+}
+
+/// Row-preview geometry is transformed after constructing the authored paths,
+/// corner radii and text layout. Rasterize directly into the small output;
+/// scaling the editor model first would change its fixed radii and text wraps.
+pub(crate) fn render_thumbnail_frame(
+    document: &Document,
+    assets: &BTreeMap<String, Arc<RgbaImage>>,
+    text: Option<(&mut TextRenderer, &BTreeMap<String, String>)>,
+    scale: f64,
+) -> Result<RgbaImage, String> {
+    render_inner(document, assets, text, scale as f32)
 }
 
 fn render_inner(
     document: &Document,
     assets: &BTreeMap<String, Arc<RgbaImage>>,
     mut text: Option<(&mut TextRenderer, &BTreeMap<String, String>)>,
+    scale: f32,
 ) -> Result<RgbaImage, String> {
     let (width, height) = validate_canvas(document)?;
     let background = document
@@ -144,6 +157,13 @@ fn render_inner(
         }
     }
 
+    if scale != 1. {
+        for layer in &mut layers {
+            scale_layer(layer, scale);
+        }
+        // Canvas shadowBlur/offsets are not affected by its current transform.
+        // Keep the resolved shadow metrics, as AnnotationLayerPreview does.
+    }
     captures_image::render_with_shadows_owned(
         captures_image::Document {
             source: Arc::new(RgbaImage::from_pixel(width, height, background)),
@@ -152,6 +172,65 @@ fn render_inner(
         },
         &shadows,
     )
+}
+
+fn scale_layer(layer: &mut Layer, scale: f32) {
+    let point = |p: &mut Point| {
+        p.x *= scale;
+        p.y *= scale;
+    };
+    layer.stroke_width *= scale;
+    if let Some(origin) = &mut layer.rotation_origin {
+        point(origin);
+    }
+    match &mut layer.shape {
+        Shape::Freehand(points)
+        | Shape::SmoothPath(points)
+        | Shape::ControlledPath(points)
+        | Shape::Polygon(points)
+        | Shape::TaperedArrow(points) => points.iter_mut().for_each(point),
+        Shape::Line { start, end } | Shape::Arrow { start, end } => {
+            point(start);
+            point(end);
+        }
+        Shape::Rectangle {
+            origin,
+            width,
+            height,
+        }
+        | Shape::Ellipse {
+            origin,
+            width,
+            height,
+        }
+        | Shape::Image {
+            origin,
+            width,
+            height,
+            ..
+        } => {
+            point(origin);
+            *width *= scale;
+            *height *= scale;
+        }
+        Shape::RoundedRectangle {
+            origin,
+            width,
+            height,
+            radius,
+        } => {
+            point(origin);
+            *width *= scale;
+            *height *= scale;
+            *radius *= scale;
+        }
+        Shape::Text {
+            origin, font_size, ..
+        } => {
+            point(origin);
+            *font_size *= scale;
+        }
+    }
 }
 
 fn validate_text(element: &TextElement, families: &BTreeMap<String, String>) -> Result<(), String> {

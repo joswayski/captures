@@ -795,7 +795,7 @@ pub(super) struct DefaultsSection {
     pub(super) root: gtk::Box,
     pub(super) values: Rc<Defaults>,
     tool: Rc<RefCell<String>>,
-    picker: gtk::Box,
+    picker: gtk::Grid,
     shapes: Vec<(&'static str, gtk::Button)>,
     stroke_check: gtk::ToggleButton,
     stroke: gtk::Box,
@@ -842,13 +842,18 @@ impl DefaultsSection {
         let root = gtk::Box::new(gtk::Orientation::Vertical, 12);
         root.add_css_class("property-section");
 
-        let picker = gtk::Box::new(gtk::Orientation::Horizontal, 4);
-        picker.set_homogeneous(true);
+        // `.screenshot-shape-picker`: three equal columns, two rows.
+        let picker = gtk::Grid::builder()
+            .column_spacing(4)
+            .row_spacing(4)
+            .column_homogeneous(true)
+            .build();
         picker.set_accessible_role(gtk::AccessibleRole::Group);
         picker.update_property(&[gtk::accessible::Property::Label("Shape")]);
         let shapes: Vec<_> = captures_app::editor_chrome::SHAPE_TOOLS
             .iter()
-            .map(|item| {
+            .enumerate()
+            .map(|(index, item)| {
                 let button = gtk::Button::new();
                 button.add_css_class("shape-pick");
                 button.set_child(Some(&Icon::new(item.key, 18).with_stroke(1.8)));
@@ -861,7 +866,7 @@ impl DefaultsSection {
                         pick(key);
                     }
                 });
-                picker.append(&button);
+                picker.attach(&button, index as i32 % 3, index as i32 / 3, 1, 1);
                 (item.key, button)
             })
             .collect();

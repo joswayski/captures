@@ -30,7 +30,7 @@ use image::RgbaImage;
 use crate::editor::compare::Compare;
 use crate::switch::TokenSwitch;
 use crate::tokens::Tokens;
-use crate::widgets::{Icon, SnapshotArea, icon_button};
+use crate::widgets::{Icon, MaxWidth, SnapshotArea, WidthWatch, icon_button};
 
 mod output;
 use output::{Change, Estimate, Output, Source};
@@ -124,13 +124,18 @@ enum Outcome {
     Compare(u64, Result<(u64, Arc<RgbaImage>, Arc<RgbaImage>), String>),
 }
 
-/// Bundled sidecars when present, else `CAPTURES_FFMPEG`/`CAPTURES_FFPROBE`,
-/// else the system's `ffmpeg` and `ffprobe` on PATH.
 /// The newest playback frame (position, pixels); the UI takes it at 60 Hz
 /// and older frames are dropped.
 type LatestFrame = Arc<Mutex<Option<(u64, Arc<RgbaImage>)>>>;
 
 fn toolchain() -> MediaToolchain {
+    let (ffmpeg, ffprobe) = media_tools();
+    MediaToolchain::new(ffmpeg, ffprobe)
+}
+
+/// Bundled sidecars when present, else `CAPTURES_FFMPEG`/`CAPTURES_FFPROBE`,
+/// else the system's `ffmpeg` and `ffprobe` on PATH.
+pub fn media_tools() -> (PathBuf, PathBuf) {
     let target = format!("{}-unknown-linux-gnu", std::env::consts::ARCH);
     let sidecars = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../desktop/src-tauri/binaries");
     let tool = |name: &str, variable: &str| {
@@ -142,7 +147,7 @@ fn toolchain() -> MediaToolchain {
             })
             .unwrap_or_else(|| PathBuf::from(name))
     };
-    MediaToolchain::new(
+    (
         tool("ffmpeg", "CAPTURES_FFMPEG"),
         tool("ffprobe", "CAPTURES_FFPROBE"),
     )
@@ -459,11 +464,24 @@ pub fn build(app: &gtk::Application, tokens: Rc<Tokens>, options: Options) -> Re
     let viewport = gtk::Overlay::new();
     viewport.add_css_class("recording-preview-viewport");
     let preview = SnapshotArea::new(|_, _, _| {});
+    // `fit_preview` sizes it from the window (shipping's `52vh` Fit).
     preview.set_size_request(-1, 380);
     preview.set_hexpand(true);
     preview.set_accessible_role(gtk::AccessibleRole::Img);
     preview.update_property(&[gtk::accessible::Property::Label("Recording preview")]);
-    viewport.set_child(Some(&preview));
+    let preview_watch = WidthWatch::new(&preview, {
+        let state_cell = state_cell.clone();
+        move |_| {
+            let state_cell = state_cell.clone();
+            // Size requests may not change during allocation.
+            glib::idle_add_local_once(move || {
+                if let Some(state) = state_cell.borrow().upgrade() {
+                    state.fit_preview();
+                }
+            });
+        }
+    });
+    viewport.set_child(Some(&preview_watch));
     let play = gtk::Button::new();
     play.add_css_class("recording-play");
     let play_icon = Icon::new("resume", 22).with_stroke(2.);
@@ -583,7 +601,10 @@ pub fn build(app: &gtk::Application, tokens: Rc<Tokens>, options: Options) -> Re
     // `.recording-save-footer` centers its filename, switch and action columns.
     let bar = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     bar.add_css_class("recording-save-bar");
-    let columns = gtk::Box::new(gtk::Orientation::Horizontal, 16);
+    // `grid-template-columns: minmax(280px, 420px) max-content
+    // minmax(340px, auto)`; `relayout` stacks it at 820 px and below.
+    let columns = gtk::Grid::new();
+    columns.set_column_spacing(16);
     columns.set_halign(gtk::Align::Center);
     columns.set_hexpand(true);
     bar.append(&columns);
@@ -592,6 +613,9 @@ pub fn build(app: &gtk::Application, tokens: Rc<Tokens>, options: Options) -> Re
     file_heading.append(&label("Filename", "editor-field-label"));
     let folder = label("", "editor-folder");
     folder.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+    // `.recording-destination`: flex 1, packed to the end.
+    folder.set_hexpand(true);
+    folder.set_xalign(1.);
     folder.set_max_width_chars(36);
     file_heading.append(&folder);
     // Shipping `aria-label="Change save location"` over "Change…"; the text
@@ -608,7 +632,10 @@ pub fn build(app: &gtk::Application, tokens: Rc<Tokens>, options: Options) -> Re
     row.add_css_class("editor-filename");
     let filename = gtk::Entry::new();
     filename.add_css_class("editor-filename-entry");
-    filename.set_width_chars(30);
+    // The column (`minmax(280px, 420px)`) sizes the field, not its text.
+    filename.set_width_chars(1);
+    filename.set_max_width_chars(80);
+    filename.set_hexpand(true);
     filename.update_property(&[gtk::accessible::Property::Label("Saved filename")]);
     let output = Output::new({
         let state_cell = state_cell.clone();
@@ -622,14 +649,21 @@ pub fn build(app: &gtk::Application, tokens: Rc<Tokens>, options: Options) -> Re
     row.append(&filename);
     row.append(&output.format.root);
     file.append(&row);
-    columns.append(&file);
-    let as_new = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    file.set_size_request(280, -1);
+    let file_column = MaxWidth::new(&file, 420);
+    columns.attach(&file_column, 0, 0, 1, 1);
+    // `.recording-make-copy`: a 32 px row level with the filename field.
+    let as_new = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     as_new.set_valign(gtk::Align::End);
+    as_new.set_size_request(-1, 32);
     let save_as_new = TokenSwitch::new(tokens.clone(), false);
+    save_as_new.set_valign(gtk::Align::Center);
     save_as_new.update_property(&[gtk::accessible::Property::Label("Save as new file")]);
     as_new.append(&save_as_new);
-    as_new.append(&label("Save as new file", "editor-switch-label"));
-    columns.append(&as_new);
+    let as_new_label = label("Save as new file", "editor-switch-label");
+    as_new_label.set_valign(gtk::Align::Center);
+    as_new.append(&as_new_label);
+    columns.attach(&as_new, 1, 0, 1, 1);
     // `.recording-save-action-area`: the one-line toast over the actions.
     let area = gtk::Box::new(gtk::Orientation::Vertical, 3);
     area.set_size_request(340, -1);
@@ -660,7 +694,7 @@ pub fn build(app: &gtk::Application, tokens: Rc<Tokens>, options: Options) -> Re
     save.set_sensitive(false);
     actions.append(&save);
     area.append(&actions);
-    columns.append(&area);
+    columns.attach(&area, 2, 0, 1, 1);
     // `.recording-export-progress`: a 3 px strip along the footer's top.
     let footer = gtk::Overlay::new();
     footer.set_child(Some(&bar));
@@ -671,7 +705,67 @@ pub fn build(app: &gtk::Application, tokens: Rc<Tokens>, options: Options) -> Re
     progress.set_can_target(false);
     footer.add_overlay(&progress);
     root.append(&footer);
-    window.set_child(Some(&root));
+    let relayout = {
+        let compact_now: Cell<Option<bool>> = Cell::default();
+        let (columns, file_column, file, area) = (
+            columns.clone(),
+            file_column.clone(),
+            file.clone(),
+            area.clone(),
+        );
+        let output_root = output.clone();
+        move |width: i32| {
+            // `@media (max-width: 820px)`.
+            let compact = width <= 820;
+            if compact_now.replace(Some(compact)) == Some(compact) {
+                return;
+            }
+            output_root.set_compact(compact);
+            columns.remove(&area);
+            if compact {
+                // `minmax(0, 1fr) max-content`, the actions on their own row.
+                columns.set_halign(gtk::Align::Fill);
+                columns.set_column_spacing(20);
+                columns.set_row_spacing(6);
+                file.set_size_request(0, -1);
+                file_column.set_max(MaxWidth::UNBOUNDED);
+                file_column.set_hexpand(true);
+                columns.attach(&area, 0, 1, 2, 1);
+            } else {
+                columns.set_halign(gtk::Align::Center);
+                columns.set_column_spacing(16);
+                columns.set_row_spacing(0);
+                file.set_size_request(280, -1);
+                file_column.set_max(420);
+                file_column.set_hexpand(false);
+                columns.attach(&area, 2, 0, 1, 1);
+            }
+        }
+    };
+    let relayout: Rc<dyn Fn(i32)> = Rc::new(relayout);
+    let watch = WidthWatch::new(&root, {
+        let relayout = relayout.clone();
+        move |width| {
+            let relayout = relayout.clone();
+            glib::idle_add_local_once(move || relayout(width));
+        }
+    });
+    window.set_child(Some(&watch));
+    // Decide from the requested size before the first layout too, and refit
+    // the preview whenever the window height (`vh`) changes.
+    window.connect_realize({
+        let relayout = relayout.clone();
+        move |window| relayout(window.default_width())
+    });
+    window.connect_default_width_notify(move |window| relayout(window.default_width()));
+    window.connect_default_height_notify({
+        let state_cell = state_cell.clone();
+        move |_| {
+            if let Some(state) = state_cell.borrow().upgrade() {
+                state.fit_preview();
+            }
+        }
+    });
 
     let state = Rc::new(State {
         tokens,
@@ -1328,6 +1422,7 @@ impl State {
         if changed && self.playing.borrow().is_none() {
             *self.frame.borrow_mut() = Some(texture_of(&presented.frame));
             self.w.preview.queue_draw();
+            self.fit_preview();
         }
         let revision = presented.revision;
         if self.drag.get().is_none() && self.pending_apply.borrow().is_none() {
@@ -1599,8 +1694,41 @@ impl State {
             .update_property(&[gtk::accessible::Property::Label(name)]);
     }
 
+    /// Shipping's Fit media is `min(100%, 52vh × aspect)` wide inside the
+    /// 12 px viewport padding, and the viewport stays 160 px to 58vh tall;
+    /// 100% shows the frame at its own height.
+    fn fit_preview(&self) {
+        let preview = &self.w.preview;
+        let Some((tw, th)) = self
+            .frame
+            .borrow()
+            .as_ref()
+            .map(|t| (f64::from(t.width()), f64::from(t.height())))
+        else {
+            return;
+        };
+        let width = f64::from(preview.width());
+        let Some(window) = preview.root().and_downcast::<gtk::Window>() else {
+            return;
+        };
+        let vh = f64::from(window.default_height().max(1)) / 100.;
+        if width <= 0. || tw <= 0. {
+            return;
+        }
+        let media = if self.one_to_one.get() {
+            th
+        } else {
+            ((width - 24.) * th / tw).min(52. * vh)
+        };
+        let height = (media + 24.).clamp(160., (58. * vh).max(160.)).round() as i32;
+        if preview.height_request() != height {
+            preview.set_size_request(-1, height);
+        }
+    }
+
     fn set_zoom(&self, one_to_one: bool) {
         self.one_to_one.set(one_to_one);
+        self.fit_preview();
         set_class(&self.w.fit, "active", !one_to_one);
         set_class(&self.w.actual, "active", one_to_one);
         self.w.preview.queue_draw();

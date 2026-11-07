@@ -787,6 +787,37 @@ bounds between drawing and UIA; errors expose only their notice. The recording
 footer's control bounds and appearance match the baseline. The misleading
 invalid-directory error predates this fix. macOS, X11 and Wayland are unchanged.
 
+The shared annotation-thumbnail slice uses Tauri's 46×34 logical canvas at
+2x resolution, its 3 px containment inset and its 1.35 px minimum shape/path
+stroke. It computes bounds before widening the preview stroke, retains authored
+opacity, and never changes the document or export. Win32, AppKit and GTK fill
+the well with this already-padded canvas; image layers retain source opacity
+and cover fitting. Primitive geometry scales after path construction and text
+layout, avoiding full-document raster allocations for large annotations.
+Nine fixtures compared with the real Tauri annotation component in Chromium:
+thin line/arrow/path, 25% path, hidden 50% rectangle, thick ellipse, a 100,000 px
+rectangle, text and a rotated arrow. At 2x, line alpha coverage is 2.749 physical
+pixels versus Tauri's 2.753; low-opacity alpha maxima match at 64 and 128.
+Text raster edges differ by up to one physical pixel in these fixtures.
+Workspace Rust gates, npm check, wgpu compatibility and Windows-GNU build/clippy
+pass. Pass 22 accepted the real Win32 release build (zero warnings) at 150% in
+light/dark, normal/minimum windows: all nine annotation cases, image cover,
+single hidden-row fade, visibility/opacity refresh, one-step Undo and unchanged
+idle drafts/source. Thin-line screen coverage was 1.95/1.98 physical pixels
+against a nominal 2.03 at 150%. GTK 4.8 X11 and private headless-Sway smoke
+passed; corrected source-over reference sheets confirm all nine thumbnails
+and visibility/opacity refresh in both themes. AppKit on the owner's MacBook
+accepted real light/dark windows and scrolled image rows: all 12 session
+bitmaps are byte-identical to the fixtures, line coverage is 2.749 pixels at
+2x and low-opacity maxima are 64/128. Existing well geometry is retained;
+Tauri also scales the 46x34 backing canvas to its CSS-sized well rather than
+aspect-fitting it. The AppKit full suite ran 634 tests with one skip and one
+MiniPreview save-state assertion failure; that test passed alone and the
+MiniPreview suite passed 57 tests with one skip on the same source. This is
+intermittent, with cause unproven, not a green full-suite claim.
+GTK thumbnail captures cover X11 at 2x only, not Wayland, fractional scaling or
+real hardware. X11/Wayland physical performance and accessibility remain open.
+
 Win32 recording editor slice 1 adds `--scene recording --artifact ID` and
 enables History's recording Edit action. The shared `RecordingEditorSession`
 lives on a worker with explicit FFmpeg/FFprobe overrides, Windows Tauri
@@ -1088,11 +1119,10 @@ with and without Openbox: bottom-left lands at x=0 with its bottom edge at
 reports ABOVE and all desktops. Not done: a non-focusable window (Tauri sets
 `focusable(false)`; GTK4 has no accept-focus API, and keyboard access to the
 stack relies on focus), restoring a dragged stack origin, and Wayland, where
-GTK4 cannot position toplevels: the compositor places the stack until a
-`gtk4-layer-shell` path for wlroots and KDE compositors lands; GNOME has no
-layer-shell. The X11 path is the default `x11` Cargo feature, so a
-Wayland-only GTK build can drop it. Wayland, multi-monitor and real
-hardware not verified. Windows, macOS: unchanged.
+GTK4 cannot position toplevels (see the layer-shell placement below; GNOME
+has no layer-shell). The X11 path is the default `x11` Cargo feature, so a
+Wayland-only GTK build can drop it. Multi-monitor and real hardware not
+verified. Windows, macOS: unchanged.
 
 GTK preview cards now leave with shipping's exits, driven by the shared
 `preview_motion::StackExits` the AppKit and wgpu hosts use. Close keeps the
@@ -1397,6 +1427,109 @@ screenshot crop and the recording crop, so CI fails on an unnamed control
 on GTK 4.14 too. The check is structural only: names, roles and focus
 order, not what Orca speaks. Orca, Wayland, KDE Plasma and real hardware
 remain unverified, so the accessibility gate is not closed. Windows, macOS:
+unchanged.
+
+GTK on Wayland: `smoke.py --wayland` runs the whole AT-SPI smoke on the
+private headless Sway 1.9 fixture (`build_wayland_compositor_fixture.sh`)
+with no X display. Input crosses the compositor through the
+`wayland_drag_probe` virtual pointer and keyboard, windows are found and
+closed through Sway IPC, and the clipboard is `wl-copy`. GDK's Wayland
+backend reads the double-click time from GSettings, so the run uses a
+private keyfile backend that allows the injector's slower clicks. Every
+step that passes on X11 passes there too.
+
+With the opt-in `layer-shell` feature, the preview stack becomes a
+wlr-layer-shell surface on the Top layer, but only when the compositor
+offers the protocol and the display is Wayland. It is anchored to
+shipping's corner with `thumbnail_geometry`'s gaps as margins, and its
+keyboard mode is on-demand. A carried pile moves through its margins: the
+pointer's output position is the surface origin plus the pointer in the
+window. Elsewhere, GNOME included, nothing changes.
+
+Checked on the 1280 × 1024 headless Sway output with gtk4-layer-shell
+1.3.0, pinned and built by `apps/native/gtk/build_layer_shell.sh`:
+- The stack is no longer a Sway toplevel.
+- Bottom-left cards span x 28–312 with their bottom edge at 952 (1024 less
+  the 48 px auto-hide reserve, the 12 px gap and the 12 px padding), as on
+  X11.
+- Top-right cards end at x 1252 and start at y 24.
+- Collapse keeps the anchored edge, and a carry from bottom-left to the top
+  right re-anchors there and expands downward.
+
+CI builds the library and runs clippy with the feature. KDE, GNOME and real
+hardware not verified. Windows, macOS: unchanged.
+
+GTK Open With: `--open-media PATH` and `-- FILE...` import each file
+through the shared `OpenMedia` request on a worker thread, then open the
+matching editor. A file already in History reuses its entry, and an open
+editor is focused. Without `--scene`, no Preferences window opens. A
+failure shows shipping's "Captures" error dialog with the shared reason.
+`smoke.py` covers a PNG, an MP4 and a refused text file on X11 and Wayland.
+
+Not done: forwarding files to an already running instance (the GTK host is
+still `NON_UNIQUE`), the desktop file and MIME registration, the tray,
+global shortcuts, onboarding, crash diagnostics, and the update and launch
+notices. All of these need a GTK live-app mode (profile election and the
+capture flow) first. Windows, macOS: unchanged.
+
+GTK resource gate (Xvfb 1280 × 800 in an Ubuntu 24.04 container on two
+vCPUs, GTK 4.14; release builds; the shipping Tauri 2026.11.07.3 `.deb`).
+Each value is the median of three runs of the same journey: Preferences
+idle, pointer hover and wheel scroll for 20 s each, then Capture History with
+1000 entries opened and scrolled. CPU sums the whole process tree as a
+percentage of one core; memory is the tree's PSS.
+
+| | GTK (GL renderer, llvmpipe) | GTK (`GSK_RENDERER=cairo`) | wgpu | Tauri |
+| --- | --- | --- | --- | --- |
+| Launch to first painted frame | 1337 ms | 273 ms | 424 ms | 2950 ms |
+| Idle CPU | 0.0% | 0.0% | 0.0% | 0.5% |
+| Hover CPU | 8.3% | 5.5% | 118.8% | 70.0% |
+| Scroll CPU | 6.7% | 3.5% | 118.8% | 52.5% |
+| Preferences PSS / RSS | 245 / 271 MB | 109 / 137 MB | 210 / 233 MB | 617 / 1188 MB |
+| History open | 94 ms | 94 ms | 112 ms | 429 ms |
+| History scroll CPU | 40.1% | 17.8% | 156.9% | 137.5% |
+| History PSS / RSS | 325 / 352 MB | 126 / 155 MB | 229 / 252 MB | 1044 / 1777 MB |
+| Processes | 1 | 1 | 1 | 7 |
+
+These numbers are Xvfb-only. Xvfb has no GPU, so GTK's default GL renderer
+ran in software (llvmpipe), as wgpu's Vulkan did, and the cairo column says
+nothing about real GPUs. The host keeps GTK's default renderer; there is no
+automatic switch. `GSK_RENDERER=cairo` remains a documented manual override
+for machines whose GL is software-only or broken. Measuring the GSK renderers
+on real GPUs is on the Linux PC hardware list, with Wayland and longer churn.
+Windows, macOS: unchanged.
+
+GTK live-app mode, step 1: `--live` makes the GTK host the resident app.
+Before GTK starts it takes the shared `captures_app::instance` election for
+the profile's History root (the same code as wgpu and AppKit); a second
+launch forwards its files or a bare relaunch and exits without UI or
+settings writes. The resident process holds the application with no window,
+survives its last window closing, and quits on SIGINT/SIGTERM or
+`--quit-after`, dropping the election after GTK shuts down. Launch and bare
+relaunch follow the shared `interactive_launch` and `reactivation`, and
+forwarded files join the Open With import queue in arrival order. Not yet:
+first-run setup (Preferences stands in), tray and launch notice, global
+shortcuts, the capture flow, crash diagnostics and update notices. Verified:
+the shared `instance_smoke.py` (both argument forms) on X11 under Xvfb, and
+the GTK smoke's new `live` step on X11 and on headless Sway 1.9. X11 and
+Wayland on real desktops not verified. Windows, macOS: unchanged.
+
+GTK live-app mode, step 2 (first capture slice): Screenshot Display through
+the shared capture flow. X11 uses `CaptureFlow` (Escape armed) and
+`Request::CaptureDisplay` for the display under the pointer; Wayland uses
+`PortalCapture` and `capture_portal_screenshot` with every Captures window
+unmapped first, as the wgpu host. The preview stack hides first unless it is
+included in captures, as shipping's HUD concealment, and settles for
+shipping's 40 ms. The saved capture reloads History, joins the preview stack
+and, with auto-copy, goes to the clipboard through `arboard`
+(wlr-data-control on Wayland; GDK cannot set a Wayland selection without an
+input serial). Entry point for now: `--capture display` on the launch that
+becomes the primary; the tray and shortcuts follow. Not yet: the countdown
+overlay (the delay is honored), region and window selectors, recording and
+its HUD. Verified: the GTK smoke's `capture` step on X11 under Xvfb (real
+X11 read) and on headless Sway 1.9 against a Screenshot portal fixture; the
+preview stack after a live capture inspected under Xvfb with picom. The real
+xdg-desktop-portal backends, GNOME and KDE not verified. Windows, macOS:
 unchanged.
 
 ## Progress dashboard

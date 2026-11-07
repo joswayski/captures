@@ -15,13 +15,19 @@ with a loopback endpoint, keyboard entry sends one draft and the client's
 cooldown refuses a second.
 
 Run under `xvfb-run -a dbus-run-session --`, with `--binary` pointing at a
-built `captures-gtk`. Needs python3-gi and gir1.2-atspi-2.0.
+built `captures-gtk`. Needs python3-gi and gir1.2-atspi-2.0. With
+`--wayland --injector PATH` (under `dbus-run-session --` only) the same
+steps run on a private headless Sway, with the wayland_drag_probe's virtual
+pointer and keyboard instead of xdotool.
 """
 import argparse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import os
 from pathlib import Path
+import re
+import select
+import signal
 import subprocess
 import sys
 import tempfile
@@ -131,22 +137,229 @@ def press(node):
     assert Atspi.Action.do_action(node, index), f"action failed on {node.get_name()}"
 
 
+class X11:
+    """Real input and window handling under Xvfb (no window manager): xdotool,
+    xclip and WM_DELETE_WINDOW. Keys use xdotool names."""
+
+    def window(self, title, pid=None):
+        args = ["xdotool", "search", "--sync"]
+        args += ["--onlyvisible", "--pid", str(pid)] if pid else []
+        return subprocess.run([*args, "--name", title], capture_output=True, text=True,
+                              check=True).stdout.split()[0]
+
+    def origin(self, window):
+        shell = subprocess.run(["xdotool", "getwindowgeometry", "--shell", window],
+                               capture_output=True, text=True, check=True).stdout
+        geometry = dict(line.split("=", 1) for line in shell.split())
+        return int(geometry["X"]), int(geometry["Y"])
+
+    def focus(self, window):
+        subprocess.run(["xdotool", "windowfocus", "--sync", window], check=True)
+
+    def point_into(self, window, x, y):
+        # Without a window manager, keys go to the window under the pointer.
+        subprocess.run(["xdotool", "mousemove", "--window", window, str(x), str(y)], check=True)
+        time.sleep(0.2)
+
+    def slide(self, window, dx):
+        """Move `window` horizontally (xvfb-run's 640 px screen hides its
+        right side); returns the offset to add to window coordinates."""
+        x, y = self.origin(window)
+        subprocess.run(["xdotool", "windowmove", window, str(x + dx), str(y)], check=True)
+        time.sleep(0.5)
+        return dx
+
+    def click(self, x, y, count=1):
+        # GTK must see the pointer enter before the press.
+        subprocess.run(["xdotool", "mousemove", str(x), str(y)], check=True)
+        time.sleep(0.2)
+        subprocess.run(["xdotool", "click", "--repeat", str(count), "--delay", "80", "1"],
+                       check=True)
+
+    def drag(self, x, y, to_x, to_y):
+        subprocess.run(["xdotool", "mousemove", str(x), str(y)], check=True)
+        time.sleep(0.2)
+        subprocess.run(["xdotool", "mousedown", "1"], check=True)
+        for step in range(1, 11):
+            subprocess.run(["xdotool", "mousemove", str(x + (to_x - x) * step // 10),
+                            str(y + (to_y - y) * step // 10)], check=True)
+            time.sleep(0.03)
+        subprocess.run(["xdotool", "mouseup", "1"], check=True)
+
+    def key(self, *names):
+        subprocess.run(["xdotool", "key", *names], check=True)
+
+    def type(self, text):
+        subprocess.run(["xdotool", "type", "--delay", "40", text], check=True)
+
+    def copy(self, text):
+        subprocess.run(["xclip", "-selection", "clipboard"], input=text, text=True, check=True)
+
+    def visible(self, pid):
+        return subprocess.run(["xdotool", "search", "--onlyvisible", "--pid", str(pid),
+                               "--name", "."], capture_output=True, text=True).stdout.split()
+
+    def paste_types(self):
+        return subprocess.run(["xclip", "-selection", "clipboard", "-t", "TARGETS", "-o"],
+                              capture_output=True, text=True).stdout.split()
+
+    def close(self, window):
+        """Ask `window` to close with WM_DELETE_WINDOW, as a taskbar or a
+        Wayland compositor does: unlike a window manager's Alt+F4 there is no
+        keyboard grab, so a focused text field does not commit first."""
+        import ctypes
+
+        class ClientMessage(ctypes.Structure):
+            _fields_ = [("type", ctypes.c_int), ("serial", ctypes.c_ulong),
+                        ("send_event", ctypes.c_int), ("display", ctypes.c_void_p),
+                        ("window", ctypes.c_ulong), ("message_type", ctypes.c_ulong),
+                        ("format", ctypes.c_int), ("data", ctypes.c_long * 5)]
+
+        class Event(ctypes.Union):
+            _fields_ = [("xclient", ClientMessage), ("pad", ctypes.c_long * 24)]
+
+        x11 = ctypes.CDLL("libX11.so.6")
+        x11.XOpenDisplay.restype = ctypes.c_void_p
+        x11.XInternAtom.restype = ctypes.c_ulong
+        x11.XInternAtom.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+        x11.XSendEvent.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int,
+                                   ctypes.c_long, ctypes.c_void_p]
+        x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+        display = x11.XOpenDisplay(None)
+        event = Event()
+        message = event.xclient
+        message.type = 33  # ClientMessage
+        message.display = display
+        message.window = int(window)
+        message.format = 32
+        message.message_type = x11.XInternAtom(display, b"WM_PROTOCOLS", 0)
+        message.data[0] = x11.XInternAtom(display, b"WM_DELETE_WINDOW", 0)
+        x11.XSendEvent(display, int(window), 0, 0, ctypes.byref(event))
+        x11.XCloseDisplay(display)
+
+
+# Linux evdev codes for the Wayland virtual keyboard, which publishes a US keymap.
+EVDEV = dict(zip("qwertyuiopasdfghjklzxcvbnm", [16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 30,
+             31, 32, 33, 34, 35, 36, 37, 38, 44, 45, 46, 47, 48, 49, 50], strict=True))
+EVDEV.update(dict(zip("1234567890", range(2, 12), strict=True)))
+EVDEV.update({"escape": 1, "return": 28, "tab": 15, "space": 57, "right": 106, "left": 105,
+              "f3": 61, " ": 57, "-": 12, ".": 52, "/": 53})
+SHIFTED = {"@": "2", "_": "-"}
+
+
+class Wayland:
+    """The same operations on a private headless Sway: swaymsg for windows,
+    and the wayland_drag_probe's virtual pointer and keyboard for input."""
+
+    WIDTH, HEIGHT = 1280, 1024
+
+    def __init__(self, env, pointer, keyboard):
+        self.env, self.pointer, self.keyboard = env, pointer, keyboard
+
+    def _nodes(self):
+        tree = json.loads(subprocess.run(["swaymsg", "-t", "get_tree"], env=self.env,
+                                         capture_output=True, text=True, check=True).stdout)
+        stack = [tree]
+        while stack:
+            node = stack.pop()
+            stack += node.get("nodes", []) + node.get("floating_nodes", [])
+            if node.get("pid"):
+                yield node
+
+    def _node(self, window):
+        return next(n for n in self._nodes() if n["id"] == window)
+
+    def window(self, title, pid=None):
+        def found():
+            return next((n["id"] for n in self._nodes() if re.search(title, n.get("name") or "")
+                         and (pid is None or n["pid"] == pid)), None)
+        return wait(found, f"the {title} window")
+
+    def origin(self, window):
+        rect = self._node(window)["rect"]
+        return rect["x"], rect["y"]
+
+    def _sway(self, window, command):
+        subprocess.run(["swaymsg", f"[con_id={window}] {command}"], env=self.env, check=True,
+                       stdout=subprocess.DEVNULL)
+
+    def focus(self, window):
+        self._sway(window, "focus")
+        wait(lambda: self._node(window)["focused"], "compositor focus")
+        time.sleep(0.2)
+
+    def point_into(self, window, x, y):
+        self.focus(window)
+
+    def slide(self, window, dx):
+        return 0  # The 1280 px output shows the whole editor.
+
+    def _pointer(self, line, reply):
+        self.pointer.stdin.write(f"{line}\n".encode())
+        self.pointer.stdin.flush()
+        assert select.select([self.pointer.stdout], [], [], 10)[0], "pointer stalled"
+        assert self.pointer.stdout.readline().strip() == reply
+
+    def click(self, x, y, count=1):
+        for _ in range(count):
+            self._pointer(f"{x} {y} {self.WIDTH} {self.HEIGHT}", b"CLICKED")
+
+    def drag(self, x, y, to_x, to_y):
+        self._pointer(f"drag {x} {y} {self.WIDTH} {self.HEIGHT} {to_x} {to_y}", b"DRAGGED")
+
+    def _press(self, key, modifiers):
+        code = EVDEV[key]
+        mods = "+".join(modifiers) or "none"
+        self.keyboard.stdin.write(f"{code} {mods}\n".encode())
+        self.keyboard.stdin.flush()
+        assert select.select([self.keyboard.stdout], [], [], 10)[0], "keyboard stalled"
+        assert self.keyboard.stdout.readline().strip() == f"KEYED {code} {mods}".encode()
+
+    def key(self, *names):
+        for name in names:
+            *modifiers, key = name.lower().split("+")
+            self._press(key, [{"control": "ctrl"}.get(m, m) for m in modifiers])
+
+    def type(self, text):
+        for char in text:
+            if char in SHIFTED:
+                self._press(SHIFTED[char], ["shift"])
+            else:
+                self._press(char.lower(), ["shift"] if char.isupper() else [])
+            time.sleep(0.04)
+
+    def copy(self, text):
+        subprocess.run(["wl-copy"], input=text, text=True, env=self.env, check=True)
+
+    def close(self, window):
+        self._sway(window, "kill")
+
+    def visible(self, pid):
+        return [n["id"] for n in self._nodes() if n["pid"] == pid]
+
+    def paste_types(self):
+        return subprocess.run(["wl-paste", "--list-types"], env=self.env, capture_output=True,
+                              text=True).stdout.split()
+
+
+DESKTOP = X11()
+
+
 def choose_file(app, title, accept, path):
     """Pick `path` in GTK's own file chooser: open its Location field (Ctrl+L
     once the dialog has focus), paste the whole path, then press `accept`.
     Typing key by key races the field's inline autocompletion on GTK 4.14,
     and AT-SPI text edits do not reach it."""
-    dialog = subprocess.run(["xdotool", "search", "--sync", "--name", f"^{title}$"],
-                            capture_output=True, text=True, check=True).stdout.split()[0]
+    dialog = DESKTOP.window(f"^{title}$")
     # GTK 4.8 names the stock button "Add Add"; GTK 4.14 names it "Add".
     button = wait(lambda: [n for n, (role, name) in nodes(app)
                            if role == "push button" and name in (accept, f"{accept} {accept}")],
                   f"the {title} dialog")[0]
-    subprocess.run(["xclip", "-selection", "clipboard"], input=str(path), text=True, check=True)
-    subprocess.run(["xdotool", "windowfocus", "--sync", dialog], check=True)
-    subprocess.run(["xdotool", "key", "ctrl+l"], check=True)
+    DESKTOP.copy(str(path))
+    DESKTOP.focus(dialog)
+    DESKTOP.key("ctrl+l")
     time.sleep(0.5)
-    subprocess.run(["xdotool", "key", "ctrl+a", "ctrl+v"], check=True)
+    DESKTOP.key("ctrl+a", "ctrl+v")
     time.sleep(0.5)
     press(button)
 
@@ -271,11 +484,8 @@ def preferences(binary, scratch):
         region = wait(lambda: find(app, "push button", "Region"), "the Region recorder")[0]
         press(region)
         wait(lambda: has_state(region, Atspi.StateType.PRESSED), "the recorder to listen")
-        window = subprocess.run(["xdotool", "search", "--sync", "--onlyvisible",
-                                 "--pid", str(process.pid), "--name", "^Preferences$"],
-                                capture_output=True, text=True, check=True).stdout.split()[0]
-        subprocess.run(["xdotool", "windowfocus", "--sync", window], check=True)
-        subprocess.run(["xdotool", "key", "ctrl+shift+4"], check=True)
+        DESKTOP.focus(DESKTOP.window("Preferences$", process.pid))
+        DESKTOP.key("ctrl+shift+4")
         wait(lambda: saved_value("region_shortcut") == "Control+Shift+Digit4", "the shortcut")
         wait(lambda: not has_state(region, Atspi.StateType.PRESSED), "the recorder to stop")
         print("preferences: selects, the microphone list and the shortcut recorder saved")
@@ -286,16 +496,16 @@ def preferences(binary, scratch):
             return [node_text(n, name) for n, (role, name) in nodes(app)
                     if role in ("status bar", "status")]
 
-        subprocess.run(["xdotool", "key", "ctrl+f"], check=True)
+        DESKTOP.key("ctrl+f")
         wait(lambda: [n for role in ("text", "entry") for n in find(app, role, "Find settings")],
              "the Find settings field")
-        subprocess.run(["xdotool", "type", "--delay", "40", "shortcut"], check=True)
+        DESKTOP.type("shortcut")
         wait(lambda: "1 of 2" in find_count(), "Find to count two matches")
-        subprocess.run(["xdotool", "key", "ctrl+g"], check=True)
+        DESKTOP.key("ctrl+g")
         wait(lambda: "2 of 2" in find_count(), "Ctrl+G to step to the second match")
-        subprocess.run(["xdotool", "key", "shift+F3"], check=True)
+        DESKTOP.key("shift+F3")
         wait(lambda: "1 of 2" in find_count(), "Shift+F3 to step back")
-        subprocess.run(["xdotool", "key", "Escape"], check=True)
+        DESKTOP.key("Escape")
         wait(lambda: not [n for role in ("text", "entry") for n in find(app, role, "Find settings")
                           if has_state(n, Atspi.StateType.SHOWING)], "Escape to close Find")
         print("preferences: Find counted, stepped and closed from the keyboard")
@@ -347,26 +557,15 @@ def editor(binary, scratch):
         press(green)
         wait(lambda: has_state(green, Atspi.StateType.PRESSED), "the green default fill")
         # Drag across the middle of the canvas with the real pointer.
-        window = subprocess.run(["xdotool", "search", "--sync", "--name",
-                                 "Captures Screenshot Editor"],
-                                capture_output=True, text=True, check=True).stdout.split()[0]
-        geometry = dict(line.strip().split(": ", 1) for line in subprocess.run(
-            ["xdotool", "getwindowgeometry", "--shell", window],
-            capture_output=True, text=True, check=True).stdout.replace("=", ": ").splitlines())
+        window = DESKTOP.window("Captures Screenshot Editor")
+        origin_x, origin_y = DESKTOP.origin(window)
         extents = canvas.get_extents(Atspi.CoordType.WINDOW)
         # Near the canvas's top-left: xvfb-run's default screen is 640×480,
         # smaller than the editor window.
-        x = int(geometry["X"]) + extents.x + 150
-        y = int(geometry["Y"]) + extents.y + 150
+        x = origin_x + extents.x + 150
+        y = origin_y + extents.y + 150
         # GTK must see the pointer enter before the press, or it drops the drag.
-        subprocess.run(["xdotool", "mousemove", str(x), str(y)], check=True)
-        time.sleep(0.2)
-        subprocess.run(["xdotool", "mousedown", "1"], check=True)
-        for step in range(1, 11):
-            subprocess.run(["xdotool", "mousemove", str(x + step * 16), str(y + step * 10)],
-                           check=True)
-            time.sleep(0.03)
-        subprocess.run(["xdotool", "mouseup", "1"], check=True)
+        DESKTOP.drag(x, y, x + 160, y + 100)
         layer = lambda: [n for n, (role, name) in nodes(app)
                          if role == "list item" and name.startswith("Rectangle")]
         wait(layer, "a rectangle layer from the drag")
@@ -393,9 +592,7 @@ def editor(binary, scratch):
         select = find(app, "push button", "Select & move (V)")[0]
         press(select)
         wait(lambda: has_state(select, Atspi.StateType.PRESSED), "the Select tool")
-        subprocess.run(["xdotool", "mousemove", str(x + 80), str(y + 50)], check=True)
-        time.sleep(0.2)
-        subprocess.run(["xdotool", "click", "1"], check=True)
+        DESKTOP.click(x + 80, y + 50)
         shadow = wait(lambda: find(app, "check box", "Drop shadow"), "the shape properties")[0]
         press(shadow)
         wait(lambda: find(app, "slider", "Shadow blur"), "the shadow settings to open")
@@ -421,17 +618,15 @@ def editor(binary, scratch):
         press(text_tool)
         # AT-SPI activation clicks after GTK's short press animation.
         wait(lambda: has_state(text_tool, Atspi.StateType.PRESSED), "the Text tool")
-        subprocess.run(["xdotool", "mousemove", str(x + 40), str(y + 60)], check=True)
-        time.sleep(0.2)
-        subprocess.run(["xdotool", "click", "1"], check=True)
+        DESKTOP.click(x + 40, y + 60)
         field = wait(lambda: find(app, "text", "Edit text on canvas"), "the inline text field")[0]
         wait(lambda: has_state(field, Atspi.StateType.FOCUSED), "the field to take focus")
-        subprocess.run(["xdotool", "type", "--delay", "40", "Smoke label"], check=True)
-        subprocess.run(["xdotool", "key", "Return"], check=True)
-        subprocess.run(["xdotool", "type", "--delay", "40", "second"], check=True)
+        DESKTOP.type("Smoke label")
+        DESKTOP.key("Return")
+        DESKTOP.type("second")
         typed = Atspi.Text.get_text(field, 0, -1)
         assert typed == "Smoke label\nsecond", f"the field holds {typed!r}"
-        subprocess.run(["xdotool", "key", "Escape"], check=True)
+        DESKTOP.key("Escape")
         wait(lambda: find(app, "list item", "Smoke label · Text"),
              "Escape to commit the text layer")
         wait(lambda: not find(app, "text", "Edit text on canvas"), "the field to close")
@@ -460,9 +655,7 @@ def editor(binary, scratch):
         wait(lambda: not has_state(contiguous, Atspi.StateType.CHECKED), "Contiguous to clear")
         press(contiguous)
         wait(lambda: has_state(contiguous, Atspi.StateType.CHECKED), "Contiguous to check")
-        subprocess.run(["xdotool", "mousemove", str(x + 300), str(y + 120)], check=True)
-        time.sleep(0.2)
-        subprocess.run(["xdotool", "click", "1"], check=True)
+        DESKTOP.click(x + 300, y + 120)
         # The worker publishes the wand edit, then Undo reverts only it.
         time.sleep(1.5)
         press(find(app, "push button", "Undo")[0])
@@ -500,14 +693,7 @@ def editor(binary, scratch):
         wait(lambda: not find(app, "radio menu item", "1 : 1"), "the aspect menu to close")
 
         def drag_crop():
-            subprocess.run(["xdotool", "mousemove", str(x), str(y)], check=True)
-            time.sleep(0.2)
-            subprocess.run(["xdotool", "mousedown", "1"], check=True)
-            for step in range(1, 11):
-                subprocess.run(["xdotool", "mousemove", str(x + step * 16), str(y + step * 6)],
-                               check=True)
-                time.sleep(0.03)
-            subprocess.run(["xdotool", "mouseup", "1"], check=True)
+            DESKTOP.drag(x, y, x + 160, y + 60)
             return wait(lambda: find(app, "spin button", "Crop width"), "the staged crop")[0]
 
         crop_width = drag_crop()
@@ -547,7 +733,7 @@ def editor(binary, scratch):
         press(solid)
         wait(lambda: find(app, "push button", "Background color: transparent"),
              "the canvas to become transparent")
-        subprocess.run(["xdotool", "key", "Escape"], check=True)
+        DESKTOP.key("Escape")
         print("editor: canvas width, Trim edges and transparent background over AT-SPI")
 
         # Export settings: Compress, 50% output and JPEG reach the saved file,
@@ -613,12 +799,13 @@ def editor(binary, scratch):
         press(find(app, "push button", "Add images")[0])
         choose_file(app, "Add images", "Add", picked)
         wait(lambda: find(app, "list item", "Pasted logo.png · Image"), "the imported image layer")
-        subprocess.run(["xdotool", "windowmove", window, "-500", "0"], check=True)
-        time.sleep(0.5)
+        shift = DESKTOP.slide(window, -500)
+        origin_x, origin_y = DESKTOP.origin(window)
 
         def row_center(row):
             extents = row.get_extents(Atspi.CoordType.WINDOW)
-            return extents.x - 500 + extents.width // 2, extents.y + extents.height // 2
+            return (origin_x + extents.x + extents.width // 2,
+                    origin_y + extents.y + extents.height // 2)
 
         def rows():
             return [name for _, (role, name) in nodes(app)
@@ -626,14 +813,12 @@ def editor(binary, scratch):
 
         logo = find(app, "list item", "Pasted logo.png · Image")[0]
         x, y = row_center(logo)
-        subprocess.run(["xdotool", "mousemove", str(x), str(y)], check=True)
-        time.sleep(0.2)
-        subprocess.run(["xdotool", "click", "--repeat", "2", "--delay", "80", "1"], check=True)
+        DESKTOP.click(x, y, count=2)
         wait(lambda: find(app, "text", "Rename layer"), "the Rename layer field")
         time.sleep(0.5)  # The row's entry takes focus on idle.
-        subprocess.run(["xdotool", "key", "ctrl+a"], check=True)
-        subprocess.run(["xdotool", "type", "--delay", "20", "  Logo  "], check=True)
-        subprocess.run(["xdotool", "key", "Return"], check=True)
+        DESKTOP.key("ctrl+a")
+        DESKTOP.type("  Logo  ")
+        DESKTOP.key("Return")
         wait(lambda: find(app, "list item", "Logo · Image"), "the trimmed new layer name")
         before = rows()
         assert before[0] == "Logo · Image", f"unexpected layer order {before}"
@@ -641,19 +826,12 @@ def editor(binary, scratch):
         x, y = row_center(find(app, "list item", "Logo · Image")[0])
         _, target_y = row_center(below)
         target_y += below.get_extents(Atspi.CoordType.WINDOW).height // 4
-        subprocess.run(["xdotool", "mousemove", str(x), str(y)], check=True)
-        time.sleep(0.2)
-        subprocess.run(["xdotool", "mousedown", "1"], check=True)
-        for step in range(1, 11):
-            subprocess.run(["xdotool", "mousemove", str(x),
-                            str(y + (target_y - y) * step // 10)], check=True)
-            time.sleep(0.03)
-        subprocess.run(["xdotool", "mouseup", "1"], check=True)
+        DESKTOP.drag(x, y, x, target_y)
         wait(lambda: rows()[:2] == [before[1], "Logo · Image"],
              f"the drag to move Logo below {before[1]}")
         press(find(app, "push button", "Undo")[0])
         wait(lambda: rows()[:2] == before[:2], "Undo to restore the layer order")
-        subprocess.run(["xdotool", "windowmove", window, "0", "0"], check=True)
+        DESKTOP.slide(window, -shift)
         print(f"editor: renamed an image layer to Logo and dragged it below {before[1]}")
 
         # The ⋯ layer settings card: opacity, Send to back, Duplicate, Flatten.
@@ -684,41 +862,6 @@ def editor(binary, scratch):
         process.wait(timeout=10)
 
 
-def close_window(window):
-    """Ask `window` to close with WM_DELETE_WINDOW, as a taskbar or a Wayland
-    compositor does: unlike a window manager's Alt+F4 there is no keyboard
-    grab, so a focused text field does not commit on focus loss first."""
-    import ctypes
-
-    class ClientMessage(ctypes.Structure):
-        _fields_ = [("type", ctypes.c_int), ("serial", ctypes.c_ulong),
-                    ("send_event", ctypes.c_int), ("display", ctypes.c_void_p),
-                    ("window", ctypes.c_ulong), ("message_type", ctypes.c_ulong),
-                    ("format", ctypes.c_int), ("data", ctypes.c_long * 5)]
-
-    class Event(ctypes.Union):
-        _fields_ = [("xclient", ClientMessage), ("pad", ctypes.c_long * 24)]
-
-    x11 = ctypes.CDLL("libX11.so.6")
-    x11.XOpenDisplay.restype = ctypes.c_void_p
-    x11.XInternAtom.restype = ctypes.c_ulong
-    x11.XInternAtom.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
-    x11.XSendEvent.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_long,
-                               ctypes.c_void_p]
-    x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
-    display = x11.XOpenDisplay(None)
-    event = Event()
-    message = event.xclient
-    message.type = 33  # ClientMessage
-    message.display = display
-    message.window = int(window)
-    message.format = 32
-    message.message_type = x11.XInternAtom(display, b"WM_PROTOCOLS", 0)
-    message.data[0] = x11.XInternAtom(display, b"WM_DELETE_WINDOW", 0)
-    x11.XSendEvent(display, int(window), 0, 0, ctypes.byref(event))
-    x11.XCloseDisplay(display)
-
-
 def editor_close_keeps_open_text(binary, scratch):
     """Closing the editor with a text label still open commits it into the
     draft: reopening the capture restores both labels."""
@@ -733,33 +876,29 @@ def editor_close_keeps_open_text(binary, scratch):
             press(wait(lambda: find(app, "push button", "Open screenshot in editor"), "Edit")[0])
             wait(lambda: find(app, "list item", "Original screenshot · Locked background"),
                  "the background layer")
-            return subprocess.run(["xdotool", "search", "--sync", "--name",
-                                   "Captures Screenshot Editor"],
-                                  capture_output=True, text=True, check=True).stdout.split()[0]
+            return DESKTOP.window("Captures Screenshot Editor")
 
         def label(window, dx, words):
             tool = find(app, "push button", "Text (T)")[0]
             press(tool)
             wait(lambda: has_state(tool, Atspi.StateType.PRESSED), "the Text tool")
-            subprocess.run(["xdotool", "windowfocus", "--sync", window], check=True)
+            DESKTOP.focus(window)
             # Near the canvas's top-left: xvfb-run's default screen is 640×480.
             canvas = find(app, "image", "Screenshot canvas")[0]
             extents = canvas.get_extents(Atspi.CoordType.WINDOW)
-            subprocess.run(["xdotool", "mousemove", "--window", window,
-                            str(extents.x + 120 + dx), str(extents.y + 120)], check=True)
-            time.sleep(0.2)
-            subprocess.run(["xdotool", "click", "1"], check=True)
+            origin_x, origin_y = DESKTOP.origin(window)
+            DESKTOP.click(origin_x + extents.x + 120 + dx, origin_y + extents.y + 120)
             field = wait(lambda: find(app, "text", "Edit text on canvas"), "the inline field")[0]
             wait(lambda: has_state(field, Atspi.StateType.FOCUSED), "the field to take focus")
-            subprocess.run(["xdotool", "type", "--delay", "40", words], check=True)
+            DESKTOP.type(words)
             wait(lambda: find(app, "list item", f"{words} · Text"), f"the {words} layer")
 
         window = open_editor()
         label(window, 0, "abc")
-        subprocess.run(["xdotool", "key", "Escape"], check=True)
+        DESKTOP.key("Escape")
         wait(lambda: not find(app, "text", "Edit text on canvas"), "Escape to commit abc")
         label(window, 150, "OPEN")
-        close_window(window)
+        DESKTOP.close(window)
         wait(lambda: not find(app, "image", "Screenshot canvas"), "the editor to close")
         open_editor()
         wait(lambda: find(app, "list item", "OPEN · Text") and find(app, "list item", "abc · Text"),
@@ -1009,14 +1148,11 @@ def feedback(binary, scratch):
         # Keyboard only: nothing starts focused, so Tab walks the three
         # categories into the message, then on to the contact field. Without
         # a window manager, keys go to the window under the pointer.
-        window = subprocess.run(["xdotool", "search", "--sync", "--name", "^Send Feedback$"],
-                                capture_output=True, text=True, check=True).stdout.split()[0]
-        subprocess.run(["xdotool", "mousemove", "--window", window, "20", "20"], check=True)
-        time.sleep(0.2)
-        subprocess.run(["xdotool", "key", "Tab", "Tab", "Tab", "Tab"], check=True)
-        subprocess.run(["xdotool", "type", "--delay", "40", "Toolbar overlaps"], check=True)
-        subprocess.run(["xdotool", "key", "Tab"], check=True)
-        subprocess.run(["xdotool", "type", "--delay", "40", "@captures"], check=True)
+        DESKTOP.point_into(DESKTOP.window("^Send Feedback$"), 20, 20)
+        DESKTOP.key("Tab", "Tab", "Tab", "Tab")
+        DESKTOP.type("Toolbar overlaps")
+        DESKTOP.key("Tab")
+        DESKTOP.type("@captures")
         wait(lambda: has_state(send, Atspi.StateType.SENSITIVE), "Send to enable")
         press(send)
         wait(lambda: received, "the loopback service to receive the draft")
@@ -1032,8 +1168,8 @@ def feedback(binary, scratch):
         # A second draft inside a minute stops at the client's cooldown.
         # Sending disabled the fields, which dropped focus as shipping's
         # browser does: Shift+Tab reaches Contact, then the message.
-        subprocess.run(["xdotool", "key", "shift+Tab", "shift+Tab"], check=True)
-        subprocess.run(["xdotool", "type", "--delay", "40", "Again"], check=True)
+        DESKTOP.key("shift+Tab", "shift+Tab")
+        DESKTOP.type("Again")
         wait(lambda: has_state(send, Atspi.StateType.SENSITIVE), "Send to enable again")
         press(send)
         wait(lambda: [n for n, (_, name) in nodes(app) if node_text(n, name)
@@ -1045,6 +1181,232 @@ def feedback(binary, scratch):
         process.terminate()
         process.wait(timeout=10)
         server.shutdown()
+
+
+def open_with(binary, scratch):
+    """Open With: files after `--` import into History and open their
+    editors without Preferences; a file Captures cannot open reports it in
+    shipping's "Captures" error dialog."""
+    root = scratch / "open-history"
+    files = scratch / "open-files"
+    files.mkdir()
+    image = files / "Shared screenshot.png"
+    image.write_bytes(fixture_png(accent=(45, 156, 255)))
+    movie = files / "Shared clip.mp4"
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+                    "testsrc2=size=320x180:rate=10:duration=2", "-c:v", "mpeg4", "-an",
+                    str(movie)], check=True)
+    note = files / "notes.txt"
+    note.write_text("not media")
+    process = launch(binary, "--history-root", str(root), "--settings-file",
+                     str(scratch / "preferences.json"), "--", str(image), str(movie), str(note))
+    try:
+        app = wait(lambda: application(process.pid), "the app on the accessibility bus")
+        wait(lambda: find(app, "image", "Screenshot canvas"), "the screenshot editor")
+        wait(lambda: [n for n, (_, name) in nodes(app) if name == "Captures Editor"],
+             "the recording editor")
+        imported = sorted(json.loads(path.read_text())["kind"]
+                          for path in root.glob("*/metadata.json"))
+        assert imported == ["screenshot", "video"], imported
+        dialog = wait(lambda: [n for n, (role, name) in nodes(app)
+                               if name == "Captures" and role in ("alert", "dialog")],
+                      "the open error dialog")[0]
+        assert not [n for n, (_, name) in nodes(app) if name == "Preferences"], \
+            "Open With also opened Preferences"
+        assert [n for n, (_, name) in nodes(dialog) if name.startswith("Captures can open")]
+        # GTK 4.8 names the stock button "_OK OK"; later releases "OK".
+        press([n for n, (role, name) in nodes(dialog)
+               if role == "push button" and name in ("OK", "_OK OK")][0])
+        wait(lambda: not [n for n, (role, name) in nodes(app)
+                          if name == "Captures" and role in ("alert", "dialog")],
+             "OK to close the error")
+        print("open with: a PNG and an MP4 opened their editors; a text file was refused")
+    finally:
+        process.terminate()
+        process.wait(timeout=10)
+
+
+def live(binary, scratch):
+    """Live app: a quiet launch stays resident with no window; a second
+    launch for the profile forwards a relaunch or files and exits before GTK
+    starts; closing every window keeps the app running; SIGTERM quits and
+    releases the profile for the next launch."""
+    root = scratch / "live-history"
+    settings = scratch / "live-settings.json"
+    settings.write_text(json.dumps({
+        "settings_schema_version": 5, "onboarding_completed": True, "appearance": "dark",
+        "theme": "mustard", "output_directory": str(scratch / "live-exports"),
+        "region_shortcut": "Ctrl+Shift+F7", "window_shortcut": "Ctrl+Shift+F8",
+        "display_shortcut": "Ctrl+Shift+F9", "new_capture_shortcut": "Ctrl+Shift+F10",
+        "launch_at_login": False, "show_mini_previews": False, "auto_copy_to_clipboard": False}))
+    image = scratch / "Live share.png"
+    image.write_bytes(fixture_png(accent=(240, 90, 60)))
+    log = scratch / "live.log"
+    profile = ["--live", "--history-root", str(root)]
+
+    def events():
+        return [json.loads(line) for line in log.read_text().splitlines() if line.startswith("{")]
+
+    def forward(*files):
+        unused = scratch / "live-unused.json"
+        result = subprocess.run([binary, *profile, "--settings-file", str(unused), "--", *files],
+                                capture_output=True, text=True, timeout=10)
+        assert result.returncode == 0, result.stderr
+        assert [json.loads(line)["event"] for line in result.stdout.splitlines()] == ["forwarded"]
+        assert not unused.exists(), "the forwarded launch wrote settings"
+
+    env = dict(os.environ, GSK_RENDERER="cairo", GTK_A11Y="atspi", NO_AT_BRIDGE="0")
+    with log.open("w") as stream:
+        process = subprocess.Popen([binary, *profile, "--settings-file", str(settings),
+                                    "--captures-autostart"], env=env, stdout=stream)
+    try:
+        ready = wait(lambda: [e for e in events() if e["event"] == "ready"], "live readiness")[0]
+        assert ready["windows"] == 0, events()
+        assert {"event": "launch", "action": "StartupNotice"} in events(), events()
+        forward()
+        preferences = DESKTOP.window("Preferences$", process.pid)
+        wait(lambda: any(e["event"] == "instance-relaunch" for e in events()), "the relaunch")
+        DESKTOP.close(preferences)
+        app = wait(lambda: application(process.pid), "the app on the accessibility bus")
+        wait(lambda: not [n for n, (_, name) in nodes(app) if name.endswith("Preferences")],
+             "Preferences to close")
+        time.sleep(1)
+        assert process.poll() is None, "closing the last window quit the resident app"
+        forward(str(image))
+        wait(lambda: find(app, "image", "Screenshot canvas"), "the forwarded file's editor")
+        assert len(list(root.glob("*/metadata.json"))) == 1
+        process.send_signal(signal.SIGTERM)
+        assert process.wait(timeout=10) == 0
+        # The next launch becomes the primary instead of forwarding.
+        restart = subprocess.run([binary, *profile, "--settings-file", str(settings),
+                                  "--captures-autostart", "--quit-after", "2"], env=env,
+                                 capture_output=True, text=True, timeout=20)
+        assert restart.returncode == 0, restart.stderr
+        assert '"event":"ready"' in restart.stdout, restart.stdout
+        print("live: quiet launch windowless; relaunch, close and a forwarded PNG handled; "
+              "SIGTERM released the profile")
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+
+
+def desktop_fixture(log, still):
+    """`--desktop-fixture`: an unlocked org.freedesktop.ScreenSaver (the
+    shared capture-session check) and, with `still`, a Screenshot portal that
+    answers each request with that PNG one second later. Runs on a private
+    session bus so it never races a real portal."""
+    from gi.repository import Gio
+
+    xml = """<node><interface name="org.freedesktop.ScreenSaver">
+      <method name="GetActive"><arg type="b" direction="out"/></method></interface>
+      <interface name="org.freedesktop.portal.Screenshot">
+      <method name="Screenshot"><arg type="s" direction="in"/><arg type="a{sv}" direction="in"/>
+      <arg type="o" direction="out"/></method>
+      <property name="version" type="u" access="read"/></interface></node>"""
+    saver, portal = Gio.DBusNodeInfo.new_for_xml(xml).interfaces
+
+    def call(connection, sender, path, interface, method, params, invocation):
+        if method == "GetActive":
+            invocation.return_value(GLib.Variant("(b)", (False,)))
+            return
+        token = params.unpack()[1]["handle_token"]
+        request = f"/org/freedesktop/portal/desktop/request/{sender[1:].replace('.', '_')}/{token}"
+        with open(log, "a") as stream:
+            stream.write(json.dumps({"event": "request"}) + "\n")
+        invocation.return_value(GLib.Variant("(o)", (request,)))
+
+        def respond():
+            results = {"uri": GLib.Variant("s", Path(still).as_uri())}
+            connection.emit_signal(sender, request, "org.freedesktop.portal.Request", "Response",
+                                   GLib.Variant("(ua{sv})", (0, results)))
+            return False
+        GLib.timeout_add(1000, respond)
+
+    def version(*_):
+        return GLib.Variant("u", 3)
+
+    def owned(connection, name):
+        if name == "org.freedesktop.ScreenSaver":
+            connection.register_object("/org/freedesktop/ScreenSaver", saver, call, None, None)
+        else:
+            connection.register_object("/org/freedesktop/portal/desktop", portal, call, version,
+                                       None)
+        names.remove(name)
+        if not names:
+            print("READY", flush=True)
+
+    names = ["org.freedesktop.ScreenSaver"] + (["org.freedesktop.portal.Desktop"] if still else [])
+    for name in list(names):
+        Gio.bus_own_name(Gio.BusType.SESSION, name, 0, owned, None, None)
+    GLib.MainLoop().run()
+
+
+def capture(binary, scratch):
+    """Live Screenshot Display through the shared capture flow: X11 reads the
+    display under the pointer; Wayland asks the Screenshot portal (a fixture
+    here) with every Captures window unmapped. The capture joins History and
+    the preview stack, and auto-copy puts it on the clipboard."""
+    portal = isinstance(DESKTOP, Wayland)
+    root = scratch / "capture-history"
+    settings = scratch / "capture-settings.json"
+    settings.write_text(json.dumps({
+        "settings_schema_version": 5, "onboarding_completed": True,
+        "output_directory": str(scratch / "capture-exports"),
+        "region_shortcut": "Ctrl+Shift+F7", "window_shortcut": "Ctrl+Shift+F8",
+        "display_shortcut": "Ctrl+Shift+F9", "new_capture_shortcut": "Ctrl+Shift+F10",
+        "launch_at_login": False, "show_mini_previews": True, "auto_copy_to_clipboard": True}))
+    still = scratch / "portal still.png"
+    still.write_bytes(fixture_png(accent=(30, 200, 120)))
+    pixbuf = GdkPixbuf.Pixbuf.new_from_file(str(still))
+    still_size = (pixbuf.get_width(), pixbuf.get_height())
+    fixture_log = scratch / "capture-fixture.log"
+    fixture_log.touch()
+    bus = subprocess.Popen(["dbus-daemon", "--session", "--nofork", "--print-address=1"],
+                           stdout=subprocess.PIPE, text=True)
+    address = bus.stdout.readline().strip()
+    env = dict(os.environ, DBUS_SESSION_BUS_ADDRESS=address, DBUS_SYSTEM_BUS_ADDRESS=address,
+               GSK_RENDERER="cairo", GTK_A11Y="none")
+    command = [sys.executable, __file__, "--binary", binary, "--desktop-fixture", str(fixture_log)]
+    service = subprocess.Popen(command + (["--still", str(still)] if portal else []), env=env,
+                               stdout=subprocess.PIPE)
+    log = scratch / "capture.log"
+    process = None
+    try:
+        assert select.select([service.stdout], [], [], 20)[0], "the desktop fixture stalled"
+        assert service.stdout.readline().strip() == b"READY"
+        with log.open("w") as stream:
+            process = subprocess.Popen([binary, "--live", "--history-root", str(root),
+                                        "--settings-file", str(settings), "--capture", "display"],
+                                       env=env, stdout=stream)
+
+        def events():
+            return [json.loads(line) for line in log.read_text().splitlines()
+                    if line.startswith("{")]
+        if portal:
+            wait(lambda: "request" in fixture_log.read_text(), "the portal request")
+            assert not DESKTOP.visible(process.pid), "a Captures window was mapped for the portal"
+        captured = wait(lambda: [e for e in events() if e["event"].startswith("capture")],
+                        "the capture", timeout=30)[0]
+        assert captured["event"] == "captured", events()
+        entry = json.loads(next(root.glob("*/metadata.json")).read_text())
+        assert (entry["kind"], entry["mode"]) == ("screenshot", "display"), entry
+        if portal:
+            assert (entry["width"], entry["height"]) == still_size, entry
+        else:
+            assert entry["width"] > 0 and entry["height"] > 0, entry
+        DESKTOP.window("^Captures Previews$", process.pid)
+        wait(lambda: "image/png" in DESKTOP.paste_types(), "auto-copy to the clipboard")
+        if portal:
+            DESKTOP.window("Preferences$", process.pid)
+        print(f"capture: Screenshot Display saved {entry['width']}×{entry['height']} "
+              f"{'through the portal' if portal else 'from X11'}, into the preview stack "
+              "and the clipboard")
+    finally:
+        for child in (process, service, bus):
+            if child and child.poll() is None:
+                child.terminate()
+                child.wait(timeout=10)
 
 
 def recording(binary, scratch):
@@ -1068,11 +1430,8 @@ def recording(binary, scratch):
         assert Atspi.Value.get_current_value(end) == 4000, "Trim end is not at the end"
         # Focus starts on Play; Tab reaches Trim start, Shift+Right moves it 1 s.
         # Without a window manager, keys go to the window under the pointer.
-        window = subprocess.run(["xdotool", "search", "--sync", "--name", "Captures Editor"],
-                                capture_output=True, text=True, check=True).stdout.split()[0]
-        subprocess.run(["xdotool", "mousemove", "--window", window, "300", "20"], check=True)
-        time.sleep(0.2)
-        subprocess.run(["xdotool", "key", "Tab", "shift+Right"], check=True)
+        DESKTOP.point_into(DESKTOP.window("Captures Editor"), 300, 20)
+        DESKTOP.key("Tab", "shift+Right")
         wait(lambda: Atspi.Value.get_current_value(start) == 1000, "Trim start at 1 s")
         play = find(editor, "push button", "Play preview")[0]
         press(play)
@@ -1101,24 +1460,87 @@ def recording(binary, scratch):
         process.wait(timeout=10)
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--binary", required=True)
-    args = parser.parse_args()
+STEPS = [history, preferences, editor, editor_close_keeps_open_text, recording,
+         recording_output, previews, preview_overflow, feedback, open_with, live, capture]
+
+
+def run(binary, scratch, only=None):
     subprocess.Popen(["/usr/libexec/at-spi-bus-launcher", "--launch-immediately"],
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(1)
+    for step in STEPS:
+        if not only or step.__name__ in only:
+            step(binary, scratch)
+
+
+def wayland(scratch, injector):
+    """Start a private headless Sway (the fixture from
+    build_wayland_compositor_fixture.sh on PATH) with persistent virtual
+    pointer and keyboard devices, and point every later launch at it."""
+    global DESKTOP
+    runtime = scratch / "runtime"
+    runtime.mkdir(mode=0o700)
+    # The injector's clicks are slower than a person's double-click. GDK's
+    # Wayland backend reads it from GSettings: a private keyfile backend.
+    (scratch / "config/glib-2.0/settings").mkdir(parents=True)
+    (scratch / "config/glib-2.0/settings/keyfile").write_text(
+        "[org/gnome/desktop/peripherals/mouse]\ndouble-click=1500\n")
+    for key in ("DISPLAY", "WAYLAND_DISPLAY", "SWAYSOCK"):
+        os.environ.pop(key, None)
+    os.environ.update(XDG_RUNTIME_DIR=str(runtime), XDG_CONFIG_HOME=str(scratch / "config"),
+                      XDG_SESSION_TYPE="wayland", XDG_CURRENT_DESKTOP="sway",
+                      GDK_BACKEND="wayland", WLR_BACKENDS="headless", WLR_HEADLESS_OUTPUTS="1",
+                      WLR_LIBINPUT_NO_DEVICES="1", WLR_RENDERER="pixman",
+                      GSETTINGS_BACKEND="keyfile")
+    config = scratch / "sway.conf"
+    config.write_text(f"output HEADLESS-1 resolution {Wayland.WIDTH}x{Wayland.HEIGHT}\n"
+                      "output * bg #234567 solid_color\nseat seat0 fallback true\n"
+                      "default_border none\ndefault_floating_border none\n"
+                      'for_window [title=".*"] floating enable\n')
+    log = (scratch / "sway.log").open("w")
+    sway = subprocess.Popen(["sway", "--unsupported-gpu", "-c", str(config)],
+                            stdout=log, stderr=log)
+    socket = wait(lambda: next((p for p in runtime.glob("wayland-*") if p.is_socket()), None),
+                  "the Wayland socket")
+    os.environ["WAYLAND_DISPLAY"] = socket.name
+    os.environ["SWAYSOCK"] = str(wait(lambda: next(iter(runtime.glob("sway-ipc.*.sock")), None),
+                                      "the Sway IPC socket"))
+    devices = []
+    for kind in ("pointer", "keyboard"):
+        device = subprocess.Popen([str(injector), kind], stdin=subprocess.PIPE,
+                                  stdout=subprocess.PIPE)
+        assert select.select([device.stdout], [], [], 20)[0], f"the {kind} injector stalled"
+        assert device.stdout.readline().strip() == b"READY", f"the {kind} injector failed"
+        devices.append(device)
+    DESKTOP = Wayland(dict(os.environ), *devices)
+    return [*devices, sway]
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--binary", required=True)
+    parser.add_argument("--wayland", action="store_true",
+                        help="run on a private headless Sway instead of the caller's X display")
+    parser.add_argument("--injector", type=Path,
+                        help="wayland_drag_probe binary (virtual pointer and keyboard)")
+    parser.add_argument("--only", action="append",
+                        help="run just this step (repeatable): " + ", ".join(s.__name__ for s in STEPS))
+    parser.add_argument("--desktop-fixture", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--still", type=Path, help=argparse.SUPPRESS)
+    args = parser.parse_args()
+    if args.desktop_fixture:
+        return desktop_fixture(args.desktop_fixture, args.still)
+    assert not args.wayland or args.injector, "--wayland needs --injector"
     with tempfile.TemporaryDirectory() as scratch:
         scratch = Path(scratch)
-        history(args.binary, scratch)
-        preferences(args.binary, scratch)
-        editor(args.binary, scratch)
-        editor_close_keeps_open_text(args.binary, scratch)
-        recording(args.binary, scratch)
-        recording_output(args.binary, scratch)
-        previews(args.binary, scratch)
-        preview_overflow(args.binary, scratch)
-        feedback(args.binary, scratch)
+        services = wayland(scratch, args.injector.resolve(strict=True)) if args.wayland else []
+        try:
+            run(args.binary, scratch, args.only)
+            print(f"smoke: passed on {'Wayland (headless Sway)' if args.wayland else 'X11'}")
+        finally:
+            for service in services:
+                service.terminate()
+                service.wait(timeout=10)
 
 
 if __name__ == "__main__":
