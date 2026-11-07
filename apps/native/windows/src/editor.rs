@@ -67,6 +67,7 @@ mod eraser;
 mod fields;
 mod menu;
 mod props;
+mod rows;
 mod text;
 mod text_section;
 pub use menu::MenuKind;
@@ -250,6 +251,10 @@ pub enum Event {
     MenuActive(usize),
     /// The Properties body scrolled.
     Scrolled,
+    /// The rename input opened (focus moves into it).
+    RenameFocus,
+    /// The rename input's value changed.
+    RenameText,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -303,6 +308,8 @@ enum Kind {
     /// The Properties scrollbar thumb (`base.css` `::-webkit-scrollbar`),
     /// moved on the compositor while scrolling.
     PropsThumb,
+    /// The Layers drop line while a row is dragged.
+    DropLine,
     Ctl(Target, Layer),
 }
 
@@ -606,6 +613,14 @@ pub struct Editor {
     menu_press: Option<usize>,
     /// The focused property input and its caret.
     field: Option<fields::FieldEdit>,
+    /// An image layer's open inline rename, and its caret over the list.
+    rename: Option<rows::Rename>,
+    rename_caret: usize,
+    /// A pressed or dragged Layers row, its drop line, and a layer moved by
+    /// keyboard whose row keeps focus once the reply arrives.
+    row_drag: Option<rows::RowDrag>,
+    drop_line: usize,
+    row_follow: Option<String>,
     field_caret: usize,
     /// The caret of a focused Canvas W or H, in the header.
     header_caret: usize,
@@ -653,6 +668,8 @@ pub struct Editor {
     overlay: usize,
     layers_heading: usize,
     list: usize,
+    /// Above the rows (created later): the rename caret and drop line.
+    list_over: usize,
     properties: usize,
     bar: usize,
     header: usize,
@@ -1198,6 +1215,11 @@ impl Editor {
             menu_lit: 0,
             menu_press: None,
             field: None,
+            rename: None,
+            rename_caret: 0,
+            row_drag: None,
+            drop_line: 0,
+            row_follow: None,
             field_caret: 0,
             header_caret: 0,
             text_preset: text::NEW_TEXT_PRESET,
@@ -1234,6 +1256,7 @@ impl Editor {
             overlay: 0,
             layers_heading: 0,
             list: 0,
+            list_over: 0,
             properties: 0,
             bar: 0,
             header: 0,
@@ -1319,6 +1342,12 @@ impl Editor {
         self.layers_heading = self.add(Some(sidebar), Kind::LayersHeading, 0.);
         self.list = self.add(Some(sidebar), Kind::List, 0.);
         self.nodes[self.list].clip = true;
+        self.list_over = self.add(Some(sidebar), Kind::Group, 0.);
+        self.nodes[self.list_over].clip = true;
+        self.rename_caret = self.add(Some(self.list_over), Kind::FieldCaret, 0.);
+        self.nodes[self.rename_caret].visible = false;
+        self.drop_line = self.add(Some(self.list_over), Kind::DropLine, rows::DROP_LINE_GLOW);
+        self.nodes[self.drop_line].visible = false;
         self.properties = self.add(Some(sidebar), Kind::Properties, 0.);
         self.props_clip = self.add(Some(self.properties), Kind::Group, 0.);
         self.nodes[self.props_clip].clip = true;
@@ -1920,6 +1949,9 @@ impl Editor {
         if !self.enabled(target) {
             return;
         }
+        if self.rename.is_some() {
+            self.finish_rename(true);
+        }
         match target {
             Target::Dismiss => {
                 self.banner = false;
@@ -2204,6 +2236,8 @@ impl Editor {
                 if let Some(next) = self.pending.take() {
                     self.submit(next);
                 }
+                self.sync_rename();
+                self.follow_row();
                 self.received_text();
             }
             Outcome::Preview(result) => {
@@ -2818,6 +2852,10 @@ impl Editor {
             Rect::new(0., 0., l.sidebar.w, HEADING_H),
         );
         self.set_rect(self.list, local(l.list, l.sidebar));
+        self.set_rect(self.list_over, local(l.list, l.sidebar));
+        self.relayout_rename();
+        self.place_rename_caret();
+        self.place_drop_line();
         self.set_rect(self.properties, local(l.properties, l.sidebar));
         let view = self.props_view();
         self.props_scroll = self
@@ -3177,7 +3215,11 @@ impl Editor {
         list.extend((0..RAIL_TOOLS.len()).map(Target::Tool));
         list.push(Target::Divider);
         for i in 0..self.layer_count() {
-            list.extend([Target::Layer(i), Target::Eye(i), Target::Lock(i)]);
+            // A row being renamed is `tabIndex=-1`; its input has focus.
+            if self.renaming() != Some(i) {
+                list.push(Target::Layer(i));
+            }
+            list.extend([Target::Eye(i), Target::Lock(i)]);
         }
         list.extend(self.prop_order().into_iter().map(Target::Prop));
         list.extend([Target::Copy, Target::SaveAsNew, Target::Save]);
@@ -3194,6 +3236,10 @@ impl Editor {
             return;
         }
         let changed = focus != self.focus;
+        // Focus moving to a control blurs the rename input, which commits.
+        if focus.is_some() && self.rename.is_some() {
+            self.finish_rename(true);
+        }
         // Inputs and the select draw their focus as an accent border.
         for target in [self.focus, focus].into_iter().flatten() {
             if let Target::Prop(
@@ -3441,6 +3487,7 @@ impl Editor {
             Kind::Overlay => self.draw_overlay(dc)?,
             Kind::Caret => gfx::fill(dc, all, self.caret_fill())?,
             Kind::FieldCaret => gfx::fill(dc, all, c("text"))?,
+            Kind::DropLine => self.draw_drop_line(dc, w)?,
             Kind::Menu => self.draw_menu(dc, (w, h))?,
             Kind::MenuLit => self.draw_menu_lit(dc, (w, h))?,
             Kind::Sidebar => {
@@ -4294,14 +4341,14 @@ impl Editor {
                 g.ellipsis(&kind, room)?;
                 let block = name.height + 2. + kind.height;
                 let y = ((h - block) / 2.).round();
-                gfx::text(dc, &name, cx, y, t.color_alpha("text", fade))?;
-                gfx::text(
-                    dc,
-                    &kind,
-                    cx,
-                    y + name.height + 2.,
-                    t.color_alpha("text-subtle", fade),
-                )?;
+                let kind_y = if self.renaming() == Some(i) {
+                    self.draw_rename(dc, (w, h))?;
+                    self.rename_kind_y(w, h)
+                } else {
+                    gfx::text(dc, &name, cx, y, t.color_alpha("text", fade))?;
+                    y + name.height + 2.
+                };
+                gfx::text(dc, &kind, cx, kind_y, t.color_alpha("text-subtle", fade))?;
                 let mx = w - s3 - QUICK.0;
                 gfx::icon(
                     dc,
@@ -4865,7 +4912,9 @@ impl Editor {
     /// follow the caret.
     fn blink_caret(&mut self, dcomp: &IDCompositionDesktopDevice) -> Result<()> {
         // The label's caret, or a focused property input's.
-        let node = if self.field.is_some() {
+        let node = if self.rename.is_some() {
+            self.rename_caret
+        } else if self.field.is_some() {
             self.field_caret_node()
         } else {
             self.caret
@@ -4886,7 +4935,11 @@ impl Editor {
                 visual.SetOpacity(&animation)?;
             }
         }
-        if let Some(rect) = self.field_ime_rect().or_else(|| self.ime_rect()) {
+        if let Some(rect) = self
+            .rename_ime_rect()
+            .or_else(|| self.field_ime_rect())
+            .or_else(|| self.ime_rect())
+        {
             crate::textfield::ime_position(self.hwnd, rect);
         }
         Ok(())
@@ -4909,7 +4962,7 @@ impl Editor {
     pub fn service(&mut self) -> (bool, Vec<Event>) {
         // The IME is on only while a label is open or a property input has
         // focus, like a focused textarea.
-        let text = self.inline.is_some() || self.field.is_some();
+        let text = self.inline.is_some() || self.field.is_some() || self.rename.is_some();
         if text != self.ime && !self.hwnd.is_invalid() {
             crate::textfield::ime_enable(self.hwnd, text);
             self.ime = text;
@@ -5035,6 +5088,10 @@ impl Editor {
                     self.set_range(range, value, true);
                 } else if self.slider_drag {
                     self.slide_to(x);
+                } else if self.text_drag && self.rename.is_some() {
+                    self.rename_point(x, false, true);
+                } else if self.row_drag.is_some() {
+                    self.drag_row_to(x, y);
                 } else if self.text_drag && self.field.is_some() {
                     self.field_point(x, y, false, true);
                 } else if self.text_drag {
@@ -5107,6 +5164,16 @@ impl Editor {
                 if self.inline.is_some() && hit.is_some() {
                     self.finish_text();
                 }
+                // A press in the rename input edits it; anywhere else blurs
+                // it, which commits (`onBlur={finishLayerRename}`).
+                if self.rename.is_some() {
+                    if self.rename_rect().is_some_and(|r| r.contains(x, y)) {
+                        self.rename_point(x, msg == WM_LBUTTONDBLCLK, key_down(VK_SHIFT));
+                        self.need = true;
+                        return Some(LRESULT(0));
+                    }
+                    self.finish_rename(true);
+                }
                 match hit {
                     Some(Target::Divider) => {
                         if msg == WM_LBUTTONDBLCLK {
@@ -5135,6 +5202,15 @@ impl Editor {
                     {
                         self.set_focus(Some(target), false);
                         self.field_point(x, y, msg == WM_LBUTTONDBLCLK, key_down(VK_SHIFT));
+                    }
+                    // Double-clicking an image layer's row renames it.
+                    Some(Target::Layer(i)) if msg == WM_LBUTTONDBLCLK && self.can_rename(i) => {
+                        self.begin_rename(i);
+                    }
+                    Some(target @ Target::Layer(i)) if self.enabled(target) => {
+                        self.pressed = Some(target);
+                        self.set_focus(Some(target), false);
+                        self.press_row(i, x, y);
                     }
                     // Steppers (`tabIndex=-1`) leave focus where it is.
                     Some(target @ Target::Prop(Prop::Step(..))) if self.enabled(target) => {
@@ -5181,6 +5257,9 @@ impl Editor {
                     self.finish();
                 }
                 let hit = self.hit(x, y);
+                if self.drop_row(x, y) {
+                    self.pressed = None;
+                }
                 if let Some(pressed) = self.pressed.take()
                     && hit == Some(pressed)
                 {
@@ -5252,6 +5331,11 @@ impl Editor {
                     Some((x, y)) => match self.hit(x, y) {
                         Some(Target::Divider) => IDC_SIZEWE,
                         Some(Target::Prop(prop)) if Self::is_field(prop) => IDC_IBEAM,
+                        Some(Target::Layer(_))
+                            if self.rename_rect().is_some_and(|r| r.contains(x, y)) =>
+                        {
+                            IDC_IBEAM
+                        }
                         Some(target) if self.enabled(target) => IDC_HAND,
                         Some(_) => IDC_ARROW,
                         None if self.in_text(x, y) => IDC_IBEAM,
@@ -5278,6 +5362,10 @@ impl Editor {
             WM_KEYDOWN => {
                 let vk = VIRTUAL_KEY(wp.0 as u16);
                 let (ctrl, shift) = (key_down(VK_CONTROL), key_down(VK_SHIFT));
+                if (vk == VK_ESCAPE && self.cancel_row_drag()) || self.rename_key(vk, ctrl, shift) {
+                    self.need = true;
+                    return Some(LRESULT(0));
+                }
                 if self.menu_key(vk) {
                     self.need = true;
                     return Some(LRESULT(0));
@@ -5309,11 +5397,20 @@ impl Editor {
             // Alt chords arrive as system keys; Alt+F4, Alt+Space and the
             // rest stay with DefWindowProc.
             WM_SYSKEYDOWN => {
-                if !self.menu_alt_key(VIRTUAL_KEY(wp.0 as u16)) {
+                let vk = VIRTUAL_KEY(wp.0 as u16);
+                if self.rename.is_some() || !(self.reorder_key(vk) || self.menu_alt_key(vk)) {
                     return None;
                 }
                 self.need = true;
             }
+            WM_CHAR if self.rename.is_some() => self.rename_char(wp.0 as u16),
+            WM_IME_STARTCOMPOSITION if self.rename.is_some() => {
+                if let Some(rect) = self.rename_ime_rect() {
+                    crate::textfield::ime_position(self.hwnd, rect);
+                }
+            }
+            WM_IME_COMPOSITION if self.rename.is_some() => self.rename_ime(lp.0 as u32),
+            WM_IME_ENDCOMPOSITION if self.rename.is_some() => self.rename_ime_end(),
             WM_CHAR if self.field.is_some() => self.field_char(wp.0 as u16),
             WM_IME_STARTCOMPOSITION if self.field.is_some() => {
                 if let Some(rect) = self.field_ime_rect() {

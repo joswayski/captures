@@ -47,6 +47,9 @@ pub enum Id {
     Row(usize),
     /// The inline label editor (`textarea aria-label="Edit text on canvas"`).
     InlineText,
+    /// A row's open rename input (`input aria-label="Rename layer"`), in
+    /// place of the row button (`role="group"` while renaming).
+    Rename,
     /// `section aria-label="Tool properties"`.
     Properties,
     /// `.screenshot-shape-picker` (`role="group" aria-label="Shape"`).
@@ -179,7 +182,11 @@ fn children(e: &Editor, id: Id) -> Vec<Id> {
         Id::Layers => vec![Id::LayersTitle, Id::Stub(Stub::AddLayer), Id::List],
         Id::List => (0..e.layer_count()).map(Id::Row).collect(),
         Id::Row(i) if i < e.layer_count() => vec![
-            c(Target::Layer(i)),
+            if e.renaming() == Some(i) {
+                Id::Rename
+            } else {
+                c(Target::Layer(i))
+            },
             c(Target::Eye(i)),
             c(Target::Lock(i)),
             Id::Stub(Stub::LayerMenu(i)),
@@ -221,7 +228,7 @@ fn prop_parent(prop: Prop) -> Id {
     }
 }
 
-fn parent(id: Id) -> Option<Id> {
+fn parent(e: &Editor, id: Id) -> Option<Id> {
     Some(match id {
         Id::Root => return None,
         Id::BannerText | Id::Control(Target::Dismiss) => Id::Banner,
@@ -236,6 +243,7 @@ fn parent(id: Id) -> Option<Id> {
         Id::Row(_) => Id::List,
         Id::ShapePicker | Id::ColorField(_) | Id::ModeGroup => Id::Properties,
         Id::InlineText => Id::Canvas,
+        Id::Rename => Id::Row(e.renaming()?),
         Id::MenuItem(_) => Id::Menu,
         Id::Control(Target::Prop(prop)) => prop_parent(prop),
         Id::Control(Target::Layer(i) | Target::Eye(i) | Target::Lock(i))
@@ -270,6 +278,7 @@ fn rect(e: &Editor, id: Id) -> Rect {
         }
         Id::Properties => l.properties,
         Id::InlineText => e.text_rect(),
+        Id::Rename => e.rename_rect().unwrap_or_default(),
         Id::ShapePicker => e.picker_rect(),
         Id::ModeGroup => e.modes_rect(),
         Id::ColorField(field) => e.color_field_rect(field),
@@ -297,6 +306,7 @@ fn name(e: &Editor, id: Id) -> String {
         Id::Row(i) => e.name(Target::Layer(i)),
         Id::Properties => "Tool properties".into(),
         Id::InlineText => editor_chrome::text_format::INLINE_LABEL.into(),
+        Id::Rename => captures_app::editor_layers::menu::RENAME_LABEL.into(),
         Id::ShapePicker => "Shape".into(),
         Id::ModeGroup => "Eraser mode".into(),
         Id::ColorField(field) => e.field_label(field),
@@ -365,7 +375,7 @@ fn control_type(e: &Editor, id: Id) -> UIA_CONTROLTYPE_ID {
         Id::Flyout => UIA_MenuControlTypeId,
         Id::List => UIA_ListControlTypeId,
         Id::Row(_) => UIA_ListItemControlTypeId,
-        Id::Filename | Id::InlineText => UIA_EditControlTypeId,
+        Id::Filename | Id::InlineText | Id::Rename => UIA_EditControlTypeId,
         Id::Stub(Stub::Format) => UIA_ComboBoxControlTypeId,
         Id::Stub(_) => UIA_ButtonControlTypeId,
         Id::Control(Target::Shape(_)) => UIA_MenuItemControlTypeId,
@@ -449,6 +459,7 @@ fn runtime_id(id: Id) -> [i32; 4] {
         Id::ShapePicker => (17, 0),
         Id::ColorField(field) => (18, field as i32),
         Id::InlineText => (19, 0),
+        Id::Rename => (24, 0),
         Id::ModeGroup => (20, 0),
         Id::Menu => (21, 0),
         Id::BgMenu => (23, 0),
@@ -485,6 +496,7 @@ fn offscreen(e: &Editor, id: Id) -> bool {
     match id {
         // Rows scrolled out of the list.
         Id::Row(_)
+        | Id::Rename
         | Id::Control(Target::Layer(_) | Target::Eye(_) | Target::Lock(_))
         | Id::Stub(Stub::LayerMenu(_)) => {
             let (r, list) = (rect(e, id), e.l.list);
@@ -586,6 +598,7 @@ fn value(e: &Editor, id: Id) -> Option<String> {
         }
         Id::Filename => e.filename(),
         Id::InlineText => e.text_value(),
+        Id::Rename => e.rename_text(),
         Id::Control(Target::Prop(prop @ (Prop::Number(_) | Prop::Textarea))) => e.field_text(prop),
         Id::Control(Target::Prop(prop @ (Prop::Font | Prop::Aspect | Prop::Preset))) => {
             let kind = trigger_kind(Id::Control(Target::Prop(prop)))?;
@@ -674,7 +687,9 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                 }
                 Id::Control(_) if toggle_state(e, id).is_some() => pattern == UIA_TogglePatternId,
                 Id::Control(_) => pattern == UIA_InvokePatternId,
-                Id::Filename | Id::Location | Id::InlineText => pattern == UIA_ValuePatternId,
+                Id::Filename | Id::Location | Id::InlineText | Id::Rename => {
+                    pattern == UIA_ValuePatternId
+                }
                 Id::Stub(_) => pattern == UIA_InvokePatternId,
                 _ => false,
             })
@@ -697,6 +712,7 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                 Id::MenuItem(i) => active == Some(i),
                 Id::Control(t) => e.focus == Some(t) && active.is_none(),
                 Id::InlineText => e.text_active(),
+                Id::Rename => e.renaming().is_some(),
                 _ => false,
             };
             let region = matches!(id, Id::Canvas | Id::Layers | Id::Properties);
@@ -731,7 +747,7 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                 UIA_AutomationIdPropertyId => VARIANT::from(BSTR::from(format!("editor-{id:?}"))),
                 UIA_FrameworkIdPropertyId => VARIANT::from(BSTR::from("Captures")),
                 UIA_IsKeyboardFocusablePropertyId => {
-                    VARIANT::from(focusable(e, id) || id == Id::InlineText)
+                    VARIANT::from(focusable(e, id) || matches!(id, Id::InlineText | Id::Rename))
                 }
                 UIA_HasKeyboardFocusPropertyId => VARIANT::from(focused),
                 UIA_IsEnabledPropertyId => VARIANT::from(enabled),
@@ -801,7 +817,7 @@ fn writable(id: Id) -> bool {
     match id {
         // The crop's Width and Height are `readOnly`.
         Id::Control(Target::Prop(Prop::Number(num))) => !num.read_only(),
-        Id::InlineText | Id::Control(Target::Prop(Prop::Textarea)) => true,
+        Id::InlineText | Id::Rename | Id::Control(Target::Prop(Prop::Textarea)) => true,
         _ => false,
     }
 }
@@ -814,15 +830,15 @@ impl IRawElementProviderFragment_Impl for Node_Impl {
     fn Navigate(&self, direction: NavigateDirection) -> Result<IRawElementProviderFragment> {
         let id = self.id;
         let next = with(self.hwnd, |e| {
-            let exists = |id: Id| parent(id).is_none_or(|p| children(e, p).contains(&id));
+            let exists = |id: Id| parent(e, id).is_none_or(|p| children(e, p).contains(&id));
             if !exists(id) {
                 return Err(unavailable());
             }
             Ok(match direction {
-                NavigateDirection_Parent => parent(id),
+                NavigateDirection_Parent => parent(e, id),
                 NavigateDirection_FirstChild => children(e, id).first().copied(),
                 NavigateDirection_LastChild => children(e, id).last().copied(),
-                NavigateDirection_NextSibling | NavigateDirection_PreviousSibling => parent(id)
+                NavigateDirection_NextSibling | NavigateDirection_PreviousSibling => parent(e, id)
                     .and_then(|p| {
                         let siblings = children(e, p);
                         let i = siblings.iter().position(|s| *s == id)?;
@@ -910,6 +926,9 @@ impl IRawElementProviderFragmentRoot_Impl for Node_Impl {
     }
 
     fn GetFocus(&self) -> Result<IRawElementProviderFragment> {
+        if with(self.hwnd, |e| Ok(e.renaming().is_some()))? {
+            return Ok(fragment(self.hwnd, Id::Rename));
+        }
         if with(self.hwnd, |e| Ok(e.text_active()))? {
             return Ok(fragment(self.hwnd, Id::InlineText));
         }
@@ -1097,6 +1116,15 @@ impl IValueProvider_Impl for Node_Impl {
             return Err(read_only());
         }
         let value = unsafe { value.to_string() }.unwrap_or_default();
+        if self.id == Id::Rename {
+            return with(self.hwnd, |e| {
+                if e.renaming().is_none() {
+                    return Err(unavailable());
+                }
+                e.set_rename_value(&value);
+                Ok(())
+            });
+        }
         if let Id::Control(Target::Prop(prop)) = self.id {
             let id = self.id;
             return with(self.hwnd, |e| {
@@ -1238,6 +1266,20 @@ pub fn raise(hwnd: HWND, events: &[(Event, String)]) {
                         4,
                     );
                 }
+                Event::RenameFocus => {
+                    let _ = UiaRaiseAutomationEvent(
+                        &node(hwnd, Id::Rename),
+                        UIA_AutomationFocusChangedEventId,
+                    );
+                }
+                Event::RenameText => {
+                    let _ = UiaRaiseAutomationPropertyChangedEvent(
+                        &node(hwnd, Id::Rename),
+                        UIA_ValueValuePropertyId,
+                        &VARIANT::default(),
+                        &VARIANT::from(BSTR::from(detail.as_str())),
+                    );
+                }
                 Event::InlineFocus => {
                     let _ = UiaRaiseAutomationEvent(
                         &node(hwnd, Id::InlineText),
@@ -1284,6 +1326,7 @@ pub fn describe(e: &Editor, events: Vec<Event>) -> Vec<(Event, String)> {
                 Event::Value(target) => value(e, Id::Control(target)).unwrap_or_default(),
                 Event::Notice => e.notice_text().map(|(text, _)| text).unwrap_or_default(),
                 Event::InlineText => e.text_value(),
+                Event::RenameText => e.rename_text(),
                 Event::Scrolled => scroll_percent(e).to_string(),
                 Event::Expanded(target) => {
                     let open = match target {
