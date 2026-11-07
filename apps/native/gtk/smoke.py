@@ -1262,7 +1262,8 @@ def live(binary, scratch):
     try:
         ready = wait(lambda: [e for e in events() if e["event"] == "ready"], "live readiness")[0]
         assert ready["windows"] == 0, events()
-        assert {"event": "launch", "action": "StartupNotice"} in events(), events()
+        assert {"event": "launch", "action": "StartupNotice", "crashReview": False} in events(), \
+            events()
         forward()
         preferences = DESKTOP.window("Preferences$", process.pid)
         wait(lambda: any(e["event"] == "instance-relaunch" for e in events()), "the relaunch")
@@ -1389,11 +1390,18 @@ def capture(binary, scratch):
     still_size = (pixbuf.get_width(), pixbuf.get_height())
     fixture_log = scratch / "capture-fixture.log"
     fixture_log.touch()
+    # Services the private bus activates (the GTK portal backend) would
+    # otherwise start a second accessibility bus for this display, whose
+    # exit unlinks the shared socket the later AT-SPI steps use.
+    a11y = subprocess.run(["gdbus", "call", "--session", "--dest", "org.a11y.Bus",
+                           "--object-path", "/org/a11y/bus", "--method", "org.a11y.Bus.GetAddress"],
+                          capture_output=True, text=True, check=True).stdout.strip()[2:-3]
     bus = subprocess.Popen(["dbus-daemon", "--session", "--nofork", "--print-address=1"],
-                           stdout=subprocess.PIPE, text=True)
+                           stdout=subprocess.PIPE, text=True,
+                           env=dict(os.environ, AT_SPI_BUS_ADDRESS=a11y))
     address = bus.stdout.readline().strip()
     env = dict(os.environ, DBUS_SESSION_BUS_ADDRESS=address, DBUS_SYSTEM_BUS_ADDRESS=address,
-               GSK_RENDERER="cairo", GTK_A11Y="none")
+               AT_SPI_BUS_ADDRESS=a11y, GSK_RENDERER="cairo", GTK_A11Y="none")
     command = [sys.executable, __file__, "--binary", binary, "--desktop-fixture", str(fixture_log)]
     service = subprocess.Popen(command + (["--still", str(still)] if portal else []), env=env,
                                stdout=subprocess.PIPE)
@@ -1522,6 +1530,50 @@ def tray(binary, scratch):
             process.wait()
 
 
+def setup(binary, scratch):
+    """First-run setup in the live app: a fresh profile opens setup (not
+    Preferences) with Linux's ready screen access; the tray shows setup
+    until it finishes; Start capturing saves completion, closes the window
+    and turns the global shortcuts on."""
+    root = scratch / "setup-history"
+    settings = scratch / "setup-settings.json"
+    log = scratch / "setup.log"
+    env = dict(os.environ, GSK_RENDERER="cairo", GTK_A11Y="atspi", NO_AT_BRIDGE="0")
+    with log.open("w") as stream:
+        process = subprocess.Popen([binary, "--live", "--history-root", str(root),
+                                    "--settings-file", str(settings)], env=env, stdout=stream)
+
+    def events(name):
+        return [json.loads(line) for line in log.read_text().splitlines()
+                if line.startswith("{") and json.loads(line)["event"] == name]
+    try:
+        assert wait(lambda: events("launch"), "the launch")[0]["action"] == "Setup"
+        app = wait(lambda: application(process.pid), "the app on the accessibility bus")
+        window = wait(lambda: [n for n, (role, name) in nodes(app)
+                               if role in ("frame", "window", "filler") and name == "Captures"],
+                      "the setup window")[0]
+        assert not events("shortcuts"), "shortcuts were live before setup finished"
+        state = wait(lambda: events("setup"), "the setup state")[0]
+        assert state == {"event": "setup", "title": "You’re ready to capture", "ready": True}, state
+        wait(lambda: [n for n, (_, name) in nodes(window) if name == "Ready"], "Ready status")
+        assert_accessible(window, "setup")
+        start = wait(lambda: [n for n in find(window, "push button", "Start capturing")
+                              if has_state(n, Atspi.StateType.SENSITIVE)], "Start capturing")[0]
+        press(start)
+        wait(lambda: events("setup-complete"), "setup to finish")
+        assert json.loads(settings.read_text())["onboarding_completed"] is True
+        registered = wait(lambda: events("shortcuts"), "shortcuts after setup")[0]
+        assert registered["ok"], registered
+        wait(lambda: not [n for n, (_, name) in nodes(app) if name == "Captures"],
+             "the setup window to close")
+        assert process.poll() is None, "finishing setup quit the app"
+        print("setup: a fresh profile opened setup; Start capturing saved it and enabled "
+              "shortcuts")
+    finally:
+        process.terminate()
+        process.wait(timeout=10)
+
+
 def shortcuts(binary, scratch):
     """Global capture shortcuts in the live app. X11: the saved Screenshot
     Display chord captures; after Preferences' file changes to another chord,
@@ -1624,9 +1676,81 @@ def recording(binary, scratch):
         process.wait(timeout=10)
 
 
+def crash_review(binary, scratch):
+    """Crash diagnostics: a live app killed without its clean exit opens
+    Send Feedback with the local review on the next visible launch. Add to
+    message appends the summary, Dismiss clears the evidence, and a later
+    clean quit leaves nothing to review."""
+    root = scratch / "crash-history"
+    settings = scratch / "crash-settings.json"
+    settings.write_text(json.dumps({
+        "settings_schema_version": 5, "onboarding_completed": True, "appearance": "light",
+        "theme": "cobalt", "output_directory": str(scratch / "crash-exports"),
+        "region_shortcut": "Ctrl+Shift+F7", "window_shortcut": "Ctrl+Shift+F8",
+        "display_shortcut": "Ctrl+Shift+F9", "new_capture_shortcut": "Ctrl+Shift+F10",
+        "launch_at_login": False, "show_mini_previews": False, "auto_copy_to_clipboard": False}))
+    env = dict(os.environ, GSK_RENDERER="cairo", GTK_A11Y="atspi", NO_AT_BRIDGE="0",
+               CAPTURES_NATIVE_SKIP_SYSTEM_SHORTCUT_TAKEOVER="1")
+    log = scratch / "crash.log"
+
+    def start(*extra):
+        with log.open("w") as stream:
+            process = subprocess.Popen([binary, "--live", "--history-root", str(root),
+                                        "--settings-file", str(settings), *extra],
+                                       env=env, stdout=stream)
+        wait(lambda: [e for e in events() if e["event"] == "ready"], "live readiness")
+        return process
+
+    def events():
+        return [json.loads(line) for line in log.read_text().splitlines() if line.startswith("{")]
+
+    def review_requested():
+        return next(e for e in events() if e["event"] == "launch")["crashReview"]
+
+    def stop(process):
+        process.terminate()
+        assert process.wait(timeout=10) == 0, "SIGTERM did not quit cleanly"
+
+    process = start("--captures-autostart")
+    process.kill()
+    process.wait(timeout=10)
+    process = start()
+    try:
+        assert review_requested(), events()
+        app = wait(lambda: application(process.pid), "the app on the accessibility bus")
+        form = wait(lambda: [n for n, (_, name) in nodes(app) if name == "Send Feedback"],
+                    "Send Feedback with the review")[0]
+        wait(lambda: [n for n, (role, name) in nodes(form) if role == "heading"
+                      and node_text(n, name) == "Previous session did not close normally"],
+             "the review title")
+        assert_accessible(form, "Send Feedback")
+        message = [n for n, (role, name) in nodes(form) if name == "Message"
+                   and role != "label" and "Text" in n.get_interfaces()][0]
+        assert Atspi.Text.get_text(message, 0, -1) == "", "the review was added unasked"
+        press(find(form, "push button", "Add to message")[0])
+        wait(lambda: Atspi.Text.get_text(message, 0, -1).startswith(
+            "Previous session did not close normally\n"), "the summary in the message")
+        press(find(form, "push button", "Dismiss diagnostics")[0])
+        wait(lambda: not find(form, "push button", "Dismiss diagnostics"), "the review to close")
+    finally:
+        stop(process)
+    process = start()
+    try:
+        assert not review_requested(), "dismissed evidence came back"
+    finally:
+        stop(process)
+    process = start()
+    try:
+        assert not review_requested(), "a clean quit left evidence"
+    finally:
+        stop(process)
+    print("crash review: a killed session opened its review; Add to message and Dismiss "
+          "worked; clean quits left nothing")
+
+
 STEPS = [history, preferences, editor, editor_close_keeps_open_text, recording,
          recording_output, previews, preview_overflow, feedback, open_with, live, capture, tray,
-         shortcuts]
+         shortcuts, setup, crash_review]
 FIXTURE_LOG = None
 
 

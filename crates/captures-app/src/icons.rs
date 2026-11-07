@@ -52,6 +52,11 @@ pub fn paths(name: &str) -> Option<&'static [&'static str]> {
         ],
         "close" => &["m6 6 12 12M18 6 6 18"],
         "check" => &["m5 12 4 4L19 6"],
+        // First-run setup's `ScreenAccessIcon` (`Onboarding.tsx`).
+        "screen-access" => &[
+            "M5.5 4h13a2.5 2.5 0 0 1 2.5 2.5v8a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 14.5v-8A2.5 2.5 0 0 1 5.5 4Z",
+            "M8 21h8M12 17v4",
+        ],
         // Lucide Share2 for the native sharing entry point, on every OS.
         "share" => &[
             "M15 5a3 3 0 1 0 6 0a3 3 0 1 0-6 0",
@@ -77,6 +82,8 @@ pub fn paths(name: &str) -> Option<&'static [&'static str]> {
         ],
         "preview-overflow-up" => &["M3.5 10 8 5.5 12.5 10"],
         "preview-overflow-down" => &["M3.5 6 8 10.5 12.5 6"],
+        // First-run setup's `CheckmarkIcon` (`Onboarding.tsx`).
+        "setup-check" => &["M3.2 8.2 6.4 11.4 12.8 4.6"],
         // Text alignment (`EditorIcon` `align-*`).
         "align-left" => &["M5 6h14M5 10h10M5 14h14M5 18h10"],
         "align-center" => &["M5 6h14M8 10h8M5 14h14M8 18h8"],
@@ -206,7 +213,11 @@ pub fn polylines(name: &str) -> Option<Vec<Vec<[f32; 2]>>> {
     let mut lines: Vec<Vec<[f32; 2]>> = paths(name)?.iter().flat_map(|d| flatten(d)).collect();
     if matches!(
         name,
-        "external-link" | "preview-stack" | "preview-overflow-up" | "preview-overflow-down"
+        "external-link"
+            | "preview-stack"
+            | "preview-overflow-up"
+            | "preview-overflow-down"
+            | "setup-check"
     ) {
         for point in lines.iter_mut().flatten() {
             point[0] *= 1.5;
@@ -654,6 +665,8 @@ mod tests {
             "hide-controls",
             "close",
             "check",
+            "screen-access",
+            "setup-check",
             "warning",
             "restore",
             "copy",

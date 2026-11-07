@@ -30,9 +30,14 @@ thread_local! {
     static SHORTCUTS: RefCell<Option<CaptureShortcuts>> = RefCell::default();
 }
 
-/// A tray menu row, on the main loop.
+/// A tray menu row, on the main loop. Until setup finishes, every row but
+/// Quit shows setup, as shipping.
 pub fn tray_action(action: crate::tray::Action) {
     if let Some(host) = HOST.with(|resident| resident.borrow().upgrade()) {
+        if action != crate::tray::Action::Quit && !onboarded(&host) {
+            host.show_setup();
+            return;
+        }
         crate::tray::run(&host, action);
     }
 }
@@ -60,6 +65,11 @@ pub fn start(host: &Rc<Host>, instance: Instance, quiet: bool, opening_files: bo
         })
     });
     *host.instance.borrow_mut() = Some(instance);
+    // Diagnostics belong to the elected primary only.
+    match captures_app::crash::Session::start(&host.history_root) {
+        Ok(session) => *host.crash.borrow_mut() = Some(std::sync::Arc::new(session)),
+        Err(error) => eprintln!("{error} Capture remains available."),
+    }
     let settings = captures_settings::load(&host.settings_file).unwrap_or_default();
     let tray = crate::tray::start(&settings);
     // Without a tray a windowless app is unreachable: open Preferences, and
@@ -97,17 +107,28 @@ pub fn start(host: &Rc<Host>, instance: Instance, quiet: bool, opening_files: bo
         SETTINGS.with(|watch| *watch.borrow_mut() = Some(monitor));
     }
     let launch = app_windows::interactive_launch(onboarded(host), quiet, opening_files, false);
+    // A visible launch after an unclean exit opens Send Feedback with the
+    // local review, as the wgpu host; nothing is sent or added unasked.
+    let review = !quiet
+        && launch.is_some_and(|launch| launch != InteractiveLaunch::Setup)
+        && host
+            .crash
+            .borrow()
+            .as_ref()
+            .is_some_and(|session| session.preview().is_some());
     emit(
         "launch",
-        serde_json::json!({"action": launch.map(|launch| format!("{launch:?}"))}),
+        serde_json::json!({"action": launch.map(|launch| format!("{launch:?}")),
+        "crashReview": review}),
     );
+    if review {
+        host.show_feedback();
+    }
     match launch {
-        // First-run setup has no GTK window yet; Preferences stands in.
-        Some(
-            InteractiveLaunch::Setup
-            | InteractiveLaunch::Preferences
-            | InteractiveLaunch::StartupNoticeAndPreferences,
-        ) => {
+        Some(InteractiveLaunch::Setup) => {
+            host.show_setup();
+        }
+        Some(InteractiveLaunch::Preferences | InteractiveLaunch::StartupNoticeAndPreferences) => {
             host.show_preferences();
         }
         Some(InteractiveLaunch::StartupNotice) if tray_missing => {
@@ -123,6 +144,12 @@ pub fn stop(host: &Host) {
     SETTINGS.with(|watch| watch.borrow_mut().take());
     SHORTCUTS.with(|shortcuts| shortcuts.borrow_mut().take());
     host.tray.borrow_mut().take();
+    // Mark a clean exit before releasing the profile election.
+    if let Some(session) = host.crash.borrow_mut().take()
+        && let Err(error) = session.clean_exit()
+    {
+        eprintln!("{error}");
+    }
     host.instance.borrow_mut().take();
     host.resident.borrow_mut().take();
 }
@@ -242,6 +269,9 @@ fn reactivate(host: &Rc<Host>) {
         )
         .collect();
     let mut visible: Vec<_> = (0..editors.len()).map(PrimaryWindow::Editor).collect();
+    if host.setup.borrow().is_some() {
+        visible.push(PrimaryWindow::App(AppWindow::Setup));
+    }
     if host.history.borrow().is_some() {
         visible.push(PrimaryWindow::App(AppWindow::History));
     }
@@ -253,9 +283,10 @@ fn reactivate(host: &Rc<Host>) {
         Reactivation::Focus(PrimaryWindow::App(AppWindow::History)) => {
             host.show_history();
         }
-        // Setup stands in as Preferences until the onboarding slice.
-        Reactivation::Focus(PrimaryWindow::App(AppWindow::Preferences | AppWindow::Setup))
-        | Reactivation::ShowSetup
+        Reactivation::Focus(PrimaryWindow::App(AppWindow::Setup)) | Reactivation::ShowSetup => {
+            host.show_setup();
+        }
+        Reactivation::Focus(PrimaryWindow::App(AppWindow::Preferences))
         | Reactivation::ShowPreferences
         | Reactivation::RestoreRecordingControls => {
             host.show_preferences();

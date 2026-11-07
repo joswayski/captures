@@ -7,6 +7,7 @@ mod editor;
 mod feedback;
 mod history;
 mod live;
+mod onboarding;
 mod preferences;
 mod previews;
 mod recording;
@@ -26,7 +27,7 @@ use std::time::{Duration, Instant};
 use gtk::prelude::*;
 use gtk::{gio, glib, graphene};
 
-const USAGE: &str = "captures-gtk [--scene preferences|history|editor|recording|preview|feedback] [--artifact ID] [--appearance light|dark]\n\
+const USAGE: &str = "captures-gtk [--scene preferences|history|editor|recording|preview|feedback|setup] [--artifact ID] [--appearance light|dark]\n\
   [--settings-file PATH] [--history-root PATH] [--size WxH] [--feedback-endpoint URL]\n\
   [--screenshot OUT.png] [--find QUERY] [--count N] [--exercise] [--quit-after SECONDS]\n\
   [--open-media PATH]... [-- FILE...]\n\
@@ -40,6 +41,7 @@ enum Scene {
     Recording,
     Preview,
     Feedback,
+    Setup,
 }
 
 impl Scene {
@@ -51,6 +53,7 @@ impl Scene {
             Scene::Recording => "recording",
             Scene::Preview => "preview",
             Scene::Feedback => "feedback",
+            Scene::Setup => "setup",
         }
     }
 }
@@ -118,6 +121,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
                     "recording" => Scene::Recording,
                     "preview" => Scene::Preview,
                     "feedback" => Scene::Feedback,
+                    "setup" => Scene::Setup,
                     other => return Err(format!("unsupported scene {other}")),
                 }
             }
@@ -213,6 +217,8 @@ struct Host {
     find: RefCell<Option<String>>,
     feedback: RefCell<Option<gtk::ApplicationWindow>>,
     feedback_endpoint: Option<String>,
+    /// First-run setup, while open.
+    setup: RefCell<Option<gtk::ApplicationWindow>>,
     /// Holds the app while Open With imports run before any window opens.
     opening: RefCell<Option<gio::ApplicationHoldGuard>>,
     /// Open With files waiting for the import worker, in arrival order.
@@ -225,6 +231,8 @@ struct Host {
     /// The capture in flight (`capture.rs`).
     capture: RefCell<Option<capture::Flow>>,
     tray: RefCell<Option<tray::Tray>>,
+    /// The live app's local crash diagnostics (`captures_app::crash`).
+    crash: RefCell<Option<std::sync::Arc<captures_app::crash::Session>>>,
 }
 
 impl Host {
@@ -291,6 +299,7 @@ impl Host {
             &self.app,
             &self.tokens.borrow(),
             self.feedback_endpoint.clone(),
+            self.crash.borrow().clone(),
         );
         let host = Rc::downgrade(self);
         window.connect_close_request(move |_| {
@@ -300,6 +309,30 @@ impl Host {
             glib::Propagation::Proceed
         });
         *self.feedback.borrow_mut() = Some(window.clone());
+        window.present();
+        window
+    }
+
+    /// First-run setup: one window, reused while open.
+    fn show_setup(self: &Rc<Self>) -> gtk::ApplicationWindow {
+        if let Some(window) = self.setup.borrow().as_ref() {
+            window.present();
+            return window.clone();
+        }
+        let window = onboarding::build(
+            &self.app,
+            &self.tokens.borrow(),
+            self.settings_file.clone(),
+            || {},
+        );
+        let host = Rc::downgrade(self);
+        window.connect_close_request(move |_| {
+            if let Some(host) = host.upgrade() {
+                host.setup.borrow_mut().take();
+            }
+            glib::Propagation::Proceed
+        });
+        *self.setup.borrow_mut() = Some(window.clone());
         window.present();
         window
     }
@@ -705,6 +738,7 @@ fn main() -> glib::ExitCode {
             find: RefCell::new(options.find.clone()),
             feedback: RefCell::default(),
             feedback_endpoint: options.feedback_endpoint.clone(),
+            setup: RefCell::default(),
             opening: RefCell::default(),
             pending: RefCell::default(),
             importing: Cell::new(false),
@@ -712,6 +746,7 @@ fn main() -> glib::ExitCode {
             resident: RefCell::default(),
             capture: RefCell::default(),
             tray: RefCell::default(),
+            crash: RefCell::default(),
         });
         hosts.borrow_mut().push(host.clone());
         let weak = Rc::downgrade(&host);
@@ -758,6 +793,7 @@ fn main() -> glib::ExitCode {
         let window: gtk::ApplicationWindow = match options.scene {
             Scene::Preferences => host.show_preferences(),
             Scene::Feedback => host.show_feedback(),
+            Scene::Setup => host.show_setup(),
             Scene::History => host.show_history().window.clone(),
             Scene::Editor => {
                 let id = options.artifact.clone().expect("checked in parse");
@@ -895,8 +931,8 @@ fn exercise(host: &Rc<Host>, scene: Scene, started: Instant) {
                         history.scroll_to_end(cycle % 2 == 0);
                     }
                 }
-                // A static form: nothing to exercise.
-                Scene::Feedback => {}
+                // Static forms: nothing to exercise.
+                Scene::Feedback | Scene::Setup => {}
             }
             emit(
                 "scripted-action",
