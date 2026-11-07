@@ -1016,6 +1016,20 @@ AppKit, X11 and Wayland are unchanged and not physically reverified. Jose
 authorized this opt-in development merge with the hardware gate pending. Format
 switching and hard size budgets remain open; no native promotion or release changes.
 
+The following Win32 slice connects Maximum file size for MP4/GIF to the shared
+hard-budget exporter: decimal KB/MB/GB, a 10 MB default, a 100 KB minimum and
+unit-specific steps. Unit conversion preserves exact whole bytes instead of
+Tauri's eight-significant-digit display rounding. Blur retains invalid drafts;
+Save reports them instead of exporting the previous cap. The size row fills the
+card, independently of the quality select's 430-point width limit. Replacement
+resets output to source defaults and clears the cap. An impossible MP4 budget can
+fail during preview acceptance and visibly restore the accepted settings; GIF
+budgets can fail after the encoder retries. Neither path publishes a failed copy.
+Native remains opt-in. Physical DirectComposition, pointer and UIA acceptance
+for Maximum controls remains open. AppKit, X11 and Wayland budget controls are
+unchanged and not physically reverified; GTK uses its own numeric widget, while
+AppKit's controls ABI and the wgpu host share the decimal-rounding correction.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,

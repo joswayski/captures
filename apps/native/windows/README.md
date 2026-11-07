@@ -34,15 +34,21 @@ pass 25; pass 26 accepted source-sized preview and playback independent of expor
 dimensions, including stable custom-field steppers and retained audio edits.
 Graphical crop has eight handles and interior movement; numeric source-pixel
 bounds, aspect lock, keyboard movement and UIA ranges share the crop geometry.
-Crop and comparison still await physical acceptance; Wine tests and offscreen
-renders are not that gate. MP4 Preserve/Compress presets and GIF compression use
+Crop passed its separate hardware check with observations; comparison still awaits
+physical acceptance. Wine tests and offscreen renders are not that gate.
+MP4 Preserve/Compress presets and GIF compression use
 the shared encoded comparison, with a 6–94% split, keyboard/UIA range, Hide/Show,
 processing/error feedback and estimated size badges. New edits cancel old work;
 only matching generations, accepted revisions and source positions can display.
 Comparison hides during MP4 playback; crop controls remain above it.
 GIF comparison is a static sample; Hide restores source autoplay.
-Format switching and hard size budgets remain
-migration work.
+Maximum file size uses the shared MP4/GIF hard-budget exporter, decimal KB/MB/GB,
+a 10 MB default and a 100 KB minimum. Size drafts stay untouched on blur; Save
+reports an invalid draft instead of exporting the last accepted cap. Unit changes
+preserve exact whole bytes (unlike Tauri's eight-significant-digit formatter).
+The comparison displays the cap rather than an estimate. Replacement resets to
+source defaults and clears the cap. Physical pointer, UIA and DirectComposition
+acceptance for these controls remains open. Format switching remains migration work.
 This slice preserves the source's MP4/GIF format; WebM saves report unsupported.
 The filename exposes UIA Value, the copy switch
 and preview modes expose Toggle, and actions Invoke. Timeline/playback passed

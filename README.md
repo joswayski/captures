@@ -212,10 +212,16 @@ maximum width and quality-based palette limits, and separate source-audio volume
 mute and mono. Crop supports source-pixel numeric fields, aspect locking, eight
 resize handles and interior dragging over the full source preview, with keyboard
 and accessibility ranges. Compression comparison adds a draggable before/after split,
-Hide/Show, and MP4 Preserve/Compress presets; format switching and hard file-size
-budgets remain migration work. These slices are not recording-editor parity.
+Hide/Show, and MP4 Preserve/Compress presets. Maximum file size for MP4/GIF uses
+decimal KB/MB/GB, a 100 KB minimum and a 10 MB default. Invalid drafts remain
+visible and block Save; a successful replacement resets output to source defaults
+and clears the cap. Unit changes preserve exact whole bytes rather than Tauri's
+eight-significant-digit display rounding. Format switching remains migration work.
+These slices are not recording-editor parity.
 Output controls and source-preview correction passed physical Windows testing;
-crop and comparison still await acceptance. Like Tauri, the preview keeps the original source's
+comparison and maximum-size controls still await physical acceptance. Crop passed
+its separate hardware check with observations, not full editor acceptance.
+Like Tauri, the preview keeps the original source's
 size and picture while output settings affect the saved file, not the page layout.
 
 The native capture workspace connects full-display

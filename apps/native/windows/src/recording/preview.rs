@@ -1084,4 +1084,169 @@ mod tests {
         drop(w);
         std::fs::remove_dir_all(profile).unwrap();
     }
+
+    #[test]
+    fn maximum_file_size_keeps_exact_drafts_and_only_saves_a_valid_cap() {
+        use super::super::compare::Encoded;
+        use captures_media::QualityPreset;
+        let (mut w, profile) = fixture();
+        let accept = |w: &mut Recording| {
+            let mut p = w.presented.take().unwrap();
+            p.output = w.output.values.clone();
+            (p.edit, p.export) = p.output.specs(p.width, p.height, p.edit, p.export);
+            p.revision += 1;
+            w.apply_outcome(Outcome::Preview(w.timeline.generation, Box::new(p), None));
+        };
+        let typed = |w: &mut Recording, text: &str| {
+            w.set_focus(Some(Target::MaximumSize), true);
+            w.set_output_number(Target::MaximumSize, text);
+        };
+        let cap = |w: &Recording| w.presented.as_ref().unwrap().export.max_size_bytes;
+        w.layout().unwrap();
+        assert!(!w.shown(Target::MaximumSize));
+        w.choose_output(Target::QualityMode, 2);
+        accept(&mut w);
+        assert!(w.shown(Target::MaximumSize) && w.shown(Target::MaximumUnit));
+        assert_eq!(w.output_value(Target::MaximumSize), "10");
+        assert_eq!(w.maximum_estimate(), "≤ 10.0 MB");
+        assert_eq!(cap(&w), Some(10_000_000));
+        assert_eq!(
+            w.presented.as_ref().unwrap().export.quality,
+            QualityPreset::Preserve
+        );
+
+        // Unit changes convert the exact bytes, not an f64 or 8-digit display.
+        typed(&mut w, "123.456789");
+        for (unit, text) in [(0, "123456.789"), (2, "0.123456789"), (1, "123.456789")] {
+            w.choose_output(Target::MaximumUnit, unit);
+            assert_eq!(w.output_value(Target::MaximumSize), text);
+            assert_eq!(w.output.values.maximum_bytes, 123_456_789);
+        }
+        // Extra digits floor to whole bytes, as shipping's Math.floor.
+        typed(&mut w, "0.1000009");
+        assert_eq!(w.output.values.maximum_bytes, 100_000);
+
+        // 100 KB is the inclusive minimum in every unit.
+        w.choose_output(Target::MaximumUnit, 0);
+        typed(&mut w, "99.999");
+        assert_eq!(w.maximum_estimate(), "—");
+        assert_eq!(
+            w.output.values.maximum_bytes, 100_000,
+            "invalid keeps accepted"
+        );
+        typed(&mut w, "100");
+        assert_eq!(w.maximum_estimate(), "≤ 100 KB");
+        w.choose_output(Target::MaximumUnit, 2);
+        assert_eq!(w.output_value(Target::MaximumSize), "0.0001");
+        typed(&mut w, "0.0000999");
+        assert_eq!(w.maximum_estimate(), "—");
+
+        // Steps follow the unit and shipping's toFixed; unreadable text starts
+        // from the minimum and below-minimum text clamps up to it.
+        w.key(VK_UP);
+        assert_eq!(w.output_value(Target::MaximumSize), "0.0002");
+        w.key(VK_UP);
+        assert_eq!(w.output_value(Target::MaximumSize), "0.0003");
+        w.choose_output(Target::MaximumUnit, 1);
+        typed(&mut w, "0.15");
+        w.key(VK_UP);
+        assert_eq!(w.output_value(Target::MaximumSize), "0.3");
+        typed(&mut w, "0.1");
+        w.key(VK_DOWN);
+        assert_eq!(w.output_value(Target::MaximumSize), "0.1");
+        w.choose_output(Target::MaximumUnit, 0);
+        typed(&mut w, "");
+        w.key(VK_UP);
+        assert_eq!(w.output_value(Target::MaximumSize), "100");
+        typed(&mut w, "not a number");
+        w.key(VK_UP);
+        assert_eq!(w.output_value(Target::MaximumSize), "101");
+        typed(&mut w, "50");
+        w.key(VK_UP);
+        assert_eq!(w.output_value(Target::MaximumSize), "100");
+        accept(&mut w);
+        assert_eq!(cap(&w), Some(100_000));
+
+        // An invalid draft survives blur and unit changes, never clamps, and
+        // cannot save the previously accepted limit.
+        w.saved_fingerprint = Some((w.destination(), w.make_copy));
+        assert!(!w.enabled(Target::Save));
+        typed(&mut w, "50");
+        w.set_focus(Some(Target::Filename), true);
+        assert_eq!(w.output_value(Target::MaximumSize), "50");
+        w.choose_output(Target::MaximumUnit, 1);
+        assert_eq!(w.output_value(Target::MaximumSize), "0.05");
+        accept(&mut w);
+        assert!(w.enabled(Target::Save), "Save explains the draft");
+        w.activate(Target::Save);
+        assert!(!w.saving && w.error && w.status == ui::MAXIMUM_SIZE_ERROR);
+        assert_eq!(cap(&w), Some(100_000));
+        // No comparison can show a cap the draft no longer states.
+        assert!(!w.compare.pending && w.compare.encoded.is_none());
+
+        // A valid edit supersedes older comparisons; only the accepted cap shows.
+        typed(&mut w, "2.5");
+        let stale = w.compare.generation;
+        assert!(w.timeline.pending && !w.enabled(Target::Save));
+        accept(&mut w);
+        assert_eq!(cap(&w), Some(2_500_000));
+        let p = w.presented.as_ref().unwrap();
+        let (revision, position_ms) = (p.revision, p.position_ms);
+        let encoded = |bytes| {
+            Ok(Encoded {
+                revision,
+                position_ms,
+                before: frame(1920, 1080),
+                after: frame(1920, 1080),
+                bytes,
+            })
+        };
+        w.apply_outcome(Outcome::Comparison(stale, encoded(100_000)));
+        assert!(w.compare.encoded.is_none());
+        w.apply_outcome(Outcome::Comparison(
+            w.compare.generation,
+            encoded(2_500_000),
+        ));
+        assert_eq!(w.compare.encoded.as_ref().map(|e| e.bytes), Some(2_500_000));
+        assert!(w.enabled(Target::Save));
+
+        // Leaving Maximum clears the cap; returning restores the kept draft.
+        w.choose_output(Target::QualityMode, 1);
+        accept(&mut w);
+        assert!(!w.shown(Target::MaximumSize) && w.shown(Target::Quality));
+        assert_eq!(cap(&w), None);
+        assert_eq!(
+            w.presented.as_ref().unwrap().export.quality,
+            ui::DEFAULT_COMPRESS_PRESET
+        );
+        w.choose_output(Target::QualityMode, 0);
+        accept(&mut w);
+        assert_eq!(cap(&w), None);
+        w.choose_output(Target::QualityMode, 2);
+        accept(&mut w);
+        assert_eq!(w.output_value(Target::MaximumSize), "2.5");
+        assert_eq!(cap(&w), Some(2_500_000));
+
+        // GIF offers Compress and Maximum; a capped GIF keeps its palette.
+        let p = w.presented.as_mut().unwrap();
+        p.export.format = captures_media::ExportFormat::Gif;
+        p.mime_type = "image/gif".into();
+        w.output.values.mode = ui::QualityMode::Compress;
+        w.choose_output(Target::Quality, 0);
+        let modes: Vec<_> = w
+            .output_choices(Target::QualityMode)
+            .into_iter()
+            .map(|c| c.label)
+            .collect();
+        assert_eq!(modes, ["Compress", "Maximum file size"]);
+        w.choose_output(Target::QualityMode, 1);
+        accept(&mut w);
+        let export = &w.presented.as_ref().unwrap().export;
+        assert_eq!(
+            (export.quality, export.max_size_bytes, export.gif_max_colors),
+            (QualityPreset::Preserve, Some(2_500_000), Some(64))
+        );
+        drop(w);
+        std::fs::remove_dir_all(profile).unwrap();
+    }
 }
