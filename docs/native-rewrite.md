@@ -669,6 +669,14 @@ skips keys while a field edits), and the Layer W/H/X/Y fields commit each
 valid keystroke (`onChange`), so "50" is two undo steps and a partial "3" in
 Width resizes. Windows: cross-compiled only. macOS, Linux: unchanged.
 
+Editor selects on Alt+Down (hardware pass 15): the editor window had no
+system-key handling, so Alt+Down and Alt+Up reached DefWindowProc. On a
+focused Font, Aspect or zoom preset select they now open it, or close an
+open one keeping its choice, like the Preferences selects (#1242, #1243).
+The Text style picker is a button and keeps Enter and Space. Other Alt
+chords stay with DefWindowProc. Windows: cross-compiled only. macOS, Linux:
+unchanged.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,
