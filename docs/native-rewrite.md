@@ -677,6 +677,18 @@ The Text style picker is a button and keeps Enter and Space. Other Alt
 chords stay with DefWindowProc. Windows: cross-compiled only. macOS, Linux:
 unchanged.
 
+The pass-18 Windows Chromium reference refines those three HTML selects:
+arrows change the trigger's provisional value while leaving the document
+untouched. Closing with Escape, Alt+Up/Down or an outside click commits that
+keyboard choice once. Hover changes only the highlighted row; Enter, Tab
+or clicking accepts it, and Tab closes without leaving the trigger. Arrow
+navigation clamps rather than wraps. The Win32 host keeps these two states
+separate so hovering after keyboard navigation cannot overwrite its choice
+on Escape, and a series of font arrows creates only one document edit.
+The Preferences CustomSelect and Text style menu keep their existing behavior.
+Windows: regression drives pointer/key messages through the offscreen editor;
+physical follow-up remains open. macOS, X11 and Wayland unchanged/unverified.
+
 Properties scroll (hardware pass 15): shipping's `.screenshot-properties` is
 one scroller that stays mounted, so a tool or selection change keeps its
 `scrollTop` (clamped when the content gets shorter). The host reset it to

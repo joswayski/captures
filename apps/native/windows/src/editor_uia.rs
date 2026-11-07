@@ -602,7 +602,7 @@ fn value(e: &Editor, id: Id) -> Option<String> {
         Id::Control(Target::Prop(prop @ (Prop::Number(_) | Prop::Textarea))) => e.field_text(prop),
         Id::Control(Target::Prop(prop @ (Prop::Font | Prop::Aspect | Prop::Preset))) => {
             let kind = trigger_kind(Id::Control(Target::Prop(prop)))?;
-            e.menu_selected(kind)
+            e.menu_displayed(kind)
                 .and_then(|i| e.menu_items(kind).into_iter().nth(i))
                 .unwrap_or_default()
         }
@@ -823,7 +823,7 @@ fn writable(id: Id) -> bool {
 }
 
 fn item_selected(e: &Editor, index: usize) -> bool {
-    menu_kind(e).is_some_and(|kind| e.menu_selected(kind) == Some(index))
+    menu_kind(e).is_some_and(|kind| e.menu_displayed(kind) == Some(index))
 }
 
 impl IRawElementProviderFragment_Impl for Node_Impl {

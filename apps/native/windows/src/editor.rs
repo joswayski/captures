@@ -6131,6 +6131,84 @@ mod tests {
     use captures_app::editor_image_background::BrushMode;
     use image::Rgba;
 
+    /// Windows Chromium keeps pointer highlight separate from the provisional
+    /// keyboard value, and applies the document change only when closing.
+    #[test]
+    fn html_selects_commit_keyboard_choices_but_not_hover_on_dismissal() {
+        use windows::Win32::System::Com::*;
+        unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok().unwrap() };
+        let data = std::env::temp_dir().join(format!("captures-select-{}", std::process::id()));
+        let capture = captures_app::persist_screenshot(
+            &data.join("history"),
+            &RgbaImage::from_pixel(640, 360, Rgba([20, 50, 80, 255])),
+            CaptureMode::Region,
+        )
+        .unwrap();
+        let options = crate::parse(
+            [
+                "test".into(),
+                "--profile".into(),
+                data.to_string_lossy().into_owned(),
+                "--scene".into(),
+                "editor".into(),
+                "--artifact".into(),
+                capture.entry.id,
+            ]
+            .into_iter(),
+        )
+        .unwrap();
+        let tokens = crate::appearance::tokens(Some("light"), &Default::default());
+        let mut e = render_offscreen(
+            &options,
+            Gfx::new(&tokens, false).unwrap(),
+            tokens,
+            (1280., 840.),
+        )
+        .unwrap();
+        let key = |e: &mut Editor, vk: VIRTUAL_KEY| {
+            e.handle(WM_KEYDOWN, WPARAM(vk.0 as usize), LPARAM(0));
+        };
+        let hover = |e: &mut Editor, index| {
+            let r = e.menu_item_rect(index);
+            let (x, y) = ((r.x + r.w / 2.) as u32, (r.y + r.h / 2.) as u32);
+            e.handle(WM_MOUSEMOVE, WPARAM(0), LPARAM((x | (y << 16)) as isize));
+        };
+        e.select_tool("c");
+        e.prepare().unwrap();
+        e.set_focus(Some(Target::Prop(Prop::Aspect)), true);
+        e.set_menu(MenuKind::Aspect, true);
+        assert!(e.menu_open(MenuKind::Aspect));
+        hover(&mut e, 2);
+        assert_eq!(e.menu_displayed(MenuKind::Aspect), Some(0));
+        key(&mut e, VK_ESCAPE);
+        assert_eq!(e.crop_aspect, 0, "hover-only Escape keeps Free");
+
+        e.set_menu(MenuKind::Aspect, true);
+        key(&mut e, VK_DOWN);
+        key(&mut e, VK_DOWN);
+        assert_eq!(e.menu_displayed(MenuKind::Aspect), Some(2));
+        assert_eq!(e.crop_aspect, 0, "open navigation does not change the crop");
+        hover(&mut e, 3);
+        key(&mut e, VK_ESCAPE);
+        assert_eq!(e.crop_aspect, 2, "Escape keeps keyboard, not later hover");
+
+        e.set_menu(MenuKind::Aspect, true);
+        hover(&mut e, 3);
+        key(&mut e, VK_TAB);
+        assert_eq!(e.crop_aspect, 3, "Tab accepts even a hover-only choice");
+        assert_eq!(e.focus, Some(Target::Prop(Prop::Aspect)));
+        assert!(!e.menu_open(MenuKind::Aspect));
+        e.set_menu(MenuKind::Aspect, true);
+        key(&mut e, VK_HOME);
+        key(&mut e, VK_UP);
+        assert_eq!(e.menu_displayed(MenuKind::Aspect), Some(0), "no wrapping");
+        e.set_focus(Some(Target::Fit), true);
+        assert_eq!(e.crop_aspect, 0, "outside focus commits keyboard choice");
+        drop(e);
+        std::fs::remove_dir_all(data).unwrap();
+        unsafe { CoUninitialize() };
+    }
+
     /// Pass 15: a staged crop dims the whole canvas, so its overlay bounds
     /// stay the same while the rectangle changes; it must still redraw.
     #[test]
