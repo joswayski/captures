@@ -203,10 +203,10 @@ data and do not join the public update channel. The detailed native development
 notes below describe implemented slices, not completion of physical acceptance
 or approval to replace the public app.
 
-The Win32 workbench can open a recording from History into its first recording
-editor slice: filename, save location, Save as new file, replacement, cancellation
-and Show in Folder. Playback, the trim timeline, output options and recording crop
-remain migration work; this shell is not recording-editor parity.
+The Win32 workbench can open recordings from History, preview video and GIFs,
+switch between Fit and 100%, and save copies or replace the original with
+cancellation and Show in Folder. The trim timeline, output options and recording
+crop remain migration work; these slices are not recording-editor parity.
 
 The native capture workspace connects full-display
 PNG capture, local screenshot history, copy, export, and deletion to

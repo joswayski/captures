@@ -16,10 +16,17 @@ and save footer: filename editing, Change save location, Save as new file with
 the `-edited` suggestion, replacement, progress, Cancel and Show in Folder.
 The shared recording session and media tools run on a worker; closing cancels
 work and waits for replacement/history cleanup before destroying the window.
-Playback, trim and format/quality/audio/crop controls are not connected yet.
+The preview displays retained decoded frames, plays/pauses video with source
+audio and Loop preview, and autoplays GIFs without video-only controls.
+Fit contains the media; 100% maps source pixels to DIPs and scrolls with the
+wheel (Shift+wheel horizontally). The media worker retains only its newest
+frame while the UI is busy; pause/restart generations discard stale frames.
+Trim and format/quality/audio-mix/crop controls, preview scrollbars and the
+full scrollable editor layout are not connected yet.
 This slice preserves the source's MP4/GIF format; WebM saves report unsupported.
 The filename exposes UIA Value, the copy switch
-Toggle, and actions Invoke; Narrator/Text-pattern acceptance remains open.
+and preview modes expose Toggle, and actions Invoke; Narrator/Text-pattern
+and physical playback/audio acceptance remain open.
 
 ```powershell
 node apps/native/prepare.mjs --output apps/native/windows/resources
