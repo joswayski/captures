@@ -687,14 +687,22 @@ separate so hovering after keyboard navigation cannot overwrite its choice
 on Escape, and a series of font arrows creates only one document edit.
 The Preferences CustomSelect and Text style menu keep their existing behavior.
 Windows: regression drives pointer/key messages through the offscreen editor;
-physical follow-up remains open. macOS, X11 and Wayland unchanged/unverified.
+real Windows pass 20 at 150% verified provisional UIA values, unchanged canvas
+pixels/drafts while open, all keyboard/hover close paths, clamping and retained
+Tab focus. Font navigation commits one undo step; zoom adds none. macOS, X11
+and Wayland unchanged/unverified.
 
 Pass 18 also traced the apparent Layers-wheel failure to a lone Alt entering
 Windows' default menu loop, not to wheel routing. Preferences, History and both
 editors have no menu bar, so they consume only `SC_KEYMENU` with no character.
 Alt+Space and other system commands still reach Windows. This keeps a lone
-Alt/F10 from suspending ordinary wheel input or repaint; physical follow-up
-remains open, with Alt-select chords and Alt+F4 included as controls.
+Alt/F10 from suspending ordinary wheel input or repaint. Pass 20 verified flags
+stay 0x0 after real Alt/F10 input (previously 0xC), wheel and hover still work,
+Alt+Space opens every system menu, Alt+F4 closes all four windows, and layer
+Alt+Up/Down reorder and select chords retain their behavior. The recording
+shell has no scrollable content yet; filename typing and hover were verified.
+The release build completed in 15 s without warnings; real-pointer clips and
+UIA/draft/pixel logs cover these checks.
 
 Properties scroll (hardware pass 15): shipping's `.screenshot-properties` is
 one scroller that stays mounted, so a tool or selection change keeps its
