@@ -288,7 +288,10 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertFalse(flyout.isHidden, "Shapes opens its flyout")
             XCTAssertTrue(controller.window.firstResponder === flyout.buttons[0].button)
             XCTAssertEqual(flyout.frame.minX, rail[3].frame.maxX + 10)
-            XCTAssertEqual(flyout.frame.size, NSSize(width: CGFloat(6 + 3 * 44 + 2 * 4 + 6), height: CGFloat(6 + 2 * 44 + 4 + 6)),
+            // Typed parts keep Xcode 26.6's type checker from timing out.
+            let flyoutWidth: CGFloat = 6 + 3 * 44 + 2 * 4 + 6
+            let flyoutHeight: CGFloat = 6 + 2 * 44 + 4 + 6
+            XCTAssertEqual(flyout.frame.size, NSSize(width: flyoutWidth, height: flyoutHeight),
                            "three 44pt columns, --s-2 gaps and --s-3 padding")
             XCTAssertEqual(flyout.buttons.map { $0.button.toolTip ?? "" },
                            ["Rectangle (R)", "Ellipse (O)", "Line (L)", "Triangle", "Diamond (D)", "Star (S)"])
