@@ -717,6 +717,18 @@ it does for the CSS animation. Deviation: the spread stays at 5 px and only
 the alpha moves. Windows: cross-compiled only, Wine render of the ring at
 its peak (temporary, removed hook). macOS, Linux: unchanged.
 
+Hardware pass 16 verified crop dragging/dashes/apply/undo, field commits,
+Properties scroll, rename selection and reorder, compositor pulse idle,
+and final-window shutdown. Follow-up fixes keep the dragged row's 0.42
+opacity through hover and layout refreshes, fit annotation thumbnails with
+3 px padding instead of cropping them like image thumbnails, and paint crop
+dimming as one even-odd shape so fractional edges between four translucent
+rectangles cannot leave seams. Image thumbnails retain cover fitting.
+The drop indicator below a locked background is unchanged: Tauri also places
+its hint by pointer half while its reorder clamps to the unlocked run.
+Windows: cross-target clippy passed; rendered/hardware follow-up pending.
+macOS, X11 and Wayland: unchanged; these fixes touch only the Win32 host.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,

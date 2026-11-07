@@ -26,7 +26,7 @@ const COPY_GAP: f32 = 2.;
 /// uses to start an HTML drag.
 const DRAG_START: f32 = 4.;
 /// `li.dragging { opacity: 0.42 }`.
-const DRAGGING_OPACITY: f32 = 0.42;
+pub(super) const DRAGGING_OPACITY: f32 = 0.42;
 /// The drop line: 2 px tall, 3 px in from each side, 4 px outside the row,
 /// with `box-shadow: 0 0 8px`.
 pub const DROP_LINE_H: f32 = 2.;
@@ -501,12 +501,9 @@ impl Editor {
                 return;
             }
             drag.active = true;
-            let from = drag.from;
             // A drag is not a click.
             self.pressed = None;
-            let base = self.layered(Target::Layer(from)).base;
-            self.nodes[base].opacity = DRAGGING_OPACITY;
-            self.nodes[base].props = true;
+            self.refresh(false);
             self.need = true;
         }
         let from = self.row_drag.as_ref().map_or(0, |d| d.from);
@@ -557,7 +554,7 @@ impl Editor {
         if !drag.active {
             return false;
         }
-        self.end_row_drag(drag.from);
+        self.end_row_drag();
         if let Some(i) = self.row_at(x, y).filter(|&i| i != drag.from)
             && let Some(target) = self.layer(i).map(|l| l.id.clone())
         {
@@ -574,19 +571,15 @@ impl Editor {
     pub(super) fn cancel_row_drag(&mut self) -> bool {
         match self.row_drag.take() {
             Some(drag) if drag.active => {
-                self.end_row_drag(drag.from);
+                self.end_row_drag();
                 true
             }
             _ => false,
         }
     }
 
-    fn end_row_drag(&mut self, from: usize) {
-        if from < self.rows {
-            let base = self.layered(Target::Layer(from)).base;
-            self.nodes[base].opacity = 1.;
-            self.nodes[base].props = true;
-        }
+    fn end_row_drag(&mut self) {
+        self.refresh(false);
         self.set_visible(self.drop_line, false);
         self.need = true;
     }

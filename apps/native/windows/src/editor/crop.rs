@@ -236,15 +236,24 @@ impl Editor {
         };
         let (l, tp) = (r.x as f32, r.y as f32);
         let (rr, bt) = ((r.x + r.width) as f32, (r.y + r.height) as f32);
-        for part in [
-            rect(l, tp, rr, a.1),
-            rect(l, b.1, rr, bt),
-            rect(l, a.1, a.0, b.1),
-            rect(b.0, a.1, rr, b.1),
-        ] {
-            if part.right > part.left && part.bottom > part.top {
-                gfx::fill(dc, part, shade)?;
+        unsafe {
+            // One even-odd fill avoids translucent antialias seams where
+            // the old four rectangles met at fractional device pixels.
+            let dim = self.g.factory.CreatePathGeometry()?;
+            let sink = dim.Open()?;
+            sink.SetFillMode(D2D1_FILL_MODE_ALTERNATE);
+            for area in [rect(l, tp, rr, bt), rect(a.0, a.1, b.0, b.1)] {
+                let point = |x, y| windows_numerics::Vector2 { X: x, Y: y };
+                sink.BeginFigure(point(area.left, area.top), D2D1_FIGURE_BEGIN_FILLED);
+                sink.AddLines(&[
+                    point(area.right, area.top),
+                    point(area.right, area.bottom),
+                    point(area.left, area.bottom),
+                ]);
+                sink.EndFigure(D2D1_FIGURE_END_CLOSED);
             }
+            sink.Close()?;
+            dc.FillGeometry(&dim, &gfx::brush(dc, shade)?, None);
         }
         let white = D2D1_COLOR_F {
             r: 1.,
