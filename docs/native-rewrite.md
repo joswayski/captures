@@ -677,6 +677,16 @@ The Text style picker is a button and keeps Enter and Space. Other Alt
 chords stay with DefWindowProc. Windows: cross-compiled only. macOS, Linux:
 unchanged.
 
+Properties scroll (hardware pass 15): shipping's `.screenshot-properties` is
+one scroller that stays mounted, so a tool or selection change keeps its
+`scrollTop` (clamped when the content gets shorter). The host reset it to
+the top on both; it now keeps it and lets the next layout clamp it. Left as
+is because Tauri does the same: Tab from Canvas height reaches Trim (DOM
+order Canvas W, H, Trim, Background), and the Background card (portalled to
+the end of `body`) stays open when Tab leaves it and, on an outside press,
+closes with focus on the root (the canvas isn't focusable). Windows:
+cross-compiled only. macOS, Linux: unchanged.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,
