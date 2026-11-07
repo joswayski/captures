@@ -603,6 +603,14 @@ impl Recording {
                     Err(error) => self.notify(&error, true),
                 }
                 self.refresh_footer();
+                if self.focus == Some(Target::Cancel) && !self.closing {
+                    let target = if self.enabled(Target::Save) {
+                        Target::Save
+                    } else {
+                        Target::Reveal
+                    };
+                    self.set_focus(Some(target), self.focus_visible);
+                }
             }
             Outcome::Revealed(Err(error)) => self.notify(&error, true),
             Outcome::Revealed(Ok(())) => {}
@@ -861,11 +869,15 @@ impl Recording {
                     )?;
                 }
                 if focused {
-                    gfx::border(dc, local, t.n("r-md"), 2., t.color("theme-accent"))?;
+                    gfx::ring(dc, local, t.n("r-md"), 2., 4., t.color("theme-accent"))?;
                 }
             }
         }
         Ok(())
+    }
+
+    fn bleed(&self, index: usize) -> f32 {
+        if index >= 5 { 4. } else { 0. }
     }
 
     fn opacity(&self, index: usize) -> f32 {
@@ -898,11 +910,17 @@ impl Recording {
                 continue;
             }
             let r = self.rects[index];
+            let bleed = self.bleed(index);
             unsafe {
                 dc.SetTransform(&Matrix3x2::identity());
                 dc.PushLayer(
                     &D2D1_LAYER_PARAMETERS1 {
-                        contentBounds: gfx::rect(r.x, r.y, r.x + r.w, r.y + r.h),
+                        contentBounds: gfx::rect(
+                            r.x - bleed,
+                            r.y - bleed,
+                            r.x + r.w + bleed,
+                            r.y + r.h + bleed,
+                        ),
                         opacity,
                         maskTransform: Matrix3x2::identity(),
                         ..Default::default()
@@ -930,10 +948,9 @@ impl Recording {
             }
             let r = self.rects[index];
             let s = self.scale;
-            let size = (
-                (r.w * s).round().max(1.) as u32,
-                (r.h * s).round().max(1.) as u32,
-            );
+            let bleed = (self.bleed(index) * s).ceil();
+            let inner = ((r.w * s).round().max(1.), (r.h * s).round().max(1.));
+            let size = ((inner.0 + 2. * bleed) as u32, (inner.1 + 2. * bleed) as u32);
             if self.layers[index]
                 .surface
                 .as_ref()
@@ -953,14 +970,14 @@ impl Recording {
             gfx::draw_surface(
                 surface,
                 size,
-                (size.0 as f32 / r.w.max(1.), size.1 as f32 / r.h.max(1.)),
-                0.,
+                (inner.0 / r.w.max(1.), inner.1 / r.h.max(1.)),
+                bleed,
                 |dc| self.draw(dc, index),
             )?;
             let visual = &self.layers[index].visual;
             unsafe {
-                visual.SetOffsetX2((r.x * s).round())?;
-                visual.SetOffsetY2((r.y * s).round())?;
+                visual.SetOffsetX2((r.x * s).round() - bleed)?;
+                visual.SetOffsetY2((r.y * s).round() - bleed)?;
                 let opacity = self.opacity(index);
                 visual.SetOpacity2(opacity)?;
                 if index == CARET && opacity > 0. {
