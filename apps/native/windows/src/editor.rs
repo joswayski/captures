@@ -357,6 +357,32 @@ pub struct LayerItem {
     pub visibility_label: String,
     pub lock_label: String,
     pub menu_label: String,
+    /// The session's row thumbnail (`refresh_layer_thumbnails`), if any.
+    pub thumb: Option<Arc<Thumb>>,
+}
+
+/// A layer row thumbnail as premultiplied BGRA, converted once on the
+/// worker when the session renders a new one.
+pub struct Thumb {
+    pub width: u32,
+    pub height: u32,
+    pub bgra: Vec<u8>,
+}
+
+impl Thumb {
+    fn from_rgba(image: &RgbaImage) -> Self {
+        let mut bgra = Vec::with_capacity(image.as_raw().len());
+        for px in image.pixels() {
+            let [r, g, b, a] = px.0;
+            let p = |c: u8| ((u16::from(c) * u16::from(a) + 127) / 255) as u8;
+            bgra.extend_from_slice(&[p(b), p(g), p(r), a]);
+        }
+        Thumb {
+            width: image.width(),
+            height: image.height(),
+            bgra,
+        }
+    }
 }
 
 /// Changed document pixels as premultiplied BGRA: only the `damage`
@@ -761,6 +787,9 @@ fn diff(old: &RgbaImage, new: &RgbaImage) -> Option<(u32, u32, u32, u32)> {
 struct Published {
     base: Option<Arc<RgbaImage>>,
     chain: Option<(Weak<RgbaImage>, PixelRect)>,
+    /// The thumbnails last sent, by layer ID, with the session image each
+    /// came from: an unchanged layer reuses its conversion.
+    thumbs: BTreeMap<String, (Arc<RgbaImage>, Arc<Thumb>)>,
 }
 
 /// `(x, y, width, height)` in canvas pixels.
@@ -845,7 +874,22 @@ fn union(a: (u32, u32, u32, u32), b: (u32, u32, u32, u32)) -> (u32, u32, u32, u3
     (x0, y0, x1 - x0, y1 - y0)
 }
 
-fn present(session: &EditorSession, artifact_id: &str, published: &mut Published) -> Presented {
+fn present(session: &mut EditorSession, artifact_id: &str, published: &mut Published) -> Presented {
+    // Only layers whose preview changed re-render (at most 64 px).
+    session.refresh_layer_thumbnails();
+    let mut thumbs = BTreeMap::new();
+    for element in &session.snapshot().document.elements {
+        let id = &element.base().id;
+        let Some(image) = session.layer_thumbnail(id) else {
+            continue;
+        };
+        let thumb = match published.thumbs.get(id) {
+            Some((source, thumb)) if Arc::ptr_eq(source, &image) => thumb.clone(),
+            _ => Arc::new(Thumb::from_rgba(&image)),
+        };
+        thumbs.insert(id.clone(), (image, thumb));
+    }
+    published.thumbs = thumbs;
     let snapshot = session.snapshot();
     let layers = snapshot
         .document
@@ -865,6 +909,7 @@ fn present(session: &EditorSession, artifact_id: &str, published: &mut Published
                 visibility_label: editor_chrome::visibility_label(element),
                 lock_label: editor_chrome::lock_label(element),
                 menu_label: editor_chrome::menu_label(element),
+                thumb: published.thumbs.get(&base.id).map(|(_, t)| t.clone()),
             }
         })
         .collect();
@@ -976,7 +1021,8 @@ fn spawn_worker(
                 Some(captures_app::editor_fonts::bundled()),
             ) {
                 Ok(opened) => {
-                    let first = present(&opened, &id, &mut published);
+                    let mut opened = opened;
+                    let first = present(&mut opened, &id, &mut published);
                     if !send(Outcome::Presented(Box::new(first))) {
                         return;
                     }
@@ -4214,16 +4260,19 @@ impl Editor {
                     t.n("r-sm"),
                     t.color_alpha("canvas-checker-b", fade),
                 )?;
+                match &layer.thumb {
+                    Some(thumb) => draw_thumb(dc, thumb, preview, t.n("r-sm"), fade)?,
+                    None => gfx::icon(
+                        dc,
+                        &g.factory,
+                        layer.icon,
+                        &[],
+                        (px + 13., (h - 18.) / 2., 18.),
+                        1.7,
+                        t.color_alpha("text-muted", fade),
+                    )?,
+                }
                 gfx::border(dc, preview, t.n("r-sm"), 1., t.color_alpha("border", fade))?;
-                gfx::icon(
-                    dc,
-                    &g.factory,
-                    layer.icon,
-                    &[],
-                    (px + 13., (h - 18.) / 2., 18.),
-                    1.7,
-                    t.color_alpha("text-muted", fade),
-                )?;
                 let cx = px + 44. + s4;
                 let room = (w - cx - s3 - 3. * QUICK.0 - 4. - s3).max(1.);
                 let name = g.text(t, Style::Button, &layer.name, 1e4)?;
@@ -5393,6 +5442,79 @@ fn bitmap(
     }
 }
 
+/// `.screenshot-layer-preview img { object-fit: cover }`, clipped to the
+/// well's rounded corners and faded with a hidden layer.
+fn draw_thumb(
+    dc: &ID2D1DeviceContext,
+    thumb: &Thumb,
+    well: D2D_RECT_F,
+    radius: f32,
+    opacity: f32,
+) -> Result<()> {
+    if thumb.width == 0 || thumb.height == 0 {
+        return Ok(());
+    }
+    let bitmap = unsafe {
+        dc.CreateBitmap(
+            D2D_SIZE_U {
+                width: thumb.width,
+                height: thumb.height,
+            },
+            Some(thumb.bgra.as_ptr() as *const _),
+            thumb.width * 4,
+            &D2D1_BITMAP_PROPERTIES1 {
+                pixelFormat: D2D1_PIXEL_FORMAT {
+                    format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                    alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+                },
+                dpiX: 96.,
+                dpiY: 96.,
+                bitmapOptions: D2D1_BITMAP_OPTIONS_NONE,
+                colorContext: std::mem::ManuallyDrop::new(None),
+            },
+        )?
+    };
+    let (ww, wh) = (well.right - well.left, well.bottom - well.top);
+    let (tw, th) = (thumb.width as f32, thumb.height as f32);
+    let scale = (ww / tw).max(wh / th);
+    let (dw, dh) = (tw * scale, th * scale);
+    let x = well.left + (ww - dw) / 2.;
+    let y = well.top + (wh - dh) / 2.;
+    let factory = unsafe { dc.GetFactory()? };
+    let clip = unsafe {
+        factory.CreateRoundedRectangleGeometry(&D2D1_ROUNDED_RECT {
+            rect: well,
+            radiusX: radius,
+            radiusY: radius,
+        })?
+    };
+    let mut layer = D2D1_LAYER_PARAMETERS1 {
+        contentBounds: well,
+        geometricMask: std::mem::ManuallyDrop::new(Some(clip.cast()?)),
+        maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+        maskTransform: Matrix3x2::identity(),
+        opacity: 1.,
+        ..Default::default()
+    };
+    unsafe {
+        dc.PushAxisAlignedClip(&well, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+        dc.PushLayer(&layer, None::<&ID2D1Layer>);
+        dc.DrawBitmap(
+            &bitmap,
+            Some(&rect(x, y, x + dw, y + dh)),
+            opacity,
+            D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
+            None,
+            None,
+        );
+        dc.PopLayer();
+        dc.PopAxisAlignedClip();
+        // Release the mask reference the parameters own.
+        std::mem::ManuallyDrop::drop(&mut layer.geometricMask);
+    }
+    Ok(())
+}
+
 /// A round-capped, round-joined polyline.
 fn polyline(
     dc: &ID2D1DeviceContext,
@@ -5765,7 +5887,8 @@ pub fn render_offscreen(
         Some(captures_app::editor_fonts::bundled()),
     )
     .map_err(fail)?;
-    let presented = present(&session, &id, &mut Published::default());
+    let mut session = session;
+    let presented = present(&mut session, &id, &mut Published::default());
     let mode = entry.mode.unwrap_or(CaptureMode::Region);
     let mut editor = Editor::new(
         HWND::default(),
