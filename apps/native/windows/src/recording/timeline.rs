@@ -89,7 +89,13 @@ impl Recording {
         }
         self.saved = None;
         self.saved_fingerprint = None;
-        self.seek_timeline(value);
+        // The export end is exclusive; accept a preview inside the trim
+        // without changing that boundary or comparison's frame identity.
+        self.seek_timeline(if target == Target::TrimEnd {
+            value.saturating_sub(1)
+        } else {
+            value
+        });
         self.events.push(Event::Range(target));
         self.layout_timeline();
     }
@@ -106,8 +112,8 @@ impl Recording {
             .output
             .values
             .specs(p.width, p.height, edit, p.export.clone());
-        // Trim end may equal duration; a preview frame must be inside the
-        // source's final presentation interval, as in the AppKit host.
+        // General source scrubs may lie outside the selected trim. Only the
+        // source's final presentation interval bounds this shared seek path.
         let position_ms = position_ms.min(p.duration_ms.saturating_sub(1));
         self.timeline.resume |= self.preview.playing;
         self.stop_preview();
@@ -162,7 +168,7 @@ impl Recording {
                 self.seek_timeline(if target == Target::TrimStart {
                     self.timeline.start
                 } else {
-                    self.timeline.end
+                    self.timeline.end.saturating_sub(1)
                 });
             } else if track.contains(x, y) {
                 self.timeline.scrubbing = true;

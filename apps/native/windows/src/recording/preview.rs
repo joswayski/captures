@@ -701,6 +701,12 @@ mod tests {
         assert_eq!(w.trim_range(Target::TrimStart), Some((1001, 0, 5999)));
         w.set_trim(Target::TrimEnd, 4200.);
         assert_eq!(w.trim_range(Target::TrimEnd), Some((4200, 1002, 6000)));
+        assert_eq!(w.preview.position_ms, 4199, "trim end is exclusive");
+        w.set_focus(Some(Target::TrimEnd), true);
+        let end = w.target_rect(Target::TrimEnd);
+        assert!(w.timeline_pointer(WM_LBUTTONDOWN, end.x + end.w / 2., end.y + end.h / 2.));
+        assert_eq!((w.timeline.end, w.preview.position_ms), (4200, 4199));
+        w.end_timeline_drag();
 
         // Full-duration trim endpoints are valid, but preview seeks must
         // remain inside the source's final presentation interval.
@@ -759,6 +765,10 @@ mod tests {
         assert_eq!(w.trim_range(Target::TrimStart), Some((4999, 0, 4999)));
         w.set_trim(Target::TrimEnd, 0.);
         assert_eq!(w.trim_range(Target::TrimEnd), Some((5000, 5000, 6000)));
+        assert_eq!(
+            w.preview.position_ms, 4999,
+            "one-millisecond trim previews its start"
+        );
 
         w.presented.as_mut().unwrap().duration_ms = 75_000;
         w.set_trim(Target::TrimEnd, 74_990.);
