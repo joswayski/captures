@@ -150,6 +150,10 @@ pub fn can_arrange(document: &Document, id: &str, front: bool) -> bool {
 /// preview box at 2x).
 pub const THUMBNAIL_SIZE: u32 = 64;
 
+/// Shipping AnnotationLayerPreview's logical canvas, with 3 px containment
+/// padding. Native hosts receive this whole canvas at 2x, not a tight crop.
+pub const ANNOTATION_PREVIEW_SIZE: (u32, u32) = (46, 34);
+
 /// One layer's live thumbnail, cached until the layer changes.
 #[derive(Clone, Debug)]
 pub struct LayerThumbnail {
@@ -177,12 +181,13 @@ impl ThumbnailCache {
     }
 
     /// Render missing or stale thumbnails with `render`, which composites a
-    /// one-element document. A layer that fails to render keeps no thumbnail;
-    /// hosts fall back to the kind icon.
+    /// one-element document with the given geometry scale. The document's
+    /// dimensions are output pixels. A layer that fails to render keeps no
+    /// thumbnail; hosts fall back to the kind icon.
     pub fn refresh(
         &mut self,
         document: &Document,
-        mut render: impl FnMut(&Document) -> Result<RgbaImage, String>,
+        mut render: impl FnMut(&Document, f64) -> Result<RgbaImage, String>,
     ) {
         self.entries.retain(|id, _| {
             document
@@ -219,7 +224,8 @@ impl ThumbnailCache {
     }
 }
 
-/// Visibility, lock, opacity, blend and the image name do not change shipping's preview.
+/// Visibility, lock and blend do not change shipping's preview. Image rows use
+/// the source image without layer opacity; annotation canvases keep opacity.
 fn thumbnail_key_matches(cached: &Element, current: &Element) -> bool {
     normalized(cached) == normalized(current)
 }
@@ -229,9 +235,9 @@ fn normalized(element: &Element) -> Element {
     let base = element.base_mut();
     base.visible = true;
     base.locked = false;
-    base.opacity = 100.;
     "source-over".clone_into(&mut base.blend_mode);
     if let Element::Image(image) = &mut element {
+        image.base.opacity = 100.;
         image.name.clear();
     }
     element
@@ -239,7 +245,7 @@ fn normalized(element: &Element) -> Element {
 
 fn render_thumbnail(
     element: &Element,
-    render: &mut impl FnMut(&Document) -> Result<RgbaImage, String>,
+    render: &mut impl FnMut(&Document, f64) -> Result<RgbaImage, String>,
 ) -> Option<RgbaImage> {
     let bounds = element.painted_bounds().ok()?;
     if !(bounds.width.is_finite() && bounds.height.is_finite())
@@ -249,6 +255,38 @@ fn render_thumbnail(
         return None;
     }
     let mut element = normalized(element);
+    if !matches!(element, Element::Image(_)) {
+        let (width, height) = ANNOTATION_PREVIEW_SIZE;
+        let scale = ((f64::from(width) - 6.) / bounds.width.max(1.))
+            .min((f64::from(height) - 6.) / bounds.height.max(1.));
+        // Compute the transform from authored bounds BEFORE widening strokes,
+        // exactly as previewTransformForBounds + withPreviewStrokeFloor do.
+        let style = match &mut element {
+            Element::Shape(shape) => Some(&mut shape.style),
+            Element::Path(path) => Some(&mut path.style),
+            _ => None,
+        };
+        if let Some(style) = style {
+            style.stroke_width = style.stroke_width.max(1.35 / scale);
+        }
+        element
+            .translate_layer(
+                (f64::from(width) / scale - bounds.width) / 2. - bounds.x,
+                (f64::from(height) / scale - bounds.height) / 2. - bounds.y,
+            )
+            .ok()?;
+        return render(
+            &Document {
+                width: f64::from(width * 2),
+                height: f64::from(height * 2),
+                background: None,
+                elements: vec![element],
+                extra: serde_json::Map::new(),
+            },
+            scale * 2.,
+        )
+        .ok();
+    }
     element.translate_layer(-bounds.x, -bounds.y).ok()?;
     let document = Document {
         width: bounds.width.ceil().max(1.),
@@ -257,7 +295,7 @@ fn render_thumbnail(
         elements: vec![element],
         extra: serde_json::Map::new(),
     };
-    let frame = render(&document).ok()?;
+    let frame = render(&document, 1.).ok()?;
     let (width, height) = frame.dimensions();
     let scale = (f64::from(THUMBNAIL_SIZE) / f64::from(width.max(height))).min(1.);
     let target = |side: u32| ((f64::from(side) * scale).round() as u32).max(1);
@@ -358,12 +396,78 @@ mod tests {
     }
 
     #[test]
+    fn annotation_previews_keep_readable_strokes_and_authored_opacity_without_editing_layers() {
+        // Asymmetric document coordinates catch scaling without translation.
+        // Both paths and shapes must retain 1.35 logical px at 2x resolution.
+        for kind in ["shape", "path"] {
+            let element = json!({"kind": kind, "id": "a", "x": 37., "y": 19.,
+                "visible": true, "locked": false, "opacity": 100., "blendMode": "source-over",
+                "shape": "line", "endX": 437., "endY": 19., "controls": [],
+                "points": [{"x": 37., "y": 19.}, {"x": 437., "y": 19.}],
+                "style": {"color": "#ff3b5c", "fill": null, "strokeWidth": 1.,
+                    "strokeEnabled": true, "dropShadow": false}});
+            let mut doc = document(json!({"width": 500., "height": 100.,
+                "background": null, "elements": [element]}));
+            let original = doc.clone();
+            let mut cache = ThumbnailCache::default();
+            let render = |doc: &Document, scale| {
+                crate::editor_render::render_thumbnail_frame(doc, &BTreeMap::new(), None, scale)
+            };
+            let coverage = |image: &RgbaImage| {
+                (0..image.height())
+                    .map(|y| f64::from(image.get_pixel(46, y)[3]) / 255.)
+                    .sum::<f64>()
+            };
+            cache.refresh(&doc, render);
+            let full = cache.get("a").unwrap().image.clone();
+            assert_eq!(full.dimensions(), (92, 68));
+            assert!(
+                (coverage(&full) - 2.7).abs() < 0.12,
+                "{kind}: {}",
+                coverage(&full)
+            );
+            assert_eq!(
+                doc, original,
+                "thumbnail widening must not edit the document"
+            );
+            assert!(
+                full.enumerate_pixels()
+                    .all(|(x, y, p)| (x > 0 && x < 91 && y > 0 && y < 67) || p[3] == 0)
+            );
+
+            doc.elements[0].base_mut().opacity = 25.;
+            cache.refresh(&doc, render);
+            let quarter = cache.get("a").unwrap().image.clone();
+            assert!((coverage(&quarter) - 0.675).abs() < 0.08);
+            assert!(quarter.pixels().all(|p| p[3] <= 64));
+            doc.elements[0].base_mut().visible = false;
+            cache.refresh(&doc, render);
+            assert_eq!(
+                *cache.get("a").unwrap().image,
+                *quarter,
+                "host visibility fade must not hide or double-dim the annotation"
+            );
+
+            // A thick authored stroke must not be replaced by the minimum.
+            doc.elements[0].base_mut().opacity = 100.;
+            match &mut doc.elements[0] {
+                Element::Shape(s) => s.style.stroke_width = 40.,
+                Element::Path(p) => p.style.stroke_width = 40.,
+                _ => unreachable!(),
+            }
+            cache.refresh(&doc, render);
+            assert!(coverage(&cache.get("a").unwrap().image) > 6.);
+        }
+    }
+
+    #[test]
     fn thumbnails_render_each_layer_alone_and_rerender_only_on_change() {
         let mut doc = document(json!({"width": 100., "height": 100., "background": "#fff",
             "elements": [image("a", false), image("b", false)]}));
         let mut cache = ThumbnailCache::default();
         let renders = std::cell::RefCell::new(Vec::new());
-        let render = |document: &Document| {
+        let render = |document: &Document, scale: f64| {
+            assert_eq!(scale, 1.);
             renders
                 .borrow_mut()
                 .push((document.width, document.height, document.elements.len()));

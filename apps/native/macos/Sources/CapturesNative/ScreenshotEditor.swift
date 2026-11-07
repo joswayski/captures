@@ -289,8 +289,12 @@ private final class EditorLayerCell: NSTableCellView {
         if let thumbnail, thumbnail.size.width > 0, thumbnail.size.height > 0 {
             let widthScale = preview.width / thumbnail.size.width
             let heightScale = preview.height / thumbnail.size.height
-            let scale = coversPreview ? max(widthScale, heightScale) : min(widthScale, heightScale)
-            let size = NSSize(width: thumbnail.size.width * scale, height: thumbnail.size.height * scale)
+            let scale = max(widthScale, heightScale)
+            // Annotation thumbnails are complete, padded canvases. CSS fills
+            // the well with that canvas; only image layers use object-fit: cover.
+            let size = coversPreview
+                ? NSSize(width: thumbnail.size.width * scale, height: thumbnail.size.height * scale)
+                : preview.size
             let target = NSRect(x: preview.midX - size.width / 2, y: preview.midY - size.height / 2,
                                 width: size.width, height: size.height)
             thumbnail.draw(in: target, from: .zero, operation: .sourceOver, fraction: fade,
