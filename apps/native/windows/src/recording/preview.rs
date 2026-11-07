@@ -235,7 +235,39 @@ impl Recording {
         let t = &self.t;
         gfx::shadow(dc, all, t.n("r-xl"), t.shadow("shadow-sm"))?;
         gfx::fill_round(dc, all, t.n("r-xl"), t.color("surface-raised"))?;
+        // The viewport and oversized media share the panel's rounded edge;
+        // a rectangular stage fill must not paint over its bottom corners.
+        let clip = unsafe {
+            self.g
+                .factory
+                .CreateRoundedRectangleGeometry(&D2D1_ROUNDED_RECT {
+                    rect: all,
+                    radiusX: t.n("r-xl"),
+                    radiusY: t.n("r-xl"),
+                })?
+        };
+        let mut layer = D2D1_LAYER_PARAMETERS1 {
+            contentBounds: all,
+            geometricMask: std::mem::ManuallyDrop::new(Some(clip.cast()?)),
+            maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+            maskTransform: Matrix3x2::identity(),
+            opacity: 1.,
+            ..Default::default()
+        };
+        unsafe { dc.PushLayer(&layer, None::<&ID2D1Layer>) };
+        let result = self.draw_preview_content(dc);
+        unsafe {
+            dc.PopLayer();
+            std::mem::ManuallyDrop::drop(&mut layer.geometricMask);
+        }
+        result?;
         gfx::border(dc, all, t.n("r-xl"), 1., t.color("border-subtle"))?;
+        Ok(())
+    }
+
+    fn draw_preview_content(&self, dc: &ID2D1DeviceContext) -> Result<()> {
+        let r = self.rects[PREVIEW];
+        let t = &self.t;
         self.draw_text(
             dc,
             Style::Control,

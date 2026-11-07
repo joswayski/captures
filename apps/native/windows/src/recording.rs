@@ -978,7 +978,27 @@ impl Recording {
     }
 
     fn bleed(&self, index: usize) -> f32 {
-        if index >= CONTROL_START { 4. } else { 0. }
+        let shadow = if index == slot(Target::Play) {
+            Some("shadow-lg")
+        } else if index == PREVIEW {
+            Some("shadow-sm")
+        } else {
+            None
+        };
+        if let Some(shadow) = shadow {
+            // gfx::shadow paints out to half the blur plus spread and offset.
+            // Keep that ink (and its antialiasing) inside the retained surface.
+            self.t
+                .shadow(shadow)
+                .iter()
+                .map(|s| s.x.abs().max(s.y.abs()) + s.spread + s.blur / 2. + 1.)
+                .fold(4., f32::max)
+                .ceil()
+        } else if index >= CONTROL_START {
+            4.
+        } else {
+            0.
+        }
     }
 
     fn opacity(&self, index: usize) -> f32 {
@@ -1017,11 +1037,19 @@ impl Recording {
             }
             let r = self.rects[index];
             let bleed = self.bleed(index);
-            let clip = if index == slot(Target::Play) {
-                self.preview_view()
-            } else {
-                Rect::new(r.x - bleed, r.y - bleed, r.w + 2. * bleed, r.h + 2. * bleed)
-            };
+            let mut clip = Rect::new(r.x - bleed, r.y - bleed, r.w + 2. * bleed, r.h + 2. * bleed);
+            if index == slot(Target::Play) {
+                // Match both the retained surface's bounds and its viewport
+                // clip; otherwise offscreen renders hide surface-bleed bugs.
+                let view = self.preview_view();
+                let (x, y) = (clip.x.max(view.x), clip.y.max(view.y));
+                clip = Rect::new(
+                    x,
+                    y,
+                    ((clip.x + clip.w).min(view.x + view.w) - x).max(0.),
+                    ((clip.y + clip.h).min(view.y + view.h) - y).max(0.),
+                );
+            }
             unsafe {
                 dc.SetTransform(&Matrix3x2::identity());
                 dc.PushLayer(

@@ -774,6 +774,16 @@ scrollable page and later timeline/output/crop controls are still pending.
 macOS, X11 and Wayland: unchanged, not reverified; no shared API, release or
 workflow changes. This is not a native parity or public-channel gate.
 
+Pass 19's provisional Windows hardware run verified source-audio peaks,
+play/pause/resume, Loop, GIF autoplay and actual-size wheel/Shift-wheel scrolling.
+It found a square-cut play shadow and a stage fill covering the panel's bottom
+corners. Retained surfaces now reserve the token shadow's painted extent, and
+the preview content is masked to the rounded panel before its border is drawn.
+Offscreen painting now also clips the play surface to its allocated bounds.
+Local clippy/build and 17 host tests pass. Wine renders were inspected but
+cannot validate the new mask: this Wine build stubs Direct2D PushLayer/PopLayer.
+Native visual acceptance and the reported slow playback teardown remain open.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,
