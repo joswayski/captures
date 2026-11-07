@@ -1,5 +1,5 @@
-//! Retained recording preview, timeline, output cards and save footer, backed by
-//! the shared media session. Crop and comparison follow in separate slices; this is
+//! Retained recording preview, timeline, crop, comparison and save footer, backed by
+//! the shared media session. Format switching and size budgets remain; this is
 //! an opt-in workbench, not the shipping editor.
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -24,6 +24,7 @@ use crate::textfield::{self, Change, Key, TextField};
 use crate::tokens::Tokens;
 use crate::{Options, appearance};
 
+mod compare;
 mod crop;
 mod menu;
 mod output;
@@ -41,6 +42,7 @@ const WM_WAKE: u32 = WM_APP + 32;
 const WM_FRAME: u32 = WM_APP + 33;
 const WM_MOUSELEAVE: u32 = 0x02A3;
 const OUTPUT_TIMER: usize = 42;
+const COMPARE_TIMER: usize = 43;
 
 thread_local! {
     static WINDOWS: RefCell<Vec<Recording>> = const { RefCell::new(Vec::new()) };
@@ -88,6 +90,7 @@ pub enum Target {
     Height,
     Fps,
     GifWidth,
+    QualityMode,
     Quality,
     System,
     SystemVolume,
@@ -101,13 +104,18 @@ pub enum Target {
     CropWidth,
     CropHeight,
     CropHandle(CropDragHandle),
+    CompareSplit,
+    CompareHide,
+    CompareShow,
 }
 
-pub const TARGETS: [Target; 37] = [
+pub const TARGETS: [Target; 41] = [
     Target::Loop,
     Target::Fit,
     Target::Actual,
     Target::Play,
+    Target::CompareSplit,
+    Target::CompareHide,
     Target::CropHandle(CropDragHandle::North),
     Target::CropHandle(CropDragHandle::NorthEast),
     Target::CropHandle(CropDragHandle::East),
@@ -129,7 +137,9 @@ pub const TARGETS: [Target; 37] = [
     Target::Resolution,
     Target::Width,
     Target::Height,
+    Target::QualityMode,
     Target::Quality,
+    Target::CompareShow,
     Target::System,
     Target::SystemVolume,
     Target::Microphone,
@@ -163,6 +173,7 @@ impl Target {
             Self::Height => "Output height",
             Self::Fps => "GIF frame rate",
             Self::GifWidth => "GIF maximum width",
+            Self::QualityMode => "Save quality",
             Self::Quality => "Compression quality",
             Self::System => "System audio",
             Self::SystemVolume => "System audio volume",
@@ -176,6 +187,9 @@ impl Target {
             Self::CropWidth => "Crop width",
             Self::CropHeight => "Crop height",
             Self::CropHandle(handle) => crop::handle_label(handle),
+            Self::CompareSplit => captures_app::compression_compare::RANGE_LABEL,
+            Self::CompareHide => captures_app::compression_compare::DISMISS_LABEL,
+            Self::CompareShow => captures_app::compression_compare::SHOW,
         }
     }
 
@@ -186,6 +200,10 @@ impl Target {
     fn scrolls(self) -> bool {
         self.is_preview()
             || matches!(self, Self::TrimStart | Self::TrimEnd | Self::CropHandle(_))
+            || matches!(
+                self,
+                Self::CompareSplit | Self::CompareHide | Self::CompareShow
+            )
             || self.is_output()
     }
 }
@@ -243,6 +261,7 @@ pub struct Recording {
     preview: Preview,
     timeline: Timeline,
     output: Output,
+    compare: compare::Compare,
     crop_drag: Option<crop::Drag>,
     menu: Option<menu::Menu>,
     pub filename: TextField,
@@ -343,6 +362,7 @@ impl Recording {
             preview: Preview::default(),
             timeline: Timeline::default(),
             output: Output::new(&settings.recording),
+            compare: compare::Compare::default(),
             crop_drag: None,
             menu: None,
             filename: TextField::new(Style::Option, ""),
@@ -448,6 +468,9 @@ impl Recording {
             return self.output_shown(target);
         }
         match target {
+            Target::CompareSplit => self.compare_visible() && self.compare.encoded.is_some(),
+            Target::CompareHide => self.compare_visible(),
+            Target::CompareShow => self.compresses() && self.compare.dismissed,
             Target::CropHandle(_) => self.crop_shown(),
             Target::Cancel => self.saving,
             Target::Reveal => self.saved.is_some() && !self.saving,
@@ -470,6 +493,7 @@ impl Recording {
             return false;
         }
         match target {
+            Target::CompareSplit => !self.compare.pending && !self.timeline.pending,
             Target::CropX | Target::CropY | Target::CropWidth | Target::CropHeight => {
                 self.output.values.crop_on
             }
@@ -508,6 +532,19 @@ impl Recording {
         if let Some(handle) = self.crop_hit(x, y) {
             return (handle != CropDragHandle::Move).then_some(Target::CropHandle(handle));
         }
+        if self.compare_visible() && self.page_visible_rect(self.preview_view()).contains(x, y) {
+            for t in [Target::CompareHide, Target::CompareSplit] {
+                if self.shown(t) && self.target_rect(t).contains(x, y) {
+                    return Some(t);
+                }
+            }
+            if self.shown(Target::Play) && self.target_rect(Target::Play).contains(x, y) {
+                return Some(Target::Play);
+            }
+            if self.preview_media().contains(x, y) {
+                return None;
+            }
+        }
         if self.shown(Target::Play)
             && y < self.rects[FOOTER].y
             && self.preview_view().contains(x, y)
@@ -539,7 +576,10 @@ impl Recording {
 
     /// Viewport clipping shared by live composition, screenshots and UIA.
     pub fn visible_target_rect(&self, target: Target) -> Rect {
-        let r = if matches!(target, Target::Play | Target::CropHandle(_)) {
+        let r = if matches!(
+            target,
+            Target::Play | Target::CropHandle(_) | Target::CompareHide | Target::CompareSplit
+        ) {
             self.preview_control_clip(target)
         } else {
             self.target_rect(target)
@@ -571,8 +611,10 @@ impl Recording {
         }
         let r = if index == slot(Target::Play)
             || ((CONTROL_START..MENU).contains(&index)
-                && matches!(TARGETS[index - CONTROL_START], Target::CropHandle(_)))
-        {
+                && matches!(
+                    TARGETS[index - CONTROL_START],
+                    Target::CropHandle(_) | Target::CompareHide | Target::CompareSplit
+                )) {
             self.preview_view()
         } else {
             Rect::new(0., 0., self.width, self.rects[FOOTER].y)
@@ -665,7 +707,7 @@ impl Recording {
             self.reveal_play();
         }
         if visible && let Some(t) = target {
-            self.reveal_crop_handle(t);
+            self.reveal_media_control(t);
         }
         if visible
             && let Some(target) = target
@@ -732,10 +774,14 @@ impl Recording {
             return;
         }
         match target {
+            Target::CompareHide | Target::CompareShow => self.activate_compare(target),
             Target::TrimStart | Target::TrimEnd => {}
             Target::Play => {
                 if self.preview.playing {
                     self.stop_preview();
+                    if self.compresses() {
+                        self.seek_timeline(self.preview.position_ms);
+                    }
                 } else {
                     // Match Tauri's replay tolerance, including a full-end
                     // still parked at duration - 1 ms after a trim edit.
@@ -807,6 +853,7 @@ impl Recording {
                     destination: self.destination(),
                     export: presented.export.clone(),
                 };
+                self.cancel_compare();
                 self.stop_preview();
                 if self
                     .worker
@@ -866,8 +913,11 @@ impl Recording {
                             self.worker
                                 .looping
                                 .store(true, std::sync::atomic::Ordering::Relaxed);
-                            self.start_preview();
+                            if !self.compare_visible() {
+                                self.start_preview();
+                            }
                         }
+                        self.schedule_compare();
                     }
                     Err(error) => self.notify(&error, true),
                 }
@@ -900,7 +950,9 @@ impl Recording {
                 self.events.push(Event::Range(Target::TrimStart));
                 self.events.push(Event::Range(Target::TrimEnd));
                 self.resume_timeline();
+                self.schedule_compare();
             }
+            Outcome::Comparison(generation, result) => self.accept_compare(generation, result),
             Outcome::Thumbnails(result) => {
                 self.worker.thumbnail_cancel.take();
                 match result {
@@ -977,17 +1029,27 @@ impl Recording {
                     };
                     self.set_focus(Some(target), self.focus_visible);
                 }
-                if self.extension() == "gif" && !self.closing && !self.hwnd.is_invalid() {
+                if self.extension() == "gif"
+                    && !self.closing
+                    && !self.hwnd.is_invalid()
+                    && !self.compare_visible()
+                {
                     self.start_preview();
                 }
+                self.schedule_compare();
             }
             Outcome::Revealed(result) => {
                 if let Err(error) = result {
                     self.notify(&error, true);
                 }
-                if self.extension() == "gif" && !self.closing && !self.hwnd.is_invalid() {
+                if self.extension() == "gif"
+                    && !self.closing
+                    && !self.hwnd.is_invalid()
+                    && !self.compare_visible()
+                {
                     self.start_preview();
                 }
+                self.schedule_compare();
             }
             Outcome::PlaybackEnded(generation, result) => {
                 self.take_preview_frame();
@@ -1154,6 +1216,9 @@ impl Recording {
             MENU => self.draw_output_menu(dc)?,
             _ => {
                 let target = TARGETS[index - CONTROL_START];
+                if matches!(target, Target::CompareHide | Target::CompareSplit) {
+                    return self.draw_compare_control(dc, target);
+                }
                 if matches!(target, Target::CropHandle(_)) {
                     return self.draw_crop_handle(dc, target);
                 }
@@ -1494,6 +1559,9 @@ impl Recording {
     fn key(&mut self, key: VIRTUAL_KEY) {
         let down = |key: VIRTUAL_KEY| unsafe { GetKeyState(i32::from(key.0)) < 0 };
         let (ctrl, shift) = (down(VK_CONTROL), down(VK_SHIFT));
+        if self.compare_key(key) {
+            return;
+        }
         if self.crop_key(key, shift) {
             return;
         }
@@ -1591,6 +1659,7 @@ impl Recording {
             WM_OUTCOME => self.outcomes(),
             WM_FRAME => self.take_preview_frame(),
             WM_TIMER if wp.0 == OUTPUT_TIMER => self.apply_output_due(),
+            WM_TIMER if wp.0 == COMPARE_TIMER => self.compare_due(),
             WM_WAKE => {}
             WM_SIZE if wp.0 != SIZE_MINIMIZED as usize => {
                 self.width = (lp.0 as u32 & 0xffff) as f32 / self.scale;
@@ -1615,6 +1684,7 @@ impl Recording {
                 );
                 if self.output_pointer(msg, x, y)
                     || self.crop_pointer(msg, x, y)
+                    || self.compare_pointer(msg, x, y)
                     || self.timeline_pointer(msg, x, y)
                 {
                     return Some(LRESULT(0));
@@ -1693,6 +1763,7 @@ impl Recording {
                 }
             }
             WM_CAPTURECHANGED => {
+                self.compare.dragging = false;
                 self.output.slider = None;
                 self.end_crop_drag();
                 self.end_timeline_drag();
@@ -1723,7 +1794,10 @@ impl Recording {
                         CropDragHandle::NorthWest | CropDragHandle::SouthEast => IDC_SIZENWSE,
                         CropDragHandle::Move => IDC_SIZEALL,
                     }
-                } else if self.timeline.drag.is_some()
+                } else if self.compare.dragging
+                    || self.enabled(Target::CompareSplit)
+                        && self.hit(x, y) == Some(Target::CompareSplit)
+                    || self.timeline.drag.is_some()
                     || self.timeline.scrubbing
                     || self.enabled(Target::TrimStart)
                         && (over_timeline

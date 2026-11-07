@@ -190,7 +190,7 @@ impl Recording {
             _ => return false,
         };
         self.move_crop(self.output.values.crop, handle, dx, dy);
-        self.reveal_crop_handle(target);
+        self.reveal_media_control(target);
         true
     }
 
@@ -250,8 +250,11 @@ impl Recording {
         true
     }
 
-    pub(super) fn reveal_crop_handle(&mut self, target: Target) {
-        if !matches!(target, Target::CropHandle(_)) {
+    pub(super) fn reveal_media_control(&mut self, target: Target) {
+        if !matches!(
+            target,
+            Target::CropHandle(_) | Target::CompareHide | Target::CompareSplit
+        ) {
             return;
         }
         let view = self.preview_view();

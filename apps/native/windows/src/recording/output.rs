@@ -15,6 +15,7 @@ pub(super) struct Values {
     pub fps: u16,
     pub maximum_width: u32,
     pub quality: QualityPreset,
+    pub mode: ui::QualityMode,
     pub audio: AudioEdit,
     pub crop_on: bool,
     pub crop: CropRect,
@@ -28,6 +29,7 @@ impl Values {
             fps: settings.gif_fps,
             maximum_width: settings.gif_max_width,
             quality: ui::DEFAULT_COMPRESS_PRESET,
+            mode: ui::QualityMode::Preserve,
             audio: AudioEdit::default(),
             crop_on: false,
             crop: CropRect {
@@ -86,6 +88,11 @@ impl Values {
         edit.audio = self.audio.clone();
         edit.audio.source_has_system_audio = system;
         edit.audio.source_has_microphone_audio = mic;
+        export.quality = if gif || self.mode == ui::QualityMode::Compress {
+            self.quality
+        } else {
+            QualityPreset::Preserve
+        };
         if gif {
             edit.audio.mute_system_audio = true;
             edit.audio.mute_microphone = true;
@@ -139,6 +146,7 @@ impl Target {
                 | Self::CropHeight
                 | Self::Fps
                 | Self::GifWidth
+                | Self::QualityMode
                 | Self::Quality
                 | Self::System
                 | Self::SystemVolume
@@ -150,7 +158,7 @@ impl Target {
     pub fn is_select(self) -> bool {
         matches!(
             self,
-            Self::Resolution | Self::Fps | Self::GifWidth | Self::Quality
+            Self::Resolution | Self::Fps | Self::GifWidth | Self::QualityMode | Self::Quality
         )
     }
     pub fn is_number(self) -> bool {
@@ -197,7 +205,9 @@ impl Recording {
             Target::Width | Target::Height => {
                 self.output.values.resolution == ResolutionChoice::Custom
             }
-            Target::Fps | Target::GifWidth | Target::Quality => gif,
+            Target::Fps | Target::GifWidth => gif,
+            Target::Quality => gif || self.output.values.mode == ui::QualityMode::Compress,
+            Target::QualityMode => !gif,
             Target::System | Target::SystemVolume => !gif && audio.source_has_system_audio,
             Target::Microphone | Target::MicrophoneVolume => {
                 !gif && audio.source_has_microphone_audio
@@ -334,6 +344,8 @@ impl Recording {
             Target::Resolution => menus.resolutions,
             Target::Fps => menus.gif_frame_rates,
             Target::GifWidth => menus.gif_maximum_widths,
+            // Hard size budgets are a later slice; do not offer an inert mode.
+            Target::QualityMode => menus.quality_modes.into_iter().take(2).collect(),
             Target::Quality => menus.quality_presets,
             _ => vec![],
         }
@@ -350,6 +362,7 @@ impl Recording {
                 .iter()
                 .position(|&r| r == v.maximum_width),
             Target::Quality => ui::COMPRESS_PRESETS.iter().position(|&r| r == v.quality),
+            Target::QualityMode => Some(usize::from(v.mode == ui::QualityMode::Compress)),
             _ => None,
         }
         .unwrap_or(0)
@@ -365,6 +378,13 @@ impl Recording {
             Target::Fps => v.fps = ui::GIF_FRAME_RATES[index],
             Target::GifWidth => v.maximum_width = ui::GIF_MAXIMUM_WIDTHS[index],
             Target::Quality => v.quality = ui::COMPRESS_PRESETS[index],
+            Target::QualityMode => {
+                v.mode = [ui::QualityMode::Preserve, ui::QualityMode::Compress][index];
+                self.compare.dismissed = false;
+                if v.mode == ui::QualityMode::Preserve {
+                    self.compare.split = captures_app::compression_compare::DEFAULT_SPLIT;
+                }
+            }
             _ => return,
         }
         self.close_output_menu();
@@ -372,6 +392,7 @@ impl Recording {
     }
 
     pub(super) fn output_changed(&mut self, target: Target) {
+        self.cancel_compare();
         self.saved = None;
         self.saved_fingerprint = None;
         self.timeline.resume |= self.preview.playing;
@@ -757,8 +778,7 @@ impl Recording {
             }
             top += ch + gap;
         }
-        let quality = self.output_shown(Target::Quality);
-        let two = quality && self.width > 820.;
+        let two = self.width > 820.;
         let card_w = if two { (track.w - gap) / 2. } else { track.w };
         let extra = if self.output_shown(Target::Width) {
             self.t.n("s-4") + 16. + self.t.n("s-2") + h
@@ -811,18 +831,32 @@ impl Recording {
             let _ =
                 self.output.fields[i].relayout(&self.g, &self.t, w - 26. - 2. * self.t.n("s-4"));
         }
-        if quality {
+        {
             let x = if two { track.x + card_w + gap } else { track.x };
             let y = if two { top } else { top + ch + gap };
-            let qh = field_top + h + pad;
+            let mut field_y = y + field_top;
+            let qw = (card_w - 2. * pad).min(430.);
+            if self.shown(Target::QualityMode) {
+                self.rects[slot(Target::QualityMode)] = Rect::new(x + pad, field_y, qw, h);
+                field_y += h + gap + 18. + self.t.n("s-3");
+            }
+            if self.shown(Target::Quality) {
+                self.rects[slot(Target::Quality)] = Rect::new(x + pad, field_y, qw, h);
+                field_y += h + gap;
+            }
+            self.rects[slot(Target::CompareShow)] = Rect::new(x + pad, field_y, qw, h);
+            if self.shown(Target::CompareShow) {
+                field_y += h + gap;
+            }
+            let qh = field_y - y + pad;
             self.output.cards.push((
-                Rect::new(x, y, card_w, if two { ch } else { qh }),
+                Rect::new(x, y, card_w, if two { ch.max(qh) } else { qh }),
                 "Save quality",
             ));
-            self.rects[slot(Target::Quality)] =
-                Rect::new(x + pad, y + field_top, (card_w - 2. * pad).min(430.), h);
             if !two {
                 top += qh + gap;
+            } else {
+                top += (qh - ch).max(0.);
             }
         }
         top += ch + gap;
@@ -900,6 +934,7 @@ impl Recording {
             (Target::Height, "Height"),
             (Target::Fps, "Frame rate"),
             (Target::GifWidth, "Maximum width"),
+            (Target::QualityMode, "Save quality"),
             (Target::Quality, "Quality"),
         ] {
             if !self.shown(target) {

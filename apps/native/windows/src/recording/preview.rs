@@ -123,6 +123,7 @@ impl Recording {
     }
 
     pub(super) fn start_preview(&mut self) {
+        self.cancel_compare();
         self.stop_preview();
         let cancel = CancelToken::default();
         let job = Job::Play {
@@ -139,6 +140,7 @@ impl Recording {
         }
         self.worker.playback_cancel = Some(cancel);
         self.preview.playing = true;
+        self.place_play();
         self.dirty[slot(Target::Play)] = true;
         self.events.push(Event::Name(Target::Play));
     }
@@ -227,12 +229,17 @@ impl Recording {
         let media = self.preview_media();
         self.rects[slot(Target::Play)] = Rect::new(
             media.x + media.w / 2. - 28.,
-            media.y + media.h / 2. - 28.,
+            if self.compare_visible() {
+                media.y + media.h - self.t.n("s-5") - 40. - 56.
+            } else {
+                media.y + media.h / 2. - 28.
+            },
             56.,
             56.,
         );
         self.dirty[slot(Target::Play)] = true;
         self.layout_crop();
+        self.layout_compare();
     }
 
     pub fn play_clip(&self) -> Rect {
@@ -371,6 +378,7 @@ impl Recording {
             dc.PopAxisAlignedClip();
             result?;
         }
+        self.draw_compare(dc)?;
         self.draw_crop(dc)
     }
 
@@ -525,6 +533,8 @@ mod tests {
             height: 1080,
             output: output::Values::new(1920, 1080, &Default::default()),
             full_source: false,
+            revision: 0,
+            size_bytes: 100_000,
         })));
         (w, profile)
     }
@@ -644,6 +654,7 @@ mod tests {
         ] {
             let (mut w, profile) = fixture();
             w.presented.as_mut().unwrap().mime_type = "image/gif".into();
+            w.compare.dismissed = true;
             w.timeline.start = 1100;
             w.preview.position_ms = position;
             w.preview.playing = true;
@@ -768,6 +779,112 @@ mod tests {
         drop(source);
         std::fs::remove_dir_all(profile).unwrap();
         std::fs::remove_dir_all(source_profile).unwrap();
+    }
+
+    #[test]
+    fn comparison_tracks_accepted_edits_and_keeps_split_independent_of_save() {
+        use super::super::compare::Encoded;
+        let (mut w, profile) = fixture();
+        let encoded = |revision, position_ms| {
+            Ok(Encoded {
+                revision,
+                position_ms,
+                before: frame(1920, 1080),
+                after: frame(1920, 1080),
+                bytes: 40_000,
+            })
+        };
+        w.layout().unwrap();
+        assert!(!w.shown(Target::CompareHide));
+        w.choose_output(Target::QualityMode, 1);
+        w.choose_output(Target::Quality, 0);
+        let mut p = w.presented.take().unwrap();
+        p.output = w.output.values.clone();
+        (p.edit, p.export) = p.output.specs(p.width, p.height, p.edit, p.export);
+        p.revision = 7;
+        w.apply_outcome(Outcome::Preview(w.timeline.generation, Box::new(p), None));
+        assert!(w.shown(Target::CompareHide));
+        assert!(!w.enabled(Target::CompareSplit));
+        let mut generation = w.compare.generation;
+        w.apply_outcome(Outcome::Comparison(generation - 1, encoded(6, 0)));
+        assert!(!w.shown(Target::CompareSplit));
+        for (revision, position) in [(6, 0), (7, 1)] {
+            w.apply_outcome(Outcome::Comparison(generation, encoded(revision, position)));
+            assert!(!w.shown(Target::CompareSplit) && w.status.contains("selected frame"));
+            w.schedule_compare();
+            generation = w.compare.generation;
+        }
+        w.apply_outcome(Outcome::Comparison(generation, encoded(7, 0)));
+        assert!(w.enabled(Target::CompareSplit));
+        assert_eq!(
+            w.presented.as_ref().unwrap().export.quality,
+            captures_media::QualityPreset::Tiny
+        );
+        w.set_compare_split(23.4);
+        w.set_focus(Some(Target::CompareSplit), true);
+        w.key(VK_RIGHT);
+        assert!((w.compare_range(Target::CompareSplit).unwrap().0 - 23.5).abs() < 1e-8);
+        w.key(VK_PRIOR);
+        assert!((w.compare_range(Target::CompareSplit).unwrap().0 - 32.3).abs() < 1e-8);
+        w.key(VK_END);
+        assert_eq!(w.compare_range(Target::CompareSplit), Some((94., 6., 94.)));
+        let media = w.preview_media();
+        assert!(w.compare_pointer(
+            WM_LBUTTONDOWN,
+            media.x + media.w * 0.3,
+            media.y + media.h * 0.25
+        ));
+        w.compare_pointer(WM_MOUSEMOVE, media.x - 20., media.y + media.h * 0.25);
+        w.compare_pointer(WM_LBUTTONUP, media.x - 20., media.y + media.h * 0.25);
+        assert_eq!(w.compare_range(Target::CompareSplit).unwrap().0, 6.);
+        assert!(w.enabled(Target::Save));
+        assert_eq!(
+            w.presented.as_ref().unwrap().export.quality,
+            captures_media::QualityPreset::Tiny
+        );
+        w.activate(Target::CompareHide);
+        assert!(!w.shown(Target::CompareSplit) && w.shown(Target::CompareShow));
+        w.activate(Target::CompareShow);
+        w.apply_outcome(Outcome::Comparison(
+            w.compare.generation,
+            Err("encoder unavailable".into()),
+        ));
+        assert!(w.status.contains("encoder unavailable") && w.enabled(Target::Save));
+        w.activate(Target::CompareHide);
+        w.activate(Target::CompareShow);
+        w.apply_outcome(Outcome::Comparison(w.compare.generation, encoded(7, 0)));
+        assert!(w.enabled(Target::CompareSplit));
+        assert!(w.status.is_empty() && !w.error);
+        (w.width, w.height) = (640., 480.);
+        w.activate(Target::Actual);
+        w.set_focus(Some(Target::CompareSplit), true);
+        let visible = w.visible_target_rect(Target::CompareSplit);
+        assert_eq!((visible.w, visible.h), (36., 36.));
+        assert!(visible.y + visible.h + 4. <= w.rects[FOOTER].y);
+        w.activate(Target::Play);
+        assert!(!w.shown(Target::CompareHide));
+        w.apply_outcome(Outcome::Comparison(generation, encoded(7, 0)));
+        assert!(!w.shown(Target::CompareSplit));
+        w.stop_preview();
+        w.activate(Target::Fit);
+        w.activate(Target::Crop);
+        let mut p = w.presented.take().unwrap();
+        p.output = w.output.values.clone();
+        p.full_source = true;
+        w.apply_outcome(Outcome::Preview(w.timeline.generation, Box::new(p), None));
+        w.apply_outcome(Outcome::Comparison(w.compare.generation, encoded(7, 0)));
+        assert!(w.shown(Target::CompareHide) && w.enabled(Target::CompareSplit));
+        w.set_focus(Some(Target::CompareSplit), true);
+        let r = w.target_rect(Target::CompareSplit);
+        // The crop interior sits above comparison, as in Tauri. Pointer
+        // movement there must move the crop, not the split underneath.
+        assert!(!w.compare_pointer(WM_LBUTTONDOWN, r.x + 18., r.y + 18.));
+        assert!(w.crop_pointer(WM_LBUTTONDOWN, r.x + 18., r.y + 18.));
+        w.crop_pointer(WM_LBUTTONUP, r.x + 18., r.y + 18.);
+        w.choose_output(Target::QualityMode, 0);
+        assert!(!w.compresses());
+        drop(w);
+        std::fs::remove_dir_all(profile).unwrap();
     }
 
     #[test]

@@ -29,6 +29,7 @@ fn with<R>(hwnd: HWND, f: impl FnOnce(&mut Recording) -> Result<R>) -> Result<R>
 
 fn range(w: &Recording, target: Target) -> Option<(f64, f64, f64)> {
     w.crop_range(target)
+        .or_else(|| w.compare_range(target))
         .or_else(|| w.volume_range(target))
         .or_else(|| {
             w.trim_range(target)
@@ -166,9 +167,9 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
             Id::Option(_, _) => {
                 pattern == UIA_SelectionItemPatternId || pattern == UIA_InvokePatternId
             }
-            Id::Control(Target::TrimStart | Target::TrimEnd | Target::CropHandle(_)) => {
-                pattern == UIA_RangeValuePatternId
-            }
+            Id::Control(
+                Target::TrimStart | Target::TrimEnd | Target::CropHandle(_) | Target::CompareSplit,
+            ) => pattern == UIA_RangeValuePatternId,
             Id::Control(Target::Filename) | Id::Location => pattern == UIA_ValuePatternId,
             Id::Control(Target::Copy | Target::Loop | Target::Fit | Target::Actual) => {
                 pattern == UIA_TogglePatternId
@@ -202,7 +203,10 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                         Id::Control(Target::Filename) => UIA_EditControlTypeId,
                         Id::Control(Target::Copy) => UIA_CheckBoxControlTypeId,
                         Id::Control(
-                            Target::TrimStart | Target::TrimEnd | Target::CropHandle(_),
+                            Target::TrimStart
+                            | Target::TrimEnd
+                            | Target::CropHandle(_)
+                            | Target::CompareSplit,
                         ) => UIA_SliderControlTypeId,
                         Id::Control(_) => UIA_ButtonControlTypeId,
                         _ => UIA_TextControlTypeId,
@@ -574,6 +578,8 @@ impl IRangeValueProvider_Impl for Node_Impl {
                 w.set_volume(target, value);
             } else if matches!(target, Target::CropHandle(_)) {
                 w.set_crop_range(target, value);
+            } else if target == Target::CompareSplit {
+                w.set_compare_split(value);
             } else {
                 w.set_trim(target, value);
             }
@@ -595,6 +601,9 @@ impl IRangeValueProvider_Impl for Node_Impl {
         })
     }
     fn SmallChange(&self) -> Result<f64> {
+        if self.id == Id::Control(Target::CompareSplit) {
+            return Ok(captures_app::compression_compare::KEY_STEP * 100.);
+        }
         with(self.hwnd, |w| {
             Ok(
                 if matches!(self.id, Id::Control(Target::TrimStart | Target::TrimEnd))
@@ -609,6 +618,9 @@ impl IRangeValueProvider_Impl for Node_Impl {
         })
     }
     fn LargeChange(&self) -> Result<f64> {
+        if self.id == Id::Control(Target::CompareSplit) {
+            return Ok(captures_app::compression_compare::PAGE_STEP * 100.);
+        }
         Ok(if matches!(self.id,Id::Control(t) if t.is_volume()) {
             20.
         } else if matches!(self.id, Id::Control(Target::CropHandle(_))) {

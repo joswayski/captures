@@ -1000,6 +1000,22 @@ session test. Comparison and remaining save-quality/format controls stay open.
 Jose authorized merging this development slice before the physical gate;
 acceptance remains pending. No native promotion or release/workflow changes.
 
+The following Win32 development slice adds encoded before/after comparison and
+estimated sizes from the accepted recording session, MP4 Preserve/Compress
+presets, a keyboard/UIA split range and Hide/Show. Work is debounced and cancelled;
+only matching generations, accepted revisions and source positions display.
+Crop stays above the comparison and owns its interior/handle pointer events,
+matching Tauri. GIF comparison is static; Hide resumes source autoplay.
+Verified locally: npm check, workspace fmt/tests/clippy, Windows-GNU build/clippy
+and 26 Wine host tests. Removed real-worker probes covered MP4/GIF comparisons,
+outside-trim errors without disabling Save, asymmetric crop and repeated GIF
+Hide/Show cycles. Light/dark, normal/minimum, processing/error and focus renders
+were inspected. Physical pointer, UIA and compositor acceptance remain queued;
+narrow portrait badges and tiny crop labels need comparative hardware inspection.
+AppKit, X11 and Wayland are unchanged and not physically reverified. Jose
+authorized this opt-in development merge with the hardware gate pending. Format
+switching and hard size budgets remain open; no native promotion or release changes.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,

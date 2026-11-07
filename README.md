@@ -211,10 +211,11 @@ Output controls include original/1080p/720p/custom dimensions, GIF frame rate,
 maximum width and quality-based palette limits, and separate source-audio volumes,
 mute and mono. Crop supports source-pixel numeric fields, aspect locking, eight
 resize handles and interior dragging over the full source preview, with keyboard
-and accessibility ranges. Recording comparison, format switching and the remaining
-save-quality options are still migration work; these slices are not recording-editor
-parity. Output controls and their source-preview correction passed physical Windows
-testing; crop acceptance remains pending. Like Tauri, the preview keeps the original source's
+and accessibility ranges. Compression comparison adds a draggable before/after split,
+Hide/Show, and MP4 Preserve/Compress presets; format switching and hard file-size
+budgets remain migration work. These slices are not recording-editor parity.
+Output controls and source-preview correction passed physical Windows testing;
+crop and comparison still await acceptance. Like Tauri, the preview keeps the original source's
 size and picture while output settings affect the saved file, not the page layout.
 
 The native capture workspace connects full-display

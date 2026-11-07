@@ -95,6 +95,7 @@ impl Recording {
     }
 
     pub(super) fn seek_timeline(&mut self, position_ms: u64) {
+        self.cancel_compare();
         let Some(p) = self.presented.as_ref() else {
             return;
         };
@@ -206,6 +207,11 @@ impl Recording {
     }
 
     pub(super) fn resume_timeline(&mut self) {
+        // GIF comparison replaces its moving source with a static sample.
+        // Hiding it restores autoplay.
+        if self.extension() == "gif" && self.compare_visible() {
+            self.timeline.resume = false;
+        }
         if self.timeline.resume
             && !self.timeline.pending
             && self.timeline.drag.is_none()

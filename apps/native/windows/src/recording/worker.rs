@@ -33,6 +33,8 @@ pub(super) struct Presented {
     pub height: u32,
     pub output: Values,
     pub full_source: bool,
+    pub revision: u64,
+    pub size_bytes: u64,
 }
 
 impl Presented {
@@ -52,6 +54,8 @@ impl Presented {
             height: snapshot.editor.source.height,
             output: output.clone(),
             full_source: false,
+            revision: snapshot.editor.revision,
+            size_bytes: snapshot.editor.source.size_bytes,
         }
     }
 
@@ -85,6 +89,7 @@ pub(super) struct PreviewRequest {
 pub(super) enum Job {
     Save(RecordingSaveRequest, bool, CancelToken),
     Preview,
+    Compare(u64, CancelToken),
     Thumbnails(CancelToken),
     Play {
         generation: u64,
@@ -111,6 +116,7 @@ pub(super) struct Saved {
 pub(super) enum Outcome {
     Opened(Result<Presented, String>),
     Preview(u64, Box<Presented>, Option<String>),
+    Comparison(u64, Result<super::compare::Encoded, String>),
     Thumbnails(Result<Arc<Frame>, String>),
     Progress(ExportProgress),
     Saved(Result<Saved, String>),
@@ -158,6 +164,7 @@ pub(super) struct Worker {
     pub cancel: Option<CancelToken>,
     pub playback_cancel: Option<CancelToken>,
     pub thumbnail_cancel: Option<CancelToken>,
+    pub comparison_cancel: Option<CancelToken>,
     source_cancel: CancelToken,
     /// One pending scrub/trim request, rather than a queue of stale decodes.
     pending_preview: Arc<Mutex<Option<PreviewRequest>>>,
@@ -255,6 +262,23 @@ impl Worker {
                 while let Ok(job) = inbox.recv() {
                     let outcome = match job {
                         Job::Close => break,
+                        Job::Compare(generation, cancel) => {
+                            let Some(session) = session.as_ref() else {
+                                continue;
+                            };
+                            let result = (|| {
+                                let sample = session.export_comparison(&cancel)?;
+                                let estimate = session.estimate_export(&cancel)?;
+                                Ok(super::compare::Encoded {
+                                    revision: sample.revision,
+                                    position_ms: sample.position_ms,
+                                    before: Arc::new(Frame::new(&sample.before_frame())),
+                                    after: Arc::new(Frame::new(&sample.after_frame())),
+                                    bytes: estimate.size_bytes,
+                                })
+                            })();
+                            Outcome::Comparison(generation, result)
+                        }
                         Job::Preview => {
                             let Some(request) = requests.lock().expect("preview mailbox").take()
                             else {
@@ -406,6 +430,7 @@ impl Worker {
             cancel: None,
             playback_cancel: None,
             thumbnail_cancel: None,
+            comparison_cancel: None,
             source_cancel,
             pending_preview,
             latest,
@@ -427,6 +452,9 @@ impl Worker {
 
     pub fn close(&mut self) {
         self.source_cancel.cancel();
+        if let Some(cancel) = self.comparison_cancel.take() {
+            cancel.cancel();
+        }
         self.pending_preview.lock().expect("preview mailbox").take();
         if let Some(cancel) = self.thumbnail_cancel.take() {
             cancel.cancel();
