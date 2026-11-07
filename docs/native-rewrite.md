@@ -708,6 +708,15 @@ temporary, removed hook; Wine's DirectWrite stubs `HitTestTextRange`, so the
 selected name draws without its highlight there (as in Preferences Find).
 macOS, Linux: unchanged.
 
+Apply crop pulse: shipping's `screenshot-cta-pulse` (2.4 s ease-in-out,
+infinite, a 0 → 5 px accent `box-shadow` at 22 % and back) is a ring visual
+under Apply crop, drawn once at its 50 % frame, whose opacity a repeating
+DirectComposition animation (smoothstep halves) raises and lowers. Nothing
+in the process ticks or redraws for it; only the compositor animates, as
+it does for the CSS animation. Deviation: the spread stays at 5 px and only
+the alpha moves. Windows: cross-compiled only, Wine render of the ring at
+its peak (temporary, removed hook). macOS, Linux: unchanged.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,
