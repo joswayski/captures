@@ -667,7 +667,7 @@ impl CheckWorker {
             p.icon = notice::Icon::Check;
             p.icon_tone = notice::IconTone::Positive;
             if self.install_request_enabled {
-                p.close_warning = Some(notice::OPEN_CAPTURES_WARNING.into());
+                p.close_warning = Some(notice::open_captures_warning(true).into());
             }
         }
         if self.preview {
@@ -1061,7 +1061,7 @@ mod tests {
         assert_eq!(notice.footer.unwrap().primary.unwrap(), install);
         assert_eq!(
             notice.close_warning.as_deref(),
-            Some(crate::update_notice::OPEN_CAPTURES_WARNING)
+            Some("Open captures reopen after the update. Screenshot drafts are kept.")
         );
         assert!(worker.check());
         wait_idle(&mut worker);

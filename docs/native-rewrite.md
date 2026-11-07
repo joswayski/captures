@@ -1643,11 +1643,15 @@ drives it from the shared fixtures and stub; Hide/What's new persist
 packaging there is no GTK Preview build. Compared with the Tauri harness
 (`?view=update&mock=1`, `?view=startup&mock=1&platform=linux`) at 2x in
 light and dark over the same page colour: card sizes match every state; the
-launch notice card is 1 px taller (text 1–2 px lower). Shipping's close
-warning reads "Open captures reopen after the update. Screenshot drafts are
-kept."; the shared `OPEN_CAPTURES_WARNING` still has older copy, reported to
-the shared-crate owner. Verified: the smoke's `notices` step and the launch
-notice in its `live` and `setup` steps on X11 and headless Sway 1.9.
+launch notice card is 1 px taller (text 1–2 px lower). The close warning
+follows shipping's `openCapturesUpdateWarning` through the shared
+`update_notice::open_captures_warning(installable)`: "Open captures reopen
+after the update. Screenshot drafts are kept." for an update the app
+installs, "Open captures will close. Unsaved edits are kept as drafts." for
+a manual download, in every host that renders the shared presenter (GTK,
+wgpu, AppKit; Win32 has no update notice yet). Verified: the smoke's
+`notices` step and the launch notice in its `live` and `setup` steps on X11
+and headless Sway 1.9.
 Windows, macOS: unchanged.
 
 ## Progress dashboard
