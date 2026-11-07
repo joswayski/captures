@@ -109,12 +109,15 @@ final class EditorPickersTests: XCTestCase {
             bitmap.size = row.bounds.size
             row.cacheDisplay(in: row.bounds, to: bitmap)
             let blue = row.swatchButtons[4].frame
-            let sample = try XCTUnwrap(bitmap.colorAt(x: Int(blue.midX * scale), y: Int(blue.midY * scale))?
-                .usingColorSpace(.sRGB))
+            // The bitmap already contains sRGB bytes. colorAt returns a
+            // calibrated NSColor; converting that to sRGB transforms them again.
+            var sample = [Int](repeating: 0, count: bitmap.samplesPerPixel)
+            bitmap.getPixel(&sample, atX: Int(blue.midX * scale), y: Int(blue.midY * scale))
+            XCTAssertEqual(sample[3], 255, "the enabled swatch paints opaquely")
             // #2d9cff per channel; a neighbouring swatch is far outside 0.04.
-            XCTAssertEqual(sample.redComponent, 45 / 255, accuracy: 0.04, "the swatch paints its color")
-            XCTAssertEqual(sample.greenComponent, 156 / 255, accuracy: 0.04, "the swatch paints its color")
-            XCTAssertEqual(sample.blueComponent, 1, accuracy: 0.04, "the swatch paints its color")
+            XCTAssertEqual(CGFloat(sample[0]) / 255, 45 / 255, accuracy: 0.04, "the swatch paints its color")
+            XCTAssertEqual(CGFloat(sample[1]) / 255, 156 / 255, accuracy: 0.04, "the swatch paints its color")
+            XCTAssertEqual(CGFloat(sample[2]) / 255, 1, accuracy: 0.04, "the swatch paints its color")
             window.orderOut(nil)
         }
     }
