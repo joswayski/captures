@@ -10,7 +10,9 @@ use captures_app::recording_editor::{
     RecordingSaveRequest, ReplacedRecording, SavedRecording,
 };
 use captures_app::recording_editor_ui::{self as ui, SaveDefaults};
-use captures_media::{CancelToken, ExportFormat, ExportProgress, ExportSpec, MediaToolchain};
+use captures_media::{
+    CancelToken, EditSpec, ExportFormat, ExportProgress, ExportSpec, MediaToolchain,
+};
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
 
@@ -24,6 +26,8 @@ pub(super) struct Presented {
     pub defaults: SaveDefaults,
     pub frame: Arc<Frame>,
     pub duration_ms: u64,
+    pub edit: EditSpec,
+    pub position_ms: u64,
 }
 
 impl Presented {
@@ -37,12 +41,22 @@ impl Presented {
             defaults: session.save_defaults(directory),
             frame: Arc::new(Frame::new(&session.frame())),
             duration_ms: snapshot.editor.source.duration_ms.unwrap_or(0),
+            edit: snapshot.editor.edit.clone(),
+            position_ms: snapshot.editor.position_ms,
         }
     }
 }
 
+pub(super) struct PreviewRequest {
+    pub generation: u64,
+    pub edit: EditSpec,
+    pub position_ms: u64,
+}
+
 pub(super) enum Job {
     Save(RecordingSaveRequest, bool, CancelToken),
+    Preview,
+    Thumbnails(CancelToken),
     Play {
         generation: u64,
         position_ms: u64,
@@ -67,6 +81,8 @@ pub(super) struct Saved {
 
 pub(super) enum Outcome {
     Opened(Result<Presented, String>),
+    Preview(u64, Box<Presented>, Option<String>),
+    Thumbnails(Result<Arc<Frame>, String>),
     Progress(ExportProgress),
     Saved(Result<Saved, String>),
     Revealed(Result<(), String>),
@@ -112,6 +128,9 @@ pub(super) struct Worker {
     /// Also cancelled if teardown bypasses WM_CLOSE.
     pub cancel: Option<CancelToken>,
     pub playback_cancel: Option<CancelToken>,
+    pub thumbnail_cancel: Option<CancelToken>,
+    /// One pending scrub/trim request, rather than a queue of stale decodes.
+    pending_preview: Arc<Mutex<Option<PreviewRequest>>>,
     /// Bounded to one frame even while a modal dialog blocks the UI loop.
     pub latest: Arc<Mutex<Option<PlaybackFrame>>>,
     pub looping: Arc<AtomicBool>,
@@ -129,6 +148,8 @@ impl Worker {
         let hwnd = hwnd.0 as isize;
         let latest = Arc::new(Mutex::new(None));
         let frames = latest.clone();
+        let pending_preview: Arc<Mutex<Option<PreviewRequest>>> = Arc::new(Mutex::new(None));
+        let requests = pending_preview.clone();
         let looping = Arc::new(AtomicBool::new(false));
         let loop_flag = looping.clone();
         let thread = std::thread::Builder::new()
@@ -183,6 +204,37 @@ impl Worker {
                 while let Ok(job) = inbox.recv() {
                     let outcome = match job {
                         Job::Close => break,
+                        Job::Preview => {
+                            let Some(request) = requests.lock().expect("preview mailbox").take()
+                            else {
+                                continue;
+                            };
+                            let Some(session) = session.as_mut() else {
+                                continue;
+                            };
+                            let export = session.snapshot_v2().save_export.clone();
+                            let result =
+                                session.execute_v2(RecordingEditorRequestV2::UpdatePreviewAt {
+                                    edit: request.edit,
+                                    export,
+                                    position_ms: request.position_ms,
+                                });
+                            Outcome::Preview(
+                                request.generation,
+                                Box::new(Presented::of(session, &directory)),
+                                result.err(),
+                            )
+                        }
+                        Job::Thumbnails(cancel) => {
+                            let Some(session) = session.as_ref() else {
+                                continue;
+                            };
+                            Outcome::Thumbnails(
+                                session
+                                    .timeline_thumbnails(&cancel)
+                                    .map(|strip| Arc::new(Frame::new(strip.pixels()))),
+                            )
+                        }
                         Job::Reveal(path) => {
                             Outcome::Revealed(crate::history::reveal(&path.to_string_lossy()))
                         }
@@ -281,12 +333,30 @@ impl Worker {
             thread: Some(thread),
             cancel: None,
             playback_cancel: None,
+            thumbnail_cancel: None,
+            pending_preview,
             latest,
             looping,
         })
     }
 
+    pub fn preview(&self, request: PreviewRequest) {
+        if self
+            .pending_preview
+            .lock()
+            .expect("preview mailbox")
+            .replace(request)
+            .is_none()
+        {
+            let _ = self.jobs.send(Job::Preview);
+        }
+    }
+
     pub fn close(&mut self) {
+        self.pending_preview.lock().expect("preview mailbox").take();
+        if let Some(cancel) = self.thumbnail_cancel.take() {
+            cancel.cancel();
+        }
         if let Some(cancel) = &self.cancel {
             cancel.cancel();
         }

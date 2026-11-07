@@ -19,6 +19,28 @@ pub(super) struct Frame {
 }
 
 impl Frame {
+    pub fn bitmap(&self, dc: &ID2D1DeviceContext) -> Result<ID2D1Bitmap1> {
+        unsafe {
+            dc.CreateBitmap(
+                D2D_SIZE_U {
+                    width: self.width,
+                    height: self.height,
+                },
+                Some(self.bgra.as_ptr().cast()),
+                self.width * 4,
+                &D2D1_BITMAP_PROPERTIES1 {
+                    pixelFormat: D2D1_PIXEL_FORMAT {
+                        format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                        alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+                    },
+                    dpiX: 96.,
+                    dpiY: 96.,
+                    ..Default::default()
+                },
+            )
+        }
+    }
+
     /// Convert on the media worker, never while painting a native control.
     pub fn new(image: &RgbaImage) -> Self {
         let mut bgra = Vec::with_capacity(image.as_raw().len());
@@ -80,6 +102,7 @@ impl Recording {
         {
             self.preview.position_ms = frame.position_ms;
             self.set_preview_frame(frame.frame);
+            self.dirty[TIMELINE] = true;
         }
     }
 
@@ -135,7 +158,6 @@ impl Recording {
             }
         });
         let height = (media_h + 2. * self.t.n("s-5")).clamp(160., self.height * 0.58);
-        let height = height.min((self.rects[FOOTER].y - top - 46. - self.t.n("s-6")).max(1.));
         self.rects[PREVIEW] = Rect::new(title.x, top, title.w, 46. + height);
         let right = title.x + title.w - self.t.n("s-5");
         self.rects[slot(Target::Actual)] = Rect::new(right - 66., top + 7., 66., 32.);
@@ -148,6 +170,7 @@ impl Recording {
         for target in [Target::Play, Target::Loop, Target::Fit, Target::Actual] {
             self.dirty[slot(target)] = true;
         }
+        self.layout_timeline();
     }
 
     pub(super) fn preview_view(&self) -> Rect {
@@ -296,23 +319,7 @@ impl Recording {
         let mut cache = self.preview.bitmap.borrow_mut();
         unsafe {
             if cache.is_none() {
-                *cache = Some(dc.CreateBitmap(
-                    D2D_SIZE_U {
-                        width: frame.width,
-                        height: frame.height,
-                    },
-                    Some(frame.bgra.as_ptr().cast()),
-                    frame.width * 4,
-                    &D2D1_BITMAP_PROPERTIES1 {
-                        pixelFormat: D2D1_PIXEL_FORMAT {
-                            format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                            alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
-                        },
-                        dpiX: 96.,
-                        dpiY: 96.,
-                        ..Default::default()
-                    },
-                )?);
+                *cache = Some(frame.bitmap(dc)?);
             }
             let bitmap = cache.as_ref().expect("created bitmap");
             let media = self.preview_media();
@@ -451,8 +458,17 @@ impl Recording {
 mod tests {
     use super::*;
 
-    #[test]
-    fn lower_resolution_playback_keeps_scrolled_media_filling_the_viewport() {
+    fn frame(width: u32, height: u32) -> Arc<Frame> {
+        Arc::new(Frame::new(&RgbaImage::from_fn(width, height, |x, y| {
+            image::Rgba(if x >= width * 7 / 8 && y >= height * 7 / 8 {
+                [37, 91, 153, 255]
+            } else {
+                [173, 41, 88, 255]
+            })
+        })))
+    }
+
+    fn fixture() -> (Recording, PathBuf) {
         use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
         unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).ok().unwrap() };
         let profile = std::env::temp_dir().join(format!(
@@ -475,15 +491,6 @@ mod tests {
         // No decoder is needed: feed the same accepted-still/decoded-frame
         // boundary as the worker, with known pixels at different resolutions.
         let _ = w.worker.outcomes.recv().unwrap();
-        let fixture = |width, height| {
-            Arc::new(Frame::new(&RgbaImage::from_fn(width, height, |x, y| {
-                image::Rgba(if x >= width * 7 / 8 && y >= height * 7 / 8 {
-                    [37, 91, 153, 255]
-                } else {
-                    [173, 41, 88, 255]
-                })
-            })))
-        };
         w.apply_outcome(Outcome::Opened(Ok(Presented {
             mime_type: "video/mp4".into(),
             dropped_frames: 0,
@@ -499,9 +506,18 @@ mod tests {
                 directory: profile.to_string_lossy().into_owned(),
                 stem: "Recording".into(),
             },
-            frame: fixture(1920, 1080),
+            frame: frame(1920, 1080),
             duration_ms: 6000,
+            edit: captures_media::EditSpec::default(),
+            position_ms: 0,
         })));
+        (w, profile)
+    }
+
+    #[test]
+    fn lower_resolution_playback_keeps_scrolled_media_filling_the_viewport() {
+        let (mut w, profile) = fixture();
+        let g = w.g.clone();
         (w.width, w.height) = (640., 480.);
         w.layout().unwrap();
         w.activate(Target::Actual);
@@ -558,7 +574,7 @@ mod tests {
         *w.worker.latest.lock().unwrap() = Some(worker::PlaybackFrame {
             generation: w.preview.generation,
             position_ms: 100,
-            frame: fixture(1280, 720),
+            frame: frame(1280, 720),
         });
         w.take_preview_frame();
         assert_eq!(
@@ -574,5 +590,167 @@ mod tests {
         );
         drop(w);
         std::fs::remove_dir_all(profile).unwrap();
+    }
+
+    #[test]
+    fn play_restarts_within_the_final_ten_milliseconds_on_the_first_press() {
+        let (mut w, profile) = fixture();
+        w.timeline.start = 1100;
+        for (end, position, expected) in [
+            (6000, 5999, 1100),
+            (6000, 5990, 1100),
+            (6000, 5989, 5989),
+            (4200, 4190, 1100),
+            (4200, 4189, 4189),
+            (1105, 1104, 1100),
+        ] {
+            w.timeline.end = end;
+            w.preview.position_ms = position;
+            w.activate(Target::Play);
+            assert!(w.preview.playing);
+            assert_eq!(
+                w.preview.position_ms, expected,
+                "end={end}, position={position}"
+            );
+            w.activate(Target::Play);
+            assert!(!w.preview.playing);
+        }
+        drop(w);
+        std::fs::remove_dir_all(profile).unwrap();
+    }
+
+    #[test]
+    fn looping_preview_restarts_an_empty_tail_but_not_an_empty_trim() {
+        for (looping, position, restarts) in [
+            (true, 5999, true),
+            (false, 5999, false),
+            (true, 1100, false),
+        ] {
+            let (mut w, profile) = fixture();
+            w.presented.as_mut().unwrap().mime_type = "image/gif".into();
+            w.timeline.start = 1100;
+            w.preview.position_ms = position;
+            w.preview.playing = true;
+            w.worker.looping.store(looping, Ordering::Relaxed);
+            w.apply_outcome(Outcome::PlaybackEnded(w.preview.generation, Ok(())));
+            assert!(
+                !w.preview.playing,
+                "wait for the starting frame before replay"
+            );
+            let mut accepted = w.presented.take().unwrap();
+            accepted.edit.trim_start_ms = 1100;
+            accepted.position_ms = 1100;
+            w.apply_outcome(Outcome::Preview(
+                w.timeline.generation,
+                Box::new(accepted),
+                None,
+            ));
+            assert_eq!(w.preview.position_ms, 1100);
+            assert_eq!(
+                w.preview.playing, restarts,
+                "looping={looping}, position={position}"
+            );
+            assert!(!w.error);
+            drop(w);
+            std::fs::remove_dir_all(profile).unwrap();
+        }
+    }
+
+    #[test]
+    fn timeline_keeps_source_time_and_only_accepts_the_latest_preview() {
+        let (mut w, profile) = fixture();
+        (w.width, w.height) = (640., 480.);
+        w.layout().unwrap();
+        let footer = w.target_rect(Target::Save);
+        // Keyboard focus must reveal the whole handle above the fixed footer.
+        w.set_focus(Some(Target::TrimStart), true);
+        let handle = w.visible_target_rect(Target::TrimStart);
+        assert_eq!(handle.h, 82.);
+        assert!(handle.y >= 0. && handle.y + handle.h < footer.y);
+        assert_eq!(w.target_rect(Target::Save).y, footer.y);
+        w.key(VK_RIGHT);
+        assert_eq!(w.trim_range(Target::TrimStart), Some((1, 0, 5999)));
+        w.key(VK_PRIOR);
+        assert_eq!(w.trim_range(Target::TrimStart), Some((1001, 0, 5999)));
+        w.set_trim(Target::TrimEnd, 4200.);
+        assert_eq!(w.trim_range(Target::TrimEnd), Some((4200, 1002, 6000)));
+
+        // Full-duration trim endpoints are valid, but preview seeks must
+        // remain inside the source's final presentation interval.
+        w.set_trim(Target::TrimEnd, 6000.);
+        assert_eq!(w.trim_range(Target::TrimEnd), Some((6000, 1002, 6000)));
+        assert_eq!(w.preview.position_ms, 5999);
+        w.set_focus(Some(Target::TrimEnd), true);
+        w.set_trim(Target::TrimEnd, 5999.);
+        w.key(VK_RIGHT);
+        assert_eq!((w.timeline.end, w.preview.position_ms), (6000, 5999));
+        w.set_trim(Target::TrimEnd, 5000.);
+        w.key(VK_PRIOR);
+        assert_eq!((w.timeline.end, w.preview.position_ms), (6000, 5999));
+        w.set_trim(Target::TrimEnd, 4200.);
+        let track = w.timeline_track();
+        assert!(w.timeline_pointer(WM_LBUTTONDOWN, track.x + track.w - 1., track.y + 20.));
+        assert!(w.timeline_pointer(WM_MOUSEMOVE, track.x + track.w, track.y + 20.));
+        assert_eq!(w.preview.position_ms, 5999);
+        assert_eq!(w.timeline.end, 4200, "scrubbing must not alter the trim");
+        w.end_timeline_drag();
+
+        // Scrubbing is source-relative, not restricted to the selected range.
+        let track = w.timeline_track();
+        assert!(w.timeline_pointer(WM_LBUTTONDOWN, track.x + track.w / 12., track.y + 20.));
+        assert_eq!(w.preview.position_ms, 500);
+        assert!(!w.enabled(Target::Save));
+        assert!(!w.enabled(Target::Play));
+        w.end_timeline_drag();
+        let generation = w.timeline.generation;
+
+        let mut stale = w.presented.take().unwrap();
+        stale.edit.trim_start_ms = 100;
+        stale.edit.trim_end_ms = Some(5000);
+        w.apply_outcome(Outcome::Preview(generation - 1, Box::new(stale), None));
+        assert_eq!((w.timeline.start, w.timeline.end), (1001, 4200));
+        assert!(w.timeline.pending);
+
+        // A failed latest decode must restore the worker's accepted edit,
+        // including an earlier success whose stale UI outcome was ignored.
+        let (mut source, source_profile) = fixture();
+        let mut accepted = source.presented.take().unwrap();
+        accepted.edit.trim_start_ms = 100;
+        accepted.edit.trim_end_ms = Some(5000);
+        accepted.position_ms = 800;
+        w.apply_outcome(Outcome::Preview(
+            generation,
+            Box::new(accepted),
+            Some("decode failed".into()),
+        ));
+        assert_eq!(
+            (w.timeline.start, w.timeline.end, w.preview.position_ms),
+            (100, 5000, 800)
+        );
+        assert!(w.enabled(Target::Save) && w.error);
+        w.set_trim(Target::TrimStart, 6000.);
+        assert_eq!(w.trim_range(Target::TrimStart), Some((4999, 0, 4999)));
+        w.set_trim(Target::TrimEnd, 0.);
+        assert_eq!(w.trim_range(Target::TrimEnd), Some((5000, 5000, 6000)));
+
+        w.presented.as_mut().unwrap().duration_ms = 75_000;
+        w.set_trim(Target::TrimEnd, 74_990.);
+        w.key(VK_RIGHT);
+        assert_eq!((w.timeline.end, w.preview.position_ms), (75_000, 74_999));
+        w.set_focus(Some(Target::TrimStart), true);
+        w.set_trim(Target::TrimStart, 1000.);
+        w.key(VK_RIGHT);
+        assert_eq!(w.timeline.start, 1010);
+        let accepted = w.presented.take().unwrap();
+        w.apply_outcome(Outcome::Preview(
+            w.timeline.generation,
+            Box::new(accepted),
+            None,
+        ));
+        assert!(!w.error && w.status.is_empty());
+        drop(w);
+        drop(source);
+        std::fs::remove_dir_all(profile).unwrap();
+        std::fs::remove_dir_all(source_profile).unwrap();
     }
 }

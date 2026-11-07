@@ -38,6 +38,8 @@ fn children(w: &Recording) -> Vec<Id> {
             Target::Fit,
             Target::Actual,
             Target::Play,
+            Target::TrimStart,
+            Target::TrimEnd,
             Target::Change,
             Target::Filename,
             Target::Copy,
@@ -74,11 +76,10 @@ fn value(w: &Recording, id: Id) -> String {
 
 fn rect(w: &Recording, id: Id) -> Rect {
     match id {
-        Id::Control(Target::Play) => w.play_clip(),
-        Id::Control(t) => w.target_rect(t),
+        Id::Control(t) => w.visible_target_rect(t),
         Id::Root => Rect::new(0., 0., w.width, w.height),
-        Id::Title => w.title_rect(),
-        Id::Warning => w.warning_rect(),
+        Id::Title => w.page_visible_rect(w.title_rect()),
+        Id::Warning => w.page_visible_rect(w.warning_rect()),
         Id::Location => {
             let r = w.target_rect(Target::Filename);
             Rect::new(r.x, r.y - 20., r.w, 16.)
@@ -122,7 +123,8 @@ fn runtime(id: Id) -> [i32; 3] {
     IRawElementProviderFragmentRoot,
     IInvokeProvider,
     IToggleProvider,
-    IValueProvider
+    IValueProvider,
+    IRangeValueProvider
 )]
 pub struct Node {
     hwnd: HWND,
@@ -142,6 +144,7 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
     }
     fn GetPatternProvider(&self, pattern: UIA_PATTERN_ID) -> Result<IUnknown> {
         let supported = match self.id {
+            Id::Control(Target::TrimStart | Target::TrimEnd) => pattern == UIA_RangeValuePatternId,
             Id::Control(Target::Filename) | Id::Location => pattern == UIA_ValuePatternId,
             Id::Control(Target::Copy | Target::Loop | Target::Fit | Target::Actual) => {
                 pattern == UIA_TogglePatternId
@@ -168,6 +171,7 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                         Id::Root => UIA_WindowControlTypeId,
                         Id::Control(Target::Filename) => UIA_EditControlTypeId,
                         Id::Control(Target::Copy) => UIA_CheckBoxControlTypeId,
+                        Id::Control(Target::TrimStart | Target::TrimEnd) => UIA_SliderControlTypeId,
                         Id::Control(_) => UIA_ButtonControlTypeId,
                         _ => UIA_TextControlTypeId,
                     }
@@ -200,6 +204,24 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                     VARIANT::from(if w.error { Assertive.0 } else { Polite.0 })
                 }
                 UIA_ValueValuePropertyId => VARIANT::from(BSTR::from(value(w, self.id))),
+                UIA_RangeValueValuePropertyId
+                | UIA_RangeValueMinimumPropertyId
+                | UIA_RangeValueMaximumPropertyId => {
+                    if let Id::Control(target) = self.id
+                        && let Some((value, min, max)) = w.trim_range(target)
+                    {
+                        VARIANT::from(if property == UIA_RangeValueValuePropertyId {
+                            value
+                        } else if property == UIA_RangeValueMinimumPropertyId {
+                            min
+                        } else {
+                            max
+                        } as f64)
+                    } else {
+                        VARIANT::default()
+                    }
+                }
+                UIA_RangeValueIsReadOnlyPropertyId => VARIANT::from(!enabled),
                 UIA_ValueIsReadOnlyPropertyId => {
                     VARIANT::from(self.id != Id::Control(Target::Filename) || !enabled)
                 }
@@ -366,6 +388,71 @@ impl IValueProvider_Impl for Node_Impl {
     }
 }
 
+impl IRangeValueProvider_Impl for Node_Impl {
+    fn SetValue(&self, value: f64) -> Result<()> {
+        with(self.hwnd, |w| {
+            let Id::Control(target) = self.id else {
+                return Err(E_INVALIDARG.into());
+            };
+            let Some((_, min, max)) = w.trim_range(target) else {
+                return Err(E_INVALIDARG.into());
+            };
+            if !w.enabled(target) {
+                return Err(HRESULT(UIA_E_ELEMENTNOTENABLED as _).into());
+            }
+            if !value.is_finite() || value < min as f64 || value > max as f64 {
+                return Err(E_INVALIDARG.into());
+            }
+            w.set_trim(target, value);
+            Ok(())
+        })
+    }
+    fn Value(&self) -> Result<f64> {
+        self.trim_component(0)
+    }
+    fn Minimum(&self) -> Result<f64> {
+        self.trim_component(1)
+    }
+    fn Maximum(&self) -> Result<f64> {
+        self.trim_component(2)
+    }
+    fn IsReadOnly(&self) -> Result<BOOL> {
+        with(self.hwnd, |w| {
+            Ok((!matches!(self.id, Id::Control(t) if w.enabled(t))).into())
+        })
+    }
+    fn SmallChange(&self) -> Result<f64> {
+        with(self.hwnd, |w| {
+            Ok(
+                if w.trim_range(Target::TrimEnd)
+                    .is_some_and(|(_, _, max)| max >= 60_000)
+                {
+                    10.
+                } else {
+                    1.
+                },
+            )
+        })
+    }
+    fn LargeChange(&self) -> Result<f64> {
+        Ok(1000.)
+    }
+}
+
+impl Node_Impl {
+    fn trim_component(&self, part: usize) -> Result<f64> {
+        with(self.hwnd, |w| {
+            let Id::Control(target) = self.id else {
+                return Err(E_INVALIDARG.into());
+            };
+            let Some((value, min, max)) = w.trim_range(target) else {
+                return Err(E_INVALIDARG.into());
+            };
+            Ok([value, min, max][part] as f64)
+        })
+    }
+}
+
 pub fn describe(w: &Recording, events: Vec<Event>) -> Vec<(Event, String)> {
     events
         .into_iter()
@@ -376,6 +463,9 @@ pub fn describe(w: &Recording, events: Vec<Event>) -> Vec<(Event, String)> {
                 Event::Status => w.status.clone(),
                 Event::Name(t) => w.target_label(t).into(),
                 Event::Toggle(t) => w.toggled(t).unwrap_or(false).to_string(),
+                Event::Range(t) => w
+                    .trim_range(t)
+                    .map_or(String::new(), |(value, _, _)| value.to_string()),
                 _ => String::new(),
             };
             (event, text)
@@ -424,6 +514,14 @@ pub fn raise(hwnd: HWND, events: &[(Event, String)]) {
                         UIA_NamePropertyId,
                         &VARIANT::default(),
                         &VARIANT::from(BSTR::from(text)),
+                    );
+                }
+                Event::Range(target) => {
+                    let _ = UiaRaiseAutomationPropertyChangedEvent(
+                        &node(hwnd, Id::Control(target)),
+                        UIA_RangeValueValuePropertyId,
+                        &VARIANT::default(),
+                        &VARIANT::from(text.parse::<f64>().unwrap_or(0.)),
                     );
                 }
                 Event::Status => {
