@@ -800,8 +800,8 @@ keyboard-focus controls over a blurred, dimmed image (Close, Delete, Edit,
 Copy with its clipboard chip, Save file or Show in Folder), file drag out,
 the stale-pointer hover lock, and the Clear all and Minimize controls. Delete
 removes the History entry and reloads History. Only the hovered card
-redraws. Not ported: the collapsed 3D pile pose (Minimize keeps only the
-newest card), arrive/exit motion, overflow scrolling, and stack placement:
+redraws. Not ported then: the collapsed 3D pile pose, arrive/exit motion,
+overflow scrolling, and stack placement:
 GTK4 cannot position windows, so the compositor places the stack; a
 Wayland layer-shell or X11 hint path is still needed. Release build under
 Xvfb with Cairo, two cards: about 94 MB RSS against about 155 MB for the egui
@@ -813,6 +813,24 @@ that editor closes. The hover image's blur and dimming are baked into a
 texture once per card instead of a per-frame blur node: GTK's Cairo renderer
 blurred only the damaged clip, which left visible seams around the hover
 controls. X11 (Xvfb) only. Windows, macOS: unchanged.
+
+The GTK preview stack now lays out and moves through one `Pile` widget that
+places each card with a transform, so motion never re-renders a card's
+contents. Minimize flies the cards into shipping's collapsed 3D pile
+(`collapsed_card_pose`: peek, spin, tilt, scale and depth shade, using the
+pose's flattened affine summary rather than its keystone projection) over
+`PreviewStackFly`, and the expanded list flies back the same way. Hovering
+the pile fans it with `StackFan`'s per-depth stagger; rear cards get the
+shared media blur, baked once the pile settles. New cards rise in with
+`PreviewCardArrive`. While minimized the stack toolbar hides and, as
+shipping's `.thumbnail-collapsed-hit-target`, one "Expand N previews"
+button covers the pile with the accent ring on hover or focus; rear cards
+leave the accessibility tree. Timing resolves the shared `motion` specs
+against GTK's tokens, and with GTK animations off (GNOME's Reduce
+animation) every change lands at once with no frame ticks. `smoke.py`
+minimizes to the pile and expands it over AT-SPI. Exit motion (dismiss
+streak, delete dust), the drag sway and overflow scrolling remain open.
+X11 (Xvfb) only. Windows, macOS: unchanged.
 
 The fifth GTK4 slice is the recording editor, opened by History's Edit on a
 video or GIF (one window per artifact) or `--scene recording --artifact ID`.

@@ -2326,3 +2326,20 @@ popover.captures-menu.canvas-bg-menu > contents {
   outline: 2px solid alpha(var(--theme-accent), 0.62);
   outline-offset: 6px;
 }
+
+/* `.thumbnail-stack-compact .thumbnail-card::before`: a rear card's depth shade. */
+.captures .preview-card-dim {
+  background: var(--glass-strong-solid);
+}
+/* `.thumbnail-collapsed-hit-target`: the collapsed pile's expand button. */
+.captures button.preview-pile-expand {
+  all: unset;
+  border-radius: var(--thumbnail-card-radius);
+  transition: box-shadow 220ms ease;
+}
+.captures button.preview-pile-expand:hover,
+.captures button.preview-pile-expand:focus-visible {
+  box-shadow:
+    0 0 0 1px alpha(var(--theme-accent), 0.85),
+    0 0 18px alpha(var(--theme-accent), 0.24);
+}

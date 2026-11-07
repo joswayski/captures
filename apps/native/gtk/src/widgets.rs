@@ -304,8 +304,11 @@ mod thumbnail_imp {
         pub texture: std::cell::RefCell<Option<gtk::gdk::Texture>>,
         pub cover: std::cell::Cell<bool>,
         pub dimmed: std::cell::Cell<bool>,
-        /// The hover image (blur radius, texture), built once per texture.
-        pub dimmed_texture: std::cell::RefCell<Option<(f32, gtk::gdk::Texture)>>,
+        /// Collapsed-pile media blur (`blur(…px)`, no dimming).
+        pub blur: std::cell::Cell<f32>,
+        /// The baked filtered image: (blur radius, brightness, texture),
+        /// built once per texture and filter.
+        pub dimmed_texture: std::cell::RefCell<Option<(f32, f32, gtk::gdk::Texture)>>,
     }
 
     #[glib::object_subclass]
@@ -355,18 +358,26 @@ mod thumbnail_imp {
             // The blurred, dimmed image is baked once and then drawn as a
             // plain texture: the Cairo renderer blurs only the damaged clip,
             // which left seams wherever the hover controls repainted.
-            let texture = if dimmed {
-                let sigma = preview_chrome::HOVER_MEDIA_BLUR as f32 / scale;
+            let filter = if dimmed {
+                Some((
+                    preview_chrome::HOVER_MEDIA_BLUR as f32,
+                    preview_chrome::HOVER_MEDIA_BRIGHTNESS as f32,
+                ))
+            } else if self.blur.get() > 0. {
+                Some((self.blur.get(), 1.))
+            } else {
+                None
+            };
+            let texture = if let Some((blur, brightness)) = filter {
+                let sigma = blur / scale;
                 let mut cached = self.dimmed_texture.borrow_mut();
                 match cached.as_ref() {
-                    Some((radius, baked)) if *radius == sigma => baked.clone(),
+                    Some((radius, light, baked)) if *radius == sigma && *light == brightness => {
+                        baked.clone()
+                    }
                     _ => {
-                        let baked = super::dim_and_blur(
-                            &texture,
-                            sigma,
-                            preview_chrome::HOVER_MEDIA_BRIGHTNESS as f32,
-                        );
-                        *cached = Some((sigma, baked.clone()));
+                        let baked = super::dim_and_blur(&texture, sigma, brightness);
+                        *cached = Some((sigma, brightness, baked.clone()));
                         baked
                     }
                 }
@@ -404,6 +415,13 @@ impl Default for Thumbnail {
 impl Thumbnail {
     pub fn has_texture(&self) -> bool {
         self.imp().texture.borrow().is_some()
+    }
+
+    /// A collapsed pile's rear-card media blur in logical pixels (0: none).
+    pub fn set_blur(&self, blur: f32) {
+        if self.imp().blur.replace(blur) != blur {
+            self.queue_draw();
+        }
     }
 
     pub fn set_dimmed(&self, dimmed: bool) {

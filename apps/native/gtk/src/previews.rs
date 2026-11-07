@@ -15,7 +15,11 @@ use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 
 use crate::history::{media_path, reveal, save_copy};
+use crate::tokens::Tokens;
 use crate::widgets::{Icon, Thumbnail, icon_button};
+
+mod pile;
+use pile::{Pile, PileCard};
 
 pub const TITLE: &str = "Captures Previews";
 
@@ -35,6 +39,7 @@ pub struct Previews {
 struct Card {
     entry: HistoryEntry,
     root: gtk::Overlay,
+    dim: gtk::Box,
     image: Thumbnail,
     chip: gtk::Label,
     /// Hover-only controls; untargetable while hidden, as shipping's
@@ -52,7 +57,7 @@ struct State {
     window: gtk::ApplicationWindow,
     stack: RefCell<PreviewStack>,
     cards: RefCell<Vec<Rc<Card>>>,
-    list: gtk::Box,
+    pile: Pile,
     minimize: gtk::Button,
     actions: Actions,
 }
@@ -68,7 +73,13 @@ fn icon_control(icon: &str, label: &str, classes: &[&str]) -> gtk::Button {
     button
 }
 
-pub fn build(app: &gtk::Application, history_root: PathBuf, actions: Actions) -> Previews {
+pub fn build(
+    app: &gtk::Application,
+    tokens: &Tokens,
+    placement: captures_settings::MiniPreviewPlacement,
+    history_root: PathBuf,
+    actions: Actions,
+) -> Previews {
     let window = gtk::ApplicationWindow::builder()
         .application(app)
         .title(TITLE)
@@ -78,18 +89,8 @@ pub fn build(app: &gtk::Application, history_root: PathBuf, actions: Actions) ->
     window.add_css_class("captures");
     window.add_css_class("preview-stack-window");
 
-    let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    let pad = preview::THUMBNAIL_PADDING as i32;
-    root.set_margin_start(pad);
-    root.set_margin_end(pad);
-    root.set_margin_top(pad);
-    let list = gtk::Box::new(gtk::Orientation::Vertical, preview::THUMBNAIL_GAP as i32);
-    list.update_property(&[gtk::accessible::Property::Label("Previews")]);
-    root.append(&list);
-    // The shared control gutter under the stack.
+    // The shared control gutter beside the stack's anchored edge.
     let controls = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    controls.set_size_request(-1, preview::THUMBNAIL_CONTROL_GUTTER as i32);
-    controls.set_valign(gtk::Align::Start);
     let clear = icon_control(
         "close",
         preview::STACK_CLEAR_ALL_LABEL,
@@ -105,15 +106,17 @@ pub fn build(app: &gtk::Application, history_root: PathBuf, actions: Actions) ->
         button.set_valign(gtk::Align::Center);
         controls.append(button);
     }
-    root.append(&controls);
-    window.set_child(Some(&root));
+    let pile = Pile::new(tokens, &controls);
+    pile.update_property(&[gtk::accessible::Property::Label("Previews")]);
+    pile.set_top_anchor(placement.is_top());
+    window.set_child(Some(&pile));
 
     let state = Rc::new(State {
         history_root,
         window: window.clone(),
         stack: RefCell::default(),
         cards: RefCell::default(),
-        list,
+        pile: pile.clone(),
         minimize: minimize.clone(),
         actions,
     });
@@ -121,6 +124,14 @@ pub fn build(app: &gtk::Application, history_root: PathBuf, actions: Actions) ->
     clear.connect_clicked(move |_| {
         if let Some(state) = weak.upgrade() {
             state.clear_all();
+        }
+    });
+    let weak = Rc::downgrade(&state);
+    pile.connect_expand(move || {
+        if let Some(state) = weak.upgrade()
+            && state.stack.borrow().is_collapsed()
+        {
+            state.toggle_collapsed();
         }
     });
     let weak = Rc::downgrade(&state);
@@ -173,7 +184,12 @@ impl State {
     fn restore(self: &Rc<Self>, entry: HistoryEntry) {
         if self.stack.borrow_mut().insert(entry.id.clone()) {
             let card = self.card(entry);
-            self.list.append(&card.root);
+            self.pile.add_card(PileCard {
+                id: card.entry.id.clone(),
+                root: card.root.clone().upcast(),
+                dim: card.dim.clone().upcast(),
+                image: card.image.clone(),
+            });
             self.cards.borrow_mut().push(card);
         }
         self.sync_editing();
@@ -200,7 +216,7 @@ impl State {
         self.cards.borrow_mut().retain(|card| {
             let keep = card.entry.id != id;
             if !keep {
-                self.list.remove(&card.root);
+                self.pile.remove_card(id);
             }
             keep
         });
@@ -211,7 +227,7 @@ impl State {
         let ids = self.stack.borrow().ids().to_vec();
         self.stack.borrow_mut().remove_all(&ids);
         for card in self.cards.borrow_mut().drain(..) {
-            self.list.remove(&card.root);
+            self.pile.remove_card(&card.entry.id);
         }
         self.relayout();
     }
@@ -222,8 +238,8 @@ impl State {
         self.relayout();
     }
 
-    /// Collapsed keeps only the newest card (the shipping 3D pile pose is
-    /// not ported); the window shrinks to its content.
+    /// The pile flies between the list and the collapsed 3D pose; the
+    /// non-resizable window follows its height.
     fn relayout(&self) {
         let stack = self.stack.borrow();
         if stack.ids().is_empty() {
@@ -231,11 +247,7 @@ impl State {
             return;
         }
         let collapsed = stack.is_collapsed();
-        let cards = self.cards.borrow();
-        let newest = cards.len().saturating_sub(1);
-        for (index, card) in cards.iter().enumerate() {
-            card.root.set_visible(!collapsed || index == newest);
-        }
+        self.pile.set_collapsed(collapsed);
         let label = if collapsed {
             "Expand previews"
         } else {
@@ -269,6 +281,12 @@ impl State {
         root.add_css_class("preview-card");
         root.set_overflow(gtk::Overflow::Hidden);
         root.set_child(Some(&image));
+        // The collapsed pile's depth shade, under every control.
+        let dim = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        dim.add_css_class("preview-card-dim");
+        dim.set_can_target(false);
+        dim.set_opacity(0.);
+        root.add_overlay(&dim);
 
         // `.thumbnail-bottom-bar`: size chip and the clipboard status chip.
         let bottom = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -352,6 +370,7 @@ impl State {
         let card = Rc::new(Card {
             entry,
             root,
+            dim,
             image,
             chip,
             controls,

@@ -147,3 +147,13 @@ fn css_rgba([r, g, b, a]: [f32; 4]) -> String {
         a
     )
 }
+
+impl captures_app::motion::MotionTokens for Tokens {
+    fn duration_ms(&self, token: &str) -> Option<f64> {
+        self.raw(token)?.trim().strip_suffix("ms")?.parse().ok()
+    }
+
+    fn easing(&self, token: &str) -> Option<[f64; 4]> {
+        self.easings.get(token).copied()
+    }
+}

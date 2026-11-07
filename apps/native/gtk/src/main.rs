@@ -273,8 +273,13 @@ impl Host {
             let edit = Rc::downgrade(self);
             let changed = Rc::downgrade(self);
             let editing = Rc::downgrade(self);
+            let placement = captures_settings::load(&self.settings_file)
+                .unwrap_or_default()
+                .mini_preview_placement;
             let previews = Rc::new(previews::build(
                 &self.app,
+                &self.tokens.borrow(),
+                placement,
                 self.history_root.clone(),
                 previews::Actions {
                     edit: Box::new(move |entry| {
