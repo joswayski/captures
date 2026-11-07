@@ -675,6 +675,9 @@ pub struct Editor {
     /// The overlay surface was just created and has never been drawn:
     /// DirectComposition rejects a partial `BeginDraw` on it (E_INVALIDARG).
     overlay_fresh: bool,
+    /// Something other than the brush ring changed since the last overlay
+    /// draw (a staged crop can change inside the same bounds).
+    overlay_rest_dirty: bool,
     motions: Vec<Motion>,
     dcomp: Option<IDCompositionDesktopDevice>,
     _target: Option<IDCompositionTarget>,
@@ -1246,6 +1249,7 @@ impl Editor {
             page_key: (0., 0., 0., 0.),
             overlay_drawn: (None, None),
             overlay_fresh: true,
+            overlay_rest_dirty: true,
             motions: Vec::new(),
             dcomp: None,
             _target: None,
@@ -2557,6 +2561,13 @@ impl Editor {
     }
 
     fn overlay_changed(&mut self) {
+        self.overlay_rest_dirty = true;
+        self.ring_changed();
+    }
+
+    /// Only the brush ring moved: the overlay redraws just its old and new
+    /// boxes.
+    fn ring_changed(&mut self) {
         self.nodes[self.overlay].dirty = true;
         if self.inline.is_some() {
             self.place_caret();
@@ -4699,25 +4710,9 @@ impl Editor {
     ) -> Result<()> {
         let now = self.overlay_parts();
         let fresh = std::mem::take(&mut self.overlay_fresh);
-        let either = |a: Option<Rect>, b: Option<Rect>| match (a, b) {
-            (Some(a), Some(b)) => Some(cover(a, b)),
-            (a, b) => a.or(b),
-        };
-        let was = self.overlay_drawn;
-        let region = if fresh {
-            // A new surface is drawn whole once, transparent where empty.
-            Some(Rect::new(
-                0.,
-                0.,
-                size.0 as f32 / scale.0,
-                size.1 as f32 / scale.1,
-            ))
-        } else if was.0 == now.0 {
-            // Only the brush ring moved (or nothing did).
-            either(was.1, now.1)
-        } else {
-            either(either(was.0, was.1), either(now.0, now.1))
-        };
+        let rest_changed = std::mem::take(&mut self.overlay_rest_dirty);
+        let full = Rect::new(0., 0., size.0 as f32 / scale.0, size.1 as f32 / scale.1);
+        let region = overlay_region(fresh, rest_changed, self.overlay_drawn, now, full);
         self.overlay_drawn = now;
         let Some(region) = region else {
             return Ok(());
@@ -5055,7 +5050,7 @@ impl Editor {
                 self.hover_props_thumb(Some((x, y)));
                 // The brush ring follows the pointer in the overlay.
                 if self.brush_mode().is_some() {
-                    self.overlay_changed();
+                    self.ring_changed();
                 }
             }
             WM_MOUSELEAVE => {
@@ -5063,7 +5058,7 @@ impl Editor {
                 self.set_pointer(None);
                 self.hover_props_thumb(None);
                 if self.tool == "b" {
-                    self.overlay_changed();
+                    self.ring_changed();
                 }
             }
             WM_LBUTTONDOWN | WM_LBUTTONDBLCLK | WM_MBUTTONDOWN => {
@@ -5404,6 +5399,29 @@ fn patch(image: &mut Option<Image>, pixels: Pixels) -> PixelRect {
         bgra: pixels.bgra,
     });
     full
+}
+
+/// The part of the overlay to redraw: the whole surface the first time;
+/// only the brush ring's old and new boxes when nothing else changed (pass
+/// 13); else everything drawn before and now. `(rest, ring)` bounds.
+fn overlay_region(
+    fresh: bool,
+    rest_changed: bool,
+    was: (Option<Rect>, Option<Rect>),
+    now: (Option<Rect>, Option<Rect>),
+    full: Rect,
+) -> Option<Rect> {
+    let either = |a: Option<Rect>, b: Option<Rect>| match (a, b) {
+        (Some(a), Some(b)) => Some(cover(a, b)),
+        (a, b) => a.or(b),
+    };
+    if fresh {
+        Some(full)
+    } else if !rest_changed && was.0 == now.0 {
+        either(was.1, now.1)
+    } else {
+        either(either(was.0, was.1), either(now.0, now.1))
+    }
 }
 
 /// The rectangle covering both.
@@ -5922,6 +5940,31 @@ mod tests {
     use super::*;
     use captures_app::editor_image_background::BrushMode;
     use image::Rgba;
+
+    /// Pass 15: a staged crop dims the whole canvas, so its overlay bounds
+    /// stay the same while the rectangle changes; it must still redraw.
+    #[test]
+    fn overlay_redraws_content_that_changes_inside_the_same_bounds() {
+        let canvas = Some(Rect::new(10., 10., 640., 360.));
+        let full = Rect::new(0., 0., 800., 600.);
+        let crop_moved = overlay_region(false, true, (canvas, None), (canvas, None), full);
+        assert_eq!(crop_moved, canvas);
+        // Only the ring moved: just its two boxes.
+        let (a, b) = (
+            Rect::new(100., 100., 40., 40.),
+            Rect::new(120., 100., 40., 40.),
+        );
+        let ring = overlay_region(false, false, (canvas, Some(a)), (canvas, Some(b)), full);
+        assert_eq!(ring, Some(cover(a, b)));
+        assert_eq!(
+            overlay_region(false, false, (canvas, None), (canvas, None), full),
+            None
+        );
+        assert_eq!(
+            overlay_region(true, false, (None, None), (None, None), full),
+            Some(full)
+        );
+    }
 
     /// Hardware pass 14: after two Erase strokes and two undos a row at the
     /// edge of stroke 1's damage stayed on screen. Drive the worker's

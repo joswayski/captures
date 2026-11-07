@@ -641,6 +641,24 @@ host has no rotate handle yet, so nothing reads the value until rotation is
 ported. Windows: cross-compiled only, Wine renders in light and dark
 against the harness. macOS, Linux: unchanged.
 
+Layer thumbnails: the worker calls the shared `refresh_layer_thumbnails`
+before each publish (only changed layers re-render, at most 64 px) and
+converts a thumbnail to premultiplied BGRA only when the session hands it a
+new image; unchanged layers reuse the previous conversion. A row draws it
+cover-fit in its 44 × 32 well (`.screenshot-layer-preview img`), clipped to
+the rounded corners and faded with a hidden layer; a layer without one keeps
+the kind icon. Windows: cross-compiled only, Wine renders in light and dark
+(fixture shapes added by a temporary, removed hook). macOS, Linux:
+unchanged.
+
+Crop overlay (hardware pass 15): a staged crop dims the whole canvas, so
+the overlay's content bounds stay the same while the rectangle changes, and
+the ring-only redraw from pass 13 then drew nothing after the press. Only
+the brush ring's pointer moves now take that path; every other overlay
+change redraws its old and new content. A host test covers the region rule.
+Windows: cross-compiled only, the test runs under Wine. macOS, Linux:
+unchanged.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,
