@@ -2,6 +2,7 @@
 //! Closed, including cancellation and replacement's history compensation.
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{Arc, Mutex, atomic::AtomicBool};
 use std::thread::JoinHandle;
 
 use captures_app::recording_editor::{
@@ -13,12 +14,16 @@ use captures_media::{CancelToken, ExportFormat, ExportProgress, ExportSpec, Medi
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
 
+use super::preview::Frame;
+
 pub(super) struct Presented {
     pub mime_type: String,
     pub dropped_frames: u64,
     pub export: ExportSpec,
     pub original: Option<PathBuf>,
     pub defaults: SaveDefaults,
+    pub frame: Arc<Frame>,
+    pub duration_ms: u64,
 }
 
 impl Presented {
@@ -30,14 +35,27 @@ impl Presented {
             export: snapshot.save_export.clone(),
             original: session.original_save_path().map(Path::to_owned),
             defaults: session.save_defaults(directory),
+            frame: Arc::new(Frame::new(&session.frame())),
+            duration_ms: snapshot.editor.source.duration_ms.unwrap_or(0),
         }
     }
 }
 
 pub(super) enum Job {
     Save(RecordingSaveRequest, bool, CancelToken),
+    Play {
+        generation: u64,
+        position_ms: u64,
+        cancel: CancelToken,
+    },
     Reveal(PathBuf),
     Close,
+}
+
+pub(super) struct PlaybackFrame {
+    pub generation: u64,
+    pub position_ms: u64,
+    pub frame: Arc<Frame>,
 }
 
 pub(super) struct Saved {
@@ -52,6 +70,7 @@ pub(super) enum Outcome {
     Progress(ExportProgress),
     Saved(Result<Saved, String>),
     Revealed(Result<(), String>),
+    PlaybackEnded(u64, Result<(), String>),
     Closed,
 }
 
@@ -92,6 +111,10 @@ pub(super) struct Worker {
     thread: Option<JoinHandle<()>>,
     /// Also cancelled if teardown bypasses WM_CLOSE.
     pub cancel: Option<CancelToken>,
+    pub playback_cancel: Option<CancelToken>,
+    /// Bounded to one frame even while a modal dialog blocks the UI loop.
+    pub latest: Arc<Mutex<Option<PlaybackFrame>>>,
+    pub looping: Arc<AtomicBool>,
 }
 
 impl Worker {
@@ -104,6 +127,10 @@ impl Worker {
         let (jobs, inbox) = channel();
         let (out, outcomes) = channel();
         let hwnd = hwnd.0 as isize;
+        let latest = Arc::new(Mutex::new(None));
+        let frames = latest.clone();
+        let looping = Arc::new(AtomicBool::new(false));
+        let loop_flag = looping.clone();
         let thread = std::thread::Builder::new()
             .name("captures-recording-editor".into())
             .spawn(move || {
@@ -159,6 +186,57 @@ impl Worker {
                         Job::Reveal(path) => {
                             Outcome::Revealed(crate::history::reveal(&path.to_string_lossy()))
                         }
+                        Job::Play {
+                            generation,
+                            position_ms,
+                            cancel,
+                        } => {
+                            let Some(session) = session.as_ref() else {
+                                continue;
+                            };
+                            let result = (|| {
+                                let mut playback = session.looping_playback(
+                                    position_ms,
+                                    true,
+                                    loop_flag.clone(),
+                                    &cancel,
+                                )?;
+                                while let Some(frame) = playback.next_frame()? {
+                                    if cancel.is_cancelled() {
+                                        break;
+                                    }
+                                    let frame = PlaybackFrame {
+                                        generation,
+                                        position_ms: frame.position_ms,
+                                        frame: Arc::new(Frame::new(&frame.pixels())),
+                                    };
+                                    let wake = frames
+                                        .lock()
+                                        .expect("playback mailbox")
+                                        .replace(frame)
+                                        .is_none();
+                                    if wake && hwnd != 0 {
+                                        unsafe {
+                                            let _ = PostMessageW(
+                                                Some(HWND(hwnd as *mut _)),
+                                                super::WM_FRAME,
+                                                WPARAM(0),
+                                                LPARAM(0),
+                                            );
+                                        }
+                                    }
+                                }
+                                Ok(())
+                            })();
+                            Outcome::PlaybackEnded(
+                                generation,
+                                if cancel.is_cancelled() {
+                                    Ok(())
+                                } else {
+                                    result
+                                },
+                            )
+                        }
                         Job::Save(request, copy, cancel) => {
                             let Some(session) = session.as_mut() else {
                                 continue;
@@ -202,11 +280,17 @@ impl Worker {
             outcomes,
             thread: Some(thread),
             cancel: None,
+            playback_cancel: None,
+            latest,
+            looping,
         })
     }
 
     pub fn close(&mut self) {
         if let Some(cancel) = &self.cancel {
+            cancel.cancel();
+        }
+        if let Some(cancel) = self.playback_cancel.take() {
             cancel.cancel();
         }
         let _ = self.jobs.send(Job::Close);

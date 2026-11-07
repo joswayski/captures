@@ -760,8 +760,14 @@ Win32 layer-preview wells now use Tauri's 10 DIP checkerboard period and
 theme tokens, including transparent image areas and faded hidden layers.
 Cells clip a rounded fill without overlapping alpha, leaving the row layout
 and thumbnail pixels unchanged. Light/dark Direct2D renders under Wine were
-inspected; changed pixels stay inside the three fixture wells. Physical
-Windows follow-up remains open. macOS, X11 and Wayland are unchanged.
+inspected; changed pixels stay inside the three fixture wells. Pass 21 on
+Windows 11 at 150% accepted light/dark default, hidden annotation, selected
+40%-opacity rectangle, transparent image and hidden background states against
+the parent build. Cells alternate 7/8 physical pixels (5 DIP), hidden fills
+have no overlap seams, corners match row backgrounds, and image cover and row
+geometry are unchanged. Both release builds had zero warnings; disposable
+profiles/processes were removed without touching the installed app, clipboard,
+Run key or firewall. macOS, X11 and Wayland are unchanged.
 Tauri's 1.35 CSS-pixel annotation stroke floor and preview opacity still need
 the separate shared-thumbnail slice; this host-only change does not add them.
 
@@ -792,7 +798,7 @@ and Explorer reveal. Replacement preserves the shared session's identity and
 compensation checks; close waits for cancellation/cleanup instead of ending
 the process during an export. Corrupt settings fail rather than redirecting
 saves to a default folder. UIA exposes Value, Toggle and Invoke for the footer.
-This is the shell only: the canvas is empty until preview/playback slice 2;
+Slice 1 contains only the shell; preview/playback is added in slice 2 below;
 timeline, output cards, format preferences, crop/comparison and Text-pattern
 acceptance remain open. This slice saves MP4/GIF sources in their original
 format and rejects WebM export. No release or workflow changes.
@@ -802,10 +808,66 @@ normal/minimum sizes, light/dark, dropped-frame warning and open-error state.
 Wine uses substitute fonts, not Windows typography acceptance. Temporary worker
 tests (removed) verified copy format/bytes, cancelled-copy without publication,
 replacement/recovery-byte equality and close for MP4/GIF, with the separate
-Windows staging-flush access fix. Real-PC rendering, UIA/input, save/cancel and
-close checks remain pending. macOS, X11 and Wayland: existing recording
+Windows staging-flush access fix. Real-PC pass 18 at 150% verified live
+light/dark normal/minimum rendering, UIA/input, MP4/GIF copy/replacement hashes,
+cancel without stage leftovers, and close during encoding (110 ms to exit).
+Its follow-up verified separated Save focus rings without clipping or moving
+controls; a disappearing Cancel returns focus to Save or, after successful
+completion, Show in Folder. macOS, X11 and Wayland: existing recording
 hosts unchanged; no shared-crate API changes in this slice. Native remains
 opt-in and is not a public-channel replacement.
+
+Win32 recording slice 2 adds retained decoded preview frames, video play/pause
+with source audio and Loop preview, GIF autoplay without video-only controls,
+and Fit/100% sizing. Wheel/Shift+wheel scroll the actual-size preview; keyboard
+focus reveals its clipped play button. The worker keeps only the newest frame
+and wakes the UI when that mailbox becomes nonempty; generation IDs discard
+frames and completions from cancelled playback. Save/reveal/close cancel the
+stream before using the session. No idle redraw timer is added.
+Windows: temporary actual-worker tests under Wine passed changing MP4 frames,
+pause stability, rapid pause/resume, loop wrap, GIF autoplay, actual-size
+clamping/focus reveal and cancellation/close (42–64 ms). Those tests were
+removed. Light/dark normal/minimum Direct2D renders were inspected with
+synthetic media. Physical compositor/audio, UIA/keyboard, pointer transitions
+and performance acceptance remain open. Preview scrollbars, the complete
+scrollable page and later timeline/output/crop controls are still pending.
+macOS, X11 and Wayland: unchanged, not reverified; no shared API, release or
+workflow changes. This is not a native parity or public-channel gate.
+
+Pass 19's provisional Windows hardware run verified source-audio peaks,
+play/pause/resume, Loop, GIF autoplay and actual-size wheel/Shift-wheel scrolling.
+It found a square-cut play shadow and a stage fill covering the panel's bottom
+corners. Retained surfaces now reserve the token shadow's painted extent, and
+the preview content is masked to the rounded panel before its border is drawn.
+Offscreen painting now also clips the play surface to its allocated bounds.
+Local clippy/build and 17 host tests pass. Wine renders were inspected but
+cannot validate the new mask: this Wine build stubs Direct2D PushLayer/PopLayer.
+The real D2D/DComp gate then passed light/dark normal/minimum rounded corners,
+shadow allocation and focus, including 100% media against both bottom corners.
+Precise teardown checks measured 51–106 ms host exit without orphan decoders;
+the original multi-second measurements included harness query cost. Dark shadow
+banding remains a minor visual gap.
+
+Pass 19 also found 100% playback shrinking underneath the scroll position:
+the decoder caps frames at 1280×720, but the host used that texture size for
+display geometry. Layout, media bounds and scroll limits now use the accepted
+full-size still; decoded frames only replace the texture. A rendered-pixel
+regression reproduces the empty stage before the fix and preserves the expected
+bottom-right source pixels after a smaller playback frame and relayout.
+Temporary real-FFmpeg renders also preserve the 1920×1080 bounds before/after
+playback at maximum scroll in light/dark. Native pass 20 accepted the fix on
+Windows 11 at 150%: 1080p light/dark and 4K light hold the same right edge
+through play/pause/resume, maximum scroll, shrink and restore. A 2560×1440 GIF
+passes Fit/100%, scroll limits and resize in both themes. Clean release build:
+14.7 s. The real-pointer geometry clip and corner sheets were inspected.
+Saving a looping 30 s GIF stops preview and starts the encoder; Cancel returns
+to enabled Save in 137 ms, removes the stage file, preserves the source hash
+and restarts autoplay (light only). This was cancellation after saving from
+autoplay, not proof that GIF autoplay naturally stopped; it keeps looping.
+The 14-state hover/focus sequence matches the Windows Chromium harness.
+Native retains a separated keyboard-focus ring; Tauri's global outline reset
+and overlay rule show visibility but no distinct ring, a remaining visual
+difference. Dark shadow banding remains minor. No native promotion is implied.
 
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
