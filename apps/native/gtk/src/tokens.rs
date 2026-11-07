@@ -47,8 +47,7 @@ impl Tokens {
     ) -> (String, Tokens) {
         use captures_settings::Appearance;
         let appearance = forced.map(str::to_owned).unwrap_or_else(|| {
-            let dark =
-                gtk::Settings::default().is_some_and(|s| s.is_gtk_application_prefer_dark_theme());
+            let dark = crate::system_look::prefers_dark();
             match settings.appearance {
                 Appearance::Light => "light".into(),
                 Appearance::Dark => "dark".into(),

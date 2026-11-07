@@ -10,6 +10,7 @@ mod previews;
 mod recording;
 mod style;
 mod switch;
+mod system_look;
 mod tokens;
 mod widgets;
 
@@ -255,6 +256,27 @@ impl Host {
         tokens
     }
 
+    /// The desktop switched light and dark: a System look follows it.
+    fn follow_system(&self) {
+        if self.forced_appearance.borrow().is_some() {
+            return;
+        }
+        let settings = captures_settings::load(&self.settings_file).unwrap_or_default();
+        if settings.appearance != captures_settings::Appearance::System {
+            return;
+        }
+        let (appearance, _) = tokens::Tokens::for_settings(&settings, None);
+        // Dark tokens have light text.
+        let current = if self.tokens.borrow().rgba("text").red() < 0.5 {
+            "light"
+        } else {
+            "dark"
+        };
+        if appearance != current {
+            preferences::restyle(self.apply_look(&settings, false));
+        }
+    }
+
     fn show_history(self: &Rc<Self>) -> Rc<history::History> {
         if let Some(history) = self.history.borrow().as_ref() {
             history.window.present();
@@ -470,6 +492,9 @@ fn main() -> glib::ExitCode {
         let Some(options) = options.borrow_mut().take() else {
             return;
         };
+        if options.appearance.is_none() {
+            system_look::start();
+        }
         let settings = captures_settings::load(&options.settings_file).unwrap_or_default();
         let (appearance, tokens) =
             tokens::Tokens::for_settings(&settings, options.appearance.as_deref());
@@ -496,6 +521,12 @@ fn main() -> glib::ExitCode {
             feedback_endpoint: options.feedback_endpoint.clone(),
         });
         hosts.borrow_mut().push(host.clone());
+        let weak = Rc::downgrade(&host);
+        system_look::watch(move || {
+            if let Some(host) = weak.upgrade() {
+                host.follow_system();
+            }
+        });
         let window: gtk::ApplicationWindow = match options.scene {
             Scene::Preferences => host.show_preferences(),
             Scene::Feedback => host.show_feedback(),

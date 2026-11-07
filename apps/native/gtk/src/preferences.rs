@@ -104,24 +104,29 @@ impl Prefs {
             Some("appearance" | "theme" | "custom_theme")
         ) {
             let tokens = (self.on_look)(&saved, path == "appearance");
-            // Dark tokens have light text.
-            *self.appearance.borrow_mut() = if tokens.rgba("text").red() < 0.5 {
-                "light"
-            } else {
-                "dark"
-            }
-            .into();
-            for switch in self.switches.borrow().iter() {
-                switch.set_tokens(tokens.clone());
-            }
-            for swatch in self.swatches.borrow().iter() {
-                swatch.queue_draw();
-            }
-            *self.tokens.borrow_mut() = tokens;
+            self.restyle(tokens);
         }
         for listener in self.listeners.borrow().iter() {
             listener(&saved);
         }
+    }
+
+    /// Token-drawn widgets follow a new look.
+    fn restyle(&self, tokens: Rc<Tokens>) {
+        // Dark tokens have light text.
+        *self.appearance.borrow_mut() = if tokens.rgba("text").red() < 0.5 {
+            "light"
+        } else {
+            "dark"
+        }
+        .into();
+        for switch in self.switches.borrow().iter() {
+            switch.set_tokens(tokens.clone());
+        }
+        for swatch in self.swatches.borrow().iter() {
+            swatch.queue_draw();
+        }
+        *self.tokens.borrow_mut() = tokens;
     }
 
     fn listen(&self, f: impl Fn(&AppSettings) + 'static) {
@@ -176,6 +181,16 @@ pub(crate) fn description(text: &str, class: &str) -> gtk::Label {
 thread_local! {
     /// CSS `1ch` at `--text-sm`: the width of "0" in the UI font.
     static CH: Cell<f32> = const { Cell::new(7.) };
+    /// The open Preferences page, for looks that change outside it.
+    static OPEN: RefCell<std::rc::Weak<Prefs>> = const { RefCell::new(std::rc::Weak::new()) };
+}
+
+/// Restyle an open Preferences window's token-drawn widgets for a look the
+/// page did not pick (the desktop's light or dark for System).
+pub fn restyle(tokens: Rc<Tokens>) {
+    if let Some(prefs) = OPEN.with(|open| open.borrow().upgrade()) {
+        prefs.restyle(tokens);
+    }
 }
 
 /// Measure `1ch` for [`capped`] once the stylesheet is installed.
@@ -248,6 +263,7 @@ pub fn build(
         status_generation: Rc::default(),
         updates: RefCell::default(),
     });
+    OPEN.with(|open| *open.borrow_mut() = Rc::downgrade(&prefs));
 
     let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     // Shipping's `@media (max-width: 720px)` layout, applied after allocation.

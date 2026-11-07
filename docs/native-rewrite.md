@@ -1087,9 +1087,9 @@ GTK's `max-width-chars` measures in the default font. Compared with the
 Tauri harness card by card, light and dark, at 1080×900 under Xvfb.
 `smoke.py` saves Dark, Cobalt (checked), a typed Custom accent, the Top
 right corner, a 24 FPS GIF select and a recorded Ctrl+Shift+4 Region
-shortcut. Not yet ported: the microphone list, Send feedback and the
-update worker (all ported later, below) and live System appearance
-changes. X11 (Xvfb) on GTK 4.8 and 4.14 only;
+shortcut. Not yet ported then: the microphone list, Send feedback, the
+update worker and live System appearance changes (all ported later,
+below). X11 (Xvfb) on GTK 4.8 and 4.14 only;
 Wayland, Orca and real hardware remain open. Windows, macOS: unchanged.
 
 GTK Preferences Find follows `usePreferencesFind`. Ctrl+F opens the header's
@@ -1211,6 +1211,23 @@ null ALSA default device, opens the select, chooses "Default — default" and
 checks it saves `default`. X11 (Xvfb) on GTK 4.8 and 4.14 only; a real
 PipeWire session, USB microphones and hot-plugging remain unverified.
 Windows, macOS: unchanged.
+
+The GTK System appearance now follows the desktop while the app runs.
+`system_look` reads the XDG Settings portal's `org.freedesktop.appearance`
+`color-scheme` once before the first window is styled (a one-second limit,
+so a dark desktop does not open light and flip) and listens for its
+`SettingChanged`. When the portal states no preference, or there is no
+portal, GTK's prefer-dark setting or a `-dark` theme name decides. Those are
+the signals WebKitGTK reads for the shipping app's `prefers-color-scheme`,
+and both GTK settings are watched too. A change restyles every window's
+stylesheet and the open Preferences page's token-drawn switches and
+swatches, as picking Light or Dark does. A Light, Dark or `--appearance`
+look ignores it. Checked under Xvfb with xdg-desktop-portal-gtk on GTK 4.8:
+with Preferences open on System, `gsettings set
+org.gnome.desktop.interface color-scheme prefer-dark` turned the window
+dark (background 239,239,242 to 11,11,14) and `prefer-light` turned it back.
+CI has no portal, so the smoke does not cover it. KDE Plasma, Wayland and
+real desktops not verified. Windows, macOS: unchanged.
 
 ## Progress dashboard
 
