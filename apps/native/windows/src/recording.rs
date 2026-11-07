@@ -613,6 +613,12 @@ impl Recording {
                 if self.preview.playing {
                     self.stop_preview();
                 } else {
+                    // Match Tauri's replay tolerance, including a full-end
+                    // still parked at duration - 1 ms after a trim edit.
+                    if self.preview.position_ms >= self.timeline.end.saturating_sub(10) {
+                        self.preview.position_ms = self.timeline.start;
+                        self.dirty[TIMELINE] = true;
+                    }
                     self.start_preview();
                 }
             }

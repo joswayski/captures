@@ -593,6 +593,33 @@ mod tests {
     }
 
     #[test]
+    fn play_restarts_within_the_final_ten_milliseconds_on_the_first_press() {
+        let (mut w, profile) = fixture();
+        w.timeline.start = 1100;
+        for (end, position, expected) in [
+            (6000, 5999, 1100),
+            (6000, 5990, 1100),
+            (6000, 5989, 5989),
+            (4200, 4190, 1100),
+            (4200, 4189, 4189),
+            (1105, 1104, 1100),
+        ] {
+            w.timeline.end = end;
+            w.preview.position_ms = position;
+            w.activate(Target::Play);
+            assert!(w.preview.playing);
+            assert_eq!(
+                w.preview.position_ms, expected,
+                "end={end}, position={position}"
+            );
+            w.activate(Target::Play);
+            assert!(!w.preview.playing);
+        }
+        drop(w);
+        std::fs::remove_dir_all(profile).unwrap();
+    }
+
+    #[test]
     fn looping_preview_restarts_an_empty_tail_but_not_an_empty_trim() {
         for (looping, position, restarts) in [
             (true, 5999, true),
