@@ -5981,7 +5981,11 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 if let Some(mut editor) = closed {
                     editor.queue_close();
                 }
-                if !crate::host::exists() && !crate::history::exists() && !exists() {
+                if !crate::host::exists()
+                    && !crate::history::exists()
+                    && !exists()
+                    && !crate::recording::exists()
+                {
                     PostQuitMessage(0);
                 }
                 return LRESULT(0);

@@ -161,13 +161,13 @@ pub struct Item {
 }
 
 impl Item {
-    /// Edit opens the screenshot editor; the recording editor and Restore's
-    /// floating preview don't exist in this host yet, so those stay disabled.
+    /// Edit opens the matching editor; Restore's floating preview is still
+    /// unavailable in this host.
     pub fn action_enabled(&self, action: CardAction) -> bool {
         self.busy.is_none()
             && match action {
                 CardAction::SaveFile | CardAction::ShowInFolder => true,
-                CardAction::Edit => !self.entry.kind.is_recording() && !self.card.missing,
+                CardAction::Edit => !self.card.missing,
                 _ => false,
             }
     }
@@ -444,7 +444,7 @@ pub struct History {
     /// Back to Preferences was activated; the loop opens it.
     pub open_preferences: bool,
     /// Edit was chosen: the run loop opens this artifact's editor.
-    pub open_editor: Option<String>,
+    pub open_editor: Option<(String, ArtifactKind)>,
 }
 
 impl History {
@@ -903,7 +903,9 @@ impl History {
     fn run_action(&mut self, serial: u32, action: CardAction) {
         if action == CardAction::Edit {
             // One window per artifact; the run loop opens or raises it.
-            self.open_editor = self.item(serial).map(|item| item.entry.id.clone());
+            self.open_editor = self
+                .item(serial)
+                .map(|item| (item.entry.id.clone(), item.entry.kind));
             return;
         }
         // A settings file that exists but can't be read must not send Save
@@ -2579,7 +2581,7 @@ impl History {
     /// One frame if due; the run loop calls this and clears `woken` first.
     /// Returns whether another frame is due, the accessibility events, and
     /// whether Preferences or an editor (by artifact id) should open.
-    pub fn service(&mut self) -> (bool, Vec<Event>, bool, Option<String>) {
+    pub fn service(&mut self) -> (bool, Vec<Event>, bool, Option<(String, ArtifactKind)>) {
         if self.need {
             self.need = false;
             if let Err(error) = self.frame() {
@@ -2760,7 +2762,7 @@ fn load(root: &std::path::Path) -> std::result::Result<Vec<(HistoryEntry, bool)>
 }
 
 /// Shipping `reveal_recording_artifact`: select the file in Explorer.
-fn reveal(path: &str) -> std::result::Result<(), String> {
+pub(crate) fn reveal(path: &str) -> std::result::Result<(), String> {
     use windows::Win32::UI::Shell::{ILFree, SHOpenFolderAndSelectItems, SHParseDisplayName};
     if !std::path::Path::new(path).exists() {
         return Err(captures_app::Error::Missing.to_string());
@@ -2994,7 +2996,8 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                         h.take();
                     }
                 });
-                if !crate::host::exists() && !crate::editor::exists() {
+                if !crate::host::exists() && !crate::editor::exists() && !crate::recording::exists()
+                {
                     PostQuitMessage(0);
                 }
                 return LRESULT(0);

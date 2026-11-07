@@ -1164,7 +1164,10 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                     }
                 });
                 // The last window quits.
-                if !crate::history::exists() && !crate::editor::exists() {
+                if !crate::history::exists()
+                    && !crate::editor::exists()
+                    && !crate::recording::exists()
+                {
                     PostQuitMessage(0);
                 }
                 return LRESULT(0);
@@ -1269,11 +1272,15 @@ pub fn run(options: Options) -> Result<()> {
         RegisterClassW(&class);
         crate::history::register(instance.into())?;
         crate::editor::register(instance.into())?;
+        crate::recording::register(instance.into())?;
         match options.scene {
             crate::Scene::Preferences => open(&options)?,
             crate::Scene::History => crate::history::open(&options, options.size)?,
             crate::Scene::Editor => {
                 crate::editor::open(&options, options.artifact.as_deref().unwrap_or_default())?
+            }
+            crate::Scene::Recording => {
+                crate::recording::open(&options, options.artifact.as_deref().unwrap_or_default())?
             }
         }
         loop {
@@ -1326,10 +1333,15 @@ pub fn run(options: Options) -> Result<()> {
                 if preferences && let Err(error) = open(&options) {
                     eprintln!("couldn't open Preferences: {error}");
                 }
-                if let Some(id) = editor
-                    && let Err(error) = crate::editor::open(&options, &id)
-                {
-                    eprintln!("couldn't open the editor for {id}: {error}");
+                if let Some((id, kind)) = editor {
+                    let result = if kind.is_recording() {
+                        crate::recording::open(&options, &id)
+                    } else {
+                        crate::editor::open(&options, &id)
+                    };
+                    if let Err(error) = result {
+                        eprintln!("couldn't open the editor for {id}: {error}");
+                    }
                 }
             }
             // Each editor's frame; again only the loop clears `woken`.
@@ -1344,6 +1356,17 @@ pub fn run(options: Options) -> Result<()> {
                     if !events.is_empty() {
                         crate::editor_uia::raise(hwnd, &events);
                     }
+                }
+            }
+            for hwnd in crate::recording::windows() {
+                let serviced = crate::recording::with_recording(hwnd, |editor| {
+                    editor.woken = false;
+                    let (again, events) = editor.service();
+                    (again, crate::recording_uia::describe(editor, events))
+                });
+                if let Some((again_r, events)) = serviced {
+                    again |= again_r;
+                    crate::recording_uia::raise(hwnd, &events);
                 }
             }
             if let Some((hwnd, again_p, events, pick_folder, pick_color, open_history)) = state {
