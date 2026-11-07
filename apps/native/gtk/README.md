@@ -60,8 +60,16 @@ window unmapped. The preview stack leaves the screen first unless Preferences
 includes it in captures. A saved capture joins History and the preview stack,
 and auto-copy uses `arboard` (wlr-data-control on Wayland, which needs no
 input serial), as shipping does. The configured countdown delays the capture,
-but has no on-screen countdown yet. Region and window selection, recording and
-the launch notice are not in the GTK host yet. A fresh profile opens
+but has no on-screen countdown yet. Region and window selection and recording
+are not in the GTK host yet. A quiet launch into the tray shows shipping's
+launch notice for 5 s, and finishing setup shows it for 15 s. Linux tray
+hosts never report the icon's position, so it is always the compact
+caretless rectangle in the work area's tray corner (`--scene startup`
+renders it): an unmanaged notification window on X11, an Overlay layer
+surface with the `layer-shell` feature on wlroots/KDE Wayland, and a
+compositor-placed window elsewhere. On Wayland it names the tray route
+instead of the New Capture keys, as the portal decides the real trigger.
+New Capture itself is not in the GTK host yet. A fresh profile opens
 first-run setup (`--scene setup` renders it as a fixture): shipping's
 `Onboarding.tsx` with the shared `captures_app::onboarding` copy, state and
 completion. Until it finishes, the tray shows setup and no global shortcut
@@ -92,7 +100,12 @@ layer-shell`, then run with `LD_LIBRARY_PATH` set to that prefix's `lib`.
 Preferences' Updates card checks only the native Preview channel, and only in
 a build with `CAPTURES_NATIVE_PREVIEW_VERSION` and
 `CAPTURES_NATIVE_PREVIEW_PUBLIC_KEY` set; development builds never make an
-update request, and the GTK host never installs.
+update request, and the GTK host never installs. The update notice
+(`--scene update --update NAME`, one of `captures_app::update_notice::FIXTURES`)
+renders shipping's card from the shared presentation and walks the shared
+stub (Update now downloads, restarts and closes; nothing is downloaded or
+installed). Live update checks do not open it yet: with no GTK packaging
+there is no GTK Preview build to check for.
 
 The host uses GTK's default renderer. On a machine whose GL is software-only
 or broken, `GSK_RENDERER=cairo` is a manual override; the host never switches
@@ -111,7 +124,7 @@ size from `preview.png`, never the full capture.
 Delete with 1000 entries, Preferences (a switch's role, checked state and
 save, Interface theme, accent chips, a custom accent, the preview corner, a
 select and the shortcut recorder), and the editor opened from History: an xdotool drag draws a rectangle,
-then Undo, Redo and Save, the Text tool types and commits a label, the Eraser's slider, check box and Wand click (one undo step), shape and text Properties (shadow, opacity drag as one undo step, fill, Bold, alignment), a drawing default fill reaching a new rectangle, Add images through the GTK chooser, a staged 1 : 1 Crop with Clear, Apply crop and Undo, the Canvas toolbar (width, Trim edges, transparent background), Export settings (Compress, 50%, JPEG saved and measured) Change… save location, layer rename plus drag reorder with the real pointer, the ⋯ layer settings card (opacity, Send to back, Duplicate, Flatten image), and the Compress before/after comparison (split, Hide, Show); Restore into previews: Copy, Close and Delete; Send Feedback as a fixture and against a loopback service (keyboard entry, one send, the cooldown); Open With (a PNG and an MP4 open their editors, a text file is refused); `--live` (a quiet launch stays windowless, a forwarded relaunch opens Preferences, closing it keeps the app running, a forwarded PNG opens its editor, SIGTERM releases the profile); live Screenshot Display (X11 reads the screen; on Wayland a Screenshot portal fixture answers while no Captures window is mapped; the capture reaches History, the preview stack and the clipboard; an unlocked ScreenSaver fixture satisfies the shared session check); the tray (a StatusNotifierWatcher fixture; shipping's 15 rows in order with unsupported captures disabled, and real dbusmenu clicks for Capture History…, Screenshot Display on X11 and Quit); first-run setup (a fresh profile opens setup with Linux's ready screen access; Start capturing saves completion and turns the shortcuts on); crash review (a SIGKILLed live session opens Send Feedback with the review on relaunch, Add to message appends the summary, Dismiss clears it, and clean quits leave nothing); global shortcuts (on X11 the saved Display chord captures, and after a settings change the new chord captures and the old one does not; on Wayland the portal owner starts); and
+then Undo, Redo and Save, the Text tool types and commits a label, the Eraser's slider, check box and Wand click (one undo step), shape and text Properties (shadow, opacity drag as one undo step, fill, Bold, alignment), a drawing default fill reaching a new rectangle, Add images through the GTK chooser, a staged 1 : 1 Crop with Clear, Apply crop and Undo, the Canvas toolbar (width, Trim edges, transparent background), Export settings (Compress, 50%, JPEG saved and measured) Change… save location, layer rename plus drag reorder with the real pointer, the ⋯ layer settings card (opacity, Send to back, Duplicate, Flatten image), and the Compress before/after comparison (split, Hide, Show); Restore into previews: Copy, Close and Delete; Send Feedback as a fixture and against a loopback service (keyboard entry, one send, the cooldown); Open With (a PNG and an MP4 open their editors, a text file is refused); `--live` (a quiet launch stays windowless, a forwarded relaunch opens Preferences, closing it keeps the app running, a forwarded PNG opens its editor, SIGTERM releases the profile); live Screenshot Display (X11 reads the screen; on Wayland a Screenshot portal fixture answers while no Captures window is mapped; the capture reaches History, the preview stack and the clipboard; an unlocked ScreenSaver fixture satisfies the shared session check); the tray (a StatusNotifierWatcher fixture; shipping's 15 rows in order with unsupported captures disabled, and real dbusmenu clicks for Capture History…, Screenshot Display on X11 and Quit); first-run setup (a fresh profile opens setup with Linux's ready screen access; Start capturing saves completion and turns the shortcuts on); the launch notice (a quiet live launch shows it with the New Capture keys on X11 and the tray route on Wayland; Close dismisses it; finishing setup shows it for 15 s); the update notice fixture (Hide persists the notes setting and What's new restores it, pull requests are real buttons, Update now downloads, restarts and closes, an error's Close dismisses it); crash review (a SIGKILLed live session opens Send Feedback with the review on relaunch, Add to message appends the summary, Dismiss clears it, and clean quits leave nothing); global shortcuts (on X11 the saved Display chord captures, and after a settings change the new chord captures and the old one does not; on Wayland the portal owner starts); and
 the recording editor: keyboard trim, play/pause and Save as new, then the Compress comparison, crop with the crop handle sliders, GIF format and a saved 320 × 180 GIF). Run it with `xvfb-run -a dbus-run-session -- /usr/bin/python3
 apps/native/gtk/smoke.py --binary apps/native/gtk/target/debug/captures-gtk`.
 `--only STEP` (repeatable) runs single steps. `--wayland --injector PATH` runs the same smoke on a private headless Sway

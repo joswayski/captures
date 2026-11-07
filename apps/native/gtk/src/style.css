@@ -2780,3 +2780,362 @@ popover.captures-menu.canvas-bg-menu > contents {
   font-family: var(--font-mono);
   font-size: var(--text-sm);
 }
+
+/* ------------------------------------------------------ tray notices ---- */
+
+/* `.tray-notice`: a transparent window; the 28 px frame holds the shadow. */
+window.captures.notice-window {
+  background: transparent;
+}
+
+/* `.startup-notice:not([data-caret])`: Linux tray icons report no position,
+   so the launch notice is always the compact caretless glass rectangle. */
+.captures .startup-notice {
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-lg);
+  color: var(--glass-text);
+  background: var(--glass-strong-solid);
+  box-shadow: var(--tooltip-shadow-compact);
+  animation: startup-arrive var(--dur-4) var(--ease-out);
+}
+.captures .startup-notice-content {
+  padding: var(--s-4) calc(var(--h-sm) + var(--s-5)) var(--s-4) var(--s-5);
+}
+.captures .startup-notice-title {
+  color: var(--glass-text);
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--brand-tracking);
+  line-height: var(--lh-tight-md);
+}
+.captures .startup-notice-row {
+  margin-top: var(--s-1);
+}
+.captures .startup-notice-hint {
+  color: var(--glass-text-muted);
+  font-size: var(--text-sm);
+  letter-spacing: var(--sm-tracking);
+  line-height: var(--lh-tight-sm);
+}
+.captures .startup-notice-key {
+  padding: 1px var(--s-1);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-sm);
+  color: var(--glass-text);
+  background: var(--glass-hover);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  line-height: var(--lh-tight-sm);
+}
+/* The word space before the first `<kbd>` plus its `--s-1` margin. */
+.captures .startup-notice-key.first {
+  margin-left: calc(var(--s-1) + 3px);
+}
+.captures .startup-notice-key.next {
+  margin-left: var(--s-1);
+}
+.captures button.startup-notice-dismiss {
+  all: unset;
+  min-width: var(--h-sm);
+  min-height: var(--h-sm);
+  margin-right: var(--s-3);
+  border-radius: var(--r-pill);
+  color: var(--glass-text-subtle);
+}
+.captures button.startup-notice-dismiss:hover {
+  color: var(--glass-text);
+  background: var(--glass-hover);
+}
+.captures button.startup-notice-dismiss:focus-visible {
+  color: var(--glass-text);
+  box-shadow: var(--focus-ring);
+}
+@keyframes startup-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* `.update-notice.tray-notice-card`: a solid raised card. */
+.captures .update-notice {
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  color: var(--text);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-md);
+  animation: notice-pop-in var(--dur-4) var(--ease-out);
+}
+@keyframes notice-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.captures .update-notice-header {
+  padding: var(--s-6) var(--s-6) var(--s-5);
+}
+.captures .update-app-icon {
+  /* 36 px border-box. */
+  min-width: 34px;
+  min-height: 34px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  color: var(--text);
+  background: var(--surface-sunken);
+}
+.captures .update-notice-available .update-app-icon,
+.captures .update-notice-up_to_date .update-app-icon {
+  border-color: transparent;
+  color: var(--theme-accent-ink);
+  background: var(--theme-accent);
+}
+.captures .update-notice-restarting .update-app-icon {
+  border-color: transparent;
+  color: var(--positive-ink);
+  background: var(--positive);
+}
+.captures .update-notice-error .update-app-icon {
+  border-color: transparent;
+  color: var(--theme-signal-ink);
+  background: var(--theme-signal);
+}
+.captures .update-notice-copy {
+  margin-left: var(--s-4);
+}
+.captures .update-notice-title {
+  color: var(--text);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--card-tracking);
+}
+.captures .update-notice-description {
+  margin-top: 2px;
+  color: var(--text-subtle);
+  font-size: var(--text-sm);
+  font-feature-settings: "tnum";
+}
+.captures button.update-notes-reveal,
+.captures button.update-notes-toggle {
+  all: unset;
+  color: var(--text-subtle);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--xs-wide-tracking);
+}
+.captures button.update-notes-reveal {
+  margin-left: var(--s-4);
+  padding: var(--s-2) var(--s-3);
+  border-radius: var(--r-sm);
+}
+.captures button.update-notes-reveal:hover,
+.captures button.update-notes-toggle:hover {
+  color: var(--text);
+}
+.captures button.update-notes-reveal:focus-visible,
+.captures button.update-notes-toggle:focus-visible {
+  border-radius: var(--r-sm);
+  box-shadow: var(--focus-ring);
+}
+.captures .update-notice-body {
+  padding: 0 var(--s-6) var(--s-4);
+}
+.captures .update-notes {
+  padding: var(--s-5);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg);
+  background: var(--surface-sunken);
+}
+.captures .update-notes-heading {
+  margin-bottom: var(--s-4);
+}
+.captures .update-notes-title {
+  color: var(--text-subtle);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--eyebrow-tracking);
+}
+.captures .update-notes-intro {
+  margin-bottom: var(--s-4);
+  color: var(--text-subtle);
+  font-size: var(--text-sm);
+  line-height: var(--lh-snug-sm);
+}
+.captures .update-notes-groups {
+  padding-right: var(--s-1);
+}
+.captures .update-notes-group + .update-notes-group {
+  margin-top: var(--s-5);
+  padding-top: var(--s-4);
+  border-top: 1px solid var(--border);
+}
+.captures .update-notes-version {
+  margin-bottom: var(--s-3);
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  font-feature-settings: "tnum";
+}
+.captures .update-notes-item + .update-notes-item {
+  margin-top: var(--s-3);
+}
+/* The 5 px `li::before` dot at 0.5em; the text starts at `--s-5`. */
+.captures .update-notes-bullet {
+  min-width: 5px;
+  min-height: 5px;
+  margin-top: 6px;
+  margin-right: calc(var(--s-5) - 5px);
+  border-radius: var(--r-pill);
+  background: var(--text-faint);
+}
+.captures .update-notes-text,
+.captures .update-notes-empty,
+.captures .update-status-message {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--lh-snug-sm);
+}
+.captures .update-notes-empty,
+.captures .update-status-message {
+  color: var(--text-subtle);
+}
+/* `.update-notes-pr` and `.update-download-fallback-link`: underlined text
+   buttons after a sentence, on its line height. */
+.captures button.notice-inline-button {
+  all: unset;
+  color: var(--text);
+  font-size: var(--text-sm);
+  line-height: var(--lh-snug-sm);
+  font-feature-settings: "tnum";
+}
+.captures button.notice-inline-button label {
+  text-decoration-line: underline;
+}
+.captures .update-notes-item button.notice-inline-button:hover {
+  color: var(--text-subtle);
+}
+.captures .update-download-fallback-row button.notice-inline-button:hover {
+  color: var(--text-muted);
+}
+.captures button.notice-inline-button:focus-visible {
+  border-radius: var(--r-sm);
+  box-shadow: var(--focus-ring);
+}
+.captures .update-download,
+.captures .update-restart {
+  padding: var(--s-5);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg);
+  background: var(--surface-sunken);
+}
+.captures .update-progress-label {
+  margin-bottom: var(--s-4);
+  color: var(--text-subtle);
+  font-size: var(--text-sm);
+}
+.captures .update-progress-detail {
+  margin-left: var(--s-2);
+  color: var(--text-faint);
+  font-feature-settings: "tnum";
+}
+.captures .update-progress-percent {
+  color: var(--text);
+  font-weight: var(--weight-bold);
+  font-feature-settings: "tnum";
+}
+.captures progressbar.update-progress {
+  all: unset;
+}
+.captures progressbar.update-progress > trough {
+  all: unset;
+  min-height: 4px;
+  border-radius: var(--r-pill);
+  background: var(--surface-canvas);
+}
+.captures progressbar.update-progress > trough > progress {
+  all: unset;
+  min-height: 4px;
+  border-radius: var(--r-pill);
+  background: var(--info);
+}
+.captures .update-error {
+  padding: var(--s-5);
+  border: 1px solid var(--danger-border);
+  border-radius: var(--r-lg);
+  color: var(--danger-text);
+  background: var(--danger-surface);
+  font-size: var(--text-sm);
+  line-height: var(--lh-snug-sm);
+}
+.captures .update-download-fallback-row {
+  margin-top: var(--s-3);
+}
+.captures .update-download-fallback {
+  color: var(--text-subtle);
+  font-size: var(--text-sm);
+  line-height: var(--lh-snug-sm);
+}
+.captures .update-close-warning {
+  margin: 0 var(--s-6) var(--s-3);
+  padding: var(--s-3) var(--s-4);
+  border: 1px solid alpha(var(--caution-text), 0.32);
+  border-radius: var(--r-md);
+  color: var(--caution-text);
+  background: var(--caution-surface);
+}
+.captures .update-close-warning-icon {
+  margin-top: 1px;
+  margin-right: var(--s-3);
+}
+.captures .update-close-warning-text {
+  font-size: var(--text-sm);
+  line-height: var(--lh-snug-sm);
+}
+.captures .update-notice-footer {
+  /* 56 px border-box minimum. */
+  min-height: 32px;
+  padding: var(--s-4) var(--s-6) var(--s-6);
+}
+.captures .update-notice-footer button {
+  all: unset;
+  /* `--h-md` border-box. */
+  min-height: 30px;
+  padding: 0 var(--s-5);
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+.captures .update-notice-footer button.update-dismiss {
+  background: var(--surface-raised);
+}
+.captures .update-notice-footer button.update-dismiss:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+/* `.ui-btn-solid`: the neutral high-contrast action. */
+.captures .update-notice-footer button.update-primary {
+  min-width: 78px;
+  margin-left: var(--s-3);
+  color: var(--solid-ink);
+  background: var(--solid);
+  font-weight: var(--weight-semibold);
+}
+.captures .update-notice-footer button.update-primary:hover:not(:disabled) {
+  background: var(--solid-hover);
+}
+.captures .update-notice-footer button:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+.captures .update-notice-footer button:disabled {
+  opacity: 0.45;
+}
