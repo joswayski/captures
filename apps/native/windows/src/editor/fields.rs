@@ -163,6 +163,23 @@ impl Editor {
         self.prop_dirty(edit.prop);
     }
 
+    /// UIA Invoke on another control. Chromium's accessible click focuses
+    /// a button, so the focused input blurs and commits its draft (Canvas
+    /// W and H included) before the control acts, as a pointer press does.
+    /// The field's own steppers leave it focused, like their pointer press.
+    pub fn blur_field_for(&mut self, target: Target) {
+        let Some(prop) = self.field.as_ref().map(|e| e.prop) else {
+            return;
+        };
+        let own_step =
+            matches!(target, Target::Prop(Prop::Step(num, _)) if Prop::Number(num) == prop);
+        if own_step || target == Target::Prop(prop) {
+            return;
+        }
+        let focus = self.focusable().contains(&target).then_some(target);
+        self.set_focus(focus, false);
+    }
+
     /// Enter or blur: a finite value clamps and applies; anything else
     /// shows the current value again.
     ///
