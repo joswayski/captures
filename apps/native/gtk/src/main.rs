@@ -5,6 +5,7 @@
 mod editor;
 mod feedback;
 mod history;
+mod live;
 mod preferences;
 mod previews;
 mod recording;
@@ -14,7 +15,8 @@ mod system_look;
 mod tokens;
 mod widgets;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -25,7 +27,8 @@ use gtk::{gio, glib, graphene};
 const USAGE: &str = "captures-gtk [--scene preferences|history|editor|recording|preview|feedback] [--artifact ID] [--appearance light|dark]\n\
   [--settings-file PATH] [--history-root PATH] [--size WxH] [--feedback-endpoint URL]\n\
   [--screenshot OUT.png] [--find QUERY] [--count N] [--exercise] [--quit-after SECONDS]\n\
-  [--open-media PATH]... [-- FILE...]";
+  [--open-media PATH]... [-- FILE...]\n\
+  --live [--captures-autostart] [--history-root PATH] [--settings-file PATH] [--open-media PATH]... [-- FILE...]";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Scene {
@@ -70,6 +73,11 @@ struct Options {
     open: Vec<PathBuf>,
     /// `--scene` was given; without it, files open only their editors.
     scene_given: bool,
+    settings_given: bool,
+    /// Run as the resident app (`live.rs`).
+    live: bool,
+    /// `--captures-autostart`: a quiet launch that opens no window.
+    quiet: bool,
 }
 
 fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
@@ -88,6 +96,9 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
         quit_after: None,
         open: Vec::new(),
         scene_given: false,
+        settings_given: false,
+        live: false,
+        quiet: false,
     };
     let mut args = args.skip(1);
     while let Some(flag) = args.next() {
@@ -107,7 +118,12 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
             }
             "--artifact" => options.artifact = Some(value()?),
             "--appearance" => options.appearance = Some(value()?),
-            "--settings-file" => options.settings_file = value()?.into(),
+            "--settings-file" => {
+                options.settings_given = true;
+                options.settings_file = value()?.into();
+            }
+            "--live" => options.live = true,
+            "--captures-autostart" => options.quiet = true,
             "--history-root" => options.history_root = Some(value()?.into()),
             "--screenshot" => options.screenshot = Some(value()?.into()),
             "--find" => options.find = Some(value()?),
@@ -135,6 +151,20 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
             "--help" => return Err(USAGE.into()),
             _ => return Err(format!("unknown argument {flag}\n{USAGE}")),
         }
+    }
+    if options.live
+        && (options.scene_given
+            || options.screenshot.is_some()
+            || options.exercise
+            || options.artifact.is_some())
+    {
+        return Err(
+            "--live opens windows itself; drop --scene, --artifact, --screenshot and --exercise"
+                .into(),
+        );
+    }
+    if options.quiet && !options.live {
+        return Err("--captures-autostart needs --live".into());
     }
     if matches!(options.scene, Scene::Editor | Scene::Recording) && options.artifact.is_none() {
         return Err(format!(
@@ -176,6 +206,13 @@ struct Host {
     feedback_endpoint: Option<String>,
     /// Holds the app while Open With imports run before any window opens.
     opening: RefCell<Option<gio::ApplicationHoldGuard>>,
+    /// Open With files waiting for the import worker, in arrival order.
+    pending: RefCell<VecDeque<PathBuf>>,
+    importing: Cell<bool>,
+    /// `--live`: the profile election and the hold that keeps the resident
+    /// app running with no window.
+    instance: RefCell<Option<captures_app::instance::Instance>>,
+    resident: RefCell<Option<gio::ApplicationHoldGuard>>,
 }
 
 impl Host {
@@ -397,12 +434,22 @@ impl Host {
 
     /// Open With: import each file into History off the UI thread, as
     /// shipping does, then open its editor. A file already in History opens
-    /// that entry; one already being edited focuses its window.
+    /// that entry; one already being edited focuses its window. Files
+    /// import one at a time in arrival order, including forwarded ones.
     fn open_media(self: &Rc<Self>, paths: Vec<PathBuf>) {
-        let Some(path) = paths.first().cloned() else {
+        self.pending.borrow_mut().extend(paths);
+        if !self.importing.get() {
+            self.import_next();
+        }
+    }
+
+    fn import_next(self: &Rc<Self>) {
+        let Some(path) = self.pending.borrow_mut().pop_front() else {
+            self.importing.set(false);
             self.opening.borrow_mut().take();
             return;
         };
+        self.importing.set(true);
         let root = self.history_root.clone();
         let open_artifact_ids = self
             .editors
@@ -444,7 +491,7 @@ impl Host {
                     host.show_error(&error);
                 }
             }
-            host.open_media(paths[1..].to_vec());
+            host.import_next();
         });
     }
 
@@ -562,7 +609,7 @@ impl Host {
 }
 
 fn main() -> glib::ExitCode {
-    let options = match parse(std::env::args()) {
+    let mut options = match parse(std::env::args()) {
         Ok(options) => options,
         Err(error) => {
             eprintln!("{error}");
@@ -570,6 +617,43 @@ fn main() -> glib::ExitCode {
         }
     };
     let started = Instant::now();
+    // Election precedes GTK, workers and windows; fixtures never take part.
+    let instance = if options.live {
+        if options.history_root.is_none() && !options.settings_given {
+            match captures_app::preview_channel::startup() {
+                Ok(Some(startup)) => {
+                    options.history_root = Some(startup.history_root);
+                    options.settings_file = startup.settings_file;
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    eprintln!("Captures could not start: {error}");
+                    return glib::ExitCode::FAILURE;
+                }
+            }
+        }
+        let root = options
+            .history_root
+            .clone()
+            .unwrap_or_else(captures_app::default_history_root);
+        match live::elect(&root, &options.open) {
+            Ok(Some(instance)) => Some(instance),
+            Ok(None) => {
+                emit(
+                    "forwarded",
+                    serde_json::json!({"paths": options.open.len()}),
+                );
+                return glib::ExitCode::SUCCESS;
+            }
+            Err(error) => {
+                eprintln!("Captures could not start: {error}");
+                return glib::ExitCode::FAILURE;
+            }
+        }
+    } else {
+        None
+    };
+    let instance = RefCell::new(instance);
     editor::register_fonts();
     let app = gtk::Application::builder()
         .application_id("es.captur.Captures.Gtk")
@@ -577,6 +661,7 @@ fn main() -> glib::ExitCode {
         .build();
     let options = Rc::new(RefCell::new(Some(options)));
     let hosts: Rc<RefCell<Vec<Rc<Host>>>> = Rc::default();
+    let shutdown = hosts.clone();
     app.connect_activate(move |app| {
         let Some(options) = options.borrow_mut().take() else {
             return;
@@ -609,6 +694,10 @@ fn main() -> glib::ExitCode {
             feedback: RefCell::default(),
             feedback_endpoint: options.feedback_endpoint.clone(),
             opening: RefCell::default(),
+            pending: RefCell::default(),
+            importing: Cell::new(false),
+            instance: RefCell::default(),
+            resident: RefCell::default(),
         });
         hosts.borrow_mut().push(host.clone());
         let weak = Rc::downgrade(&host);
@@ -617,6 +706,25 @@ fn main() -> glib::ExitCode {
                 host.follow_system();
             }
         });
+        if let Some(instance) = instance.borrow_mut().take() {
+            live::start(&host, instance, options.quiet, !options.open.is_empty());
+            host.open_media(options.open.clone());
+            emit(
+                "ready",
+                serde_json::json!({
+                    "scene": "live", "renderer": "gtk4",
+                    "gsk": std::env::var("GSK_RENDERER").ok(),
+                    "os": std::env::consts::OS, "appearance": appearance,
+                    "launchToReadyMs": started.elapsed().as_secs_f64() * 1000.,
+                    "windows": app.windows().len(),
+                }),
+            );
+            if let Some(after) = options.quit_after {
+                let app = app.clone();
+                glib::timeout_add_local_once(after, move || app.quit());
+            }
+            return;
+        }
         // Open With alone opens only the files' editors, as shipping.
         if !options.open.is_empty() {
             host.open_media(options.open.clone());
@@ -714,6 +822,20 @@ fn main() -> glib::ExitCode {
                 }
                 window.application().expect("app").quit();
             });
+        }
+    });
+    // A resident app quits on SIGINT/SIGTERM through the normal shutdown,
+    // which releases the profile election.
+    for signal in [2, 15] {
+        let app = app.clone();
+        glib::unix_signal_add_local(signal, move || {
+            app.quit();
+            glib::ControlFlow::Continue
+        });
+    }
+    app.connect_shutdown(move |_| {
+        for host in shutdown.borrow().iter() {
+            live::stop(host);
         }
     });
     app.run_with_args::<&str>(&[])

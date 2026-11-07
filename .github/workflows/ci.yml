@@ -249,9 +249,17 @@ jobs:
               --screenshot "$RUNNER_TEMP/feedback-$appearance.png"
             test -s "$RUNNER_TEMP/feedback-$appearance.png"
           done
-      - name: AT-SPI smoke (History, Preferences, editors, previews, Feedback)
+      - name: AT-SPI smoke (History, Preferences, editors, previews, Feedback, live app)
         timeout-minutes: 6
         run: xvfb-run -a dbus-run-session -- /usr/bin/python3 apps/native/gtk/smoke.py --binary apps/native/gtk/target/debug/captures-gtk
+      - name: Shared single-instance forwarding check
+        timeout-minutes: 2
+        run: |
+          for form in "" --positional; do
+            xvfb-run -a dbus-run-session -- /usr/bin/python3 apps/native/instance_smoke.py \
+              --binary apps/native/gtk/target/debug/captures-gtk \
+              --output "$RUNNER_TEMP/gtk-instance$form" $form
+          done
 
   # The Windows host that replaces the egui/wgpu UI on Windows (see
   # docs/native-rewrite.md): rustfmt, clippy, and an offscreen Preferences render.

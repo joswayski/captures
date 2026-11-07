@@ -27,6 +27,7 @@ import os
 from pathlib import Path
 import re
 import select
+import signal
 import subprocess
 import sys
 import tempfile
@@ -1210,6 +1211,71 @@ def open_with(binary, scratch):
         process.wait(timeout=10)
 
 
+def live(binary, scratch):
+    """Live app: a quiet launch stays resident with no window; a second
+    launch for the profile forwards a relaunch or files and exits before GTK
+    starts; closing every window keeps the app running; SIGTERM quits and
+    releases the profile for the next launch."""
+    root = scratch / "live-history"
+    settings = scratch / "live-settings.json"
+    settings.write_text(json.dumps({
+        "settings_schema_version": 5, "onboarding_completed": True, "appearance": "dark",
+        "theme": "mustard", "output_directory": str(scratch / "live-exports"),
+        "region_shortcut": "Ctrl+Shift+F7", "window_shortcut": "Ctrl+Shift+F8",
+        "display_shortcut": "Ctrl+Shift+F9", "new_capture_shortcut": "Ctrl+Shift+F10",
+        "launch_at_login": False, "show_mini_previews": False, "auto_copy_to_clipboard": False}))
+    image = scratch / "Live share.png"
+    image.write_bytes(fixture_png(accent=(240, 90, 60)))
+    log = scratch / "live.log"
+    profile = ["--live", "--history-root", str(root)]
+
+    def events():
+        return [json.loads(line) for line in log.read_text().splitlines() if line.startswith("{")]
+
+    def forward(*files):
+        unused = scratch / "live-unused.json"
+        result = subprocess.run([binary, *profile, "--settings-file", str(unused), "--", *files],
+                                capture_output=True, text=True, timeout=10)
+        assert result.returncode == 0, result.stderr
+        assert [json.loads(line)["event"] for line in result.stdout.splitlines()] == ["forwarded"]
+        assert not unused.exists(), "the forwarded launch wrote settings"
+
+    env = dict(os.environ, GSK_RENDERER="cairo", GTK_A11Y="atspi", NO_AT_BRIDGE="0")
+    with log.open("w") as stream:
+        process = subprocess.Popen([binary, *profile, "--settings-file", str(settings),
+                                    "--captures-autostart"], env=env, stdout=stream)
+    try:
+        ready = wait(lambda: [e for e in events() if e["event"] == "ready"], "live readiness")[0]
+        assert ready["windows"] == 0, events()
+        assert {"event": "launch", "action": "StartupNotice"} in events(), events()
+        forward()
+        preferences = DESKTOP.window("Preferences$", process.pid)
+        wait(lambda: any(e["event"] == "instance-relaunch" for e in events()), "the relaunch")
+        DESKTOP.close(preferences)
+        app = wait(lambda: application(process.pid), "the app on the accessibility bus")
+        wait(lambda: not [n for n, (_, name) in nodes(app) if name.endswith("Preferences")],
+             "Preferences to close")
+        time.sleep(1)
+        assert process.poll() is None, "closing the last window quit the resident app"
+        forward(str(image))
+        wait(lambda: find(app, "image", "Screenshot canvas"), "the forwarded file's editor")
+        assert len(list(root.glob("*/metadata.json"))) == 1
+        process.send_signal(signal.SIGTERM)
+        assert process.wait(timeout=10) == 0
+        # The next launch becomes the primary instead of forwarding.
+        restart = subprocess.run([binary, *profile, "--settings-file", str(settings),
+                                  "--captures-autostart", "--quit-after", "2"], env=env,
+                                 capture_output=True, text=True, timeout=20)
+        assert restart.returncode == 0, restart.stderr
+        assert '"event":"ready"' in restart.stdout, restart.stdout
+        print("live: quiet launch windowless; relaunch, close and a forwarded PNG handled; "
+              "SIGTERM released the profile")
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+
+
 def recording(binary, scratch):
     root = scratch / "recording-history"
     write_video_entry(root, seconds=4)
@@ -1261,20 +1327,17 @@ def recording(binary, scratch):
         process.wait(timeout=10)
 
 
-def run(binary, scratch):
+STEPS = [history, preferences, editor, editor_close_keeps_open_text, recording,
+         recording_output, previews, preview_overflow, feedback, open_with, live]
+
+
+def run(binary, scratch, only=None):
     subprocess.Popen(["/usr/libexec/at-spi-bus-launcher", "--launch-immediately"],
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(1)
-    history(binary, scratch)
-    preferences(binary, scratch)
-    editor(binary, scratch)
-    editor_close_keeps_open_text(binary, scratch)
-    recording(binary, scratch)
-    recording_output(binary, scratch)
-    previews(binary, scratch)
-    preview_overflow(binary, scratch)
-    feedback(binary, scratch)
-    open_with(binary, scratch)
+    for step in STEPS:
+        if not only or step.__name__ in only:
+            step(binary, scratch)
 
 
 def wayland(scratch, injector):
@@ -1327,13 +1390,15 @@ def main():
                         help="run on a private headless Sway instead of the caller's X display")
     parser.add_argument("--injector", type=Path,
                         help="wayland_drag_probe binary (virtual pointer and keyboard)")
+    parser.add_argument("--only", action="append",
+                        help="run just this step (repeatable): " + ", ".join(s.__name__ for s in STEPS))
     args = parser.parse_args()
     assert not args.wayland or args.injector, "--wayland needs --injector"
     with tempfile.TemporaryDirectory() as scratch:
         scratch = Path(scratch)
         services = wayland(scratch, args.injector.resolve(strict=True)) if args.wayland else []
         try:
-            run(args.binary, scratch)
+            run(args.binary, scratch, args.only)
             print(f"smoke: passed on {'Wayland (headless Sway)' if args.wayland else 'X11'}")
         finally:
             for service in services:

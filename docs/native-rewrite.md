@@ -1483,6 +1483,21 @@ for machines whose GL is software-only or broken. Measuring the GSK renderers
 on real GPUs is on the Linux PC hardware list, with Wayland and longer churn.
 Windows, macOS: unchanged.
 
+GTK live-app mode, step 1: `--live` makes the GTK host the resident app.
+Before GTK starts it takes the shared `captures_app::instance` election for
+the profile's History root (the same code as wgpu and AppKit); a second
+launch forwards its files or a bare relaunch and exits without UI or
+settings writes. The resident process holds the application with no window,
+survives its last window closing, and quits on SIGINT/SIGTERM or
+`--quit-after`, dropping the election after GTK shuts down. Launch and bare
+relaunch follow the shared `interactive_launch` and `reactivation`, and
+forwarded files join the Open With import queue in arrival order. Not yet:
+first-run setup (Preferences stands in), tray and launch notice, global
+shortcuts, the capture flow, crash diagnostics and update notices. Verified:
+the shared `instance_smoke.py` (both argument forms) on X11 under Xvfb, and
+the GTK smoke's new `live` step on X11 and on headless Sway 1.9. X11 and
+Wayland on real desktops not verified. Windows, macOS: unchanged.
+
 ## Progress dashboard
 
 We are delivering stage 4 workflow slices and stage 5 editor slices.
