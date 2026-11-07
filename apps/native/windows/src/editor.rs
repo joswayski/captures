@@ -47,7 +47,9 @@ use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::*;
 use windows::Win32::Graphics::Direct2D::*;
 use windows::Win32::Graphics::DirectComposition::*;
-use windows::Win32::Graphics::DirectWrite::DWRITE_TEXT_ALIGNMENT_TRAILING;
+use windows::Win32::Graphics::DirectWrite::{
+    DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_ALIGNMENT_TRAILING,
+};
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
@@ -537,6 +539,8 @@ pub struct Layout {
     pub change: Rect,
     pub folder: Rect,
     pub hint: Rect,
+    pub notice_line: Rect,
+    pub hint_line: Rect,
     pub switch_label: Rect,
     pub buttons: [Rect; SLOTS],
     compact: bool,
@@ -2079,6 +2083,7 @@ impl Editor {
 
     /// The export bar and the controls that read its state.
     fn export_changed(&mut self) {
+        self.relayout = true;
         self.nodes[self.bar].dirty = true;
         for target in [Target::Save, Target::SaveAsNew, Target::Copy] {
             let base = self.layered(target).base;
@@ -2675,7 +2680,56 @@ impl Editor {
         l.header = Rect::new(0., banner_h, w, HEADER_H);
         let body = banner_h + HEADER_H;
         let sidebar_w = self.sidebar_width();
-        l.bar = Rect::new(0., (h - BAR_H).max(body), w, BAR_H);
+
+        // Size the footer's flexible columns before measuring wrapped status.
+        let copy = g.text(&t, Style::Button, "Copy image", 1e4)?;
+        let copy_w = 2. + 2. * s5 + 15. + s3 + copy.width;
+        let save = g.text(&t, Style::Strong, "Save", 1e4)?;
+        let save_w = (2. + 2. * n("s-8") + 15. + s3 + save.width).max(106.);
+        let as_new = g.text(&t, Style::Status, "Save as new file", 1e4)?;
+        let switch_w = SWITCH.0 + s3 + as_new.width;
+        let actions_w = save_w
+            + if self.exists(Target::SaveAsNew) {
+                2. * s5 + 1. + switch_w
+            } else {
+                0.
+            };
+        let gap = if l.compact { s4 } else { s5 };
+        let available =
+            w - 2. * s5 - copy_w - actions_w - if l.compact { 3. * gap } else { 4. * gap + 120. };
+        let (min_settings, max_settings, min_filename) = if l.compact {
+            (170., 200., 230.)
+        } else {
+            (178., 210., 240.)
+        };
+        let settings_w = (available - min_filename).clamp(min_settings, max_settings);
+        let filename_w = (available - settings_w).max(min_filename);
+        let filename_w = if l.compact {
+            filename_w
+        } else {
+            filename_w.min(390.)
+        };
+        let fx = s5 + settings_w + gap;
+        let sx = w - s5 - actions_w;
+        let copy_end = fx + filename_w + gap + copy_w + gap;
+
+        // Shipping moves status below the controls at the same breakpoint
+        // as the compact header. Reserve the idle notice line too.
+        let status_w = if l.compact {
+            w - 2. * s5
+        } else {
+            sx - gap - copy_end
+        };
+        let (notice, error) = self.notice_text().unwrap_or_else(|| (" ".into(), false));
+        let notice_h = g.text(&t, Style::Note, &notice, status_w)?.height;
+        let status_h = if error {
+            (notice_h + n("s-1")).max(20.)
+        } else {
+            notice_h + g.text(&t, Style::Note, &self.hint_text(), status_w)?.height + 2. * n("s-1")
+        };
+        let row_h = if l.compact { 60. } else { status_h.max(60.) };
+        let bar_h = BAR_H + row_h - 60. + if l.compact { s4 + status_h } else { 0. };
+        l.bar = Rect::new(0., (h - bar_h).max(body), w, bar_h);
         let body_h = (l.bar.y - body).max(0.);
         l.rail = Rect::new(0., body, RAIL_W, body_h);
         l.sidebar = Rect::new(w - sidebar_w, body, sidebar_w, body_h);
@@ -2795,47 +2849,62 @@ impl Editor {
         );
 
         // Export bar: `.screenshot-export-main`.
-        let top = l.bar.y + 1. + s4;
-        l.export_settings = Rect::new(s5, top + 16., 210., 44.);
-        let fx = l.export_settings.x + l.export_settings.w + s5;
-        let fw = 390.;
-        l.filename = Rect::new(fx, top + 24., fw, 36.);
-        l.suffix = Rect::new(fx + fw - 62., top + 25., 61., 34.);
+        let top = l.bar.y + 1. + s4 + row_h - 60.;
+        l.export_settings = Rect::new(s5, top + 16., settings_w, 44.);
+        l.filename = Rect::new(fx, top + 24., filename_w, 36.);
+        l.suffix = Rect::new(fx + filename_w - 62., top + 25., 61., 34.);
         let change = g.text(&t, Style::Tiny, "Change…", 1e4)?;
         l.change = Rect::new(
-            fx + fw - change.width - 2. * s3,
+            fx + filename_w - change.width - 2. * s3,
             top,
             change.width + 2. * s3,
             20.,
         );
-        l.folder = Rect::new(fx, top, fw, 20.);
-        let copy = g.text(&t, Style::Button, "Copy image", 1e4)?;
-        let copy_w = 2. + 2. * s5 + 15. + s3 + copy.width;
+        l.folder = Rect::new(fx, top, filename_w, 20.);
         set(
             Target::Copy,
-            Rect::new(fx + fw + s5, top + 24., copy_w, 36.),
+            Rect::new(fx + filename_w + gap, top + 24., copy_w, 36.),
         );
-        let save = g.text(&t, Style::Strong, "Save", 1e4)?;
-        let save_w = (2. + 2. * n("s-8") + 15. + s3 + save.width).max(106.);
         set(
             Target::Save,
             Rect::new(w - s5 - save_w, top + 24., save_w, 36.),
         );
-        let as_new = g.text(&t, Style::Status, "Save as new file", 1e4)?;
-        let switch_w = SWITCH.0 + s3 + as_new.width;
-        // Without the toggle the hint runs up to Save.
-        let sx = if self.exists(Target::SaveAsNew) {
-            w - s5 - save_w - s5 - 1. - s5 - switch_w
-        } else {
-            w - s5 - save_w
-        };
         set(
             Target::SaveAsNew,
             Rect::new(sx - s2, top + 24., switch_w + 2. * s2, 36.),
         );
         l.switch_label = Rect::new(sx + SWITCH.0 + s3, top + 24., as_new.width, 36.);
-        let copy_end = fx + fw + s5 + copy_w + s5;
-        l.hint = Rect::new(copy_end, top, (sx - s5 - copy_end).max(0.), 60.);
+        l.hint = if l.compact {
+            Rect::new(s5, top + 60. + s4, status_w, status_h)
+        } else {
+            Rect::new(copy_end, l.bar.y + 1. + s4, status_w, row_h)
+        };
+
+        // Painting and UIA use each text line's own bounds, not the entire
+        // status column (which can contain both success feedback and a hint).
+        let notice_h = if self.notice_text().is_some() || l.compact {
+            notice_h
+        } else {
+            0.
+        };
+        let hint_h = if error || self.hint_text().is_empty() {
+            0.
+        } else {
+            g.text(&t, Style::Note, &self.hint_text(), status_w)?.height
+        };
+        let total = notice_h + hint_h;
+        let y = if l.compact {
+            l.hint.y + 1.
+        } else {
+            l.hint.y + (l.hint.h - total) / 2. + (s4 / 2.).min((l.hint.h - total) / 2.)
+        };
+        l.notice_line = Rect::new(l.hint.x, y, status_w, notice_h);
+        l.hint_line = Rect::new(
+            l.hint.x,
+            y + notice_h + if l.compact { n("s-1") } else { 0. },
+            status_w,
+            hint_h,
+        );
 
         l.buttons = buttons;
         self.l = l;
@@ -4076,20 +4145,26 @@ impl Editor {
             dim("text-subtle"),
         )?;
 
-        // Notice over the hint, right-aligned before the switch.
+        // Compact status spans the second row; wide status precedes the switch.
         let hint = local(l.hint);
         let width = (hint.right - hint.left).max(1.);
         let mut lines = Vec::new();
-        if let Some((text, error)) = self.notice_text() {
+        let notice = self.notice_text();
+        let has_error = notice.as_ref().is_some_and(|(_, error)| *error);
+        if let Some((text, error)) = notice {
             let color = if error {
                 "danger-text"
             } else {
                 "positive-text"
             };
-            lines.push((g.text(t, Style::Note, &text, width)?, c(color)));
+            lines.push((
+                g.text(t, Style::Note, &text, width)?,
+                c(color),
+                l.notice_line,
+            ));
         }
         let hint_text = self.hint_text();
-        if !hint_text.is_empty() {
+        if !hint_text.is_empty() && !has_error {
             let warning = view.as_ref().is_some_and(|v| v.hint_warning);
             lines.push((
                 g.text(t, Style::Note, &hint_text, width)?,
@@ -4098,18 +4173,19 @@ impl Editor {
                 } else {
                     "text-subtle"
                 }),
+                l.hint_line,
             ));
         }
-        let total: f32 = lines.iter().map(|(text, _)| text.height).sum();
-        let mut y = (hint.top + hint.bottom - total) / 2. + s4 / 2.;
-        for (text, color) in lines {
+        for (text, color, bounds) in lines {
             unsafe {
                 text.layout.SetMaxWidth(width)?;
-                text.layout
-                    .SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING)?;
+                text.layout.SetTextAlignment(if l.compact {
+                    DWRITE_TEXT_ALIGNMENT_LEADING
+                } else {
+                    DWRITE_TEXT_ALIGNMENT_TRAILING
+                })?;
             }
-            gfx::text(dc, &text, hint.left, y, color)?;
-            y += text.height;
+            gfx::text(dc, &text, bounds.x, bounds.y - y0, color)?;
         }
 
         // Save as new file's label and the separator before Save.
@@ -6158,6 +6234,115 @@ mod tests {
     use super::*;
     use captures_app::editor_image_background::BrushMode;
     use image::Rgba;
+
+    #[test]
+    fn footer_keeps_status_and_actions_readable_across_the_compact_breakpoint() {
+        use windows::Win32::System::Com::*;
+        unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok().unwrap() };
+        let data = std::env::temp_dir().join(format!("captures-footer-{}", std::process::id()));
+        let capture = captures_app::persist_screenshot(
+            &data.join("history"),
+            &RgbaImage::from_pixel(640, 360, Rgba([20, 50, 80, 255])),
+            CaptureMode::Region,
+        )
+        .unwrap();
+        let options = crate::parse(
+            [
+                "test".into(),
+                "--profile".into(),
+                data.to_string_lossy().into_owned(),
+                "--scene".into(),
+                "editor".into(),
+                "--artifact".into(),
+                capture.entry.id,
+            ]
+            .into_iter(),
+        )
+        .unwrap();
+        let tokens = crate::appearance::tokens(Some("light"), &Default::default());
+        let mut editor = render_offscreen(
+            &options,
+            Gfx::new(&tokens, false).unwrap(),
+            tokens,
+            MIN_SIZE,
+        )
+        .unwrap();
+        let source = data.join("source.png");
+        RgbaImage::from_pixel(640, 360, Rgba([20, 50, 80, 255]))
+            .save(&source)
+            .unwrap();
+        for (width, has_source) in [860., 1040., 1041., 1280.]
+            .into_iter()
+            .flat_map(|width| [false, true].map(|has_source| (width, has_source)))
+        {
+            editor.target.as_mut().unwrap().source = has_source.then(|| ExportSource {
+                artifact_id: editor.artifact_id.clone(),
+                path: source.clone(),
+            });
+            assert_eq!(editor.exists(Target::SaveAsNew), has_source);
+            for notice in [
+                None,
+                Some(("Image copied.".into(), false)),
+                Some((
+                    "Unable to save this image. Choose another folder and try again.".into(),
+                    true,
+                )),
+            ] {
+                editor.w = width;
+                editor.set_notice(notice);
+                editor.prepare().unwrap();
+                let hint = editor.l.hint;
+                let copy = editor.target_rect(Target::Copy);
+                let save = editor.target_rect(Target::Save);
+                assert!(copy.x + copy.w <= save.x, "{width}: Copy overlaps Save");
+                if has_source {
+                    let toggle = editor.target_rect(Target::SaveAsNew);
+                    assert!(copy.x + copy.w <= toggle.x, "{width}: Copy overlaps toggle");
+                    assert!(toggle.x + toggle.w <= save.x);
+                }
+                assert!(editor.l.filename.x + editor.l.filename.w <= copy.x);
+                assert!(
+                    editor.l.filename.w >= 230.,
+                    "filename lost its minimum width"
+                );
+                assert!(hint.w >= 120., "{width}: status collapsed to {}", hint.w);
+                assert!(hint.y >= copy.y + copy.h || hint.x >= copy.x + copy.w);
+                assert!(hint.x >= 0. && hint.x + hint.w <= width);
+                assert!(hint.y >= editor.l.bar.y && hint.y + hint.h <= editor.h);
+                let notice = editor.l.notice_line;
+                let hint_line = editor.l.hint_line;
+                assert!(notice.y + notice.h <= hint_line.y);
+                assert!(hint_line.y + hint_line.h <= hint.y + hint.h);
+                let hint_height = if editor.notice_text().is_some_and(|(_, error)| error) {
+                    0.
+                } else {
+                    editor
+                        .g
+                        .text(&editor.t, Style::Note, &editor.hint_text(), hint.w)
+                        .unwrap()
+                        .height
+                };
+                let text_height = hint_height
+                    + editor.notice_text().map_or(0., |(text, _)| {
+                        editor
+                            .g
+                            .text(&editor.t, Style::Note, &text, hint.w)
+                            .unwrap()
+                            .height
+                    });
+                assert!(
+                    text_height <= hint.h,
+                    "{width}, source={has_source}, notice={:?}: {text_height} exceeds {}, width={}",
+                    editor.notice_text(),
+                    hint.h,
+                    hint.w
+                );
+            }
+        }
+        drop(editor);
+        std::fs::remove_dir_all(data).unwrap();
+        unsafe { CoUninitialize() };
+    }
 
     /// Windows Chromium keeps pointer highlight separate from the provisional
     /// keyboard value, and applies the document change only when closing.

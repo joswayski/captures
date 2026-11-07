@@ -771,6 +771,22 @@ Run key or firewall. macOS, X11 and Wayland are unchanged.
 Tauri's 1.35 CSS-pixel annotation stroke floor and preview opacity still need
 the separate shared-thumbnail slice; this host-only change does not add them.
 
+Win32 screenshot export footers now follow Tauri's 1040-DIP breakpoint:
+status spans a second, left-aligned row at compact widths, while export and
+filename columns flex around Copy, Save and the optional save-as-new toggle.
+Wrapped status can grow the footer, and errors replace the ordinary hint as
+they already do in UIA. A regression reproduced the original minimum-width
+overlap; 20 Windows tests passed under Wine, including 860/1040/1041/1280-DIP
+idle/success/error states with and without the toggle. Light/dark Direct2D
+renders at those widths were inspected. Windows cross-build/clippy, workspace
+tests/fmt/clippy and npm check passed. Real-PC pass 23 accepted release
+f03c0c92 at 150% in both themes: 1290/1560/1561/1920 physical-pixel widths,
+saved/fresh sources, idle/copy/save/error status, live resize and complete
+keyboard focus rings. Success notices and hints now share distinct measured
+bounds between drawing and UIA; errors expose only their notice. The recording
+footer's control bounds and appearance match the baseline. The misleading
+invalid-directory error predates this fix. macOS, X11 and Wayland are unchanged.
+
 The shared annotation-thumbnail slice uses Tauri's 46×34 logical canvas at
 2x resolution, its 3 px containment inset and its 1.35 px minimum shape/path
 stroke. It computes bounds before widening the preview stroke, retains authored
