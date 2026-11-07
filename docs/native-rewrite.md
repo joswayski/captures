@@ -795,8 +795,19 @@ full-size still; decoded frames only replace the texture. A rendered-pixel
 regression reproduces the empty stage before the fix and preserves the expected
 bottom-right source pixels after a smaller playback frame and relayout.
 Temporary real-FFmpeg renders also preserve the 1920×1080 bounds before/after
-playback at maximum scroll in light/dark. Native size-fix acceptance, oversized
-GIF checks and cancel-after-playback coverage remain queued.
+playback at maximum scroll in light/dark. Native pass 20 accepted the fix on
+Windows 11 at 150%: 1080p light/dark and 4K light hold the same right edge
+through play/pause/resume, maximum scroll, shrink and restore. A 2560×1440 GIF
+passes Fit/100%, scroll limits and resize in both themes. Clean release build:
+14.7 s. The real-pointer geometry clip and corner sheets were inspected.
+Saving a looping 30 s GIF stops preview and starts the encoder; Cancel returns
+to enabled Save in 137 ms, removes the stage file, preserves the source hash
+and restarts autoplay (light only). This was cancellation after saving from
+autoplay, not proof that GIF autoplay naturally stopped; it keeps looping.
+The 14-state hover/focus sequence matches the Windows Chromium harness.
+Native retains a separated keyboard-focus ring; Tauri's global outline reset
+and overlay rule show visibility but no distinct ring, a remaining visual
+difference. Dark shadow banding remains minor. No native promotion is implied.
 
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
