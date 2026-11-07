@@ -593,6 +593,43 @@ mod tests {
     }
 
     #[test]
+    fn looping_preview_restarts_an_empty_tail_but_not_an_empty_trim() {
+        for (looping, position, restarts) in [
+            (true, 5999, true),
+            (false, 5999, false),
+            (true, 1100, false),
+        ] {
+            let (mut w, profile) = fixture();
+            w.presented.as_mut().unwrap().mime_type = "image/gif".into();
+            w.timeline.start = 1100;
+            w.preview.position_ms = position;
+            w.preview.playing = true;
+            w.worker.looping.store(looping, Ordering::Relaxed);
+            w.apply_outcome(Outcome::PlaybackEnded(w.preview.generation, Ok(())));
+            assert!(
+                !w.preview.playing,
+                "wait for the starting frame before replay"
+            );
+            let mut accepted = w.presented.take().unwrap();
+            accepted.edit.trim_start_ms = 1100;
+            accepted.position_ms = 1100;
+            w.apply_outcome(Outcome::Preview(
+                w.timeline.generation,
+                Box::new(accepted),
+                None,
+            ));
+            assert_eq!(w.preview.position_ms, 1100);
+            assert_eq!(
+                w.preview.playing, restarts,
+                "looping={looping}, position={position}"
+            );
+            assert!(!w.error);
+            drop(w);
+            std::fs::remove_dir_all(profile).unwrap();
+        }
+    }
+
+    #[test]
     fn timeline_keeps_source_time_and_only_accepts_the_latest_preview() {
         let (mut w, profile) = fixture();
         (w.width, w.height) = (640., 480.);

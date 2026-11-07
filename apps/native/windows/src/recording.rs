@@ -849,6 +849,14 @@ impl Recording {
             Outcome::PlaybackEnded(generation, result) => {
                 self.take_preview_frame();
                 if generation == self.preview.generation {
+                    // Seeking into the final frame's hold interval can leave
+                    // an empty playback tail. Retry a loop from trim start,
+                    // but do not keep retrying a trim that is itself empty.
+                    let resume = self
+                        .worker
+                        .looping
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                        && self.preview.position_ms > self.timeline.start;
                     self.worker.playback_cancel.take();
                     self.preview.playing = false;
                     self.preview.position_ms = self.timeline.start;
@@ -858,6 +866,7 @@ impl Recording {
                     if let Err(error) = result {
                         self.notify(&error, true);
                     } else if !self.closing {
+                        self.timeline.resume = resume;
                         self.seek_timeline(self.timeline.start);
                     }
                 }
