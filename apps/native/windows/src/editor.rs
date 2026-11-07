@@ -539,6 +539,8 @@ pub struct Layout {
     pub change: Rect,
     pub folder: Rect,
     pub hint: Rect,
+    pub notice_line: Rect,
+    pub hint_line: Rect,
     pub switch_label: Rect,
     pub buttons: [Rect; SLOTS],
     compact: bool,
@@ -2878,6 +2880,32 @@ impl Editor {
             Rect::new(copy_end, l.bar.y + 1. + s4, status_w, row_h)
         };
 
+        // Painting and UIA use each text line's own bounds, not the entire
+        // status column (which can contain both success feedback and a hint).
+        let notice_h = if self.notice_text().is_some() || l.compact {
+            notice_h
+        } else {
+            0.
+        };
+        let hint_h = if error || self.hint_text().is_empty() {
+            0.
+        } else {
+            g.text(&t, Style::Note, &self.hint_text(), status_w)?.height
+        };
+        let total = notice_h + hint_h;
+        let y = if l.compact {
+            l.hint.y + 1.
+        } else {
+            l.hint.y + (l.hint.h - total) / 2. + (s4 / 2.).min((l.hint.h - total) / 2.)
+        };
+        l.notice_line = Rect::new(l.hint.x, y, status_w, notice_h);
+        l.hint_line = Rect::new(
+            l.hint.x,
+            y + notice_h + if l.compact { n("s-1") } else { 0. },
+            status_w,
+            hint_h,
+        );
+
         l.buttons = buttons;
         self.l = l;
         self.layout_props(l.properties.w);
@@ -4129,9 +4157,11 @@ impl Editor {
             } else {
                 "positive-text"
             };
-            lines.push((g.text(t, Style::Note, &text, width)?, c(color)));
-        } else if l.compact {
-            lines.push((g.text(t, Style::Note, " ", width)?, c("text-subtle")));
+            lines.push((
+                g.text(t, Style::Note, &text, width)?,
+                c(color),
+                l.notice_line,
+            ));
         }
         let hint_text = self.hint_text();
         if !hint_text.is_empty() && !has_error {
@@ -4143,16 +4173,10 @@ impl Editor {
                 } else {
                     "text-subtle"
                 }),
+                l.hint_line,
             ));
         }
-        let total: f32 = lines.iter().map(|(text, _)| text.height).sum();
-        let mut y = if l.compact {
-            hint.top + 1.
-        } else {
-            (hint.top + hint.bottom - total) / 2.
-                + (s4 / 2.).min((hint.bottom - hint.top - total) / 2.)
-        };
-        for (text, color) in lines {
+        for (text, color, bounds) in lines {
             unsafe {
                 text.layout.SetMaxWidth(width)?;
                 text.layout.SetTextAlignment(if l.compact {
@@ -4161,8 +4185,7 @@ impl Editor {
                     DWRITE_TEXT_ALIGNMENT_TRAILING
                 })?;
             }
-            gfx::text(dc, &text, hint.left, y, color)?;
-            y += text.height + if l.compact { t.n("s-1") } else { 0. };
+            gfx::text(dc, &text, bounds.x, bounds.y - y0, color)?;
         }
 
         // Save as new file's label and the separator before Save.
@@ -6286,6 +6309,10 @@ mod tests {
                 assert!(hint.y >= copy.y + copy.h || hint.x >= copy.x + copy.w);
                 assert!(hint.x >= 0. && hint.x + hint.w <= width);
                 assert!(hint.y >= editor.l.bar.y && hint.y + hint.h <= editor.h);
+                let notice = editor.l.notice_line;
+                let hint_line = editor.l.hint_line;
+                assert!(notice.y + notice.h <= hint_line.y);
+                assert!(hint_line.y + hint_line.h <= hint.y + hint.h);
                 let hint_height = if editor.notice_text().is_some_and(|(_, error)| error) {
                     0.
                 } else {
