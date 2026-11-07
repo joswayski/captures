@@ -89,9 +89,12 @@ pub enum Style {
     PreviewMono,
     /// `.screenshot-format-buttons em`: the Italic button's "I".
     Italic,
+    /// `.recording-editor-header h1`: `--text-2xl`, semibold, tighter.
+    RecordingTitle,
 }
 
-const STYLES: [Style; 33] = [
+const STYLES: [Style; 34] = [
+    Style::RecordingTitle,
     Style::Brand,
     Style::Nav,
     Style::Title,
@@ -334,6 +337,13 @@ fn spec(style: Style) -> Spec {
             mono: true,
             ..spec("text-md", "weight-semibold", None, None, false)
         },
+        Style::RecordingTitle => spec(
+            "text-2xl",
+            "weight-semibold",
+            Some("tracking-tighter"),
+            Some("leading-tight"),
+            false,
+        ),
         Style::Italic => Spec {
             italic: true,
             ..spec("text-sm", "weight-semibold", None, None, false)
