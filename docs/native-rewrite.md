@@ -1444,10 +1444,12 @@ percentage of one core; memory is the tree's PSS.
 | History PSS / RSS | 325 / 352 MB | 126 / 155 MB | 229 / 252 MB | 1044 / 1777 MB |
 | Processes | 1 | 1 | 1 | 7 |
 
-The default GL renderer runs in software here (llvmpipe), as wgpu's Vulkan
-does, and costs about 1.1 s of startup and 135 MB. Against wgpu, the GTK
-host passes on every row only with the cairo renderer; with GL it loses on
-startup and memory. Real GPUs, Wayland and longer churn not measured.
+These numbers are Xvfb-only. Xvfb has no GPU, so GTK's default GL renderer
+ran in software (llvmpipe), as wgpu's Vulkan did, and the cairo column says
+nothing about real GPUs. The host keeps GTK's default renderer; there is no
+automatic switch. `GSK_RENDERER=cairo` remains a documented manual override
+for machines whose GL is software-only or broken. Measuring the GSK renderers
+on real GPUs is on the Linux PC hardware list, with Wayland and longer churn.
 Windows, macOS: unchanged.
 
 ## Progress dashboard

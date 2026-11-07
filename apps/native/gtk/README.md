@@ -48,6 +48,14 @@ a build with `CAPTURES_NATIVE_PREVIEW_VERSION` and
 `CAPTURES_NATIVE_PREVIEW_PUBLIC_KEY` set; development builds never make an
 update request, and the GTK host never installs.
 
+The host uses GTK's default renderer. On a machine whose GL is software-only
+or broken, `GSK_RENDERER=cairo` is a manual override; the host never switches
+renderers itself.
+
+Hardware checks waiting for the owner's Linux PC: measure the GSK renderers
+(GL/NGL and cairo) on real GPUs with the resource-gate journeys, Orca, and
+the physical X11, GNOME Wayland and KDE Wayland runs.
+
 History is one virtualized `GtkListView` of card rows. GtkListView keeps up
 to 200 rows alive before GTK 4.12, so only rows near the viewport hold cards
 (from a shared pool) and thumbnail textures, decoded off the UI thread at card
