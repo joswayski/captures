@@ -3,10 +3,10 @@
 The Linux replacement for the egui/wgpu workbench: GTK4 for windows, text,
 input and AT-SPI, with Captures' own token-drawn styling and controls. See
 [native-rewrite.md](../../../docs/native-rewrite.md#host-direction) for the
-direction and the gates it must pass. Preferences (every card; Find and the
-compact layout are not ported), Capture History, the screenshot and
-recording editors, and the floating previews (History's Restore) exist so
-far.
+direction and the gates it must pass. Preferences (every card, Find, the
+compact layout, the microphone list and the Preview-only update check),
+Capture History, the screenshot and recording editors, Send Feedback and the
+floating previews (History's Restore) exist so far.
 
 ```sh
 node apps/native/prepare.mjs --output apps/native/gtk/resources

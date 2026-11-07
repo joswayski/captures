@@ -1013,9 +1013,8 @@ GTK's `max-width-chars` measures in the default font. Compared with the
 Tauri harness card by card, light and dark, at 1080×900 under Xvfb.
 `smoke.py` saves Dark, Cobalt (checked), a typed Custom accent, the Top
 right corner, a 24 FPS GIF select and a recorded Ctrl+Shift+4 Region
-shortcut. Not yet ported: the microphone list (Off and the saved device
-only, until the GTK host has an audio backend), Send feedback and the
-update worker (both ported later, below) and live System appearance
+shortcut. Not yet ported: the microphone list, Send feedback and the
+update worker (all ported later, below) and live System appearance
 changes. X11 (Xvfb) on GTK 4.8 and 4.14 only;
 Wayland, Orca and real hardware remain open. Windows, macOS: unchanged.
 
@@ -1124,6 +1123,20 @@ arrives exactly once, after the last progress, for valid and refused
 packages. `smoke.py` checks that a development
 build's Check Now stays off. X11 (Xvfb) only; Wayland and real hardware
 remain open. Windows, macOS: unchanged.
+
+The GTK Default microphone select lists Off, then the shared engine's
+`captures_recording_platform::microphone_devices()`, the same call shipping's
+`list_recording_audio_devices` and the wgpu workbench make. It enumerates on
+a `gio::spawn_blocking` thread when Preferences opens, as shipping's
+Preferences does, and keeps a saved device that is no longer present. On
+Linux that engine is cpal's ALSA host, which PipeWire desktops serve through
+pipewire-alsa; device ids stay `default` and `microphone:<name>`, so a choice
+made here records in every host. There is no separate PipeWire enumeration,
+which would invent ids the recorder cannot open. `smoke.py` gives the app a
+null ALSA default device, opens the select, chooses "Default — default" and
+checks it saves `default`. X11 (Xvfb) on GTK 4.8 and 4.14 only; a real
+PipeWire session, USB microphones and hot-plugging remain unverified.
+Windows, macOS: unchanged.
 
 ## Progress dashboard
 

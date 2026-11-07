@@ -127,8 +127,8 @@ def choose_file(app, title, accept, path):
     press(button)
 
 
-def launch(binary, *args):
-    env = dict(os.environ, GSK_RENDERER="cairo", GTK_A11Y="atspi", NO_AT_BRIDGE="0")
+def launch(binary, *args, **env):
+    env = dict(os.environ, GSK_RENDERER="cairo", GTK_A11Y="atspi", NO_AT_BRIDGE="0", **env)
     return subprocess.Popen([binary, *args], env=env, stdout=subprocess.DEVNULL)
 
 
@@ -174,7 +174,12 @@ def history(binary, scratch):
 
 def preferences(binary, scratch):
     settings = scratch / "preferences.json"
-    process = launch(binary, "--settings-file", str(settings), "--size", "880x660")
+    # A null ALSA capture device, so the microphone list has a device to show.
+    home = scratch / "home"
+    home.mkdir()
+    (home / ".asoundrc").write_text("pcm.!default { type null }\n")
+    process = launch(binary, "--settings-file", str(settings), "--size", "880x660",
+                     HOME=str(home))
     try:
         app = wait(lambda: application(process.pid), "the app on the accessibility bus")
         title = "Automatically copy captures to the clipboard"
@@ -226,6 +231,15 @@ def preferences(binary, scratch):
                    "the GIF frames per second select")[0])
         press(wait(lambda: find(app, "radio menu item", "24 FPS"), "24 FPS")[0])
         wait(lambda: saved_value("recording", "gif_fps") == 24, "24 FPS to save")
+        # The microphone list comes from the shared engine's enumeration.
+        press(find(app, "push button", "Recording")[0])
+        press(wait(lambda: [n for n, (role, name) in nodes(app)
+                            if role == "combo box" and name.startswith("Default microphone")],
+                   "the Default microphone select")[0])
+        press(wait(lambda: find(app, "radio menu item", "Default — default"),
+                   "the enumerated default microphone")[0])
+        wait(lambda: saved_value("recording", "microphone_device_id") == "default",
+             "the microphone to save")
 
         # The recorder takes the next combination, as shipping's ShortcutInput.
         region = wait(lambda: find(app, "push button", "Region"), "the Region recorder")[0]
@@ -238,7 +252,7 @@ def preferences(binary, scratch):
         subprocess.run(["xdotool", "key", "ctrl+shift+4"], check=True)
         wait(lambda: saved_value("region_shortcut") == "Control+Shift+Digit4", "the shortcut")
         wait(lambda: not has_state(region, Atspi.StateType.PRESSED), "the recorder to stop")
-        print("preferences: selects and the shortcut recorder saved")
+        print("preferences: selects, the microphone list and the shortcut recorder saved")
 
         # Find: Ctrl+F opens a search landmark; the live count follows the
         # query and Ctrl+G, and Escape closes it.

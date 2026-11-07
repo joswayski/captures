@@ -1558,14 +1558,55 @@ fn recording_card(prefs: &Rc<Prefs>) -> gtk::Box {
             preferences::countdown_label(*s)
         }),
     );
-    // The GTK host has no audio backend yet, so the list holds Off and the
-    // saved device; shipping enumerates microphones here.
-    let mut microphones = vec![("off".to_owned(), preferences::MICROPHONE_OFF.to_owned())];
-    if let Some(id) = prefs.get("recording.microphone_device_id").as_str() {
-        let name = id.strip_prefix("microphone:").unwrap_or(id);
-        microphones.push((id.to_owned(), name.to_owned()));
-    }
-    select_row(prefs, &card, "recording.microphone_device_id", microphones);
+    // Off and the saved device until the shared engine's enumeration (cpal's
+    // ALSA host, which PipeWire desktops serve through pipewire-alsa) returns
+    // off the main thread, as shipping lists `list_recording_audio_devices`.
+    let saved = prefs
+        .get("recording.microphone_device_id")
+        .as_str()
+        .map(|id| {
+            (
+                id.to_owned(),
+                id.strip_prefix("microphone:").unwrap_or(id).to_owned(),
+            )
+        });
+    let microphones = move |devices: Vec<(String, String)>| {
+        let mut list = vec![("off".to_owned(), preferences::MICROPHONE_OFF.to_owned())];
+        list.extend(devices);
+        if let Some(saved) = &saved
+            && !list.iter().any(|(id, _)| *id == saved.0)
+        {
+            list.push(saved.clone());
+        }
+        list
+    };
+    let microphone = select(
+        prefs,
+        "recording.microphone_device_id",
+        microphones(Vec::new()),
+    );
+    microphone.root.set_size_request(160, -1);
+    let copy = preferences::row("recording.microphone_device_id");
+    add(
+        &card,
+        &inline_row(copy.title, copy.description, &microphone.root),
+    );
+    let weak = Rc::downgrade(&microphone);
+    glib::spawn_future_local(async move {
+        let Ok(devices) = gio::spawn_blocking(|| {
+            captures_recording_platform::microphone_devices()
+                .into_iter()
+                .map(|device| (device.id, device.name))
+                .collect::<Vec<_>>()
+        })
+        .await
+        else {
+            return;
+        };
+        if let Some(choice) = weak.upgrade() {
+            choice.set_options(microphones(devices));
+        }
+    });
     for key in preferences::RECORDING_TOGGLES {
         let path: &'static str = match key {
             "capture_system_audio" => "recording.capture_system_audio",
