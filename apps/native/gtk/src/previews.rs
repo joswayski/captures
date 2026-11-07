@@ -418,6 +418,28 @@ impl State {
         }
     }
 
+    /// The expanded stack's room on its monitor (`thumbnail_geometry`'s
+    /// `available_height`): the X11 work area, or on other backends the
+    /// monitor less the same gaps.
+    fn available_height(&self) -> Option<f64> {
+        let surface = self.window.surface()?;
+        #[cfg(feature = "x11")]
+        if let (Some(placer), Ok(surface)) = (
+            self.placer.as_ref(),
+            surface.clone().downcast::<gdk4_x11::X11Surface>(),
+        ) {
+            let work = preview::work_area(placer.bounds(&surface, false)?);
+            return Some((work.height - work.bottom_gap - preview::THUMBNAIL_PADDING).max(1.));
+        }
+        let monitor =
+            gtk::prelude::WidgetExt::display(&self.window).monitor_at_surface(&surface)?;
+        let height = f64::from(monitor.geometry().height());
+        Some(
+            (height - 2. * preview::THUMBNAIL_SYSTEM_CHROME_GAP - preview::THUMBNAIL_PADDING)
+                .max(1.),
+        )
+    }
+
     /// Whether this host can carry the pile itself (X11 with a placer).
     fn can_carry(&self) -> bool {
         #[cfg(feature = "x11")]
@@ -516,6 +538,7 @@ impl State {
         }));
         self.minimize
             .update_property(&[gtk::accessible::Property::Label(label)]);
+        self.pile.set_max_height(self.available_height());
         // Undecorated, non-resizable: let the window shrink to the stack.
         self.window.set_default_size(-1, -1);
     }
@@ -678,11 +701,15 @@ impl State {
         });
         card.root.add_controller(motion);
         let focus = gtk::EventControllerFocus::new();
-        let weak = Rc::downgrade(&card);
+        let (weak, pile) = (Rc::downgrade(&card), self.pile.downgrade());
         focus.connect_enter(move |_| {
             if let Some(card) = weak.upgrade() {
                 card.focused.set(true);
                 card.refresh();
+                // Keyboard focus scrolls an overflowing stack to the card.
+                if let Some(pile) = pile.upgrade() {
+                    pile.reveal(&card.entry.id);
+                }
             }
         });
         let weak = Rc::downgrade(&card);

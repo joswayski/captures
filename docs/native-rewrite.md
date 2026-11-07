@@ -940,9 +940,8 @@ button covers the pile with the accent ring on hover or focus; rear cards
 leave the accessibility tree. Timing resolves the shared `motion` specs
 against GTK's tokens, and with GTK animations off (GNOME's Reduce
 animation) every change lands at once with no frame ticks. `smoke.py`
-minimizes to the pile and expands it over AT-SPI. Exit motion and the
-carry with its drag sway (both ported later, below) and overflow scrolling
-remain open.
+minimizes to the pile and expands it over AT-SPI. Exit motion, the carry
+with its drag sway and overflow scrolling were ported later (below).
 X11 (Xvfb) only. Windows, macOS: unchanged.
 
 On X11 the GTK stack now takes shipping's placement. The window is 340 px
@@ -1007,9 +1006,29 @@ place its window, the press goes to the compositor's own move
 (`gdk::Toplevel::begin_move`) without re-anchoring or sway. Checked under a
 1920×1080 Xvfb (GTK 4.8): a carry from the bottom-left corner up and right
 moved the window from 0,756 to 702,288 with the rear card leaning, it stayed
-collapsed on drop, and a later click expanded it from the top anchor. Not
-done: overflow scrolling. Wayland, a real window manager's drag and real
-hardware not verified. Windows, macOS: unchanged.
+collapsed on drop, and a later click expanded it from the top anchor.
+Wayland, a real window manager's drag and real hardware not verified.
+Windows, macOS: unchanged.
+
+An expanded GTK stack taller than its monitor's room now scrolls, as
+shipping's `overflow-y: auto` stack. The window stops at
+`thumbnail_geometry`'s available height (the X11 work area less the gaps;
+elsewhere the monitor less the same gaps). The cards scroll inside it under
+the fixed toolbar, and a new card brings the newest edge back into view. The
+wheel scrolls by GTK's own step (viewport height to the 2/3 power). The
+`.thumbnail-overflow-cue` glass tabs at the top and bottom edges appear from
+the shared `stack_overflow`, carry `overflow_cue_label`'s "Show older
+captures" / "Show newer captures", and ease one card slot over 380 ms
+(`animateThumbnailStackScroll`'s ease-out cubic; at once with animations
+off). Hidden cues leave the accessibility tree and the focus chain.
+Keyboard focus on a card scrolls it clear of the toolbar. The cues appear
+without shipping's small pop-in. `smoke.py` restores five cards on the
+1280×1024 Xvfb screen (976 px of stack in 936 px of room), checks that the
+stack starts at the newest card, and steps the older cue until the newer cue
+takes its place. Checked by screenshot on a 1280×400 screen: the newest card
+shows with the upper cue, the cue scrolls to the oldest card, and the wheel
+scrolls back. X11 (Xvfb) only; Wayland and real hardware not verified.
+Windows, macOS: unchanged.
 
 The fifth GTK4 slice is the recording editor, opened by History's Edit on a
 video or GIF (one window per artifact) or `--scene recording --artifact ID`.

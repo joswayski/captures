@@ -16,7 +16,10 @@ use gtk::subclass::prelude::*;
 use gtk::{glib, graphene, gsk};
 
 use crate::tokens::Tokens;
-use crate::widgets::{Streak, Thumbnail, streak_step};
+use crate::widgets::{Icon, Streak, Thumbnail, streak_step};
+
+/// `THUMBNAIL_STACK_SCROLL_DURATION_MS`: an overflow cue's scroll.
+const SCROLL_MS: f64 = 380.;
 
 /// Shipping's 340 px window holds 284 px cards inside 28 px side padding.
 pub const CARD_WIDTH: f64 = preview::THUMBNAIL_WIDTH - 2. * preview::THUMBNAIL_PADDING;
@@ -69,6 +72,15 @@ mod imp {
         /// A carried pile's gravity (`None`: ±1 from its corner).
         pub gravity: Cell<Option<f64>>,
         pub carry: Cell<super::Carry>,
+        /// The tallest the expanded stack may be (the work area's room).
+        pub max_height: Cell<Option<f64>>,
+        /// An expanded stack's scroll (`scrollTop`) easing from, to, since;
+        /// `None` keeps the newest card in view.
+        pub scroll: Cell<Option<(f64, f64, f64)>>,
+        /// The scroll range at the latest layout.
+        pub max_scroll: Cell<f64>,
+        /// `.thumbnail-overflow-cue-older` and `-newer`.
+        pub cues: RefCell<Vec<gtk::Button>>,
     }
 
     #[glib::object_subclass]
@@ -101,11 +113,16 @@ mod imp {
                 let now = obj.now_ms();
                 // Shipping retains the frame through the fly, so the
                 // window resizes and moves once, not on every frame.
-                if obj.tweens().0.running(now - since, obj.reduced()) {
+                let height = if obj.tweens().0.running(now - since, obj.reduced()) {
                     preview::stack_height(count).max(preview::collapsed_frame_height(count))
                 } else {
                     obj.content_height(obj.collapse_progress(now))
-                }
+                };
+                // A stack taller than the work area scrolls inside it.
+                self.max_height
+                    .get()
+                    .map_or(height, |max| height.min(max))
+                    .max(preview::collapsed_frame_height(count))
             };
             let size = size.round() as i32;
             (size, size, -1, -1)
@@ -246,6 +263,41 @@ impl Pile {
         controls.set_parent(&pile);
         *imp.controls.borrow_mut() = Some(controls.clone().upcast());
 
+        // Overflow cues paint over the cards and under the stack toolbar.
+        for (older, icon) in [(true, "chevron-up"), (false, "chevron-down")] {
+            let cue = gtk::Button::new();
+            cue.add_css_class("preview-overflow-cue");
+            cue.add_css_class(if older { "older" } else { "newer" });
+            cue.set_child(Some(&Icon::new(icon, 16).with_stroke(2.)));
+            cue.set_opacity(0.);
+            cue.set_can_target(false);
+            cue.set_focusable(false);
+            cue.insert_before(&pile, Some(controls));
+            let weak = pile.downgrade();
+            cue.connect_clicked(move |_| {
+                if let Some(pile) = weak.upgrade() {
+                    let slot = preview::THUMBNAIL_CARD_SLOT;
+                    pile.scroll_by(if older { -slot } else { slot }, true);
+                }
+            });
+            imp.cues.borrow_mut().push(cue);
+        }
+        let wheel = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
+        let weak = pile.downgrade();
+        wheel.connect_scroll(move |_, _, dy| {
+            let Some(pile) = weak.upgrade() else {
+                return glib::Propagation::Proceed;
+            };
+            if pile.imp().collapsed.get() || pile.imp().max_scroll.get() <= 0. {
+                return glib::Propagation::Proceed;
+            }
+            // GTK's own wheel step: the viewport height to the 2/3 power.
+            let step = f64::from(pile.height()).powf(2. / 3.);
+            pile.scroll_by(dy * step, false);
+            glib::Propagation::Stop
+        });
+        pile.add_controller(wheel);
+
         let expand = gtk::Button::new();
         expand.add_css_class("preview-pile-expand");
         expand.set_visible(false);
@@ -280,6 +332,83 @@ impl Pile {
 
     pub fn connect_expand(&self, expand: impl Fn() + 'static) {
         *self.imp().on_expand.borrow_mut() = Some(Box::new(expand));
+    }
+
+    /// The tallest the expanded stack may be before it scrolls.
+    pub fn set_max_height(&self, max: Option<f64>) {
+        if self.imp().max_height.replace(max) != max {
+            self.queue_resize();
+        }
+    }
+
+    /// The expanded stack's scroll now, clamped to the latest range.
+    fn scroll_top(&self, now: f64, max_scroll: f64) -> f64 {
+        let imp = self.imp();
+        let top = match imp.scroll.get() {
+            None if imp.top_anchor.get() => 0.,
+            None => max_scroll,
+            Some((from, to, since)) => {
+                let t = if self.reduced() {
+                    1.
+                } else {
+                    ((now - since) / SCROLL_MS).clamp(0., 1.)
+                };
+                from + (to - from) * (1. - (1. - t).powi(3))
+            }
+        };
+        top.clamp(0., max_scroll)
+    }
+
+    /// Scroll the expanded stack by `delta` points; a cue eases there
+    /// (`animateThumbnailStackScroll`), the wheel moves at once.
+    pub fn scroll_by(&self, delta: f64, animate: bool) {
+        let imp = self.imp();
+        let (now, max) = (self.now_ms(), imp.max_scroll.get());
+        let from = self.scroll_top(now, max);
+        let to = (from + delta).clamp(0., max);
+        imp.scroll.set(Some(if animate {
+            (from, to, now)
+        } else {
+            (to, to, now)
+        }));
+        self.animate();
+    }
+
+    /// Bring `id`'s card fully into view (keyboard focus moved to it).
+    pub fn reveal(&self, id: &str) {
+        let imp = self.imp();
+        if imp.collapsed.get() {
+            return;
+        }
+        let (count, index) = {
+            let cards = imp.cards.borrow();
+            let Some(index) = cards.iter().position(|card| card.id == id) else {
+                return;
+            };
+            (cards.len(), index)
+        };
+        let top = imp.top_anchor.get();
+        let Some(layout) = preview::card_layout_in(count, index, false, top, false) else {
+            return;
+        };
+        let (max, viewport) = (imp.max_scroll.get(), f64::from(self.height()));
+        let scroll = self.scroll_top(self.now_ms(), max);
+        // Clear of the toolbar gutter on the anchored edge.
+        let gutter = preview::THUMBNAIL_CONTROL_GUTTER;
+        let (lo, hi) = if top {
+            (gutter, viewport)
+        } else {
+            (0., viewport - gutter)
+        };
+        let (start, end) = (
+            layout.y - scroll,
+            layout.y + preview::THUMBNAIL_CARD_HEIGHT - scroll,
+        );
+        if start < lo {
+            self.scroll_by(start - lo, true);
+        } else if end > hi {
+            self.scroll_by(end - hi, true);
+        }
     }
 
     /// The collapsed pile's hit target, which a carry starts on.
@@ -518,9 +647,10 @@ impl Pile {
     /// Add the newest card; it rises in with shipping's arrival.
     pub fn add_card(&self, card: PileCard) {
         let imp = self.imp();
-        // Paint order is child order: cards stay under the controls.
-        card.root
-            .insert_before(self, imp.controls.borrow().as_ref());
+        // Paint order is child order: cards stay under the cues and controls.
+        card.root.insert_before(self, imp.cues.borrow().first());
+        // The newest card comes into view.
+        imp.scroll.set(None);
         imp.arrivals
             .borrow_mut()
             .insert(card.id.clone(), self.now_ms());
@@ -718,6 +848,18 @@ impl Pile {
             || !imp.rejects.borrow().is_empty()
             || !imp.exits.borrow().is_empty()
             || self.carry_moving(now, deepest, &fan, reduced)
+            || imp
+                .scroll
+                .get()
+                .is_some_and(|(_, _, since)| !reduced && now - since < SCROLL_MS)
+    }
+
+    /// Clear all is emptying the stack: every card is leaving.
+    fn is_clearing(&self) -> bool {
+        let imp = self.imp();
+        let exits = imp.exits.borrow();
+        let cards = imp.cards.borrow();
+        !cards.is_empty() && cards.iter().all(|card| exits.exiting(&card.id).is_some())
     }
 
     fn exit_motion(&self) -> ExitMotion {
@@ -840,10 +982,46 @@ impl Pile {
         } else {
             f64::from(height) - self.content_height(progress)
         };
+        // An expanded stack taller than the window scrolls (`scrollTop`).
+        let content = preview::stack_height(count);
+        let max_scroll = (content - f64::from(height)).max(0.);
+        imp.max_scroll.set(max_scroll);
+        let scroll_top = self.scroll_top(now, max_scroll);
+        let shift = if top {
+            -scroll_top
+        } else {
+            max_scroll - scroll_top
+        };
+        let overflow = if progress > 0. || imp.collapsed.get() || self.is_clearing() {
+            preview::StackOverflow::default()
+        } else {
+            preview::stack_overflow(scroll_top, content, f64::from(height))
+        };
+        for (cue, shown) in imp
+            .cues
+            .borrow()
+            .iter()
+            .zip([overflow.above, overflow.below])
+        {
+            let older = cue.has_css_class("older");
+            cue.set_opacity(if shown { 1. } else { 0. });
+            cue.set_can_target(shown);
+            cue.set_focusable(shown);
+            cue.update_state(&[gtk::accessible::State::Hidden(!shown)]);
+            let label = preview::overflow_cue_label(older, top);
+            cue.set_tooltip_text(Some(label));
+            cue.update_property(&[gtk::accessible::Property::Label(label)]);
+            let (w, h) = (46., 22.);
+            let y = if older { 6. } else { height - 6. - h };
+            let transform =
+                gsk::Transform::new().translate(&graphene::Point::new((width - w) / 2., y));
+            cue.allocate(w as i32, h as i32, -1, Some(transform));
+        }
         for (index, card) in cards.iter().enumerate() {
             let depth = count - 1 - index;
-            let expanded =
-                preview::card_layout_in(count, index, false, top, false).map_or(0., |l| l.y);
+            let expanded = preview::card_layout_in(count, index, false, top, false)
+                .map_or(0., |l| l.y)
+                + shift;
             let front = preview::collapsed_padding(count);
             let rest = preview::collapsed_card_pose(&card.id, depth, false, gravity, top);
             let lean = self.lean(depth, now, &fan_tween, reduced);

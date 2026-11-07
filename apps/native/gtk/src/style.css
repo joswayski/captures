@@ -2331,6 +2331,28 @@ popover.captures-menu.canvas-bg-menu > contents {
 }
 
 /* `.thumbnail-stack-compact .thumbnail-card::before`: a rear card's depth shade. */
+/* `.thumbnail-overflow-cue`: a glass tab on the window edge that scrolls one card. */
+.captures button.preview-overflow-cue {
+  all: unset;
+  border: 1px solid var(--glass-border);
+  color: var(--glass-text);
+  background: var(--glass-strong);
+  box-shadow: var(--glass-shadow);
+  transition: background 120ms ease;
+}
+.captures button.preview-overflow-cue.older {
+  border-radius: 0 0 var(--r-lg) var(--r-lg);
+}
+.captures button.preview-overflow-cue.newer {
+  border-radius: var(--r-lg) var(--r-lg) 0 0;
+}
+.captures button.preview-overflow-cue:hover {
+  background: var(--glass-raised);
+}
+.captures button.preview-overflow-cue:focus-visible {
+  outline: 2px solid var(--theme-accent);
+  outline-offset: 2px;
+}
 /* `.thumbnail-file-dragging`: the image hides under the drag's still copy. */
 .captures .preview-card.file-dragging captures-thumbnail {
   opacity: 0;

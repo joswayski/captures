@@ -830,6 +830,39 @@ def previews(binary, scratch):
         process.wait(timeout=10)
 
 
+def preview_overflow(binary, scratch):
+    """Five cards (976 px) overflow a 1024 px screen's 936 px of room: the stack scrolls, showing
+    the newest card, and the overflow cues scroll it a card at a time."""
+    root = scratch / "overflow-history"
+    write_history_entries(root, 6)
+    process = launch(binary, "--scene", "history", "--history-root", str(root),
+                     "--settings-file", str(scratch / "overflow-settings.json"),
+                     "--size", "1260x1000")
+    try:
+        app = wait(lambda: application(process.pid), "the app on the accessibility bus")
+        for count in range(1, 6):
+            restores = wait(lambda: len(find(app, "push button", "Restore")) >= count
+                            and find(app, "push button", "Restore"), f"{count} Restore buttons")
+            press(restores[count - 1])
+            wait(lambda: len(find(app, "image", "Screenshot preview")) == count,
+                 f"{count} preview cards")
+        stack = wait(lambda: find(app, "frame", "Captures Previews"), "the previews window")[0]
+        older = wait(lambda: find(stack, "push button", "Show older captures"), "the older cue")
+        assert not find(stack, "push button", "Show newer captures"), "the stack began scrolled up"
+        for _ in range(6):
+            press(older[0])
+            if find(stack, "push button", "Show newer captures"):
+                break
+            time.sleep(0.5)
+        wait(lambda: find(stack, "push button", "Show newer captures"), "the newer cue")
+        wait(lambda: not find(stack, "push button", "Show older captures"),
+             "the older cue to go once the oldest card shows", timeout=10)
+        print("previews: five cards scroll with the overflow cues")
+    finally:
+        process.terminate()
+        process.wait(timeout=10)
+
+
 def feedback(binary, scratch):
     # Without an endpoint the form is a fixture: Send stays off.
     process = launch(binary, "--settings-file", str(scratch / "feedback-settings.json"),
@@ -998,6 +1031,7 @@ def main():
         recording(args.binary, scratch)
         recording_output(args.binary, scratch)
         previews(args.binary, scratch)
+        preview_overflow(args.binary, scratch)
         feedback(args.binary, scratch)
 
 
