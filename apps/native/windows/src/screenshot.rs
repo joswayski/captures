@@ -30,6 +30,7 @@ pub fn render(options: &Options, path: &std::path::Path) -> Result<()> {
             (spec.width, spec.height)
         }
         Window::Editor => crate::editor::SIZE,
+        Window::Recording => crate::recording::SIZE,
     };
     let (w, h) = options.size.unwrap_or((w as u32, h as u32));
     let canvas = tokens.color("surface-canvas");
@@ -41,6 +42,10 @@ pub fn render(options: &Options, path: &std::path::Path) -> Result<()> {
         let editor =
             crate::editor::render_offscreen(options, g.clone(), tokens, (w as f32, h as f32))?;
         Box::new(move |dc| editor.paint(dc, 1.))
+    } else if options.scene == Window::Recording {
+        let recording =
+            crate::recording::render_offscreen(options, g.clone(), tokens, (w as f32, h as f32))?;
+        Box::new(move |dc| recording.paint(dc))
     } else {
         let platform = captures_app::shortcuts::ShortcutPlatform::Windows;
         let detail = match &options.history_root {

@@ -729,6 +729,30 @@ its hint by pointer half while its reorder clamps to the unlocked run.
 Windows: cross-target clippy passed; rendered/hardware follow-up pending.
 macOS, X11 and Wayland: unchanged; these fixes touch only the Win32 host.
 
+Win32 recording editor slice 1 adds `--scene recording --artifact ID` and
+enables History's recording Edit action. The shared `RecordingEditorSession`
+lives on a worker with explicit FFmpeg/FFprobe overrides, Windows Tauri
+sidecars and PATH fallback. The retained header and footer provide filename,
+save folder, Save as new file, replacement, progress/cancellation, saved status
+and Explorer reveal. Replacement preserves the shared session's identity and
+compensation checks; close waits for cancellation/cleanup instead of ending
+the process during an export. Corrupt settings fail rather than redirecting
+saves to a default folder. UIA exposes Value, Toggle and Invoke for the footer.
+This is the shell only: the canvas is empty until preview/playback slice 2;
+timeline, output cards, format preferences, crop/comparison and Text-pattern
+acceptance remain open. This slice saves MP4/GIF sources in their original
+format and rejects WebM export. No release or workflow changes.
+Windows: cross-target fmt/clippy/build and 12 host tests passed, plus npm check.
+Offscreen Direct2D renders with real MP4/GIF media were inspected under Wine:
+normal/minimum sizes, light/dark, dropped-frame warning and open-error state.
+Wine uses substitute fonts, not Windows typography acceptance. Temporary worker
+tests (removed) verified copy format/bytes, cancelled-copy without publication,
+replacement/recovery-byte equality and close for MP4/GIF, with the separate
+Windows staging-flush access fix. Real-PC rendering, UIA/input, save/cancel and
+close checks remain pending. macOS, X11 and Wayland: existing recording
+hosts unchanged; no shared-crate API changes in this slice. Native remains
+opt-in and is not a public-channel replacement.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,

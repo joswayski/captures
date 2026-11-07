@@ -24,6 +24,10 @@ mod host;
 #[cfg(windows)]
 mod keys;
 #[cfg(windows)]
+mod recording;
+#[cfg(windows)]
+mod recording_uia;
+#[cfg(windows)]
 mod scene;
 #[cfg(windows)]
 mod screenshot;
@@ -44,6 +48,8 @@ pub enum Scene {
     History,
     /// `--scene editor --artifact ID`.
     Editor,
+    /// `--scene recording --artifact ID`.
+    Recording,
 }
 
 #[cfg(windows)]
@@ -98,6 +104,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
                     "preferences" => Scene::Preferences,
                     "history" => Scene::History,
                     "editor" => Scene::Editor,
+                    "recording" => Scene::Recording,
                     scene => return Err(format!("unsupported scene {scene}")),
                 };
             }
@@ -146,8 +153,8 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
         }
         use_profile(&mut options, &dir)?;
     }
-    if options.scene == Scene::Editor && options.artifact.is_none() {
-        return Err("--scene editor needs --artifact ID".into());
+    if matches!(options.scene, Scene::Editor | Scene::Recording) && options.artifact.is_none() {
+        return Err("--scene editor/recording needs --artifact ID".into());
     }
     Ok(options)
 }
