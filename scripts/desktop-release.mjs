@@ -17,6 +17,20 @@ export function isDesktopReleasePath(path) {
   );
 }
 
+/** Native parity work is not public Tauri behavior, even inside a linked crate. */
+export function isUnreleasedNativePath(path) {
+  return (
+    path.startsWith("apps/native/") ||
+    path.startsWith("crates/captures-settings-ffi/") ||
+    (path.startsWith("crates/captures-app/") &&
+      // These are the captures-app modules called by apps/desktop/src-tauri.
+      // Review this boundary when Tauri adopts more modules or native ships.
+      !["crates/captures-app/src/preview.rs", "crates/captures-app/src/preview_drag.rs"].includes(
+        path,
+      ))
+  );
+}
+
 function dependencyNames(pkg) {
   return Object.keys({
     ...pkg?.dependencies,
@@ -221,8 +235,10 @@ export function previousPreviewTag(head, releases) {
 export function releaseNotesBetween(before, after, repository) {
   const range = refExists(before) ? `${before}..${after}` : after;
   const output = git(["rev-list", "--reverse", range]);
-  const qualifying = (output ? output.split(/\r?\n/u) : []).filter(
-    (commit) => releaseImpactBetween(firstParent(commit), commit).shouldRelease,
+  const qualifying = (output ? output.split(/\r?\n/u) : []).filter((commit) =>
+    releaseImpactBetween(firstParent(commit), commit).paths.some(
+      (path) => !isUnreleasedNativePath(path),
+    ),
   );
   return releaseNotes(qualifying, repository, after);
 }

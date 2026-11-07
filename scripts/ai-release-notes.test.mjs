@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, test } from "vitest";
 import { aiReleaseNotes } from "./ai-release-notes.mjs";
+import { releaseNotesBetween } from "./desktop-release.mjs";
 
 const directories = [];
 afterEach(() =>
@@ -171,6 +172,62 @@ test("invalid or unavailable editorial output preserves exact fallback without l
     });
     assert.equal(notes, fallback);
     assert.deepEqual(warnings, [[]], "no raw provider error or source content reaches diagnostics");
+  }
+});
+
+test("native migration stays out of AI and fallback notes while shared shipping code remains eligible", async () => {
+  const f = fixture();
+  const native = f.commit(
+    {
+      "crates/captures-app/src/editor_session.rs": "NATIVE-BRUSH",
+      "crates/captures-settings-ffi/src/editor.rs": "NATIVE-FFI",
+      "apps/native/windows/src/editor.rs": "NATIVE-HOST",
+    },
+    "Smoother background brushing",
+  );
+  const options = {
+    cwd: f.cwd,
+    env,
+    fetch: async () => {
+      throw new Error("native-only range must not call the provider");
+    },
+    warn: () => assert.fail("native-only range must not fall back"),
+  };
+  assert.equal(
+    await aiReleaseNotes(f.base, native, fallback, options),
+    "## What's Changed\nNo user-facing desktop changes in this Preview.\n",
+  );
+  const shipped = f.commit(
+    {
+      "crates/captures-app/src/preview.rs": "SHIPPED-STACK",
+      "crates/captures-app/src/preview_drag.rs": "SHIPPED-DRAG",
+      "crates/captures-app/src/editor_session.rs": "NATIVE-BRUSH-UPDATE",
+    },
+    "Keep your capture handy",
+  );
+  const notes = await aiReleaseNotes(f.base, shipped, fallback, {
+    ...options,
+    fetch: async (_, options) => {
+      const source = JSON.parse(JSON.parse(options.body).messages[0].content);
+      assert.deepEqual(
+        source.commits.map(({ commit }) => commit),
+        [shipped],
+      );
+      assert.match(source.commits[0].diff, /SHIPPED-STACK/u);
+      assert.match(source.commits[0].diff, /SHIPPED-DRAG/u);
+      assert.doesNotMatch(source.commits[0].diff, /NATIVE-/u);
+      return reply([highlight(shipped)]);
+    },
+  });
+  assert.match(notes, /Keep your capture handy/u);
+  const original = process.cwd();
+  try {
+    process.chdir(f.cwd);
+    const deterministic = releaseNotesBetween(f.base, shipped, "joswayski/captures");
+    assert.doesNotMatch(deterministic, /Smoother background brushing/u);
+    assert.match(deterministic, /Keep your capture handy/u);
+  } finally {
+    process.chdir(original);
   }
 });
 

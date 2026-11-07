@@ -217,7 +217,14 @@ files or installed-app data. There is no AI request from the desktop app.
 
 Evidence uses the exact previous-Tauri-Preview-to-target first-parent range. Only
 Tauri and shared source paths supply evidence; native-app source, website, tests,
-dependency bots and secret-looking paths are excluded. Path filtering is not
+dependency bots and secret-looking paths are excluded. Native-only code inside
+shared crates is also excluded: `captures-settings-ffi` and `captures-app` except
+the `preview.rs` and `preview_drag.rs` modules used by Tauri. The commit-based
+fallback excludes the same native-only paths without changing build triggers.
+The prompt requires behavior reachable in Tauri, not migration or parity progress;
+shared-code changes alone do not establish that a feature is exposed. Review these
+boundaries when Tauri adopts more native modules or the native app ships.
+Path filtering is not
 a secret-content scanner. Requests are capped at 400,000 serialized characters
 by shortening diffs and marking truncation, without dropping commit metadata.
 Citations, output shape, plain text and length limits are checked locally;
