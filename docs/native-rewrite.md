@@ -1532,6 +1532,27 @@ preview stack after a live capture inspected under Xvfb with picom. The real
 xdg-desktop-portal backends, GNOME and KDE not verified. Windows, macOS:
 unchanged.
 
+GTK live-app mode, step 3: tray and global shortcuts. The tray is shipping's
+`build_tray_menu` as a StatusNotifierItem through `tray-icon` with `ksni`
+(the wgpu host's choice; no GTK 3 joins the GTK 4 process), with shipping's
+`tray_accelerator` labels. Rows for captures the GTK host cannot run yet
+(New Capture, Region, Window and the three recordings) keep shipping's order
+but are disabled; Check for Updates… follows Preview update metadata and
+opens Preferences. Without a StatusNotifier watcher and host the app opens
+Preferences and quits with its last window, as the wgpu host. Global
+shortcuts use the shared `CaptureShortcuts` once setup is finished: the
+global-hotkey X11 manager (the one `CaptureFlow` uses for Escape) or the
+Wayland GlobalShortcuts portal, never both. A file monitor on the settings
+file refreshes the tray accelerators and the bindings after Preferences
+saves. Not yet: the portal bindings/Configure/Retry UI in GTK Preferences,
+the launch notice, and the actions behind the disabled rows. Verified: the
+GTK smoke's `tray` step (real dbusmenu GetLayout and clicks against a
+StatusNotifierWatcher fixture) on X11 and headless Sway 1.9, and its
+`shortcuts` step (real X11 key presses, rebinding after a settings change)
+on X11; on Sway only that the portal owner starts, since the fixture has no
+GlobalShortcuts portal. Real panels (GNOME AppIndicator, KDE, waybar) and
+real GlobalShortcuts portals not verified. Windows, macOS: unchanged.
+
 ## Progress dashboard
 
 We are delivering stage 4 workflow slices and stage 5 editor slices.

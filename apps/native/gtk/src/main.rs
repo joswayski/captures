@@ -14,6 +14,7 @@ mod style;
 mod switch;
 mod system_look;
 mod tokens;
+mod tray;
 mod widgets;
 
 use std::cell::{Cell, RefCell};
@@ -223,6 +224,7 @@ struct Host {
     resident: RefCell<Option<gio::ApplicationHoldGuard>>,
     /// The capture in flight (`capture.rs`).
     capture: RefCell<Option<capture::Flow>>,
+    tray: RefCell<Option<tray::Tray>>,
 }
 
 impl Host {
@@ -709,6 +711,7 @@ fn main() -> glib::ExitCode {
             instance: RefCell::default(),
             resident: RefCell::default(),
             capture: RefCell::default(),
+            tray: RefCell::default(),
         });
         hosts.borrow_mut().push(host.clone());
         let weak = Rc::downgrade(&host);
