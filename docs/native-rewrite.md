@@ -784,10 +784,23 @@ rectangle, text and a rotated arrow. At 2x, line alpha coverage is 2.749 physica
 pixels versus Tauri's 2.753; low-opacity alpha maxima match at 64 and 128.
 Text raster edges differ by up to one physical pixel in these fixtures.
 Workspace Rust gates, npm check, wgpu compatibility and Windows-GNU build/clippy
-pass. Light/dark Win32 renders under Wine were inspected, but Wine's layer stubs
-cannot verify clipping or hidden-row alpha. Real Win32 and AppKit acceptance,
-plus GTK smoke and thumbnail inspection, remain required before merging this
-slice. X11/Wayland physical performance and accessibility remain unverified.
+pass. Pass 22 accepted the real Win32 release build (zero warnings) at 150% in
+light/dark, normal/minimum windows: all nine annotation cases, image cover,
+single hidden-row fade, visibility/opacity refresh, one-step Undo and unchanged
+idle drafts/source. Thin-line screen coverage was 1.95/1.98 physical pixels
+against a nominal 2.03 at 150%. GTK 4.8 X11 and private headless-Sway smoke
+passed; corrected source-over reference sheets confirm all nine thumbnails
+and visibility/opacity refresh in both themes. AppKit on the owner's MacBook
+accepted real light/dark windows and scrolled image rows: all 12 session
+bitmaps are byte-identical to the fixtures, line coverage is 2.749 pixels at
+2x and low-opacity maxima are 64/128. Existing well geometry is retained;
+Tauri also scales the 46x34 backing canvas to its CSS-sized well rather than
+aspect-fitting it. The AppKit full suite ran 634 tests with one skip and one
+MiniPreview save-state assertion failure; that test passed alone and the
+MiniPreview suite passed 57 tests with one skip on the same source. This is
+intermittent, with cause unproven, not a green full-suite claim.
+GTK thumbnail captures cover X11 at 2x only, not Wayland, fractional scaling or
+real hardware. X11/Wayland physical performance and accessibility remain open.
 
 Win32 recording editor slice 1 adds `--scene recording --artifact ID` and
 enables History's recording Edit action. The shared `RecordingEditorSession`
