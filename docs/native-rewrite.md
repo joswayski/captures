@@ -760,8 +760,14 @@ Win32 layer-preview wells now use Tauri's 10 DIP checkerboard period and
 theme tokens, including transparent image areas and faded hidden layers.
 Cells clip a rounded fill without overlapping alpha, leaving the row layout
 and thumbnail pixels unchanged. Light/dark Direct2D renders under Wine were
-inspected; changed pixels stay inside the three fixture wells. Physical
-Windows follow-up remains open. macOS, X11 and Wayland are unchanged.
+inspected; changed pixels stay inside the three fixture wells. Pass 21 on
+Windows 11 at 150% accepted light/dark default, hidden annotation, selected
+40%-opacity rectangle, transparent image and hidden background states against
+the parent build. Cells alternate 7/8 physical pixels (5 DIP), hidden fills
+have no overlap seams, corners match row backgrounds, and image cover and row
+geometry are unchanged. Both release builds had zero warnings; disposable
+profiles/processes were removed without touching the installed app, clipboard,
+Run key or firewall. macOS, X11 and Wayland are unchanged.
 Tauri's 1.35 CSS-pixel annotation stroke floor and preview opacity still need
 the separate shared-thumbnail slice; this host-only change does not add them.
 
