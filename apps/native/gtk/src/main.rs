@@ -2,6 +2,7 @@
 //! own token-drawn surfaces and controls. Runs beside the wgpu workbench
 //! until it passes the feature, screenshot, performance and accessibility
 //! gates in `docs/native-rewrite.md`.
+mod capture;
 mod editor;
 mod feedback;
 mod history;
@@ -28,7 +29,7 @@ const USAGE: &str = "captures-gtk [--scene preferences|history|editor|recording|
   [--settings-file PATH] [--history-root PATH] [--size WxH] [--feedback-endpoint URL]\n\
   [--screenshot OUT.png] [--find QUERY] [--count N] [--exercise] [--quit-after SECONDS]\n\
   [--open-media PATH]... [-- FILE...]\n\
-  --live [--captures-autostart] [--history-root PATH] [--settings-file PATH] [--open-media PATH]... [-- FILE...]";
+  --live [--captures-autostart] [--capture display] [--history-root PATH] [--settings-file PATH] [--open-media PATH]... [-- FILE...]";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Scene {
@@ -78,6 +79,8 @@ struct Options {
     live: bool,
     /// `--captures-autostart`: a quiet launch that opens no window.
     quiet: bool,
+    /// `--capture display`: take a screenshot once the live app is ready.
+    capture: bool,
 }
 
 fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
@@ -99,6 +102,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
         settings_given: false,
         live: false,
         quiet: false,
+        capture: false,
     };
     let mut args = args.skip(1);
     while let Some(flag) = args.next() {
@@ -124,6 +128,10 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
             }
             "--live" => options.live = true,
             "--captures-autostart" => options.quiet = true,
+            "--capture" => match value()?.as_str() {
+                "display" => options.capture = true,
+                other => return Err(format!("unsupported capture {other}")),
+            },
             "--history-root" => options.history_root = Some(value()?.into()),
             "--screenshot" => options.screenshot = Some(value()?.into()),
             "--find" => options.find = Some(value()?),
@@ -163,8 +171,8 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
                 .into(),
         );
     }
-    if options.quiet && !options.live {
-        return Err("--captures-autostart needs --live".into());
+    if (options.quiet || options.capture) && !options.live {
+        return Err("--captures-autostart and --capture need --live".into());
     }
     if matches!(options.scene, Scene::Editor | Scene::Recording) && options.artifact.is_none() {
         return Err(format!(
@@ -213,6 +221,8 @@ struct Host {
     /// app running with no window.
     instance: RefCell<Option<captures_app::instance::Instance>>,
     resident: RefCell<Option<gio::ApplicationHoldGuard>>,
+    /// The capture in flight (`capture.rs`).
+    capture: RefCell<Option<capture::Flow>>,
 }
 
 impl Host {
@@ -698,6 +708,7 @@ fn main() -> glib::ExitCode {
             importing: Cell::new(false),
             instance: RefCell::default(),
             resident: RefCell::default(),
+            capture: RefCell::default(),
         });
         hosts.borrow_mut().push(host.clone());
         let weak = Rc::downgrade(&host);
@@ -719,6 +730,9 @@ fn main() -> glib::ExitCode {
                     "windows": app.windows().len(),
                 }),
             );
+            if options.capture {
+                host.capture_display();
+            }
             if let Some(after) = options.quit_after {
                 let app = app.clone();
                 glib::timeout_add_local_once(after, move || app.quit());

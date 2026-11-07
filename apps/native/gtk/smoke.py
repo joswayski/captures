@@ -195,6 +195,14 @@ class X11:
     def copy(self, text):
         subprocess.run(["xclip", "-selection", "clipboard"], input=text, text=True, check=True)
 
+    def visible(self, pid):
+        return subprocess.run(["xdotool", "search", "--onlyvisible", "--pid", str(pid),
+                               "--name", "."], capture_output=True, text=True).stdout.split()
+
+    def paste_types(self):
+        return subprocess.run(["xclip", "-selection", "clipboard", "-t", "TARGETS", "-o"],
+                              capture_output=True, text=True).stdout.split()
+
     def close(self, window):
         """Ask `window` to close with WM_DELETE_WINDOW, as a taskbar or a
         Wayland compositor does: unlike a window manager's Alt+F4 there is no
@@ -325,6 +333,13 @@ class Wayland:
 
     def close(self, window):
         self._sway(window, "kill")
+
+    def visible(self, pid):
+        return [n["id"] for n in self._nodes() if n["pid"] == pid]
+
+    def paste_types(self):
+        return subprocess.run(["wl-paste", "--list-types"], env=self.env, capture_output=True,
+                              text=True).stdout.split()
 
 
 DESKTOP = X11()
@@ -1276,6 +1291,124 @@ def live(binary, scratch):
             process.wait()
 
 
+def desktop_fixture(log, still):
+    """`--desktop-fixture`: an unlocked org.freedesktop.ScreenSaver (the
+    shared capture-session check) and, with `still`, a Screenshot portal that
+    answers each request with that PNG one second later. Runs on a private
+    session bus so it never races a real portal."""
+    from gi.repository import Gio
+
+    xml = """<node><interface name="org.freedesktop.ScreenSaver">
+      <method name="GetActive"><arg type="b" direction="out"/></method></interface>
+      <interface name="org.freedesktop.portal.Screenshot">
+      <method name="Screenshot"><arg type="s" direction="in"/><arg type="a{sv}" direction="in"/>
+      <arg type="o" direction="out"/></method>
+      <property name="version" type="u" access="read"/></interface></node>"""
+    saver, portal = Gio.DBusNodeInfo.new_for_xml(xml).interfaces
+
+    def call(connection, sender, path, interface, method, params, invocation):
+        if method == "GetActive":
+            invocation.return_value(GLib.Variant("(b)", (False,)))
+            return
+        token = params.unpack()[1]["handle_token"]
+        request = f"/org/freedesktop/portal/desktop/request/{sender[1:].replace('.', '_')}/{token}"
+        with open(log, "a") as stream:
+            stream.write(json.dumps({"event": "request"}) + "\n")
+        invocation.return_value(GLib.Variant("(o)", (request,)))
+
+        def respond():
+            results = {"uri": GLib.Variant("s", Path(still).as_uri())}
+            connection.emit_signal(sender, request, "org.freedesktop.portal.Request", "Response",
+                                   GLib.Variant("(ua{sv})", (0, results)))
+            return False
+        GLib.timeout_add(1000, respond)
+
+    def version(*_):
+        return GLib.Variant("u", 3)
+
+    def owned(connection, name):
+        if name == "org.freedesktop.ScreenSaver":
+            connection.register_object("/org/freedesktop/ScreenSaver", saver, call, None, None)
+        else:
+            connection.register_object("/org/freedesktop/portal/desktop", portal, call, version,
+                                       None)
+        names.remove(name)
+        if not names:
+            print("READY", flush=True)
+
+    names = ["org.freedesktop.ScreenSaver"] + (["org.freedesktop.portal.Desktop"] if still else [])
+    for name in list(names):
+        Gio.bus_own_name(Gio.BusType.SESSION, name, 0, owned, None, None)
+    GLib.MainLoop().run()
+
+
+def capture(binary, scratch):
+    """Live Screenshot Display through the shared capture flow: X11 reads the
+    display under the pointer; Wayland asks the Screenshot portal (a fixture
+    here) with every Captures window unmapped. The capture joins History and
+    the preview stack, and auto-copy puts it on the clipboard."""
+    portal = isinstance(DESKTOP, Wayland)
+    root = scratch / "capture-history"
+    settings = scratch / "capture-settings.json"
+    settings.write_text(json.dumps({
+        "settings_schema_version": 5, "onboarding_completed": True,
+        "output_directory": str(scratch / "capture-exports"),
+        "region_shortcut": "Ctrl+Shift+F7", "window_shortcut": "Ctrl+Shift+F8",
+        "display_shortcut": "Ctrl+Shift+F9", "new_capture_shortcut": "Ctrl+Shift+F10",
+        "launch_at_login": False, "show_mini_previews": True, "auto_copy_to_clipboard": True}))
+    still = scratch / "portal still.png"
+    still.write_bytes(fixture_png(accent=(30, 200, 120)))
+    pixbuf = GdkPixbuf.Pixbuf.new_from_file(str(still))
+    still_size = (pixbuf.get_width(), pixbuf.get_height())
+    fixture_log = scratch / "capture-fixture.log"
+    fixture_log.touch()
+    bus = subprocess.Popen(["dbus-daemon", "--session", "--nofork", "--print-address=1"],
+                           stdout=subprocess.PIPE, text=True)
+    address = bus.stdout.readline().strip()
+    env = dict(os.environ, DBUS_SESSION_BUS_ADDRESS=address, DBUS_SYSTEM_BUS_ADDRESS=address,
+               GSK_RENDERER="cairo", GTK_A11Y="none")
+    command = [sys.executable, __file__, "--binary", binary, "--desktop-fixture", str(fixture_log)]
+    service = subprocess.Popen(command + (["--still", str(still)] if portal else []), env=env,
+                               stdout=subprocess.PIPE)
+    log = scratch / "capture.log"
+    process = None
+    try:
+        assert select.select([service.stdout], [], [], 20)[0], "the desktop fixture stalled"
+        assert service.stdout.readline().strip() == b"READY"
+        with log.open("w") as stream:
+            process = subprocess.Popen([binary, "--live", "--history-root", str(root),
+                                        "--settings-file", str(settings), "--capture", "display"],
+                                       env=env, stdout=stream)
+
+        def events():
+            return [json.loads(line) for line in log.read_text().splitlines()
+                    if line.startswith("{")]
+        if portal:
+            wait(lambda: "request" in fixture_log.read_text(), "the portal request")
+            assert not DESKTOP.visible(process.pid), "a Captures window was mapped for the portal"
+        captured = wait(lambda: [e for e in events() if e["event"].startswith("capture")],
+                        "the capture", timeout=30)[0]
+        assert captured["event"] == "captured", events()
+        entry = json.loads(next(root.glob("*/metadata.json")).read_text())
+        assert (entry["kind"], entry["mode"]) == ("screenshot", "display"), entry
+        if portal:
+            assert (entry["width"], entry["height"]) == still_size, entry
+        else:
+            assert entry["width"] > 0 and entry["height"] > 0, entry
+        DESKTOP.window("^Captures Previews$", process.pid)
+        wait(lambda: "image/png" in DESKTOP.paste_types(), "auto-copy to the clipboard")
+        if portal:
+            DESKTOP.window("Preferences$", process.pid)
+        print(f"capture: Screenshot Display saved {entry['width']}×{entry['height']} "
+              f"{'through the portal' if portal else 'from X11'}, into the preview stack "
+              "and the clipboard")
+    finally:
+        for child in (process, service, bus):
+            if child and child.poll() is None:
+                child.terminate()
+                child.wait(timeout=10)
+
+
 def recording(binary, scratch):
     root = scratch / "recording-history"
     write_video_entry(root, seconds=4)
@@ -1328,7 +1461,7 @@ def recording(binary, scratch):
 
 
 STEPS = [history, preferences, editor, editor_close_keeps_open_text, recording,
-         recording_output, previews, preview_overflow, feedback, open_with, live]
+         recording_output, previews, preview_overflow, feedback, open_with, live, capture]
 
 
 def run(binary, scratch, only=None):
@@ -1392,7 +1525,11 @@ def main():
                         help="wayland_drag_probe binary (virtual pointer and keyboard)")
     parser.add_argument("--only", action="append",
                         help="run just this step (repeatable): " + ", ".join(s.__name__ for s in STEPS))
+    parser.add_argument("--desktop-fixture", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--still", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.desktop_fixture:
+        return desktop_fixture(args.desktop_fixture, args.still)
     assert not args.wayland or args.injector, "--wayland needs --injector"
     with tempfile.TemporaryDirectory() as scratch:
         scratch = Path(scratch)

@@ -327,6 +327,23 @@ impl Previews {
         self.state.toggle_collapsed();
     }
 
+    /// Auto-copy finished for a capture's card: its clipboard chip.
+    pub fn copied(&self, id: &str, result: Result<(), String>) {
+        let card = self
+            .state
+            .cards
+            .borrow()
+            .iter()
+            .find(|card| card.entry.id == id)
+            .cloned();
+        if let Some(card) = card {
+            match result {
+                Ok(()) => card.notify("Copied to clipboard", false),
+                Err(error) => card.notify(&format!("Couldn’t copy: {error}"), true),
+            }
+        }
+    }
+
     /// Shipping's `thumbnail-editor-active` ring follows the editor windows.
     pub fn sync_editing(&self) {
         self.state.sync_editing();

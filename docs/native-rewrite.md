@@ -1498,6 +1498,24 @@ the shared `instance_smoke.py` (both argument forms) on X11 under Xvfb, and
 the GTK smoke's new `live` step on X11 and on headless Sway 1.9. X11 and
 Wayland on real desktops not verified. Windows, macOS: unchanged.
 
+GTK live-app mode, step 2 (first capture slice): Screenshot Display through
+the shared capture flow. X11 uses `CaptureFlow` (Escape armed) and
+`Request::CaptureDisplay` for the display under the pointer; Wayland uses
+`PortalCapture` and `capture_portal_screenshot` with every Captures window
+unmapped first, as the wgpu host. The preview stack hides first unless it is
+included in captures, as shipping's HUD concealment, and settles for
+shipping's 40 ms. The saved capture reloads History, joins the preview stack
+and, with auto-copy, goes to the clipboard through `arboard`
+(wlr-data-control on Wayland; GDK cannot set a Wayland selection without an
+input serial). Entry point for now: `--capture display` on the launch that
+becomes the primary; the tray and shortcuts follow. Not yet: the countdown
+overlay (the delay is honored), region and window selectors, recording and
+its HUD. Verified: the GTK smoke's `capture` step on X11 under Xvfb (real
+X11 read) and on headless Sway 1.9 against a Screenshot portal fixture; the
+preview stack after a live capture inspected under Xvfb with picom. The real
+xdg-desktop-portal backends, GNOME and KDE not verified. Windows, macOS:
+unchanged.
+
 ## Progress dashboard
 
 We are delivering stage 4 workflow slices and stage 5 editor slices.

@@ -17,6 +17,8 @@ serde_json = "1"
 image = { version = "0.25", default-features = false, features = ["png"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 uuid = { version = "1", features = ["v4"] }
+# Auto-copy after a capture (wlr-data-control on Wayland), as shipping.
+arboard = { version = "3.6", features = ["wayland-data-control"] }
 captures-app = { path = "../../../crates/captures-app" }
 captures-capture = { path = "../../../crates/captures-capture" }
 captures-media = { path = "../../../crates/captures-media" }
