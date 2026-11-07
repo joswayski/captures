@@ -43,10 +43,14 @@ struct Form {
     spacer: gtk::Box,
 }
 
+/// `diagnostics`: the live app's local crash diagnostics. A previous
+/// session that did not close normally adds the native hosts' review card
+/// (not in shipping Tauri); nothing is added to the message unless asked.
 pub fn build(
     app: &gtk::Application,
     tokens: &Tokens,
     endpoint: Option<String>,
+    diagnostics: Option<Arc<captures_app::crash::Session>>,
 ) -> gtk::ApplicationWindow {
     let window = gtk::ApplicationWindow::builder()
         .application(app)
@@ -205,14 +209,55 @@ pub fn build(
     actions.append(&send);
 
     let shell = gtk::Box::new(gtk::Orientation::Vertical, space("s-6"));
-    for part in [
-        header.upcast_ref::<gtk::Widget>(),
-        meta.upcast_ref(),
-        form_card.upcast_ref(),
-        actions.upcast_ref(),
-    ] {
-        shell.append(part);
-    }
+    shell.append(&header);
+    shell.append(&meta);
+    let review = diagnostics
+        .as_ref()
+        .and_then(|session| Some((session.clone(), session.preview()?)));
+    let review_error = description("", "feedback-status");
+    review_error.add_css_class("feedback-status-error");
+    review_error.set_accessible_role(gtk::AccessibleRole::Alert);
+    review_error.set_visible(false);
+    let review_card = review.as_ref().map(|(_, review)| {
+        let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        card.add_css_class("settings-card");
+        card.add_css_class("feedback-review");
+        let title = label(review.title, "feedback-review-title");
+        title.set_accessible_role(gtk::AccessibleRole::Heading);
+        card.append(&title);
+        let explanation = description(review.explanation, "help-text");
+        explanation.add_css_class("feedback-review-explanation");
+        card.append(&explanation);
+        // Mouse-selectable but out of the Tab order (a focusable label reads
+        // poorly to screen readers); Copy summary and Add to message carry
+        // the same text for keyboard users.
+        let summary = description(&review.summary, "feedback-review-summary");
+        summary.set_selectable(true);
+        summary.set_focusable(false);
+        summary.update_property(&[gtk::accessible::Property::Label("Diagnostic summary")]);
+        let scroller = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .max_content_height(128)
+            .propagate_natural_height(true)
+            .child(&summary)
+            .build();
+        scroller.add_css_class("feedback-review-scroller");
+        card.append(&scroller);
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, space("s-3"));
+        row.add_css_class("feedback-review-actions");
+        let buttons = ["Copy summary", "Add to message", "Dismiss diagnostics"].map(|text| {
+            let button = gtk::Button::with_label(text);
+            button.add_css_class("ui-btn");
+            row.append(&button);
+            button
+        });
+        card.append(&row);
+        card.append(&review_error);
+        shell.append(&card);
+        (card, buttons)
+    });
+    shell.append(&form_card);
+    shell.append(&actions);
     let page = gtk::Box::new(gtk::Orientation::Vertical, 0);
     page.add_css_class("feedback");
     page.set_vexpand(true);
@@ -221,6 +266,11 @@ pub fn build(
         .hscrollbar_policy(gtk::PolicyType::Never)
         .child(&page)
         .build();
+    // Natural heights, not minimums, once the page overflows: otherwise the
+    // review's capped summary scroller shrinks to one line.
+    if let Some(viewport) = scroller.child().and_downcast::<gtk::Viewport>() {
+        viewport.set_vscroll_policy(gtk::ScrollablePolicy::Natural);
+    }
     // Shipping's `@media (max-width: 720px)`: two category columns.
     let columns: Rc<Cell<i32>> = Rc::default();
     let watch = WidthWatch::new(&scroller, {
@@ -288,6 +338,31 @@ pub fn build(
             form.refresh();
         }
     });
+    if let (Some((card, [copy_summary, add, dismiss])), Some((session, review))) =
+        (review_card, review)
+    {
+        let summary = review.summary.clone();
+        copy_summary.connect_clicked(move |button| button.clipboard().set_text(&summary));
+        let weak = Rc::downgrade(&form);
+        let (summary, error) = (review.summary.clone(), review_error.clone());
+        add.connect_clicked(move |_| {
+            if let Some(form) = weak.upgrade() {
+                let added = form.append_to_message(&summary);
+                error.set_label(
+                    "Wait for the current send to finish, or shorten the message below 8,000 characters.",
+                );
+                error.set_visible(!added);
+            }
+        });
+        let error = review_error.clone();
+        dismiss.connect_clicked(move |_| match session.dismiss() {
+            Ok(()) => card.set_visible(false),
+            Err(message) => {
+                error.set_label(&message);
+                error.set_visible(true);
+            }
+        });
+    }
     let weak = Rc::downgrade(&form);
     form.send.connect_clicked(move |_| {
         if let Some(form) = weak.upgrade() {
@@ -343,6 +418,24 @@ fn place_categories(grid: &gtk::Grid, categories: &[gtk::Button], columns: i32) 
 }
 
 impl Form {
+    /// Add `text` after the draft, as the review's Add to message: never
+    /// while sending, and never past the message limit.
+    fn append_to_message(&self, text: &str) -> bool {
+        if self.sending.get() {
+            return false;
+        }
+        let buffer = self.message.buffer();
+        let current: String = buffer
+            .text(&buffer.start_iter(), &buffer.end_iter(), false)
+            .into();
+        let separator = if current.is_empty() { "" } else { "\n\n" };
+        if current.chars().count() + separator.len() + text.chars().count() > copy::MESSAGE_LIMIT {
+            return false;
+        }
+        buffer.insert(&mut buffer.end_iter(), &format!("{separator}{text}"));
+        true
+    }
+
     fn text(&self) -> String {
         let buffer = self.message.buffer();
         buffer

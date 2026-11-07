@@ -2625,3 +2625,158 @@ popover.captures-menu.canvas-bg-menu > contents {
   min-height: var(--h-lg);
   padding: 0 var(--s-6);
 }
+
+/* First-run setup (`.onboarding*`, windows.css). */
+.captures .onboarding-shell {
+  background: var(--surface-canvas);
+}
+.captures .onboarding-stage {
+  padding: var(--s-9) var(--s-8);
+}
+.captures .onboarding-stage > * + * {
+  margin-top: var(--s-7);
+}
+.captures .onboarding-copy > * + * {
+  margin-top: var(--s-3);
+}
+.captures .onboarding-mark {
+  min-width: 40px;
+  min-height: 40px;
+  margin-bottom: var(--s-2);
+  border-radius: var(--r-lg);
+  color: var(--theme-accent-ink);
+  background: var(--theme-accent);
+  box-shadow: var(--shadow-sm);
+}
+.captures .onboarding-title {
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--recording-title-tracking);
+}
+.captures .onboarding-lede {
+  color: var(--text-subtle);
+  font-size: var(--text-md);
+  line-height: var(--lh-normal-md);
+}
+.captures .onboarding-panel > * + * {
+  margin-top: var(--s-5);
+}
+.captures .onboarding-permissions {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-xl);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-sm);
+}
+.captures .onboarding-permission {
+  padding: var(--s-6);
+}
+.captures .onboarding-permission > * + * {
+  margin-left: var(--s-5);
+}
+.captures .onboarding-permission-icon {
+  min-width: 22px;
+  min-height: 22px;
+  margin-top: 1px;
+  color: var(--text-subtle);
+}
+.captures .onboarding-permission-title {
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--brand-tracking);
+}
+.captures .onboarding-permission-description {
+  margin-top: var(--s-2);
+  color: var(--text-subtle);
+  font-size: var(--text-sm);
+  line-height: var(--lh-snug-sm);
+}
+.captures .onboarding-permission-actions {
+  min-width: 118px;
+}
+.captures .onboarding-permission-actions > * + * {
+  margin-top: var(--s-3);
+}
+.captures .onboarding-permission-status {
+  color: var(--text-subtle);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+.captures .onboarding-permission-status > * + * {
+  margin-left: var(--s-2);
+}
+.captures .onboarding-permission-status.ready {
+  color: var(--positive-text);
+}
+.captures .onboarding-error {
+  padding: var(--s-4) var(--s-5);
+  border: 1px solid var(--danger-border);
+  border-radius: var(--r-md);
+  color: var(--danger-text);
+  background: var(--danger-surface);
+  font-size: var(--text-sm);
+}
+/* Not a `.ui-btn` in shipping: the browser's own button box (square, 2 px
+   transparent border, no shadow) with the solid recipe. */
+.captures button.onboarding-primary-button {
+  all: unset;
+  /* Chromium sizes buttons border-box: 148 × `--h-xl` overall. */
+  min-width: 96px;
+  min-height: 36px;
+  margin-top: var(--s-5);
+  padding: 0 var(--s-6);
+  border: 2px solid transparent;
+  color: var(--solid-ink);
+  background: var(--solid);
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  transition: background-color var(--dur-2) var(--ease-standard);
+}
+.captures button.onboarding-primary-button:hover {
+  background: var(--solid-hover);
+}
+.captures button.onboarding-primary-button:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+.captures button.onboarding-primary-button:disabled {
+  opacity: 0.4;
+}
+/* A calm neutral halo once setup can finish (`onboarding-cta-pulse`). */
+.captures button.onboarding-primary-button.cta-pulse:not(:disabled) {
+  animation: onboarding-cta-pulse 2.6s ease-in-out infinite;
+}
+@keyframes onboarding-cta-pulse {
+  0% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+  50% {
+    box-shadow: 0 0 0 5px var(--surface-active);
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+/* `@media (max-height: 600px)`. */
+.captures .onboarding-stage.short {
+  padding: var(--s-6) var(--s-7);
+}
+.captures .onboarding-stage.short > * + * {
+  margin-top: var(--s-5);
+}
+
+/* Native hosts' previous-session review in Send Feedback (not in Tauri). */
+.captures .feedback-review > * + * {
+  margin-top: var(--s-4);
+}
+.captures .feedback-review-title {
+  color: var(--text);
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+}
+.captures .feedback-review-explanation {
+  margin-top: var(--s-3);
+}
+.captures .feedback-review-summary {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}

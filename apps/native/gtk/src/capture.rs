@@ -34,7 +34,7 @@ impl Flow {
     }
 }
 
-fn wayland(host: &Host) -> bool {
+pub fn wayland(host: &Host) -> bool {
     gdk::Display::default().is_some_and(|display| display.type_().name() == "GdkWaylandDisplay")
         || host
             .app

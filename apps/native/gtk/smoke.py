@@ -1262,7 +1262,8 @@ def live(binary, scratch):
     try:
         ready = wait(lambda: [e for e in events() if e["event"] == "ready"], "live readiness")[0]
         assert ready["windows"] == 0, events()
-        assert {"event": "launch", "action": "StartupNotice"} in events(), events()
+        assert {"event": "launch", "action": "StartupNotice", "crashReview": False} in events(), \
+            events()
         forward()
         preferences = DESKTOP.window("Preferences$", process.pid)
         wait(lambda: any(e["event"] == "instance-relaunch" for e in events()), "the relaunch")
@@ -1293,9 +1294,10 @@ def live(binary, scratch):
 
 def desktop_fixture(log, still):
     """`--desktop-fixture`: an unlocked org.freedesktop.ScreenSaver (the
-    shared capture-session check) and, with `still`, a Screenshot portal that
-    answers each request with that PNG one second later. Runs on a private
-    session bus so it never races a real portal."""
+    shared capture-session check), a StatusNotifierWatcher with a registered
+    host that logs each tray item, and, with `still`, a Screenshot portal that
+    answers each request with that PNG one second later (on a private session
+    bus, so it never races a real portal)."""
     from gi.repository import Gio
 
     xml = """<node><interface name="org.freedesktop.ScreenSaver">
@@ -1303,12 +1305,30 @@ def desktop_fixture(log, still):
       <interface name="org.freedesktop.portal.Screenshot">
       <method name="Screenshot"><arg type="s" direction="in"/><arg type="a{sv}" direction="in"/>
       <arg type="o" direction="out"/></method>
-      <property name="version" type="u" access="read"/></interface></node>"""
-    saver, portal = Gio.DBusNodeInfo.new_for_xml(xml).interfaces
+      <property name="version" type="u" access="read"/></interface>
+      <interface name="org.kde.StatusNotifierWatcher">
+      <method name="RegisterStatusNotifierItem"><arg type="s" direction="in"/></method>
+      <method name="RegisterStatusNotifierHost"><arg type="s" direction="in"/></method>
+      <property name="IsStatusNotifierHostRegistered" type="b" access="read"/>
+      <property name="ProtocolVersion" type="i" access="read"/>
+      <property name="RegisteredStatusNotifierItems" type="as" access="read"/></interface></node>"""
+    saver, portal, watcher = Gio.DBusNodeInfo.new_for_xml(xml).interfaces
+    items = []
 
     def call(connection, sender, path, interface, method, params, invocation):
         if method == "GetActive":
             invocation.return_value(GLib.Variant("(b)", (False,)))
+            return
+        if method == "RegisterStatusNotifierHost":
+            invocation.return_value(None)
+            return
+        if method == "RegisterStatusNotifierItem":
+            service = params.unpack()[0]
+            items.append(service)
+            with open(log, "a") as stream:
+                stream.write(json.dumps({"event": "item", "service": service, "sender": sender})
+                             + "\n")
+            invocation.return_value(None)
             return
         token = params.unpack()[1]["handle_token"]
         request = f"/org/freedesktop/portal/desktop/request/{sender[1:].replace('.', '_')}/{token}"
@@ -1326,9 +1346,16 @@ def desktop_fixture(log, still):
     def version(*_):
         return GLib.Variant("u", 3)
 
+    def watched(connection, sender, path, interface, name):
+        return {"IsStatusNotifierHostRegistered": GLib.Variant("b", True),
+                "ProtocolVersion": GLib.Variant("i", 0),
+                "RegisteredStatusNotifierItems": GLib.Variant("as", items)}[name]
+
     def owned(connection, name):
         if name == "org.freedesktop.ScreenSaver":
             connection.register_object("/org/freedesktop/ScreenSaver", saver, call, None, None)
+        elif name == "org.kde.StatusNotifierWatcher":
+            connection.register_object("/StatusNotifierWatcher", watcher, call, watched, None)
         else:
             connection.register_object("/org/freedesktop/portal/desktop", portal, call, version,
                                        None)
@@ -1336,7 +1363,8 @@ def desktop_fixture(log, still):
         if not names:
             print("READY", flush=True)
 
-    names = ["org.freedesktop.ScreenSaver"] + (["org.freedesktop.portal.Desktop"] if still else [])
+    names = ["org.freedesktop.ScreenSaver", "org.kde.StatusNotifierWatcher"]
+    names += ["org.freedesktop.portal.Desktop"] if still else []
     for name in list(names):
         Gio.bus_own_name(Gio.BusType.SESSION, name, 0, owned, None, None)
     GLib.MainLoop().run()
@@ -1362,11 +1390,18 @@ def capture(binary, scratch):
     still_size = (pixbuf.get_width(), pixbuf.get_height())
     fixture_log = scratch / "capture-fixture.log"
     fixture_log.touch()
+    # Services the private bus activates (the GTK portal backend) would
+    # otherwise start a second accessibility bus for this display, whose
+    # exit unlinks the shared socket the later AT-SPI steps use.
+    a11y = subprocess.run(["gdbus", "call", "--session", "--dest", "org.a11y.Bus",
+                           "--object-path", "/org/a11y/bus", "--method", "org.a11y.Bus.GetAddress"],
+                          capture_output=True, text=True, check=True).stdout.strip()[2:-3]
     bus = subprocess.Popen(["dbus-daemon", "--session", "--nofork", "--print-address=1"],
-                           stdout=subprocess.PIPE, text=True)
+                           stdout=subprocess.PIPE, text=True,
+                           env=dict(os.environ, AT_SPI_BUS_ADDRESS=a11y))
     address = bus.stdout.readline().strip()
     env = dict(os.environ, DBUS_SESSION_BUS_ADDRESS=address, DBUS_SYSTEM_BUS_ADDRESS=address,
-               GSK_RENDERER="cairo", GTK_A11Y="none")
+               AT_SPI_BUS_ADDRESS=a11y, GSK_RENDERER="cairo", GTK_A11Y="none")
     command = [sys.executable, __file__, "--binary", binary, "--desktop-fixture", str(fixture_log)]
     service = subprocess.Popen(command + (["--still", str(still)] if portal else []), env=env,
                                stdout=subprocess.PIPE)
@@ -1407,6 +1442,187 @@ def capture(binary, scratch):
             if child and child.poll() is None:
                 child.terminate()
                 child.wait(timeout=10)
+
+
+def tray_menu(service):
+    """The tray item's dbusmenu: its rows as (id, label, enabled), and a
+    function that clicks a row by label, as a panel would."""
+    from gi.repository import Gio
+    bus = Gio.bus_get_sync(Gio.BusType.SESSION)
+    name, _, path = service.partition("/")
+    item = Gio.DBusProxy.new_sync(bus, Gio.DBusProxyFlags.NONE, None, name,
+                                  "/" + path if path else "/StatusNotifierItem",
+                                  "org.kde.StatusNotifierItem")
+    menu = item.get_cached_property("Menu").unpack()
+    reply = bus.call_sync(name, menu, "com.canonical.dbusmenu", "GetLayout",
+                          GLib.Variant("(iias)", (0, -1, [])), None, 0, 5000).unpack()
+    rows = []
+    for child in reply[1][2]:
+        identifier, props, _ = child
+        rows.append((identifier, props.get("label", "-" if props.get("type") == "separator"
+                                           else ""), props.get("enabled", True)))
+
+    def click(label, exits=False):
+        identifier = next(i for i, text, _ in rows if text == label)
+        try:
+            bus.call_sync(name, menu, "com.canonical.dbusmenu", "Event",
+                          GLib.Variant("(isvu)", (identifier, "clicked", GLib.Variant("s", ""), 0)),
+                          None, 0, 5000)
+        except GLib.Error:
+            # Quit can exit before ksni replies; panels do not wait for it.
+            if not exits:
+                raise
+    return rows, click
+
+
+def tray(binary, scratch):
+    """The live app's tray: shipping's menu rows in order (captures the GTK
+    host cannot run yet disabled), and real dbusmenu clicks for Capture
+    History…, Screenshot Display (X11; Wayland's portal is the capture step's)
+    and Quit Captures."""
+    root = scratch / "tray-history"
+    settings = scratch / "tray-settings.json"
+    settings.write_text(json.dumps({
+        "settings_schema_version": 5, "onboarding_completed": True,
+        "output_directory": str(scratch / "tray-exports"),
+        "region_shortcut": "Ctrl+Shift+F7", "window_shortcut": "Ctrl+Shift+F8",
+        "display_shortcut": "Ctrl+Shift+F9", "new_capture_shortcut": "Ctrl+Shift+F10",
+        "launch_at_login": False, "show_mini_previews": False, "auto_copy_to_clipboard": False}))
+    log = scratch / "tray.log"
+    env = dict(os.environ, GSK_RENDERER="cairo", GTK_A11Y="atspi", NO_AT_BRIDGE="0")
+    with log.open("w") as stream:
+        process = subprocess.Popen([binary, "--live", "--captures-autostart", "--history-root",
+                                    str(root), "--settings-file", str(settings)], env=env,
+                                   stdout=stream)
+
+    def events():
+        return [json.loads(line) for line in log.read_text().splitlines() if line.startswith("{")]
+    try:
+        wait(lambda: any(e["event"] == "tray" for e in events()), "the tray")
+        service = wait(lambda: [json.loads(line) for line in FIXTURE_LOG.read_text().splitlines()
+                                if json.loads(line).get("event") == "item"
+                                and json.loads(line)["sender"]], "the tray item")[-1]["service"]
+        rows, click = wait(lambda: tray_menu(service), "the tray menu")
+        labels = [label for _, label, _ in rows]
+        assert labels == ["New Capture…", "Screenshot Region", "Screenshot Window",
+                          "Screenshot Display", "Record Region", "Record Window",
+                          "Record Display", "-", "Capture History…", "Open Save Location",
+                          "Preferences", "Send Feedback…", "Check for Updates…", "-",
+                          "Quit Captures"], labels
+        enabled = [label for _, label, on in rows if on and label != "-"]
+        assert enabled == ["Screenshot Display", "Capture History…", "Open Save Location",
+                           "Preferences", "Send Feedback…", "Quit Captures"], enabled
+        assert DESKTOP.visible(process.pid) == [], "the quiet launch opened a window"
+        click("Capture History…")
+        DESKTOP.window("^Capture History$", process.pid)
+        if not isinstance(DESKTOP, Wayland):
+            click("Screenshot Display")
+            wait(lambda: [e for e in events() if e["event"] == "captured"], "the tray capture")
+            assert len(list(root.glob("*/metadata.json"))) == 1
+        click("Quit Captures", exits=True)
+        assert process.wait(timeout=10) == 0
+        print(f"tray: {len(rows)} rows in shipping order; History"
+              f"{', Screenshot Display' if not isinstance(DESKTOP, Wayland) else ''} "
+              "and Quit through dbusmenu")
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+
+
+def setup(binary, scratch):
+    """First-run setup in the live app: a fresh profile opens setup (not
+    Preferences) with Linux's ready screen access; the tray shows setup
+    until it finishes; Start capturing saves completion, closes the window
+    and turns the global shortcuts on."""
+    root = scratch / "setup-history"
+    settings = scratch / "setup-settings.json"
+    log = scratch / "setup.log"
+    env = dict(os.environ, GSK_RENDERER="cairo", GTK_A11Y="atspi", NO_AT_BRIDGE="0")
+    with log.open("w") as stream:
+        process = subprocess.Popen([binary, "--live", "--history-root", str(root),
+                                    "--settings-file", str(settings)], env=env, stdout=stream)
+
+    def events(name):
+        return [json.loads(line) for line in log.read_text().splitlines()
+                if line.startswith("{") and json.loads(line)["event"] == name]
+    try:
+        assert wait(lambda: events("launch"), "the launch")[0]["action"] == "Setup"
+        app = wait(lambda: application(process.pid), "the app on the accessibility bus")
+        window = wait(lambda: [n for n, (role, name) in nodes(app)
+                               if role in ("frame", "window", "filler") and name == "Captures"],
+                      "the setup window")[0]
+        assert not events("shortcuts"), "shortcuts were live before setup finished"
+        state = wait(lambda: events("setup"), "the setup state")[0]
+        assert state == {"event": "setup", "title": "You’re ready to capture", "ready": True}, state
+        wait(lambda: [n for n, (_, name) in nodes(window) if name == "Ready"], "Ready status")
+        assert_accessible(window, "setup")
+        start = wait(lambda: [n for n in find(window, "push button", "Start capturing")
+                              if has_state(n, Atspi.StateType.SENSITIVE)], "Start capturing")[0]
+        press(start)
+        wait(lambda: events("setup-complete"), "setup to finish")
+        assert json.loads(settings.read_text())["onboarding_completed"] is True
+        registered = wait(lambda: events("shortcuts"), "shortcuts after setup")[0]
+        assert registered["ok"], registered
+        wait(lambda: not [n for n, (_, name) in nodes(app) if name == "Captures"],
+             "the setup window to close")
+        assert process.poll() is None, "finishing setup quit the app"
+        print("setup: a fresh profile opened setup; Start capturing saved it and enabled "
+              "shortcuts")
+    finally:
+        process.terminate()
+        process.wait(timeout=10)
+
+
+def shortcuts(binary, scratch):
+    """Global capture shortcuts in the live app. X11: the saved Screenshot
+    Display chord captures; after Preferences' file changes to another chord,
+    that one captures and the old one no longer does. Wayland: the shared
+    GlobalShortcuts portal owner starts without registering X11 keys (this
+    headless Sway's portal has no GlobalShortcuts, so nothing is bound)."""
+    root = scratch / "shortcut-history"
+    settings = scratch / "shortcut-settings.json"
+    values = {
+        "settings_schema_version": 5, "onboarding_completed": True,
+        "output_directory": str(scratch / "shortcut-exports"),
+        "region_shortcut": "Ctrl+Shift+F7", "window_shortcut": "Ctrl+Shift+F8",
+        "display_shortcut": "Ctrl+Shift+F9", "new_capture_shortcut": "Ctrl+Shift+F10",
+        "launch_at_login": False, "show_mini_previews": False, "auto_copy_to_clipboard": False}
+    settings.write_text(json.dumps(values))
+    log = scratch / "shortcuts.log"
+    env = dict(os.environ, GSK_RENDERER="cairo", GTK_A11Y="none")
+    with log.open("w") as stream:
+        process = subprocess.Popen([binary, "--live", "--captures-autostart", "--history-root",
+                                    str(root), "--settings-file", str(settings)], env=env,
+                                   stdout=stream)
+
+    def events(name):
+        return [json.loads(line) for line in log.read_text().splitlines()
+                if line.startswith("{") and json.loads(line)["event"] == name]
+
+    def captures():
+        return len(list(root.glob("*/metadata.json")))
+    try:
+        registered = wait(lambda: events("shortcuts"), "shortcut registration")[0]
+        assert registered["ok"], registered
+        if isinstance(DESKTOP, Wayland):
+            print("shortcuts: the GlobalShortcuts portal owner started on Wayland")
+            return
+        DESKTOP.key("ctrl+shift+F9")
+        wait(lambda: captures() == 1, "Ctrl+Shift+F9 to capture the display")
+        settings.with_suffix(".tmp").write_text(json.dumps(dict(values,
+                                                                display_shortcut="Ctrl+Shift+F6")))
+        settings.with_suffix(".tmp").replace(settings)
+        wait(lambda: len(events("shortcuts")) == 2, "the new chord to register")
+        DESKTOP.key("ctrl+shift+F9")
+        time.sleep(1.5)
+        assert captures() == 1, "the old chord still captured"
+        DESKTOP.key("ctrl+shift+F6")
+        wait(lambda: captures() == 2, "Ctrl+Shift+F6 to capture the display")
+        print("shortcuts: the saved Display chord captured; a changed chord took over")
+    finally:
+        process.terminate()
+        process.wait(timeout=10)
 
 
 def recording(binary, scratch):
@@ -1460,17 +1676,103 @@ def recording(binary, scratch):
         process.wait(timeout=10)
 
 
+def crash_review(binary, scratch):
+    """Crash diagnostics: a live app killed without its clean exit opens
+    Send Feedback with the local review on the next visible launch. Add to
+    message appends the summary, Dismiss clears the evidence, and a later
+    clean quit leaves nothing to review."""
+    root = scratch / "crash-history"
+    settings = scratch / "crash-settings.json"
+    settings.write_text(json.dumps({
+        "settings_schema_version": 5, "onboarding_completed": True, "appearance": "light",
+        "theme": "cobalt", "output_directory": str(scratch / "crash-exports"),
+        "region_shortcut": "Ctrl+Shift+F7", "window_shortcut": "Ctrl+Shift+F8",
+        "display_shortcut": "Ctrl+Shift+F9", "new_capture_shortcut": "Ctrl+Shift+F10",
+        "launch_at_login": False, "show_mini_previews": False, "auto_copy_to_clipboard": False}))
+    env = dict(os.environ, GSK_RENDERER="cairo", GTK_A11Y="atspi", NO_AT_BRIDGE="0",
+               CAPTURES_NATIVE_SKIP_SYSTEM_SHORTCUT_TAKEOVER="1")
+    log = scratch / "crash.log"
+
+    def start(*extra):
+        with log.open("w") as stream:
+            process = subprocess.Popen([binary, "--live", "--history-root", str(root),
+                                        "--settings-file", str(settings), *extra],
+                                       env=env, stdout=stream)
+        wait(lambda: [e for e in events() if e["event"] == "ready"], "live readiness")
+        return process
+
+    def events():
+        return [json.loads(line) for line in log.read_text().splitlines() if line.startswith("{")]
+
+    def review_requested():
+        return next(e for e in events() if e["event"] == "launch")["crashReview"]
+
+    def stop(process):
+        process.terminate()
+        assert process.wait(timeout=10) == 0, "SIGTERM did not quit cleanly"
+
+    process = start("--captures-autostart")
+    process.kill()
+    process.wait(timeout=10)
+    process = start()
+    try:
+        assert review_requested(), events()
+        app = wait(lambda: application(process.pid), "the app on the accessibility bus")
+        form = wait(lambda: [n for n, (_, name) in nodes(app) if name == "Send Feedback"],
+                    "Send Feedback with the review")[0]
+        wait(lambda: [n for n, (role, name) in nodes(form) if role == "heading"
+                      and node_text(n, name) == "Previous session did not close normally"],
+             "the review title")
+        assert_accessible(form, "Send Feedback")
+        message = [n for n, (role, name) in nodes(form) if name == "Message"
+                   and role != "label" and "Text" in n.get_interfaces()][0]
+        assert Atspi.Text.get_text(message, 0, -1) == "", "the review was added unasked"
+        press(find(form, "push button", "Add to message")[0])
+        wait(lambda: Atspi.Text.get_text(message, 0, -1).startswith(
+            "Previous session did not close normally\n"), "the summary in the message")
+        press(find(form, "push button", "Dismiss diagnostics")[0])
+        wait(lambda: not find(form, "push button", "Dismiss diagnostics"), "the review to close")
+    finally:
+        stop(process)
+    process = start()
+    try:
+        assert not review_requested(), "dismissed evidence came back"
+    finally:
+        stop(process)
+    process = start()
+    try:
+        assert not review_requested(), "a clean quit left evidence"
+    finally:
+        stop(process)
+    print("crash review: a killed session opened its review; Add to message and Dismiss "
+          "worked; clean quits left nothing")
+
+
 STEPS = [history, preferences, editor, editor_close_keeps_open_text, recording,
-         recording_output, previews, preview_overflow, feedback, open_with, live, capture]
+         recording_output, previews, preview_overflow, feedback, open_with, live, capture, tray,
+         shortcuts, setup, crash_review]
+FIXTURE_LOG = None
 
 
 def run(binary, scratch, only=None):
+    """Every step, with a tray watcher and unlocked screen saver fixture on
+    the session bus for the live-app steps."""
+    global FIXTURE_LOG
     subprocess.Popen(["/usr/libexec/at-spi-bus-launcher", "--launch-immediately"],
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    time.sleep(1)
-    for step in STEPS:
-        if not only or step.__name__ in only:
-            step(binary, scratch)
+    FIXTURE_LOG = scratch / "desktop-fixture.log"
+    FIXTURE_LOG.touch()
+    fixture = subprocess.Popen([sys.executable, __file__, "--binary", binary,
+                                "--desktop-fixture", str(FIXTURE_LOG)], stdout=subprocess.PIPE)
+    try:
+        assert select.select([fixture.stdout], [], [], 20)[0], "the desktop fixture stalled"
+        assert fixture.stdout.readline().strip() == b"READY"
+        for step in STEPS:
+            if not only or step.__name__ in only:
+                step(binary, scratch)
+    finally:
+        fixture.terminate()
+        fixture.wait(timeout=10)
 
 
 def wayland(scratch, injector):
@@ -1530,6 +1832,8 @@ def main():
     args = parser.parse_args()
     if args.desktop_fixture:
         return desktop_fixture(args.desktop_fixture, args.still)
+    # Live launches must never rebind the machine's own screenshot keys.
+    os.environ["CAPTURES_NATIVE_SKIP_SYSTEM_SHORTCUT_TAKEOVER"] = "1"
     assert not args.wayland or args.injector, "--wayland needs --injector"
     with tempfile.TemporaryDirectory() as scratch:
         scratch = Path(scratch)

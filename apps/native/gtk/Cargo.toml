@@ -19,6 +19,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 uuid = { version = "1", features = ["v4"] }
 # Auto-copy after a capture (wlr-data-control on Wayland), as shipping.
 arboard = { version = "3.6", features = ["wayland-data-control"] }
+tray-icon = { version = "0.25.1", default-features = false, features = ["ksni"] }
 captures-app = { path = "../../../crates/captures-app" }
 captures-capture = { path = "../../../crates/captures-capture" }
 captures-media = { path = "../../../crates/captures-media" }

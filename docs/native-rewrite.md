@@ -1555,6 +1555,60 @@ preview stack after a live capture inspected under Xvfb with picom. The real
 xdg-desktop-portal backends, GNOME and KDE not verified. Windows, macOS:
 unchanged.
 
+GTK live-app mode, step 3: tray and global shortcuts. The tray is shipping's
+`build_tray_menu` as a StatusNotifierItem through `tray-icon` with `ksni`
+(the wgpu host's choice; no GTK 3 joins the GTK 4 process), with shipping's
+`tray_accelerator` labels. Rows for captures the GTK host cannot run yet
+(New Capture, Region, Window and the three recordings) keep shipping's order
+but are disabled; Check for Updates… follows Preview update metadata and
+opens Preferences. Without a StatusNotifier watcher and host the app opens
+Preferences and quits with its last window, as the wgpu host. Global
+shortcuts use the shared `CaptureShortcuts` once setup is finished: the
+global-hotkey X11 manager (the one `CaptureFlow` uses for Escape) or the
+Wayland GlobalShortcuts portal, never both. A file monitor on the settings
+file refreshes the tray accelerators and the bindings after Preferences
+saves. Not yet: the portal bindings/Configure/Retry UI in GTK Preferences,
+the launch notice, and the actions behind the disabled rows. Verified: the
+GTK smoke's `tray` step (real dbusmenu GetLayout and clicks against a
+StatusNotifierWatcher fixture) on X11 and headless Sway 1.9, and its
+`shortcuts` step (real X11 key presses, rebinding after a settings change)
+on X11; on Sway only that the portal owner starts, since the fixture has no
+GlobalShortcuts portal. Real panels (GNOME AppIndicator, KDE, waybar) and
+real GlobalShortcuts portals not verified. Windows, macOS: unchanged.
+
+GTK live-app mode, step 4: first-run setup. A fresh profile's live launch
+opens shipping's setup window (`Onboarding.tsx`, `.onboarding*`) built from
+the shared `captures_app::onboarding` copy, `State::presentation` and
+`Session` (check and complete on a worker; malformed settings fail closed
+as shipping). Linux shows screen capture as Ready with no microphone row.
+The `max-height: 600px` layout follows the window height, so the default
+560 px window hides the lede as shipping. The primary button keeps
+shipping's unstyled browser box (square, 2 px transparent border, 148 × 40
+border-box) and its calm pulse. Until setup finishes, tray rows other than
+Quit show setup and no global shortcut is registered; completion turns the
+shortcuts on through the settings monitor. `captures-app::icons` gains the
+shipping `ScreenAccessIcon` and the 16-unit `CheckmarkIcon`. Compared with
+the Tauri harness (`?view=onboarding&mock=1&platform=linux&granted=1`) at
+620 × 560 and 620 × 720 in light and dark: positions within 1–2 px; the
+harness mock says Granted where Linux says Ready. Verified: the GTK smoke's
+`setup` step on X11 and headless Sway 1.9. Windows, macOS: unchanged (they
+do not use the new icon names).
+
+GTK live-app mode, step 5: crash diagnostics. The elected live primary starts
+the shared `captures_app::crash::Session` on its History profile (a failure
+leaves capture available) and marks a clean exit on Quit or SIGTERM before
+releasing the election. After an unclean session, a visible launch with setup
+finished opens Send Feedback with the native hosts' review card (the wgpu
+`crash_review_pending` behaviour; shipping Tauri has no equivalent card):
+title, explanation, a mouse-selectable summary capped at 128 px, Copy summary,
+Add to message (refused while sending or past 8,000 characters) and Dismiss
+diagnostics. The summary label stays out of the Tab order; the buttons carry
+its text for keyboard users. Verified: the smoke's `crash_review` step
+(SIGKILL, relaunch, Add to message, Dismiss, then two clean quits with no
+review) on X11 and headless Sway 1.9, plus light and dark renders. OS
+exception reports and physical shutdown remain open. Windows, macOS:
+unchanged.
+
 ## Progress dashboard
 
 We are delivering stage 4 workflow slices and stage 5 editor slices.
