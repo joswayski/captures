@@ -659,6 +659,16 @@ change redraws its old and new content. A host test covers the region rule.
 Windows: cross-compiled only, the test runs under Wine. macOS, Linux:
 unchanged.
 
+Field drafts (hardware pass 15): a pointer press on another control already
+moved focus and committed a Canvas W or H draft, but UIA Invoke on a tool or
+layer row did not move focus, so the draft stayed. Invoke now blurs the
+focused field first, as Chromium's accessible click focuses a button; the
+field's own steppers keep it focused. Unchanged, because Tauri behaves the
+same: Esc in a field does nothing (`NumberInput` has no Escape and the editor
+skips keys while a field edits), and the Layer W/H/X/Y fields commit each
+valid keystroke (`onChange`), so "50" is two undo steps and a partial "3" in
+Width resizes. Windows: cross-compiled only. macOS, Linux: unchanged.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,

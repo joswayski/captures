@@ -930,6 +930,7 @@ impl Node_Impl {
         let id = self.id;
         with(self.hwnd, |e| match id {
             Id::Control(target) if e.exists(target) && e.enabled(target) => {
+                e.blur_field_for(target);
                 e.activate(target);
                 Ok(())
             }
