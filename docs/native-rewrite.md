@@ -898,6 +898,29 @@ Native retains a separated keyboard-focus ring; Tauri's global outline reset
 and overlay rule show visibility but no distinct ring, a remaining visual
 difference. Dark shadow banding remains minor. No native promotion is implied.
 
+Win32 recording slice 3 adds the source-relative thumbnail timeline, trim handles,
+selected-duration summary, dimmed exclusions and playhead. Pointer scrubbing and
+offset-preserving trim drags use the shared geometry; keyboard arrows step 1 ms
+below a minute and 10 ms thereafter, and Page keys step one second. UIA exposes
+bounded RangeValue sliders. The page scrolls above the fixed footer and keyboard
+focus reveals preview controls or trim handles; clipped controls cannot intercept
+footer clicks. No numeric trim fields are added to shipping's graphical timeline.
+The worker coalesces pending preview requests and reports its accepted edit even
+on failure, so stale successful decodes cannot leave the controls and export out
+of sync. Save/Play wait for the latest decode, GIFs resume after seeks, and EOF
+restores both the playhead and image to the trim start. Close cancels thumbnail
+generation and discards pending seeks before draining the worker.
+Local Windows-GNU build/fmt/clippy and 21 Wine host tests pass, including source
+seeking outside the trim, interval/keyboard bounds, stale outcomes and minimum-size
+focus. Temporary real-media probes (removed) exported MP4 750–2750 ms as 1.979333 s
+and GIF 200–800 ms as 0.6 s, verified changing decoded pixels, EOF image reset,
+GIF resume and close. Light/dark default, trimmed and minimum-size Direct2D renders
+were inspected. Workspace Rust gates and npm check pass. Real-PC pointer recording,
+UIA and compositor acceptance remain pending; Wine cannot validate layer masks.
+AppKit, X11 and Wayland hosts are unchanged and not reverified by this slice;
+they already have timeline editing. No shared API, release or workflow change,
+and no native promotion.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,

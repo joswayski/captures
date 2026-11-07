@@ -1,5 +1,5 @@
-//! Retained recording preview and save footer, backed by the shared media
-//! session. Timeline and output cards follow in separate slices; this is
+//! Retained recording preview, timeline and save footer, backed by the shared
+//! media session. Output cards follow in separate slices; this is
 //! an opt-in workbench, not the shipping editor.
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -25,8 +25,10 @@ use crate::tokens::Tokens;
 use crate::{Options, appearance};
 
 mod preview;
+mod timeline;
 mod worker;
 use preview::Preview;
+use timeline::Timeline;
 use worker::{Job, Outcome, Presented, Worker};
 
 pub const SIZE: (f32, f32) = (1280., 840.);
@@ -74,13 +76,17 @@ pub enum Target {
     Loop,
     Fit,
     Actual,
+    TrimStart,
+    TrimEnd,
 }
 
-const TARGETS: [Target; 10] = [
+const TARGETS: [Target; 12] = [
     Target::Loop,
     Target::Fit,
     Target::Actual,
     Target::Play,
+    Target::TrimStart,
+    Target::TrimEnd,
     Target::Change,
     Target::Filename,
     Target::Copy,
@@ -102,11 +108,17 @@ impl Target {
             Self::Loop => "Loop preview",
             Self::Fit => "Fit",
             Self::Actual => "100%",
+            Self::TrimStart => "Trim start",
+            Self::TrimEnd => "Trim end",
         }
     }
 
     fn is_preview(self) -> bool {
         matches!(self, Self::Play | Self::Loop | Self::Fit | Self::Actual)
+    }
+
+    fn scrolls(self) -> bool {
+        self.is_preview() || matches!(self, Self::TrimStart | Self::TrimEnd)
     }
 }
 
@@ -119,6 +131,7 @@ pub enum Event {
     Structure,
     Toggle(Target),
     Name(Target),
+    Range(Target),
 }
 
 // Each control and the caret has its own retained surface. A progress tick
@@ -129,7 +142,8 @@ const STATUS: usize = 2;
 const PROGRESS: usize = 3;
 const CARET: usize = 4;
 const PREVIEW: usize = 5;
-const CONTROL_START: usize = 6;
+const TIMELINE: usize = 6;
+const CONTROL_START: usize = 7;
 const COUNT: usize = CONTROL_START + TARGETS.len();
 
 struct Layer {
@@ -150,10 +164,12 @@ pub struct Recording {
     pub scale: f32,
     pub width: f32,
     pub height: f32,
+    page_scroll: f32,
     rects: [Rect; COUNT],
     worker: Worker,
     presented: Option<Presented>,
     preview: Preview,
+    timeline: Timeline,
     pub filename: TextField,
     pub directory: PathBuf,
     source_directory: PathBuf,
@@ -244,10 +260,12 @@ impl Recording {
             scale: unsafe { GetDpiForWindow(hwnd) } as f32 / 96.,
             width: SIZE.0,
             height: SIZE.1,
+            page_scroll: 0.,
             rects: [Rect::default(); COUNT],
             worker,
             presented: None,
             preview: Preview::default(),
+            timeline: Timeline::default(),
             filename: TextField::new(Style::Option, ""),
             directory,
             source_directory: PathBuf::new(),
@@ -288,7 +306,12 @@ impl Recording {
 
     pub fn title_rect(&self) -> Rect {
         let width = (self.width - 2. * self.t.n("s-8")).min(1220.);
-        Rect::new((self.width - width) / 2., self.t.n("s-8"), width, 34.)
+        Rect::new(
+            (self.width - width) / 2.,
+            self.t.n("s-8") - self.page_scroll,
+            width,
+            34.,
+        )
     }
 
     pub fn warning_rect(&self) -> Rect {
@@ -364,7 +387,11 @@ impl Recording {
             return false;
         }
         match target {
+            Target::Play | Target::Save if self.timeline.pending => false,
             Target::Play => self.presented.as_ref().is_some_and(|p| p.duration_ms > 0),
+            Target::TrimStart | Target::TrimEnd => {
+                self.presented.as_ref().is_some_and(|p| p.duration_ms > 0)
+            }
             Target::Save => {
                 self.saved_fingerprint.as_ref() != Some(&(self.destination(), self.make_copy))
             }
@@ -382,14 +409,70 @@ impl Recording {
 
     pub fn hit(&self, x: f32, y: f32) -> Option<Target> {
         if self.shown(Target::Play)
+            && y < self.rects[FOOTER].y
             && self.preview_view().contains(x, y)
             && self.preview_media().contains(x, y)
         {
             return Some(Target::Play);
         }
-        TARGETS
-            .into_iter()
-            .find(|&t| t != Target::Play && self.shown(t) && self.target_rect(t).contains(x, y))
+        TARGETS.into_iter().find(|&t| {
+            t != Target::Play
+                && self.shown(t)
+                && (!t.scrolls() || y < self.rects[FOOTER].y)
+                && self.target_rect(t).contains(x, y)
+        })
+    }
+
+    fn page_scroll_max(&self) -> f32 {
+        let timeline = self.rects[TIMELINE];
+        (timeline.y + timeline.h + self.page_scroll + self.t.n("s-6") - self.rects[FOOTER].y)
+            .max(0.)
+    }
+
+    fn scroll_page(&mut self, delta: f32) {
+        let next = (self.page_scroll + delta).clamp(0., self.page_scroll_max());
+        if next != self.page_scroll {
+            self.page_scroll = next;
+            let _ = self.layout();
+        }
+    }
+
+    /// Viewport clipping shared by live composition, screenshots and UIA.
+    pub fn visible_target_rect(&self, target: Target) -> Rect {
+        let r = if target == Target::Play {
+            self.play_clip()
+        } else {
+            self.target_rect(target)
+        };
+        if !target.scrolls() {
+            return r;
+        }
+        self.page_visible_rect(r)
+    }
+
+    pub fn page_visible_rect(&self, r: Rect) -> Rect {
+        let y = r.y.max(0.);
+        Rect::new(
+            r.x,
+            y,
+            r.w,
+            ((r.y + r.h).min(self.rects[FOOTER].y) - y).max(0.),
+        )
+    }
+
+    fn content_clip(&self, index: usize) -> Option<Rect> {
+        if index != PREVIEW
+            && index != TIMELINE
+            && !(index >= CONTROL_START && TARGETS[index - CONTROL_START].scrolls())
+        {
+            return None;
+        }
+        let r = if index == slot(Target::Play) {
+            self.preview_view()
+        } else {
+            Rect::new(0., 0., self.width, self.rects[FOOTER].y)
+        };
+        Some(self.page_visible_rect(r))
     }
 
     fn layout(&mut self) -> Result<()> {
@@ -441,6 +524,11 @@ impl Recording {
             .relayout(&self.g, &self.t, filename_w - 76. - n("s-4"))?;
         self.place_caret();
         self.layout_preview();
+        let scroll = self.page_scroll.min(self.page_scroll_max());
+        if scroll != self.page_scroll {
+            self.page_scroll = scroll;
+            self.layout_preview();
+        }
         self.dirty.fill(true);
         Ok(())
     }
@@ -462,6 +550,19 @@ impl Recording {
         if visible && target == Some(Target::Play) {
             self.reveal_play();
         }
+        if visible
+            && let Some(target) = target
+            && target.scrolls()
+        {
+            let r = self.target_rect(target);
+            let delta = if r.y < 4. {
+                r.y - 4.
+            } else {
+                (r.y + r.h + 4. - self.rects[FOOTER].y).max(0.)
+            };
+            self.scroll_page(delta);
+        }
+        self.dirty[TIMELINE] = true;
         if let Some(target) = target {
             self.dirty[slot(target)] = true;
             if changed {
@@ -507,6 +608,7 @@ impl Recording {
             return;
         }
         match target {
+            Target::TrimStart | Target::TrimEnd => {}
             Target::Play => {
                 if self.preview.playing {
                     self.stop_preview();
@@ -621,8 +723,13 @@ impl Recording {
                         self.set_value(&p.defaults.stem);
                         self.set_preview_frame(p.frame.clone());
                         let gif = p.mime_type == "image/gif";
+                        self.timeline.start = p.edit.trim_start_ms;
+                        self.timeline.end = p.edit.trim_end_ms.unwrap_or(p.duration_ms).max(1);
                         self.presented = Some(p);
                         self.layout_preview();
+                        if !self.hwnd.is_invalid() {
+                            self.load_timeline();
+                        }
                         if gif && !self.hwnd.is_invalid() && !self.closing {
                             self.worker
                                 .looping
@@ -634,6 +741,44 @@ impl Recording {
                 }
                 self.dirty.fill(true);
                 self.events.push(Event::Structure);
+            }
+            Outcome::Preview(generation, p, error) => {
+                if generation != self.timeline.generation || self.closing {
+                    return;
+                }
+                self.timeline.pending = false;
+                self.timeline.start = p.edit.trim_start_ms;
+                self.timeline.end = p.edit.trim_end_ms.unwrap_or(p.duration_ms).max(1);
+                self.preview.position_ms = p.position_ms;
+                self.set_preview_frame(p.frame.clone());
+                self.presented = Some(*p);
+                if let Some(error) = error {
+                    self.timeline.resume = false;
+                    self.notify(&error, true);
+                } else {
+                    self.notify("", false);
+                }
+                self.layout_timeline();
+                self.refresh_footer();
+                self.events.push(Event::Range(Target::TrimStart));
+                self.events.push(Event::Range(Target::TrimEnd));
+                self.resume_timeline();
+            }
+            Outcome::Thumbnails(result) => {
+                self.worker.thumbnail_cancel.take();
+                match result {
+                    Ok(strip) => match strip.bitmap(&self.g.dc) {
+                        Ok(bitmap) => self.timeline.strip = Some(bitmap),
+                        Err(error) => {
+                            self.notify(&format!("Timeline preview unavailable: {error}"), true)
+                        }
+                    },
+                    Err(error) if !self.closing => {
+                        self.notify(&format!("Timeline preview unavailable: {error}"), true)
+                    }
+                    Err(_) => {}
+                }
+                self.dirty[TIMELINE] = true;
             }
             Outcome::Progress(progress) => {
                 self.progress = progress.completed_per_mille.min(1000);
@@ -652,7 +797,10 @@ impl Recording {
                             self.source_stem = p.defaults.stem.clone();
                             self.set_preview_frame(p.frame.clone());
                             self.preview.position_ms = 0;
+                            self.timeline.start = p.edit.trim_start_ms;
+                            self.timeline.end = p.edit.trim_end_ms.unwrap_or(p.duration_ms).max(1);
                             self.presented = Some(p);
+                            self.load_timeline();
                             self.layout_preview();
                             self.dirty[BACK] = true;
                         }
@@ -703,11 +851,14 @@ impl Recording {
                 if generation == self.preview.generation {
                     self.worker.playback_cancel.take();
                     self.preview.playing = false;
-                    self.preview.position_ms = 0;
+                    self.preview.position_ms = self.timeline.start;
+                    self.dirty[TIMELINE] = true;
                     self.dirty[slot(Target::Play)] = true;
                     self.events.push(Event::Name(Target::Play));
                     if let Err(error) = result {
                         self.notify(&error, true);
+                    } else if !self.closing {
+                        self.seek_timeline(self.timeline.start);
                     }
                 }
             }
@@ -846,8 +997,12 @@ impl Recording {
             }
             CARET => gfx::fill(dc, local, t.color("text"))?,
             PREVIEW => self.draw_preview(dc)?,
+            TIMELINE => self.draw_timeline(dc)?,
             _ => {
                 let target = TARGETS[index - CONTROL_START];
+                if matches!(target, Target::TrimStart | Target::TrimEnd) {
+                    return self.draw_trim_handle(dc, target);
+                }
                 if target.is_preview() {
                     return self.draw_preview_control(dc, target);
                 }
@@ -980,7 +1135,7 @@ impl Recording {
     fn bleed(&self, index: usize) -> f32 {
         let shadow = if index == slot(Target::Play) {
             Some("shadow-lg")
-        } else if index == PREVIEW {
+        } else if index == PREVIEW || index == TIMELINE {
             Some("shadow-sm")
         } else {
             None
@@ -1038,10 +1193,9 @@ impl Recording {
             let r = self.rects[index];
             let bleed = self.bleed(index);
             let mut clip = Rect::new(r.x - bleed, r.y - bleed, r.w + 2. * bleed, r.h + 2. * bleed);
-            if index == slot(Target::Play) {
+            if let Some(view) = self.content_clip(index) {
                 // Match both the retained surface's bounds and its viewport
                 // clip; otherwise offscreen renders hide surface-bleed bugs.
-                let view = self.preview_view();
                 let (x, y) = (clip.x.max(view.x), clip.y.max(view.y));
                 clip = Rect::new(
                     x,
@@ -1112,8 +1266,7 @@ impl Recording {
             unsafe {
                 visual.SetOffsetX2((r.x * s).round() - bleed)?;
                 visual.SetOffsetY2((r.y * s).round() - bleed)?;
-                if index == slot(Target::Play) {
-                    let clip = self.preview_view();
+                if let Some(clip) = self.content_clip(index) {
                     visual.SetClip2(&gfx::rect(
                         (clip.x - r.x) * s + bleed,
                         (clip.y - r.y) * s + bleed,
@@ -1163,6 +1316,30 @@ impl Recording {
     fn key(&mut self, key: VIRTUAL_KEY) {
         let down = |key: VIRTUAL_KEY| unsafe { GetKeyState(i32::from(key.0)) < 0 };
         let (ctrl, shift) = (down(VK_CONTROL), down(VK_SHIFT));
+        if key == VK_ESCAPE && (self.timeline.drag.is_some() || self.timeline.scrubbing) {
+            self.end_timeline_drag();
+            unsafe {
+                let _ = ReleaseCapture();
+            }
+            return;
+        }
+        if let Some(target) = self.focus
+            && let Some((value, _, _)) = self.trim_range(target)
+        {
+            let duration = self.presented.as_ref().map_or(1, |p| p.duration_ms);
+            let step = if duration < 60_000 { 1. } else { 10. };
+            let delta = match key {
+                VK_LEFT | VK_DOWN => Some(-step),
+                VK_RIGHT | VK_UP => Some(step),
+                VK_PRIOR => Some(1000.),
+                VK_NEXT => Some(-1000.),
+                _ => None,
+            };
+            if let Some(delta) = delta {
+                self.set_trim(target, value as f64 + delta);
+                return;
+            }
+        }
         if key == VK_TAB {
             let order: Vec<_> = TARGETS.into_iter().filter(|&t| self.enabled(t)).collect();
             if order.is_empty() {
@@ -1251,14 +1428,19 @@ impl Recording {
                     (lp.0 as u16 as i16) as f32 / self.scale,
                     ((lp.0 >> 16) as u16 as i16) as f32 / self.scale,
                 );
+                if self.timeline_pointer(msg, x, y) {
+                    return Some(LRESULT(0));
+                }
                 let hit = self.hit(x, y);
-                let over_media =
-                    self.preview_view().contains(x, y) && self.preview_media().contains(x, y);
+                let over_media = y < self.rects[FOOTER].y
+                    && self.preview_view().contains(x, y)
+                    && self.preview_media().contains(x, y);
                 if over_media != self.preview.hovered {
                     self.preview.hovered = over_media;
                     self.dirty[slot(Target::Play)] = true;
                 }
                 if self.hover != hit {
+                    self.dirty[TIMELINE] = true;
                     if let Some(t) = self.hover {
                         self.dirty[slot(t)] = true;
                     }
@@ -1323,17 +1505,39 @@ impl Recording {
                 }
             }
             WM_CAPTURECHANGED => {
+                self.end_timeline_drag();
                 self.dragging = false;
                 self.pressed = None;
             }
             WM_MOUSELEAVE => {
                 self.tracking = false;
+                self.dirty[TIMELINE] = true;
                 self.preview.hovered = false;
                 self.dirty[slot(Target::Play)] = true;
                 if let Some(t) = self.hover.take() {
                     self.dirty[slot(t)] = true;
                 }
             }
+            WM_SETCURSOR if (lp.0 & 0xffff) as u32 == HTCLIENT => unsafe {
+                let mut point = POINT::default();
+                let _ = GetCursorPos(&mut point);
+                let _ = windows::Win32::Graphics::Gdi::ScreenToClient(self.hwnd, &mut point);
+                let (x, y) = (point.x as f32 / self.scale, point.y as f32 / self.scale);
+                let over_timeline =
+                    y < self.rects[FOOTER].y && self.timeline_track().contains(x, y);
+                let cursor = if self.timeline.drag.is_some()
+                    || self.timeline.scrubbing
+                    || self.enabled(Target::TrimStart)
+                        && (over_timeline
+                            || matches!(self.hit(x, y), Some(Target::TrimStart | Target::TrimEnd)))
+                {
+                    IDC_SIZEWE
+                } else {
+                    IDC_ARROW
+                };
+                SetCursor(LoadCursorW(None, cursor).ok());
+                return Some(LRESULT(1));
+            },
             WM_MOUSEWHEEL | WM_MOUSEHWHEEL => {
                 let mut point = POINT {
                     x: lp.0 as u16 as i16 as i32,
@@ -1342,13 +1546,16 @@ impl Recording {
                 unsafe {
                     let _ = windows::Win32::Graphics::Gdi::ScreenToClient(self.hwnd, &mut point);
                 }
-                if self
-                    .preview_view()
-                    .contains(point.x as f32 / self.scale, point.y as f32 / self.scale)
+                let delta =
+                    (wp.0 >> 16) as u16 as i16 as f32 / 120. * appearance::wheel_lines() * 100.
+                        / 3.;
+                let old_scroll = self.preview.scroll;
+                let in_page = point.y as f32 / self.scale < self.rects[FOOTER].y;
+                if in_page
+                    && self
+                        .preview_view()
+                        .contains(point.x as f32 / self.scale, point.y as f32 / self.scale)
                 {
-                    let delta =
-                        (wp.0 >> 16) as u16 as i16 as f32 / 120. * appearance::wheel_lines() * 100.
-                            / 3.;
                     let shift = unsafe { GetKeyState(VK_SHIFT.0 as i32) } < 0;
                     if msg == WM_MOUSEHWHEEL {
                         self.preview.scroll.0 += delta;
@@ -1360,6 +1567,13 @@ impl Recording {
                     self.clamp_preview_scroll();
                     self.place_play();
                     self.dirty[PREVIEW] = true;
+                }
+                if in_page
+                    && msg == WM_MOUSEWHEEL
+                    && old_scroll == self.preview.scroll
+                    && unsafe { GetKeyState(VK_SHIFT.0 as i32) } >= 0
+                {
+                    self.scroll_page(-delta);
                 }
             }
             WM_KEYDOWN => self.key(VIRTUAL_KEY(wp.0 as u16)),
@@ -1502,6 +1716,15 @@ pub fn render_offscreen(
         .recv()
         .map_err(|error| Error::new(E_FAIL, error.to_string()))?;
     window.apply_outcome(opened);
+    if window.presented.is_some() {
+        window.load_timeline();
+        let thumbnails = window
+            .worker
+            .outcomes
+            .recv()
+            .map_err(|error| Error::new(E_FAIL, error.to_string()))?;
+        window.apply_outcome(thumbnails);
+    }
     window.layout()?;
     Ok(window)
 }
