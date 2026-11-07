@@ -779,8 +779,13 @@ they already do in UIA. A regression reproduced the original minimum-width
 overlap; 20 Windows tests passed under Wine, including 860/1040/1041/1280-DIP
 idle/success/error states with and without the toggle. Light/dark Direct2D
 renders at those widths were inspected. Windows cross-build/clippy, workspace
-tests/fmt/clippy and npm check passed; real-PC acceptance is pending. The
-recording footer, macOS, X11 and Wayland hosts are unchanged by this fix.
+tests/fmt/clippy and npm check passed. Real-PC pass 23 accepted release
+f03c0c92 at 150% in both themes: 1290/1560/1561/1920 physical-pixel widths,
+saved/fresh sources, idle/copy/save/error status, live resize and complete
+keyboard focus rings. Success notices and hints now share distinct measured
+bounds between drawing and UIA; errors expose only their notice. The recording
+footer's control bounds and appearance match the baseline. The misleading
+invalid-directory error predates this fix. macOS, X11 and Wayland are unchanged.
 
 Win32 recording editor slice 1 adds `--scene recording --artifact ID` and
 enables History's recording Edit action. The shared `RecordingEditorSession`
