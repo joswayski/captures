@@ -3139,3 +3139,88 @@ window.captures.notice-window {
 .captures .update-notice-footer button:disabled {
   opacity: 0.45;
 }
+
+/* ------------------------------------------------- capture overlays ---- */
+
+/* `CaptureOverlay` (`.capture-surface`): the frozen desktop and its
+   shade/marquee are drawn in a SnapshotArea; only the chip is CSS. */
+window.captures.capture-surface {
+  background: transparent;
+}
+/* `.capture-guidance`: two-row glass chip 16% from the top. */
+.captures .capture-guidance {
+  padding: var(--s-4) var(--s-6);
+  border: 1px solid var(--glass-border-strong);
+  border-radius: var(--r-xl);
+  background: var(--glass-strong);
+  box-shadow: var(--glass-shadow);
+  transition:
+    opacity var(--dur-3) var(--ease-standard),
+    border-color var(--dur-3) var(--ease-standard);
+  animation: guidance-arrive var(--dur-3) var(--ease-out);
+}
+.captures .capture-guidance.faded {
+  opacity: 0;
+}
+.captures .capture-guidance-title {
+  color: var(--glass-text);
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--brand-tracking);
+}
+.captures .capture-guidance-hint {
+  margin-top: 2px;
+  color: var(--glass-text-muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+/* `.capture-guidance-feedback`: accent border and the sideways nudge,
+   replayed for every empty click (the classes alternate). */
+.captures .capture-guidance.feedback-a,
+.captures .capture-guidance.feedback-b {
+  border-color: var(--guidance-feedback-border);
+}
+.captures .capture-guidance.feedback-a {
+  animation: guidance-nudge-a var(--dur-4) var(--ease-out);
+}
+.captures .capture-guidance.feedback-b {
+  animation: guidance-nudge-b var(--dur-4) var(--ease-out);
+}
+@keyframes guidance-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes guidance-nudge-a {
+  0% {
+    transform: none;
+  }
+  25% {
+    transform: translateX(-8px);
+  }
+  75% {
+    transform: translateX(8px);
+  }
+  100% {
+    transform: none;
+  }
+}
+@keyframes guidance-nudge-b {
+  0% {
+    transform: none;
+  }
+  25% {
+    transform: translateX(-8px);
+  }
+  75% {
+    transform: translateX(8px);
+  }
+  100% {
+    transform: none;
+  }
+}

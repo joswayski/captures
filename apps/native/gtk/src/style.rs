@@ -62,6 +62,12 @@ pub fn css(t: &Tokens) -> String {
                 .strip_prefix("drop-shadow(")?
                 .strip_suffix(')')?
                 .to_owned(),
+            // `rgba(var(--theme-accent-rgb), 0.8)`.
+            "guidance-feedback-border" => {
+                let mut accent = t.rgba("theme-accent");
+                accent.set_alpha(captures_app::capture_menu::GUIDANCE_FEEDBACK_BORDER_ALPHA as f32);
+                accent.to_string()
+            }
             "image-hover" => {
                 mix(t.rgba("surface-sunken"), t.rgba("theme-accent"), 0.12).to_string()
             }
