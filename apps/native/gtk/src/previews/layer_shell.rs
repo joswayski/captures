@@ -143,3 +143,23 @@ pub fn notice(window: &impl IsA<gtk::Window>, top: bool, (right, vertical): (i32
     window.set_margin(if top { Edge::Top } else { Edge::Bottom }, vertical);
     true
 }
+
+/// A capture selector as an Overlay layer surface covering the whole
+/// output, above panels, with the keyboard (Escape) while it is up. Must
+/// run before the window is realized; returns whether it did.
+pub fn cover(window: &impl IsA<gtk::Window>) -> bool {
+    let window = window.as_ref();
+    let wayland = WidgetExt::display(window).type_().name() == "GdkWaylandDisplay";
+    if !wayland || !gtk4_layer_shell::is_supported() {
+        return false;
+    }
+    window.init_layer_shell();
+    window.set_namespace(Some("captures-selector"));
+    window.set_layer(Layer::Overlay);
+    window.set_exclusive_zone(-1);
+    window.set_keyboard_mode(KeyboardMode::Exclusive);
+    for edge in [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom] {
+        window.set_anchor(edge, true);
+    }
+    true
+}

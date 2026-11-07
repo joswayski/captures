@@ -203,10 +203,10 @@ fn drain_shortcuts() {
         emit("shortcut", serde_json::json!({"action": action.id()}));
         match action {
             CaptureShortcut::Display => host.capture_display(),
+            CaptureShortcut::Region => host.capture_region(),
+            CaptureShortcut::Window => host.capture_window(),
             // Not in the GTK host yet; their tray rows are disabled too.
             CaptureShortcut::NewCapture
-            | CaptureShortcut::Region
-            | CaptureShortcut::Window
             | CaptureShortcut::RecordRegion
             | CaptureShortcut::RecordWindow
             | CaptureShortcut::RecordDisplay => {}

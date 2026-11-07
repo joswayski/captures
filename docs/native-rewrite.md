@@ -1654,6 +1654,33 @@ wgpu, AppKit; Win32 has no update notice yet). Verified: the smoke's
 and headless Sway 1.9.
 Windows, macOS: unchanged.
 
+GTK live-app mode, step 7: Screenshot Region and Window (`selector.rs`), from
+the tray, the saved shortcuts and `--capture region|window`. X11 runs the
+shared `CaptureFlow` with `RegionSession` / `WindowSession::prepare` for the
+display under the pointer, frozen when Preferences says so, on an
+override-redirect window covering that display. Wayland asks the Screenshot
+portal for a still and selects over it on an Overlay layer surface (with the
+`layer-shell` feature) or a fullscreen window, with every Captures window
+unmapped; Window uses the portal's ScreenCast window picker, as the wgpu host.
+The overlay draws the frozen texture once and re-records only the shade,
+marquee, badge and window ring per pointer move. The guidance chip is a real
+Status widget with shipping's copy, empty-click "Click and drag" feedback
+(1.8 s, nudge) and pointer ducking; the size badge shows logical pixels, as
+shipping's CSS pixels, while the file keeps physical pixels. The X11
+WM_CLASS class is now "Captures", so the shared `captures_window_is_internal`
+keeps the GTK host's own notices out of Window targets, as it does for
+shipping. Compared with the Tauri harness (`?view=capture&mock=1`) at 2x:
+the chip, feedback border, marquee, badge and window ring and title chip
+match; the harness captures predate shipping's `capture-visible` reveal, so
+they show no region shade where GTK shows `--capture-shade`, as shipping
+does once revealed. Verified: the smoke's `selectors` step (guidance, empty
+click feedback, Escape with nothing saved, a drag saving exactly 120×60, the
+hovered fixture window named over AT-SPI and saved at 260×160) on X11 with GTK
+4.8 and 4.14; on headless Sway 1.9 a 300×150 crop of the portal still with
+and without `layer-shell`, and the ScreenCast refusal cancelling Window. Real
+window managers, multi-monitor and HiDPI Wayland remain unverified.
+Windows, macOS: unchanged.
+
 ## Progress dashboard
 
 We are delivering stage 4 workflow slices and stage 5 editor slices.

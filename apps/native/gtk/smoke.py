@@ -21,6 +21,8 @@ steps run on a private headless Sway, with the wayland_drag_probe's virtual
 pointer and keyboard instead of xdotool.
 """
 import argparse
+import contextlib
+import ctypes
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import os
@@ -1327,13 +1329,17 @@ def desktop_fixture(log, still):
       <method name="Screenshot"><arg type="s" direction="in"/><arg type="a{sv}" direction="in"/>
       <arg type="o" direction="out"/></method>
       <property name="version" type="u" access="read"/></interface>
+      <interface name="org.freedesktop.portal.ScreenCast">
+      <method name="CreateSession"><arg type="a{sv}" direction="in"/>
+      <arg type="o" direction="out"/></method>
+      <property name="version" type="u" access="read"/></interface>
       <interface name="org.kde.StatusNotifierWatcher">
       <method name="RegisterStatusNotifierItem"><arg type="s" direction="in"/></method>
       <method name="RegisterStatusNotifierHost"><arg type="s" direction="in"/></method>
       <property name="IsStatusNotifierHostRegistered" type="b" access="read"/>
       <property name="ProtocolVersion" type="i" access="read"/>
       <property name="RegisteredStatusNotifierItems" type="as" access="read"/></interface></node>"""
-    saver, portal, watcher = Gio.DBusNodeInfo.new_for_xml(xml).interfaces
+    saver, portal, screencast, watcher = Gio.DBusNodeInfo.new_for_xml(xml).interfaces
     items = []
 
     def call(connection, sender, path, interface, method, params, invocation):
@@ -1351,16 +1357,21 @@ def desktop_fixture(log, still):
                              + "\n")
             invocation.return_value(None)
             return
-        token = params.unpack()[1]["handle_token"]
+        token = params.unpack()[-1]["handle_token"]
         request = f"/org/freedesktop/portal/desktop/request/{sender[1:].replace('.', '_')}/{token}"
         with open(log, "a") as stream:
-            stream.write(json.dumps({"event": "request"}) + "\n")
+            stream.write(json.dumps({"event": "request", "method": method}) + "\n")
         invocation.return_value(GLib.Variant("(o)", (request,)))
 
         def respond():
-            results = {"uri": GLib.Variant("s", Path(still).as_uri())}
+            # A screenshot answers with the still; a ScreenCast session is
+            # refused as a person dismissing the window picker would.
+            if method == "CreateSession":
+                response, results = 1, {}
+            else:
+                response, results = 0, {"uri": GLib.Variant("s", Path(still).as_uri())}
             connection.emit_signal(sender, request, "org.freedesktop.portal.Request", "Response",
-                                   GLib.Variant("(ua{sv})", (0, results)))
+                                   GLib.Variant("(ua{sv})", (response, results)))
             return False
         GLib.timeout_add(1000, respond)
 
@@ -1378,8 +1389,9 @@ def desktop_fixture(log, still):
         elif name == "org.kde.StatusNotifierWatcher":
             connection.register_object("/StatusNotifierWatcher", watcher, call, watched, None)
         else:
-            connection.register_object("/org/freedesktop/portal/desktop", portal, call, version,
-                                       None)
+            for interface in (portal, screencast):
+                connection.register_object("/org/freedesktop/portal/desktop", interface, call,
+                                           version, None)
         names.remove(name)
         if not names:
             print("READY", flush=True)
@@ -1389,6 +1401,40 @@ def desktop_fixture(log, still):
     for name in list(names):
         Gio.bus_own_name(Gio.BusType.SESSION, name, 0, owned, None, None)
     GLib.MainLoop().run()
+
+
+@contextlib.contextmanager
+def private_desktop(scratch, name, still=None):
+    """A private session bus with the desktop fixture (unlocked screen
+    saver, tray watcher and, with `still`, the Screenshot portal answering
+    with that PNG), so portal requests never reach a real portal. Yields the
+    launch environment and the fixture's log."""
+    fixture_log = scratch / f"{name}-fixture.log"
+    fixture_log.touch()
+    # Services the private bus activates (the GTK portal backend) would
+    # otherwise start a second accessibility bus for this display, whose
+    # exit unlinks the shared socket the later AT-SPI steps use.
+    a11y = subprocess.run(["gdbus", "call", "--session", "--dest", "org.a11y.Bus",
+                           "--object-path", "/org/a11y/bus", "--method", "org.a11y.Bus.GetAddress"],
+                          capture_output=True, text=True, check=True).stdout.strip()[2:-3]
+    bus = subprocess.Popen(["dbus-daemon", "--session", "--nofork", "--print-address=1"],
+                           stdout=subprocess.PIPE, text=True,
+                           env=dict(os.environ, AT_SPI_BUS_ADDRESS=a11y))
+    address = bus.stdout.readline().strip()
+    env = dict(os.environ, DBUS_SESSION_BUS_ADDRESS=address, DBUS_SYSTEM_BUS_ADDRESS=address,
+               AT_SPI_BUS_ADDRESS=a11y, GSK_RENDERER="cairo", GTK_A11Y="none")
+    command = [sys.executable, __file__, "--binary", "-", "--desktop-fixture", str(fixture_log)]
+    service = subprocess.Popen(command + (["--still", str(still)] if still else []), env=env,
+                               stdout=subprocess.PIPE)
+    try:
+        assert select.select([service.stdout], [], [], 20)[0], "the desktop fixture stalled"
+        assert service.stdout.readline().strip() == b"READY"
+        yield env, fixture_log
+    finally:
+        for child in (service, bus):
+            if child.poll() is None:
+                child.terminate()
+                child.wait(timeout=10)
 
 
 def capture(binary, scratch):
@@ -1409,60 +1455,240 @@ def capture(binary, scratch):
     still.write_bytes(fixture_png(accent=(30, 200, 120)))
     pixbuf = GdkPixbuf.Pixbuf.new_from_file(str(still))
     still_size = (pixbuf.get_width(), pixbuf.get_height())
-    fixture_log = scratch / "capture-fixture.log"
-    fixture_log.touch()
-    # Services the private bus activates (the GTK portal backend) would
-    # otherwise start a second accessibility bus for this display, whose
-    # exit unlinks the shared socket the later AT-SPI steps use.
-    a11y = subprocess.run(["gdbus", "call", "--session", "--dest", "org.a11y.Bus",
-                           "--object-path", "/org/a11y/bus", "--method", "org.a11y.Bus.GetAddress"],
-                          capture_output=True, text=True, check=True).stdout.strip()[2:-3]
-    bus = subprocess.Popen(["dbus-daemon", "--session", "--nofork", "--print-address=1"],
-                           stdout=subprocess.PIPE, text=True,
-                           env=dict(os.environ, AT_SPI_BUS_ADDRESS=a11y))
-    address = bus.stdout.readline().strip()
-    env = dict(os.environ, DBUS_SESSION_BUS_ADDRESS=address, DBUS_SYSTEM_BUS_ADDRESS=address,
-               AT_SPI_BUS_ADDRESS=a11y, GSK_RENDERER="cairo", GTK_A11Y="none")
-    command = [sys.executable, __file__, "--binary", binary, "--desktop-fixture", str(fixture_log)]
-    service = subprocess.Popen(command + (["--still", str(still)] if portal else []), env=env,
-                               stdout=subprocess.PIPE)
     log = scratch / "capture.log"
     process = None
-    try:
-        assert select.select([service.stdout], [], [], 20)[0], "the desktop fixture stalled"
-        assert service.stdout.readline().strip() == b"READY"
-        with log.open("w") as stream:
-            process = subprocess.Popen([binary, "--live", "--history-root", str(root),
-                                        "--settings-file", str(settings), "--capture", "display"],
-                                       env=env, stdout=stream)
+    with private_desktop(scratch, "capture", still if portal else None) as (env, fixture_log):
+        try:
+            with log.open("w") as stream:
+                process = subprocess.Popen([binary, "--live", "--history-root", str(root),
+                                            "--settings-file", str(settings), "--capture", "display"],
+                                           env=env, stdout=stream)
 
-        def events():
-            return [json.loads(line) for line in log.read_text().splitlines()
-                    if line.startswith("{")]
-        if portal:
-            wait(lambda: "request" in fixture_log.read_text(), "the portal request")
-            assert not DESKTOP.visible(process.pid), "a Captures window was mapped for the portal"
-        captured = wait(lambda: [e for e in events() if e["event"].startswith("capture")],
-                        "the capture", timeout=30)[0]
-        assert captured["event"] == "captured", events()
-        entry = json.loads(next(root.glob("*/metadata.json")).read_text())
-        assert (entry["kind"], entry["mode"]) == ("screenshot", "display"), entry
-        if portal:
-            assert (entry["width"], entry["height"]) == still_size, entry
-        else:
-            assert entry["width"] > 0 and entry["height"] > 0, entry
-        DESKTOP.window("^Captures Previews$", process.pid)
-        wait(lambda: "image/png" in DESKTOP.paste_types(), "auto-copy to the clipboard")
-        if portal:
-            DESKTOP.window("Preferences$", process.pid)
-        print(f"capture: Screenshot Display saved {entry['width']}×{entry['height']} "
-              f"{'through the portal' if portal else 'from X11'}, into the preview stack "
-              "and the clipboard")
+            def events():
+                return [json.loads(line) for line in log.read_text().splitlines()
+                        if line.startswith("{")]
+            if portal:
+                wait(lambda: "request" in fixture_log.read_text(), "the portal request")
+                assert not DESKTOP.visible(process.pid), "a Captures window was mapped for the portal"
+            captured = wait(lambda: [e for e in events() if e["event"].startswith("capture")],
+                            "the capture", timeout=30)[0]
+            assert captured["event"] == "captured", events()
+            entry = json.loads(next(root.glob("*/metadata.json")).read_text())
+            assert (entry["kind"], entry["mode"]) == ("screenshot", "display"), entry
+            if portal:
+                assert (entry["width"], entry["height"]) == still_size, entry
+            else:
+                assert entry["width"] > 0 and entry["height"] > 0, entry
+            DESKTOP.window("^Captures Previews$", process.pid)
+            wait(lambda: "image/png" in DESKTOP.paste_types(), "auto-copy to the clipboard")
+            if portal:
+                DESKTOP.window("Preferences$", process.pid)
+            print(f"capture: Screenshot Display saved {entry['width']}×{entry['height']} "
+                  f"{'through the portal' if portal else 'from X11'}, into the preview stack "
+                  "and the clipboard")
+        finally:
+            if process and process.poll() is None:
+                process.terminate()
+                process.wait(timeout=10)
+
+
+class X11Window:
+    """A plain top-level X window that the shared window list sees: shipping
+    reads `_NET_CLIENT_LIST_STACKING`, which this window-manager-less Xvfb
+    leaves to the smoke (libX11 through ctypes, no extra tools)."""
+
+    def __init__(self, title, x, y, width, height):
+        c = ctypes
+        self.x11 = x11 = c.cdll.LoadLibrary("libX11.so.6")
+        x11.XOpenDisplay.restype = c.c_void_p
+        x11.XOpenDisplay.argtypes = [c.c_char_p]
+        x11.XDefaultRootWindow.restype = c.c_ulong
+        x11.XDefaultRootWindow.argtypes = [c.c_void_p]
+        x11.XCreateSimpleWindow.restype = c.c_ulong
+        x11.XCreateSimpleWindow.argtypes = [c.c_void_p, c.c_ulong, c.c_int, c.c_int, c.c_uint,
+                                            c.c_uint, c.c_uint, c.c_ulong, c.c_ulong]
+        x11.XInternAtom.restype = c.c_ulong
+        x11.XInternAtom.argtypes = [c.c_void_p, c.c_char_p, c.c_int]
+        x11.XChangeProperty.argtypes = [c.c_void_p, c.c_ulong, c.c_ulong, c.c_ulong, c.c_int,
+                                        c.c_int, c.c_void_p, c.c_int]
+        x11.XDeleteProperty.argtypes = [c.c_void_p, c.c_ulong, c.c_ulong]
+        for name in ("XMapWindow", "XDestroyWindow"):
+            getattr(x11, name).argtypes = [c.c_void_p, c.c_ulong]
+        x11.XSync.argtypes = [c.c_void_p, c.c_int]
+        x11.XDefaultGC.restype = c.c_void_p
+        x11.XDefaultGC.argtypes = [c.c_void_p, c.c_int]
+        x11.XFillRectangle.argtypes = [c.c_void_p, c.c_ulong, c.c_void_p, c.c_int, c.c_int,
+                                       c.c_uint, c.c_uint]
+        x11.XCreatePixmap.restype = c.c_ulong
+        x11.XCreatePixmap.argtypes = [c.c_void_p, c.c_ulong, c.c_uint, c.c_uint, c.c_uint]
+        x11.XDefaultDepth.argtypes = [c.c_void_p, c.c_int]
+        x11.XSetForeground.argtypes = [c.c_void_p, c.c_void_p, c.c_ulong]
+        x11.XSetWindowBackgroundPixmap.argtypes = [c.c_void_p, c.c_ulong, c.c_ulong]
+        x11.XCloseDisplay.argtypes = [c.c_void_p]
+        self.display = x11.XOpenDisplay(None)
+        assert self.display, "no X display"
+        self.root = x11.XDefaultRootWindow(self.display)
+        self.window = x11.XCreateSimpleWindow(self.display, self.root, x, y, width, height, 0, 0,
+                                              0xffffff)
+        atom = lambda name: x11.XInternAtom(self.display, name, 0)  # noqa: E731
+        name = title.encode()
+        x11.XChangeProperty(self.display, self.window, atom(b"_NET_WM_NAME"),
+                            atom(b"UTF8_STRING"), 8, 0, name, len(name))
+        # Content, since a blank frame is refused as an empty capture: half
+        # black, half white, as a background pixmap so the server repaints
+        # it after the overlays uncover it (nothing here handles Expose).
+        gc = x11.XDefaultGC(self.display, 0)
+        pixmap = x11.XCreatePixmap(self.display, self.window, width, height,
+                                   x11.XDefaultDepth(self.display, 0))
+        x11.XSetForeground(self.display, gc, 0xffffff)
+        x11.XFillRectangle(self.display, pixmap, gc, 0, 0, width, height)
+        x11.XSetForeground(self.display, gc, 0)
+        x11.XFillRectangle(self.display, pixmap, gc, 0, 0, width // 2, height)
+        x11.XSetWindowBackgroundPixmap(self.display, self.window, pixmap)
+        x11.XMapWindow(self.display, self.window)
+        self.stacking = atom(b"_NET_CLIENT_LIST_STACKING")
+        stack = (c.c_ulong * 1)(self.window)
+        x11.XChangeProperty(self.display, self.root, self.stacking, 33, 32, 0, stack, 1)
+        x11.XSync(self.display, 0)
+
+    def close(self):
+        self.x11.XDeleteProperty(self.display, self.root, self.stacking)
+        self.x11.XDestroyWindow(self.display, self.window)
+        self.x11.XSync(self.display, 0)
+        self.x11.XCloseDisplay(self.display)
+
+
+def selectors(binary, scratch):
+    """Screenshot Region and Window through the shared capture flow. X11: the
+    display under the pointer, frozen, in an unmanaged overlay over AT-SPI; a
+    click without a drag says "Click and drag", Escape cancels, a drag saves
+    exactly the selection, and the Window overlay names and saves the hovered
+    window. Wayland: Region selects over the Screenshot portal's still (a
+    fixture) on a fullscreen surface with every Captures window unmapped and
+    saves that crop; Window goes to the portal's own window picker (refused
+    by the fixture, so it cancels)."""
+    portal = isinstance(DESKTOP, Wayland)
+    root = scratch / "selector-history"
+    settings = scratch / "selector-settings.json"
+    settings.write_text(json.dumps({
+        "settings_schema_version": 5, "onboarding_completed": True,
+        "output_directory": str(scratch / "selector-exports"),
+        "region_shortcut": "Ctrl+Shift+F7", "window_shortcut": "Ctrl+Shift+F8",
+        "display_shortcut": "Ctrl+Shift+F9", "new_capture_shortcut": "Ctrl+Shift+F10",
+        "launch_at_login": False, "show_mini_previews": False, "auto_copy_to_clipboard": False}))
+    accent = (200, 90, 160)
+    still = scratch / "selector still.png"
+    still.write_bytes(fixture_png(Wayland.WIDTH, Wayland.HEIGHT, accent=accent))
+    log = scratch / "selectors.log"
+    log.write_text("")
+    # X11 uses the session's fixture; the portal needs a private bus.
+    desktop = (private_desktop(scratch, "selectors", still) if portal
+               else contextlib.nullcontext((dict(os.environ), FIXTURE_LOG)))
+    window = None if portal else X11Window("Fixture window", 60, 240, 260, 160)
+    process = None
+
+    def events():
+        return [json.loads(line) for line in log.read_text().splitlines() if line.startswith("{")]
+
+    def outcomes():
+        return [e for e in events() if e["event"] in ("captured", "capture-cancelled",
+                                                      "capture-failed")]
+
+    def run(kind):
+        nonlocal process
+        if process and process.poll() is None:
+            process.terminate()
+            process.wait(timeout=10)
+        before = len(outcomes())
+        with log.open("a") as stream:
+            process = subprocess.Popen([binary, "--live", "--history-root", str(root),
+                                        "--settings-file", str(settings), "--capture", kind],
+                                       env=dict(env, GSK_RENDERER="cairo", GTK_A11Y="atspi",
+                                                NO_AT_BRIDGE="0"), stdout=stream)
+        return before
+
+    def outcome(before):
+        return wait(lambda: outcomes()[before:], "the capture outcome", timeout=30)[0]
+
+    def overlay(label):
+        app = wait(lambda: application(process.pid), "the app on the accessibility bus")
+        return app, wait(lambda: find(app, "panel", label), label)[0]
+
+    def guidance(app, title):
+        return wait(lambda: [n for n, (role, name) in nodes(app)
+                             if role in ("status", "status bar")
+                             and [c for c, (_, text) in nodes(n) if node_text(c, text) == title]],
+                    f"the {title!r} guidance")
+
+    def entry(artifact):
+        return json.loads((root / artifact / "metadata.json").read_text())
+
+    try:
+        with desktop as (env, fixture_log):
+            # Region: guidance, an empty click's feedback, then Escape.
+            before = run("region")
+            shown = wait(lambda: [e for e in events() if e["event"] == "selector"][before:],
+                         "the region overlay")[0]
+            assert (shown["kind"], shown["portal"], shown["frozen"]) == ("region", portal, True)
+            if portal:
+                assert '"CreateSession"' not in fixture_log.read_text()
+                assert "Screenshot" in fixture_log.read_text(), "no portal still was requested"
+            app, _ = overlay("Capture region selector")
+            guidance(app, "Drag to select a region")
+            DESKTOP.click(500, 420)
+            guidance(app, "Click and drag to select a region")
+            DESKTOP.key("Escape")
+            assert outcome(before)["event"] == "capture-cancelled", events()
+            assert not list(root.glob("*/metadata.json")), "a cancelled overlay saved a capture"
+
+            # Region: a drag saves exactly the selection. On Wayland it lies
+            # in the still's accent block, so its pixels prove the crop.
+            before = run("region")
+            overlay("Capture region selector")
+            if portal:
+                DESKTOP.drag(900, 60, 1200, 210)
+            else:
+                DESKTOP.drag(100, 280, 220, 340)
+            captured = outcome(before)
+            assert captured["event"] == "captured", events()
+            region = entry(captured["id"])
+            size = (300, 150) if portal else (120, 60)
+            assert (region["mode"], region["width"], region["height"]) == ("region", *size), region
+            if portal:
+                saved = GdkPixbuf.Pixbuf.new_from_file(str(root / captured["id"] / "capture.png"))
+                at = 75 * saved.get_rowstride() + 150 * saved.get_n_channels()
+                assert tuple(saved.get_pixels()[at:at + 3]) == accent, "the crop missed the still"
+            print(f"selectors: Region guidance, feedback and Escape; a drag saved "
+                  f"{size[0]}×{size[1]} {'from the portal still' if portal else 'from X11'}")
+
+            # Window.
+            before = run("window")
+            if portal:
+                assert outcome(before)["event"] == "capture-cancelled", events()
+                assert '"CreateSession"' in fixture_log.read_text(), "no window picker request"
+                print("selectors: Window went to the ScreenCast window picker; refusal cancelled")
+            else:
+                shown = wait(lambda: [e for e in events() if e["event"] == "selector"
+                                      and e["kind"] == "window"], "the window overlay")[0]
+                assert shown["windows"] == 1, shown
+                app, group = overlay("Capture window selector")
+                subprocess.run(["xdotool", "mousemove", "190", "320"], check=True)
+                wait(lambda: group.get_description() == "Target: Fixture window",
+                     "the hovered window target")
+                guidance(app, "Select a window to continue")
+                DESKTOP.click(190, 320)
+                captured = outcome(before)
+                assert captured["event"] == "captured", events()
+                saved = entry(captured["id"])
+                assert (saved["mode"], saved["width"], saved["height"]) == ("window", 260, 160), \
+                    saved
+                print("selectors: Window named the hovered window and saved it at 260×160")
     finally:
-        for child in (process, service, bus):
-            if child and child.poll() is None:
-                child.terminate()
-                child.wait(timeout=10)
+        if process and process.poll() is None:
+            process.terminate()
+            process.wait(timeout=10)
+        if window:
+            window.close()
 
 
 def tray_menu(service):
@@ -1531,7 +1757,8 @@ def tray(binary, scratch):
                           "Preferences", "Send Feedback…", "Check for Updates…", "-",
                           "Quit Captures"], labels
         enabled = [label for _, label, on in rows if on and label != "-"]
-        assert enabled == ["Screenshot Display", "Capture History…", "Open Save Location",
+        assert enabled == ["Screenshot Region", "Screenshot Window", "Screenshot Display",
+                           "Capture History…", "Open Save Location",
                            "Preferences", "Send Feedback…", "Quit Captures"], enabled
         # The quiet launch shows only the launch notice, which leaves by itself.
         wait(lambda: {"event": "startup-notice-closed", "by": "timeout"} in events(),
@@ -1830,8 +2057,8 @@ def crash_review(binary, scratch):
 
 
 STEPS = [history, preferences, editor, editor_close_keeps_open_text, recording,
-         recording_output, previews, preview_overflow, feedback, open_with, live, capture, tray,
-         shortcuts, setup, crash_review, notices]
+         recording_output, previews, preview_overflow, feedback, open_with, live, capture, selectors,
+         tray, shortcuts, setup, crash_review, notices]
 FIXTURE_LOG = None
 
 
