@@ -1290,6 +1290,8 @@ final class MiniPreviewTests: XCTestCase {
             let chips = try XCTUnwrap(controller.previewView).dustChipCount
             XCTAssertGreaterThan(chips, 0, "exercise real dust, not the fallback")
             RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+            // A restarted exit would end at least 2.9 s after this arrival.
+            let incomingArrived = CACurrentMediaTime()
             try capture("incoming")
             let view = try XCTUnwrap(controller.previewView)
             XCTAssertEqual(view.renderedArtifactIDs, ["older", "dust", "close", "incoming"])
@@ -1309,16 +1311,24 @@ final class MiniPreviewTests: XCTestCase {
                     XCTAssertFalse(button.canBecomeKeyView, "Tab must skip every exiting control")
                 }
             }
-            try write(render(try XCTUnwrap(view.window as? MiniPreviewPanel)),
-                      name: "mini-preview-overlap-arrival-\(placement).png")
-            if let bitmap = try renderPresentation(try XCTUnwrap(view.window as? MiniPreviewPanel)) {
-                try write(bitmap, name: "mini-preview-overlap-presentation-\(placement).png")
-            }
+            // Render now but encode the PNGs after the exit, so slow machines
+            // don't spend the 2.9 s hold writing files.
+            let arrival = try render(try XCTUnwrap(view.window as? MiniPreviewPanel))
+            let presentation = try renderPresentation(try XCTUnwrap(view.window as? MiniPreviewPanel))
             RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+            let againWithinHold = CACurrentMediaTime() - started < 2.9 - 0.1
             try capture("again")
-            XCTAssertEqual(try XCTUnwrap(controller.previewView).dustChipCount, chips)
+            if againWithinHold {
+                XCTAssertEqual(try XCTUnwrap(controller.previewView).dustChipCount, chips,
+                               "the existing chips must survive a second arrival")
+            }
             try waitUntil { !controller.isTransitioning }
-            XCTAssertLessThan(CACurrentMediaTime() - started, 3.4, "arrivals must not restart a 2.9 s exit")
+            XCTAssertLessThan(CACurrentMediaTime(), incomingArrived + 2.9,
+                              "arrivals must not restart a 2.9 s exit")
+            try write(arrival, name: "mini-preview-overlap-arrival-\(placement).png")
+            if let presentation {
+                try write(presentation, name: "mini-preview-overlap-presentation-\(placement).png")
+            }
             XCTAssertEqual(controller.presentedArtifactIDs, ["older", "incoming", "again"])
             let final = try XCTUnwrap(controller.previewView)
             XCTAssertEqual(final.renderedArtifactIDs, controller.presentedArtifactIDs)

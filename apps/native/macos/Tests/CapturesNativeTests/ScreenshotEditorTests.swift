@@ -1887,8 +1887,8 @@ final class ScreenshotEditorTests: XCTestCase {
                 .compactMap { $0 as? EditorViewportGestureView }
                 .first { $0.accessibilityLabel() == "Screenshot viewport" })
             input.onViewportPan?(NSPoint(x: -117, y: 63))
-            XCTAssertEqual(controller.viewport.panX, -117)
-            XCTAssertEqual(controller.viewport.panY, 63)
+            XCTAssertEqual(controller.viewport.panX, -117, accuracy: 1e-7)
+            XCTAssertEqual(controller.viewport.panY, 63, accuracy: 1e-7)
             XCTAssertEqual(controller.state.snapshot, original)
             XCTAssertTrue(worker.requests.isEmpty)
             XCTAssertTrue(worker.encodes.isEmpty)

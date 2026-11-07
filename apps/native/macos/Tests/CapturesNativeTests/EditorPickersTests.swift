@@ -98,14 +98,23 @@ final class EditorPickersTests: XCTestCase {
             window.appearance = NSAppearance(named: appearance == "dark" ? .darkAqua : .aqua)
             window.contentView?.addSubview(row)
             row.isEnabled = true; row.selectedHex = "#2d9cff"
-            let bitmap = try XCTUnwrap(row.bitmapImageRepForCachingDisplay(in: row.bounds))
+            // Render into an sRGB bitmap: the default cache bitmap uses the
+            // display's space (Display P3 on MacBooks), which shifts samples.
+            let scale = window.backingScaleFactor
+            let bitmap = try XCTUnwrap(NSBitmapImageRep(
+                bitmapDataPlanes: nil, pixelsWide: Int(row.bounds.width * scale),
+                pixelsHigh: Int(row.bounds.height * scale), bitsPerSample: 8, samplesPerPixel: 4,
+                hasAlpha: true, isPlanar: false, colorSpaceName: .calibratedRGB,
+                bytesPerRow: 0, bitsPerPixel: 0)?.retagging(with: .sRGB))
+            bitmap.size = row.bounds.size
             row.cacheDisplay(in: row.bounds, to: bitmap)
             let blue = row.swatchButtons[4].frame
-            let scale = CGFloat(bitmap.pixelsWide) / row.bounds.width
             let sample = try XCTUnwrap(bitmap.colorAt(x: Int(blue.midX * scale), y: Int(blue.midY * scale))?
                 .usingColorSpace(.sRGB))
-            XCTAssertEqual(sample.blueComponent, 1, accuracy: 0.02, "the swatch paints its color")
-            XCTAssertLessThan(sample.redComponent, 0.3)
+            // #2d9cff per channel; a neighbouring swatch is far outside 0.04.
+            XCTAssertEqual(sample.redComponent, 45 / 255, accuracy: 0.04, "the swatch paints its color")
+            XCTAssertEqual(sample.greenComponent, 156 / 255, accuracy: 0.04, "the swatch paints its color")
+            XCTAssertEqual(sample.blueComponent, 1, accuracy: 0.04, "the swatch paints its color")
             window.orderOut(nil)
         }
     }
