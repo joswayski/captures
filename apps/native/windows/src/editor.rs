@@ -4357,12 +4357,7 @@ impl Editor {
                 let px = 1. + s3 + 12. + s4;
                 let preview = rect(px, (h - 32.) / 2., px + 44., (h + 32.) / 2.);
                 let fade = if layer.visible { 1. } else { 0.42 };
-                gfx::fill_round(
-                    dc,
-                    preview,
-                    t.n("r-sm"),
-                    t.color_alpha("canvas-checker-b", fade),
-                )?;
+                draw_thumb_well(dc, t, preview, fade)?;
                 match &layer.thumb {
                     Some(thumb) => {
                         draw_thumb(dc, thumb, preview, t.n("r-sm"), layer.is_image, fade)?
@@ -5642,6 +5637,34 @@ fn bitmap(
             },
         )
     }
+}
+
+/// `.screenshot-layer-preview`: 5 DIP squares, fixed to the well rather than
+/// scaled with the image. Clip the rounded fill to each cell so the two colors
+/// never overlap (hidden layers fade both colors by the same amount).
+fn draw_thumb_well(dc: &ID2D1DeviceContext, t: &Tokens, well: D2D_RECT_F, fade: f32) -> Result<()> {
+    let a = gfx::brush(dc, t.color_alpha("canvas-checker-a", fade))?;
+    let b = gfx::brush(dc, t.color_alpha("canvas-checker-b", fade))?;
+    let rounded = D2D1_ROUNDED_RECT {
+        rect: well,
+        radiusX: t.n("r-sm"),
+        radiusY: t.n("r-sm"),
+    };
+    let columns = ((well.right - well.left) / 5.).ceil() as i32;
+    let rows = ((well.bottom - well.top) / 5.).ceil() as i32;
+    for row in 0..rows {
+        for column in 0..columns {
+            let x = well.left + column as f32 * 5.;
+            let y = well.top + row as f32 * 5.;
+            let cell = rect(x, y, (x + 5.).min(well.right), (y + 5.).min(well.bottom));
+            unsafe {
+                dc.PushAxisAlignedClip(&cell, D2D1_ANTIALIAS_MODE_ALIASED);
+                dc.FillRoundedRectangle(&rounded, if (row + column) % 2 == 0 { &a } else { &b });
+                dc.PopAxisAlignedClip();
+            }
+        }
+    }
+    Ok(())
 }
 
 /// `.screenshot-layer-preview img { object-fit: cover }`, clipped to the

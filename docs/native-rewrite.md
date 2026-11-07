@@ -756,6 +756,15 @@ its hint by pointer half while its reorder clamps to the unlocked run.
 Windows: cross-target clippy passed; rendered/hardware follow-up pending.
 macOS, X11 and Wayland: unchanged; these fixes touch only the Win32 host.
 
+Win32 layer-preview wells now use Tauri's 10 DIP checkerboard period and
+theme tokens, including transparent image areas and faded hidden layers.
+Cells clip a rounded fill without overlapping alpha, leaving the row layout
+and thumbnail pixels unchanged. Light/dark Direct2D renders under Wine were
+inspected; changed pixels stay inside the three fixture wells. Physical
+Windows follow-up remains open. macOS, X11 and Wayland are unchanged.
+Tauri's 1.35 CSS-pixel annotation stroke floor and preview opacity still need
+the separate shared-thumbnail slice; this host-only change does not add them.
+
 Win32 recording editor slice 1 adds `--scene recording --artifact ID` and
 enables History's recording Edit action. The shared `RecordingEditorSession`
 lives on a worker with explicit FFmpeg/FFprobe overrides, Windows Tauri
