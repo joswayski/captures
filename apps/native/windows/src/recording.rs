@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use captures_app::recording_editor::RecordingSaveRequest;
 use captures_app::recording_editor_ui as ui;
-use captures_media::CancelToken;
+use captures_media::{CancelToken, CropDragHandle};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::*;
 use windows::Win32::Graphics::DirectComposition::*;
@@ -24,6 +24,7 @@ use crate::textfield::{self, Change, Key, TextField};
 use crate::tokens::Tokens;
 use crate::{Options, appearance};
 
+mod crop;
 mod menu;
 mod output;
 mod preview;
@@ -93,17 +94,38 @@ pub enum Target {
     Microphone,
     MicrophoneVolume,
     Mono,
+    Crop,
+    CropLock,
+    CropX,
+    CropY,
+    CropWidth,
+    CropHeight,
+    CropHandle(CropDragHandle),
 }
 
-pub const TARGETS: [Target; 23] = [
+pub const TARGETS: [Target; 37] = [
     Target::Loop,
     Target::Fit,
     Target::Actual,
     Target::Play,
+    Target::CropHandle(CropDragHandle::North),
+    Target::CropHandle(CropDragHandle::NorthEast),
+    Target::CropHandle(CropDragHandle::East),
+    Target::CropHandle(CropDragHandle::SouthEast),
+    Target::CropHandle(CropDragHandle::South),
+    Target::CropHandle(CropDragHandle::SouthWest),
+    Target::CropHandle(CropDragHandle::West),
+    Target::CropHandle(CropDragHandle::NorthWest),
     Target::TrimStart,
     Target::TrimEnd,
     Target::Fps,
     Target::GifWidth,
+    Target::Crop,
+    Target::CropX,
+    Target::CropY,
+    Target::CropWidth,
+    Target::CropHeight,
+    Target::CropLock,
     Target::Resolution,
     Target::Width,
     Target::Height,
@@ -147,6 +169,13 @@ impl Target {
             Self::Microphone => "Microphone",
             Self::MicrophoneVolume => "Microphone volume",
             Self::Mono => "Convert to mono",
+            Self::Crop => "Crop recording",
+            Self::CropLock => "Lock aspect ratio",
+            Self::CropX => "Crop X",
+            Self::CropY => "Crop Y",
+            Self::CropWidth => "Crop width",
+            Self::CropHeight => "Crop height",
+            Self::CropHandle(handle) => crop::handle_label(handle),
         }
     }
 
@@ -155,7 +184,9 @@ impl Target {
     }
 
     fn scrolls(self) -> bool {
-        self.is_preview() || matches!(self, Self::TrimStart | Self::TrimEnd) || self.is_output()
+        self.is_preview()
+            || matches!(self, Self::TrimStart | Self::TrimEnd | Self::CropHandle(_))
+            || self.is_output()
     }
 }
 
@@ -212,6 +243,7 @@ pub struct Recording {
     preview: Preview,
     timeline: Timeline,
     output: Output,
+    crop_drag: Option<crop::Drag>,
     menu: Option<menu::Menu>,
     pub filename: TextField,
     pub directory: PathBuf,
@@ -311,6 +343,7 @@ impl Recording {
             preview: Preview::default(),
             timeline: Timeline::default(),
             output: Output::new(&settings.recording),
+            crop_drag: None,
             menu: None,
             filename: TextField::new(Style::Option, ""),
             directory,
@@ -415,6 +448,7 @@ impl Recording {
             return self.output_shown(target);
         }
         match target {
+            Target::CropHandle(_) => self.crop_shown(),
             Target::Cancel => self.saving,
             Target::Reveal => self.saved.is_some() && !self.saving,
             Target::Play | Target::Loop => self
@@ -436,6 +470,9 @@ impl Recording {
             return false;
         }
         match target {
+            Target::CropX | Target::CropY | Target::CropWidth | Target::CropHeight => {
+                self.output.values.crop_on
+            }
             Target::SystemVolume => !self.output.values.audio.mute_system_audio,
             Target::MicrophoneVolume => !self.output.values.audio.mute_microphone,
             Target::Play | Target::Save if self.timeline.pending => false,
@@ -468,6 +505,9 @@ impl Recording {
     }
 
     pub fn hit(&self, x: f32, y: f32) -> Option<Target> {
+        if let Some(handle) = self.crop_hit(x, y) {
+            return (handle != CropDragHandle::Move).then_some(Target::CropHandle(handle));
+        }
         if self.shown(Target::Play)
             && y < self.rects[FOOTER].y
             && self.preview_view().contains(x, y)
@@ -499,8 +539,8 @@ impl Recording {
 
     /// Viewport clipping shared by live composition, screenshots and UIA.
     pub fn visible_target_rect(&self, target: Target) -> Rect {
-        let r = if target == Target::Play {
-            self.play_clip()
+        let r = if matches!(target, Target::Play | Target::CropHandle(_)) {
+            self.preview_control_clip(target)
         } else {
             self.target_rect(target)
         };
@@ -529,7 +569,10 @@ impl Recording {
         {
             return None;
         }
-        let r = if index == slot(Target::Play) {
+        let r = if index == slot(Target::Play)
+            || ((CONTROL_START..MENU).contains(&index)
+                && matches!(TARGETS[index - CONTROL_START], Target::CropHandle(_)))
+        {
             self.preview_view()
         } else {
             Rect::new(0., 0., self.width, self.rects[FOOTER].y)
@@ -620,6 +663,9 @@ impl Recording {
         self.focus_visible = visible;
         if visible && target == Some(Target::Play) {
             self.reveal_play();
+        }
+        if visible && let Some(t) = target {
+            self.reveal_crop_handle(t);
         }
         if visible
             && let Some(target) = target
@@ -832,6 +878,7 @@ impl Recording {
                 if generation != self.timeline.generation || self.closing {
                     return;
                 }
+                let crop_was_shown = self.crop_shown();
                 self.timeline.pending = false;
                 self.timeline.start = p.edit.trim_start_ms;
                 self.timeline.end = p.edit.trim_end_ms.unwrap_or(p.duration_ms).max(1);
@@ -844,6 +891,9 @@ impl Recording {
                     self.notify(&error, true);
                 } else if self.saved.is_none() {
                     self.notify("", false);
+                }
+                if crop_was_shown != self.crop_shown() {
+                    self.events.push(Event::Structure);
                 }
                 let _ = self.layout();
                 self.refresh_footer();
@@ -1104,6 +1154,9 @@ impl Recording {
             MENU => self.draw_output_menu(dc)?,
             _ => {
                 let target = TARGETS[index - CONTROL_START];
+                if matches!(target, Target::CropHandle(_)) {
+                    return self.draw_crop_handle(dc, target);
+                }
                 if target.is_output() {
                     return self.draw_output_control(dc, target);
                 }
@@ -1441,6 +1494,9 @@ impl Recording {
     fn key(&mut self, key: VIRTUAL_KEY) {
         let down = |key: VIRTUAL_KEY| unsafe { GetKeyState(i32::from(key.0)) < 0 };
         let (ctrl, shift) = (down(VK_CONTROL), down(VK_SHIFT));
+        if self.crop_key(key, shift) {
+            return;
+        }
         if self.output_key(key, ctrl, shift) {
             return;
         }
@@ -1557,7 +1613,10 @@ impl Recording {
                     (lp.0 as u16 as i16) as f32 / self.scale,
                     ((lp.0 >> 16) as u16 as i16) as f32 / self.scale,
                 );
-                if self.output_pointer(msg, x, y) || self.timeline_pointer(msg, x, y) {
+                if self.output_pointer(msg, x, y)
+                    || self.crop_pointer(msg, x, y)
+                    || self.timeline_pointer(msg, x, y)
+                {
                     return Some(LRESULT(0));
                 }
                 let hit = self.hit(x, y);
@@ -1635,6 +1694,7 @@ impl Recording {
             }
             WM_CAPTURECHANGED => {
                 self.output.slider = None;
+                self.end_crop_drag();
                 self.end_timeline_drag();
                 self.dragging = false;
                 self.pressed = None;
@@ -1655,7 +1715,15 @@ impl Recording {
                 let (x, y) = (point.x as f32 / self.scale, point.y as f32 / self.scale);
                 let over_timeline =
                     y < self.rects[FOOTER].y && self.timeline_track().contains(x, y);
-                let cursor = if self.timeline.drag.is_some()
+                let cursor = if let Some(handle) = self.crop_hit(x, y) {
+                    match handle {
+                        CropDragHandle::North | CropDragHandle::South => IDC_SIZENS,
+                        CropDragHandle::East | CropDragHandle::West => IDC_SIZEWE,
+                        CropDragHandle::NorthEast | CropDragHandle::SouthWest => IDC_SIZENESW,
+                        CropDragHandle::NorthWest | CropDragHandle::SouthEast => IDC_SIZENWSE,
+                        CropDragHandle::Move => IDC_SIZEALL,
+                    }
+                } else if self.timeline.drag.is_some()
                     || self.timeline.scrubbing
                     || self.enabled(Target::TrimStart)
                         && (over_timeline

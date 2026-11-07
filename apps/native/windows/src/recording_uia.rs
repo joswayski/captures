@@ -28,10 +28,12 @@ fn with<R>(hwnd: HWND, f: impl FnOnce(&mut Recording) -> Result<R>) -> Result<R>
 }
 
 fn range(w: &Recording, target: Target) -> Option<(f64, f64, f64)> {
-    w.volume_range(target).or_else(|| {
-        w.trim_range(target)
-            .map(|(v, min, max)| (v as f64, min as f64, max as f64))
-    })
+    w.crop_range(target)
+        .or_else(|| w.volume_range(target))
+        .or_else(|| {
+            w.trim_range(target)
+                .map(|(v, min, max)| (v as f64, min as f64, max as f64))
+        })
 }
 
 fn children(w: &Recording) -> Vec<Id> {
@@ -108,14 +110,20 @@ fn screen_rect(w: &Recording, r: Rect) -> UiaRect {
 }
 
 fn runtime(id: Id) -> [i32; 3] {
+    let target_id = |t| {
+        TARGETS
+            .iter()
+            .position(|&target| target == t)
+            .expect("target") as i32
+    };
     let kind = match id {
         Id::Root => 0,
         Id::Title => 1,
         Id::Warning => 2,
         Id::Location => 3,
         Id::Status => 4,
-        Id::Control(t) => 10 + t as i32,
-        Id::Option(t, i) => 1000 + t as i32 * 100 + i as i32,
+        Id::Control(t) => 10 + target_id(t),
+        Id::Option(t, i) => 1000 + target_id(t) * 100 + i as i32,
     };
     [UiaAppendRuntimeId as i32, 400, kind]
 }
@@ -158,7 +166,9 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
             Id::Option(_, _) => {
                 pattern == UIA_SelectionItemPatternId || pattern == UIA_InvokePatternId
             }
-            Id::Control(Target::TrimStart | Target::TrimEnd) => pattern == UIA_RangeValuePatternId,
+            Id::Control(Target::TrimStart | Target::TrimEnd | Target::CropHandle(_)) => {
+                pattern == UIA_RangeValuePatternId
+            }
             Id::Control(Target::Filename) | Id::Location => pattern == UIA_ValuePatternId,
             Id::Control(Target::Copy | Target::Loop | Target::Fit | Target::Actual) => {
                 pattern == UIA_TogglePatternId
@@ -191,7 +201,9 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                         Id::Option(_, _) => UIA_ListItemControlTypeId,
                         Id::Control(Target::Filename) => UIA_EditControlTypeId,
                         Id::Control(Target::Copy) => UIA_CheckBoxControlTypeId,
-                        Id::Control(Target::TrimStart | Target::TrimEnd) => UIA_SliderControlTypeId,
+                        Id::Control(
+                            Target::TrimStart | Target::TrimEnd | Target::CropHandle(_),
+                        ) => UIA_SliderControlTypeId,
                         Id::Control(_) => UIA_ButtonControlTypeId,
                         _ => UIA_TextControlTypeId,
                     }
@@ -518,10 +530,11 @@ impl IValueProvider_Impl for Node_Impl {
             if t == Target::Filename {
                 w.set_value(&value);
             } else if t.is_number() {
+                let (min, max) = w.number_bounds(t);
                 if !value
                     .trim()
                     .parse::<f64>()
-                    .is_ok_and(|v| v.is_finite() && v >= 2. && v <= u32::MAX as f64)
+                    .is_ok_and(|v| v.is_finite() && v >= min && v <= max)
                 {
                     return Err(E_INVALIDARG.into());
                 }
@@ -559,6 +572,8 @@ impl IRangeValueProvider_Impl for Node_Impl {
             }
             if target.is_volume() {
                 w.set_volume(target, value);
+            } else if matches!(target, Target::CropHandle(_)) {
+                w.set_crop_range(target, value);
             } else {
                 w.set_trim(target, value);
             }
@@ -582,7 +597,7 @@ impl IRangeValueProvider_Impl for Node_Impl {
     fn SmallChange(&self) -> Result<f64> {
         with(self.hwnd, |w| {
             Ok(
-                if !matches!(self.id,Id::Control(t) if t.is_volume())
+                if matches!(self.id, Id::Control(Target::TrimStart | Target::TrimEnd))
                     && w.trim_range(Target::TrimEnd)
                         .is_some_and(|(_, _, max)| max >= 60_000)
                 {
@@ -596,6 +611,8 @@ impl IRangeValueProvider_Impl for Node_Impl {
     fn LargeChange(&self) -> Result<f64> {
         Ok(if matches!(self.id,Id::Control(t) if t.is_volume()) {
             20.
+        } else if matches!(self.id, Id::Control(Target::CropHandle(_))) {
+            10.
         } else {
             1000.
         })

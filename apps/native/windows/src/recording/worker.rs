@@ -32,6 +32,7 @@ pub(super) struct Presented {
     pub width: u32,
     pub height: u32,
     pub output: Values,
+    pub full_source: bool,
 }
 
 impl Presented {
@@ -50,6 +51,7 @@ impl Presented {
             width: snapshot.editor.source.width,
             height: snapshot.editor.source.height,
             output: output.clone(),
+            full_source: false,
         }
     }
 }
@@ -138,6 +140,7 @@ pub(super) struct Worker {
     pub cancel: Option<CancelToken>,
     pub playback_cancel: Option<CancelToken>,
     pub thumbnail_cancel: Option<CancelToken>,
+    source_cancel: CancelToken,
     /// One pending scrub/trim request, rather than a queue of stale decodes.
     pending_preview: Arc<Mutex<Option<PreviewRequest>>>,
     /// Bounded to one frame even while a modal dialog blocks the UI loop.
@@ -162,6 +165,8 @@ impl Worker {
         let requests = pending_preview.clone();
         let looping = Arc::new(AtomicBool::new(false));
         let loop_flag = looping.clone();
+        let source_cancel = CancelToken::default();
+        let source_decode = source_cancel.clone();
         let thread = std::thread::Builder::new()
             .name("captures-recording-editor".into())
             .spawn(move || {
@@ -224,6 +229,7 @@ impl Worker {
                         None
                     }
                 };
+                let mut source_frame: Option<(u64, Arc<Frame>)> = None;
                 while let Ok(job) = inbox.recv() {
                     let outcome = match job {
                         Job::Close => break,
@@ -244,11 +250,30 @@ impl Worker {
                             if result.is_ok() {
                                 output = request.output;
                             }
-                            Outcome::Preview(
-                                request.generation,
-                                Box::new(Presented::of(session, &directory, &output)),
-                                result.err(),
-                            )
+                            let mut presented = Presented::of(session, &directory, &output);
+                            let mut error = result.err();
+                            if output.crop_on {
+                                let position = presented.position_ms;
+                                if source_frame.as_ref().is_none_or(|(at, _)| *at != position) {
+                                    match session.source_frame(&source_decode) {
+                                        Ok(frame) => {
+                                            source_frame =
+                                                Some((position, Arc::new(Frame::new(&frame))))
+                                        }
+                                        Err(message) => {
+                                            error =
+                                                Some(format!("Crop preview unavailable: {message}"))
+                                        }
+                                    }
+                                }
+                                if let Some((at, frame)) = &source_frame
+                                    && *at == position
+                                {
+                                    presented.frame = frame.clone();
+                                    presented.full_source = true;
+                                }
+                            }
+                            Outcome::Preview(request.generation, Box::new(presented), error)
                         }
                         Job::Thumbnails(cancel) => {
                             let Some(session) = session.as_ref() else {
@@ -272,12 +297,21 @@ impl Worker {
                                 continue;
                             };
                             let result = (|| {
-                                let mut playback = session.looping_playback(
-                                    position_ms,
-                                    true,
-                                    loop_flag.clone(),
-                                    &cancel,
-                                )?;
+                                let mut playback = if output.crop_on {
+                                    session.looping_source_playback(
+                                        position_ms,
+                                        true,
+                                        loop_flag.clone(),
+                                        &cancel,
+                                    )
+                                } else {
+                                    session.looping_playback(
+                                        position_ms,
+                                        true,
+                                        loop_flag.clone(),
+                                        &cancel,
+                                    )
+                                }?;
                                 while let Some(frame) = playback.next_frame()? {
                                     if cancel.is_cancelled() {
                                         break;
@@ -334,6 +368,7 @@ impl Worker {
                                 session
                                     .replace_original_at(&request.destination, &cancel, progress)
                                     .map(|ReplacedRecording::Replaced { path, .. }| {
+                                        source_frame = None;
                                         let snapshot = session.snapshot_v2();
                                         output = Values::new(
                                             snapshot.editor.source.width,
@@ -369,6 +404,7 @@ impl Worker {
             cancel: None,
             playback_cancel: None,
             thumbnail_cancel: None,
+            source_cancel,
             pending_preview,
             latest,
             looping,
@@ -389,6 +425,7 @@ impl Worker {
 
     pub fn close(&mut self) {
         self.pending_preview.lock().expect("preview mailbox").take();
+        self.source_cancel.cancel();
         if let Some(cancel) = self.thumbnail_cancel.take() {
             cancel.cancel();
         }

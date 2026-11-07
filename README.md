@@ -209,9 +209,11 @@ or replace the original with cancellation and Show in Folder. The timeline suppo
 pointer/keyboard input and accessibility ranges.
 Output controls include original/1080p/720p/custom dimensions, GIF frame rate,
 maximum width and quality-based palette limits, and separate source-audio volumes,
-mute and mono. Recording crop, comparison, format switching and the remaining
+mute and mono. Crop supports source-pixel numeric fields, aspect locking, eight
+resize handles and interior dragging over the full source preview, with keyboard
+and accessibility ranges. Recording comparison, format switching and the remaining
 save-quality options are still migration work; these slices are not recording-editor
-parity, and the new output controls still await physical Windows acceptance.
+parity, and the new output and crop controls still await physical Windows acceptance.
 
 The native capture workspace connects full-display
 PNG capture, local screenshot history, copy, export, and deletion to

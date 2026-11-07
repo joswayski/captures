@@ -630,6 +630,38 @@ impl RecordingEditorSession {
             .map_err(|error| error.to_string())
     }
 
+    /// Play the uncropped source under an editor crop overlay. Retain accepted
+    /// trim and audio, but omit visual crop, resize and export effects. The
+    /// saved edit, retained preview, position and revision remain unchanged.
+    pub fn looping_source_playback(
+        &self,
+        position_ms: u64,
+        sound: bool,
+        looping: Arc<AtomicBool>,
+        cancel: &CancelToken,
+    ) -> Result<RecordingPlayback, String> {
+        self.ensure_active()?;
+        let edit = EditSpec {
+            crop: None,
+            output_width: None,
+            output_height: None,
+            ..self.edit.clone()
+        };
+        self.tools
+            .looping_playback(
+                &self.source_path,
+                &self.probe,
+                &edit,
+                &default_preview_export(),
+                position_ms,
+                sound,
+                looping,
+                cancel,
+            )
+            .map(|inner| RecordingPlayback { inner })
+            .map_err(|error| error.to_string())
+    }
+
     /// Generate the shipping full-source thumbnail strip without changing any
     /// accepted edit, preview, frame, position, revision, or History state.
     pub fn timeline_thumbnails(
@@ -1892,6 +1924,24 @@ mod tests {
             blue > 220 && red < 30 && green < 30,
             "Adjust crop at the accepted end position must show the same final frame"
         );
+        let accepted = serde_json::to_value(session.snapshot_v2()).unwrap();
+        let retained = session.frame();
+        let cancel = CancelToken::default();
+        let mut playback = session
+            .looping_source_playback(750, false, Arc::new(AtomicBool::new(false)), &cancel)
+            .unwrap();
+        assert_eq!((playback.width(), playback.height()), (80, 48));
+        let played = playback.next_frame().unwrap().unwrap();
+        assert!(played.position_ms >= 750 && played.position_ms < 2000);
+        let [red, green, blue, _] = played.pixels().get_pixel(40, 24).0;
+        assert!(blue > 220 && red < 30 && green < 30);
+        cancel.cancel();
+        drop(playback);
+        assert_eq!(
+            serde_json::to_value(session.snapshot_v2()).unwrap(),
+            accepted
+        );
+        assert!(Arc::ptr_eq(&retained, &session.frame()));
         assert_eq!(fs::read(&source).unwrap(), original);
         assert_eq!(fs::read(&metadata).unwrap(), original_metadata);
         assert_eq!(

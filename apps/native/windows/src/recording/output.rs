@@ -2,7 +2,9 @@
 //! transaction as the timeline. Draft values stay on the UI thread.
 use captures_app::controls::{number, range};
 use captures_app::recording_editor_ui::ResolutionChoice;
-use captures_media::{AudioEdit, EditSpec, ExportFormat, ExportSpec, QualityPreset};
+use captures_media::{
+    AudioEdit, CropRect, CropResizeAxis, EditSpec, ExportFormat, ExportSpec, QualityPreset,
+};
 
 use super::*;
 
@@ -14,6 +16,8 @@ pub(super) struct Values {
     pub maximum_width: u32,
     pub quality: QualityPreset,
     pub audio: AudioEdit,
+    pub crop_on: bool,
+    pub crop: CropRect,
 }
 
 impl Values {
@@ -25,6 +29,13 @@ impl Values {
             maximum_width: settings.gif_max_width,
             quality: ui::DEFAULT_COMPRESS_PRESET,
             audio: AudioEdit::default(),
+            crop_on: false,
+            crop: CropRect {
+                x: 0,
+                y: 0,
+                width,
+                height,
+            },
         }
     }
 
@@ -41,6 +52,7 @@ impl Values {
             let v = v.round().max(2.) as u32;
             v - v % 2
         };
+        edit.crop = self.crop_on.then_some(self.crop);
         let (width, height) = edit.crop.map_or((width, height), |c| (c.width, c.height));
         let limit = match self.resolution {
             ResolutionChoice::P1080 => 1080.,
@@ -64,7 +76,7 @@ impl Values {
                 even(f64::from(size.1) * scale),
             );
         }
-        let resized = gif || self.resolution != ResolutionChoice::Original;
+        let resized = gif || self.crop_on || self.resolution != ResolutionChoice::Original;
         edit.output_width = resized.then_some(size.0);
         edit.output_height = resized.then_some(size.1);
         let (system, mic) = (
@@ -92,10 +104,11 @@ impl Values {
 
 pub(super) struct Output {
     pub values: Values,
-    pub fields: [TextField; 2],
+    pub fields: [TextField; 6],
     pub cards: Vec<(Rect, &'static str)>,
     pub slider: Option<Target>,
     pub due: Option<std::time::Instant>,
+    pub crop_locked: bool,
 }
 
 impl Output {
@@ -106,6 +119,7 @@ impl Output {
             cards: Vec::new(),
             slider: None,
             due: None,
+            crop_locked: true,
         }
     }
 }
@@ -117,6 +131,12 @@ impl Target {
             Self::Resolution
                 | Self::Width
                 | Self::Height
+                | Self::Crop
+                | Self::CropLock
+                | Self::CropX
+                | Self::CropY
+                | Self::CropWidth
+                | Self::CropHeight
                 | Self::Fps
                 | Self::GifWidth
                 | Self::Quality
@@ -134,16 +154,35 @@ impl Target {
         )
     }
     pub fn is_number(self) -> bool {
-        matches!(self, Self::Width | Self::Height)
+        matches!(
+            self,
+            Self::Width
+                | Self::Height
+                | Self::CropX
+                | Self::CropY
+                | Self::CropWidth
+                | Self::CropHeight
+        )
     }
     pub fn is_volume(self) -> bool {
         matches!(self, Self::SystemVolume | Self::MicrophoneVolume)
     }
     pub fn is_check(self) -> bool {
-        matches!(self, Self::System | Self::Microphone | Self::Mono)
+        matches!(
+            self,
+            Self::System | Self::Microphone | Self::Mono | Self::Crop | Self::CropLock
+        )
     }
-    fn field_index(self) -> usize {
-        usize::from(self == Self::Height)
+    pub(super) fn field_index(self) -> usize {
+        match self {
+            Self::Width => 0,
+            Self::Height => 1,
+            Self::CropX => 2,
+            Self::CropY => 3,
+            Self::CropWidth => 4,
+            Self::CropHeight => 5,
+            _ => unreachable!("numeric field"),
+        }
     }
 }
 
@@ -186,13 +225,81 @@ impl Recording {
         }
     }
 
-    fn sync_output_fields(&mut self) {
-        for (i, value) in [self.output.values.custom.0, self.output.values.custom.1]
-            .into_iter()
-            .enumerate()
-        {
-            self.output.fields[i].editor.set_text(&value.to_string());
+    pub(super) fn sync_output_fields(&mut self) {
+        for target in TARGETS.into_iter().filter(|t| t.is_number()) {
+            let value = self.number_value(target);
+            self.output.fields[target.field_index()]
+                .editor
+                .set_text(&value.to_string());
         }
+    }
+
+    fn number_value(&self, target: Target) -> u32 {
+        let v = &self.output.values;
+        match target {
+            Target::Width => v.custom.0,
+            Target::Height => v.custom.1,
+            Target::CropX => v.crop.x,
+            Target::CropY => v.crop.y,
+            Target::CropWidth => v.crop.width,
+            Target::CropHeight => v.crop.height,
+            _ => unreachable!("numeric field"),
+        }
+    }
+
+    pub fn number_bounds(&self, target: Target) -> (f64, f64) {
+        let c = self.output.values.crop;
+        let (w, h) = self
+            .presented
+            .as_ref()
+            .map_or((2, 2), |p| (p.width, p.height));
+        let (min, max) = match target {
+            Target::CropX => (0, w.saturating_sub(c.width)),
+            Target::CropY => (0, h.saturating_sub(c.height)),
+            Target::CropWidth => (2, w.saturating_sub(c.x).max(2)),
+            Target::CropHeight => (2, h.saturating_sub(c.y).max(2)),
+            _ => (2, u32::MAX),
+        };
+        (min.into(), max.into())
+    }
+
+    fn set_number_value(&mut self, target: Target, value: u32) {
+        let v = &mut self.output.values;
+        match target {
+            Target::Width => v.custom.0 = value,
+            Target::Height => v.custom.1 = value,
+            Target::CropX => v.crop.x = value,
+            Target::CropY => v.crop.y = value,
+            Target::CropWidth | Target::CropHeight if self.output.crop_locked => {
+                let p = self.presented.as_ref().expect("opened source");
+                let axis = if target == Target::CropWidth {
+                    CropResizeAxis::Width
+                } else {
+                    CropResizeAxis::Height
+                };
+                v.crop = v.crop.resize_aspect_locked(p.width, p.height, axis, value);
+            }
+            Target::CropWidth => v.crop.width = value,
+            Target::CropHeight => v.crop.height = value,
+            _ => unreachable!("numeric field"),
+        }
+        // An aspect-locked edit can change the other dimension. Preserve the
+        // active text draft while refreshing its coupled field and UIA values.
+        for t in [
+            Target::CropX,
+            Target::CropY,
+            Target::CropWidth,
+            Target::CropHeight,
+        ] {
+            if t != target {
+                let value = self.number_value(t);
+                self.output.fields[t.field_index()]
+                    .editor
+                    .set_text(&value.to_string());
+                self.events.push(Event::OutputValue(t));
+            }
+        }
+        self.events.push(Event::OutputValue(Target::Resolution));
     }
 
     pub fn output_value(&self, target: Target) -> String {
@@ -216,10 +323,12 @@ impl Recording {
         let Some(p) = &self.presented else {
             return vec![];
         };
-        let (w, h) = p
-            .edit
-            .crop
-            .map_or((p.width, p.height), |c| (c.width, c.height));
+        let v = &self.output.values;
+        let (w, h) = if v.crop_on {
+            (v.crop.width, v.crop.height)
+        } else {
+            (p.width, p.height)
+        };
         let menus = ui::menus(p.export.format == ExportFormat::Gif, w, h);
         match target {
             Target::Resolution => menus.resolutions,
@@ -292,6 +401,7 @@ impl Recording {
             Event::OutputValue(target)
         });
         let _ = self.layout();
+        self.dirty[PREVIEW] = true;
         self.refresh_footer();
     }
 
@@ -344,12 +454,23 @@ impl Recording {
             self.toggle_output_menu(target);
             return;
         }
+        if target == Target::CropLock {
+            self.output.crop_locked = !self.output.crop_locked;
+            self.events.push(Event::Toggle(target));
+            self.layout_crop();
+            self.dirty[slot(target)] = true;
+            return;
+        }
         let a = &mut self.output.values.audio;
         match target {
             Target::System => a.mute_system_audio = !a.mute_system_audio,
             Target::Microphone => a.mute_microphone = !a.mute_microphone,
             Target::Mono => a.mono_output = !a.mono_output,
+            Target::Crop => self.output.values.crop_on = !self.output.values.crop_on,
             _ => return,
+        }
+        if target == Target::Crop {
+            self.events.push(Event::Structure);
         }
         self.output_changed(target);
     }
@@ -369,20 +490,16 @@ impl Recording {
         let _ = self.output.fields[i].apply(&self.g, &self.t, change);
         self.dirty[slot(target)] = true;
         self.place_caret();
+        let (min, max) = self.number_bounds(target);
         if change.text
             && let Some(value) = self
                 .output_value(target)
                 .trim()
                 .parse::<f64>()
                 .ok()
-                .filter(|v| v.is_finite() && *v >= 2. && *v <= u32::MAX as f64)
+                .filter(|v| v.is_finite() && *v >= min && *v <= max)
         {
-            let value = value.clamp(2., u32::MAX as f64).round() as u32;
-            if target == Target::Width {
-                self.output.values.custom.0 = value;
-            } else {
-                self.output.values.custom.1 = value;
-            }
+            self.set_number_value(target, value.round() as u32);
             self.output_changed(target);
         }
     }
@@ -391,26 +508,20 @@ impl Recording {
         let Some(t) = self.focus.filter(|t| t.is_number()) else {
             return;
         };
-        let current = if t == Target::Width {
-            self.output.values.custom.0
-        } else {
-            self.output.values.custom.1
-        };
+        let current = self.number_value(t);
+        let (min, max) = self.number_bounds(t);
         let value = self
             .output_value(t)
             .trim()
             .parse::<f64>()
             .ok()
             .filter(|v| v.is_finite())
-            .map_or(current, |v| v.clamp(2., u32::MAX as f64).round() as u32);
+            .map_or(current, |v| v.clamp(min, max).round() as u32);
         if value != current {
-            if t == Target::Width {
-                self.output.values.custom.0 = value;
-            } else {
-                self.output.values.custom.1 = value;
-            }
+            self.set_number_value(t, value);
             self.output_changed(t);
         }
+        let value = self.number_value(t);
         self.output.fields[t.field_index()]
             .editor
             .set_text(&value.to_string());
@@ -509,14 +620,10 @@ impl Recording {
     fn step_output_number(&mut self, t: Target, up: bool) {
         let mut text = self.output_value(t);
         if text.trim().is_empty() {
-            text = if t == Target::Width {
-                self.output.values.custom.0
-            } else {
-                self.output.values.custom.1
-            }
-            .to_string();
+            text = self.number_value(t).to_string();
         }
-        let v = number::step_from(&text, 1., up, Some(2.), Some(u32::MAX as f64));
+        let (min, max) = self.number_bounds(t);
+        let v = number::step_from(&text, 1., up, Some(min), Some(max));
         self.set_output_number(t, &v.to_string());
     }
 
@@ -658,12 +765,41 @@ impl Recording {
         } else {
             0.
         };
-        let ch = field_top + h + extra + pad;
+        let check_y = top + pad + 18. + gap;
+        self.rects[slot(Target::Crop)] = Rect::new(track.x + pad, check_y, card_w - 2. * pad, 24.);
+        let number_y = check_y + 24. + gap + 18. + self.t.n("s-3");
+        let cw = (card_w - 2. * pad - 3. * self.t.n("s-3")) / 4.;
+        for (i, target) in [
+            Target::CropX,
+            Target::CropY,
+            Target::CropWidth,
+            Target::CropHeight,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            self.rects[slot(target)] = Rect::new(
+                track.x + pad + i as f32 * (cw + self.t.n("s-3")),
+                number_y,
+                cw,
+                h,
+            );
+            let _ = self.output.fields[target.field_index()].relayout(
+                &self.g,
+                &self.t,
+                cw - 26. - 2. * self.t.n("s-4"),
+            );
+        }
+        let lock_y = number_y + h + self.t.n("s-4");
+        self.rects[slot(Target::CropLock)] =
+            Rect::new(track.x + pad, lock_y, card_w - 2. * pad, 24.);
+        let resolution_y = lock_y + 24. + gap + 18. + self.t.n("s-3");
+        let ch = resolution_y - top + h + extra + pad;
         self.output
             .cards
             .push((Rect::new(track.x, top, card_w, ch), "Crop & size"));
         self.rects[slot(Target::Resolution)] =
-            Rect::new(track.x + pad, top + field_top, card_w - 2. * pad, h);
+            Rect::new(track.x + pad, resolution_y, card_w - 2. * pad, h);
         let w = (card_w - 2. * pad - self.t.n("s-3")) / 2.;
         for (i, t) in [Target::Width, Target::Height].into_iter().enumerate() {
             self.rects[slot(t)] = Rect::new(
@@ -755,6 +891,10 @@ impl Recording {
             )?;
         }
         for (target, label) in [
+            (Target::CropX, "X"),
+            (Target::CropY, "Y"),
+            (Target::CropWidth, "Width"),
+            (Target::CropHeight, "Height"),
             (Target::Resolution, "Output resolution"),
             (Target::Width, "Width"),
             (Target::Height, "Height"),
