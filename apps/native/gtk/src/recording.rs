@@ -317,6 +317,8 @@ struct State {
     /// Where the preview last drew its frame, in widget points.
     image_bounds: Cell<(f32, f32, f32, f32)>,
     crop_drag: Cell<Option<(CropDragHandle, CropRect)>>,
+    /// The crop handles' adjustments are being set from the crop box.
+    crop_syncing: Cell<bool>,
     estimate: Cell<Estimate>,
     /// Supersedes the running estimate and names the next one.
     estimate_generation: Cell<u64>,
@@ -351,6 +353,9 @@ struct Widgets {
     warning: gtk::Label,
     preview: SnapshotArea,
     viewport: gtk::Overlay,
+    /// Focusable sliders over the drawn crop handles (macOS
+    /// `RecordingCropHandle`): each moves its edge in source pixels.
+    crop_handles: [(CropDragHandle, gtk::Scale); 8],
     play: gtk::Button,
     play_icon: Icon,
     loop_button: gtk::Button,
@@ -396,6 +401,8 @@ fn set_class(widget: &impl IsA<gtk::Widget>, class: &str, on: bool) {
 /// `.timeline-trim-handle`: twice the 4 px track inset, 3 px past each edge.
 const HANDLE_WIDTH: i32 = 8;
 const HANDLE_OVERHANG: i32 = 3;
+/// The focus target over each drawn 11 pt crop handle.
+const CROP_HANDLE_SIZE: i32 = 12;
 
 pub fn build(app: &gtk::Application, tokens: Rc<Tokens>, options: Options) -> RecordingEditor {
     let window = gtk::ApplicationWindow::builder()
@@ -483,6 +490,43 @@ pub fn build(app: &gtk::Application, tokens: Rc<Tokens>, options: Options) -> Re
         widget.set_visible(false);
         viewport.add_overlay(widget);
     }
+    let crop_handles = {
+        use CropDragHandle::*;
+        [
+            (NorthWest, "north-west"),
+            (North, "north"),
+            (NorthEast, "north-east"),
+            (East, "east"),
+            (SouthEast, "south-east"),
+            (South, "south"),
+            (SouthWest, "south-west"),
+            (West, "west"),
+        ]
+        .map(|(kind, name)| {
+            // As the trim handles: a restyled GtkRange for AT-SPI Value. The
+            // preview draws the handle and keeps the pointer drag.
+            let orientation = if crop_handle_vertical(kind) {
+                gtk::Orientation::Vertical
+            } else {
+                gtk::Orientation::Horizontal
+            };
+            let handle = gtk::Scale::new(
+                orientation,
+                Some(&gtk::Adjustment::new(0., 0., 1., 1., 10., 0.)),
+            );
+            handle.add_css_class("recording-crop-handle");
+            handle.set_draw_value(false);
+            handle.set_size_request(CROP_HANDLE_SIZE, CROP_HANDLE_SIZE);
+            handle.set_focusable(true);
+            handle.set_can_target(false);
+            handle.set_visible(false);
+            handle.update_property(&[gtk::accessible::Property::Label(&format!(
+                "Recording crop {name} handle"
+            ))]);
+            viewport.add_overlay(&handle);
+            (kind, handle)
+        })
+    };
     // Over the comparison, as shipping's `z-index: 2`.
     viewport.add_overlay(&play);
     card.append(&viewport);
@@ -653,6 +697,7 @@ pub fn build(app: &gtk::Application, tokens: Rc<Tokens>, options: Options) -> Re
         source_frame: RefCell::default(),
         image_bounds: Cell::default(),
         crop_drag: Cell::default(),
+        crop_syncing: Cell::default(),
         estimate: Cell::default(),
         estimate_generation: Cell::default(),
         estimate_cancel: RefCell::default(),
@@ -674,6 +719,7 @@ pub fn build(app: &gtk::Application, tokens: Rc<Tokens>, options: Options) -> Re
             warning,
             preview,
             viewport,
+            crop_handles,
             play,
             play_icon,
             loop_button,
@@ -845,6 +891,19 @@ impl State {
         let weak = Rc::downgrade(self);
         w.viewport.connect_get_child_position(move |_, child| {
             let state = weak.upgrade()?;
+            if let Some((kind, _)) = state.w.crop_handles.iter().find(|(_, h)| h == child) {
+                let (_, hx, hy) = state
+                    .crop_points()?
+                    .into_iter()
+                    .find(|(handle, _, _)| handle == kind)?;
+                let half = f64::from(CROP_HANDLE_SIZE) / 2.;
+                return Some(gdk::Rectangle::new(
+                    (hx - half).round() as i32,
+                    (hy - half).round() as i32,
+                    CROP_HANDLE_SIZE,
+                    CROP_HANDLE_SIZE,
+                ));
+            }
             let (x, y, width, height) = state.image_bounds.get();
             if child == state.w.play.upcast_ref::<gtk::Widget>() {
                 // Shipping keeps Play clear of the centered compare handle.
@@ -938,10 +997,13 @@ impl State {
                 return;
             };
             let scale = f64::from(state.image_bounds.get().2) / f64::from(texture.width().max(1));
-            state
+            if state
                 .output
-                .drag_crop(from, handle, dx / scale.max(1e-6), dy / scale.max(1e-6));
-            state.w.preview.queue_draw();
+                .drag_crop(from, handle, dx / scale.max(1e-6), dy / scale.max(1e-6))
+            {
+                state.sync_crop_handles();
+                state.w.preview.queue_draw();
+            }
         });
         let weak = Rc::downgrade(self);
         crop_drag.connect_drag_end(move |_, _, _| {
@@ -967,6 +1029,51 @@ impl State {
             state.w.preview.set_cursor_from_name(cursor);
         });
         w.preview.add_controller(motion);
+
+        // Crop handles: arrows nudge both axes by a source pixel (10 with
+        // Shift), as macOS; assistive technologies set the edge directly.
+        for (kind, handle) in &w.crop_handles {
+            let kind = *kind;
+            let keys = gtk::EventControllerKey::new();
+            keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+            let weak = Rc::downgrade(self);
+            keys.connect_key_pressed(move |_, key, _, modifiers| {
+                let Some(state) = weak.upgrade() else {
+                    return glib::Propagation::Proceed;
+                };
+                let step = if modifiers.contains(gdk::ModifierType::SHIFT_MASK) {
+                    10.
+                } else {
+                    1.
+                };
+                let (dx, dy) = match key {
+                    gdk::Key::Left => (-step, 0.),
+                    gdk::Key::Right => (step, 0.),
+                    gdk::Key::Up => (0., -step),
+                    gdk::Key::Down => (0., step),
+                    _ => return glib::Propagation::Proceed,
+                };
+                state.nudge_crop(kind, dx, dy);
+                glib::Propagation::Stop
+            });
+            handle.add_controller(keys);
+            let weak = Rc::downgrade(self);
+            handle.connect_value_changed(move |handle| {
+                let Some(state) = weak.upgrade() else { return };
+                let Some(crop) = state.output.crop_shown() else {
+                    return;
+                };
+                if state.crop_syncing.get() {
+                    return;
+                }
+                let delta = handle.value().round() - crop_edge(kind, crop);
+                if crop_handle_vertical(kind) {
+                    state.nudge_crop(kind, 0., delta);
+                } else {
+                    state.nudge_crop(kind, delta, 0.);
+                }
+            });
+        }
 
         // Track: drag a handle to trim, or press elsewhere to seek.
         let drag = gtk::GestureDrag::new();
@@ -1120,6 +1227,7 @@ impl State {
             }
             Outcome::SourceFrame(revision, frame) => {
                 *self.source_frame.borrow_mut() = Some((revision, texture_of(&frame)));
+                self.sync_crop_handles();
                 self.w.preview.queue_draw();
             }
             Outcome::Estimate(generation, result) => {
@@ -1276,8 +1384,59 @@ impl State {
             self.compare.dismissed.set(false);
         }
         self.refresh_compare();
+        self.sync_crop_handles();
         self.w.preview.queue_draw();
         self.schedule_apply();
+    }
+
+    /// Move one crop handle by source pixels from the keyboard or AT-SPI.
+    fn nudge_crop(self: &Rc<Self>, kind: CropDragHandle, dx: f64, dy: f64) {
+        let Some(crop) = self.output.crop_shown() else {
+            return;
+        };
+        if self.output.drag_crop(crop, kind, dx, dy) {
+            self.output_changed(Change::Edit);
+        } else {
+            // A blocked edge: the slider returns to where the edge stayed.
+            self.sync_crop_handles();
+        }
+    }
+
+    /// Show the crop handles with the crop box and give each its edge, the
+    /// edge's reach and the box as an AT-SPI value.
+    fn sync_crop_handles(&self) {
+        let crop = self.crop_view().map(|(crop, _)| crop);
+        let extent = self
+            .output
+            .source()
+            .map_or(0., |source| f64::from(source.width.max(source.height)));
+        self.crop_syncing.set(true);
+        for (kind, handle) in &self.w.crop_handles {
+            handle.set_visible(crop.is_some());
+            let Some(crop) = crop else { continue };
+            let vertical = crop_handle_vertical(*kind);
+            let edge = crop_edge(*kind, crop);
+            let reach = |direction: f64| {
+                let delta = direction * extent;
+                let (dx, dy) = if vertical { (0., delta) } else { (delta, 0.) };
+                self.output
+                    .crop_after(crop, *kind, dx, dy)
+                    .map_or(edge, |moved| crop_edge(*kind, moved))
+            };
+            handle
+                .adjustment()
+                .configure(edge, reach(-1.), reach(1.), 1., 10., 0.);
+            handle.update_property(&[gtk::accessible::Property::ValueText(&format!(
+                "{} edge {edge} source pixels; X {}, Y {}, width {}, height {}",
+                if vertical { "Y" } else { "X" },
+                crop.x,
+                crop.y,
+                crop.width,
+                crop.height
+            ))]);
+        }
+        self.crop_syncing.set(false);
+        self.w.viewport.queue_allocate();
     }
 
     fn compare_visible(&self) -> bool {
@@ -1434,6 +1593,7 @@ impl State {
         self.w.play.set_tooltip_text(Some(name));
         // Playback hides the comparison, as shipping's `!previewPlaying`.
         self.refresh_compare();
+        self.sync_crop_handles();
         self.w
             .play
             .update_property(&[gtk::accessible::Property::Label(name)]);
@@ -1769,18 +1929,35 @@ impl State {
         Some((crop, texture))
     }
 
-    /// The crop handle (or the box itself) under a preview point.
-    fn crop_handle_at(&self, x: f64, y: f64) -> Option<CropDragHandle> {
+    /// Where the preview draws a texture: fitted inside its padding, or 1:1.
+    fn image_rect(&self, texture: &gdk::Texture, width: f32, height: f32) -> graphene::Rect {
+        let pad = 12.;
+        let (tw, th) = (texture.width() as f32, texture.height() as f32);
+        let scale = if self.one_to_one.get() {
+            1.
+        } else {
+            ((width - 2. * pad) / tw)
+                .min((height - 2. * pad) / th)
+                .max(0.01)
+        };
+        let (dw, dh) = (tw * scale, th * scale);
+        graphene::Rect::new((width - dw) / 2., (height - dh) / 2., dw, dh)
+    }
+
+    /// The eight crop handle points, in preview points, for the current
+    /// preview size (corners first, as the hit test prefers them).
+    fn crop_points(&self) -> Option<[(CropDragHandle, f64, f64); 8]> {
         let (crop, texture) = self.crop_view()?;
-        let (bx, by, bw, _) = self.image_bounds.get();
-        let scale = f64::from(bw) / f64::from(texture.width().max(1));
-        let left = f64::from(bx) + f64::from(crop.x) * scale;
-        let top = f64::from(by) + f64::from(crop.y) * scale;
+        let preview = &self.w.preview;
+        let image = self.image_rect(&texture, preview.width() as f32, preview.height() as f32);
+        let scale = f64::from(image.width()) / f64::from(texture.width().max(1));
+        let left = f64::from(image.x()) + f64::from(crop.x) * scale;
+        let top = f64::from(image.y()) + f64::from(crop.y) * scale;
         let right = left + f64::from(crop.width) * scale;
         let bottom = top + f64::from(crop.height) * scale;
         let (cx, cy) = ((left + right) / 2., (top + bottom) / 2.);
         use CropDragHandle::*;
-        [
+        Some([
             (NorthWest, left, top),
             (NorthEast, right, top),
             (SouthEast, right, bottom),
@@ -1789,11 +1966,21 @@ impl State {
             (East, right, cy),
             (South, cx, bottom),
             (West, left, cy),
-        ]
-        .into_iter()
-        .find(|(_, hx, hy)| (x - hx).abs() <= 8. && (y - hy).abs() <= 8.)
-        .map(|(handle, _, _)| handle)
-        .or_else(|| (x >= left && x <= right && y >= top && y <= bottom).then_some(Move))
+        ])
+    }
+
+    /// The crop handle (or the box itself) under a preview point.
+    fn crop_handle_at(&self, x: f64, y: f64) -> Option<CropDragHandle> {
+        let points = self.crop_points()?;
+        let near = points
+            .iter()
+            .find(|(_, hx, hy)| (x - hx).abs() <= 8. && (y - hy).abs() <= 8.)
+            .map(|(handle, _, _)| *handle);
+        let (_, left, top) = points[0];
+        let (_, right, bottom) = points[2];
+        near.or_else(|| {
+            (x >= left && x <= right && y >= top && y <= bottom).then_some(CropDragHandle::Move)
+        })
     }
 
     fn draw_preview(&self, snapshot: &gtk::Snapshot, width: f32, height: f32) {
@@ -1815,17 +2002,9 @@ impl State {
         else {
             return;
         };
-        let pad = 12.;
-        let (tw, th) = (texture.width() as f32, texture.height() as f32);
-        let scale = if self.one_to_one.get() {
-            1.
-        } else {
-            ((width - 2. * pad) / tw)
-                .min((height - 2. * pad) / th)
-                .max(0.01)
-        };
-        let (dw, dh) = (tw * scale, th * scale);
-        let bounds = graphene::Rect::new((width - dw) / 2., (height - dh) / 2., dw, dh);
+        let bounds = self.image_rect(&texture, width, height);
+        let (dw, dh) = (bounds.width(), bounds.height());
+        let scale = dw / texture.width() as f32;
         snapshot.push_clip(&graphene::Rect::new(0., 0., width, height));
         let rounded = gsk::RoundedRect::from_rect(bounds, t.number("r-md"));
         snapshot.push_rounded_clip(&rounded);
@@ -1998,4 +2177,20 @@ impl State {
         snapshot.append_color(&ink, tab.bounds());
         snapshot.pop();
     }
+}
+
+/// Edge handles move one axis; corners announce their horizontal edge.
+fn crop_handle_vertical(kind: CropDragHandle) -> bool {
+    matches!(kind, CropDragHandle::North | CropDragHandle::South)
+}
+
+/// The source-pixel edge a crop handle's slider reports.
+fn crop_edge(kind: CropDragHandle, crop: CropRect) -> f64 {
+    use CropDragHandle::*;
+    f64::from(match kind {
+        North => crop.y,
+        South => crop.y + crop.height,
+        West | NorthWest | SouthWest => crop.x,
+        _ => crop.x + crop.width,
+    })
 }

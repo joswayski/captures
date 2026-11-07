@@ -741,6 +741,20 @@ def recording_output(binary, scratch):
              "the aspect lock to set Height 180")
         wait(lambda: find(app, "combo box", "Output resolution: Original — 320 × 180"),
              "Output resolution to follow the crop")
+        # The drawn crop handles are AT-SPI sliders over source-pixel edges.
+        # They show once the uncropped source frame arrives.
+        wait(lambda: len([name for _, (role, name) in nodes(app)
+                          if role == "slider" and name.startswith("Recording crop")]) == 8,
+             "the eight crop handle sliders")
+        east = find(app, "slider", "Recording crop east handle")[0]
+        left = Atspi.Value.get_current_value(find(app, "spin button", "X")[0])
+        assert Atspi.Value.get_current_value(east) == left + 320, "east handle off the crop edge"
+        Atspi.Value.set_current_value(east, left + 288)
+        wait(lambda: Atspi.Value.get_current_value(width) == 288, "the east handle to set Width")
+        wait(lambda: Atspi.Value.get_current_value(height) == 162, "the lock to follow the handle")
+        Atspi.Value.set_current_value(east, left + 320)
+        wait(lambda: Atspi.Value.get_current_value(height) == 180, "the handle back to 320 × 180")
+        print("recording: crop handle sliders move the box over AT-SPI")
         choose("Format", "GIF")
         wait(lambda: find(app, "heading", "GIF settings"), "the GIF settings card")
         assert find(app, "combo box", "Save quality: Compress"), "GIF did not stay on Compress"

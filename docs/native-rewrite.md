@@ -1032,8 +1032,13 @@ shipping's `buildExportRequestSpecs`; an invalid Maximum limit stays
 unapplied and disables Save. With Crop recording on, the preview shows the
 uncropped source frame under the dim, accent box, size badge and eight
 handles, drawn as retained nodes; dragging moves or resizes it in source
-pixels. The handles are drawn, not widgets: assistive technologies use the
-crop spin buttons. Change… picks the folder Save writes to (Save as new and
+pixels. Over each drawn handle sits a focusable restyled `GtkScale` (macOS
+`RecordingCropHandle`): AT-SPI reads a slider named `Recording crop <edge>
+handle` whose value is its edge in source pixels (corners report X), with
+the edge's reach as its range and the box as value text; setting it or
+pressing the arrows (both axes, 10 px with Shift) moves the box through the
+shared `CropRect::after_drag` and the aspect lock, and only its focus ring
+draws. Change… picks the folder Save writes to (Save as new and
 replace both use it, as shipping). Compress or Maximum file size (MP4 or
 GIF) shows shipping's `CompressionPreview` over the paused preview: the
 session's `export_comparison` encodes the accepted frame after 350 ms of
@@ -1051,7 +1056,8 @@ installs FFmpeg, renders it in both appearances, and `smoke.py` opens it from
 History, trims 1 s with the keyboard over AT-SPI, plays and pauses, and
 checks that Save as new writes a 3 s `-edited` MP4 and leaves the source
 unchanged; a second step moves the Compress comparison split, hides and
-shows it, then crops to 320 × 180 with the aspect lock, switches
+shows it, then crops to 320 × 180 with the aspect lock, moves the east crop
+handle slider to 288 and back over AT-SPI, switches
 to GIF (GIF settings, Compress, Save as new forced on) and checks the saved
 GIF's size in a folder chosen through Change…, then the saved toast, Show in
 Folder and Save staying off. X11 (Xvfb) only; Wayland, Orca and real hardware remain open.

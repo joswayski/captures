@@ -1570,6 +1570,24 @@ popover.captures-menu .choice-description {
   outline: 2px solid var(--text);
   outline-offset: 2px;
 }
+/* Recording crop handles: the preview draws them; these focusable sliders
+   carry keyboard and AT-SPI and show only the focus ring. */
+.captures scale.recording-crop-handle,
+.captures scale.recording-crop-handle trough,
+.captures scale.recording-crop-handle highlight,
+.captures scale.recording-crop-handle fill,
+.captures scale.recording-crop-handle slider {
+  all: unset;
+  min-width: 0;
+  min-height: 0;
+}
+.captures scale.recording-crop-handle {
+  border-radius: var(--r-xs);
+}
+.captures scale.recording-crop-handle:focus-visible {
+  outline: 2px solid var(--glass-text);
+  outline-offset: 2px;
+}
 .captures .recording-save-bar {
   min-height: 44px;
   padding: var(--s-4) var(--s-7);

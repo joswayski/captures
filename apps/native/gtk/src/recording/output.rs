@@ -751,21 +751,41 @@ impl Output {
         self.model.crop_on.get().then(|| self.model.crop.get())
     }
 
-    /// A drag on the preview moved the crop box (source pixels).
-    pub(super) fn drag_crop(&self, from: CropRect, handle: CropDragHandle, dx: f64, dy: f64) {
-        let Some(source) = self.model.source.get() else {
-            return;
-        };
-        if let Some(crop) = from.after_drag(
+    /// The crop box after moving `handle` by source pixels, under the aspect lock.
+    pub(super) fn crop_after(
+        &self,
+        from: CropRect,
+        handle: CropDragHandle,
+        dx: f64,
+        dy: f64,
+    ) -> Option<CropRect> {
+        let source = self.model.source.get()?;
+        from.after_drag(
             source.width,
             source.height,
             handle,
             dx,
             dy,
             self.model.locked.get(),
-        ) {
-            self.model.crop.set(crop);
-            self.sync_crop();
+        )
+    }
+
+    /// A drag on the preview or a handle nudge moved the crop box (source
+    /// pixels); false when the box stayed put.
+    pub(super) fn drag_crop(
+        &self,
+        from: CropRect,
+        handle: CropDragHandle,
+        dx: f64,
+        dy: f64,
+    ) -> bool {
+        match self.crop_after(from, handle, dx, dy) {
+            Some(crop) if crop != self.model.crop.get() => {
+                self.model.crop.set(crop);
+                self.sync_crop();
+                true
+            }
+            _ => false,
         }
     }
 
