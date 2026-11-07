@@ -170,9 +170,11 @@ impl Recording {
                     if index == BACK {
                         target.SetRoot(&visual)?;
                     } else if index != CARET {
+                        // With no reference, false inserts above all siblings:
+                        // controls must paint over the opaque footer band.
                         layers[BACK].visual.AddVisual(
                             &visual,
-                            true,
+                            false,
                             None::<&IDCompositionVisual>,
                         )?;
                     }
@@ -186,7 +188,7 @@ impl Recording {
             unsafe {
                 layers[BACK].visual.AddVisual(
                     &layers[CARET].visual,
-                    true,
+                    false,
                     None::<&IDCompositionVisual>,
                 )?;
             }
