@@ -782,7 +782,21 @@ the preview content is masked to the rounded panel before its border is drawn.
 Offscreen painting now also clips the play surface to its allocated bounds.
 Local clippy/build and 17 host tests pass. Wine renders were inspected but
 cannot validate the new mask: this Wine build stubs Direct2D PushLayer/PopLayer.
-Native visual acceptance and the reported slow playback teardown remain open.
+The real D2D/DComp gate then passed light/dark normal/minimum rounded corners,
+shadow allocation and focus, including 100% media against both bottom corners.
+Precise teardown checks measured 51–106 ms host exit without orphan decoders;
+the original multi-second measurements included harness query cost. Dark shadow
+banding remains a minor visual gap.
+
+Pass 19 also found 100% playback shrinking underneath the scroll position:
+the decoder caps frames at 1280×720, but the host used that texture size for
+display geometry. Layout, media bounds and scroll limits now use the accepted
+full-size still; decoded frames only replace the texture. A rendered-pixel
+regression reproduces the empty stage before the fix and preserves the expected
+bottom-right source pixels after a smaller playback frame and relayout.
+Temporary real-FFmpeg renders also preserve the 1920×1080 bounds before/after
+playback at maximum scroll in light/dark. Native size-fix acceptance, oversized
+GIF checks and cancel-after-playback coverage remain queued.
 
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with

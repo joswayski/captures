@@ -123,7 +123,9 @@ impl Recording {
         } else {
             title.y + title.h + self.t.n("s-6")
         };
-        let source = self.preview.frame.as_ref();
+        // Playback decodes at up to 1280×720. Its texture resolution must not
+        // change the accepted media's display size, scroll bounds or controls.
+        let source = self.presented.as_ref().map(|p| &p.frame);
         let media_h = source.map_or(160., |f| {
             if self.preview.actual {
                 f.height as f32
@@ -156,7 +158,7 @@ impl Recording {
     pub(super) fn preview_media(&self) -> Rect {
         let r = self.preview_view();
         let pad = self.t.n("s-5");
-        let Some(frame) = &self.preview.frame else {
+        let Some(frame) = self.presented.as_ref().map(|p| &p.frame) else {
             return Rect::default();
         };
         let scale = if self.preview.actual {
@@ -179,10 +181,9 @@ impl Recording {
         let r = self.preview_view();
         let pad = 2. * self.t.n("s-5");
         let (w, h) = self
-            .preview
-            .frame
+            .presented
             .as_ref()
-            .map_or((0., 0.), |f| (f.width as f32, f.height as f32));
+            .map_or((0., 0.), |p| (p.frame.width as f32, p.frame.height as f32));
         self.preview.scroll = if self.preview.actual {
             (
                 self.preview.scroll.0.clamp(0., (w + pad - r.w).max(0.)),
@@ -443,5 +444,135 @@ impl Recording {
             )?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lower_resolution_playback_keeps_scrolled_media_filling_the_viewport() {
+        use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
+        unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).ok().unwrap() };
+        let profile = std::env::temp_dir().join(format!(
+            "captures-playback-size-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let options = crate::parse(
+            ["captures", "--profile", profile.to_str().unwrap()]
+                .into_iter()
+                .map(str::to_owned),
+        )
+        .unwrap();
+        let t = Tokens::variant("light", "mustard");
+        let g = Gfx::new(&t, false).unwrap();
+        let mut w = Recording::new(HWND::default(), &options, "missing", g.clone(), t).unwrap();
+        // No decoder is needed: feed the same accepted-still/decoded-frame
+        // boundary as the worker, with known pixels at different resolutions.
+        let _ = w.worker.outcomes.recv().unwrap();
+        let fixture = |width, height| {
+            Arc::new(Frame::new(&RgbaImage::from_fn(width, height, |x, y| {
+                image::Rgba(if x >= width * 7 / 8 && y >= height * 7 / 8 {
+                    [37, 91, 153, 255]
+                } else {
+                    [173, 41, 88, 255]
+                })
+            })))
+        };
+        w.apply_outcome(Outcome::Opened(Ok(Presented {
+            mime_type: "video/mp4".into(),
+            dropped_frames: 0,
+            export: captures_media::ExportSpec {
+                format: captures_media::ExportFormat::Mp4,
+                quality: captures_media::QualityPreset::Preserve,
+                max_size_bytes: None,
+                frames_per_second: None,
+                gif_max_colors: None,
+            },
+            original: None,
+            defaults: ui::SaveDefaults {
+                directory: profile.to_string_lossy().into_owned(),
+                stem: "Recording".into(),
+            },
+            frame: fixture(1920, 1080),
+            duration_ms: 6000,
+        })));
+        (w.width, w.height) = (640., 480.);
+        w.layout().unwrap();
+        w.activate(Target::Actual);
+        w.preview.scroll = (f32::MAX, f32::MAX);
+        w.clamp_preview_scroll();
+        w.place_play();
+
+        let render_pixel = |w: &Recording| unsafe {
+            let properties = |bitmap_options| D2D1_BITMAP_PROPERTIES1 {
+                pixelFormat: D2D1_PIXEL_FORMAT {
+                    format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                    alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+                },
+                dpiX: 96.,
+                dpiY: 96.,
+                bitmapOptions: bitmap_options,
+                ..Default::default()
+            };
+            let size = D2D_SIZE_U {
+                width: 640,
+                height: 480,
+            };
+            let target =
+                g.dc.CreateBitmap(size, None, 0, &properties(D2D1_BITMAP_OPTIONS_TARGET))
+                    .unwrap();
+            g.dc.SetTarget(&target);
+            g.dc.BeginDraw();
+            w.paint(&g.dc).unwrap();
+            g.dc.EndDraw(None, None).unwrap();
+            g.dc.SetTarget(None);
+            let read =
+                g.dc.CreateBitmap(
+                    size,
+                    None,
+                    0,
+                    &properties(D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW),
+                )
+                .unwrap();
+            read.CopyFromBitmap(None, &target, None).unwrap();
+            let mapped = read.Map(D2D1_MAP_OPTIONS_READ).unwrap();
+            // Well inside the bottom-right media, away from rounded edges,
+            // padding and Play. This must stay media, not the empty stage.
+            let view = w.preview_view();
+            let x = (view.x + view.w - 30.) as usize;
+            let y = (view.y + view.h - 30.) as usize;
+            let pixel =
+                std::slice::from_raw_parts(mapped.bits.add(y * mapped.pitch as usize + x * 4), 4)
+                    .to_vec();
+            read.Unmap().unwrap();
+            pixel
+        };
+        assert_eq!(render_pixel(&w), [153, 91, 37, 255]);
+        w.preview.playing = true;
+        *w.worker.latest.lock().unwrap() = Some(worker::PlaybackFrame {
+            generation: w.preview.generation,
+            position_ms: 100,
+            frame: fixture(1280, 720),
+        });
+        w.take_preview_frame();
+        assert_eq!(
+            render_pixel(&w),
+            [153, 91, 37, 255],
+            "playback must not uncover the stage"
+        );
+        w.layout().unwrap();
+        assert_eq!(
+            render_pixel(&w),
+            [153, 91, 37, 255],
+            "relayout must preserve the same bottom-right source pixels"
+        );
+        drop(w);
+        std::fs::remove_dir_all(profile).unwrap();
     }
 }
