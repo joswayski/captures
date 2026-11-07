@@ -22,9 +22,9 @@ use crate::widgets::{Icon, Thumbnail, icon_button};
 mod pile;
 use pile::{Pile, PileCard};
 #[cfg(feature = "layer-shell")]
-mod layer_shell;
+pub(crate) mod layer_shell;
 #[cfg(feature = "x11")]
-mod x11;
+pub(crate) mod x11;
 
 pub const TITLE: &str = "Captures Previews";
 /// Shipping's eight-point radial threshold before a press on the collapsed

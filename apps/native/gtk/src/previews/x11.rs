@@ -2,8 +2,10 @@
 //! (`preview::thumbnail_geometry`) and, as Tauri's thumbnail window, stays
 //! above other windows on every workspace and out of the taskbar and pager.
 //! GTK4 has no move API, so the X window is configured directly. Wayland
-//! compositors place toplevels themselves.
+//! compositors place toplevels themselves. The tray notices reuse the
+//! placer to sit in the tray corner.
 use captures_app::preview::{self, ThumbnailMonitorBounds, ThumbnailStackOrigin};
+use captures_app::tray_notice::LogicalRect;
 use captures_settings::MiniPreviewPlacement;
 use gdk4_x11::{X11Display, X11Monitor, X11Surface};
 use gtk::prelude::*;
@@ -15,10 +17,11 @@ use std::rc::Rc;
 use x11rb::connection::Connection;
 use x11rb::protocol::Event;
 use x11rb::protocol::xproto::{
-    Atom, ChangeWindowAttributesAux, ClientMessageEvent, ConfigureWindowAux, ConnectionExt,
-    EventMask, Property,
+    Atom, AtomEnum, ChangeWindowAttributesAux, ClientMessageEvent, ConfigureWindowAux,
+    ConnectionExt, EventMask, PropMode, Property,
 };
 use x11rb::rust_connection::RustConnection;
+use x11rb::wrapper::ConnectionExt as _;
 
 pub struct Placer {
     connection: RustConnection,
@@ -168,6 +171,79 @@ impl Placer {
         let _ = self.connection.configure_window(xid(surface), &position);
         let _ = self.connection.flush();
         self.drain();
+    }
+
+    /// The pointer's monitor and its work area in logical pixels, for the
+    /// tray notices' shared placement.
+    pub fn areas(&self, surface: &X11Surface) -> Option<(LogicalRect, LogicalRect)> {
+        let bounds = self.bounds(surface, true)?;
+        let scale = bounds.scale_factor;
+        let rect = |x: i32, y: i32, width: u32, height: u32| {
+            LogicalRect::new(
+                f64::from(x) / scale,
+                f64::from(y) / scale,
+                f64::from(width) / scale,
+                f64::from(height) / scale,
+            )
+        };
+        Some((
+            rect(
+                bounds.full_x,
+                bounds.full_y,
+                bounds.full_width,
+                bounds.full_height,
+            ),
+            rect(
+                bounds.work_x,
+                bounds.work_y,
+                bounds.work_width,
+                bounds.work_height,
+            ),
+        ))
+    }
+
+    /// Move the window's top-left corner to logical `(x, y)`.
+    pub fn move_to(&self, surface: &X11Surface, x: f64, y: f64) {
+        let scale = f64::from(surface.scale_factor());
+        let device = |logical: f64| (logical * scale).round() as i32;
+        let position = ConfigureWindowAux::new().x(device(x)).y(device(y));
+        let _ = self.connection.configure_window(xid(surface), &position);
+        let _ = self.connection.flush();
+        self.drain();
+    }
+
+    /// A transient notification the window manager never manages (no
+    /// focus, frame or placement of its own), as the wgpu launch notice's
+    /// override-redirect `_NET_WM_WINDOW_TYPE_NOTIFICATION` window. Call
+    /// before the first map.
+    pub fn unmanaged_notification(&self, surface: &X11Surface) {
+        let attributes = ChangeWindowAttributesAux::new().override_redirect(1);
+        let _ = self
+            .connection
+            .change_window_attributes(xid(surface), &attributes);
+        let atom = |name: &[u8]| {
+            Some(
+                self.connection
+                    .intern_atom(false, name)
+                    .ok()?
+                    .reply()
+                    .ok()?
+                    .atom,
+            )
+        };
+        if let (Some(kind), Some(notification)) = (
+            atom(b"_NET_WM_WINDOW_TYPE"),
+            atom(b"_NET_WM_WINDOW_TYPE_NOTIFICATION"),
+        ) {
+            let _ = self.connection.change_property32(
+                PropMode::REPLACE,
+                xid(surface),
+                kind,
+                AtomEnum::ATOM,
+                &[notification],
+            );
+        }
+        let _ = self.connection.flush();
     }
 
     fn monitor(&self, surface: &X11Surface, follow_pointer: bool) -> Option<X11Monitor> {

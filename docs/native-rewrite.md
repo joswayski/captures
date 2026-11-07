@@ -1664,6 +1664,36 @@ review) on X11 and headless Sway 1.9, plus light and dark renders. OS
 exception reports and physical shutdown remain open. Windows, macOS:
 unchanged.
 
+GTK live-app mode, step 6: launch and update notices (`notices.rs`). A quiet
+launch into the tray shows shipping's launch notice for 5 s and finishing
+setup shows it for 15 s (`tray_notice` timings). Linux StatusNotifier hosts
+never report the icon's position (`should_retry_tray_rect` is false), so the
+notice is always the compact caretless glass rectangle at
+`fallback_tray_notice`'s tray corner: an override-redirect
+`_NET_WM_WINDOW_TYPE_NOTIFICATION` window on X11, an Overlay layer surface
+with the `layer-shell` feature, and compositor placement otherwise. On
+Wayland it names the tray route rather than keys, as the wgpu host. The
+update notice renders `update_notice::present` as shipping's solid
+`--surface-raised` card: shipping's four grid rows (compact cards share spare
+height, the notes take it otherwise), notes with pull requests as real
+buttons inline after the text, progress, restart, error with its download
+fallback, the close warning and footer. `--scene update --update NAME`
+drives it from the shared fixtures and stub; Hide/What's new persist
+`show_update_changelog`. Live update checks do not open it: with no GTK
+packaging there is no GTK Preview build. Compared with the Tauri harness
+(`?view=update&mock=1`, `?view=startup&mock=1&platform=linux`) at 2x in
+light and dark over the same page colour: card sizes match every state; the
+launch notice card is 1 px taller (text 1–2 px lower). The close warning
+follows shipping's `openCapturesUpdateWarning` through the shared
+`update_notice::open_captures_warning(installable)`: "Open captures reopen
+after the update. Screenshot drafts are kept." for an update the app
+installs, "Open captures will close. Unsaved edits are kept as drafts." for
+a manual download, in every host that renders the shared presenter (GTK,
+wgpu, AppKit; Win32 has no update notice yet). Verified: the smoke's
+`notices` step and the launch notice in its `live` and `setup` steps on X11
+and headless Sway 1.9.
+Windows, macOS: unchanged.
+
 ## Progress dashboard
 
 We are delivering stage 4 workflow slices and stage 5 editor slices.

@@ -122,3 +122,24 @@ pub fn origin(window: &gtk::ApplicationWindow) -> Option<(f64, f64)> {
     };
     Some((x, y))
 }
+
+/// A tray notice as an Overlay layer surface in the tray corner: anchored
+/// right and to the `top` or bottom edge, `margins` (right, vertical) from
+/// the compositor's usable area. Keyboard focus only when clicked. Must run
+/// before the window is realized; returns whether it did.
+pub fn notice(window: &impl IsA<gtk::Window>, top: bool, (right, vertical): (i32, i32)) -> bool {
+    let window = window.as_ref();
+    let wayland = WidgetExt::display(window).type_().name() == "GdkWaylandDisplay";
+    if !wayland || !gtk4_layer_shell::is_supported() {
+        return false;
+    }
+    window.init_layer_shell();
+    window.set_namespace(Some("captures-notice"));
+    window.set_layer(Layer::Overlay);
+    window.set_keyboard_mode(KeyboardMode::OnDemand);
+    window.set_anchor(Edge::Right, true);
+    window.set_anchor(if top { Edge::Top } else { Edge::Bottom }, true);
+    window.set_margin(Edge::Right, right);
+    window.set_margin(if top { Edge::Top } else { Edge::Bottom }, vertical);
+    true
+}

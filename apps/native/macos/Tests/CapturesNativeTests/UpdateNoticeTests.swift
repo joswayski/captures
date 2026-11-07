@@ -122,7 +122,7 @@ final class UpdateNoticeTests: XCTestCase {
 
         try model.load(fixture: "closing")
         XCTAssertEqual(try model.presentation().closeWarning,
-            "Open captures will close. Unsaved edits are kept as drafts.")
+            "Open captures reopen after the update. Screenshot drafts are kept.")
 
         try model.load(fixture: "restarting")
         p = try model.presentation()
