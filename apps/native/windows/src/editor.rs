@@ -5702,14 +5702,14 @@ fn draw_thumb(
     };
     let (ww, wh) = (well.right - well.left, well.bottom - well.top);
     let (tw, th) = (thumb.width as f32, thumb.height as f32);
-    let scale = if cover {
-        (ww / tw).max(wh / th)
+    let (dw, dh) = if cover {
+        let scale = (ww / tw).max(wh / th);
+        (tw * scale, th * scale)
     } else {
-        // Shipping AnnotationLayerPreview fits the whole annotation with
-        // previewTransformForBounds' 3 px padding. Only images use cover.
-        ((ww - 6.).max(1.) / tw).min((wh - 6.).max(1.) / th)
+        // The shared annotation canvas already contains its 3px inset.
+        // Like the CSS canvas, fill the well; do not fit/pad it a second time.
+        (ww, wh)
     };
-    let (dw, dh) = (tw * scale, th * scale);
     let x = well.left + (ww - dw) / 2.;
     let y = well.top + (wh - dh) / 2.;
     let factory = unsafe { dc.GetFactory()? };

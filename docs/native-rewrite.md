@@ -765,6 +765,24 @@ Windows follow-up remains open. macOS, X11 and Wayland are unchanged.
 Tauri's 1.35 CSS-pixel annotation stroke floor and preview opacity still need
 the separate shared-thumbnail slice; this host-only change does not add them.
 
+The shared annotation-thumbnail slice uses Tauri's 46×34 logical canvas at
+2x resolution, its 3 px containment inset and its 1.35 px minimum shape/path
+stroke. It computes bounds before widening the preview stroke, retains authored
+opacity, and never changes the document or export. Win32, AppKit and GTK fill
+the well with this already-padded canvas; image layers retain source opacity
+and cover fitting. Primitive geometry scales after path construction and text
+layout, avoiding full-document raster allocations for large annotations.
+Nine fixtures compared with the real Tauri annotation component in Chromium:
+thin line/arrow/path, 25% path, hidden 50% rectangle, thick ellipse, a 100,000 px
+rectangle, text and a rotated arrow. At 2x, line alpha coverage is 2.749 physical
+pixels versus Tauri's 2.753; low-opacity alpha maxima match at 64 and 128.
+Text raster edges differ by up to one physical pixel in these fixtures.
+Workspace Rust gates, npm check, wgpu compatibility and Windows-GNU build/clippy
+pass. Light/dark Win32 renders under Wine were inspected, but Wine's layer stubs
+cannot verify clipping or hidden-row alpha. Real Win32 and AppKit acceptance,
+plus GTK smoke and thumbnail inspection, remain required before merging this
+slice. X11/Wayland physical performance and accessibility remain unverified.
+
 Win32 recording editor slice 1 adds `--scene recording --artifact ID` and
 enables History's recording Edit action. The shared `RecordingEditorSession`
 lives on a worker with explicit FFmpeg/FFprobe overrides, Windows Tauri

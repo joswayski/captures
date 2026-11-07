@@ -1034,8 +1034,15 @@ impl EditorSession {
         let document = self.visible_document().clone();
         let assets = &self.assets;
         let fonts = &mut self.fonts;
-        self.thumbnails.refresh(&document, |document| {
-            render_frame(document, assets, fonts.as_mut())
+        self.thumbnails.refresh(&document, |document, scale| {
+            crate::editor_render::render_thumbnail_frame(
+                document,
+                assets,
+                fonts
+                    .as_mut()
+                    .map(|fonts| (&mut fonts.renderer, &fonts.assets.families)),
+                scale,
+            )
         });
     }
 

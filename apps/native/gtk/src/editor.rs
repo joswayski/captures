@@ -1013,12 +1013,16 @@ fn texture_of(pixels: &RgbaImage) -> gdk::Texture {
     .upcast()
 }
 
-/// `.screenshot-layer-preview img { object-fit: cover }` over the checkerboard.
-fn thumbnail_area(texture: gdk::Texture) -> SnapshotArea {
+/// Image layers cover the well; annotation canvases already include padding.
+fn thumbnail_area(texture: gdk::Texture, image: bool) -> SnapshotArea {
     let area = SnapshotArea::new(move |snapshot, width, height| {
         let (tw, th) = (texture.width() as f32, texture.height() as f32);
         let scale = (width / tw).max(height / th);
-        let (dw, dh) = (tw * scale, th * scale);
+        let (dw, dh) = if image {
+            (tw * scale, th * scale)
+        } else {
+            (width, height)
+        };
         snapshot.push_clip(&graphene::Rect::new(0., 0., width, height));
         snapshot.append_texture(
             &texture,
@@ -1611,7 +1615,7 @@ impl State {
             preview.set_valign(gtk::Align::Center);
             preview.set_overflow(gtk::Overflow::Hidden);
             match self.thumbnail_texture(&layer.id, layer.thumbnail.as_ref()) {
-                Some(texture) => preview.append(&thumbnail_area(texture)),
+                Some(texture) => preview.append(&thumbnail_area(texture, layer.kind == "Image")),
                 None => {
                     let icon = Icon::new(layer.icon, 16).with_stroke(1.7);
                     icon.set_vexpand(true);
