@@ -630,9 +630,9 @@ impl RecordingEditorSession {
             .map_err(|error| error.to_string())
     }
 
-    /// Play the uncropped source under an editor crop overlay. Retain accepted
-    /// trim and audio, but omit visual crop, resize and export effects. The
-    /// saved edit, retained preview, position and revision remain unchanged.
+    /// Play the source in its original geometry, as in the shipping editor.
+    /// Retain accepted trim and audio, but omit visual crop, resize and export
+    /// effects. The saved edit, preview, position and revision remain unchanged.
     pub fn looping_source_playback(
         &self,
         position_ms: u64,

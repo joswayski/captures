@@ -54,6 +54,14 @@ pub fn css(t: &Tokens) -> String {
             "card-tracking" => tracking("tracking-tight", "text-lg"),
             "sm-tracking" => tracking("tracking-tight", "text-sm"),
             "eyebrow-tracking" => tracking("tracking-wide", "text-2xs"),
+            "xs-wide-tracking" => tracking("tracking-wide", "text-xs"),
+            // `filter: drop-shadow(…)` tokens, as a `box-shadow`.
+            name if name.starts_with("tooltip-shadow") => t
+                .raw(name)?
+                .trim()
+                .strip_prefix("drop-shadow(")?
+                .strip_suffix(')')?
+                .to_owned(),
             "image-hover" => {
                 mix(t.rgba("surface-sunken"), t.rgba("theme-accent"), 0.12).to_string()
             }

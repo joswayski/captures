@@ -20,8 +20,16 @@ const WARNING_HEIGHT: f64 = 56.0;
 const STATUS_HEIGHT: f64 = 56.0;
 const ERROR_HEIGHT: f64 = 96.0;
 
-pub const OPEN_CAPTURES_WARNING: &str =
-    "Open captures will close. Unsaved edits are kept as drafts.";
+/// Shipping `openCapturesUpdateWarning`, shown when the update closes open
+/// captures: an update the app installs itself reopens them, while a manual
+/// download leaves them closed with their drafts.
+pub fn open_captures_warning(installable: bool) -> &'static str {
+    if installable {
+        "Open captures reopen after the update. Screenshot drafts are kept."
+    } else {
+        "Open captures will close. Unsaved edits are kept as drafts."
+    }
+}
 pub const DOWNLOAD_PAGE_URL: &str = "https://captur.es/#download";
 const CAPTURES_GITHUB_OWNER: &str = "joswayski";
 const CAPTURES_GITHUB_REPO: &str = "captures";
@@ -824,8 +832,9 @@ pub fn present(status: Option<&UpdateStatus>, view: &ViewState) -> Presentation 
     let close_warning = match status {
         Some(S::Available {
             will_close_open_captures: true,
+            installable,
             ..
-        }) if error.is_none() => Some(OPEN_CAPTURES_WARNING.to_owned()),
+        }) if error.is_none() => Some(open_captures_warning(*installable).to_owned()),
         _ => None,
     };
 
@@ -1357,7 +1366,10 @@ mod tests {
         let p = present(Some(&status), &view(false));
         assert!(p.notes.is_none());
         assert_eq!(p.reveal_notes.unwrap().action, Action::ShowNotes);
-        assert_eq!(p.close_warning.as_deref(), Some(OPEN_CAPTURES_WARNING));
+        assert_eq!(
+            p.close_warning.as_deref(),
+            Some("Open captures reopen after the update. Screenshot drafts are kept.")
+        );
         assert_eq!(p.card_height, 168.0 + 56.0);
         let shown = present(Some(&status), &view(true));
         assert_eq!(shown.card_height, 480.0);
@@ -1371,6 +1383,23 @@ mod tests {
             manual.footer.unwrap().primary.unwrap().label,
             "View release"
         );
+    }
+
+    #[test]
+    fn a_manual_update_warns_that_open_captures_close() {
+        let status = available_fixture(false, true, false);
+        let p = present(Some(&status), &view(true));
+        assert_eq!(p.footer.unwrap().primary.unwrap().label, "View release");
+        assert_eq!(
+            p.close_warning.as_deref(),
+            Some("Open captures will close. Unsaved edits are kept as drafts.")
+        );
+        // Shipping hides it while an action error shows.
+        let failed = ViewState {
+            action_error: Some("GitHub is unavailable".into()),
+            ..view(true)
+        };
+        assert!(present(Some(&status), &failed).close_warning.is_none());
     }
 
     #[test]

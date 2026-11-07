@@ -213,7 +213,9 @@ mute and mono. Crop supports source-pixel numeric fields, aspect locking, eight
 resize handles and interior dragging over the full source preview, with keyboard
 and accessibility ranges. Recording comparison, format switching and the remaining
 save-quality options are still migration work; these slices are not recording-editor
-parity, and the new output and crop controls still await physical Windows acceptance.
+parity. Output controls passed the physical Windows gate; the follow-up source-preview
+correction and crop controls still await testing. Like Tauri, the preview keeps the original source's
+size and picture while output settings affect the saved file, not the page layout.
 
 The native capture workspace connects full-display
 PNG capture, local screenshot history, copy, export, and deletion to

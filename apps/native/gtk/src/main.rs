@@ -7,6 +7,7 @@ mod editor;
 mod feedback;
 mod history;
 mod live;
+mod notices;
 mod onboarding;
 mod preferences;
 mod previews;
@@ -27,7 +28,8 @@ use std::time::{Duration, Instant};
 use gtk::prelude::*;
 use gtk::{gio, glib, graphene};
 
-const USAGE: &str = "captures-gtk [--scene preferences|history|editor|recording|preview|feedback|setup] [--artifact ID] [--appearance light|dark]\n\
+const USAGE: &str = "captures-gtk [--scene preferences|history|editor|recording|preview|feedback|setup|update|startup] [--artifact ID] [--appearance light|dark]\n\
+  [--update available|single|closing|manual|downloading|restarting|error|checking|up-to-date]\n\
   [--settings-file PATH] [--history-root PATH] [--size WxH] [--feedback-endpoint URL]\n\
   [--screenshot OUT.png] [--find QUERY] [--count N] [--exercise] [--quit-after SECONDS]\n\
   [--open-media PATH]... [-- FILE...]\n\
@@ -42,6 +44,10 @@ enum Scene {
     Preview,
     Feedback,
     Setup,
+    /// The update notice on a shared `update_notice::fixture` status.
+    Update,
+    /// The launch notice.
+    Startup,
 }
 
 impl Scene {
@@ -54,6 +60,8 @@ impl Scene {
             Scene::Preview => "preview",
             Scene::Feedback => "feedback",
             Scene::Setup => "setup",
+            Scene::Update => "update",
+            Scene::Startup => "startup",
         }
     }
 }
@@ -85,6 +93,8 @@ struct Options {
     quiet: bool,
     /// `--capture display`: take a screenshot once the live app is ready.
     capture: bool,
+    /// `--update NAME`: the fixture status `--scene update` shows.
+    update: String,
 }
 
 fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
@@ -107,6 +117,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
         live: false,
         quiet: false,
         capture: false,
+        update: "available".into(),
     };
     let mut args = args.skip(1);
     while let Some(flag) = args.next() {
@@ -122,10 +133,19 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
                     "preview" => Scene::Preview,
                     "feedback" => Scene::Feedback,
                     "setup" => Scene::Setup,
+                    "update" => Scene::Update,
+                    "startup" => Scene::Startup,
                     other => return Err(format!("unsupported scene {other}")),
                 }
             }
             "--artifact" => options.artifact = Some(value()?),
+            "--update" => {
+                let name = value()?;
+                if !captures_app::update_notice::FIXTURES.contains(&name.as_str()) {
+                    return Err(format!("unknown update fixture {name}"));
+                }
+                options.update = name;
+            }
             "--appearance" => options.appearance = Some(value()?),
             "--settings-file" => {
                 options.settings_given = true;
@@ -233,6 +253,8 @@ struct Host {
     tray: RefCell<Option<tray::Tray>>,
     /// The live app's local crash diagnostics (`captures_app::crash`).
     crash: RefCell<Option<std::sync::Arc<captures_app::crash::Session>>>,
+    /// The launch notice, while shown.
+    startup_notice: RefCell<Option<gtk::ApplicationWindow>>,
 }
 
 impl Host {
@@ -319,11 +341,24 @@ impl Host {
             window.present();
             return window.clone();
         }
+        // Finishing setup in the live app shows the launch notice for 15 s.
+        let finished = {
+            let host = Rc::downgrade(self);
+            move || {
+                if let Some(host) = host.upgrade()
+                    && host.instance.borrow().is_some()
+                {
+                    host.show_startup_notice(
+                        captures_app::tray_notice::STARTUP_NOTICE_AFTER_SETUP_VISIBLE,
+                    );
+                }
+            }
+        };
         let window = onboarding::build(
             &self.app,
             &self.tokens.borrow(),
             self.settings_file.clone(),
-            || {},
+            finished,
         );
         let host = Rc::downgrade(self);
         window.connect_close_request(move |_| {
@@ -334,6 +369,34 @@ impl Host {
         });
         *self.setup.borrow_mut() = Some(window.clone());
         window.present();
+        window
+    }
+
+    /// Shipping's launch notice for `visible_for`; a later one replaces it.
+    fn show_startup_notice(self: &Rc<Self>, visible_for: Duration) -> gtk::ApplicationWindow {
+        if let Some(previous) = self.startup_notice.borrow_mut().take() {
+            previous.close();
+        }
+        let settings = captures_settings::load(&self.settings_file).unwrap_or_default();
+        let keys = notices::startup_keys(&settings, capture::wayland(self));
+        let window = notices::startup(&self.app, &keys, visible_for);
+        let host = Rc::downgrade(self);
+        window.connect_close_request(move |window| {
+            if let Some(host) = host.upgrade() {
+                let mut slot = host.startup_notice.borrow_mut();
+                if slot.as_ref() == Some(window) {
+                    slot.take();
+                }
+            }
+            glib::Propagation::Proceed
+        });
+        *self.startup_notice.borrow_mut() = Some(window.clone());
+        window.present();
+        emit(
+            "startup-notice",
+            serde_json::json!({"keys": keys, "visibleMs": visible_for.as_millis() as u64,
+            "caret": "none"}),
+        );
         window
     }
 
@@ -747,6 +810,7 @@ fn main() -> glib::ExitCode {
             capture: RefCell::default(),
             tray: RefCell::default(),
             crash: RefCell::default(),
+            startup_notice: RefCell::default(),
         });
         hosts.borrow_mut().push(host.clone());
         let weak = Rc::downgrade(&host);
@@ -794,6 +858,19 @@ fn main() -> glib::ExitCode {
             Scene::Preferences => host.show_preferences(),
             Scene::Feedback => host.show_feedback(),
             Scene::Setup => host.show_setup(),
+            Scene::Update => {
+                let notice = notices::update(app, host.settings_file.clone(), &options.update);
+                notice.window.present();
+                let window = notice.window.clone();
+                // The notice lives as long as its window.
+                let keep = RefCell::new(Some(notice));
+                window.connect_destroy(move |_| {
+                    keep.borrow_mut().take();
+                });
+                window
+            }
+            Scene::Startup => host
+                .show_startup_notice(captures_app::tray_notice::STARTUP_NOTICE_AFTER_SETUP_VISIBLE),
             Scene::History => host.show_history().window.clone(),
             Scene::Editor => {
                 let id = options.artifact.clone().expect("checked in parse");
@@ -932,7 +1009,7 @@ fn exercise(host: &Rc<Host>, scene: Scene, started: Instant) {
                     }
                 }
                 // Static forms: nothing to exercise.
-                Scene::Feedback | Scene::Setup => {}
+                Scene::Feedback | Scene::Setup | Scene::Update | Scene::Startup => {}
             }
             emit(
                 "scripted-action",

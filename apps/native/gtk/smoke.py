@@ -1261,9 +1261,30 @@ def live(binary, scratch):
                                     "--captures-autostart"], env=env, stdout=stream)
     try:
         ready = wait(lambda: [e for e in events() if e["event"] == "ready"], "live readiness")[0]
-        assert ready["windows"] == 0, events()
+        # A quiet launch into the tray shows only shipping's 5 s launch
+        # notice: caretless (no tray geometry), with the New Capture keys on
+        # X11 and the tray route on Wayland, where the portal owns the keys.
+        assert ready["windows"] == 1, events()
         assert {"event": "launch", "action": "StartupNotice", "crashReview": False} in events(), \
             events()
+        shown = [e for e in events() if e["event"] == "startup-notice"]
+        assert shown and (shown[0]["visibleMs"], shown[0]["caret"]) == (5000, "none"), events()
+        wayland = isinstance(DESKTOP, Wayland)
+        assert shown[0]["keys"] == ([] if wayland else ["Ctrl", "Shift", "F10"]), shown
+        app = wait(lambda: application(process.pid), "the app on the accessibility bus")
+        # The status card named for its title, or unnamed on GTK 4.14, which
+        # drops a status node's label and labelled-by; either way it holds
+        # the title.
+        title = "Captures is ready to use"
+        card = wait(lambda: [n for n, (role, name) in nodes(app)
+                             if role in ("status", "status bar") and name in (title, "")
+                             and [c for c, (_, text) in nodes(n) if text == title]],
+                    "the launch notice")[0]
+        hint = "Open History from the tray menu" if wayland else "Open New Capture with"
+        assert [n for n, (_, name) in nodes(card) if node_text(n, name) == hint], hint
+        press(find(card, "push button", "Close")[0])
+        wait(lambda: {"event": "startup-notice-closed", "by": "close"} in events(),
+             "Close to dismiss the launch notice")
         forward()
         preferences = DESKTOP.window("Preferences$", process.pid)
         wait(lambda: any(e["event"] == "instance-relaunch" for e in events()), "the relaunch")
@@ -1284,8 +1305,8 @@ def live(binary, scratch):
                                  capture_output=True, text=True, timeout=20)
         assert restart.returncode == 0, restart.stderr
         assert '"event":"ready"' in restart.stdout, restart.stdout
-        print("live: quiet launch windowless; relaunch, close and a forwarded PNG handled; "
-              "SIGTERM released the profile")
+        print("live: quiet launch showed only the launch notice; relaunch, close and a "
+              "forwarded PNG handled; SIGTERM released the profile")
     finally:
         if process.poll() is None:
             process.kill()
@@ -1512,7 +1533,10 @@ def tray(binary, scratch):
         enabled = [label for _, label, on in rows if on and label != "-"]
         assert enabled == ["Screenshot Display", "Capture History…", "Open Save Location",
                            "Preferences", "Send Feedback…", "Quit Captures"], enabled
-        assert DESKTOP.visible(process.pid) == [], "the quiet launch opened a window"
+        # The quiet launch shows only the launch notice, which leaves by itself.
+        wait(lambda: {"event": "startup-notice-closed", "by": "timeout"} in events(),
+             "the launch notice to expire", timeout=12)
+        assert DESKTOP.visible(process.pid) == [], "the quiet launch left a window open"
         click("Capture History…")
         DESKTOP.window("^Capture History$", process.pid)
         if not isinstance(DESKTOP, Wayland):
@@ -1564,11 +1588,14 @@ def setup(binary, scratch):
         assert json.loads(settings.read_text())["onboarding_completed"] is True
         registered = wait(lambda: events("shortcuts"), "shortcuts after setup")[0]
         assert registered["ok"], registered
+        # Finishing setup shows the launch notice for 15 s, as shipping.
+        notice = wait(lambda: events("startup-notice"), "the launch notice after setup")[0]
+        assert notice["visibleMs"] == 15000, notice
         wait(lambda: not [n for n, (_, name) in nodes(app) if name == "Captures"],
              "the setup window to close")
         assert process.poll() is None, "finishing setup quit the app"
-        print("setup: a fresh profile opened setup; Start capturing saved it and enabled "
-              "shortcuts")
+        print("setup: a fresh profile opened setup; Start capturing saved it, enabled "
+              "shortcuts and showed the 15 s launch notice")
     finally:
         process.terminate()
         process.wait(timeout=10)
@@ -1676,6 +1703,60 @@ def recording(binary, scratch):
         process.wait(timeout=10)
 
 
+def notices(binary, scratch):
+    """The update notice on shipping's fixtures over AT-SPI: Hide persists
+    `show_update_changelog` and What's new restores the notes; Update now
+    downloads, reaches the restart state and closes (the shared stub never
+    installs anything); an error's Close dismisses it."""
+    settings = scratch / "notice-settings.json"
+    settings.write_text(json.dumps({
+        "settings_schema_version": 5, "onboarding_completed": True, "appearance": "light",
+        "output_directory": str(scratch / "notice-exports"), "region_shortcut": "Ctrl+Shift+F7",
+        "window_shortcut": "Ctrl+Shift+F8", "display_shortcut": "Ctrl+Shift+F9",
+        "launch_at_login": False, "show_mini_previews": False, "auto_copy_to_clipboard": False,
+        "show_update_changelog": True}))
+    process = launch(binary, "--scene", "update", "--update", "available",
+                     "--settings-file", str(settings))
+    try:
+        app = wait(lambda: application(process.pid), "the app on the accessibility bus")
+        dialog = wait(lambda: find(app, "dialog", "Update available"), "the update notice")[0]
+        assert_accessible(dialog, "update notice")
+        # Pull requests are real buttons inside the note text.
+        wait(lambda: find(dialog, "push button", "Open pull request 265"),
+             "the pull request button in the notes")
+        press(wait(lambda: find(app, "push button", "Hide"), "Hide")[0])
+        reveal = wait(lambda: find(app, "push button", "What’s new"), "What's new")[0]
+        assert json.loads(settings.read_text())["show_update_changelog"] is False
+        press(reveal)
+        wait(lambda: find(app, "push button", "Hide"), "the notes to return")
+        assert json.loads(settings.read_text())["show_update_changelog"] is True
+        press(find(app, "push button", "Update now")[0])
+        wait(lambda: [n for n, (role, _) in nodes(app) if role == "progress bar"],
+             "download progress")
+        wait(lambda: find(app, "dialog", "Updated"), "the restart state", timeout=15)
+        assert process.wait(timeout=10) == 0, "the notice did not close after the restart"
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            process.wait(timeout=10)
+    process = launch(binary, "--scene", "update", "--update", "error",
+                     "--settings-file", str(settings))
+    try:
+        app = wait(lambda: application(process.pid), "the app on the accessibility bus")
+        dialog = wait(lambda: find(app, "dialog", "Update failed"), "the error notice")[0]
+        assert_accessible(dialog, "update error notice")
+        assert [n for n, (role, _) in nodes(dialog) if role == "alert"], "no error alert"
+        assert find(dialog, "push button", "download from captur.es"), "no download fallback"
+        assert find(dialog, "push button", "Try again"), "no Try again"
+        press(find(dialog, "push button", "Close")[0])
+        assert process.wait(timeout=10) == 0, "Close did not dismiss the notice"
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            process.wait(timeout=10)
+    print("notices: update notice notes, download, restart and dismissal over AT-SPI")
+
+
 def crash_review(binary, scratch):
     """Crash diagnostics: a live app killed without its clean exit opens
     Send Feedback with the local review on the next visible launch. Add to
@@ -1750,7 +1831,7 @@ def crash_review(binary, scratch):
 
 STEPS = [history, preferences, editor, editor_close_keeps_open_text, recording,
          recording_output, previews, preview_overflow, feedback, open_with, live, capture, tray,
-         shortcuts, setup, crash_review]
+         shortcuts, setup, crash_review, notices]
 FIXTURE_LOG = None
 
 

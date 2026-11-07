@@ -29,10 +29,14 @@ maximum width and quality presets (64/96/128/256 palette colors), plus separate
 pixels. Valid edits debounce for 250 ms; invalid drafts stay local until blur.
 Save waits for the accepted preview settings, and failed previews restore those
 settings. Numeric fields expose UIA Value, menus ExpandCollapse/SelectionItem,
-volumes RangeValue and audio checkboxes Toggle. Physical Windows acceptance for
-these output controls is pending; Wine tests and offscreen renders are not that gate.
-Graphical/numeric crop, comparison, format switching and MP4 quality/size-budget
-controls remain migration work.
+volumes RangeValue and audio checkboxes Toggle. Output controls passed physical
+pass 25; the source-preview correction awaits its focused retest. The preview
+retains source geometry independently of the export dimensions.
+Graphical crop has eight handles and interior movement; numeric source-pixel
+bounds, aspect lock, keyboard movement and UIA ranges share the crop geometry.
+Crop still awaits physical acceptance; Wine tests and offscreen renders are not
+that gate. Comparison, format switching and MP4 quality/size-budget controls
+remain migration work.
 This slice preserves the source's MP4/GIF format; WebM saves report unsupported.
 The filename exposes UIA Value, the copy switch
 and preview modes expose Toggle, and actions Invoke. Timeline/playback passed

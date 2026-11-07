@@ -54,6 +54,24 @@ impl Presented {
             full_source: false,
         }
     }
+
+    fn source(
+        session: &RecordingEditorSession,
+        directory: &Path,
+        output: &Values,
+        cache: &mut Option<(u64, Arc<Frame>)>,
+        cancel: &CancelToken,
+    ) -> Result<Self, String> {
+        let mut presented = Self::of(session, directory, output);
+        let position = presented.position_ms;
+        if cache.as_ref().is_none_or(|(at, _)| *at != position) {
+            let frame = session.source_frame(cancel)?;
+            *cache = Some((position, Arc::new(Frame::new(&frame))));
+        }
+        presented.frame = cache.as_ref().expect("source frame").1.clone();
+        presented.full_source = true;
+        Ok(presented)
+    }
 }
 
 pub(super) struct PreviewRequest {
@@ -185,6 +203,7 @@ impl Worker {
                     sent
                 };
                 let mut output = Values::new(2, 2, &settings);
+                let mut source_frame = None;
                 let mut session = match RecordingEditorSession::open(
                     RecordingEditorOpenRequest {
                         history_root: root,
@@ -219,9 +238,13 @@ impl Worker {
                     Ok(session)
                 }) {
                     Ok(session) => {
-                        send(Outcome::Opened(Ok(Presented::of(
-                            &session, &directory, &output,
-                        ))));
+                        send(Outcome::Opened(Presented::source(
+                            &session,
+                            &directory,
+                            &output,
+                            &mut source_frame,
+                            &source_decode,
+                        )));
                         Some(session)
                     }
                     Err(error) => {
@@ -229,7 +252,6 @@ impl Worker {
                         None
                     }
                 };
-                let mut source_frame: Option<(u64, Arc<Frame>)> = None;
                 while let Ok(job) = inbox.recv() {
                     let outcome = match job {
                         Job::Close => break,
@@ -250,29 +272,18 @@ impl Worker {
                             if result.is_ok() {
                                 output = request.output;
                             }
-                            let mut presented = Presented::of(session, &directory, &output);
                             let mut error = result.err();
-                            if output.crop_on {
-                                let position = presented.position_ms;
-                                if source_frame.as_ref().is_none_or(|(at, _)| *at != position) {
-                                    match session.source_frame(&source_decode) {
-                                        Ok(frame) => {
-                                            source_frame =
-                                                Some((position, Arc::new(Frame::new(&frame))))
-                                        }
-                                        Err(message) => {
-                                            error =
-                                                Some(format!("Crop preview unavailable: {message}"))
-                                        }
-                                    }
-                                }
-                                if let Some((at, frame)) = &source_frame
-                                    && *at == position
-                                {
-                                    presented.frame = frame.clone();
-                                    presented.full_source = true;
-                                }
-                            }
+                            let presented = Presented::source(
+                                session,
+                                &directory,
+                                &output,
+                                &mut source_frame,
+                                &source_decode,
+                            )
+                            .unwrap_or_else(|message| {
+                                error = Some(format!("Source preview unavailable: {message}"));
+                                Presented::of(session, &directory, &output)
+                            });
                             Outcome::Preview(request.generation, Box::new(presented), error)
                         }
                         Job::Thumbnails(cancel) => {
@@ -297,21 +308,12 @@ impl Worker {
                                 continue;
                             };
                             let result = (|| {
-                                let mut playback = if output.crop_on {
-                                    session.looping_source_playback(
-                                        position_ms,
-                                        true,
-                                        loop_flag.clone(),
-                                        &cancel,
-                                    )
-                                } else {
-                                    session.looping_playback(
-                                        position_ms,
-                                        true,
-                                        loop_flag.clone(),
-                                        &cancel,
-                                    )
-                                }?;
+                                let mut playback = session.looping_source_playback(
+                                    position_ms,
+                                    true,
+                                    loop_flag.clone(),
+                                    &cancel,
+                                )?;
                                 while let Some(frame) = playback.next_frame()? {
                                     if cancel.is_cancelled() {
                                         break;
@@ -424,8 +426,8 @@ impl Worker {
     }
 
     pub fn close(&mut self) {
-        self.pending_preview.lock().expect("preview mailbox").take();
         self.source_cancel.cancel();
+        self.pending_preview.lock().expect("preview mailbox").take();
         if let Some(cancel) = self.thumbnail_cancel.take() {
             cancel.cancel();
         }

@@ -134,8 +134,11 @@ pub fn start(host: &Rc<Host>, instance: Instance, quiet: bool, opening_files: bo
         Some(InteractiveLaunch::StartupNotice) if tray_missing => {
             host.show_preferences();
         }
-        // The launch notice is a later slice; stay in the tray.
-        Some(InteractiveLaunch::StartupNotice) | None => {}
+        // A quiet launch into the tray says so for 5 s.
+        Some(InteractiveLaunch::StartupNotice) => {
+            host.show_startup_notice(captures_app::tray_notice::STARTUP_NOTICE_AUTOSTART_VISIBLE);
+        }
+        None => {}
     }
 }
 
