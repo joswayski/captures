@@ -936,6 +936,46 @@ AppKit, X11 and Wayland hosts are unchanged and not reverified by this slice;
 they already have timeline editing. No shared API, release or workflow change,
 and no native promotion.
 
+Win32 recording slice 4 adds output-resolution presets/custom dimensions,
+GIF FPS/maximum width and quality-based palette limits, and source-aware audio
+volumes, mute and mono. It uses `recording_editor_ui` choices and shared numeric,
+range and select semantics. Presets constrain height without upscaling; custom
+dimensions round to even pixels before applying GIF's width cap. Menus retain
+trigger focus, scroll and expose UIA selection; numbers expose Value, volumes
+RangeValue and checkboxes Toggle. Edits debounce 250 ms, pause playback and
+coalesce with timeline requests. The worker returns accepted output settings
+even on failure so controls and saves cannot diverge. Replacement resets the
+output controls and accepts GIF defaults before another save.
+Local real-worker Wine exports verified portrait 1200×1600 to 810×1080/540×720,
+custom 641×359 to 640×358, 8/30 FPS GIFs with 64/256-color limits, width caps,
+mono/stereo and removing audio when both tracks are muted. Independent 440/880 Hz
+analysis measured a 4.3474 ratio for 37%/161% volumes (expected 4.3514); mic-only
+suppressed the system tone. Missing-source preview failure restored accepted
+controls and succeeded after restoring the disposable source. Normal/minimum
+light/dark Direct2D renders, custom fields, menus and muted audio were inspected.
+Physical Windows pass25 accepted f0333327: presets/no-upscale/custom even rounding,
+GIF FPS/width/palette exports, source-aware audio/mute/mono (independent 440/880 Hz
+peaks match 50%/150% and 200% gains), UIA, real-pointer controls, menus, focus reveal
+and minimum-size light/dark layout. Playback pauses during pending edits and resumes;
+paused edits stay paused. Save failure/retry and GIF replacement/copy pass. A 2-pixel
+H.264 export reports the shared encoder failure with no partial file; valid dimensions
+retry successfully. Replacement correctly makes the replaced GIF the new source.
+The full pass25 clip and minimum-size sheet were inspected.
+
+Pass25 also exposed a Tauri difference: an extremely thin custom output shrank the
+preview and moved every following card. The follow-up keeps stage geometry and
+paused/playback pictures source-relative, retaining accepted trim/audio but ignoring
+visual export settings until save. Source stills are cached at the accepted time;
+close cancels decoding and replacement clears the cache. The regression fails before
+the geometry fix. A removed real-worker probe retained the same source image after
+1282×2 output, played source-aspect MP4/GIF frames and still exported both at 334×188.
+Light/dark normal/minimum renders were inspected. This follow-up needs a focused
+PC geometry/playback/audio retest; Wine has no playback device and cannot create
+the DirectComposition window. AppKit, X11 and Wayland hosts are unchanged and not
+reverified; the immutable source-playback API is covered by shared Linux tests.
+Crop, comparison, format switching and remaining save-quality controls stay open.
+No native promotion or release/workflow changes.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,

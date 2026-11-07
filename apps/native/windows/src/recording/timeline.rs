@@ -101,6 +101,10 @@ impl Recording {
         let mut edit = p.edit.clone();
         edit.trim_start_ms = self.timeline.start;
         edit.trim_end_ms = Some(self.timeline.end);
+        let (edit, export) = self
+            .output
+            .values
+            .specs(p.width, p.height, edit, p.export.clone());
         // Trim end may equal duration; a preview frame must be inside the
         // source's final presentation interval, as in the AppKit host.
         let position_ms = position_ms.min(p.duration_ms.saturating_sub(1));
@@ -109,10 +113,18 @@ impl Recording {
         self.preview.position_ms = position_ms;
         self.timeline.generation += 1;
         self.timeline.pending = true;
+        self.output.due = None;
+        if !self.hwnd.is_invalid() {
+            unsafe {
+                let _ = KillTimer(Some(self.hwnd), OUTPUT_TIMER);
+            }
+        }
         self.worker.preview(worker::PreviewRequest {
             generation: self.timeline.generation,
             edit,
             position_ms,
+            export,
+            output: self.output.values.clone(),
         });
         self.dirty[TIMELINE] = true;
         self.refresh_footer();

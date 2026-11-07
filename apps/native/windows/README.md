@@ -21,12 +21,23 @@ audio and Loop preview, and autoplays GIFs without video-only controls.
 Fit contains the media; 100% maps source pixels to DIPs and scrolls with the
 wheel (Shift+wheel horizontally). The media worker retains only its newest
 frame while the UI is busy; pause/restart generations discard stale frames.
-Trim and format/quality/audio-mix/crop controls, preview scrollbars and the
-full scrollable editor layout are not connected yet.
+The scrollable page has a source-relative thumbnail timeline with draggable
+trim handles, keyboard steps and UIA RangeValue. Output cards use the shared
+recording-editor menus: original/1080p/720p/custom dimensions, GIF frame rate,
+maximum width and quality presets (64/96/128/256 palette colors), plus separate
+0–200% source-audio volumes, mute and mono. Custom dimensions export as even
+pixels. Valid edits debounce for 250 ms; invalid drafts stay local until blur.
+Save waits for the accepted preview settings, and failed previews restore those
+settings. Numeric fields expose UIA Value, menus ExpandCollapse/SelectionItem,
+volumes RangeValue and audio checkboxes Toggle. Output controls passed physical
+pass 25; pass 26 accepted source-sized preview and playback independent of export
+dimensions, including stable custom-field steppers and retained audio edits.
+Graphical/numeric crop, comparison, format switching and MP4 quality/size-budget
+controls remain migration work.
 This slice preserves the source's MP4/GIF format; WebM saves report unsupported.
 The filename exposes UIA Value, the copy switch
-and preview modes expose Toggle, and actions Invoke; Narrator/Text-pattern
-and physical playback/audio acceptance remain open.
+and preview modes expose Toggle, and actions Invoke. Timeline/playback passed
+physical pass 24; Narrator/Text-pattern and recording-editor parity remain open.
 
 ```powershell
 node apps/native/prepare.mjs --output apps/native/windows/resources

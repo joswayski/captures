@@ -207,8 +207,13 @@ The Win32 workbench can open recordings from History, preview video and GIFs,
 switch between Fit and 100%, scrub and trim a thumbnail timeline, and save copies
 or replace the original with cancellation and Show in Folder. The timeline supports
 pointer/keyboard input and accessibility ranges.
-Output options and recording crop remain migration work; these slices are not
-recording-editor parity.
+Output controls include original/1080p/720p/custom dimensions, GIF frame rate,
+maximum width and quality-based palette limits, and separate source-audio volumes,
+mute and mono. Recording crop, comparison, format switching and the remaining
+save-quality options are still migration work; these slices are not recording-editor
+parity. Output controls and their source-preview correction passed physical Windows
+testing. Like Tauri, the preview keeps the original source's
+size and picture while output settings affect the saved file, not the page layout.
 
 The native capture workspace connects full-display
 PNG capture, local screenshot history, copy, export, and deletion to

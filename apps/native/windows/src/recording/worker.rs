@@ -16,6 +16,7 @@ use captures_media::{
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
 
+use super::output::Values;
 use super::preview::Frame;
 
 pub(super) struct Presented {
@@ -28,10 +29,13 @@ pub(super) struct Presented {
     pub duration_ms: u64,
     pub edit: EditSpec,
     pub position_ms: u64,
+    pub width: u32,
+    pub height: u32,
+    pub output: Values,
 }
 
 impl Presented {
-    fn of(session: &RecordingEditorSession, directory: &Path) -> Self {
+    fn of(session: &RecordingEditorSession, directory: &Path, output: &Values) -> Self {
         let snapshot = session.snapshot_v2();
         Self {
             mime_type: snapshot.editor.source.mime_type.clone(),
@@ -43,7 +47,27 @@ impl Presented {
             duration_ms: snapshot.editor.source.duration_ms.unwrap_or(0),
             edit: snapshot.editor.edit.clone(),
             position_ms: snapshot.editor.position_ms,
+            width: snapshot.editor.source.width,
+            height: snapshot.editor.source.height,
+            output: output.clone(),
         }
+    }
+
+    fn source(
+        session: &RecordingEditorSession,
+        directory: &Path,
+        output: &Values,
+        cache: &mut Option<(u64, Arc<Frame>)>,
+        cancel: &CancelToken,
+    ) -> Result<Self, String> {
+        let mut presented = Self::of(session, directory, output);
+        let position = presented.position_ms;
+        if cache.as_ref().is_none_or(|(at, _)| *at != position) {
+            let frame = session.source_frame(cancel)?;
+            *cache = Some((position, Arc::new(Frame::new(&frame))));
+        }
+        presented.frame = cache.as_ref().expect("source frame").1.clone();
+        Ok(presented)
     }
 }
 
@@ -51,6 +75,8 @@ pub(super) struct PreviewRequest {
     pub generation: u64,
     pub edit: EditSpec,
     pub position_ms: u64,
+    pub export: ExportSpec,
+    pub output: Values,
 }
 
 pub(super) enum Job {
@@ -129,6 +155,7 @@ pub(super) struct Worker {
     pub cancel: Option<CancelToken>,
     pub playback_cancel: Option<CancelToken>,
     pub thumbnail_cancel: Option<CancelToken>,
+    source_cancel: CancelToken,
     /// One pending scrub/trim request, rather than a queue of stale decodes.
     pending_preview: Arc<Mutex<Option<PreviewRequest>>>,
     /// Bounded to one frame even while a modal dialog blocks the UI loop.
@@ -142,6 +169,7 @@ impl Worker {
         root: PathBuf,
         id: String,
         directory: PathBuf,
+        settings: captures_settings::RecordingSettings,
     ) -> std::io::Result<Self> {
         let (jobs, inbox) = channel();
         let (out, outcomes) = channel();
@@ -152,6 +180,8 @@ impl Worker {
         let requests = pending_preview.clone();
         let looping = Arc::new(AtomicBool::new(false));
         let loop_flag = looping.clone();
+        let source_cancel = CancelToken::default();
+        let source_decode = source_cancel.clone();
         let thread = std::thread::Builder::new()
             .name("captures-recording-editor".into())
             .spawn(move || {
@@ -169,6 +199,8 @@ impl Worker {
                     }
                     sent
                 };
+                let mut output = Values::new(2, 2, &settings);
+                let mut source_frame = None;
                 let mut session = match RecordingEditorSession::open(
                     RecordingEditorOpenRequest {
                         history_root: root,
@@ -181,19 +213,35 @@ impl Worker {
                     // Until the format picker lands, preserve GIF sources as GIF
                     // for both save-copy and replacement, never MP4 in a .gif file.
                     let snapshot = session.snapshot_v2();
+                    output = Values::new(
+                        snapshot.editor.source.width,
+                        snapshot.editor.source.height,
+                        &settings,
+                    );
                     if snapshot.editor.source.mime_type == "image/gif" {
-                        let edit = snapshot.editor.edit.clone();
                         let export = ExportSpec {
                             format: ExportFormat::Gif,
                             ..snapshot.save_export.clone()
                         };
+                        let (edit, export) = output.specs(
+                            snapshot.editor.source.width,
+                            snapshot.editor.source.height,
+                            snapshot.editor.edit.clone(),
+                            export,
+                        );
                         session
                             .execute_v2(RecordingEditorRequestV2::UpdatePreview { edit, export })?;
                     }
                     Ok(session)
                 }) {
                     Ok(session) => {
-                        send(Outcome::Opened(Ok(Presented::of(&session, &directory))));
+                        send(Outcome::Opened(Presented::source(
+                            &session,
+                            &directory,
+                            &output,
+                            &mut source_frame,
+                            &source_decode,
+                        )));
                         Some(session)
                     }
                     Err(error) => {
@@ -212,18 +260,28 @@ impl Worker {
                             let Some(session) = session.as_mut() else {
                                 continue;
                             };
-                            let export = session.snapshot_v2().save_export.clone();
                             let result =
                                 session.execute_v2(RecordingEditorRequestV2::UpdatePreviewAt {
                                     edit: request.edit,
-                                    export,
+                                    export: request.export,
                                     position_ms: request.position_ms,
                                 });
-                            Outcome::Preview(
-                                request.generation,
-                                Box::new(Presented::of(session, &directory)),
-                                result.err(),
+                            if result.is_ok() {
+                                output = request.output;
+                            }
+                            let mut error = result.err();
+                            let presented = Presented::source(
+                                session,
+                                &directory,
+                                &output,
+                                &mut source_frame,
+                                &source_decode,
                             )
+                            .unwrap_or_else(|message| {
+                                error = Some(format!("Source preview unavailable: {message}"));
+                                Presented::of(session, &directory, &output)
+                            });
+                            Outcome::Preview(request.generation, Box::new(presented), error)
                         }
                         Job::Thumbnails(cancel) => {
                             let Some(session) = session.as_ref() else {
@@ -247,7 +305,7 @@ impl Worker {
                                 continue;
                             };
                             let result = (|| {
-                                let mut playback = session.looping_playback(
+                                let mut playback = session.looping_source_playback(
                                     position_ms,
                                     true,
                                     loop_flag.clone(),
@@ -309,7 +367,18 @@ impl Worker {
                                 session
                                     .replace_original_at(&request.destination, &cancel, progress)
                                     .map(|ReplacedRecording::Replaced { path, .. }| {
-                                        (path, None, Some(Presented::of(session, &directory)))
+                                        source_frame = None;
+                                        let snapshot = session.snapshot_v2();
+                                        output = Values::new(
+                                            snapshot.editor.source.width,
+                                            snapshot.editor.source.height,
+                                            &settings,
+                                        );
+                                        (
+                                            path,
+                                            None,
+                                            Some(Presented::of(session, &directory, &output)),
+                                        )
                                     })
                                     .map_err(|error| error.message)
                             };
@@ -334,6 +403,7 @@ impl Worker {
             cancel: None,
             playback_cancel: None,
             thumbnail_cancel: None,
+            source_cancel,
             pending_preview,
             latest,
             looping,
@@ -353,6 +423,7 @@ impl Worker {
     }
 
     pub fn close(&mut self) {
+        self.source_cancel.cancel();
         self.pending_preview.lock().expect("preview mailbox").take();
         if let Some(cancel) = self.thumbnail_cancel.take() {
             cancel.cancel();
