@@ -364,6 +364,7 @@ pub struct LayerItem {
     pub name: String,
     pub kind: &'static str,
     pub icon: &'static str,
+    pub is_image: bool,
     pub visible: bool,
     pub locked: bool,
     pub visibility_label: String,
@@ -932,6 +933,7 @@ fn present(session: &mut EditorSession, artifact_id: &str, published: &mut Publi
                 name: row.map_or_else(|| editor_chrome::layer_name(element), |r| r.name.clone()),
                 kind: row.map_or(editor_chrome::layer_kind(element), |r| r.kind),
                 icon: row.map_or(editor_chrome::layer_icon(element), |r| r.icon),
+                is_image: matches!(element, captures_app::editor::Element::Image(_)),
                 visible: base.visible,
                 locked: base.locked,
                 visibility_label: editor_chrome::visibility_label(element),
@@ -3140,7 +3142,17 @@ impl Editor {
                 Target::Prop(Prop::Step(..)) => 1.,
                 _ => 0.45,
             };
-            let opacity = if enabled { 1. } else { faded };
+            // Pointer/selection refreshes must preserve the drag fade, not
+            // overwrite it with the enabled row's resting opacity.
+            let row_dragging = matches!(target, Target::Layer(i)
+                if self.row_drag.as_ref().is_some_and(|d| d.active && d.from == i));
+            let opacity = if row_dragging {
+                rows::DRAGGING_OPACITY
+            } else if enabled {
+                1.
+            } else {
+                faded
+            };
             if self.nodes[layered.base].opacity != opacity {
                 self.nodes[layered.base].opacity = opacity;
                 self.nodes[layered.base].props = true;
@@ -4352,7 +4364,9 @@ impl Editor {
                     t.color_alpha("canvas-checker-b", fade),
                 )?;
                 match &layer.thumb {
-                    Some(thumb) => draw_thumb(dc, thumb, preview, t.n("r-sm"), fade)?,
+                    Some(thumb) => {
+                        draw_thumb(dc, thumb, preview, t.n("r-sm"), layer.is_image, fade)?
+                    }
                     None => gfx::icon(
                         dc,
                         &g.factory,
@@ -5632,6 +5646,7 @@ fn draw_thumb(
     thumb: &Thumb,
     well: D2D_RECT_F,
     radius: f32,
+    cover: bool,
     opacity: f32,
 ) -> Result<()> {
     if thumb.width == 0 || thumb.height == 0 {
@@ -5659,7 +5674,13 @@ fn draw_thumb(
     };
     let (ww, wh) = (well.right - well.left, well.bottom - well.top);
     let (tw, th) = (thumb.width as f32, thumb.height as f32);
-    let scale = (ww / tw).max(wh / th);
+    let scale = if cover {
+        (ww / tw).max(wh / th)
+    } else {
+        // Shipping AnnotationLayerPreview fits the whole annotation with
+        // previewTransformForBounds' 3 px padding. Only images use cover.
+        ((ww - 6.).max(1.) / tw).min((wh - 6.).max(1.) / th)
+    };
     let (dw, dh) = (tw * scale, th * scale);
     let x = well.left + (ww - dw) / 2.;
     let y = well.top + (wh - dh) / 2.;
