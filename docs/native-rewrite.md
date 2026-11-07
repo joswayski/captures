@@ -3936,6 +3936,14 @@ are not crash/power-loss atomic: a process kill can leave new permanent media wi
 old or hidden History. History-only and reference-only recordings are unsupported.
 Shipping's recording editor has no edit drafts or undo, so neither is a parity gap.
 
+Windows replacement staging now opens the completed private media file with
+write access before `sync_all`: Windows `FlushFileBuffers` rejects a read-only
+handle with Access denied. No truncation, publication or compensation policy
+changes. Windows-GNU/Wine worker validation reproduced the failure, then passed
+MP4/GIF copy, cancelled-copy, replacement, recovery-byte equality and close
+with the access fix. This is not real-PC acceptance. Linux workspace media tests
+also pass; macOS and physical Windows/X11/Wayland verification remain open.
+
 Save-location slice status: shared Rust and the additive
 `captures_recording_editor_replace_original_v2` ABI connect AppKit and the shared
 Windows/X11/Wayland host. Private X11 dark/light input checks cover a real rfd folder
