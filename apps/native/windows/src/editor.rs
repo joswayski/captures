@@ -1856,7 +1856,8 @@ impl Editor {
             self.nodes[base].dirty = true;
         }
         self.range_drag = None;
-        self.props_scroll = 0.;
+        // `.screenshot-properties` stays mounted, so like its `scrollTop`
+        // the scroll stays, clamped by the next layout.
         self.props_changed();
         self.overlay_changed();
         self.refresh(false);
@@ -2074,7 +2075,8 @@ impl Editor {
             self.nodes[base].dirty = true;
         }
         self.range_drag = None;
-        self.props_scroll = 0.;
+        // `.screenshot-properties` stays mounted, so like its `scrollTop`
+        // the scroll stays, clamped by the next layout.
         self.props_changed();
         self.overlay_changed();
         self.need = true;
