@@ -2458,22 +2458,27 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         // width, so the zoom group gives up the history side's share through
         // its buttons and slider; the Canvas toolbar gives up its share through
         // the Background picker, then clips.
-        let addWidth = 2 + 2 * pad + 16 + tokens.number("s-3") + titleWidth(addImagesButton.title)
-        let zoomButton = EditorChrome.metric("zoom_button")
-        let sliderPad = tokens.number(layout.showHistory ? "s-4" : "s-3")
-        let zoomNatural = 2 + 3 * zoomButton + layout.sliderWidth + layout.presetWidth
-        let historyNatural = (layout.showHistory ? 2 * (control + spacing) : 0)
-            + spacing + zoomNatural + 2 * spacing + addWidth
-        let canvasNatural = canvasToolbarWidths().reduce(0, +) + 2 * 4 + 6 * 2
-        let overflow = max(0, canvasNatural + historyNatural - (width - 3 * pad))
+        // Explicit CGFloat types keep Xcode 26.6's type checker from timing
+        // out on this arithmetic (and then resolving `-` to `Duration`).
+        let addLabel: CGFloat = titleWidth(addImagesButton.title)
+        let addWidth: CGFloat = 2 + 2 * pad + 16 + tokens.number("s-3") + addLabel
+        let zoomButton: CGFloat = EditorChrome.metric("zoom_button")
+        let sliderPad: CGFloat = tokens.number(layout.showHistory ? "s-4" : "s-3")
+        let zoomNatural: CGFloat = 2 + 3 * zoomButton + layout.sliderWidth + layout.presetWidth
+        let historyButtons: CGFloat = layout.showHistory ? 2 * (control + spacing) : 0
+        let historyNatural: CGFloat = historyButtons + 3 * spacing + zoomNatural + addWidth
+        let canvasNatural: CGFloat = canvasToolbarWidths().reduce(0, +) + 2 * 4 + 6 * 2
+        let available: CGFloat = width - 3 * pad
+        let overflow: CGFloat = max(0, canvasNatural + historyNatural - available)
         // Inside the zoom group, shrink is weighted by content boxes: a 30 pt
         // button less its 1 pt divider, the slider less its padding and divider.
-        let sliderContent = layout.sliderWidth - 2 * sliderPad - 1
-        let zoomShrinkable = 3 * (zoomButton - 1) + sliderContent
-        let historyShrink = min(overflow * historyNatural / (canvasNatural + historyNatural), zoomShrinkable)
-        let buttonWidth = zoomButton - historyShrink * (zoomButton - 1) / zoomShrinkable
-        let sliderWidth = layout.sliderWidth - historyShrink * sliderContent / zoomShrinkable
-        let zoomWidth = zoomNatural - historyShrink
+        let sliderContent: CGFloat = layout.sliderWidth - 2 * sliderPad - 1
+        let zoomShrinkable: CGFloat = 3 * (zoomButton - 1) + sliderContent
+        let historyShare: CGFloat = overflow * historyNatural / (canvasNatural + historyNatural)
+        let historyShrink: CGFloat = min(historyShare, zoomShrinkable)
+        let buttonWidth: CGFloat = zoomButton - historyShrink * (zoomButton - 1) / zoomShrinkable
+        let sliderWidth: CGFloat = layout.sliderWidth - historyShrink * sliderContent / zoomShrinkable
+        let zoomWidth: CGFloat = zoomNatural - historyShrink
         addImagesButton.frame = NSRect(x: width - pad - addWidth, y: y,
                                        width: addWidth, height: control)
         zoomGroup.frame = NSRect(x: addImagesButton.frame.minX - 2 * spacing - zoomWidth, y: y,
@@ -2508,7 +2513,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             undoButton.frame = NSRect(x: redoButton.frame.minX - spacing - control, y: y,
                                       width: control, height: control)
         }
-        layoutCanvasToolbar(width: canvasNatural - (overflow - historyShrink), y: y)
+        let canvasShrink: CGFloat = overflow - historyShrink
+        layoutCanvasToolbar(width: canvasNatural - canvasShrink, y: y)
     }
 
     /// The natural widths of shipping's `.screenshot-canvas-toolbar` items: the
