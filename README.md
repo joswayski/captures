@@ -862,6 +862,12 @@ sliders and system color panel.
 Windows/Linux custom selects retain focus on the first arrow after Tab and
 process rapid navigation, selection and cancellation keys in order, including
 repeated arrows. Tab still closes the listbox and moves to the next control.
+The Windows screenshot editor's Font, Aspect and zoom selects follow Windows
+Chromium instead: keyboard choices apply once on close; pointer hover alone
+does not commit on Escape. Tab accepts the highlighted choice and closes the
+popup before a second Tab moves focus.
+The native Windows host ignores lone Alt/F10 menu activation so scrolling remains
+available; Alt+Space and Alt+F4 retain their standard Windows behavior.
 Native Windows/Linux numeric fields also apply rapid Up/Down steps in order at
 their limits and retain focus on the first arrow after Tab; stepping stops when
 Tab or Enter leaves the field.

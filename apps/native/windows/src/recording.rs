@@ -1080,6 +1080,10 @@ impl Recording {
 
     fn handle(&mut self, msg: u32, wp: WPARAM, lp: LPARAM) -> Option<LRESULT> {
         match msg {
+            // No menu bar: suppress lone Alt/F10, not Alt+Space or other chords.
+            WM_SYSCOMMAND if wp.0 & 0xfff0 == SC_KEYMENU as usize && lp.0 == 0 => {
+                return Some(LRESULT(0));
+            }
             WM_OUTCOME => self.outcomes(),
             WM_WAKE => {}
             WM_SIZE if wp.0 != SIZE_MINIMIZED as usize => {

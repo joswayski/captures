@@ -37,6 +37,9 @@ pub struct Menu {
     pub kind: MenuKind,
     /// The highlighted row (pointer or keyboard).
     pub active: Option<usize>,
+    /// HTML selects display keyboard choices before committing on close.
+    /// Pointer hover changes only `active`, not this provisional value.
+    pub keyboard: Option<usize>,
     /// The panel in client DIPs, border included.
     pub rect: Rect,
 }
@@ -141,6 +144,15 @@ impl Editor {
         self.menu.is_some_and(|m| m.kind == kind)
     }
 
+    /// Windows HTML selects show keyboard navigation in their trigger, but
+    /// leave the document unchanged until closing. Hover only highlights a row.
+    pub fn menu_displayed(&self, kind: MenuKind) -> Option<usize> {
+        self.menu
+            .filter(|m| m.kind == kind && kind.is_select())
+            .and_then(|m| m.keyboard)
+            .or_else(|| self.menu_selected(kind))
+    }
+
     /// Open a popup at its selection, or close it if it is open.
     pub(super) fn toggle_menu(&mut self, kind: MenuKind) {
         if self.menu_open(kind) {
@@ -158,6 +170,7 @@ impl Editor {
         self.menu = Some(Menu {
             kind,
             active,
+            keyboard: None,
             rect: Rect::default(),
         });
         self.place_menu();
@@ -211,6 +224,9 @@ impl Editor {
             .push(Event::Expanded(Target::Prop(menu.kind.trigger())));
         self.events.push(Event::Structure);
         self.need = true;
+        if let Some(index) = menu.keyboard {
+            self.apply_menu_choice(menu.kind, index);
+        }
     }
 
     /// Row `index`'s rect inside the panel.
@@ -338,7 +354,7 @@ impl Editor {
         }
     }
 
-    /// Highlight a row; only the lit row repaints.
+    /// Highlight a row; pointer hover does not change the trigger's value.
     pub(super) fn set_menu_active(&mut self, active: Option<usize>) {
         let Some(menu) = self.menu.as_mut() else {
             return;
@@ -377,8 +393,18 @@ impl Editor {
         let Some(menu) = self.menu else {
             return;
         };
+        // An explicit pick replaces the provisional keyboard choice; applying
+        // both would create two document edits and two undo steps.
+        self.menu.as_mut().expect("open menu").keyboard = None;
         self.close_menu();
-        match menu.kind {
+        self.apply_menu_choice(menu.kind, index);
+    }
+
+    fn apply_menu_choice(&mut self, kind: MenuKind, index: usize) {
+        if kind.is_select() && self.menu_selected(kind) == Some(index) {
+            return;
+        }
+        match kind {
             MenuKind::Style => {
                 if let Some(preset) = TEXT_STYLE_PRESETS.get(index) {
                     self.apply_text(TextChange::Preset(preset.id));
@@ -401,13 +427,12 @@ impl Editor {
                 None => {}
             },
         }
-        self.events
-            .push(Event::Value(Target::Prop(menu.kind.trigger())));
+        self.events.push(Event::Value(Target::Prop(kind.trigger())));
     }
 
-    /// Alt+Down or Alt+Up (a system key) on a focused select: opens it, or
-    /// closes an open one keeping its choice, like the Preferences selects
-    /// and Windows combo boxes. The Text style picker is a button.
+    /// Alt+Down or Alt+Up opens a select or commits its keyboard choice
+    /// while closing it, matching shipping's HTML selects on Windows.
+    /// Preferences uses CustomSelect instead; the Text style picker is a button.
     pub(super) fn menu_alt_key(&mut self, vk: VIRTUAL_KEY) -> bool {
         let Some(Target::Prop(prop @ (Prop::Font | Prop::Aspect | Prop::Preset))) = self.focus
         else {
@@ -446,6 +471,18 @@ impl Editor {
             VK_SPACE => select::Key::Space,
             VK_ESCAPE => select::Key::Escape,
             VK_TAB => {
+                if let Some(menu) = self.menu.filter(|m| m.kind == kind)
+                    && kind.is_select()
+                {
+                    if let Some(index) = menu.active {
+                        self.choose_menu(index);
+                    } else {
+                        self.close_menu();
+                    }
+                    // The first Tab accepts the highlighted row and closes
+                    // the native popup; focus stays on the trigger.
+                    return true;
+                }
                 self.close_menu();
                 return false;
             }
@@ -466,7 +503,21 @@ impl Editor {
             open: true,
             active: m.active.unwrap_or(selected),
         });
-        let outcome = select::key(state, &disabled, selected, key);
+        let mut outcome = select::key(state, &disabled, selected, key);
+        // These three shipping controls are HTML selects, not CustomSelect.
+        // Windows Chromium clamps arrows. Keyboard choices commit once on
+        // close, while pointer highlights commit only on Enter, Tab or click.
+        if kind.is_select() && state.open {
+            match key {
+                select::Key::ArrowDown => {
+                    outcome.state.active = (state.active + 1).min(count - 1);
+                }
+                select::Key::ArrowUp => {
+                    outcome.state.active = state.active.saturating_sub(1);
+                }
+                _ => {}
+            }
+        }
         if !outcome.handled {
             return false;
         }
@@ -481,6 +532,13 @@ impl Editor {
             self.close_menu();
         } else {
             self.set_menu_active(Some(outcome.state.active));
+            if kind.is_select() {
+                self.menu.as_mut().expect("open menu").keyboard = Some(outcome.state.active);
+                self.prop_dirty(kind.trigger());
+                self.nodes[self.menu_node].dirty = true;
+                self.nodes[self.menu_lit].dirty = true;
+                self.events.push(Event::Value(Target::Prop(kind.trigger())));
+            }
         }
         true
     }
@@ -500,7 +558,11 @@ impl Editor {
             return Ok(());
         }
         let t = &self.t;
-        let text = self.g.text(t, Style::MonoSmall, &self.zoom_text(), 1e4)?;
+        let label = self
+            .menu_displayed(MenuKind::Preset)
+            .and_then(|i| self.menu_items(MenuKind::Preset).into_iter().nth(i))
+            .unwrap_or_else(|| self.zoom_text());
+        let text = self.g.text(t, Style::MonoSmall, &label, 1e4)?;
         gfx::text(
             dc,
             &text,
@@ -565,7 +627,7 @@ impl Editor {
     ) -> Result<()> {
         let t = &self.t;
         let c = |name: &str| t.color(name);
-        let selected = self.menu_selected(kind) == Some(index);
+        let selected = self.menu_displayed(kind) == Some(index);
         let items = self.menu_items(kind);
         let Some(label) = items.get(index) else {
             return Ok(());

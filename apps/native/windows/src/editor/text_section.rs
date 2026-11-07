@@ -435,7 +435,7 @@ impl Editor {
         };
         gfx::border(dc, all, radius, 1., border)?;
         let label = self
-            .menu_selected(kind)
+            .menu_displayed(kind)
             .and_then(|i| self.menu_items(kind).into_iter().nth(i))
             .unwrap_or_default();
         let s4 = t.n("s-4");
