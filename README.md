@@ -211,7 +211,9 @@ Output controls include original/1080p/720p/custom dimensions, GIF frame rate,
 maximum width and quality-based palette limits, and separate source-audio volumes,
 mute and mono. Recording crop, comparison, format switching and the remaining
 save-quality options are still migration work; these slices are not recording-editor
-parity, and the new output controls still await physical Windows acceptance.
+parity. Output controls passed the physical Windows gate; the follow-up source-preview
+correction still awaits retesting. Like Tauri, the preview keeps the original source's
+size and picture while output settings affect the saved file, not the page layout.
 
 The native capture workspace connects full-display
 PNG capture, local screenshot history, copy, export, and deletion to

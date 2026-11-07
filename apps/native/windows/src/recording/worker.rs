@@ -52,6 +52,23 @@ impl Presented {
             output: output.clone(),
         }
     }
+
+    fn source(
+        session: &RecordingEditorSession,
+        directory: &Path,
+        output: &Values,
+        cache: &mut Option<(u64, Arc<Frame>)>,
+        cancel: &CancelToken,
+    ) -> Result<Self, String> {
+        let mut presented = Self::of(session, directory, output);
+        let position = presented.position_ms;
+        if cache.as_ref().is_none_or(|(at, _)| *at != position) {
+            let frame = session.source_frame(cancel)?;
+            *cache = Some((position, Arc::new(Frame::new(&frame))));
+        }
+        presented.frame = cache.as_ref().expect("source frame").1.clone();
+        Ok(presented)
+    }
 }
 
 pub(super) struct PreviewRequest {
@@ -138,6 +155,7 @@ pub(super) struct Worker {
     pub cancel: Option<CancelToken>,
     pub playback_cancel: Option<CancelToken>,
     pub thumbnail_cancel: Option<CancelToken>,
+    source_cancel: CancelToken,
     /// One pending scrub/trim request, rather than a queue of stale decodes.
     pending_preview: Arc<Mutex<Option<PreviewRequest>>>,
     /// Bounded to one frame even while a modal dialog blocks the UI loop.
@@ -162,6 +180,8 @@ impl Worker {
         let requests = pending_preview.clone();
         let looping = Arc::new(AtomicBool::new(false));
         let loop_flag = looping.clone();
+        let source_cancel = CancelToken::default();
+        let source_decode = source_cancel.clone();
         let thread = std::thread::Builder::new()
             .name("captures-recording-editor".into())
             .spawn(move || {
@@ -180,6 +200,7 @@ impl Worker {
                     sent
                 };
                 let mut output = Values::new(2, 2, &settings);
+                let mut source_frame = None;
                 let mut session = match RecordingEditorSession::open(
                     RecordingEditorOpenRequest {
                         history_root: root,
@@ -214,9 +235,13 @@ impl Worker {
                     Ok(session)
                 }) {
                     Ok(session) => {
-                        send(Outcome::Opened(Ok(Presented::of(
-                            &session, &directory, &output,
-                        ))));
+                        send(Outcome::Opened(Presented::source(
+                            &session,
+                            &directory,
+                            &output,
+                            &mut source_frame,
+                            &source_decode,
+                        )));
                         Some(session)
                     }
                     Err(error) => {
@@ -244,11 +269,19 @@ impl Worker {
                             if result.is_ok() {
                                 output = request.output;
                             }
-                            Outcome::Preview(
-                                request.generation,
-                                Box::new(Presented::of(session, &directory, &output)),
-                                result.err(),
+                            let mut error = result.err();
+                            let presented = Presented::source(
+                                session,
+                                &directory,
+                                &output,
+                                &mut source_frame,
+                                &source_decode,
                             )
+                            .unwrap_or_else(|message| {
+                                error = Some(format!("Source preview unavailable: {message}"));
+                                Presented::of(session, &directory, &output)
+                            });
+                            Outcome::Preview(request.generation, Box::new(presented), error)
                         }
                         Job::Thumbnails(cancel) => {
                             let Some(session) = session.as_ref() else {
@@ -272,7 +305,7 @@ impl Worker {
                                 continue;
                             };
                             let result = (|| {
-                                let mut playback = session.looping_playback(
+                                let mut playback = session.looping_source_playback(
                                     position_ms,
                                     true,
                                     loop_flag.clone(),
@@ -334,6 +367,7 @@ impl Worker {
                                 session
                                     .replace_original_at(&request.destination, &cancel, progress)
                                     .map(|ReplacedRecording::Replaced { path, .. }| {
+                                        source_frame = None;
                                         let snapshot = session.snapshot_v2();
                                         output = Values::new(
                                             snapshot.editor.source.width,
@@ -369,6 +403,7 @@ impl Worker {
             cancel: None,
             playback_cancel: None,
             thumbnail_cancel: None,
+            source_cancel,
             pending_preview,
             latest,
             looping,
@@ -388,6 +423,7 @@ impl Worker {
     }
 
     pub fn close(&mut self) {
+        self.source_cancel.cancel();
         self.pending_preview.lock().expect("preview mailbox").take();
         if let Some(cancel) = self.thumbnail_cancel.take() {
             cancel.cancel();

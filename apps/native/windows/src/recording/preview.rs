@@ -149,9 +149,9 @@ impl Recording {
         } else {
             title.y + title.h + self.t.n("s-6")
         };
-        // Playback decodes at up to 1280×720. Its texture resolution must not
-        // change the accepted media's display size, scroll bounds or controls.
-        let source = self.presented.as_ref().map(|p| &p.frame);
+        // Like Tauri, the stage follows the source, not export dimensions or
+        // the playback texture (which decodes at up to 1280×720).
+        let source = self.presented.as_ref();
         let media_h = source.map_or(160., |f| {
             if self.preview.actual {
                 f.height as f32
@@ -185,7 +185,7 @@ impl Recording {
     pub(super) fn preview_media(&self) -> Rect {
         let r = self.preview_view();
         let pad = self.t.n("s-5");
-        let Some(frame) = self.presented.as_ref().map(|p| &p.frame) else {
+        let Some(frame) = self.presented.as_ref() else {
             return Rect::default();
         };
         let scale = if self.preview.actual {
@@ -210,7 +210,7 @@ impl Recording {
         let (w, h) = self
             .presented
             .as_ref()
-            .map_or((0., 0.), |p| (p.frame.width as f32, p.frame.height as f32));
+            .map_or((0., 0.), |p| (p.width as f32, p.height as f32));
         self.preview.scroll = if self.preview.actual {
             (
                 self.preview.scroll.0.clamp(0., (w + pad - r.w).max(0.)),
@@ -848,6 +848,24 @@ mod tests {
         assert_eq!(
             w.volume_range(Target::MicrophoneVolume),
             Some((20., 0., 200.))
+        );
+
+        let before = w.preview_media();
+        let preview_height = w.rects[PREVIEW].h;
+        let mut resized = w.presented.take().unwrap();
+        resized.frame = frame(1282, 2);
+        resized.edit.output_width = Some(1282);
+        resized.edit.output_height = Some(2);
+        w.apply_outcome(Outcome::Preview(
+            w.timeline.generation,
+            Box::new(resized),
+            None,
+        ));
+        let after = w.preview_media();
+        assert_eq!((after.w, after.h), (before.w, before.h));
+        assert_eq!(
+            w.rects[PREVIEW].h, preview_height,
+            "export size must not move the controls"
         );
 
         let mut accepted = w.presented.take().unwrap();
