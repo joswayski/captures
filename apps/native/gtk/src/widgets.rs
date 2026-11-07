@@ -297,7 +297,6 @@ impl SplitColumn {
 
 mod thumbnail_imp {
     use super::*;
-    use captures_app::preview_chrome;
 
     #[derive(Default)]
     pub struct Thumbnail {
@@ -309,6 +308,11 @@ mod thumbnail_imp {
         /// The baked filtered image: (blur radius, brightness, texture),
         /// built once per texture and filter.
         pub dimmed_texture: std::cell::RefCell<Option<(f32, f32, gtk::gdk::Texture)>>,
+        /// A Close streak: horizontal stretch and the stepped motion blur
+        /// (`None` keeps the base look), over the hover look or not.
+        pub streak: std::cell::Cell<Option<super::Streak>>,
+        /// Baked streak steps by index, for the current base look.
+        pub streak_textures: std::cell::RefCell<Vec<(usize, gtk::gdk::Texture)>>,
     }
 
     #[glib::object_subclass]
@@ -331,22 +335,101 @@ mod thumbnail_imp {
         }
 
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
-            let Some(texture) = self.texture.borrow().clone() else {
+            let widget = self.obj();
+            let (w, h) = (widget.width() as f32, widget.height() as f32);
+            let Some((texture, mut rect)) = widget.drawn() else {
                 return;
             };
+            let cover = self.cover.get();
+            let texture = match self.streak.get() {
+                Some(streak) => {
+                    // Stretch about the centre, inside the card's clip.
+                    let width = rect.width() * streak.scale_x;
+                    rect = graphene::Rect::new(
+                        rect.x() - (width - rect.width()) / 2.,
+                        rect.y(),
+                        width,
+                        rect.height(),
+                    );
+                    match streak.step {
+                        Some(step) => widget.streak_texture(step),
+                        None => texture,
+                    }
+                }
+                None => texture,
+            };
+            if cover {
+                snapshot.push_clip(&graphene::Rect::new(0., 0., w, h));
+            }
+            snapshot.append_texture(&texture, &rect);
+            if cover {
+                snapshot.pop();
+            }
+        }
+    }
+}
+
+impl Thumbnail {
+    /// The texture as drawn now (plain, or the baked hover / pile filter)
+    /// and where it lands in the widget, before any clip.
+    pub fn drawn(&self) -> Option<(gtk::gdk::Texture, graphene::Rect)> {
+        self.imp().drawn()
+    }
+
+    fn streak_texture(&self, step: usize) -> gtk::gdk::Texture {
+        let imp = self.imp();
+        if let Some((_, baked)) = imp
+            .streak_textures
+            .borrow()
+            .iter()
+            .find(|(index, _)| *index == step)
+        {
+            return baked.clone();
+        }
+        let streak = imp.streak.get().expect("streaking");
+        let (base, _) = imp.drawn_with(streak.keep_look).expect("a texture");
+        let scale = imp.texture_scale().unwrap_or(1.);
+        let sigma = STREAK_BLURS[step] / scale;
+        let baked = dim_and_blur(&base, sigma, 1., false);
+        imp.streak_textures.borrow_mut().push((step, baked.clone()));
+        baked
+    }
+}
+
+mod thumbnail_draw {
+    use super::*;
+    use captures_app::preview_chrome;
+
+    impl thumbnail_imp::Thumbnail {
+        /// Texture pixels per logical pixel's inverse: the draw scale.
+        pub fn texture_scale(&self) -> Option<f32> {
+            let texture = self.texture.borrow().clone()?;
             let widget = self.obj();
             let (w, h) = (widget.width() as f32, widget.height() as f32);
             let (tw, th) = (texture.width() as f32, texture.height() as f32);
             if w <= 0. || h <= 0. || tw <= 0. || th <= 0. {
-                return;
+                return None;
             }
-            // `object-fit: contain` or `cover`, centered.
-            let cover = self.cover.get();
-            let scale = if cover {
+            Some(if self.cover.get() {
                 (w / tw).max(h / th)
             } else {
                 (w / tw).min(h / th)
-            };
+            })
+        }
+
+        pub fn drawn(&self) -> Option<(gtk::gdk::Texture, graphene::Rect)> {
+            self.drawn_with(true)
+        }
+
+        /// `hover`: false draws the plain image even while dimmed (a Close
+        /// streak leaves the locked hover look at its first step).
+        pub fn drawn_with(&self, hover: bool) -> Option<(gtk::gdk::Texture, graphene::Rect)> {
+            let texture = self.texture.borrow().clone()?;
+            // `object-fit: contain` or `cover`, centered.
+            let scale = self.texture_scale()?;
+            let widget = self.obj();
+            let (w, h) = (widget.width() as f32, widget.height() as f32);
+            let (tw, th) = (texture.width() as f32, texture.height() as f32);
             // Mini-preview hover: `blur(2px) brightness(.5)` and `scale(1.015)`.
             let dimmed = self.dimmed.get();
             let scale = if dimmed {
@@ -358,6 +441,7 @@ mod thumbnail_imp {
             // The blurred, dimmed image is baked once and then drawn as a
             // plain texture: the Cairo renderer blurs only the damaged clip,
             // which left seams wherever the hover controls repainted.
+            let dimmed = dimmed && hover;
             let filter = if dimmed {
                 Some((
                     preview_chrome::HOVER_MEDIA_BLUR as f32,
@@ -376,7 +460,7 @@ mod thumbnail_imp {
                         baked.clone()
                     }
                     _ => {
-                        let baked = super::dim_and_blur(&texture, sigma, brightness);
+                        let baked = super::dim_and_blur(&texture, sigma, brightness, true);
                         *cached = Some((sigma, brightness, baked.clone()));
                         baked
                     }
@@ -384,18 +468,41 @@ mod thumbnail_imp {
             } else {
                 texture
             };
-            if cover {
-                snapshot.push_clip(&graphene::Rect::new(0., 0., w, h));
-            }
-            snapshot.append_texture(
-                &texture,
-                &graphene::Rect::new((w - dw) / 2., (h - dh) / 2., dw, dh),
-            );
-            if cover {
-                snapshot.pop();
-            }
+            Some((
+                texture,
+                graphene::Rect::new((w - dw) / 2., (h - dh) / 2., dw, dh),
+            ))
         }
     }
+}
+
+/// Shipping's stepped Close streak blurs (`#thumbnail-motion-blur-a/b/c`
+/// `stdDeviation` on x), as the wgpu workbench's `STREAK_BLURS`.
+const STREAK_BLURS: [f32; 3] = [3.5, 8., 14.];
+
+/// The streak step `blur` (the `PreviewDismissStreak` pose's blur) shows:
+/// each `url()` filter swaps in at its keyframe midpoint, as CSS does for
+/// filters it cannot interpolate.
+pub fn streak_step(blur: f64) -> Option<usize> {
+    let mut previous = captures_app::preview_chrome::HOVER_MEDIA_BLUR as f32;
+    let mut step = None;
+    for (index, &sigma) in STREAK_BLURS.iter().enumerate() {
+        if blur as f32 >= (previous + sigma) / 2. {
+            step = Some(index);
+        }
+        previous = sigma;
+    }
+    step
+}
+
+/// A Close or Clear all streak frame on a [`Thumbnail`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Streak {
+    pub scale_x: f32,
+    pub step: Option<usize>,
+    /// Clear all keeps the card's look under every step; Close drops the
+    /// locked hover look from the first step.
+    pub keep_look: bool,
 }
 
 glib::wrapper! {
@@ -415,6 +522,12 @@ impl Default for Thumbnail {
 impl Thumbnail {
     pub fn has_texture(&self) -> bool {
         self.imp().texture.borrow().is_some()
+    }
+
+    /// The source texture's pixel size.
+    pub fn texture_size(&self) -> Option<(f64, f64)> {
+        let texture = self.imp().texture.borrow().clone()?;
+        Some((f64::from(texture.width()), f64::from(texture.height())))
     }
 
     /// A collapsed pile's rear-card media blur in logical pixels (0: none).
@@ -439,25 +552,46 @@ impl Thumbnail {
     pub fn set_texture(&self, texture: Option<gtk::gdk::Texture>) {
         *self.imp().texture.borrow_mut() = texture;
         self.imp().dimmed_texture.borrow_mut().take();
+        self.imp().streak_textures.borrow_mut().clear();
         self.queue_draw();
+    }
+
+    pub fn set_streak(&self, streak: Option<Streak>) {
+        let imp = self.imp();
+        let old = imp.streak.replace(streak);
+        if old.map(|s| s.keep_look) != streak.map(|s| s.keep_look) {
+            imp.streak_textures.borrow_mut().clear();
+        }
+        if old != streak {
+            self.queue_draw();
+        }
     }
 }
 
 /// Shipping's hover media filter, `blur(σ) brightness(b)`, baked into a new
 /// texture: three box passes approximate the Gaussian (σ in texture pixels).
-fn dim_and_blur(texture: &gtk::gdk::Texture, sigma: f32, brightness: f32) -> gtk::gdk::Texture {
+/// Without `vertical` it blurs along rows only (the Close streak).
+fn dim_and_blur(
+    texture: &gtk::gdk::Texture,
+    sigma: f32,
+    brightness: f32,
+    vertical: bool,
+) -> gtk::gdk::Texture {
     let (width, height) = (texture.width() as usize, texture.height() as usize);
     let stride = width * 4;
     // `download` writes Cairo's native-endian premultiplied ARGB32.
     let mut pixels = vec![0u8; stride * height];
     texture.download(&mut pixels, stride);
-    let box_width = (4.0 * sigma * sigma + 1.0).sqrt();
+    // n box passes of width w have variance n(w² − 1)/12: three per axis,
+    // or six along rows alone.
+    let passes = if vertical { 3. } else { 6. };
+    let box_width = (12.0 * sigma * sigma / passes + 1.0).sqrt();
     let radius = ((box_width - 1.0) / 2.0).round().max(0.0) as usize;
     if radius > 0 {
         let mut scratch = vec![0u8; pixels.len()];
         for _ in 0..3 {
             box_pass(&pixels, &mut scratch, (width, height), radius, true);
-            box_pass(&scratch, &mut pixels, (width, height), radius, false);
+            box_pass(&scratch, &mut pixels, (width, height), radius, !vertical);
         }
     }
     for pixel in pixels.chunks_exact_mut(4) {

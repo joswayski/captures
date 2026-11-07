@@ -916,8 +916,8 @@ button covers the pile with the accent ring on hover or focus; rear cards
 leave the accessibility tree. Timing resolves the shared `motion` specs
 against GTK's tokens, and with GTK animations off (GNOME's Reduce
 animation) every change lands at once with no frame ticks. `smoke.py`
-minimizes to the pile and expands it over AT-SPI. Exit motion (dismiss
-streak, delete dust), the drag sway and overflow scrolling remain open.
+minimizes to the pile and expands it over AT-SPI. Exit motion (ported
+later, below), the drag sway and overflow scrolling remain open.
 X11 (Xvfb) only. Windows, macOS: unchanged.
 
 On X11 the GTK stack now takes shipping's placement. The window is 340 px
@@ -942,6 +942,30 @@ GTK4 cannot position toplevels: the compositor places the stack until a
 `gtk4-layer-shell` path for wlroots and KDE compositors lands; GNOME has no
 layer-shell. The X11 path is the default `x11` Cargo feature, so a
 Wayland-only GTK build can drop it. Wayland, multi-monitor and real
+hardware not verified. Windows, macOS: unchanged.
+
+GTK preview cards now leave with shipping's exits, driven by the shared
+`preview_motion::StackExits` the AppKit and wgpu hosts use. Close keeps the
+card's slot while it streaks toward its anchored edge (`PreviewDismiss`,
+118 px out, and `PreviewDismissStreak`: horizontal stretch over the stepped
+3.5, 8 and 14 px motion blurs, baked once per step into a texture, from the
+locked hover look). Delete dissolves the card into `dust_particles` from the
+trash control: the frozen hover image fades, up to 220 chips rise, turn and
+fade while the dust clip opens 120 px past the card, and the elevation and
+outline fade with them. Survivors slide into the hole with `settle_tween`
+after each exit's settle delay. Clear all streaks every card out with the
+36 ms bottom-first stagger and no settle, and the window hides once the last
+exit ends. An exiting card takes no input and leaves the accessibility tree
+at once; with GTK animations off it leaves immediately. A card's file drag
+hides its image under a still copy of it (`thumbnail-file-dragging`). Its
+end follows the shared `preview_drag_outcome`: a drop back on the stack
+shakes the card (`thumbnail-drop-reject`), an accepted copy elsewhere removes
+it, and anything else keeps it. The pile's clock is now the monotonic clock:
+an idle frame clock's last frame time is stale, and it started each exit
+already partly played. Checked by recording Close, Delete, Clear all and a
+drop back on the stack under Xvfb (GTK 4.8). Not done: carrying the
+collapsed pile (it moves the window and re-anchors the stack, with
+`DragSway` leaning the rear cards) and overflow scrolling. Wayland and real
 hardware not verified. Windows, macOS: unchanged.
 
 The fifth GTK4 slice is the recording editor, opened by History's Edit on a

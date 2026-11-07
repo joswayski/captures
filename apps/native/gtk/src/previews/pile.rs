@@ -10,13 +10,13 @@ use std::collections::HashMap;
 
 use captures_app::motion::{Animation, Motion, Transition, Tween};
 use captures_app::preview::{self, CollapsedCardPose};
-use captures_app::preview_motion::StackFan;
+use captures_app::preview_motion::{self, DustParticle, ExitKind, StackExits, StackFan};
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
 use gtk::{glib, graphene, gsk};
 
 use crate::tokens::Tokens;
-use crate::widgets::Thumbnail;
+use crate::widgets::{Streak, Thumbnail, streak_step};
 
 /// Shipping's 340 px window holds 284 px cards inside 28 px side padding.
 pub const CARD_WIDTH: f64 = preview::THUMBNAIL_WIDTH - 2. * preview::THUMBNAIL_PADDING;
@@ -54,6 +54,18 @@ mod imp {
         pub motion: RefCell<Option<(Tween, Tween, Animation)>>,
         pub ticking: Cell<bool>,
         pub on_expand: RefCell<Option<Box<dyn Fn()>>>,
+        pub right_anchor: Cell<bool>,
+        /// Cards playing an exit keep their slot here until it ends.
+        pub exits: RefCell<StackExits>,
+        /// A Delete's dust chips, by card id.
+        pub dust: RefCell<HashMap<String, Vec<DustParticle>>>,
+        /// Each card's top-left in the pile at the latest layout.
+        pub origins: RefCell<HashMap<String, (f32, f32)>>,
+        /// Drop-on-self shake start, by card id.
+        pub rejects: RefCell<HashMap<String, f64>>,
+        pub exit_motion: Cell<Option<super::ExitMotion>>,
+        /// An exit ended and its card left the pile.
+        pub on_exited: RefCell<Option<Box<dyn Fn()>>>,
     }
 
     #[glib::object_subclass]
@@ -99,6 +111,67 @@ mod imp {
         fn size_allocate(&self, width: i32, height: i32, _baseline: i32) {
             self.obj().place(width as f32, height as f32);
         }
+
+        /// Children in order; a dissolving card's dust paints right above
+        /// it, outside its clip.
+        fn snapshot(&self, snapshot: &gtk::Snapshot) {
+            let obj = self.obj();
+            let mut child = obj.first_child();
+            while let Some(widget) = child {
+                obj.snapshot_child(&widget, snapshot);
+                let id = self
+                    .cards
+                    .borrow()
+                    .iter()
+                    .find(|card| card.root == widget)
+                    .map(|card| card.id.clone());
+                if let Some(id) = id {
+                    obj.snapshot_dust(&id, snapshot);
+                }
+                child = widget.next_sibling();
+            }
+        }
+    }
+}
+
+/// Exit and reject timings, resolved once from the tokens.
+#[derive(Clone, Copy)]
+pub struct ExitMotion {
+    dismiss: Animation,
+    streak: Animation,
+    fallback: Animation,
+    /// `--thumbnail-drop-reject-duration` and `-x-1` … `-x-4`.
+    reject_ms: f64,
+    reject_x: [f64; 4],
+}
+
+impl ExitMotion {
+    /// `thumbnail-drop-reject`'s horizontal shake, linear between stops.
+    fn reject_offset(&self, elapsed_ms: f64) -> f64 {
+        if elapsed_ms >= self.reject_ms {
+            return 0.;
+        }
+        let [a, b, c, d] = self.reject_x;
+        let stops = [
+            (0., 0.),
+            (0.1, -a),
+            (0.3, a),
+            (0.5, -b),
+            (0.65, c),
+            (0.8, -d),
+            (0.9, d),
+            (1., 0.),
+        ];
+        let t = (elapsed_ms / self.reject_ms).clamp(0., 1.);
+        let pair = stops
+            .windows(2)
+            .find(|pair| t <= pair[1].0)
+            .unwrap_or(&stops[6..]);
+        lerp(
+            pair[0].1,
+            pair[1].1,
+            (t - pair[0].0) / (pair[1].0 - pair[0].0),
+        )
     }
 }
 
@@ -140,6 +213,15 @@ impl Pile {
                 .resolve(tokens)
                 .expect("card arrive tokens"),
         ));
+        let animation = |motion: Motion| motion.resolve(tokens).expect("preview exit tokens");
+        imp.exit_motion.set(Some(ExitMotion {
+            dismiss: animation(Motion::PreviewDismiss),
+            streak: animation(Motion::PreviewDismissStreak),
+            fallback: animation(Motion::PreviewDeleteFallback),
+            reject_ms: f64::from(tokens.number("thumbnail-drop-reject-duration")),
+            reject_x: [1, 2, 3, 4]
+                .map(|n| f64::from(tokens.number(&format!("thumbnail-drop-reject-x-{n}")))),
+        }));
         controls.set_parent(&pile);
         *imp.controls.borrow_mut() = Some(controls.clone().upcast());
 
@@ -179,6 +261,144 @@ impl Pile {
         *self.imp().on_expand.borrow_mut() = Some(Box::new(expand));
     }
 
+    pub fn connect_exited(&self, exited: impl Fn() + 'static) {
+        *self.imp().on_exited.borrow_mut() = Some(Box::new(exited));
+    }
+
+    /// No card left, exiting or not.
+    pub fn is_empty(&self) -> bool {
+        self.imp().cards.borrow().is_empty()
+    }
+
+    pub fn is_top_anchor(&self) -> bool {
+        self.imp().top_anchor.get()
+    }
+
+    /// Close streaks and the dust origin mirror on right-anchored stacks.
+    pub fn set_right_anchor(&self, right: bool) {
+        self.imp().right_anchor.set(right);
+    }
+
+    fn live_ids(&self) -> Vec<String> {
+        let exits = self.imp().exits.borrow();
+        self.imp()
+            .cards
+            .borrow()
+            .iter()
+            .filter(|card| exits.exiting(&card.id).is_none())
+            .map(|card| card.id.clone())
+            .collect()
+    }
+
+    /// Play `id`'s shipping exit while it keeps its slot, then drop it.
+    /// False when it should leave at once: reduced motion, a collapsed or
+    /// flying pile, or an unknown card. `saved` places the dust origin.
+    pub fn begin_exit(
+        &self,
+        id: &str,
+        kind: ExitKind,
+        delay_ms: f64,
+        settles: bool,
+        saved: bool,
+    ) -> bool {
+        let imp = self.imp();
+        let now = self.now_ms();
+        let (_, since) = imp.fly.get();
+        if self.reduced() || imp.collapsed.get() || self.tweens().0.running(now - since, false) {
+            return false;
+        }
+        let live = self.live_ids();
+        let image = {
+            let cards = imp.cards.borrow();
+            let Some(card) = cards.iter().find(|card| card.id == id) else {
+                return false;
+            };
+            card.root.set_can_target(false);
+            card.image.clone()
+        };
+        let size = image.texture_size();
+        let kind = match (kind, size) {
+            (ExitKind::Dust, None) => ExitKind::DeleteFallback,
+            _ => kind,
+        };
+        let begun = imp.exits.borrow_mut().begin(
+            &live,
+            id,
+            kind,
+            now,
+            delay_ms,
+            settles,
+            &preview_motion::settle_tween(),
+        );
+        if !begun {
+            return false;
+        }
+        if let (ExitKind::Dust, Some(size)) = (kind, size) {
+            let origin = preview_motion::delete_origin_x(CARD_WIDTH, saved, imp.right_anchor.get());
+            let seed = id.bytes().fold(0x811c_9dc5_u32, |hash, byte| {
+                (hash ^ u32::from(byte)).wrapping_mul(0x0100_0193)
+            });
+            let particles = preview_motion::dust_particles(
+                CARD_WIDTH,
+                preview::THUMBNAIL_CARD_HEIGHT,
+                size,
+                (origin, preview_motion::DELETE_ORIGIN_Y),
+                seed,
+            );
+            imp.dust.borrow_mut().insert(id.to_owned(), particles);
+            if let Some(card) = imp.cards.borrow().iter().find(|card| card.id == id) {
+                card.root.add_css_class("exit-dust");
+            }
+        }
+        self.update_cards();
+        self.animate();
+        true
+    }
+
+    /// Shipping's "no" shake when a card's file is dropped back on the stack.
+    pub fn reject(&self, id: &str) {
+        let imp = self.imp();
+        if self.reduced() || imp.collapsed.get() || imp.exits.borrow().exiting(id).is_some() {
+            return;
+        }
+        imp.rejects
+            .borrow_mut()
+            .insert(id.to_owned(), self.now_ms());
+        self.animate();
+    }
+
+    /// Drop exits that have finished and let the stack shrink.
+    fn prune_exits(&self) {
+        let imp = self.imp();
+        let display = {
+            let mut exits = imp.exits.borrow_mut();
+            if !exits.prune(
+                self.now_ms(),
+                self.reduced(),
+                &preview_motion::settle_tween(),
+            ) {
+                return;
+            }
+            exits.display_ids().to_vec()
+        };
+        imp.cards.borrow_mut().retain(|card| {
+            let keep = display.contains(&card.id);
+            if !keep {
+                card.root.unparent();
+            }
+            keep
+        });
+        imp.dust.borrow_mut().retain(|id, _| display.contains(id));
+        imp.origins
+            .borrow_mut()
+            .retain(|id, _| display.contains(id));
+        self.update_cards();
+        self.queue_resize();
+        if let Some(exited) = imp.on_exited.borrow().as_ref() {
+            exited();
+        }
+    }
+
     /// Add the newest card; it rises in with shipping's arrival.
     pub fn add_card(&self, card: PileCard) {
         let imp = self.imp();
@@ -189,6 +409,8 @@ impl Pile {
             .borrow_mut()
             .insert(card.id.clone(), self.now_ms());
         imp.cards.borrow_mut().push(card);
+        let live = self.live_ids();
+        imp.exits.borrow_mut().sync(&live);
         self.update_cards();
         self.animate();
     }
@@ -203,6 +425,11 @@ impl Pile {
             keep
         });
         imp.arrivals.borrow_mut().remove(id);
+        imp.rejects.borrow_mut().remove(id);
+        imp.dust.borrow_mut().remove(id);
+        imp.exits.borrow_mut().release(id, false);
+        let live = self.live_ids();
+        imp.exits.borrow_mut().sync(&live);
         self.update_cards();
         self.queue_resize();
     }
@@ -272,10 +499,10 @@ impl Pile {
         !self.settings().is_gtk_enable_animations()
     }
 
+    /// The monotonic clock: an idle frame clock's last frame time is stale,
+    /// which would start a new motion already partly played.
     fn now_ms(&self) -> f64 {
-        self.frame_clock()
-            .map_or_else(glib::monotonic_time, |clock| clock.frame_time()) as f64
-            / 1000.
+        glib::monotonic_time() as f64 / 1000.
     }
 
     fn content_height(&self, progress: f64) -> f64 {
@@ -316,11 +543,15 @@ impl Pile {
             };
             expand.update_property(&[gtk::accessible::Property::Label(&label)]);
         }
+        let exits = imp.exits.borrow();
         for (index, card) in cards.iter().enumerate() {
             let depth = count - 1 - index;
-            card.root.set_can_target(!collapsed);
-            card.root
-                .update_state(&[gtk::accessible::State::Hidden(collapsed && depth > 0)]);
+            // An exiting card takes no input and leaves the tree at once.
+            let exiting = exits.exiting(&card.id).is_some();
+            card.root.set_can_target(!collapsed && !exiting);
+            card.root.update_state(&[gtk::accessible::State::Hidden(
+                exiting || (collapsed && depth > 0),
+            )]);
         }
     }
 
@@ -332,7 +563,11 @@ impl Pile {
             return;
         }
         self.add_tick_callback(|pile, _| {
+            pile.prune_exits();
             pile.queue_resize();
+            if !pile.imp().dust.borrow().is_empty() {
+                pile.queue_draw();
+            }
             if pile.running() {
                 return glib::ControlFlow::Continue;
             }
@@ -351,10 +586,93 @@ impl Pile {
         imp.arrivals
             .borrow_mut()
             .retain(|_, start| arrive.running(now - *start, reduced));
+        let reject_ms = self.exit_motion().reject_ms;
+        imp.rejects
+            .borrow_mut()
+            .retain(|_, start| !reduced && now - *start < reject_ms);
         let deepest = imp.cards.borrow().len().saturating_sub(1);
         fly.running(now - since, reduced)
             || imp.fan.borrow().running(deepest, now, &fan, reduced)
             || !imp.arrivals.borrow().is_empty()
+            || !imp.rejects.borrow().is_empty()
+            || !imp.exits.borrow().is_empty()
+    }
+
+    fn exit_motion(&self) -> ExitMotion {
+        self.imp().exit_motion.get().expect("exit motion")
+    }
+
+    /// A dissolving card's chips (`thumbnail-dust-layer`): each a piece of
+    /// the frozen hover image that rises, turns and fades from the trash
+    /// control while the layer's clip opens past the card.
+    fn snapshot_dust(&self, id: &str, snapshot: &gtk::Snapshot) {
+        let imp = self.imp();
+        let dust = imp.dust.borrow();
+        let Some(particles) = dust.get(id) else {
+            return;
+        };
+        let Some(elapsed) = imp
+            .exits
+            .borrow()
+            .exiting(id)
+            .map(|exit| exit.elapsed_ms(self.now_ms()).max(0.))
+        else {
+            return;
+        };
+        let frame = preview_motion::dust_frame(elapsed, self.reduced());
+        let Some(&(x, y)) = imp.origins.borrow().get(id) else {
+            return;
+        };
+        let cards = imp.cards.borrow();
+        let Some((texture, drawn)) = cards
+            .iter()
+            .find(|card| card.id == id)
+            .and_then(|card| card.image.drawn())
+        else {
+            return;
+        };
+        if frame.layer_opacity <= 0. {
+            return;
+        }
+        let pad = preview_motion::DUST_LAYER_PAD as f32;
+        let open = pad * frame.clip_open as f32;
+        snapshot.save();
+        snapshot.translate(&graphene::Point::new(x, y));
+        snapshot.push_rounded_clip(&gsk::RoundedRect::from_rect(
+            graphene::Rect::new(-open, -open, WIDTH + 2. * open, HEIGHT + 2. * open),
+            12.,
+        ));
+        for particle in particles {
+            let visual = preview_motion::dust_visual_at(particle, elapsed);
+            let alpha = visual.opacity * frame.layer_opacity;
+            if alpha <= 0. {
+                continue;
+            }
+            let (w, h) = (particle.width as f32, particle.height as f32);
+            snapshot.save();
+            snapshot.translate(&graphene::Point::new(
+                (particle.left + visual.dx) as f32 - pad + w / 2.,
+                (particle.top + visual.dy) as f32 - pad + h / 2.,
+            ));
+            snapshot.rotate(visual.rotate as f32);
+            snapshot.scale(visual.scale as f32, visual.scale as f32);
+            snapshot.push_opacity(alpha);
+            snapshot.push_clip(&graphene::Rect::new(-w / 2., -h / 2., w, h));
+            snapshot.append_texture(
+                &texture,
+                &graphene::Rect::new(
+                    drawn.x() - particle.source_left as f32 - w / 2.,
+                    drawn.y() - particle.source_top as f32 - h / 2.,
+                    drawn.width(),
+                    drawn.height(),
+                ),
+            );
+            snapshot.pop();
+            snapshot.pop();
+            snapshot.restore();
+        }
+        snapshot.pop();
+        snapshot.restore();
     }
 
     /// Rear cards' media blur, baked once the pile is at rest.
@@ -383,6 +701,12 @@ impl Pile {
         let top = imp.top_anchor.get();
         let gravity = if top { -1. } else { 1. };
         let (_, fan_tween, arrive) = self.tweens();
+        let motion = self.exit_motion();
+        let settle = preview_motion::settle_tween();
+        let exits = imp.exits.borrow();
+        let rejects = imp.rejects.borrow();
+        let mut origins = imp.origins.borrow_mut();
+        let mirror = if imp.right_anchor.get() { -1. } else { 1. };
         let fan = imp.fan.borrow();
         let arrivals = imp.arrivals.borrow();
         let cards = imp.cards.borrow();
@@ -418,6 +742,57 @@ impl Pile {
                 scale = (scale.0 * frame.scale, scale.1 * frame.scale);
                 opacity = frame.opacity;
             }
+            // Survivors slide into an exiting card's slot; the exiting card
+            // streaks out, shrinks away or hands its look to the dust.
+            let shift = exits.shift_px(&card.id, now, reduced, &settle, top);
+            let mut slide = rejects
+                .get(&card.id)
+                .map_or(0., |start| motion.reject_offset(now - start));
+            match exits.exiting(&card.id) {
+                Some(exit) if exit.kind == ExitKind::Dust => {
+                    let frame = preview_motion::dust_frame(exit.elapsed_ms(now).max(0.), reduced);
+                    let mut child = card.root.first_child();
+                    while let Some(widget) = child {
+                        widget.set_opacity(
+                            if widget == card.image.clone().upcast::<gtk::Widget>() {
+                                frame.source_opacity
+                            } else if widget == card.dim {
+                                widget.opacity()
+                            } else {
+                                frame.chrome_opacity
+                            },
+                        );
+                        child = widget.next_sibling();
+                    }
+                }
+                Some(exit) => {
+                    let elapsed = exit.elapsed_ms(now).max(0.);
+                    let animation = if exit.kind == ExitKind::Dismiss {
+                        motion.dismiss
+                    } else {
+                        motion.fallback
+                    };
+                    let pose = animation.pose_at(elapsed, reduced);
+                    slide += pose.translate_x * mirror;
+                    opacity *= pose.opacity;
+                    scale = (scale.0 * pose.scale, scale.1 * pose.scale);
+                    if exit.kind == ExitKind::Dismiss {
+                        let streak = motion.streak.pose_at(elapsed, reduced);
+                        card.image.set_streak(Some(Streak {
+                            scale_x: streak.scale_x as f32,
+                            step: streak_step(streak.blur),
+                            keep_look: !exit.settles,
+                        }));
+                    }
+                }
+                None => {}
+            }
+            let centre_x = centre_x + slide;
+            let centre_y = centre_y + shift;
+            origins.insert(
+                card.id.clone(),
+                ((centre_x - half.0) as f32, (centre_y - half.1) as f32),
+            );
             card.root.set_opacity(opacity);
             card.dim.set_opacity(
                 preview::collapsed_dim_opacity(depth) * progress * (1. - 0.35 * fan_pose),

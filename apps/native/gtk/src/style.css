@@ -2331,6 +2331,18 @@ popover.captures-menu.canvas-bg-menu > contents {
 }
 
 /* `.thumbnail-stack-compact .thumbnail-card::before`: a rear card's depth shade. */
+/* `.thumbnail-file-dragging`: the image hides under the drag's still copy. */
+.captures .preview-card.file-dragging captures-thumbnail {
+  opacity: 0;
+}
+/* `thumbnail-delete-frame-fade`: the elevation and outline leave with the dust. */
+.captures .preview-card.exit-dust {
+  box-shadow:
+    0 6px 14px rgba(0, 0, 0, 0),
+    0 2px 5px rgba(0, 0, 0, 0),
+    0 0 0 1px rgba(255, 255, 255, 0);
+  transition: box-shadow 500ms cubic-bezier(0.22, 0.1, 0.25, 1);
+}
 .captures .preview-card-dim {
   background: var(--glass-strong-solid);
 }

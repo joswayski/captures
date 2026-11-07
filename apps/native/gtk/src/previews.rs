@@ -9,7 +9,8 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
 
-use captures_app::preview::{self, PreviewStack};
+use captures_app::preview::{self, PreviewDropLanding, PreviewStack};
+use captures_app::preview_motion::ExitKind;
 use captures_history::HistoryEntry;
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
@@ -52,6 +53,8 @@ struct Card {
     /// Shipping's stale-pointer hover lock: a card that appears under a
     /// resting pointer stays at rest until the pointer really moves.
     lock_origin: Cell<Option<(f64, f64)>>,
+    /// Playing its exit: the look stays as it was when the exit began.
+    exiting: Cell<bool>,
 }
 
 struct State {
@@ -62,6 +65,8 @@ struct State {
     pile: Pile,
     minimize: gtk::Button,
     actions: Actions,
+    /// The current file drag landed on this stack (shipping rejects it).
+    self_drop: Cell<bool>,
     #[cfg(feature = "x11")]
     placement: captures_settings::MiniPreviewPlacement,
     #[cfg(feature = "x11")]
@@ -115,6 +120,7 @@ pub fn build(
     let pile = Pile::new(tokens, &controls);
     pile.update_property(&[gtk::accessible::Property::Label("Previews")]);
     pile.set_top_anchor(placement.is_top());
+    pile.set_right_anchor(placement.is_right());
     window.set_child(Some(&pile));
 
     let state = Rc::new(State {
@@ -125,6 +131,7 @@ pub fn build(
         pile: pile.clone(),
         minimize: minimize.clone(),
         actions,
+        self_drop: Cell::new(false),
         #[cfg(feature = "x11")]
         placement,
         #[cfg(feature = "x11")]
@@ -138,6 +145,24 @@ pub fn build(
             state.clear_all();
         }
     });
+    let weak = Rc::downgrade(&state);
+    pile.connect_exited(move || {
+        if let Some(state) = weak.upgrade() {
+            state.relayout();
+        }
+    });
+    // A card's file dropped back on the stack is refused with a shake.
+    let drop = gtk::DropTargetAsync::new(None, gdk::DragAction::COPY);
+    drop.connect_accept(|_, drop| drop.drag().is_some());
+    let weak = Rc::downgrade(&state);
+    drop.connect_drop(move |_, drop, _, _| {
+        if let Some(state) = weak.upgrade() {
+            state.self_drop.set(true);
+        }
+        drop.finish(gdk::DragAction::empty());
+        true
+    });
+    pile.add_controller(drop);
     let weak = Rc::downgrade(&state);
     pile.connect_expand(move || {
         if let Some(state) = weak.upgrade()
@@ -269,25 +294,49 @@ impl State {
         }
     }
 
-    fn dismiss(&self, id: &str) {
+    /// Close or Delete: play the card's exit in its slot, then it leaves.
+    /// The card keeps its locked hover look, as shipping's exit lock.
+    fn leave(&self, id: &str, kind: Option<ExitKind>) {
         if !self.stack.borrow_mut().remove(id) {
             return;
         }
-        self.cards.borrow_mut().retain(|card| {
-            let keep = card.entry.id != id;
-            if !keep {
-                self.pile.remove_card(id);
-            }
-            keep
+        let card = self
+            .cards
+            .borrow()
+            .iter()
+            .find(|card| card.entry.id == id)
+            .cloned();
+        self.cards.borrow_mut().retain(|card| card.entry.id != id);
+        let playing = card.zip(kind).is_some_and(|(card, kind)| {
+            card.exiting.set(true);
+            card.image.set_dimmed(true);
+            self.pile
+                .begin_exit(id, kind, 0., true, card.entry.saved_path.is_some())
         });
+        if !playing {
+            self.pile.remove_card(id);
+        }
         self.relayout();
     }
 
+    /// Clear all: every card streaks out as it looks now, the bottom card
+    /// first, without the survivors settling.
     fn clear_all(&self) {
         let ids = self.stack.borrow().ids().to_vec();
         self.stack.borrow_mut().remove_all(&ids);
-        for card in self.cards.borrow_mut().drain(..) {
-            self.pile.remove_card(&card.entry.id);
+        let top = self.pile.is_top_anchor();
+        let cards: Vec<_> = self.cards.borrow_mut().drain(..).collect();
+        for card in cards {
+            let index = ids.iter().position(|id| *id == card.entry.id).unwrap_or(0);
+            card.exiting.set(true);
+            let delay = captures_app::preview_motion::clear_delay_ms(ids.len(), index, top);
+            let saved = card.entry.saved_path.is_some();
+            if !self
+                .pile
+                .begin_exit(&card.entry.id, ExitKind::Dismiss, delay, false, saved)
+            {
+                self.pile.remove_card(&card.entry.id);
+            }
         }
         self.relayout();
     }
@@ -317,7 +366,10 @@ impl State {
     fn relayout(&self) {
         let stack = self.stack.borrow();
         if stack.ids().is_empty() {
-            self.window.set_visible(false);
+            // Exiting cards finish first.
+            if self.pile.is_empty() {
+                self.window.set_visible(false);
+            }
             return;
         }
         let collapsed = stack.is_collapsed();
@@ -451,6 +503,7 @@ impl State {
             hovered: Cell::new(false),
             focused: Cell::new(false),
             lock_origin: Cell::new(None),
+            exiting: Cell::new(false),
         });
         card.refresh();
         self.load_thumbnail(&card);
@@ -511,16 +564,56 @@ impl State {
         });
         card.root.add_controller(focus);
 
-        // File drag out, as History's cards.
+        // File drag out, as History's cards. The card's image hides under a
+        // still copy of it (`thumbnail-file-dragging`); an accepted copy
+        // elsewhere dismisses the card, a drop back on the stack shakes it.
         let drag = gtk::DragSource::new();
         drag.set_actions(gdk::DragAction::COPY);
         let path = media_path(&self.history_root, &card.entry);
-        drag.connect_prepare(move |_, _, _| {
+        let grab = Rc::new(Cell::new((0., 0.)));
+        let at = grab.clone();
+        drag.connect_prepare(move |_, x, y| {
+            at.set((x, y));
             let uri = gio::File::for_path(&path).uri();
             Some(gdk::ContentProvider::for_bytes(
                 "text/uri-list",
                 &glib::Bytes::from_owned(format!("{uri}\r\n").into_bytes()),
             ))
+        });
+        let (weak, weak_card) = (Rc::downgrade(self), Rc::downgrade(&card));
+        drag.connect_drag_begin(move |source, _| {
+            let (Some(state), Some(card)) = (weak.upgrade(), weak_card.upgrade()) else {
+                return;
+            };
+            state.self_drop.set(false);
+            let still = gtk::WidgetPaintable::new(Some(&card.image)).current_image();
+            let (x, y) = grab.get();
+            source.set_icon(Some(&still), x as i32, y as i32);
+            card.root.add_css_class("file-dragging");
+        });
+        let cancelled = Rc::new(Cell::new(false));
+        let flag = cancelled.clone();
+        drag.connect_drag_cancel(move |_, _, _| {
+            flag.set(true);
+            false
+        });
+        let (weak, weak_card) = (Rc::downgrade(self), Rc::downgrade(&card));
+        drag.connect_drag_end(move |_, _, _| {
+            let accepted = !cancelled.replace(false);
+            let (Some(state), Some(card)) = (weak.upgrade(), weak_card.upgrade()) else {
+                return;
+            };
+            card.root.remove_css_class("file-dragging");
+            let landing = if state.self_drop.replace(false) {
+                PreviewDropLanding::PreviewStack
+            } else {
+                PreviewDropLanding::External
+            };
+            match preview::preview_drag_outcome(accepted, landing) {
+                preview::PreviewDragOutcome::Reject => state.pile.reject(&card.entry.id),
+                preview::PreviewDragOutcome::Dismiss => state.leave(&card.entry.id, None),
+                preview::PreviewDragOutcome::Retain => {}
+            }
         });
         card.image.add_controller(drag);
 
@@ -528,7 +621,7 @@ impl State {
         let weak = Rc::downgrade(self);
         close.connect_clicked(move |_| {
             if let Some(state) = weak.upgrade() {
-                state.dismiss(&id);
+                state.leave(&id, Some(ExitKind::Dismiss));
             }
         });
         let weak = Rc::downgrade(self);
@@ -645,7 +738,7 @@ impl State {
             let Some(state) = weak.upgrade() else { return };
             match result {
                 Ok(()) => {
-                    state.dismiss(&id);
+                    state.leave(&id, Some(ExitKind::Dust));
                     (state.actions.changed)();
                 }
                 Err(error) => {
@@ -662,6 +755,9 @@ impl Card {
     /// Hover or focus shows the controls over a dimmed image; only this
     /// card's nodes change.
     fn refresh(&self) {
+        if self.exiting.get() {
+            return;
+        }
         // Keyboard focus only (`:focus-visible`): the window's initial focus
         // must not reveal the first card's controls.
         let keyboard = self
