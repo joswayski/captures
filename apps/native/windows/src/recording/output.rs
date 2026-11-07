@@ -1,6 +1,7 @@
 //! Output cards use shipping menu copy and the same accepted preview/save
 //! transaction as the timeline. Draft values stay on the UI thread.
 use captures_app::controls::{number, range};
+use captures_app::editor_export::{DEFAULT_MAX_SIZE_BYTES, FileSizeUnit};
 use captures_app::recording_editor_ui::ResolutionChoice;
 use captures_media::{
     AudioEdit, CropRect, CropResizeAxis, EditSpec, ExportFormat, ExportSpec, QualityPreset,
@@ -16,6 +17,8 @@ pub(super) struct Values {
     pub maximum_width: u32,
     pub quality: QualityPreset,
     pub mode: ui::QualityMode,
+    pub maximum_bytes: u64,
+    pub maximum_unit: FileSizeUnit,
     pub audio: AudioEdit,
     pub crop_on: bool,
     pub crop: CropRect,
@@ -30,6 +33,8 @@ impl Values {
             maximum_width: settings.gif_max_width,
             quality: ui::DEFAULT_COMPRESS_PRESET,
             mode: ui::QualityMode::Preserve,
+            maximum_bytes: DEFAULT_MAX_SIZE_BYTES,
+            maximum_unit: FileSizeUnit::Mb,
             audio: AudioEdit::default(),
             crop_on: false,
             crop: CropRect {
@@ -88,7 +93,11 @@ impl Values {
         edit.audio = self.audio.clone();
         edit.audio.source_has_system_audio = system;
         edit.audio.source_has_microphone_audio = mic;
-        export.quality = if gif || self.mode == ui::QualityMode::Compress {
+        export.max_size_bytes =
+            (self.mode == ui::QualityMode::Maximum).then_some(self.maximum_bytes);
+        export.quality = if self.mode != ui::QualityMode::Maximum
+            && (gif || self.mode == ui::QualityMode::Compress)
+        {
             self.quality
         } else {
             QualityPreset::Preserve
@@ -96,7 +105,6 @@ impl Values {
         if gif {
             edit.audio.mute_system_audio = true;
             edit.audio.mute_microphone = true;
-            export.quality = self.quality;
             export.frames_per_second = Some(self.fps);
             export.gif_max_colors = Some(match self.quality {
                 QualityPreset::Tiny => 64,
@@ -111,7 +119,7 @@ impl Values {
 
 pub(super) struct Output {
     pub values: Values,
-    pub fields: [TextField; 6],
+    pub fields: [TextField; 7],
     pub cards: Vec<(Rect, &'static str)>,
     pub slider: Option<Target>,
     pub due: Option<std::time::Instant>,
@@ -148,6 +156,8 @@ impl Target {
                 | Self::GifWidth
                 | Self::QualityMode
                 | Self::Quality
+                | Self::MaximumSize
+                | Self::MaximumUnit
                 | Self::System
                 | Self::SystemVolume
                 | Self::Microphone
@@ -158,7 +168,12 @@ impl Target {
     pub fn is_select(self) -> bool {
         matches!(
             self,
-            Self::Resolution | Self::Fps | Self::GifWidth | Self::QualityMode | Self::Quality
+            Self::Resolution
+                | Self::Fps
+                | Self::GifWidth
+                | Self::QualityMode
+                | Self::Quality
+                | Self::MaximumUnit
         )
     }
     pub fn is_number(self) -> bool {
@@ -166,6 +181,7 @@ impl Target {
             self,
             Self::Width
                 | Self::Height
+                | Self::MaximumSize
                 | Self::CropX
                 | Self::CropY
                 | Self::CropWidth
@@ -189,6 +205,7 @@ impl Target {
             Self::CropY => 3,
             Self::CropWidth => 4,
             Self::CropHeight => 5,
+            Self::MaximumSize => 6,
             _ => unreachable!("numeric field"),
         }
     }
@@ -206,8 +223,13 @@ impl Recording {
                 self.output.values.resolution == ResolutionChoice::Custom
             }
             Target::Fps | Target::GifWidth => gif,
-            Target::Quality => gif || self.output.values.mode == ui::QualityMode::Compress,
-            Target::QualityMode => !gif,
+            Target::Quality => {
+                self.output.values.mode != ui::QualityMode::Maximum
+                    && (gif || self.output.values.mode == ui::QualityMode::Compress)
+            }
+            Target::MaximumSize | Target::MaximumUnit => {
+                self.output.values.mode == ui::QualityMode::Maximum
+            }
             Target::System | Target::SystemVolume => !gif && audio.source_has_system_audio,
             Target::Microphone | Target::MicrophoneVolume => {
                 !gif && audio.source_has_microphone_audio
@@ -244,8 +266,15 @@ impl Recording {
         }
     }
 
-    fn number_value(&self, target: Target) -> u32 {
+    fn number_value(&self, target: Target) -> f64 {
         let v = &self.output.values;
+        if target == Target::MaximumSize {
+            return v
+                .maximum_unit
+                .value(v.maximum_bytes)
+                .parse()
+                .expect("decimal size");
+        }
         match target {
             Target::Width => v.custom.0,
             Target::Height => v.custom.1,
@@ -255,9 +284,17 @@ impl Recording {
             Target::CropHeight => v.crop.height,
             _ => unreachable!("numeric field"),
         }
+        .into()
     }
 
     pub fn number_bounds(&self, target: Target) -> (f64, f64) {
+        if target == Target::MaximumSize {
+            let unit = self.output.values.maximum_unit;
+            return (
+                unit.value(100_000).parse().expect("minimum size"),
+                unit.value(u64::MAX).parse().expect("maximum size"),
+            );
+        }
         let c = self.output.values.crop;
         let (w, h) = self
             .presented
@@ -273,8 +310,15 @@ impl Recording {
         (min.into(), max.into())
     }
 
-    fn set_number_value(&mut self, target: Target, value: u32) {
+    fn set_number_value(&mut self, target: Target, value: f64) {
         let v = &mut self.output.values;
+        if target == Target::MaximumSize {
+            if let Some(bytes) = v.maximum_unit.bytes(&value.to_string()) {
+                v.maximum_bytes = bytes;
+            }
+            return;
+        }
+        let value = value.round() as u32;
         match target {
             Target::Width => v.custom.0 = value,
             Target::Height => v.custom.1 = value,
@@ -344,8 +388,15 @@ impl Recording {
             Target::Resolution => menus.resolutions,
             Target::Fps => menus.gif_frame_rates,
             Target::GifWidth => menus.gif_maximum_widths,
-            // Hard size budgets are a later slice; do not offer an inert mode.
-            Target::QualityMode => menus.quality_modes.into_iter().take(2).collect(),
+            Target::QualityMode => menus.quality_modes,
+            Target::MaximumUnit => FileSizeUnit::ALL
+                .iter()
+                .map(|unit| ui::Choice {
+                    value: unit.label().into(),
+                    label: unit.label().into(),
+                    description: String::new(),
+                })
+                .collect(),
             Target::Quality => menus.quality_presets,
             _ => vec![],
         }
@@ -362,7 +413,12 @@ impl Recording {
                 .iter()
                 .position(|&r| r == v.maximum_width),
             Target::Quality => ui::COMPRESS_PRESETS.iter().position(|&r| r == v.quality),
-            Target::QualityMode => Some(usize::from(v.mode == ui::QualityMode::Compress)),
+            Target::QualityMode => ui::QualityMode::available(self.extension() == "gif")
+                .iter()
+                .position(|&mode| mode == v.mode),
+            Target::MaximumUnit => FileSizeUnit::ALL
+                .iter()
+                .position(|&unit| unit == v.maximum_unit),
             _ => None,
         }
         .unwrap_or(0)
@@ -372,14 +428,23 @@ impl Recording {
         if !self.enabled(target) || index >= self.output_choices(target).len() {
             return;
         }
+        let gif = self.extension() == "gif";
         let v = &mut self.output.values;
         match target {
             Target::Resolution => v.resolution = ResolutionChoice::ALL[index],
             Target::Fps => v.fps = ui::GIF_FRAME_RATES[index],
             Target::GifWidth => v.maximum_width = ui::GIF_MAXIMUM_WIDTHS[index],
             Target::Quality => v.quality = ui::COMPRESS_PRESETS[index],
+            Target::MaximumUnit => {
+                v.maximum_unit = FileSizeUnit::ALL[index];
+                self.output.fields[Target::MaximumSize.field_index()]
+                    .editor
+                    .set_text(&v.maximum_unit.value(v.maximum_bytes));
+                self.events.push(Event::OutputValue(Target::MaximumSize));
+            }
             Target::QualityMode => {
-                v.mode = [ui::QualityMode::Preserve, ui::QualityMode::Compress][index];
+                v.mode = ui::QualityMode::available(gif)[index];
+                self.events.push(Event::Structure);
                 self.compare.dismissed = false;
                 if v.mode == ui::QualityMode::Preserve {
                     self.compare.split = captures_app::compression_compare::DEFAULT_SPLIT;
@@ -389,6 +454,29 @@ impl Recording {
         }
         self.close_output_menu();
         self.output_changed(target);
+    }
+
+    pub(super) fn maximum_limit(&self) -> Option<u64> {
+        self.output_size_bytes(&self.output_value(Target::MaximumSize))
+            .filter(|&bytes| bytes >= 100_000)
+    }
+
+    pub fn output_size_bytes(&self, text: &str) -> Option<u64> {
+        self.output.values.maximum_unit.bytes(text)
+    }
+
+    pub fn maximum_estimate(&self) -> String {
+        ui::estimate(&ui::EstimateInput {
+            maximum: true,
+            maximum_bytes: self.maximum_limit(),
+            ..Default::default()
+        })
+        .label
+    }
+
+    pub fn maximum_estimate_rect(&self) -> Rect {
+        let field = self.target_rect(Target::MaximumSize);
+        Rect::new(field.x, field.y + field.h + self.t.n("s-5"), field.w, 44.)
     }
 
     pub(super) fn output_changed(&mut self, target: Target) {
@@ -511,6 +599,20 @@ impl Recording {
         let _ = self.output.fields[i].apply(&self.g, &self.t, change);
         self.dirty[slot(target)] = true;
         self.place_caret();
+        if target == Target::MaximumSize {
+            if change.text {
+                if let Some(bytes) = self.maximum_limit() {
+                    self.output.values.maximum_bytes = bytes;
+                    self.output_changed(target);
+                } else {
+                    self.cancel_compare();
+                    self.refresh_footer();
+                }
+                self.dirty[OUTPUT] = true;
+                self.events.push(Event::OutputValue(target));
+            }
+            return;
+        }
         let (min, max) = self.number_bounds(target);
         if change.text
             && let Some(value) = self
@@ -520,7 +622,7 @@ impl Recording {
                 .ok()
                 .filter(|v| v.is_finite() && *v >= min && *v <= max)
         {
-            self.set_number_value(target, value.round() as u32);
+            self.set_number_value(target, value);
             self.output_changed(target);
         }
     }
@@ -537,7 +639,7 @@ impl Recording {
             .parse::<f64>()
             .ok()
             .filter(|v| v.is_finite())
-            .map_or(current, |v| v.clamp(min, max).round() as u32);
+            .map_or(current, |v| v.clamp(min, max));
         if value != current {
             self.set_number_value(t, value);
             self.output_changed(t);
@@ -553,6 +655,14 @@ impl Recording {
             r.w - 26. - 2. * self.t.n("s-4"),
         );
         self.dirty[slot(t)] = true;
+        if t == Target::MaximumSize {
+            self.dirty[OUTPUT] = true;
+            self.refresh_footer();
+            self.events.push(Event::OutputValue(t));
+            if !self.timeline.pending {
+                self.schedule_compare();
+            }
+        }
     }
 
     pub(super) fn output_key(&mut self, key: VIRTUAL_KEY, ctrl: bool, shift: bool) -> bool {
@@ -644,7 +754,16 @@ impl Recording {
             text = self.number_value(t).to_string();
         }
         let (min, max) = self.number_bounds(t);
-        let v = number::step_from(&text, 1., up, Some(min), Some(max));
+        let step = if t == Target::MaximumSize {
+            match self.output.values.maximum_unit {
+                FileSizeUnit::Kb => 1.,
+                FileSizeUnit::Mb => 0.1,
+                FileSizeUnit::Gb => 0.0001,
+            }
+        } else {
+            1.
+        };
+        let v = number::step_from(&text, step, up, Some(min), Some(max));
         self.set_output_number(t, &v.to_string());
     }
 
@@ -846,7 +965,19 @@ impl Recording {
             }
             self.rects[slot(Target::CompareShow)] = Rect::new(x + pad, field_y, qw, h);
             if self.shown(Target::CompareShow) {
-                field_y += h + gap;
+                field_y += h + gap + 18. + self.t.n("s-3");
+            }
+            if self.shown(Target::MaximumSize) {
+                let width = qw - 92. - self.t.n("s-4");
+                self.rects[slot(Target::MaximumSize)] = Rect::new(x + pad, field_y, width, h);
+                self.rects[slot(Target::MaximumUnit)] =
+                    Rect::new(x + pad + qw - 92., field_y, 92., h);
+                let _ = self.output.fields[Target::MaximumSize.field_index()].relayout(
+                    &self.g,
+                    &self.t,
+                    width - 26. - 2. * self.t.n("s-4"),
+                );
+                field_y += h + gap + 44.;
             }
             let qh = field_y - y + pad;
             self.output.cards.push((
@@ -936,6 +1067,7 @@ impl Recording {
             (Target::GifWidth, "Maximum width"),
             (Target::QualityMode, "Save quality"),
             (Target::Quality, "Quality"),
+            (Target::MaximumSize, "Maximum file size"),
         ] {
             if !self.shown(target) {
                 continue;
@@ -947,6 +1079,25 @@ impl Recording {
                 label,
                 Rect::new(r.x - base.x, r.y - base.y - 18. - t.n("s-3"), r.w, 18.),
                 "text-subtle",
+                false,
+            )?;
+        }
+        if self.shown(Target::MaximumSize) {
+            let r = self.maximum_estimate_rect();
+            self.draw_text(
+                dc,
+                Style::Option,
+                "Est. size",
+                Rect::new(r.x - base.x, r.y - base.y, r.w, 18.),
+                "text-subtle",
+                false,
+            )?;
+            self.draw_text(
+                dc,
+                Style::Strong,
+                &self.maximum_estimate(),
+                Rect::new(r.x - base.x, r.y - base.y + 24., r.w, 20.),
+                "text",
                 false,
             )?;
         }

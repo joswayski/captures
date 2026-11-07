@@ -46,7 +46,7 @@ impl Default for Compare {
 impl Recording {
     pub(super) fn compresses(&self) -> bool {
         self.presented.is_some()
-            && (self.extension() == "gif" || self.output.values.mode == ui::QualityMode::Compress)
+            && (self.extension() == "gif" || self.output.values.mode != ui::QualityMode::Preserve)
     }
 
     pub(super) fn compare_visible(&self) -> bool {
@@ -88,7 +88,11 @@ impl Recording {
 
     pub(super) fn schedule_compare(&mut self) {
         self.cancel_compare();
-        if !self.compare_visible() || self.timeline.pending {
+        if !self.compare_visible()
+            || self.timeline.pending
+            || (self.output.values.mode == ui::QualityMode::Maximum
+                && self.maximum_limit().is_none())
+        {
             self.place_play();
             return;
         }

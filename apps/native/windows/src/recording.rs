@@ -1,5 +1,5 @@
 //! Retained recording preview, timeline, crop, comparison and save footer, backed by
-//! the shared media session. Format switching and size budgets remain; this is
+//! the shared media session. Format switching remains; this is
 //! an opt-in workbench, not the shipping editor.
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -92,6 +92,8 @@ pub enum Target {
     GifWidth,
     QualityMode,
     Quality,
+    MaximumSize,
+    MaximumUnit,
     System,
     SystemVolume,
     Microphone,
@@ -109,7 +111,7 @@ pub enum Target {
     CompareShow,
 }
 
-pub const TARGETS: [Target; 41] = [
+pub const TARGETS: [Target; 43] = [
     Target::Loop,
     Target::Fit,
     Target::Actual,
@@ -140,6 +142,8 @@ pub const TARGETS: [Target; 41] = [
     Target::QualityMode,
     Target::Quality,
     Target::CompareShow,
+    Target::MaximumSize,
+    Target::MaximumUnit,
     Target::System,
     Target::SystemVolume,
     Target::Microphone,
@@ -175,6 +179,8 @@ impl Target {
             Self::GifWidth => "GIF maximum width",
             Self::QualityMode => "Save quality",
             Self::Quality => "Compression quality",
+            Self::MaximumSize => "Maximum file size",
+            Self::MaximumUnit => "File size unit",
             Self::System => "System audio",
             Self::SystemVolume => "System audio volume",
             Self::Microphone => "Microphone",
@@ -505,7 +511,10 @@ impl Recording {
                 self.presented.as_ref().is_some_and(|p| p.duration_ms > 0)
             }
             Target::Save => {
-                self.saved_fingerprint.as_ref() != Some(&(self.destination(), self.make_copy))
+                (self.output.values.mode != ui::QualityMode::Maximum
+                    || self.maximum_limit() == Some(self.output.values.maximum_bytes))
+                    && self.saved_fingerprint.as_ref()
+                        != Some(&(self.destination(), self.make_copy))
                     && self.presented.as_ref().is_some_and(|p| {
                         let (edit, export) = self.output.values.specs(
                             p.width,

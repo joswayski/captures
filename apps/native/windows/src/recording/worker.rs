@@ -229,6 +229,7 @@ impl Worker {
                         &settings,
                     );
                     if snapshot.editor.source.mime_type == "image/gif" {
+                        output.mode = ui::QualityMode::Compress;
                         let export = ExportSpec {
                             format: ExportFormat::Gif,
                             ..snapshot.save_export.clone()
@@ -268,13 +269,18 @@ impl Worker {
                             };
                             let result = (|| {
                                 let sample = session.export_comparison(&cancel)?;
-                                let estimate = session.estimate_export(&cancel)?;
+                                // Shipping displays the hard cap in Maximum mode,
+                                // not a second sampled size estimate.
+                                let bytes = match session.snapshot_v2().save_export.max_size_bytes {
+                                    Some(cap) => cap,
+                                    None => session.estimate_export(&cancel)?.size_bytes,
+                                };
                                 Ok(super::compare::Encoded {
                                     revision: sample.revision,
                                     position_ms: sample.position_ms,
                                     before: Arc::new(Frame::new(&sample.before_frame())),
                                     after: Arc::new(Frame::new(&sample.after_frame())),
-                                    bytes: estimate.size_bytes,
+                                    bytes,
                                 })
                             })();
                             Outcome::Comparison(generation, result)
@@ -401,6 +407,9 @@ impl Worker {
                                             snapshot.editor.source.height,
                                             &settings,
                                         );
+                                        if snapshot.editor.source.mime_type == "image/gif" {
+                                            output.mode = ui::QualityMode::Compress;
+                                        }
                                         (
                                             path,
                                             None,

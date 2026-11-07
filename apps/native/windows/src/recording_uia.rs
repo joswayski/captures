@@ -19,6 +19,7 @@ pub enum Id {
     Warning,
     Location,
     Status,
+    MaximumEstimate,
     Control(Target),
     Option(Target, usize),
 }
@@ -44,6 +45,9 @@ fn children(w: &Recording) -> Vec<Id> {
     }
     ids.push(Id::Location);
     ids.extend(TARGETS.into_iter().filter(|&t| w.shown(t)).map(Id::Control));
+    if w.shown(Target::MaximumSize) {
+        ids.push(Id::MaximumEstimate);
+    }
     ids.push(Id::Status);
     ids
 }
@@ -55,6 +59,7 @@ fn name(w: &Recording, id: Id) -> String {
         Id::Warning => w.warning().unwrap_or_default(),
         Id::Location => "Save location".into(),
         Id::Status => w.status.clone(),
+        Id::MaximumEstimate => format!("Est. size: {}", w.maximum_estimate()),
         Id::Control(t) => w.target_label(t).into(),
         Id::Option(t, i) => w
             .output_choices(t)
@@ -85,6 +90,7 @@ fn rect(w: &Recording, id: Id) -> Rect {
         Id::Root => Rect::new(0., 0., w.width, w.height),
         Id::Title => w.page_visible_rect(w.title_rect()),
         Id::Warning => w.page_visible_rect(w.warning_rect()),
+        Id::MaximumEstimate => w.page_visible_rect(w.maximum_estimate_rect()),
         Id::Location => {
             let r = w.target_rect(Target::Filename);
             Rect::new(r.x, r.y - 20., r.w, 16.)
@@ -123,6 +129,7 @@ fn runtime(id: Id) -> [i32; 3] {
         Id::Warning => 2,
         Id::Location => 3,
         Id::Status => 4,
+        Id::MaximumEstimate => 5,
         Id::Control(t) => 10 + target_id(t),
         Id::Option(t, i) => 1000 + target_id(t) * 100 + i as i32,
     };
@@ -239,11 +246,17 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                 UIA_LiveSettingPropertyId if self.id == Id::Status => {
                     VARIANT::from(if w.error { Assertive.0 } else { Polite.0 })
                 }
+                UIA_LiveSettingPropertyId if self.id == Id::MaximumEstimate => {
+                    VARIANT::from(Polite.0)
+                }
                 UIA_ValueValuePropertyId => VARIANT::from(BSTR::from(value(w, self.id))),
                 UIA_HelpTextPropertyId => {
                     let description = match self.id {
                         Id::Option(t, i) => {
                             w.output_choices(t).get(i).map(|c| c.description.clone())
+                        }
+                        Id::MaximumEstimate => {
+                            Some(captures_app::recording_editor_ui::ESTIMATE_HELP.into())
                         }
                         _ => None,
                     }
@@ -539,6 +552,9 @@ impl IValueProvider_Impl for Node_Impl {
                     .trim()
                     .parse::<f64>()
                     .is_ok_and(|v| v.is_finite() && v >= min && v <= max)
+                    || (t == Target::MaximumSize
+                        && w.output_size_bytes(&value)
+                            .is_none_or(|bytes| bytes < 100_000))
                 {
                     return Err(E_INVALIDARG.into());
                 }
@@ -681,6 +697,12 @@ pub fn raise(hwnd: HWND, events: &[(Event, String)]) {
                         &VARIANT::default(),
                         &VARIANT::from(BSTR::from(text)),
                     );
+                    if t == Target::MaximumSize {
+                        let _ = UiaRaiseAutomationEvent(
+                            &node(hwnd, Id::MaximumEstimate),
+                            UIA_LiveRegionChangedEventId,
+                        );
+                    }
                 }
                 Event::Expanded(t) => {
                     let _ = UiaRaiseAutomationPropertyChangedEvent(
