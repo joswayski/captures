@@ -87,6 +87,8 @@ impl Recording {
             Target::System => Some(!self.output.values.audio.mute_system_audio),
             Target::Microphone => Some(!self.output.values.audio.mute_microphone),
             Target::Mono => Some(self.output.values.audio.mono_output),
+            Target::Crop => Some(self.output.values.crop_on),
+            Target::CropLock => Some(self.output.crop_locked),
             _ => None,
         }
     }
@@ -230,10 +232,15 @@ impl Recording {
             56.,
         );
         self.dirty[slot(Target::Play)] = true;
+        self.layout_crop();
     }
 
     pub fn play_clip(&self) -> Rect {
-        let button = self.target_rect(Target::Play);
+        self.preview_control_clip(Target::Play)
+    }
+
+    pub(super) fn preview_control_clip(&self, target: Target) -> Rect {
+        let button = self.target_rect(target);
         let view = self.preview_view();
         let (x, y) = (button.x.max(view.x), button.y.max(view.y));
         Rect::new(
@@ -364,7 +371,7 @@ impl Recording {
             dc.PopAxisAlignedClip();
             result?;
         }
-        Ok(())
+        self.draw_crop(dc)
     }
 
     pub(super) fn draw_preview_control(
@@ -517,6 +524,7 @@ mod tests {
             width: 1920,
             height: 1080,
             output: output::Values::new(1920, 1080, &Default::default()),
+            full_source: false,
         })));
         (w, profile)
     }
@@ -760,6 +768,81 @@ mod tests {
         drop(source);
         std::fs::remove_dir_all(profile).unwrap();
         std::fs::remove_dir_all(source_profile).unwrap();
+    }
+
+    #[test]
+    fn crop_controls_share_source_coordinates_and_keep_handles_visible() {
+        use captures_media::{CropDragHandle::*, CropRect};
+        let (mut w, profile) = fixture();
+        (w.width, w.height) = (640., 480.);
+        w.layout().unwrap();
+        assert!(!w.enabled(Target::CropWidth));
+        w.activate(Target::Crop);
+        w.presented.as_mut().unwrap().full_source = true;
+        w.set_output_number(Target::CropWidth, "640");
+        w.set_output_number(Target::CropX, "17");
+        w.set_output_number(Target::CropY, "29");
+        assert_eq!(w.output_value(Target::CropHeight), "360");
+        w.set_crop_range(Target::CropHandle(East), 625.);
+        assert_eq!(
+            w.output.values.crop,
+            CropRect {
+                x: 17,
+                y: 38,
+                width: 608,
+                height: 342
+            }
+        );
+        assert_eq!(w.crop_range(Target::CropHandle(East)).unwrap().0, 625.);
+        w.activate(Target::CropLock);
+        w.set_focus(Some(Target::CropHandle(NorthWest)), true);
+        assert!(w.crop_key(VK_DOWN, true));
+        assert_eq!(
+            w.output.values.crop,
+            CropRect {
+                x: 17,
+                y: 48,
+                width: 608,
+                height: 332
+            }
+        );
+        w.set_output_number(Target::CropWidth, "640");
+        w.set_output_number(Target::CropHeight, "360");
+        w.set_output_number(Target::CropX, "100");
+        w.set_output_number(Target::CropY, "200");
+        w.scroll_page(-f32::MAX);
+        let media = w.preview_media();
+        let (sx, sy) = (media.w / 1920., media.h / 1080.);
+        let (x, y) = (media.x + 200. * sx, media.y + 290. * sy);
+        assert!(w.crop_pointer(WM_LBUTTONDOWN, x, y));
+        assert!(w.crop_pointer(WM_MOUSEMOVE, x + 37. * sx, y - 23. * sy));
+        assert_eq!(w.output.values.crop.x, 137);
+        assert_eq!(w.output.values.crop.y, 177);
+        assert!(w.crop_pointer(WM_LBUTTONUP, x + 100. * sx, y - 23. * sy));
+        assert_eq!(
+            w.output.values.crop,
+            CropRect {
+                x: 200,
+                y: 177,
+                width: 640,
+                height: 360
+            }
+        );
+        assert!(w.crop_drag.is_none());
+        assert!(!w.enabled(Target::Save));
+        w.set_output_number(Target::CropX, "1280");
+        w.set_output_number(Target::CropY, "720");
+        w.activate(Target::Actual);
+        w.set_focus(Some(Target::CropHandle(SouthEast)), true);
+        let target = w.target_rect(Target::CropHandle(SouthEast));
+        let visible = w.visible_target_rect(Target::CropHandle(SouthEast));
+        assert_eq!((visible.w, visible.h), (11., 11.));
+        assert!(target.y + target.h + 4. <= w.rects[FOOTER].y);
+        w.activate(Target::Crop);
+        assert!(!w.shown(Target::CropHandle(SouthEast)));
+        assert!(!w.enabled(Target::CropWidth));
+        drop(w);
+        std::fs::remove_dir_all(profile).unwrap();
     }
 
     #[test]

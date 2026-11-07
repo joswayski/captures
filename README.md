@@ -209,10 +209,12 @@ or replace the original with cancellation and Show in Folder. The timeline suppo
 pointer/keyboard input and accessibility ranges.
 Output controls include original/1080p/720p/custom dimensions, GIF frame rate,
 maximum width and quality-based palette limits, and separate source-audio volumes,
-mute and mono. Recording crop, comparison, format switching and the remaining
+mute and mono. Crop supports source-pixel numeric fields, aspect locking, eight
+resize handles and interior dragging over the full source preview, with keyboard
+and accessibility ranges. Recording comparison, format switching and the remaining
 save-quality options are still migration work; these slices are not recording-editor
 parity. Output controls and their source-preview correction passed physical Windows
-testing. Like Tauri, the preview keeps the original source's
+testing; crop acceptance remains pending. Like Tauri, the preview keeps the original source's
 size and picture while output settings affect the saved file, not the page layout.
 
 The native capture workspace connects full-display

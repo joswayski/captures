@@ -976,6 +976,30 @@ reverified; the immutable source-playback API is covered by shared Linux tests.
 Crop, comparison, format switching and remaining save-quality controls stay open.
 No native promotion or release/workflow changes.
 
+Win32 recording slice 5 adds graphical and numeric source-relative crop, using
+shared `CropRect` drag and aspect-lock geometry. Eight handles expose UIA edge
+ranges and arrow-key steps of one source pixel (Shift: ten); interior dragging
+keeps its grab offset. Escape/capture loss ends a drag without reverting it.
+X/Y/width/height drafts follow the output fields' commit/clamp rules, and original
+output size follows the crop. Fit/100% and keyboard focus reveal keep handles
+within the media viewport and above the fixed footer. Enabling crop displays the
+full source with dimming, handles and size chip. A cached source frame avoids
+redecoding it for every crop edit. Source playback retains accepted trim/audio
+without crop/resize/export effects or mutation of the accepted session, while
+saved output retains the crop. GIF autoplay uses that same source path.
+Local Windows-GNU build/clippy and 25 Wine host tests passed. A removed real-worker
+probe accepted crop 73,109,321,239, exported 320×238 MP4/GIF, and played successive
+source frames with crop active. Audio was muted for this orb probe because Wine
+has no playback device; physical audio remains a PC gate. Light/dark, normal/minimum,
+numeric/aspect-lock focus and Fit/100% Direct2D captures were inspected alongside
+the live Tauri harness. Wine cannot create this DirectComposition window, so a
+real-pointer clip, UIA and compositor acceptance remain queued on the PC after
+the output-controls gate. AppKit, X11 and Wayland hosts are unchanged and not
+physically reverified; the new shared source-playback API is covered by its Linux
+session test. Comparison and remaining save-quality/format controls stay open.
+Jose authorized merging this development slice before the physical gate;
+acceptance remains pending. No native promotion or release/workflow changes.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,

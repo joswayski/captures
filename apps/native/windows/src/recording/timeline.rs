@@ -209,6 +209,7 @@ impl Recording {
         if self.timeline.resume
             && !self.timeline.pending
             && self.timeline.drag.is_none()
+            && self.crop_drag.is_none()
             && !self.timeline.scrubbing
             && !self.closing
             && !self.saving

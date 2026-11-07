@@ -32,6 +32,7 @@ pub(super) struct Presented {
     pub width: u32,
     pub height: u32,
     pub output: Values,
+    pub full_source: bool,
 }
 
 impl Presented {
@@ -50,6 +51,7 @@ impl Presented {
             width: snapshot.editor.source.width,
             height: snapshot.editor.source.height,
             output: output.clone(),
+            full_source: false,
         }
     }
 
@@ -67,6 +69,7 @@ impl Presented {
             *cache = Some((position, Arc::new(Frame::new(&frame))));
         }
         presented.frame = cache.as_ref().expect("source frame").1.clone();
+        presented.full_source = true;
         Ok(presented)
     }
 }
