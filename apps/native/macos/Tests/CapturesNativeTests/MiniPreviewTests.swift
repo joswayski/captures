@@ -808,7 +808,7 @@ final class MiniPreviewTests: XCTestCase {
         try png.write(to: imagePath)
         let transport = MiniPreviewActionTransport()
         transport.cleanupGate = DispatchSemaphore(value: 0)
-        defer { transport.cleanupGate?.signal() }
+        defer { transport.cleanupGate?.signal(); transport.gate?.signal() }
         let pasteboard = NSPasteboard(name: NSPasteboard.Name("es.captures.tests.\(UUID())"))
         pasteboard.clearContents()
         let actions = MiniPreviewActions(settingsPath: nil, transport: transport,
@@ -860,8 +860,13 @@ final class MiniPreviewTests: XCTestCase {
             "Copy must publish the full-resolution PNG, not the thumbnail")
         XCTAssertTrue(save.isEnabled)
         XCTAssertEqual(transport.saveCount, 0, "Save must wait for Copy to finish")
+        // A visible button's performClick can service the completion on the
+        // main run loop. Hold Save in flight while checking its busy state.
+        transport.gate = DispatchSemaphore(value: 0)
         save.performClick(nil)
         XCTAssertFalse(save.isEnabled)
+        XCTAssertEqual(transport.started.wait(timeout: .now() + 5), .success)
+        transport.gate?.signal()
         LiveCaptureController.flush()
         try waitUntil { save.title == "Saved" }
         XCTAssertTrue(save.isEnabled)
