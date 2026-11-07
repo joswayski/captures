@@ -16,6 +16,7 @@ use captures_media::{
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
 
+use super::output::Values;
 use super::preview::Frame;
 
 pub(super) struct Presented {
@@ -28,10 +29,13 @@ pub(super) struct Presented {
     pub duration_ms: u64,
     pub edit: EditSpec,
     pub position_ms: u64,
+    pub width: u32,
+    pub height: u32,
+    pub output: Values,
 }
 
 impl Presented {
-    fn of(session: &RecordingEditorSession, directory: &Path) -> Self {
+    fn of(session: &RecordingEditorSession, directory: &Path, output: &Values) -> Self {
         let snapshot = session.snapshot_v2();
         Self {
             mime_type: snapshot.editor.source.mime_type.clone(),
@@ -43,6 +47,9 @@ impl Presented {
             duration_ms: snapshot.editor.source.duration_ms.unwrap_or(0),
             edit: snapshot.editor.edit.clone(),
             position_ms: snapshot.editor.position_ms,
+            width: snapshot.editor.source.width,
+            height: snapshot.editor.source.height,
+            output: output.clone(),
         }
     }
 }
@@ -51,6 +58,8 @@ pub(super) struct PreviewRequest {
     pub generation: u64,
     pub edit: EditSpec,
     pub position_ms: u64,
+    pub export: ExportSpec,
+    pub output: Values,
 }
 
 pub(super) enum Job {
@@ -142,6 +151,7 @@ impl Worker {
         root: PathBuf,
         id: String,
         directory: PathBuf,
+        settings: captures_settings::RecordingSettings,
     ) -> std::io::Result<Self> {
         let (jobs, inbox) = channel();
         let (out, outcomes) = channel();
@@ -169,6 +179,7 @@ impl Worker {
                     }
                     sent
                 };
+                let mut output = Values::new(2, 2, &settings);
                 let mut session = match RecordingEditorSession::open(
                     RecordingEditorOpenRequest {
                         history_root: root,
@@ -181,19 +192,31 @@ impl Worker {
                     // Until the format picker lands, preserve GIF sources as GIF
                     // for both save-copy and replacement, never MP4 in a .gif file.
                     let snapshot = session.snapshot_v2();
+                    output = Values::new(
+                        snapshot.editor.source.width,
+                        snapshot.editor.source.height,
+                        &settings,
+                    );
                     if snapshot.editor.source.mime_type == "image/gif" {
-                        let edit = snapshot.editor.edit.clone();
                         let export = ExportSpec {
                             format: ExportFormat::Gif,
                             ..snapshot.save_export.clone()
                         };
+                        let (edit, export) = output.specs(
+                            snapshot.editor.source.width,
+                            snapshot.editor.source.height,
+                            snapshot.editor.edit.clone(),
+                            export,
+                        );
                         session
                             .execute_v2(RecordingEditorRequestV2::UpdatePreview { edit, export })?;
                     }
                     Ok(session)
                 }) {
                     Ok(session) => {
-                        send(Outcome::Opened(Ok(Presented::of(&session, &directory))));
+                        send(Outcome::Opened(Ok(Presented::of(
+                            &session, &directory, &output,
+                        ))));
                         Some(session)
                     }
                     Err(error) => {
@@ -212,16 +235,18 @@ impl Worker {
                             let Some(session) = session.as_mut() else {
                                 continue;
                             };
-                            let export = session.snapshot_v2().save_export.clone();
                             let result =
                                 session.execute_v2(RecordingEditorRequestV2::UpdatePreviewAt {
                                     edit: request.edit,
-                                    export,
+                                    export: request.export,
                                     position_ms: request.position_ms,
                                 });
+                            if result.is_ok() {
+                                output = request.output;
+                            }
                             Outcome::Preview(
                                 request.generation,
-                                Box::new(Presented::of(session, &directory)),
+                                Box::new(Presented::of(session, &directory, &output)),
                                 result.err(),
                             )
                         }
@@ -309,7 +334,17 @@ impl Worker {
                                 session
                                     .replace_original_at(&request.destination, &cancel, progress)
                                     .map(|ReplacedRecording::Replaced { path, .. }| {
-                                        (path, None, Some(Presented::of(session, &directory)))
+                                        let snapshot = session.snapshot_v2();
+                                        output = Values::new(
+                                            snapshot.editor.source.width,
+                                            snapshot.editor.source.height,
+                                            &settings,
+                                        );
+                                        (
+                                            path,
+                                            None,
+                                            Some(Presented::of(session, &directory, &output)),
+                                        )
                                     })
                                     .map_err(|error| error.message)
                             };

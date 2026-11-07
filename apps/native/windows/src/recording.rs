@@ -1,5 +1,5 @@
-//! Retained recording preview, timeline and save footer, backed by the shared
-//! media session. Output cards follow in separate slices; this is
+//! Retained recording preview, timeline, output cards and save footer, backed by
+//! the shared media session. Crop and comparison follow in separate slices; this is
 //! an opt-in workbench, not the shipping editor.
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -24,9 +24,12 @@ use crate::textfield::{self, Change, Key, TextField};
 use crate::tokens::Tokens;
 use crate::{Options, appearance};
 
+mod menu;
+mod output;
 mod preview;
 mod timeline;
 mod worker;
+use output::Output;
 use preview::Preview;
 use timeline::Timeline;
 use worker::{Job, Outcome, Presented, Worker};
@@ -36,6 +39,7 @@ const WM_OUTCOME: u32 = WM_APP + 31;
 const WM_WAKE: u32 = WM_APP + 32;
 const WM_FRAME: u32 = WM_APP + 33;
 const WM_MOUSELEAVE: u32 = 0x02A3;
+const OUTPUT_TIMER: usize = 42;
 
 thread_local! {
     static WINDOWS: RefCell<Vec<Recording>> = const { RefCell::new(Vec::new()) };
@@ -78,15 +82,37 @@ pub enum Target {
     Actual,
     TrimStart,
     TrimEnd,
+    Resolution,
+    Width,
+    Height,
+    Fps,
+    GifWidth,
+    Quality,
+    System,
+    SystemVolume,
+    Microphone,
+    MicrophoneVolume,
+    Mono,
 }
 
-const TARGETS: [Target; 12] = [
+pub const TARGETS: [Target; 23] = [
     Target::Loop,
     Target::Fit,
     Target::Actual,
     Target::Play,
     Target::TrimStart,
     Target::TrimEnd,
+    Target::Fps,
+    Target::GifWidth,
+    Target::Resolution,
+    Target::Width,
+    Target::Height,
+    Target::Quality,
+    Target::System,
+    Target::SystemVolume,
+    Target::Microphone,
+    Target::MicrophoneVolume,
+    Target::Mono,
     Target::Change,
     Target::Filename,
     Target::Copy,
@@ -110,6 +136,17 @@ impl Target {
             Self::Actual => "100%",
             Self::TrimStart => "Trim start",
             Self::TrimEnd => "Trim end",
+            Self::Resolution => "Output resolution",
+            Self::Width => "Output width",
+            Self::Height => "Output height",
+            Self::Fps => "GIF frame rate",
+            Self::GifWidth => "GIF maximum width",
+            Self::Quality => "Compression quality",
+            Self::System => "System audio",
+            Self::SystemVolume => "System audio volume",
+            Self::Microphone => "Microphone",
+            Self::MicrophoneVolume => "Microphone volume",
+            Self::Mono => "Convert to mono",
         }
     }
 
@@ -118,7 +155,7 @@ impl Target {
     }
 
     fn scrolls(self) -> bool {
-        self.is_preview() || matches!(self, Self::TrimStart | Self::TrimEnd)
+        self.is_preview() || matches!(self, Self::TrimStart | Self::TrimEnd) || self.is_output()
     }
 }
 
@@ -132,6 +169,8 @@ pub enum Event {
     Toggle(Target),
     Name(Target),
     Range(Target),
+    OutputValue(Target),
+    Expanded(Target),
 }
 
 // Each control and the caret has its own retained surface. A progress tick
@@ -143,8 +182,10 @@ const PROGRESS: usize = 3;
 const CARET: usize = 4;
 const PREVIEW: usize = 5;
 const TIMELINE: usize = 6;
-const CONTROL_START: usize = 7;
-const COUNT: usize = CONTROL_START + TARGETS.len();
+const OUTPUT: usize = 7;
+const CONTROL_START: usize = 8;
+const MENU: usize = CONTROL_START + TARGETS.len();
+const COUNT: usize = MENU + 1;
 
 struct Layer {
     visual: IDCompositionVisual3,
@@ -170,6 +211,8 @@ pub struct Recording {
     presented: Option<Presented>,
     preview: Preview,
     timeline: Timeline,
+    output: Output,
+    menu: Option<menu::Menu>,
     pub filename: TextField,
     pub directory: PathBuf,
     source_directory: PathBuf,
@@ -245,6 +288,7 @@ impl Recording {
                 .unwrap_or_else(captures_app::default_history_root),
             id.into(),
             directory.clone(),
+            settings.recording.clone(),
         )
         .map_err(|error| Error::new(E_FAIL, error.to_string()))?;
         Ok(Self {
@@ -266,6 +310,8 @@ impl Recording {
             presented: None,
             preview: Preview::default(),
             timeline: Timeline::default(),
+            output: Output::new(&settings.recording),
+            menu: None,
             filename: TextField::new(Style::Option, ""),
             directory,
             source_directory: PathBuf::new(),
@@ -365,6 +411,9 @@ impl Recording {
     }
 
     pub fn shown(&self, target: Target) -> bool {
+        if target.is_output() {
+            return self.output_shown(target);
+        }
         match target {
             Target::Cancel => self.saving,
             Target::Reveal => self.saved.is_some() && !self.saving,
@@ -387,6 +436,8 @@ impl Recording {
             return false;
         }
         match target {
+            Target::SystemVolume => !self.output.values.audio.mute_system_audio,
+            Target::MicrophoneVolume => !self.output.values.audio.mute_microphone,
             Target::Play | Target::Save if self.timeline.pending => false,
             Target::Play => self.presented.as_ref().is_some_and(|p| p.duration_ms > 0),
             Target::TrimStart | Target::TrimEnd => {
@@ -394,6 +445,15 @@ impl Recording {
             }
             Target::Save => {
                 self.saved_fingerprint.as_ref() != Some(&(self.destination(), self.make_copy))
+                    && self.presented.as_ref().is_some_and(|p| {
+                        let (edit, export) = self.output.values.specs(
+                            p.width,
+                            p.height,
+                            p.edit.clone(),
+                            p.export.clone(),
+                        );
+                        edit == p.edit && export == p.export
+                    })
             }
             Target::Copy => self
                 .presented
@@ -424,7 +484,7 @@ impl Recording {
     }
 
     fn page_scroll_max(&self) -> f32 {
-        let timeline = self.rects[TIMELINE];
+        let timeline = self.rects[OUTPUT];
         (timeline.y + timeline.h + self.page_scroll + self.t.n("s-6") - self.rects[FOOTER].y)
             .max(0.)
     }
@@ -463,7 +523,9 @@ impl Recording {
     fn content_clip(&self, index: usize) -> Option<Rect> {
         if index != PREVIEW
             && index != TIMELINE
-            && !(index >= CONTROL_START && TARGETS[index - CONTROL_START].scrolls())
+            && index != OUTPUT
+            && !(index == CARET && self.focus.is_some_and(Target::is_number))
+            && !((CONTROL_START..MENU).contains(&index) && TARGETS[index - CONTROL_START].scrolls())
         {
             return None;
         }
@@ -534,6 +596,11 @@ impl Recording {
     }
 
     fn place_caret(&mut self) {
+        if let Some(r) = self.output_caret() {
+            self.rects[CARET] = r;
+            self.dirty[CARET] = true;
+            return;
+        }
         let field = self.target_rect(Target::Filename);
         let (x, y, h) = self.filename.caret_box(self.t.n("s-4"), field.h);
         self.rects[CARET] = Rect::new(field.x + x, field.y + y, 1., h);
@@ -541,6 +608,10 @@ impl Recording {
     }
 
     pub fn set_focus(&mut self, target: Option<Target>, visible: bool) {
+        self.output_focus(target, visible);
+        if self.menu_target().is_some_and(|t| Some(t) != target) {
+            self.close_output_menu();
+        }
         if let Some(old) = self.focus {
             self.dirty[slot(old)] = true;
         }
@@ -604,7 +675,14 @@ impl Recording {
     }
 
     pub fn activate(&mut self, target: Target) {
+        if !target.is_number() {
+            self.commit_output_number();
+        }
         if !self.enabled(target) {
+            return;
+        }
+        if target.is_output() {
+            self.activate_output(target);
             return;
         }
         match target {
@@ -702,6 +780,7 @@ impl Recording {
                 self.notify("Preparing…", false);
                 self.refresh_footer();
             }
+            _ => {}
         }
     }
 
@@ -732,6 +811,7 @@ impl Recording {
                         self.timeline.start = p.edit.trim_start_ms;
                         self.timeline.end = p.edit.trim_end_ms.unwrap_or(p.duration_ms).max(1);
                         self.presented = Some(p);
+                        self.reset_output();
                         self.layout_preview();
                         if !self.hwnd.is_invalid() {
                             self.load_timeline();
@@ -759,12 +839,13 @@ impl Recording {
                 self.set_preview_frame(p.frame.clone());
                 self.presented = Some(*p);
                 if let Some(error) = error {
+                    self.reset_output();
                     self.timeline.resume = false;
                     self.notify(&error, true);
-                } else {
+                } else if self.saved.is_none() {
                     self.notify("", false);
                 }
-                self.layout_timeline();
+                let _ = self.layout();
                 self.refresh_footer();
                 self.events.push(Event::Range(Target::TrimStart));
                 self.events.push(Event::Range(Target::TrimEnd));
@@ -806,9 +887,15 @@ impl Recording {
                             self.timeline.start = p.edit.trim_start_ms;
                             self.timeline.end = p.edit.trim_end_ms.unwrap_or(p.duration_ms).max(1);
                             self.presented = Some(p);
+                            self.reset_output();
                             self.load_timeline();
                             self.layout_preview();
                             self.dirty[BACK] = true;
+                            // Replacement rebases the shared session to source-preserving
+                            // defaults. Accept the displayed GIF defaults before another save.
+                            if self.extension() == "gif" {
+                                self.seek_timeline(0);
+                            }
                         }
                         if let Some(warning) = saved.warning {
                             self.notify(
@@ -1013,8 +1100,13 @@ impl Recording {
             CARET => gfx::fill(dc, local, t.color("text"))?,
             PREVIEW => self.draw_preview(dc)?,
             TIMELINE => self.draw_timeline(dc)?,
+            OUTPUT => self.draw_output(dc)?,
+            MENU => self.draw_output_menu(dc)?,
             _ => {
                 let target = TARGETS[index - CONTROL_START];
+                if target.is_output() {
+                    return self.draw_output_control(dc, target);
+                }
                 if matches!(target, Target::TrimStart | Target::TrimEnd) {
                     return self.draw_trim_handle(dc, target);
                 }
@@ -1148,9 +1240,9 @@ impl Recording {
     }
 
     fn bleed(&self, index: usize) -> f32 {
-        let shadow = if index == slot(Target::Play) {
+        let shadow = if index == slot(Target::Play) || index == MENU {
             Some("shadow-lg")
-        } else if index == PREVIEW || index == TIMELINE {
+        } else if index == PREVIEW || index == TIMELINE || index == OUTPUT {
             Some("shadow-sm")
         } else {
             None
@@ -1172,11 +1264,16 @@ impl Recording {
     }
 
     fn opacity(&self, index: usize) -> f32 {
+        if index == MENU {
+            return f32::from(self.menu.is_some());
+        }
         if index == CARET {
             f32::from(
-                self.focus == Some(Target::Filename)
-                    && self.enabled(Target::Filename)
-                    && self.filename.editor.selection().0 == self.filename.editor.selection().1,
+                self.output_caret_visible()
+                    || (self.focus == Some(Target::Filename)
+                        && self.enabled(Target::Filename)
+                        && self.filename.editor.selection().0
+                            == self.filename.editor.selection().1),
             )
         } else if index >= CONTROL_START {
             let target = TARGETS[index - CONTROL_START];
@@ -1230,6 +1327,10 @@ impl Recording {
                     },
                     None::<&ID2D1Layer>,
                 );
+                dc.PushAxisAlignedClip(
+                    &gfx::rect(clip.x, clip.y, clip.x + clip.w, clip.y + clip.h),
+                    D2D1_ANTIALIAS_MODE_ALIASED,
+                );
                 dc.SetTransform(&Matrix3x2 {
                     M31: r.x,
                     M32: r.y,
@@ -1237,6 +1338,7 @@ impl Recording {
                 });
                 let result = self.draw(dc, index);
                 dc.SetTransform(&Matrix3x2::identity());
+                dc.PopAxisAlignedClip();
                 dc.PopLayer();
                 result?;
             }
@@ -1247,6 +1349,12 @@ impl Recording {
     fn frame(&mut self) -> Result<()> {
         for index in 0..COUNT {
             if !std::mem::take(&mut self.dirty[index]) {
+                continue;
+            }
+            if self.opacity(index) == 0. {
+                unsafe {
+                    self.layers[index].visual.SetOpacity2(0.)?;
+                }
                 continue;
             }
             let r = self.rects[index];
@@ -1288,6 +1396,8 @@ impl Recording {
                         (clip.x + clip.w - r.x) * s + bleed,
                         (clip.y + clip.h - r.y) * s + bleed,
                     ))?;
+                } else {
+                    visual.SetClip2(&gfx::rect(0., 0., size.0 as f32, size.1 as f32))?;
                 }
                 let opacity = self.opacity(index);
                 visual.SetOpacity2(opacity)?;
@@ -1331,6 +1441,9 @@ impl Recording {
     fn key(&mut self, key: VIRTUAL_KEY) {
         let down = |key: VIRTUAL_KEY| unsafe { GetKeyState(i32::from(key.0)) < 0 };
         let (ctrl, shift) = (down(VK_CONTROL), down(VK_SHIFT));
+        if self.output_key(key, ctrl, shift) {
+            return;
+        }
         if key == VK_ESCAPE && (self.timeline.drag.is_some() || self.timeline.scrubbing) {
             self.end_timeline_drag();
             unsafe {
@@ -1421,6 +1534,7 @@ impl Recording {
             }
             WM_OUTCOME => self.outcomes(),
             WM_FRAME => self.take_preview_frame(),
+            WM_TIMER if wp.0 == OUTPUT_TIMER => self.apply_output_due(),
             WM_WAKE => {}
             WM_SIZE if wp.0 != SIZE_MINIMIZED as usize => {
                 self.width = (lp.0 as u32 & 0xffff) as f32 / self.scale;
@@ -1443,7 +1557,7 @@ impl Recording {
                     (lp.0 as u16 as i16) as f32 / self.scale,
                     ((lp.0 >> 16) as u16 as i16) as f32 / self.scale,
                 );
-                if self.timeline_pointer(msg, x, y) {
+                if self.output_pointer(msg, x, y) || self.timeline_pointer(msg, x, y) {
                     return Some(LRESULT(0));
                 }
                 let hit = self.hit(x, y);
@@ -1520,6 +1634,7 @@ impl Recording {
                 }
             }
             WM_CAPTURECHANGED => {
+                self.output.slider = None;
                 self.end_timeline_drag();
                 self.dragging = false;
                 self.pressed = None;
@@ -1564,6 +1679,9 @@ impl Recording {
                 let delta =
                     (wp.0 >> 16) as u16 as i16 as f32 / 120. * appearance::wheel_lines() * 100.
                         / 3.;
+                if self.output_menu_wheel(delta) {
+                    return Some(LRESULT(0));
+                }
                 let old_scroll = self.preview.scroll;
                 let in_page = point.y as f32 / self.scale < self.rects[FOOTER].y;
                 if in_page
@@ -1592,6 +1710,7 @@ impl Recording {
                 }
             }
             WM_KEYDOWN => self.key(VIRTUAL_KEY(wp.0 as u16)),
+            WM_CHAR if self.output_char(wp.0 as u16) => {}
             WM_CHAR if self.focus == Some(Target::Filename) && self.enabled(Target::Filename) => {
                 let unit = wp.0 as u16;
                 if (0xd800..=0xdbff).contains(&unit) {

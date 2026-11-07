@@ -84,6 +84,9 @@ impl Recording {
             Target::Loop => Some(self.worker.looping.load(Ordering::Relaxed)),
             Target::Fit => Some(!self.preview.actual),
             Target::Actual => Some(self.preview.actual),
+            Target::System => Some(!self.output.values.audio.mute_system_audio),
+            Target::Microphone => Some(!self.output.values.audio.mute_microphone),
+            Target::Mono => Some(self.output.values.audio.mono_output),
             _ => None,
         }
     }
@@ -171,6 +174,7 @@ impl Recording {
             self.dirty[slot(target)] = true;
         }
         self.layout_timeline();
+        self.layout_output();
     }
 
     pub(super) fn preview_view(&self) -> Rect {
@@ -510,6 +514,9 @@ mod tests {
             duration_ms: 6000,
             edit: captures_media::EditSpec::default(),
             position_ms: 0,
+            width: 1920,
+            height: 1080,
+            output: output::Values::new(1920, 1080, &Default::default()),
         })));
         (w, profile)
     }
@@ -558,9 +565,10 @@ mod tests {
                 .unwrap();
             read.CopyFromBitmap(None, &target, None).unwrap();
             let mapped = read.Map(D2D1_MAP_OPTIONS_READ).unwrap();
-            // Well inside the bottom-right media, away from rounded edges,
-            // padding and Play. This must stay media, not the empty stage.
-            let view = w.preview_view();
+            // Well inside the visible bottom-right media, away from rounded
+            // edges, padding, Play and the fixed footer. At minimum size the
+            // bottom of the full media view is clipped behind that footer.
+            let view = w.page_visible_rect(w.preview_view());
             let x = (view.x + view.w - 30.) as usize;
             let y = (view.y + view.h - 30.) as usize;
             let pixel =
@@ -752,5 +760,110 @@ mod tests {
         drop(source);
         std::fs::remove_dir_all(profile).unwrap();
         std::fs::remove_dir_all(source_profile).unwrap();
+    }
+
+    #[test]
+    fn output_controls_keep_drafts_ranges_and_accepted_settings_together() {
+        use captures_app::recording_editor_ui::ResolutionChoice;
+        let (mut w, profile) = fixture();
+        (w.width, w.height) = (640., 480.);
+        let p = w.presented.as_mut().unwrap();
+        p.edit.audio.source_has_system_audio = true;
+        p.edit.audio.source_has_microphone_audio = true;
+        w.layout().unwrap();
+        w.set_output_menu(Target::Resolution, true);
+        w.key(VK_END);
+        w.key(VK_ESCAPE);
+        assert!(
+            !w.shown(Target::Width),
+            "highlighting then Escape does not choose"
+        );
+        w.set_output_menu(Target::Resolution, true);
+        w.key(VK_END);
+        w.key(VK_RETURN);
+        assert!(w.shown(Target::Width));
+        w.set_focus(Some(Target::Width), true);
+        assert_eq!(
+            w.visible_target_rect(Target::Width).h,
+            w.target_rect(Target::Width).h
+        );
+        w.set_output_number(Target::Width, "1");
+        assert_eq!(
+            w.output.values.custom.0, 1920,
+            "incomplete text must not resize"
+        );
+        w.set_output_number(Target::Width, "641");
+        w.set_output_number(Target::Height, "479");
+        let p = w.presented.as_ref().unwrap();
+        let (edit, _) = w
+            .output
+            .values
+            .specs(p.width, p.height, p.edit.clone(), p.export.clone());
+        assert_eq!(
+            (edit.output_width, edit.output_height),
+            (Some(640), Some(478))
+        );
+        assert!(
+            !w.enabled(Target::Save),
+            "pending settings cannot save the previous edit"
+        );
+        w.set_output_number(Target::Width, "");
+        w.key(VK_UP);
+        assert_eq!(
+            w.output_value(Target::Width),
+            "642",
+            "empty draft steps from the current value"
+        );
+        w.set_output_number(Target::Width, "0");
+        w.set_focus(Some(Target::Height), true);
+        assert_eq!(
+            w.output_value(Target::Width),
+            "2",
+            "blur clamps to the minimum"
+        );
+
+        w.set_volume(Target::SystemVolume, 37.);
+        w.set_volume(Target::MicrophoneVolume, 161.);
+        w.activate(Target::System);
+        assert_eq!(w.toggled(Target::System), Some(false));
+        assert!(!w.enabled(Target::SystemVolume));
+        w.set_volume(Target::SystemVolume, 80.);
+        assert_eq!(w.volume_range(Target::SystemVolume).unwrap().0, 37.);
+        w.activate(Target::System);
+        w.activate(Target::Mono);
+        let p = w.presented.as_ref().unwrap();
+        let (edit, _) = w
+            .output
+            .values
+            .specs(p.width, p.height, p.edit.clone(), p.export.clone());
+        assert_eq!(
+            (edit.audio.system_volume, edit.audio.microphone_volume),
+            (0.37, 1.61)
+        );
+        assert!(edit.audio.mono_output && edit.audio.source_has_microphone_audio);
+        assert!(!edit.audio.mute_system_audio);
+        w.set_focus(Some(Target::MicrophoneVolume), true);
+        w.key(VK_HOME);
+        w.key(VK_PRIOR);
+        assert_eq!(
+            w.volume_range(Target::MicrophoneVolume),
+            Some((20., 0., 200.))
+        );
+
+        let mut accepted = w.presented.take().unwrap();
+        accepted.output.resolution = ResolutionChoice::P720;
+        accepted.edit.output_width = Some(1280);
+        accepted.edit.output_height = Some(720);
+        w.apply_outcome(Outcome::Preview(
+            w.timeline.generation,
+            Box::new(accepted),
+            Some("decode failed".into()),
+        ));
+        assert_eq!(w.output_value(Target::Resolution), "720p maximum");
+        assert!(!w.shown(Target::Width));
+        assert_eq!(w.volume_range(Target::SystemVolume).unwrap().0, 100.);
+        assert!(w.enabled(Target::Save) && w.error);
+        drop(w);
+        std::fs::remove_dir_all(profile).unwrap();
     }
 }

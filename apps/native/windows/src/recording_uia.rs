@@ -9,7 +9,7 @@ use windows::Win32::System::Variant::*;
 use windows::Win32::UI::Accessibility::*;
 use windows::core::*;
 
-use crate::recording::{Event, Recording, Target, with_recording};
+use crate::recording::{Event, Recording, TARGETS, Target, with_recording};
 use crate::scene::Rect;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -20,10 +20,18 @@ pub enum Id {
     Location,
     Status,
     Control(Target),
+    Option(Target, usize),
 }
 
 fn with<R>(hwnd: HWND, f: impl FnOnce(&mut Recording) -> Result<R>) -> Result<R> {
     with_recording(hwnd, f).unwrap_or_else(|| Err(HRESULT(UIA_E_ELEMENTNOTAVAILABLE as _).into()))
+}
+
+fn range(w: &Recording, target: Target) -> Option<(f64, f64, f64)> {
+    w.volume_range(target).or_else(|| {
+        w.trim_range(target)
+            .map(|(v, min, max)| (v as f64, min as f64, max as f64))
+    })
 }
 
 fn children(w: &Recording) -> Vec<Id> {
@@ -32,25 +40,7 @@ fn children(w: &Recording) -> Vec<Id> {
         ids.push(Id::Warning);
     }
     ids.push(Id::Location);
-    ids.extend(
-        [
-            Target::Loop,
-            Target::Fit,
-            Target::Actual,
-            Target::Play,
-            Target::TrimStart,
-            Target::TrimEnd,
-            Target::Change,
-            Target::Filename,
-            Target::Copy,
-            Target::Cancel,
-            Target::Reveal,
-            Target::Save,
-        ]
-        .into_iter()
-        .filter(|&t| w.shown(t))
-        .map(Id::Control),
-    );
+    ids.extend(TARGETS.into_iter().filter(|&t| w.shown(t)).map(Id::Control));
     ids.push(Id::Status);
     ids
 }
@@ -63,12 +53,17 @@ fn name(w: &Recording, id: Id) -> String {
         Id::Location => "Save location".into(),
         Id::Status => w.status.clone(),
         Id::Control(t) => w.target_label(t).into(),
+        Id::Option(t, i) => w
+            .output_choices(t)
+            .get(i)
+            .map_or(String::new(), |c| c.label.clone()),
     }
 }
 
 fn value(w: &Recording, id: Id) -> String {
     match id {
         Id::Control(Target::Filename) => w.text(),
+        Id::Control(t) if t.is_output() => w.output_value(t),
         Id::Location => w.directory.to_string_lossy().into_owned(),
         _ => String::new(),
     }
@@ -77,6 +72,13 @@ fn value(w: &Recording, id: Id) -> String {
 fn rect(w: &Recording, id: Id) -> Rect {
     match id {
         Id::Control(t) => w.visible_target_rect(t),
+        Id::Option(t, i) => {
+            if w.menu_target() == Some(t) {
+                w.output_menu_row(i)
+            } else {
+                Rect::default()
+            }
+        }
         Id::Root => Rect::new(0., 0., w.width, w.height),
         Id::Title => w.page_visible_rect(w.title_rect()),
         Id::Warning => w.page_visible_rect(w.warning_rect()),
@@ -113,6 +115,7 @@ fn runtime(id: Id) -> [i32; 3] {
         Id::Location => 3,
         Id::Status => 4,
         Id::Control(t) => 10 + t as i32,
+        Id::Option(t, i) => 1000 + t as i32 * 100 + i as i32,
     };
     [UiaAppendRuntimeId as i32, 400, kind]
 }
@@ -124,7 +127,9 @@ fn runtime(id: Id) -> [i32; 3] {
     IInvokeProvider,
     IToggleProvider,
     IValueProvider,
-    IRangeValueProvider
+    IRangeValueProvider,
+    IExpandCollapseProvider,
+    ISelectionItemProvider
 )]
 pub struct Node {
     hwnd: HWND,
@@ -144,6 +149,15 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
     }
     fn GetPatternProvider(&self, pattern: UIA_PATTERN_ID) -> Result<IUnknown> {
         let supported = match self.id {
+            Id::Control(t) if t.is_select() => {
+                pattern == UIA_ExpandCollapsePatternId || pattern == UIA_ValuePatternId
+            }
+            Id::Control(t) if t.is_number() => pattern == UIA_ValuePatternId,
+            Id::Control(t) if t.is_volume() => pattern == UIA_RangeValuePatternId,
+            Id::Control(t) if t.is_check() => pattern == UIA_TogglePatternId,
+            Id::Option(_, _) => {
+                pattern == UIA_SelectionItemPatternId || pattern == UIA_InvokePatternId
+            }
             Id::Control(Target::TrimStart | Target::TrimEnd) => pattern == UIA_RangeValuePatternId,
             Id::Control(Target::Filename) | Id::Location => pattern == UIA_ValuePatternId,
             Id::Control(Target::Copy | Target::Loop | Target::Fit | Target::Actual) => {
@@ -162,6 +176,7 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
         with(self.hwnd, |w| {
             let enabled = match self.id {
                 Id::Control(t) => w.enabled(t),
+                Id::Option(t, _) => w.menu_target() == Some(t) && w.enabled(t),
                 _ => true,
             };
             Ok(match property {
@@ -169,6 +184,11 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                 UIA_ControlTypePropertyId => VARIANT::from(
                     match self.id {
                         Id::Root => UIA_WindowControlTypeId,
+                        Id::Control(t) if t.is_select() => UIA_ComboBoxControlTypeId,
+                        Id::Control(t) if t.is_number() => UIA_EditControlTypeId,
+                        Id::Control(t) if t.is_volume() => UIA_SliderControlTypeId,
+                        Id::Control(t) if t.is_check() => UIA_CheckBoxControlTypeId,
+                        Id::Option(_, _) => UIA_ListItemControlTypeId,
                         Id::Control(Target::Filename) => UIA_EditControlTypeId,
                         Id::Control(Target::Copy) => UIA_CheckBoxControlTypeId,
                         Id::Control(Target::TrimStart | Target::TrimEnd) => UIA_SliderControlTypeId,
@@ -204,11 +224,31 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                     VARIANT::from(if w.error { Assertive.0 } else { Polite.0 })
                 }
                 UIA_ValueValuePropertyId => VARIANT::from(BSTR::from(value(w, self.id))),
+                UIA_HelpTextPropertyId => {
+                    let description = match self.id {
+                        Id::Option(t, i) => {
+                            w.output_choices(t).get(i).map(|c| c.description.clone())
+                        }
+                        _ => None,
+                    }
+                    .unwrap_or_default();
+                    VARIANT::from(BSTR::from(description))
+                }
+                UIA_ExpandCollapseExpandCollapseStatePropertyId => VARIANT::from(
+                    if matches!(self.id, Id::Control(t) if w.menu_target() == Some(t)) {
+                        1i32
+                    } else {
+                        0i32
+                    },
+                ),
+                UIA_SelectionItemIsSelectedPropertyId => {
+                    VARIANT::from(matches!(self.id, Id::Option(t,i) if w.output_selected(t) == i))
+                }
                 UIA_RangeValueValuePropertyId
                 | UIA_RangeValueMinimumPropertyId
                 | UIA_RangeValueMaximumPropertyId => {
                     if let Id::Control(target) = self.id
-                        && let Some((value, min, max)) = w.trim_range(target)
+                        && let Some((value, min, max)) = range(w, target)
                     {
                         VARIANT::from(if property == UIA_RangeValueValuePropertyId {
                             value
@@ -216,15 +256,16 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                             min
                         } else {
                             max
-                        } as f64)
+                        })
                     } else {
                         VARIANT::default()
                     }
                 }
                 UIA_RangeValueIsReadOnlyPropertyId => VARIANT::from(!enabled),
-                UIA_ValueIsReadOnlyPropertyId => {
-                    VARIANT::from(self.id != Id::Control(Target::Filename) || !enabled)
-                }
+                UIA_ValueIsReadOnlyPropertyId => VARIANT::from(
+                    !matches!(self.id, Id::Control(t) if t == Target::Filename || t.is_number())
+                        || !enabled,
+                ),
                 UIA_ToggleToggleStatePropertyId => {
                     if let Id::Control(t) = self.id
                         && let Some(on) = w.toggled(t)
@@ -250,9 +291,36 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
 impl IRawElementProviderFragment_Impl for Node_Impl {
     fn Navigate(&self, direction: NavigateDirection) -> Result<IRawElementProviderFragment> {
         let next = with(self.hwnd, |w| {
-            let list = children(w);
+            let list = if let Id::Option(t, _) = self.id {
+                (0..w.output_choices(t).len())
+                    .map(|i| Id::Option(t, i))
+                    .collect()
+            } else {
+                children(w)
+            };
             Ok(match direction {
+                NavigateDirection_Parent if matches!(self.id, Id::Option(_, _)) => {
+                    if let Id::Option(t, _) = self.id {
+                        Some(Id::Control(t))
+                    } else {
+                        None
+                    }
+                }
                 NavigateDirection_Parent if self.id != Id::Root => Some(Id::Root),
+                NavigateDirection_FirstChild | NavigateDirection_LastChild if matches!(self.id,Id::Control(t) if w.menu_target() == Some(t)) => {
+                    if let Id::Control(t) = self.id {
+                        Some(Id::Option(
+                            t,
+                            if direction == NavigateDirection_FirstChild {
+                                0
+                            } else {
+                                w.output_choices(t).len() - 1
+                            },
+                        ))
+                    } else {
+                        None
+                    }
+                }
                 NavigateDirection_FirstChild if self.id == Id::Root => list.first().copied(),
                 NavigateDirection_LastChild if self.id == Id::Root => list.last().copied(),
                 NavigateDirection_NextSibling | NavigateDirection_PreviousSibling => {
@@ -319,12 +387,14 @@ impl IRawElementProviderFragmentRoot_Impl for Node_Impl {
                 ((x - f64::from(origin.x)) / f64::from(w.scale)) as f32,
                 ((y - f64::from(origin.y)) / f64::from(w.scale)) as f32,
             );
-            Ok(w.hit(x, y)
-                .map(Id::Control)
+            Ok(w.output_menu_hit(x, y)
+                .and_then(|i| w.menu_target().map(|t| Id::Option(t, i)))
                 .or_else(|| {
-                    children(w)
-                        .into_iter()
-                        .find(|&id| rect(w, id).contains(x, y))
+                    w.hit(x, y).map(Id::Control).or_else(|| {
+                        children(w)
+                            .into_iter()
+                            .find(|&id| rect(w, id).contains(x, y))
+                    })
                 })
                 .unwrap_or(Id::Root))
         })?;
@@ -340,6 +410,13 @@ impl IRawElementProviderFragmentRoot_Impl for Node_Impl {
 impl IInvokeProvider_Impl for Node_Impl {
     fn Invoke(&self) -> Result<()> {
         with(self.hwnd, |w| {
+            if let Id::Option(t, i) = self.id {
+                if w.menu_target() != Some(t) || !w.enabled(t) {
+                    return Err(HRESULT(UIA_E_ELEMENTNOTAVAILABLE as _).into());
+                }
+                w.choose_output(t, i);
+                return Ok(());
+            }
             let Id::Control(t) = self.id else {
                 return Err(Error::empty());
             };
@@ -367,14 +444,91 @@ impl IToggleProvider_Impl for Node_Impl {
     }
 }
 
+impl IExpandCollapseProvider_Impl for Node_Impl {
+    fn Expand(&self) -> Result<()> {
+        self.expand_output(true)
+    }
+    fn Collapse(&self) -> Result<()> {
+        self.expand_output(false)
+    }
+    fn ExpandCollapseState(&self) -> Result<ExpandCollapseState> {
+        with(self.hwnd, |w| {
+            Ok(
+                if matches!(self.id,Id::Control(t) if w.menu_target() == Some(t)) {
+                    ExpandCollapseState_Expanded
+                } else {
+                    ExpandCollapseState_Collapsed
+                },
+            )
+        })
+    }
+}
+
+impl Node_Impl {
+    fn expand_output(&self, open: bool) -> Result<()> {
+        with(self.hwnd, |w| {
+            let Id::Control(t) = self.id else {
+                return Err(E_INVALIDARG.into());
+            };
+            if !t.is_select() {
+                return Err(E_INVALIDARG.into());
+            }
+            if !w.enabled(t) {
+                return Err(HRESULT(UIA_E_ELEMENTNOTENABLED as _).into());
+            }
+            w.set_output_menu(t, open);
+            Ok(())
+        })
+    }
+}
+
+impl ISelectionItemProvider_Impl for Node_Impl {
+    fn Select(&self) -> Result<()> {
+        self.Invoke()
+    }
+    fn AddToSelection(&self) -> Result<()> {
+        self.Invoke()
+    }
+    fn RemoveFromSelection(&self) -> Result<()> {
+        Err(E_INVALIDARG.into())
+    }
+    fn IsSelected(&self) -> Result<BOOL> {
+        with(self.hwnd, |w| {
+            Ok(matches!(self.id,Id::Option(t,i) if w.output_selected(t) == i).into())
+        })
+    }
+    fn SelectionContainer(&self) -> Result<IRawElementProviderSimple> {
+        let Id::Option(t, _) = self.id else {
+            return Err(E_INVALIDARG.into());
+        };
+        Ok(node(self.hwnd, Id::Control(t)))
+    }
+}
+
 impl IValueProvider_Impl for Node_Impl {
     fn SetValue(&self, value: &PCWSTR) -> Result<()> {
         let value = unsafe { value.to_string() }.map_err(|_| Error::from(E_INVALIDARG))?;
         with(self.hwnd, |w| {
-            if self.id != Id::Control(Target::Filename) || !w.enabled(Target::Filename) {
+            let Id::Control(t) = self.id else {
+                return Err(E_INVALIDARG.into());
+            };
+            if !w.enabled(t) {
                 return Err(HRESULT(UIA_E_ELEMENTNOTENABLED as _).into());
             }
-            w.set_value(&value);
+            if t == Target::Filename {
+                w.set_value(&value);
+            } else if t.is_number() {
+                if !value
+                    .trim()
+                    .parse::<f64>()
+                    .is_ok_and(|v| v.is_finite() && v >= 2. && v <= u32::MAX as f64)
+                {
+                    return Err(E_INVALIDARG.into());
+                }
+                w.set_output_number(t, &value);
+            } else {
+                return Err(E_INVALIDARG.into());
+            }
             Ok(())
         })
     }
@@ -383,7 +537,7 @@ impl IValueProvider_Impl for Node_Impl {
     }
     fn IsReadOnly(&self) -> Result<BOOL> {
         with(self.hwnd, |w| {
-            Ok((self.id != Id::Control(Target::Filename) || !w.enabled(Target::Filename)).into())
+            Ok((!matches!(self.id,Id::Control(t) if (t == Target::Filename || t.is_number()) && w.enabled(t))).into())
         })
     }
 }
@@ -394,16 +548,20 @@ impl IRangeValueProvider_Impl for Node_Impl {
             let Id::Control(target) = self.id else {
                 return Err(E_INVALIDARG.into());
             };
-            let Some((_, min, max)) = w.trim_range(target) else {
+            let Some((_, min, max)) = range(w, target) else {
                 return Err(E_INVALIDARG.into());
             };
             if !w.enabled(target) {
                 return Err(HRESULT(UIA_E_ELEMENTNOTENABLED as _).into());
             }
-            if !value.is_finite() || value < min as f64 || value > max as f64 {
+            if !value.is_finite() || value < min || value > max {
                 return Err(E_INVALIDARG.into());
             }
-            w.set_trim(target, value);
+            if target.is_volume() {
+                w.set_volume(target, value);
+            } else {
+                w.set_trim(target, value);
+            }
             Ok(())
         })
     }
@@ -424,8 +582,9 @@ impl IRangeValueProvider_Impl for Node_Impl {
     fn SmallChange(&self) -> Result<f64> {
         with(self.hwnd, |w| {
             Ok(
-                if w.trim_range(Target::TrimEnd)
-                    .is_some_and(|(_, _, max)| max >= 60_000)
+                if !matches!(self.id,Id::Control(t) if t.is_volume())
+                    && w.trim_range(Target::TrimEnd)
+                        .is_some_and(|(_, _, max)| max >= 60_000)
                 {
                     10.
                 } else {
@@ -435,7 +594,11 @@ impl IRangeValueProvider_Impl for Node_Impl {
         })
     }
     fn LargeChange(&self) -> Result<f64> {
-        Ok(1000.)
+        Ok(if matches!(self.id,Id::Control(t) if t.is_volume()) {
+            20.
+        } else {
+            1000.
+        })
     }
 }
 
@@ -445,10 +608,10 @@ impl Node_Impl {
             let Id::Control(target) = self.id else {
                 return Err(E_INVALIDARG.into());
             };
-            let Some((value, min, max)) = w.trim_range(target) else {
+            let Some((value, min, max)) = range(w, target) else {
                 return Err(E_INVALIDARG.into());
             };
-            Ok([value, min, max][part] as f64)
+            Ok([value, min, max][part])
         })
     }
 }
@@ -462,10 +625,12 @@ pub fn describe(w: &Recording, events: Vec<Event>) -> Vec<(Event, String)> {
                 Event::Copy => w.make_copy.to_string(),
                 Event::Status => w.status.clone(),
                 Event::Name(t) => w.target_label(t).into(),
+                Event::OutputValue(t) => w.output_value(t),
+                Event::Expanded(t) => (w.menu_target() == Some(t)).to_string(),
                 Event::Toggle(t) => w.toggled(t).unwrap_or(false).to_string(),
-                Event::Range(t) => w
-                    .trim_range(t)
-                    .map_or(String::new(), |(value, _, _)| value.to_string()),
+                Event::Range(t) => {
+                    range(w, t).map_or(String::new(), |(value, _, _)| value.to_string())
+                }
                 _ => String::new(),
             };
             (event, text)
@@ -480,6 +645,22 @@ pub fn raise(hwnd: HWND, events: &[(Event, String)]) {
         }
         for (event, text) in events {
             match *event {
+                Event::OutputValue(t) => {
+                    let _ = UiaRaiseAutomationPropertyChangedEvent(
+                        &node(hwnd, Id::Control(t)),
+                        UIA_ValueValuePropertyId,
+                        &VARIANT::default(),
+                        &VARIANT::from(BSTR::from(text)),
+                    );
+                }
+                Event::Expanded(t) => {
+                    let _ = UiaRaiseAutomationPropertyChangedEvent(
+                        &node(hwnd, Id::Control(t)),
+                        UIA_ExpandCollapseExpandCollapseStatePropertyId,
+                        &VARIANT::default(),
+                        &VARIANT::from(if text == "true" { 1i32 } else { 0i32 }),
+                    );
+                }
                 Event::Focus(target) => {
                     let _ = UiaRaiseAutomationEvent(
                         &node(hwnd, Id::Control(target)),

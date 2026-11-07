@@ -936,6 +936,28 @@ AppKit, X11 and Wayland hosts are unchanged and not reverified by this slice;
 they already have timeline editing. No shared API, release or workflow change,
 and no native promotion.
 
+Win32 recording slice 4 adds output-resolution presets/custom dimensions,
+GIF FPS/maximum width and quality-based palette limits, and source-aware audio
+volumes, mute and mono. It uses `recording_editor_ui` choices and shared numeric,
+range and select semantics. Presets constrain height without upscaling; custom
+dimensions round to even pixels before applying GIF's width cap. Menus retain
+trigger focus, scroll and expose UIA selection; numbers expose Value, volumes
+RangeValue and checkboxes Toggle. Edits debounce 250 ms, pause playback and
+coalesce with timeline requests. The worker returns accepted output settings
+even on failure so controls and saves cannot diverge. Replacement resets the
+output controls and accepts GIF defaults before another save.
+Local real-worker Wine exports verified portrait 1200×1600 to 810×1080/540×720,
+custom 641×359 to 640×358, 8/30 FPS GIFs with 64/256-color limits, width caps,
+mono/stereo and removing audio when both tracks are muted. Independent 440/880 Hz
+analysis measured a 4.3474 ratio for 37%/161% volumes (expected 4.3514); mic-only
+suppressed the system tone. Missing-source preview failure restored accepted
+controls and succeeded after restoring the disposable source. Normal/minimum
+light/dark Direct2D renders, custom fields, menus and muted audio were inspected.
+Physical Windows pointer/keyboard/UIA, compositor and playback-audio acceptance
+is still pending after Caper; Wine is not that gate. AppKit, X11 and Wayland are
+unchanged and not reverified. Crop, comparison, format switching and remaining
+save-quality controls stay open. No native promotion or release/workflow changes.
+
 The second GTK4 slice is Capture History: shipping header (Back to
 Preferences, title, 60ch lede, two-step Delete all), filter pills with
 counts, and the card grid (thumbnail, two-step Delete, date, details,
