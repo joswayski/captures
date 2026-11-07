@@ -206,7 +206,7 @@ or approval to replace the public app.
 The Win32 workbench can open recordings from History, preview video and GIFs,
 switch between Fit and 100%, scrub and trim a thumbnail timeline, and save copies
 or replace the original with cancellation and Show in Folder. The timeline supports
-pointer/keyboard input and accessibility ranges; its real-PC acceptance is pending.
+pointer/keyboard input and accessibility ranges.
 Output options and recording crop remain migration work; these slices are not
 recording-editor parity.
 

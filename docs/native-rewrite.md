@@ -910,13 +910,28 @@ on failure, so stale successful decodes cannot leave the controls and export out
 of sync. Save/Play wait for the latest decode, GIFs resume after seeks, and EOF
 restores both the playhead and image to the trim start. Close cancels thumbnail
 generation and discards pending seeks before draining the worker.
-Local Windows-GNU build/fmt/clippy and 21 Wine host tests pass, including source
+Local Windows-GNU build/fmt/clippy and 23 Wine host tests pass, including source
 seeking outside the trim, interval/keyboard bounds, stale outcomes and minimum-size
 focus. Temporary real-media probes (removed) exported MP4 750–2750 ms as 1.979333 s
 and GIF 200–800 ms as 0.6 s, verified changing decoded pixels, EOF image reset,
 GIF resume and close. Light/dark default, trimmed and minimum-size Direct2D renders
-were inspected. Workspace Rust gates and npm check pass. Real-PC pointer recording,
-UIA and compositor acceptance remain pending; Wine cannot validate layer masks.
+were inspected. Workspace Rust gates and npm check pass.
+Native pass 24 accepted the slice on Windows 11 at 150%, in light/dark and normal/
+minimum sizes: real-pointer drag/scrub/cancellation, UIA ranges, keyboard bounds,
+focus reveal, wheel chaining, compositor clipping, MP4/GIF export and clean close
+during seeks, playback and save. Full-duration trim endpoints remain exact while
+preview seeks clamp to duration minus one millisecond. An empty playback tail
+restarts looping previews from trim start without retrying an empty full trim;
+the 4 s GIF keeps animating through endpoint edits and later scrub/trim changes.
+Manual Play uses Tauri's 10 ms end tolerance: hardware end−10 restarts on the first
+press, end−11 preserves the tail, pause resumes in place and EOF replay works.
+MP4 1500–6000 ms exported as 4.529333 s and 2000–4000 ms as 2.013333 s;
+GIF 600–1200 ms exported as exactly 0.6 s. Close left no partial files or FFmpeg
+children; disposable profiles preserved installed Captures/Caper and user data.
+The pointer/Play and GIF-loop clips and normal/minimum sheets were inspected.
+Handle inset drift, timestamp-chip placement and the 3-DIP drag threshold match
+Tauri source; this comparison was not a live Tauri render. Output/crop/comparison
+and recording-editor parity remain open.
 AppKit, X11 and Wayland hosts are unchanged and not reverified by this slice;
 they already have timeline editing. No shared API, release or workflow change,
 and no native promotion.
