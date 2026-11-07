@@ -1272,9 +1272,14 @@ def live(binary, scratch):
         wayland = isinstance(DESKTOP, Wayland)
         assert shown[0]["keys"] == ([] if wayland else ["Ctrl", "Shift", "F10"]), shown
         app = wait(lambda: application(process.pid), "the app on the accessibility bus")
+        # The status card named for its title, or unnamed on GTK 4.14, which
+        # drops a status node's label and labelled-by; either way it holds
+        # the title.
+        title = "Captures is ready to use"
         card = wait(lambda: [n for n, (role, name) in nodes(app)
-                             if role in ("status", "status bar")
-                             and name == "Captures is ready to use"], "the launch notice")[0]
+                             if role in ("status", "status bar") and name in (title, "")
+                             and [c for c, (_, text) in nodes(n) if text == title]],
+                    "the launch notice")[0]
         hint = "Open History from the tray menu" if wayland else "Open New Capture with"
         assert [n for n, (_, name) in nodes(card) if node_text(n, name) == hint], hint
         press(find(card, "push button", "Close")[0])

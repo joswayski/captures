@@ -138,7 +138,12 @@ fn place_on_x11(window: &gtk::ApplicationWindow, unmanaged: bool) {
 }
 
 fn button(text: &str, classes: &[&str]) -> gtk::Button {
-    let button = gtk::Button::with_label(text);
+    // A label child, not `with_label`: GTK 4.14 names a label-mode button
+    // after its text and drops the accessible label ("HIDE", "#265"). GTK
+    // 4.8 does not name it from the child, so the text is the default name.
+    let button = gtk::Button::new();
+    button.set_child(Some(&gtk::Label::new(Some(text))));
+    button.update_property(&[gtk::accessible::Property::Label(text)]);
     for class in classes {
         button.add_css_class(class);
     }
