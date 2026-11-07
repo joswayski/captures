@@ -611,6 +611,26 @@ mod tests {
         w.set_trim(Target::TrimEnd, 4200.);
         assert_eq!(w.trim_range(Target::TrimEnd), Some((4200, 1002, 6000)));
 
+        // Full-duration trim endpoints are valid, but preview seeks must
+        // remain inside the source's final presentation interval.
+        w.set_trim(Target::TrimEnd, 6000.);
+        assert_eq!(w.trim_range(Target::TrimEnd), Some((6000, 1002, 6000)));
+        assert_eq!(w.preview.position_ms, 5999);
+        w.set_focus(Some(Target::TrimEnd), true);
+        w.set_trim(Target::TrimEnd, 5999.);
+        w.key(VK_RIGHT);
+        assert_eq!((w.timeline.end, w.preview.position_ms), (6000, 5999));
+        w.set_trim(Target::TrimEnd, 5000.);
+        w.key(VK_PRIOR);
+        assert_eq!((w.timeline.end, w.preview.position_ms), (6000, 5999));
+        w.set_trim(Target::TrimEnd, 4200.);
+        let track = w.timeline_track();
+        assert!(w.timeline_pointer(WM_LBUTTONDOWN, track.x + track.w - 1., track.y + 20.));
+        assert!(w.timeline_pointer(WM_MOUSEMOVE, track.x + track.w, track.y + 20.));
+        assert_eq!(w.preview.position_ms, 5999);
+        assert_eq!(w.timeline.end, 4200, "scrubbing must not alter the trim");
+        w.end_timeline_drag();
+
         // Scrubbing is source-relative, not restricted to the selected range.
         let track = w.timeline_track();
         assert!(w.timeline_pointer(WM_LBUTTONDOWN, track.x + track.w / 12., track.y + 20.));
@@ -649,7 +669,11 @@ mod tests {
         w.set_trim(Target::TrimEnd, 0.);
         assert_eq!(w.trim_range(Target::TrimEnd), Some((5000, 5000, 6000)));
 
-        w.presented.as_mut().unwrap().duration_ms = 60_000;
+        w.presented.as_mut().unwrap().duration_ms = 75_000;
+        w.set_trim(Target::TrimEnd, 74_990.);
+        w.key(VK_RIGHT);
+        assert_eq!((w.timeline.end, w.preview.position_ms), (75_000, 74_999));
+        w.set_focus(Some(Target::TrimStart), true);
         w.set_trim(Target::TrimStart, 1000.);
         w.key(VK_RIGHT);
         assert_eq!(w.timeline.start, 1010);

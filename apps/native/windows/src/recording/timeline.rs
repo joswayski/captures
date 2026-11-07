@@ -101,7 +101,9 @@ impl Recording {
         let mut edit = p.edit.clone();
         edit.trim_start_ms = self.timeline.start;
         edit.trim_end_ms = Some(self.timeline.end);
-        let position_ms = position_ms.min(p.duration_ms);
+        // Trim end may equal duration; a preview frame must be inside the
+        // source's final presentation interval, as in the AppKit host.
+        let position_ms = position_ms.min(p.duration_ms.saturating_sub(1));
         self.timeline.resume |= self.preview.playing;
         self.stop_preview();
         self.preview.position_ms = position_ms;
