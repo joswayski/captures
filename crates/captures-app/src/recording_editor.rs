@@ -1083,7 +1083,11 @@ impl RecordingEditorSession {
         new_entry.has_system_audio = new_system;
         new_entry.has_microphone_audio = new_microphone;
         new_entry.saved_path = Some(output.to_string_lossy().into_owned());
-        fs::File::open(&stage)
+        // Windows FlushFileBuffers requires write access, even though the
+        // encoder has already finished writing this private staging file.
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&stage)
             .and_then(|file| file.sync_all())
             .map_err(|error| unchanged(error.to_string()))?;
         if cancel.is_cancelled() {
