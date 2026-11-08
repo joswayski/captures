@@ -58,9 +58,6 @@ pub struct Controls {
     error_text: RefCell<hud::ErrorLine>,
     meter: gtk::ProgressBar,
     buttons: Vec<(Control, gtk::Button, Option<Icon>)>,
-    tooltip_layer: gtk::Fixed,
-    tooltip: gtk::Label,
-    tooltip_hover: Cell<Option<Control>>,
     notice: RefCell<Option<gtk::ApplicationWindow>>,
     confirmation: RefCell<Option<gtk::MessageDialog>>,
 }
@@ -268,20 +265,7 @@ impl Controls {
         // Keep the transparent native surface stable when an error arrives.
         error.set_size_request(-1, 16);
         outer.append(&error);
-        // Keep tooltips inside the existing transparent HUD, without a popup
-        // surface that can steal focus or intercept recording controls.
-        let overlay = gtk::Overlay::new();
-        overlay.set_child(Some(&outer));
-        let tooltip_layer = gtk::Fixed::new();
-        tooltip_layer.set_can_target(false);
-        overlay.add_overlay(&tooltip_layer);
-        let tooltip = gtk::Label::builder()
-            .accessible_role(gtk::AccessibleRole::Tooltip)
-            .build();
-        tooltip.add_css_class("recording-hud-tooltip");
-        tooltip.update_state(&[gtk::accessible::State::Hidden(true)]);
-        tooltip_layer.put(&tooltip, 0., 0.);
-        window.set_child(Some(&overlay));
+        window.set_child(Some(&outer));
         let worker = Worker::new(
             || {
                 let (ffmpeg, ffprobe) = crate::recording::media_tools();
@@ -313,9 +297,6 @@ impl Controls {
             error_text: RefCell::default(),
             meter,
             buttons,
-            tooltip_layer,
-            tooltip,
-            tooltip_hover: Cell::new(None),
             notice: RefCell::default(),
             confirmation: RefCell::default(),
         });
@@ -326,44 +307,7 @@ impl Controls {
                     controls.action(control);
                 }
             });
-            let weak = Rc::downgrade(&controls);
-            button.connect_has_focus_notify(move |_| {
-                if let Some(controls) = weak.upgrade() {
-                    controls.refresh_tooltip();
-                }
-            });
         }
-        // Hit-test at the window so disabled controls also show shipping's
-        // immediate tooltip; their accessible names retain the disabled reason.
-        let motion = gtk::EventControllerMotion::new();
-        motion.set_propagation_phase(gtk::PropagationPhase::Capture);
-        let weak = Rc::downgrade(&controls);
-        motion.connect_enter(move |_, x, y| {
-            if let Some(controls) = weak.upgrade() {
-                controls.hover_tooltip(x, y);
-            }
-        });
-        let weak = Rc::downgrade(&controls);
-        motion.connect_motion(move |_, x, y| {
-            if let Some(controls) = weak.upgrade() {
-                controls.hover_tooltip(x, y);
-            }
-        });
-        let weak = Rc::downgrade(&controls);
-        motion.connect_leave(move |_| {
-            if let Some(controls) = weak.upgrade() {
-                controls.tooltip_hover.set(None);
-                controls.refresh_tooltip();
-            }
-        });
-        controls.window.add_controller(motion);
-        let weak = Rc::downgrade(&controls);
-        controls.window.connect_unmap(move |_| {
-            if let Some(controls) = weak.upgrade() {
-                controls.tooltip_hover.set(None);
-                controls.refresh_tooltip();
-            }
-        });
         let weak = Rc::downgrade(&controls);
         controls.window.connect_close_request(move |_| {
             if let Some(controls) = weak.upgrade() {
@@ -466,6 +410,11 @@ impl Controls {
             let state = view.control(*control);
             button.set_sensitive(state.enabled);
             button.update_property(&[gtk::accessible::Property::Label(state.label)]);
+            button.set_tooltip_text(Some(if state.enabled {
+                state.tooltip
+            } else {
+                state.label
+            }));
             if state.selected {
                 button.add_css_class("active");
             } else {
@@ -486,76 +435,6 @@ impl Controls {
             .set_opacity(if error.is_some() { 1. } else { 0. });
         self.error
             .update_state(&[gtk::accessible::State::Hidden(error.is_none())]);
-        self.refresh_tooltip();
-    }
-
-    fn hover_tooltip(&self, x: f64, y: f64) {
-        let point = gtk::graphene::Point::new(x as f32, y as f32);
-        let control = self.buttons.iter().find_map(|(control, button, _)| {
-            button
-                .compute_bounds(&self.window)
-                .filter(|bounds| bounds.contains_point(&point))
-                .map(|_| *control)
-        });
-        self.tooltip_hover.set(control);
-        self.refresh_tooltip();
-    }
-
-    fn refresh_tooltip(&self) {
-        use captures_app::tray_notice::LogicalRect;
-
-        if self.tooltip.settings().is_gtk_enable_animations() {
-            self.tooltip.add_css_class("animated");
-        } else {
-            self.tooltip.remove_css_class("animated");
-        }
-        // Read actual focus, including after sensitivity changes during a
-        // recording command, rather than retaining a separate focus owner.
-        let owner = self
-            .tooltip_hover
-            .get()
-            .or_else(|| {
-                self.buttons
-                    .iter()
-                    .find_map(|(control, button, _)| button.has_focus().then_some(*control))
-            })
-            .filter(|_| self.window.is_mapped());
-        let Some(control) = owner else {
-            self.tooltip.remove_css_class("showing");
-            self.tooltip
-                .update_state(&[gtk::accessible::State::Hidden(true)]);
-            return;
-        };
-        let (_, button, _) = self.buttons.iter().find(|(c, _, _)| *c == control).unwrap();
-        let Some(anchor) = button.compute_bounds(&self.tooltip_layer) else {
-            return;
-        };
-        let view = hud::present(&self.input());
-        self.tooltip.set_label(view.control(control).tooltip);
-        let (_, width, _, _) = self.tooltip.measure(gtk::Orientation::Horizontal, -1);
-        let (_, height, _, _) = self.tooltip.measure(gtk::Orientation::Vertical, width);
-        let frame = hud::tooltip_frame(
-            LogicalRect::new(
-                anchor.x().into(),
-                anchor.y().into(),
-                anchor.width().into(),
-                anchor.height().into(),
-            ),
-            f64::from(width) - hud::TOOLTIP_PADDING_X * 2. - 2.,
-            f64::from(height) - hud::TOOLTIP_PADDING_Y * 2. - 2.,
-            control.tooltip_right_aligned(),
-            1.,
-            LogicalRect::new(
-                0.,
-                0.,
-                self.window.width().into(),
-                self.window.height().into(),
-            ),
-        );
-        self.tooltip_layer.move_(&self.tooltip, frame.x, frame.y);
-        self.tooltip
-            .update_state(&[gtk::accessible::State::Hidden(false)]);
-        self.tooltip.add_css_class("showing");
     }
 
     fn drain(self: &Rc<Self>) {

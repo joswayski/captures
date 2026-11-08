@@ -2588,65 +2588,18 @@ def recording_controls(binary, scratch):
             assert_accessible(app, "Recording HUD")
             microphone = find(app, "push button", "Microphone unavailable because no microphone was selected")[0]
             assert not has_state(microphone, Atspi.StateType.SENSITIVE)
-            hud = DESKTOP.window("^Captures Recording Controls$", process.pid)
-
-            def tooltip(text):
-                return [n for n, (role, name) in nodes(app)
-                        if role == "tool tip" and node_text(n, name) == text
-                        and has_state(n, Atspi.StateType.VISIBLE)]
-
-            def focus_control(control):
-                DESKTOP.point_into(hud, 30, 20)
-                DESKTOP.focus(hud)
-                for _ in range(8):
-                    if has_state(control, Atspi.StateType.FOCUSED):
-                        break
-                    DESKTOP.key("Tab")
-                    time.sleep(0.1)
-                assert has_state(control, Atspi.StateType.FOCUSED)
-
-            # Real hover includes a disabled microphone. The last three tips
-            # align to the right, the others center, without stealing focus.
-            focus = subprocess.check_output(["xdotool", "getwindowfocus"], text=True)
-            for label, text, right in (
-                ("Stop recording", "Stop and save", False),
-                ("Pause recording", "Pause recording", False),
-                ("Take a region screenshot", "Take a region screenshot", False),
-                (microphone.get_name(), "Mute microphone", True),
-                ("Hide recording controls", "Hide controls", True),
-            ):
-                control = find(app, "push button", label)[0]
-                rect = Atspi.Component.get_extents(control, Atspi.CoordType.WINDOW)
-                DESKTOP.point_into(hud, rect.x + rect.width // 2, rect.y + rect.height // 2)
-                tip = wait(lambda: tooltip(text), text + " tooltip", timeout=2)[0]
-                bounds = Atspi.Component.get_extents(tip, Atspi.CoordType.WINDOW)
-                # GTK exposes the label's content, excluding its 8 px padding.
-                expected = rect.x + rect.width - bounds.width - 8 if right else rect.x + (rect.width - bounds.width) / 2
-                assert abs(bounds.x - expected) <= 1, (label, bounds.x, expected)
-                assert bounds.y >= rect.y + rect.height, "tooltip covers its control"
-                assert not has_state(tip, Atspi.StateType.FOCUSABLE)
-                assert subprocess.check_output(["xdotool", "getwindowfocus"], text=True) == focus
-            # Keyboard focus shows the same tip; Enter still operates Pause,
-            # and its tooltip follows the new state instead of staying stale.
-            focus_control(pause)
-            wait(lambda: tooltip("Pause recording"), "focused Pause tooltip")
             # Escape after acceptance is no longer a discard command.
             DESKTOP.key("Escape")
             time.sleep(1.1)
-            DESKTOP.key("Return")
+            press(pause)
             resume = button(app, "Resume recording")
-            rect = Atspi.Component.get_extents(resume, Atspi.CoordType.WINDOW)
-            DESKTOP.point_into(hud, rect.x + rect.width // 2, rect.y + rect.height // 2)
-            wait(lambda: tooltip("Resume recording"), "updated Resume tooltip")
             background("#20d030")
             paused = wait(lambda: [e for e in event("recording-state") if e["state"] == "paused"], "paused state")[-1]["elapsedMs"]
             time.sleep(1.2)
             assert event("recording-state")[-1]["elapsedMs"] == paused, "paused timer advanced"
             background("#2030d0")
-            subprocess.run(["xdotool", "click", "1"], check=True)
-            pause = button(app, "Pause recording")
-            focus_control(pause)
-            wait(lambda: tooltip("Pause recording"), "focus tooltip after mouse activation")
+            press(resume)
+            button(app, "Pause recording")
             # A screenshot borrows Escape without cancelling the recording.
             press(button(app, "Take a region screenshot"))
             selector = DESKTOP.window("^Captures Region Selector$", process.pid)
