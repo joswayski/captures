@@ -1838,7 +1838,12 @@ restore the controls. Session loss finalizes accepted media rather than discardi
 it, and failed publication retains the recovery bundle. Tool discovery, capture,
 encoding and finalization stay on workers. The GTK loop drains events and samples
 the timer/meter, using `recording_hud` for control states, labels and error policy.
-Wayland recording and tooltip/hidden-notice visual parity are still unfinished.
+The hidden-controls notice uses the shipping glass card, capture icon and individual
+saved-shortcut keycaps. On X11 it stays centered on the old HUD without taking
+keyboard focus or intercepting clicks. Its six-second arrival/hold/fade ends before
+the window closes at 6.2 seconds; disabling GTK animations leaves it still and
+visible until then. Restoring the HUD dismisses the notice immediately.
+Wayland recording and recording-control tooltip visual parity are still unfinished.
 Record controls are disabled on Wayland, and direct recording requests explicitly
 refuse it. AppKit,
 Win32 and the wgpu workbench are unchanged; physical-device and accessibility

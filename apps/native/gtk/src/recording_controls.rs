@@ -918,35 +918,12 @@ impl Controls {
         let Some(host) = self.host.upgrade() else {
             return;
         };
-        let copy = hud::hidden_notice_copy(
+        let window = crate::notices::recording_hidden(
+            &host.app,
             &self.settings.new_capture_shortcut,
-            captures_app::shortcuts::ShortcutPlatform::Linux,
+            &self.window,
         );
-        let window = gtk::ApplicationWindow::builder()
-            .application(&host.app)
-            .title(copy.title)
-            .decorated(false)
-            .resizable(false)
-            .build();
-        window.add_css_class("captures");
-        window.add_css_class("recording-controls-window");
-        let card = gtk::Box::new(gtk::Orientation::Vertical, 6);
-        card.add_css_class("recording-hidden-notice");
-        let title = gtk::Label::new(Some(copy.title));
-        title.add_css_class("recording-hidden-title");
-        card.append(&title);
-        let detail = gtk::Label::new(Some(&copy.detail()));
-        detail.set_wrap(true);
-        detail.set_max_width_chars(55);
-        card.append(&detail);
-        window.set_child(Some(&card));
-        window.present();
-        let weak = window.downgrade();
-        glib::timeout_add_local_once(Duration::from_millis(6200), move || {
-            if let Some(window) = weak.upgrade() {
-                window.close();
-            }
-        });
+        window.set_visible(true);
         *self.notice.borrow_mut() = Some(window);
     }
 

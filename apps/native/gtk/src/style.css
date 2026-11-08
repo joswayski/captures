@@ -3558,15 +3558,60 @@ window.captures.recording-controls-window {
   border-radius: var(--r-pill);
 }
 .captures .recording-hidden-notice {
-  margin: 6px;
-  padding: var(--s-5);
+  padding: 0 var(--s-5);
   border: 1px solid var(--glass-border);
   border-radius: var(--r-xl);
-  color: var(--glass-text-muted);
+  color: var(--glass-text);
   background: var(--glass-strong);
-  font-size: var(--text-sm);
+  box-shadow: var(--glass-shadow);
+}
+.captures .recording-hidden-notice.animated {
+  animation: recording-hidden-lifecycle 6s var(--ease-standard) forwards;
+}
+.captures .recording-hidden-icon {
+  min-width: 34px;
+  min-height: 34px;
+  border-radius: var(--r-lg);
+  color: var(--theme-accent-ink);
+  background: var(--theme-accent);
 }
 .captures .recording-hidden-title {
   color: var(--glass-text);
+  font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
+}
+.captures .recording-hidden-text {
+  color: var(--glass-text-muted);
+  font-size: var(--text-xs);
+  line-height: var(--lh-snug-xs);
+}
+.captures .recording-hidden-key {
+  min-width: 8px;
+  padding: 2px 5px;
+  border: 1px solid var(--glass-border-strong);
+  border-bottom-width: 2px;
+  border-radius: var(--r-xs);
+  color: var(--glass-text);
+  background: rgba(255, 255, 255, 0.08);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  line-height: 13px;
+}
+@keyframes recording-hidden-lifecycle {
+  0% {
+    opacity: 0;
+    transform: translateY(7px) scale(0.97);
+  }
+  5% {
+    opacity: 1;
+    transform: none;
+  }
+  80% {
+    opacity: 1;
+    transform: none;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(5px) scale(0.985);
+  }
 }
