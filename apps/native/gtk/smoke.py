@@ -2588,18 +2588,101 @@ def recording_controls(binary, scratch):
             assert_accessible(app, "Recording HUD")
             microphone = find(app, "push button", "Microphone unavailable because no microphone was selected")[0]
             assert not has_state(microphone, Atspi.StateType.SENSITIVE)
+            hud = DESKTOP.window("^Captures Recording Controls$", process.pid)
+
+            def tooltip(text):
+                return [n for n, (role, name) in nodes(app)
+                        if role == "tool tip" and node_text(n, name) == text
+                        and has_state(n, Atspi.StateType.VISIBLE)]
+
+            def snapshot():
+                path = profile / "hud.png"
+                subprocess.run(["import", "-window", hud, str(path)], check=True)
+                return GdkPixbuf.Pixbuf.new_from_file(str(path))
+
+            def changed_frame(before, after, left, top, right, bottom):
+                assert (before.get_width(), before.get_height(), before.get_n_channels()) == (
+                    after.get_width(), after.get_height(), after.get_n_channels())
+                first, second = before.get_pixels(), after.get_pixels()
+                stride, channels = after.get_rowstride(), after.get_n_channels()
+                changed = []
+                for y in range(max(0, top), min(after.get_height(), bottom)):
+                    for x in range(max(0, left), min(after.get_width(), right)):
+                        at = y * stride + x * channels
+                        if first[at:at + 3] != second[at:at + 3]:
+                            changed.append((x, y))
+                assert changed, "hover did not paint the expected control or tooltip"
+                xs, ys = zip(*changed, strict=True)
+                return min(xs), min(ys), max(xs) + 1, max(ys) + 1
+
+            def focus_control(control):
+                DESKTOP.point_into(hud, 30, 20)
+                DESKTOP.focus(hud)
+                for _ in range(8):
+                    if has_state(control, Atspi.StateType.FOCUSED):
+                        break
+                    DESKTOP.key("Tab")
+                    time.sleep(0.1)
+                assert has_state(control, Atspi.StateType.FOCUSED)
+
+            # Real hover includes a disabled microphone. The last three tips
+            # align to the right, the others center, without stealing focus.
+            focus = subprocess.check_output(["xdotool", "getwindowfocus"], text=True)
+            for label, text, right in (
+                ("Stop recording", "Stop and save", False),
+                ("Pause recording", "Pause recording", False),
+                ("Take a region screenshot", "Take a region screenshot", False),
+                (microphone.get_name(), "Mute microphone", True),
+                ("Hide recording controls", "Hide controls", True),
+            ):
+                control = find(app, "push button", label)[0]
+                rect = Atspi.Component.get_extents(control, Atspi.CoordType.WINDOW)
+                DESKTOP.point_into(hud, 0, 0)
+                before = snapshot()
+                DESKTOP.point_into(hud, rect.x + rect.width // 2, rect.y + rect.height // 2)
+                tip = wait(lambda: tooltip(text), text + " tooltip", timeout=2)[0]
+                # GTK 4.8 reports content sizes over AT-SPI; 4.14 combines
+                # content origins with border-box sizes. Check actual painted
+                # edges instead of treating either representation as a box.
+                after = snapshot()
+                painted_tip = changed_frame(before, after, 0, rect.y + rect.height + 3,
+                                            after.get_width(), after.get_height())
+                if has_state(control, Atspi.StateType.SENSITIVE):
+                    painted_button = changed_frame(before, after, rect.x - 3, rect.y - 3,
+                                                   rect.x + rect.width + 3, rect.y + rect.height + 3)
+                    offset = (painted_tip[2] - painted_button[2] if right else
+                              (painted_tip[0] + painted_tip[2] - painted_button[0] - painted_button[2]) / 2)
+                    assert abs(offset) <= 1, (label, painted_tip, painted_button)
+                    assert painted_tip[1] >= painted_button[3], "tooltip covers its control"
+                else:
+                    # The disabled microphone has no hover paint. Its button
+                    # has no padding, so only its 1 px border differs between
+                    # the two AT-SPI size conventions; still check alignment.
+                    assert right
+                    assert abs(painted_tip[2] - rect.x - rect.width) <= 1, (label, painted_tip, rect)
+                assert not has_state(tip, Atspi.StateType.FOCUSABLE)
+                assert subprocess.check_output(["xdotool", "getwindowfocus"], text=True) == focus
+            # Keyboard focus shows the same tip; Enter still operates Pause,
+            # and its tooltip follows the new state instead of staying stale.
+            focus_control(pause)
+            wait(lambda: tooltip("Pause recording"), "focused Pause tooltip")
             # Escape after acceptance is no longer a discard command.
             DESKTOP.key("Escape")
             time.sleep(1.1)
-            press(pause)
+            DESKTOP.key("Return")
             resume = button(app, "Resume recording")
+            rect = Atspi.Component.get_extents(resume, Atspi.CoordType.WINDOW)
+            DESKTOP.point_into(hud, rect.x + rect.width // 2, rect.y + rect.height // 2)
+            wait(lambda: tooltip("Resume recording"), "updated Resume tooltip")
             background("#20d030")
             paused = wait(lambda: [e for e in event("recording-state") if e["state"] == "paused"], "paused state")[-1]["elapsedMs"]
             time.sleep(1.2)
             assert event("recording-state")[-1]["elapsedMs"] == paused, "paused timer advanced"
             background("#2030d0")
-            press(resume)
-            button(app, "Pause recording")
+            subprocess.run(["xdotool", "click", "1"], check=True)
+            pause = button(app, "Pause recording")
+            focus_control(pause)
+            wait(lambda: tooltip("Pause recording"), "focus tooltip after mouse activation")
             # A screenshot borrows Escape without cancelling the recording.
             press(button(app, "Take a region screenshot"))
             selector = DESKTOP.window("^Captures Region Selector$", process.pid)

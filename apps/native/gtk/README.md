@@ -96,20 +96,26 @@ controls on another display while retaining the target. On Wayland Region crops
 the portal still, Full screen preserves its exact pixels and Display metadata,
 and Window goes to the ScreenCast picker. Repeating a Wayland target remains
 portal-mediated; the compositor decides which UI its new still contains.
-Record mode is not connected to this menu yet. The development-only
-`--live --capture record-display` entry point records the X11 display under
-the pointer using saved recording settings and the shared serialized worker.
-It runs the recording countdown and opens fixed-glass controls for Stop and
+On X11, Record mode offers Region, Window and Full screen targets with temporary
+FPS, resolution, cursor, clicks, desktop-audio and microphone options. Normal
+tray and shortcut entry points use the same recording flow. The development-only
+`--live --capture record-display` entry point records the display under the pointer
+using saved recording settings. The shared serialized worker runs the recording
+countdown and opens fixed-glass controls for Stop and
 save, Pause/Resume, Restart (with confirmation), a region screenshot beside
 the take, microphone mute, Delete (with confirmation), and Hide. New Capture
 or a bare relaunch restores hidden controls; Hide is disabled without a tray.
+Controls show immediate, fixed-glass tooltips on hover or keyboard focus,
+including disabled controls; accessible names retain unavailable reasons.
+The last three tooltips align to the right. Transitions honor reduced motion.
+Hide shows a click-through notice with the saved New Capture shortcut, then
+expires without restoring the HUD.
 Accepted takes save on Quit/SIGTERM; pre-start Escape cancels without publishing,
 and failed finalization retains recovery media. Saved takes join History and
 honor `open_editor_after_recording`. Use a disposable `--history-root` and
 `--settings-file` for this development path. Wayland recording is explicitly
-refused; recording target/options selection and tooltip/notice visual parity
-remain unfinished. Normal tray/shortcut Record actions stay disabled; this is
-not a native release or completed parity gate.
+refused, including its menu/tray actions; this is not a native release or
+completed physical-device parity gate.
 
 A quiet launch into the tray shows shipping's
 launch notice for 5 s, and finishing setup shows it for 15 s. Linux tray
