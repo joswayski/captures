@@ -2397,7 +2397,184 @@ def crash_review(binary, scratch):
           "worked; clean quits left nothing")
 
 
-STEPS = [history, preferences, editor, editor_close_keeps_open_text, recording,
+def recording_controls(binary, scratch):
+    """Real X11 recording through the opt-in HUD: separate segments survive
+    pause/resume and child screenshots; cancellation/discard publish nothing.
+    The green desktop shown only while paused must never enter the MP4."""
+    if isinstance(DESKTOP, Wayland):
+        print("recording_controls: X11-only development entry point; Wayland not connected")
+        return
+    profile = scratch / "recording-controls"
+    profile.mkdir()
+    root = profile / "history"
+    settings = profile / "settings.json"
+    values = {"settings_schema_version": 5, "onboarding_completed": True,
+              "output_directory": str(profile / "exports"),
+              "region_shortcut": "Ctrl+Shift+F7", "window_shortcut": "Ctrl+Shift+F8",
+              "display_shortcut": "Ctrl+Shift+F9",
+              "launch_at_login": False, "show_mini_previews": False,
+              "auto_copy_to_clipboard": False, "screenshot_countdown_seconds": 0,
+              "new_capture_shortcut": "Ctrl+Shift+F10", "freeze_screen": False,
+              "recording": {"video_fps": 15, "countdown_seconds": 0,
+                            "show_cursor": False, "open_editor_after_recording": False}}
+    settings.write_text(json.dumps(values))
+    log = profile / "events.log"
+
+    def events():
+        return [json.loads(line) for line in log.read_text().splitlines() if line.startswith("{")]
+
+    def event(name):
+        return [e for e in events() if e["event"] == name]
+
+    def background(color):
+        subprocess.run(["hsetroot", "-solid", color], check=True, stdout=subprocess.DEVNULL)
+
+    def start(env):
+        with log.open("w") as stream:
+            process = subprocess.Popen([binary, "--live", "--captures-autostart",
+                                        "--history-root", str(root), "--settings-file", str(settings),
+                                        "--capture", "record-display"], env=env, stdout=stream)
+        return process
+
+    def button(app, name):
+        # GTK 4.8 repeats stock dialog button labels (as in choose_file).
+        return wait(lambda: [n for n, (role, text) in nodes(app)
+                             if role == "push button" and text in (name, f"{name} {name}")
+                             if has_state(n, Atspi.StateType.SENSITIVE)], name)[0]
+
+    def stop(process):
+        if process.poll() is None:
+            process.terminate()
+        assert process.wait(timeout=45) == 0, log.read_text()
+
+    with private_desktop(scratch, "recording-controls") as (env, _):
+        env = dict(env, GTK_A11Y="atspi", NO_AT_BRIDGE="0")
+        background("#d02030")
+        process = start(env)
+        try:
+            app = wait(lambda: application(process.pid), "recording app")
+            pause = button(app, "Pause recording")
+            assert_accessible(app, "Recording HUD")
+            microphone = find(app, "push button", "Microphone unavailable because no microphone was selected")[0]
+            assert not has_state(microphone, Atspi.StateType.SENSITIVE)
+            # Escape after acceptance is no longer a discard command.
+            DESKTOP.key("Escape")
+            time.sleep(1.1)
+            press(pause)
+            resume = button(app, "Resume recording")
+            background("#20d030")
+            paused = wait(lambda: [e for e in event("recording-state") if e["state"] == "paused"], "paused state")[-1]["elapsedMs"]
+            time.sleep(1.2)
+            assert event("recording-state")[-1]["elapsedMs"] == paused, "paused timer advanced"
+            background("#2030d0")
+            press(resume)
+            button(app, "Pause recording")
+            # A screenshot borrows Escape without cancelling the recording.
+            press(button(app, "Take a region screenshot"))
+            selector = DESKTOP.window("^Captures Region Selector$", process.pid)
+            DESKTOP.point_into(selector, 40, 40)
+            DESKTOP.key("Escape")
+            wait(lambda: event("capture-cancelled"), "cancelled child screenshot")
+            button(app, "Pause recording")
+            press(button(app, "Hide recording controls"))
+            wait(lambda: not find(app, "frame", "Captures Recording Controls"), "hidden HUD")
+            DESKTOP.key("ctrl+shift+F10")
+            button(app, "Pause recording")
+            time.sleep(1.1)
+            press(button(app, "Stop recording"))
+            saved = wait(lambda: event("recording-saved"), "saved MP4", timeout=45)[0]
+            folder = root / saved["id"]
+            media = next(folder.glob("*.mp4"))
+            info = json.loads(subprocess.run(["ffprobe", "-v", "error", "-show_streams",
+                                             "-of", "json", str(media)], capture_output=True,
+                                            text=True, check=True).stdout)
+            video = next(s for s in info["streams"] if s["codec_type"] == "video")
+            assert video["width"] > 0 and video["height"] > 0
+            pixels = subprocess.run(["ffmpeg", "-v", "error", "-i", str(media), "-vf",
+                                     "crop=2:2:20:400,scale=1:1", "-pix_fmt", "rgb24",
+                                     "-f", "rawvideo", "-"], capture_output=True, check=True).stdout
+            frames = list(zip(pixels[0::3], pixels[1::3], pixels[2::3], strict=True))
+            assert len(frames) >= 15, "recording was empty/too short"
+            assert any(r > 150 and b < 80 for r, g, b in frames), "missing pre-pause red frames"
+            assert any(b > 150 and r < 80 for r, g, b in frames), "missing resumed blue frames"
+            assert not any(g > 150 and r < 80 and b < 80 for r, g, b in frames), "paused green leaked into MP4"
+            assert not list((profile / "recording-recovery").glob("*/manifest.json"))
+            print(f"recording_controls: {len(frames)} decoded frames, red→blue with no paused green; "
+                  "Escape, child cancellation, Hide/shortcut restore and Stop passed")
+        finally:
+            stop(process)
+
+        # Destructive controls ask first; Cancel keeps the take, Restart resets
+        # it through a fresh countdown, and confirmed Delete publishes nothing.
+        count = len(list(root.glob("*/metadata.json")))
+        process = start(env)
+        try:
+            app = wait(lambda: application(process.pid), "second recording app")
+            press(button(app, "Restart recording"))
+            press(button(app, "Cancel"))
+            button(app, "Pause recording")
+            press(button(app, "Restart recording"))
+            press(button(app, "Restart"))
+            button(app, "Pause recording")
+            press(button(app, "Delete recording"))
+            press(button(app, "Cancel"))
+            button(app, "Pause recording")
+            press(button(app, "Delete recording"))
+            press(button(app, "Delete"))
+            wait(lambda: event("recording-discarded"), "discarded take")
+            assert len(list(root.glob("*/metadata.json"))) == count
+            assert not list((profile / "recording-recovery").glob("*/manifest.json"))
+        finally:
+            stop(process)
+
+        values["recording"]["countdown_seconds"] = 3
+        settings.write_text(json.dumps(values))
+        process = start(env)
+        try:
+            countdown = DESKTOP.window("^Captures Recording Countdown$", process.pid)
+            DESKTOP.point_into(countdown, 40, 40)
+            DESKTOP.key("Escape")
+            wait(lambda: event("recording-discarded"), "cancelled countdown")
+            assert not any(e.get("state") == "recording" for e in events())
+            assert len(list(root.glob("*/metadata.json"))) == count
+            assert not list((profile / "recording-recovery").glob("*/manifest.json"))
+        finally:
+            stop(process)
+
+        values["recording"]["countdown_seconds"] = 0
+        settings.write_text(json.dumps(values))
+        process = start(env)
+        try:
+            app = wait(lambda: application(process.pid), "quit-save app")
+            button(app, "Pause recording")
+            time.sleep(1.2)
+            press(button(app, "Pause recording"))
+            resume = button(app, "Resume recording")
+            # A segment-open failure must preserve the paused take and its
+            # Stop/Resume controls, not falsely offer destructive Retry.
+            bundle = next((profile / "recording-recovery").glob("*/manifest.json")).parent
+            held = bundle.with_name(bundle.name + ".held")
+            bundle.rename(held)
+            bundle.write_text("fixture: segment directory unavailable")
+            try:
+                press(resume)
+                wait(lambda: event("recording-failed"), "failed resume")
+                button(app, "Resume recording")
+                button(app, "Stop recording")
+                assert not find(app, "push button", "Retry recording")
+                assert event("recording-state")[-1]["state"] == "paused"
+            finally:
+                bundle.unlink()
+                held.rename(bundle)
+        finally:
+            stop(process)
+        assert len(list(root.glob("*/metadata.json"))) == count + 1, "Quit lost an accepted take"
+        assert event("recording-saved")[-1]["onQuit"]
+        print("recording_controls: restart/delete confirmations, countdown cancellation, "
+              "failed resume preserves paused media, and save-on-Quit passed")
+
+
+STEPS = [history, preferences, editor, editor_close_keeps_open_text, recording, recording_controls,
          recording_output, previews, preview_overflow, feedback, open_with, live, capture, selectors,
          new_capture, tray, shortcuts, setup, crash_review, notices]
 FIXTURE_LOG = None

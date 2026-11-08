@@ -144,6 +144,10 @@ pub fn start(host: &Rc<Host>, instance: Instance, quiet: bool, opening_files: bo
 
 /// Stop accepting forwarded launches and release the profile.
 pub fn stop(host: &Host) {
+    let recorder = host.recorder.borrow_mut().take();
+    if let Some(recorder) = recorder {
+        recorder.shutdown();
+    }
     SETTINGS.with(|watch| watch.borrow_mut().take());
     SHORTCUTS.with(|shortcuts| shortcuts.borrow_mut().take());
     host.tray.borrow_mut().take();
@@ -200,6 +204,15 @@ pub(crate) fn route_shortcuts_to_selector(generation: Option<u64>) {
     SHORTCUTS.with(|cell| {
         if let Some(shortcuts) = cell.borrow().as_ref() {
             shortcuts.set_selector_generation(generation);
+        }
+    });
+}
+
+/// A hidden HUD retains New Capture as its restoration chord.
+pub(crate) fn recording_hidden(hidden: bool) {
+    SHORTCUTS.with(|cell| {
+        if let Some(shortcuts) = cell.borrow().as_ref() {
+            shortcuts.set_restore_only(hidden);
         }
     });
 }
@@ -269,6 +282,9 @@ fn drain() {
 /// with the highest priority (an editor before History before
 /// Preferences), or open Preferences.
 fn reactivate(host: &Rc<Host>) {
+    if host.restore_recording_controls() {
+        return;
+    }
     let editors: Vec<gtk::ApplicationWindow> = host
         .editors
         .borrow()

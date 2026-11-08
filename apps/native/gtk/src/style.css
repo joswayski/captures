@@ -3425,3 +3425,133 @@ popover.captures-menu.glass button.choice-option.active {
   font-size: var(--text-md);
   text-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
 }
+
+/* ---------------------------------------------------- recording HUD ---- */
+window.captures.recording-controls-window {
+  background: transparent;
+  color: var(--glass-text);
+}
+.captures .recording-hud {
+  margin: 6px;
+  padding: var(--s-3) var(--s-4) var(--s-4);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-2xl);
+  background: var(--glass-strong);
+}
+.captures .recording-hud-privacy,
+.captures .recording-hud-status {
+  color: var(--glass-text-subtle);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+}
+.captures .recording-hud-status {
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--eyebrow-tracking);
+}
+.captures .recording-hud-time {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  font-feature-settings: "tnum";
+  letter-spacing: var(--card-tracking);
+}
+.captures .recording-hud-dot {
+  min-width: 10px;
+  min-height: 10px;
+  border-radius: var(--r-pill);
+  background: var(--theme-signal);
+  box-shadow: 0 0 0 4px alpha(var(--theme-signal), 0.16);
+}
+.captures .recording-hud-dot.accent {
+  background: var(--theme-accent);
+  box-shadow: 0 0 0 4px alpha(var(--theme-accent), 0.16);
+}
+.captures .recording-hud-dot.info {
+  background: var(--info);
+  box-shadow: 0 0 0 4px alpha(var(--info), 0.16);
+}
+.captures .recording-hud-dot.subtle {
+  background: var(--glass-text-subtle);
+  box-shadow: none;
+}
+@keyframes recording-hud-pulse {
+  50% {
+    opacity: 0.6;
+  }
+}
+.captures .recording-hud-dot.pulsing {
+  animation: recording-hud-pulse 1.6s ease-in-out infinite;
+}
+.captures .recording-hud-actions button {
+  all: unset;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  color: var(--glass-text-muted);
+  transition:
+    color var(--dur-2),
+    background-color var(--dur-2),
+    border-color var(--dur-2);
+}
+.captures .recording-hud-actions button:hover {
+  color: var(--glass-text);
+  background: var(--glass-hover);
+}
+.captures .recording-hud-actions button:disabled {
+  opacity: 0.32;
+}
+.captures .recording-hud-actions button:focus-visible {
+  border-color: var(--theme-accent);
+}
+.captures .recording-hud-actions button.active {
+  color: var(--theme-accent);
+  border-color: alpha(var(--theme-accent), 0.3);
+}
+.captures .recording-hud-actions button.recording-stop {
+  min-width: 34px;
+  border-color: alpha(var(--theme-signal), 0.4);
+  background: alpha(var(--theme-signal), 0.14);
+}
+.captures .recording-stop-square {
+  min-width: 11px;
+  min-height: 11px;
+  border-radius: 2px;
+  background: var(--theme-signal);
+}
+.captures .recording-hud-actions button.recording-stop:hover,
+.captures .recording-hud-actions button.recording-discard:hover {
+  background: var(--theme-signal);
+  color: var(--glass-text);
+}
+.captures .recording-stop:hover .recording-stop-square {
+  background: var(--glass-text);
+}
+.captures .recording-hud-error {
+  margin: 0 10px 4px;
+  color: var(--theme-signal-text);
+  font-size: var(--text-2xs);
+}
+.captures .recording-hud-meter trough {
+  min-height: 4px;
+  background: rgba(0, 0, 0, 0.4);
+  border-radius: var(--r-pill);
+}
+.captures .recording-hud-meter progress {
+  min-height: 4px;
+  background: var(--positive);
+  border-radius: var(--r-pill);
+}
+.captures .recording-hidden-notice {
+  margin: 6px;
+  padding: var(--s-5);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-xl);
+  color: var(--glass-text-muted);
+  background: var(--glass-strong);
+  font-size: var(--text-sm);
+}
+.captures .recording-hidden-title {
+  color: var(--glass-text);
+  font-weight: var(--weight-semibold);
+}

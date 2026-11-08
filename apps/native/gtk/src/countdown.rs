@@ -28,6 +28,7 @@ mod imp {
         pub content: Cell<Pose>,
         pub animation: RefCell<Option<gtk::TickCallbackId>>,
         pub font_width: Cell<i32>,
+        pub recording: Cell<bool>,
     }
 
     impl Default for Content {
@@ -39,6 +40,7 @@ mod imp {
                 content: Cell::new(Pose::REST),
                 animation: RefCell::default(),
                 font_width: Cell::new(0),
+                recording: Cell::new(false),
             }
         }
     }
@@ -170,10 +172,15 @@ glib::wrapper! {
 }
 
 impl Content {
-    fn new(tokens: Rc<Tokens>, seconds: u8) -> Self {
+    fn new(tokens: Rc<Tokens>, seconds: u8, recording: bool) -> Self {
         let content: Self = glib::Object::new();
+        content.imp().recording.set(recording);
         let labels = [
-            gtk::Label::new(Some("SCREENSHOT IN")),
+            gtk::Label::new(Some(if recording {
+                "RECORDING IN"
+            } else {
+                "SCREENSHOT IN"
+            })),
             gtk::Label::new(Some(&seconds.to_string())),
             gtk::Label::new(Some("Press Esc to cancel")),
         ];
@@ -194,8 +201,13 @@ impl Content {
     fn set_remaining(&self, seconds: u8) {
         self.imp().labels.get().expect("labels")[1].set_label(&seconds.to_string());
         self.queue_allocate();
+        let kind = if self.imp().recording.get() {
+            "Recording"
+        } else {
+            "Screenshot"
+        };
         self.update_property(&[gtk::accessible::Property::Label(&format!(
-            "Screenshot in {seconds}. Press Esc to cancel"
+            "{kind} in {seconds}. Press Esc to cancel"
         ))]);
     }
 
@@ -243,18 +255,41 @@ impl Content {
 /// still wait for compositor settlement before acquiring pixels. Zero-delay
 /// captures do not create a window; cancelling never publishes an artifact.
 pub async fn wait(host: &Host, generation: u64, seconds: u8, display: Option<&DisplayDescriptor>) {
+    wait_kind(host, generation, seconds, display, false).await;
+}
+
+pub async fn wait_recording(
+    host: &Host,
+    generation: u64,
+    seconds: u8,
+    display: Option<&DisplayDescriptor>,
+) {
+    wait_kind(host, generation, seconds, display, true).await;
+}
+
+async fn wait_kind(
+    host: &Host,
+    generation: u64,
+    seconds: u8,
+    display: Option<&DisplayDescriptor>,
+    recording: bool,
+) {
     if seconds == 0 || !capture_flow::is_current(generation) {
         return;
     }
     let deadline = Countdown::new(Instant::now(), seconds);
     let window = gtk::ApplicationWindow::builder()
         .application(&host.app)
-        .title(TITLE)
+        .title(if recording {
+            "Captures Recording Countdown"
+        } else {
+            TITLE
+        })
         .decorated(false)
         .build();
     window.add_css_class("captures");
     window.add_css_class("countdown-window");
-    let content = Content::new(host.tokens.borrow().clone(), seconds);
+    let content = Content::new(host.tokens.borrow().clone(), seconds, recording);
     window.set_child(Some(&content));
     if let Some(display) = display {
         let (width, height) = display.overlay_size();
@@ -315,7 +350,11 @@ pub async fn wait(host: &Host, generation: u64, seconds: u8, display: Option<&Di
     if !capture_flow::is_current(generation) {
         content.imp().labels.get().expect("labels")[2].set_label("Cancelling…");
         content.queue_allocate();
-        content.update_property(&[gtk::accessible::Property::Label("Cancelling screenshot")]);
+        content.update_property(&[gtk::accessible::Property::Label(if recording {
+            "Cancelling recording"
+        } else {
+            "Cancelling screenshot"
+        })]);
         content.animate(true);
         if content.settings().is_gtk_enable_animations() {
             glib::timeout_future(Duration::from_millis(180)).await;

@@ -14,6 +14,7 @@ mod onboarding;
 mod preferences;
 mod previews;
 mod recording;
+mod recording_controls;
 mod selector;
 mod style;
 mod switch;
@@ -36,7 +37,8 @@ const USAGE: &str = "captures-gtk [--scene preferences|history|editor|recording|
   [--settings-file PATH] [--history-root PATH] [--size WxH] [--feedback-endpoint URL]\n\
   [--screenshot OUT.png] [--find QUERY] [--count N] [--exercise] [--quit-after SECONDS]\n\
   [--open-media PATH]... [-- FILE...]\n\
-  --live [--captures-autostart] [--capture display|region|window|new] [--history-root PATH] [--settings-file PATH] [--open-media PATH]... [-- FILE...]";
+  --live [--captures-autostart] [--capture display|region|window|new|record-display] [--history-root PATH] [--settings-file PATH] [--open-media PATH]... [-- FILE...]\n\
+  record-display is an X11-only development entry point; the Record menu is not connected yet.";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Scene {
@@ -163,6 +165,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
                     "region" => tray::Action::CaptureRegion,
                     "window" => tray::Action::CaptureWindow,
                     "new" => tray::Action::NewCapture,
+                    "record-display" => tray::Action::RecordDisplay,
                     other => return Err(format!("unsupported capture {other}")),
                 })
             }
@@ -266,6 +269,8 @@ struct Host {
     startup_notice: RefCell<Option<gtk::ApplicationWindow>>,
     /// The Region or Window overlay, while open (`selector.rs`).
     selector: RefCell<Option<selector::Handle>>,
+    /// An accepted or starting take, independent of a screenshot beside it.
+    recorder: RefCell<Option<Rc<recording_controls::Controls>>>,
 }
 
 impl Host {
@@ -829,6 +834,7 @@ fn main() -> glib::ExitCode {
             crash: RefCell::default(),
             startup_notice: RefCell::default(),
             selector: RefCell::default(),
+            recorder: RefCell::default(),
         });
         hosts.borrow_mut().push(host.clone());
         let weak = Rc::downgrade(&host);
@@ -854,6 +860,7 @@ fn main() -> glib::ExitCode {
                 Some(tray::Action::CaptureRegion) => host.capture_region(),
                 Some(tray::Action::CaptureWindow) => host.capture_window(),
                 Some(tray::Action::NewCapture) => host.new_capture(),
+                Some(tray::Action::RecordDisplay) => host.record_display(),
                 Some(_) => host.capture_display(),
                 None => {}
             }

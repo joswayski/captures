@@ -1817,8 +1817,25 @@ After the monotonic deadline, the countdown unmaps before compositor settlement
 and pixel acquisition. Escape saves nothing and restores hidden previews.
 Wayland Window displays the countdown before requesting its portal picker;
 already-approved portal stills and explicit frozen-controls captures skip it.
-Recording/HUD remains separate work; this does not promote native or change the
-macOS/Windows implementations.
+The recording countdown uses the same surface with recording-specific copy.
+This does not promote native or change the macOS/Windows implementations.
+
+GTK live recording controls (`recording_controls.rs`) are connected to the shared
+worker through an explicit development entry point, `--live --capture record-display`.
+It records the X11 display under the pointer using saved settings, with a
+cancellable countdown, Pause/Resume, Restart/Delete confirmations, microphone
+mute, Stop into History, optional editor opening, and save-on-Quit. The accepted
+take retains its parent generation while the existing Region selector borrows a
+child for a screenshot. Hide requires a tray; New Capture and a bare relaunch
+restore the controls. Session loss finalizes accepted media rather than discarding
+it, and failed publication retains the recovery bundle. Tool discovery, capture,
+encoding and finalization stay on workers. The GTK loop drains events and samples
+the timer/meter, using `recording_hud` for control states, labels and error policy.
+The normal Record menu/tray/shortcut actions remain disabled: target/options
+selection, Wayland recording, and tooltip/hidden-notice visual parity are still
+unfinished. The development entry point explicitly refuses Wayland. AppKit,
+Win32 and the wgpu workbench are unchanged; physical-device and accessibility
+acceptance remain separate gates, and Tauri remains the public app.
 
 ## Progress dashboard
 

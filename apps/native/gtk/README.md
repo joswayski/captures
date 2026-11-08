@@ -44,7 +44,7 @@ The live app shows shipping's tray menu as a StatusNotifierItem
 New Capture…, Screenshot Display, Screenshot Region, Screenshot Window,
 Capture History…, Open Save Location, Preferences, Send Feedback… and Quit
 work; the recording rows stay in shipping's order but are disabled until the
-GTK host records, and Check for Updates…
+recording selection/options menu is connected, and Check for Updates…
 is enabled only in a Preview build with update metadata (it opens
 Preferences). Without a StatusNotifier host the app opens Preferences and
 quits when its last window closes. Once setup is finished, the saved global
@@ -96,7 +96,22 @@ controls on another display while retaining the target. On Wayland Region crops
 the portal still, Full screen preserves its exact pixels and Display metadata,
 and Window goes to the ScreenCast picker. Repeating a Wayland target remains
 portal-mediated; the compositor decides which UI its new still contains.
-Record mode and its HUD are not in the GTK host yet. A quiet launch into the tray shows shipping's
+Record mode is not connected to this menu yet. The development-only
+`--live --capture record-display` entry point records the X11 display under
+the pointer using saved recording settings and the shared serialized worker.
+It runs the recording countdown and opens fixed-glass controls for Stop and
+save, Pause/Resume, Restart (with confirmation), a region screenshot beside
+the take, microphone mute, Delete (with confirmation), and Hide. New Capture
+or a bare relaunch restores hidden controls; Hide is disabled without a tray.
+Accepted takes save on Quit/SIGTERM; pre-start Escape cancels without publishing,
+and failed finalization retains recovery media. Saved takes join History and
+honor `open_editor_after_recording`. Use a disposable `--history-root` and
+`--settings-file` for this development path. Wayland recording is explicitly
+refused; recording target/options selection and tooltip/notice visual parity
+remain unfinished. Normal tray/shortcut Record actions stay disabled; this is
+not a native release or completed parity gate.
+
+A quiet launch into the tray shows shipping's
 launch notice for 5 s, and finishing setup shows it for 15 s. Linux tray
 hosts never report the icon's position, so it is always the compact
 caretless rectangle in the work area's tray corner (`--scene startup`
@@ -170,5 +185,10 @@ instead (the `sway` from `apps/native/build_wayland_compositor_fixture.sh` on
 `PATH`, and `apps/native/wayland_drag_probe` built for its virtual pointer and
 keyboard; no X display). It needs `python3-gi`, `gir1.2-atspi-2.0`, `gir1.2-gdkpixbuf-2.0`, `xdotool`,
 `at-spi2-core` and `ffmpeg`, plus ImageMagick's `import` for the X11 controls-pixel comparison.
+The `recording_controls` step also uses `hsetroot` and `ffprobe`. Run it on a
+private Xvfb display with `-noreset`: it records changing desktop colors,
+decodes the saved MP4, checks that paused frames were excluded, and exercises
+child cancellation, Hide/restore, confirmations, countdown cancellation and
+save-on-Quit. It does not exercise a physical microphone or a Wayland portal.
 The recording editor uses `CAPTURES_FFMPEG` and
 `CAPTURES_FFPROBE`, then the desktop app's sidecars, then `ffmpeg` on `PATH`.

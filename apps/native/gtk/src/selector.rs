@@ -149,6 +149,9 @@ impl Host {
     /// New Capture (Screenshot mode): the capture bar over the display
     /// under the pointer, or over the portal's still.
     pub fn new_capture(self: &Rc<Self>) {
+        if self.restore_recording_controls() {
+            return;
+        }
         if !self.retarget_new_capture(MenuTarget::Region, Kind::Menu) {
             self.select_on(Kind::Menu, None, MenuTarget::Region);
         }
@@ -212,6 +215,12 @@ impl Host {
         let portal = wayland(self);
         let flow = if portal {
             PortalCapture::begin().map(Flow::Portal)
+        } else if let Some(recorder) = self.recorder.borrow().as_ref() {
+            recorder
+                .flow
+                .borrow()
+                .begin_recording_screenshot(0)
+                .map(Flow::X11)
         } else {
             CaptureFlow::begin(0).map(Flow::X11)
         };
