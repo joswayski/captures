@@ -3496,6 +3496,26 @@ window.captures.recording-controls-window {
 .captures .recording-hud-dot.pulsing {
   animation: recording-hud-pulse 1.6s ease-in-out infinite;
 }
+.captures .recording-hud-tooltip {
+  padding: 5px 8px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-sm);
+  color: var(--glass-text);
+  background: var(--glass-strong);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  opacity: 0;
+  transform: translateY(-3px);
+}
+.captures .recording-hud-tooltip.animated {
+  transition:
+    opacity var(--dur-1) var(--ease-standard),
+    transform var(--dur-1) var(--ease-standard);
+}
+.captures .recording-hud-tooltip.showing {
+  opacity: 1;
+  transform: translateY(0);
+}
 .captures .recording-hud-actions button {
   all: unset;
   min-width: 32px;
