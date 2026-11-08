@@ -1821,8 +1821,15 @@ The recording countdown uses the same surface with recording-specific copy.
 This does not promote native or change the macOS/Windows implementations.
 
 GTK live recording controls (`recording_controls.rs`) are connected to the shared
-worker through an explicit development entry point, `--live --capture record-display`.
-It records the X11 display under the pointer using saved settings, with a
+worker through New Capture's Record mode, the recording tray actions and shortcuts.
+On X11 the existing selector transfers its capture guard, selected display and
+Region/Window/Full screen target to the controller. FPS, maximum resolution,
+cursor/click coupling, desktop audio and microphone choices apply to this take;
+Preferences are unchanged. Microphones enumerate off the UI thread. Changing
+capture type retains the selection/options, and switching displays retains the
+recording options. Enter on an option toggles it rather than starting a take.
+The development entry point `--live --capture record-display` still records the
+display under the pointer using saved settings. Both paths have a
 cancellable countdown, Pause/Resume, Restart/Delete confirmations, microphone
 mute, Stop into History, optional editor opening, and save-on-Quit. The accepted
 take retains its parent generation while the existing Region selector borrows a
@@ -1831,9 +1838,9 @@ restore the controls. Session loss finalizes accepted media rather than discardi
 it, and failed publication retains the recovery bundle. Tool discovery, capture,
 encoding and finalization stay on workers. The GTK loop drains events and samples
 the timer/meter, using `recording_hud` for control states, labels and error policy.
-The normal Record menu/tray/shortcut actions remain disabled: target/options
-selection, Wayland recording, and tooltip/hidden-notice visual parity are still
-unfinished. The development entry point explicitly refuses Wayland. AppKit,
+Wayland recording and tooltip/hidden-notice visual parity are still unfinished.
+Record controls are disabled on Wayland, and direct recording requests explicitly
+refuse it. AppKit,
 Win32 and the wgpu workbench are unchanged; physical-device and accessibility
 acceptance remain separate gates, and Tauri remains the public app.
 

@@ -229,10 +229,9 @@ fn drain_shortcuts() {
             CaptureShortcut::Region => host.capture_region(),
             CaptureShortcut::Window => host.capture_window(),
             CaptureShortcut::NewCapture => host.new_capture(),
-            // Not in the GTK host yet; their tray rows are disabled too.
-            CaptureShortcut::RecordRegion
-            | CaptureShortcut::RecordWindow
-            | CaptureShortcut::RecordDisplay => {}
+            CaptureShortcut::RecordRegion => host.record_menu(crate::capture_bar::Target::Region),
+            CaptureShortcut::RecordWindow => host.record_menu(crate::capture_bar::Target::Window),
+            CaptureShortcut::RecordDisplay => host.record_menu(crate::capture_bar::Target::Display),
         }
     }
 }

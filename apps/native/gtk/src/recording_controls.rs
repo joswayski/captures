@@ -1,6 +1,5 @@
-//! Live recording controls. The development-only X11 display entry point uses
-//! saved recording settings; the normal Record menu stays gated until its
-//! selection/options UI is connected. Sessions and media never live on GTK's
+//! Live recording controls. New Capture transfers its X11 selection and
+//! capture guard here. Sessions and media never live on GTK's
 //! thread. The parent capture guard survives pauses, screenshots and hiding.
 
 use std::cell::{Cell, RefCell};
@@ -43,6 +42,8 @@ pub struct Controls {
     worker: RefCell<Worker>,
     display: RefCell<Option<DisplayDescriptor>>,
     settings: captures_settings::AppSettings,
+    target: Option<RecordingTarget>,
+    hidden: Vec<gtk::Window>,
     snapshot: RefCell<Option<RecordingSessionSnapshot>>,
     pending: Cell<Pending>,
     accepted: Cell<bool>,
@@ -78,16 +79,16 @@ impl Host {
             Ok(flow) => flow,
             Err(error) => return self.capture_failed(&error),
         };
-        let controls = Controls::new(self, flow);
+        let controls = Controls::new(
+            self,
+            flow,
+            None,
+            None,
+            captures_settings::load(&self.settings_file).unwrap_or_default(),
+            Vec::new(),
+        );
         *self.recorder.borrow_mut() = Some(controls.clone());
-        let weak = Rc::downgrade(&controls);
-        glib::timeout_add_local(Duration::from_millis(50), move || {
-            let Some(controls) = weak.upgrade().filter(|c| !c.closing.get()) else {
-                return glib::ControlFlow::Break;
-            };
-            controls.drain();
-            glib::ControlFlow::Continue
-        });
+        controls.watch();
         glib::spawn_future_local(async move {
             let display = gio::spawn_blocking(|| {
                 let id = crate::capture::pointer_display()?;
@@ -121,6 +122,25 @@ impl Host {
         });
     }
 
+    pub fn record_selected(
+        self: &Rc<Self>,
+        flow: CaptureFlow,
+        display: DisplayDescriptor,
+        target: RecordingTarget,
+        settings: captures_settings::AppSettings,
+        hidden: Vec<gtk::Window>,
+    ) {
+        let controls = Controls::new(self, flow, Some(display), Some(target), settings, hidden);
+        *self.recorder.borrow_mut() = Some(controls.clone());
+        controls.watch();
+        glib::spawn_future_local(async move {
+            glib::timeout_future(crate::capture::SETTLE).await;
+            controls.send(Command::VerifyToolchain {
+                generation: controls.generation(),
+            });
+        });
+    }
+
     pub fn restore_recording_controls(&self) -> bool {
         if let Some(controls) = self.recorder.borrow().as_ref() {
             controls.restore();
@@ -132,6 +152,17 @@ impl Host {
 }
 
 impl Controls {
+    fn watch(self: &Rc<Self>) {
+        let weak = Rc::downgrade(self);
+        glib::timeout_add_local(Duration::from_millis(50), move || {
+            let Some(controls) = weak.upgrade().filter(|c| !c.closing.get()) else {
+                return glib::ControlFlow::Break;
+            };
+            controls.drain();
+            glib::ControlFlow::Continue
+        });
+    }
+
     fn generation(&self) -> u64 {
         self.flow.borrow().generation()
     }
@@ -142,7 +173,14 @@ impl Controls {
         self.worker.borrow().send(command);
     }
 
-    fn new(host: &Rc<Host>, flow: CaptureFlow) -> Rc<Self> {
+    fn new(
+        host: &Rc<Host>,
+        flow: CaptureFlow,
+        display: Option<DisplayDescriptor>,
+        target: Option<RecordingTarget>,
+        settings: captures_settings::AppSettings,
+        hidden: Vec<gtk::Window>,
+    ) -> Rc<Self> {
         let window = gtk::ApplicationWindow::builder()
             .application(&host.app)
             .title(TITLE)
@@ -241,8 +279,10 @@ impl Controls {
             flow: RefCell::new(flow),
             host: Rc::downgrade(host),
             worker: RefCell::new(worker),
-            display: RefCell::default(),
-            settings: captures_settings::load(&host.settings_file).unwrap_or_default(),
+            display: RefCell::new(display),
+            settings,
+            target,
+            hidden,
             snapshot: RefCell::default(),
             pending: Cell::new(Pending::Prepare),
             accepted: Cell::new(false),
@@ -491,9 +531,12 @@ impl Controls {
                     let settings = &self.settings.recording;
                     let options = RecordingOptions {
                         kind: RecordingKind::Video,
-                        target: RecordingTarget::Display {
-                            display_id: display.id.clone(),
-                        },
+                        target: self
+                            .target
+                            .clone()
+                            .unwrap_or_else(|| RecordingTarget::Display {
+                                display_id: display.id.clone(),
+                            }),
                         frames_per_second: settings.video_fps,
                         max_resolution: settings.video_max_resolution,
                         countdown_seconds: settings.countdown_seconds,
@@ -950,6 +993,9 @@ impl Controls {
         }
         if let Some(host) = self.host.upgrade() {
             host.recorder.borrow_mut().take();
+        }
+        for window in &self.hidden {
+            window.set_visible(true);
         }
     }
 

@@ -3254,6 +3254,21 @@ window.captures.capture-surface {
   padding: var(--s-4);
   border-spacing: var(--s-4);
 }
+.captures .capture-recording-options {
+  padding: var(--s-5);
+  border-spacing: var(--s-4);
+  border-top: 1px solid var(--glass-border);
+}
+.captures .capture-recording-caption {
+  color: var(--glass-text-subtle);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+}
+.captures .capture-recording-toggle {
+  min-height: var(--h-lg);
+  color: var(--glass-text-muted);
+  font-size: var(--text-xs);
+}
 /* `.capture-selector-close`. */
 .captures button.capture-bar-close {
   all: unset;

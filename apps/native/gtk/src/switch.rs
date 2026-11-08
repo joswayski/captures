@@ -26,6 +26,7 @@ mod imp {
     pub struct TokenSwitch {
         pub tokens: RefCell<Option<Rc<Tokens>>>,
         pub on: Cell<bool>,
+        pub glass: Cell<bool>,
         /// Drawn knob position, 0 (off) to 1 (on).
         pub position: Cell<f64>,
         pub hovered: Cell<bool>,
@@ -120,7 +121,9 @@ mod imp {
                     (a.alpha() + (b.alpha() - a.alpha()) * p) * alpha,
                 )
             };
-            let mut off_border = t.rgba(if enabled && self.hovered.get() {
+            let mut off_border = t.rgba(if self.glass.get() {
+                "glass-border-strong"
+            } else if enabled && self.hovered.get() {
                 "text-faint"
             } else {
                 "border-strong"
@@ -130,7 +133,14 @@ mod imp {
             off_border = mix(off_border, clear);
             snapshot.push_rounded_clip(&pill);
             snapshot.append_color(
-                &mix(t.rgba("surface-sunken"), t.rgba("theme-accent")),
+                &mix(
+                    if self.glass.get() {
+                        gdk::RGBA::new(0., 0., 0., 0.35)
+                    } else {
+                        t.rgba("surface-sunken")
+                    },
+                    t.rgba("theme-accent"),
+                ),
                 &track,
             );
             snapshot.pop();
@@ -143,7 +153,14 @@ mod imp {
             snapshot.append_outset_shadow(&round, &shadow, 0., 1., 0., 1.);
             snapshot.push_rounded_clip(&round);
             snapshot.append_color(
-                &mix(t.rgba("text-subtle"), t.rgba("theme-accent-ink")),
+                &mix(
+                    t.rgba(if self.glass.get() {
+                        "glass-text-subtle"
+                    } else {
+                        "text-subtle"
+                    }),
+                    t.rgba("theme-accent-ink"),
+                ),
                 &knob,
             );
             snapshot.pop();
@@ -178,6 +195,11 @@ impl TokenSwitch {
 
     pub fn is_on(&self) -> bool {
         self.imp().on.get()
+    }
+
+    pub fn set_glass(&self) {
+        self.imp().glass.set(true);
+        self.queue_draw();
     }
 
     pub fn connect_toggled(&self, f: impl Fn(bool) + 'static) {

@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use captures_app::capture_flow::{self, CaptureFlow, PortalCapture};
-use captures_app::capture_menu::{self, GuidanceTarget};
+use captures_app::capture_menu::{self, GuidanceTarget, MenuMode};
 use captures_app::region::RegionSession;
 use captures_app::selection::{self, Bounds, DragMode, DragOptions, Point, Rect};
 use captures_app::window::{Target, WindowSession};
@@ -121,6 +121,7 @@ struct Overlay {
     /// New Capture: the bar, its target and region aspect lock.
     bar: Option<Bar>,
     target: Cell<MenuTarget>,
+    capture_mode: Cell<MenuMode>,
     aspect: Cell<Option<f64>>,
     display_card: Option<gtk::Box>,
 }
@@ -153,14 +154,14 @@ impl Host {
             return;
         }
         if !self.retarget_new_capture(MenuTarget::Region, Kind::Menu) {
-            self.select_on(Kind::Menu, None, MenuTarget::Region);
+            self.select_on(Kind::Menu, None, MenuTarget::Region, None);
         }
     }
 
     /// Shipping's Display entry point opens the bar on Full screen.
     pub fn capture_display(self: &Rc<Self>) {
         if !self.retarget_new_capture(MenuTarget::Display, Kind::Menu) {
-            self.select_on(Kind::Menu, None, MenuTarget::Display);
+            self.select_on(Kind::Menu, None, MenuTarget::Display, None);
         }
     }
 
@@ -189,7 +190,9 @@ impl Host {
         {
             return true;
         }
-        if overlay.target.get() == target {
+        if overlay.capture_mode.replace(MenuMode::Screenshot) == MenuMode::Screenshot
+            && overlay.target.get() == target
+        {
             overlay.recapture(repeat);
             return true;
         }
@@ -201,17 +204,59 @@ impl Host {
     }
 
     fn select(self: &Rc<Self>, kind: Kind) {
-        self.select_on(kind, None, MenuTarget::Region);
+        self.select_on(kind, None, MenuTarget::Region, None);
+    }
+
+    pub fn record_menu(self: &Rc<Self>, target: MenuTarget) {
+        if self.restore_recording_controls() {
+            return;
+        }
+        if wayland(self) {
+            return self.capture_failed(
+                "GTK recording currently requires X11. Wayland recording is not connected yet.",
+            );
+        }
+        let overlay = self
+            .selector
+            .borrow()
+            .as_ref()
+            .map(|handle| handle.0.clone());
+        if let Some(overlay) = overlay.filter(|overlay| overlay.kind == Kind::Menu) {
+            if !overlay.done.get() && !overlay.state.borrow().primary.starting {
+                overlay.capture_mode.set(MenuMode::Recording);
+                overlay.retarget(target);
+            }
+            return;
+        }
+        let settings = captures_settings::load(&self.settings_file).unwrap_or_default();
+        self.select_on(
+            Kind::Menu,
+            None,
+            target,
+            Some((MenuMode::Recording, settings.recording)),
+        );
     }
 
     /// `display`: the display New Capture switches to.
-    fn select_on(self: &Rc<Self>, kind: Kind, display: Option<String>, target: MenuTarget) {
+    fn select_on(
+        self: &Rc<Self>,
+        kind: Kind,
+        display: Option<String>,
+        target: MenuTarget,
+        recording: Option<(MenuMode, captures_settings::RecordingSettings)>,
+    ) {
         // An exiting countdown still owns hidden windows and cleanup even
         // after Escape has released its shared generation.
         if self.capture.borrow().is_some() {
             return self.capture_failed("A capture is already in progress");
         }
-        let settings = captures_settings::load(&self.settings_file).unwrap_or_default();
+        let mut settings = captures_settings::load(&self.settings_file).unwrap_or_default();
+        let mode = if let Some((mode, recording)) = recording {
+            settings.recording = recording;
+            mode
+        } else {
+            MenuMode::Screenshot
+        };
         let portal = wayland(self);
         let flow = if portal {
             PortalCapture::begin().map(Flow::Portal)
@@ -266,6 +311,7 @@ impl Host {
                 Ok(Some(source)) if capture_flow::is_current(generation) => {
                     overlay(
                         &host, kind, source, portal, hidden, settings, started, generation, target,
+                        mode,
                     );
                 }
                 result => {
@@ -376,6 +422,7 @@ fn overlay(
     started: Instant,
     generation: u64,
     target: MenuTarget,
+    mode: MenuMode,
 ) {
     let (texture, display) = match &source {
         Source::Region(session) => (
@@ -486,11 +533,13 @@ fn overlay(
         card.append(&detail);
         card.set_visible(false);
         root.add_overlay(&card);
-        let (aspect_link, display_link) = (link.clone(), link.clone());
+        let (aspect_link, display_link, options_link) = (link.clone(), link.clone(), link.clone());
         let bar = Bar::new(
             displays,
             &current,
             settings.auto_start_on_selection,
+            settings.recording.clone(),
+            host.tokens.borrow().clone(),
             move |id| {
                 if let Some(overlay) = aspect_link.borrow().upgrade() {
                     overlay.set_aspect(&id);
@@ -499,6 +548,11 @@ fn overlay(
             move |id| {
                 if let Some(overlay) = display_link.borrow().upgrade() {
                     overlay.switch_display(id);
+                }
+            },
+            move || {
+                if let Some(overlay) = options_link.borrow().upgrade() {
+                    overlay.sync_bar();
                 }
             },
         );
@@ -535,6 +589,7 @@ fn overlay(
         laid_out: Cell::new(0),
         bar,
         target: Cell::new(target),
+        capture_mode: Cell::new(mode),
         aspect: Cell::new(None),
         display_card,
     });
@@ -1057,6 +1112,26 @@ impl Overlay {
             });
         }
         bar.set_window_available(self.portal || !self.windows().is_empty());
+        bar.set_recording_available(
+            !self.portal
+                && self
+                    .host
+                    .upgrade()
+                    .is_some_and(|host| host.recorder.borrow().is_none()),
+        );
+        for (button, mode) in bar
+            .modes
+            .iter()
+            .zip([MenuMode::Screenshot, MenuMode::Recording])
+        {
+            let weak = Rc::downgrade(self);
+            button.connect_clicked(move |_| {
+                if let Some(overlay) = weak.upgrade() {
+                    overlay.capture_mode.set(mode);
+                    overlay.sync_bar();
+                }
+            });
+        }
         let weak = Rc::downgrade(self);
         bar.primary.connect_clicked(move |_| {
             if let Some(overlay) = weak.upgrade() {
@@ -1151,7 +1226,13 @@ impl Overlay {
         for window in &self.hidden {
             window.set_visible(true);
         }
-        host.select_on(Kind::Menu, Some(id), self.target.get());
+        let recording = self.bar.as_ref().map(|bar| {
+            (
+                self.capture_mode.get(),
+                bar.recording.settings.borrow().clone(),
+            )
+        });
+        host.select_on(Kind::Menu, Some(id), self.target.get(), recording);
     }
 
     /// Repeat a target chord: read the visible controls before replacing the
@@ -1202,6 +1283,7 @@ impl Overlay {
                         old.started,
                         generation,
                         old.target.get(),
+                        MenuMode::Screenshot,
                     );
                 }
                 result => {
@@ -1241,10 +1323,23 @@ impl Overlay {
         let primary = self.state.borrow().primary;
         bar.sync(
             self.mode(),
+            self.capture_mode.get(),
             self.can_start(),
             self.settings.auto_start_on_selection,
             primary,
         );
+        if let Some(card) = &self.display_card
+            && let Some(detail) = card.last_child().and_downcast::<gtk::Label>()
+            && let Some(Source::Menu { region, .. }) = self.source.borrow().as_ref()
+        {
+            let display = region.display();
+            let fps = (self.capture_mode.get() == MenuMode::Recording)
+                .then(|| bar.recording.settings.borrow().video_fps);
+            detail.set_label(
+                &capture_menu::display_identity(&display.name, display.width, display.height, fps)
+                    .detail,
+            );
+        }
     }
 
     /// The primary action: capture the chosen target.
@@ -1289,7 +1384,56 @@ impl Overlay {
         };
         self.state.borrow_mut().primary.starting = true;
         self.sync_bar();
-        self.confirm(choice);
+        if self.capture_mode.get() == MenuMode::Recording {
+            self.record(choice);
+        } else {
+            self.confirm(choice);
+        }
+    }
+
+    fn record(self: &Rc<Self>, choice: Choice) {
+        use captures_recording::{CaptureRect, RecordingTarget};
+        let Some(host) = self.host.upgrade() else {
+            return;
+        };
+        let display = match self.source.borrow().as_ref() {
+            Some(Source::Menu { region, .. }) => region.display().clone(),
+            _ => return self.cancel(&host),
+        };
+        let target = match choice {
+            Choice::Region(rect) | Choice::Window(Target::Region { rect }) => {
+                RecordingTarget::Region {
+                    display_id: display.id.clone(),
+                    // The X11 recording engine takes display-local overlay points,
+                    // not global desktop coordinates or scaled screenshot pixels.
+                    rect: CaptureRect {
+                        x: rect.x.round() as i32,
+                        y: rect.y.round() as i32,
+                        width: rect.width.round() as u32,
+                        height: rect.height.round() as u32,
+                    },
+                }
+            }
+            Choice::Window(Target::Window { id }) => RecordingTarget::Window { window_id: id },
+            Choice::Display | Choice::Window(Target::Display) => RecordingTarget::Display {
+                display_id: display.id.clone(),
+            },
+        };
+        let mut settings = self.settings.clone();
+        settings.recording = self
+            .bar
+            .as_ref()
+            .expect("record menu")
+            .recording
+            .settings
+            .borrow()
+            .clone();
+        self.close();
+        let flow = host.capture.borrow_mut().take();
+        host.selector.borrow_mut().take();
+        if let Some(Flow::X11(flow)) = flow {
+            host.record_selected(flow, display, target, settings, self.hidden.clone());
+        }
     }
 
     fn hover(&self, x: f64, y: f64) {
@@ -1792,6 +1936,9 @@ fn window_label(window: &WindowDescriptor) -> &str {
 fn enter_confirms(focus: Option<&gtk::Widget>) -> bool {
     let mut widget = focus.cloned();
     while let Some(current) = widget {
+        if current.is::<crate::switch::TokenSwitch>() {
+            return false;
+        }
         if current.is::<gtk::Button>() {
             return current.has_css_class("capture-segment")
                 || current.has_css_class("capture-bar-primary");

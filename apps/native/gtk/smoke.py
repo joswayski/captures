@@ -1749,7 +1749,7 @@ def selectors(binary, scratch):
 
 def new_capture(binary, scratch):
     """New Capture in Screenshot mode: shipping's bar as real controls over
-    AT-SPI (Record unavailable until the GTK host records), Close cancels,
+    AT-SPI (Record unavailable on Wayland), Close cancels,
     a drag plus Enter saves exactly the region, and Full screen saves the
     display. X11 also picks the fixture window and saves it; on Wayland the
     region crops the portal still, Full screen persists that same still
@@ -1798,7 +1798,7 @@ def new_capture(binary, scratch):
             for name in ("Screenshot", "Region"):
                 assert has_state(segment(app, name), Atspi.StateType.PRESSED) or has_state(
                     segment(app, name), Atspi.StateType.CHECKED), f"{name} not pressed"
-            assert not has_state(segment(app, "Record"), enabled), "Record before recording"
+            assert has_state(segment(app, "Record"), enabled) == (not portal)
             assert [n for n, (role, name) in nodes(app) if role == "combo box"
                     and name.startswith("Region aspect ratio")], "no Aspect select"
             assert not has_state(primary, enabled), "Take screenshot before a region"
@@ -2086,8 +2086,9 @@ def tray(binary, scratch):
                           "Preferences", "Send Feedback…", "Check for Updates…", "-",
                           "Quit Captures"], labels
         enabled = [label for _, label, on in rows if on and label != "-"]
+        recording = [] if isinstance(DESKTOP, Wayland) else ["Record Region", "Record Window", "Record Display"]
         assert enabled == ["New Capture…", "Screenshot Region", "Screenshot Window",
-                           "Screenshot Display", "Capture History…", "Open Save Location",
+                           "Screenshot Display", *recording, "Capture History…", "Open Save Location",
                            "Preferences", "Send Feedback…", "Quit Captures"], enabled
         # The quiet launch shows only the launch notice, which leaves by itself.
         wait(lambda: {"event": "startup-notice-closed", "by": "timeout"} in events(),
@@ -2397,6 +2398,136 @@ def crash_review(binary, scratch):
           "worked; clean quits left nothing")
 
 
+def recording_menu(binary, scratch):
+    """Normal New Capture, tray and shortcut entry points feed real targets
+    and temporary options to the same recorder, without changing Preferences."""
+    if isinstance(DESKTOP, Wayland):
+        return  # new_capture and tray assert the explicit capability gate.
+    live = LiveCaptures(binary, scratch, "recording-menu")
+    settings = json.loads(live.settings.read_text())
+    settings.update(freeze_screen=False, recording={
+        "video_fps": 60, "countdown_seconds": 0, "show_cursor": False,
+        "microphone_device_id": "missing-test-microphone",
+        "open_editor_after_recording": False, "video_shortcut": "Ctrl+Shift+F4",
+        "window_shortcut": "Ctrl+Shift+F5", "display_shortcut": "Ctrl+Shift+F6"})
+    live.settings.write_text(json.dumps(settings))
+    fixture = X11Window("Recording target", 60, 240, 260, 160)
+
+    def segment(app, name):
+        return wait(lambda: find(app, "toggle button", name) or find(app, "push button", name), name)[0]
+
+    def button(app, name):
+        return wait(lambda: [n for n in find(app, "push button", name)
+                             if has_state(n, Atspi.StateType.SENSITIVE)], name)[0]
+
+    def choose(app, label, value):
+        press(wait(lambda: [n for n, (role, name) in nodes(app)
+                            if role == "combo box" and name.startswith(label)
+                            and has_state(n, Atspi.StateType.SENSITIVE)], label)[0])
+        press(wait(lambda: find(app, "radio menu item", value), value)[0])
+
+    try:
+        for target in ("Region", "Window", "Full screen"):
+            before = len([e for e in live.events() if e["event"] == "recording-saved"])
+            live.run("new", os.environ)
+            live.shown("new-capture")
+            # The explicit live launch opens Preferences behind the selector;
+            # uncover the fixture so a region records it, not Preferences.
+            DESKTOP.close(DESKTOP.window("Preferences$", live.process.pid))
+            wait(lambda: not [n for n, (_, name) in nodes(live.app())
+                              if name.endswith("Preferences")], "Preferences to close")
+            app = wait(lambda: find(live.app(), "frame", "Captures New Capture"), "New Capture")[0]
+            if target == "Region":
+                press(segment(app, "Record"))
+                start = wait(lambda: find(app, "push button", "Start recording"), "Record mode")[0]
+                assert not has_state(start, Atspi.StateType.SENSITIVE), "recording without a region"
+                clicks = [n for role in ("switch", "check box", "toggle button")
+                          for n in find(app, role, "Show clicks")][0]
+                cursor = [n for role in ("switch", "check box", "toggle button")
+                          for n in find(app, role, "Show cursor")][0]
+                press(clicks)
+                wait(lambda: has_state(cursor, Atspi.StateType.CHECKED), "clicks enable cursor")
+                press(cursor)
+                wait(lambda: not has_state(clicks, Atspi.StateType.CHECKED), "hiding cursor disables clicks")
+                # Retarget through the actual global shortcut route, not a UI callback.
+                DESKTOP.key("ctrl+shift+F5")
+                wait(lambda: has_state(segment(app, "Window"), Atspi.StateType.CHECKED)
+                     or has_state(segment(app, "Window"), Atspi.StateType.PRESSED), "Record Window shortcut")
+                DESKTOP.key("ctrl+shift+F4")
+                wait(lambda: has_state(segment(app, "Region"), Atspi.StateType.CHECKED)
+                     or has_state(segment(app, "Region"), Atspi.StateType.PRESSED), "Record Region shortcut")
+                DESKTOP.drag(100, 280, 286, 374)
+                expected = (186, 94)
+                # Enter on an option toggles it; it must not confirm the capture.
+                for _ in range(20):
+                    if has_state(cursor, Atspi.StateType.FOCUSED):
+                        break
+                    DESKTOP.key("Tab")
+                    time.sleep(0.1)
+                assert has_state(cursor, Atspi.StateType.FOCUSED), "cursor not keyboard reachable"
+                DESKTOP.key("Return")
+                wait(lambda: has_state(cursor, Atspi.StateType.CHECKED), "Enter toggles cursor")
+                assert not find(live.app(), "frame", "Captures Recording Controls")
+                DESKTOP.key("space")
+                wait(lambda: not has_state(cursor, Atspi.StateType.CHECKED), "Space toggles cursor")
+            elif target == "Window":
+                service = wait(lambda: [json.loads(line)["service"] for line in FIXTURE_LOG.read_text().splitlines()
+                                        if json.loads(line).get("event") == "item"], "tray service")[-1]
+                _, click = tray_menu(service)
+                click("Record Window")
+                wait(lambda: find(app, "push button", "Start recording"), "Record mode")
+                DESKTOP.click(100, 280)
+                expected = (260, 160)
+            else:
+                DESKTOP.key("ctrl+shift+F6")
+                button(app, "Start recording")
+                choose(app, "Maximum resolution", "720p")
+                # Xvfb's 1280×1024 display scales to 900×720.
+                geometry = subprocess.run(["xdotool", "getdisplaygeometry"], capture_output=True, text=True, check=True).stdout
+                width, height = map(int, geometry.split())
+                expected = ((round(width * 720 / height) & ~1), 720) if height > 720 else (width & ~1, height & ~1)
+            choose(app, "Microphone", "Off")
+            choose(app, "Frames per second", "15")
+            # Switching capture type must retain the temporary options/selection.
+            press(segment(app, "Screenshot"))
+            press(segment(app, "Record"))
+            wait(lambda: find(app, "combo box", "Frames per second: 15"), "retained FPS")
+            assert_accessible(app, "Record menu")
+            recovery = live.root.with_name("recording-recovery")
+            old_drafts = set(recovery.glob("*/manifest.json"))
+            press(button(app, "Start recording"))
+            app = live.app()
+            button(app, "Pause recording")
+            manifest = json.loads(next(iter(set(recovery.glob("*/manifest.json")) - old_drafts)).read_text())
+            assert manifest["options"]["frames_per_second"] == 15
+            assert manifest["options"]["audio"]["microphone_device_id"] is None
+            time.sleep(1.1)
+            press(button(app, "Stop recording"))
+            saved = wait(lambda: [e for e in live.events() if e["event"] == "recording-saved"][before:], "saved selection", timeout=45)[0]
+            media = next((live.root / saved["id"]).glob("*.mp4"))
+            info = json.loads(subprocess.run(["ffprobe", "-v", "error", "-show_streams", "-of", "json", str(media)], capture_output=True, text=True, check=True).stdout)
+            video = next(s for s in info["streams"] if s["codec_type"] == "video")
+            assert (video["width"], video["height"]) == expected, (target, video)
+            # OpenH264 enables frame skipping; FPS is a requested ceiling,
+            # verified in the persisted take above, not a guaranteed average.
+            assert int(video["nb_frames"]) >= 2 and float(video["duration"]) >= 1, video
+            subprocess.run(["ffmpeg", "-v", "error", "-i", str(media), "-f", "null", "-"], check=True)
+            if target != "Full screen":
+                pixels = subprocess.check_output(["ffmpeg", "-v", "error", "-i", str(media),
+                    "-frames:v", "1", "-pix_fmt", "gray", "-f", "rawvideo", "-"])
+                width, height = expected
+                # Both selections cross the fixture's black/white boundary;
+                # correct dimensions alone would miss a displaced crop.
+                row = pixels[(height // 2) * width: (height // 2 + 1) * width]
+                assert row[width // 4] < 10 and row[width * 3 // 4] > 245, "wrong target pixels"
+            assert all(s["codec_type"] != "audio" for s in info["streams"]), "Off audio was recorded"
+            assert json.loads(live.settings.read_text())["recording"]["video_fps"] == 60, "menu changed Preferences"
+            print(f"recording_menu: {target} saved {expected} with the 15 FPS setting through normal controls")
+    finally:
+        live.stop()
+        fixture.close()
+
+
 def recording_controls(binary, scratch):
     """Real X11 recording through the opt-in HUD: separate segments survive
     pause/resume and child screenshots; cancellation/discard publish nothing.
@@ -2574,7 +2705,7 @@ def recording_controls(binary, scratch):
               "failed resume preserves paused media, and save-on-Quit passed")
 
 
-STEPS = [history, preferences, editor, editor_close_keeps_open_text, recording, recording_controls,
+STEPS = [history, preferences, editor, editor_close_keeps_open_text, recording, recording_controls, recording_menu,
          recording_output, previews, preview_overflow, feedback, open_with, live, capture, selectors,
          new_capture, tray, shortcuts, setup, crash_review, notices]
 FIXTURE_LOG = None

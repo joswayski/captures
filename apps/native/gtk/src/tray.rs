@@ -116,7 +116,8 @@ fn available(action: Action) -> bool {
     !matches!(
         action,
         Action::RecordRegion | Action::RecordWindow | Action::RecordDisplay
-    )
+    ) || gtk::gdk::Display::default()
+        .is_some_and(|display| display.type_().name() == "GdkX11Display")
 }
 
 fn shortcut(settings: &captures_settings::AppSettings, shortcut: Shortcut) -> &str {
@@ -333,7 +334,8 @@ pub fn run(host: &Rc<Host>, action: Action) {
             }
         }
         Action::Quit => host.app.quit(),
-        // Disabled in the menu until the GTK host has these captures.
-        Action::RecordRegion | Action::RecordWindow | Action::RecordDisplay => {}
+        Action::RecordRegion => host.record_menu(crate::capture_bar::Target::Region),
+        Action::RecordWindow => host.record_menu(crate::capture_bar::Target::Window),
+        Action::RecordDisplay => host.record_menu(crate::capture_bar::Target::Display),
     }
 }
