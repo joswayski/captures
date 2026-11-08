@@ -2,13 +2,34 @@
 
 Status: **opt-in native development; Tauri remains the public Preview and physical cross-platform acceptance remains open**.
 This rewrite covers macOS, Windows, and Linux, feature by feature rather than one
-complete OS at a time. The native workbenches use AppKit on macOS and Rust/wgpu
-on Windows/Linux. Public downloads and installed updates continue to select
+complete OS at a time. The replacement hosts use AppKit on macOS, Win32 with
+DirectComposition/Direct2D on Windows, and GTK4 on Linux. The older egui/wgpu
+workbench remains a performance comparator and receives CI-maintenance fixes only.
+Public downloads and installed updates continue to select
 validated Tauri Previews; native CI and development packages do not authorize a
 cutover or a stable release. Earlier experimental native packages remain in the
 archive. No WebView, JavaScript runtime, localhost server or Tauri runtime belongs
 in the replacement; the Tauri CLI can still bundle native development installers.
 Tauri/React remains the shipping behavior and visual baseline.
+
+## Current cutover blockers (November 2026)
+
+The implementation notes below are a chronological record, not a current checklist:
+an early slice's "not yet ported" can be superseded by a later slice. Implemented
+features, automated checks and physical acceptance are separate milestones.
+
+| Platform | Implemented development app | Acceptance still needed before cutover |
+| --- | --- | --- |
+| macOS / AppKit | Capture, Preferences, History, previews, screenshot and recording editors | Current recording-editor baseline visual/focus/accessibility audit, then the separate trim-end comparison correction; full feature, hardware performance and accessibility gates remain open |
+| Windows / Win32 | Preferences, History, screenshot and recording editors, including recording crop/comparison and maximum-file-size exports | Resident capture/tray/shortcut flows, floating previews and recording controls still need migration from the older host; recording format switching is also open. Scoped physical editor checks do not establish whole-app parity, performance or accessibility |
+| Linux / GTK4 on X11 | Screenshot and recording targets/options, countdown, recording controls, previews, Preferences, History and editors | Virtual-X11 input, accessibility-tree and decoded-media checks are not physical GPU, audio-device, Orca or mixed-DPI acceptance |
+| Linux / GTK4 on Wayland | Portal-mediated screenshots and development UI | Recording is not connected and remains disabled; physical GNOME/KDE, portal/PipeWire, accessibility and mixed-DPI acceptance remain open |
+
+Each host must pass feature and Tauri screenshot parity, real-hardware performance
+at least as good as the egui host, and accessibility acceptance. Packaging/update
+recovery must also be verified for the host being shipped. Only then can the owner
+approve replacing the public Tauri app. Native development commits or packages do
+not make that decision automatically, and no cutover date is committed.
 
 Native migration tooling includes installed profile copy, pinned signature
 verification and a stopped-process helper, separately from the opt-in development
