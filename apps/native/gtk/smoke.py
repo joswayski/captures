@@ -2607,10 +2607,30 @@ def recording_controls(binary, scratch):
             DESKTOP.key("Escape")
             wait(lambda: event("capture-cancelled"), "cancelled child screenshot")
             button(app, "Pause recording")
-            press(button(app, "Hide recording controls"))
-            wait(lambda: not find(app, "frame", "Captures Recording Controls"), "hidden HUD")
+            focus_target = X11Window("Keep typing here", 300, 240, 640, 180)
+            try:
+                DESKTOP.focus(str(focus_target.window))
+                press(button(app, "Hide recording controls"))
+                wait(lambda: not find(app, "frame", "Captures Recording Controls"), "hidden HUD")
+                notice = guidance(app, "Recording controls hidden")[0]
+                for text in ("Open Captures from the tray, or press", "Ctrl", "Shift", "F10",
+                             "to bring them back."):
+                    assert find(notice, "label", text), f"missing hidden-notice copy: {text}"
+                assert_accessible(notice, "hidden recording notice")
+                focus = subprocess.check_output(["xdotool", "getwindowfocus"], text=True).strip()
+                assert focus == str(focus_target.window), "hidden notice stole keyboard focus"
+                wait(lambda: not find(app, "frame", "Recording controls hidden"),
+                     "notice expiry", timeout=9)
+                assert not find(app, "frame", "Captures Recording Controls"), "expiry restored HUD"
+            finally:
+                focus_target.close()
             DESKTOP.key("ctrl+shift+F10")
             button(app, "Pause recording")
+            press(button(app, "Hide recording controls"))
+            guidance(app, "Recording controls hidden")
+            DESKTOP.key("ctrl+shift+F10")
+            button(app, "Pause recording")
+            wait(lambda: not find(app, "frame", "Recording controls hidden"), "restore dismisses notice")
             time.sleep(1.1)
             press(button(app, "Stop recording"))
             saved = wait(lambda: event("recording-saved"), "saved MP4", timeout=45)[0]
@@ -2631,7 +2651,7 @@ def recording_controls(binary, scratch):
             assert not any(g > 150 and r < 80 and b < 80 for r, g, b in frames), "paused green leaked into MP4"
             assert not list((profile / "recording-recovery").glob("*/manifest.json"))
             print(f"recording_controls: {len(frames)} decoded frames, red→blue with no paused green; "
-                  "Escape, child cancellation, Hide/shortcut restore and Stop passed")
+                  "Escape, child cancellation, hidden notice copy/focus/expiry, shortcut restore and Stop passed")
         finally:
             stop(process)
 

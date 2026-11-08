@@ -202,6 +202,24 @@ impl Placer {
         ))
     }
 
+    /// The surface rectangle in desktop logical coordinates, including a
+    /// window manager's placement. Hidden HUD notices inherit its center.
+    pub fn geometry(&self, surface: &X11Surface) -> Option<LogicalRect> {
+        let origin = self
+            .connection
+            .translate_coordinates(xid(surface), self.root, 0, 0)
+            .ok()?
+            .reply()
+            .ok()?;
+        let scale = f64::from(surface.scale_factor());
+        Some(LogicalRect::new(
+            f64::from(origin.dst_x) / scale,
+            f64::from(origin.dst_y) / scale,
+            f64::from(surface.width()),
+            f64::from(surface.height()),
+        ))
+    }
+
     /// Move the window's top-left corner to logical `(x, y)`.
     pub fn move_to(&self, surface: &X11Surface, x: f64, y: f64) {
         let scale = f64::from(surface.scale_factor());

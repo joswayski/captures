@@ -58,6 +58,201 @@ fn window(
     window
 }
 
+/// Shipping's click-through notice, centered where the recording HUD was.
+/// It borrows the notice frame, but not the tray-corner placement or focus.
+pub fn recording_hidden(
+    app: &gtk::Application,
+    shortcut: &str,
+    hud_window: &gtk::ApplicationWindow,
+) -> gtk::ApplicationWindow {
+    use captures_app::recording_hud as hud;
+    let copy = hud::hidden_notice_copy(shortcut, captures_app::shortcuts::ShortcutPlatform::Linux);
+    let card = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(12)
+        .accessible_role(gtk::AccessibleRole::Status)
+        .build();
+    card.add_css_class("recording-hidden-notice");
+    card.set_size_request(
+        hud::HIDDEN_NOTICE_WIDTH as i32,
+        hud::HIDDEN_NOTICE_HEIGHT as i32,
+    );
+    card.update_property(&[
+        gtk::accessible::Property::Label(copy.title),
+        gtk::accessible::Property::Description(&copy.detail()),
+    ]);
+    if card.settings().is_gtk_enable_animations() {
+        card.add_css_class("animated");
+    }
+    let tile = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    tile.add_css_class("recording-hidden-icon");
+    tile.set_valign(gtk::Align::Center);
+    tile.set_accessible_role(gtk::AccessibleRole::Presentation);
+    let icon = Icon::new("capture", 20).with_stroke(1.8);
+    icon.set_halign(gtk::Align::Center);
+    icon.set_valign(gtk::Align::Center);
+    icon.set_vexpand(true);
+    tile.append(&icon);
+    card.append(&tile);
+    let text = gtk::Box::new(gtk::Orientation::Vertical, 3);
+    text.set_valign(gtk::Align::Center);
+    text.set_hexpand(true);
+    text.append(&label(copy.title, "recording-hidden-title"));
+    let sentence: HiddenSentence = glib::Object::new();
+    for (value, class) in std::iter::once((copy.before_keys.as_str(), "recording-hidden-text"))
+        .chain(
+            copy.keys
+                .iter()
+                .map(|key| (key.as_str(), "recording-hidden-key")),
+        )
+        .chain(std::iter::once((copy.after_keys, "recording-hidden-text")))
+    {
+        let item = label(value, class);
+        item.set_halign(gtk::Align::Start);
+        item.set_valign(gtk::Align::Center);
+        item.set_parent(&sentence);
+    }
+    text.append(&sentence);
+    card.append(&text);
+    let window = window(app, copy.title, &card, hud::HIDDEN_NOTICE_WIDTH);
+    window.set_focusable(false);
+    window.connect_realize(|window| {
+        if let Some(surface) = window.surface() {
+            surface.set_input_region(&gtk::cairo::Region::create());
+        }
+    });
+    #[cfg(feature = "x11")]
+    if let Some(placer) = crate::previews::x11::Placer::new(&WidgetExt::display(hud_window)) {
+        let anchor = hud_window
+            .surface()
+            .and_downcast::<gdk4_x11::X11Surface>()
+            .and_then(|surface| placer.geometry(&surface));
+        window.connect_realize(move |window| {
+            if let Some(surface) = window.surface().and_downcast::<gdk4_x11::X11Surface>() {
+                surface.set_skip_taskbar_hint(true);
+                surface.set_skip_pager_hint(true);
+                placer.unmanaged_notification(&surface);
+                let (_, size) = window.preferred_size();
+                if let Some(anchor) = anchor {
+                    placer.move_to(
+                        &surface,
+                        anchor.x + (anchor.width - f64::from(size.width())) / 2.,
+                        anchor.y + (anchor.height - f64::from(size.height())) / 2.,
+                    );
+                }
+            }
+        });
+    }
+    #[cfg(not(feature = "x11"))]
+    let _ = hud_window;
+    let weak = window.downgrade();
+    glib::timeout_add_local_once(Duration::from_millis(6200), move || {
+        if let Some(window) = weak.upgrade() {
+            window.close();
+        }
+    });
+    window
+}
+
+// Shipping uses flex-wrap for text runs and individual keycaps. GtkFlowBox
+// aligns columns across rows, which puts multi-key shortcuts on separate lines.
+mod sentence_imp {
+    use gtk::glib;
+    use gtk::prelude::*;
+    use gtk::subclass::prelude::*;
+
+    #[derive(Default)]
+    pub struct HiddenSentence;
+
+    #[glib::object_subclass]
+    impl ObjectSubclass for HiddenSentence {
+        const NAME: &'static str = "CapturesHiddenSentence";
+        type Type = super::HiddenSentence;
+        type ParentType = gtk::Widget;
+
+        fn class_init(klass: &mut Self::Class) {
+            klass.set_accessible_role(gtk::AccessibleRole::Group);
+        }
+    }
+
+    impl ObjectImpl for HiddenSentence {
+        fn dispose(&self) {
+            while let Some(child) = self.obj().first_child() {
+                child.unparent();
+            }
+        }
+    }
+
+    impl WidgetImpl for HiddenSentence {
+        fn request_mode(&self) -> gtk::SizeRequestMode {
+            gtk::SizeRequestMode::HeightForWidth
+        }
+
+        fn measure(&self, orientation: gtk::Orientation, width: i32) -> (i32, i32, i32, i32) {
+            if orientation == gtk::Orientation::Horizontal {
+                let mut min = 0;
+                let mut natural = 0;
+                let mut child = self.obj().first_child();
+                while let Some(item) = child {
+                    let (item_min, item_width, _, _) = item.measure(orientation, -1);
+                    min = min.max(item_min);
+                    natural += item_width + if natural == 0 { 0 } else { 4 };
+                    child = item.next_sibling();
+                }
+                (min, natural, -1, -1)
+            } else {
+                let height = self.obj().arrange(width, false);
+                (height, height, -1, -1)
+            }
+        }
+
+        fn size_allocate(&self, width: i32, _height: i32, _baseline: i32) {
+            self.obj().arrange(width, true);
+        }
+    }
+}
+
+glib::wrapper! {
+    pub struct HiddenSentence(ObjectSubclass<sentence_imp::HiddenSentence>)
+        @extends gtk::Widget,
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
+}
+
+impl HiddenSentence {
+    fn arrange(&self, width: i32, allocate: bool) -> i32 {
+        let mut row: Vec<(gtk::Widget, i32, i32, i32)> = Vec::new();
+        let (mut x, mut y, mut height) = (0, 0, 0);
+        let flush = |row: &mut Vec<(gtk::Widget, i32, i32, i32)>, y, height| {
+            for (item, x, w, h) in row.drain(..) {
+                if allocate {
+                    let at = gtk::gsk::Transform::new().translate(&graphene::Point::new(
+                        x as f32,
+                        (y + (height - h) / 2) as f32,
+                    ));
+                    item.allocate(w, h, -1, Some(at));
+                }
+            }
+        };
+        let mut child = self.first_child();
+        while let Some(item) = child {
+            let w = item.measure(gtk::Orientation::Horizontal, -1).1;
+            let h = item.measure(gtk::Orientation::Vertical, w).1;
+            if width >= 0 && x > 0 && x + w > width {
+                flush(&mut row, y, height);
+                y += height + 4;
+                x = 0;
+                height = 0;
+            }
+            child = item.next_sibling();
+            row.push((item, x, w, h));
+            x += w + 4;
+            height = height.max(h);
+        }
+        flush(&mut row, y, height);
+        y + height
+    }
+}
+
 /// Put `window` in the tray corner: shipping's `fallback_tray_notice`
 /// (work-area right edge, the panel's edge). `unmanaged` makes it a
 /// notification the window manager never focuses or moves (the launch
