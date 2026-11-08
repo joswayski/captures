@@ -2302,7 +2302,7 @@ impl Live {
             controls_switching_display: false,
             controls_switch_from: None,
             controls_countdown_seconds: 0,
-            recording_worker: recording::Worker::new(ctx.clone()),
+            recording_worker: recording::new(ctx.clone()),
             recording_toolchain_ready: false,
             recording_toolchain_error: None,
             include_recording_controls: false,

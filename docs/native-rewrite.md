@@ -5518,6 +5518,16 @@ permissions, worker scheduling, window exclusion, recording lifecycle and media
 finalization. This behavior-preserving extraction does not connect the native
 Record button or close a recording acceptance gate.
 
+The wgpu host's serialized session worker lives in
+`captures-recording-platform::worker`. It owns blocking session operations and the
+recovery lease; hosts supply tool discovery, a UI-loop wake and a capture-generation
+check. Tool discovery stays off the UI thread. First-frame portal region selection
+queues owned pixels and a reply channel, then waits cancellation-aware; terminal
+retirement releases the lease without deleting recoverable media. The wgpu adapter
+still wakes its root viewport even while an editor is active. GTK can reuse this
+worker, but its live Record controls and HUD remain unconnected. AppKit's existing
+worker and the shipping Tauri host are unchanged.
+
 Native recording microphone mute now shares one `RecordingSession` operation
 across AppKit and wgpu. Running changes durably complete the accepted segment,
 persist only `audio.microphone_muted`, then reopen with the same target/options;
