@@ -175,7 +175,7 @@ final class EditorMarkedSlider: NSView {
 
 /// One shipping text format button (`.screenshot-format-buttons button`):
 /// B, I or an alignment icon; `active` fills it with the accent.
-final class EditorFormatButton: NSButton {
+final class EditorFormatButton: PointingButton {
     enum Glyph: Equatable {
         case bold
         case italic

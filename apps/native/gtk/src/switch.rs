@@ -57,7 +57,7 @@ mod imp {
             let widget = self.obj();
             widget.set_focusable(true);
             widget.set_valign(gtk::Align::Center);
-            widget.set_cursor_from_name(Some("pointer"));
+            crate::widgets::action_cursor(&*widget);
             let hover = gtk::EventControllerMotion::new();
             let weak = widget.downgrade();
             hover.connect_enter(move |_, _, _| {

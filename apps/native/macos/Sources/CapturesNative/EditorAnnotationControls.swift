@@ -25,9 +25,9 @@ final class EditorAnnotationControls: NSView {
     private var original: NativeAnnotationStyle?
     private var draft: NativeAnnotationStyle?
     private var ready = false
-    let strokeCheck = NSButton(checkboxWithTitle: "Stroke", target: nil, action: nil)
-    let shadowCheck = NSButton(checkboxWithTitle: "Drop shadow", target: nil, action: nil)
-    let fillCheck = NSButton(checkboxWithTitle: "Filled shape", target: nil, action: nil)
+    let strokeCheck = PointingButton(checkboxWithTitle: "Stroke", target: nil, action: nil)
+    let shadowCheck = PointingButton(checkboxWithTitle: "Drop shadow", target: nil, action: nil)
+    let fillCheck = PointingButton(checkboxWithTitle: "Filled shape", target: nil, action: nil)
     private let strokeLegend = NSTextField(labelWithString: EditorColors.text("stroke_color"))
     private let fillLegend = NSTextField(labelWithString: EditorColors.text("fill_color"))
     let strokeSwatches: ColorSwatchRow

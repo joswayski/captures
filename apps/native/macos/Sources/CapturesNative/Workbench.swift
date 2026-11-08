@@ -99,7 +99,7 @@ enum ShippingIcons {
 
 // NSButton keeps keyboard activation, target/action and accessibility behavior;
 // only the visual treatment is custom. No stock Aqua bezel in the content UI.
-final class CaptureButton: NSButton {
+final class CaptureButton: PointingButton {
     var tokens: Tokens!
     var selected = false
     var glass = false

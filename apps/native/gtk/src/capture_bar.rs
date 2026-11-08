@@ -63,6 +63,7 @@ fn segment(icon: Option<&str>, label: &str) -> gtk::ToggleButton {
     // Shipping's `aria-pressed` buttons (a toggle button from GTK 4.10;
     // 4.8 reports a push button with the pressed state).
     let button = gtk::ToggleButton::new();
+    crate::widgets::action_cursor(&button);
     button.add_css_class("capture-segment");
     let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     content.set_halign(gtk::Align::Center);
@@ -129,6 +130,7 @@ impl Bar {
         root.append(&top);
 
         let close = gtk::Button::new();
+        crate::widgets::action_cursor(&close);
         close.add_css_class("capture-bar-close");
         let glyph = Icon::new("close", 15).with_stroke(2.);
         glyph.set_halign(gtk::Align::Center);
@@ -187,6 +189,7 @@ impl Bar {
         top.append(&display_box);
 
         let primary = gtk::Button::new();
+        crate::widgets::action_cursor(&primary);
         primary.add_css_class("capture-bar-primary");
         let content = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         content.set_halign(gtk::Align::Center);

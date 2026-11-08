@@ -676,6 +676,7 @@ impl Header {
         let actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         actions.set_valign(gtk::Align::End);
         let cancel = gtk::Button::with_label(copy.cancel);
+        crate::widgets::action_cursor(&cancel);
         cancel.add_css_class("ui-btn");
         cancel.add_css_class("ghost");
         cancel.update_property(&[gtk::accessible::Property::Label(copy.cancel_label)]);
@@ -736,6 +737,7 @@ impl Toolbar {
             .into_iter()
             .map(|filter| {
                 let button = gtk::Button::new();
+                crate::widgets::action_cursor(&button);
                 button.add_css_class("history-filter");
                 let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
                 content.append(&gtk::Label::new(Some(filter.label())));
@@ -956,6 +958,7 @@ impl CardView {
             .build();
         wrap.add_css_class("history-image-wrap");
         let open = gtk::Button::new();
+        crate::widgets::action_cursor(&open);
         open.add_css_class("history-image-open");
         let thumbnail = Thumbnail::default();
         thumbnail.set_fill_width(true);
@@ -971,6 +974,7 @@ impl CardView {
         missing.set_can_target(false);
         wrap.add_overlay(&missing);
         let delete = gtk::Button::new();
+        crate::widgets::action_cursor(&delete);
         delete.add_css_class("history-delete");
         let trash = Icon::new("trash", 16).with_stroke(1.7);
         delete.set_child(Some(&trash));
@@ -1223,6 +1227,7 @@ impl CardView {
         });
         for action in card.menu {
             let button = gtk::Button::with_label(action.label());
+            crate::widgets::action_cursor(&button);
             button.add_css_class("menu-item");
             if let Some(label) = button.child().and_downcast::<gtk::Label>() {
                 label.set_xalign(0.);

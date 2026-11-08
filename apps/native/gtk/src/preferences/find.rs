@@ -69,6 +69,7 @@ pub fn build(
     bar.append(&count);
     let button = |icon: &str, label: &str, class: &str| {
         let button = gtk::Button::new();
+        crate::widgets::action_cursor(&button);
         button.add_css_class(class);
         let glyph = Icon::new(icon, 14).with_stroke(1.7);
         glyph.set_halign(gtk::Align::Center);

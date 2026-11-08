@@ -103,7 +103,7 @@ struct StartupNoticeLayout: Equatable {
     }
 }
 
-final class StartupNoticeCloseButton: NSButton {
+final class StartupNoticeCloseButton: PointingButton {
     private let tokens: Tokens
     private var tracking: NSTrackingArea?
     private(set) var hovered = false

@@ -1428,7 +1428,7 @@ final class EditorExportChevron: NSView {
 
 /// Shipping `.screenshot-make-copy`: a 28×16 token switch, its 11 pt label
 /// and the divider before Save. The button's `state` is the setting.
-final class EditorMakeCopySwitch: NSButton {
+final class EditorMakeCopySwitch: PointingButton {
     var tokens: Tokens! { didSet { needsDisplay = true } }
     static let label = "Save as new file"
     private var hovered = false
@@ -1700,7 +1700,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private let outputCompressionPreset = ClosurePopUpButton()
     private let outputWidth = NSTextField()
     private let outputHeight = NSTextField()
-    private let outputAspectLock = NSButton(checkboxWithTitle: "Lock aspect ratio", target: nil, action: nil)
+    private let outputAspectLock = PointingButton(checkboxWithTitle: "Lock aspect ratio", target: nil, action: nil)
     private let outputDimensions = NSTextField(labelWithString: "")
     private let outputFilename = NSTextField()
     private let outputLocation = NSTextField(labelWithString: "")
@@ -1754,7 +1754,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     /// Shipping Eraser `RangeSlider`s: Wand Tolerance (the wand's own 0–255
     /// channel distance, stopped at 120), brush Size and Softness.
     private var wandTolerance: EditorMarkedSlider!
-    private let wandContiguous = NSButton(checkboxWithTitle: EditorInspectorCopy.eraser("contiguous"),
+    private let wandContiguous = PointingButton(checkboxWithTitle: EditorInspectorCopy.eraser("contiguous"),
                                           target: nil, action: nil)
     private var brushSize: EditorMarkedSlider!
     private var brushSoftness: EditorMarkedSlider!
@@ -1764,8 +1764,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private let createTextSize = TokenNumberField()
     private var createTextControls: [NSView] = []
     private var createTextDefaultsPublished = false
-    private let drawingStroke = NSButton(checkboxWithTitle: "Stroke", target: nil, action: nil)
-    private let drawingFill = NSButton(checkboxWithTitle: "Filled shape", target: nil, action: nil)
+    private let drawingStroke = PointingButton(checkboxWithTitle: "Stroke", target: nil, action: nil)
+    private let drawingFill = PointingButton(checkboxWithTitle: "Filled shape", target: nil, action: nil)
     private var drawingStrokeColor: ColorSwatchRow!
     private var drawingFillColor: ColorSwatchRow!
     private var drawingStrokeColorLabel: NSTextField!
@@ -1779,7 +1779,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private(set) var shapeFlyout: EditorShapePicker!
     private var shapeFlyoutMonitor: Any?
     private var drawingDefaultsArtifactID: String?
-    private let drawingDropShadow = NSButton(checkboxWithTitle: "Drop shadow", target: nil, action: nil)
+    private let drawingDropShadow = PointingButton(checkboxWithTitle: "Drop shadow", target: nil, action: nil)
     /// The drawing defaults' `DropShadowFields`, shared with new text.
     private var drawingShadowSettings: EditorDropShadowFields!
     private var drawingShadowCustomized = false
@@ -1789,7 +1789,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private let textFamily = ClosurePopUpButton(frame: .zero, pullsDown: false)
     private var textFormat: EditorTextFormatButtons!
     /// Shipping "Text background": a `#111318` plate that clears outline and rounding.
-    private let textBackground = NSButton(checkboxWithTitle: "Text background", target: nil, action: nil)
+    private let textBackground = PointingButton(checkboxWithTitle: "Text background", target: nil, action: nil)
     private var textPlateColor: ColorSwatchRow!
     private var textPlateColorLabel: NSTextField!
     /// Text property rows laid out top to bottom by `layoutTextControls`.
@@ -1799,10 +1799,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var textContentScroll: NSScrollView!
     private var textSizeLabel: NSTextField!
     private var textColorLabel: NSTextField!
-    private let textShadow = NSButton(checkboxWithTitle: "Drop shadow", target: nil, action: nil)
+    private let textShadow = PointingButton(checkboxWithTitle: "Drop shadow", target: nil, action: nil)
     /// Staged outline from a style choice; like shipping, there is no Outline
     /// control (the Outlined style sets it), so this button is never shown.
-    private let textOutline = NSButton(checkboxWithTitle: "Outline", target: nil, action: nil)
+    private let textOutline = PointingButton(checkboxWithTitle: "Outline", target: nil, action: nil)
     /// Shipping `TextStylePicker` for the selected text: its current treatment.
     private let textPreset = ClosurePopUpButton(frame: .zero, pullsDown: false)
     private var textPresetRounded: Bool?
@@ -3243,7 +3243,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         backgroundCard.layer?.borderWidth = 1
         backgroundCard.setAccessibilityLabel(EditorColors.text("canvas_background"))
         backgroundCard.isHidden = true
-        backgroundSolid = NSButton(checkboxWithTitle: EditorColors.text("solid_background"),
+        backgroundSolid = PointingButton(checkboxWithTitle: EditorColors.text("solid_background"),
                                    target: self, action: #selector(toggleSolidBackground))
         backgroundSolid.font = .systemFont(ofSize: tokens.number("text-sm"))
         backgroundSolid.frame = NSRect(x: cardPadding, y: cardPadding, width: swatchWidth, height: 24)

@@ -53,7 +53,7 @@ final class ClosureColorWell: NSColorWell {
     @objc func selectedColor() { change?(color) }
 }
 
-final class ShortcutRecorderButton: NSButton {
+final class ShortcutRecorderButton: PointingButton {
     var tokens: Tokens!
     var beginRecording: (() -> Void)?
     var recordEvent: ((NSEvent) -> Void)?
@@ -328,7 +328,7 @@ enum PreferencesPolicy {
 }
 
 /// Hover tracking shared by the Preferences controls.
-class PreferenceHoverButton: NSButton {
+class PreferenceHoverButton: PointingButton {
     private(set) var hovered = false
     private var hoverTracking: NSTrackingArea?
     var actionBlock: (() -> Void)?

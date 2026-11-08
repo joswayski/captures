@@ -50,7 +50,7 @@ private final class MiniPreviewButtonCell: NSButtonCell {
 }
 
 /// Preview-only control so this floating chrome does not inherit Workbench button styling.
-final class MiniPreviewButton: NSButton {
+final class MiniPreviewButton: PointingButton {
     /// A main action's glyph pops in when it changes (Save → Saved → Show in
     /// Folder), as shipping remounts its SVG.
     var kind: MiniPreviewButtonKind {
@@ -1485,7 +1485,7 @@ private final class MiniPreviewExpandButton: NSButton {
 
 /// Shipping `.thumbnail-overflow-cue`: a centered chevron tab on the stack
 /// edge that scrolls one card slot toward hidden captures.
-final class MiniPreviewOverflowCue: NSButton {
+final class MiniPreviewOverflowCue: PointingButton {
     static let size = NSSize(width: 46, height: 22)
     let above: Bool
     private let tokens: Tokens

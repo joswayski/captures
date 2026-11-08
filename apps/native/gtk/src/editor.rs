@@ -341,6 +341,7 @@ fn label(text: &str, class: &str) -> gtk::Label {
 
 fn icon_only(icon: &str, side: i32, name: &str, class: &str) -> gtk::Button {
     let button = gtk::Button::new();
+    crate::widgets::action_cursor(&button);
     button.add_css_class(class);
     button.set_child(Some(&Icon::new(icon, side).with_stroke(1.75)));
     button.set_tooltip_text(Some(name));
@@ -455,6 +456,7 @@ pub fn build(
     banner_text.set_hexpand(true);
     banner.append(&banner_text);
     let dismiss = gtk::Button::with_label(header::DRAFT_DISMISS);
+    crate::widgets::action_cursor(&dismiss);
     dismiss.add_css_class("ui-btn");
     dismiss.add_css_class("ghost");
     dismiss.update_property(&[gtk::accessible::Property::Label(
@@ -564,6 +566,7 @@ pub fn build(
     let mut shapes_icon = None;
     for tool in RAIL_TOOLS {
         let button = gtk::Button::new();
+        crate::widgets::action_cursor(&button);
         button.add_css_class("editor-rail-button");
         let icon = Icon::new(tool.icon, 18).with_stroke(1.75);
         if tool.key == editor_chrome::SHAPES_KEY {
@@ -733,6 +736,7 @@ pub fn build(
     // Shipping `aria-label="Change save location"` over "Change…". GTK 4.14
     // names a button after its label child, so the text is presentational.
     let change_folder = gtk::Button::new();
+    crate::widgets::action_cursor(&change_folder);
     let change_text = gtk::Label::new(Some("Change…"));
     change_text.set_accessible_role(gtk::AccessibleRole::Presentation);
     change_folder.set_child(Some(&change_text));

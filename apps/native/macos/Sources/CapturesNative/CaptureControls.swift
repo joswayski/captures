@@ -516,7 +516,7 @@ struct UnifiedCaptureControlsState: Equatable {
 
 /// Shipping `recording-toggle`: a 30×18 switch followed by On/Off/Unavailable,
 /// with the unavailable reason as its tooltip.
-final class RecordingSwitchButton: NSButton {
+final class RecordingSwitchButton: PointingButton {
     private let tokens: Tokens
     let key: String
     var isOn = false { didSet { refresh() } }
@@ -584,7 +584,7 @@ final class RecordingSwitchButton: NSButton {
 
 /// Shipping `capture-selector-preferences-link`: note text with an external
 /// glyph that opens Preferences at the setting it describes.
-final class CaptureNoteLink: NSButton {
+final class CaptureNoteLink: PointingButton {
     private let tokens: Tokens
     private let parts: [(String, Bool)]
     let setting: String

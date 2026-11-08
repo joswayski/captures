@@ -97,6 +97,7 @@ pub(crate) fn check_row(caption: &str, active: bool) -> gtk::ToggleButton {
     let check = gtk::ToggleButton::builder()
         .accessible_role(gtk::AccessibleRole::Checkbox)
         .build();
+    crate::widgets::action_cursor(&check);
     check.add_css_class("check-row");
     let checked = |active: bool| {
         gtk::accessible::State::Checked(if active {
@@ -156,6 +157,7 @@ impl EraserSection {
             .iter()
             .map(|(mode, label)| {
                 let button = gtk::Button::with_label(label);
+                crate::widgets::action_cursor(&button);
                 button.add_css_class("format-button");
                 group.append(&button);
                 (*mode, button)
@@ -338,8 +340,10 @@ impl CropSection {
         let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         actions.set_homogeneous(true);
         let clear = gtk::Button::with_label("Clear");
+        crate::widgets::action_cursor(&clear);
         clear.add_css_class("property-action");
         let apply = gtk::Button::with_label("Apply crop");
+        crate::widgets::action_cursor(&apply);
         apply.add_css_class("property-action");
         apply.add_css_class("primary");
         apply.add_css_class("cta-pulse");

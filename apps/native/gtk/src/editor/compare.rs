@@ -41,6 +41,7 @@ fn pill(class: &str) -> gtk::Label {
 /// after its label child, which would hide shipping's `aria-label`.
 fn labeled(text: &str) -> gtk::Button {
     let button = gtk::Button::new();
+    crate::widgets::action_cursor(&button);
     let label = gtk::Label::new(Some(text));
     label.set_accessible_role(gtk::AccessibleRole::Presentation);
     button.set_child(Some(&label));

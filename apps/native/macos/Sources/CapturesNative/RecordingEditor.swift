@@ -985,8 +985,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private let cropOverlay: RecordingCropOverlay
     private let geometryPanel = Surface()
     private let geometryTitle = NSTextField(labelWithString: "Crop & size")
-    private let cropEnabled = NSButton(checkboxWithTitle: "Crop recording", target: nil, action: nil)
-    private let cropLock = NSButton(checkboxWithTitle: "Lock aspect ratio", target: nil, action: nil)
+    private let cropEnabled = PointingButton(checkboxWithTitle: "Crop recording", target: nil, action: nil)
+    private let cropLock = PointingButton(checkboxWithTitle: "Lock aspect ratio", target: nil, action: nil)
     private let cropX = TokenNumberField()
     private let cropY = TokenNumberField()
     private let cropWidth = TokenNumberField()
@@ -1032,9 +1032,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private let microphoneVolumeSlider = TokenSlider(value: 100, minValue: 0, maxValue: 200,
                                                   target: nil, action: nil)
     /// Checked includes the track, like shipping's audio rows.
-    private let systemAudio = NSButton(checkboxWithTitle: "System audio", target: nil, action: nil)
-    private let microphoneAudio = NSButton(checkboxWithTitle: "Microphone", target: nil, action: nil)
-    private let monoOutput = NSButton(checkboxWithTitle: "Convert to mono", target: nil, action: nil)
+    private let systemAudio = PointingButton(checkboxWithTitle: "System audio", target: nil, action: nil)
+    private let microphoneAudio = PointingButton(checkboxWithTitle: "Microphone", target: nil, action: nil)
+    private let monoOutput = PointingButton(checkboxWithTitle: "Convert to mono", target: nil, action: nil)
     private let format = ClosurePopUpButton()
     private let qualityPanel = Surface()
     private let qualityTitle = NSTextField(labelWithString: "Save quality")
@@ -4140,7 +4140,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
 /// toolbar. Transparent with subtle ink, `--surface-hover` on hover, and
 /// `--surface-active` with a `--border` ring while on. It keeps NSButton's
 /// on/off state, keyboard activation and accessibility.
-final class RecordingPreviewToggle: NSButton {
+final class RecordingPreviewToggle: PointingButton {
     var tokens: Tokens? { didSet { needsDisplay = true } }
     /// A shared vector glyph, independent of platform font coverage.
     let leadingIcon: String?

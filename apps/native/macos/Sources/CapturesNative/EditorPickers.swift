@@ -55,7 +55,7 @@ enum EditorColors {
 }
 
 /// One round shipping swatch (`.screenshot-color-field button`).
-final class ColorSwatchButton: NSButton {
+final class ColorSwatchButton: PointingButton {
     let swatchHex: String
     var tokens: Tokens { didSet { needsDisplay = true } }
     var active = false {

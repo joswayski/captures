@@ -210,6 +210,7 @@ impl ExportBar {
         let custom_width = custom_field("Custom output width", true);
         let custom_height = custom_field("Custom output height", false);
         let lock = gtk::ToggleButton::new();
+        crate::widgets::action_cursor(&lock);
         lock.add_css_class("export-lock");
         lock.set_active(true);
         lock.add_css_class("active");
@@ -366,6 +367,7 @@ impl ExportBar {
             &estimate_row,
         ));
         let show_compare = gtk::Button::with_label(compression_compare::SHOW);
+        crate::widgets::action_cursor(&show_compare);
         show_compare.add_css_class("export-show-compare");
         let show_box = control(
             compression_compare::SHOW_CAPTION,
@@ -377,6 +379,7 @@ impl ExportBar {
 
         // `.screenshot-export-disclosure`.
         let disclosure = gtk::Button::new();
+        crate::widgets::action_cursor(&disclosure);
         disclosure.add_css_class("export-disclosure");
         let copy = gtk::Box::new(gtk::Orientation::Vertical, 2);
         copy.set_hexpand(true);

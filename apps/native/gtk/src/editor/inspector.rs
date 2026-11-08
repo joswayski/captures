@@ -223,6 +223,7 @@ impl ShapeSection {
         }
         root.append(&curve.root);
         let straighten = gtk::Button::with_label("Straighten line");
+        crate::widgets::action_cursor(&straighten);
         straighten.add_css_class("ui-btn");
         straighten.set_halign(gtk::Align::Start);
         {
@@ -337,6 +338,7 @@ struct TextSection {
 
 fn format_button(child: &impl IsA<gtk::Widget>, name: &str) -> gtk::Button {
     let button = gtk::Button::new();
+    crate::widgets::action_cursor(&button);
     button.add_css_class("format-button");
     button.set_child(Some(child));
     button.update_property(&[gtk::accessible::Property::Label(name)]);
@@ -855,6 +857,7 @@ impl DefaultsSection {
             .enumerate()
             .map(|(index, item)| {
                 let button = gtk::Button::new();
+                crate::widgets::action_cursor(&button);
                 button.add_css_class("shape-pick");
                 button.set_child(Some(&Icon::new(item.key, 18).with_stroke(1.8)));
                 button.set_tooltip_text(Some(&item.name()));

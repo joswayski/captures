@@ -143,6 +143,40 @@ class X11:
     """Real input and window handling under Xvfb (no window manager): xdotool,
     xclip and WM_DELETE_WINDOW. Keys use xdotool names."""
 
+    def cursor(self):
+        """The cursor actually installed on the X server, not widget styling."""
+        c = ctypes
+
+        class CursorImage(c.Structure):
+            _fields_ = [("x", c.c_short), ("y", c.c_short),
+                        ("width", c.c_ushort), ("height", c.c_ushort),
+                        ("xhot", c.c_ushort), ("yhot", c.c_ushort),
+                        ("serial", c.c_ulong), ("pixels", c.POINTER(c.c_ulong)),
+                        ("atom", c.c_ulong), ("name", c.c_char_p)]
+
+        x11 = c.CDLL("libX11.so.6")
+        fixes = c.CDLL("libXfixes.so.3")
+        x11.XOpenDisplay.argtypes = [c.c_char_p]
+        x11.XOpenDisplay.restype = c.c_void_p
+        x11.XCloseDisplay.argtypes = [c.c_void_p]
+        x11.XFree.argtypes = [c.c_void_p]
+        fixes.XFixesGetCursorImage.argtypes = [c.c_void_p]
+        fixes.XFixesGetCursorImage.restype = c.POINTER(CursorImage)
+        display = x11.XOpenDisplay(None)
+        assert display, "no X display"
+        image = None
+        try:
+            image = fixes.XFixesGetCursorImage(display)
+            assert image, "no X cursor image"
+            cursor = image.contents
+            return ((cursor.name or b"").decode(),
+                    (cursor.width, cursor.height, cursor.xhot, cursor.yhot,
+                     tuple(cursor.pixels[:cursor.width * cursor.height])))
+        finally:
+            if image:
+                x11.XFree(image)
+            x11.XCloseDisplay(display)
+
     def window(self, title, pid=None):
         args = ["xdotool", "search", "--all", "--sync"]
         args += ["--onlyvisible", "--pid", str(pid)] if pid else []
@@ -2608,6 +2642,8 @@ def recording_controls(binary, scratch):
             # Real hover includes a disabled microphone. The last three tips
             # align to the right, the others center, without stealing focus.
             focus = subprocess.check_output(["xdotool", "getwindowfocus"], text=True)
+            DESKTOP.point_into(hud, 1, 1)
+            _, neutral_cursor = DESKTOP.cursor()
             for label, text, right in (
                 ("Stop recording", "Stop and save", False),
                 ("Pause recording", "Pause recording", False),
@@ -2618,6 +2654,12 @@ def recording_controls(binary, scratch):
                 control = find(app, "push button", label)[0]
                 rect = Atspi.Component.get_extents(control, Atspi.CoordType.WINDOW)
                 DESKTOP.point_into(hud, rect.x + rect.width // 2, rect.y + rect.height // 2)
+                cursor, pixels = DESKTOP.cursor()
+                if has_state(control, Atspi.StateType.SENSITIVE):
+                    assert cursor in ("pointer", "hand2"), (label, cursor)
+                    assert pixels != neutral_cursor, "enabled action retained the default cursor"
+                else:
+                    assert pixels == neutral_cursor, "disabled action changed the default cursor"
                 tip = wait(lambda: tooltip(text), text + " tooltip", timeout=2)[0]
                 bounds = Atspi.Component.get_extents(tip, Atspi.CoordType.WINDOW)
                 # GTK exposes the label's content, excluding its 8 px padding.

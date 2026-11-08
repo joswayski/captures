@@ -450,7 +450,7 @@ final class UpdateNoticeView: NSView {
     }
 
     private func caption(_ button: UpdateNoticeButton, parent: NSView, rightEdge: CGFloat, y: CGFloat) {
-        let control = NSButton(title: "", target: nil, action: nil)
+        let control = PointingButton(title: "", target: nil, action: nil)
         control.isBordered = false
         control.attributedTitle = NSAttributedString(string: button.label.uppercased(), attributes: [
             .font: NSFont.systemFont(ofSize: tokens.number("text-xs"), weight: .semibold),

@@ -90,6 +90,7 @@ struct State {
 
 fn icon_control(icon: &str, label: &str, classes: &[&str]) -> gtk::Button {
     let button = gtk::Button::new();
+    crate::widgets::action_cursor(&button);
     for class in classes {
         button.add_css_class(class);
     }

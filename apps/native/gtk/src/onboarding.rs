@@ -102,6 +102,7 @@ pub fn build(
     error.set_visible(false);
 
     let primary = gtk::Button::with_label(text.start);
+    crate::widgets::action_cursor(&primary);
     primary.add_css_class("onboarding-primary-button");
     primary.set_halign(gtk::Align::End);
     primary.set_sensitive(false);
@@ -235,6 +236,7 @@ impl Setup {
         }
         if let Some(action) = presentation.screen_action {
             let button = gtk::Button::with_label(action);
+            crate::widgets::action_cursor(&button);
             button.add_css_class("ui-btn");
             button.add_css_class("onboarding-permission-button");
             button.set_halign(gtk::Align::End);

@@ -1799,7 +1799,13 @@ impl Recording {
                 let (x, y) = (point.x as f32 / self.scale, point.y as f32 / self.scale);
                 let over_timeline =
                     y < self.rects[FOOTER].y && self.timeline_track().contains(x, y);
-                let cursor = if let Some(handle) = self.crop_hit(x, y) {
+                let cursor = if self.menu.is_some() {
+                    if self.output_menu_hit(x, y).is_some() {
+                        IDC_HAND
+                    } else {
+                        IDC_ARROW
+                    }
+                } else if let Some(handle) = self.crop_hit(x, y) {
                     match handle {
                         CropDragHandle::North | CropDragHandle::South => IDC_SIZENS,
                         CropDragHandle::East | CropDragHandle::West => IDC_SIZEWE,
@@ -1817,6 +1823,14 @@ impl Recording {
                             || matches!(self.hit(x, y), Some(Target::TrimStart | Target::TrimEnd)))
                 {
                     IDC_SIZEWE
+                } else if let Some(target) = self.hit(x, y).filter(|&t| self.enabled(t)) {
+                    let rect = self.target_rect(target);
+                    if target == Target::Filename || target.is_number() && x < rect.x + rect.w - 26.
+                    {
+                        IDC_IBEAM
+                    } else {
+                        IDC_HAND
+                    }
                 } else {
                     IDC_ARROW
                 };

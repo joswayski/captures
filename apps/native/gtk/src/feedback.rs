@@ -202,6 +202,7 @@ pub fn build(
     spacer.set_hexpand(true);
     actions.append(&spacer);
     let send = gtk::Button::with_label(copy::SEND);
+    crate::widgets::action_cursor(&send);
     send.add_css_class("ui-btn");
     send.add_css_class("primary");
     send.add_css_class("feedback-submit");
@@ -247,6 +248,7 @@ pub fn build(
         row.add_css_class("feedback-review-actions");
         let buttons = ["Copy summary", "Add to message", "Dismiss diagnostics"].map(|text| {
             let button = gtk::Button::with_label(text);
+            crate::widgets::action_cursor(&button);
             button.add_css_class("ui-btn");
             row.append(&button);
             button

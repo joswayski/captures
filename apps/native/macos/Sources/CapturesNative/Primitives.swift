@@ -4,6 +4,17 @@ import CCapturesSettings
 // Shared shipping UI primitives drawn from design tokens (`styles/base.css`,
 // `styles/primitives.css`), used by every AppKit surface.
 
+/// Shipping buttons use a hand only while they can be activated.
+class PointingButton: NSButton {
+    override var isEnabled: Bool {
+        didSet { window?.invalidateCursorRects(for: self) }
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(visibleRect, cursor: isEnabled ? .pointingHand : .arrow)
+    }
+}
+
 /// Shipping `--focus-ring-tight`, a 2 pt translucent accent ring, drawn just
 /// inside `rect` because AppKit clips a view's drawing to its bounds. Every
 /// token-drawn control (buttons, selects, fields, sliders) shares it.
@@ -125,7 +136,14 @@ final class ClosurePopUpButton: NSPopUpButton {
     var isListboxOpen: Bool { listbox != nil }
 
     override var isEnabled: Bool {
-        didSet { if !isEnabled { closeListbox() } }
+        didSet {
+            if !isEnabled { closeListbox() }
+            window?.invalidateCursorRects(for: self)
+        }
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(visibleRect, cursor: isEnabled ? .pointingHand : .arrow)
     }
 
     @objc func selectedValue() { change?(indexOfSelectedItem) }
@@ -470,6 +488,13 @@ final class TokenSelectListView: NSView {
         scrollToVisible(rowRect(active).insetBy(dx: 0, dy: -padding))
     }
 
+    override func resetCursorRects() {
+        for index in options.indices {
+            addCursorRect(rowRect(index).intersection(visibleRect),
+                          cursor: options[index].enabled ? .pointingHand : .arrow)
+        }
+    }
+
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func updateTrackingAreas() {
@@ -709,7 +734,12 @@ final class TokenNumberFieldCell: NSTextFieldCell {
 final class TokenStepperHalf: NSView {
     let up: Bool
     var tokens: Tokens? { didSet { needsDisplay = true } }
-    var available = true { didSet { needsDisplay = true } }
+    var available = true {
+        didSet {
+            needsDisplay = true
+            window?.invalidateCursorRects(for: self)
+        }
+    }
     var press: (() -> Void)?
     private var pointerInside = false
     private var pointerTracking: NSTrackingArea?
@@ -727,6 +757,10 @@ final class TokenStepperHalf: NSView {
     override func accessibilityPerformPress() -> Bool {
         guard available else { return false }
         press?(); return true
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(visibleRect, cursor: available ? .pointingHand : .arrow)
     }
 
     override func updateTrackingAreas() {

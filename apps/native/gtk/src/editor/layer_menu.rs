@@ -68,6 +68,7 @@ fn section(title: &str, class: &str) -> gtk::Box {
 /// `.screenshot-layer-menu-action` (or `-tile`): an icon and a label.
 fn action(icon: &str, label: &str, name: &str, tip: &str, class: &str) -> gtk::Button {
     let button = gtk::Button::new();
+    crate::widgets::action_cursor(&button);
     button.add_css_class(class);
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     let glyph = Icon::new(icon, 15).with_stroke(1.8);

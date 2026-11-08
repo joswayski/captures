@@ -233,6 +233,7 @@ impl Controls {
                     actions.append(&meter);
                 }
                 let button = gtk::Button::new();
+                crate::widgets::action_cursor(&button);
                 let icon = if control == Control::Stop {
                     button.add_css_class("recording-stop");
                     let square = gtk::Box::new(gtk::Orientation::Horizontal, 0);

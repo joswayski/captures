@@ -337,6 +337,7 @@ fn button(text: &str, classes: &[&str]) -> gtk::Button {
     // after its text and drops the accessible label ("HIDE", "#265"). GTK
     // 4.8 does not name it from the child, so the text is the default name.
     let button = gtk::Button::new();
+    crate::widgets::action_cursor(&button);
     button.set_child(Some(&gtk::Label::new(Some(text))));
     button.update_property(&[gtk::accessible::Property::Label(text)]);
     for class in classes {
@@ -392,6 +393,7 @@ pub fn startup(
     content.append(&row);
     card.set_child(Some(&content));
     let close = gtk::Button::new();
+    crate::widgets::action_cursor(&close);
     close.add_css_class("startup-notice-dismiss");
     close.set_child(Some(&Icon::new("close", 14).with_stroke(2.)));
     close.set_tooltip_text(None);

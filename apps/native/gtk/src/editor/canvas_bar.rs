@@ -115,6 +115,7 @@ impl CanvasBar {
         root.append(&trim);
 
         let background = gtk::Button::new();
+        crate::widgets::action_cursor(&background);
         background.add_css_class("canvas-tool");
         background.add_css_class("canvas-bg-trigger");
         background.set_tooltip_text(Some(colors::BACKGROUND_TOOLTIP));

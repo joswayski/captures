@@ -108,6 +108,7 @@ impl ColorField {
             .iter()
             .map(|swatch| {
                 let button = gtk::Button::new();
+                crate::widgets::action_cursor(&button);
                 button.add_css_class("color-swatch");
                 let fill = parse(swatch);
                 let dot = SnapshotArea::new(move |snapshot, w, h| {
@@ -127,6 +128,7 @@ impl ColorField {
             })
             .collect();
         let custom = gtk::Button::new();
+        crate::widgets::action_cursor(&custom);
         custom.add_css_class("custom-color");
         custom.set_tooltip_text(Some(colors::CUSTOM_COLOR));
         custom.update_property(&[gtk::accessible::Property::Label(colors::CUSTOM_COLOR)]);
@@ -274,6 +276,7 @@ impl NumberField {
             ("chevron-down", gtk::SpinType::StepBackward, "Decrease"),
         ] {
             let step = gtk::Button::new();
+            crate::widgets::action_cursor(&step);
             step.add_css_class("number-input-step");
             step.set_focusable(false);
             step.set_child(Some(&Icon::new(icon, 11).with_stroke(2.)));
@@ -357,6 +360,7 @@ impl Choice {
             root.append(legend);
         }
         let trigger = gtk::Button::new();
+        crate::widgets::action_cursor(&trigger);
         trigger.add_css_class(if preview {
             "text-style-trigger"
         } else {
@@ -497,6 +501,7 @@ impl Choice {
         let descriptions = self.descriptions.borrow();
         for (index, (id, label)) in self.options.borrow().iter().enumerate() {
             let option = gtk::Button::new();
+            crate::widgets::action_cursor(&option);
             option.add_css_class("choice-option");
             option.set_accessible_role(gtk::AccessibleRole::MenuItemRadio);
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);

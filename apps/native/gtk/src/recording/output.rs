@@ -510,6 +510,7 @@ impl Output {
         size_limit.append(&unit.root);
         // Shipping's Comparison · Show before / after, while it is hidden.
         let show_compare = gtk::Button::with_label(compare::SHOW);
+        crate::widgets::action_cursor(&show_compare);
         show_compare.add_css_class("ui-btn");
         show_compare.add_css_class("export-show-compare");
         show_compare.set_halign(gtk::Align::Start);

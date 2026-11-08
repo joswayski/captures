@@ -210,7 +210,7 @@ struct HistoryGridLayout: Equatable {
 
 /// Token-styled History control. Keeps NSButton keyboard, target/action and
 /// accessibility behavior; only the drawing is custom.
-final class HistoryButton: NSButton {
+final class HistoryButton: PointingButton {
     enum Style { case primary, secondary, danger, confirm, ghost, overlay, confirmOverlay }
     enum Glyph { case edit, save, trash, restore, check, back }
 
@@ -1012,7 +1012,7 @@ final class HistoryGridView: NSView {
 
 /// `.history-filters` pill: a label and a faint count. `title` stays
 /// "Label count" so the control is addressable; VoiceOver hears "Label, n captures".
-final class HistoryFilterPill: NSButton {
+final class HistoryFilterPill: PointingButton {
     var tokens: Tokens
     let label: String
     var count = 0 { didSet { update() } }

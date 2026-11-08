@@ -340,6 +340,7 @@ pub fn build(
     let actions = gtk::Box::new(gtk::Orientation::Horizontal, tokens.number("s-4") as i32);
     actions.set_valign(gtk::Align::Center);
     let history = gtk::Button::with_label(preferences::HISTORY_ACTION);
+    crate::widgets::action_cursor(&history);
     history.add_css_class("preferences-history-button");
     history.set_valign(gtk::Align::Center);
     history.connect_clicked(move |_| open_history());
@@ -379,6 +380,7 @@ pub fn build(
 
     for (index, section) in SECTIONS.iter().enumerate() {
         let button = gtk::Button::with_label(section.title);
+        crate::widgets::action_cursor(&button);
         button.add_css_class("nav-item");
         if let Some(child) = button.child().and_downcast::<gtk::Label>() {
             child.set_xalign(0.);
@@ -754,6 +756,7 @@ fn utility_row(title: &str, body: &str, action: &str) -> (gtk::Box, gtk::Button)
     // A label child, not `with_label`: GTK 4.14 names a label-mode button
     // after its text and drops the accessible label, so both rows read "Open".
     let button = gtk::Button::new();
+    crate::widgets::action_cursor(&button);
     button.set_child(Some(&gtk::Label::new(Some(action))));
     button.add_css_class("ui-btn");
     button.update_property(&[gtk::accessible::Property::Label(&format!(
@@ -822,6 +825,7 @@ fn appearance_card(prefs: &Rc<Prefs>) -> gtk::Box {
     let mut buttons = Vec::new();
     for (id, name) in preferences::APPEARANCE_MODES {
         let button = gtk::Button::with_label(name);
+        crate::widgets::action_cursor(&button);
         button.add_css_class("segment");
         pressed(&button, current == id);
         let weak = Rc::downgrade(prefs);
@@ -993,6 +997,7 @@ fn custom_theme_editor(prefs: &Rc<Prefs>) -> gtk::Box {
     ));
     heading.append(&text);
     let reset = gtk::Button::with_label(copy.reset);
+    crate::widgets::action_cursor(&reset);
     reset.add_css_class("ui-btn");
     reset.set_valign(gtk::Align::Start);
     let weak = Rc::downgrade(prefs);
@@ -1032,6 +1037,7 @@ fn custom_theme_editor(prefs: &Rc<Prefs>) -> gtk::Box {
             "{name} hex value"
         ))]);
         let picker = gtk::Button::new();
+        crate::widgets::action_cursor(&picker);
         picker.add_css_class("custom-theme-picker");
         picker.update_property(&[gtk::accessible::Property::Label(&format!(
             "{name} color picker"
@@ -1130,6 +1136,7 @@ fn capture_card(prefs: &Rc<Prefs>, window: &gtk::ApplicationWindow) -> gtk::Box 
     });
     field.append(&entry);
     let choose = gtk::Button::with_label("Choose…");
+    crate::widgets::action_cursor(&choose);
     choose.add_css_class("ui-btn");
     let (target, window) = (entry.clone(), window.downgrade());
     #[allow(deprecated)] // `GtkFileDialog` needs GTK 4.10.
@@ -1344,6 +1351,7 @@ fn shortcut_row(prefs: &Rc<Prefs>, title: &'static str, path: String) -> gtk::Bo
     let control = gtk::Box::new(gtk::Orientation::Vertical, 0);
     control.set_size_request(260, -1);
     let recorder = gtk::Button::new();
+    crate::widgets::action_cursor(&recorder);
     recorder.add_css_class("shortcut-recorder");
     recorder.update_relation(&[gtk::accessible::Relation::LabelledBy(&[name.upcast_ref()])]);
     // `.shortcut-recorder`: `gap: var(--s-3)` between key caps.
@@ -1696,6 +1704,7 @@ fn updates_card(prefs: &Rc<Prefs>) -> gtk::Box {
     let actions = gtk::Box::new(gtk::Orientation::Vertical, tokens.number("s-3") as i32);
     actions.set_halign(gtk::Align::End);
     let check = gtk::Button::with_label(preferences::UPDATES_ACTION);
+    crate::widgets::action_cursor(&check);
     check.add_css_class("ui-btn");
     check.set_size_request(preferences::UPDATES_ACTION_WIDTH as i32, -1);
     check.set_halign(gtk::Align::End);

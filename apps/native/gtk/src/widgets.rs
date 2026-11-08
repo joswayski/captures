@@ -8,6 +8,19 @@ use gtk::graphene;
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
 
+/// Match shipping's hand cursor for actions, including inherited sensitivity.
+pub fn action_cursor(widget: &impl IsA<gtk::Widget>) {
+    fn update(widget: &gtk::Widget) {
+        widget.set_cursor_from_name(Some(if widget.is_sensitive() {
+            "pointer"
+        } else {
+            "default"
+        }));
+    }
+    update(widget.as_ref());
+    widget.connect_state_flags_changed(|widget, _| update(widget.as_ref()));
+}
+
 mod icon_imp {
     use super::*;
 
@@ -786,6 +799,7 @@ fn box_pass(
 /// A button with a leading shipping icon and a label (`.ui-btn svg` at 15 px).
 pub fn icon_button(icon: &str, label: &str, classes: &[&str]) -> (gtk::Button, Icon, gtk::Label) {
     let button = gtk::Button::new();
+    action_cursor(&button);
     for class in classes {
         button.add_css_class(class);
     }

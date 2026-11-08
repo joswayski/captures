@@ -391,6 +391,7 @@ fn label(text: &str, class: &str) -> gtk::Label {
 
 fn segment(text: &str) -> gtk::Button {
     let button = gtk::Button::with_label(text);
+    crate::widgets::action_cursor(&button);
     button.add_css_class("recording-segment");
     button
 }
@@ -483,6 +484,7 @@ pub fn build(app: &gtk::Application, tokens: Rc<Tokens>, options: Options) -> Re
     });
     viewport.set_child(Some(&preview_watch));
     let play = gtk::Button::new();
+    crate::widgets::action_cursor(&play);
     play.add_css_class("recording-play");
     let play_icon = Icon::new("resume", 22).with_stroke(2.);
     play.set_child(Some(&play_icon));
@@ -621,6 +623,7 @@ pub fn build(app: &gtk::Application, tokens: Rc<Tokens>, options: Options) -> Re
     // Shipping `aria-label="Change save location"` over "Change…"; the text
     // is presentational because GTK 4.14 names a button after its label.
     let change_folder = gtk::Button::new();
+    crate::widgets::action_cursor(&change_folder);
     let change_text = gtk::Label::new(Some("Change…"));
     change_text.set_accessible_role(gtk::AccessibleRole::Presentation);
     change_folder.set_child(Some(&change_text));
@@ -678,6 +681,7 @@ pub fn build(app: &gtk::Application, tokens: Rc<Tokens>, options: Options) -> Re
     actions.set_halign(gtk::Align::End);
     actions.add_css_class("recording-save-actions");
     let cancel = gtk::Button::with_label("Cancel");
+    crate::widgets::action_cursor(&cancel);
     cancel.add_css_class("ui-btn");
     cancel.add_css_class("recording-save-cancel");
     cancel.set_size_request(76, -1);
