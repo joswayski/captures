@@ -238,8 +238,9 @@ a single resident app with the shipping tray menu, forwarding relaunches to the
 running copy. Its New Capture and Screenshot Region, Window and Display items and
 the matching global shortcuts open the Screenshot capture bar on that target, taking
 over Print Screen and Win+Shift+S like shipping. The Record rows and shortcuts open
-the bar in Record, which starts an experimental recording with floating Stop, Pause,
-Restart, Mute, Delete and Hide controls (its options row, the controls' region
+the bar in Record, whose options row (FPS, resolution, cursor, clicks, desktop audio
+and microphone) applies to that recording only. It starts an experimental recording
+with floating Stop, Pause, Restart, Mute, Delete and Hide controls (the controls' region
 screenshot and recovery after a crash are not ported); Send Feedback stays disabled. Saved
 screenshots appear in an experimental mini-preview stack with Close, Delete, Edit,
 Copy and Save file / Show in Folder, and History's Restore brings a screenshot back

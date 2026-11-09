@@ -9,19 +9,24 @@
 //! pointer (the desktop means the whole display) and Full screen saves the
 //! display. A configured delay shows shipping's ScreenshotCountdown scrim
 //! (`.recording-countdown`) on the selected display; Esc cancels it. Record
-//! hands the flow, display and target to `recorder`; its options row, the
-//! Aspect and Display selects and UI Automation are not ported yet.
+//! shows shipping's `recording-options-row` (FPS, Max resolution, Show
+//! cursor, Show clicks, Desktop audio and Microphone, kept for this capture
+//! only) and hands the flow, display, target and those choices to
+//! `recorder`; the Aspect and Display selects, keyboard focus through the
+//! bar and UI Automation are not ported yet.
 
 use std::cell::RefCell;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::time::{Duration, Instant};
 
 use captures_app::capture_flow::CaptureFlow;
-use captures_app::capture_menu::{self, MenuMode, PrimaryState};
+use captures_app::capture_menu::{self, MenuMode, PrimaryState, RecordingToggle};
+use captures_app::controls::select;
 use captures_app::selection::Point;
 use captures_app::window::{self as window_target, WindowSession};
 use captures_capture::{DisplayDescriptor, LogicalRect};
-use captures_recording::{CaptureRect, RecordingTarget};
+use captures_recording::{CaptureRect, MaxResolution, RecordingTarget};
+use captures_recording_platform::RecordingCapabilities;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::*;
 use windows::Win32::Graphics::Direct2D::*;
@@ -56,6 +61,237 @@ enum Hit {
     Record,
     Target(Target),
     Primary,
+    /// A `.recording-options-row` switch.
+    Toggle(RecordingToggle),
+    /// A `.recording-options-row` select's trigger.
+    Select(Field),
+    /// A row in the open listbox.
+    Option(usize),
+}
+
+/// The Record options row's selects.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Field {
+    Fps,
+    Resolution,
+    Microphone,
+}
+
+/// `capture_menu::RESOLUTION_OPTIONS` order.
+const RESOLUTIONS: [MaxResolution; 3] = [
+    MaxResolution::Original,
+    MaxResolution::P1080,
+    MaxResolution::P720,
+];
+
+/// Shipping `.recording-options-row` columns: `76px 132px 92px 92px 118px
+/// minmax(180px, 240px)` with `--s-4` gaps inside `--s-5` padding.
+const OPTION_COLUMNS: [f32; 6] = [76., 132., 92., 92., 118., 240.];
+/// `.recording-field > span`: a `--text-2xs` caption's line box.
+const CAPTION_H: f32 = 11.;
+
+/// The Record options for this capture. Like shipping they start from the
+/// saved settings, gated by the platform's capabilities, and only apply to
+/// the take they start; Preferences keeps the saved defaults.
+pub struct RecordOptions {
+    pub fps: u16,
+    pub resolution: MaxResolution,
+    pub show_cursor: bool,
+    pub highlight_clicks: bool,
+    pub system_audio: bool,
+    pub microphone: Option<String>,
+    pub capabilities: RecordingCapabilities,
+    /// Enumerated microphones as `(id, name)`; empty until loaded.
+    pub microphones: Vec<(String, String)>,
+    pub microphones_loading: bool,
+    microphones_requested: bool,
+}
+
+impl RecordOptions {
+    pub fn new(settings: &captures_settings::AppSettings) -> Self {
+        let capabilities =
+            RecordingCapabilities::current(settings.include_recording_controls_in_captures);
+        let r = &settings.recording;
+        Self {
+            fps: r.video_fps,
+            resolution: r.video_max_resolution,
+            show_cursor: capabilities.cursor_control && r.show_cursor,
+            highlight_clicks: capabilities.click_highlights && r.highlight_clicks,
+            system_audio: capabilities.system_audio && r.capture_system_audio,
+            microphone: capabilities
+                .microphone
+                .then(|| r.microphone_device_id.clone())
+                .flatten(),
+            capabilities,
+            microphones: Vec::new(),
+            microphones_loading: false,
+            microphones_requested: false,
+        }
+    }
+
+    /// Whether to enumerate microphones now: once per menu, when it first
+    /// shows Record (shipping `loadAudioDevices`).
+    fn take_microphone_request(&mut self) -> bool {
+        let request = self.capabilities.microphone && !self.microphones_requested;
+        if request {
+            self.microphones_requested = true;
+            self.microphones_loading = true;
+        }
+        request
+    }
+
+    pub fn set_microphones(&mut self, devices: Vec<(String, String)>) {
+        self.microphones = devices;
+        self.microphones_loading = false;
+    }
+
+    fn microphone_entries(&self) -> Vec<capture_menu::MicrophoneEntry> {
+        let devices: Vec<_> = self
+            .microphones
+            .iter()
+            .map(|(id, name)| (id.as_str(), name.as_str()))
+            .collect();
+        capture_menu::microphone_entries(
+            self.capabilities.microphone,
+            self.microphones_loading,
+            self.microphone.as_deref(),
+            &devices,
+        )
+    }
+
+    /// A select's option labels, which are disabled, and the selected index
+    /// (the first option when the value is not listed, like shipping).
+    fn entries(&self, field: Field) -> (Vec<String>, Vec<bool>, usize) {
+        match field {
+            Field::Fps => {
+                let selected = capture_menu::FPS_OPTIONS
+                    .iter()
+                    .position(|&f| f == self.fps);
+                (
+                    capture_menu::FPS_OPTIONS.map(|f| f.to_string()).to_vec(),
+                    vec![false; 3],
+                    selected.unwrap_or(0),
+                )
+            }
+            Field::Resolution => {
+                let selected = RESOLUTIONS.iter().position(|&r| r == self.resolution);
+                (
+                    capture_menu::RESOLUTION_OPTIONS
+                        .map(|(_, label)| label.to_string())
+                        .to_vec(),
+                    vec![false; 3],
+                    selected.unwrap_or(0),
+                )
+            }
+            Field::Microphone => {
+                let entries = self.microphone_entries();
+                let selected = entries
+                    .iter()
+                    .position(|e| e.id == self.microphone)
+                    .unwrap_or(0);
+                (
+                    entries.iter().map(|e| e.label.clone()).collect(),
+                    entries.iter().map(|e| !e.enabled).collect(),
+                    selected,
+                )
+            }
+        }
+    }
+
+    /// The closed trigger's label.
+    fn value(&self, field: Field) -> String {
+        match field {
+            Field::Microphone => {
+                let devices: Vec<_> = self
+                    .microphones
+                    .iter()
+                    .map(|(id, name)| (id.as_str(), name.as_str()))
+                    .collect();
+                capture_menu::microphone_selected_label(
+                    self.capabilities.microphone,
+                    self.microphones_loading,
+                    self.microphone.as_deref(),
+                    &devices,
+                )
+            }
+            _ => {
+                let (labels, _, selected) = self.entries(field);
+                labels.into_iter().nth(selected).unwrap_or_default()
+            }
+        }
+    }
+
+    /// Shipping disables the microphone select while devices load.
+    fn enabled(&self, field: Field) -> bool {
+        field != Field::Microphone || (self.capabilities.microphone && !self.microphones_loading)
+    }
+
+    fn choose(&mut self, field: Field, index: usize) {
+        match field {
+            Field::Fps => {
+                if let Some(&fps) = capture_menu::FPS_OPTIONS.get(index) {
+                    self.fps = fps;
+                }
+            }
+            Field::Resolution => {
+                if let Some(&resolution) = RESOLUTIONS.get(index) {
+                    self.resolution = resolution;
+                }
+            }
+            Field::Microphone => {
+                if let Some(entry) = self.microphone_entries().into_iter().nth(index)
+                    && entry.enabled
+                {
+                    self.microphone = entry.id;
+                }
+            }
+        }
+    }
+
+    fn available(&self, toggle: RecordingToggle) -> bool {
+        let c = &self.capabilities;
+        match toggle {
+            RecordingToggle::ShowCursor => c.cursor_control,
+            RecordingToggle::ShowClicks => c.click_highlights,
+            RecordingToggle::DesktopAudio => c.system_audio,
+        }
+    }
+
+    fn on(&self, toggle: RecordingToggle) -> bool {
+        match toggle {
+            RecordingToggle::ShowCursor => self.show_cursor,
+            RecordingToggle::ShowClicks => self.highlight_clicks,
+            RecordingToggle::DesktopAudio => self.system_audio,
+        }
+    }
+
+    fn toggle(&mut self, toggle: RecordingToggle) {
+        if !self.available(toggle) {
+            return;
+        }
+        match toggle {
+            RecordingToggle::ShowCursor => self.show_cursor = !self.show_cursor,
+            RecordingToggle::ShowClicks => self.highlight_clicks = !self.highlight_clicks,
+            RecordingToggle::DesktopAudio => self.system_audio = !self.system_audio,
+        }
+        (self.show_cursor, self.highlight_clicks) =
+            capture_menu::couple_pointer_options(toggle, self.show_cursor, self.highlight_clicks);
+    }
+
+    /// The take's settings: shipping's `start_recording` options.
+    pub fn apply(&self, recording: &mut captures_settings::RecordingSettings) {
+        let c = &self.capabilities;
+        recording.video_fps = self.fps;
+        recording.video_max_resolution = self.resolution;
+        recording.show_cursor = c.cursor_control && self.show_cursor;
+        recording.highlight_clicks = c.click_highlights && self.highlight_clicks;
+        recording.capture_system_audio = c.system_audio && self.system_audio;
+        recording.microphone_device_id = if c.microphone {
+            self.microphone.clone()
+        } else {
+            None
+        };
+    }
 }
 
 type Rect = D2D_RECT_F;
@@ -88,8 +324,32 @@ struct Segment {
     active: bool,
 }
 
+/// One `.recording-field`: its uppercase caption over a select or switch.
+struct FieldBox {
+    caption: gfx::Text,
+    x: f32,
+    caption_y: f32,
+    /// The trigger, or the switch's whole `.recording-toggle` label.
+    control: Rect,
+    /// The trigger's or switch's text.
+    value: gfx::Text,
+    hit: Hit,
+    enabled: bool,
+}
+
+/// The open `.custom-select-listbox`: rows with their label and whether each
+/// is disabled or selected, plus the selected row's check.
+struct Listbox {
+    rect: Rect,
+    rows: Vec<(Rect, gfx::Text, bool, bool)>,
+    check: gfx::Text,
+}
+
 struct Layout {
     panel: Rect,
+    /// The options row's top border and its fields, in Record.
+    options: Option<(f32, Vec<FieldBox>)>,
+    listbox: Option<Listbox>,
     close: Rect,
     switches: [Rect; 2],
     divider: Rect,
@@ -121,6 +381,9 @@ pub struct Menu {
     pub hovered: Option<Option<usize>>,
     /// The clicked window target, kept when the pointer leaves it.
     pub picked: Option<Option<usize>>,
+    pub record: RecordOptions,
+    /// The open listbox and its highlighted row.
+    pub open: Option<(Field, select::State)>,
 }
 
 impl Menu {
@@ -145,6 +408,8 @@ impl Menu {
             windows: Vec::new(),
             hovered: None,
             picked: None,
+            record: RecordOptions::new(&captures_settings::AppSettings::default()),
+            open: None,
         }
     }
 
@@ -259,8 +524,15 @@ impl Menu {
             x += w + after;
         }
         let note_w = x;
-        let pw = row.max(note_w + 24.) + 2.;
-        let ph = 1. + 56. + 28. + 1.;
+        let record = self.mode == MenuMode::Recording;
+        // `.recording-options-row`: 74 px min height, `--s-5` padding, top border.
+        let options_h = if record { 78. } else { 0. };
+        let mut pw = row.max(note_w + 24.) + 2.;
+        if record {
+            let columns = OPTION_COLUMNS.iter().sum::<f32>() + 8. * 5.;
+            pw = pw.max(1. + 12. + columns + 12. + 1.);
+        }
+        let ph = 1. + 56. + options_h + 28. + 1.;
         let (w, h) = self.size;
         let left = ((w - pw) / 2.).round();
         let top = (h - 26. - ph).round();
@@ -298,8 +570,24 @@ impl Menu {
             let px = x + GAP + 4.;
             (rect(px, cy - 20., px + w, cy + 20.), text, self.can_start())
         });
+        let options = if record {
+            Some(self.options_layout(g, t, left, top + 1. + 56.)?)
+        } else {
+            None
+        };
+        let listbox = match (self.open, &options) {
+            (Some((field, _)), Some((_, fields))) => {
+                match fields.iter().find(|f| f.hit == Hit::Select(field)) {
+                    Some(f) => Some(self.listbox_layout(g, t, field, f.control)?),
+                    None => None,
+                }
+            }
+            _ => None,
+        };
         Ok(Layout {
             panel,
+            options,
+            listbox,
             close,
             switches: [action_box, target_box],
             divider,
@@ -309,12 +597,163 @@ impl Menu {
                 .into_iter()
                 .map(|(text, nx, strong)| (text, left + (pw - note_w) / 2. + nx, strong))
                 .collect(),
-            note_y: top + 1. + 56. + 10.,
+            note_y: top + 1. + 56. + options_h + 10.,
+        })
+    }
+
+    /// The `.recording-options-row` fields below the bar's first row.
+    fn options_layout(
+        &self,
+        g: &Gfx,
+        t: &Tokens,
+        left: f32,
+        row_top: f32,
+    ) -> Result<(f32, Vec<FieldBox>)> {
+        let caption_y = row_top + 1. + 12.;
+        let control_y = caption_y + CAPTION_H + 6.;
+        let items = [
+            (capture_menu::FIELD_FPS, Hit::Select(Field::Fps)),
+            (
+                capture_menu::FIELD_MAX_RESOLUTION,
+                Hit::Select(Field::Resolution),
+            ),
+            (
+                RecordingToggle::ShowCursor.label(),
+                Hit::Toggle(RecordingToggle::ShowCursor),
+            ),
+            (
+                RecordingToggle::ShowClicks.label(),
+                Hit::Toggle(RecordingToggle::ShowClicks),
+            ),
+            (
+                RecordingToggle::DesktopAudio.label(),
+                Hit::Toggle(RecordingToggle::DesktopAudio),
+            ),
+            (
+                capture_menu::FIELD_MICROPHONE,
+                Hit::Select(Field::Microphone),
+            ),
+        ];
+        let mut x = left + 1. + 12.;
+        let mut fields = Vec::new();
+        for ((label, hit), width) in items.into_iter().zip(OPTION_COLUMNS) {
+            // `.recording-field > span`: uppercase `--text-2xs` semibold, wide.
+            let caption = g.text_sized(
+                t,
+                &label.to_uppercase(),
+                t.n("text-2xs"),
+                "weight-semibold",
+                Some("tracking-wide"),
+            )?;
+            let control = rect(x, control_y, x + width, control_y + 36.);
+            let (value, enabled) = match hit {
+                // The trigger inherits the field's weight and tracking at `--text-sm`.
+                Hit::Select(field) => {
+                    let value = g.text_sized(
+                        t,
+                        &self.record.value(field),
+                        t.n("text-sm"),
+                        "weight-semibold",
+                        Some("tracking-wide"),
+                    )?;
+                    // `--s-4` padding, `--s-5` gap and the 14 px chevron.
+                    g.ellipsis(&value, (width - 16. - 12. - 14.).max(1.))?;
+                    (value, self.record.enabled(field))
+                }
+                Hit::Toggle(toggle) => {
+                    let available = self.record.available(toggle);
+                    let status = capture_menu::toggle_status(available, self.record.on(toggle));
+                    let value = g.text_sized(t, status, t.n("text-xs"), "weight-medium", None)?;
+                    (value, available)
+                }
+                _ => continue,
+            };
+            fields.push(FieldBox {
+                caption,
+                x,
+                caption_y,
+                control,
+                value,
+                hit,
+                enabled,
+            });
+            x += width + 8.;
+        }
+        Ok((row_top, fields))
+    }
+
+    /// The open glass `.custom-select-listbox`, placed like shipping.
+    fn listbox_layout(&self, g: &Gfx, t: &Tokens, field: Field, trigger: Rect) -> Result<Listbox> {
+        let (labels, disabled, selected) = self.record.entries(field);
+        let check = g.text_sized(t, "✓", t.n("text-sm"), "weight-regular", None)?;
+        let mut texts = Vec::new();
+        for (index, label) in labels.iter().enumerate() {
+            // `[aria-selected="true"]` is `--weight-medium`.
+            let weight = if index == selected {
+                "weight-medium"
+            } else {
+                "weight-regular"
+            };
+            texts.push(g.text_sized(t, label, t.n("text-sm"), weight, None)?);
+        }
+        let row_h = texts
+            .iter()
+            .map(|text| text.height + 2. + 12.)
+            .fold(28_f32, f32::max);
+        let label_w = texts.iter().map(|text| text.width).fold(0., f32::max);
+        let content_w = (label_w + 16. + check.width + 16. + 8. + 2.).ceil();
+        let content_h = texts.len() as f32 * row_h + 8.;
+        let (w, h) = self.size;
+        let layout = select::layout(
+            select::Rect {
+                left: f64::from(trigger.left),
+                top: f64::from(trigger.top),
+                width: f64::from(trigger.right - trigger.left),
+                height: f64::from(trigger.bottom - trigger.top),
+            },
+            f64::from(content_w),
+            f64::from(content_h + 2.),
+            f64::from(w),
+            f64::from(h),
+            texts.len(),
+        );
+        let (left, top) = (layout.left as f32, layout.top as f32);
+        let height = (layout.max_height as f32).min(content_h + 2.);
+        let list = rect(left, top, left + layout.width as f32, top + height);
+        let rows = texts
+            .into_iter()
+            .enumerate()
+            .map(|(index, text)| {
+                let y = top + 1. + 4. + index as f32 * row_h;
+                let row = rect(list.left + 5., y, list.right - 5., y + row_h);
+                (row, text, disabled[index], index == selected)
+            })
+            .collect();
+        Ok(Listbox {
+            rect: list,
+            rows,
+            check,
         })
     }
 
     fn hit(&self, x: f32, y: f32) -> Option<Hit> {
         let layout = self.layout.as_ref()?;
+        if let Some(listbox) = &layout.listbox
+            && contains(&listbox.rect, x, y)
+        {
+            return listbox
+                .rows
+                .iter()
+                .position(|(r, ..)| contains(r, x, y))
+                .map(Hit::Option);
+        }
+        if let Some((_, fields)) = &layout.options
+            && let Some(field) = fields
+                .iter()
+                .find(|f| f.enabled && contains(&f.control, x, y))
+        {
+            return Some(field.hit);
+        }
         if contains(&layout.close, x, y) {
             return Some(Hit::Close);
         }
@@ -331,10 +770,11 @@ impl Menu {
             .map(|s| s.hit)
     }
 
+    /// Over the bar or its open listbox.
     fn over_panel(&self, x: f32, y: f32) -> bool {
-        self.layout
-            .as_ref()
-            .is_some_and(|l| contains(&l.panel, x, y))
+        self.layout.as_ref().is_some_and(|l| {
+            contains(&l.panel, x, y) || l.listbox.as_ref().is_some_and(|b| contains(&b.rect, x, y))
+        })
     }
 
     pub fn paint(
@@ -548,6 +988,9 @@ impl Menu {
             }
             gfx::text(dc, label, x + 22., cy - label.height / 2., ink)?;
         }
+        if let Some((row_top, fields)) = &layout.options {
+            self.paint_options(dc, g, t, &layout.panel, *row_top, fields)?;
+        }
         // `.capture-selector-note`
         for (text, x, strong) in &layout.note {
             let color = if *strong {
@@ -557,8 +1000,142 @@ impl Menu {
             };
             gfx::text(dc, text, *x, layout.note_y, color)?;
         }
+        if let Some(listbox) = &layout.listbox {
+            self.paint_listbox(dc, t, listbox)?;
+        }
         self.layout = Some(layout);
         Ok(())
+    }
+
+    fn paint_options(
+        &self,
+        dc: &ID2D1DeviceContext,
+        g: &Gfx,
+        t: &Tokens,
+        panel: &Rect,
+        row_top: f32,
+        fields: &[FieldBox],
+    ) -> Result<()> {
+        let border = rect(panel.left + 1., row_top, panel.right - 1., row_top + 1.);
+        gfx::fill(dc, border, t.color("glass-border"))?;
+        let accent = t.color("theme-accent");
+        for f in fields {
+            let cy_caption = f.caption_y + (CAPTION_H - f.caption.height) / 2.;
+            gfx::text(
+                dc,
+                &f.caption,
+                f.x,
+                cy_caption,
+                t.color("glass-text-subtle"),
+            )?;
+            let c = f.control;
+            let cy = (c.top + c.bottom) / 2.;
+            // Disabled controls are at 50% (`:disabled`, `:has(input:disabled)`).
+            let fade = if f.enabled { 1. } else { 0.5 };
+            let hovered = f.enabled && self.hover == Some(f.hit);
+            match f.hit {
+                // `.recording-selector-panel .custom-select-trigger`
+                Hit::Select(field) => {
+                    let open = self.open.is_some_and(|(o, _)| o == field);
+                    gfx::fill_round(dc, c, 8., shade(0.3 * fade))?;
+                    let edge = if open {
+                        accent
+                    } else if hovered {
+                        t.color("glass-border-strong")
+                    } else {
+                        t.color("glass-border")
+                    };
+                    gfx::border(dc, c, 8., 1., alpha(edge, fade))?;
+                    let ink = alpha(t.color("glass-text"), fade);
+                    gfx::text(dc, &f.value, c.left + 8., cy - f.value.height / 2., ink)?;
+                    // The chevron turns over while open.
+                    let icon = if open { "chevron-up" } else { "chevron-down" };
+                    let subtle = alpha(t.color("glass-text-subtle"), fade);
+                    gfx::icon(
+                        dc,
+                        &g.factory,
+                        icon,
+                        &[],
+                        (c.right - 8. - 14., cy - 7., 14.),
+                        1.7,
+                        subtle,
+                    )?;
+                }
+                // `.recording-toggle`: the 30×18 `.recording-switch` and its status.
+                Hit::Toggle(toggle) => {
+                    let on = f.enabled && self.record.on(toggle);
+                    let switch = rect(c.left, cy - 9., c.left + 30., cy + 9.);
+                    let knob_x = c.left + 3. + if on { 12. } else { 0. };
+                    let knob = rect(knob_x, cy - 6., knob_x + 12., cy + 6.);
+                    if on {
+                        gfx::fill_round(dc, switch, 9., alpha(accent, fade))?;
+                        let ink = t.color_alpha("theme-accent-ink", fade);
+                        gfx::fill_round(dc, knob, 6., ink)?;
+                    } else {
+                        gfx::fill_round(dc, switch, 9., shade(0.35 * fade))?;
+                        let edge = t.color_alpha("glass-border-strong", fade);
+                        gfx::border(dc, switch, 9., 1., edge)?;
+                        let knob_color = t.color_alpha("glass-text-subtle", fade);
+                        gfx::fill_round(dc, knob, 6., knob_color)?;
+                    }
+                    let status = if hovered {
+                        "glass-text"
+                    } else {
+                        "glass-text-muted"
+                    };
+                    let y = cy - f.value.height / 2.;
+                    gfx::text(dc, &f.value, c.left + 36., y, t.color_alpha(status, fade))?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// `.custom-select-listbox-glass`: raised glass, hovered row lit, the
+    /// selected row's check in the accent.
+    fn paint_listbox(&self, dc: &ID2D1DeviceContext, t: &Tokens, listbox: &Listbox) -> Result<()> {
+        let r = listbox.rect;
+        gfx::shadow(dc, r, 10., t.shadow("shadow-lg"))?;
+        gfx::fill_round(dc, r, 10., t.color("glass-raised"))?;
+        gfx::border(dc, r, 10., 1., t.color("glass-border"))?;
+        let active = self.open.map(|(_, state)| state.active);
+        unsafe { dc.PushAxisAlignedClip(&r, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE) };
+        let mut result = Ok(());
+        for (index, (row, label, disabled, selected)) in listbox.rows.iter().enumerate() {
+            let lit = !disabled && active == Some(index);
+            let color = if *disabled {
+                t.color("glass-text-subtle")
+            } else if lit || *selected {
+                t.color("glass-text")
+            } else {
+                t.color("glass-text-muted")
+            };
+            let cy = (row.top + row.bottom) / 2.;
+            result = (|| {
+                if lit {
+                    gfx::fill_round(dc, *row, 6., t.color("glass-hover"))?;
+                }
+                gfx::text(dc, label, row.left + 8., cy - label.height / 2., color)?;
+                if *selected {
+                    let check = &listbox.check;
+                    let x = row.right - 8. - check.width;
+                    gfx::text(
+                        dc,
+                        check,
+                        x,
+                        cy - check.height / 2.,
+                        t.color("theme-accent"),
+                    )?;
+                }
+                Ok(())
+            })();
+            if result.is_err() {
+                break;
+            }
+        }
+        unsafe { dc.PopAxisAlignedClip() };
+        result
     }
 
     /// `.recording-display-identity`: the icon, display name and size,
@@ -623,17 +1200,84 @@ impl Menu {
             return true;
         }
         let hover = self.hit(x, y);
-        std::mem::replace(&mut self.hover, hover) != hover
+        let mut changed = false;
+        // Pointing at an enabled row highlights it (`onPointerEnter`).
+        if let (Some(Hit::Option(index)), Some((field, state))) = (hover, self.open.as_mut())
+            && !self.record.entries(*field).1[index]
+            && state.active != index
+        {
+            state.active = index;
+            changed = true;
+        }
+        std::mem::replace(&mut self.hover, hover) != hover || changed
     }
 
     fn pressed(&mut self, x: f32, y: f32) -> bool {
         self.pressed = self.hit(x, y);
+        // A press anywhere else closes the listbox and still acts there.
+        let mut closed = false;
+        if let Some((field, _)) = self.open
+            && self.pressed != Some(Hit::Select(field))
+            && !self
+                .layout
+                .as_ref()
+                .and_then(|l| l.listbox.as_ref())
+                .is_some_and(|b| contains(&b.rect, x, y))
+        {
+            self.open = None;
+            closed = true;
+        }
+        if closed && self.pressed.is_none() && self.over_panel(x, y) {
+            return true;
+        }
         if self.pressed.is_none() && self.target == Target::Region && !self.over_panel(x, y) {
             self.drag = Some((x, y));
             self.selection = None;
             return true;
         }
-        false
+        closed
+    }
+
+    /// Run a click on an options-row control or listbox row.
+    fn option_action(&mut self, hit: Hit) {
+        match hit {
+            Hit::Toggle(toggle) => self.record.toggle(toggle),
+            Hit::Select(field) if self.open.is_some_and(|(o, _)| o == field) => self.open = None,
+            Hit::Select(field) if self.record.enabled(field) => {
+                let (_, disabled, selected) = self.record.entries(field);
+                self.open = Some((field, select::open(&disabled, selected)));
+            }
+            // A disabled row leaves the listbox open, like shipping.
+            Hit::Option(index) => {
+                if let Some((field, _)) = self.open
+                    && !self
+                        .record
+                        .entries(field)
+                        .1
+                        .get(index)
+                        .copied()
+                        .unwrap_or(true)
+                {
+                    self.record.choose(field, index);
+                    self.open = None;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Keys for the open listbox; true when consumed.
+    fn listbox_key(&mut self, key: select::Key) -> bool {
+        let Some((field, state)) = self.open else {
+            return false;
+        };
+        let (_, disabled, selected) = self.record.entries(field);
+        let outcome = select::key(state, &disabled, selected, key);
+        if let Some(index) = outcome.chosen {
+            self.record.choose(field, index);
+        }
+        self.open = outcome.state.open.then_some((field, outcome.state));
+        outcome.handled
     }
 
     /// A click outside the bar in Window mode picks the hovered target;
@@ -710,6 +1354,27 @@ struct Overlay {
     _target: IDCompositionTarget,
     _visual: IDCompositionVisual2,
     surface: IDCompositionSurface,
+    /// Microphones enumerating off the UI thread.
+    microphones: Option<Receiver<Vec<(String, String)>>>,
+}
+
+/// Enumerate microphones once the menu first shows Record (shipping
+/// `loadAudioDevices`); the select reads "Loading microphones…" meanwhile.
+fn load_microphones(overlay: &mut Overlay, wake: &std::sync::Arc<dyn Fn() + Send + Sync>) {
+    if overlay.menu.mode != MenuMode::Recording || !overlay.menu.record.take_microphone_request() {
+        return;
+    }
+    let (sender, receiver) = channel();
+    let wake = wake.clone();
+    std::thread::spawn(move || {
+        let devices = captures_recording_platform::microphone_devices()
+            .into_iter()
+            .map(|device| (device.id, device.name))
+            .collect::<Vec<_>>();
+        let _ = sender.send(devices);
+        wake();
+    });
+    overlay.microphones = Some(receiver);
 }
 
 /// The confirmed choice waiting out the screenshot delay behind
@@ -899,7 +1564,16 @@ pub fn service() -> Option<Outcome> {
                 Err(TryRecvError::Disconnected) => Some(Err("The capture worker stopped".into())),
             },
             // Global Escape or a session lock cancelled the generation.
-            Phase::Selecting(..) => (!capture.flow.is_current()).then_some(Ok(None)),
+            Phase::Selecting(overlay, _) => {
+                if let Some(receiver) = &overlay.microphones
+                    && let Ok(devices) = receiver.try_recv()
+                {
+                    overlay.microphones = None;
+                    overlay.menu.record.set_microphones(devices);
+                    let _ = overlay.render(&capture.tokens);
+                }
+                (!capture.flow.is_current()).then_some(Ok(None))
+            }
             // The countdown window's timer advances it.
             Phase::Counting(..) => None,
             Phase::Capturing(results) => match results.try_recv() {
@@ -946,6 +1620,7 @@ impl Capture {
             );
             menu.mode = self.mode;
             menu.controls_excluded = !self.settings.include_recording_controls_in_captures;
+            menu.record = RecordOptions::new(&self.settings);
             menu.windows = window_rects(&session);
             let mut overlay = Overlay {
                 hwnd,
@@ -957,7 +1632,9 @@ impl Capture {
                 _target: target,
                 _visual: visual,
                 surface,
+                microphones: None,
             };
+            load_microphones(&mut overlay, &self.wake);
             overlay.render(&self.tokens)?;
             let _ = ShowWindow(hwnd, SW_SHOW);
             let _ = SetForegroundWindow(hwnd);
@@ -1012,6 +1689,8 @@ impl Capture {
                 (Target::Display, _) => whole,
                 _ => return,
             };
+            // This capture's options; the saved defaults stay in Preferences.
+            overlay.menu.record.apply(&mut self.settings.recording);
             // Dropping the overlay closes the menu; the host hands off next.
             self.phase = Phase::Record(Box::new((display, target)));
             (self.wake)();
@@ -1214,11 +1893,30 @@ impl Capture {
                 };
                 let _ = overlay.render(&self.tokens);
             }
-            WM_KEYDOWN => match VIRTUAL_KEY(wp.0 as u16) {
-                VK_RETURN => action = Some(Hit::Primary),
-                VK_ESCAPE => action = Some(Hit::Close),
-                _ => {}
-            },
+            WM_KEYDOWN => {
+                let vk = VIRTUAL_KEY(wp.0 as u16);
+                let key = match vk {
+                    VK_DOWN => Some(select::Key::ArrowDown),
+                    VK_UP => Some(select::Key::ArrowUp),
+                    VK_HOME => Some(select::Key::Home),
+                    VK_END => Some(select::Key::End),
+                    VK_RETURN => Some(select::Key::Enter),
+                    VK_SPACE => Some(select::Key::Space),
+                    VK_ESCAPE => Some(select::Key::Escape),
+                    _ => None,
+                };
+                if overlay.menu.open.is_some()
+                    && key.is_some_and(|key| overlay.menu.listbox_key(key))
+                {
+                    let _ = overlay.render(&self.tokens);
+                    return Some(LRESULT(0));
+                }
+                match vk {
+                    VK_RETURN => action = Some(Hit::Primary),
+                    VK_ESCAPE => action = Some(Hit::Close),
+                    _ => {}
+                }
+            }
             WM_SETCURSOR => {
                 if (lp.0 & 0xffff) as u32 != HTCLIENT {
                     return None;
@@ -1263,6 +1961,12 @@ impl Capture {
                 } else {
                     MenuMode::Screenshot
                 };
+                overlay.menu.open = None;
+                load_microphones(overlay, &self.wake);
+                let _ = overlay.render(&self.tokens);
+            }
+            Some(hit @ (Hit::Toggle(_) | Hit::Select(_) | Hit::Option(_))) => {
+                overlay.menu.option_action(hit);
                 let _ = overlay.render(&self.tokens);
             }
             None => {}
@@ -1428,6 +2132,38 @@ mod tests {
             ("Display".into(), 2560, 1600),
             auto_start,
         )
+    }
+
+    #[test]
+    fn record_options_couple_pointer_toggles_and_apply_only_to_the_take() {
+        let mut saved = captures_settings::AppSettings::default();
+        saved.recording.video_fps = 30;
+        saved.recording.microphone_device_id = Some("usb".into());
+        let mut options = RecordOptions::new(&saved);
+        options.capabilities.cursor_control = true;
+        options.capabilities.click_highlights = true;
+        options.capabilities.system_audio = false;
+        options.show_cursor = false;
+        // Clicks need a visible cursor; hiding the cursor drops clicks.
+        options.toggle(RecordingToggle::ShowClicks);
+        assert!(options.show_cursor && options.highlight_clicks);
+        options.toggle(RecordingToggle::ShowCursor);
+        assert!(!options.show_cursor && !options.highlight_clicks);
+        // An unavailable switch stays off.
+        options.toggle(RecordingToggle::DesktopAudio);
+        assert!(!options.system_audio);
+        // The saved microphone is listed until devices load; FPS picks by index.
+        assert_eq!(
+            options.value(Field::Microphone),
+            capture_menu::SELECTED_MICROPHONE
+        );
+        options.choose(Field::Fps, 2);
+        let mut take = saved.recording.clone();
+        options.apply(&mut take);
+        assert_eq!(take.video_fps, 15);
+        assert_eq!(take.microphone_device_id.as_deref(), Some("usb"));
+        assert!(!take.capture_system_audio);
+        assert_eq!(saved.recording.video_fps, 30);
     }
 
     #[test]

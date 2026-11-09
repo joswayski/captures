@@ -55,10 +55,31 @@ pub fn render(options: &Options, path: &std::path::Path) -> Result<()> {
             ("Generic PnP Monitor".into(), w * 2, h * 2),
             settings.auto_start_on_selection,
         );
-        // `--select record` draws the bar in Record.
-        if options.select.as_deref() == Some("record") {
+        // `--select record` draws the bar in Record; `record-fps` and
+        // `record-microphone` also open that select.
+        if let Some(select) = options.select.as_deref()
+            && select.starts_with("record")
+        {
+            use crate::capture::Field;
             menu.mode = captures_app::capture_menu::MenuMode::Recording;
             menu.controls_excluded = true;
+            menu.record = crate::capture::RecordOptions::new(&settings);
+            menu.record.set_microphones(vec![
+                ("default".into(), "Microphone (Realtek(R) Audio)".into()),
+                ("usb".into(), "Headset Microphone (USB Audio)".into()),
+            ]);
+            let field = match select {
+                "record-fps" => Some(Field::Fps),
+                "record-microphone" => Some(Field::Microphone),
+                _ => None,
+            };
+            menu.open = field.map(|field| {
+                let state = captures_app::controls::select::State {
+                    open: true,
+                    active: 1,
+                };
+                (field, state)
+            });
         }
         if target == crate::capture::Target::Region && options.select.is_some() {
             menu.selection = Some(crate::gfx::rect(320., 180., 860., 500.));

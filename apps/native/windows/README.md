@@ -119,8 +119,12 @@ still need a real keyboard check. Send Feedback stays disabled.
 Record (`recorder.rs`) switches the bar to Record ("Start recording"; its
 note follows Include recording controls in captures), and the Record Region,
 Window and Display tray rows and shortcuts open it there. Its options row
-(frame rate, resolution, cursor, clicks, audio, microphone) is not ported:
-the take uses the saved recording settings. Confirming hands the capture flow
+(shipping `.recording-options-row`: FPS and Max resolution selects, Show
+cursor, Show clicks and Desktop audio switches, and the Microphone select,
+enumerated off the UI thread when Record first shows) starts from the saved
+recording settings and applies only to this take, like shipping; the open
+lists take the pointer and arrow keys, Enter and Esc. Keyboard focus through
+the bar's controls and UI Automation are not ported. Confirming hands the capture flow
 to the shared recording worker, which verifies FFmpeg, prepares the session,
 then shows the "RECORDING IN" countdown (Esc cancels the take) and starts.
 The controls (`hud.rs`, shipping `.recording-hud` at 430×102) float centered
