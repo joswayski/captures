@@ -463,6 +463,7 @@ mod tests {
             completed_duration_ms: 7_300,
             identity: Some(identity.into()),
             reason: None,
+            last_error: None,
         }
     }
 
