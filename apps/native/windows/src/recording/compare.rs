@@ -46,13 +46,14 @@ impl Default for Compare {
 impl Recording {
     pub(super) fn compresses(&self) -> bool {
         self.presented.is_some()
+            && self.extension() != "webm"
             && (self.extension() == "gif" || self.output.values.mode != ui::QualityMode::Preserve)
     }
 
     pub(super) fn compare_visible(&self) -> bool {
         ui_compare::recording_visible(
             self.compresses(),
-            self.preview.playing && self.extension() != "gif",
+            self.preview.playing && !self.source_is_gif(),
             self.compare.dismissed,
         ) && !self.closing
             && !self.saving
@@ -98,7 +99,7 @@ impl Recording {
         }
         // GIF's source animation runs underneath Tauri's static comparison.
         // Stop its native decoder so the single session worker can encode.
-        if self.extension() == "gif" {
+        if self.source_is_gif() {
             self.stop_preview();
             self.timeline.resume = false;
         }
@@ -217,12 +218,12 @@ impl Recording {
 
     pub(super) fn activate_compare(&mut self, target: Target) {
         self.compare.dismissed = target == Target::CompareHide;
-        if !self.compare.dismissed && self.extension() == "gif" && self.preview.playing {
+        if !self.compare.dismissed && self.source_is_gif() && self.preview.playing {
             self.stop_preview();
             self.seek_timeline(self.preview.position_ms);
         }
         self.schedule_compare();
-        if self.compare.dismissed && self.extension() == "gif" {
+        if self.compare.dismissed && self.source_is_gif() {
             self.start_preview();
         }
         let _ = self.layout();

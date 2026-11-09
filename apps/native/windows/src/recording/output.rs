@@ -6,11 +6,13 @@ use captures_app::recording_editor_ui::ResolutionChoice;
 use captures_media::{
     AudioEdit, CropRect, CropResizeAxis, EditSpec, ExportFormat, ExportSpec, QualityPreset,
 };
+use captures_settings::VideoFormat;
 
 use super::*;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Values {
+    pub format: VideoFormat,
     pub resolution: ResolutionChoice,
     pub custom: (u32, u32),
     pub fps: u16,
@@ -27,6 +29,7 @@ pub(super) struct Values {
 impl Values {
     pub fn new(width: u32, height: u32, settings: &captures_settings::RecordingSettings) -> Self {
         Self {
+            format: VideoFormat::Mp4,
             resolution: ResolutionChoice::Original,
             custom: (width, height),
             fps: settings.gif_fps,
@@ -55,6 +58,16 @@ impl Values {
         mut edit: EditSpec,
         mut export: ExportSpec,
     ) -> (EditSpec, ExportSpec) {
+        // WebM remains selectable like Tauri, but Save reports unsupported.
+        // Its preview uses MP4; never publish that preview as a WebM file.
+        let gif = self.format == VideoFormat::Gif;
+        export.format = if gif {
+            ExportFormat::Gif
+        } else {
+            ExportFormat::Mp4
+        };
+        export.frames_per_second = None;
+        export.gif_max_colors = None;
         let even = |v: f64| {
             let v = v.round().max(2.) as u32;
             v - v % 2
@@ -75,7 +88,6 @@ impl Values {
                 even(f64::from(height) * scale),
             )
         };
-        let gif = export.format == ExportFormat::Gif;
         if gif && size.0 > self.maximum_width {
             let scale = f64::from(self.maximum_width) / f64::from(size.0);
             size = (
@@ -143,7 +155,8 @@ impl Target {
     pub fn is_output(self) -> bool {
         matches!(
             self,
-            Self::Resolution
+            Self::Format
+                | Self::Resolution
                 | Self::Width
                 | Self::Height
                 | Self::Crop
@@ -168,7 +181,8 @@ impl Target {
     pub fn is_select(self) -> bool {
         matches!(
             self,
-            Self::Resolution
+            Self::Format
+                | Self::Resolution
                 | Self::Fps
                 | Self::GifWidth
                 | Self::QualityMode
@@ -216,7 +230,8 @@ impl Recording {
         let Some(p) = &self.presented else {
             return false;
         };
-        let gif = p.export.format == ExportFormat::Gif;
+        let gif = self.output.values.format == VideoFormat::Gif;
+        let video = self.output.values.format == VideoFormat::Mp4;
         let audio = &p.edit.audio;
         match target {
             Target::Width | Target::Height => {
@@ -230,12 +245,12 @@ impl Recording {
             Target::MaximumSize | Target::MaximumUnit => {
                 self.output.values.mode == ui::QualityMode::Maximum
             }
-            Target::System | Target::SystemVolume => !gif && audio.source_has_system_audio,
+            Target::System | Target::SystemVolume => video && audio.source_has_system_audio,
             Target::Microphone | Target::MicrophoneVolume => {
-                !gif && audio.source_has_microphone_audio
+                video && audio.source_has_microphone_audio
             }
             Target::Mono => {
-                !gif && (audio.source_has_system_audio || audio.source_has_microphone_audio)
+                video && (audio.source_has_system_audio || audio.source_has_microphone_audio)
             }
             _ => true,
         }
@@ -374,8 +389,16 @@ impl Recording {
         } else {
             (p.width, p.height)
         };
-        let menus = ui::menus(p.export.format == ExportFormat::Gif, w, h);
+        let menus = ui::menus(v.format != VideoFormat::Mp4, w, h);
         match target {
+            Target::Format => [("mp4", "MP4"), ("gif", "GIF"), ("webm", "WebM")]
+                .into_iter()
+                .map(|(value, label)| ui::Choice {
+                    value: value.into(),
+                    label: label.into(),
+                    description: String::new(),
+                })
+                .collect(),
             Target::Resolution => menus.resolutions,
             Target::Fps => menus.gif_frame_rates,
             Target::GifWidth => menus.gif_maximum_widths,
@@ -396,6 +419,9 @@ impl Recording {
     pub fn output_selected(&self, target: Target) -> usize {
         let v = &self.output.values;
         match target {
+            Target::Format => [VideoFormat::Mp4, VideoFormat::Gif, VideoFormat::WebM]
+                .iter()
+                .position(|&format| format == v.format),
             Target::Resolution => ResolutionChoice::ALL
                 .iter()
                 .position(|&r| r == v.resolution),
@@ -404,7 +430,7 @@ impl Recording {
                 .iter()
                 .position(|&r| r == v.maximum_width),
             Target::Quality => ui::COMPRESS_PRESETS.iter().position(|&r| r == v.quality),
-            Target::QualityMode => ui::QualityMode::available(self.extension() == "gif")
+            Target::QualityMode => ui::QualityMode::available(v.format != VideoFormat::Mp4)
                 .iter()
                 .position(|&mode| mode == v.mode),
             Target::MaximumUnit => FileSizeUnit::ALL
@@ -419,9 +445,18 @@ impl Recording {
         if !self.enabled(target) || index >= self.output_choices(target).len() {
             return;
         }
-        let gif = self.extension() == "gif";
+        let non_mp4 = self.output.values.format != VideoFormat::Mp4;
         let v = &mut self.output.values;
         match target {
+            Target::Format => {
+                v.format = [VideoFormat::Mp4, VideoFormat::Gif, VideoFormat::WebM][index];
+                if v.format != VideoFormat::Mp4 && v.mode == ui::QualityMode::Preserve {
+                    v.mode = ui::QualityMode::Compress;
+                }
+                self.compare.dismissed = false;
+                self.events.push(Event::Structure);
+                self.events.push(Event::OutputValue(Target::QualityMode));
+            }
             Target::Resolution => v.resolution = ResolutionChoice::ALL[index],
             Target::Fps => v.fps = ui::GIF_FRAME_RATES[index],
             Target::GifWidth => v.maximum_width = ui::GIF_MAXIMUM_WIDTHS[index],
@@ -442,7 +477,7 @@ impl Recording {
                 self.events.push(Event::OutputValue(Target::MaximumSize));
             }
             Target::QualityMode => {
-                v.mode = ui::QualityMode::available(gif)[index];
+                v.mode = ui::QualityMode::available(non_mp4)[index];
                 self.events.push(Event::Structure);
                 self.compare.dismissed = false;
                 if v.mode == ui::QualityMode::Preserve {
@@ -880,7 +915,10 @@ impl Recording {
         let h = self.t.n("h-md");
         let mut top = track.y + track.h + gap;
         self.output.cards.clear();
-        for t in TARGETS.into_iter().filter(|t| t.is_output()) {
+        for t in TARGETS
+            .into_iter()
+            .filter(|t| t.is_output() && *t != Target::Format)
+        {
             self.rects[slot(t)] = Rect::default();
         }
         let field_top = pad + 18. + gap + 18. + self.t.n("s-3");
@@ -1127,6 +1165,53 @@ impl Recording {
         let t = &self.t;
         let b = gfx::rect(0., 0., r.w, r.h);
         let focus = self.focus == Some(target);
+        if target == Target::Format {
+            // The filename paints the shared field and separator underneath.
+            let hover = self.hover == Some(target) && self.enabled(target);
+            if hover {
+                gfx::fill_round(
+                    dc,
+                    gfx::rect(1., 1., r.w - 1., r.h - 1.),
+                    t.n("r-md"),
+                    t.color("surface-hover"),
+                )?;
+                gfx::fill(
+                    dc,
+                    gfx::rect(1., 1., t.n("r-md"), r.h - 1.),
+                    t.color("surface-hover"),
+                )?;
+            }
+            let color = if hover || focus || self.menu_target() == Some(target) {
+                "text"
+            } else {
+                "text-subtle"
+            };
+            self.draw_text(
+                dc,
+                Style::Option,
+                &format!(".{}", self.extension()),
+                Rect::new(t.n("s-3"), 0., r.w - 28., r.h),
+                color,
+                false,
+            )?;
+            gfx::icon(
+                dc,
+                &self.g.factory,
+                if self.menu_target() == Some(target) {
+                    "chevron-up"
+                } else {
+                    "chevron-down"
+                },
+                &[],
+                (r.w - 20., (r.h - 12.) / 2., 12.),
+                1.8,
+                t.color(color),
+            )?;
+            if focus && self.focus_visible {
+                gfx::ring(dc, b, t.n("r-md"), 2., 4., t.color("theme-accent"))?;
+            }
+            return Ok(());
+        }
         if target.is_select() || target.is_number() {
             gfx::fill_round(dc, b, t.n("r-md"), t.color("surface-field"))?;
             gfx::border(

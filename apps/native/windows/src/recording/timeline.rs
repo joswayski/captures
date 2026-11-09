@@ -215,7 +215,7 @@ impl Recording {
     pub(super) fn resume_timeline(&mut self) {
         // GIF comparison replaces its moving source with a static sample.
         // Hiding it restores autoplay.
-        if self.extension() == "gif" && self.compare_visible() {
+        if self.source_is_gif() && self.compare_visible() {
             self.timeline.resume = false;
         }
         if self.timeline.resume

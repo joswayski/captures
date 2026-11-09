@@ -48,8 +48,15 @@ reports an invalid draft instead of exporting the last accepted cap. Unit change
 preserve exact whole bytes (unlike Tauri's eight-significant-digit formatter).
 The comparison displays the cap rather than an estimate. Replacement resets to
 source defaults and clears the cap. Physical pointer, UIA and DirectComposition
-acceptance for these controls remains open. Format switching remains migration work.
-This slice preserves the source's MP4/GIF format; WebM saves report unsupported.
+acceptance for these controls remains open. The filename's Format menu switches
+between MP4 and GIF, preserving trim, crop, audio settings and size limits.
+Changing formats forces a new file instead of overwriting the source; returning
+to the source format allows replacement again. GIF-only frame rate/palette
+settings do not leak into MP4 exports, and source playback stays independent of
+the export format. Videos honor the saved output-format preference; GIF sources
+start as GIF. WebM remains selectable to match Tauri, but saving it reports
+unsupported and writes no file. The menu shares the existing keyboard and UIA
+ExpandCollapse/SelectionItem behavior; physical interaction acceptance remains open.
 The filename exposes UIA Value, the copy switch
 and preview modes expose Toggle, and actions Invoke. Timeline/playback passed
 physical pass 24; Narrator/Text-pattern and recording-editor parity remain open.

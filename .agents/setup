@@ -16,6 +16,8 @@ packages=(
   curl
   dbus
   file
+  fonts-dejavu-core
+  fonts-wine
   grim
   hsetroot
   imagemagick
@@ -45,15 +47,18 @@ packages=(
   libxkbcommon-x11-0
   libxrandr-dev
   meson
+  mingw-w64
   nasm
   ninja-build
   openbox
+  p7zip-full
   patchelf
   picom
   pipewire
   pkg-config
   postgresql
   python3-dbus
+  python3-fonttools
   python3-gi
   python3-gi-cairo
   python3-xlib
@@ -61,6 +66,8 @@ packages=(
   swaybg
   wayland-protocols
   wget
+  wine
+  wine64
   wireplumber
   wl-clipboard
   x11-apps
@@ -133,6 +140,7 @@ if ! command -v rustup >/dev/null 2>&1; then
 fi
 rustup toolchain install 1.94.0 --profile minimal --component rustfmt --component clippy
 rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy
+rustup target add --toolchain 1.95.0 x86_64-pc-windows-gnu
 
 step "installing JavaScript dependencies"
 npm ci

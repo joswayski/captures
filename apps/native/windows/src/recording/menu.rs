@@ -77,7 +77,11 @@ impl Recording {
                 width: trigger.w.into(),
                 height: trigger.h.into(),
             },
-            360.,
+            if menu.target == Target::Format {
+                136.
+            } else {
+                360.
+            },
             f64::from(row * count as f32 + 2. * pad + 2.),
             self.width.into(),
             self.height.into(),
