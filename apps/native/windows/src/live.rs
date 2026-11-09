@@ -10,6 +10,7 @@ use std::time::SystemTime;
 
 use captures_app::app_windows::{self, AppWindow, InteractiveLaunch, PrimaryWindow, Reactivation};
 use captures_app::instance::{Instance, Launch, OpenRequest};
+use captures_app::shortcuts::{CaptureShortcut, CaptureShortcuts};
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -31,6 +32,12 @@ struct Resident {
     /// `None` when the notification area is unavailable: like the other
     /// hosts, closing the last window then quits.
     tray: Option<Tray>,
+    /// The saved capture shortcuts; `None` until first-run setup finishes,
+    /// like shipping, or when registration failed.
+    shortcuts: Option<CaptureShortcuts>,
+    /// Released while a Preferences shortcut recorder is active so it can
+    /// receive chords Captures owns.
+    shortcuts_suspended: bool,
     settings_modified: Option<SystemTime>,
     thread: u32,
     /// A message-only window that owns the clipboard for auto-copy.
@@ -102,6 +109,8 @@ pub fn start(options: &Options, instance: Instance) {
             options: options.clone(),
             instance,
             tray,
+            shortcuts: None,
+            shortcuts_suspended: false,
             settings_modified: modified(options),
             thread,
             clipboard: unsafe {
@@ -123,6 +132,7 @@ pub fn start(options: &Options, instance: Instance) {
             .ok(),
         })
     });
+    sync_shortcuts(&settings);
     // The Win32 host has no first-run setup window yet; Preferences stands in.
     let launch =
         app_windows::interactive_launch(settings.onboarding_completed, options.quiet, false, false);
@@ -173,13 +183,30 @@ pub fn service() {
                 tray.update(&settings);
             }
         });
+        sync_shortcuts(&settings);
     }
+    let recorder = crate::host::with_host(|h| h.scene.recording.is_some()).unwrap_or(false);
+    suspend_shortcuts(recorder);
     match crate::capture::service() {
         Some(Ok(Some(artifact))) => captured(&options, artifact),
         Some(Ok(None)) | None => {}
         Some(Err(error)) => show_error(&error),
     }
     while let Some(action) = RESIDENT.with(|r| r.borrow().as_ref()?.tray.as_ref()?.next_action()) {
+        run(&options, action);
+    }
+    while let Some(shortcut) =
+        RESIDENT.with(|r| r.borrow().as_ref()?.shortcuts.as_ref()?.next_action())
+    {
+        let action = match shortcut {
+            CaptureShortcut::NewCapture => Action::NewCapture,
+            CaptureShortcut::Region => Action::CaptureRegion,
+            CaptureShortcut::Window => Action::CaptureWindow,
+            CaptureShortcut::Display => Action::CaptureDisplay,
+            CaptureShortcut::RecordRegion => Action::RecordRegion,
+            CaptureShortcut::RecordWindow => Action::RecordWindow,
+            CaptureShortcut::RecordDisplay => Action::RecordDisplay,
+        };
         run(&options, action);
     }
     for _ in 0..32 {
@@ -224,17 +251,72 @@ fn run(options: &Options, action: Action) {
         }
         Action::Quit => unsafe { PostQuitMessage(0) },
         // Like shipping, Screenshot Display opens the bar on Full screen.
-        Action::NewCapture => new_capture(options, crate::capture::Target::Region),
+        // Shipping's Screenshot Region and Window open their selector without
+        // the bar; those direct overlays are not ported, so the bar opens on
+        // that target instead.
+        Action::NewCapture | Action::CaptureRegion => {
+            new_capture(options, crate::capture::Target::Region)
+        }
+        Action::CaptureWindow => new_capture(options, crate::capture::Target::Window),
         Action::CaptureDisplay => new_capture(options, crate::capture::Target::Display),
-        // Disabled rows: the direct overlays, recording and feedback are not
+        // Disabled rows and ignored shortcuts: recording and feedback are not
         // ported yet.
-        Action::CaptureRegion
-        | Action::CaptureWindow
-        | Action::RecordRegion
+        Action::RecordRegion
         | Action::RecordWindow
         | Action::RecordDisplay
         | Action::SendFeedback => {}
     }
+}
+
+/// Register the saved capture shortcuts, or follow a change to them. Like
+/// shipping, none are live until first-run setup finishes, and registering
+/// takes over overlapping OS keys (Print Screen for Snipping Tool,
+/// Win+Shift+S). While New Capture is open the shared capture flow drops
+/// shortcut presses: switching its target in place is not ported yet.
+fn sync_shortcuts(settings: &captures_settings::AppSettings) {
+    RESIDENT.with(|r| {
+        let mut r = r.borrow_mut();
+        let Some(r) = r.as_mut() else { return };
+        if !settings.onboarding_completed {
+            r.shortcuts = None;
+            return;
+        }
+        let result = match r.shortcuts.as_mut() {
+            Some(shortcuts) => shortcuts.update(settings),
+            None => CaptureShortcuts::new(settings, wake_on(r.thread)).map(|shortcuts| {
+                r.shortcuts = Some(shortcuts);
+                r.shortcuts_suspended = false;
+            }),
+        };
+        if let Err(error) = result {
+            eprintln!("Could not register capture shortcuts: {error}");
+        }
+        // Shipping logs system-key takeover failures and keeps its bindings.
+        if let Some(shortcuts) = r.shortcuts.as_mut() {
+            for error in shortcuts.take_system_takeover().errors {
+                eprintln!("{error}");
+            }
+        }
+    });
+}
+
+/// Release the OS registrations while a Preferences recorder listens, and
+/// restore them when it stops.
+fn suspend_shortcuts(suspended: bool) {
+    RESIDENT.with(|r| {
+        let mut r = r.borrow_mut();
+        let Some(r) = r.as_mut() else { return };
+        if r.shortcuts_suspended == suspended {
+            return;
+        }
+        let Some(shortcuts) = r.shortcuts.as_mut() else {
+            return;
+        };
+        match shortcuts.set_suspended(suspended) {
+            Ok(()) => r.shortcuts_suspended = suspended,
+            Err(error) => eprintln!("Could not change capture shortcut registration: {error}"),
+        }
+    });
 }
 
 /// Shipping `app_reactivation` for a relaunch: focus the open window with

@@ -101,10 +101,15 @@ Aspect/Display selects and floating previews are not ported yet. A physical Wind
 Region and Full screen captures, the clipboard and History; a second New
 Capture now refocuses the open bar instead of an error, and the snapshot waits
 for the tray menu and overflow flyout to close (a recheck passed both; the
-wait adds about 0.5 s before the overlay appears). The remaining capture,
-recording and Send Feedback rows are
-disabled and no global shortcuts are registered until those flows exist, so
-the OS screenshot key is not taken over. `--scene capture --screenshot PATH`
+wait adds about 0.5 s before the overlay appears). Screenshot Region and
+Window open the bar on that target (shipping's bar-less selectors are not
+ported). After setup, `--live` registers the saved capture shortcuts with the
+shared `CaptureShortcuts` owner, which takes over Print Screen and Win+Shift+S
+from Snipping Tool like shipping: New Capture and the screenshot shortcuts open
+the bar on their target, the recording shortcuts do nothing yet, and presses
+while New Capture is open are dropped (switching it in place is not ported).
+An active Preferences shortcut recorder releases the registrations. The
+recording and Send Feedback rows stay disabled. `--scene capture --screenshot PATH`
 renders the bar offscreen (`--tool display` for Full screen, `--tool window`
 for Window, `--select x` for a sample selection or hovered window, `--select
 desktop` for the hovered display, `--select picked` for a picked window with
@@ -112,7 +117,7 @@ the pointer on the desktop, `--tool countdown` for the countdown at 3). There is
 or launch notice yet; Preferences stands in, and files forwarded by path are
 not opened. A physical Windows 11 check (4K, 150%) passed quiet launch, the
 menu and its disabled rows, left-click, residency after closing windows,
-relaunch forwarding and Quit, with the OS Win+Shift+S still working. Wine
+relaunch forwarding and Quit (before shortcuts were registered). Wine
 cannot render Preferences (no DirectComposition) or open the tray menu.
 
 Recordings need FFmpeg and FFprobe. `CAPTURES_FFMPEG` and `CAPTURES_FFPROBE`

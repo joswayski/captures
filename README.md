@@ -235,9 +235,10 @@ eight-significant-digit display rounding. The filename's Format menu switches
 between MP4 and GIF, saving conversions as new files; WebM is listed but not saved.
 These slices are not recording-editor parity. With `--live`, the Win32 host runs as
 a single resident app with the shipping tray menu, forwarding relaunches to the
-running copy. Its New Capture and Screenshot Display items open the Screenshot
-capture bar for Region, Window and Full screen captures; Record mode and the other
-capture, recording and feedback rows stay disabled until those flows are ported.
+running copy. Its New Capture and Screenshot Region, Window and Display items and
+the matching global shortcuts open the Screenshot capture bar on that target, taking
+over Print Screen and Win+Shift+S like shipping; Record mode, the recording rows and
+shortcuts, and Send Feedback stay disabled until those flows are ported.
 Output controls and source-preview correction passed physical Windows testing;
 comparison and maximum-size controls still await physical acceptance. Crop passed
 its separate hardware check with observations, not full editor acceptance.
