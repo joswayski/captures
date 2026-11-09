@@ -1171,6 +1171,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 if !crate::history::exists()
                     && !crate::editor::exists()
                     && !crate::recording::exists()
+                    && !crate::live::resident()
                 {
                     PostQuitMessage(0);
                 }
@@ -1262,7 +1263,7 @@ pub fn open(options: &Options) -> Result<()> {
     Ok(())
 }
 
-pub fn run(options: Options) -> Result<()> {
+pub fn run(options: Options, resident: Option<captures_app::instance::Instance>) -> Result<()> {
     unsafe {
         let instance = GetModuleHandleW(None)?;
         let class = WNDCLASSW {
@@ -1277,14 +1278,19 @@ pub fn run(options: Options) -> Result<()> {
         crate::history::register(instance.into())?;
         crate::editor::register(instance.into())?;
         crate::recording::register(instance.into())?;
-        match options.scene {
-            crate::Scene::Preferences => open(&options)?,
-            crate::Scene::History => crate::history::open(&options, options.size)?,
-            crate::Scene::Editor => {
-                crate::editor::open(&options, options.artifact.as_deref().unwrap_or_default())?
-            }
-            crate::Scene::Recording => {
-                crate::recording::open(&options, options.artifact.as_deref().unwrap_or_default())?
+        if let Some(instance) = resident {
+            crate::live::start(&options, instance);
+        } else {
+            match options.scene {
+                crate::Scene::Preferences => open(&options)?,
+                crate::Scene::History => crate::history::open(&options, options.size)?,
+                crate::Scene::Editor => {
+                    crate::editor::open(&options, options.artifact.as_deref().unwrap_or_default())?
+                }
+                crate::Scene::Recording => crate::recording::open(
+                    &options,
+                    options.artifact.as_deref().unwrap_or_default(),
+                )?,
             }
         }
         loop {
@@ -1292,6 +1298,7 @@ pub fn run(options: Options) -> Result<()> {
             while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
                 if msg.message == WM_QUIT {
                     HOST.with(|h| h.borrow_mut().take());
+                    crate::live::stop();
                     // Closed editors may still be committing labels and
                     // writing drafts; returning would end the process.
                     crate::editor::wait_for_workers();
@@ -1317,6 +1324,7 @@ pub fn run(options: Options) -> Result<()> {
                     std::mem::take(&mut h.open_history),
                 )
             });
+            crate::live::service();
             // History's frame, like Preferences': only the loop clears `woken`.
             let history = crate::history::with_history(|h| {
                 h.woken = false;

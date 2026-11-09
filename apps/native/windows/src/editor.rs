@@ -6089,6 +6089,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                     && !crate::history::exists()
                     && !exists()
                     && !crate::recording::exists()
+                    && !crate::live::resident()
                 {
                     PostQuitMessage(0);
                 }

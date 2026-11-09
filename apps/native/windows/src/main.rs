@@ -24,6 +24,8 @@ mod host;
 #[cfg(windows)]
 mod keys;
 #[cfg(windows)]
+mod live;
+#[cfg(windows)]
 mod recording;
 #[cfg(windows)]
 mod recording_uia;
@@ -35,6 +37,8 @@ mod screenshot;
 mod textfield;
 #[cfg(windows)]
 mod tokens;
+#[cfg(windows)]
+mod tray;
 #[cfg(windows)]
 mod uia;
 #[cfg(windows)]
@@ -75,6 +79,10 @@ pub struct Options {
     /// tests on a real PC. Settings, history and saves stay under DIR, and the
     /// launch-at-login registry entry is never touched.
     profile: bool,
+    /// `--live`: the resident app with its notification-area icon.
+    live: bool,
+    /// `--captures-autostart`: a quiet resident launch that opens no window.
+    quiet: bool,
 }
 
 #[cfg(windows)]
@@ -92,6 +100,8 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
         select: None,
         crop: None,
         profile: false,
+        live: false,
+        quiet: false,
     };
     let mut profile = std::env::var_os("CAPTURES_NATIVE_PROFILE").map(std::path::PathBuf::from);
     let mut explicit = false;
@@ -124,6 +134,8 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
                 explicit = true;
             }
             "--profile" => profile = Some(value()?.into()),
+            "--live" => options.live = true,
+            "--captures-autostart" => options.quiet = true,
             "--screenshot" => options.screenshot = Some(value()?.into()),
             "--artifact" => options.artifact = Some(value()?),
             "--find" => options.find = Some(value()?),
@@ -152,6 +164,9 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
             return Err("--profile replaces --settings-file and --history-root".into());
         }
         use_profile(&mut options, &dir)?;
+    }
+    if options.quiet && !options.live {
+        return Err("--captures-autostart needs --live".into());
     }
     if matches!(options.scene, Scene::Editor | Scene::Recording) && options.artifact.is_none() {
         return Err("--scene editor/recording needs --artifact ID".into());
@@ -204,7 +219,16 @@ fn main() -> std::process::ExitCode {
     }
     let result = match &options.screenshot {
         Some(path) => screenshot::render(&options, path),
-        None => host::run(options),
+        None if options.live => match live::elect(&options) {
+            // Another process owns this profile and took the relaunch.
+            Ok(None) => return std::process::ExitCode::SUCCESS,
+            Ok(Some(instance)) => host::run(options, Some(instance)),
+            Err(error) => Err(windows::core::Error::new(
+                windows::core::HRESULT(0x80004005u32 as i32),
+                format!("Could not start the resident app: {error}"),
+            )),
+        },
+        None => host::run(options, None),
     };
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,

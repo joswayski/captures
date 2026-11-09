@@ -231,8 +231,12 @@ Hide/Show, and MP4 Preserve/Compress presets. Maximum file size for MP4/GIF uses
 decimal KB/MB/GB, a 100 KB minimum and a 10 MB default. Invalid drafts remain
 visible and block Save; a successful replacement resets output to source defaults
 and clears the cap. Unit changes preserve exact whole bytes rather than Tauri's
-eight-significant-digit display rounding. Format switching remains migration work.
-These slices are not recording-editor parity.
+eight-significant-digit display rounding. The filename's Format menu switches
+between MP4 and GIF, saving conversions as new files; WebM is listed but not saved.
+These slices are not recording-editor parity. With `--live`, the Win32 host runs as
+a single resident app with the shipping tray menu, forwarding relaunches to the
+running copy; its capture, recording and feedback rows stay disabled until those
+flows are ported.
 Output controls and source-preview correction passed physical Windows testing;
 comparison and maximum-size controls still await physical acceptance. Crop passed
 its separate hardware check with observations, not full editor acceptance.

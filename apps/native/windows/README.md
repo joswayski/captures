@@ -82,6 +82,18 @@ comparisons; `--find QUERY` renders it with Find open and the query typed, and
 with that layer selected, and `--crop X,Y,W,H` with that crop staged. On other platforms the binary is a stub, so `cargo check` and
 `clippy` still run; cross-check with `--target x86_64-pc-windows-gnu`.
 
+`--live` runs the resident app (`src/live.rs`): the first launch for a profile
+wins the shared instance election and later launches forward to it and exit;
+`--captures-autostart` makes it quiet. The notification-area icon
+(`src/tray.rs`, the `tray-icon`/`muda` Win32 menus shipping uses) has the
+shipping menu and accelerators, left-click opens Preferences, and closing the
+last window keeps the app resident. Capture, recording and Send Feedback rows
+are disabled and no global shortcuts are registered until those flows exist,
+so the OS screenshot key is not taken over. There is no first-run setup window
+or launch notice yet; Preferences stands in, and files forwarded by path are
+not opened. Wine cannot render Preferences (no DirectComposition) or open the
+tray menu, so physical Windows acceptance remains open.
+
 Recordings need FFmpeg and FFprobe. `CAPTURES_FFMPEG` and `CAPTURES_FFPROBE`
 override discovery; otherwise the host looks beside its executable, in Tauri's
 `apps/desktop/src-tauri/binaries` (`*-<arch>-pc-windows-msvc.exe`), then on PATH
