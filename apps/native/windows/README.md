@@ -96,7 +96,8 @@ the Aspect/Display selects, the countdown overlay and floating previews are not
 ported yet. A physical Windows 11 check (4K, 150%) confirmed pixel-exact
 Region and Full screen captures, the clipboard and History; a second New
 Capture now refocuses the open bar instead of an error, and the snapshot waits
-for the tray menu and overflow flyout to close. The remaining capture,
+for the tray menu and overflow flyout to close (a recheck passed both; the
+wait adds about 0.5 s before the overlay appears). The remaining capture,
 recording and Send Feedback rows are
 disabled and no global shortcuts are registered until those flows exist, so
 the OS screenshot key is not taken over. `--scene capture --screenshot PATH`
