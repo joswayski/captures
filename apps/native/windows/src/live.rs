@@ -192,6 +192,7 @@ pub fn service() {
         Some(Ok(None)) | None => {}
         Some(Err(error)) => show_error(&error),
     }
+    crate::previews::set_suppressed(crate::capture::active());
     while let Some(action) = RESIDENT.with(|r| r.borrow().as_ref()?.tray.as_ref()?.next_action()) {
         run(&options, action);
     }
@@ -359,34 +360,41 @@ fn new_capture(options: &Options, target: crate::capture::Target) {
     let Some(thread) = RESIDENT.with(|r| r.borrow().as_ref().map(|r| r.thread)) else {
         return;
     };
+    // Shipping hides the mini previews before the snapshot.
+    crate::previews::set_suppressed(true);
     if let Err(error) = crate::capture::open(options, target, wake_on(thread)) {
         show_error(&error);
     }
 }
 
-/// A saved screenshot: an open History reloads and auto-copy puts it on
-/// the clipboard as PNG and `CF_DIB`.
+/// A saved screenshot: an open History reloads, auto-copy puts it on the
+/// clipboard as PNG and `CF_DIB`, and its mini preview appears.
 fn captured(options: &Options, artifact: captures_app::Artifact) {
     crate::history::with_history(|h| h.reload());
     let settings = captures_settings::load(&options.settings_file).unwrap_or_default();
-    if !settings.auto_copy_to_clipboard {
-        return;
-    }
-    let Some(owner) = RESIDENT.with(|r| r.borrow().as_ref().and_then(|r| r.clipboard)) else {
-        return;
-    };
-    let copied = std::fs::read(&artifact.image_path)
-        .map_err(|e| e.to_string())
-        .and_then(|png| {
-            let image = image::load_from_memory(&png)
-                .map_err(|e| e.to_string())?
-                .into_rgba8();
-            crate::editor::set_clipboard(owner, &png, &crate::editor::dib(&image))
-                .map_err(|e| e.message().to_string())
-        });
-    if let Err(error) = copied {
-        eprintln!("Could not copy the screenshot: {error}");
-    }
+    let copied = settings.auto_copy_to_clipboard
+        && match copy_png(&artifact.image_path) {
+            Ok(()) => true,
+            Err(error) => {
+                eprintln!("Could not copy the screenshot: {error}");
+                false
+            }
+        };
+    crate::previews::show(options, &artifact, copied);
+}
+
+/// Put a PNG on the clipboard as PNG and `CF_DIB`, owned by the resident
+/// app's clipboard window.
+pub fn copy_png(path: &std::path::Path) -> std::result::Result<(), String> {
+    let owner = RESIDENT
+        .with(|r| r.borrow().as_ref().and_then(|r| r.clipboard))
+        .ok_or("The clipboard is unavailable")?;
+    let png = std::fs::read(path).map_err(|e| e.to_string())?;
+    let image = image::load_from_memory(&png)
+        .map_err(|e| e.to_string())?
+        .into_rgba8();
+    crate::editor::set_clipboard(owner, &png, &crate::editor::dib(&image))
+        .map_err(|e| e.message().to_string())
 }
 
 /// Capture failures use a system message box until the native error surface

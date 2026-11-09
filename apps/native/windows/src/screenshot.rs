@@ -87,7 +87,28 @@ pub fn render(options: &Options, path: &std::path::Path) -> Result<()> {
         let frozen = crate::capture::bitmap(&g, &desktop)?;
         let menu = std::cell::RefCell::new(menu);
         let g = g.clone();
-        if options.tool.as_deref() == Some("countdown") {
+        if options.tool.as_deref() == Some("previews") {
+            // The bottom-left stack over the desktop, as the 1280×800 mock.
+            let stack = crate::previews::fixture(&g, &desktop, options.select.is_some());
+            let size = (w as f32, h as f32);
+            let top = size.1 - stack.height;
+            Box::new(move |dc| unsafe {
+                dc.DrawBitmap(
+                    &frozen,
+                    Some(&crate::gfx::rect(0., 0., size.0, size.1)),
+                    1.,
+                    windows::Win32::Graphics::Direct2D::D2D1_INTERPOLATION_MODE_LINEAR,
+                    None,
+                    None,
+                );
+                let mut base = windows_numerics::Matrix3x2::identity();
+                dc.GetTransform(&mut base);
+                dc.SetTransform(&(windows_numerics::Matrix3x2::translation(0., top) * base));
+                let result = stack.paint(dc, &g, &tokens);
+                dc.SetTransform(&base);
+                result
+            })
+        } else if options.tool.as_deref() == Some("countdown") {
             // The scrim over the live desktop at 3, at rest.
             let size = (w as f32, h as f32);
             Box::new(move |dc| {

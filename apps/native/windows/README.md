@@ -109,11 +109,20 @@ from Snipping Tool like shipping: New Capture and the screenshot shortcuts open
 the bar on their target, the recording shortcuts do nothing yet, and presses
 while New Capture is open are dropped (switching it in place is not ported).
 An active Preferences shortcut recorder releases the registrations. The
-recording and Send Feedback rows stay disabled. `--scene capture --screenshot PATH`
+recording and Send Feedback rows stay disabled. When Show mini previews is on,
+each saved screenshot joins shipping's floating preview stack (`previews.rs`):
+a topmost, non-activating window placed with the shared `thumbnail_geometry`
+on the display under the pointer, hidden while New Capture is open. Cards show
+the size chip and Copied to clipboard; hover blurs and dims the image under
+Close and Delete (Delete alone dismisses an unsaved capture; a saved file goes
+to the Recycle Bin), Edit, Copy and Save file / Show in Folder, plus Clear all.
+The pile and Minimize, arrive/exit motion, file drags, keyboard focus, UIA,
+tooltips and History Restore are not ported. `--scene capture --screenshot PATH`
 renders the bar offscreen (`--tool display` for Full screen, `--tool window`
 for Window, `--select x` for a sample selection or hovered window, `--select
 desktop` for the hovered display, `--select picked` for a picked window with
-the pointer on the desktop, `--tool countdown` for the countdown at 3). There is no first-run setup window
+the pointer on the desktop, `--tool countdown` for the countdown at 3,
+`--tool previews` for the preview stack, `--select x` hovering its first card). There is no first-run setup window
 or launch notice yet; Preferences stands in, and files forwarded by path are
 not opened. A physical Windows 11 check (4K, 150%) passed quiet launch, the
 menu and its disabled rows, left-click, residency after closing windows,

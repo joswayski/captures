@@ -238,7 +238,9 @@ a single resident app with the shipping tray menu, forwarding relaunches to the
 running copy. Its New Capture and Screenshot Region, Window and Display items and
 the matching global shortcuts open the Screenshot capture bar on that target, taking
 over Print Screen and Win+Shift+S like shipping; Record mode, the recording rows and
-shortcuts, and Send Feedback stay disabled until those flows are ported.
+shortcuts, and Send Feedback stay disabled until those flows are ported. Saved
+screenshots appear in an experimental mini-preview stack with Close, Delete, Edit,
+Copy and Save file / Show in Folder; its pile, motion and file drags are not ported.
 Output controls and source-preview correction passed physical Windows testing;
 comparison and maximum-size controls still await physical acceptance. Crop passed
 its separate hardware check with observations, not full editor acceptance.

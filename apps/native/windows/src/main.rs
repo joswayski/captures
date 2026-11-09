@@ -28,6 +28,8 @@ mod keys;
 #[cfg(windows)]
 mod live;
 #[cfg(windows)]
+mod previews;
+#[cfg(windows)]
 mod recording;
 #[cfg(windows)]
 mod recording_uia;
@@ -59,7 +61,9 @@ pub enum Scene {
     /// `--scene capture --screenshot PATH`: the New Capture bar over a
     /// fixture desktop; `--tool display` selects Full screen and `--tool
     /// window` Window (`--select x` hovers its window, `desktop` the display,
-    /// `picked` picks the window with the pointer on the desktop).
+    /// `picked` picks the window with the pointer on the desktop), `--tool
+    /// countdown` shows the countdown and `--tool previews` the mini-preview
+    /// stack (`--select x` hovers its first card).
     Capture,
 }
 
