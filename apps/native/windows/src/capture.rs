@@ -479,15 +479,13 @@ impl Menu {
             t.color("glass-text"),
         )?;
         y += 58.;
-        gfx::text(dc, &name, (w - name.width) / 2., y, t.color("glass-text"))?;
+        // `.recording-display-identity` text shadows: 0 2px 12px / 10px at 0.5.
+        let (nx, dx) = ((w - name.width) / 2., (w - detail.width) / 2.);
+        gfx::text_shadow(dc, &name, nx, y + 2., 12., 0.5)?;
+        gfx::text(dc, &name, nx, y, t.color("glass-text"))?;
         y += name.height + 8.;
-        gfx::text(
-            dc,
-            &detail,
-            (w - detail.width) / 2.,
-            y,
-            t.color("glass-text-muted"),
-        )
+        gfx::text_shadow(dc, &detail, dx, y + 2., 10., 0.5)?;
+        gfx::text(dc, &detail, dx, y, t.color("glass-text-muted"))
     }
 
     /// Pointer motion; true when the menu needs a repaint.
@@ -587,7 +585,10 @@ pub fn open(
     wake: impl Fn() + Send + Sync + Clone + 'static,
 ) -> std::result::Result<(), String> {
     if active() {
-        return Err("A capture is already in progress".into());
+        // Shipping ignores a second request (`CaptureInProgress`); bring the
+        // open controls forward so Enter and Esc keep reaching them.
+        focus_overlay();
+        return Ok(());
     }
     let settings = captures_settings::load(&options.settings_file).unwrap_or_default();
     let flow = CaptureFlow::begin(0)?;
@@ -596,6 +597,7 @@ pub fn open(
     let (sender, prepared) = channel();
     let worker_wake = wake.clone();
     std::thread::spawn(move || {
+        wait_for_shell_menus();
         let result = pointer_display().and_then(|display| {
             match RegionSession::prepare(&display, generation, freeze, include_cursor) {
                 Ok(session) => Ok(Some(session)),
@@ -623,6 +625,73 @@ pub fn open(
         })
     });
     Ok(())
+}
+
+fn focus_overlay() {
+    CAPTURE.with(|c| {
+        if let Ok(c) = c.try_borrow()
+            && let Some(Capture {
+                phase: Phase::Selecting(overlay, _),
+                ..
+            }) = c.as_ref()
+        {
+            unsafe {
+                let _ = SetForegroundWindow(overlay.hwnd);
+            }
+        }
+    });
+}
+
+/// The tray menu that opened New Capture fades out after the click, and
+/// Windows 11's notification-area overflow flyout closes behind it. Wait for
+/// both (bounded like shipping's shell-flyout dismissal) plus the fade, so
+/// neither freezes into the snapshot. `RegionSession::prepare` then dismisses
+/// Start/Search as shipping does.
+fn wait_for_shell_menus() {
+    const CLASSES: [PCWSTR; 3] = [
+        w!("#32768"),
+        w!("TopLevelWindowForOverflowXamlIsland"),
+        w!("NotifyIconOverflowWindow"),
+    ];
+    let visible = || {
+        CLASSES.iter().any(|class| {
+            let mut after = None;
+            loop {
+                let Ok(hwnd) = (unsafe { FindWindowExW(None, after, *class, None) }) else {
+                    return false;
+                };
+                if hwnd.is_invalid() {
+                    return false;
+                }
+                if unsafe { IsWindowVisible(hwnd) }.as_bool() && !cloaked(hwnd) {
+                    return true;
+                }
+                after = Some(hwnd);
+            }
+        })
+    };
+    let started = Instant::now();
+    while visible() && started.elapsed() < Duration::from_millis(750) {
+        std::thread::sleep(Duration::from_millis(16));
+    }
+    // Menu selection fade (`SPI_GETSELECTIONFADE`) and flyout close animations
+    // outlive the window's visibility.
+    std::thread::sleep(Duration::from_millis(200));
+}
+
+fn cloaked(hwnd: HWND) -> bool {
+    use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
+    let mut cloaked = 0u32;
+    unsafe {
+        DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_CLOAKED,
+            (&raw mut cloaked).cast(),
+            size_of::<u32>() as u32,
+        )
+    }
+    .is_ok()
+        && cloaked != 0
 }
 
 /// Advance the capture; `Some` with its result once it ends. Call from the

@@ -877,6 +877,32 @@ pub fn text(
     Ok(())
 }
 
+/// A CSS black `text-shadow` at `(x, y)` (offset included): the blur is
+/// approximated by translucent copies on two rings, like [`shadow`].
+pub fn text_shadow(
+    dc: &ID2D1DeviceContext,
+    layout: &Text,
+    x: f32,
+    y: f32,
+    blur: f32,
+    alpha: f32,
+) -> Result<()> {
+    let color = D2D1_COLOR_F {
+        r: 0.,
+        g: 0.,
+        b: 0.,
+        a: alpha / 8.,
+    };
+    for radius in [blur / 6., blur / 3.] {
+        for step in 0..8 {
+            let angle = step as f32 * std::f32::consts::FRAC_PI_4;
+            let (dx, dy) = (radius * angle.cos(), radius * angle.sin());
+            text(dc, layout, x + dx, y + dy, color)?;
+        }
+    }
+    Ok(())
+}
+
 /// A shipping 24-unit icon at `side` DIPs: every path is stroked except those
 /// listed in `filled`, which are filled (`.capture-icon-spark`).
 pub fn icon(
