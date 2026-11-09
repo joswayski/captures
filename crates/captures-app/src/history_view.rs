@@ -103,6 +103,96 @@ pub fn copy() -> &'static Copy {
     &COPY
 }
 
+/// `RecordingRecovery` buttons: Recover, its busy label, and the two-step
+/// Discard (`.danger`) that arms "Discard permanently?" first.
+pub const RECOVER: &str = "Recover";
+pub const RECOVERING: &str = "Recovering…";
+pub const DISCARD: &str = "Discard";
+pub const DISCARD_CONFIRM: &str = "Discard permanently?";
+/// Shown for a bundle the shared recovery cannot read.
+pub const RECOVERY_UNAVAILABLE: &str = "This bundle cannot be recovered.";
+
+/// Shipping `recordingErrorMessage`: drop repeated "Error:", "Background
+/// task failed:" and "Recording failed:" prefixes, capitalise a leading
+/// article, and fall back when nothing is left.
+pub fn recording_error_message(message: &str) -> String {
+    let mut message = message.trim();
+    'strip: loop {
+        for prefix in ["error:", "background task failed:", "recording failed:"] {
+            if message.len() >= prefix.len()
+                && message.is_char_boundary(prefix.len())
+                && message[..prefix.len()].eq_ignore_ascii_case(prefix)
+            {
+                message = message[prefix.len()..].trim_start();
+                continue 'strip;
+            }
+        }
+        break;
+    }
+    if message.is_empty() {
+        return "The recording could not be completed.".into();
+    }
+    let article = ["the ", "a ", "an "].iter().any(|a| message.starts_with(a));
+    if article {
+        let mut chars = message.chars();
+        let first = chars
+            .next()
+            .map(|c| c.to_ascii_uppercase())
+            .unwrap_or_default();
+        return format!("{first}{}", chars.as_str());
+    }
+    message.to_owned()
+}
+
+/// One `.recording-recovery-row`'s copy.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct RecoveryRow {
+    /// `strong`: "Video recording", "GIF recording", or "Unavailable recording".
+    pub title: String,
+    /// `small`: `toLocaleString()` date · completed duration "recovered so far".
+    pub detail: String,
+}
+
+pub fn recovery_row(
+    kind: Option<captures_recording::RecordingKind>,
+    created_at_ms: Option<u64>,
+    recovered_ms: u64,
+) -> RecoveryRow {
+    recovery_row_in(kind, created_at_ms, recovered_ms, &Local)
+}
+
+fn recovery_row_in<Tz: TimeZone>(
+    kind: Option<captures_recording::RecordingKind>,
+    created_at_ms: Option<u64>,
+    recovered_ms: u64,
+    zone: &Tz,
+) -> RecoveryRow
+where
+    Tz::Offset: std::fmt::Display,
+{
+    use captures_recording::RecordingKind;
+    let kind = match kind {
+        Some(RecordingKind::Video) => "Video",
+        Some(RecordingKind::Gif) => "GIF",
+        None => "Unavailable",
+    };
+    // en-US `Date.toLocaleString()`.
+    let date = created_at_ms
+        .and_then(|ms| i64::try_from(ms).ok())
+        .and_then(|ms| zone.timestamp_millis_opt(ms).single())
+        .map_or_else(
+            || "Unknown date".to_owned(),
+            |date| date.format("%-m/%-d/%Y, %-I:%M:%S %p").to_string(),
+        );
+    RecoveryRow {
+        title: format!("{kind} recording"),
+        detail: format!(
+            "{date} · {} recovered so far",
+            format_recording_time(recovered_ms)
+        ),
+    }
+}
+
 pub fn load_error(error: &str) -> String {
     format!("Couldn’t load capture history: {error}")
 }
@@ -573,6 +663,36 @@ mod tests {
             "created_at": "2026-09-26T15:04:05Z",
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn recovery_rows_match_shipping_copy() {
+        use captures_recording::RecordingKind;
+        let utc = FixedOffset::east_opt(0).unwrap();
+        // 2026-09-26T14:50:45Z, 1 h 2 min 3.9 s recovered.
+        let row = recovery_row_in(
+            Some(RecordingKind::Gif),
+            Some(1_790_434_245_000),
+            3_723_900,
+            &utc,
+        );
+        assert_eq!(row.title, "GIF recording");
+        assert_eq!(
+            row.detail,
+            "9/26/2026, 2:50:45 PM · 1:02:03 recovered so far"
+        );
+        let row = recovery_row_in(None, None, 59_999, &utc);
+        assert_eq!(row.title, "Unavailable recording");
+        assert_eq!(row.detail, "Unknown date · 0:59 recovered so far");
+        assert_eq!(
+            recording_error_message("Error: recording failed:  the display went to sleep."),
+            "The display went to sleep."
+        );
+        assert_eq!(
+            recording_error_message(" Error: "),
+            "The recording could not be completed."
+        );
+        assert_eq!(recording_error_message("theme lost"), "theme lost");
     }
 
     #[test]

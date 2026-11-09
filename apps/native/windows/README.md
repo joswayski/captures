@@ -137,7 +137,11 @@ Delete confirm with a system message box (OK/Cancel). Stop saves to History,
 adds a mini preview and opens the recording editor when Preferences asks;
 Quit saves an accepted take. New Capture or the tray brings hidden controls
 back. Not ported: the HUD's region Screenshot (drawn disabled), tooltips,
-keyboard focus, UIA, the hidden-controls notice and crash recovery. The HUD
+keyboard focus, UIA and the hidden-controls notice. A take interrupted by a
+crash is listed in History's Interrupted recordings section (shared
+`RecordingRecovery`, shipping copy and two-step Discard; Recover and Discard
+run off the UI thread and are reachable by Tab and UIA; offscreen render with
+`--scene history --select recovery`). The HUD
 and Record bar match the Tauri harness offscreen
 (`--scene capture --tool hud [--select paused|failed|hover] --size 430x102`,
 `--tool region --select record`). A physical Windows 11 check (4K, 150%,

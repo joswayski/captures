@@ -20,6 +20,7 @@ use std::time::{Duration, Instant};
 use captures_app::history_view::{self, Card, CardAction, Grid, RowExtras};
 use captures_app::motion::CubicBezier;
 use captures_history::{ArtifactKind, HistoryEntry};
+use captures_recording_platform::{RecordingRecovery, RecoveryDraft};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::*;
 use windows::Win32::Graphics::Direct2D::*;
@@ -133,6 +134,10 @@ pub enum Target {
     Delete(u32),
     /// A card's action button, by index into `Card::actions`.
     Action(u32, usize),
+    /// An interrupted recording's Recover button, by draft serial.
+    Recover(u32),
+    /// An interrupted recording's two-step Discard button.
+    Discard(u32),
 }
 
 impl Target {
@@ -193,6 +198,62 @@ impl Item {
     }
 }
 
+/// A shipping `RecordingRecovery` row; `serial` names it across reloads.
+pub struct Draft {
+    pub serial: u32,
+    pub draft: RecoveryDraft,
+    pub row: history_view::RecoveryRow,
+}
+
+impl Draft {
+    /// Only an intact interrupted bundle offers Recover and Discard; the
+    /// shared recovery needs its identity to act on it.
+    pub fn actionable(&self) -> bool {
+        self.draft.status == "recoverable" && self.draft.identity.is_some()
+    }
+
+    /// The `small.warning` line: why the take stopped, or why an
+    /// unreadable bundle cannot be recovered.
+    pub fn reason(&self) -> Option<String> {
+        if self.actionable() {
+            return self
+                .draft
+                .last_error
+                .as_deref()
+                .map(history_view::recording_error_message);
+        }
+        Some(
+            self.draft
+                .reason
+                .clone()
+                .unwrap_or_else(|| history_view::RECOVERY_UNAVAILABLE.into()),
+        )
+    }
+}
+
+/// The laid-out section, in content coordinates.
+struct RecoveryLayout {
+    section: Rect,
+    title: Text,
+    help: Text,
+    help_y: f32,
+    /// Each row: serial, top border y, title, detail, reason, Recover and
+    /// Discard rects.
+    rows: Vec<RowLayout>,
+    error: Option<(Text, f32)>,
+}
+
+struct RowLayout {
+    serial: u32,
+    rule_y: f32,
+    text_y: f32,
+    title: Text,
+    detail: Text,
+    reason: Option<Text>,
+    recover: Option<Rect>,
+    discard: Option<Rect>,
+}
+
 /// Accessibility notifications, raised after the frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Event {
@@ -213,6 +274,10 @@ enum Done {
     Cleared(std::result::Result<(), String>),
     Saved(u32, std::result::Result<String, String>),
     Shown(u32, std::result::Result<(), String>),
+    Drafts(std::result::Result<Vec<RecoveryDraft>, String>),
+    /// A recovery finished: its draft serial and any warning.
+    Recovered(u32, std::result::Result<Option<String>, String>),
+    Discarded(u32, std::result::Result<(), String>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -258,6 +323,8 @@ enum Kind {
     Outline(usize),
     /// `.history-image-wrap`: thumbnail, divider and "File missing".
     Image(usize),
+    /// `.recording-recovery-section`, its rows and buttons.
+    Recovery,
 }
 
 struct Node {
@@ -376,6 +443,7 @@ struct Texts {
     filters: Vec<(Text, Text)>,
     error: Option<Text>,
     empty: Option<(Text, Option<Text>)>,
+    recovery: Option<RecoveryLayout>,
 }
 
 pub struct History {
@@ -393,6 +461,14 @@ pub struct History {
     pub shown: Vec<usize>,
     pub filter: Filter,
     pub error: Option<String>,
+    /// Interrupted recordings, newest first.
+    pub drafts: Vec<Draft>,
+    /// The row whose Discard reads "Discard permanently?".
+    pub discard_armed: Option<u32>,
+    /// The row being recovered or discarded; every row waits for it.
+    pub recovery_busy: Option<u32>,
+    /// `.settings-error` under the rows.
+    pub recovery_error: Option<String>,
     /// Delete all arms until this deadline.
     pub confirm_all: Option<Instant>,
     pub deleting_all: bool,
@@ -424,6 +500,7 @@ pub struct History {
     filters: Vec<Layered>,
     rule: usize,
     error_node: usize,
+    recovery_node: usize,
     empty: usize,
     grid_node: usize,
     scrollbar: usize,
@@ -477,6 +554,10 @@ impl History {
             shown: Vec::new(),
             filter: Filter::All,
             error: None,
+            drafts: Vec::new(),
+            discard_armed: None,
+            recovery_busy: None,
+            recovery_error: None,
             confirm_all: None,
             deleting_all: false,
             next_serial: 1,
@@ -519,6 +600,7 @@ impl History {
             filters: Vec::new(),
             rule: 0,
             error_node: 0,
+            recovery_node: 0,
             empty: 0,
             grid_node: 0,
             scrollbar: 0,
@@ -599,6 +681,8 @@ impl History {
             .collect();
         self.rule = self.add(Some(content), Kind::Rule, 0.);
         self.error_node = self.add(Some(content), Kind::Error, 0.);
+        // Room for `--shadow-sm` and the buttons' focus rings.
+        self.recovery_node = self.add(Some(content), Kind::Recovery, 8.);
         self.empty = self.add(Some(content), Kind::Empty, 0.);
         self.grid_node = self.add(Some(content), Kind::Group, 0.);
         self.scrollbar = self.add(Some(root), Kind::Scrollbar, 0.);
@@ -675,8 +759,88 @@ impl History {
     /// Load entries off the UI thread; shipping's `refresh`.
     pub(crate) fn reload(&mut self) {
         let (root, sender, hwnd) = (self.root.clone(), self.sender.clone(), self.hwnd.0 as isize);
+        // A take in progress holds the recovery lease and is not interrupted;
+        // keep the rows already shown until it ends.
+        let drafts = !crate::recorder::active();
         std::thread::spawn(move || {
             let _ = sender.send(Done::Loaded(load(&root)));
+            if drafts {
+                let recovery = RecordingRecovery::new(root, crate::recording::toolchain());
+                let _ = sender.send(Done::Drafts(recovery.list()));
+            }
+            post(hwnd, WM_APP_DONE);
+        });
+    }
+
+    fn set_drafts(&mut self, drafts: Vec<RecoveryDraft>) {
+        let mut old: HashMap<String, u32> = self
+            .drafts
+            .drain(..)
+            .map(|d| (d.draft.session_id.clone(), d.serial))
+            .collect();
+        for draft in drafts {
+            let serial = old.remove(&draft.session_id).unwrap_or_else(|| {
+                self.next_serial += 1;
+                self.next_serial - 1
+            });
+            let row = history_view::recovery_row(
+                draft.kind,
+                draft.created_at_ms,
+                draft.completed_duration_ms,
+            );
+            self.drafts.push(Draft { serial, draft, row });
+        }
+        if self
+            .discard_armed
+            .is_some_and(|serial| self.draft(serial).is_none())
+        {
+            self.discard_armed = None;
+        }
+        self.refilter();
+    }
+
+    pub fn draft(&self, serial: u32) -> Option<&Draft> {
+        self.drafts.iter().find(|d| d.serial == serial)
+    }
+
+    /// Shipping `run("recover_recording_draft")` and the two-step Discard.
+    fn recovery_step(&mut self, serial: u32, discard: bool) {
+        let Some(draft) = self.draft(serial) else {
+            return;
+        };
+        let (id, identity) = (
+            draft.draft.session_id.clone(),
+            draft.draft.identity.clone().unwrap_or_default(),
+        );
+        if discard && self.discard_armed != Some(serial) {
+            let old = self.discard_armed.replace(serial);
+            for serial in old.into_iter().chain([serial]) {
+                self.events.push(Event::Name(Target::Discard(serial)));
+            }
+            self.relayout = true;
+            return;
+        }
+        self.recovery_busy = Some(serial);
+        self.recovery_error = None;
+        self.relayout = true;
+        if !discard {
+            self.events.push(Event::Name(Target::Recover(serial)));
+        }
+        let (root, sender, hwnd) = (self.root.clone(), self.sender.clone(), self.hwnd.0 as isize);
+        std::thread::spawn(move || {
+            let recovery = RecordingRecovery::new(root, crate::recording::toolchain());
+            let done = if discard {
+                Done::Discarded(serial, recovery.discard(&id, &identity).map(|_| ()))
+            } else {
+                let cancel = captures_media::CancelToken::default();
+                Done::Recovered(
+                    serial,
+                    recovery
+                        .recover(&id, &identity, &cancel, |_| {})
+                        .map(|outcome| outcome.warning),
+                )
+            };
+            let _ = sender.send(done);
             post(hwnd, WM_APP_DONE);
         });
     }
@@ -754,6 +918,9 @@ impl History {
             Target::Action(serial, i) => self
                 .shown_index(serial)
                 .is_some_and(|_| i < self.item(serial).map_or(0, |it| it.card.actions.len())),
+            Target::Recover(serial) | Target::Discard(serial) => {
+                self.draft(serial).is_some_and(Draft::actionable)
+            }
         }
     }
 
@@ -769,6 +936,11 @@ impl History {
                     .get(i)
                     .is_some_and(|&action| item.action_enabled(action))
             }),
+            // Every row waits while one recovers or discards, and a take in
+            // progress holds the recovery lease.
+            Target::Recover(_) | Target::Discard(_) => {
+                self.recovery_busy.is_none() && !crate::recorder::active()
+            }
         }
     }
 
@@ -788,6 +960,14 @@ impl History {
                 .item(serial)
                 .and_then(|item| Some(item.action_label(*item.card.actions.get(i)?).into()))
                 .unwrap_or_default(),
+            Target::Recover(serial) if self.recovery_busy == Some(serial) => {
+                history_view::RECOVERING.into()
+            }
+            Target::Recover(_) => history_view::RECOVER.into(),
+            Target::Discard(serial) if self.discard_armed == Some(serial) => {
+                history_view::DISCARD_CONFIRM.into()
+            }
+            Target::Discard(_) => history_view::DISCARD.into(),
         }
     }
 
@@ -836,6 +1016,8 @@ impl History {
                 };
                 self.run_action(serial, action);
             }
+            Target::Recover(serial) => self.recovery_step(serial, false),
+            Target::Discard(serial) => self.recovery_step(serial, true),
         }
         self.need = true;
     }
@@ -1052,6 +1234,18 @@ impl History {
                 self.restyle(serial);
                 self.events.push(Event::Name(Target::Action(serial, 1)));
             }
+            Done::Drafts(Ok(drafts)) => {
+                if self.recovery_busy.is_none() {
+                    self.set_drafts(drafts);
+                }
+            }
+            Done::Drafts(Err(error)) => {
+                self.recovery_error = Some(error);
+                self.events.push(Event::Structure);
+                self.relayout = true;
+            }
+            Done::Recovered(serial, result) => self.recovery_done(serial, result),
+            Done::Discarded(serial, result) => self.recovery_done(serial, result.map(|()| None)),
             Done::Deleted(serial, Err(error))
             | Done::Saved(serial, Err(error))
             | Done::Shown(serial, Err(error)) => {
@@ -1068,6 +1262,24 @@ impl History {
             }
         }
         self.need = true;
+    }
+
+    /// A recovery or discard ended: refresh History and the rows like
+    /// shipping, keeping an error (or a recovery warning) under the rows.
+    fn recovery_done(&mut self, serial: u32, result: std::result::Result<Option<String>, String>) {
+        self.recovery_busy = None;
+        self.discard_armed = None;
+        match result {
+            Ok(warning) => self.recovery_error = warning,
+            Err(error) => {
+                self.recovery_error = Some(error);
+                self.events.push(Event::Alert(None));
+            }
+        }
+        self.events.push(Event::Name(Target::Recover(serial)));
+        self.events.push(Event::Structure);
+        self.relayout = true;
+        self.reload();
     }
 
     /// Expire two-step deletes and re-arm the timer for the next deadline.
@@ -1264,6 +1476,16 @@ impl History {
             self.texts.error = Some(text);
         }
 
+        // `RecordingRecovery`: shipping renders it between the error and the
+        // grid, only while interrupted recordings or a recovery error exist.
+        self.texts.recovery = None;
+        if !self.drafts.is_empty() || self.recovery_error.is_some() {
+            y += s6;
+            let section = self.measure_recovery(shell_x, y, shell_w)?;
+            y += section.section.h;
+            self.texts.recovery = Some(section);
+        }
+
         // The grid, or the loading, empty and filtered-empty sections.
         y += s6;
         self.grid = history_view::grid_in_window(f64::from(shell_w), self.compact);
@@ -1317,6 +1539,120 @@ impl History {
         Ok(())
     }
 
+    /// `.recording-recovery-section` at `(x, y)`, `width` wide: `--s-6`
+    /// padding, `--s-4` gaps, rows split by `--border-subtle` with Recover and
+    /// Discard (`.ui-btn` metrics) on the right.
+    fn measure_recovery(&self, x: f32, y: f32, width: f32) -> Result<RecoveryLayout> {
+        let (t, g) = (&self.t, &self.g);
+        let n = |name: &str| t.n(name);
+        let (s3, s4, s5, s6, h_md) = (n("s-3"), n("s-4"), n("s-5"), n("s-6"), n("h-md"));
+        let copy = history_view::copy();
+        let inner_x = x + 1. + s6;
+        let inner_w = (width - 2. - 2. * s6).max(1.);
+        let mut cy = y + 1. + s6;
+        let title = g.text_sized(
+            t,
+            copy.recovery_title,
+            n("text-lg"),
+            "weight-semibold",
+            Some("tracking-tight"),
+        )?;
+        cy += title.height + s4;
+        let help = g.text(t, Style::Error, copy.recovery_help, inner_w)?;
+        let help_y = cy;
+        cy += help.height;
+        let button = |label: &str| -> Result<f32> {
+            Ok(2. + 2. * s5 + g.text(t, Style::Control, label, 1e4)?.width)
+        };
+        let mut rows = Vec::new();
+        for draft in &self.drafts {
+            cy += s4;
+            let rule_y = cy;
+            cy += 1. + s4;
+            let buttons = if draft.actionable() {
+                let recover = if self.recovery_busy == Some(draft.serial) {
+                    history_view::RECOVERING
+                } else {
+                    history_view::RECOVER
+                };
+                let discard = if self.discard_armed == Some(draft.serial) {
+                    history_view::DISCARD_CONFIRM
+                } else {
+                    history_view::DISCARD
+                };
+                Some((button(recover)?, button(discard)?))
+            } else {
+                None
+            };
+            let buttons_w = buttons.map_or(0., |(a, b)| a + s3 + b + s6);
+            let text_w = (inner_w - buttons_w).max(1.);
+            let row_title =
+                g.text_sized(t, &draft.row.title, n("text-md"), "weight-medium", None)?;
+            let detail = g.text(t, Style::Error, &draft.row.detail, text_w)?;
+            let reason = draft
+                .reason()
+                .map(|reason| g.text(t, Style::Error, &reason, text_w))
+                .transpose()?;
+            let text_h = row_title.height
+                + 2.
+                + detail.height
+                + reason.as_ref().map_or(0., |r| 2. + r.height);
+            let row_h = text_h.max(if buttons.is_some() { h_md } else { 0. });
+            let text_y = cy + (row_h - text_h) / 2.;
+            let by = cy + (row_h - h_md) / 2.;
+            let (recover, discard) = match buttons {
+                Some((rw, dw)) => {
+                    let right = inner_x + inner_w;
+                    (
+                        Some(Rect::new(right - dw - s3 - rw, by, rw, h_md)),
+                        Some(Rect::new(right - dw, by, dw, h_md)),
+                    )
+                }
+                None => (None, None),
+            };
+            rows.push(RowLayout {
+                serial: draft.serial,
+                rule_y,
+                text_y,
+                title: row_title,
+                detail,
+                reason,
+                recover,
+                discard,
+            });
+            cy += row_h;
+        }
+        let error = match &self.recovery_error {
+            Some(error) => {
+                cy += s4;
+                let text = g.text(t, Style::Error, error, inner_w)?;
+                let at = cy;
+                cy += text.height;
+                Some((text, at))
+            }
+            None => None,
+        };
+        cy += s6 + 1.;
+        Ok(RecoveryLayout {
+            section: Rect::new(x, y, width, cy - y),
+            title,
+            help,
+            help_y,
+            rows,
+            error,
+        })
+    }
+
+    /// A Recover or Discard button's rect in content coordinates.
+    fn recovery_rect(&self, target: Target) -> Option<Rect> {
+        let layout = self.texts.recovery.as_ref()?;
+        layout.rows.iter().find_map(|row| match target {
+            Target::Recover(serial) if serial == row.serial => row.recover,
+            Target::Discard(serial) if serial == row.serial => row.discard,
+            _ => None,
+        })
+    }
+
     /// A card's rect in content coordinates.
     pub fn card_rect(&self, k: usize) -> Rect {
         let (x, y) = self.grid.origin_with(k, &self.extras);
@@ -1354,6 +1690,9 @@ impl History {
             Target::Cancel => self.l.cancel,
             Target::DeleteAll => self.l.delete_all,
             Target::Filter(i) => self.l.filters[i],
+            Target::Recover(_) | Target::Discard(_) => {
+                self.recovery_rect(target).unwrap_or_default()
+            }
             Target::Delete(serial) | Target::Action(serial, _) => {
                 let Some(k) = self.shown_index(serial) else {
                     return Rect::default();
@@ -1790,6 +2129,18 @@ impl History {
                 }
             }
         }
+        if let Some(l) = &self.texts.recovery {
+            for row in &l.rows {
+                for (target, r) in [
+                    (Target::Recover(row.serial), row.recover),
+                    (Target::Discard(row.serial), row.discard),
+                ] {
+                    if r.is_some_and(inside) {
+                        return (Some(target), None);
+                    }
+                }
+            }
+        }
         if self.texts.empty.is_some() {
             return (None, None);
         }
@@ -1823,6 +2174,11 @@ impl History {
         let (hover, card) = pointer.map_or((None, None), |(x, y)| self.hit(x, y));
         if hover == self.hover && card == self.hover_card {
             return;
+        }
+        let recovery =
+            |t: Option<Target>| matches!(t, Some(Target::Recover(_) | Target::Discard(_)));
+        if recovery(hover) || recovery(self.hover) {
+            self.nodes[self.recovery_node].dirty = true;
         }
         self.hover = hover;
         if card != self.hover_card {
@@ -1863,6 +2219,9 @@ impl History {
             list.push(Target::DeleteAll);
             list.extend((0..FILTERS.len()).map(Target::Filter));
         }
+        for draft in self.drafts.iter().filter(|d| d.actionable()) {
+            list.extend([Target::Recover(draft.serial), Target::Discard(draft.serial)]);
+        }
         for &i in &self.shown {
             let item = &self.items[i];
             list.push(Target::Delete(item.serial));
@@ -1879,6 +2238,7 @@ impl History {
         let changed = focus != self.focus;
         self.focus = focus;
         self.focus_visible = visible;
+        self.nodes[self.recovery_node].dirty = true;
         if let Some(target) = focus {
             if visible {
                 let r = self.target_rect(target);
@@ -1997,6 +2357,101 @@ impl History {
             Kind::Outline(_) => gfx::border(dc, all, t.n("r-xl"), 1., c("border-strong"))?,
             Kind::CardBase(slot) => self.draw_card(dc, slot, (w, h))?,
             Kind::Image(slot) => self.draw_image(dc, slot, (w, h))?,
+            Kind::Recovery => self.draw_recovery(dc)?,
+        }
+        Ok(())
+    }
+
+    /// `.recording-recovery-section`, drawn in its node's coordinates.
+    fn draw_recovery(&self, dc: &ID2D1DeviceContext) -> Result<()> {
+        let Some(l) = &self.texts.recovery else {
+            return Ok(());
+        };
+        let t = &self.t;
+        let g = &self.g;
+        let c = |name: &str| t.color(name);
+        let (ox, oy) = (l.section.x, l.section.y);
+        let local = |r: Rect| rect(r.x - ox, r.y - oy, r.x - ox + r.w, r.y - oy + r.h);
+        let all = rect(0., 0., l.section.w, l.section.h);
+        let radius = t.n("r-xl");
+        let s6 = t.n("s-6");
+        gfx::shadow(dc, all, radius, t.shadow("shadow-sm"))?;
+        gfx::fill_round(dc, all, radius, c("surface-raised"))?;
+        gfx::border(dc, all, radius, 1., c("caution-surface"))?;
+        let x = 1. + s6;
+        gfx::text(dc, &l.title, x, 1. + s6, c("text"))?;
+        gfx::text(dc, &l.help, x, l.help_y - oy, c("text-subtle"))?;
+        let inner_w = l.section.w - 2. - 2. * s6;
+        for row in &l.rows {
+            gfx::fill(
+                dc,
+                rect(x, row.rule_y - oy, x + inner_w, row.rule_y - oy + 1.),
+                c("border-subtle"),
+            )?;
+            let mut y = row.text_y - oy;
+            gfx::text(dc, &row.title, x, y, c("text"))?;
+            y += row.title.height + 2.;
+            gfx::text(dc, &row.detail, x, y, c("text-subtle"))?;
+            if let Some(reason) = &row.reason {
+                y += row.detail.height + 2.;
+                gfx::text(dc, reason, x, y, c("caution-text"))?;
+            }
+            for (target, r) in [
+                (Target::Recover(row.serial), row.recover),
+                (Target::Discard(row.serial), row.discard),
+            ] {
+                let Some(r) = r else { continue };
+                let b = local(r);
+                let enabled = self.enabled(target);
+                let hovered = enabled && self.hover == Some(target);
+                // Shipping adds `.danger` only to the armed Discard.
+                let danger = matches!(target, Target::Discard(s) if self.discard_armed == Some(s));
+                // `.ui-btn` (Recover) and `.ui-btn-danger` (Discard).
+                let ink = if danger {
+                    if hovered {
+                        gfx::fill_round(dc, b, t.n("r-md"), c("danger-surface"))?;
+                        c("danger-text")
+                    } else {
+                        c("text-subtle")
+                    }
+                } else {
+                    gfx::shadow(dc, b, t.n("r-md"), t.shadow("shadow-xs"))?;
+                    let (bg, edge) = if hovered {
+                        ("control-hover", "border-strong")
+                    } else {
+                        ("control", "control-border")
+                    };
+                    gfx::fill_round(dc, b, t.n("r-md"), c(bg))?;
+                    gfx::border(dc, b, t.n("r-md"), 1., c(edge))?;
+                    c("text")
+                };
+                let ink = if enabled {
+                    ink
+                } else {
+                    D2D1_COLOR_F {
+                        a: ink.a * 0.45,
+                        ..ink
+                    }
+                };
+                let label = g.text(t, Style::Control, &self.name(target), 1e4)?;
+                let lx = b.left + (b.right - b.left - label.width) / 2.;
+                let ly = b.top + (b.bottom - b.top - label.height) / 2.;
+                gfx::text(dc, &label, lx, ly, ink)?;
+                if self.focus_visible && self.focus == Some(target) {
+                    gfx::ring(dc, b, t.n("r-md"), 0., 2., c("surface-canvas"))?;
+                    gfx::ring(
+                        dc,
+                        b,
+                        t.n("r-md"),
+                        2.,
+                        4.,
+                        t.color_alpha("theme-accent", 0.55),
+                    )?;
+                }
+            }
+        }
+        if let Some((text, at)) = &l.error {
+            gfx::text(dc, text, x, at - oy, c("danger-text"))?;
         }
         Ok(())
     }
@@ -2421,6 +2876,14 @@ impl History {
             ),
             (self.error_node, l.error, self.error.is_some()),
             (self.empty, l.empty, self.texts.empty.is_some()),
+            (
+                self.recovery_node,
+                self.texts
+                    .recovery
+                    .as_ref()
+                    .map_or_else(Rect::default, |r| r.section),
+                self.texts.recovery.is_some(),
+            ),
         ];
         for (i, f) in self.filters.iter().enumerate() {
             set.push((f.base, l.filters[i], actions));
@@ -3105,6 +3568,47 @@ pub fn render_offscreen(
             history.loading = false;
             history.error = Some(history_view::load_error(&error));
         }
+    }
+    // `--select recovery` adds two interrupted recordings (one armed to
+    // discard) and an unreadable bundle; otherwise the real drafts.
+    let drafts = if options.select.as_deref() == Some("recovery") {
+        use captures_recording::RecordingKind;
+        let draft = |id: &str, kind, created, ms, ok: bool| RecoveryDraft {
+            session_id: id.into(),
+            status: if ok { "recoverable" } else { "unavailable" },
+            kind,
+            created_at_ms: created,
+            completed_duration_ms: ms,
+            identity: ok.then(|| id.into()),
+            reason: (!ok).then(|| "Recording manifest is unreadable".into()),
+            last_error: (id == "a").then(|| "Error: the display went to sleep.".into()),
+        };
+        Ok(vec![
+            draft(
+                "a",
+                Some(RecordingKind::Video),
+                Some(1_790_434_245_000),
+                83_000,
+                true,
+            ),
+            draft(
+                "b",
+                Some(RecordingKind::Gif),
+                Some(1_790_430_000_000),
+                12_400,
+                true,
+            ),
+            draft("c", None, None, 0, false),
+        ])
+    } else {
+        RecordingRecovery::new(root.clone(), crate::recording::toolchain()).list()
+    };
+    match drafts {
+        Ok(drafts) => history.set_drafts(drafts),
+        Err(error) => history.recovery_error = Some(error),
+    }
+    if options.select.as_deref() == Some("recovery") {
+        history.discard_armed = history.drafts.get(1).map(|d| d.serial);
     }
     history.layout(w, h)?;
     history.relayout = false;

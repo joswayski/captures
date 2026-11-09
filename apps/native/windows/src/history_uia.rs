@@ -47,6 +47,9 @@ pub enum Id {
     Warning(u32),
     Action(u32, usize),
     CardError(u32),
+    /// An interrupted recording's Recover and Discard buttons.
+    Recover(u32),
+    Discard(u32),
 }
 
 fn unavailable() -> Error {
@@ -69,6 +72,8 @@ fn target(id: Id) -> Option<Target> {
         Id::Filter(i) => Target::Filter(i),
         Id::Delete(serial) => Target::Delete(serial),
         Id::Action(serial, i) => Target::Action(serial, i),
+        Id::Recover(serial) => Target::Recover(serial),
+        Id::Discard(serial) => Target::Discard(serial),
         _ => return None,
     })
 }
@@ -81,6 +86,8 @@ fn id_of(target: Target) -> Id {
         Target::Filter(i) => Id::Filter(i),
         Target::Delete(serial) => Id::Delete(serial),
         Target::Action(serial, i) => Id::Action(serial, i),
+        Target::Recover(serial) => Id::Recover(serial),
+        Target::Discard(serial) => Id::Discard(serial),
     }
 }
 
@@ -100,6 +107,9 @@ fn children(h: &History, id: Id) -> Vec<Id> {
             }
             if h.error.is_some() {
                 list.push(Id::Error);
+            }
+            for draft in h.drafts.iter().filter(|d| d.actionable()) {
+                list.extend([Id::Recover(draft.serial), Id::Discard(draft.serial)]);
             }
             list.push(if empty_shown(h) { Id::Empty } else { Id::Grid });
             list
@@ -250,9 +260,14 @@ fn name(h: &History, id: Id) -> String {
 fn control_type(id: Id) -> UIA_CONTROLTYPE_ID {
     match id {
         Id::Root => UIA_WindowControlTypeId,
-        Id::Back | Id::Cancel | Id::DeleteAll | Id::Filter(_) | Id::Open(_) | Id::Delete(_) => {
-            UIA_ButtonControlTypeId
-        }
+        Id::Back
+        | Id::Cancel
+        | Id::DeleteAll
+        | Id::Filter(_)
+        | Id::Open(_)
+        | Id::Delete(_)
+        | Id::Recover(_)
+        | Id::Discard(_) => UIA_ButtonControlTypeId,
         Id::Action(..) => UIA_ButtonControlTypeId,
         Id::Filters | Id::Empty | Id::Grid | Id::Card(_) => UIA_GroupControlTypeId,
         _ => UIA_TextControlTypeId,
@@ -283,6 +298,8 @@ fn runtime_id(id: Id) -> [i32; 4] {
         Id::Warning(s) => (19, s, 0),
         Id::Action(s, i) => (20, s, i as u32),
         Id::CardError(s) => (21, s, 0),
+        Id::Recover(s) => (22, s, 0),
+        Id::Discard(s) => (23, s, 0),
     };
     // A distinct first part keeps these apart from Preferences' ids.
     [UiaAppendRuntimeId as i32, 100 + kind, a as i32, b as i32]
@@ -353,6 +370,8 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
             | Id::DeleteAll
             | Id::Open(_)
             | Id::Delete(_)
+            | Id::Recover(_)
+            | Id::Discard(_)
             | Id::Action(..) => pattern == UIA_InvokePatternId,
             _ => false,
         };

@@ -241,7 +241,8 @@ over Print Screen and Win+Shift+S like shipping. The Record rows and shortcuts o
 the bar in Record, whose options row (FPS, resolution, cursor, clicks, desktop audio
 and microphone) applies to that recording only. It starts an experimental recording
 with floating Stop, Pause, Restart, Mute, Delete and Hide controls (the controls' region
-screenshot and recovery after a crash are not ported); Send Feedback stays disabled. Saved
+screenshot is not ported), and History lists interrupted recordings to recover or
+discard; Send Feedback stays disabled. Saved
 screenshots appear in an experimental mini-preview stack with Close, Delete, Edit,
 Copy and Save file / Show in Folder, and History's Restore brings a screenshot back
 there; its pile, motion and file drags are not ported.

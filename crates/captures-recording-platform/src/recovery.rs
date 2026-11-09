@@ -23,6 +23,8 @@ pub struct RecoveryDraft {
     pub completed_duration_ms: u64,
     pub identity: Option<String>,
     pub reason: Option<String>,
+    /// Why the take stopped, from its manifest (shipping `last_error`).
+    pub last_error: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -116,7 +118,7 @@ impl RecordingRecovery {
             }
             let path = entry.path();
             let parsed = self.read(&name);
-            let (status, kind, created_at_ms, completed_duration_ms, identity, reason) =
+            let (status, kind, created_at_ms, completed_duration_ms, identity, reason, last_error) =
                 match parsed {
                     Ok((manifest, identity)) => {
                         if manifest.state == RecordingState::Ready
@@ -137,9 +139,10 @@ impl RecordingRecovery {
                                 .sum(),
                             Some(identity),
                             (!valid).then(|| "Draft is not interrupted".into()),
+                            manifest.last_error,
                         )
                     }
-                    Err(error) => ("unavailable", None, None, 0, None, Some(error)),
+                    Err(error) => ("unavailable", None, None, 0, None, Some(error), None),
                 };
             if !path.exists() && !path.is_symlink() {
                 continue;
@@ -152,6 +155,7 @@ impl RecordingRecovery {
                 completed_duration_ms,
                 identity,
                 reason,
+                last_error,
             });
         }
         drafts.sort_by(|a, b| b.created_at_ms.cmp(&a.created_at_ms));
