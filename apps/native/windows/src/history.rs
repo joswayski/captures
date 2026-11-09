@@ -666,7 +666,7 @@ impl History {
     }
 
     /// Load entries off the UI thread; shipping's `refresh`.
-    fn reload(&mut self) {
+    pub(crate) fn reload(&mut self) {
         let (root, sender, hwnd) = (self.root.clone(), self.sender.clone(), self.hwnd.0 as isize);
         std::thread::spawn(move || {
             let _ = sender.send(Done::Loaded(load(&root)));

@@ -1011,7 +1011,7 @@ fn open_request(root: &std::path::Path, id: &str) -> OpenRequest {
 }
 
 /// `CF_DIB`: a bottom-up 32 bpp BGRA bitmap.
-fn dib(image: &RgbaImage) -> Vec<u8> {
+pub(crate) fn dib(image: &RgbaImage) -> Vec<u8> {
     let (w, h) = image.dimensions();
     let mut out = Vec::with_capacity(40 + (w * h * 4) as usize);
     for value in [40u32, w, h] {
@@ -5890,7 +5890,7 @@ fn hex_color(value: &str) -> D2D1_COLOR_F {
 }
 
 /// Put the image on the clipboard as `PNG` and `CF_DIB`.
-fn set_clipboard(hwnd: HWND, png: &[u8], dib: &[u8]) -> Result<()> {
+pub(crate) fn set_clipboard(hwnd: HWND, png: &[u8], dib: &[u8]) -> Result<()> {
     use windows::Win32::System::DataExchange::*;
     use windows::Win32::System::Memory::*;
     const CF_DIB: u32 = 8;

@@ -107,15 +107,14 @@ const MENU: [Row; 15] = [
     Row::Item("quit", "Quit Captures", Action::Quit, None),
 ];
 
-/// What the Win32 host can run so far. Capture, recording and feedback still
-/// live in the older host; their rows stay visible but disabled.
+/// What the Win32 host can run so far. New Capture and Screenshot Display
+/// open the capture bar; the other capture, recording and feedback rows stay
+/// visible but disabled.
 fn available(action: Action) -> bool {
     !matches!(
         action,
-        Action::NewCapture
-            | Action::CaptureRegion
+        Action::CaptureRegion
             | Action::CaptureWindow
-            | Action::CaptureDisplay
             | Action::RecordRegion
             | Action::RecordWindow
             | Action::RecordDisplay

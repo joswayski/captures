@@ -91,9 +91,15 @@ pub enum Style {
     Italic,
     /// `.recording-editor-header h1`: `--text-2xl`, semibold, tighter.
     RecordingTitle,
+    /// `.recording-start`: `--text-md`, semibold.
+    Action,
+    /// `.capture-selector-note strong`: `--text-xs`, bold.
+    NoteStrong,
 }
 
-const STYLES: [Style; 34] = [
+const STYLES: [Style; 36] = [
+    Style::NoteStrong,
+    Style::Action,
     Style::RecordingTitle,
     Style::Brand,
     Style::Nav,
@@ -344,6 +350,8 @@ fn spec(style: Style) -> Spec {
             Some("leading-tight"),
             false,
         ),
+        Style::Action => spec("text-md", "weight-semibold", None, None, false),
+        Style::NoteStrong => spec("text-xs", "weight-bold", None, Some("leading-snug"), false),
         Style::Italic => Spec {
             italic: true,
             ..spec("text-sm", "weight-semibold", None, None, false)

@@ -1287,6 +1287,8 @@ pub fn run(options: Options, resident: Option<captures_app::instance::Instance>)
                 crate::Scene::Editor => {
                     crate::editor::open(&options, options.artifact.as_deref().unwrap_or_default())?
                 }
+                // Parsing requires --screenshot, which never runs the host.
+                crate::Scene::Capture => {}
                 crate::Scene::Recording => crate::recording::open(
                     &options,
                     options.artifact.as_deref().unwrap_or_default(),

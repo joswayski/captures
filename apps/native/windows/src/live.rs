@@ -13,8 +13,11 @@ use captures_app::instance::{Instance, Launch, OpenRequest};
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::{
-    PostQuitMessage, PostThreadMessageW, SW_SHOWNORMAL, SetForegroundWindow, ShowWindow, WM_APP,
+    CreateWindowExW, HWND_MESSAGE, MB_ICONERROR, MB_OK, MessageBoxW, PostQuitMessage,
+    PostThreadMessageW, SW_SHOWNORMAL, SetForegroundWindow, ShowWindow, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_APP,
 };
+use windows::core::{HSTRING, w};
 
 use crate::Options;
 use crate::tray::{Action, Tray};
@@ -29,6 +32,9 @@ struct Resident {
     /// hosts, closing the last window then quits.
     tray: Option<Tray>,
     settings_modified: Option<SystemTime>,
+    thread: u32,
+    /// A message-only window that owns the clipboard for auto-copy.
+    clipboard: Option<HWND>,
 }
 
 thread_local! {
@@ -79,7 +85,8 @@ fn modified(options: &Options) -> Option<SystemTime> {
 
 /// Become the resident app and open what shipping opens at launch.
 pub fn start(options: &Options, instance: Instance) {
-    let wake = wake_on(unsafe { GetCurrentThreadId() });
+    let thread = unsafe { GetCurrentThreadId() };
+    let wake = wake_on(thread);
     instance.set_wake(wake.clone());
     let settings = captures_settings::load(&options.settings_file).unwrap_or_default();
     let tray = match Tray::new(&settings, wake) {
@@ -96,6 +103,24 @@ pub fn start(options: &Options, instance: Instance) {
             instance,
             tray,
             settings_modified: modified(options),
+            thread,
+            clipboard: unsafe {
+                CreateWindowExW(
+                    WINDOW_EX_STYLE(0),
+                    w!("STATIC"),
+                    None,
+                    WINDOW_STYLE(0),
+                    0,
+                    0,
+                    0,
+                    0,
+                    Some(HWND_MESSAGE),
+                    None,
+                    None,
+                    None,
+                )
+            }
+            .ok(),
         })
     });
     // The Win32 host has no first-run setup window yet; Preferences stands in.
@@ -149,6 +174,11 @@ pub fn service() {
             }
         });
     }
+    match crate::capture::service() {
+        Some(Ok(Some(artifact))) => captured(&options, artifact),
+        Some(Ok(None)) | None => {}
+        Some(Err(error)) => show_error(&error),
+    }
     while let Some(action) = RESIDENT.with(|r| r.borrow().as_ref()?.tray.as_ref()?.next_action()) {
         run(&options, action);
     }
@@ -193,11 +223,13 @@ fn run(options: &Options, action: Action) {
             }
         }
         Action::Quit => unsafe { PostQuitMessage(0) },
-        // Disabled rows: capture, recording and feedback are not ported yet.
-        Action::NewCapture
-        | Action::CaptureRegion
+        // Like shipping, Screenshot Display opens the bar on Full screen.
+        Action::NewCapture => new_capture(options, crate::capture::Target::Region),
+        Action::CaptureDisplay => new_capture(options, crate::capture::Target::Display),
+        // Disabled rows: the direct overlays, recording and feedback are not
+        // ported yet.
+        Action::CaptureRegion
         | Action::CaptureWindow
-        | Action::CaptureDisplay
         | Action::RecordRegion
         | Action::RecordWindow
         | Action::RecordDisplay
@@ -232,5 +264,59 @@ fn reactivate(options: &Options) {
             }
         }
         _ => open_preferences(options),
+    }
+}
+
+/// Open New Capture unless first-run setup is unfinished (Preferences stands
+/// in for setup, as shipping opens setup instead).
+fn new_capture(options: &Options, target: crate::capture::Target) {
+    let settings = captures_settings::load(&options.settings_file).unwrap_or_default();
+    if !settings.onboarding_completed {
+        return open_preferences(options);
+    }
+    let Some(thread) = RESIDENT.with(|r| r.borrow().as_ref().map(|r| r.thread)) else {
+        return;
+    };
+    if let Err(error) = crate::capture::open(options, target, wake_on(thread)) {
+        show_error(&error);
+    }
+}
+
+/// A saved screenshot: an open History reloads and auto-copy puts it on
+/// the clipboard as PNG and `CF_DIB`.
+fn captured(options: &Options, artifact: captures_app::Artifact) {
+    crate::history::with_history(|h| h.reload());
+    let settings = captures_settings::load(&options.settings_file).unwrap_or_default();
+    if !settings.auto_copy_to_clipboard {
+        return;
+    }
+    let Some(owner) = RESIDENT.with(|r| r.borrow().as_ref().and_then(|r| r.clipboard)) else {
+        return;
+    };
+    let copied = std::fs::read(&artifact.image_path)
+        .map_err(|e| e.to_string())
+        .and_then(|png| {
+            let image = image::load_from_memory(&png)
+                .map_err(|e| e.to_string())?
+                .into_rgba8();
+            crate::editor::set_clipboard(owner, &png, &crate::editor::dib(&image))
+                .map_err(|e| e.message().to_string())
+        });
+    if let Err(error) = copied {
+        eprintln!("Could not copy the screenshot: {error}");
+    }
+}
+
+/// Capture failures use a system message box until the native error surface
+/// is ported.
+fn show_error(message: &str) {
+    eprintln!("{message}");
+    unsafe {
+        MessageBoxW(
+            None,
+            &HSTRING::from(message),
+            w!("Captures"),
+            MB_OK | MB_ICONERROR,
+        );
     }
 }

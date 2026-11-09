@@ -8,6 +8,8 @@
 #[cfg(windows)]
 mod appearance;
 #[cfg(windows)]
+mod capture;
+#[cfg(windows)]
 mod dialog;
 #[cfg(windows)]
 mod editor;
@@ -54,6 +56,9 @@ pub enum Scene {
     Editor,
     /// `--scene recording --artifact ID`.
     Recording,
+    /// `--scene capture --screenshot PATH`: the New Capture bar over a
+    /// fixture desktop; `--tool display` selects Full screen.
+    Capture,
 }
 
 #[cfg(windows)]
@@ -115,6 +120,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
                     "history" => Scene::History,
                     "editor" => Scene::Editor,
                     "recording" => Scene::Recording,
+                    "capture" => Scene::Capture,
                     scene => return Err(format!("unsupported scene {scene}")),
                 };
             }
@@ -164,6 +170,9 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
             return Err("--profile replaces --settings-file and --history-root".into());
         }
         use_profile(&mut options, &dir)?;
+    }
+    if options.scene == Scene::Capture && options.screenshot.is_none() {
+        return Err("--scene capture renders with --screenshot; use --live to capture".into());
     }
     if options.quiet && !options.live {
         return Err("--captures-autostart needs --live".into());

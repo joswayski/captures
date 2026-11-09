@@ -31,6 +31,7 @@ pub fn render(options: &Options, path: &std::path::Path) -> Result<()> {
         }
         Window::Editor => crate::editor::SIZE,
         Window::Recording => crate::recording::SIZE,
+        Window::Capture => (1280., 800.),
     };
     let (w, h) = options.size.unwrap_or((w as u32, h as u32));
     let canvas = tokens.color("surface-canvas");
@@ -42,6 +43,35 @@ pub fn render(options: &Options, path: &std::path::Path) -> Result<()> {
         let editor =
             crate::editor::render_offscreen(options, g.clone(), tokens, (w as f32, h as f32))?;
         Box::new(move |dc| editor.paint(dc, 1.))
+    } else if options.scene == Window::Capture {
+        let target = if options.tool.as_deref() == Some("display") {
+            crate::capture::Target::Display
+        } else {
+            crate::capture::Target::Region
+        };
+        let mut menu = crate::capture::Menu::new(
+            target,
+            (w as f32, h as f32),
+            ("Generic PnP Monitor".into(), w * 2, h * 2),
+            settings.auto_start_on_selection,
+        );
+        if target == crate::capture::Target::Region && options.select.is_some() {
+            menu.selection = Some(crate::gfx::rect(320., 180., 860., 500.));
+        }
+        // A synthetic desktop: a diagonal gradient with a light window.
+        let desktop = image::RgbaImage::from_fn(w, h, |x, y| {
+            let inside = (280..900).contains(&x) && (140..540).contains(&y);
+            let v = ((x + y) * 255 / (w + h)) as u8;
+            if inside {
+                image::Rgba([236, 236, 232, 255])
+            } else {
+                image::Rgba([40 + v / 3, 70 + v / 4, 120 + v / 3, 255])
+            }
+        });
+        let frozen = crate::capture::bitmap(&g, &desktop)?;
+        let menu = std::cell::RefCell::new(menu);
+        let g = g.clone();
+        Box::new(move |dc| menu.borrow_mut().paint(dc, &g, &tokens, Some(&frozen)))
     } else if options.scene == Window::Recording {
         let recording =
             crate::recording::render_offscreen(options, g.clone(), tokens, (w as f32, h as f32))?;

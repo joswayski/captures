@@ -87,9 +87,17 @@ wins the shared instance election and later launches forward to it and exit;
 `--captures-autostart` makes it quiet. The notification-area icon
 (`src/tray.rs`, the `tray-icon`/`muda` Win32 menus shipping uses) has the
 shipping menu and accelerators, left-click opens Preferences, and closing the
-last window keeps the app resident. Capture, recording and Send Feedback rows
-are disabled and no global shortcuts are registered until those flows exist,
-so the OS screenshot key is not taken over. There is no first-run setup window
+last window keeps the app resident. New Capture and Screenshot Display open
+the Screenshot capture bar (`src/capture.rs`) over a frozen snapshot of the
+display under the pointer, on Region or Full screen. Drag a region, then press
+Enter or Capture (Esc or Close cancels); the countdown applies, the result is
+copied to the clipboard and History reloads. Record mode, the Window target,
+the Aspect/Display selects, the countdown overlay and floating previews are not
+ported yet. The remaining capture, recording and Send Feedback rows are
+disabled and no global shortcuts are registered until those flows exist, so
+the OS screenshot key is not taken over. `--scene capture --screenshot PATH`
+renders the bar offscreen (`--tool display` for Full screen, `--select x` for
+a sample selection). There is no first-run setup window
 or launch notice yet; Preferences stands in, and files forwarded by path are
 not opened. A physical Windows 11 check (4K, 150%) passed quiet launch, the
 menu and its disabled rows, left-click, residency after closing windows,
