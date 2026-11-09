@@ -1028,6 +1028,17 @@ impl Previews {
                 }
             }
             WM_SETCURSOR => {
+                // Windows sends this before the WM_MOUSEMOVE that updates
+                // `hot`, so hit-test where the pointer is now.
+                let mut p = POINT::default();
+                unsafe {
+                    let _ = GetCursorPos(&mut p);
+                    let _ = windows::Win32::Graphics::Gdi::ScreenToClient(self.hwnd, &mut p);
+                }
+                let at = (p.x as f32 / self.scale, p.y as f32 / self.scale);
+                if self.stack.pointer(Some(at)) {
+                    let _ = self.render();
+                }
                 let control = !matches!(self.stack.hot, None | Some(Hit::Card(_)));
                 let cursor = if control { IDC_HAND } else { IDC_ARROW };
                 unsafe {
