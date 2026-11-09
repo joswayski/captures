@@ -87,7 +87,35 @@ pub fn render(options: &Options, path: &std::path::Path) -> Result<()> {
         let frozen = crate::capture::bitmap(&g, &desktop)?;
         let menu = std::cell::RefCell::new(menu);
         let g = g.clone();
-        Box::new(move |dc| menu.borrow_mut().paint(dc, &g, &tokens, Some(&frozen)))
+        if options.tool.as_deref() == Some("countdown") {
+            // The scrim over the live desktop at 3, at rest.
+            let size = (w as f32, h as f32);
+            Box::new(move |dc| {
+                unsafe {
+                    dc.DrawBitmap(
+                        &frozen,
+                        Some(&crate::gfx::rect(0., 0., size.0, size.1)),
+                        1.,
+                        windows::Win32::Graphics::Direct2D::D2D1_INTERPOLATION_MODE_LINEAR,
+                        None,
+                        None,
+                    )
+                };
+                let rest = captures_app::motion::Pose::REST;
+                crate::capture::paint_countdown(
+                    dc,
+                    &g,
+                    &tokens,
+                    size,
+                    3,
+                    "Press Esc to cancel",
+                    rest,
+                    rest,
+                )
+            })
+        } else {
+            Box::new(move |dc| menu.borrow_mut().paint(dc, &g, &tokens, Some(&frozen)))
+        }
     } else if options.scene == Window::Recording {
         let recording =
             crate::recording::render_offscreen(options, g.clone(), tokens, (w as f32, h as f32))?;

@@ -93,9 +93,11 @@ display under the pointer, on Region or Full screen. Drag a region, or switch
 to Window and click the window under the pointer (the desktop picks the entire
 display), then press Enter or Capture (Esc or Close cancels); the countdown
 applies, the result is copied to the clipboard and History reloads. One shared
-`WindowSession` snapshot serves all three targets. Record mode, the
-Aspect/Display selects, the countdown overlay and floating previews are not
-ported yet. A physical Windows 11 check (4K, 150%) confirmed pixel-exact
+`WindowSession` snapshot serves all three targets. A screenshot delay shows
+shipping's countdown scrim ("SCREENSHOT IN", the number and "Press Esc to
+cancel") on the selected display with the shared entry and exit motions; Esc
+cancels it and the capture reads fresh pixels once it closes. Record mode, the
+Aspect/Display selects and floating previews are not ported yet. A physical Windows 11 check (4K, 150%) confirmed pixel-exact
 Region and Full screen captures, the clipboard and History; a second New
 Capture now refocuses the open bar instead of an error, and the snapshot waits
 for the tray menu and overflow flyout to close (a recheck passed both; the
@@ -106,7 +108,7 @@ the OS screenshot key is not taken over. `--scene capture --screenshot PATH`
 renders the bar offscreen (`--tool display` for Full screen, `--tool window`
 for Window, `--select x` for a sample selection or hovered window, `--select
 desktop` for the hovered display, `--select picked` for a picked window with
-the pointer on the desktop). There is no first-run setup window
+the pointer on the desktop, `--tool countdown` for the countdown at 3). There is no first-run setup window
 or launch notice yet; Preferences stands in, and files forwarded by path are
 not opened. A physical Windows 11 check (4K, 150%) passed quiet launch, the
 menu and its disabled rows, left-click, residency after closing windows,

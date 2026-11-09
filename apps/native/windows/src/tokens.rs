@@ -103,3 +103,13 @@ impl Tokens {
         value.trim_end_matches("em").parse::<f32>().unwrap_or(0.) * size
     }
 }
+
+impl captures_app::motion::MotionTokens for Tokens {
+    fn duration_ms(&self, token: &str) -> Option<f64> {
+        self.numbers.get(token).map(|ms| f64::from(*ms))
+    }
+
+    fn easing(&self, token: &str) -> Option<[f64; 4]> {
+        self.easings.get(token).copied()
+    }
+}

@@ -7,8 +7,9 @@
 //! list (and frozen pixels) off the UI thread and captures after
 //! confirmation. Region drags a rectangle, Window picks the window under the
 //! pointer (the desktop means the whole display) and Full screen saves the
-//! display; Record, the Aspect and Display selects, the countdown overlay and
-//! UI Automation are not ported yet.
+//! display. A configured delay shows shipping's ScreenshotCountdown scrim
+//! (`.recording-countdown`) on the selected display; Esc cancels it. Record,
+//! the Aspect and Display selects and UI Automation are not ported yet.
 
 use std::cell::RefCell;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
@@ -16,6 +17,7 @@ use std::time::{Duration, Instant};
 
 use captures_app::capture_flow::{self, CaptureFlow};
 use captures_app::capture_menu::{self, MenuMode, PrimaryState};
+use captures_app::motion::{Animation, Motion, Pose};
 use captures_app::selection::Point;
 use captures_app::window::{self as window_target, WindowSession};
 use captures_capture::LogicalRect;
@@ -647,6 +649,7 @@ type CaptureResult = std::result::Result<Option<captures_app::Artifact>, String>
 enum Phase {
     Preparing(Receiver<std::result::Result<Option<WindowSession>, String>>),
     Selecting(Box<Overlay>, Box<WindowSession>),
+    Counting(Box<Counting>),
     Capturing(Receiver<CaptureResult>),
     Done(Box<CaptureResult>),
 }
@@ -671,6 +674,154 @@ struct Overlay {
     _target: IDCompositionTarget,
     _visual: IDCompositionVisual2,
     surface: IDCompositionSurface,
+}
+
+/// The confirmed choice waiting out the screenshot delay behind
+/// `.recording-countdown` on the selected display.
+struct Counting {
+    hwnd: HWND,
+    g: Gfx,
+    scale: f32,
+    px: (u32, u32),
+    _target: IDCompositionTarget,
+    _visual: IDCompositionVisual2,
+    surface: IDCompositionSurface,
+    deadline: capture_flow::Countdown,
+    remaining: u8,
+    /// When the current entry or exit motion started.
+    started: Instant,
+    exiting: bool,
+    reduced: bool,
+    scrim: Animation,
+    content: Animation,
+    /// Taken when the deadline passes.
+    next: Option<(Choice, Box<WindowSession>)>,
+}
+
+impl Drop for Counting {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = DestroyWindow(self.hwnd);
+        }
+    }
+}
+
+impl Counting {
+    fn render(&mut self, t: &Tokens) -> Result<()> {
+        let ms = self.started.elapsed().as_secs_f64() * 1000.;
+        let (scrim, content) = (
+            self.scrim.pose_at(ms, self.reduced),
+            self.content.pose_at(ms, self.reduced),
+        );
+        let size = (self.px.0 as f32 / self.scale, self.px.1 as f32 / self.scale);
+        let hint = if self.exiting {
+            "Cancelling…"
+        } else {
+            "Press Esc to cancel"
+        };
+        let (g, remaining) = (&self.g, self.remaining);
+        gfx::draw_surface(&self.surface, self.px, (self.scale, self.scale), 0., |dc| {
+            paint_countdown(dc, g, t, size, remaining, hint, scrim, content)
+        })?;
+        unsafe { self.g.dcomp.as_ref().ok_or_else(Error::empty)?.Commit() }
+    }
+
+    fn animating(&self) -> bool {
+        let ms = self.started.elapsed().as_secs_f64() * 1000.;
+        self.scrim.running(ms, self.reduced) || self.content.running(ms, self.reduced)
+    }
+}
+
+/// Shipping's ScreenshotCountdown at `remaining` seconds: the
+/// `--glass-countdown-scrim`, then the heading, number and hint, centred
+/// with `.recording-countdown-content`'s grid, sizes and text shadow.
+#[allow(clippy::too_many_arguments)]
+pub fn paint_countdown(
+    dc: &ID2D1DeviceContext,
+    g: &Gfx,
+    t: &Tokens,
+    (w, h): (f32, f32),
+    remaining: u8,
+    hint: &str,
+    scrim: Pose,
+    content: Pose,
+) -> Result<()> {
+    let scrim_color = t.color("glass-countdown-scrim");
+    gfx::fill(
+        dc,
+        rect(0., 0., w, h),
+        alpha(scrim_color, scrim.opacity as f32),
+    )?;
+    let heading_size = (w * 0.016).clamp(t.n("countdown-label-min"), t.n("countdown-label-max"));
+    let number_size = (w * 0.26).clamp(t.n("countdown-number-min"), t.n("countdown-number-max"));
+    let heading = g.text_sized(
+        t,
+        "SCREENSHOT IN",
+        heading_size,
+        "weight-medium",
+        Some("tracking-wide"),
+    )?;
+    let number = g.text_sized(
+        t,
+        &remaining.to_string(),
+        number_size,
+        "weight-bold",
+        Some("tracking-tighter"),
+    )?;
+    let hint = g.text_sized(t, hint, t.n("text-md"), "weight-regular", None)?;
+    // `margin: 0.04em 0 0.06em` around a `line-height: 0.95` number, then the
+    // hint's `--s-7` top margin.
+    let number_box = number_size * 0.95;
+    let before = number_size * 0.04;
+    let after = number_size * 0.06 + t.n("s-7");
+    let total = heading.height + before + number_box + after + hint.height;
+    let opacity = content.opacity as f32;
+    let mut base = windows_numerics::Matrix3x2::identity();
+    unsafe { dc.GetTransform(&mut base) };
+    // `scale()` about the centre, after any `translateY`.
+    let (cx, cy) = (w / 2., h / 2.);
+    let k = content.scale as f32;
+    let local = windows_numerics::Matrix3x2 {
+        M11: k,
+        M12: 0.,
+        M21: 0.,
+        M22: k,
+        M31: cx - k * cx,
+        M32: cy - k * cy + content.translate_y as f32,
+    };
+    unsafe { dc.SetTransform(&(local * base)) };
+    let mut y = (h - total) / 2.;
+    let lines = [
+        (&heading, y, "glass-text-muted"),
+        (
+            &number,
+            {
+                y += heading.height + before;
+                y + (number_box - number.height) / 2.
+            },
+            "glass-text",
+        ),
+        (
+            &hint,
+            {
+                y += number_box + after;
+                y
+            },
+            "glass-text-muted",
+        ),
+    ];
+    let mut result = Ok(());
+    for (text, top, color) in lines {
+        let x = (w - text.width) / 2.;
+        // `text-shadow: 0 3px 24px rgba(0, 0, 0, 0.6)`
+        result = gfx::text_blur_shadow(dc, text, (x, top + 3.), 24., 0.6 * opacity)
+            .and_then(|()| gfx::text(dc, text, x, top, t.color_alpha(color, opacity)));
+        if result.is_err() {
+            break;
+        }
+    }
+    unsafe { dc.SetTransform(&base) };
+    result
 }
 
 impl Drop for Overlay {
@@ -830,6 +981,8 @@ pub fn service() -> Option<CaptureResult> {
             },
             // Global Escape or a session lock cancelled the generation.
             Phase::Selecting(..) => (!capture.flow.is_current()).then_some(Ok(None)),
+            // The countdown window's timer advances it.
+            Phase::Counting(..) => None,
             Phase::Capturing(results) => match results.try_recv() {
                 Ok(result) => Some(result),
                 Err(TryRecvError::Empty) => None,
@@ -853,30 +1006,7 @@ impl Capture {
         };
         let dcomp = g.dcomp.clone().ok_or_else(Error::empty)?;
         unsafe {
-            let instance = GetModuleHandleW(None)?;
-            if !REGISTERED.get() {
-                RegisterClassW(&WNDCLASSW {
-                    lpfnWndProc: Some(wndproc),
-                    hInstance: instance.into(),
-                    lpszClassName: w!("CapturesNewCapture"),
-                    ..Default::default()
-                });
-                REGISTERED.set(true);
-            }
-            let hwnd = CreateWindowExW(
-                WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOREDIRECTIONBITMAP,
-                w!("CapturesNewCapture"),
-                w!("New Capture"),
-                WS_POPUP,
-                display.x,
-                display.y,
-                display.width as i32,
-                display.height as i32,
-                None,
-                None,
-                Some(instance.into()),
-                None,
-            )?;
+            let hwnd = popup(&display, w!("CapturesNewCapture"), w!("New Capture"))?;
             let scale = GetDpiForWindow(hwnd).max(96) as f32 / 96.;
             let px = (display.width, display.height);
             let frozen = match session.frozen_preview() {
@@ -962,18 +1092,124 @@ impl Capture {
         else {
             return;
         };
+        if seconds == 0 {
+            return self.spawn_capture(choice, session, false);
+        }
+        match self.count(seconds, choice, session) {
+            Ok(counting) => self.phase = Phase::Counting(Box::new(counting)),
+            Err(error) => {
+                self.flow.cancel();
+                self.phase = Phase::Done(Box::new(Err(error.message().to_string())));
+                (self.wake)();
+            }
+        }
+    }
+
+    /// Open the countdown scrim over the selected display.
+    fn count(&self, seconds: u8, choice: Choice, session: Box<WindowSession>) -> Result<Counting> {
+        let display = session.display().clone();
+        let g = match crate::host::with_host(|h| h.g.clone()) {
+            Some(g) => g,
+            None => Gfx::new(&self.tokens, true)?,
+        };
+        let dcomp = g.dcomp.clone().ok_or_else(Error::empty)?;
+        let t = &self.tokens;
+        let resolve = |motion: Motion| motion.resolve(t).ok_or_else(Error::empty);
+        unsafe {
+            let hwnd = popup(
+                &display,
+                w!("CapturesCountdown"),
+                w!("Screenshot Countdown"),
+            )?;
+            let scale = GetDpiForWindow(hwnd).max(96) as f32 / 96.;
+            let px = (display.width, display.height);
+            let target = dcomp.CreateTargetForHwnd(hwnd, true)?;
+            let visual = dcomp.CreateVisual()?;
+            let surface = g.surface(px.0, px.1)?;
+            visual.SetContent(&surface)?;
+            target.SetRoot(&visual)?;
+            let mut counting = Counting {
+                hwnd,
+                g,
+                scale,
+                px,
+                _target: target,
+                _visual: visual,
+                surface,
+                deadline: capture_flow::Countdown::new(Instant::now(), seconds),
+                remaining: seconds,
+                started: Instant::now(),
+                exiting: false,
+                reduced: crate::appearance::reduced_motion(),
+                scrim: resolve(Motion::CountdownIn)?,
+                content: resolve(Motion::CountdownContentIn)?,
+                next: Some((choice, session)),
+            };
+            counting.render(t)?;
+            let _ = ShowWindow(hwnd, SW_SHOW);
+            let _ = SetForegroundWindow(hwnd);
+            let _ = SetFocus(Some(hwnd));
+            SetTimer(Some(hwnd), 1, 16, None);
+            Ok(counting)
+        }
+    }
+
+    /// A countdown frame: cancel (with the exit motion), tick the number, or
+    /// close the scrim and capture once the deadline passes.
+    fn tick(&mut self) {
+        let Phase::Counting(counting) = &mut self.phase else {
+            return;
+        };
+        if counting.exiting {
+            if counting.animating() {
+                let _ = counting.render(&self.tokens);
+            } else {
+                self.phase = Phase::Done(Box::new(Ok(None)));
+                (self.wake)();
+            }
+            return;
+        }
+        if !self.flow.is_current() {
+            if counting.reduced {
+                self.phase = Phase::Done(Box::new(Ok(None)));
+                (self.wake)();
+                return;
+            }
+            counting.exiting = true;
+            counting.started = Instant::now();
+            if let (Some(scrim), Some(content)) = (
+                Motion::CountdownOut.resolve(&self.tokens),
+                Motion::CountdownContentOut.resolve(&self.tokens),
+            ) {
+                counting.scrim = scrim;
+                counting.content = content;
+            }
+            let _ = counting.render(&self.tokens);
+            return;
+        }
+        let remaining = counting.deadline.remaining(Instant::now());
+        if remaining == 0 {
+            // Dropping the countdown closes the scrim before the capture.
+            let Some((choice, session)) = counting.next.take() else {
+                return;
+            };
+            self.phase = Phase::Done(Box::new(Ok(None)));
+            return self.spawn_capture(choice, session, true);
+        }
+        let changed = std::mem::replace(&mut counting.remaining, remaining) != remaining;
+        if changed || counting.animating() {
+            let _ = counting.render(&self.tokens);
+        }
+    }
+
+    /// Capture `choice` off the UI thread once closed windows have settled.
+    fn spawn_capture(&mut self, choice: Choice, session: Box<WindowSession>, after: bool) {
         let (generation, root) = (self.flow.generation(), self.root.clone());
         let include_cursor = self.settings.show_cursor_in_screenshots;
         let (sender, results) = channel();
         let wake = self.wake.clone();
         std::thread::spawn(move || {
-            let started = Instant::now();
-            let countdown = Duration::from_secs(u64::from(seconds));
-            while started.elapsed() < countdown && capture_flow::is_current(generation) {
-                std::thread::sleep(Duration::from_millis(50));
-            }
             std::thread::sleep(SETTLE);
-            let after = seconds > 0;
             let result = match choice {
                 Choice::Session(target) => match session.capture(&root, &target, after) {
                     Ok(artifact) => Ok(Some(artifact)),
@@ -1003,6 +1239,23 @@ impl Capture {
     }
 
     fn handle(&mut self, hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> Option<LRESULT> {
+        if let Phase::Counting(counting) = &self.phase
+            && counting.hwnd == hwnd
+        {
+            match msg {
+                WM_TIMER => self.tick(),
+                WM_PAINT => unsafe {
+                    let _ = ValidateRect(Some(hwnd), None);
+                },
+                WM_ERASEBKGND => return Some(LRESULT(1)),
+                WM_KEYDOWN if VIRTUAL_KEY(wp.0 as u16) == VK_ESCAPE => {
+                    self.flow.cancel();
+                    self.tick();
+                }
+                _ => return None,
+            }
+            return Some(LRESULT(0));
+        }
         let Phase::Selecting(overlay, session) = &mut self.phase else {
             return None;
         };
@@ -1128,6 +1381,43 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
         c.as_mut()?.handle(hwnd, msg, wp, lp)
     });
     handled.unwrap_or_else(|| unsafe { DefWindowProcW(hwnd, msg, wp, lp) })
+}
+
+/// A topmost tool popup covering `display`, registering both overlay classes
+/// on first use.
+unsafe fn popup(
+    display: &captures_capture::DisplayDescriptor,
+    class: PCWSTR,
+    title: PCWSTR,
+) -> Result<HWND> {
+    unsafe {
+        let instance = GetModuleHandleW(None)?;
+        if !REGISTERED.get() {
+            for name in [w!("CapturesNewCapture"), w!("CapturesCountdown")] {
+                RegisterClassW(&WNDCLASSW {
+                    lpfnWndProc: Some(wndproc),
+                    hInstance: instance.into(),
+                    lpszClassName: name,
+                    ..Default::default()
+                });
+            }
+            REGISTERED.set(true);
+        }
+        CreateWindowExW(
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOREDIRECTIONBITMAP,
+            class,
+            title,
+            WS_POPUP,
+            display.x,
+            display.y,
+            display.width as i32,
+            display.height as i32,
+            None,
+            None,
+            Some(instance.into()),
+            None,
+        )
+    }
 }
 
 /// Straight RGBA as an opaque premultiplied BGRA Direct2D bitmap.

@@ -376,6 +376,9 @@ pub struct Gfx {
     pub dcomp: Option<IDCompositionDesktopDevice>,
     dwrite: IDWriteFactory,
     formats: Vec<(Style, IDWriteTextFormat)>,
+    /// The UI family, for sizes no fixed [`Style`] covers.
+    family: HSTRING,
+    axes: Option<IDWriteFactory6>,
     /// Ascent and descent per em of the UI face, for CSS `line-height`.
     ascent: f32,
     descent: f32,
@@ -485,6 +488,8 @@ impl Gfx {
                 dcomp,
                 dwrite,
                 formats,
+                family: HSTRING::from(family),
+                axes,
                 ascent,
                 descent,
             })
@@ -531,6 +536,69 @@ impl Gfx {
                     DWRITE_LINE_SPACING_METHOD_UNIFORM,
                     line,
                     (line - content) / 2. + self.ascent * size,
+                )?;
+            }
+            let mut metrics = DWRITE_TEXT_METRICS::default();
+            layout.GetMetrics(&mut metrics)?;
+            Ok(Text {
+                layout,
+                width: metrics.width,
+                height: metrics.height,
+            })
+        }
+    }
+
+    /// One unwrapped line of the UI face at a computed `size` (CSS `clamp()`
+    /// sizes such as the countdown), `weight` and optional `tracking` token.
+    pub fn text_sized(
+        &self,
+        t: &Tokens,
+        text: &str,
+        size: f32,
+        weight: &str,
+        tracking: Option<&str>,
+    ) -> Result<Text> {
+        let weight = t.n(weight);
+        let wide: Vec<u16> = text.encode_utf16().collect();
+        unsafe {
+            let format: IDWriteTextFormat = match self.axes.as_ref().and_then(|f| {
+                f.CreateTextFormat(
+                    &self.family,
+                    None,
+                    &[DWRITE_FONT_AXIS_VALUE {
+                        axisTag: DWRITE_FONT_AXIS_TAG_WEIGHT,
+                        value: weight,
+                    }],
+                    size,
+                    w!("en-us"),
+                )
+                .ok()
+            }) {
+                Some(format) => format.cast()?,
+                None => self.dwrite.CreateTextFormat(
+                    &self.family,
+                    None,
+                    DWRITE_FONT_WEIGHT(weight as i32),
+                    DWRITE_FONT_STYLE_NORMAL,
+                    DWRITE_FONT_STRETCH_NORMAL,
+                    size,
+                    w!("en-us"),
+                )?,
+            };
+            format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
+            let layout = self
+                .dwrite
+                .CreateTextLayout(&wide, &format, 100_000., 100_000.)?;
+            if let Some(tracking) = tracking {
+                let layout1: IDWriteTextLayout1 = layout.cast()?;
+                layout1.SetCharacterSpacing(
+                    0.,
+                    t.em(tracking, size),
+                    0.,
+                    DWRITE_TEXT_RANGE {
+                        startPosition: 0,
+                        length: wide.len() as u32,
+                    },
                 )?;
             }
             let mut metrics = DWRITE_TEXT_METRICS::default();
@@ -901,6 +969,75 @@ pub fn text_shadow(
         }
     }
     Ok(())
+}
+
+/// A CSS black `text-shadow` with a true Gaussian blur (`CLSID_D2D1Shadow`,
+/// standard deviation blur ÷ 2) at `(x, y)`, offset included. Large text
+/// such as the countdown needs it: [`text_shadow`]'s rings read as an
+/// outline there. Falls back to the rings where the effect is unavailable.
+pub fn text_blur_shadow(
+    dc: &ID2D1DeviceContext,
+    layout: &Text,
+    (x, y): (f32, f32),
+    blur: f32,
+    alpha: f32,
+) -> Result<()> {
+    let blurred = || -> Result<()> {
+        unsafe {
+            let list = dc.CreateCommandList()?;
+            let target = dc.GetTarget()?;
+            let mut transform = Matrix3x2::identity();
+            dc.GetTransform(&mut transform);
+            dc.SetTarget(&list);
+            dc.SetTransform(&Matrix3x2::identity());
+            let black = brush(
+                dc,
+                D2D1_COLOR_F {
+                    r: 0.,
+                    g: 0.,
+                    b: 0.,
+                    a: 1.,
+                },
+            );
+            if let Ok(black) = &black {
+                dc.DrawTextLayout(
+                    Vector2 { X: 0., Y: 0. },
+                    &layout.layout,
+                    black,
+                    D2D1_DRAW_TEXT_OPTIONS_NONE,
+                );
+            }
+            dc.SetTarget(&target);
+            dc.SetTransform(&transform);
+            black?;
+            list.Close()?;
+            let effect = dc.CreateEffect(&CLSID_D2D1Shadow)?;
+            effect.SetInput(0, &list, true);
+            effect.SetValue(
+                D2D1_SHADOW_PROP_BLUR_STANDARD_DEVIATION.0 as u32,
+                D2D1_PROPERTY_TYPE_FLOAT,
+                &(blur / 2.).to_le_bytes(),
+            )?;
+            let color: Vec<u8> = [0f32, 0., 0., alpha]
+                .iter()
+                .flat_map(|v| v.to_le_bytes())
+                .collect();
+            effect.SetValue(
+                D2D1_SHADOW_PROP_COLOR.0 as u32,
+                D2D1_PROPERTY_TYPE_VECTOR4,
+                &color,
+            )?;
+            dc.DrawImage(
+                &effect.GetOutput()?,
+                Some(&Vector2 { X: x, Y: y }),
+                None,
+                D2D1_INTERPOLATION_MODE_LINEAR,
+                D2D1_COMPOSITE_MODE_SOURCE_OVER,
+            );
+            Ok(())
+        }
+    };
+    blurred().or_else(|_| text_shadow(dc, layout, x, y, blur, alpha))
 }
 
 /// A shipping 24-unit icon at `side` DIPs: every path is stroked except those
