@@ -125,7 +125,7 @@ pub(super) enum Outcome {
 
 /// Explicit overrides, then packaged/repository Tauri sidecars, then PATH.
 /// A Windows GNU workbench still uses the shipped MSVC sidecar executable.
-fn toolchain() -> MediaToolchain {
+pub(crate) fn toolchain() -> MediaToolchain {
     let target = format!("{}-pc-windows-msvc", std::env::consts::ARCH);
     let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../desktop/src-tauri/binaries");
     let executable = std::env::current_exe()

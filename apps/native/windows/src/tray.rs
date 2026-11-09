@@ -107,13 +107,10 @@ const MENU: [Row; 15] = [
     Row::Item("quit", "Quit Captures", Action::Quit, None),
 ];
 
-/// What the Win32 host can run so far. The screenshot rows open the capture
-/// bar; the recording and feedback rows stay visible but disabled.
+/// What the Win32 host can run so far. The screenshot and recording rows
+/// open the capture bar; Send Feedback stays visible but disabled.
 fn available(action: Action) -> bool {
-    !matches!(
-        action,
-        Action::RecordRegion | Action::RecordWindow | Action::RecordDisplay | Action::SendFeedback
-    )
+    action != Action::SendFeedback
 }
 
 fn shortcut(settings: &captures_settings::AppSettings, shortcut: Shortcut) -> &str {

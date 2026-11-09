@@ -634,6 +634,7 @@ dependencies = [
  "captures-capture",
  "captures-history",
  "captures-media",
+ "captures-recording",
  "captures-recording-platform",
  "captures-settings",
  "chrono",

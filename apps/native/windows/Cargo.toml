@@ -25,6 +25,7 @@ tray-icon = { version = "0.25.1", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 captures-settings = { path = "../../../crates/captures-settings" }
+captures-recording = { path = "../../../crates/captures-recording" }
 # Microphone enumeration (cpal/WASAPI) from the shared recording stack.
 captures-recording-platform = { path = "../../../crates/captures-recording-platform" }
 windows-core = "0.62"

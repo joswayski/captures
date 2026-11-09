@@ -55,6 +55,11 @@ pub fn render(options: &Options, path: &std::path::Path) -> Result<()> {
             ("Generic PnP Monitor".into(), w * 2, h * 2),
             settings.auto_start_on_selection,
         );
+        // `--select record` draws the bar in Record.
+        if options.select.as_deref() == Some("record") {
+            menu.mode = captures_app::capture_menu::MenuMode::Recording;
+            menu.controls_excluded = true;
+        }
         if target == crate::capture::Target::Region && options.select.is_some() {
             menu.selection = Some(crate::gfx::rect(320., 180., 860., 500.));
         }
@@ -107,6 +112,39 @@ pub fn render(options: &Options, path: &std::path::Path) -> Result<()> {
                 let result = stack.paint(dc, &g, &tokens);
                 dc.SetTransform(&base);
                 result
+            })
+        } else if options.tool.as_deref() == Some("hud") {
+            // The recording controls at 1:34 with a microphone, at the canvas
+            // corner over the desktop; `--select paused|failed|hover`.
+            let mut hud = crate::hud::Hud::new(true);
+            hud.input.busy = false;
+            hud.input.has_microphone = true;
+            hud.elapsed_ms = 94_000;
+            hud.level = 0.0;
+            hud.input.state = match options.select.as_deref() {
+                Some("paused") => captures_recording::RecordingState::Paused,
+                Some("failed") => captures_recording::RecordingState::Failed,
+                _ => captures_recording::RecordingState::Recording,
+            };
+            if options.select.as_deref() == Some("failed") {
+                hud.error = Some("ffmpeg exited before the first frame".into());
+            }
+            if options.select.as_deref() == Some("hover") {
+                hud.hover = Some(captures_app::recording_hud::Control::Stop);
+            }
+            let size = (w as f32, h as f32);
+            Box::new(move |dc| {
+                unsafe {
+                    dc.DrawBitmap(
+                        &frozen,
+                        Some(&crate::gfx::rect(0., 0., size.0, size.1)),
+                        1.,
+                        windows::Win32::Graphics::Direct2D::D2D1_INTERPOLATION_MODE_LINEAR,
+                        None,
+                        None,
+                    )
+                };
+                hud.paint(dc, &g, &tokens, 0.)
             })
         } else if options.tool.as_deref() == Some("countdown") {
             // The scrim over the live desktop at 3, at rest.

@@ -26,11 +26,15 @@ mod history_uia;
 #[cfg(windows)]
 mod host;
 #[cfg(windows)]
+mod hud;
+#[cfg(windows)]
 mod keys;
 #[cfg(windows)]
 mod live;
 #[cfg(windows)]
 mod previews;
+#[cfg(windows)]
+mod recorder;
 #[cfg(windows)]
 mod recording;
 #[cfg(windows)]

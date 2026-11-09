@@ -96,8 +96,8 @@ applies, the result is copied to the clipboard and History reloads. One shared
 `WindowSession` snapshot serves all three targets. A screenshot delay shows
 shipping's countdown scrim ("SCREENSHOT IN", the number and "Press Esc to
 cancel") on the selected display with the shared entry and exit motions; Esc
-cancels it and the capture reads fresh pixels once it closes. Record mode, the
-Aspect/Display selects and floating previews are not ported yet. A physical Windows 11 check (4K, 150%) confirmed pixel-exact
+cancels it and the capture reads fresh pixels once it closes. The Aspect and
+Display selects are not ported yet. A physical Windows 11 check (4K, 150%) confirmed pixel-exact
 Region and Full screen captures, the clipboard and History; a second New
 Capture now refocuses the open bar instead of an error, and the snapshot waits
 for the tray menu and overflow flyout to close (a recheck passed both; the
@@ -106,7 +106,7 @@ Window open the bar on that target (shipping's bar-less selectors are not
 ported). After setup, `--live` registers the saved capture shortcuts with the
 shared `CaptureShortcuts` owner, which takes over Print Screen and Win+Shift+S
 from Snipping Tool like shipping: New Capture and the screenshot shortcuts open
-the bar on their target, the recording shortcuts do nothing yet, and presses
+the bar on their target, the recording shortcuts open it in Record, and presses
 while New Capture is open are dropped (switching it in place is not ported).
 An active Preferences shortcut recorder releases the registrations. A key
 press skips the tray menu's 200 ms fade wait. A physical Windows 11 check
@@ -114,8 +114,31 @@ press skips the tray menu's 200 ms fade wait. A physical Windows 11 check
 recorder's release and Quit; key press to bar took about 380 ms in a release
 build (260 ms without Freeze screen). The Win+Shift+S hook ignores injected
 input and the installed Captures held Print Screen, so those two takeovers
-still need a real keyboard check. The
-recording and Send Feedback rows stay disabled. When Show mini previews is on,
+still need a real keyboard check. Send Feedback stays disabled.
+
+Record (`recorder.rs`) switches the bar to Record ("Start recording"; its
+note follows Include recording controls in captures), and the Record Region,
+Window and Display tray rows and shortcuts open it there. Its options row
+(frame rate, resolution, cursor, clicks, audio, microphone) is not ported:
+the take uses the saved recording settings. Confirming hands the capture flow
+to the shared recording worker, which verifies FFmpeg, prepares the session,
+then shows the "RECORDING IN" countdown (Esc cancels the take) and starts.
+The controls (`hud.rs`, shipping `.recording-hud` at 430×102) float centered
+20 px above the bottom of the display: a topmost, non-activating window,
+excluded from captures with `WDA_EXCLUDEFROMCAPTURE` unless Preferences
+includes it, dragged by the card. They show the status dot, elapsed time and
+state, and Stop, Pause/Resume, Restart, Mute with the microphone level, Delete
+and Hide, with state and copy from `captures_app::recording_hud`. Restart and
+Delete confirm with a system message box (OK/Cancel). Stop saves to History,
+adds a mini preview and opens the recording editor when Preferences asks;
+Quit saves an accepted take. New Capture or the tray brings hidden controls
+back. Not ported: the HUD's region Screenshot (drawn disabled), tooltips,
+keyboard focus, UIA, the hidden-controls notice and crash recovery. The HUD
+and Record bar match the Tauri harness offscreen
+(`--scene capture --tool hud [--select paused|failed|hover] --size 430x102`,
+`--tool region --select record`); a physical recording check is pending.
+
+When Show mini previews is on,
 each saved screenshot joins shipping's floating preview stack (`previews.rs`):
 a topmost, non-activating window placed with the shared `thumbnail_geometry`
 on the display under the pointer, hidden while New Capture is open. Cards show

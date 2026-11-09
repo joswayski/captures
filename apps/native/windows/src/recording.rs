@@ -34,6 +34,7 @@ mod worker;
 use output::Output;
 use preview::Preview;
 use timeline::Timeline;
+pub(crate) use worker::toolchain;
 use worker::{Job, Outcome, Presented, Worker};
 
 pub const SIZE: (f32, f32) = (1280., 840.);

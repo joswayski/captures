@@ -8,8 +8,9 @@
 //! confirmation. Region drags a rectangle, Window picks the window under the
 //! pointer (the desktop means the whole display) and Full screen saves the
 //! display. A configured delay shows shipping's ScreenshotCountdown scrim
-//! (`.recording-countdown`) on the selected display; Esc cancels it. Record,
-//! the Aspect and Display selects and UI Automation are not ported yet.
+//! (`.recording-countdown`) on the selected display; Esc cancels it. Record
+//! hands the flow, display and target to `recorder`; its options row, the
+//! Aspect and Display selects and UI Automation are not ported yet.
 
 use std::cell::RefCell;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
@@ -19,7 +20,8 @@ use captures_app::capture_flow::CaptureFlow;
 use captures_app::capture_menu::{self, MenuMode, PrimaryState};
 use captures_app::selection::Point;
 use captures_app::window::{self as window_target, WindowSession};
-use captures_capture::LogicalRect;
+use captures_capture::{DisplayDescriptor, LogicalRect};
+use captures_recording::{CaptureRect, RecordingTarget};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::*;
 use windows::Win32::Graphics::Direct2D::*;
@@ -102,6 +104,9 @@ struct Layout {
 /// display's top-left corner.
 pub struct Menu {
     pub target: Target,
+    pub mode: MenuMode,
+    /// Recording controls stay out of recordings (Preferences).
+    pub controls_excluded: bool,
     pub size: (f32, f32),
     pub selection: Option<Rect>,
     drag: Option<(f32, f32)>,
@@ -127,6 +132,8 @@ impl Menu {
     ) -> Self {
         Self {
             target,
+            mode: MenuMode::Screenshot,
+            controls_excluded: true,
             size,
             selection: None,
             drag: None,
@@ -169,9 +176,15 @@ impl Menu {
                 Some("capture"),
                 Hit::Screenshot,
                 true,
-                true,
+                self.mode == MenuMode::Screenshot,
             ),
-            (label("Record")?, None, Hit::Record, false, false),
+            (
+                label("Record")?,
+                None,
+                Hit::Record,
+                true,
+                self.mode == MenuMode::Recording,
+            ),
         ];
         let mut targets = Vec::new();
         for (target, text, icon) in [
@@ -191,11 +204,8 @@ impl Menu {
             8. + items.iter().map(|i| width(&i.0)).sum::<f32>()
         };
         let (aw, tw) = (box_width(&action), box_width(&targets));
-        let primary = capture_menu::primary_action(
-            MenuMode::Screenshot,
-            self.auto_start,
-            PrimaryState::default(),
-        );
+        let primary =
+            capture_menu::primary_action(self.mode, self.auto_start, PrimaryState::default());
         let primary = if primary.hidden {
             None
         } else {
@@ -214,8 +224,10 @@ impl Menu {
             + primary.as_ref().map_or(0., |(w, _)| GAP + 4. + w)
             + PAD;
         // `These controls **won’t** show in screenshots · Press Enter…`: the
-        // menu closes before every capture, so it never shows in one.
-        let visibility = capture_menu::visibility_note(MenuMode::Screenshot, true, true);
+        // menu closes before every capture, so it never shows in one. In
+        // Record the note follows the recording-controls preference.
+        let excluded = self.mode == MenuMode::Screenshot || self.controls_excluded;
+        let visibility = capture_menu::visibility_note(self.mode, true, excluded);
         let confirm = capture_menu::confirm_note(self.auto_start);
         let note_text = |text: &str, strong| {
             g.text(
@@ -526,7 +538,14 @@ impl Menu {
             let content = 16. + 6. + label.width;
             let x = (r.left + r.right - content) / 2.;
             let cy = (r.top + r.bottom) / 2.;
-            gfx::icon(dc, &g.factory, "capture", &[], (x, cy - 8., 16.), 1.8, ink)?;
+            if self.mode == MenuMode::Recording {
+                // `.recording-start .capture-record-dot` on the accent.
+                let dot = rect(x + 2., cy - 6., x + 14., cy + 6.);
+                gfx::fill_round(dc, dot, 6., t.color_alpha("theme-signal", opacity))?;
+                gfx::border(dc, dot, 6., 1.5, alpha(ink, 0.6))?;
+            } else {
+                gfx::icon(dc, &g.factory, "capture", &[], (x, cy - 8., 16.), 1.8, ink)?;
+            }
             gfx::text(dc, label, x + 22., cy - label.height / 2., ink)?;
         }
         // `.capture-selector-note`
@@ -644,19 +663,36 @@ enum Choice {
     Display,
 }
 
-type CaptureResult = std::result::Result<Option<captures_app::Artifact>, String>;
+pub type CaptureResult = std::result::Result<Option<captures_app::Artifact>, String>;
+
+/// What a finished New Capture leaves for the host.
+pub enum Outcome {
+    Captured(Box<CaptureResult>),
+    /// Record was confirmed: the recorder takes over the flow and its Escape.
+    Record(Box<Handoff>),
+}
+
+pub struct Handoff {
+    pub flow: CaptureFlow,
+    pub display: DisplayDescriptor,
+    pub target: RecordingTarget,
+    pub settings: captures_settings::AppSettings,
+    pub tokens: Tokens,
+}
 
 enum Phase {
     Preparing(Receiver<std::result::Result<Option<WindowSession>, String>>),
     Selecting(Box<Overlay>, Box<WindowSession>),
     Counting(Box<Counting>),
     Capturing(Receiver<CaptureResult>),
+    Record(Box<(DisplayDescriptor, RecordingTarget)>),
     Done(Box<CaptureResult>),
 }
 
 struct Capture {
     flow: CaptureFlow,
     target: Target,
+    mode: MenuMode,
     settings: captures_settings::AppSettings,
     tokens: Tokens,
     root: std::path::PathBuf,
@@ -708,6 +744,7 @@ pub fn active() -> bool {
 pub fn open(
     options: &crate::Options,
     target: Target,
+    mode: MenuMode,
     from_menu: bool,
     wake: impl Fn() + Send + Sync + Clone + 'static,
 ) -> std::result::Result<(), String> {
@@ -744,6 +781,7 @@ pub fn open(
         *c.borrow_mut() = Some(Capture {
             flow,
             target,
+            mode,
             settings,
             tokens,
             root,
@@ -827,9 +865,23 @@ fn cloaked(hwnd: HWND) -> bool {
 
 /// Advance the capture; `Some` with its result once it ends. Call from the
 /// host loop outside any window borrow.
-pub fn service() -> Option<CaptureResult> {
+pub fn service() -> Option<Outcome> {
     CAPTURE.with(|cell| {
         let mut slot = cell.try_borrow_mut().ok()?;
+        if matches!(slot.as_ref()?.phase, Phase::Record(_)) {
+            let capture = slot.take()?;
+            let Phase::Record(record) = capture.phase else {
+                return None;
+            };
+            let (display, target) = *record;
+            return Some(Outcome::Record(Box::new(Handoff {
+                flow: capture.flow,
+                display,
+                target,
+                settings: capture.settings,
+                tokens: capture.tokens,
+            })));
+        }
         let capture = slot.as_mut()?;
         let finished = match &mut capture.phase {
             Phase::Preparing(prepared) => match prepared.try_recv() {
@@ -856,11 +908,12 @@ pub fn service() -> Option<CaptureResult> {
                 Err(TryRecvError::Disconnected) => Some(Err("The capture worker stopped".into())),
             },
             Phase::Done(result) => Some(std::mem::replace(&mut **result, Ok(None))),
+            Phase::Record(_) => None,
         };
         if finished.is_some() {
             *slot = None;
         }
-        finished
+        finished.map(|result| Outcome::Captured(Box::new(result)))
     })
 }
 
@@ -891,6 +944,8 @@ impl Capture {
                 (display.name.clone(), display.width, display.height),
                 self.settings.auto_start_on_selection,
             );
+            menu.mode = self.mode;
+            menu.controls_excluded = !self.settings.include_recording_controls_in_captures;
             menu.windows = window_rects(&session);
             let mut overlay = Overlay {
                 hwnd,
@@ -928,6 +983,40 @@ impl Capture {
         let Phase::Selecting(_, session) = &self.phase else {
             return;
         };
+        if overlay.menu.mode == MenuMode::Recording {
+            let display = session.display().clone();
+            let whole = RecordingTarget::Display {
+                display_id: display.id.clone(),
+            };
+            // Region rects stay in the overlay's display-local DIPs, which
+            // the recording engine scales to the captured frame.
+            let target = match (overlay.menu.target, overlay.menu.selection) {
+                (Target::Region, Some(r)) => RecordingTarget::Region {
+                    display_id: display.id.clone(),
+                    rect: CaptureRect {
+                        x: r.left.round() as i32,
+                        y: r.top.round() as i32,
+                        width: (r.right - r.left).round() as u32,
+                        height: (r.bottom - r.top).round() as u32,
+                    },
+                },
+                (Target::Window, _) => match overlay.menu.picked.flatten() {
+                    Some(index) => match session.windows().get(index) {
+                        Some(window) => RecordingTarget::Window {
+                            window_id: window.id.clone(),
+                        },
+                        None => return,
+                    },
+                    None => whole,
+                },
+                (Target::Display, _) => whole,
+                _ => return,
+            };
+            // Dropping the overlay closes the menu; the host hands off next.
+            self.phase = Phase::Record(Box::new((display, target)));
+            (self.wake)();
+            return;
+        }
         let choice = match (overlay.menu.target, overlay.menu.selection) {
             (Target::Region, Some(r)) => Choice::Session(window_target::Target::Region {
                 rect: LogicalRect {
@@ -1168,7 +1257,15 @@ impl Capture {
                     self.confirm();
                 }
             }
-            Some(Hit::Screenshot | Hit::Record) | None => {}
+            Some(hit @ (Hit::Screenshot | Hit::Record)) => {
+                overlay.menu.mode = if hit == Hit::Record {
+                    MenuMode::Recording
+                } else {
+                    MenuMode::Screenshot
+                };
+                let _ = overlay.render(&self.tokens);
+            }
+            None => {}
         }
         Some(LRESULT(0))
     }

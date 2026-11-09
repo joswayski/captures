@@ -21,7 +21,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{HSTRING, w};
 
 use crate::Options;
+use crate::capture::Outcome;
 use crate::tray::{Action, Tray};
+use captures_app::capture_menu::MenuMode;
 
 /// Posted to the UI thread so its wait returns; carries no data.
 const WM_APP_LIVE: u32 = WM_APP + 20;
@@ -147,6 +149,7 @@ pub fn start(options: &Options, instance: Instance) {
 
 /// Release the tray and the profile election.
 pub fn stop() {
+    crate::recorder::shutdown();
     RESIDENT.with(|r| r.borrow_mut().take());
 }
 
@@ -188,10 +191,20 @@ pub fn service() {
     let recorder = crate::host::with_host(|h| h.scene.recording.is_some()).unwrap_or(false);
     suspend_shortcuts(recorder);
     match crate::capture::service() {
-        Some(Ok(Some(artifact))) => captured(&options, artifact),
-        Some(Ok(None)) | None => {}
-        Some(Err(error)) => show_error(&error),
+        Some(Outcome::Captured(result)) => match *result {
+            Ok(Some(artifact)) => captured(&options, artifact),
+            Ok(None) => {}
+            Err(error) => show_error(&error),
+        },
+        None => {}
+        Some(Outcome::Record(handoff)) => {
+            let thread = RESIDENT.with(|r| r.borrow().as_ref().map(|r| r.thread));
+            if let Some(thread) = thread {
+                crate::recorder::start(&options, *handoff, wake_on(thread));
+            }
+        }
     }
+    crate::recorder::service();
     crate::previews::set_suppressed(crate::capture::active());
     while let Some(action) = RESIDENT.with(|r| r.borrow().as_ref()?.tray.as_ref()?.next_action()) {
         run(&options, action);
@@ -199,17 +212,19 @@ pub fn service() {
     while let Some(shortcut) =
         RESIDENT.with(|r| r.borrow().as_ref()?.shortcuts.as_ref()?.next_action())
     {
-        // As the tray rows; recording shortcuts do nothing until recording
-        // is ported.
-        let target = match shortcut {
-            CaptureShortcut::NewCapture | CaptureShortcut::Region => crate::capture::Target::Region,
-            CaptureShortcut::Window => crate::capture::Target::Window,
-            CaptureShortcut::Display => crate::capture::Target::Display,
-            CaptureShortcut::RecordRegion
-            | CaptureShortcut::RecordWindow
-            | CaptureShortcut::RecordDisplay => continue,
+        // As the tray rows: each opens the bar on its mode and target.
+        use crate::capture::Target;
+        let (target, mode) = match shortcut {
+            CaptureShortcut::NewCapture | CaptureShortcut::Region => {
+                (Target::Region, MenuMode::Screenshot)
+            }
+            CaptureShortcut::Window => (Target::Window, MenuMode::Screenshot),
+            CaptureShortcut::Display => (Target::Display, MenuMode::Screenshot),
+            CaptureShortcut::RecordRegion => (Target::Region, MenuMode::Recording),
+            CaptureShortcut::RecordWindow => (Target::Window, MenuMode::Recording),
+            CaptureShortcut::RecordDisplay => (Target::Display, MenuMode::Recording),
         };
-        new_capture(&options, target, false);
+        new_capture(&options, target, mode, false);
     }
     for _ in 0..32 {
         let next = RESIDENT.with(|r| r.borrow().as_ref().map(|r| r.instance.next_request()));
@@ -256,16 +271,45 @@ fn run(options: &Options, action: Action) {
         // Shipping's Screenshot Region and Window open their selector without
         // the bar; those direct overlays are not ported, so the bar opens on
         // that target instead.
-        Action::NewCapture | Action::CaptureRegion => {
-            new_capture(options, crate::capture::Target::Region, true)
-        }
-        Action::CaptureWindow => new_capture(options, crate::capture::Target::Window, true),
-        Action::CaptureDisplay => new_capture(options, crate::capture::Target::Display, true),
-        // Disabled rows: recording and feedback are not ported yet.
-        Action::RecordRegion
-        | Action::RecordWindow
-        | Action::RecordDisplay
-        | Action::SendFeedback => {}
+        Action::NewCapture | Action::CaptureRegion => new_capture(
+            options,
+            crate::capture::Target::Region,
+            MenuMode::Screenshot,
+            true,
+        ),
+        Action::CaptureWindow => new_capture(
+            options,
+            crate::capture::Target::Window,
+            MenuMode::Screenshot,
+            true,
+        ),
+        Action::CaptureDisplay => new_capture(
+            options,
+            crate::capture::Target::Display,
+            MenuMode::Screenshot,
+            true,
+        ),
+        // The Record rows open the bar in Record on their target.
+        Action::RecordRegion => new_capture(
+            options,
+            crate::capture::Target::Region,
+            MenuMode::Recording,
+            true,
+        ),
+        Action::RecordWindow => new_capture(
+            options,
+            crate::capture::Target::Window,
+            MenuMode::Recording,
+            true,
+        ),
+        Action::RecordDisplay => new_capture(
+            options,
+            crate::capture::Target::Display,
+            MenuMode::Recording,
+            true,
+        ),
+        // Disabled row: feedback is not ported yet.
+        Action::SendFeedback => {}
     }
 }
 
@@ -353,17 +397,21 @@ fn reactivate(options: &Options) {
 
 /// Open New Capture unless first-run setup is unfinished (Preferences stands
 /// in for setup, as shipping opens setup instead).
-fn new_capture(options: &Options, target: crate::capture::Target, from_menu: bool) {
+fn new_capture(options: &Options, target: crate::capture::Target, mode: MenuMode, from_menu: bool) {
     let settings = captures_settings::load(&options.settings_file).unwrap_or_default();
     if !settings.onboarding_completed {
         return open_preferences(options);
+    }
+    // A running recording owns the capture flow: bring its controls back.
+    if crate::recorder::active() {
+        return crate::recorder::restore();
     }
     let Some(thread) = RESIDENT.with(|r| r.borrow().as_ref().map(|r| r.thread)) else {
         return;
     };
     // Shipping hides the mini previews before the snapshot.
     crate::previews::set_suppressed(true);
-    if let Err(error) = crate::capture::open(options, target, from_menu, wake_on(thread)) {
+    if let Err(error) = crate::capture::open(options, target, mode, from_menu, wake_on(thread)) {
         show_error(&error);
     }
 }
@@ -400,7 +448,7 @@ pub fn copy_png(path: &std::path::Path) -> std::result::Result<(), String> {
 
 /// Capture failures use a system message box until the native error surface
 /// is ported.
-fn show_error(message: &str) {
+pub fn show_error(message: &str) {
     eprintln!("{message}");
     unsafe {
         MessageBoxW(
