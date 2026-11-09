@@ -42,6 +42,13 @@ pub fn elect(options: &Options) -> std::io::Result<Option<Instance>> {
         .history_root
         .clone()
         .unwrap_or_else(captures_app::default_history_root);
+    // A relaunch is the foreground process; let the resident copy it
+    // forwards to bring its window forward instead of opening it behind.
+    let _ = unsafe {
+        windows::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow(
+            windows::Win32::UI::WindowsAndMessaging::ASFW_ANY,
+        )
+    };
     Ok(
         match Instance::start(&root, OpenRequest::from_paths(Vec::new())?)? {
             Launch::Primary(instance) => Some(instance),

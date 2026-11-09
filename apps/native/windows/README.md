@@ -91,8 +91,10 @@ last window keeps the app resident. Capture, recording and Send Feedback rows
 are disabled and no global shortcuts are registered until those flows exist,
 so the OS screenshot key is not taken over. There is no first-run setup window
 or launch notice yet; Preferences stands in, and files forwarded by path are
-not opened. Wine cannot render Preferences (no DirectComposition) or open the
-tray menu, so physical Windows acceptance remains open.
+not opened. A physical Windows 11 check (4K, 150%) passed quiet launch, the
+menu and its disabled rows, left-click, residency after closing windows,
+relaunch forwarding and Quit, with the OS Win+Shift+S still working. Wine
+cannot render Preferences (no DirectComposition) or open the tray menu.
 
 Recordings need FFmpeg and FFprobe. `CAPTURES_FFMPEG` and `CAPTURES_FFPROBE`
 override discovery; otherwise the host looks beside its executable, in Tauri's
