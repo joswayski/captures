@@ -48,8 +48,15 @@ reports an invalid draft instead of exporting the last accepted cap. Unit change
 preserve exact whole bytes (unlike Tauri's eight-significant-digit formatter).
 The comparison displays the cap rather than an estimate. Replacement resets to
 source defaults and clears the cap. Physical pointer, UIA and DirectComposition
-acceptance for these controls remains open. Format switching remains migration work.
-This slice preserves the source's MP4/GIF format; WebM saves report unsupported.
+acceptance for these controls remains open. The filename's Format menu switches
+between MP4 and GIF, preserving trim, crop, audio settings and size limits.
+Changing formats forces a new file instead of overwriting the source; returning
+to the source format allows replacement again. GIF-only frame rate/palette
+settings do not leak into MP4 exports, and source playback stays independent of
+the export format. Videos honor the saved output-format preference; GIF sources
+start as GIF. WebM remains selectable to match Tauri, but saving it reports
+unsupported and writes no file. The menu shares the existing keyboard and UIA
+ExpandCollapse/SelectionItem behavior; physical interaction acceptance remains open.
 The filename exposes UIA Value, the copy switch
 and preview modes expose Toggle, and actions Invoke. Timeline/playback passed
 physical pass 24; Narrator/Text-pattern and recording-editor parity remain open.
@@ -79,6 +86,20 @@ Recordings need FFmpeg and FFprobe. `CAPTURES_FFMPEG` and `CAPTURES_FFPROBE`
 override discovery; otherwise the host looks beside its executable, in Tauri's
 `apps/desktop/src-tauri/binaries` (`*-<arch>-pc-windows-msvc.exe`), then on PATH
 as `ffmpeg.exe` and `ffprobe.exe`. No tools are downloaded by the host.
+
+On Linux (and in orbs), the tests also run under Wine 8 with a disposable prefix.
+Run `node apps/native/prepare.mjs --output apps/native/windows/resources` first.
+The prefix needs DejaVu copies renamed to Segoe UI/Consolas plus Wine's
+Tahoma in `drive_c/windows/Fonts`, *registered* under
+`HKLM\Software\Microsoft\Windows NT\CurrentVersion\Fonts` (Wine's DirectWrite
+ignores unregistered files there, and every layout test then fails with
+`0x80004005`), and a MinGW-built `bcryptprimitives.dll` exporting `ProcessPrng`
+with `WINEDLLOVERRIDES=bcryptprimitives=n,b`. Build with
+`cargo +1.95.0 test --target x86_64-pc-windows-gnu --no-run`, then run the test
+executable under `wine` with `--test-threads=1`, an Xvfb `DISPLAY`, and
+`CAPTURES_FFMPEG`/`CAPTURES_FFPROBE` pointing at Windows FFmpeg from a Preview
+installer (`7z x`). In a 4 GB orb, run clippy with `-j1` and not alongside other
+builds. These shims are test-only; never package them.
 
 Each scene node (`src/scene.rs`) owns one composition surface. Hover and
 toggle transitions animate visual opacity and offsets on the compositor, and

@@ -1096,6 +1096,121 @@ mod tests {
     }
 
     #[test]
+    fn format_selection_preserves_edits_and_requires_a_new_file_for_conversion() {
+        use captures_media::ExportFormat;
+        use captures_settings::VideoFormat;
+        let (mut w, profile) = fixture();
+        let p = w.presented.as_mut().unwrap();
+        p.original = Some(profile.join("Recording.mp4"));
+        p.edit.trim_start_ms = 700;
+        p.edit.trim_end_ms = Some(4300);
+        p.edit.audio.source_has_system_audio = true;
+        w.make_copy = false;
+        w.output.values.audio.system_volume = 0.63;
+        w.output.values.fps = 12;
+        w.output.values.maximum_width = 320;
+        w.layout().unwrap();
+
+        // The filename suffix is a separate, non-scrolling keyboard/pointer
+        // target. Escape cancels a highlighted choice without converting.
+        let rect = w.target_rect(Target::Format);
+        assert_eq!(w.hit(rect.x + 5., rect.y + 5.), Some(Target::Format));
+        w.set_focus(Some(Target::Format), true);
+        assert!(w.output_menu_key(VK_DOWN));
+        assert!(w.output_menu_key(VK_ESCAPE));
+        assert_eq!(w.output_value(Target::Format), "MP4");
+        assert!(!w.make_copy);
+
+        // A format change while replacing must protect the original, even
+        // when the user had typed a different destination beforehand.
+        w.set_value("custom-name");
+        w.directory = profile.join("elsewhere");
+        w.choose_output(Target::Format, 1);
+        assert_eq!(w.destination(), profile.join("Recording-edited.gif"));
+        assert!(w.make_copy && !w.enabled(Target::Copy));
+        w.activate(Target::Copy);
+        assert!(w.make_copy);
+        assert!(w.shown(Target::Fps) && !w.shown(Target::System));
+        assert_eq!(w.output.values.mode, ui::QualityMode::Compress);
+        assert!(!w.enabled(Target::Save));
+        let mut accepted = w.presented.take().unwrap();
+        accepted.output = w.output.values.clone();
+        (accepted.edit, accepted.export) = accepted.output.specs(
+            accepted.width,
+            accepted.height,
+            accepted.edit,
+            accepted.export,
+        );
+        assert_eq!(accepted.export.format, ExportFormat::Gif);
+        assert_eq!(accepted.export.frames_per_second, Some(12));
+        assert_eq!(accepted.export.gif_max_colors, Some(256));
+        assert_eq!(
+            (accepted.edit.output_width, accepted.edit.output_height),
+            (Some(320), Some(180))
+        );
+        assert!(accepted.edit.audio.mute_system_audio);
+        assert_eq!(
+            (accepted.edit.trim_start_ms, accepted.edit.trim_end_ms),
+            (700, Some(4300))
+        );
+        w.apply_outcome(Outcome::Preview(
+            w.timeline.generation,
+            Box::new(accepted),
+            None,
+        ));
+        assert!(w.enabled(Target::Save) && w.shown(Target::Play));
+        // MP4 sources remain video previews even when exporting GIF.
+        w.preview.playing = true;
+        assert!(!w.compare_visible());
+        w.preview.playing = false;
+
+        w.choose_output(Target::Format, 0);
+        assert!(w.enabled(Target::Copy));
+        assert_eq!(w.destination(), profile.join("Recording-edited.mp4"));
+        assert!(!w.shown(Target::Fps) && w.shown(Target::System));
+        let p = w.presented.as_ref().unwrap();
+        let (edit, export) =
+            w.output
+                .values
+                .specs(p.width, p.height, p.edit.clone(), p.export.clone());
+        assert_eq!(export.format, ExportFormat::Mp4);
+        assert_eq!(
+            (export.frames_per_second, export.gif_max_colors),
+            (None, None)
+        );
+        assert_eq!((edit.output_width, edit.output_height), (None, None));
+        assert!(!edit.audio.mute_system_audio);
+        assert_eq!(edit.audio.system_volume, 0.63);
+        w.activate(Target::Copy);
+        assert_eq!(w.destination(), profile.join("Recording.mp4"));
+        assert!(!w.make_copy);
+
+        w.choose_output(Target::Format, 2);
+        assert_eq!(w.output.values.format, VideoFormat::WebM);
+        assert!(w.make_copy && !w.compresses());
+        let mut p = w.presented.take().unwrap();
+        p.output = w.output.values.clone();
+        (p.edit, p.export) = p.output.specs(p.width, p.height, p.edit, p.export);
+        w.apply_outcome(Outcome::Preview(w.timeline.generation, Box::new(p), None));
+        w.activate(Target::Save);
+        assert_eq!(w.status, ui::WEBM_EXPORT_ERROR);
+        assert!(!w.saving);
+
+        // A rejected conversion restores the accepted format and its suffix.
+        w.choose_output(Target::Format, 1);
+        let accepted = w.presented.take().unwrap();
+        w.apply_outcome(Outcome::Preview(
+            w.timeline.generation,
+            Box::new(accepted),
+            Some("decode failed".into()),
+        ));
+        assert_eq!(w.output_value(Target::Format), "WebM");
+        assert_eq!(w.extension(), "webm");
+        drop(w);
+        std::fs::remove_dir_all(profile).unwrap();
+    }
+
+    #[test]
     fn maximum_file_size_keeps_exact_drafts_and_only_saves_a_valid_cap() {
         use super::super::compare::Encoded;
         use captures_media::QualityPreset;
@@ -1238,10 +1353,8 @@ mod tests {
         assert_eq!(cap(&w), Some(2_500_000));
 
         // GIF offers Compress and Maximum; a capped GIF keeps its palette.
-        let p = w.presented.as_mut().unwrap();
-        p.export.format = captures_media::ExportFormat::Gif;
-        p.mime_type = "image/gif".into();
-        w.output.values.mode = ui::QualityMode::Compress;
+        w.choose_output(Target::Format, 1);
+        w.choose_output(Target::QualityMode, 0);
         w.choose_output(Target::Quality, 0);
         let modes: Vec<_> = w
             .output_choices(Target::QualityMode)

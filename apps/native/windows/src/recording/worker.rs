@@ -10,9 +10,7 @@ use captures_app::recording_editor::{
     RecordingSaveRequest, ReplacedRecording, SavedRecording,
 };
 use captures_app::recording_editor_ui::{self as ui, SaveDefaults};
-use captures_media::{
-    CancelToken, EditSpec, ExportFormat, ExportProgress, ExportSpec, MediaToolchain,
-};
+use captures_media::{CancelToken, EditSpec, ExportProgress, ExportSpec, MediaToolchain};
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
 
@@ -219,26 +217,25 @@ impl Worker {
                     toolchain(),
                 )
                 .and_then(|mut session| {
-                    // The shared session starts with MP4 preview/save defaults.
-                    // Until the format picker lands, preserve GIF sources as GIF
-                    // for both save-copy and replacement, never MP4 in a .gif file.
+                    // Shipping starts GIF sources as GIF and honors the saved
+                    // output preference for videos, including unsupported WebM.
                     let snapshot = session.snapshot_v2();
                     output = Values::new(
                         snapshot.editor.source.width,
                         snapshot.editor.source.height,
                         &settings,
                     );
-                    if snapshot.editor.source.mime_type == "image/gif" {
+                    output.format = ui::initial_output_format(
+                        &snapshot.editor.source.mime_type,
+                        settings.video_format,
+                    );
+                    if output.format != captures_settings::VideoFormat::Mp4 {
                         output.mode = ui::QualityMode::Compress;
-                        let export = ExportSpec {
-                            format: ExportFormat::Gif,
-                            ..snapshot.save_export.clone()
-                        };
                         let (edit, export) = output.specs(
                             snapshot.editor.source.width,
                             snapshot.editor.source.height,
                             snapshot.editor.edit.clone(),
-                            export,
+                            snapshot.save_export.clone(),
                         );
                         session
                             .execute_v2(RecordingEditorRequestV2::UpdatePreview { edit, export })?;
@@ -406,6 +403,10 @@ impl Worker {
                                             snapshot.editor.source.width,
                                             snapshot.editor.source.height,
                                             &settings,
+                                        );
+                                        output.format = ui::initial_output_format(
+                                            &snapshot.editor.source.mime_type,
+                                            captures_settings::VideoFormat::Mp4,
                                         );
                                         if snapshot.editor.source.mime_type == "image/gif" {
                                             output.mode = ui::QualityMode::Compress;

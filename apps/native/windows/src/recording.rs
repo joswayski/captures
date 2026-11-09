@@ -1,5 +1,5 @@
 //! Retained recording preview, timeline, crop, comparison and save footer, backed by
-//! the shared media session. Format switching remains; this is
+//! the shared media session, with MP4/GIF output selection. This is
 //! an opt-in workbench, not the shipping editor.
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -74,6 +74,7 @@ pub fn with_recording<R>(hwnd: HWND, f: impl FnOnce(&mut Recording) -> R) -> Opt
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Target {
     Filename,
+    Format,
     Change,
     Copy,
     Cancel,
@@ -111,7 +112,7 @@ pub enum Target {
     CompareShow,
 }
 
-pub const TARGETS: [Target; 43] = [
+pub const TARGETS: [Target; 44] = [
     Target::Loop,
     Target::Fit,
     Target::Actual,
@@ -151,6 +152,7 @@ pub const TARGETS: [Target; 43] = [
     Target::Mono,
     Target::Change,
     Target::Filename,
+    Target::Format,
     Target::Copy,
     Target::Cancel,
     Target::Reveal,
@@ -161,6 +163,7 @@ impl Target {
     pub fn label(self) -> &'static str {
         match self {
             Self::Filename => "Saved filename",
+            Self::Format => "Format",
             Self::Change => "Change save location",
             Self::Copy => "Save as new file",
             Self::Cancel => "Cancel",
@@ -210,7 +213,7 @@ impl Target {
                 self,
                 Self::CompareSplit | Self::CompareHide | Self::CompareShow
             )
-            || self.is_output()
+            || (self.is_output() && self != Self::Format)
     }
 }
 
@@ -447,21 +450,24 @@ impl Recording {
     }
 
     fn extension(&self) -> &'static str {
-        if self
-            .presented
+        match self.output.values.format {
+            captures_settings::VideoFormat::Gif => "gif",
+            captures_settings::VideoFormat::WebM => "webm",
+            captures_settings::VideoFormat::Mp4 => "mp4",
+        }
+    }
+
+    fn format_requires_copy(&self) -> bool {
+        self.presented.as_ref().is_some_and(|p| {
+            self.output.values.format
+                != ui::initial_output_format(&p.mime_type, captures_settings::VideoFormat::Mp4)
+        })
+    }
+
+    fn source_is_gif(&self) -> bool {
+        self.presented
             .as_ref()
             .is_some_and(|p| p.mime_type == "image/gif")
-        {
-            "gif"
-        } else if self
-            .presented
-            .as_ref()
-            .is_some_and(|p| p.mime_type.starts_with("video/webm"))
-        {
-            "webm"
-        } else {
-            "mp4"
-        }
     }
 
     fn destination(&self) -> PathBuf {
@@ -522,10 +528,12 @@ impl Recording {
                         edit == p.edit && export == p.export
                     })
             }
-            Target::Copy => self
-                .presented
-                .as_ref()
-                .is_some_and(|p| p.original.is_some()),
+            Target::Copy => {
+                self.presented
+                    .as_ref()
+                    .is_some_and(|p| p.original.is_some())
+                    && !self.format_requires_copy()
+            }
             _ => true,
         }
     }
@@ -535,6 +543,10 @@ impl Recording {
     }
 
     pub fn hit(&self, x: f32, y: f32) -> Option<Target> {
+        // The format trigger occupies the trailing part of the filename field.
+        if self.shown(Target::Format) && self.target_rect(Target::Format).contains(x, y) {
+            return Some(Target::Format);
+        }
         if let Some(handle) = self.crop_hit(x, y) {
             return (handle != CropDragHandle::Move).then_some(Target::CropHandle(handle));
         }
@@ -654,6 +666,7 @@ impl Recording {
         let x = if compact { pad } else { (w - total) / 2. };
         let field_y = y + n("s-4") + 16. + n("s-2");
         self.rects[slot(Target::Filename)] = Rect::new(x, field_y, filename_w, n("h-md"));
+        self.rects[slot(Target::Format)] = Rect::new(x + filename_w - 76., field_y, 76., n("h-md"));
         self.rects[slot(Target::Change)] =
             Rect::new(x + filename_w - 58., y + n("s-4") - 2., 58., 20.);
         self.rects[slot(Target::Copy)] =
@@ -891,6 +904,14 @@ impl Recording {
     }
 
     fn refresh_footer(&mut self) {
+        // A conversion cannot replace a source of another format. Match
+        // Tauri's new-file name/location suggestion when enabling the copy.
+        if self.format_requires_copy() && !self.make_copy {
+            self.make_copy = true;
+            self.directory = self.source_directory.clone();
+            self.set_value(&ui::edited_file_stem(&self.source_stem));
+            self.events.push(Event::Copy);
+        }
         self.dirty[FOOTER..].fill(true);
         self.events.push(Event::Structure);
     }
@@ -918,6 +939,7 @@ impl Recording {
                         self.timeline.end = p.edit.trim_end_ms.unwrap_or(p.duration_ms).max(1);
                         self.presented = Some(p);
                         self.reset_output();
+                        self.refresh_footer();
                         self.layout_preview();
                         if !self.hwnd.is_invalid() {
                             self.load_timeline();
@@ -1042,7 +1064,7 @@ impl Recording {
                     };
                     self.set_focus(Some(target), self.focus_visible);
                 }
-                if self.extension() == "gif"
+                if self.source_is_gif()
                     && !self.closing
                     && !self.hwnd.is_invalid()
                     && !self.compare_visible()
@@ -1055,7 +1077,7 @@ impl Recording {
                 if let Err(error) = result {
                     self.notify(&error, true);
                 }
-                if self.extension() == "gif"
+                if self.source_is_gif()
                     && !self.closing
                     && !self.hwnd.is_invalid()
                     && !self.compare_visible()
@@ -1269,13 +1291,6 @@ impl Recording {
                         dc,
                         gfx::rect(r.w - 76., 1., r.w - 75., r.h - 1.),
                         t.color("control-border"),
-                    )?;
-                    text(
-                        Style::Option,
-                        &format!(".{}", self.extension()),
-                        Rect::new(r.w - 64., 0., 60., r.h),
-                        "text-subtle",
-                        false,
                     )?;
                 } else if target == Target::Copy {
                     let y = (r.h - 19.) / 2.;

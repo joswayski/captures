@@ -48,6 +48,11 @@ in [release procedures](docs/releases.md#native-preview-packaging-and-recovery).
 
 On Debian or Ubuntu, install `libpipewire-0.3-dev`, `libspa-0.2-dev`, and `libasound2-dev`.
 
+Orb setup also installs Rust 1.95's Windows GNU target, MinGW, Wine, fonts and
+fixture tools for the opt-in Win32 host. Wine checks use disposable profiles;
+they do not replace real Windows interaction, UI Automation or GPU acceptance.
+See [`apps/native/windows/README.md`](apps/native/windows/README.md) for host commands.
+
 The optional Rust account API also needs PostgreSQL for database integration
 tests. It does not participate in local desktop capture. See
 [`apps/api/README.md`](apps/api/README.md) for configuration, database isolation,
