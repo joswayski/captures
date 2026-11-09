@@ -3,10 +3,12 @@
 //! under the pointer, frozen like shipping when Freeze screen is on.
 //!
 //! The shared `CaptureFlow` owns the generation and global Escape from the
-//! moment the menu opens; `RegionSession` prepares the display (and frozen
-//! pixels) off the UI thread and captures after confirmation. Region drags a
-//! rectangle and Full screen saves the display; Window, Record, the Aspect and
-//! Display selects, the countdown overlay and UI Automation are not ported yet.
+//! moment the menu opens; `WindowSession` prepares the display, its window
+//! list (and frozen pixels) off the UI thread and captures after
+//! confirmation. Region drags a rectangle, Window picks the window under the
+//! pointer (the desktop means the whole display) and Full screen saves the
+//! display; Record, the Aspect and Display selects, the countdown overlay and
+//! UI Automation are not ported yet.
 
 use std::cell::RefCell;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
@@ -14,7 +16,8 @@ use std::time::{Duration, Instant};
 
 use captures_app::capture_flow::{self, CaptureFlow};
 use captures_app::capture_menu::{self, MenuMode, PrimaryState};
-use captures_app::region::RegionSession;
+use captures_app::selection::Point;
+use captures_app::window::{self as window_target, WindowSession};
 use captures_capture::LogicalRect;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::*;
@@ -105,6 +108,12 @@ pub struct Menu {
     display: (String, u32, u32),
     auto_start: bool,
     layout: Option<Layout>,
+    /// Window targets in DIPs from the display's corner, with their labels.
+    pub windows: Vec<(Rect, String)>,
+    /// The window under the pointer; `Some(None)` is the display.
+    pub hovered: Option<Option<usize>>,
+    /// The clicked window target, kept when the pointer leaves it.
+    pub picked: Option<Option<usize>>,
 }
 
 impl Menu {
@@ -124,7 +133,15 @@ impl Menu {
             display,
             auto_start,
             layout: None,
+            windows: Vec::new(),
+            hovered: None,
+            picked: None,
         }
+    }
+
+    /// The window target under the pointer; true when it changed.
+    fn hover_window(&mut self, hit: Option<Option<usize>>) -> bool {
+        std::mem::replace(&mut self.hovered, hit) != hit
     }
 
     /// A drawn region of at least one DIP each way, or Full screen.
@@ -134,7 +151,7 @@ impl Menu {
             Target::Region => self
                 .selection
                 .is_some_and(|r| r.right - r.left >= 1. && r.bottom - r.top >= 1.),
-            Target::Window => false,
+            Target::Window => self.picked.is_some(),
         }
     }
 
@@ -164,7 +181,7 @@ impl Menu {
                 label(text)?,
                 Some(icon),
                 Hit::Target(target),
-                target != Target::Window,
+                true,
                 target == self.target,
             ));
         }
@@ -340,7 +357,56 @@ impl Menu {
                     gfx::border(dc, r, 2., 1.5, accent)?;
                 }
             },
-            Target::Window => gfx::fill(dc, full, shade(0.3))?,
+            // `.recording-target-window`: clear until a target is hovered; the
+            // clicked one stays when the pointer leaves.
+            Target::Window => match self.hovered.or(self.picked) {
+                Some(Some(index)) => {
+                    if let Some((r, label)) = self.windows.get(index) {
+                        let r = rect(
+                            r.left.max(0.),
+                            r.top.max(0.),
+                            r.right.min(w),
+                            r.bottom.min(h),
+                        );
+                        for band in [
+                            rect(0., 0., w, r.top),
+                            rect(0., r.bottom, w, h),
+                            rect(0., r.top, r.left, r.bottom),
+                            rect(r.right, r.top, w, r.bottom),
+                        ] {
+                            if band.right > band.left && band.bottom > band.top {
+                                gfx::fill(dc, band, shade(0.3))?;
+                            }
+                        }
+                        gfx::fill(dc, r, alpha(accent, 0.14))?;
+                        // An outer 2 px ring, never over the window.
+                        gfx::ring(dc, r, 0., 0., 2., accent)?;
+                        unsafe { dc.PushAxisAlignedClip(&r, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE) };
+                        let chip = self.chip(
+                            dc,
+                            g,
+                            t,
+                            (r.left + 8., r.top + 8.),
+                            label,
+                            r.right - r.left - 8.,
+                        );
+                        unsafe { dc.PopAxisAlignedClip() };
+                        chip?;
+                    }
+                }
+                Some(None) => {
+                    gfx::border(dc, full, 0., 2., accent)?;
+                    self.chip(
+                        dc,
+                        g,
+                        t,
+                        (16., 16.),
+                        capture_menu::DISPLAY_TARGET,
+                        360_f32.min(w - 8.),
+                    )?;
+                }
+                None => {}
+            },
             Target::Display => {
                 gfx::fill(dc, full, shade(0.5))?;
                 gfx::border(dc, full, 0., 2., accent)?;
@@ -457,6 +523,26 @@ impl Menu {
 
     /// `.recording-display-identity`: the icon, display name and size,
     /// centered and lifted by 60% of its height.
+    /// A glass name chip: `--s-3`/`--s-2` padding, `--text-xs` medium,
+    /// ellipsized within `max_width`.
+    fn chip(
+        &self,
+        dc: &ID2D1DeviceContext,
+        g: &Gfx,
+        t: &Tokens,
+        (x, y): (f32, f32),
+        label: &str,
+        max_width: f32,
+    ) -> Result<()> {
+        let (px, py) = (12., 8.);
+        let text = g.text(t, Style::Chip, label, 10_000.)?;
+        let text_w = text.width.min((max_width - 2. * px).max(0.));
+        g.ellipsis(&text, text_w)?;
+        let chip = rect(x, y, x + text_w + 2. * px, y + text.height + 2. * py);
+        gfx::fill_round(dc, chip, 6., t.color("glass-strong"))?;
+        gfx::text(dc, &text, x + px, y + py, t.color("glass-text"))
+    }
+
     fn identity(&self, dc: &ID2D1DeviceContext, g: &Gfx, t: &Tokens) -> Result<()> {
         let (name, pw, ph) = &self.display;
         let identity = capture_menu::display_identity(name, *pw, *ph, None);
@@ -510,6 +596,14 @@ impl Menu {
         false
     }
 
+    /// A click outside the bar in Window mode picks the hovered target;
+    /// auto-start then confirms it.
+    fn pick(&mut self) -> Option<Hit> {
+        let hovered = self.hovered?;
+        self.picked = Some(hovered);
+        self.auto_start.then_some(Hit::Primary)
+    }
+
     /// Release; returns the action to run.
     fn released(&mut self, x: f32, y: f32) -> Option<Hit> {
         if self.drag.take().is_some() {
@@ -525,15 +619,15 @@ impl Menu {
 
 /// What confirmation captures.
 enum Choice {
-    Region(LogicalRect),
+    Session(window_target::Target),
     Display,
 }
 
 type CaptureResult = std::result::Result<Option<captures_app::Artifact>, String>;
 
 enum Phase {
-    Preparing(Receiver<std::result::Result<Option<RegionSession>, String>>),
-    Selecting(Box<Overlay>, Box<RegionSession>),
+    Preparing(Receiver<std::result::Result<Option<WindowSession>, String>>),
+    Selecting(Box<Overlay>, Box<WindowSession>),
     Capturing(Receiver<CaptureResult>),
     Done(Box<CaptureResult>),
 }
@@ -599,7 +693,7 @@ pub fn open(
     std::thread::spawn(move || {
         wait_for_shell_menus();
         let result = pointer_display().and_then(|display| {
-            match RegionSession::prepare(&display, generation, freeze, include_cursor) {
+            match WindowSession::prepare(&display, generation, freeze, include_cursor, 0.) {
                 Ok(session) => Ok(Some(session)),
                 Err(captures_app::Error::Cancelled) => Ok(None),
                 Err(error) => Err(error.to_string()),
@@ -732,7 +826,7 @@ pub fn service() -> Option<CaptureResult> {
 }
 
 impl Capture {
-    fn show(&mut self, session: RegionSession) -> Result<()> {
+    fn show(&mut self, session: WindowSession) -> Result<()> {
         let display = session.display().clone();
         let g = match crate::host::with_host(|h| h.g.clone()) {
             Some(g) => g,
@@ -775,12 +869,13 @@ impl Capture {
             let surface = g.surface(px.0, px.1)?;
             visual.SetContent(&surface)?;
             target.SetRoot(&visual)?;
-            let menu = Menu::new(
+            let mut menu = Menu::new(
                 self.target,
                 (px.0 as f32 / scale, px.1 as f32 / scale),
                 (display.name.clone(), display.width, display.height),
                 self.settings.auto_start_on_selection,
             );
+            menu.windows = window_rects(&session);
             let mut overlay = Overlay {
                 hwnd,
                 menu,
@@ -814,12 +909,26 @@ impl Capture {
         if !overlay.menu.can_start() {
             return;
         }
+        let Phase::Selecting(_, session) = &self.phase else {
+            return;
+        };
         let choice = match (overlay.menu.target, overlay.menu.selection) {
-            (Target::Region, Some(r)) => Choice::Region(LogicalRect {
-                x: f64::from(r.left),
-                y: f64::from(r.top),
-                width: f64::from(r.right - r.left),
-                height: f64::from(r.bottom - r.top),
+            (Target::Region, Some(r)) => Choice::Session(window_target::Target::Region {
+                rect: LogicalRect {
+                    x: f64::from(r.left),
+                    y: f64::from(r.top),
+                    width: f64::from(r.right - r.left),
+                    height: f64::from(r.bottom - r.top),
+                },
+            }),
+            (Target::Window, _) => Choice::Session(match overlay.menu.picked.flatten() {
+                Some(index) => match session.windows().get(index) {
+                    Some(window) => window_target::Target::Window {
+                        id: window.id.clone(),
+                    },
+                    None => return,
+                },
+                None => window_target::Target::Display,
             }),
             (Target::Display, _) => Choice::Display,
             _ => return,
@@ -847,7 +956,7 @@ impl Capture {
             std::thread::sleep(SETTLE);
             let after = seconds > 0;
             let result = match choice {
-                Choice::Region(rect) => match session.capture(&root, rect, after) {
+                Choice::Session(target) => match session.capture(&root, &target, after) {
                     Ok(artifact) => Ok(Some(artifact)),
                     Err(captures_app::Error::Cancelled) => Ok(None),
                     Err(error) => Err(error.to_string()),
@@ -875,7 +984,7 @@ impl Capture {
     }
 
     fn handle(&mut self, hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> Option<LRESULT> {
-        let Phase::Selecting(overlay, _) = &mut self.phase else {
+        let Phase::Selecting(overlay, session) = &mut self.phase else {
             return None;
         };
         if overlay.hwnd != hwnd {
@@ -895,7 +1004,17 @@ impl Capture {
             WM_ERASEBKGND => return Some(LRESULT(1)),
             WM_MOUSEMOVE => {
                 let (x, y) = point(lp, overlay.scale);
-                if overlay.menu.moved(x, y) {
+                let mut changed = overlay.menu.moved(x, y);
+                if overlay.menu.target == Target::Window {
+                    let hit = (!overlay.menu.over_panel(x, y)).then(|| {
+                        session.hit_test(Point {
+                            x: f64::from(x),
+                            y: f64::from(y),
+                        })
+                    });
+                    changed |= overlay.menu.hover_window(hit);
+                }
+                if changed {
                     let _ = overlay.render(&self.tokens);
                 }
             }
@@ -909,7 +1028,12 @@ impl Capture {
             WM_LBUTTONUP => {
                 let (x, y) = point(lp, overlay.scale);
                 let _ = unsafe { ReleaseCapture() };
-                action = overlay.menu.released(x, y);
+                let outside = overlay.menu.pressed.is_none() && !overlay.menu.over_panel(x, y);
+                action = if overlay.menu.target == Target::Window && outside {
+                    overlay.menu.pick()
+                } else {
+                    overlay.menu.released(x, y)
+                };
                 let _ = overlay.render(&self.tokens);
             }
             WM_KEYDOWN => match VIRTUAL_KEY(wp.0 as u16) {
@@ -929,8 +1053,13 @@ impl Capture {
                 };
                 let cursor = if overlay.menu.hit(x, y).is_some() {
                     IDC_HAND
-                } else if overlay.menu.target == Target::Region && !overlay.menu.over_panel(x, y) {
+                } else if overlay.menu.over_panel(x, y) {
+                    IDC_ARROW
+                } else if overlay.menu.target == Target::Region {
                     IDC_CROSS
+                } else if overlay.menu.target == Target::Window {
+                    // `--capture-action-cursor`
+                    IDC_HAND
                 } else {
                     IDC_ARROW
                 };
@@ -1012,6 +1141,43 @@ pub fn bitmap(g: &Gfx, image: &image::RgbaImage) -> Result<ID2D1Bitmap1> {
     }
 }
 
+/// Window targets in display-local DIPs, as `WindowSession::hit_test` reads
+/// them, labelled by title, then app name.
+fn window_rects(session: &WindowSession) -> Vec<(Rect, String)> {
+    let display = session.display();
+    let scale = if captures_capture::DisplayDescriptor::reports_physical_geometry() {
+        display.scale_factor.max(1.) as f32
+    } else {
+        1.
+    };
+    session
+        .windows()
+        .iter()
+        .map(|window| {
+            let left = (window.x - display.x) as f32 / scale;
+            let top = (window.y - display.y) as f32 / scale;
+            let label = [
+                Some(window.title.trim()),
+                window.app_name.as_deref().map(str::trim),
+            ]
+            .into_iter()
+            .flatten()
+            .find(|name| !name.is_empty())
+            .unwrap_or("Window")
+            .to_owned();
+            (
+                rect(
+                    left,
+                    top,
+                    left + window.width as f32 / scale,
+                    top + window.height as f32 / scale,
+                ),
+                label,
+            )
+        })
+        .collect()
+}
+
 /// Shipping starts on the display under the pointer, else the primary.
 fn pointer_display() -> std::result::Result<String, String> {
     let backend = captures_capture::XcapBackend;
@@ -1075,8 +1241,30 @@ mod tests {
     }
 
     #[test]
-    fn full_screen_starts_without_a_selection_and_window_never_does() {
+    fn full_screen_starts_without_a_selection() {
         assert!(menu(Target::Display, false).can_start());
-        assert!(!menu(Target::Window, false).can_start());
+    }
+
+    #[test]
+    fn window_click_picks_the_hovered_target_and_keeps_it() {
+        let mut m = menu(Target::Window, false);
+        assert!(!m.can_start());
+        // A click with nothing hovered yet picks nothing.
+        assert_eq!(m.pick(), None);
+        assert!(!m.can_start());
+        m.hover_window(Some(Some(1)));
+        assert_eq!(m.pick(), None);
+        assert_eq!(m.picked, Some(Some(1)));
+        // Leaving the window keeps the pick; the desktop picks the display.
+        assert!(m.hover_window(None));
+        assert!(m.can_start());
+        m.hover_window(Some(None));
+        m.pick();
+        assert_eq!(m.picked, Some(None));
+        assert!(m.can_start());
+        // Auto-start confirms the pick at once.
+        let mut m = menu(Target::Window, true);
+        m.hover_window(Some(Some(0)));
+        assert_eq!(m.pick(), Some(Hit::Primary));
     }
 }

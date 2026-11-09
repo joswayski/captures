@@ -89,10 +89,12 @@ wins the shared instance election and later launches forward to it and exit;
 shipping menu and accelerators, left-click opens Preferences, and closing the
 last window keeps the app resident. New Capture and Screenshot Display open
 the Screenshot capture bar (`src/capture.rs`) over a frozen snapshot of the
-display under the pointer, on Region or Full screen. Drag a region, then press
-Enter or Capture (Esc or Close cancels); the countdown applies, the result is
-copied to the clipboard and History reloads. Record mode, the Window target,
-the Aspect/Display selects, the countdown overlay and floating previews are not
+display under the pointer, on Region or Full screen. Drag a region, or switch
+to Window and click the window under the pointer (the desktop picks the entire
+display), then press Enter or Capture (Esc or Close cancels); the countdown
+applies, the result is copied to the clipboard and History reloads. One shared
+`WindowSession` snapshot serves all three targets. Record mode, the
+Aspect/Display selects, the countdown overlay and floating previews are not
 ported yet. A physical Windows 11 check (4K, 150%) confirmed pixel-exact
 Region and Full screen captures, the clipboard and History; a second New
 Capture now refocuses the open bar instead of an error, and the snapshot waits
@@ -101,8 +103,9 @@ wait adds about 0.5 s before the overlay appears). The remaining capture,
 recording and Send Feedback rows are
 disabled and no global shortcuts are registered until those flows exist, so
 the OS screenshot key is not taken over. `--scene capture --screenshot PATH`
-renders the bar offscreen (`--tool display` for Full screen, `--select x` for
-a sample selection). There is no first-run setup window
+renders the bar offscreen (`--tool display` for Full screen, `--tool window`
+for Window, `--select x` for a sample selection or hovered window, `--select
+desktop` for the hovered display). There is no first-run setup window
 or launch notice yet; Preferences stands in, and files forwarded by path are
 not opened. A physical Windows 11 check (4K, 150%) passed quiet launch, the
 menu and its disabled rows, left-click, residency after closing windows,

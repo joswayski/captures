@@ -44,10 +44,10 @@ pub fn render(options: &Options, path: &std::path::Path) -> Result<()> {
             crate::editor::render_offscreen(options, g.clone(), tokens, (w as f32, h as f32))?;
         Box::new(move |dc| editor.paint(dc, 1.))
     } else if options.scene == Window::Capture {
-        let target = if options.tool.as_deref() == Some("display") {
-            crate::capture::Target::Display
-        } else {
-            crate::capture::Target::Region
+        let target = match options.tool.as_deref() {
+            Some("display") => crate::capture::Target::Display,
+            Some("window") => crate::capture::Target::Window,
+            _ => crate::capture::Target::Region,
         };
         let mut menu = crate::capture::Menu::new(
             target,
@@ -57,6 +57,19 @@ pub fn render(options: &Options, path: &std::path::Path) -> Result<()> {
         );
         if target == crate::capture::Target::Region && options.select.is_some() {
             menu.selection = Some(crate::gfx::rect(320., 180., 860., 500.));
+        }
+        // The fixture window below; `--select` hovers it, `--select desktop`
+        // the display.
+        menu.windows = vec![(
+            crate::gfx::rect(280., 140., 900., 540.),
+            "Notes — Meeting agenda".into(),
+        )];
+        if target == crate::capture::Target::Window {
+            menu.hovered = match options.select.as_deref() {
+                Some("desktop") => Some(None),
+                Some(_) => Some(Some(0)),
+                None => None,
+            };
         }
         // A synthetic desktop: a diagonal gradient with a light window.
         let desktop = image::RgbaImage::from_fn(w, h, |x, y| {
