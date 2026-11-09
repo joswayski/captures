@@ -2797,6 +2797,15 @@ final class RecordingEditorTests: XCTestCase {
             controller.window.setContentSize(size)
             XCTAssertTrue(try windowHit(startHandle, in: controller) === startHandle)
             XCTAssertTrue(try windowHit(endHandle, in: controller) === endHandle)
+            // The End field holds the full 2000 ms duration after Reset trim;
+            // its text area (inside the steppers) must fit it plus the cell's
+            // 2 pt line-fragment padding on each side.
+            for trimField in [start, end] {
+                let digits = NSAttributedString(string: "2000", attributes: [.font: try XCTUnwrap(trimField.font)])
+                let textArea = try XCTUnwrap(trimField.cell).drawingRect(forBounds: trimField.bounds)
+                XCTAssertGreaterThanOrEqual(textArea.width, ceil(digits.size().width) + 4,
+                                            "\(trimField.accessibilityLabel() ?? "") clips at \(size)")
+            }
         }
 
         start.stringValue = "1000"; end.stringValue = "1002"

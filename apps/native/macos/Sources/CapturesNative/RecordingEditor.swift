@@ -1907,11 +1907,18 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             view.frame = NSRect(x: x, y: rowY + dy, width: width, height: height)
             x = view.frame.maxX + itemGap
         }
+        // Fit the longest value either field can hold (the duration in ms)
+        // inside the 12 pt leading inset, 30 pt stepper column and the cell's
+        // 2 pt padding each side, so long clips never clip the End value.
+        let longestTrim = String(presentation?.snapshot.durationMilliseconds ?? 0) as NSString
+        let trimFont: NSFont = trimEnd.font ?? .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
+        let trimDigits = ceil(longestTrim.size(withAttributes: [.font: trimFont]).width)
+        let trimFieldWidth = max(72, 12 + TokenNumberField.stepperWidth + 4 + trimDigits + 4)
         place(trimStartLabel, width: 60, height: 16, dy: 6)
-        place(trimStart, width: 72, height: fieldHeight, dy: 0)
+        place(trimStart, width: trimFieldWidth, height: fieldHeight, dy: 0)
         x += tokens.number("s-3")
         place(trimEndLabel, width: 54, height: 16, dy: 6)
-        place(trimEnd, width: 72, height: fieldHeight, dy: 0)
+        place(trimEnd, width: trimFieldWidth, height: fieldHeight, dy: 0)
         place(resetTrimButton, width: 92, height: fieldHeight, dy: 0)
         x += tokens.number("s-5")
         place(positionLabel, width: 52, height: 16, dy: 6)
