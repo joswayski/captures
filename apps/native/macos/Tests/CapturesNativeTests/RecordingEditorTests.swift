@@ -2678,20 +2678,22 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertTrue(controller.dirty)
     }
 
-    func testTrimEndPreviewIsSourceBoundedAndLatestIntentSurvivesEstimateAndQuitVeto() throws {
+    func testTrimEndPreviewIsTrimBoundedAndLatestIntentSurvivesEstimateAndQuitVeto() throws {
         _ = NSApplication.shared
-        let worker = FakeRecordingEditorWorker(presentation: try presentation())
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(end: 1_400))
         worker.deferRequest = true
         let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: recordingArtifact(), historyRoot: "/History", outputDirectory: "/Exports")
         let timeline = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? RecordingTrimTimeline }.first)
-        XCTAssertTrue(timeline.beginDrag(edge: .end, at: timeline.bounds.width - 10))
-        XCTAssertEqual(worker.requests.first?["position_ms"] as? UInt64, 1999)
-        XCTAssertEqual(timeline.endMilliseconds, 2000, "UI end still includes the full source")
+        XCTAssertTrue(timeline.beginDrag(edge: .end, at: 10 + (timeline.bounds.width - 20) * 0.7))
+        XCTAssertEqual(worker.requests.first?["position_ms"] as? UInt64, 1399)
+        XCTAssertEqual(timeline.endMilliseconds, 1400, "preview does not shorten the selected trim")
+        let edit = try XCTUnwrap(worker.requests.first?["edit"] as? [String: Any])
+        XCTAssertEqual((edit["trim_end_ms"] as? NSNumber)?.uint64Value, 1400)
         timeline.nudge(edge: .end, direction: -1, page: true)
         timeline.nudge(edge: .end, direction: 1, page: true)
-        worker.completeRequest(.success(try presentation(position: 1999, revision: 1)))
+        worker.completeRequest(.success(try presentation(end: 1400, position: 1399, revision: 1)))
         XCTAssertEqual(worker.requests.count, 1, "returning to active identity drops an older queued trim")
         XCTAssertFalse(controller.dirty, "edge press/return alone does not dirty the editor")
         timeline.endDrag()
@@ -2706,7 +2708,7 @@ final class RecordingEditorTests: XCTestCase {
         worker.completeEstimate(.failure(AppBridgeError.backend("operation cancelled")))
         XCTAssertEqual(worker.requests.count, 2)
         XCTAssertEqual(worker.requests.last?["position_ms"] as? UInt64, 900)
-        worker.completeRequest(.success(try presentation(start: 900, position: 900, revision: 2)))
+        worker.completeRequest(.success(try presentation(start: 900, end: 1400, position: 900, revision: 2)))
         XCTAssertEqual(timeline.startMilliseconds, 900)
         XCTAssertFalse(timeline.trimming, "completion never resurrects a gesture ended by Quit")
     }
