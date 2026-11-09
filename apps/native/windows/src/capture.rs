@@ -842,10 +842,13 @@ pub fn active() -> bool {
 }
 
 /// Open New Capture on `target` over the display under the pointer.
-/// `wake` runs on worker threads when the host loop has work.
+/// `from_menu` is true when a tray menu click opened it, so its fade must
+/// leave the screen first. `wake` runs on worker threads when the host loop
+/// has work.
 pub fn open(
     options: &crate::Options,
     target: Target,
+    from_menu: bool,
     wake: impl Fn() + Send + Sync + Clone + 'static,
 ) -> std::result::Result<(), String> {
     if active() {
@@ -861,7 +864,7 @@ pub fn open(
     let (sender, prepared) = channel();
     let worker_wake = wake.clone();
     std::thread::spawn(move || {
-        wait_for_shell_menus();
+        wait_for_shell_menus(from_menu);
         let result = pointer_display().and_then(|display| {
             match WindowSession::prepare(&display, generation, freeze, include_cursor, 0.) {
                 Ok(session) => Ok(Some(session)),
@@ -909,9 +912,10 @@ fn focus_overlay() {
 /// The tray menu that opened New Capture fades out after the click, and
 /// Windows 11's notification-area overflow flyout closes behind it. Wait for
 /// both (bounded like shipping's shell-flyout dismissal) plus the fade, so
-/// neither freezes into the snapshot. `RegionSession::prepare` then dismisses
-/// Start/Search as shipping does.
-fn wait_for_shell_menus() {
+/// neither freezes into the snapshot. A shortcut press skips the fade wait
+/// unless one of those menus was open. `RegionSession::prepare` then
+/// dismisses Start/Search as shipping does.
+fn wait_for_shell_menus(from_menu: bool) {
     const CLASSES: [PCWSTR; 3] = [
         w!("#32768"),
         w!("TopLevelWindowForOverflowXamlIsland"),
@@ -935,12 +939,15 @@ fn wait_for_shell_menus() {
         })
     };
     let started = Instant::now();
+    let open = visible();
     while visible() && started.elapsed() < Duration::from_millis(750) {
         std::thread::sleep(Duration::from_millis(16));
     }
     // Menu selection fade (`SPI_GETSELECTIONFADE`) and flyout close animations
     // outlive the window's visibility.
-    std::thread::sleep(Duration::from_millis(200));
+    if from_menu || open {
+        std::thread::sleep(Duration::from_millis(200));
+    }
 }
 
 fn cloaked(hwnd: HWND) -> bool {

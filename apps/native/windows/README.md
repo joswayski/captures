@@ -108,7 +108,13 @@ shared `CaptureShortcuts` owner, which takes over Print Screen and Win+Shift+S
 from Snipping Tool like shipping: New Capture and the screenshot shortcuts open
 the bar on their target, the recording shortcuts do nothing yet, and presses
 while New Capture is open are dropped (switching it in place is not ported).
-An active Preferences shortcut recorder releases the registrations. The
+An active Preferences shortcut recorder releases the registrations. A key
+press skips the tray menu's 200 ms fade wait. A physical Windows 11 check
+(4K, 150%, injected input) passed every registered chord, the tray rows, the
+recorder's release and Quit; key press to bar took about 380 ms in a release
+build (260 ms without Freeze screen). The Win+Shift+S hook ignores injected
+input and the installed Captures held Print Screen, so those two takeovers
+still need a real keyboard check. The
 recording and Send Feedback rows stay disabled. When Show mini previews is on,
 each saved screenshot joins shipping's floating preview stack (`previews.rs`):
 a topmost, non-activating window placed with the shared `thumbnail_geometry`

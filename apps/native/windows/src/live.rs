@@ -199,16 +199,17 @@ pub fn service() {
     while let Some(shortcut) =
         RESIDENT.with(|r| r.borrow().as_ref()?.shortcuts.as_ref()?.next_action())
     {
-        let action = match shortcut {
-            CaptureShortcut::NewCapture => Action::NewCapture,
-            CaptureShortcut::Region => Action::CaptureRegion,
-            CaptureShortcut::Window => Action::CaptureWindow,
-            CaptureShortcut::Display => Action::CaptureDisplay,
-            CaptureShortcut::RecordRegion => Action::RecordRegion,
-            CaptureShortcut::RecordWindow => Action::RecordWindow,
-            CaptureShortcut::RecordDisplay => Action::RecordDisplay,
+        // As the tray rows; recording shortcuts do nothing until recording
+        // is ported.
+        let target = match shortcut {
+            CaptureShortcut::NewCapture | CaptureShortcut::Region => crate::capture::Target::Region,
+            CaptureShortcut::Window => crate::capture::Target::Window,
+            CaptureShortcut::Display => crate::capture::Target::Display,
+            CaptureShortcut::RecordRegion
+            | CaptureShortcut::RecordWindow
+            | CaptureShortcut::RecordDisplay => continue,
         };
-        run(&options, action);
+        new_capture(&options, target, false);
     }
     for _ in 0..32 {
         let next = RESIDENT.with(|r| r.borrow().as_ref().map(|r| r.instance.next_request()));
@@ -256,12 +257,11 @@ fn run(options: &Options, action: Action) {
         // the bar; those direct overlays are not ported, so the bar opens on
         // that target instead.
         Action::NewCapture | Action::CaptureRegion => {
-            new_capture(options, crate::capture::Target::Region)
+            new_capture(options, crate::capture::Target::Region, true)
         }
-        Action::CaptureWindow => new_capture(options, crate::capture::Target::Window),
-        Action::CaptureDisplay => new_capture(options, crate::capture::Target::Display),
-        // Disabled rows and ignored shortcuts: recording and feedback are not
-        // ported yet.
+        Action::CaptureWindow => new_capture(options, crate::capture::Target::Window, true),
+        Action::CaptureDisplay => new_capture(options, crate::capture::Target::Display, true),
+        // Disabled rows: recording and feedback are not ported yet.
         Action::RecordRegion
         | Action::RecordWindow
         | Action::RecordDisplay
@@ -289,8 +289,9 @@ fn sync_shortcuts(settings: &captures_settings::AppSettings) {
                 r.shortcuts_suspended = false;
             }),
         };
+        // The shared error already says what failed.
         if let Err(error) = result {
-            eprintln!("Could not register capture shortcuts: {error}");
+            eprintln!("{error}");
         }
         // Shipping logs system-key takeover failures and keeps its bindings.
         if let Some(shortcuts) = r.shortcuts.as_mut() {
@@ -352,7 +353,7 @@ fn reactivate(options: &Options) {
 
 /// Open New Capture unless first-run setup is unfinished (Preferences stands
 /// in for setup, as shipping opens setup instead).
-fn new_capture(options: &Options, target: crate::capture::Target) {
+fn new_capture(options: &Options, target: crate::capture::Target, from_menu: bool) {
     let settings = captures_settings::load(&options.settings_file).unwrap_or_default();
     if !settings.onboarding_completed {
         return open_preferences(options);
@@ -362,7 +363,7 @@ fn new_capture(options: &Options, target: crate::capture::Target) {
     };
     // Shipping hides the mini previews before the snapshot.
     crate::previews::set_suppressed(true);
-    if let Err(error) = crate::capture::open(options, target, wake_on(thread)) {
+    if let Err(error) = crate::capture::open(options, target, from_menu, wake_on(thread)) {
         show_error(&error);
     }
 }
