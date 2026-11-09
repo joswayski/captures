@@ -141,7 +141,13 @@ impl Hud {
         let space = g.text(t, Style::Tiny, "a a", 10_000.)?.width
             - 2. * g.text(t, Style::Tiny, "a", 10_000.)?.width;
         let strong = g.text_sized(t, note.emphasis, 10., "weight-bold", None)?;
-        let trail = g.text(t, Style::Tiny, &note.trail, 10_000.)?;
+        // Shipping's `showHideHint`: included controls point at Hide.
+        let trail = if self.excluded {
+            note.trail.clone()
+        } else {
+            format!("{} · Use Hide controls to keep them out", note.trail)
+        };
+        let trail = g.text(t, Style::Tiny, &trail, 10_000.)?;
         let total = lead.width + space + strong.width + trail.width;
         let mut x = (CARD.left + CARD.right - total) / 2.;
         let row = CARD.top + 1. + 6. + 6.5;

@@ -346,6 +346,18 @@ fn sync_shortcuts(settings: &captures_settings::AppSettings) {
     });
 }
 
+/// Hidden recording controls keep New Capture as the chord that restores
+/// them; the shared owner otherwise drops presses while a recording runs.
+pub fn recording_hidden(hidden: bool) {
+    RESIDENT.with(|r| {
+        if let Ok(r) = r.try_borrow()
+            && let Some(shortcuts) = r.as_ref().and_then(|r| r.shortcuts.as_ref())
+        {
+            shortcuts.set_restore_only(hidden);
+        }
+    });
+}
+
 /// Release the OS registrations while a Preferences recorder listens, and
 /// restore them when it stops.
 fn suspend_shortcuts(suspended: bool) {

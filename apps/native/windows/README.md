@@ -136,7 +136,16 @@ back. Not ported: the HUD's region Screenshot (drawn disabled), tooltips,
 keyboard focus, UIA, the hidden-controls notice and crash recovery. The HUD
 and Record bar match the Tauri harness offscreen
 (`--scene capture --tool hud [--select paused|failed|hover] --size 430x102`,
-`--tool region --select record`); a physical recording check is pending.
+`--tool region --select record`). A physical Windows 11 check (4K, 150%,
+injected input) passed Region, Window and Full screen MP4s without the
+controls, the countdown and Esc, Pause/Resume, Restart/Delete confirmation,
+microphone mute, focus and drag, included controls and save-on-Quit. It found
+that the New Capture chord didn't restore hidden controls (hidden controls
+now make it a restore chord, like GTK) and the missing "Use Hide controls to
+keep them out" hint; both are fixed. Frame rates were far below the 60 fps
+setting (about 4 fps at 4K, 7 for a large window, 16–30 for regions) at about
+5% CPU, likely in the shared capture pipeline; compare with Tauri before
+treating it as a native regression.
 
 When Show mini previews is on,
 each saved screenshot joins shipping's floating preview stack (`previews.rs`):

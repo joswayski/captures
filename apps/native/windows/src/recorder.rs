@@ -101,6 +101,7 @@ struct Recorder {
 
 impl Drop for Recorder {
     fn drop(&mut self) {
+        crate::live::recording_hidden(false);
         self.countdown = None;
         unsafe {
             let _ = DestroyWindow(self.hwnd);
@@ -333,6 +334,7 @@ impl Recorder {
             return;
         }
         self.shown = true;
+        crate::live::recording_hidden(false);
         self.refresh();
         unsafe {
             if self.excluded() {
@@ -344,6 +346,9 @@ impl Recorder {
 
     fn hide(&mut self) {
         self.shown = false;
+        // Only a user's Hide makes New Capture a restore chord; the countdown
+        // hides the controls while Escape still owns the take.
+        crate::live::recording_hidden(self.accepted);
         self.hud.hover = None;
         self.hud.pressed = None;
         unsafe {
