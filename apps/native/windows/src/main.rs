@@ -10,6 +10,8 @@ mod appearance;
 #[cfg(windows)]
 mod capture;
 #[cfg(windows)]
+mod countdown;
+#[cfg(windows)]
 mod dialog;
 #[cfg(windows)]
 mod editor;

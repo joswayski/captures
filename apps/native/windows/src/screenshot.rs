@@ -123,13 +123,13 @@ pub fn render(options: &Options, path: &std::path::Path) -> Result<()> {
                     )
                 };
                 let rest = captures_app::motion::Pose::REST;
-                crate::capture::paint_countdown(
+                crate::countdown::paint(
                     dc,
                     &g,
                     &tokens,
                     size,
                     3,
-                    "Press Esc to cancel",
+                    ("SCREENSHOT IN", "Press Esc to cancel"),
                     rest,
                     rest,
                 )
