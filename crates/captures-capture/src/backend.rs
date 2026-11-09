@@ -129,8 +129,29 @@ impl XcapBackend {
                 #[cfg(target_os = "linux")]
                 let (x, y, width, height, display_id) =
                     linux_window_geometry(&monitors, x, y, width, height)?;
+                // The top-left corner names the display, as before. A window
+                // whose top-left corner is off every display (dragged past the
+                // left or top edge) falls back to its centre and then its other
+                // corners, so its visible part stays a target.
                 #[cfg(not(target_os = "linux"))]
-                let display_id = Monitor::from_point(x, y).ok()?.id().ok()?;
+                let display_id = {
+                    let (w, h) = (
+                        i32::try_from(width).unwrap_or(i32::MAX),
+                        i32::try_from(height).unwrap_or(i32::MAX),
+                    );
+                    let (right, bottom) = (x.saturating_add(w - 1), y.saturating_add(h - 1));
+                    [
+                        (x, y),
+                        (x.saturating_add(w / 2), y.saturating_add(h / 2)),
+                        (right, y),
+                        (x, bottom),
+                        (right, bottom),
+                    ]
+                    .into_iter()
+                    .find_map(|(px, py)| Monitor::from_point(px, py).ok())?
+                    .id()
+                    .ok()?
+                };
 
                 let fallback_z =
                     fallback_front.saturating_sub(i32::try_from(index).unwrap_or(i32::MAX));

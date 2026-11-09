@@ -66,10 +66,13 @@ pub fn render(options: &Options, path: &std::path::Path) -> Result<()> {
         )];
         if target == crate::capture::Target::Window {
             menu.hovered = match options.select.as_deref() {
-                Some("desktop") => Some(None),
+                Some("desktop" | "picked") => Some(None),
                 Some(_) => Some(Some(0)),
                 None => None,
             };
+            if options.select.as_deref() == Some("picked") {
+                menu.picked = Some(Some(0));
+            }
         }
         // A synthetic desktop: a diagonal gradient with a light window.
         let desktop = image::RgbaImage::from_fn(w, h, |x, y| {

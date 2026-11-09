@@ -58,7 +58,8 @@ pub enum Scene {
     Recording,
     /// `--scene capture --screenshot PATH`: the New Capture bar over a
     /// fixture desktop; `--tool display` selects Full screen and `--tool
-    /// window` Window (`--select x` hovers its window, `desktop` the display).
+    /// window` Window (`--select x` hovers its window, `desktop` the display,
+    /// `picked` picks the window with the pointer on the desktop).
     Capture,
 }
 

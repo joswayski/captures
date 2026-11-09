@@ -105,7 +105,8 @@ disabled and no global shortcuts are registered until those flows exist, so
 the OS screenshot key is not taken over. `--scene capture --screenshot PATH`
 renders the bar offscreen (`--tool display` for Full screen, `--tool window`
 for Window, `--select x` for a sample selection or hovered window, `--select
-desktop` for the hovered display). There is no first-run setup window
+desktop` for the hovered display, `--select picked` for a picked window with
+the pointer on the desktop). There is no first-run setup window
 or launch notice yet; Preferences stands in, and files forwarded by path are
 not opened. A physical Windows 11 check (4K, 150%) passed quiet launch, the
 menu and its disabled rows, left-click, residency after closing windows,

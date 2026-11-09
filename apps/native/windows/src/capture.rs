@@ -359,42 +359,62 @@ impl Menu {
             },
             // `.recording-target-window`: clear until a target is hovered; the
             // clicked one stays when the pointer leaves.
-            Target::Window => match self.hovered.or(self.picked) {
-                Some(Some(index)) => {
-                    if let Some((r, label)) = self.windows.get(index) {
+            // `.recording-target-window`: clear until a target is hovered. The
+            // shade cuts out the hovered (else picked) window; like shipping's
+            // `.hovered` and `.selected` classes, both the hovered and the
+            // picked window keep their tint, ring and name chip.
+            Target::Window => {
+                let picked = self.picked.flatten();
+                let clip = |index: usize| {
+                    self.windows.get(index).map(|(r, label)| {
                         let r = rect(
                             r.left.max(0.),
                             r.top.max(0.),
                             r.right.min(w),
                             r.bottom.min(h),
                         );
-                        for band in [
-                            rect(0., 0., w, r.top),
-                            rect(0., r.bottom, w, h),
-                            rect(0., r.top, r.left, r.bottom),
-                            rect(r.right, r.top, w, r.bottom),
-                        ] {
-                            if band.right > band.left && band.bottom > band.top {
-                                gfx::fill(dc, band, shade(0.3))?;
-                            }
+                        (r, label.as_str())
+                    })
+                };
+                if let Some((r, _)) = self.hovered.or(self.picked).flatten().and_then(clip) {
+                    for band in [
+                        rect(0., 0., w, r.top),
+                        rect(0., r.bottom, w, h),
+                        rect(0., r.top, r.left, r.bottom),
+                        rect(r.right, r.top, w, r.bottom),
+                    ] {
+                        if band.right > band.left && band.bottom > band.top {
+                            gfx::fill(dc, band, shade(0.3))?;
                         }
-                        gfx::fill(dc, r, alpha(accent, 0.14))?;
-                        // An outer 2 px ring, never over the window.
-                        gfx::ring(dc, r, 0., 0., 2., accent)?;
-                        unsafe { dc.PushAxisAlignedClip(&r, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE) };
-                        let chip = self.chip(
-                            dc,
-                            g,
-                            t,
-                            (r.left + 8., r.top + 8.),
-                            label,
-                            r.right - r.left - 8.,
-                        );
-                        unsafe { dc.PopAxisAlignedClip() };
-                        chip?;
                     }
                 }
-                Some(None) => {
+                let hovered_window = self.hovered.flatten();
+                let mut marked: Vec<usize> = picked.into_iter().collect();
+                marked.extend(hovered_window.filter(|&i| Some(i) != picked));
+                for (r, label) in marked.into_iter().filter_map(clip) {
+                    gfx::fill(dc, r, alpha(accent, 0.14))?;
+                    // An outer 2 px ring, never over the window.
+                    gfx::ring(dc, r, 0., 0., 2., accent)?;
+                    unsafe { dc.PushAxisAlignedClip(&r, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE) };
+                    let chip = self.chip(
+                        dc,
+                        g,
+                        t,
+                        (r.left + 8., r.top + 8.),
+                        label,
+                        r.right - r.left - 8.,
+                    );
+                    unsafe { dc.PopAxisAlignedClip() };
+                    chip?;
+                }
+                // The desktop outline: hovered without a picked window, or picked.
+                let desktop = match (self.hovered, self.picked) {
+                    (Some(None), Some(Some(_))) => false,
+                    (Some(None), _) => true,
+                    (None, Some(None)) => true,
+                    _ => false,
+                };
+                if desktop {
                     gfx::border(dc, full, 0., 2., accent)?;
                     self.chip(
                         dc,
@@ -405,8 +425,7 @@ impl Menu {
                         360_f32.min(w - 8.),
                     )?;
                 }
-                None => {}
-            },
+            }
             Target::Display => {
                 gfx::fill(dc, full, shade(0.5))?;
                 gfx::border(dc, full, 0., 2., accent)?;
