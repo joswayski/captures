@@ -116,8 +116,9 @@ on the display under the pointer, hidden while New Capture is open. Cards show
 the size chip and Copied to clipboard; hover blurs and dims the image under
 Close and Delete (Delete alone dismisses an unsaved capture; a saved file goes
 to the Recycle Bin), Edit, Copy and Save file / Show in Folder, plus Clear all.
-The pile and Minimize, arrive/exit motion, file drags, keyboard focus, UIA,
-tooltips and History Restore are not ported. `--scene capture --screenshot PATH`
+History's Restore brings a screenshot back as a card and reads "✓ Restored"
+for 2.5 s. The pile and Minimize, arrive/exit motion, file drags, keyboard
+focus, UIA and tooltips are not ported. `--scene capture --screenshot PATH`
 renders the bar offscreen (`--tool display` for Full screen, `--tool window`
 for Window, `--select x` for a sample selection or hovered window, `--select
 desktop` for the hovered display, `--select picked` for a picked window with

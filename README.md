@@ -240,7 +240,8 @@ the matching global shortcuts open the Screenshot capture bar on that target, ta
 over Print Screen and Win+Shift+S like shipping; Record mode, the recording rows and
 shortcuts, and Send Feedback stay disabled until those flows are ported. Saved
 screenshots appear in an experimental mini-preview stack with Close, Delete, Edit,
-Copy and Save file / Show in Folder; its pile, motion and file drags are not ported.
+Copy and Save file / Show in Folder, and History's Restore brings a screenshot back
+there; its pile, motion and file drags are not ported.
 Output controls and source-preview correction passed physical Windows testing;
 comparison and maximum-size controls still await physical acceptance. Crop passed
 its separate hardware check with observations, not full editor acceptance.

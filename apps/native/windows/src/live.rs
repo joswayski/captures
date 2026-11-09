@@ -380,7 +380,7 @@ fn captured(options: &Options, artifact: captures_app::Artifact) {
                 false
             }
         };
-    crate::previews::show(options, &artifact, copied);
+    crate::previews::show(options, &artifact.entry, &artifact.preview_path, copied);
 }
 
 /// Put a PNG on the clipboard as PNG and `CF_DIB`, owned by the resident

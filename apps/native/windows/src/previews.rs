@@ -655,9 +655,26 @@ thread_local! {
     static PREVIEWS: RefCell<Option<Previews>> = const { RefCell::new(None) };
 }
 
+/// History Restore: bring a screenshot back as a card.
+pub fn restore(options: &crate::Options, entry: &HistoryEntry) {
+    let root = options
+        .history_root
+        .clone()
+        .unwrap_or_else(captures_app::default_history_root);
+    let preview = root
+        .join(&entry.id)
+        .join(captures_history::HISTORY_PREVIEW_FILE);
+    show(options, entry, &preview, false);
+}
+
 /// Add a saved screenshot's card. `clipboard` is whether auto-copy put it
 /// on the clipboard. Does nothing when mini previews are off.
-pub fn show(options: &crate::Options, artifact: &captures_app::Artifact, clipboard: bool) {
+pub fn show(
+    options: &crate::Options,
+    entry: &HistoryEntry,
+    preview: &std::path::Path,
+    clipboard: bool,
+) {
     let settings = captures_settings::load(&options.settings_file).unwrap_or_default();
     if !settings.show_mini_previews {
         return;
@@ -668,15 +685,11 @@ pub fn show(options: &crate::Options, artifact: &captures_app::Artifact, clipboa
             *p = Some(Previews::new(options, &settings)?);
         }
         let previews = p.as_mut().ok_or_else(Error::empty)?;
-        let image = image::open(&artifact.preview_path)
-            .ok()
-            .map(|image| image.into_rgba8());
+        let image = image::open(preview).ok().map(|image| image.into_rgba8());
         let g = previews.g.clone();
-        previews
-            .stack
-            .push(&g, artifact.entry.clone(), image.as_ref());
+        previews.stack.push(&g, entry.clone(), image.as_ref());
         if clipboard {
-            previews.set_clipboard(&artifact.entry.id);
+            previews.set_clipboard(&entry.id);
         }
         previews.place_on_pointer_monitor()?;
         previews.render()

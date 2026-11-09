@@ -1338,6 +1338,9 @@ pub fn run(options: Options, resident: Option<captures_app::instance::Instance>)
                     editor,
                 )
             });
+            if let Some(Some(entry)) = crate::history::with_history(|h| h.restore.take()) {
+                crate::previews::restore(&options, &entry);
+            }
             let mut again = false;
             if let Some((again_h, events, preferences, editor)) = history {
                 again |= again_h;

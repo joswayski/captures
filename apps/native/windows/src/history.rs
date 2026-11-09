@@ -156,24 +156,28 @@ pub struct Item {
     pub card: Card,
     /// The second Delete click arms until this deadline.
     pub confirm: Option<Instant>,
+    /// Restore succeeded: its button reads "✓ Restored" until this deadline.
+    pub restored: Option<Instant>,
     pub busy: Option<Busy>,
     pub error: Option<String>,
 }
 
 impl Item {
-    /// Edit opens the matching editor; Restore's floating preview is still
-    /// unavailable in this host.
+    /// Edit opens the matching editor and Restore brings a screenshot back
+    /// as a floating preview; Copy image and Save image are not ported.
     pub fn action_enabled(&self, action: CardAction) -> bool {
         self.busy.is_none()
             && match action {
                 CardAction::SaveFile | CardAction::ShowInFolder => true,
-                CardAction::Edit => !self.card.missing,
+                CardAction::Edit | CardAction::Restore => !self.card.missing,
                 _ => false,
             }
     }
 
     pub fn action_label(&self, action: CardAction) -> &'static str {
-        if self.busy == Some(Busy::Action(action)) {
+        if let (Some(done), Some(_)) = (action.done_label(), self.restored) {
+            done
+        } else if self.busy == Some(Busy::Action(action)) {
             action.busy_label()
         } else {
             action.label()
@@ -445,6 +449,8 @@ pub struct History {
     pub open_preferences: bool,
     /// Edit was chosen: the run loop opens this artifact's editor.
     pub open_editor: Option<(String, ArtifactKind)>,
+    /// Restore was chosen: the run loop shows this capture's mini preview.
+    pub restore: Option<HistoryEntry>,
 }
 
 impl History {
@@ -542,6 +548,7 @@ impl History {
             events: Vec::new(),
             open_preferences: false,
             open_editor: None,
+            restore: None,
         };
         history.build();
         Ok(history)
@@ -701,6 +708,7 @@ impl History {
                         entry,
                         card,
                         confirm: None,
+                        restored: None,
                         busy: None,
                         error: None,
                     }
@@ -908,6 +916,28 @@ impl History {
                 .map(|item| (item.entry.id.clone(), item.entry.kind));
             return;
         }
+        if action == CardAction::Restore {
+            let Some(entry) = self.item(serial).map(|item| item.entry.clone()) else {
+                return;
+            };
+            self.restore = Some(entry);
+            let Some(item) = self.item_mut(serial) else {
+                return;
+            };
+            item.restored =
+                Some(Instant::now() + Duration::from_millis(history_view::ACTION_FEEDBACK_MS));
+            let i = item
+                .card
+                .actions
+                .iter()
+                .position(|&a| a == action)
+                .unwrap_or(0);
+            self.events.push(Event::Name(Target::Action(serial, i)));
+            self.restyle(serial);
+            self.arm_timer();
+            self.need = true;
+            return;
+        }
         // A settings file that exists but can't be read must not send Save
         // file to the default Captures folder; only a missing file means
         // defaults.
@@ -1059,6 +1089,18 @@ impl History {
             self.events.push(Event::Name(Target::Delete(serial)));
             self.restyle(serial);
         }
+        let restored: Vec<u32> = self
+            .items
+            .iter()
+            .filter(|item| item.restored.is_some_and(|at| at <= now))
+            .map(|item| item.serial)
+            .collect();
+        for serial in restored {
+            if let Some(item) = self.item_mut(serial) {
+                item.restored = None;
+            }
+            self.restyle(serial);
+        }
         self.arm_timer();
         self.need = true;
     }
@@ -1067,7 +1109,7 @@ impl History {
         let next = self
             .items
             .iter()
-            .filter_map(|item| item.confirm)
+            .flat_map(|item| item.confirm.into_iter().chain(item.restored))
             .chain(self.confirm_all)
             .min();
         unsafe {
@@ -2126,10 +2168,15 @@ impl History {
                     Style::Control
                 };
                 let text = g.text(t, style, label, 1e4)?;
-                // Shipping drops the save icon while saving.
-                let icon = action
-                    .icon()
-                    .filter(|_| !(busy && action == CardAction::SaveFile));
+                // Shipping drops the save icon while saving and shows a check
+                // with "Restored".
+                let icon = if action == CardAction::Restore && item.restored.is_some() {
+                    Some("check")
+                } else {
+                    action
+                        .icon()
+                        .filter(|_| !(busy && action == CardAction::SaveFile))
+                };
                 let pad = 1. + t.n("s-4");
                 let icon_w = icon.map_or(0., |_| ICON + s3);
                 let room = (w - 2. * pad - icon_w).max(1.);
