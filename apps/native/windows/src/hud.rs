@@ -8,7 +8,9 @@
 //!
 //! Tooltips follow the pointer over any button, enabled or not, like
 //! shipping's hovered `.recording-tooltip` wrapper; they appear without the
-//! `--dur-1` fade. Not ported yet: keyboard focus and UI Automation.
+//! `--dur-1` fade. [`Hud::parts`] lists what UI Automation exposes
+//! (`hud_uia`). The window never activates over the app being recorded, so
+//! the controls have no Tab focus yet (shipping's webview focus is not ported).
 
 use captures_app::capture_menu::{self, MenuMode};
 use captures_app::recording_hud::{self as hud, Control};
@@ -31,6 +33,22 @@ const CARD: Rect = D2D_RECT_F {
     right: 424.,
     bottom: 76.,
 };
+
+/// The HUD's accessible parts in shipping DOM order.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Part {
+    /// `.recording-hud-privacy`.
+    Privacy,
+    /// The elapsed `<strong>`.
+    Time,
+    /// The state `<small>`.
+    Status,
+    Button(Control),
+    /// `.recording-microphone-level`, between Screenshot and Mute.
+    Level,
+    /// `.recording-hud-error` (`role="alert"`).
+    Error,
+}
 
 pub struct Hud {
     pub input: hud::Input,
@@ -125,6 +143,74 @@ impl Hud {
             .into_iter()
             .find(|(_, r)| x >= r.left && x < r.right && y >= r.top && y < r.bottom)
             .map(|(control, _)| control)
+    }
+
+    /// The accessible parts with their rects, in reading order.
+    pub fn parts(&self) -> Vec<(Part, Rect)> {
+        let cy = CARD.top + 1. + 6. + 13. + 2. + 19.;
+        let left = CARD.left + 1. + 8. + 11. + 8.;
+        let mut parts = vec![
+            (
+                Part::Privacy,
+                rect(
+                    CARD.left + 1.,
+                    CARD.top + 7.,
+                    CARD.right - 1.,
+                    CARD.top + 20.,
+                ),
+            ),
+            (
+                Part::Time,
+                rect(left, cy - 17., CARD.left + 1. + 8. + 96., cy + 3.),
+            ),
+            (
+                Part::Status,
+                rect(left, cy + 3., CARD.left + 1. + 8. + 96., cy + 17.),
+            ),
+        ];
+        let (buttons, level) = self.layout();
+        for (control, r) in buttons {
+            if control == Control::Microphone
+                && let Some(level) = level
+            {
+                parts.push((Part::Level, level));
+            }
+            parts.push((Part::Button(control), r));
+        }
+        if self.error.is_some() {
+            parts.push((
+                Part::Error,
+                rect(10., CARD.bottom + 5., SIZE.0 - 10., SIZE.1),
+            ));
+        }
+        parts
+    }
+
+    /// A part's accessible name: shipping's `aria-label`s and text.
+    pub fn part_name(&self, part: Part) -> String {
+        match part {
+            Part::Privacy => {
+                let note = capture_menu::visibility_note(MenuMode::Recording, true, self.excluded);
+                let hint = if self.excluded {
+                    ""
+                } else {
+                    " · Use Hide controls to keep them out"
+                };
+                format!("{}{}{}{hint}", note.lead, note.emphasis, note.trail)
+            }
+            Part::Time => clock(self.elapsed_ms),
+            Part::Status => self.view().status_label.to_string(),
+            Part::Button(control) => self.view().control(control).label.to_string(),
+            Part::Level => format!(
+                "Microphone level {}%",
+                (self.level.clamp(0., 1.) * 100.).round()
+            ),
+            Part::Error => self
+                .error
+                .as_deref()
+                .map(hud::error_message)
+                .unwrap_or_default(),
+        }
     }
 
     /// Over the card, where a drag moves the window (shipping `cursor: grab`).
@@ -383,6 +469,55 @@ pub fn clock(ms: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn accessible_parts_follow_the_shipping_dom() {
+        let mut h = Hud::new(true);
+        h.input.state = RecordingState::Recording;
+        h.input.busy = false;
+        let kinds = |h: &Hud| h.parts().into_iter().map(|(p, _)| p).collect::<Vec<_>>();
+        // No microphone: no level meter, and no error line.
+        assert!(!kinds(&h).contains(&Part::Level));
+        assert!(!kinds(&h).contains(&Part::Error));
+        h.input.has_microphone = true;
+        h.level = 0.426;
+        h.error = Some("ffmpeg exited".into());
+        let parts = kinds(&h);
+        let at = |p| parts.iter().position(|q| *q == p).unwrap();
+        assert_eq!(
+            &parts[..4],
+            &[
+                Part::Privacy,
+                Part::Time,
+                Part::Status,
+                Part::Button(Control::Stop)
+            ]
+        );
+        // The meter sits between Screenshot and Mute; the error comes last.
+        assert_eq!(at(Part::Level) + 1, at(Part::Button(Control::Microphone)));
+        assert_eq!(at(Part::Button(Control::Screenshot)) + 1, at(Part::Level));
+        assert_eq!(parts.last(), Some(&Part::Error));
+        assert_eq!(h.part_name(Part::Level), "Microphone level 43%");
+        assert_eq!(h.part_name(Part::Button(Control::Stop)), "Stop recording");
+        assert_eq!(
+            h.part_name(Part::Button(Control::PauseResume)),
+            "Pause recording"
+        );
+        h.input.state = RecordingState::Paused;
+        assert_eq!(
+            h.part_name(Part::Button(Control::PauseResume)),
+            "Resume recording"
+        );
+        assert_eq!(
+            h.part_name(Part::Button(Control::Hide)),
+            "Hide recording controls"
+        );
+        assert!(h.part_name(Part::Privacy).contains("won’t"));
+        // Every part is inside the window.
+        for (_, r) in h.parts() {
+            assert!(r.left >= 0. && r.top >= 0. && r.right <= SIZE.0 && r.bottom <= SIZE.1);
+        }
+    }
 
     #[test]
     fn controls_match_the_shipping_row() {

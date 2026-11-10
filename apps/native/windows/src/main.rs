@@ -28,6 +28,8 @@ mod host;
 #[cfg(windows)]
 mod hud;
 #[cfg(windows)]
+mod hud_uia;
+#[cfg(windows)]
 mod keys;
 #[cfg(windows)]
 mod live;

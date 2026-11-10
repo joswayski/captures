@@ -140,7 +140,11 @@ back. The HUD's Screenshot opens the capture bar on Region with Record
 disabled while the take runs; included controls are kept out of its snapshot
 (`WDA_EXCLUDEFROMCAPTURE` while it prepares). Hovering any button, enabled
 or not, shows its shipping tooltip under it (the last three right-aligned),
-without the fade. Not ported: keyboard focus, UIA and the hidden-controls notice. A take interrupted by a
+without the fade. UI Automation exposes the controls in shipping order with
+their `aria-label` names (privacy line, time, state, each button with
+Invoke, microphone level, the error line as an assertive alert) and
+announces name flips such as Pause/Resume. Not ported: Tab focus (the
+window never activates) and the hidden-controls notice. A take interrupted by a
 crash is listed in History's Interrupted recordings section (shared
 `RecordingRecovery`, shipping copy and two-step Discard; Recover and Discard
 run off the UI thread and are reachable by Tab and UIA; offscreen render with

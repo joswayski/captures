@@ -31,6 +31,7 @@ use windows::Win32::Graphics::Gdi::{
     ValidateRect,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Accessibility::{UiaReturnRawElementProvider, UiaRootObjectId};
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -51,6 +52,8 @@ const WM_MOUSELEAVE: u32 = 0x02A3;
 const WM_APP_CONFIRM: u32 = WM_APP + 41;
 /// The HUD's region Screenshot, opened once the click handler returns.
 const WM_APP_SCREENSHOT: u32 = WM_APP + 42;
+/// A UI Automation Invoke; `wparam` indexes `Control::ALL`.
+const WM_APP_INVOKE: u32 = WM_APP + 43;
 /// Shipping `.recording-hud` window: centered, 20 px above the work area.
 const BOTTOM: f32 = 20.;
 
@@ -102,6 +105,10 @@ struct Recorder {
     tracking: bool,
     /// Messages to show once the recorder is no longer borrowed.
     notices: Vec<String>,
+    /// What screen readers last heard, and the events to raise outside the
+    /// borrow.
+    announced: Vec<(crate::hud::Part, String)>,
+    ui_events: Vec<crate::hud_uia::Event>,
 }
 
 impl Drop for Recorder {
@@ -175,22 +182,44 @@ pub fn protect_for_snapshot(protect: bool) {
     });
 }
 
+/// Read the controls for UI Automation: the HUD, its window and scale.
+/// `None` while the recorder is busy or gone.
+pub fn with_hud<R>(f: impl FnOnce(&Hud, HWND, f32) -> R) -> Option<R> {
+    RECORDER.with(|r| {
+        let r = r.try_borrow().ok()?;
+        let r = r.as_ref()?;
+        Some(f(&r.hud, r.hwnd, r.scale))
+    })
+}
+
+/// Press a control for UI Automation once its call returns, as a click.
+pub fn post_invoke(hwnd: HWND, control: Control) {
+    if let Some(index) = Control::ALL.iter().position(|c| *c == control) {
+        unsafe {
+            let _ = PostMessageW(Some(hwnd), WM_APP_INVOKE, WPARAM(index), LPARAM(0));
+        }
+    }
+}
+
 /// Handle worker events. Call from the host loop outside any window borrow.
 pub fn service() {
     let notices = RECORDER.with(|cell| {
         let Ok(mut slot) = cell.try_borrow_mut() else {
-            return Vec::new();
+            return (Vec::new(), Vec::new());
         };
         let Some(recorder) = slot.as_mut() else {
-            return Vec::new();
+            return (Vec::new(), Vec::new());
         };
         let ended = recorder.drain();
         let notices = std::mem::take(&mut recorder.notices);
+        let events = std::mem::take(&mut recorder.ui_events);
         if ended {
             *slot = None;
         }
-        notices
+        (notices, events)
     });
+    let (notices, events) = notices;
+    crate::hud_uia::raise(&events);
     for notice in notices {
         crate::live::show_error(&notice);
     }
@@ -290,6 +319,8 @@ impl Recorder {
             pulse: Instant::now(),
             tracking: false,
             notices: Vec::new(),
+            announced: Vec::new(),
+            ui_events: Vec::new(),
         })
     }
 
@@ -330,6 +361,10 @@ impl Recorder {
         self.hud.error = self
             .errors
             .line(self.snapshot.as_ref().and_then(|s| s.error.as_deref()));
+        let announced = crate::hud_uia::announced(&self.hud);
+        self.ui_events
+            .extend(crate::hud_uia::diff(&self.announced, &announced));
+        self.announced = announced;
         if self.shown {
             let _ = self.render();
         }
@@ -864,6 +899,11 @@ impl Recorder {
                 return Some(LRESULT(if caption { HTCAPTION } else { HTCLIENT } as isize));
             }
             WM_NCLBUTTONDBLCLK => {}
+            WM_APP_INVOKE => {
+                if let Some(&control) = Control::ALL.get(wp.0) {
+                    self.action(control);
+                }
+            }
             WM_MOUSEMOVE => {
                 if !self.tracking {
                     let mut track = TRACKMOUSEEVENT {
@@ -925,6 +965,25 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
     if msg == WM_APP_SCREENSHOT {
         crate::live::recording_screenshot();
         return LRESULT(0);
+    }
+    // Outside the recorder borrow: UI Automation may call straight back in.
+    if msg == WM_GETOBJECT
+        && lp.0 as i32 == UiaRootObjectId
+        && with_hud(|_, controls, _| controls == hwnd).unwrap_or(false)
+    {
+        return unsafe {
+            UiaReturnRawElementProvider(
+                hwnd,
+                wp,
+                lp,
+                &crate::hud_uia::node(crate::hud_uia::Id::Root),
+            )
+        };
+    }
+    if msg == WM_DESTROY {
+        unsafe {
+            let _ = UiaReturnRawElementProvider(hwnd, WPARAM(0), LPARAM(0), None);
+        }
     }
     if msg == WM_APP_CONFIRM {
         // The message box runs its own loop: ask without borrowing.
