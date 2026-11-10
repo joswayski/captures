@@ -138,8 +138,9 @@ adds a mini preview and opens the recording editor when Preferences asks;
 Quit saves an accepted take. New Capture or the tray brings hidden controls
 back. The HUD's Screenshot opens the capture bar on Region with Record
 disabled while the take runs; included controls are kept out of its snapshot
-(`WDA_EXCLUDEFROMCAPTURE` while it prepares). Not ported: tooltips,
-keyboard focus, UIA and the hidden-controls notice. A take interrupted by a
+(`WDA_EXCLUDEFROMCAPTURE` while it prepares). Hovering any button, enabled
+or not, shows its shipping tooltip under it (the last three right-aligned),
+without the fade. Not ported: keyboard focus, UIA and the hidden-controls notice. A take interrupted by a
 crash is listed in History's Interrupted recordings section (shared
 `RecordingRecovery`, shipping copy and two-step Discard; Recover and Discard
 run off the UI thread and are reachable by Tab and UIA; offscreen render with

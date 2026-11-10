@@ -6,7 +6,9 @@
 //! draws them, shared by the live window and the offscreen renderer.
 //! Coordinates are DIPs from the 430×102 window's corner.
 //!
-//! Not ported yet: tooltips, keyboard focus and UI Automation.
+//! Tooltips follow the pointer over any button, enabled or not, like
+//! shipping's hovered `.recording-tooltip` wrapper; they appear without the
+//! `--dur-1` fade. Not ported yet: keyboard focus and UI Automation.
 
 use captures_app::capture_menu::{self, MenuMode};
 use captures_app::recording_hud::{self as hud, Control};
@@ -41,6 +43,8 @@ pub struct Hud {
     pub excluded: bool,
     pub hover: Option<Control>,
     pub pressed: Option<Control>,
+    /// The button under the pointer, enabled or not, whose tooltip shows.
+    pub tooltip: Option<Control>,
 }
 
 impl Hud {
@@ -59,6 +63,7 @@ impl Hud {
             excluded,
             hover: None,
             pressed: None,
+            tooltip: None,
         }
     }
 
@@ -109,6 +114,16 @@ impl Hud {
                     && y >= r.top
                     && y < r.bottom
             })
+            .map(|(control, _)| control)
+    }
+
+    /// The button under the pointer, including disabled ones (the tooltip
+    /// target).
+    pub fn under(&self, x: f32, y: f32) -> Option<Control> {
+        self.layout()
+            .0
+            .into_iter()
+            .find(|(_, r)| x >= r.left && x < r.right && y >= r.top && y < r.bottom)
             .map(|(control, _)| control)
     }
 
@@ -287,7 +302,66 @@ impl Hud {
                 t.color("theme-signal-text"),
             )?;
         }
-        Ok(())
+        self.paint_tooltip(dc, g, t, &view)
+    }
+
+    /// Shipping `.recording-tooltip > [role="tooltip"]` under the hovered
+    /// button, placed by the shared `tooltip_frame` inside the window.
+    fn paint_tooltip(
+        &self,
+        dc: &ID2D1DeviceContext,
+        g: &Gfx,
+        t: &Tokens,
+        view: &hud::View,
+    ) -> Result<()> {
+        let Some(control) = self.tooltip else {
+            return Ok(());
+        };
+        let Some(anchor) = self
+            .layout()
+            .0
+            .into_iter()
+            .find(|(c, _)| *c == control)
+            .map(|(_, r)| r)
+        else {
+            return Ok(());
+        };
+        let copy = view.control(control);
+        let pad = (hud::TOOLTIP_PADDING_X as f32, hud::TOOLTIP_PADDING_Y as f32);
+        let text = g.text_sized(t, copy.tooltip, t.n("text-xs"), "weight-medium", None)?;
+        let inner = hud::TOOLTIP_MAX_WIDTH as f32 - pad.0 * 2. - 2.;
+        if text.width > inner {
+            g.ellipsis(&text, inner)?;
+        }
+        let frame = hud::tooltip_frame(
+            captures_app::tray_notice::LogicalRect::new(
+                anchor.left.into(),
+                anchor.top.into(),
+                (anchor.right - anchor.left).into(),
+                (anchor.bottom - anchor.top).into(),
+            ),
+            text.width.min(inner).into(),
+            text.height.into(),
+            copy.tooltip_right_aligned,
+            1.,
+            captures_app::tray_notice::LogicalRect::new(0., 0., SIZE.0.into(), SIZE.1.into()),
+        );
+        let r = rect(
+            frame.x as f32,
+            frame.y as f32,
+            (frame.x + frame.width) as f32,
+            (frame.y + frame.height) as f32,
+        );
+        let radius = t.n("r-sm");
+        gfx::fill_round(dc, r, radius, t.color("glass-strong"))?;
+        gfx::border(dc, r, radius, 1., t.color("glass-border"))?;
+        gfx::text(
+            dc,
+            &text,
+            r.left + 1. + pad.0,
+            r.top + 1. + pad.1,
+            t.color("glass-text"),
+        )
     }
 }
 

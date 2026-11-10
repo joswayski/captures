@@ -140,7 +140,8 @@ pub fn render(options: &Options, path: &std::path::Path) -> Result<()> {
             })
         } else if options.tool.as_deref() == Some("hud") {
             // The recording controls at 1:34 with a microphone, at the canvas
-            // corner over the desktop; `--select paused|failed|hover|included`.
+            // corner over the desktop; `--select paused|failed|hover|included|
+            // tooltip-hide`.
             let mut hud = crate::hud::Hud::new(options.select.as_deref() != Some("included"));
             hud.input.busy = false;
             hud.input.has_microphone = true;
@@ -156,6 +157,11 @@ pub fn render(options: &Options, path: &std::path::Path) -> Result<()> {
             }
             if options.select.as_deref() == Some("hover") {
                 hud.hover = Some(captures_app::recording_hud::Control::Stop);
+                hud.tooltip = hud.hover;
+            }
+            // `--select tooltip-hide` shows a right-aligned tooltip.
+            if options.select.as_deref() == Some("tooltip-hide") {
+                hud.tooltip = Some(captures_app::recording_hud::Control::Hide);
             }
             let size = (w as f32, h as f32);
             Box::new(move |dc| {

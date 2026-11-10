@@ -380,6 +380,7 @@ impl Recorder {
         crate::live::recording_hidden(self.accepted);
         self.hud.hover = None;
         self.hud.pressed = None;
+        self.hud.tooltip = None;
         unsafe {
             // NVIDIA Instant Replay treats an excluded HWND as protected
             // content even while hidden, as the shipping host notes.
@@ -875,13 +876,16 @@ impl Recorder {
                 }
                 let (x, y) = self.point(lp);
                 let hover = self.hud.hit(x, y);
-                if std::mem::replace(&mut self.hud.hover, hover) != hover {
+                let tooltip = self.hud.under(x, y);
+                let tooltip_changed = std::mem::replace(&mut self.hud.tooltip, tooltip) != tooltip;
+                if std::mem::replace(&mut self.hud.hover, hover) != hover || tooltip_changed {
                     let _ = self.render();
                 }
             }
             WM_MOUSELEAVE => {
                 self.tracking = false;
-                if self.hud.hover.take().is_some() {
+                let tooltip = self.hud.tooltip.take().is_some();
+                if self.hud.hover.take().is_some() || tooltip {
                     let _ = self.render();
                 }
             }
