@@ -49,6 +49,8 @@ const START_TIMER: usize = 2;
 const WM_MOUSELEAVE: u32 = 0x02A3;
 /// `wparam` 1 asks "Restart recording?", 0 "Delete recording?".
 const WM_APP_CONFIRM: u32 = WM_APP + 41;
+/// The HUD's region Screenshot, opened once the click handler returns.
+const WM_APP_SCREENSHOT: u32 = WM_APP + 42;
 /// Shipping `.recording-hud` window: centered, 20 px above the work area.
 const BOTTOM: f32 = 20.;
 
@@ -93,6 +95,9 @@ struct Recorder {
     errors: hud::ErrorLine,
     countdown: Option<Countdown>,
     shown: bool,
+    /// Kept out of New Capture's snapshot even when the controls are
+    /// included in captures, like shipping's temporary content protection.
+    snapshot_protected: bool,
     pulse: Instant,
     tracking: bool,
     /// Messages to show once the recorder is no longer borrowed.
@@ -143,6 +148,29 @@ pub fn restore() {
             && let Some(r) = r.as_mut()
         {
             r.restore();
+        }
+    });
+}
+
+/// Keep included controls out of a screenshot snapshot while New Capture
+/// prepares it; excluded or hidden controls are already out of it.
+pub fn protect_for_snapshot(protect: bool) {
+    RECORDER.with(|r| {
+        if let Ok(mut r) = r.try_borrow_mut()
+            && let Some(r) = r.as_mut()
+            && r.snapshot_protected != protect
+        {
+            r.snapshot_protected = protect;
+            if r.shown && !r.excluded() {
+                let affinity = if protect {
+                    WDA_EXCLUDEFROMCAPTURE
+                } else {
+                    WDA_NONE
+                };
+                unsafe {
+                    let _ = SetWindowDisplayAffinity(r.hwnd, affinity);
+                }
+            }
         }
     });
 }
@@ -258,6 +286,7 @@ impl Recorder {
             errors: hud::ErrorLine::default(),
             countdown: None,
             shown: false,
+            snapshot_protected: false,
             pulse: Instant::now(),
             tracking: false,
             notices: Vec::new(),
@@ -337,7 +366,7 @@ impl Recorder {
         crate::live::recording_hidden(false);
         self.refresh();
         unsafe {
-            if self.excluded() {
+            if self.excluded() || self.snapshot_protected {
                 let _ = SetWindowDisplayAffinity(self.hwnd, WDA_EXCLUDEFROMCAPTURE);
             }
             let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
@@ -744,7 +773,11 @@ impl Recorder {
                         PostMessageW(Some(self.hwnd), WM_APP_CONFIRM, WPARAM(restart), LPARAM(0));
                 }
             }
-            Control::Screenshot => {}
+            // Shipping `start_capture({ mode: "region" })`: the capture bar
+            // opens on Region with Record locked while this take runs.
+            Control::Screenshot => unsafe {
+                let _ = PostMessageW(Some(self.hwnd), WM_APP_SCREENSHOT, WPARAM(0), LPARAM(0));
+            },
             Control::Hide => self.hide(),
         }
         self.refresh();
@@ -885,6 +918,10 @@ impl Recorder {
 }
 
 extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    if msg == WM_APP_SCREENSHOT {
+        crate::live::recording_screenshot();
+        return LRESULT(0);
+    }
     if msg == WM_APP_CONFIRM {
         // The message box runs its own loop: ask without borrowing.
         let restart = wp.0 == 1;

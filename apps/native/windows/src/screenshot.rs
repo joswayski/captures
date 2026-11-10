@@ -55,9 +55,13 @@ pub fn render(options: &Options, path: &std::path::Path) -> Result<()> {
             ("Generic PnP Monitor".into(), w * 2, h * 2),
             settings.auto_start_on_selection,
         );
+        // `--select recording-locked` draws the bar a running take opens
+        // (Record disabled).
+        menu.recording_locked = options.select.as_deref() == Some("recording-locked");
         // `--select record` draws the bar in Record; `record-fps` and
         // `record-microphone` also open that select.
         if let Some(select) = options.select.as_deref()
+            && !menu.recording_locked
             && select.starts_with("record")
         {
             use crate::capture::Field;

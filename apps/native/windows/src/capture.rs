@@ -382,6 +382,9 @@ pub struct Menu {
     /// The clicked window target, kept when the pointer leaves it.
     pub picked: Option<Option<usize>>,
     pub record: RecordOptions,
+    /// A recording is running, so Record stays disabled (the recording
+    /// controls' Screenshot opens the bar on its take).
+    pub recording_locked: bool,
     /// The open listbox and its highlighted row.
     pub open: Option<(Field, select::State)>,
 }
@@ -409,6 +412,7 @@ impl Menu {
             hovered: None,
             picked: None,
             record: RecordOptions::new(&captures_settings::AppSettings::default()),
+            recording_locked: false,
             open: None,
         }
     }
@@ -447,7 +451,7 @@ impl Menu {
                 label("Record")?,
                 None,
                 Hit::Record,
-                true,
+                !self.recording_locked,
                 self.mode == MenuMode::Recording,
             ),
         ];
@@ -1402,6 +1406,16 @@ pub fn active() -> bool {
     CAPTURE.with(|c| c.try_borrow().map_or(true, |c| c.is_some()))
 }
 
+/// The snapshot is being taken (before the bar shows).
+pub fn preparing() -> bool {
+    CAPTURE.with(|c| {
+        c.try_borrow().is_ok_and(|c| {
+            c.as_ref()
+                .is_some_and(|c| matches!(c.phase, Phase::Preparing(_)))
+        })
+    })
+}
+
 /// Open New Capture on `target` over the display under the pointer.
 /// `from_menu` is true when a tray menu click opened it, so its fade must
 /// leave the screen first. `wake` runs on worker threads when the host loop
@@ -1618,7 +1632,12 @@ impl Capture {
                 (display.name.clone(), display.width, display.height),
                 self.settings.auto_start_on_selection,
             );
-            menu.mode = self.mode;
+            menu.recording_locked = crate::recorder::active();
+            if menu.recording_locked {
+                menu.mode = MenuMode::Screenshot;
+            } else {
+                menu.mode = self.mode;
+            }
             menu.controls_excluded = !self.settings.include_recording_controls_in_captures;
             menu.record = RecordOptions::new(&self.settings);
             menu.windows = window_rects(&session);

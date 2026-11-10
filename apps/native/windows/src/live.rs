@@ -206,6 +206,7 @@ pub fn service() {
     }
     crate::recorder::service();
     crate::previews::set_suppressed(crate::capture::active());
+    crate::recorder::protect_for_snapshot(crate::capture::preparing());
     while let Some(action) = RESIDENT.with(|r| r.borrow().as_ref()?.tray.as_ref()?.next_action()) {
         run(&options, action);
     }
@@ -418,6 +419,28 @@ fn new_capture(options: &Options, target: crate::capture::Target, mode: MenuMode
     if crate::recorder::active() {
         return crate::recorder::restore();
     }
+    open_capture(options, target, mode, from_menu);
+}
+
+/// The recording controls' Screenshot: the bar on Region, where the running
+/// take keeps Record locked.
+pub fn recording_screenshot() {
+    if let Some(options) = RESIDENT.with(|r| r.borrow().as_ref().map(|r| r.options.clone())) {
+        open_capture(
+            &options,
+            crate::capture::Target::Region,
+            MenuMode::Screenshot,
+            false,
+        );
+    }
+}
+
+fn open_capture(
+    options: &Options,
+    target: crate::capture::Target,
+    mode: MenuMode,
+    from_menu: bool,
+) {
     let Some(thread) = RESIDENT.with(|r| r.borrow().as_ref().map(|r| r.thread)) else {
         return;
     };

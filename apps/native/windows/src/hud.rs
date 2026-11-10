@@ -6,8 +6,7 @@
 //! draws them, shared by the live window and the offscreen renderer.
 //! Coordinates are DIPs from the 430×102 window's corner.
 //!
-//! Not ported yet: tooltips, keyboard focus, UI Automation and the HUD's
-//! region Screenshot (drawn disabled).
+//! Not ported yet: tooltips, keyboard focus and UI Automation.
 
 use captures_app::capture_menu::{self, MenuMode};
 use captures_app::recording_hud::{self as hud, Control};
@@ -42,18 +41,6 @@ pub struct Hud {
     pub excluded: bool,
     pub hover: Option<Control>,
     pub pressed: Option<Control>,
-}
-
-/// The shared model's view, with the HUD Screenshot disabled until a
-/// screenshot inside a recording is ported.
-fn view(input: &hud::Input) -> hud::View {
-    let mut view = hud::present(input);
-    for control in &mut view.controls {
-        if control.control == Control::Screenshot {
-            control.enabled = false;
-        }
-    }
-    view
 }
 
 impl Hud {
@@ -107,7 +94,7 @@ impl Hud {
     }
 
     pub fn view(&self) -> hud::View {
-        view(&self.input)
+        hud::present(&self.input)
     }
 
     pub fn hit(&self, x: f32, y: f32) -> Option<Control> {

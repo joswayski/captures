@@ -136,7 +136,9 @@ and Hide, with state and copy from `captures_app::recording_hud`. Restart and
 Delete confirm with a system message box (OK/Cancel). Stop saves to History,
 adds a mini preview and opens the recording editor when Preferences asks;
 Quit saves an accepted take. New Capture or the tray brings hidden controls
-back. Not ported: the HUD's region Screenshot (drawn disabled), tooltips,
+back. The HUD's Screenshot opens the capture bar on Region with Record
+disabled while the take runs; included controls are kept out of its snapshot
+(`WDA_EXCLUDEFROMCAPTURE` while it prepares). Not ported: tooltips,
 keyboard focus, UIA and the hidden-controls notice. A take interrupted by a
 crash is listed in History's Interrupted recordings section (shared
 `RecordingRecovery`, shipping copy and two-step Discard; Recover and Discard
