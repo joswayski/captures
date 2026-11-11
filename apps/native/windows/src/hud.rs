@@ -466,6 +466,123 @@ pub fn clock(ms: u64) -> String {
     }
 }
 
+/// Shipping `RecordingControlsHiddenNotice`: the 418×74 card inside a 28 px
+/// transparent frame that keeps its glass shadow unclipped.
+pub const NOTICE_PAD: f32 = 28.;
+pub const NOTICE_SIZE: (f32, f32) = (
+    hud::HIDDEN_NOTICE_WIDTH as f32 + NOTICE_PAD * 2.,
+    hud::HIDDEN_NOTICE_HEIGHT as f32 + NOTICE_PAD * 2.,
+);
+
+/// `.recording-controls-hidden-notice`: the accent capture tile, the title
+/// and the sentence with one `<kbd>` chip per shortcut key, wrapped like the
+/// shipping flex row. Drawn at rest (the 6 s fade lifecycle is not ported).
+pub fn paint_hidden_notice(
+    dc: &ID2D1DeviceContext,
+    g: &Gfx,
+    t: &Tokens,
+    copy: &hud::HiddenNoticeCopy,
+) -> Result<()> {
+    let card = rect(
+        NOTICE_PAD,
+        NOTICE_PAD,
+        NOTICE_SIZE.0 - NOTICE_PAD,
+        NOTICE_SIZE.1 - NOTICE_PAD,
+    );
+    let radius = t.n("r-xl");
+    gfx::shadow(dc, card, radius, t.shadow("glass-shadow"))?;
+    gfx::fill_round(dc, card, radius, t.color("glass-strong"))?;
+    gfx::border(dc, card, radius, 1., t.color("glass-border"))?;
+    let (pad, gap, chip_gap) = (t.n("s-5"), t.n("s-5"), t.n("s-2"));
+    let cy = (card.top + card.bottom) / 2.;
+    // `.recording-controls-hidden-icon`: 34×34 accent tile, 20 px icon.
+    let tile_left = card.left + 1. + pad;
+    let tile = rect(tile_left, cy - 17., tile_left + 34., cy + 17.);
+    gfx::fill_round(dc, tile, t.n("r-lg"), t.color("theme-accent"))?;
+    gfx::icon(
+        dc,
+        &g.factory,
+        "capture",
+        &[],
+        (tile.left + 7., tile.top + 7., 20.),
+        1.8,
+        t.color("theme-accent-ink"),
+    )?;
+    let left = tile.right + gap;
+    let width = card.right - 1. - pad - left;
+    let title = g.text_sized(t, copy.title, t.n("text-sm"), "weight-semibold", None)?;
+    // The sentence's flex items: the two text runs and the key chips.
+    let size = t.n("text-xs");
+    let mut items = vec![(
+        g.text_sized(t, &copy.before_keys, size, "weight-regular", None)?,
+        false,
+    )];
+    for key in &copy.keys {
+        items.push((
+            g.text_sized(t, key, t.n("text-2xs"), "weight-semibold", None)?,
+            true,
+        ));
+    }
+    items.push((
+        g.text_sized(t, copy.after_keys, size, "weight-regular", None)?,
+        false,
+    ));
+    // `kbd`: 2px 5px padding, 1 px border with a 2 px bottom, min-width 20.
+    let item_size = |text: &gfx::Text, chip: bool| {
+        if chip {
+            ((text.width + 12.).max(20.), text.height + 2. + 3. + 2.)
+        } else {
+            (text.width.min(width), text.height)
+        }
+    };
+    let mut rows: Vec<(f32, Vec<(usize, f32)>)> = Vec::new();
+    let mut x = 0.;
+    for (index, (text, chip)) in items.iter().enumerate() {
+        let (w, h) = item_size(text, *chip);
+        if rows.is_empty() || (x > 0. && x + w > width) {
+            rows.push((0., Vec::new()));
+            x = 0.;
+        }
+        let row = rows.last_mut().expect("a row");
+        row.0 = row.0.max(h);
+        row.1.push((index, x));
+        x += w + chip_gap;
+    }
+    let sentence: f32 = rows.iter().map(|r| r.0).sum::<f32>() + chip_gap * (rows.len() as f32 - 1.);
+    let mut y = cy - (title.height + 3. + sentence) / 2.;
+    gfx::text(dc, &title, left, y, t.color("glass-text"))?;
+    y += title.height + 3.;
+    for (height, row) in rows {
+        for (index, x) in row {
+            let (text, chip) = &items[index];
+            let (w, h) = item_size(text, *chip);
+            let top = y + (height - h) / 2.;
+            if *chip {
+                let r = rect(left + x, top, left + x + w, top + h);
+                let fill = D2D1_COLOR_F {
+                    r: 1.,
+                    g: 1.,
+                    b: 1.,
+                    a: 0.08,
+                };
+                gfx::fill_round(dc, r, t.n("r-xs"), fill)?;
+                gfx::border(dc, r, t.n("r-xs"), 1., t.color("glass-border-strong"))?;
+                let bottom = rect(r.left + 2., r.bottom - 2., r.right - 2., r.bottom - 1.);
+                gfx::fill(dc, bottom, t.color("glass-border-strong"))?;
+                let tx = r.left + (w - text.width) / 2.;
+                gfx::text(dc, text, tx, top + 3., t.color("glass-text"))?;
+            } else {
+                if text.width > width {
+                    g.ellipsis(text, width)?;
+                }
+                gfx::text(dc, text, left + x, top, t.color("glass-text-muted"))?;
+            }
+        }
+        y += height + chip_gap;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

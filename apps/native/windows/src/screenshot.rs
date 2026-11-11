@@ -177,6 +177,26 @@ pub fn render(options: &Options, path: &std::path::Path) -> Result<()> {
                 };
                 hud.paint(dc, &g, &tokens, 0.)
             })
+        } else if options.tool.as_deref() == Some("hidden-notice") {
+            // The notice over the desktop with the default New Capture keys.
+            let copy = captures_app::recording_hud::hidden_notice_copy(
+                &settings.new_capture_shortcut,
+                captures_app::shortcuts::ShortcutPlatform::Windows,
+            );
+            let size = (w as f32, h as f32);
+            Box::new(move |dc| {
+                unsafe {
+                    dc.DrawBitmap(
+                        &frozen,
+                        Some(&crate::gfx::rect(0., 0., size.0, size.1)),
+                        1.,
+                        windows::Win32::Graphics::Direct2D::D2D1_INTERPOLATION_MODE_LINEAR,
+                        None,
+                        None,
+                    )
+                };
+                crate::hud::paint_hidden_notice(dc, &g, &tokens, &copy)
+            })
         } else if options.tool.as_deref() == Some("countdown") {
             // The scrim over the live desktop at 3, at rest.
             let size = (w as f32, h as f32);

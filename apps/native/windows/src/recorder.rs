@@ -47,6 +47,9 @@ use crate::tokens::Tokens;
 const SETTLE_MS: u32 = 40;
 const FRAME_TIMER: usize = 1;
 const START_TIMER: usize = 2;
+/// Shipping destroys the hidden-controls notice 6.2 s after it opens.
+const NOTICE_TIMER: usize = 3;
+const NOTICE_MS: u32 = 6_200;
 const WM_MOUSELEAVE: u32 = 0x02A3;
 /// `wparam` 1 asks "Restart recording?", 0 "Delete recording?".
 const WM_APP_CONFIRM: u32 = WM_APP + 41;
@@ -108,6 +111,8 @@ struct Recorder {
     /// What screen readers last heard, and the events to raise outside the
     /// borrow.
     announced: Vec<(crate::hud::Part, String)>,
+    /// "Recording controls hidden" after the user's Hide.
+    notice: Option<HiddenNotice>,
     ui_events: Vec<crate::hud_uia::Event>,
 }
 
@@ -320,6 +325,7 @@ impl Recorder {
             tracking: false,
             notices: Vec::new(),
             announced: Vec::new(),
+            notice: None,
             ui_events: Vec::new(),
         })
     }
@@ -398,6 +404,7 @@ impl Recorder {
             return;
         }
         self.shown = true;
+        self.close_notice();
         crate::live::recording_hidden(false);
         self.refresh();
         unsafe {
@@ -405,6 +412,30 @@ impl Recorder {
                 let _ = SetWindowDisplayAffinity(self.hwnd, WDA_EXCLUDEFROMCAPTURE);
             }
             let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
+        }
+    }
+
+    /// Shipping's click-through notice, centered where the controls were.
+    fn open_notice(&mut self, anchor: RECT) {
+        self.close_notice();
+        let copy = hud::hidden_notice_copy(
+            &self.settings.new_capture_shortcut,
+            captures_app::shortcuts::ShortcutPlatform::Windows,
+        );
+        match HiddenNotice::open(&self.g, &self.tokens, &copy, anchor, self.scale) {
+            Ok(notice) => {
+                self.notice = Some(notice);
+                unsafe { SetTimer(Some(self.hwnd), NOTICE_TIMER, NOTICE_MS, None) };
+            }
+            Err(error) => eprintln!("Could not show the hidden-controls notice: {error}"),
+        }
+    }
+
+    fn close_notice(&mut self) {
+        if self.notice.take().is_some() {
+            unsafe {
+                let _ = KillTimer(Some(self.hwnd), NOTICE_TIMER);
+            }
         }
     }
 
@@ -814,7 +845,11 @@ impl Recorder {
             Control::Screenshot => unsafe {
                 let _ = PostMessageW(Some(self.hwnd), WM_APP_SCREENSHOT, WPARAM(0), LPARAM(0));
             },
-            Control::Hide => self.hide(),
+            Control::Hide => {
+                let anchor = window_rect(self.hwnd);
+                self.hide();
+                self.open_notice(anchor);
+            }
         }
         self.refresh();
     }
@@ -881,6 +916,7 @@ impl Recorder {
         }
         match msg {
             WM_TIMER if wp.0 == START_TIMER => self.begin(),
+            WM_TIMER if wp.0 == NOTICE_TIMER => self.close_notice(),
             WM_TIMER => {
                 if self.shown {
                     self.refresh();
@@ -1030,6 +1066,7 @@ unsafe fn register() -> Result<HINSTANCE> {
             for name in [
                 w!("CapturesRecordingControls"),
                 w!("CapturesRecordingCountdown"),
+                w!("CapturesRecordingHiddenNotice"),
             ] {
                 RegisterClassW(&WNDCLASSW {
                     lpfnWndProc: Some(wndproc),
@@ -1084,6 +1121,103 @@ unsafe fn controls_window(display: &DisplayDescriptor) -> Result<(HWND, f32, (u3
             None,
         )?;
         Ok((hwnd, scale, px))
+    }
+}
+
+fn window_rect(hwnd: HWND) -> RECT {
+    let mut r = RECT::default();
+    unsafe {
+        let _ = GetWindowRect(hwnd, &mut r);
+    }
+    r
+}
+
+/// The "Recording controls hidden" window: topmost, never activated,
+/// click-through (layered + transparent) and kept out of captures, like
+/// shipping's content-protected notice.
+struct HiddenNotice {
+    hwnd: HWND,
+    _target: IDCompositionTarget,
+    _visual: IDCompositionVisual2,
+    _surface: IDCompositionSurface,
+}
+
+impl HiddenNotice {
+    fn open(
+        g: &Gfx,
+        tokens: &Tokens,
+        copy: &hud::HiddenNoticeCopy,
+        anchor: RECT,
+        scale: f32,
+    ) -> Result<Self> {
+        let dcomp = g.dcomp.clone().ok_or_else(Error::empty)?;
+        let px = (
+            (controls::NOTICE_SIZE.0 * scale).round() as u32,
+            (controls::NOTICE_SIZE.1 * scale).round() as u32,
+        );
+        let x = (anchor.left + anchor.right - px.0 as i32) / 2;
+        let y = (anchor.top + anchor.bottom - px.1 as i32) / 2;
+        unsafe {
+            let instance = register()?;
+            let hwnd = CreateWindowExW(
+                WS_EX_TOPMOST
+                    | WS_EX_TOOLWINDOW
+                    | WS_EX_NOACTIVATE
+                    | WS_EX_NOREDIRECTIONBITMAP
+                    | WS_EX_LAYERED
+                    | WS_EX_TRANSPARENT,
+                w!("CapturesRecordingHiddenNotice"),
+                &HSTRING::from(copy.title),
+                WS_POPUP,
+                x,
+                y,
+                px.0 as i32,
+                px.1 as i32,
+                None,
+                None,
+                Some(instance),
+                None,
+            )?;
+            // Build the notice; a failure destroys the window.
+            let built = (|| -> Result<Self> {
+                SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA)?;
+                let target = dcomp.CreateTargetForHwnd(hwnd, true)?;
+                let visual = dcomp.CreateVisual()?;
+                let surface = g.surface(px.0, px.1)?;
+                visual.SetContent(&surface)?;
+                target.SetRoot(&visual)?;
+                gfx::draw_surface(&surface, px, (scale, scale), 0., |dc| {
+                    controls::paint_hidden_notice(dc, g, tokens, copy)
+                })?;
+                dcomp.Commit()?;
+                Ok(Self {
+                    hwnd,
+                    _target: target,
+                    _visual: visual,
+                    _surface: surface,
+                })
+            })();
+            match built {
+                Ok(notice) => {
+                    let _ = SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE);
+                    let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                    Ok(notice)
+                }
+                Err(error) => {
+                    let _ = DestroyWindow(hwnd);
+                    Err(error)
+                }
+            }
+        }
+    }
+}
+
+impl Drop for HiddenNotice {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = SetWindowDisplayAffinity(self.hwnd, WDA_NONE);
+            let _ = DestroyWindow(self.hwnd);
+        }
     }
 }
 
