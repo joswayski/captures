@@ -11,7 +11,8 @@ use std::time::SystemTime;
 use captures_app::app_windows::{self, AppWindow, InteractiveLaunch, PrimaryWindow, Reactivation};
 use captures_app::instance::{Instance, Launch, OpenRequest};
 use captures_app::shortcuts::{CaptureShortcut, CaptureShortcuts};
-use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+use captures_app::tray_notice;
+use windows::Win32::Foundation::{HWND, LPARAM, RECT, WPARAM};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, HWND_MESSAGE, MB_ICONERROR, MB_OK, MessageBoxW, PostQuitMessage,
@@ -138,9 +139,15 @@ pub fn start(options: &Options, instance: Instance) {
     let launch =
         app_windows::interactive_launch(settings.onboarding_completed, options.quiet, false, false);
     match launch {
-        // A quiet launch stays in the notification area. Shipping also shows
-        // its 5 s launch notice there; that notice is not ported yet.
-        Some(InteractiveLaunch::StartupNotice) if !tray_missing => {}
+        // A quiet launch stays in the notification area with the launch
+        // notice for 5 s.
+        Some(InteractiveLaunch::StartupNotice) if !tray_missing => {
+            startup_notice(options, tray_notice::STARTUP_NOTICE_AUTOSTART_VISIBLE)
+        }
+        Some(InteractiveLaunch::StartupNoticeAndPreferences) if !tray_missing => {
+            startup_notice(options, tray_notice::STARTUP_NOTICE_AUTOSTART_VISIBLE);
+            open_preferences(options);
+        }
         Some(InteractiveLaunch::Setup) => open_setup(options),
         Some(_) => open_preferences(options),
         None => {}
@@ -156,6 +163,39 @@ pub fn stop() {
 fn open_preferences(options: &Options) {
     if let Err(error) = crate::host::open(options) {
         eprintln!("couldn't open Preferences: {error}");
+    }
+}
+
+/// Shipping's launch notice with the saved New Capture keys.
+fn startup_notice(options: &Options, visible_for: std::time::Duration) {
+    let settings = captures_settings::load(&options.settings_file).unwrap_or_default();
+    let shortcut = Some(settings.new_capture_shortcut.clone())
+        .filter(|shortcut| !shortcut.trim().is_empty())
+        .unwrap_or_else(captures_settings::default_new_capture_shortcut);
+    let keys = captures_app::shortcuts::shortcut_display_tokens(
+        &shortcut,
+        captures_app::shortcuts::ShortcutPlatform::Windows,
+    );
+    let tokens = crate::appearance::tokens(options.appearance.as_deref(), &settings);
+    crate::startup_notice::show(tokens, keys, visible_for, tray_rect);
+}
+
+fn tray_rect() -> Option<RECT> {
+    RESIDENT.with(|r| r.try_borrow().ok()?.as_ref()?.tray.as_ref()?.rect())
+}
+
+/// First-run setup finished: the resident app shows the launch notice for
+/// 15 s, like shipping's `complete_onboarding`.
+pub fn setup_finished() {
+    let options = RESIDENT.with(|r| {
+        r.try_borrow()
+            .ok()?
+            .as_ref()
+            .filter(|r| r.tray.is_some())
+            .map(|r| r.options.clone())
+    });
+    if let Some(options) = options {
+        startup_notice(&options, tray_notice::STARTUP_NOTICE_AFTER_SETUP_VISIBLE);
     }
 }
 
@@ -254,6 +294,8 @@ pub fn service() {
 
 fn run(options: &Options, action: Action) {
     match action {
+        // A left click first dismisses a visible launch notice, as shipping.
+        Action::LeftClick if crate::startup_notice::hide() => {}
         Action::Preferences | Action::CheckUpdates | Action::LeftClick => open_preferences(options),
         Action::History => {
             if let Err(error) = crate::history::open(options, None) {

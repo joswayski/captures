@@ -655,6 +655,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
         match with_setup(|s| s.handle(msg, wp, lp)).flatten() {
             Some(true) => {
                 let _ = DestroyWindow(hwnd);
+                crate::live::setup_finished();
                 LRESULT(0)
             }
             Some(false) if msg == WM_SETCURSOR => LRESULT(1),

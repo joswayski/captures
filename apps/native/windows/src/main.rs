@@ -47,6 +47,8 @@ mod scene;
 mod screenshot;
 #[cfg(windows)]
 mod setup;
+#[cfg(windows)]
+mod startup_notice;
 // The editing model builds everywhere so its tests run on any OS.
 mod textfield;
 #[cfg(windows)]

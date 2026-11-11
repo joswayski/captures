@@ -189,9 +189,16 @@ off the UI thread through the shared `captures_app::onboarding` session. Tab
 focuses the button and Enter or Space finishes setup, which closes the window
 and enables the capture shortcuts. `--scene setup [--select
 checking|error|focus]` renders it offscreen (rendered against the Tauri harness
-in light, dark, short and tall sizes; not yet physically checked). Not ported:
-the button's calm pulse, UI Automation for setup and the launch notice shown
-after it. Files forwarded by path are not opened. A physical Windows 11 check (4K, 150%) passed quiet launch, the
+in light, dark, short and tall sizes; not yet physically checked). Finishing setup
+shows shipping's launch notice for 15 s, and a quiet (`--captures-autostart`)
+launch shows it for 5 s (`src/startup_notice.rs`): "Captures is ready to use"
+with the New Capture keys, a non-activating pill whose caret points at the
+notification-area icon through the shared `tray_notice` placement, retrying
+while the icon has no rect and then falling back above the taskbar without a
+caret. Close or a tray left-click hides it early. `--scene capture --tool
+startup-notice [--select fallback|hover]` renders it offscreen (compared with
+the Tauri harness; not yet physically checked). Not ported: setup's calm
+pulse, UI Automation for setup and the notice, and the notice's arrive motion. Files forwarded by path are not opened. A physical Windows 11 check (4K, 150%) passed quiet launch, the
 menu and its disabled rows, left-click, residency after closing windows,
 relaunch forwarding and Quit (before shortcuts were registered). Wine
 cannot render Preferences (no DirectComposition) or open the tray menu.

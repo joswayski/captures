@@ -201,6 +201,49 @@ pub fn render(options: &Options, path: &std::path::Path) -> Result<()> {
                 };
                 crate::hud::paint_hidden_notice(dc, &g, &tokens, &copy)
             })
+        } else if options.tool.as_deref() == Some("startup-notice") {
+            // The launch notice over the desktop: anchored above a tray icon
+            // at the bottom right, or `--select fallback` without one.
+            use captures_app::tray_notice;
+            let screen = tray_notice::LogicalRect::new(0., 0., w as f64, h as f64);
+            let work = tray_notice::LogicalRect::new(0., 0., w as f64, h as f64 - 48.);
+            let tray = (options.select.as_deref() != Some("fallback"))
+                .then(|| tray_notice::LogicalRect::new(w as f64 - 160., h as f64 - 44., 24., 40.));
+            let placement = tray_notice::startup_notice_placement(
+                screen,
+                work,
+                tray,
+                false,
+                tray_notice::FallbackEdge::Bottom,
+            );
+            let keys = captures_app::shortcuts::shortcut_display_tokens(
+                &captures_settings::default_new_capture_shortcut(),
+                captures_app::shortcuts::ShortcutPlatform::Windows,
+            );
+            let hover = options.select.as_deref() == Some("hover");
+            let size = (w as f32, h as f32);
+            Box::new(move |dc| unsafe {
+                dc.DrawBitmap(
+                    &frozen,
+                    Some(&crate::gfx::rect(0., 0., size.0, size.1)),
+                    1.,
+                    windows::Win32::Graphics::Direct2D::D2D1_INTERPOLATION_MODE_LINEAR,
+                    None,
+                    None,
+                );
+                let mut base = windows_numerics::Matrix3x2::identity();
+                dc.GetTransform(&mut base);
+                let at = windows_numerics::Matrix3x2::translation(
+                    placement.x as f32,
+                    placement.y as f32,
+                );
+                dc.SetTransform(&(at * base));
+                let result =
+                    crate::startup_notice::paint(dc, &g, &tokens, &placement, &keys, hover)
+                        .map(|_| ());
+                dc.SetTransform(&base);
+                result
+            })
         } else if options.tool.as_deref() == Some("countdown") {
             // The scrim over the live desktop at 3, at rest.
             let size = (w as f32, h as f32);

@@ -254,6 +254,21 @@ impl Tray {
         })
     }
 
+    /// The icon's physical screen rect, once the shell has laid it out.
+    pub fn rect(&self) -> Option<windows::Win32::Foundation::RECT> {
+        let rect = self.icon.rect()?;
+        let (x, y) = (
+            rect.position.x.round() as i32,
+            rect.position.y.round() as i32,
+        );
+        (rect.size.width > 0 && rect.size.height > 0).then(|| windows::Win32::Foundation::RECT {
+            left: x,
+            top: y,
+            right: x + rect.size.width as i32,
+            bottom: y + rect.size.height as i32,
+        })
+    }
+
     pub fn next_action(&self) -> Option<Action> {
         self.actions.try_recv().ok()
     }
