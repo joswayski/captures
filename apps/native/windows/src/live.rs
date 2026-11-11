@@ -357,8 +357,11 @@ fn run(options: &Options, action: Action) {
             MenuMode::Recording,
             true,
         ),
-        // Disabled row: feedback is not ported yet.
-        Action::SendFeedback => {}
+        Action::SendFeedback => {
+            if let Err(error) = crate::feedback::open(options) {
+                eprintln!("couldn't open Send Feedback: {error}");
+            }
+        }
     }
 }
 

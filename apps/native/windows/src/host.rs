@@ -1172,6 +1172,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                     && !crate::editor::exists()
                     && !crate::recording::exists()
                     && !crate::setup::exists()
+                    && !crate::feedback::exists()
                     && !crate::live::resident()
                 {
                     PostQuitMessage(0);
@@ -1280,6 +1281,7 @@ pub fn run(options: Options, resident: Option<captures_app::instance::Instance>)
         crate::editor::register(instance.into())?;
         crate::recording::register(instance.into())?;
         crate::setup::register(instance.into())?;
+        crate::feedback::register(instance.into())?;
         if let Some(instance) = resident {
             crate::live::start(&options, instance);
         } else {
@@ -1292,6 +1294,7 @@ pub fn run(options: Options, resident: Option<captures_app::instance::Instance>)
                 // Parsing requires --screenshot, which never runs the host.
                 crate::Scene::Capture => {}
                 crate::Scene::Setup => crate::setup::open(&options)?,
+                crate::Scene::Feedback => crate::feedback::open(&options)?,
                 crate::Scene::Recording => crate::recording::open(
                     &options,
                     options.artifact.as_deref().unwrap_or_default(),

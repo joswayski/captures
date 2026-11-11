@@ -114,7 +114,18 @@ press skips the tray menu's 200 ms fade wait. A physical Windows 11 check
 recorder's release and Quit; key press to bar took about 380 ms in a release
 build (260 ms without Freeze screen). The Win+Shift+S hook ignores injected
 input and the installed Captures held Print Screen, so those two takeovers
-still need a real keyboard check. Send Feedback stays disabled.
+still need a real keyboard check. The tray's Send Feedback opens shipping's form (`src/feedback.rs`, 640 × 700,
+minimum 460 × 460): the automatically included app and system details, the
+Bug/Idea/Other categories with their placeholders, a multi-line message, the
+optional contact and Send with its sent and error notes, using the shared
+`captures_app::feedback` copy and limits. Only the resident app sends, through
+the shared `captures-feedback` client on a worker; other launches are a fixture
+whose Send stays off. Tab moves through the categories, fields and Send.
+`--scene feedback [--select typed|live|sent|error|idea]` renders it offscreen
+(compared with the Tauri harness; Wine's DirectWrite stubs caret hit-testing,
+so caret placement needs a real PC). Not ported: UI Automation for the form,
+the textarea resize grip, line-based Home/End and the native hosts' optional
+crash-diagnostics card.
 
 Record (`recorder.rs`) switches the bar to Record ("Start recording"; its
 note follows Include recording controls in captures), and the Record Region,

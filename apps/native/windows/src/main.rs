@@ -18,6 +18,8 @@ mod editor;
 #[cfg(windows)]
 mod editor_uia;
 #[cfg(windows)]
+mod feedback;
+#[cfg(windows)]
 mod gfx;
 #[cfg(windows)]
 mod history;
@@ -80,6 +82,9 @@ pub enum Scene {
     /// `--scene setup`: first-run setup (`--select checking|error|focus|hover`
     /// for screenshots).
     Setup,
+    /// `--scene feedback`: Send Feedback (`--select typed|live|sent|error|idea`
+    /// for screenshots).
+    Feedback,
 }
 
 #[cfg(windows)]
@@ -143,6 +148,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
                     "recording" => Scene::Recording,
                     "capture" => Scene::Capture,
                     "setup" => Scene::Setup,
+                    "feedback" => Scene::Feedback,
                     scene => return Err(format!("unsupported scene {scene}")),
                 };
             }

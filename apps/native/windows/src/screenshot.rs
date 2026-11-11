@@ -32,6 +32,10 @@ pub fn render(options: &Options, path: &std::path::Path) -> Result<()> {
         Window::Editor => crate::editor::SIZE,
         Window::Recording => crate::recording::SIZE,
         Window::Capture => (1280., 800.),
+        Window::Feedback => (
+            captures_app::feedback::WINDOW_WIDTH,
+            captures_app::feedback::WINDOW_HEIGHT,
+        ),
         Window::Setup => {
             let spec = captures_app::app_windows::SETUP;
             (spec.width, spec.height)
@@ -273,6 +277,10 @@ pub fn render(options: &Options, path: &std::path::Path) -> Result<()> {
         } else {
             Box::new(move |dc| menu.borrow_mut().paint(dc, &g, &tokens, Some(&frozen)))
         }
+    } else if options.scene == Window::Feedback {
+        let feedback =
+            crate::feedback::render_offscreen(options, g.clone(), tokens, (w as f32, h as f32))?;
+        Box::new(move |dc| feedback.paint(dc))
     } else if options.scene == Window::Setup {
         let setup =
             crate::setup::render_offscreen(options, g.clone(), tokens, (w as f32, h as f32))?;

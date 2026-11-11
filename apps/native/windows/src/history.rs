@@ -3514,6 +3514,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                     && !crate::editor::exists()
                     && !crate::recording::exists()
                     && !crate::setup::exists()
+                    && !crate::feedback::exists()
                     && !crate::live::resident()
                 {
                     PostQuitMessage(0);

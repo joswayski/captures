@@ -107,12 +107,6 @@ const MENU: [Row; 15] = [
     Row::Item("quit", "Quit Captures", Action::Quit, None),
 ];
 
-/// What the Win32 host can run so far. The screenshot and recording rows
-/// open the capture bar; Send Feedback stays visible but disabled.
-fn available(action: Action) -> bool {
-    action != Action::SendFeedback
-}
-
 fn shortcut(settings: &captures_settings::AppSettings, shortcut: Shortcut) -> &str {
     match shortcut {
         Shortcut::NewCapture => &settings.new_capture_shortcut,
@@ -167,14 +161,14 @@ fn menu(settings: &captures_settings::AppSettings) -> Result<Menu, String> {
         let result = match *row {
             // Shipping `tray_menu_item`: a row whose accelerator the menu
             // rejects (Windows menus cannot show Super) keeps no shortcut.
-            Row::Item(id, label, action, keys) => keys
+            Row::Item(id, label, _, keys) => keys
                 .and_then(|keys| accelerator(shortcut(settings, keys)))
                 .and_then(|keys| {
-                    menu.append(&MenuItem::with_id(id, label, available(action), Some(keys)))
+                    menu.append(&MenuItem::with_id(id, label, true, Some(keys)))
                         .ok()
                 })
                 .map_or_else(
-                    || menu.append(&MenuItem::with_id(id, label, available(action), None)),
+                    || menu.append(&MenuItem::with_id(id, label, true, None)),
                     Ok,
                 ),
             Row::Updates => menu.append(&MenuItem::with_id(
