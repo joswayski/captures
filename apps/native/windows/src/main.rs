@@ -45,6 +45,8 @@ mod recording_uia;
 mod scene;
 #[cfg(windows)]
 mod screenshot;
+#[cfg(windows)]
+mod setup;
 // The editing model builds everywhere so its tests run on any OS.
 mod textfield;
 #[cfg(windows)]
@@ -73,6 +75,9 @@ pub enum Scene {
     /// countdown` shows the countdown and `--tool previews` the mini-preview
     /// stack (`--select x` hovers its first card).
     Capture,
+    /// `--scene setup`: first-run setup (`--select checking|error|focus|hover`
+    /// for screenshots).
+    Setup,
 }
 
 #[cfg(windows)]
@@ -135,6 +140,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
                     "editor" => Scene::Editor,
                     "recording" => Scene::Recording,
                     "capture" => Scene::Capture,
+                    "setup" => Scene::Setup,
                     scene => return Err(format!("unsupported scene {scene}")),
                 };
             }

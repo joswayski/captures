@@ -180,9 +180,18 @@ renders the bar offscreen (`--tool display` for Full screen, `--tool window`
 for Window, `--select x` for a sample selection or hovered window, `--select
 desktop` for the hovered display, `--select picked` for a picked window with
 the pointer on the desktop, `--tool countdown` for the countdown at 3,
-`--tool previews` for the preview stack, `--select x` hovering its first card). There is no first-run setup window
-or launch notice yet; Preferences stands in, and files forwarded by path are
-not opened. A physical Windows 11 check (4K, 150%) passed quiet launch, the
+`--tool previews` for the preview stack, `--select x` hovering its first card). While
+first-run setup is unfinished, launch, relaunch and New Capture open shipping's
+setup window (`src/setup.rs`, 620 × 560, minimum 480 × 440): the mark, copy,
+the Screen capture row with its Ready status (Windows has no permission prompt
+or microphone row) and Start capturing, with the check and completion running
+off the UI thread through the shared `captures_app::onboarding` session. Tab
+focuses the button and Enter or Space finishes setup, which closes the window
+and enables the capture shortcuts. `--scene setup [--select
+checking|error|focus]` renders it offscreen (rendered against the Tauri harness
+in light, dark, short and tall sizes; not yet physically checked). Not ported:
+the button's calm pulse, UI Automation for setup and the launch notice shown
+after it. Files forwarded by path are not opened. A physical Windows 11 check (4K, 150%) passed quiet launch, the
 menu and its disabled rows, left-click, residency after closing windows,
 relaunch forwarding and Quit (before shortcuts were registered). Wine
 cannot render Preferences (no DirectComposition) or open the tray menu.

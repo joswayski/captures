@@ -95,9 +95,12 @@ pub enum Style {
     Action,
     /// `.capture-selector-note strong`: `--text-xs`, bold.
     NoteStrong,
+    /// `.onboarding-lede`: `--text-md`, `--leading-normal`, wrapping.
+    SetupLede,
 }
 
-const STYLES: [Style; 36] = [
+const STYLES: [Style; 37] = [
+    Style::SetupLede,
     Style::NoteStrong,
     Style::Action,
     Style::RecordingTitle,
@@ -292,6 +295,13 @@ fn spec(style: Style) -> Spec {
         ),
         Style::Error => spec("text-sm", "weight-regular", None, None, true),
         Style::Body => spec("text-md", "weight-regular", None, None, false),
+        Style::SetupLede => spec(
+            "text-md",
+            "weight-regular",
+            None,
+            Some("leading-normal"),
+            true,
+        ),
         Style::Strong => spec(
             "text-sm",
             "weight-semibold",

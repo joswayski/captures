@@ -135,13 +135,13 @@ pub fn start(options: &Options, instance: Instance) {
         })
     });
     sync_shortcuts(&settings);
-    // The Win32 host has no first-run setup window yet; Preferences stands in.
     let launch =
         app_windows::interactive_launch(settings.onboarding_completed, options.quiet, false, false);
     match launch {
         // A quiet launch stays in the notification area. Shipping also shows
         // its 5 s launch notice there; that notice is not ported yet.
         Some(InteractiveLaunch::StartupNotice) if !tray_missing => {}
+        Some(InteractiveLaunch::Setup) => open_setup(options),
         Some(_) => open_preferences(options),
         None => {}
     }
@@ -156,6 +156,12 @@ pub fn stop() {
 fn open_preferences(options: &Options) {
     if let Err(error) = crate::host::open(options) {
         eprintln!("couldn't open Preferences: {error}");
+    }
+}
+
+fn open_setup(options: &Options) {
+    if let Err(error) = crate::setup::open(options) {
+        eprintln!("couldn't open setup: {error}");
     }
 }
 
@@ -404,16 +410,16 @@ fn reactivate(options: &Options) {
                 focus(hwnd);
             }
         }
+        Reactivation::ShowSetup => open_setup(options),
         _ => open_preferences(options),
     }
 }
 
-/// Open New Capture unless first-run setup is unfinished (Preferences stands
-/// in for setup, as shipping opens setup instead).
+/// Open New Capture, or first-run setup while it is unfinished.
 fn new_capture(options: &Options, target: crate::capture::Target, mode: MenuMode, from_menu: bool) {
     let settings = captures_settings::load(&options.settings_file).unwrap_or_default();
     if !settings.onboarding_completed {
-        return open_preferences(options);
+        return open_setup(options);
     }
     // A running recording owns the capture flow: bring its controls back.
     if crate::recorder::active() {
