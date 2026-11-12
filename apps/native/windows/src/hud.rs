@@ -10,7 +10,10 @@
 //! shipping's hovered `.recording-tooltip` wrapper; they appear without the
 //! `--dur-1` fade. [`Hud::parts`] lists what UI Automation exposes
 //! (`hud_uia`). The window never activates over the app being recorded, so
-//! the controls have no Tab focus yet (shipping's webview focus is not ported).
+//! the controls have no Tab focus. Shipping's Windows webview activates on a
+//! click and then takes Tab; the owner chose to keep the native behaviour so
+//! a click never takes the keyboard from the recorded app (UI Automation
+//! still invokes every button).
 
 use captures_app::capture_menu::{self, MenuMode};
 use captures_app::recording_hud::{self as hud, Control};

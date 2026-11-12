@@ -157,8 +157,10 @@ announces name flips such as Pause/Resume. Hide shows shipping's
 "Recording controls hidden" notice centered where the controls were, with
 the New Capture keys as chips: topmost, never activated, click-through
 (layered + transparent), excluded from captures, closed after 6.2 s or when
-the controls return (drawn at rest; the fade lifecycle is not ported). Not
-ported: Tab focus (the window never activates). A take interrupted by a
+the controls return (drawn at rest; the fade lifecycle is not ported). By the
+owner's decision the controls never take keyboard focus, so a click never
+pulls typing away from the recorded app; unlike shipping's Windows webview
+they have no Tab order (UI Automation still invokes every button). A take interrupted by a
 crash is listed in History's Interrupted recordings section (shared
 `RecordingRecovery`, shipping copy and two-step Discard; Recover and Discard
 run off the UI thread and are reachable by Tab and UIA; offscreen render with
