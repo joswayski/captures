@@ -184,8 +184,11 @@ the size chip and Copied to clipboard; hover blurs and dims the image under
 Close and Delete (Delete alone dismisses an unsaved capture; a saved file goes
 to the Recycle Bin), Edit, Copy and Save file / Show in Folder, plus Clear all.
 History's Restore brings a screenshot back as a card and reads "✓ Restored"
-for 2.5 s. The pile and Minimize, arrive/exit motion, file drags, keyboard
-focus, UIA and tooltips are not ported. `--scene capture --screenshot PATH`
+for 2.5 s. UI Automation lists every card's buttons (Invoke, whether or not
+the card is hovered), its size line and clipboard status, and Clear all
+previews, through the shared `panel_uia.rs` (unit-tested, not yet checked with
+Narrator). The pile and Minimize, arrive/exit motion, file drags, keyboard
+focus and tooltips are not ported. `--scene capture --screenshot PATH`
 renders the bar offscreen (`--tool display` for Full screen, `--tool window`
 for Window, `--select x` for a sample selection or hovered window, `--select
 desktop` for the hovered display, `--select picked` for a picked window with

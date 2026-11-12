@@ -6,9 +6,13 @@
 //! Save file (Show in Folder once saved). Membership, geometry and copy come
 //! from `captures_app::preview` and `preview_chrome`.
 //!
+//! UI Automation lists each card as shipping's `<article>` with its buttons
+//! (Invoke), size line and clipboard status, then Clear all previews
+//! ([`Stack::uia_items`] through `panel_uia`). Buttons are exposed whether or
+//! not the card is hovered, as they are in shipping's DOM.
+//!
 //! Not ported yet: the collapsed pile and its Minimize control, arrive/exit
-//! motion, file drags, keyboard focus, UI Automation, tooltips, History
-//! Restore and the editor-presence pill.
+//! motion, file drags, keyboard focus, tooltips and the editor-presence pill.
 
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -25,6 +29,7 @@ use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint, ValidateRect,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Accessibility::{UiaReturnRawElementProvider, UiaRootObjectId};
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     ReleaseCapture, SetCapture, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
@@ -34,6 +39,7 @@ use windows::core::*;
 use windows_numerics::Matrix3x2;
 
 use crate::gfx::{self, Gfx, rect};
+use crate::panel_uia::{self, Item, Role};
 use crate::tokens::Tokens;
 
 /// Not exported by the `windows` crate's `WindowsAndMessaging`.
@@ -278,6 +284,93 @@ impl Stack {
         }
         self.hot = at.and_then(|(x, y)| self.hit(x, y));
         (self.hovered, self.hot) != before
+    }
+
+    /// Automation key of a button, unique per card position.
+    fn uia_key(hit: Hit) -> u32 {
+        let base = |i: usize| 100 * (i as u32 + 1);
+        match hit {
+            Hit::ClearAll => 1,
+            Hit::Card(i) => base(i),
+            Hit::Close(i) => base(i) + 1,
+            Hit::Delete(i) => base(i) + 2,
+            Hit::Edit(i) => base(i) + 3,
+            Hit::Copy(i) => base(i) + 4,
+            Hit::Save(i) => base(i) + 5,
+        }
+    }
+
+    fn uia_hit(key: u32) -> Option<Hit> {
+        if key == 1 {
+            return Some(Hit::ClearAll);
+        }
+        let i = (key / 100).checked_sub(1)? as usize;
+        Some(match key % 100 {
+            0 => Hit::Card(i),
+            1 => Hit::Close(i),
+            2 => Hit::Delete(i),
+            3 => Hit::Edit(i),
+            4 => Hit::Copy(i),
+            5 => Hit::Save(i),
+            _ => return None,
+        })
+    }
+
+    /// The stack's parts in shipping's DOM order: each `<article>` with its
+    /// Close/Delete, Edit, Copy and Save file / Show in Folder buttons, its
+    /// size line and the `role="status"` clipboard confirmation, then Clear
+    /// all previews.
+    pub fn uia_items(&self) -> Vec<Item> {
+        let mut items = Vec::new();
+        for (index, card) in self.cards.iter().enumerate() {
+            let Some(r) = self.card_rect(index) else {
+                continue;
+            };
+            let group = Self::uia_key(Hit::Card(index));
+            items.push(Item::new(group, Role::Group, "Screenshot preview", r));
+            let mut child = |hit: Hit, role: Role, name: &str, rect: Rect| {
+                let mut item = Item::new(Self::uia_key(hit), role, name, rect);
+                item.parent = Some(group);
+                item.enabled = !card.busy;
+                items.push(item);
+            };
+            for (hit, rect) in self
+                .top_controls(index, r)
+                .into_iter()
+                .chain(self.main_actions(index, r))
+            {
+                let name = match hit {
+                    Hit::Close(_) => "Close",
+                    Hit::Delete(_) => "Delete",
+                    Hit::Edit(_) => preview_chrome::EDIT_LABEL,
+                    Hit::Copy(_) => "Copy",
+                    _ if card.saved => "Saved",
+                    _ if card.entry.saved_path.is_some() => "Show in Folder",
+                    _ => "Save file",
+                };
+                child(hit, Role::Button, name, rect);
+            }
+            let bar = rect(r.left + 8., r.bottom - 30., r.right - 8., r.bottom - 8.);
+            let meta =
+                preview::card_metadata(card.entry.width, card.entry.height, card.entry.size_bytes);
+            let mut text = Item::new(group + 6, Role::Text, meta, bar);
+            text.parent = Some(group);
+            items.push(text);
+            if card.clipboard {
+                let mut status = Item::new(group + 7, Role::Status, "Copied to clipboard", bar);
+                status.parent = Some(group);
+                items.push(status);
+            }
+        }
+        if !self.cards.is_empty() {
+            items.push(Item::new(
+                Self::uia_key(Hit::ClearAll),
+                Role::Button,
+                preview::STACK_CLEAR_ALL_LABEL,
+                self.clear_rect(),
+            ));
+        }
+        items
     }
 
     pub fn paint(&self, dc: &ID2D1DeviceContext, g: &Gfx, t: &Tokens) -> Result<()> {
@@ -679,6 +772,7 @@ pub fn show(
     if !settings.show_mini_previews {
         return;
     }
+    let before = panel_uia::watch(panel_uia::Window::Previews);
     let result = PREVIEWS.with(|p| -> Result<()> {
         let mut p = p.borrow_mut();
         if p.is_none() {
@@ -697,6 +791,35 @@ pub fn show(
     if let Err(error) = result {
         eprintln!("Could not show the mini preview: {error}");
     }
+    panel_uia::raise(panel_uia::Window::Previews, before);
+}
+
+/// The stack's parts for UI Automation, while it exists.
+pub fn uia_snapshot() -> Option<panel_uia::Snapshot> {
+    PREVIEWS.with(|p| {
+        let p = p.try_borrow().ok()?;
+        let previews = p.as_ref()?;
+        Some(panel_uia::Snapshot {
+            hwnd: previews.hwnd,
+            scale: previews.scale,
+            size: (CARD_W + 2. * PAD, previews.stack.height),
+            name: "Captures Previews",
+            focusable: false,
+            items: previews.stack.uia_items(),
+        })
+    })
+}
+
+/// Invoke a card button or Clear all through the click path.
+pub fn uia_act(key: u32, act: panel_uia::Act) -> Option<()> {
+    PREVIEWS.with(|p| {
+        let mut p = p.try_borrow_mut().ok()?;
+        let previews = p.as_mut()?;
+        if let (Some(hit), panel_uia::Act::Invoke) = (Stack::uia_hit(key), act) {
+            previews.run(hit);
+        }
+        Some(())
+    })
 }
 
 /// Hide the stack while capture UI is open, unless shipping's Include mini
@@ -1082,6 +1205,17 @@ fn post(hwnd: isize) {
 }
 
 extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    if msg == WM_GETOBJECT && lp.0 as i32 == UiaRootObjectId {
+        return unsafe {
+            UiaReturnRawElementProvider(
+                hwnd,
+                wp,
+                lp,
+                &panel_uia::node(panel_uia::Window::Previews, None),
+            )
+        };
+    }
+    let before = panel_uia::watch(panel_uia::Window::Previews);
     let handled = PREVIEWS.with(|p| {
         let mut p = p.try_borrow_mut().ok()?;
         let previews = p.as_mut()?;
@@ -1089,6 +1223,9 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             .then(|| previews.handle(msg, wp, lp))
             .flatten()
     });
+    if handled.is_some() {
+        panel_uia::raise(panel_uia::Window::Previews, before);
+    }
     handled.unwrap_or_else(|| unsafe { DefWindowProcW(hwnd, msg, wp, lp) })
 }
 
@@ -1180,6 +1317,50 @@ mod tests {
         assert_eq!(s.hit(50., 234.), Some(Hit::Delete(1)));
         assert_eq!(s.hit(84., 234.), Some(Hit::Card(1)));
         assert_eq!(s.hit(40., 390.), Some(Hit::ClearAll));
+    }
+
+    #[test]
+    fn automation_lists_every_cards_buttons_without_hover() {
+        use captures_settings::MiniPreviewPlacement as P;
+        let mut s = stack(P::BottomLeft, &[true, false]);
+        s.cards[1].clipboard = true;
+        s.cards[1].busy = true;
+        let items = s.uia_items();
+        let names = |group: u32| {
+            items
+                .iter()
+                .filter(|i| i.parent == Some(group))
+                .map(|i| (i.name.as_str(), i.enabled))
+                .collect::<Vec<_>>()
+        };
+        // Saved card: Close, Delete, Edit, Copy, Show in Folder and its size.
+        assert_eq!(
+            names(100),
+            vec![
+                ("Close", true),
+                ("Delete", true),
+                ("Edit", true),
+                ("Copy", true),
+                ("Show in Folder", true),
+                ("1600 × 1000 · 842 KB", true),
+            ]
+        );
+        // Unsaved, on the clipboard and busy: no Close or Copy, buttons off,
+        // and the clipboard status.
+        let second = names(200);
+        assert_eq!(
+            &second[..3],
+            &[("Delete", false), ("Edit", false), ("Save file", false)]
+        );
+        assert_eq!(second.last(), Some(&("Copied to clipboard", true)));
+        assert_eq!(
+            items.last().map(|i| i.name.as_str()),
+            Some("Clear all previews")
+        );
+        // Keys round-trip to the click targets.
+        for hit in [Hit::ClearAll, Hit::Close(0), Hit::Save(1), Hit::Edit(3)] {
+            assert_eq!(Stack::uia_hit(Stack::uia_key(hit)), Some(hit));
+        }
     }
 
     #[test]

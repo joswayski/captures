@@ -1,6 +1,6 @@
 #![allow(non_upper_case_globals)]
-//! UI Automation for the small form windows that draw themselves as one
-//! surface: first-run setup, Send Feedback and the launch notice. Each window
+//! UI Automation for the small windows that draw themselves as one surface:
+//! first-run setup, Send Feedback, the launch notice and the mini previews. Each window
 //! describes its parts as a list of [`Item`]s in shipping's DOM order and
 //! roles (`<h1>`, `role="radio"` in a `radiogroup`, `<textarea>`/`<input>`,
 //! `<button>`, `role="status"`/`role="alert"`), and applies [`Act`]s through
@@ -20,6 +20,7 @@ pub enum Window {
     Setup,
     Feedback,
     Notice,
+    Previews,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -108,6 +109,7 @@ fn snapshot(window: Window) -> Result<Snapshot> {
         Window::Setup => crate::setup::uia_snapshot(),
         Window::Feedback => crate::feedback::uia_snapshot(),
         Window::Notice => crate::startup_notice::uia_snapshot(),
+        Window::Previews => crate::previews::uia_snapshot(),
     }
     .ok_or_else(unavailable)
 }
@@ -123,6 +125,7 @@ fn act(window: Window, key: u32, act: Act) -> Result<()> {
         Window::Setup => crate::setup::uia_act(key, act),
         Window::Feedback => crate::feedback::uia_act(key, act),
         Window::Notice => crate::startup_notice::uia_act(key, act),
+        Window::Previews => crate::previews::uia_act(key, act),
     }
     .ok_or_else(unavailable)?;
     raise(window, before);
@@ -146,6 +149,7 @@ fn runtime_id(window: Window, key: Option<u32>) -> [i32; 4] {
         Window::Setup => 0,
         Window::Feedback => 1,
         Window::Notice => 2,
+        Window::Previews => 3,
     };
     // A distinct first part keeps these apart from the other windows' ids.
     [
@@ -251,7 +255,7 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                     VARIANT::from(BSTR::from(format!("{:?}", self.window).to_lowercase()))
                 }
                 UIA_FrameworkIdPropertyId => VARIANT::from(BSTR::from("Captures")),
-                // Shipping's setup and feedback pages are `<main>`.
+                // Shipping's setup, feedback and preview pages are `<main>`.
                 UIA_LandmarkTypePropertyId if self.window != Window::Notice => {
                     VARIANT::from(UIA_MainLandmarkTypeId.0)
                 }
