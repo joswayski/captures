@@ -45,6 +45,25 @@ argument parsing and asynchronous launch without modifying an installed app;
 physical elevated-upgrade acceptance remains open. This does not restore windows across a Tauri/native cutover or manual
 reinstall. See [release recovery](releases.md#native-preview-packaging-and-recovery).
 
+### Tauri bug sweep parity (a18afc62, 29b686b2)
+
+On November 12 a review pass fixed these Tauri behaviours. Native parity means
+matching them, so each was checked against the shared crates and every host:
+
+| Tauri behaviour | Shared / host status |
+| --- | --- |
+| Armed Discard is signal red, disarms after 4 s, reads "Discarding…" while busy; a Recover/Discard error shows under its own row; draft dates use the History card format | Win32 matches (28cb2e57; rendered offscreen, not physically rechecked). Shared `history_view::recovery_row` uses the card date format. GTK and AppKit have no recovery rows yet. |
+| Sizes round across unit boundaries (999,600 bytes is "1.0 MB") | Fixed in all four shared formatters (previews/History, screenshot export estimate, recording editor and compare badges, update notice), so every host gets it. |
+| Replacing the open recording starts the editor over (trim, crop, resolution, volumes, mutes, mono, Save disabled) | The shared session already reset its edit; its test now covers crop and audio. GTK's own UI model kept crop, resolution and audio armed and is fixed (checked with AT-SPI on X11). Win32 and AppKit use the shared session; their UI-model reset is not separately rechecked. |
+| "Original — W × H" shows the recording's own or cropped size | Matches on GTK, Win32 and AppKit. Possible gap: Win32 shows the raw odd crop size where GTK shows the even `Original` size; not compared with Tauri. |
+| Crop moves keep X and Y on whole pixels | Matches: every host uses the shared `after_drag`. |
+| A finished video's draft is removed only after History stored it; on failure it is kept, marked Failed and recoverable | Matches in the shared recording session and worker. Native's error lacks Tauri's "could not be added to History" prefix. |
+| Clear History continues past an undeletable entry and returns the first error | Fixed with shared `captures_history::delete_each`, used by the shared request (Win32, AppKit, wgpu) and GTK. |
+| Saving an encoded capture syncs before rename and removes the temp file on failure | Matches in the shared export publication. |
+| Saving a screenshot from its preview records `saved_path` in History | Win32 matches. GTK's Save file used a file chooser and copy, and now saves through the shared save to the configured folder like Tauri (AT-SPI checked). AppKit not rechecked. |
+| Unranged media reads capped at 2 MiB for video | Not applicable: native reads media through ffmpeg, not a webview asset protocol. |
+| Screenshot editor Undo coalescing, zoom-scaled shadows, no zero-size shapes, dropdown arrow keys, drafts kept during save; overlay acts only on the primary button; capture-bar shortcuts respect disabled states and window targets take the keyboard; Preferences rollback on rejected save, sidebar highlight, "Update failed / Try again", "Selected microphone", folder commits on blur/Enter; late saved-notice results ignored | Not yet audited on native hosts; open parity items. |
+
 ## Host direction
 
 Captures goes fully native on every platform (owner decision, November 2026,

@@ -602,13 +602,15 @@ impl State {
             .collect();
         let weak = Rc::downgrade(self);
         glib::spawn_future_local(async move {
-            let result = gio::spawn_blocking(move || {
-                ids.iter()
-                    .try_for_each(|id| captures_history::delete(&root, id))
-                    .map_err(|error| error.to_string())
-            })
-            .await
-            .unwrap_or_else(|_| Err("the delete worker stopped".into()));
+            // Keep going past an entry that cannot be deleted; the reload
+            // below then lists exactly the entries that remain.
+            let result =
+                gio::spawn_blocking(move || match captures_history::delete_each(&root, ids) {
+                    (_, Some(error)) => Err(error.to_string()),
+                    (_, None) => Ok(()),
+                })
+                .await
+                .unwrap_or_else(|_| Err("the delete worker stopped".into()));
             let Some(state) = weak.upgrade() else { return };
             state.deleting_all.set(false);
             if let Err(error) = result {

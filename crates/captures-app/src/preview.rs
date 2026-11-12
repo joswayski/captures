@@ -922,13 +922,14 @@ pub fn format_file_size(bytes: u64) -> String {
     }
     let mut value = bytes as f64;
     let mut unit = 0;
-    while value >= 1_000. && unit < UNITS.len() - 1 {
+    // 999.5 and up would round to "1000" in the smaller unit.
+    while value >= 999.5 && unit < UNITS.len() - 1 {
         value /= 1_000.;
         unit += 1;
     }
     if unit == 0 {
         format!("{} {}", value.round(), UNITS[unit])
-    } else if value >= 100. {
+    } else if value >= 99.95 {
         format!("{value:.0} {}", UNITS[unit])
     } else {
         format!("{value:.1} {}", UNITS[unit])
@@ -1014,6 +1015,10 @@ mod tests {
         assert_eq!(format_file_size(125_000_000), "125 MB");
         assert_eq!(format_file_size(0), "0 B");
         assert_eq!(format_file_size(5_000_000_000_000), "5000 GB");
+        // Just under a unit boundary moves up instead of reading "1000 KB".
+        assert_eq!(format_file_size(999_400), "999 KB");
+        assert_eq!(format_file_size(999_600), "1.0 MB");
+        assert_eq!(format_file_size(99_960), "100 KB");
         assert_eq!(card_metadata(1440, 900, 245_760), "1440 × 900 · 246 KB");
     }
 

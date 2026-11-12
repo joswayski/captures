@@ -756,6 +756,27 @@ impl Output {
         model.custom.set((source.width, source.height));
     }
 
+    /// A save replaced the open recording, so the saved file is the new
+    /// source. Its crop, size and audio edits are already in it; start them
+    /// over so the next Save does not apply them a second time (shipping's
+    /// `recording-export-finished` for the open artifact).
+    pub(super) fn rebase(&self, source: Source) {
+        let model = &self.model;
+        model.source.set(Some(source));
+        model.crop_on.set(false);
+        model.crop.set(CropRect {
+            x: 0,
+            y: 0,
+            width: source.width,
+            height: source.height,
+        });
+        model.resolution.set(ResolutionChoice::Original);
+        model.custom.set((source.width, source.height));
+        model.volume.set((100., 100.));
+        model.mute.set((false, false));
+        model.mono.set(false);
+    }
+
     pub(super) fn format(&self) -> VideoFormat {
         self.model.format.get()
     }

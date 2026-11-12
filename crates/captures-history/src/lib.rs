@@ -358,6 +358,28 @@ pub fn delete(root: &Path, id: &str) -> Result<(), Error> {
     }
 }
 
+/// Delete every id, continuing past an entry that cannot be deleted (a
+/// recording still open in a player, for example). Returns the ids that were
+/// removed and the first failure, so a host drops exactly the entries that are
+/// gone and still reports the error.
+pub fn delete_each(
+    root: &Path,
+    ids: impl IntoIterator<Item = String>,
+) -> (Vec<String>, Option<Error>) {
+    let mut failure = None;
+    let deleted = ids
+        .into_iter()
+        .filter(|id| match delete(root, id) {
+            Ok(()) => true,
+            Err(error) => {
+                failure.get_or_insert(error);
+                false
+            }
+        })
+        .collect();
+    (deleted, failure)
+}
+
 pub fn encode_png(image: &RgbaImage) -> Result<Vec<u8>, Error> {
     encode_png_with_quality(image, CompressionType::Fast, FilterType::Sub)
 }
@@ -426,6 +448,26 @@ mod tests {
     use captures_recording::RecordingTarget;
     use chrono::TimeZone;
     use tempfile::tempdir;
+
+    #[test]
+    fn delete_each_continues_past_an_entry_it_cannot_delete() {
+        let root = tempdir().unwrap();
+        let first = Uuid::new_v4().to_string();
+        let last = Uuid::new_v4().to_string();
+        for id in [&first, &last] {
+            fs::create_dir_all(root.path().join(id)).unwrap();
+        }
+
+        let (deleted, failure) = delete_each(
+            root.path(),
+            [first.clone(), "not-a-history-id".into(), last.clone()],
+        );
+
+        assert_eq!(deleted, [first.clone(), last.clone()]);
+        assert!(matches!(failure, Some(Error::HistoryUnavailable)));
+        assert!(!root.path().join(&first).exists());
+        assert!(!root.path().join(&last).exists());
+    }
 
     fn screenshot(id: &str, created_at: String) -> HistoryEntry {
         HistoryEntry {

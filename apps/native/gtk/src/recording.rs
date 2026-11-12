@@ -1398,7 +1398,10 @@ impl State {
                         let size = std::fs::metadata(&path).map_or(0, |m| m.len());
                         if let Some(presented) = presented {
                             *self.original.borrow_mut() = Some(path.clone());
+                            self.output.rebase(presented.source());
                             self.accept(*presented);
+                            // The timeline shows the saved file now.
+                            let _ = self.jobs.send(Job::Thumbnails);
                         }
                         *self.saved.borrow_mut() = Some((path, self.fingerprint()));
                         self.toast(&ui::saved_message(gif, size));

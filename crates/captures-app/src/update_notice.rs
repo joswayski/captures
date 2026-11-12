@@ -479,14 +479,15 @@ fn format_file_size(bytes: u64) -> String {
     }
     let mut value = bytes as f64;
     let mut unit = 0;
-    while value >= 1_000.0 && unit < UNITS.len() - 1 {
+    // 999.5 and up would round to "1000" in the smaller unit.
+    while value >= 999.5 && unit < UNITS.len() - 1 {
         value /= 1_000.0;
         unit += 1;
     }
     if unit == 0 {
         return format!("{} {}", value.round(), UNITS[unit]);
     }
-    if value >= 100.0 {
+    if value >= 99.95 {
         format!("{} {}", value.round(), UNITS[unit])
     } else {
         // JavaScript `toFixed(1)` rounds ties up; match it for identical copy.
@@ -1325,6 +1326,10 @@ mod tests {
         assert_eq!(format_update_size(12_582_912), "12.6 MB");
         assert_eq!(format_update_size(1_250_000), "1.3 MB");
         assert_eq!(format_update_size(250_000_000), "250 MB");
+        // Just under a unit boundary moves up instead of reading "1000 KB".
+        assert_eq!(format_update_size(999_400), "999 KB");
+        assert_eq!(format_update_size(999_600), "1.0 MB");
+        assert_eq!(format_update_size(99_960), "100 KB");
     }
 
     #[test]

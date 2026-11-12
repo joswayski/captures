@@ -226,11 +226,20 @@ fn replace_original_rebases_session_without_changing_identity_or_old_frame() {
     let mut edit = EditSpec {
         trim_start_ms: 1_000,
         trim_end_ms: Some(2_000),
+        crop: Some(CropRect {
+            x: 0,
+            y: 4,
+            width: 32,
+            height: 16,
+        }),
         output_width: Some(32),
         output_height: Some(16),
         ..EditSpec::default()
     };
     edit.audio.source_has_system_audio = true;
+    edit.audio.system_volume = 0.5;
+    edit.audio.mute_microphone = true;
+    edit.audio.mono_output = true;
     session
         .execute(RecordingEditorRequest::UpdateEdit { edit })
         .unwrap();
@@ -262,6 +271,17 @@ fn replace_original_rebases_session_without_changing_identity_or_old_frame() {
         (32, 16)
     );
     assert_eq!(snapshot.editor.edit.trim_start_ms, 0);
+    // The saved file already holds the trim, crop, size and audio edits; the
+    // editor starts over on it so a second Save does not apply them again.
+    let rebased = &snapshot.editor.edit;
+    assert_eq!(rebased.trim_end_ms, None);
+    assert_eq!(rebased.crop, None);
+    assert_eq!((rebased.output_width, rebased.output_height), (None, None));
+    assert_eq!(rebased.audio.system_volume, 1.0);
+    assert_eq!(rebased.audio.microphone_volume, 1.0);
+    assert!(!rebased.audio.mute_system_audio);
+    assert!(!rebased.audio.mute_microphone);
+    assert!(!rebased.audio.mono_output);
     assert_eq!(snapshot.save_export.max_size_bytes, None);
     assert_eq!(retained.dimensions(), (32, 24));
     assert_dominant(retained.get_pixel(8, 8).0, 0);

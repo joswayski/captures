@@ -329,9 +329,13 @@ pub fn execute(request: Request) -> Result<Response, Error> {
         Request::ClearHistory { root } => {
             // Both hosts confirm clearing every capture kind, independent of the
             // selected filter. Never follow export paths or remove another root.
-            // Hosts refresh even on error: deletion can be partial.
-            for entry in captures_history::load(&root, Utc::now())? {
-                captures_history::delete(&root, &entry.id)?;
+            // Hosts refresh even on error: deletion can be partial. Keep going
+            // past an entry that cannot be deleted, then report the first error.
+            let ids = captures_history::load(&root, Utc::now())?
+                .into_iter()
+                .map(|entry| entry.id);
+            if let (_, Some(error)) = captures_history::delete_each(&root, ids) {
+                return Err(error.into());
             }
             Ok(Response::History {
                 artifacts: list(&root)?,

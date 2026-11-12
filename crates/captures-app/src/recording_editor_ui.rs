@@ -111,14 +111,15 @@ pub fn format_file_size(bytes: u64) -> String {
     }
     let mut value = bytes as f64;
     let mut unit = 0;
-    while value >= 1_000. && unit < UNITS.len() - 1 {
+    // 999.5 and up would round to "1000" in the smaller unit.
+    while value >= 999.5 && unit < UNITS.len() - 1 {
         value /= 1_000.;
         unit += 1;
     }
     if unit == 0 {
         return format!("{bytes} B");
     }
-    let precision = if value >= 100. { 0 } else { 1 };
+    let precision = if value >= 99.95 { 0 } else { 1 };
     format!("{} {}", to_fixed(value, precision), UNITS[unit])
 }
 
@@ -648,7 +649,11 @@ mod tests {
             // toFixed rounds exact ties up; Rust formatting would give 1.2 / 100.
             (1_250, "1.3 KB"),
             (100_500, "101 KB"),
-            (99_950, "100.0 KB"),
+            (99_950, "100 KB"),
+            // Just under a unit boundary moves up instead of reading "1000 KB".
+            (99_960, "100 KB"),
+            (999_400, "999 KB"),
+            (999_600, "1.0 MB"),
         ] {
             assert_eq!(format_file_size(bytes), label);
         }

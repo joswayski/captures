@@ -537,14 +537,15 @@ pub fn format_file_size(bytes: u64) -> String {
     }
     let mut value = bytes as f64;
     let mut unit = 0;
-    while value >= 1_000. && unit < UNITS.len() - 1 {
+    // 999.5 and up would round to "1000" in the smaller unit.
+    while value >= 999.5 && unit < UNITS.len() - 1 {
         value /= 1_000.;
         unit += 1;
     }
     if unit == 0 {
         return format!("{} {}", value.round(), UNITS[unit]);
     }
-    if value >= 100. {
+    if value >= 99.95 {
         format!("{value:.0} {}", UNITS[unit])
     } else {
         format!("{value:.1} {}", UNITS[unit])
@@ -1031,6 +1032,10 @@ mod tests {
         assert_eq!(format_file_size(1_000), "1.0 KB");
         assert_eq!(format_file_size(240_400), "240 KB");
         assert_eq!(format_file_size(12_345_678), "12.3 MB");
+        // Just under a unit boundary moves up instead of reading "1000 KB".
+        assert_eq!(format_file_size(999_400), "999 KB");
+        assert_eq!(format_file_size(999_600), "1.0 MB");
+        assert_eq!(format_file_size(99_960), "100 KB");
         assert_eq!(size_delta(Some(88), Some(100)).unwrap().label, "−12%");
         assert_eq!(size_delta(Some(108), Some(100)).unwrap().label, "+8%");
         assert_eq!(size_delta(Some(1_002), Some(1_000)), None);

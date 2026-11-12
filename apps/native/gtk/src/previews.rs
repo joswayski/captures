@@ -15,7 +15,7 @@ use captures_history::HistoryEntry;
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib, graphene};
 
-use crate::history::{media_path, reveal, save_copy};
+use crate::history::{media_path, reveal};
 use crate::tokens::Tokens;
 use crate::widgets::{Icon, Thumbnail, icon_button};
 
@@ -46,6 +46,11 @@ pub struct Previews {
 
 struct Card {
     entry: HistoryEntry,
+    /// The exported file once Save file wrote one (it is also recorded in
+    /// History), so the primary action becomes Show in Folder.
+    saved_path: RefCell<Option<String>>,
+    /// Save file, or Show in Folder once saved.
+    primary: gtk::Button,
     root: gtk::Overlay,
     dim: gtk::Box,
     image: Thumbnail,
@@ -64,6 +69,8 @@ struct Card {
 
 struct State {
     history_root: PathBuf,
+    /// Save file writes to the configured folder and format, as shipping.
+    settings_file: PathBuf,
     window: gtk::ApplicationWindow,
     stack: RefCell<PreviewStack>,
     cards: RefCell<Vec<Rc<Card>>>,
@@ -104,6 +111,7 @@ pub fn build(
     tokens: &Tokens,
     placement: captures_settings::MiniPreviewPlacement,
     history_root: PathBuf,
+    settings_file: PathBuf,
     actions: Actions,
 ) -> Previews {
     let window = gtk::ApplicationWindow::builder()
@@ -142,6 +150,7 @@ pub fn build(
 
     let state = Rc::new(State {
         history_root,
+        settings_file,
         window: window.clone(),
         stack: RefCell::default(),
         cards: RefCell::default(),
@@ -396,7 +405,7 @@ impl State {
             card.exiting.set(true);
             card.image.set_dimmed(true);
             self.pile
-                .begin_exit(id, kind, 0., true, card.entry.saved_path.is_some())
+                .begin_exit(id, kind, 0., true, card.saved_path.borrow().is_some())
         });
         if !playing {
             self.pile.remove_card(id);
@@ -415,7 +424,7 @@ impl State {
             let index = ids.iter().position(|id| *id == card.entry.id).unwrap_or(0);
             card.exiting.set(true);
             let delay = captures_app::preview_motion::clear_delay_ms(ids.len(), index, top);
-            let saved = card.entry.saved_path.is_some();
+            let saved = card.saved_path.borrow().is_some();
             if !self
                 .pile
                 .begin_exit(&card.entry.id, ExitKind::Dismiss, delay, false, saved)
@@ -721,21 +730,15 @@ impl State {
             copy
         });
         let saved = entry.saved_path.clone();
-        let (second, _, _) = if saved.is_some() {
-            icon_button(
-                "folder",
-                "Show in Folder",
-                &["preview-main-button", "primary"],
-            )
-        } else {
-            icon_button("save", "Save file", &["preview-main-button", "primary"])
-        };
+        let second = primary_button(saved.is_some());
         main.append(&second);
         controls.push(second.clone());
         root.add_overlay(&main);
 
         let card = Rc::new(Card {
             entry,
+            saved_path: RefCell::new(saved),
+            primary: second.clone(),
             root,
             dim,
             image,
@@ -900,21 +903,10 @@ impl State {
             let (Some(state), Some(card)) = (weak.upgrade(), weak_card.upgrade()) else {
                 return;
             };
-            match &saved {
-                Some(path) => reveal(std::path::Path::new(path)),
-                None => {
-                    let weak_card = Rc::downgrade(&card);
-                    save_copy(
-                        Some(state.window.upcast_ref()),
-                        "Save file",
-                        media_path(&state.history_root, &card.entry),
-                        move |error| {
-                            if let Some(card) = weak_card.upgrade() {
-                                card.notify(&error, true);
-                            }
-                        },
-                    );
-                }
+            let saved = card.saved_path.borrow().clone();
+            match saved {
+                Some(path) => reveal(std::path::Path::new(&path)),
+                None => state.save(&card),
             }
         });
         card
@@ -968,6 +960,66 @@ impl State {
         });
     }
 
+    /// Save file: export to the configured folder through the shared save,
+    /// which also records the saved path in History, so reopening the capture
+    /// offers the file instead of writing a duplicate.
+    fn save(self: &Rc<Self>, card: &Rc<Card>) {
+        if !card.primary.is_sensitive() {
+            return;
+        }
+        card.primary.set_sensitive(false);
+        let settings = captures_settings::load(&self.settings_file).unwrap_or_default();
+        let root = self.history_root.clone();
+        let id = card.entry.id.clone();
+        let directory = PathBuf::from(settings.output_directory);
+        let request = if card.entry.kind.is_recording() {
+            captures_app::Request::SaveRecording {
+                root,
+                id,
+                directory,
+            }
+        } else {
+            captures_app::Request::SaveScreenshot {
+                root,
+                id,
+                directory,
+                format: settings.screenshot_format,
+            }
+        };
+        let weak = Rc::downgrade(self);
+        let weak_card = Rc::downgrade(card);
+        glib::spawn_future_local(async move {
+            let result = gio::spawn_blocking(move || match captures_app::execute(request) {
+                Ok(captures_app::Response::Saved { path, .. }) => {
+                    Ok(path.to_string_lossy().into_owned())
+                }
+                Ok(_) => Err("unexpected response".to_owned()),
+                Err(error) => Err(error.to_string()),
+            })
+            .await
+            .unwrap_or_else(|_| Err("the save worker stopped".into()));
+            let Some(card) = weak_card.upgrade() else {
+                return;
+            };
+            card.primary.set_sensitive(true);
+            match result {
+                Ok(path) => {
+                    *card.saved_path.borrow_mut() = Some(path);
+                    let shown = primary_button(true);
+                    let content = shown.child();
+                    shown.set_child(None::<&gtk::Widget>);
+                    card.primary.set_child(content.as_ref());
+                    card.primary
+                        .update_property(&[gtk::accessible::Property::Label("Show in Folder")]);
+                    if let Some(state) = weak.upgrade() {
+                        (state.actions.changed)();
+                    }
+                }
+                Err(error) => card.notify(&format!("Couldn’t save: {error}"), true),
+            }
+        });
+    }
+
     /// Delete removes the History entry (capture and recovery media);
     /// exported copies elsewhere stay, as History's Delete.
     fn delete(self: &Rc<Self>, card: &Rc<Card>) {
@@ -994,6 +1046,20 @@ impl State {
             }
         });
     }
+}
+
+/// The card's primary action: Save file, or Show in Folder once saved.
+fn primary_button(saved: bool) -> gtk::Button {
+    let (button, _, _) = if saved {
+        icon_button(
+            "folder",
+            "Show in Folder",
+            &["preview-main-button", "primary"],
+        )
+    } else {
+        icon_button("save", "Save file", &["preview-main-button", "primary"])
+    };
+    button
 }
 
 impl Card {

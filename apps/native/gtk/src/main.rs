@@ -522,6 +522,7 @@ impl Host {
                 &self.tokens.borrow(),
                 placement,
                 self.history_root.clone(),
+                self.settings_file.clone(),
                 previews::Actions {
                     edit: Box::new(move |entry| {
                         if let Some(host) = edit.upgrade() {
