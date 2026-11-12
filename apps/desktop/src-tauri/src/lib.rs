@@ -3283,6 +3283,25 @@ async fn delete_history_artifact(
     Ok(())
 }
 
+/// Delete every id, returning the ones that were removed and the first failure.
+fn delete_each(
+    ids: Vec<String>,
+    mut delete: impl FnMut(&str) -> Result<(), AppError>,
+) -> (Vec<String>, Option<AppError>) {
+    let mut failure = None;
+    let deleted = ids
+        .into_iter()
+        .filter(|id| match delete(id) {
+            Ok(()) => true,
+            Err(error) => {
+                failure.get_or_insert(error);
+                false
+            }
+        })
+        .collect();
+    (deleted, failure)
+}
+
 #[tauri::command]
 async fn clear_capture_history(
     app: AppHandle,
@@ -3298,19 +3317,23 @@ async fn clear_capture_history(
         return Ok(());
     }
 
-    let ids_for_delete = ids.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        for artifact_id in &ids_for_delete {
+    // Keep going past an entry that cannot be deleted (a recording still open
+    // in a player, for example), then drop exactly the entries that are gone so
+    // History never lists captures whose files were already removed.
+    let (ids, failure) = tauri::async_runtime::spawn_blocking(move || {
+        delete_each(ids, |artifact_id| {
             storage::delete_history_capture(artifact_id)?;
             let _ = screenshot_editor::discard_screenshot_editor_draft_files(artifact_id);
-        }
-        Ok::<(), AppError>(())
+            Ok(())
+        })
     })
     .await
-    .map_err(|error| error.to_string())?
     .map_err(|error| error.to_string())?;
 
-    state.history.lock().clear();
+    state
+        .history
+        .lock()
+        .retain(|entry| !ids.iter().any(|id| id == &entry.id));
     state
         .recording_artifacts
         .lock()
@@ -3318,6 +3341,9 @@ async fn clear_capture_history(
     state.forget_editor_artifacts_for_ids(&ids, &open_screenshot_editor_owner_ids(&app));
     app.emit("capture-history-changed", ())
         .map_err(|error| error.to_string())?;
+    if let Some(error) = failure {
+        return Err(error.to_string());
+    }
     Ok(())
 }
 
@@ -3424,7 +3450,21 @@ async fn save_artifact(
             let _ = fs::remove_file(&path);
             return Err("artifact is no longer available".to_owned());
         };
-        artifact.path = Some(path);
+        artifact.path = Some(path.clone());
+        drop(artifacts);
+        // Remember the export in History too, so reopening this capture later
+        // offers the saved file instead of writing a duplicate.
+        if let Some(entry) = state
+            .history
+            .lock()
+            .iter_mut()
+            .find(|entry| entry.id == artifact_id)
+        {
+            entry.saved_path = Some(path);
+            if let Err(error) = storage::update_history_entry_metadata(entry) {
+                eprintln!("failed to update capture history after save: {error}");
+            }
+        }
     }
 
     let artifact = state
@@ -3465,14 +3505,18 @@ fn trash_artifact(
     state: tauri::State<'_, Arc<AppState>>,
     artifact_id: String,
 ) -> CommandResult<()> {
-    let artifact = state
+    let saved_path = state
         .artifacts
         .lock()
         .iter()
         .find(|artifact| artifact.id == artifact_id)
-        .cloned()
+        .map(|artifact| artifact.path.clone())
         .ok_or_else(|| "artifact is no longer available".to_owned())?;
-    if let Some(path) = artifact.path {
+    // A saved file the user already moved or deleted has nothing left to trash;
+    // still remove the preview instead of failing forever.
+    if let Some(path) = saved_path
+        && Path::new(&path).exists()
+    {
         trash::delete(path).map_err(|error| error.to_string())?;
     }
     remove_artifact(&app, state.inner(), &artifact_id)?;
@@ -3699,7 +3743,13 @@ async fn finish_capture(
     let created_at = Utc::now().to_rfc3339();
     let history_artifact_id = artifact_id.clone();
     let history_created_at = created_at.clone();
-    let image_for_encoding = image.clone();
+    // Only the clipboard needs its own copy of the pixels; without auto-copy
+    // the capture moves straight into the encoder.
+    let (image_for_encoding, clipboard_image) = if state.settings().auto_copy_to_clipboard {
+        (image.clone(), Some(image))
+    } else {
+        (image, None)
+    };
     let encode_task = tauri::async_runtime::spawn_blocking(move || -> Result<_, AppError> {
         let image_png = storage::encode_png(&image_for_encoding)?;
         let preview_png = storage::encode_thumbnail_png(&image_for_encoding)?;
@@ -3731,7 +3781,7 @@ async fn finish_capture(
             };
         Ok((image_png, preview_png, history_entry, history_saved))
     });
-    let clipboard_task = state.settings().auto_copy_to_clipboard.then(|| {
+    let clipboard_task = clipboard_image.map(|image| {
         let clipboard_app = app.clone();
         tauri::async_runtime::spawn_blocking(move || {
             write_image_to_clipboard(&clipboard_app, image)
@@ -7976,10 +8026,10 @@ fn resolve_asset(state: &AppState, path: &str) -> Option<Vec<u8>> {
                 .map(|session| session.snapshot_png.clone())
         }),
         (Some("artifact"), Some(id)) => {
-            state.find_artifact(id).map(|artifact| artifact.preview_png)
+            state.with_artifact(id, |artifact| artifact.preview_png.clone())
         }
         (Some("artifact-full"), Some(id)) => {
-            state.find_artifact(id).map(|artifact| artifact.image_png)
+            state.with_artifact(id, |artifact| artifact.image_png.clone())
         }
         (Some("history-preview"), Some(id)) => {
             let available = state.history.lock().iter().any(|entry| entry.id == id);
@@ -8197,6 +8247,22 @@ mod tests {
         window_is_capturable, windows_display_affinity_excludes_capture,
         windows_window_is_capture_overlay,
     };
+
+    #[test]
+    fn clearing_history_keeps_only_the_entries_that_could_not_be_deleted() {
+        let ids = vec!["first".to_owned(), "locked".to_owned(), "last".to_owned()];
+
+        let (deleted, failure) = super::delete_each(ids, |id| {
+            if id == "locked" {
+                Err(AppError::HistoryUnavailable)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert_eq!(deleted, ["first", "last"]);
+        assert!(matches!(failure, Some(AppError::HistoryUnavailable)));
+    }
 
     #[test]
     fn preferences_url_only_accepts_known_targets() {

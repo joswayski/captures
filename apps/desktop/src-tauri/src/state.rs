@@ -200,6 +200,24 @@ impl AppState {
         self.settings.read().clone()
     }
 
+    /// Read from an artifact in place. `find_artifact` copies both PNG buffers,
+    /// which is wasteful when a caller needs only one field.
+    pub fn with_artifact<T>(&self, id: &str, read: impl Fn(&CaptureArtifact) -> T) -> Option<T> {
+        if let Some(artifact) = self
+            .artifacts
+            .lock()
+            .iter()
+            .find(|artifact| artifact.id == id)
+        {
+            return Some(read(artifact));
+        }
+        self.editor_artifacts
+            .lock()
+            .values()
+            .find(|artifact| artifact.id == id)
+            .map(read)
+    }
+
     pub fn find_artifact(&self, id: &str) -> Option<CaptureArtifact> {
         self.artifacts
             .lock()

@@ -55,10 +55,20 @@ pub fn save_encoded_capture(
     let path = unique_path(&directory, &stem, extension);
     let temporary = directory.join(format!(".captures-{}.tmp", Uuid::new_v4()));
 
-    let mut file = File::create(&temporary)?;
-    file.write_all(bytes)?;
-    drop(file);
-    fs::rename(&temporary, &path)?;
+    // Flush before the rename so a crash cannot leave an empty file under the
+    // final name, and never leave the hidden temporary in the user's folder.
+    let result = (|| {
+        let mut file = File::create(&temporary)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        drop(file);
+        fs::rename(&temporary, &path)?;
+        Ok::<(), AppError>(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result?;
     Ok(path)
 }
 

@@ -51,8 +51,9 @@ const RECORDING_COUNTDOWN_FADE_OUT_MS: u64 = 180;
 const RECORDING_HUD_FULL_WIDTH: f64 = 430.0;
 const RECORDING_HUD_HEIGHT: f64 = 102.0;
 const RECORDING_HUD_BOTTOM_MARGIN: f64 = 20.0;
-/// Cap un-ranged `captures-capture://media/...` reads so a missing Range header
-/// cannot pull an entire recording into the desktop process.
+/// Cap un-ranged `captures-capture://media/...` video reads so a missing Range
+/// header cannot pull an entire recording into the desktop process. GIFs are
+/// shown through `<img>`, which never asks for a range, so they are served whole.
 const DEFAULT_UNRANGED_MEDIA_BYTES: u64 = 2 * 1024 * 1024;
 const GIF_SOURCE_RETENTION_MS: u64 = 7 * 24 * 60 * 60 * 1_000;
 
@@ -1961,7 +1962,7 @@ async fn stop_recording_inner(
         target: options.target.clone(),
         missing: false,
     };
-    upsert_recording_artifact(&app, &state, &mut artifact, poster_png.clone());
+    let history = upsert_recording_artifact(&app, &state, &mut artifact, poster_png.clone());
     let _ = fs::write(directory.join("poster.png"), poster_png);
 
     let now = now_ms();
@@ -1989,7 +1990,11 @@ async fn stop_recording_inner(
     crate::restore_thumbnail_capture_ui(&app, &state);
 
     if options.kind == RecordingKind::Video {
-        let _ = DraftStore::new(recording_recovery_directory()).remove(session_id);
+        settle_video_draft(
+            &DraftStore::new(recording_recovery_directory()),
+            session_id,
+            &history,
+        );
     }
     let settings = state.settings();
     if settings.recording.open_editor_after_recording
@@ -2610,7 +2615,7 @@ pub fn start_recording_export(
                     target: source.target,
                     missing: false,
                 };
-                upsert_recording_artifact(
+                let _ = upsert_recording_artifact(
                     &app,
                     &state,
                     &mut artifact,
@@ -3181,7 +3186,7 @@ async fn recover_recording_draft_inner(
         target: manifest.options.target.clone(),
         missing: false,
     };
-    upsert_recording_artifact(&app, &state, &mut artifact, poster_png);
+    let history = upsert_recording_artifact(&app, &state, &mut artifact, poster_png);
 
     let mut recovered_manifest = recovered_manifest;
     recovered_manifest.state = RecordingState::Ready;
@@ -3192,7 +3197,7 @@ async fn recover_recording_draft_inner(
         .save(&recovered_manifest)
         .map_err(|error| AppError::Task(error.to_string()))?;
     if artifact.kind == RecordingKind::Video {
-        let _ = store.remove(session_id);
+        settle_video_draft(&store, session_id, &history);
     }
     let _ = app.emit(RECORDING_ARTIFACT_EVENT, &artifact);
     if settings.recording.open_editor_after_recording
@@ -3302,8 +3307,9 @@ pub fn resolve_recording_asset(
                 let mut bytes = vec![0; length];
                 file.read_exact(&mut bytes).ok()?;
                 (206, Some(range.content_range(total_length)), bytes)
-            } else if let Some(range) =
-                ByteRange::prefix_when_unbounded(total_length, DEFAULT_UNRANGED_MEDIA_BYTES)
+            } else if artifact.kind == RecordingKind::Video
+                && let Some(range) =
+                    ByteRange::prefix_when_unbounded(total_length, DEFAULT_UNRANGED_MEDIA_BYTES)
             {
                 file.seek(SeekFrom::Start(range.start)).ok()?;
                 let length = usize::try_from(range.length()).ok()?;
@@ -3727,21 +3733,21 @@ fn upsert_recording_artifact(
     state: &AppState,
     artifact: &mut RecordingArtifact,
     poster_png: Vec<u8>,
-) {
+) -> Result<(), String> {
     let media_source = PathBuf::from(&artifact.path);
     let history_entry = crate::models::history_entry_from_recording(artifact);
-    let history_saved =
-        match storage::save_history_recording(&history_entry, &poster_png, &media_source) {
-            Ok(recovery_path) => {
-                artifact.path = recovery_path.to_string_lossy().into_owned();
-                artifact.missing = false;
-                true
-            }
-            Err(error) => {
-                eprintln!("failed to save recording history: {error}");
-                false
-            }
-        };
+    let history = match storage::save_history_recording(&history_entry, &poster_png, &media_source)
+    {
+        Ok(recovery_path) => {
+            artifact.path = recovery_path.to_string_lossy().into_owned();
+            artifact.missing = false;
+            Ok(())
+        }
+        Err(error) => {
+            eprintln!("failed to save recording history: {error}");
+            Err(error.to_string())
+        }
+    };
     let artifact_id = artifact.id.clone();
     let artifact_data = RecordingArtifactData {
         summary: artifact.clone(),
@@ -3758,14 +3764,39 @@ fn upsert_recording_artifact(
     }
     drop(recording_artifacts);
     state.recording_timeline_sprites.lock().remove(&artifact_id);
-    if history_saved {
-        let mut history = state.history.lock();
-        if let Some(existing) = history.iter_mut().find(|entry| entry.id == artifact_id) {
+    if history.is_ok() {
+        let mut entries = state.history.lock();
+        if let Some(existing) = entries.iter_mut().find(|entry| entry.id == artifact_id) {
             *existing = history_entry;
         } else {
-            history.insert(0, history_entry);
+            entries.insert(0, history_entry);
         }
+        drop(entries);
         let _ = app.emit("capture-history-changed", ());
+    }
+    history
+}
+
+/// Retire a finished video's recovery draft only once History holds its media.
+///
+/// Until then the draft folder is the only place the recording exists (the
+/// artifact still plays from `assembled.mp4` inside it), so keep the folder and
+/// list the draft as recoverable instead of deleting the video.
+fn settle_video_draft(store: &DraftStore, session_id: &str, history: &Result<(), String>) {
+    match history {
+        Ok(()) => {
+            let _ = store.remove(session_id);
+        }
+        Err(error) => {
+            if let Ok(mut manifest) = store.load(session_id) {
+                manifest.state = RecordingState::Failed;
+                manifest.last_error = Some(format!(
+                    "This recording could not be added to History: {error}"
+                ));
+                manifest.updated_at_ms = now_ms();
+                let _ = store.save(&manifest);
+            }
+        }
     }
 }
 
@@ -4557,15 +4588,170 @@ pub(crate) fn show_recording_editor(app: &AppHandle, artifact_id: &str) -> Resul
 
 #[cfg(test)]
 mod tests {
-    use captures_recording::{CaptureRect, RecordingState, RecordingTarget};
+    use captures_recording::{
+        AudioOptions, CaptureRect, DraftStore, GifOptions, MaxResolution, RecordingDraftManifest,
+        RecordingKind, RecordingOptions, RecordingState, RecordingTarget,
+    };
     use tempfile::tempdir;
+    use uuid::Uuid;
 
     use super::{
-        RECORDING_HUD_BOTTOM_MARGIN, RECORDING_HUD_FULL_WIDTH, RECORDING_HUD_HEIGHT,
-        media_target_suffix, recording_hud_logical_position, recording_in_progress_for,
-        recording_region_indicator_url, replace_recording_source, replace_recording_source_at,
-        replacement_working_path, screenshot_capture_is_blocked_for,
+        DEFAULT_UNRANGED_MEDIA_BYTES, RECORDING_HUD_BOTTOM_MARGIN, RECORDING_HUD_FULL_WIDTH,
+        RECORDING_HUD_HEIGHT, media_target_suffix, recording_hud_logical_position,
+        recording_in_progress_for, recording_region_indicator_url, replace_recording_source,
+        replace_recording_source_at, replacement_working_path, resolve_recording_asset,
+        screenshot_capture_is_blocked_for, settle_video_draft,
     };
+    use crate::{
+        models::{RecordingArtifact, RecordingArtifactData},
+        state::AppState,
+    };
+
+    fn region_target() -> RecordingTarget {
+        RecordingTarget::Region {
+            display_id: "display-1".to_owned(),
+            rect: CaptureRect {
+                x: 0,
+                y: 0,
+                width: 800,
+                height: 600,
+            },
+        }
+    }
+
+    fn video_draft(store: &DraftStore) -> String {
+        let session_id = Uuid::new_v4().to_string();
+        let mut manifest = RecordingDraftManifest::new(
+            session_id.clone(),
+            RecordingOptions {
+                kind: RecordingKind::Video,
+                target: region_target(),
+                frames_per_second: 30,
+                max_resolution: MaxResolution::P1080,
+                countdown_seconds: 3,
+                show_cursor: true,
+                highlight_clicks: false,
+                show_keystrokes: false,
+                audio: AudioOptions::default(),
+                gif: GifOptions::default(),
+            },
+            0,
+        );
+        manifest.state = RecordingState::Ready;
+        store.create(&manifest).expect("draft saved");
+        let directory = store.session_directory(&session_id).expect("directory");
+        std::fs::write(directory.join("assembled.mp4"), b"video").expect("assembled video");
+        session_id
+    }
+
+    #[test]
+    fn keeps_a_finished_video_recoverable_when_history_could_not_store_it() {
+        let root = tempdir().expect("temporary directory");
+        let store = DraftStore::new(root.path().to_path_buf());
+        let session_id = video_draft(&store);
+        let assembled = store
+            .session_directory(&session_id)
+            .expect("directory")
+            .join("assembled.mp4");
+
+        settle_video_draft(
+            &store,
+            &session_id,
+            &Err("No space left on device".to_owned()),
+        );
+
+        assert_eq!(std::fs::read(&assembled).expect("video kept"), b"video");
+        let manifest = store.load(&session_id).expect("draft kept");
+        assert_eq!(manifest.state, RecordingState::Failed);
+        assert!(
+            manifest
+                .last_error
+                .is_some_and(|error| error.contains("No space left on device"))
+        );
+    }
+
+    #[test]
+    fn removes_a_finished_video_draft_once_history_holds_the_recording() {
+        let root = tempdir().expect("temporary directory");
+        let store = DraftStore::new(root.path().to_path_buf());
+        let session_id = video_draft(&store);
+
+        settle_video_draft(&store, &session_id, &Ok(()));
+
+        assert!(store.load(&session_id).is_err());
+        assert!(
+            !store
+                .session_directory(&session_id)
+                .expect("directory")
+                .exists()
+        );
+    }
+
+    fn state_with_media(
+        kind: RecordingKind,
+        path: &std::path::Path,
+    ) -> (std::sync::Arc<AppState>, String) {
+        let id = Uuid::new_v4().to_string();
+        let state = AppState::new();
+        state
+            .recording_artifacts
+            .lock()
+            .push(RecordingArtifactData {
+                summary: RecordingArtifact {
+                    id: id.clone(),
+                    kind,
+                    path: path.to_string_lossy().into_owned(),
+                    saved_path: None,
+                    media_url: String::new(),
+                    poster_url: String::new(),
+                    mime_type: "application/octet-stream".to_owned(),
+                    duration_ms: 1_000,
+                    width: 800,
+                    height: 600,
+                    size_bytes: 0,
+                    dropped_frames: 0,
+                    has_system_audio: false,
+                    has_microphone_audio: false,
+                    created_at: String::new(),
+                    target: region_target(),
+                    missing: false,
+                },
+                poster_png: Vec::new(),
+            });
+        (state, id)
+    }
+
+    #[test]
+    fn serves_a_large_gif_whole_because_images_never_request_a_range() {
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("media.gif");
+        let length = usize::try_from(DEFAULT_UNRANGED_MEDIA_BYTES).expect("cap fits") + 4_096;
+        std::fs::write(&path, vec![7_u8; length]).expect("gif");
+
+        let (state, id) = state_with_media(RecordingKind::Gif, &path);
+        let asset = resolve_recording_asset(&state, "media", &id, None).expect("gif asset");
+
+        assert_eq!(asset.status, 200);
+        assert_eq!(asset.bytes.len(), length);
+        assert!(asset.content_range.is_none());
+    }
+
+    #[test]
+    fn still_caps_an_unranged_video_read() {
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("media.mp4");
+        let length = usize::try_from(DEFAULT_UNRANGED_MEDIA_BYTES).expect("cap fits") + 4_096;
+        std::fs::write(&path, vec![7_u8; length]).expect("video");
+
+        let (state, id) = state_with_media(RecordingKind::Video, &path);
+        let asset = resolve_recording_asset(&state, "media", &id, None).expect("video asset");
+
+        assert_eq!(asset.status, 206);
+        assert_eq!(
+            u64::try_from(asset.bytes.len()).expect("length"),
+            DEFAULT_UNRANGED_MEDIA_BYTES
+        );
+    }
 
     #[test]
     fn builds_a_region_indicator_only_for_valid_region_targets() {
