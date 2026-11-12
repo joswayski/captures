@@ -321,11 +321,13 @@ The diagnostic accepts `--installed-package ABSOLUTE_PACKAGE_FOLDER` and
 package as its base and accepts `--base-archive`; the GUI flag additionally
 requires explicit staging.
 
-Release tooling is a separate later step, because no native build is published
-yet: it will generate patches from the six newest retained builds of each archive,
-kept in a draft `native-update-bases` release, drop patches that save too little,
-and never fail a release over a patch. No retention policy, production channel or
-installed Preferences snapshot is enabled.
+Release tooling exists but no workflow runs it while native publication is
+withdrawn: `scripts/native-update-patches.mjs` generates patches from the six
+newest retained builds of each target, kept in a draft `native-update-bases`
+release by `scripts/native-update-retain.sh`, drops patches that save too little,
+and never fails a release over a patch (see
+[releases](../../docs/releases.md#native-preview-packaging-and-recovery)). No
+retention policy, production channel or installed Preferences snapshot is enabled.
 
 `native_delta_smoke.py` tests actual explicitly supplied `package.py` archives with
 fresh, disposable in-memory signing keys. It unpacks the base archive as the

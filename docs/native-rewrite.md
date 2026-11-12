@@ -4721,7 +4721,7 @@ input. AppKit has XCTest coverage and compiles in macOS CI only. macOS, Windows
 and Wayland presentation, placement at a real tray icon, focus and accessibility
 are unverified. The Notices/updates gate stays open.
 
-### Incremental native acquisition: per-file patches connected, release tooling open
+### Incremental native acquisition: per-file patches connected, release tooling unwired
 
 **Owner requirement (November 2026): every native update downloads only a
 diff, never the whole app again.** This is a gate for the signed native
@@ -4739,9 +4739,32 @@ installer and updater, not an optimisation. Status against it:
   entry is verified against signed hashes. Whole-archive BSDIFF40 is gone.
 - Done in the client and offline generator: patches not strictly smaller than
   half the full archive are ignored by clients and reported as not listable.
-- Open: release tooling generates patches from the six newest retained builds,
-  kept in a draft `native-update-bases` release, and a patch failure never fails
-  a release. This is a later step, because no native build is published yet.
+- Done as tooling, not wired into a workflow: release tooling generates patches
+  from the six newest retained builds of each target, kept in a draft
+  `native-update-bases` release, and a patch failure never fails a release
+  (ported from Caper's `scripts/native_update_patches.py` and
+  `scripts/native-update-retain.sh`). `scripts/native-update-patches.mjs
+  generate` runs `native_update_patch` from each retained base
+  (`<version>--<target>.<tar.gz|zip>`) to the target's new full archive, checks
+  each descriptor against the manifest artifact and the patch file, warns about
+  and drops failing or not-worthwhile patches, lists the rest newest first as
+  `delta`, keeps the manifest within 128 KiB by dropping the oldest offers
+  across targets (failing only if it is still over with none), and removes
+  unlisted patch files. It never signs; the existing signer signs the bytes it
+  writes. `scripts/native-update-retain.sh download` fetches the bases (a
+  missing release is a warning); `retain`, after the signed manifest is live,
+  uploads each artifact (checked against its size and SHA-256), prunes each
+  target to its newest six builds and, with `RELEASE_TAG`, deletes patches the
+  manifest no longer lists. `--dry-run` runs only read-only `gh` calls.
+  `scripts/native-update-patches.test.mjs` covers selection, dropping, the
+  budget, the descriptor shape and a dry run; with
+  `CAPTURES_NATIVE_PATCH_E2E=1` it builds the generator, patches synthetic
+  `package.py` archives and, given `CAPTURES_NATIVE_DELTA_PROBE` and
+  `CAPTURES_NATIVE_DELTA_SIGNING_TEST`, stages the newest patch through
+  `native_delta_smoke.py`. Nothing runs it in `release.yml` while native
+  publication is withdrawn ([releases](releases.md#native-preview-packaging-and-recovery));
+  wiring it in waits for that cutover, which also needs Win32 and GTK packages
+  built and published per target.
 - Done in the format: the signed manifest keeps each full archive and lists
   patches per platform; clients fall back to the full archive only when no
   patch applies. The manifest stays under 128 KiB (the API and `preview.rs`
@@ -4755,7 +4778,7 @@ The Tauri Preview's updater cannot apply patches, and the installed native
 Preview channel (`updater/preview.rs`, which reads the Tauri-compatible
 `latest.json`) does not read them yet, so this applies to the native development
 channel today. No native build is published yet, so release patches start with
-the first native publication.
+the first native publication that runs the tooling above.
 
 `captures_app::updater::patch` implements the format. Schema-2 artifacts may carry
 `"delta": {"format": "capturespatch1", "patches": [{base_version, url, size,

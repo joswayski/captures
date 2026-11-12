@@ -60,6 +60,33 @@ Tauri Debian installs: their updater cannot install an AppImage fallback. Once o
 native, Debian installs use the manual package update path.
 Historical rebuilds through `release.yml` also build Tauri, never native.
 
+Native per-file update patches have release tooling that no workflow runs yet.
+Wire it in only when native publication resumes, with Win32 and GTK packages
+built and published per target. For each release it would:
+
+1. `scripts/native-update-retain.sh download "$BASES"` fetches the retained full
+   archives (`<version>--<target>.<tar.gz|zip>`) from the draft
+   `native-update-bases` release. A missing release is a warning.
+2. Build `native_update_patch` (`cargo build -p captures-app --bin
+   native_update_patch --locked`), then run
+   `node scripts/native-update-patches.mjs generate --manifest MANIFEST.json
+   --tool target/debug/native_update_patch --bases "$BASES" --archives
+   NEW_ARCHIVES --output PATCHES --patch-base-url HTTPS_RELEASE_DOWNLOAD_URL`
+   on the unsigned schema-2 manifest. It patches from each target's six newest
+   earlier bases, lists only patches strictly smaller than half the full
+   archive, keeps the manifest within 128 KiB by dropping the oldest offers,
+   and reports failures as `::warning::` without failing the release. It never
+   signs: upload `PATCHES/*.capturespatch` with the archives and sign the
+   manifest it wrote with the existing signer.
+3. Once the signed manifest is live,
+   `RELEASE_TAG=<tag> scripts/native-update-retain.sh retain MANIFEST.json
+   NEW_ARCHIVES` deletes patches the manifest no longer lists, uploads this
+   build's archives as bases and keeps six builds per target. Run it with
+   `continue-on-error` and a `contents: write` token; `--dry-run` prints each
+   create, upload and delete instead.
+
+Without bases or patches, clients download the full archive.
+
 The installed native profile lives under the platform-local `Captures Native Preview`
 data directory, in `profile`. First launch copies previous settings, retained History
 and screenshot drafts, preserving the old source and exports; subsequent launches
