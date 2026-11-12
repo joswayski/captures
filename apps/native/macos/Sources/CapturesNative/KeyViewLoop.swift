@@ -6,10 +6,14 @@ import AppKit
 /// loop stops at it instead of visiting them.
 protocol KeyViewParticipant: NSView {
     var keyViewLeaf: Bool { get }
+    /// Views a leaf puts in the loop right after itself, in this order,
+    /// instead of its own subviews (for example a grid's visible card controls).
+    var keyViewChildren: [NSView] { get }
 }
 
 extension KeyViewParticipant {
     var keyViewLeaf: Bool { false }
+    var keyViewChildren: [NSView] { [] }
 }
 
 /// Explicit Tab order for windows laid out with absolute frames. AppKit's
@@ -23,7 +27,9 @@ enum KeyViewLoop {
         var found: [NSView] = []
         func visit(_ view: NSView) {
             if isCandidate(view) { found.append(view) }
-            if let participant = view as? KeyViewParticipant, participant.keyViewLeaf { return }
+            if let participant = view as? KeyViewParticipant, participant.keyViewLeaf {
+                participant.keyViewChildren.forEach(visit); return
+            }
             view.subviews.forEach(visit)
         }
         visit(root)

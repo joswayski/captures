@@ -771,6 +771,7 @@ final class LiveCaptureController: NSObject {
         grid.onPrepareDrag = { [weak self] row, completion in self?.prepareHistoryDrag(row: row, completion: completion) }
         grid.onDragError = { [weak self] row, error in self?.showHistoryDragError(row: row, error: error) }
         grid.onCancel = { [weak self] in self?.cancelHistoryConfirmations() }
+        grid.onKeyViewsChanged = { [weak self] in self?.installKeyViewLoop() }
         root.addSubview(historyScroll)
         emptyState = HistoryEmptyView(tokens: tokens)
         emptyState.show(title: copy.loading, body: nil)

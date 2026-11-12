@@ -244,7 +244,13 @@ final class HistoryButton: NSButton {
     }
     override func mouseEntered(with event: NSEvent) { hovered = true; needsDisplay = true }
     override func mouseExited(with event: NSEvent) { hovered = false; needsDisplay = true }
-    override func becomeFirstResponder() -> Bool { needsDisplay = true; return super.becomeFirstResponder() }
+    override func becomeFirstResponder() -> Bool {
+        needsDisplay = true
+        guard super.becomeFirstResponder() else { return false }
+        // A card control reached with Tab scrolls into view, like a focused DOM button.
+        scrollToVisible(bounds)
+        return true
+    }
     override func resignFirstResponder() -> Bool { needsDisplay = true; return super.resignFirstResponder() }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -374,6 +380,18 @@ final class HistoryThumbnailView: NSView, NSDraggingSource {
     }
     override func mouseEntered(with event: NSEvent) { hovered = true; needsDisplay = true }
     override func mouseExited(with event: NSEvent) { hovered = false; needsDisplay = true }
+
+    /// Shipping `.history-image-open` is a button: a Tab stop while it can open.
+    override var acceptsFirstResponder: Bool { openable }
+    override func becomeFirstResponder() -> Bool {
+        guard super.becomeFirstResponder() else { return false }
+        needsDisplay = true; scrollToVisible(bounds); return true
+    }
+    override func resignFirstResponder() -> Bool { needsDisplay = true; return super.resignFirstResponder() }
+    override func keyDown(with event: NSEvent) {
+        if [36, 49, 76].contains(event.keyCode), openable { onOpen() } else { super.keyDown(with: event) }
+    }
+
     func configureInteraction(artifactID: String, openable: Bool, draggable: Bool) {
         if self.artifactID != artifactID || self.openable != openable || self.draggable != draggable {
             cancelPress()
@@ -489,6 +507,10 @@ final class HistoryThumbnailView: NSView, NSDraggingSource {
         if let image {
             image.draw(in: Self.contain(image.size, in: bounds), from: .zero, operation: .sourceOver,
                        fraction: missing ? 0.3 : 1, respectFlipped: true, hints: nil)
+        }
+        if window?.firstResponder === self {
+            tokens.color("theme-accent").setStroke()
+            clip.lineWidth = 4; clip.stroke()
         }
         NSGraphicsContext.restoreGraphicsState()
     }
@@ -834,6 +856,8 @@ final class HistoryGridView: NSView {
     var onDragError: (Int, Error) -> Void = { _, _ in }
     /// Escape: back out of an armed Delete / Delete all.
     var onCancel: () -> Void = {}
+    /// The tiled cards changed, so the window's Tab loop needs relinking.
+    var onKeyViewsChanged: () -> Void = {}
     private var layoutCache: (width: CGFloat, layout: HistoryGridLayout)?
     /// One card column in a compact window (shipping `@media (max-width: 720px)`).
     var compact = false {
@@ -930,7 +954,10 @@ final class HistoryGridView: NSView {
                           height: max(scroll.contentSize.height,
                                       layout.contentHeight(items.count, extras: extras)))
         if frame.size != size { setFrameSize(size) }
-        let visible = layout.visibleItems(items.count, in: visibleRect, extras: extras)
+        // One extra row each way, so Tab can reach the next card before it scrolls in.
+        let visible = layout.visibleItems(items.count, in: visibleRect.insetBy(dx: 0, dy: -layout.cardHeight),
+                                          extras: extras)
+        let previous = Set(cards.keys)
         var retained = Set<String>()
         let copy = HistoryCopy.current
         for index in visible {
@@ -974,13 +1001,17 @@ final class HistoryGridView: NSView {
         for (id, view) in cards where !retained.contains(id) {
             view.removeFromSuperview(); cards[id] = nil
         }
+        if Set(cards.keys) != previous { onKeyViewsChanged() }
     }
 
     private func row(for id: String) -> Int? { items.firstIndex { $0.id == id } }
 
     private func userSelect(_ id: String) {
         guard let row = row(for: id) else { return }
-        window?.makeFirstResponder(self)
+        // A card control pressed from the keyboard keeps its focus.
+        if !((window?.firstResponder as? NSView)?.isDescendant(of: self) ?? false) {
+            window?.makeFirstResponder(self)
+        }
         setSelectedRow(row, notify: true)
     }
 
@@ -1133,8 +1164,14 @@ final class HistoryEmptyView: NSView {
     }
 }
 
-/// The grid moves its selection with the arrow keys, so Tab visits it once
-/// rather than every card control.
+/// The grid moves its selection with the arrow keys. Like shipping, Tab then
+/// visits every tiled card's controls in DOM order: open, Delete, actions.
 extension HistoryGridView: KeyViewParticipant {
     var keyViewLeaf: Bool { true }
+    var keyViewChildren: [NSView] {
+        items.compactMap { cards[$0.id] }.flatMap { card -> [NSView] in
+            [card.thumbnail, card.deleteButton] + card.actionButtons
+        }
+    }
 }
+extension HistoryThumbnailView: KeyViewParticipant {}

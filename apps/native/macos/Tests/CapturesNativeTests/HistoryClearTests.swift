@@ -576,7 +576,7 @@ final class HistoryClearTests: XCTestCase {
         }
     }
 
-    func testHistoryTabOrderFollowsShippingHeaderFiltersRecoveryThenGrid() throws {
+    func testHistoryTabOrderFollowsShippingHeaderFiltersRecoveryThenGridAndCardControls() throws {
         _ = NSApplication.shared
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -600,8 +600,14 @@ final class HistoryClearTests: XCTestCase {
         try waitUntil { grid.numberOfRows == 2 }
         XCTAssertTrue(window.initialFirstResponder === grid, "The grid starts focused for its arrow keys")
         let order = KeyViewLoop.order(from: grid)
-        XCTAssertFalse(order.contains { $0.isDescendant(of: grid) && $0 !== grid },
-                       "Tab visits the grid once, not each card control")
+        // Like shipping, each card's controls follow in DOM order: open, Delete, actions.
+        let card = try XCTUnwrap(grid.card(at: 0))
+        let cardControls: [NSView] = [card.thumbnail, card.deleteButton] + card.actionButtons
+        XCTAssertEqual(Array(order[1...cardControls.count]).map(ObjectIdentifier.init),
+                       cardControls.map(ObjectIdentifier.init), "The first card's controls follow the grid")
+        let second = try XCTUnwrap(grid.card(at: 1))
+        let secondOpen = try XCTUnwrap(order.firstIndex { $0 === second.thumbnail })
+        XCTAssertEqual(secondOpen, cardControls.count + 1, "The next card's controls come after the first's")
         let copy = HistoryCopy.current
         let back = try XCTUnwrap(order.firstIndex { $0.accessibilityLabel() == copy.backToPreferences })
         let cancel = try XCTUnwrap(order.firstIndex { $0.accessibilityLabel() == copy.cancelLabel })
@@ -614,6 +620,9 @@ final class HistoryClearTests: XCTestCase {
         let retry = try XCTUnwrap(keyViewIndex(order, "Retry list"))
         XCTAssertGreaterThan(retry, pills.last ?? 0, "Interrupted recordings follow the filters")
         XCTAssertTrue(order.last?.nextKeyView === grid, "The grid ends the loop after interrupted recordings")
+        let lastCard = try XCTUnwrap(grid.card(at: 1)?.actionButtons.last)
+        XCTAssertTrue(lastCard.nextKeyView === order.first { !$0.isDescendant(of: grid) },
+                      "The last card control leads back to the header")
     }
 
     private func historyGrid(_ root: NSView) throws -> HistoryGridView {
