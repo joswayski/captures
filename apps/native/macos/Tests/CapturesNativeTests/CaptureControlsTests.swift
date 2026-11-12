@@ -236,6 +236,32 @@ final class CaptureControlsTests: XCTestCase {
         XCTAssertTrue(confirmed.isEmpty)
     }
 
+    func testWindowTargetsAreShippingSelectButtonsBeforeTheControls() throws {
+        _ = NSApplication.shared
+        var confirmed: [WindowSelectionChoice] = []
+        let view = makeView(confirm: { confirmed.append($0) })
+        let window = NSWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = view
+        XCTAssertEqual(view.windowTargetViews.map { $0.accessibilityLabel() }, ["Select Draft", "Select Reference"],
+                       "front to back, named like shipping's buttons")
+        XCTAssertTrue(view.windowTargetViews.allSatisfy(\.isHidden), "targets exist only in Window mode")
+        view.setTarget(.window)
+        let order = KeyViewLoop.order(from: view)
+        XCTAssertTrue(order[1] === view.windowTargetViews[0] && order[2] === view.windowTargetViews[1],
+                      "the targets come first, like shipping's DOM")
+        XCTAssertTrue(order[3].isDescendant(of: view.controls), "then the controls")
+        XCTAssertTrue(window.makeFirstResponder(view.windowTargetViews[1]))
+        XCTAssertEqual(view.hoveredWindowIndex, 1, "a focused target highlights like a hovered one")
+        XCTAssertNil(view.selectedWindowIndex)
+        XCTAssertTrue(view.windowTargetViews[1].accessibilityPerformPress())
+        XCTAssertEqual(view.choice, .window(index: 1, id: "back"))
+        XCTAssertTrue(confirmed.isEmpty, "selecting waits for Capture without auto-start")
+        XCTAssertNil(view.windowTargetViews[0].hitTest(NSPoint(x: 100, y: 100)),
+                     "the pointer keeps hit-testing the z-ordered windows")
+    }
+
     func testCloseUsesSharedIconAndStillCancels() throws {
         _ = NSApplication.shared
         var cancelled = 0

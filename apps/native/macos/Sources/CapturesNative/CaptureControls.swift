@@ -1363,6 +1363,48 @@ final class DisplayIdentityIcon: NSView {
     }
 }
 
+/// Shipping `.recording-window-target`: a "Select <window>" button over each
+/// window, for keyboard and VoiceOver only. Pointer input falls through to the
+/// selector, which hit-tests the z-ordered windows itself.
+final class CaptureWindowTargetView: NSView {
+    let index: Int
+    private let tokens: Tokens
+    private let radius: CGFloat
+    var onFocus: (Int) -> Void = { _ in }
+    var onSelect: (Int) -> Void = { _ in }
+
+    init(index: Int, target: WindowSelectionTarget, tokens: Tokens) {
+        self.index = index; self.tokens = tokens
+        radius = min(target.cornerRadius, target.rect.width / 2, target.rect.height / 2)
+        super.init(frame: target.rect)
+        setAccessibilityElement(true); setAccessibilityRole(.button)
+        setAccessibilityLabel("Select \(target.title.isEmpty ? "window" : target.title)")
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override var isFlipped: Bool { true }
+    override var acceptsFirstResponder: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func becomeFirstResponder() -> Bool {
+        needsDisplay = true; onFocus(index); return true
+    }
+    override func resignFirstResponder() -> Bool { needsDisplay = true; return true }
+    override func keyDown(with event: NSEvent) {
+        if [36, 49, 76].contains(event.keyCode) { onSelect(index) } else { super.keyDown(with: event) }
+    }
+    override func accessibilityPerformPress() -> Bool { onSelect(index); return true }
+
+    /// `:focus-visible`: the accent tint and an outer 2 pt accent ring.
+    override func draw(_ dirtyRect: NSRect) {
+        guard window?.firstResponder === self else { return }
+        let hole = NSBezierPath(roundedRect: bounds, xRadius: radius, yRadius: radius)
+        tokens.color("theme-accent").withAlphaComponent(0.14).setFill(); hole.fill()
+        let ring = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: max(0, radius - 1),
+                                yRadius: max(0, radius - 1))
+        ring.lineWidth = 2; tokens.color("theme-accent").setStroke(); ring.stroke()
+    }
+}
+
 final class UnifiedCaptureSelectionView: NSView {
     typealias HitTest = (CapturesSelectionPoint) -> Int64?
 
@@ -1380,6 +1422,7 @@ final class UnifiedCaptureSelectionView: NSView {
     private(set) var aspectIndex = 0
     let controls: CaptureControlsView
     private let selectionLabel = NSTextField(labelWithString: "")
+    private(set) var windowTargetViews: [CaptureWindowTargetView] = []
     private let guidance: CaptureGuidanceChip
     private let identityIcon: DisplayIdentityIcon
     private let identityName = NSTextField(labelWithString: "")
@@ -1474,6 +1517,13 @@ final class UnifiedCaptureSelectionView: NSView {
         controls.stateChanged = { [weak self] in self?.update() }
         controls.confirm = { [weak self] in self?.confirmSelection() }
         controls.cancel = { [weak self] in self?.cancel() }
+        // Like shipping's DOM, the window targets (front to back) precede the controls.
+        for (index, target) in targets.enumerated() {
+            let view = CaptureWindowTargetView(index: index, target: target, tokens: tokens)
+            view.onFocus = { [weak self] index in self?.focusWindowTarget(index) }
+            view.onSelect = { [weak self] index in self?.selectWindowTarget(index) }
+            windowTargetViews.append(view); addSubview(view)
+        }
         addSubview(controls)
         setAccessibilityRole(.group); setAccessibilityLabel("New Capture screenshot selector")
         update()
@@ -1580,6 +1630,34 @@ final class UnifiedCaptureSelectionView: NSView {
         }
     }
 
+    /// A focused window target highlights like a hovered one.
+    func focusWindowTarget(_ index: Int) {
+        guard target == .window, targets.indices.contains(index) else { return }
+        hoveredWindowIndex = Int64(index); hoveringDisplay = false; update()
+    }
+
+    /// Keyboard activation of a "Select <window>" target.
+    func selectWindowTarget(_ index: Int) {
+        guard target == .window, controls.inFlight == nil, targets.indices.contains(index) else { return }
+        hoveredWindowIndex = Int64(index); hoveringDisplay = false
+        selectedWindowIndex = Int64(index); update()
+        if autoStart { confirmSelection() }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        relinkKeyViews()
+    }
+
+    /// Explicit Tab order like shipping's DOM: the window targets, then the
+    /// controls. The selector surface itself only starts the loop. Relinked on
+    /// every update because the controls swap their views with the target.
+    private func relinkKeyViews() {
+        guard let window else { return }
+        let chain = KeyViewLoop.install(windowTargetViews + [controls], window: window, initial: self)
+        nextKeyView = chain.first
+    }
+
     /// Shipping `start()` returns while a start or display switch is in flight.
     func confirmSelection() {
         guard controls.inFlight == nil, let choice else { return }
@@ -1644,6 +1722,8 @@ final class UnifiedCaptureSelectionView: NSView {
 
     private func update() {
         controls.setCaptureEnabled(choice != nil)
+        for view in windowTargetViews { view.isHidden = target != .window }
+        relinkKeyViews()
         let label: String
         let rect: NSRect?
         var guidanceCopy: CaptureMenuPolicy.Guidance?
