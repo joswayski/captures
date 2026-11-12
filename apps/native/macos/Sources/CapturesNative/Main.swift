@@ -188,6 +188,11 @@ final class CapturesApplication: NSApplication {
 
 @main enum Main {
     static func main() {
+        // Options parses argv itself. Without this, AppKit pairs `-key value`
+        // arguments and opens any path left over (with `--live --history-root
+        // PATH`, the history root) as a document, which failed as external media.
+        // Finder and `open` deliver real documents as Apple events, unaffected.
+        UserDefaults.standard.register(defaults: ["NSTreatUnknownArgumentsAsOpen": "NO"])
         // First, so NSApp is the subclass above.
         _ = CapturesApplication.shared
         do {
