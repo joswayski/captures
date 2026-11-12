@@ -687,15 +687,7 @@ pub fn open(options: &Options) -> Result<()> {
             .map_or((spec.width, spec.height), |(w, h)| (w as f32, h as f32));
         let (ww, wh) = crate::host::window_size(hwnd, w, h);
         // Sizing sends WM_SIZE, which creates the surface and paints.
-        let _ = SetWindowPos(
-            hwnd,
-            None,
-            0,
-            0,
-            ww,
-            wh,
-            SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
-        );
+        crate::host::center(hwnd, ww, wh);
         let _ = ShowWindow(hwnd, SW_SHOW);
         let _ = SetForegroundWindow(hwnd);
     }

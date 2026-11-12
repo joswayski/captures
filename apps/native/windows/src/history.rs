@@ -3450,15 +3450,7 @@ pub fn open(options: &Options, size: Option<(u32, u32)>) -> Result<()> {
         )?;
         let (w, h) = size.map_or((spec.width, spec.height), |(w, h)| (w as f32, h as f32));
         let (ww, wh) = crate::host::window_size(hwnd, w, h);
-        let _ = SetWindowPos(
-            hwnd,
-            None,
-            0,
-            0,
-            ww,
-            wh,
-            SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
-        );
+        crate::host::center(hwnd, ww, wh);
         let mut history = History::new(hwnd, g, options, tokens, root_of(options))?;
         history.scale = GetDpiForWindow(hwnd) as f32 / 96.;
         history.reduced_motion = appearance::reduced_motion();

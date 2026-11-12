@@ -1986,15 +1986,7 @@ pub fn open(options: &Options, id: &str) -> Result<()> {
         textfield::ime_enable(hwnd, false);
         WINDOWS.with(|windows| windows.borrow_mut().push(editor));
         let (w, h) = crate::host::window_size(hwnd, w, h);
-        let _ = SetWindowPos(
-            hwnd,
-            None,
-            0,
-            0,
-            w,
-            h,
-            SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
-        );
+        crate::host::center(hwnd, w, h);
         let _ = ShowWindow(hwnd, SW_SHOW);
     }
     Ok(())

@@ -1124,6 +1124,23 @@ impl Host {
 }
 
 /// Outer window size for a client area of `w`×`h` DIPs at the window's DPI.
+/// Size a new window to `(w, h)` pixels and centre it in its monitor's work
+/// area, like shipping's `WebviewWindowBuilder::center()`. Sizing sends
+/// WM_SIZE, which creates the surface and paints.
+pub fn center(hwnd: HWND, w: i32, h: i32) {
+    unsafe {
+        let mut info = MONITORINFO {
+            cbSize: size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        let _ = GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mut info);
+        let work = info.rcWork;
+        let x = (work.left + (work.right - work.left - w) / 2).max(work.left);
+        let y = (work.top + (work.bottom - work.top - h) / 2).max(work.top);
+        let _ = SetWindowPos(hwnd, None, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+}
+
 pub fn window_size(hwnd: HWND, w: f32, h: f32) -> (i32, i32) {
     unsafe {
         let dpi = GetDpiForWindow(hwnd);
@@ -1248,15 +1265,7 @@ pub fn open(options: &Options) -> Result<()> {
             .filter(|_| options.scene == crate::Scene::Preferences)
             .map_or((spec.width, spec.height), |(w, h)| (w as f32, h as f32));
         let (ww, wh) = window_size(hwnd, w, h);
-        let _ = SetWindowPos(
-            hwnd,
-            None,
-            0,
-            0,
-            ww,
-            wh,
-            SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
-        );
+        center(hwnd, ww, wh);
         let host = Host::new(hwnd, options)?;
         HOST.with(|h| *h.borrow_mut() = Some(host));
         with_host(|h| h.request_login(None));

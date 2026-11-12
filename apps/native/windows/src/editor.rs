@@ -5985,15 +5985,7 @@ pub fn open(options: &Options, artifact_id: &str) -> Result<()> {
             .filter(|_| options.scene == crate::Scene::Editor)
             .map_or(SIZE, |(w, h)| (w as f32, h as f32));
         let (ww, wh) = crate::host::window_size(hwnd, w, h);
-        let _ = SetWindowPos(
-            hwnd,
-            None,
-            0,
-            0,
-            ww,
-            wh,
-            SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
-        );
+        crate::host::center(hwnd, ww, wh);
         let (jobs, inbox) = channel();
         let (results, outcomes) = channel();
         let previous = WORKERS.with(|w| {
