@@ -61,6 +61,9 @@ matching them, so each was checked against the shared crates and every host:
 | Clear History continues past an undeletable entry and returns the first error | Fixed with shared `captures_history::delete_each`, used by the shared request (Win32, AppKit, wgpu) and GTK. |
 | Saving an encoded capture syncs before rename and removes the temp file on failure | Matches in the shared export publication. |
 | Saving a screenshot from its preview records `saved_path` in History | Win32 matches. GTK's Save file used a file chooser and copy, and now saves through the shared save to the configured folder like Tauri (AT-SPI checked). AppKit not rechecked. |
+| A rejected Preferences save rolls the UI back to the stored settings | Win32 now reloads the stored settings and resets its switches after a refused save (Wine tests and clippy; not physically checked); shortcut changes already kept the old value. GTK and AppKit not yet audited. |
+| The screenshot overlay acts only on the primary mouse button | Win32 handles only left-button messages, so right and middle presses do nothing. GTK and AppKit not yet audited. |
+| A saved microphone that is not connected shows as "Selected microphone" | Matches on every host through the shared `capture_menu::microphone_selected_label`. |
 | Unranged media reads capped at 2 MiB for video | Not applicable: native reads media through ffmpeg, not a webview asset protocol. |
 | Screenshot editor Undo coalescing, zoom-scaled shadows, no zero-size shapes, dropdown arrow keys, drafts kept during save; overlay acts only on the primary button; capture-bar shortcuts respect disabled states and window targets take the keyboard; Preferences rollback on rejected save, sidebar highlight, "Update failed / Try again", "Selected microphone", folder commits on blur/Enter; late saved-notice results ignored | Not yet audited on native hosts; open parity items. |
 

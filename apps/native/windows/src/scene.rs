@@ -2693,8 +2693,31 @@ impl Scene {
                 self.settings = saved;
                 self.set_save_status(SaveStatus::Saved);
             }
-            Err(error) => self.save_failed(&error.to_string()),
+            Err(error) => {
+                self.save_failed(&error.to_string());
+                self.restore_stored();
+            }
         }
+    }
+
+    /// A rejected save puts the UI back on the stored settings, as shipping
+    /// does, instead of keeping the refused value for every later save.
+    fn restore_stored(&mut self) {
+        let Ok(stored) = captures_settings::load(&self.settings_file) else {
+            return;
+        };
+        self.settings = stored;
+        for row in 0..self.rows.len() {
+            let on = match self.rows[row].key {
+                RowKey::Flag(index) => flag_value(&self.settings, index),
+                RowKey::Recording(index) => recording_value(&self.settings, index),
+                RowKey::Changelog => self.settings.show_update_changelog,
+                _ => continue,
+            };
+            self.set_row(row, on);
+        }
+        self.relayout = true;
+        self.refresh(true);
     }
 
     /// Every failed settings save reports through the header status.
