@@ -193,9 +193,13 @@ Narrator). With two or more cards the toolbar shows Clear all and Minimize
 (shipping hides it for one card). Minimize collapses the stack into
 shipping's pile: the newest card in front and older cards peeking from the
 anchored edge in the shared `collapsed_card_pose`, under their depth shade,
-fanned while hovered; the pile is one "Expand N previews" button. The pose
-is drawn as its flattened affine (no keystone or rear-card blur), it snaps
-without the fly or fan motion, and the pile cannot be carried yet.
+fanned while hovered; the pile is one "Expand N previews" button. Minimize and
+Expand fly the cards between the list and the pile, and hovering fans it
+with the per-card stagger, on the shared `preview_stack_fly` /
+`preview_stack_fan` tweens (instant under Windows' reduced motion); the frame
+keeps its expanded height until a collapse lands. The pose is drawn as its
+flattened affine (no keystone or rear-card blur), and the pile cannot be
+carried yet.
 `--tool previews --select pile|pile-hover` renders it (compared with the
 Tauri harness; not yet physically checked). Arrive/exit motion, file drags,
 keyboard focus and tooltips are not ported. `--scene capture --screenshot PATH`

@@ -18,8 +18,10 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
-use captures_app::preview::{self, PreviewStack};
+use captures_app::motion::{Transition, Tween};
+use captures_app::preview::{self, CollapsedCardPose, PreviewStack};
 use captures_app::preview_chrome;
+use captures_app::preview_motion::StackFan;
 use captures_history::HistoryEntry;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::*;
@@ -44,6 +46,8 @@ use crate::tokens::Tokens;
 
 /// Not exported by the `windows` crate's `WindowsAndMessaging`.
 const WM_MOUSELEAVE: u32 = 0x02A3;
+/// Drives the pile's fly and fan while they run.
+const MOTION_TIMER: usize = 7;
 /// Posted when a worker finished a Save or Delete.
 const WM_APP_PREVIEW_DONE: u32 = WM_APP + 31;
 
@@ -117,6 +121,39 @@ pub struct Stack {
     pub pressed: Option<Hit>,
     /// The pointer is over the collapsed pile, which fans it.
     pub pile_hovered: bool,
+    /// Shipping's `preview_stack_fly` and `preview_stack_fan` tweens; `None`
+    /// (offscreen fixtures) lands every change at once.
+    pub motion: Option<(Tween, Tween)>,
+    pub reduced: bool,
+    /// Collapse progress when the latest fly began, and when (ms).
+    fly: (f64, f64),
+    fan: StackFan,
+}
+
+/// Milliseconds on a monotonic clock shared by every preview motion.
+fn now_ms() -> f64 {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    START
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_secs_f64()
+        * 1000.
+}
+
+fn lerp(from: f64, to: f64, t: f64) -> f64 {
+    from + (to - from) * t
+}
+
+/// A rear card between its rest and fanned poses.
+fn mix(rest: CollapsedCardPose, fan: CollapsedCardPose, t: f64) -> CollapsedCardPose {
+    CollapsedCardPose {
+        dx: lerp(rest.dx, fan.dx, t),
+        dy: lerp(rest.dy, fan.dy, t),
+        rotation_deg: lerp(rest.rotation_deg, fan.rotation_deg, t),
+        scale_x: lerp(rest.scale_x, fan.scale_x, t),
+        scale_y: lerp(rest.scale_y, fan.scale_y, t),
+        ..rest
+    }
 }
 
 impl Stack {
@@ -131,7 +168,68 @@ impl Stack {
             hot: None,
             pressed: None,
             pile_hovered: false,
+            motion: None,
+            reduced: false,
+            fly: (0., 0.),
+            fan: StackFan::default(),
         }
+    }
+
+    /// Whether changes land at once.
+    fn instant(&self) -> bool {
+        self.reduced || self.motion.is_none()
+    }
+
+    /// Eased collapse progress: 0 is the list, 1 the pile.
+    pub fn progress(&self) -> f64 {
+        let target = if self.collapsed() { 1. } else { 0. };
+        match &self.motion {
+            Some((fly, _)) => fly.value(self.fly.0, target, now_ms() - self.fly.1, self.reduced),
+            None => target,
+        }
+    }
+
+    /// The fly or the fan is still moving.
+    pub fn animating(&self) -> bool {
+        let Some((fly, fan)) = &self.motion else {
+            return false;
+        };
+        let now = now_ms();
+        fly.running(now - self.fly.1, self.reduced)
+            || self
+                .fan
+                .running(self.cards.len().saturating_sub(1), now, fan, self.reduced)
+    }
+
+    /// Collapse into the pile or expand it, flying from wherever the cards
+    /// are now.
+    pub fn set_collapsed(&mut self, collapsed: bool) {
+        let from = self.progress();
+        self.stack.set_collapsed(collapsed);
+        self.fly = (from, now_ms());
+        self.hovered = None;
+        self.hot = None;
+        self.pile_hovered = false;
+        self.set_fan(false);
+    }
+
+    fn set_fan(&mut self, open: bool) {
+        let count = self.cards.len();
+        let cards: Vec<(&str, usize)> = self
+            .cards
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (c.entry.id.as_str(), count - 1 - i))
+            .collect();
+        let tween = self.motion.map_or(
+            Tween {
+                duration_ms: 0.,
+                easing: captures_app::motion::CubicBezier::LINEAR,
+            },
+            |(_, fan)| fan,
+        );
+        let instant = self.instant();
+        self.fan.set(open, now_ms(), &cards, &tween, instant);
     }
 
     pub fn push(&mut self, g: &Gfx, entry: HistoryEntry, image: Option<&image::RgbaImage>) {
@@ -184,7 +282,7 @@ impl Stack {
     /// Shipping shows the toolbar (Clear all and Minimize) only for two or
     /// more cards, and never on the pile.
     fn toolbar(&self) -> bool {
-        !self.collapsed() && self.cards.len() >= 2
+        !self.collapsed() && self.cards.len() >= 2 && self.progress() <= 0.
     }
 
     /// The front card of the collapsed pile, the pile's hit target.
@@ -274,6 +372,11 @@ impl Stack {
 
     pub fn hit(&self, x: f32, y: f32) -> Option<Hit> {
         let inside = |r: &Rect| x >= r.left && x < r.right && y >= r.top && y < r.bottom;
+        // Nothing takes the pointer mid-fly.
+        let progress = self.progress();
+        if progress > 0. && progress < 1. {
+            return None;
+        }
         if self.collapsed() {
             return self.front_rect().filter(|r| inside(r)).map(|_| Hit::Expand);
         }
@@ -317,6 +420,9 @@ impl Stack {
             self.hovered = None;
             self.hot = at.and_then(|(x, y)| self.hit(x, y));
             self.pile_hovered = self.hot == Some(Hit::Expand);
+            if self.pile_hovered != before.0 {
+                self.set_fan(self.pile_hovered);
+            }
             return (self.pile_hovered, self.hot) != before;
         }
         self.pile_hovered = false;
@@ -455,7 +561,7 @@ impl Stack {
     }
 
     pub fn paint(&self, dc: &ID2D1DeviceContext, g: &Gfx, t: &Tokens) -> Result<()> {
-        if self.collapsed() {
+        if self.collapsed() || self.progress() > 0. {
             return self.paint_pile(dc, g, t);
         }
         for index in 0..self.cards.len() {
@@ -505,55 +611,73 @@ impl Stack {
         Ok(())
     }
 
-    /// The collapsed pile: oldest card first so the newest paints on top,
-    /// each rear card in its shared `collapsed_card_pose` (fanned while
-    /// hovered) under its `collapsed_dim_opacity` shade. The flattened
-    /// affine summary of the pose is drawn; the keystone, media blur and
-    /// the fly between list and pile are not.
+    /// The collapsed pile, and the fly between it and the list: oldest
+    /// card first so the newest paints on top, each card moving from its list
+    /// slot to its shared `collapsed_card_pose` (blended toward the fanned
+    /// pose by its staggered fan progress) under its `collapsed_dim_opacity`
+    /// shade, like the GTK host. The pose is drawn as its flattened affine;
+    /// the keystone and rear-card media blur are not.
     fn paint_pile(&self, dc: &ID2D1DeviceContext, g: &Gfx, t: &Tokens) -> Result<()> {
-        let Some(front) = self.front_rect() else {
-            return Ok(());
-        };
         let count = self.cards.len();
-        let gravity = if self.top { -1. } else { 1. };
-        let (cx, cy) = (
-            (front.left + front.right) / 2.,
-            (front.top + front.bottom) / 2.,
+        let progress = self.progress();
+        let now = now_ms();
+        let instant = self.instant();
+        let fan_tween = self.motion.map(|(_, fan)| fan);
+        let top = self.top;
+        let gravity = if top { -1. } else { 1. };
+        let content = lerp(
+            preview::stack_height(count),
+            preview::collapsed_frame_height(count),
+            progress,
         );
+        let offset = if top {
+            0.
+        } else {
+            f64::from(self.height) - content
+        };
+        let front = preview::collapsed_padding(count);
+        let half = (f64::from(CARD_W) / 2., f64::from(CARD_H) / 2.);
+        let local = rect(-CARD_W / 2., -CARD_H / 2., CARD_W / 2., CARD_H / 2.);
         let mut base = Matrix3x2::identity();
         unsafe { dc.GetTransform(&mut base) };
         for index in 0..count {
             let depth = count - 1 - index;
-            let pose = preview::collapsed_card_pose(
-                &self.cards[index].entry.id,
-                depth,
-                self.pile_hovered,
-                gravity,
-                self.top,
+            let id = &self.cards[index].entry.id;
+            let expanded =
+                preview::card_layout_in(count, index, false, top, false).map_or(0., |l| l.y);
+            let rest = preview::collapsed_card_pose(id, depth, false, gravity, top);
+            let fanned = preview::collapsed_card_pose(id, depth, true, gravity, top);
+            let fan = match &fan_tween {
+                Some(tween) => self.fan.progress(id, depth, now, tween, instant).0,
+                None => f64::from(u8::from(self.fan.open())),
+            };
+            let pose = mix(rest, fanned, fan);
+            let cx = f64::from(PAD) + half.0 + pose.dx * progress;
+            let cy = offset + lerp(expanded + half.1, front + half.1 + pose.dy, progress);
+            let (sin, cos) = ((pose.rotation_deg * progress) as f32)
+                .to_radians()
+                .sin_cos();
+            let (sx, sy) = (
+                lerp(1., pose.scale_x, progress) as f32,
+                lerp(1., pose.scale_y, progress) as f32,
             );
-            let (sin, cos) = (pose.rotation_deg as f32).to_radians().sin_cos();
-            let (sx, sy) = (pose.scale_x as f32, pose.scale_y as f32);
-            // Row vectors: move the front card's centre to the origin, scale,
-            // rotate clockwise, then move to the posed centre.
-            let pose_m = Matrix3x2 {
+            // Row vectors: scale, rotate clockwise, then move to the centre.
+            let m = Matrix3x2 {
                 M11: sx * cos,
                 M12: sx * sin,
                 M21: -sy * sin,
                 M22: sy * cos,
-                M31: 0.,
-                M32: 0.,
-            };
-            let m = Matrix3x2::translation(-cx, -cy)
-                * pose_m
-                * Matrix3x2::translation(cx + pose.dx as f32, cy + pose.dy as f32)
-                * base;
+                M31: cx as f32,
+                M32: cy as f32,
+            } * base;
             unsafe { dc.SetTransform(&m) };
-            let result = self.paint_card(dc, g, t, index, front).and_then(|()| {
-                let dim = preview::collapsed_dim_opacity(depth) as f32;
+            let result = self.paint_card(dc, g, t, index, local).and_then(|()| {
+                let dim =
+                    (preview::collapsed_dim_opacity(depth) * progress * (1. - 0.35 * fan)) as f32;
                 if dim > 0. {
                     let mut shade = t.color("glass-strong-solid");
                     shade.a *= dim;
-                    gfx::fill_round(dc, front, t.n("thumbnail-card-radius"), shade)?;
+                    gfx::fill_round(dc, local, t.n("thumbnail-card-radius"), shade)?;
                 }
                 Ok(())
             });
@@ -1017,7 +1141,14 @@ impl Previews {
         let (sender, results) = channel();
         Ok(Self {
             hwnd,
-            stack: Stack::new(settings.mini_preview_placement),
+            stack: {
+                let mut stack = Stack::new(settings.mini_preview_placement);
+                stack.motion = Transition::PreviewStackFly
+                    .resolve(&tokens)
+                    .zip(Transition::PreviewStackFan.resolve(&tokens));
+                stack.reduced = crate::appearance::reduced_motion();
+                stack
+            },
             g,
             tokens,
             scale: 1.,
@@ -1161,11 +1292,16 @@ impl Previews {
 
     fn run(&mut self, hit: Hit) {
         if matches!(hit, Hit::Minimize | Hit::Expand) {
-            self.stack.stack.set_collapsed(hit == Hit::Minimize);
-            self.stack.hovered = None;
-            self.stack.hot = None;
-            self.stack.pile_hovered = false;
-            let _ = self.relayout();
+            self.stack.reduced = crate::appearance::reduced_motion();
+            self.stack.set_collapsed(hit == Hit::Minimize);
+            // Expanding grows the frame first; collapsing keeps it until the
+            // pile lands, then shrinks to the pile (`motion_tick`).
+            if hit == Hit::Expand || !self.stack.animating() {
+                let _ = self.relayout();
+            } else {
+                let _ = self.render();
+            }
+            self.animate();
             return;
         }
         let Some(index) = hit.card() else {
@@ -1263,6 +1399,29 @@ impl Previews {
         let _ = self.render();
     }
 
+    /// Tick the frame timer while the fly or fan runs.
+    fn animate(&self) {
+        if self.stack.animating() {
+            unsafe {
+                SetTimer(Some(self.hwnd), MOTION_TIMER, 16, None);
+            }
+        }
+    }
+
+    fn motion_tick(&mut self) {
+        let _ = self.render();
+        if self.stack.animating() {
+            return;
+        }
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), MOTION_TIMER);
+        }
+        // A landed pile shrinks its frame to the pile.
+        if self.stack.collapsed() {
+            let _ = self.relayout();
+        }
+    }
+
     fn finish(&mut self) {
         while let Ok(done) = self.results.try_recv() {
             match done {
@@ -1322,6 +1481,7 @@ impl Previews {
                 }
                 if self.stack.pointer(Some(point(lp, self.scale))) {
                     let _ = self.render();
+                    self.animate();
                 }
             }
             WM_MOUSELEAVE => {
@@ -1329,6 +1489,7 @@ impl Previews {
                 self.stack.pressed = None;
                 if self.stack.pointer(None) {
                     let _ = self.render();
+                    self.animate();
                 }
             }
             WM_SETCURSOR => {
@@ -1368,6 +1529,7 @@ impl Previews {
                 }
             }
             WM_APP_PREVIEW_DONE => self.finish(),
+            WM_TIMER if _wp.0 == MOTION_TIMER => self.motion_tick(),
             _ => return None,
         }
         Some(LRESULT(0))
@@ -1572,6 +1734,29 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].name, "Expand 2 previews");
         assert_eq!(Stack::uia_hit(items[0].key), Some(Hit::Expand));
+    }
+
+    #[test]
+    fn nothing_takes_the_pointer_while_the_pile_flies() {
+        use captures_settings::MiniPreviewPlacement as P;
+        let slow = Tween {
+            duration_ms: 60_000.,
+            easing: captures_app::motion::CubicBezier::LINEAR,
+        };
+        let mut s = stack(P::BottomLeft, &[true, false]);
+        s.motion = Some((slow, slow));
+        s.set_collapsed(true);
+        s.stack.set_collapsed(true);
+        assert!(s.animating());
+        let progress = s.progress();
+        assert!((0. ..0.01).contains(&progress), "{progress}");
+        // Mid-fly: no toolbar, no card, no Expand target anywhere.
+        assert_eq!(s.hit(40., 390.), None);
+        assert_eq!(s.hit(150., 100.), None);
+        // Reduced motion lands at once.
+        s.reduced = true;
+        assert_eq!(s.progress(), 1.);
+        assert!(!s.animating());
     }
 
     #[test]
