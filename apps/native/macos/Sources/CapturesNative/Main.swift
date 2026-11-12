@@ -174,8 +174,22 @@ struct Options {
     enum Usage: Error { case invalid }
 }
 
+/// Reports a visible non-key panel (the recording controls) as the focused
+/// window while no window is key, so VoiceOver lands on it. The panel itself
+/// never becomes key and takes no keyboard focus.
+final class CapturesApplication: NSApplication {
+    static weak var accessibilityFallbackWindow: NSWindow?
+
+    override func accessibilityFocusedWindow() -> Any? {
+        if keyWindow == nil, let window = Self.accessibilityFallbackWindow, window.isVisible { return window }
+        return super.accessibilityFocusedWindow()
+    }
+}
+
 @main enum Main {
     static func main() {
+        // First, so NSApp is the subclass above.
+        _ = CapturesApplication.shared
         do {
             if CommandLine.arguments.dropFirst().elementsEqual(["--preview-build-info"]) {
                 var info = try AppBridge().request(["operation": "preview_build_info"])

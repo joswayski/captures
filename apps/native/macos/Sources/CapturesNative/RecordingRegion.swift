@@ -41,6 +41,10 @@ final class RecordingRegionView: NSView {
 final class RecordingRegionPanel: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
+    /// The dimmed outline is decoration. Hidden from accessibility, it no
+    /// longer captures VoiceOver as an empty dialog in front of the controls.
+    override func isAccessibilityElement() -> Bool { false }
+    override func accessibilityChildren() -> [Any]? { [] }
 
     init(screen: NSScreen, region: NSRect, tokens: Tokens) {
         super.init(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel],

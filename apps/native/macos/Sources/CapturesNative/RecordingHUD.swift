@@ -283,7 +283,10 @@ final class RecordingHUDView: NSView {
         meterTrack.setAccessibilityLabel("Microphone level")
         lifecycleButtons = [stopButton, pauseButton, restartButton, screenshotButton,
                             microphoneButton, trashButton, hideButton]
-        for case let button as CaptureButton in subviews { button.hudControl = true }
+        // The controls never take keyboard focus (the panel never becomes key).
+        // Refusing first responder also keeps VoiceOver's cursor where it is:
+        // otherwise its focus attempt resets the cursor to the window.
+        for case let button as CaptureButton in subviews { button.hudControl = true; button.refusesFirstResponder = true }
 
         // Shipping `.recording-hud-error`: 2xs signal text, one line, ellipsis.
         errorLabel.frame = NSRect(x: 16, y: 79, width: 398, height: 15)
@@ -571,6 +574,12 @@ final class RecordingHUDPanel: NSPanel {
         // Shipping `startHudDrag`: the HUD background moves the window; buttons still click.
         isMovableByWindowBackground = true
         contentView = hud
+    }
+
+    override func orderFrontRegardless() {
+        super.orderFrontRegardless()
+        CapturesApplication.accessibilityFallbackWindow = self
+        NSAccessibility.post(element: NSApp as Any, notification: .focusedWindowChanged)
     }
 }
 
