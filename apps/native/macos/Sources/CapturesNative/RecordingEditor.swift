@@ -10,7 +10,7 @@ final class RecordingTrimHandle: NSView {
         self.edge = edge; self.timeline = timeline
         super.init(frame: .zero)
         setAccessibilityElement(true)
-        setAccessibilityRole(.slider)
+        setAccessibilityRole(.slider); setAccessibilityOrientation(.horizontal)
         setAccessibilityLabel(edge == .start ? "Recording trim start handle"
                                              : "Recording trim end handle")
         updateAccessibility()
@@ -81,7 +81,13 @@ final class RecordingTrimHandle: NSView {
             ? max(0, timeline.endMilliseconds - 1) : timeline.durationMilliseconds))
         setAccessibilityValue(NSNumber(value: edge == .start
             ? timeline.startMilliseconds : timeline.endMilliseconds))
-        setAccessibilityValueDescription("\(edge == .start ? timeline.startMilliseconds : timeline.endMilliseconds) milliseconds")
+        // Shipping `aria-valuetext`: the trim time as "0:02.000", not raw milliseconds.
+        let value = edge == .start ? timeline.startMilliseconds : timeline.endMilliseconds
+        let description = RecordingEditorCopy.time(UInt64(value), duration: UInt64(timeline.durationMilliseconds))
+        guard description != accessibilityValueDescription() else { return }
+        setAccessibilityValueDescription(description)
+        // VoiceOver speaks the new time as arrow keys move the handle.
+        if window?.firstResponder === self { NSAccessibility.post(element: self, notification: .valueChanged) }
     }
 
     override func draw(_ dirtyRect: NSRect) {
