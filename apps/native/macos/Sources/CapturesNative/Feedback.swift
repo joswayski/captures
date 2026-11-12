@@ -188,6 +188,10 @@ final class FeedbackSendButton: PreferenceHoverButton {
 /// The message field; reports focus so its border can follow `:focus`.
 final class FeedbackTextView: NSTextView {
     var focusChanged: ((Bool) -> Void)?
+    /// Like shipping's <textarea>, Tab and Shift-Tab move focus instead of
+    /// inserting a tab character.
+    override func insertTab(_ sender: Any?) { window?.selectKeyView(following: self) }
+    override func insertBacktab(_ sender: Any?) { window?.selectKeyView(preceding: self) }
     override func becomeFirstResponder() -> Bool {
         let accepted = super.becomeFirstResponder()
         if accepted { focusChanged?(true) }
