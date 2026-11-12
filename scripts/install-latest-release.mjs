@@ -476,7 +476,8 @@ if ($env:CAPTURES_LAUNCH_AFTER_INSTALL -eq "1") {
 }
 
 function quitLinuxCaptures() {
-  const result = run("pkill", ["-x", BINARY_NAME]);
+  // The app renames its process to Captures; older builds keep the binary's name.
+  const result = run("pkill", ["-x", `${BINARY_NAME}|${APP_NAME}`]);
   if (result.error?.code === "ENOENT") return;
   if (result.status !== 0 && result.status !== 1) throw commandError("pkill", result);
 }

@@ -19,6 +19,9 @@ global-hotkey = { path = "../../../crates/vendor/global-hotkey" }
 [patch."https://github.com/emilk/egui"]
 eframe = { path = "vendor/eframe" }
 
+[build-dependencies]
+winresource = "0.1"
+
 [dependencies]
 eframe = { git = "https://github.com/emilk/egui", rev = "60d7caaea38a795618e842925061ad2210028a2a", default-features = false, features = ["wgpu", "x11", "wayland", "accesskit", "default_fonts"] }
 image = { version = "0.25", default-features = false, features = ["bmp", "gif", "png", "jpeg", "webp", "tiff"] }

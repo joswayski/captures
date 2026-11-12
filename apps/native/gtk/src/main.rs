@@ -733,6 +733,8 @@ impl Host {
 }
 
 fn main() -> glib::ExitCode {
+    // System Monitor and top show the process name, not the binary's.
+    let _ = std::fs::write("/proc/self/comm", "Captures");
     let mut options = match parse(std::env::args()) {
         Ok(options) => options,
         Err(error) => {

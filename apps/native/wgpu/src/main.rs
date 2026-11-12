@@ -410,6 +410,9 @@ impl InputApplication<'_> {
 }
 
 fn main() -> eframe::Result {
+    // System Monitor and top show the process name, not the binary's.
+    #[cfg(target_os = "linux")]
+    let _ = std::fs::write("/proc/self/comm", "Captures");
     #[cfg(target_os = "windows")]
     if std::env::args().nth(1).as_deref() == Some("--clipboard-probe") {
         let output = std::env::args()
