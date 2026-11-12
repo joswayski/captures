@@ -160,8 +160,24 @@ update request, and the GTK host never installs. The update notice
 (`--scene update --update NAME`, one of `captures_app::update_notice::FIXTURES`)
 renders shipping's card from the shared presentation and walks the shared
 stub (Update now downloads, restarts and closes; nothing is downloaded or
-installed). Live update checks do not open it yet: with no GTK packaging
-there is no GTK Preview build to check for.
+installed). Live update checks do not open it yet.
+
+`node scripts/native-preview-build.mjs build x86_64-unknown-linux-gnu VERSION
+--unsigned` packages this host (release, default `x11` feature, built in
+`target/native-gtk-preview`) as the unpublished, experimental Linux AppImage and
+`.deb`, with the target-suffixed FFmpeg/FFprobe sidecars and
+`native_preview_update_helper`; see
+[releases.md](../../../docs/releases.md#native-preview-packaging-and-recovery).
+Building needs `libgtk-4-dev` plus the shared capture stack's development
+packages (`libpipewire-0.3-dev`, `libclang-dev`, `libdbus-1-dev`,
+`libxkbcommon-dev`, X11/XCB/Wayland, ALSA, EGL/GBM). The packaged binary is
+`captures` and answers `--preview-build-info` with renderer `gtk`. Such a build
+starts `--live` without flags, uses the imported Preview profile, holds the
+package-use lock and opens `%U` paths or `file:` URIs from its desktop entry.
+It does not start the startup recovery companion. The `.deb` needs `libgtk-4-1`
+(GTK 4.6 or newer) installed. The AppImage carries its GTK 4 libraries, but
+the Tauri CLI's GTK hook exports `GDK_BACKEND=x11`, so it runs on X11 or
+XWayland only.
 
 The host uses GTK's default renderer. On a machine whose GL is software-only
 or broken, `GSK_RENDERER=cairo` is a manual override; the host never switches
@@ -197,4 +213,5 @@ decodes the saved MP4, checks that paused frames were excluded, and exercises
 child cancellation, Hide/restore, confirmations, countdown cancellation and
 save-on-Quit. It does not exercise a physical microphone or a Wayland portal.
 The recording editor uses `CAPTURES_FFMPEG` and
-`CAPTURES_FFPROBE`, then the desktop app's sidecars, then `ffmpeg` on `PATH`.
+`CAPTURES_FFPROBE`, then `ffmpeg`/`ffprobe` beside its executable (a package),
+then the desktop app's sidecars, then `ffmpeg` on `PATH`.

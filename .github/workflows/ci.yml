@@ -494,7 +494,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/apt-archives
-          key: desktop-package-apt-ubuntu-24.04-v1
+          key: desktop-package-apt-ubuntu-24.04-v2
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
         timeout-minutes: 15
@@ -504,7 +504,7 @@ jobs:
             libclang-dev libdbus-1-dev libegl-dev libgbm-dev libpipewire-0.3-dev
             libspa-0.2-dev librsvg2-dev libssl-dev libwayland-dev libwebkit2gtk-4.1-dev
             libxcb1-dev libxdo-dev libxrandr-dev nasm patchelf xdg-utils pkg-config wget
-            xz-utils yasm zlib1g-dev"
+            xz-utils yasm zlib1g-dev libgtk-4-dev libxkbcommon-dev libx11-dev libxi-dev"
           if compgen -G "$HOME/apt-archives/*.deb" > /dev/null; then
             sudo cp "$HOME"/apt-archives/*.deb /var/cache/apt/archives/
           fi

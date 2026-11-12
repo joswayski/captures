@@ -7,6 +7,7 @@ import { test } from "vitest";
 import {
   bundleConfiguration,
   manifest,
+  nativeHostBuild,
   TARGETS,
   updaterArtifactName,
 } from "./native-preview-build.mjs";
@@ -26,7 +27,59 @@ test("native packages preserve media and installed identity without a frontend o
   const mac = bundleConfiguration("aarch64-apple-darwin", "2026.10.1101");
   assert.ok(Object.values(mac.bundle.resources).includes("CapturesNative_CapturesNative.bundle"));
   assert.match(mac.bundle.macOS.infoPlist, /native-preview\/Info\.plist$/u);
+  assert.equal(mac.bundle.linux, undefined);
+  const linux = bundleConfiguration("x86_64-unknown-linux-gnu", "2026.10.1101");
+  assert.deepEqual(linux.bundle.linux, { deb: { depends: ["libgtk-4-1"] } });
+  assert.equal(windows.bundle.linux, undefined);
   assert.throws(() => bundleConfiguration("x86_64-pc-windows-msvc", "../other"), /Invalid/u);
+});
+
+test("Windows and Linux package the Win32 and GTK hosts, never the wgpu workbench", () => {
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(TARGETS).map(([target, { renderer }]) => [target, renderer])),
+    {
+      "aarch64-apple-darwin": "appkit",
+      "x86_64-pc-windows-msvc": "win32",
+      "x86_64-unknown-linux-gnu": "gtk",
+    },
+  );
+  const windows = nativeHostBuild("x86_64-pc-windows-msvc");
+  assert.deepEqual(windows.prepare, [
+    "apps/native/prepare.mjs",
+    "--output",
+    "apps/native/windows/resources",
+  ]);
+  assert.deepEqual(windows.cargo, [
+    "+1.95.0",
+    "build",
+    "--locked",
+    "--release",
+    "--manifest-path",
+    "apps/native/windows/Cargo.toml",
+    "--bin",
+    "captures-windows",
+    "--target-dir",
+    "target/native-win32-preview",
+    "--target",
+    "x86_64-pc-windows-msvc",
+  ]);
+  assert.equal(
+    windows.binary,
+    "target/native-win32-preview/x86_64-pc-windows-msvc/release/captures-windows.exe",
+  );
+  const linux = nativeHostBuild("x86_64-unknown-linux-gnu");
+  assert.deepEqual(linux.prepare, [
+    "apps/native/prepare.mjs",
+    "--output",
+    "apps/native/gtk/resources",
+  ]);
+  assert.ok(linux.cargo.includes("apps/native/gtk/Cargo.toml"));
+  assert.ok(!linux.cargo.some((argument) => argument.includes("wgpu")));
+  assert.equal(
+    linux.binary,
+    "target/native-gtk-preview/x86_64-unknown-linux-gnu/release/captures-gtk",
+  );
+  assert.throws(() => nativeHostBuild("aarch64-apple-darwin"), /No Win32\/GTK/u);
 });
 
 test("the shared updater manifest requires every version-bound native artifact and uses legacy platform keys", () => {

@@ -133,7 +133,8 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
         select: None,
         crop: None,
         profile: false,
-        live: false,
+        // An installed Preview is the resident app, as its launchers expect.
+        live: captures_app::preview_channel::version().is_some(),
         quiet: false,
     };
     let mut profile = std::env::var_os("CAPTURES_NATIVE_PROFILE").map(std::path::PathBuf::from);
@@ -210,6 +211,16 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
     if matches!(options.scene, Scene::Editor | Scene::Recording) && options.artifact.is_none() {
         return Err("--scene editor/recording needs --artifact ID".into());
     }
+    // An installed Preview's resident app uses its imported Preview profile
+    // unless a development profile or explicit paths were given.
+    if options.live
+        && !explicit
+        && !options.profile
+        && let Some(startup) = captures_app::preview_channel::startup()?
+    {
+        options.history_root = Some(startup.history_root);
+        options.settings_file = startup.settings_file;
+    }
     Ok(options)
 }
 
@@ -241,6 +252,24 @@ fn main() -> std::process::ExitCode {
     use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
     use windows::Win32::UI::HiDpi::{
         DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
+    };
+    // The installer builder refuses a package whose host is not this one.
+    if std::env::args().nth(1).as_deref() == Some("--preview-build-info") {
+        let version = captures_app::preview_channel::version();
+        println!(
+            "{}",
+            serde_json::json!({"renderer": "win32", "version": version})
+        );
+        return std::process::ExitCode::SUCCESS;
+    }
+    // An installed Preview holds its package for its whole lifetime, so the
+    // update helper never replaces files under a running host.
+    let _preview_use = match captures_app::preview_channel::package_use() {
+        Ok(lock) => lock,
+        Err(error) => {
+            eprintln!("Captures could not start: {error}");
+            return std::process::ExitCode::FAILURE;
+        }
     };
     let options = match parse(std::env::args()) {
         Ok(options) => options,

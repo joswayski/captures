@@ -27,8 +27,10 @@ After preparing the pinned media sidecars, build an unsigned installer on its ta
 node scripts/native-preview-build.mjs build x86_64-unknown-linux-gnu 2026.10.1101 --unsigned
 ```
 
-Use `aarch64-apple-darwin` or `x86_64-pc-windows-msvc` on those hosts. Rust/wgpu
-requires Rust 1.95 in addition to the workspace's 1.94; macOS requires the macOS 26
+Use `aarch64-apple-darwin` or `x86_64-pc-windows-msvc` on those hosts. Windows
+packages the Win32 host and Linux the GTK4 host (not the wgpu workbench); both
+require Rust 1.95 in addition to the workspace's 1.94, and Linux also needs
+`libgtk-4-dev` (see `apps/native/gtk/README.md`). macOS requires the macOS 26
 SDK and Swift. This command deliberately produces an installed-channel executable
 using the real signing public key and profile identity: do not launch it against
 valuable data as a test. The `--preview-build-info` flag prints renderer/version

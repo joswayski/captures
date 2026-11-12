@@ -20,13 +20,17 @@ export const TARGETS = {
   },
   "x86_64-pc-windows-msvc": {
     platform: "windows-x86_64",
-    renderer: "wgpu",
+    renderer: "win32",
+    host: "apps/native/windows",
+    binary: "captures-windows",
     suffix: "-setup.exe",
     bundles: "nsis",
   },
   "x86_64-unknown-linux-gnu": {
     platform: "linux-x86_64",
-    renderer: "wgpu",
+    renderer: "gtk",
+    host: "apps/native/gtk",
+    binary: "captures-gtk",
     suffix: ".AppImage",
     bundles: "appimage,deb",
   },
@@ -36,6 +40,33 @@ export function updaterArtifactName(target, version) {
   if (!TARGETS[target] || !/^\d+\.\d+\.\d+$/u.test(version))
     throw new Error("Invalid native Preview target/version");
   return `Captures-${version}-${target}${TARGETS[target].suffix}`;
+}
+
+// Windows and Linux package the Win32 and GTK hosts, each its own pinned
+// 1.95 workspace, never the maintenance-only egui/wgpu workbench.
+export function nativeHostBuild(target) {
+  const { host, binary } = TARGETS[target] ?? {};
+  if (!host) throw new Error(`No Win32/GTK native host for ${target}`);
+  const targetDirectory = `target/native-${TARGETS[target].renderer}-preview`;
+  const exe = target.includes("windows") ? ".exe" : "";
+  return {
+    prepare: ["apps/native/prepare.mjs", "--output", `${host}/resources`],
+    cargo: [
+      "+1.95.0",
+      "build",
+      "--locked",
+      "--release",
+      "--manifest-path",
+      `${host}/Cargo.toml`,
+      "--bin",
+      binary,
+      "--target-dir",
+      targetDirectory,
+      "--target",
+      target,
+    ],
+    binary: `${targetDirectory}/${target}/release/${binary}${exe}`,
+  };
 }
 
 export function bundleConfiguration(target, version, root = ROOT) {
@@ -52,6 +83,10 @@ export function bundleConfiguration(target, version, root = ROOT) {
       windows: { webviewInstallMode: { type: "skip" } },
     },
   };
+  if (TARGETS[target].renderer === "gtk") {
+    // The CLI always adds its WebKitGTK/GTK 3 dependencies; the host needs GTK 4.
+    configuration.bundle.linux = { deb: { depends: ["libgtk-4-1"] } };
+  }
   if (TARGETS[target].renderer === "appkit") {
     configuration.bundle.macOS = { infoPlist: join(root, "target/native-preview/Info.plist") };
     configuration.bundle.resources[
@@ -124,29 +159,10 @@ export function build(target, version, unsigned = false) {
       "target/native-preview/Info.plist",
     ]);
   } else {
-    run(process.execPath, ["apps/native/prepare.mjs", "--output", "apps/native/wgpu/resources"], {
-      env,
-    });
-    const nativeTarget = join(ROOT, "target/native-wgpu-preview");
-    run(
-      "cargo",
-      [
-        "+1.95.0",
-        "build",
-        "--locked",
-        "--release",
-        "--manifest-path",
-        "apps/native/wgpu/Cargo.toml",
-        "--bin",
-        "captures-wgpu-workbench",
-        "--target-dir",
-        nativeTarget,
-        "--target",
-        target,
-      ],
-      { env },
-    );
-    nativeBinary = join(nativeTarget, target, "release", `captures-wgpu-workbench${exe}`);
+    const host = nativeHostBuild(target);
+    run(process.execPath, host.prepare, { env });
+    run("cargo", host.cargo, { env });
+    nativeBinary = join(ROOT, host.binary);
   }
   // Refuse a Tauri binary, a development workbench, or a stale release version.
   const info = JSON.parse(

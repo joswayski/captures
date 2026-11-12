@@ -133,14 +133,22 @@ fn toolchain() -> MediaToolchain {
     MediaToolchain::new(ffmpeg, ffprobe)
 }
 
-/// Bundled sidecars when present, else `CAPTURES_FFMPEG`/`CAPTURES_FFPROBE`,
+/// `CAPTURES_FFMPEG`/`CAPTURES_FFPROBE`, else the packaged sidecars beside
+/// the executable (AppImage and `.deb`), else the checkout's Tauri sidecars,
 /// else the system's `ffmpeg` and `ffprobe` on PATH.
 pub fn media_tools() -> (PathBuf, PathBuf) {
     let target = format!("{}-unknown-linux-gnu", std::env::consts::ARCH);
     let sidecars = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../desktop/src-tauri/binaries");
+    let executable = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(Path::to_owned));
     let tool = |name: &str, variable: &str| {
         std::env::var_os(variable)
             .map(PathBuf::from)
+            .or_else(|| {
+                let path = executable.as_ref()?.join(name);
+                path.is_file().then_some(path)
+            })
             .or_else(|| {
                 let path = sidecars.join(format!("{name}-{target}"));
                 path.is_file().then_some(path)

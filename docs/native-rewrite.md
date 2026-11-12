@@ -45,6 +45,27 @@ argument parsing and asynchronous launch without modifying an installed app;
 physical elevated-upgrade acceptance remains open. This does not restore windows across a Tauri/native cutover or manual
 reinstall. See [release recovery](releases.md#native-preview-packaging-and-recovery).
 
+### Unsigned installers package the Win32 and GTK hosts
+
+`scripts/native-preview-build.mjs` now builds the Win32 host for
+`x86_64-pc-windows-msvc` (NSIS) and the GTK4 host for `x86_64-unknown-linux-gnu`
+(AppImage and `.deb`) instead of the egui/wgpu workbench; macOS still packages
+AppKit. Nothing is published: CI builds these unsigned installers only on
+dispatch and nightly. Each host answers `--preview-build-info` (`win32`, `gtk`)
+with the compiled Preview version, which the builder checks before bundling it
+as `captures`/`captures.exe`, the names the Preview installer updater requires.
+A Preview build starts as the resident app on the imported Preview profile and
+holds the package-use lock. Still missing against the wgpu package: the startup
+recovery companion and readiness handoff, in-app installation (Win32 has no
+update check; GTK checks and downloads only) and Win32 Open With/file
+associations (a path argument exits). GTK finds the packaged FFmpeg/FFprobe
+beside its executable. The AppImage runs GTK with `GDK_BACKEND=x11` (the Tauri
+CLI's GTK hook), so Wayland sessions get XWayland. Status: the Linux AppImage and
+`.deb` built in an orb; the AppImage launched under Xvfb with an isolated HOME
+into first-run setup and created the Preview profile. Windows MSVC packaging,
+Wayland, macOS (unchanged) and every physical install are unverified. This closes
+no parity gate.
+
 ### Tauri bug sweep parity (a18afc62, 29b686b2)
 
 On November 12 a review pass fixed these Tauri behaviours. Native parity means

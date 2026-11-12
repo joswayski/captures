@@ -120,7 +120,8 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
         open: Vec::new(),
         scene_given: false,
         settings_given: false,
-        live: false,
+        // An installed Preview is the resident app, as its launchers expect.
+        live: captures_app::preview_channel::version().is_some(),
         quiet: false,
         capture: None,
         update: "available".into(),
@@ -194,6 +195,16 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
                 ));
             }
             "--help" => return Err(USAGE.into()),
+            // The installed desktop entry's `%U`: local paths or file URIs.
+            path if captures_app::preview_channel::version().is_some()
+                && !path.starts_with('-') =>
+            {
+                options
+                    .open
+                    .push(captures_app::preview_channel::local_media_path(
+                        path.into(),
+                    )?);
+            }
             _ => return Err(format!("unknown argument {flag}\n{USAGE}")),
         }
     }
@@ -734,6 +745,24 @@ impl Host {
 }
 
 fn main() -> glib::ExitCode {
+    // The installer builder refuses a package whose host is not this one.
+    if std::env::args().nth(1).as_deref() == Some("--preview-build-info") {
+        let version = captures_app::preview_channel::version();
+        println!(
+            "{}",
+            serde_json::json!({"renderer": "gtk", "version": version})
+        );
+        return glib::ExitCode::SUCCESS;
+    }
+    // An installed Preview holds its package for its whole lifetime, so the
+    // update helper never replaces files under a running host.
+    let _preview_use = match captures_app::preview_channel::package_use() {
+        Ok(lock) => lock,
+        Err(error) => {
+            eprintln!("Captures could not start: {error}");
+            return glib::ExitCode::FAILURE;
+        }
+    };
     // System Monitor and top show the process name, not the binary's.
     let _ = std::fs::write("/proc/self/comm", "Captures");
     let mut options = match parse(std::env::args()) {

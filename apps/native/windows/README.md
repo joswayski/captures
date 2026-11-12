@@ -246,6 +246,19 @@ override discovery; otherwise the host looks beside its executable, in Tauri's
 `apps/desktop/src-tauri/binaries` (`*-<arch>-pc-windows-msvc.exe`), then on PATH
 as `ffmpeg.exe` and `ffprobe.exe`. No tools are downloaded by the host.
 
+`node scripts/native-preview-build.mjs build x86_64-pc-windows-msvc VERSION
+--unsigned` (MSVC, Rust 1.95 and the FFmpeg sidecars from
+`scripts/build-ffmpeg-sidecars.sh`) packages this host, built in release in
+`target/native-win32-preview`, as the unpublished, experimental NSIS installer
+with the sidecars and `native_preview_update_helper`; see
+[releases.md](../../../docs/releases.md#native-preview-packaging-and-recovery).
+The installed executable is `captures.exe`, which answers
+`--preview-build-info` with renderer `win32`. Such a build starts `--live`
+without flags on the imported Preview profile (unless `--profile` or explicit
+paths are given) and holds the package-use lock. It does not start the startup
+recovery companion, has no update check, and exits on a file path argument, so
+installed Open With and file associations do not work yet.
+
 On Linux (and in orbs), the tests also run under Wine 8 with a disposable prefix.
 Run `node apps/native/prepare.mjs --output apps/native/windows/resources` first.
 The prefix needs DejaVu copies renamed to Segoe UI/Consolas plus Wine's

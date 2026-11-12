@@ -39,14 +39,46 @@ Native promotion requires a separate maintainer decision on parity and migration
 
 ## Native Preview packaging and recovery
 
-The native public rollout has been withdrawn pending parity. Existing native
-archives use AppKit (macOS Apple Silicon) and Rust/wgpu (Windows/Linux x64)
-and remain experimental; physical acceptance is incomplete. They are no longer
-published by `release.yml`. `scripts/native-preview-build.mjs`
+The native public rollout has been withdrawn pending parity. Earlier native
+archives used AppKit (macOS Apple Silicon) and Rust/wgpu (Windows/Linux x64)
+and remain experimental; physical acceptance is incomplete. Native builds are no
+longer published by `release.yml`. `scripts/native-preview-build.mjs`
 builds the native executable and updater helper, verifies their build identity,
 then uses the existing pinned Tauri CLI only to bundle installers. It does not
 build or embed the Tauri app, frontend or WebView2 installer. `CI` can be manually
-dispatched on a branch to build unsigned installers without release secrets.
+dispatched on a branch to build unsigned installers without release secrets, and
+builds them nightly; nothing is uploaded to a release.
+
+The builder now packages the replacement hosts, not the maintenance-only wgpu
+workbench: AppKit for `aarch64-apple-darwin` (`.app` and `.dmg`, unchanged),
+the Win32 host (`apps/native/windows`) for `x86_64-pc-windows-msvc` (NSIS) and
+the GTK4 host (`apps/native/gtk`, default `x11` feature, no `layer-shell`) for
+`x86_64-unknown-linux-gnu` (AppImage and `.deb`). Each Win32/GTK host is built
+from its own Rust 1.95 workspace into `target/native-<renderer>-preview` after
+`apps/native/prepare.mjs` writes its git-ignored `resources/` (tokens, dust and
+icons are compiled in). The host must answer `--preview-build-info` with
+renderer `win32` or `gtk` and the requested version before it is copied to the
+bundler's main binary, so installed executables keep the Tauri names
+(`captures.exe`, `/usr/bin/captures`, `Captures.app/Contents/MacOS/captures`)
+that the Preview installer updater requires. `Target::package_executable`
+(`CapturesNative.exe`, `captures-native`) names development archives, not these
+installers. Packages also carry the target-suffixed FFmpeg/FFprobe sidecars,
+their notices and `native_preview_update_helper`.
+
+A host built with `CAPTURES_NATIVE_PREVIEW_VERSION` starts as the resident app
+(`--live`) on the imported Preview profile and holds the package-use lock, as the
+wgpu host did. The Win32 and GTK hosts do not yet start the startup recovery
+companion described below and do not install updates (Win32's Check for
+Updates opens Preferences, whose Check Now stays disabled; GTK's Updates card only
+checks and downloads), and Win32 refuses files passed by path, so Windows Open
+With and file associations from an installed package fail to launch. GTK opens
+the desktop entry's `%U` files. The `.deb` depends on `libgtk-4-1` (GTK 4.6 or
+newer) in addition to the WebKitGTK/GTK 3 entries the CLI always adds. The
+AppImage carries `libgtk-4.so.1` and its libraries (linuxdeploy follows the
+binary's dependencies), but the CLI's GTK plugin is forced to GTK 3: it also
+bundles WebKitGTK/GTK 3 (about 130 MB in all), points `GTK_PATH` at `gtk-3.0`
+and exports `GDK_BACKEND=x11`, so the AppImage runs the GTK host through X11 or
+XWayland, never its native Wayland path. Neither host is accepted for cutover.
 
 Previously published native releases required all three platforms, Apple signing/notarization,
 FFmpeg notices, checksums and a draft before publication. Native artifacts use
