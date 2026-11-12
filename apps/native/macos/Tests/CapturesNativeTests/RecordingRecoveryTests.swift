@@ -39,7 +39,7 @@ final class RecordingRecoveryTests: XCTestCase {
         buttons(content, title: "Discard")[0].performClick(nil)
         let armed = try XCTUnwrap(buttons(try XCTUnwrap(scroll.documentView),
                                           title: "Discard permanently?").first)
-        XCTAssertTrue(armed.signal, "the armed press reads as destructive")
+        XCTAssertTrue(armed.armed, "the armed press reads as destructive")
         XCTAssertNil(window.attachedSheet)
         XCTAssertEqual(worker.discardCount, 0)
         // An armed Discard is a pending press, not a modal: queued images continue.
@@ -51,6 +51,7 @@ final class RecordingRecoveryTests: XCTestCase {
         XCTAssertEqual(worker.discardCount, 0)
         buttons(try XCTUnwrap(scroll.documentView), title: "Recover")[0].performClick(nil)
         XCTAssertEqual(worker.recoverCount, 1)
+        XCTAssertEqual(buttons(try XCTUnwrap(scroll.documentView), title: "Recovering…").count, 1)
         XCTAssertFalse(controller.prepareEditorForTermination())
         worker.completeRecover(.failure(AppBridgeError.backend("The bundle changed.")))
         try waitUntil { controller.prepareEditorForTermination() }
@@ -72,8 +73,12 @@ final class RecordingRecoveryTests: XCTestCase {
         XCTAssertEqual(worker.recoveredIdentity, "original-identity")
         buttons(try XCTUnwrap(scroll.documentView), title: "Discard")[0].performClick(nil)
         XCTAssertEqual(worker.discardCount, 0, "the first press only arms the row")
+        worker.holdDiscard = true
         buttons(try XCTUnwrap(scroll.documentView), title: "Discard permanently?")[0].performClick(nil)
         try waitUntil { worker.discardCount == 1 }
+        XCTAssertEqual(buttons(try XCTUnwrap(scroll.documentView), title: "Discarding…").count, 1,
+                       "the busy row's Discard reads Discarding…")
+        worker.completeDiscard(.success(()))
         XCTAssertNil(window.attachedSheet)
         XCTAssertEqual(worker.discardedIdentity, "original-identity")
     }
@@ -504,8 +509,14 @@ private final class RecoveryFixtureWorker: RecordingRecoveryWorking {
     func completeRecover(_ result: Result<RecordingRecoveryResult, Error>) {
         let completion = pendingRecover; pendingRecover = nil; completion?(result)
     }
+    var holdDiscard = false
+    private var pendingDiscard: ((Result<Void, Error>) -> Void)?
     func discard(historyRoot: String, draft: RecordingRecoveryDraft,
                  completion: @escaping (Result<Void, Error>) -> Void) {
-        discardCount += 1; discardedIdentity = draft.identity; completion(.success(()))
+        discardCount += 1; discardedIdentity = draft.identity
+        if holdDiscard { pendingDiscard = completion } else { completion(.success(())) }
+    }
+    func completeDiscard(_ result: Result<Void, Error>) {
+        let completion = pendingDiscard; pendingDiscard = nil; completion?(result)
     }
 }

@@ -107,6 +107,9 @@ final class CaptureButton: NSButton {
     /// Neutral high-contrast action (`--solid`), e.g. the setup primary button.
     var solid = false { didSet { needsDisplay = true } }
     var signal = false
+    /// Shipping armed confirmation (`.recording-recovery-row button.danger`):
+    /// `--theme-signal-strong` fill and white text, `--theme-signal-deep` on hover.
+    var armed = false { didSet { needsDisplay = true } }
     /// A segment whose selected fill is its switch's sliding indicator view
     /// (shipping `.capture-segmented-indicator`), so it draws no idle chrome.
     var slidingSegment = false { didSet { updateTrackingAreas(); needsDisplay = true } }
@@ -250,6 +253,9 @@ final class CaptureButton: NSButton {
                 tokens.color(glass ? "glass-active" : "surface-active").setFill()
                 path.fill()
             }
+        } else if armed && isEnabled {
+            tokens.color(hovered || cell?.isHighlighted == true ? "theme-signal-deep" : "theme-signal-strong").setFill()
+            path.fill()
         } else if solid {
             tokens.color(cell?.isHighlighted == true ? "solid-hover" : "solid")
                 .faded(isEnabled ? 1 : 0.4).setFill()
@@ -293,6 +299,7 @@ final class CaptureButton: NSButton {
                 : tokens.color(isEnabled && (hovered || cell?.isHighlighted == true) ? "text" : "text-muted")
                     .faded(isEnabled ? 1 : 0.32)
         }
+        if armed && isEnabled && !hudControl { foreground = .white }
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font, .foregroundColor: foreground,
         ]

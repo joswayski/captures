@@ -169,7 +169,11 @@ final class LiveCaptureController: NSObject {
     private var historyGeneration = 0
     private var recoveryDrafts: [RecordingRecoveryDraft] = []
     private var recoveryError: String?
-    private var recoveryActionError: String?
+    /// A failed Recover or Discard, shown under its own row (or the section once the row is gone).
+    private var recoveryActionError: (sessionID: String, message: String)?
+    /// The row a running Recover or Discard belongs to, for its busy label.
+    private var recoveryBusyAction: (sessionID: String, recovering: Bool)?
+    private var recoveryDiscardTimer: Timer?
     private var recoveryGeneration = 0
     private var recoveryLoading = false
     private var recoveryBusy = false
@@ -1102,6 +1106,9 @@ final class LiveCaptureController: NSObject {
         renderedRecoveryWidth = recoveryScroll.contentSize.width
         let width = recoveryScroll.contentSize.width - 4
         let textWidth = max(0, width - 260)
+        // Rebuilding the rows keeps keyboard focus on the same control.
+        let focusedID = (window.firstResponder as? NSView)
+            .flatMap { $0.isDescendant(of: recoveryScroll) ? $0.identifier : nil }
         let content = Surface(frame: NSRect(x: 0, y: 0, width: width, height: 86))
         var nextY: CGFloat = 0
         for (index, draft) in recoveryDrafts.enumerated() {
@@ -1118,32 +1125,45 @@ final class LiveCaptureController: NSObject {
             title.textColor = tokens.color("text")
             content.addSubview(title)
             let date = draft.createdAtMilliseconds.map {
-                Date(timeIntervalSince1970: Double($0) / 1_000).formatted(date: .abbreviated, time: .shortened)
+                Self.recoveryDateFormatter.string(from: Date(timeIntervalSince1970: Double($0) / 1_000))
             } ?? "Unknown date"
             let details = NSTextField(labelWithString:
                 "\(date) · \(formatRecordingTime(milliseconds: draft.completedDurationMilliseconds)) recovered so far")
             details.frame = NSRect(x: 2, y: y + 27, width: textWidth, height: 17)
             details.font = .systemFont(ofSize: tokens.number("text-sm")); details.textColor = tokens.color("text-muted")
             content.addSubview(details)
+            let rowError = recoveryActionError?.sessionID == draft.sessionID ? recoveryActionError?.message : nil
+            let busyAction = recoveryBusy && recoveryBusyAction?.sessionID == draft.sessionID
+                ? recoveryBusyAction : nil
             if draft.status == "recoverable", draft.identity != nil {
-                let recover = CaptureButton("Recover", frame: NSRect(
+                let recover = CaptureButton(busyAction?.recovering == true ? "Recovering…" : "Recover", frame: NSRect(
                     x: width - (recoveryDiscardArmedID == draft.sessionID ? 304 : 244), y: y + 10,
                     width: 112, height: 29),
                                             tokens: tokens) { [weak self] in self?.recover(draft) }
                 // Shipping `.recording-recovery-row button.danger`: the first
                 // press arms "Discard permanently?"; the second deletes.
                 let armed = recoveryDiscardArmedID == draft.sessionID
-                let discard = CaptureButton(armed ? "Discard permanently?" : "Discard",
+                let discard = CaptureButton(busyAction?.recovering == false ? "Discarding…"
+                                                : armed ? "Discard permanently?" : "Discard",
                                             frame: NSRect(x: width - (armed ? 184 : 124), y: y + 10,
                                                           width: armed ? 172 : 112, height: 29),
                                             tokens: tokens) { [weak self] in self?.confirmDiscard(draft) }
-                discard.signal = armed
+                discard.armed = armed
+                recover.identifier = NSUserInterfaceItemIdentifier("recovery-recover-\(draft.sessionID)")
+                discard.identifier = NSUserInterfaceItemIdentifier("recovery-discard-\(draft.sessionID)")
                 discard.escapeActionBlock = { [weak self] in self?.disarmRecoveryDiscard() }
                 recover.isEnabled = !capturing && !clearingHistory && !recoveryBusy
                     && !recoveryLoading && !recordingRetiring
                 discard.isEnabled = recover.isEnabled
                 content.addSubview(recover); content.addSubview(discard)
-                nextY += 52
+                if let rowError {
+                    let error = recoveryErrorLabel(rowError, width: textWidth)
+                    error.frame.origin = NSPoint(x: 2, y: y + 46)
+                    content.addSubview(error)
+                    nextY += 46 + error.frame.height + 8
+                } else {
+                    nextY += 52
+                }
             } else {
                 let message = draft.reason ?? "This bundle cannot be recovered."
                 let reason = NSTextField(wrappingLabelWithString: message)
@@ -1156,23 +1176,44 @@ final class LiveCaptureController: NSObject {
                 nextY += 46 + height + 8
             }
         }
-        if let message = recoveryError ?? recoveryActionError {
-            let y = nextY
-            let error = NSTextField(wrappingLabelWithString: message)
-            error.font = .systemFont(ofSize: tokens.number("text-sm")); error.textColor = tokens.color("danger-text")
-            error.toolTip = message
-            error.setAccessibilityHelp(message)
-            let height = textHeight(message, font: error.font!, width: width - 4)
-            error.frame = NSRect(x: 2, y: y + 4, width: width - 4, height: height)
+        // An action error shows here only once its row is gone.
+        let orphanedError = recoveryActionError.flatMap { error in
+            recoveryDrafts.contains { $0.sessionID == error.sessionID && $0.status == "recoverable" }
+                ? nil : error.message
+        }
+        if let message = recoveryError ?? orphanedError {
+            let error = recoveryErrorLabel(message, width: width - 4)
+            error.frame.origin = NSPoint(x: 2, y: nextY + 4)
             content.addSubview(error)
-            nextY += height + 10
+            nextY += error.frame.height + 10
         }
         content.frame.size.height = max(86, nextY)
         recoveryScroll.documentView = content
         installKeyViewLoop()
+        if let focusedID, let control = content.subviews.first(where: { $0.identifier == focusedID }) {
+            window.makeFirstResponder(control)
+        }
         recoveryStatus.stringValue = recoveryBusy ? recoveryStage
             : (nextY > recoveryScroll.bounds.height ? "Scroll for full details." : "")
         if changed { layoutHistory() }
+    }
+
+    /// Shipping `.recording-recovery-row` dates use the History card format, "Nov 12, 2026, 12:32 PM".
+    private static let recoveryDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "MMM d, yyyy, h:mm a"
+        return formatter
+    }()
+
+    /// Shipping `.settings-error`: wrapped danger text.
+    private func recoveryErrorLabel(_ message: String, width: CGFloat) -> NSTextField {
+        let error = NSTextField(wrappingLabelWithString: message)
+        error.font = .systemFont(ofSize: tokens.number("text-sm")); error.textColor = tokens.color("danger-text")
+        error.toolTip = message
+        error.setAccessibilityHelp(message)
+        error.frame.size = NSSize(width: width, height: textHeight(message, font: error.font!, width: width))
+        return error
     }
 
     private func textHeight(_ message: String, font: NSFont, width: CGFloat) -> CGFloat {
@@ -1190,11 +1231,12 @@ final class LiveCaptureController: NSObject {
     private func recover(_ draft: RecordingRecoveryDraft) {
         guard currentRecovery(draft),
               let cancel = NativeRecordingEditorCancel() else { return }
-        recoveryDiscardArmedID = nil
+        recoveryDiscardArmedID = nil; recoveryDiscardTimer?.invalidate()
         recoveryActionGeneration += 1
         let current = recoveryActionGeneration
         let selectedAtDispatch = userSelectionGeneration
         recoveryBusy = true; recoveryCancel = cancel; recoveryActionError = nil
+        recoveryBusyAction = (draft.sessionID, true)
         recoveryStage = "Preparing…"
         updateActions(); renderRecovery()
         recoveryWorker.recover(historyRoot: historyRoot, draft: draft, cancel: cancel,
@@ -1227,7 +1269,8 @@ final class LiveCaptureController: NSObject {
                 case .failure(let error):
                     self.recoveryBusy = false; self.updateActions(); self.refreshRecovery()
                     self.processNextOpenImage()
-                    self.recoveryActionError = "Couldn’t recover recording: \(error.localizedDescription)"
+                    self.recoveryActionError = (draft.sessionID,
+                                                "Couldn’t recover recording: \(error.localizedDescription)")
                     self.renderRecovery()
                 }
             })
@@ -1235,8 +1278,14 @@ final class LiveCaptureController: NSObject {
 
     private func confirmDiscard(_ draft: RecordingRecoveryDraft) {
         guard currentRecovery(draft) else { return }
+        recoveryDiscardTimer?.invalidate()
         guard recoveryDiscardArmedID == draft.sessionID else {
+            // Disarms after the History confirmation timeout, like shipping.
             recoveryDiscardArmedID = draft.sessionID
+            recoveryDiscardTimer = Timer.scheduledTimer(withTimeInterval: historyCopy.confirmTimeout,
+                                                        repeats: false) { [weak self] _ in
+                self?.disarmRecoveryDiscard()
+            }
             renderRecovery()
             return
         }
@@ -1244,6 +1293,7 @@ final class LiveCaptureController: NSObject {
         recoveryActionGeneration += 1
         let current = recoveryActionGeneration
         recoveryBusy = true; recoveryActionError = nil
+        recoveryBusyAction = (draft.sessionID, false)
         recoveryStage = "Discarding…"
         updateActions(); renderRecovery()
         recoveryWorker.discard(historyRoot: historyRoot, draft: draft) { [weak self] result in
@@ -1251,7 +1301,8 @@ final class LiveCaptureController: NSObject {
             self.recoveryBusy = false; self.updateActions(); self.refreshRecovery()
             self.processNextOpenImage()
             if case .failure(let error) = result {
-                self.recoveryActionError = "Couldn’t discard recording: \(error.localizedDescription)"
+                self.recoveryActionError = (draft.sessionID,
+                                            "Couldn’t discard recording: \(error.localizedDescription)")
                 self.renderRecovery()
             }
         }
@@ -1259,6 +1310,7 @@ final class LiveCaptureController: NSObject {
 
     /// Escape disarms an armed Discard.
     func disarmRecoveryDiscard() {
+        recoveryDiscardTimer?.invalidate()
         guard recoveryDiscardArmedID != nil else { return }
         recoveryDiscardArmedID = nil
         renderRecovery()
