@@ -818,7 +818,29 @@ final class TokenNumberField: NSTextField {
         updateSteppers()
     }
 
-    override var isEnabled: Bool { didSet { updateTextColor(); updateSteppers(); needsDisplay = true } }
+    /// Return commits like shipping's `NumberInput` and keeps focus in the
+    /// field. A commit that starts work disables the field, which drops its
+    /// focus (AppKit cannot re-select a disabled field after Return, and
+    /// disabling the field being edited blurs it), so the field takes focus
+    /// back when it is enabled again unless something else took focus.
+    private var refocusWhenEnabled = false
+    override var isEnabled: Bool {
+        willSet {
+            // Disabling the field being edited sends focus to the window.
+            if isEnabled, !newValue, currentEditor() != nil { refocusWhenEnabled = true }
+        }
+        didSet {
+            updateTextColor(); updateSteppers(); needsDisplay = true
+            guard isEnabled, refocusWhenEnabled else { return }
+            refocusWhenEnabled = false
+            refocusAfterReturn()
+        }
+    }
+
+    private func refocusAfterReturn() {
+        guard let window, window.firstResponder === window, !isHiddenOrHasHiddenAncestor else { return }
+        window.makeFirstResponder(self)
+    }
 
     private func updateTextColor() {
         guard let tokens else { return }
@@ -916,7 +938,10 @@ final class TokenNumberField: NSTextField {
         let accepted = super.becomeFirstResponder(); needsDisplay = true; return accepted
     }
     override func textDidEndEditing(_ notification: Notification) {
+        let movement = notification.userInfo?["NSTextMovement"] as? Int
         super.textDidEndEditing(notification); needsDisplay = true; updateSteppers()
+        guard movement == NSTextMovement.return.rawValue else { return }
+        if isEnabled { refocusAfterReturn() } else { refocusWhenEnabled = true }
     }
     override func textDidChange(_ notification: Notification) {
         let text = currentEditor()?.string ?? stringValue

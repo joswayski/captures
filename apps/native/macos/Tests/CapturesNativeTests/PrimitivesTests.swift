@@ -268,6 +268,48 @@ final class PrimitivesTests: XCTestCase {
         window.display()
     }
 
+    func testNumberFieldKeepsFocusThroughAReturnCommitThatDisablesIt() throws {
+        _ = NSApplication.shared
+        let frame = NSRect(x: 0, y: 0, width: 300, height: 120)
+        let window = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let root = Surface(frame: frame)
+        window.contentView = root
+        let field = TokenNumberField(frame: NSRect(x: 20, y: 20, width: 120, height: 32))
+        let other = TokenNumberField(frame: NSRect(x: 160, y: 20, width: 120, height: 32))
+        root.addSubview(field); root.addSubview(other)
+        final class Commit: NSObject {
+            var count = 0
+            @objc func run(_ sender: NSTextField) { count += 1; sender.isEnabled = false }
+        }
+        let commit = Commit()
+        field.target = commit; field.action = #selector(Commit.run(_:))
+
+        // Return commits, and the commit's work disables the field.
+        XCTAssertTrue(window.makeFirstResponder(field))
+        try XCTUnwrap(field.currentEditor()).insertText("42")
+        try XCTUnwrap(field.currentEditor()).insertNewline(nil)
+        XCTAssertEqual(commit.count, 1)
+        XCTAssertNil(field.currentEditor(), "a disabled field cannot hold focus")
+        field.isEnabled = true
+        XCTAssertNotNil(field.currentEditor(), "Return keeps focus in the field once the work ends")
+        XCTAssertEqual(field.stringValue, "42")
+
+        // Work that disables the field while it is still being edited.
+        field.action = nil
+        field.isEnabled = false
+        field.isEnabled = true
+        XCTAssertNotNil(field.currentEditor())
+
+        // Focus taken elsewhere meanwhile is not stolen back.
+        field.isEnabled = false
+        XCTAssertTrue(window.makeFirstResponder(other))
+        field.isEnabled = true
+        XCTAssertNil(field.currentEditor())
+        XCTAssertNotNil(other.currentEditor())
+    }
+
     func testTokenSliderDrawsTheShippingThumb() throws {
         _ = NSApplication.shared
         let tokens = try XCTUnwrap(Tokens.variants["light-mustard"])
