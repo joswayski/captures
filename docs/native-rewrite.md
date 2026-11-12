@@ -4701,6 +4701,34 @@ are unverified. The Notices/updates gate stays open.
 
 ### Incremental native acquisition: connected, distribution acceptance open
 
+**Owner requirement (November 2026): every native update downloads only a
+diff, never the whole app again.** This is a gate for the signed native
+installer and updater, not an optimisation, and these gaps close it:
+
+- The base is the installed build by default. Hosts must not need
+  `--native-update-base-archive`; the explicit retained archive stays only as
+  a diagnostic.
+- Patches diff each uncompressed file against the installed app, as Caper's
+  live updater does (joswayski/caper `apps/native/updater/src/delta.rs`,
+  `docs/media.md` "Desktop patch updates"). Each file is copied, rebuilt with
+  bsdiff or carried whole, and every installed file read and every staged
+  entry is verified against signed hashes. Whole-archive BSDIFF40 against a
+  compressed archive is not enough.
+- Release tooling generates patches from the six newest retained builds,
+  kept in a draft `native-update-bases` release, and drops any patch larger
+  than half the full archive. A patch failure never fails a release.
+- `latest.json` keeps each full archive and lists `patches` per platform.
+  Clients fall back to the full archive only when no patch applies. The
+  manifest stays under 128 KiB (the API and `preview.rs` reject 256 KiB) by
+  dropping the oldest changelog entries, as `scripts/preview-changelog.mjs`
+  does since 7663c8e.
+- Win32 and GTK get the same updater. Today only the wgpu and AppKit hosts
+  expose the delta path.
+
+The Tauri Preview's updater cannot apply patches, so this applies to the
+native channel. No native build is published yet, so release patches start
+with the first native publication.
+
 Shared `captures_app::updater` accepts signed schema-2 BSDIFF40 descriptors alongside
 the complete artifact. They bind exact base version/size/SHA-256, patch URL/size/hash,
 and the existing complete target/renderer/platform/version. A supplied absolute
