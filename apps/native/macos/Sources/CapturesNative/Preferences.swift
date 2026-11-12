@@ -338,6 +338,8 @@ class PreferenceHoverButton: NSButton {
 
     func configure(label: String, role: NSAccessibility.Role) {
         isBordered = false; setButtonType(.momentaryPushIn)
+        // Each control draws the shipping mustard ring itself; no second system ring.
+        focusRingType = .none
         target = self; action = #selector(activate)
         setAccessibilityRole(role); setAccessibilityLabel(label)
     }
@@ -397,15 +399,23 @@ final class PreferenceSwitchButton: PreferenceHoverButton {
     private let tokens: Tokens
     var isOn = false { didSet { setAccessibilityValue(isOn); needsDisplay = true } }
 
-    init(frame: NSRect, tokens: Tokens, label: String, isOn: Bool, onPress: @escaping () -> Void) {
-        self.tokens = tokens
+    private let label: String
+
+    init(frame: NSRect, tokens: Tokens, label: String, detail: String?, isOn: Bool,
+         onPress: @escaping () -> Void) {
+        self.tokens = tokens; self.label = label
         super.init(frame: frame)
         title = isOn ? "On" : "Off"; actionBlock = onPress
         configure(label: label, role: .checkBox)
+        setAccessibilityHelp(detail)
         self.isOn = isOn
         setAccessibilityValue(isOn)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    /// VoiceOver speaks the row's label (and its detail as help), not the
+    /// "On"/"Off" button title; the state is the checkbox value.
+    override func accessibilityTitle() -> String? { label }
 
     var switchRect: NSRect { NSRect(x: bounds.maxX - 32, y: (bounds.height - 19) / 2, width: 32, height: 19) }
 
@@ -1158,7 +1168,8 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         let isOn = boolSetting(path)
         let layout = inlineRow(title, detail: detail, emphasis: emphasis, control: NSSize(width: 32, height: 19),
             y: y, card: card, enabled: enabled, switchHint: true, highlight: path.count == 1 ? path[0] : nil)
-        let button = PreferenceSwitchButton(frame: layout.row, tokens: tokens, label: title, isOn: isOn) {
+        let button = PreferenceSwitchButton(frame: layout.row, tokens: tokens, label: title, detail: detail,
+                                            isOn: isOn) {
             [weak self] in
             guard let self else { return }
             self.setBool(!self.boolSetting(path), path: path)
@@ -1899,7 +1910,8 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
             // Fixtures and exercise runs cannot register a login item.
             let layout = inlineRow(title, detail: PreferencesPolicy.text("login_item.unavailable"),
                 control: NSSize(width: 32, height: 19), y: y, card: card, enabled: false, switchHint: true)
-            let button = PreferenceSwitchButton(frame: layout.row, tokens: tokens, label: title, isOn: false) {}
+            let button = PreferenceSwitchButton(frame: layout.row, tokens: tokens, label: title,
+                detail: PreferencesPolicy.text("login_item.unavailable"), isOn: false) {}
             button.identifier = NSUserInterfaceItemIdentifier("login-item-unavailable")
             button.isEnabled = false
             card.addSubview(button)
@@ -1915,7 +1927,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
             : PreferencesPolicy.text("login_item.detail")
         let layout = inlineRow(title, detail: detail, control: NSSize(width: 32, height: 19), y: y, card: card,
             switchHint: true)
-        let button = PreferenceSwitchButton(frame: layout.row, tokens: tokens, label: title,
+        let button = PreferenceSwitchButton(frame: layout.row, tokens: tokens, label: title, detail: detail,
             isOn: loginItemEnabled == true) { [weak self] in self?.toggleLoginItem() }
         button.title = loginItemPending ? PreferencesPolicy.text("login_item.checking")
             : loginItemEnabled == true ? "On" : "Off"
