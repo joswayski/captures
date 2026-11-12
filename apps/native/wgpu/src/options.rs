@@ -14,7 +14,7 @@ pub const USAGE: &str = "Captures wgpu native host\n\
   --settings-file PATH\n\
   --native-update-manifest-url URL --native-update-public-key-file PATH --native-update-current-version VERSION (explicit live profile; check only)\n\
   --native-update-staging-directory ABSOLUTE_PATH (existing scratch directory; enables explicit temporary download/verification, never installation)\n\
-  --native-update-base-archive ABSOLUTE_PATH (optional retained archive for authenticated delta acquisition; requires staging)\n\
+  --native-update-base-archive ABSOLUTE_PATH (diagnostic: patch from this retained archive instead of the installed package; requires staging)\n\
   --native-update-ready-file ABSOLUTE_PATH --native-update-ready-token UUID_V4 (health launches only)\n\
   --native-update-install-session UUID_V4 (development supervisor only; requires staging and shutdown intent)\n\
   --floating (HUD/preview only) --reduced-motion\n\
@@ -529,7 +529,9 @@ impl Options {
         }
         if let Some(path) = update_base_archive {
             if options.native_update_staging_directory.is_none() {
-                return Err("Delta acquisition requires a native update staging directory".into());
+                return Err(
+                    "A patch base archive requires a native update staging directory".into(),
+                );
             }
             options.native_update_checks = options
                 .native_update_checks

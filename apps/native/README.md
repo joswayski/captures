@@ -75,12 +75,16 @@ Cancel pins busy state until pending I/O and cleanup finish; blocked HTTP can ta
 up to 60 seconds. Retrying downloads fresh bytes against the same authenticated
 metadata. Check Now obtains fresh metadata and drops any retained stage.
 
-Add `--native-update-base-archive /absolute/retained-full-archive` alongside staging
-to opt into the shared incremental path. Both native hosts use the same authenticated
-schema-2 descriptor described below. Construction does not read that archive;
-missing/changed/incompatible bases use the signed full download. Progress displays
-the actual patch byte total and resets to the full total on fallback. No installed
-package or profile is discovered or used as a base.
+With staging, both native hosts use the shared per-file patch path described below
+automatically: when the signed manifest offers a patch from the running version,
+it is rebuilt from the running package (the folder holding `captures-native`,
+`CapturesNative.exe` or the `.app`), with no flag. Only package files listed by the
+patch are read, each verified by hash; profiles are never read. Missing, changed or
+incompatible installed files use the signed full download in the same attempt.
+Progress displays the actual patch byte total and resets to the full total on
+fallback. `--native-update-base-archive /absolute/retained-full-archive` remains a
+diagnostic override that patches from that archive instead of the running package;
+construction does not read it.
 
 Normal Quit cancels update work and waits for cleanup without joining pending HTTP
 on the UI thread. AppKit waits off-main. wgpu retires its native windows and keeps
@@ -124,7 +128,8 @@ recorded full target and enrolled root before consuming the record once. Mismatc
 remain inspectable and never download, snapshot, replace or launch. A valid record
 is consumed for that attempt before acquisition; later failure requires a new GUI
 record or explicit operator intent. The helper reacquires/verifies package bytes
-with its existing full/delta path; this does not transfer GUI scratch or bypass
+with its existing patch/full path, using the stopped package as the patch base;
+this does not transfer GUI scratch or bypass
 Minisign. It retains the old package until real startup health and retains the
 pre-update data snapshot on success/failure. This manual-intent mode never requests
 installation from the GUI; the record is neither authentication nor proof that
@@ -237,61 +242,98 @@ OS signing or physical-platform acceptance.
 
 ### Incremental acquisition and offline patch creation
 
-Schema 1 remains full-only. Schema 2 keeps the same complete artifact fields and
-adds an optional `delta` inside that target's artifact:
+Updates download only a diff against the installed package when the signed
+manifest offers one. Schema 1 remains full-only. Schema 2 keeps the same complete
+artifact fields and adds an optional `delta` inside that target's artifact:
 
 ```json
 {
-  "format": "bsdiff40",
-  "base_version": "2026.9.99",
-  "base_size": 72593105,
-  "base_sha256": "REPLACE_WITH_EXACT_BASE_ARCHIVE_SHA256",
-  "url": "https://example.invalid/native-development.bsdiff",
-  "size": 59059418,
-  "sha256": "REPLACE_WITH_EXACT_PATCH_SHA256"
+  "format": "capturespatch1",
+  "patches": [
+    {
+      "base_version": "2026.9.99",
+      "url": "https://example.invalid/native-development-2026.9.99.capturespatch",
+      "size": 4117,
+      "sha256": "REPLACE_WITH_EXACT_PATCH_SHA256"
+    }
+  ]
 }
 ```
 
-These are illustrative development values, not a published release. The signed
-artifact's existing renderer/target/version/size/SHA-256 bind the complete target;
-the descriptor binds the exact base version/bytes and patch URL/bytes. Sign the
-complete schema-2 manifest's exact bytes with Minisign. Missing, unparseable,
-unsupported or incompatible descriptors, unavailable/corrupt bases or patches,
-and patches at least as large as the full archive fall back to the independently
-authenticated full artifact. Signature failure never starts either acquisition.
-Cancellation never starts a fallback.
+These are illustrative development values, not a published release. Sign the
+complete schema-2 manifest's exact bytes with Minisign; the signed artifact's
+renderer/target/version/size/SHA-256 still bind the complete target, and each
+offer binds a patch's URL, size and SHA-256 to the version it patches from.
+Clients use the offer whose `base_version` equals the running version. They ignore
+offers that are not strictly smaller than half the full artifact, a descriptor with
+more than 16 offers, other formats (including the earlier archive-level
+`bsdiff40` descriptor, which is no longer read) and anything unparseable, and then
+use the full artifact. Clients that predate per-file patches cannot parse this
+descriptor either, so they keep using the full artifact. Signature failure never
+starts either acquisition. Cancellation never starts a fallback.
 
-The updater hashes an owned base snapshot, verifies the patch, validates bounded
-BSDIFF40 header/control records, reconstructs privately with a bounded cancellable
-writer, then verifies the **complete signed target**. Existing staging rehashes and
-validates package contents; replacement/health/rollback remain unchanged. Base
-archives are never modified. `qbsdiff` 1.4.4 is an MIT-licensed BSDIFF40 codec, not
-an updater framework; `bzip2` decodes its controls. Acquisition retains the base and
-patch in memory. Artifact limits are not a low-memory guarantee.
+A patch file (`CAPTURESPATCH1\n`, a little-endian u32 header length, a JSON header,
+then data) lists every directory and file of the new package as its full archive
+stages, with each file's size, SHA-256 and execute bit. Each file is copied from an
+installed file with the same bytes (at any path), rebuilt from the installed file at
+its path with a bzip2 BSDIFF40 patch, or carried whole (bzip2). Comparing
+uncompressed files is what makes patches small; compressed archives diff poorly.
+The format follows Caper's live updater (`apps/native/updater/src/delta.rs` in
+joswayski/caper). Native packages hold no links, so patches and installed bases
+may not use them.
 
-An offline helper generates a patch, verifies its byte-exact round trip, and emits
-**unsigned** delta/target metadata. It never overwrites an output, signs a release,
-publishes or installs. Generation uses whole-file inputs and a suffix array, so
-measure its memory cost for your actual packages:
+The client verifies the downloaded patch's signed size and SHA-256, checks its
+header against the signed target/version and the running version, validates every
+path, entry count, size and data range with the same rules as full extraction,
+and validates bounded BSDIFF40 header/control records. It rebuilds into the private
+stage, hashing every installed file it reads, then rereads the stage and requires
+exactly the listed entries and bytes, with the same private file modes as full
+staging, before the usual package validation. Any failure falls back to the full
+artifact in the same attempt. Replacement rebuilds a fresh copy from the retained
+patch and the still-installed package rather than trusting exposed staged paths;
+replacement/health/rollback are otherwise unchanged. Installed files and base
+archives are only read. `qbsdiff` 1.4.4 is an MIT-licensed BSDIFF40 codec, not an
+updater framework; `bzip2` decodes its streams. Each rebuilt file's base and patch
+data are held in memory, up to the 512 MiB per-file extraction limit.
+
+An offline helper generates a patch from a base archive (or an unpacked package
+folder) to a new archive, proves it by rebuilding the new package from the base
+exactly as a client does, and prints an **unsigned** descriptor. It never
+overwrites an output, signs, publishes or installs. Generation diffs whole files
+with a suffix array, so measure its memory cost for your actual packages:
 
 ```sh
 cargo build -p captures-app --bin native_update_patch
-target/debug/native_update_patch \
-  --base-archive "$ABSOLUTE_RETAINED_FULL_ARCHIVE" \
-  --target-archive "$ABSOLUTE_NEW_FULL_ARCHIVE" --base-version 2026.9.99 \
+target/debug/native_update_patch --target x86_64-unknown-linux-gnu \
+  --base "$ABSOLUTE_BASE_ARCHIVE_OR_PACKAGE" --base-version 2026.9.99 \
+  --target-archive "$ABSOLUTE_NEW_FULL_ARCHIVE" --version 2026.10.50 \
   --patch-url "$NATIVE_TEST_PATCH_URL" --output "$ABSOLUTE_NEW_PATCH_FILE"
 ```
 
-Copy `delta` into the matching artifact and use `target` to check its full size/hash
-before signing. Publish a delta only when the emitted `smaller` is true. The
-diagnostic and stopped-development helper accept `--base-archive ABSOLUTE_PATH`;
-the GUI flag additionally requires explicit staging. No retention policy, production
-channel, automatic installed upgrade or installed Preferences snapshot is enabled.
+Copy `delta` into the matching artifact (merging offers from several bases into one
+`patches` list) and use `target` to check the full size/hash before signing. List an
+offer only when the emitted `listable` is true; clients ignore the rest anyway.
+Each offer adds about 250 bytes, so six offers for each of four targets add about
+6 KiB. Keep the signed manifest at most 128 KiB, as `scripts/preview-changelog.mjs`
+keeps the Preview manifest; the API and `preview.rs` reject manifests over 256 KiB.
+The diagnostic accepts `--installed-package ABSOLUTE_PACKAGE_FOLDER` and
+`--base-archive ABSOLUTE_PATH`; the stopped-development helper uses the stopped
+package as its base and accepts `--base-archive`; the GUI flag additionally
+requires explicit staging.
+
+Release tooling is a separate later step, because no native build is published
+yet: it will generate patches from the six newest retained builds of each archive,
+kept in a draft `native-update-bases` release, drop patches that save too little,
+and never fail a release over a patch. No retention policy, production channel or
+installed Preferences snapshot is enabled.
 
 `native_delta_smoke.py` tests actual explicitly supplied `package.py` archives with
-fresh, disposable in-memory signing keys. Build the offline tool, its test executable
-(`cargo test -p captures-app --bin native_update_patch --no-run` prints its path), and
-`native_update_probe`, then run:
+fresh, disposable in-memory signing keys. It unpacks the base archive as the
+installed package and stages through the probe: valid patch, base-archive override,
+tampered patch, wrong installed file, no-saving patch dropped, no installed package,
+legacy schema 1, tampered manifest and tampered full fallback. Build the offline
+tool, its test executable (`cargo test -p captures-app --bin native_update_patch
+--no-run` prints its path), and `native_update_probe`, then run:
 
 ```sh
 python3 apps/native/native_delta_smoke.py \
@@ -302,24 +344,19 @@ python3 apps/native/native_delta_smoke.py \
 ```
 
 Use `--renderer appkit` for AppKit archives. On Linux, optional `--gui ABSOLUTE_HOST`
-also exercises signed acquisition on private X11, holding real patch/full HTTP
-responses to assert both published byte totals and notice percentages, then checks
-staging, actual Ctrl+Q and cleanup. It requires the X11 smoke dependencies in
-[DEVELOPMENT.md](../../DEVELOPMENT.md). Use `--existing-patch ABSOLUTE_PATH` to reuse
-an already generated patch during fixture iteration; acquisition still verifies it
-against the exact base/target, and generation timing is then omitted.
-This fixture never accepts or stores a release private key. The ignored Rust signing
-fixture is invoked explicitly by this script, not by ordinary test runs.
+also exercises signed acquisition on private X11 (with the base-archive override),
+holding real patch/full HTTP responses to assert both published byte totals and
+notice percentages, then checks staging, actual Ctrl+Q and cleanup. It requires the
+X11 smoke dependencies in [DEVELOPMENT.md](../../DEVELOPMENT.md). Use
+`--existing-patch ABSOLUTE_PATH` to reuse an already generated patch during fixture
+iteration; acquisition still verifies the rebuild, and generation timing is then
+omitted. This fixture never accepts or stores a release private key. The ignored
+Rust signing fixture is invoked explicitly by this script, not by ordinary test runs.
 
-The October 2026 unoptimized Linux comparison used actual Rust 1.95/debug0 host
-builds (restart-intent source → incremental source), pinned FFmpeg/FFprobe 8.1.2,
-and the real source/licenses. Base/full/patch: **72,593,105 / 72,698,750 / 59,059,418
-bytes**; saving **13,639,332 bytes (18.76%)**. Generation: 109.16 s, 545,624 KiB peak
-RSS. Delta acquisition plus staging: 25.62 s, 144,244 KiB peak RSS; full acquisition
-plus staging: 9.63 s, 11,400 KiB peak RSS on private loopback. These are validation
-builds, not release-performance acceptance. Compressed archives do not guarantee
-large patch savings for small source diffs. macOS/Windows actual built-size and
-runtime comparisons and physical Wayland acceptance remain open.
+The October 2026 measurement of the earlier archive-level BSDIFF40 path on actual
+unoptimized Linux builds saved only 18.76% (72,698,750-byte full archive, 59,059,418-byte
+patch), which is why per-file patches replaced it. Per-file patch sizes for actual
+built archives on every platform have not been measured yet.
 
 Staging consumes a verified download, rehashes a private copy, and extracts only
 inside an owned temporary directory. It accepts `package.py`'s current single-root

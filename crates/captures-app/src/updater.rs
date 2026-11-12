@@ -14,9 +14,9 @@
 //! discovers installed data, registers it or activates a channel.
 //! No endpoint/key is enabled by default; construct and call on a worker thread.
 pub mod checks;
-mod delta;
 mod health;
 mod installation;
+pub mod patch;
 pub mod preview;
 mod shutdown_intent;
 mod staging;
@@ -183,6 +183,9 @@ struct Artifact {
     url: String,
     size: u64,
     sha256: String,
+    /// Schema 2 only. A `capturespatch1` descriptor lists per-file patches; any
+    /// other or unparseable value (including legacy `bsdiff40`) is ignored, so
+    /// clients that predate per-file patches keep using the full artifact.
     delta: Option<serde_json::Value>,
 }
 
@@ -206,6 +209,7 @@ pub struct UpdateClient {
     target: Target,
     current_version: Version,
     loopback: bool,
+    installed_package: Option<PathBuf>,
     base_archive: Option<PathBuf>,
 }
 
@@ -225,8 +229,8 @@ pub struct PendingUpdate {
     info: ReleaseInfo,
     url: Url,
     hash: [u8; 32],
-    delta: Option<delta::Candidate>,
-    base_archive: Option<PathBuf>,
+    patch: Option<patch::Candidate>,
+    base: Option<patch::Base>,
 }
 
 /// Verified bytes, not an installed update. Dropping removes the private file.
@@ -281,16 +285,32 @@ impl UpdateClient {
             target,
             current_version,
             loopback,
+            installed_package: installed_package(target),
             base_archive: None,
         })
     }
 
-    /// An explicit retained archive, never an installed package/profile discovered
-    /// by the updater. Construction performs no file access. Missing, changed or
-    /// incompatible bytes fall back to the authenticated full download.
+    /// The package root a per-file patch reads its unchanged and base files from.
+    /// By default this is the running package (derived from this executable's
+    /// path when it is the target's packaged executable), so hosts need no flag.
+    /// Every file read is verified against the signed patch; anything missing or
+    /// changed falls back to the authenticated full download.
+    pub fn with_installed_package(mut self, path: PathBuf) -> Result<Self, Error> {
+        if !path.is_absolute() {
+            return Err(Error::Configuration(
+                "installed package root must be absolute",
+            ));
+        }
+        self.installed_package = Some(path);
+        Ok(self)
+    }
+
+    /// Diagnostic override: patch from this retained full archive (unpacked
+    /// privately with the normal extraction limits) instead of the installed
+    /// package. Construction performs no file access.
     pub fn with_base_archive(mut self, path: PathBuf) -> Result<Self, Error> {
         if !path.is_absolute() {
-            return Err(Error::Configuration("delta base archive must be absolute"));
+            return Err(Error::Configuration("patch base archive must be absolute"));
         }
         self.base_archive = Some(path);
         Ok(self)
@@ -344,21 +364,25 @@ impl UpdateClient {
         if version.cmp_precedence(&self.current_version).is_le() {
             return Ok(None);
         }
-        // Schema 1 remains full-only. Unsupported/incompatible delta descriptors do
+        // Schema 1 remains full-only. Unsupported/incompatible patch descriptors do
         // not remove the independently authenticated full-artifact capability.
-        let delta = (manifest.schema == 2)
+        let patch = (manifest.schema == 2)
             .then(|| {
                 artifact.delta.as_ref().and_then(|description| {
-                    delta::Candidate::new(
+                    patch::Candidate::select(
                         description,
                         &self.current_version,
                         artifact.size,
                         self.loopback,
                     )
-                    .ok()
                 })
             })
             .flatten();
+        let base = match (&self.base_archive, &self.installed_package) {
+            (Some(archive), _) => Some(patch::Base::Archive(archive.clone())),
+            (None, Some(package)) => Some(patch::Base::Installed(package.clone())),
+            (None, None) => None,
+        };
         Ok(Some(PendingUpdate {
             client: self.download.clone(),
             info: ReleaseInfo {
@@ -370,8 +394,8 @@ impl UpdateClient {
             },
             url,
             hash,
-            delta,
-            base_archive: self.base_archive.clone(),
+            patch,
+            base,
         }))
     }
 }
@@ -381,11 +405,40 @@ impl PendingUpdate {
         &self.info
     }
 
-    /// Full artifact digest authenticated by the manifest, including delta use.
+    /// Full artifact digest authenticated by the manifest, including patch use.
     pub fn sha256(&self) -> String {
         self.hash.iter().map(|byte| format!("{byte:02x}")).collect()
     }
 
+    /// Acquire and stage the update: from a signed per-file patch against the
+    /// installed package (or the diagnostic base archive) when one applies, else
+    /// the full artifact. Any patch failure except cancellation falls back to the
+    /// full artifact in the same attempt, resetting byte progress to its total.
+    /// `verifying` runs once the bytes that will be staged are complete.
+    pub fn stage(
+        &self,
+        directory: &Path,
+        cancel: &CancelToken,
+        mut progress: impl FnMut(u64, u64),
+        verifying: impl FnOnce(),
+    ) -> Result<StagedUpdate, Error> {
+        check_cancel(cancel)?;
+        if let (Some(patch), Some(base)) = (&self.patch, &self.base) {
+            match patch.stage(self, base, directory, cancel, &mut progress) {
+                Ok(staged) => {
+                    verifying();
+                    return Ok(staged);
+                }
+                Err(Error::Cancelled) => return Err(Error::Cancelled),
+                Err(_) => check_cancel(cancel)?,
+            }
+        }
+        let verified = self.download(directory, cancel, progress)?;
+        verifying();
+        verified.stage(directory, cancel)
+    }
+
+    /// The complete signed artifact only; [`PendingUpdate::stage`] adds patches.
     /// Retrying uses the same authenticated metadata and a fresh private file.
     /// Cancellation is checked at I/O boundaries; blocked HTTP is bounded by the
     /// client's 60-second total request timeout, not an immediate interrupt.
@@ -396,13 +449,6 @@ impl PendingUpdate {
         mut progress: impl FnMut(u64, u64),
     ) -> Result<VerifiedUpdate, Error> {
         check_cancel(cancel)?;
-        if let (Some(delta), Some(base)) = (&self.delta, &self.base_archive) {
-            match delta.download(self, base, directory, cancel, &mut progress) {
-                Ok(verified) => return Ok(verified),
-                Err(Error::Cancelled) => return Err(Error::Cancelled),
-                Err(_) => check_cancel(cancel)?,
-            }
-        }
         // Also resets byte progress and total after an unsuccessful patch.
         progress(0, self.info.size);
         check_cancel(cancel)?;
@@ -487,6 +533,22 @@ fn verify_file(
         file,
         hash,
     })
+}
+
+/// The running package root when this process is the target's packaged
+/// executable (`<package>/captures-native`, `<package>/CapturesNative.exe` or
+/// `<package>/Captures Native Development.app/Contents/MacOS/CapturesNative`).
+fn installed_package(target: Target) -> Option<PathBuf> {
+    let executable = std::env::current_exe().ok()?;
+    let relative = Path::new(target.package_executable());
+    if !executable.is_absolute() || !executable.ends_with(relative) {
+        return None;
+    }
+    let mut package = executable.as_path();
+    for _ in relative.components() {
+        package = package.parent()?;
+    }
+    Some(package.to_owned())
 }
 
 fn http_client(redirect: Policy) -> Result<Client, Error> {

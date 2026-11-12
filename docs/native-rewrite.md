@@ -4699,88 +4699,114 @@ input. AppKit has XCTest coverage and compiles in macOS CI only. macOS, Windows
 and Wayland presentation, placement at a real tray icon, focus and accessibility
 are unverified. The Notices/updates gate stays open.
 
-### Incremental native acquisition: connected, distribution acceptance open
+### Incremental native acquisition: per-file patches connected, release tooling open
 
 **Owner requirement (November 2026): every native update downloads only a
 diff, never the whole app again.** This is a gate for the signed native
-installer and updater, not an optimisation, and these gaps close it:
+installer and updater, not an optimisation. Status against it:
 
-- The base is the installed build by default. Hosts must not need
-  `--native-update-base-archive`; the explicit retained archive stays only as
-  a diagnostic.
-- Patches diff each uncompressed file against the installed app, as Caper's
-  live updater does (joswayski/caper `apps/native/updater/src/delta.rs`,
+- Done: the base is the installed build by default. The shared updater derives
+  the running package root from its executable path (`captures-native`,
+  `CapturesNative.exe`, or the `.app` inside the package), and the
+  stopped-development helper uses the package it replaces. Hosts need no flag;
+  `--native-update-base-archive` stays only as a diagnostic override.
+- Done: patches diff each uncompressed file against the installed app, as
+  Caper's live updater does (joswayski/caper `apps/native/updater/src/delta.rs`,
   `docs/media.md` "Desktop patch updates"). Each file is copied, rebuilt with
   bsdiff or carried whole, and every installed file read and every staged
-  entry is verified against signed hashes. Whole-archive BSDIFF40 against a
-  compressed archive is not enough.
-- Release tooling generates patches from the six newest retained builds,
-  kept in a draft `native-update-bases` release, and drops any patch larger
-  than half the full archive. A patch failure never fails a release.
-- `latest.json` keeps each full archive and lists `patches` per platform.
-  Clients fall back to the full archive only when no patch applies. The
-  manifest stays under 128 KiB (the API and `preview.rs` reject 256 KiB) by
-  dropping the oldest changelog entries, as `scripts/preview-changelog.mjs`
-  does since 7663c8e.
-- Win32 and GTK get the same updater. Today only the wgpu and AppKit hosts
-  expose the delta path.
+  entry is verified against signed hashes. Whole-archive BSDIFF40 is gone.
+- Done in the client and offline generator: patches not strictly smaller than
+  half the full archive are ignored by clients and reported as not listable.
+- Open: release tooling generates patches from the six newest retained builds,
+  kept in a draft `native-update-bases` release, and a patch failure never fails
+  a release. This is a later step, because no native build is published yet.
+- Done in the format: the signed manifest keeps each full archive and lists
+  patches per platform; clients fall back to the full archive only when no
+  patch applies. The manifest stays under 128 KiB (the API and `preview.rs`
+  reject 256 KiB): offers add about 250 bytes each, clients read at most 16 per
+  artifact, and the oldest changelog entries are dropped as
+  `scripts/preview-changelog.mjs` does since 7663c8e.
+- Open: Win32 and GTK get the same updater. Today only the wgpu and AppKit
+  hosts expose acquisition; both get per-file patches through the shared code.
 
-The Tauri Preview's updater cannot apply patches, so this applies to the
-native channel. No native build is published yet, so release patches start
-with the first native publication.
+The Tauri Preview's updater cannot apply patches, and the installed native
+Preview channel (`updater/preview.rs`, which reads the Tauri-compatible
+`latest.json`) does not read them yet, so this applies to the native development
+channel today. No native build is published yet, so release patches start with
+the first native publication.
 
-Shared `captures_app::updater` accepts signed schema-2 BSDIFF40 descriptors alongside
-the complete artifact. They bind exact base version/size/SHA-256, patch URL/size/hash,
-and the existing complete target/renderer/platform/version. A supplied absolute
-retained archive is opt-in, never an installed package/profile discovered by the
-updater. Both hosts expose `--native-update-base-archive` with explicit staging;
-the diagnostic and stopped-development helper expose `--base-archive`.
+`captures_app::updater::patch` implements the format. Schema-2 artifacts may carry
+`"delta": {"format": "capturespatch1", "patches": [{base_version, url, size,
+sha256}]}`, signed with the rest of the manifest. Clients that predate per-file
+patches cannot parse that descriptor (their legacy reader denies unknown fields)
+and keep using the full artifact; legacy `bsdiff40` descriptors are now likewise
+ignored, and schema 1 stays full-only. A patch file is `CAPTURESPATCH1\n`, a
+little-endian u32 header length, a JSON header (target, base and new version,
+package folder, and every directory and file with size, SHA-256 and execute bit)
+and data. File sources are `copy` (an installed path with the same bytes),
+`bsdiff` (bzip2 BSDIFF40 from the installed file at a path, pinned by its size and
+SHA-256) or `whole` (bzip2). Native packages hold no links, so neither patches nor
+installed bases may use them.
 
-The small MIT `qbsdiff` codec handles BSDIFF40, not updater orchestration. The updater
-owns a hashed base snapshot, verifies the patch, prevalidates signed header/control
-bounds, reconstructs through a bounded cancellable writer, then verifies the entire
-target. Normal staging rehash/package validation and replacement/health/rollback
-are unchanged. Absent, unparseable, incompatible, corrupt or wrong bases/patches and
-patches no smaller than full use the signed full artifact. Signature failure never
-fetches an artifact; cancellation never falls back. Schema 1 stays full-only. Download byte
-totals reflect patch vs full, including reset on fallback and accessible percentages.
+The client verifies the patch's signed size/SHA-256, checks the header against the
+signed target/version and the running version, validates every path, entry count,
+size and data range with staging's own extraction rules, and bounds BSDIFF40
+header/control records before decoding. It rebuilds into the private stage through
+a bounded, cancellable, hashing writer, hashing every installed file it reads, then
+rereads the stage and requires exactly the listed entries and bytes, with full
+staging's private modes, before the usual package validation. Replacement rebuilds a
+fresh copy from the retained patch and the still-installed package rather than
+trusting exposed paths; replacement/health/rollback are otherwise unchanged. Any
+failure except cancellation falls back to the full artifact in the same attempt.
+Signature failure never fetches anything; cancellation never falls back. Download
+byte totals report the patch size and reset to the full size on fallback.
 
-Tests exercise asymmetric reconstruction, initial source seeks, header/control
-overflow and zero-output inflation, wrong/missing/nonregular base, descriptor
-compatibility/size boundaries, tampering, complete-target mismatch, authenticated
-fallback, cancellation and owned cleanup. Real-packager ZIP/tar fixtures stage all
-four target layouts; host replacement/recovery preserves the previous executable
-and separate settings/History fixtures. These portable layouts do not verify hosts.
-The offline `native_update_patch` generator emits unsigned metadata after exact
-round-trip validation; it never overwrites, signs/publishes releases or installs.
+Tests rebuild an asymmetric tree (changed, unchanged, moved, new and removed files,
+a gained execute bit, an empty folder) and compare it with the target, including
+Unix modes; refuse changed, missing and linked installed files; reject bad magic,
+header lengths and limits, truncated data, out-of-range and overflowing offsets,
+wrong schema/target/versions, unknown fields, link entries, unsafe or
+case-colliding paths and unsafe base paths; select only offers from the running
+version that are smaller than half the full artifact; and bound BSDIFF40 controls
+and output. Signed loopback tests stage real-packager archives for all four targets
+from an installed package without requesting the full artifact, byte- and
+mode-identical to full staging; fall back with a byte-total reset for a tampered
+patch, a changed installed file and a truncated signed patch; use only the full
+artifact for no-saving, other-version, legacy-schema, legacy-`bsdiff40`, absent and
+missing installed packages; honour the base-archive override; never fall back after
+cancellation; never bypass full authentication; and replace the installed package
+from a patched stage with rollback still restoring it. These portable layouts do
+not verify hosts. The offline `native_update_patch` generator writes a patch only
+after rebuilding the target exactly as a client does and prints an unsigned
+descriptor; it never overwrites, signs, publishes or installs.
 
-`native_delta_smoke.py` verifies actual built archives using fresh in-memory test
-keys and loopback only: valid patch, wrong/missing base, tampered patch, no size
-saving, legacy metadata, signature tampering and tampered full fallback. Source
-hashes and pre-existing scratch data stay unchanged; all probe-owned storage is
-removed. Optional private-X11 input exercises the real worker's patch/full progress,
-temporary verification and Ctrl+Q cleanup, not simulated install/restart.
+`native_delta_smoke.py` verifies explicitly supplied built archives using fresh
+in-memory test keys and loopback only: valid patch from the unpacked installed
+package, base-archive override, tampered patch, wrong installed file, no-saving
+patch dropped, no installed package, legacy metadata, signature tampering and
+tampered full fallback. Source archives, installed files and pre-existing scratch
+data stay unchanged; all probe-owned storage is removed. Optional private-X11 input
+exercises the real worker's patch/full progress, temporary verification and Ctrl+Q
+cleanup, not simulated install/restart.
 
 | Platform | Implementation / current verification |
 | --- | --- |
-| AppKit/macOS | Shared acquisition and FFI/host flag connected; portable ARM64/x64 ZIP reconstruction/staging tested on Linux; Swift tests, actual built-byte comparison and macOS runtime unverified |
-| Windows/wgpu | Shared acquisition and host flag connected; portable Windows ZIP reconstruction/staging tested on Linux; Windows runtime and actual built-byte comparison unverified |
-| X11/wgpu | Complete built Linux archives pass signed diagnostic/staging and real private-X11 patch/full progress, temporary verification, Ctrl+Q and cleanup; captures inspected; host replacement/recovery regression passes; physical and release-performance acceptance open |
-| Wayland/wgpu | Same Linux artifact/shared acquisition; no live Wayland incremental runtime verification in this slice; physical acceptance open |
+| AppKit/macOS | Shared per-file acquisition reached through the existing FFI; installed base derived from the bundle executable; portable ARM64/x64 ZIP rebuild/staging tested on Linux; Swift tests, built archives and macOS runtime unverified |
+| Windows/wgpu | Shared per-file acquisition; portable Windows ZIP rebuild/staging tested on Linux; Windows runtime and built archives unverified |
+| X11/wgpu | Portable Linux tar rebuild/staging and host replacement/recovery from a patched stage tested; the per-file smoke has not yet been rerun against built archives or private X11 |
+| Wayland/wgpu | Same Linux artifact/shared acquisition; no live Wayland incremental runtime verification; physical acceptance open |
 
-Unoptimized Rust 1.95/debug0 Linux development archives (restart-intent source →
-incremental source), including pinned FFmpeg/FFprobe 8.1.2 and source/licenses:
-base **72,593,105 bytes**, full **72,698,750 bytes**, patch **59,059,418 bytes**;
-saving **13,639,332 bytes (18.76%)**. Generation cost: **109.16 s / 545,624 KiB peak
-RSS**. Delta acquisition plus staging: **25.62 s / 144,244 KiB**; full acquisition
-plus staging: **9.63 s / 11,400 KiB** on loopback. Bandwidth savings cost local CPU,
-memory and temporary storage; these are validation builds, not a release benchmark.
-Compressed archives and small source diffs do not guarantee large patch savings.
+The earlier archive-level BSDIFF40 path, measured in October 2026 on unoptimized
+Linux development archives, saved only 18.76% (72,698,750-byte full archive,
+59,059,418-byte patch; 109.16 s / 545,624 KiB to generate), because compressed
+archives diff poorly. Per-file patch sizes and costs for built archives on every
+platform remain to be measured.
 
-Production distribution, signing, installed-data migration, retained-base policy,
-automatic installed Settings restoration, physical/accessibility/mixed-DPI/renderer
-acceptance and Tauri cutover remain separate open gates. No production channel,
-GUI installer, installed-profile writes or shipping Tauri updater changes.
+Production distribution, signing, the retained-base release tooling, installed-data
+migration, automatic installed Settings restoration, physical/accessibility/
+mixed-DPI/renderer acceptance and Tauri cutover remain separate open gates. No
+production channel, GUI installer, installed-profile writes or shipping Tauri
+updater changes.
 
 ### Signed native update acquisition: backend and opt-in diagnostic only
 

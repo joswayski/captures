@@ -237,7 +237,7 @@ struct Options {
         } catch Options.Usage.invalid {
             FileHandle.standardError.write(Data("Development metadata checks: explicit --live --history-root ABSOLUTE_PATH --settings-file ABSOLUTE_PATH --native-update-manifest-url URL --native-update-public-key-file PATH --native-update-current-version VERSION (check only; no health launch or media open).\n".utf8))
             FileHandle.standardError.write(Data("Optional --native-update-staging-directory ABSOLUTE_PATH enables explicit temporary download/verification in an existing scratch directory, never installation.\n".utf8))
-            FileHandle.standardError.write(Data("Optional --native-update-base-archive ABSOLUTE_PATH enables authenticated delta acquisition with full fallback; requires staging.\n".utf8))
+            FileHandle.standardError.write(Data("Optional --native-update-base-archive ABSOLUTE_PATH patches from that retained archive instead of the installed app (diagnostic), with full fallback; requires staging.\n".utf8))
             FileHandle.standardError.write(Data("Usage: CapturesNative [--live [--history-root PATH] [--settings-file PATH] [--native-update-ready-file ABSOLUTE_PATH --native-update-ready-token UUID] [--open-media PATH|--open-image PATH]...] [--scene preferences|history|hud|preview|sharing|region|window|update|idle] [--update-state available|single|closing|manual|downloading|restarting|error|checking|up-to-date] [--update-tray top|bottom|none] [--appearance light|dark|system] [--theme mustard|ember|rose|violet|cobalt|aqua|mint|lime|mono] [--history-count 0..10000] [--screenshot PATH] [--reference-chips] [--exercise] [--quit-after SECONDS] [-- FILE...]\n".utf8))
             exit(1)
         } catch {

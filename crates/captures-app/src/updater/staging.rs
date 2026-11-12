@@ -24,16 +24,62 @@ const MAX_CENTRAL_BYTES: u64 = 8 * 1024 * 1024;
 /// Retain this owner while inspecting paths. Replacement re-extracts the retained
 /// verified archive; exposed files are not trusted as installation inputs.
 pub struct StagedUpdate {
-    // Close the archive before TempDir cleanup, including on Windows.
-    pub(super) archive: VerifiedUpdate,
+    // Close the archive or patch before TempDir cleanup, including on Windows.
+    pub(super) source: Source,
     _directory: TempDir,
     package: PathBuf,
     executable: PathBuf,
 }
 
+/// The authenticated input a stage was built from, retained so replacement can
+/// rebuild a fresh private copy instead of trusting exposed staged paths.
+pub(super) enum Source {
+    Archive(VerifiedUpdate),
+    Patch(super::patch::Retained),
+}
+
+impl Source {
+    pub(super) fn stage(
+        self,
+        directory: &Path,
+        cancel: &CancelToken,
+    ) -> Result<StagedUpdate, Error> {
+        match self {
+            Self::Archive(archive) => archive.stage(directory, cancel),
+            Self::Patch(patch) => patch.stage(directory, cancel),
+        }
+    }
+}
+
 impl StagedUpdate {
+    pub(super) fn new(
+        source: Source,
+        directory: TempDir,
+        package: PathBuf,
+        executable: PathBuf,
+    ) -> Self {
+        Self {
+            source,
+            _directory: directory,
+            package,
+            executable,
+        }
+    }
+
     pub fn info(&self) -> &ReleaseInfo {
-        self.archive.info()
+        match &self.source {
+            Source::Archive(archive) => archive.info(),
+            Source::Patch(patch) => patch.info(),
+        }
+    }
+
+    /// The signed complete artifact digest, also when a patch rebuilt the stage.
+    pub fn sha256(&self) -> String {
+        let hash = match &self.source {
+            Source::Archive(archive) => &archive.hash,
+            Source::Patch(patch) => patch.release_hash(),
+        };
+        hash.iter().map(|byte| format!("{byte:02x}")).collect()
     }
     pub fn package(&self) -> &Path {
         &self.package
@@ -61,29 +107,46 @@ impl VerifiedUpdate {
             cancel,
             |_, _| {},
         )?;
-        let mut extraction = Extraction::new(directory.path().join("package"));
-        match self.info.target {
-            Target::LinuxX64 => extract_tar(copy.file.as_file_mut(), &mut extraction, cancel)?,
-            _ => extract_zip(copy.file.as_file_mut(), &mut extraction, cancel)?,
-        }
-        let package = extraction
-            .root
-            .join(extraction.package.ok_or(Error::Package)?);
-        let executable =
-            validate_package(&package, self.info.target, &extraction.executables, cancel)?;
+        let (package, executables) = unpack(
+            self.info.target,
+            copy.file.as_file_mut(),
+            directory.path().join("package"),
+            cancel,
+        )?;
+        let executable = validate_package(&package, self.info.target, &executables, cancel)?;
         check_cancel(cancel)?;
-        Ok(StagedUpdate {
-            archive: copy,
-            _directory: directory,
+        Ok(StagedUpdate::new(
+            Source::Archive(copy),
+            directory,
             package,
             executable,
-        })
+        ))
     }
 }
 
-struct Extraction {
+/// Bounded extraction of a package archive into `root`, with the same path,
+/// entry and size rules for every caller. Returns the package folder and its
+/// executable files; the caller decides whether it must be a complete package.
+pub(super) fn unpack(
+    target: Target,
+    file: &mut File,
     root: PathBuf,
-    package: Option<String>,
+    cancel: &CancelToken,
+) -> Result<(PathBuf, HashSet<PathBuf>), Error> {
+    let mut extraction = Extraction::new(root);
+    match target {
+        Target::LinuxX64 => extract_tar(file, &mut extraction, cancel)?,
+        _ => extract_zip(file, &mut extraction, cancel)?,
+    }
+    let package = extraction
+        .root
+        .join(extraction.package.ok_or(Error::Package)?);
+    Ok((package, extraction.executables))
+}
+
+pub(super) struct Extraction {
+    pub(super) root: PathBuf,
+    pub(super) package: Option<String>,
     nodes: BTreeMap<String, (String, bool)>,
     declared: HashSet<String>,
     executables: HashSet<PathBuf>,
@@ -91,7 +154,7 @@ struct Extraction {
 }
 
 impl Extraction {
-    fn new(root: PathBuf) -> Self {
+    pub(super) fn new(root: PathBuf) -> Self {
         Self {
             root,
             package: None,
@@ -102,7 +165,12 @@ impl Extraction {
         }
     }
 
-    fn reserve(&mut self, name: &str, directory: bool, size: u64) -> Result<PathBuf, Error> {
+    pub(super) fn reserve(
+        &mut self,
+        name: &str,
+        directory: bool,
+        size: u64,
+    ) -> Result<PathBuf, Error> {
         let name = if directory {
             name.strip_suffix('/').unwrap_or(name)
         } else {
@@ -204,7 +272,7 @@ fn copy_entry(
     Ok(())
 }
 
-fn write_entry(
+pub(super) fn write_entry(
     reader: impl Read,
     path: &Path,
     directory: bool,

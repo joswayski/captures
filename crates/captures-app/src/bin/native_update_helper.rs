@@ -220,6 +220,10 @@ fn run(arguments: impl Iterator<Item = String>) -> Result<(), String> {
     let key_file = key.canonicalize().map_err(|error| error.to_string())?;
     let client = client_from_key_file(&endpoint, &key_file, renderer, &version)
         .map_err(|error| error.to_string())?;
+    // The stopped package being replaced is the installed base for patches.
+    let client = client
+        .with_installed_package(destination.clone())
+        .map_err(|error| error.to_string())?;
     let client = match &base_archive {
         Some(path) => client
             .with_base_archive(path.clone())
@@ -338,8 +342,7 @@ fn run(arguments: impl Iterator<Item = String>) -> Result<(), String> {
     let scratch = tempfile::tempdir_in(destination.parent().ok_or(USAGE)?)
         .map_err(|error| error.to_string())?;
     let staged = update
-        .download(scratch.path(), &cancel, |_, _| {})
-        .and_then(|verified| verified.stage(scratch.path(), &cancel))
+        .stage(scratch.path(), &cancel, |_, _| {}, || {})
         .map_err(|error| error.to_string())?;
     let release = staged.info().clone();
     // Snapshot before activation: a launched newer host can migrate working data.

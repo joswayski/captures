@@ -84,7 +84,8 @@ impl StagedUpdate {
     /// installed Preview, executable or profile directory. The absolute destination
     /// must be on this host's target, with an externally managed/trusted parent.
     /// All app processes must be stopped. This process must run outside the package.
-    /// Rehash/re-extract the retained signed archive rather than trust exposed paths.
+    /// Rehash/re-extract the retained signed archive (or rebuild the retained signed
+    /// patch from its base) rather than trust exposed paths.
     /// Cancellation is observed before the two-rename activation, not between them.
     /// No host calls this yet. It does not launch, register or migrate profile data.
     pub fn replace(
@@ -115,8 +116,9 @@ impl StagedUpdate {
         let mut old_moved = false;
         let result = (|| {
             // Staged files may have been mutated after their paths were exposed.
-            // Only the retained archive's signed digest is authoritative.
-            let fresh = self.archive.stage(&paths.transaction, cancel)?;
+            // Only the retained archive's or patch's signed digest is authoritative;
+            // a patch is rebuilt again from its base, every read file rehashed.
+            let fresh = self.source.stage(&paths.transaction, cancel)?;
             let new_hash = fingerprint(fresh.package(), info.target, cancel)?;
             let receipt = Receipt {
                 schema: 1,

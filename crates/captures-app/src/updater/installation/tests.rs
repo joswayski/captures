@@ -427,11 +427,10 @@ fn archive_tampering_and_cancellation_never_move_the_current_package() {
         if cancelled {
             cancel.cancel();
         } else {
-            staged
-                .archive
-                .file
-                .write_all(b"corrupt retained archive")
-                .unwrap();
+            let staging::Source::Archive(archive) = &mut staged.source else {
+                unreachable!("full fixture")
+            };
+            archive.file.write_all(b"corrupt retained archive").unwrap();
         }
         let result = staged.replace(&fixture.destination, &cancel);
         assert!(matches!(

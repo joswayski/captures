@@ -159,11 +159,9 @@ impl Pending {
         verifying: impl FnOnce(),
     ) -> Result<Stage, Error> {
         match self {
-            Self::Development(update) => {
-                let verified = update.download(directory, token, progress)?;
-                verifying();
-                verified.stage(directory, token).map(Stage::Development)
-            }
+            Self::Development(update) => update
+                .stage(directory, token, progress, verifying)
+                .map(Stage::Development),
             Self::Preview(update) => update
                 .download_verifying(directory, token, progress, verifying)
                 .map(Stage::Preview),
@@ -174,12 +172,7 @@ impl Pending {
 impl Stage {
     fn sha256(&self) -> String {
         match self {
-            Self::Development(package) => package
-                .archive
-                .hash
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect(),
+            Self::Development(package) => package.sha256(),
             Self::Preview(package) => package.sha256.clone(),
         }
     }

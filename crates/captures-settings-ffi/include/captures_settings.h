@@ -32,9 +32,11 @@ char *captures_preview_recovery_request_v1(const char *request_json);
  * create takes {endpoint,key_file,renderer,current_version,staging_directory?,base_archive?}; pins the public
  * Minisign key (regular UTF-8 file, <=8 KiB), development identity and host target.
  * The optional existing absolute scratch directory enables explicit temporary
- * acquisition; without it, checks remain read-only. An optional absolute retained
- * base archive requires staging; signed delta reconstruction falls back to full
- * acquisition when incompatible. Construction does not read the base archive.
+ * acquisition; without it, checks remain read-only. With staging, a signed
+ * per-file patch rebuilds from the installed app when the manifest offers one
+ * from this version; any patch failure falls back to the full artifact. The
+ * optional absolute base_archive (diagnostic, requires staging) replaces the
+ * installed app as the patch base. Construction does not read either.
  * Downloading status includes actual downloaded/total bytes, including fallback resets.
  * Development mode has no installation/execution, default endpoint/channel or
  * profile access. Owned stage cleanup on recheck/free.

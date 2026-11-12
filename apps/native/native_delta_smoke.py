@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
-"""Real signed delta/full acquisition against explicit built development archives.
+"""Real signed per-file patch/full acquisition against explicit built development archives.
 
-Disposable loopback keys and scratch only; never installs, registers or launches
-an update. The signing-test executable is native_update_patch's Cargo test binary.
+Generates a per-file patch from the base archive to the target archive, unpacks
+the base as the "installed" package, then stages through native_update_probe:
+valid patch, base-archive override, tampered patch, wrong installed file,
+no-saving patch dropped, no installed package, legacy schema 1, tampered
+manifest and tampered full fallback. Disposable loopback keys and scratch only;
+never installs, registers or launches an update. The signing-test executable is
+native_update_patch's Cargo test binary.
 """
 import argparse
 import copy
@@ -16,8 +21,10 @@ from platform import machine
 import shutil
 import subprocess
 import sys
+import tarfile
 import threading
 import time
+import zipfile
 
 from history_fixture import write_completed_settings
 
@@ -28,6 +35,24 @@ def digest(path):
         while block := source.read(1024 * 1024):
             hasher.update(block)
     return hasher.hexdigest()
+
+
+EXECUTABLES = {"x86_64-unknown-linux-gnu": "captures-native", "x86_64-pc-windows-msvc": "CapturesNative.exe",
+               "aarch64-apple-darwin": "Captures Native Development.app/Contents/MacOS/CapturesNative",
+               "x86_64-apple-darwin": "Captures Native Development.app/Contents/MacOS/CapturesNative"}
+
+
+def unpack(archive, destination):
+    """The archive's single package folder, unpacked as an installed package."""
+    destination.mkdir()
+    if archive.name.endswith(".tar.gz"):
+        with tarfile.open(archive) as source:
+            source.extractall(destination, filter="data")
+    else:
+        with zipfile.ZipFile(archive) as source:
+            source.extractall(destination)
+    [package] = list(destination.iterdir())
+    return package
 
 
 def gui_check(binary, output, url, base, state, renderer, log):
@@ -129,7 +154,7 @@ def gui_check(binary, output, url, base, state, renderer, log):
         activate("Check for updates")
         wait(lambda: (reports().get("update-notice") or {}).get("visualState") == "available", "signed update available")
         activate("Package verification")
-        for path, total, name in [("/patch", (output / "update.bsdiff").stat().st_size, "patch-progress"),
+        for path, total, name in [("/patch", (output / "update.capturespatch").stat().st_size, "patch-progress"),
                                   ("/full", state["full_size"], "full-fallback-progress")]:
             received = wait(lambda: state["held"].get(path), f"{path} held HTTP progress")
             percent = math.floor(received * 100 / total + .5)
@@ -151,7 +176,7 @@ def gui_check(binary, output, url, base, state, renderer, log):
         assert app.wait(timeout=20) == 0, "real Quit failed"
         assert not list(scratch.iterdir()), "owned acquisition/staging files survived Quit"
         assert state["paths"] == ["/manifest.json", "/manifest.json.minisig", "/patch", "/full"]
-        return {"passed": True, "scope": "Private-X11 signed patch and full-fallback progress, staging, real Quit and cleanup; no installation."}
+        return {"passed": True, "scope": "Private-X11 signed per-file patch (base-archive override) and full-fallback progress, staging, real Quit and cleanup; no installation."}
     finally:
         for gate in state["gates"].values():
             gate.set()
@@ -176,7 +201,7 @@ def main():
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     base, target = args.base_archive.resolve(strict=True), args.target_archive.resolve(strict=True)
-    patch = output / "update.bsdiff"
+    patch = output / "update.capturespatch"
     original = (digest(base), digest(target))
     state = {"paths": [], "mode": "valid"}
     state["full_size"] = target.stat().st_size
@@ -236,47 +261,50 @@ def main():
             return result, time.monotonic() - started
 
         try:
+            platform = {"linux": "x86_64-unknown-linux-gnu", "win32": "x86_64-pc-windows-msvc",
+                        "darwin": "aarch64-apple-darwin" if machine() == "arm64" else "x86_64-apple-darwin"}[sys.platform]
+            full_size = target.stat().st_size
             if args.existing_patch:
                 shutil.copyfile(args.existing_patch.resolve(strict=True), patch)
                 elapsed = None
-                metadata = {"delta": {"format": "bsdiff40", "base_version": "2026.9.99",
-                    "base_size": base.stat().st_size, "base_sha256": original[0], "url": url + "/patch",
-                    "size": patch.stat().st_size, "sha256": digest(patch)},
-                    "target": {"size": target.stat().st_size, "sha256": original[1]},
-                    "smaller": patch.stat().st_size < target.stat().st_size}
+                metadata = {"delta": {"format": "capturespatch1", "patches": [{"base_version": "2026.9.99",
+                    "url": url + "/patch", "size": patch.stat().st_size, "sha256": digest(patch)}]},
+                    "target": {"version": "2026.10.50", "size": full_size, "sha256": original[1]},
+                    "listable": patch.stat().st_size * 2 < full_size}
             else:
-                generated, elapsed = run([args.patch_tool.resolve(strict=True), "--base-archive", base,
-                    "--target-archive", target, "--base-version", "2026.9.99",
-                    "--patch-url", url + "/patch", "--output", patch], "generation")
+                generated, elapsed = run([args.patch_tool.resolve(strict=True), "--target", platform,
+                    "--base", base, "--base-version", "2026.9.99", "--target-archive", target,
+                    "--version", "2026.10.50", "--patch-url", url + "/patch", "--output", patch], "generation")
                 assert generated.returncode == 0, generated.stderr
                 metadata = json.loads(generated.stdout)
-            assert metadata["delta"]["base_sha256"] == original[0]
+            [offer] = metadata["delta"]["patches"]
+            assert metadata["delta"]["format"] == "capturespatch1"
             assert metadata["target"]["sha256"] == original[1]
-            assert metadata["delta"]["sha256"] == digest(patch)
-            assert metadata["delta"]["size"] == patch.stat().st_size
-            assert metadata["target"]["size"] == target.stat().st_size
-            platform = {"linux": "x86_64-unknown-linux-gnu", "win32": "x86_64-pc-windows-msvc",
-                        "darwin": "aarch64-apple-darwin" if machine() == "arm64" else "x86_64-apple-darwin"}[sys.platform]
-            artifact = {**metadata["target"], "url": url + "/full", "delta": metadata["delta"]}
+            assert offer["sha256"] == digest(patch) and offer["size"] == patch.stat().st_size
+            assert metadata["target"]["size"] == full_size
+            artifact = {"url": url + "/full", "size": full_size, "sha256": original[1], "delta": metadata["delta"]}
             manifest = {"schema": 2, "identity": "es.captur.native-development", "renderer": args.renderer,
                         "version": "2026.10.50", "notes": "Disposable acquisition fixture.", "artifacts": {platform: artifact}}
             (output / "metadata.json").write_text(json.dumps(metadata, indent=2))
-            wrong = output / "wrong-base"
-            shutil.copyfile(base, wrong)
-            with wrong.open("r+b") as file:
+            installed = unpack(base, output / "installed")
+            wrong = unpack(base, output / "wrong-installed")
+            changed = wrong / EXECUTABLES[platform]
+            with changed.open("r+b") as file:
                 byte = file.read(1)
                 file.seek(0)
                 file.write(bytes([byte[0] ^ 31]))
+            installed_hashes = {path: digest(path) for path in installed.rglob("*") if path.is_file()}
             scratch = output / "scratch"
             scratch.mkdir()
             sentinel = scratch / "operator-data"
             sentinel.write_bytes(b"not owned by updater")
-            patch_saves = metadata["smaller"]
-            for mode in ("valid", "wrong-base", "absent-base", "tampered-patch", "not-smaller",
-                         "legacy", "tampered-manifest", "tampered-full"):
+            patch_saves = metadata["listable"]
+            uses_patch = ("valid", "base-archive", "tampered-patch", "wrong-installed", "tampered-full")
+            for mode in ("valid", "base-archive", "tampered-patch", "wrong-installed", "no-saving",
+                         "no-installed-package", "legacy", "tampered-manifest", "tampered-full"):
                 value = copy.deepcopy(manifest)
-                if mode == "not-smaller":
-                    value["artifacts"][platform]["delta"]["size"] = target.stat().st_size
+                if mode == "no-saving":
+                    value["artifacts"][platform]["delta"]["patches"][0]["size"] = (full_size + 1) // 2
                 if mode == "legacy":
                     value["schema"] = 1
                     del value["artifacts"][platform]["delta"]
@@ -289,14 +317,18 @@ def main():
                 command = [args.probe.resolve(strict=True), "--manifest-url", url + "/manifest.json",
                     "--public-key-file", output / "public.key", "--current-version", "2026.9.99",
                     "--renderer", args.renderer, "--stage-directory", scratch]
-                if mode != "absent-base":
-                    command += ["--base-archive", wrong if mode in ("wrong-base", "tampered-full") else base]
+                if mode == "base-archive":
+                    command += ["--installed-package", output / "not-installed", "--base-archive", base]
+                elif mode in ("wrong-installed", "tampered-full"):
+                    command += ["--installed-package", wrong]
+                elif mode != "no-installed-package":
+                    command += ["--installed-package", installed]
                 result, seconds = run(command, mode)
                 expected = ["/manifest.json", "/manifest.json.minisig"]
                 if mode != "tampered-manifest":
-                    if patch_saves and mode in ("valid", "tampered-patch"):
+                    if patch_saves and mode in uses_patch:
                         expected += ["/patch"]
-                    if not patch_saves or mode != "valid":
+                    if not patch_saves or mode not in ("valid", "base-archive"):
                         expected += ["/full"]
                 assert state["paths"] == expected, (mode, state["paths"], expected)
                 if mode in ("tampered-manifest", "tampered-full"):
@@ -306,17 +338,18 @@ def main():
                     assert result.returncode == 0, (mode, result.stderr)
                     reply = json.loads(result.stdout)
                     assert reply["state"] == "staged" and not reply["installed"]
-                    assert reply["release"]["size"] == target.stat().st_size
+                    assert reply["release"]["size"] == full_size
                 assert list(scratch.iterdir()) == [sentinel], mode
                 assert sentinel.read_bytes() == b"not owned by updater"
                 results.append({"case": mode, "paths": expected, "seconds": round(seconds, 3), "passed": True})
+            assert installed_hashes == {path: digest(path) for path in installed.rglob("*") if path.is_file()}, "installed package changed"
             assert original == (digest(base), digest(target)), "source archives changed"
             summary = {"passed": True, "target": platform, "base_bytes": base.stat().st_size,
-                       "full_bytes": target.stat().st_size, "patch_bytes": patch.stat().st_size,
-                       "patch_smaller": patch_saves, "generation_seconds": round(elapsed, 3) if elapsed is not None else None, "cases": results,
+                       "full_bytes": full_size, "patch_bytes": patch.stat().st_size,
+                       "patch_listable": patch_saves, "files": metadata.get("files"), "generation_seconds": round(elapsed, 3) if elapsed is not None else None, "cases": results,
                        "scope": "Actual explicitly supplied built development archives; no installation or physical-platform acceptance."}
             if args.gui:
-                assert patch_saves, "GUI patch-progress fixture needs a smaller patch"
+                assert patch_saves, "GUI patch-progress fixture needs a listable patch"
                 summary["gui"] = gui_check(args.gui, output, url, base, state, args.renderer, log)
             (output / "result.json").write_text(json.dumps(summary, indent=2))
             print(json.dumps(summary, indent=2))

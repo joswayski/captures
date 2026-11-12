@@ -1,16 +1,12 @@
-//! Offline BSDIFF40 fixture/packaging tool. Outputs unsigned metadata, not a release.
-use std::{
-    collections::BTreeMap,
-    fs,
-    io::{Read, Write},
-    path::PathBuf,
-};
+//! Offline per-file patch generator. Outputs an unsigned descriptor, not a release.
+use std::{collections::BTreeMap, fs, io::Read, path::PathBuf};
 
+use captures_app::updater::{Target, patch};
 use semver::Version;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-const USAGE: &str = "usage: native_update_patch --base-archive ABSOLUTE_PATH --target-archive ABSOLUTE_PATH --base-version VERSION --patch-url URL --output ABSOLUTE_NEW_FILE\nPrints unsigned delta/target metadata. Add the delta to a schema-2 manifest and sign its exact bytes separately; never publishes or installs.";
+const USAGE: &str = "usage: native_update_patch --target aarch64-apple-darwin|x86_64-apple-darwin|x86_64-pc-windows-msvc|x86_64-unknown-linux-gnu --base ABSOLUTE_ARCHIVE_OR_PACKAGE_FOLDER --base-version VERSION --target-archive ABSOLUTE_PATH --version VERSION --patch-url URL --output ABSOLUTE_NEW_FILE\nWrites a per-file patch after rebuilding the target package from the base exactly as a client does, and prints its unsigned descriptor. Add `delta` to the target's artifact in a schema-2 manifest only when `listable` is true, and sign the exact manifest bytes separately; never signs, publishes, overwrites or installs.";
 
 fn main() {
     match run(std::env::args().skip(1)) {
@@ -28,7 +24,13 @@ fn run(arguments: impl Iterator<Item = String>) -> Result<Value, String> {
     while let Some(flag) = arguments.next() {
         if !matches!(
             flag.as_str(),
-            "--base-archive" | "--target-archive" | "--base-version" | "--patch-url" | "--output"
+            "--target"
+                | "--base"
+                | "--base-version"
+                | "--target-archive"
+                | "--version"
+                | "--patch-url"
+                | "--output"
         ) {
             return Err(USAGE.into());
         }
@@ -38,7 +40,10 @@ fn run(arguments: impl Iterator<Item = String>) -> Result<Value, String> {
         }
     }
     let get = |flag: &str| options.get(flag).ok_or(USAGE);
-    let version = Version::parse(get("--base-version")?).map_err(|error| error.to_string())?;
+    let target: Target =
+        serde_json::from_value(json!(get("--target")?)).map_err(|_| USAGE.to_owned())?;
+    let base_version = Version::parse(get("--base-version")?).map_err(|error| error.to_string())?;
+    let version = Version::parse(get("--version")?).map_err(|error| error.to_string())?;
     let url = get("--patch-url")?;
     let output = PathBuf::from(get("--output")?);
     if !output.is_absolute()
@@ -49,36 +54,31 @@ fn run(arguments: impl Iterator<Item = String>) -> Result<Value, String> {
     {
         return Err("Output must be a new absolute file in an existing directory.".into());
     }
-    let base = input(&PathBuf::from(get("--base-archive")?))?;
-    let target = input(&PathBuf::from(get("--target-archive")?))?;
-    let mut patch = Vec::new();
-    qbsdiff::Bsdiff::new(&base, &target)
-        .compare(&mut patch)
-        .map_err(|error| error.to_string())?;
-    let mut reconstructed = Vec::new();
-    qbsdiff::Bspatch::new(&patch)
-        .and_then(|p| p.apply(&base, &mut reconstructed))
-        .map_err(|error| error.to_string())?;
-    if reconstructed != target {
-        return Err("Generated patch did not reconstruct the exact target.".into());
+    let base = PathBuf::from(get("--base")?);
+    if !base.is_absolute()
+        || !base
+            .symlink_metadata()
+            .is_ok_and(|m| m.is_dir() || (m.is_file() && m.len() > 0))
+    {
+        return Err(
+            "The base must be an absolute archive or unpacked package folder, not a link.".into(),
+        );
     }
-    let mut file = tempfile::NamedTempFile::new_in(output.parent().unwrap())
-        .map_err(|error| error.to_string())?;
-    file.write_all(&patch)
-        .and_then(|_| file.as_file().sync_all())
-        .map_err(|error| error.to_string())?;
-    file.persist_noclobber(output)
+    let archive = PathBuf::from(get("--target-archive")?);
+    let (size, sha256) = archive_digest(&archive)?;
+    let summary = patch::generate(target, &base, &base_version, &archive, &version, &output)
         .map_err(|error| error.to_string())?;
     Ok(json!({
-        "delta":{"format":"bsdiff40", "base_version":version.to_string(),
-            "base_size":base.len(), "base_sha256":format!("{:x}", Sha256::digest(&base)),
-            "url":url, "size":patch.len(), "sha256":format!("{:x}", Sha256::digest(&patch))},
-        "target":{"size":target.len(), "sha256":format!("{:x}", Sha256::digest(&target))},
-        "smaller":patch.len() < target.len()
+        "delta": {"format": patch::FORMAT, "patches": [{
+            "base_version": base_version.to_string(), "url": url,
+            "size": summary.size, "sha256": summary.sha256}]},
+        "target": {"version": version.to_string(), "size": size, "sha256": sha256},
+        "files": {"copied": summary.copied, "bsdiff": summary.bsdiff, "whole": summary.whole},
+        "listable": patch::worthwhile(summary.size, size)
     }))
 }
 
-fn input(path: &PathBuf) -> Result<Vec<u8>, String> {
+fn archive_digest(path: &PathBuf) -> Result<(u64, String), String> {
     const LIMIT: u64 = 1024 * 1024 * 1024;
     if !path.is_absolute()
         || !path
@@ -86,75 +86,78 @@ fn input(path: &PathBuf) -> Result<Vec<u8>, String> {
             .is_ok_and(|m| m.is_file() && m.len() > 0 && m.len() <= LIMIT)
     {
         return Err(
-            "Inputs must be explicit nonempty regular absolute archives, at most 1 GiB, not links."
+            "The target must be an explicit nonempty regular absolute archive, at most 1 GiB, not a link."
                 .into(),
         );
     }
-    let mut bytes = Vec::new();
-    fs::File::open(path)
-        .map_err(|error| error.to_string())?
-        .take(LIMIT + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|error| error.to_string())?;
-    if bytes.is_empty() || bytes.len() as u64 > LIMIT {
-        return Err("Input archive size is invalid.".into());
+    let mut file = fs::File::open(path).map_err(|error| error.to_string())?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0; 64 * 1024];
+    let mut size = 0;
+    loop {
+        let count = file.read(&mut buffer).map_err(|error| error.to_string())?;
+        if count == 0 {
+            break;
+        }
+        size += count as u64;
+        hasher.update(&buffer[..count]);
     }
-    Ok(bytes)
+    Ok((size, format!("{:x}", hasher.finalize())))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
-    fn offline_tool_round_trips_metadata_preserves_inputs_and_never_overwrites() {
+    fn rejects_invalid_arguments_without_writing() {
         let root = tempfile::tempdir().unwrap();
-        let base: Vec<_> = (0..131_072)
-            .map(|i| (i * 17 + (i >> 9) * 31) as u8)
-            .collect();
-        let mut target = base[177..].to_vec();
-        target[501] ^= 55;
-        target.extend_from_slice(b"a different ending");
-        let base_path = root.path().join("base");
-        let target_path = root.path().join("target");
+        let archive = root.path().join("archive.tar.gz");
+        fs::write(&archive, b"not an archive").unwrap();
         let output = root.path().join("patch");
-        fs::write(&base_path, &base).unwrap();
-        fs::write(&target_path, &target).unwrap();
-        let args: Vec<String> = vec![
-            "--base-archive".into(),
-            base_path.display().to_string(),
-            "--target-archive".into(),
-            target_path.display().to_string(),
-            "--base-version".into(),
-            "2026.9.99".into(),
-            "--patch-url".into(),
-            "https://example.invalid/patch".into(),
-            "--output".into(),
-            output.display().to_string(),
-        ];
-        let metadata = run(args.clone().into_iter()).unwrap();
-        let bytes = fs::read(&output).unwrap();
-        let mut actual = Vec::new();
-        qbsdiff::Bspatch::new(&bytes)
-            .unwrap()
-            .apply(&base, &mut actual)
-            .unwrap();
-        assert_eq!(actual, target);
-        assert_eq!(metadata["delta"]["base_size"], base.len());
-        assert_eq!(metadata["target"]["size"], target.len());
-        assert_eq!(metadata["delta"]["size"], bytes.len());
-        assert_eq!(metadata["smaller"], true);
-        assert!(run(args.clone().into_iter()).is_err());
-        assert_eq!(fs::read(&output).unwrap(), bytes);
-        assert_eq!(fs::read(&base_path).unwrap(), base);
-        assert_eq!(fs::read(&target_path).unwrap(), target);
-        fs::remove_file(output).unwrap();
-        let mut invalid = args.clone();
-        invalid[1] = "relative".into();
-        assert!(run(invalid.into_iter()).is_err());
-        let mut invalid = args;
-        invalid.extend(["--base-version".into(), "2026.9.99".into()]);
-        assert!(run(invalid.into_iter()).is_err());
-        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 2);
+        let args = |target: &str, base: &str, output: &str| -> Vec<String> {
+            [
+                "--target",
+                target,
+                "--base",
+                base,
+                "--base-version",
+                "2026.9.99",
+                "--target-archive",
+                archive.to_str().unwrap(),
+                "--version",
+                "2026.10.50",
+                "--patch-url",
+                "https://example.invalid/patch",
+                "--output",
+                output,
+            ]
+            .map(String::from)
+            .to_vec()
+        };
+        let linux = Target::LinuxX64.as_str();
+        let base = archive.to_str().unwrap();
+        let out = output.to_str().unwrap();
+        for invalid in [
+            args("linux", base, out),
+            args(linux, "relative", out),
+            args(linux, base, "relative"),
+            args(linux, base, archive.to_str().unwrap()),
+            [
+                args(linux, base, out),
+                vec!["--version".into(), "1.0.0".into()],
+            ]
+            .concat(),
+            // Not a valid package archive: generation fails before writing.
+            args(linux, base, out),
+        ] {
+            assert!(run(invalid.into_iter()).is_err());
+        }
+        let mut older = args(linux, base, out);
+        older[9] = "2026.9.98".into();
+        assert!(run(older.into_iter()).is_err());
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
+        assert_eq!(fs::read(&archive).unwrap(), b"not an archive");
     }
 
     #[test]
@@ -170,20 +173,15 @@ mod tests {
             manifest["identity"],
             captures_app::updater::DEVELOPMENT_IDENTITY
         );
+        let loopback = |url: &Value| url.as_str().unwrap().starts_with("http://127.0.0.1:");
         for artifact in manifest["artifacts"].as_object().unwrap().values() {
-            assert!(
-                artifact["url"]
-                    .as_str()
-                    .unwrap()
-                    .starts_with("http://127.0.0.1:")
-            );
-            if let Some(delta) = artifact.get("delta") {
-                assert!(
-                    delta["url"]
-                        .as_str()
-                        .unwrap()
-                        .starts_with("http://127.0.0.1:")
-                );
+            assert!(loopback(&artifact["url"]));
+            for offer in artifact["delta"]["patches"]
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
+                assert!(loopback(&offer["url"]));
             }
         }
         // Never accepts/persists a private key. Each test creates a fresh keypair.
