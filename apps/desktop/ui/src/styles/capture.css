@@ -328,7 +328,8 @@ html.capture-selector-display {
 
 .window-target-hovered,
 .recording-window-target.hovered,
-.recording-window-target.selected {
+.recording-window-target.selected,
+.recording-window-target:focus-visible {
   color: #fff;
   background: rgba(var(--theme-accent-rgb), 0.14);
   box-shadow: 0 0 0 2px var(--theme-accent);
@@ -355,7 +356,8 @@ html.capture-selector-display {
 
 .window-target-hovered span,
 .recording-window-target.hovered span,
-.recording-window-target.selected span {
+.recording-window-target.selected span,
+.recording-window-target:focus-visible span {
   color: var(--glass-text);
   background: var(--glass-strong);
   opacity: 1;

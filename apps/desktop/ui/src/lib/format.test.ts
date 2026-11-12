@@ -15,6 +15,12 @@ describe("formatFileSize", () => {
     expect(formatFileSize(125_000_000)).toBe("125 MB");
   });
 
+  it("moves to the next unit instead of rounding up to 1000", () => {
+    expect(formatFileSize(999_400)).toBe("999 KB");
+    expect(formatFileSize(999_600)).toBe("1.0 MB");
+    expect(formatFileSize(99_960)).toBe("100 KB");
+  });
+
   it("handles missing or invalid byte counts", () => {
     expect(formatFileSize(0)).toBe("0 B");
     expect(formatFileSize(Number.NaN)).toBe("0 B");

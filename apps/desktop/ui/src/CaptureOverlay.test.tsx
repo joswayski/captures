@@ -683,6 +683,81 @@ describe("CaptureOverlay guidance", () => {
     expect(document.documentElement).toHaveClass("capture-window-cursor");
   });
 
+  it("ignores a secondary-button drag instead of committing a region", async () => {
+    window.history.replaceState({}, "", "/?view=overlay&mode=region&session_id=capture-1");
+    const { container } = render(<App />);
+    await screen.findByText("Drag to select a region");
+
+    const surface = container.querySelector<HTMLElement>(".capture-surface");
+    expect(surface).not.toBeNull();
+    surface!.setPointerCapture = vi.fn();
+    vi.spyOn(surface!, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 1440,
+      bottom: 900,
+      width: 1440,
+      height: 900,
+      toJSON: () => undefined,
+    });
+
+    fireEvent.pointerDown(surface!, { pointerId: 1, button: 2, clientX: 120, clientY: 80 });
+    fireEvent.pointerMove(surface!, { pointerId: 1, clientX: 620, clientY: 480 });
+    fireEvent.pointerUp(surface!, { pointerId: 1, button: 2, clientX: 620, clientY: 480 });
+
+    expect(container.querySelector(".selection-box")).toBeNull();
+    expect(invoke).not.toHaveBeenCalledWith("commit_region", expect.anything());
+  });
+
+  it("ignores a secondary-button click on a window instead of capturing it", async () => {
+    activeSession = {
+      ...session,
+      mode: "window",
+      windows: [
+        {
+          id: "notes",
+          title: "Notes",
+          app_name: "Notes",
+          z_order: 10,
+          x: 300,
+          y: 160,
+          width: 900,
+          height: 640,
+          display_id: "display-1",
+        },
+      ],
+    };
+    window.history.replaceState({}, "", "/?view=overlay&mode=window&session_id=capture-1");
+    const { container } = render(<App />);
+    await screen.findByText("Select a window to continue");
+
+    const surface = container.querySelector<HTMLElement>(".capture-surface");
+    expect(surface).not.toBeNull();
+    vi.spyOn(surface!, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 1440,
+      bottom: 900,
+      width: 1440,
+      height: 900,
+      toJSON: () => undefined,
+    } as DOMRect);
+
+    fireEvent.pointerUp(surface!, { button: 2, clientX: 950, clientY: 400 });
+    expect(invoke).not.toHaveBeenCalledWith("commit_window", expect.anything());
+    expect(invoke).not.toHaveBeenCalledWith("commit_display", expect.anything());
+
+    fireEvent.pointerUp(surface!, { button: 0, clientX: 950, clientY: 400 });
+    expect(invoke).toHaveBeenCalledWith("commit_window", {
+      sessionId: "capture-1",
+      windowId: "notes",
+    });
+  });
+
   it("hit-tests the frontmost window under the pointer instead of CSS hover", async () => {
     activeSession = {
       ...session,

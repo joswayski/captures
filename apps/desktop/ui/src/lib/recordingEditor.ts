@@ -18,8 +18,8 @@ export function editorCropAfterDrag(
   if (handle === "move") {
     return {
       ...initial,
-      x: clamp(initial.x + delta.x, 0, bounds.width - initial.width),
-      y: clamp(initial.y + delta.y, 0, bounds.height - initial.height),
+      x: Math.round(clamp(initial.x + delta.x, 0, bounds.width - initial.width)),
+      y: Math.round(clamp(initial.y + delta.y, 0, bounds.height - initial.height)),
     };
   }
 

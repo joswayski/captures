@@ -596,6 +596,8 @@ const MAX_SCREENSHOT_OUTPUT_PIXELS = 100_000_000;
 const MIN_SCREENSHOT_ZOOM_PERCENT = 5;
 const MAX_SCREENSHOT_ZOOM_PERCENT = 800;
 const KEYBOARD_ZOOM_FACTOR = 1.25;
+/** Edits to one property closer together than this share a single undo entry. */
+const UNDO_COALESCE_MS = 600;
 const WHEEL_ZOOM_SENSITIVITY = 0.002;
 const SCREENSHOT_ZOOM_OPTIONS = [50, 100, 200] as const;
 const LAYER_CLIPBOARD_TYPE = "application/x-captures-editor-layer";
@@ -879,12 +881,43 @@ function fillPolygon(context: CanvasRenderingContext2D, points: EditorPoint[]): 
   context.stroke();
 }
 
+/**
+ * Property paths that differ between two versions of one element, two levels
+ * deep: `.opacity`, `.style.color`, and one path for all drop-shadow knobs.
+ */
+function changedElementPaths(before: unknown, after: unknown, path = "", depth = 0): string[] {
+  if (Object.is(before, after)) return [];
+  const isRecord = (value: unknown): value is Record<string, unknown> =>
+    typeof value === "object" && value !== null && !Array.isArray(value);
+  if (depth < 2 && isRecord(before) && isRecord(after)) {
+    return [...new Set([...Object.keys(before), ...Object.keys(after)])]
+      .sort()
+      .flatMap((key) => changedElementPaths(before[key], after[key], `${path}.${key}`, depth + 1));
+  }
+  return JSON.stringify(before) === JSON.stringify(after) ? [] : [path];
+}
+
+/**
+ * Identifies which property of which element an edit changed, so repeated
+ * edits to it can share an undo entry. Typing also refits the text box, so
+ * every text edit maps to one key.
+ */
+function undoCoalesceKey(before: ScreenshotElement, after: ScreenshotElement): string {
+  const paths = changedElementPaths(before, after);
+  return `${before.id}:${paths.includes(".text") ? ".text" : paths.join(",")}`;
+}
+
 function applyAnnotationDropShadow(context: CanvasRenderingContext2D, style: ElementStyle): void {
   const metrics = annotationDropShadowMetrics(style);
+  // Canvas shadows ignore the current transform, and the editor paints through
+  // a zoom/DPR scale while export paints at 1:1. Scale them here so the canvas
+  // shows the shadow that Copy and Save produce.
+  const transform = context.getTransform?.();
+  const scale = transform ? Math.hypot(transform.a, transform.b) || 1 : 1;
   context.shadowColor = metrics.color;
-  context.shadowBlur = metrics.blur;
-  context.shadowOffsetX = metrics.offsetX;
-  context.shadowOffsetY = metrics.offsetY;
+  context.shadowBlur = metrics.blur * scale;
+  context.shadowOffsetX = metrics.offsetX * scale;
+  context.shadowOffsetY = metrics.offsetY * scale;
 }
 
 function clearAnnotationDropShadow(context: CanvasRenderingContext2D): void {
@@ -1865,6 +1898,7 @@ export function ScreenshotEditor() {
   // result of a newer one when responses arrive out of order.
   const compressPreviewRequestRef = useRef(0);
   const baselineDocumentRef = useRef<ScreenshotDocument | null>(null);
+  const undoCoalesceRef = useRef<{ key: string; at: number } | null>(null);
   const [busy, setBusy] = useState<"copying" | "saving" | null>(null);
   /** Transient success for copy/save — does not replace the stable export hint. */
   const [success, setSuccess] = useState<{ kind: "copy" | "save"; message: string } | null>(null);
@@ -2153,10 +2187,25 @@ export function ScreenshotEditor() {
   }, [layerMenuId]);
 
   const commitDocument = useCallback(
-    (next: ScreenshotDocument) => {
+    (next: ScreenshotDocument, coalesceKey?: string) => {
       const current = documentRef.current;
       if (!current || JSON.stringify(current) === JSON.stringify(next)) return;
-      setUndoStack((stack) => [...stack.slice(-99), current]);
+      // Typing and slider or colour-picker drags commit on every event. Fold a
+      // burst on one property into the entry that started it, so one undo
+      // reverts the whole edit instead of one character or one percent.
+      const now = Date.now();
+      const last = undoCoalesceRef.current;
+      const merge =
+        coalesceKey !== undefined && last?.key === coalesceKey && now - last.at < UNDO_COALESCE_MS;
+      undoCoalesceRef.current = coalesceKey === undefined ? null : { key: coalesceKey, at: now };
+      if (merge) {
+        // A burst that ends where it started (a toggle flipped back) leaves nothing to undo.
+        setUndoStack((stack) =>
+          JSON.stringify(stack.at(-1)) === JSON.stringify(next) ? stack.slice(0, -1) : stack,
+        );
+      } else {
+        setUndoStack((stack) => [...stack.slice(-99), current]);
+      }
       setRedoStack([]);
       replaceDocument(next);
       setSaved(null);
@@ -2905,6 +2954,7 @@ export function ScreenshotEditor() {
   }, [shownExpandPreview, ensureImage, imageRevision]);
 
   const undo = useCallback(() => {
+    undoCoalesceRef.current = null;
     const current = documentRef.current;
     setUndoStack((stack) => {
       if (!current || stack.length === 0) return stack;
@@ -2919,6 +2969,7 @@ export function ScreenshotEditor() {
   }, [replaceDocument]);
 
   const redo = useCallback(() => {
+    undoCoalesceRef.current = null;
     const current = documentRef.current;
     setRedoStack((stack) => {
       if (!current || stack.length === 0) return stack;
@@ -3185,6 +3236,8 @@ export function ScreenshotEditor() {
         deleteSelected();
         return;
       }
+      // A focused dropdown already used this arrow key to move through its options.
+      if (event.key.startsWith("Arrow") && event.defaultPrevented) return;
       const multiplier = event.shiftKey ? 10 : 1;
       if (event.key === "ArrowLeft") nudgeSelected(-multiplier, 0);
       else if (event.key === "ArrowRight") nudgeSelected(multiplier, 0);
@@ -4473,14 +4526,17 @@ export function ScreenshotEditor() {
 
     // Keep the just-drawn shape selected so curve/resize grips show immediately
     // without switching to Select & move. A click with no drag must not leave
-    // an invisible stub arrow (that used to flash a full-size head).
+    // an invisible stub arrow (that used to flash a full-size head) or any
+    // other zero-size shape layer.
     if (gesture.kind === "draw") {
       const drawn = current.elements.find(({ id }) => id === gesture.elementId);
+      const minimumDrag = 3 / Math.max(0.01, displayScale);
       if (
         drawn &&
         drawn.kind === "shape" &&
-        drawn.shape === "arrow" &&
-        arrowPathLength(drawn) < Math.max(ARROW_MIN_DRAW_LENGTH, 3 / Math.max(0.01, displayScale))
+        (drawn.shape === "arrow"
+          ? arrowPathLength(drawn) < Math.max(ARROW_MIN_DRAW_LENGTH, minimumDrag)
+          : Math.hypot(drawn.endX - drawn.x, drawn.endY - drawn.y) < minimumDrag)
       ) {
         replaceDocument(gesture.initialDocument);
         current = gesture.initialDocument;
@@ -4490,6 +4546,7 @@ export function ScreenshotEditor() {
     }
 
     if (JSON.stringify(current) === JSON.stringify(gesture.initialDocument)) return;
+    undoCoalesceRef.current = null;
     setUndoStack((stack) => [...stack.slice(-99), gesture.initialDocument]);
     setRedoStack([]);
   };
@@ -4780,7 +4837,8 @@ export function ScreenshotEditor() {
     const current = documentRef.current;
     const element = current?.elements.find(({ id }) => id === selectedId);
     if (!current || !element) return;
-    commitDocument(replaceElement(current, element.id, updater(element)));
+    const updated = updater(element);
+    commitDocument(replaceElement(current, element.id, updated), undoCoalesceKey(element, updated));
   };
 
   const updateLayer = (
@@ -4790,7 +4848,8 @@ export function ScreenshotEditor() {
     const current = documentRef.current;
     const element = current?.elements.find(({ id }) => id === elementId);
     if (!current || !element) return;
-    commitDocument(replaceElement(current, element.id, updater(element)));
+    const updated = updater(element);
+    commitDocument(replaceElement(current, element.id, updated), undoCoalesceKey(element, updated));
   };
 
   const beginLayerRename = (element: ScreenshotElement) => {
@@ -5283,6 +5342,9 @@ export function ScreenshotEditor() {
         screenshotPathMatchesFormat(artifact.path, exportFormat) &&
         artifact.path === destinationPath;
       await loadEditorTextFonts();
+      // The canvas stays editable while the file is written, so remember which
+      // document this save actually contains.
+      const savedDocument = documentRef.current;
       const imagePng = await canvasPngBytes(renderFlattened());
       const result = await invoke<SavedScreenshotEdit>("save_screenshot_edit", {
         request: {
@@ -5308,15 +5370,19 @@ export function ScreenshotEditor() {
         setFilenameStem(screenshotFileStem(result.artifact.path));
         setDestinationDirectory(screenshotParentDirectory(result.artifact.path));
       }
-      if (documentRef.current) {
-        baselineDocumentRef.current = documentRef.current;
+      if (savedDocument) {
+        baselineDocumentRef.current = savedDocument;
       }
       setDraftRestored(false);
-      draftSaveGenerationRef.current += 1;
-      void discardEditorDraft(result.artifact.id).catch(() => undefined);
-      // Window may still be keyed by the previous capture when Save as new file saved a new id.
-      if (draftArtifactId && draftArtifactId !== result.artifact.id) {
-        void discardEditorDraft(draftArtifactId).catch(() => undefined);
+      // Edits made during the save are not in the file: keep their draft and
+      // let the pending autosave write it.
+      if (documentRef.current === savedDocument) {
+        draftSaveGenerationRef.current += 1;
+        void discardEditorDraft(result.artifact.id).catch(() => undefined);
+        // Window may still be keyed by the previous capture when Save as new file saved a new id.
+        if (draftArtifactId && draftArtifactId !== result.artifact.id) {
+          void discardEditorDraft(draftArtifactId).catch(() => undefined);
+        }
       }
       setSaved(result);
       showSuccess(

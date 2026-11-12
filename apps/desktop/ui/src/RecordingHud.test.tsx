@@ -282,6 +282,50 @@ describe("RecordingHud", () => {
     });
   });
 
+  it("ignores a save that finishes after the notice moved to another recording", async () => {
+    type SavedNoticeHandler = (event: {
+      payload: { artifact_id: string; generation: number };
+    }) => void;
+    let savedNoticeHandler: SavedNoticeHandler | null = null;
+    let finishSave: (() => void) | undefined;
+    vi.mocked(listen).mockImplementation(async (event, handler) => {
+      if (event === "recording-saved-artifact") {
+        savedNoticeHandler = handler as SavedNoticeHandler;
+      }
+      return () => undefined;
+    });
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "get_recording_artifact") {
+        return { id: (args as { artifactId: string }).artifactId, saved_path: null };
+      }
+      if (command === "save_recording_artifact") {
+        return new Promise<void>((resolve) => {
+          finishSave = resolve;
+        });
+      }
+      return undefined;
+    });
+    render(<RecordingSavedNotice />);
+    await waitFor(() => expect(savedNoticeHandler).not.toBeNull());
+
+    act(() => {
+      savedNoticeHandler!({ payload: { artifact_id: "recording-1", generation: 1 } });
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Save file" }));
+    await waitFor(() => expect(finishSave).toBeDefined());
+
+    // The reused window now shows a second, unsaved recording.
+    act(() => {
+      savedNoticeHandler!({ payload: { artifact_id: "recording-2", generation: 2 } });
+    });
+    await act(async () => {
+      finishSave!();
+    });
+
+    expect(screen.getByRole("button", { name: "Save file" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Show in Folder" })).not.toBeInTheDocument();
+  });
+
   it("warns when the platform cannot exclude recording controls", async () => {
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "get_recording_snapshot") return snapshot;

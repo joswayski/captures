@@ -765,14 +765,173 @@ describe("Preferences", () => {
       }
       if (command === "set_shortcut_capture_suppressed") return undefined;
       if (command === "open_update_download_page") return undefined;
+      if (command === "install_update") return undefined;
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(<Preferences />);
+
+    // The button retries the install, so neither label may claim it only checks.
+    expect(await screen.findByText("Update failed")).toBeInTheDocument();
+    expect(screen.queryByText("Couldn’t check for updates")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("install_update"));
+    expect(invoke).not.toHaveBeenCalledWith("check_for_updates");
+    fireEvent.click(screen.getByRole("button", { name: "download from captur.es" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("open_update_download_page"));
+  });
+
+  it("offers a new check when checking for updates failed", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_settings") return settings;
+      if (command === "get_update_status") {
+        return {
+          state: "error",
+          current_version: "0.1.0",
+          current_display_version: "0.1.0",
+          message: "Could not reach the update server",
+          retry_install: false,
+        };
+      }
+      if (command === "set_shortcut_capture_suppressed") return undefined;
+      if (command === "check_for_updates") return undefined;
       throw new Error(`unexpected command: ${command}`);
     });
 
     render(<Preferences />);
 
     expect(await screen.findByText("Couldn’t check for updates")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "download from captur.es" }));
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith("open_update_download_page"));
+    fireEvent.click(screen.getByRole("button", { name: "Check Now" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("check_for_updates"));
+  });
+
+  it("puts back the stored value when a change is rejected", async () => {
+    vi.mocked(invoke).mockImplementation(async (command, args) => {
+      if (command === "get_settings") return settings;
+      if (command === "get_update_status") {
+        return { state: "idle", current_version: "0.1.0", current_display_version: "0.1.0" };
+      }
+      if (command === "set_shortcut_capture_suppressed") return undefined;
+      if (command === "update_settings") {
+        const next = (args as { settings: AppSettings }).settings;
+        if (next.window_shortcut !== settings.window_shortcut) {
+          throw new Error("shortcuts must be unique");
+        }
+        return next;
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(<Preferences />);
+
+    const recorder = await screen.findByRole("button", { name: "Window" });
+    fireEvent.click(recorder);
+    fireEvent.keyDown(recorder, { code: "Digit4", key: "$", ctrlKey: true, shiftKey: true });
+    expect(
+      await screen.findByText(/Couldn’t save changes: .*shortcuts must be unique/),
+    ).toBeInTheDocument();
+
+    // The rejected chord is gone, so an unrelated change saves again.
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: /Automatically copy captures to the clipboard/ }),
+    );
+    await waitFor(() => {
+      expect(invoke).toHaveBeenLastCalledWith("update_settings", {
+        settings: expect.objectContaining({
+          auto_copy_to_clipboard: false,
+          window_shortcut: settings.window_shortcut,
+        }),
+      });
+    });
+    expect(await screen.findByText("Changes saved")).toBeInTheDocument();
+  });
+
+  it("keeps a saved microphone selected when it is not in the device list", async () => {
+    const withMicrophone: AppSettings = {
+      ...settings,
+      recording: { ...settings.recording, microphone_device_id: "usb-mic-7" },
+    };
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_settings") return withMicrophone;
+      if (command === "get_update_status") {
+        return { state: "idle", current_version: "0.1.0", current_display_version: "0.1.0" };
+      }
+      if (command === "list_recording_audio_devices") return [];
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(<Preferences />);
+
+    expect(await screen.findByRole("combobox", { name: "Default microphone" })).toHaveTextContent(
+      "Selected microphone",
+    );
+  });
+
+  it("does not save an empty capture folder while the path is retyped", async () => {
+    render(<Preferences />);
+
+    const folder = await screen.findByRole("textbox", { name: "Save captures to" });
+    fireEvent.change(folder, { target: { value: "" } });
+    // Longer than the 250 ms save debounce.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    });
+    expect(folder).toHaveValue("");
+    expect(invoke).not.toHaveBeenCalledWith("update_settings", expect.anything());
+
+    fireEvent.change(folder, { target: { value: "/tmp/shots" } });
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("update_settings", {
+        settings: expect.objectContaining({ output_directory: "/tmp/shots" }),
+      });
+    });
+
+    // Leaving the field empty falls back to the stored folder.
+    fireEvent.change(folder, { target: { value: "" } });
+    fireEvent.blur(folder);
+    expect(folder).toHaveValue("/tmp/shots");
+  });
+
+  it("highlights the section being read and keeps a clicked one until the user scrolls", async () => {
+    const { container } = render(<Preferences />);
+    await screen.findByRole("region", { name: "General" });
+    const scroller = container.querySelector<HTMLElement>(".preferences-scroller")!;
+    // Eight 400 px sections in a 600 px view: the last one can never reach the top.
+    const ids = ["general", "appearance", "capture", "shortcuts", "recording", "gif", "updates"];
+    const tops = new Map([...ids, "about"].map((id, index) => [id, index * 400]));
+    let scrollTop = 0;
+    Object.defineProperties(scroller, {
+      scrollHeight: { value: 3_200 },
+      clientHeight: { value: 600 },
+      scrollTop: { get: () => scrollTop },
+    });
+    for (const [id, top] of tops) {
+      vi.spyOn(scroller.querySelector(`#${id}`)!, "getBoundingClientRect").mockImplementation(
+        () => ({ top: top - scrollTop }) as DOMRect,
+      );
+    }
+    const current = () =>
+      within(screen.getByRole("navigation", { name: "Preferences sections" }))
+        .getAllByRole("button")
+        .find((button) => button.getAttribute("aria-current") === "true")?.textContent;
+    const scrollTo = (top: number) => {
+      scrollTop = top;
+      fireEvent.scroll(scroller);
+    };
+
+    scrollTo(900);
+    expect(current()).toBe("Capture");
+    scrollTo(2_600);
+    expect(current()).toBe("About");
+
+    // The smooth scroll a click starts must not move the highlight elsewhere.
+    fireEvent.click(screen.getByRole("button", { name: "Updates" }));
+    scrollTo(2_600);
+    expect(current()).toBe("Updates");
+
+    fireEvent.wheel(scroller);
+    scrollTo(0);
+    expect(current()).toBe("General");
   });
 
   it("can turn off freeze screen while capturing", async () => {

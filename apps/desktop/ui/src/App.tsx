@@ -524,6 +524,8 @@ export function RecordingSavedNotice() {
   const [error, setError] = useState("");
   const [permanentlySaved, setPermanentlySaved] = useState(false);
   const artifactId = notice.artifactId;
+  // The window is reused: a slow save for one recording must not mark the next one.
+  const generationRef = useRef(notice.generation);
 
   useEffect(() => {
     let active = true;
@@ -532,6 +534,7 @@ export function RecordingSavedNotice() {
       "recording-saved-artifact",
       ({ payload }) => {
         if (!active) return;
+        generationRef.current = payload.generation;
         setNotice({ artifactId: payload.artifact_id, generation: payload.generation });
         setBusy(false);
         setError("");
@@ -569,12 +572,14 @@ export function RecordingSavedNotice() {
 
   const reveal = async () => {
     if (!artifactId || busy) return;
+    const startedFor = notice.generation;
     setBusy(true);
     setError("");
     try {
       await invoke("reveal_recording_artifact", { artifactId });
-      dismiss();
+      if (generationRef.current === startedFor) dismiss();
     } catch (error) {
+      if (generationRef.current !== startedFor) return;
       setError(`Could not show the recording in its folder: ${String(error)}`);
       setBusy(false);
     }
@@ -582,13 +587,16 @@ export function RecordingSavedNotice() {
 
   const save = async () => {
     if (!artifactId || busy) return;
+    const startedFor = notice.generation;
     setBusy(true);
     setError("");
     try {
       await invoke("save_recording_artifact", { artifactId });
+      if (generationRef.current !== startedFor) return;
       setPermanentlySaved(true);
       setBusy(false);
     } catch (error) {
+      if (generationRef.current !== startedFor) return;
       setError(`Could not save the recording: ${String(error)}`);
       setBusy(false);
     }
@@ -1116,6 +1124,8 @@ function UpdatePreferences({
   const installableDownloadSize = available?.installable ? available.download_size : null;
   const downloading = status?.state === "downloading" ? status : null;
   const restarting = status?.state === "restarting" ? status : null;
+  // A failed download or install retries the install, so say so instead of "Check Now".
+  const retryInstall = status?.state === "error" && status.retry_install;
   const progress = downloading?.total
     ? Math.min(100, Math.round((downloading.downloaded / downloading.total) * 100))
     : null;
@@ -1131,7 +1141,9 @@ function UpdatePreferences({
       : restarting
         ? "Update complete"
         : status?.state === "error"
-          ? "Couldn’t check for updates"
+          ? retryInstall
+            ? "Update failed"
+            : "Couldn’t check for updates"
           : status?.state === "up_to_date"
             ? "Up to date"
             : "";
@@ -1177,11 +1189,7 @@ function UpdatePreferences({
             type="button"
             disabled={Boolean(status?.state === "checking" || downloading || restarting)}
             onClick={() =>
-              void run(
-                available || (status?.state === "error" && status.retry_install)
-                  ? "install_update"
-                  : "check_for_updates",
-              )
+              void run(available || retryInstall ? "install_update" : "check_for_updates")
             }
           >
             {restarting
@@ -1192,9 +1200,11 @@ function UpdatePreferences({
                   ? available.installable
                     ? "Update now"
                     : "View release"
-                  : status?.state === "checking"
-                    ? "Checking now…"
-                    : "Check Now"}
+                  : retryInstall
+                    ? "Try again"
+                    : status?.state === "checking"
+                      ? "Checking now…"
+                      : "Check Now"}
           </button>
           <div
             className={`update-settings-status${status?.state === "up_to_date" ? " update-settings-status-current" : ""}`}
@@ -1946,7 +1956,7 @@ export function HistoryCard({
   );
 }
 
-function formatHistoryDate(value: string): string {
+function formatHistoryDate(value: string | number): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "Unknown date";
   return new Intl.DateTimeFormat(undefined, {
@@ -2794,6 +2804,10 @@ export function RecordingSelector() {
           altKey: event.altKey,
           metaKey: event.metaKey,
         };
+        // Shortcuts mirror the bar's buttons, so they honour the same disabled states.
+        const windowTargetAvailable =
+          currentSession.windows.length > 0 || !windowListingIsReady(currentSession.windows_ready);
+        const recordingAvailable = currentSession.recording_available;
         if (eventMatchesShortcut(shortcutEvent, settings.region_shortcut)) {
           event.preventDefault();
           setActionMode("screenshot");
@@ -2803,7 +2817,10 @@ export function RecordingSelector() {
           setSelectedWindow(null);
           return;
         }
-        if (eventMatchesShortcut(shortcutEvent, settings.window_shortcut)) {
+        if (
+          windowTargetAvailable &&
+          eventMatchesShortcut(shortcutEvent, settings.window_shortcut)
+        ) {
           event.preventDefault();
           setActionMode("screenshot");
           setTargetMode("window");
@@ -2820,7 +2837,10 @@ export function RecordingSelector() {
           setSelectedWindow(null);
           return;
         }
-        if (eventMatchesShortcut(shortcutEvent, settings.recording.video_shortcut)) {
+        if (
+          recordingAvailable &&
+          eventMatchesShortcut(shortcutEvent, settings.recording.video_shortcut)
+        ) {
           event.preventDefault();
           setActionMode("recording");
           setTargetMode("region");
@@ -2829,7 +2849,11 @@ export function RecordingSelector() {
           setSelectedWindow(null);
           return;
         }
-        if (eventMatchesShortcut(shortcutEvent, settings.recording.window_shortcut)) {
+        if (
+          recordingAvailable &&
+          windowTargetAvailable &&
+          eventMatchesShortcut(shortcutEvent, settings.recording.window_shortcut)
+        ) {
           event.preventDefault();
           setActionMode("recording");
           setTargetMode("window");
@@ -2837,7 +2861,10 @@ export function RecordingSelector() {
           setHoveredDisplay(false);
           return;
         }
-        if (eventMatchesShortcut(shortcutEvent, settings.recording.display_shortcut)) {
+        if (
+          recordingAvailable &&
+          eventMatchesShortcut(shortcutEvent, settings.recording.display_shortcut)
+        ) {
           event.preventDefault();
           setActionMode("recording");
           setTargetMode("display");
@@ -3561,6 +3588,17 @@ export function RecordingSelector() {
                 borderRadius: cornerRadius,
               }}
               aria-label={`Select ${window.title || "window"}`}
+              // Pointer presses are hit-tested on the surface (this button is
+              // click-through), so this only runs for keyboard activation.
+              onClick={() => {
+                if (starting || switchingDisplay) return;
+                setSelectedWindow(window.id);
+                setHoveredWindow(window.id);
+                setHoveredDisplay(false);
+                if (settingsRef.current?.auto_start_on_selection) {
+                  autoStartAfterSelectionRef.current = true;
+                }
+              }}
             >
               <span>{window.title || window.app_name || "Window"}</span>
             </button>
@@ -3647,7 +3685,9 @@ export function RecordingSelector() {
                   windowListingIsReady(session.windows_ready)
                 }
                 title={
-                  mode === "window" && windowLayouts.length === 0
+                  mode === "window" &&
+                  windowLayouts.length === 0 &&
+                  windowListingIsReady(session.windows_ready)
                     ? "Window capture is not available in this desktop session"
                     : undefined
                 }
@@ -4516,6 +4556,11 @@ export function RecordingEditor() {
   } | null>(null);
   const cropDragRef = useRef<EditorCropDrag | null>(null);
   const pendingExportFingerprintRef = useRef("");
+  // Bumped when a save replaced the file behind `media_url`; the URL is keyed
+  // by artifact id, so the preview needs a new one to load the saved file.
+  const [mediaRevision, setMediaRevision] = useState(0);
+  // The revision whose rebased edit state is already the saved baseline.
+  const rebasedRevisionRef = useRef(0);
   const trimStartRef = useRef(0);
   const trimEndRef = useRef(0);
   const previewLoopRef = useRef(false);
@@ -4537,7 +4582,36 @@ export function RecordingEditor() {
           ({ payload }) => {
             if (!active || payload.export_id !== exportIdRef.current) return;
             if (payload.artifact.id === artifactId) {
-              setArtifact(payload.artifact);
+              // The save replaced this recording, so the saved file is the new
+              // source. Start its edits over: the trim, crop, size and audio
+              // changes are already in it, and leaving them armed would apply
+              // them a second time on the next save.
+              const saved = payload.artifact;
+              setArtifact(saved);
+              setTrimStart(0);
+              setTrimEnd(saved.duration_ms);
+              setPlayheadMs(0);
+              setCropEnabled(false);
+              setCrop({ x: 0, y: 0, width: saved.width, height: saved.height });
+              setResolution("original");
+              setCustomWidth(saved.width);
+              setCustomHeight(saved.height);
+              setSystemVolume(100);
+              setMicrophoneVolume(100);
+              setMuteSystem(false);
+              setMuteMicrophone(false);
+              setMono(false);
+              setPreviewPlaying(false);
+              setMediaRevision((revision) => revision + 1);
+              void invoke<RecordingTimelinePreview>("prepare_recording_timeline_preview", {
+                artifactId: saved.id,
+              })
+                .then((preview) => {
+                  if (active) setTimeline(preview);
+                })
+                .catch(() => {
+                  if (active) setTimeline(null);
+                });
             }
             setExported(payload.artifact);
             setSavedFingerprint(pendingExportFingerprintRef.current);
@@ -4931,6 +5005,14 @@ export function RecordingEditor() {
       })
     : null;
 
+  // Keyed on the revision state, not a flag set by the listener: it commits in
+  // the same render as the rebased edits, so the baseline is never stale.
+  useEffect(() => {
+    if (rebasedRevisionRef.current === mediaRevision || !exportFingerprint) return;
+    rebasedRevisionRef.current = mediaRevision;
+    setSavedFingerprint(exportFingerprint);
+  }, [mediaRevision, exportFingerprint]);
+
   if (!artifact || !exportFingerprint) {
     return (
       <main className="recording-editor recording-editor-loading">
@@ -4941,12 +5023,12 @@ export function RecordingEditor() {
 
   const duration = Math.max(1, artifact.duration_ms);
   const trimmedDuration = Math.max(1, trimEnd - trimStart);
-  const baseOutputDimensions = editorOutputDimensions(
+  const originalOutputDimensions = editorOutputDimensions(
     cropEnabled ? crop.width : artifact.width,
     cropEnabled ? crop.height : artifact.height,
-    resolution,
-    customWidth,
-    customHeight,
+    "original",
+    0,
+    0,
   );
   const hasRecordedAudio = artifact.has_system_audio || artifact.has_microphone_audio;
   // User-facing original is the permanent Captures save when present — not the
@@ -4961,6 +5043,8 @@ export function RecordingEditor() {
   const sourceStem = originalSave.stem;
   const sourceFormat = recordingSourceFormat(artifact);
   const formatRequiresCopy = outputFormat !== sourceFormat;
+  const mediaSource =
+    mediaRevision > 0 ? `${artifact.media_url}?saved=${mediaRevision}` : artifact.media_url;
   const alreadySaved = Boolean(exported && savedFingerprint === exportFingerprint);
   const maximumBytes =
     sizeMode === "maximum"
@@ -5364,7 +5448,7 @@ export function RecordingEditor() {
             {artifact.kind === "video" ? (
               <video
                 ref={videoRef}
-                src={artifact.media_url}
+                src={mediaSource}
                 playsInline
                 preload="auto"
                 onClick={() => void togglePreviewPlayback()}
@@ -5378,7 +5462,7 @@ export function RecordingEditor() {
                 onSeeked={(event) => setPlayheadMs(event.currentTarget.currentTime * 1_000)}
               />
             ) : (
-              <img src={artifact.media_url} alt="Animated GIF preview" />
+              <img src={mediaSource} alt="Animated GIF preview" />
             )}
             {showCompressCompare && (
               <CompressionPreview
@@ -5677,7 +5761,7 @@ export function RecordingEditor() {
               options={[
                 {
                   value: "original",
-                  label: `Original — ${baseOutputDimensions.width} × ${baseOutputDimensions.height}`,
+                  label: `Original — ${originalOutputDimensions.width} × ${originalOutputDimensions.height}`,
                   description: "Keep the recording’s pixel dimensions.",
                 },
                 {
@@ -6459,7 +6543,8 @@ function CaptureOverlay() {
   };
 
   const onPointerDown = (event: React.PointerEvent) => {
-    if (mode !== "region") return;
+    // Only the primary button selects, as in the capture bar.
+    if (mode !== "region" || event.button !== 0) return;
     event.preventDefault();
     clearSelectionFeedback();
     reassertRegionCursor();
@@ -6520,6 +6605,7 @@ function CaptureOverlay() {
 
   const onPointerUp = (event: React.PointerEvent) => {
     if (mode === "window") {
+      if (event.button !== 0) return;
       applyWindowHoverAt(pointFromEvent(event));
       const scale = Math.max(session.window_coordinate_scale || 1, 1);
       const hit = frontmostCaptureTargetAtPoint(
@@ -6641,6 +6727,9 @@ function CaptureOverlay() {
                 borderRadius: item.cornerRadius,
               }}
               title={item.window.title || item.window.app_name || "Window"}
+              // Decorative outline: the overlay picks windows by pointer only.
+              tabIndex={-1}
+              aria-hidden="true"
             >
               <span>{item.window.title || item.window.app_name || "Window"}</span>
             </button>
@@ -7085,7 +7174,12 @@ export function Thumbnail() {
     };
   }, []);
 
+  const hasThumbnailCards = artifacts.length > 0;
+
+  // Only previews show clipboard state; do not poll for the app's whole
+  // lifetime from the hidden, empty preview window.
   useEffect(() => {
+    if (!hasThumbnailCards) return;
     let cancelled = false;
     let polling = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -7123,7 +7217,7 @@ export function Thumbnail() {
       document.removeEventListener("visibilitychange", pollImmediately);
       window.removeEventListener("focus", pollImmediately);
     };
-  }, [applyClipboardState]);
+  }, [applyClipboardState, hasThumbnailCards]);
 
   useLayoutEffect(() => {
     const previousCount = previousArtifactCount.current;
@@ -7226,8 +7320,6 @@ export function Thumbnail() {
       window.removeEventListener("captures-thumbnail-layout-changed", refresh);
     };
   }, [artifacts.length, refreshStackOverflow]);
-
-  const hasThumbnailCards = artifacts.length > 0;
 
   useEffect(() => {
     // Dust-delete and dismiss both hold layout; survivors slide toward the
@@ -9264,9 +9356,17 @@ function RecordingRecovery({
   drafts: RecordingDraftManifest[];
   onChanged: () => Promise<void>;
 }) {
-  const [busyId, setBusyId] = useState<string | null>(null);
+  const [busy, setBusy] = useState<{ sessionId: string; recovering: boolean } | null>(null);
   const [confirmDiscardId, setConfirmDiscardId] = useState<string | null>(null);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<{ sessionId: string; message: string } | null>(null);
+  const discardTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(
+    () => () => {
+      if (discardTimer.current) clearTimeout(discardTimer.current);
+    },
+    [],
+  );
 
   if (drafts.length === 0 && !error) return null;
 
@@ -9274,20 +9374,24 @@ function RecordingRecovery({
     command: "recover_recording_draft" | "discard_recording_draft",
     sessionId: string,
   ) => {
-    if (busyId) return;
-    setBusyId(sessionId);
-    setError("");
+    if (busy) return;
+    setBusy({ sessionId, recovering: command === "recover_recording_draft" });
+    setError(null);
     try {
       await invoke(command, { sessionId });
       setConfirmDiscardId(null);
       await onChanged();
     } catch (error) {
-      setError(recordingErrorMessage(error));
+      setError({ sessionId, message: recordingErrorMessage(error) });
       await onChanged().catch(() => undefined);
     } finally {
-      setBusyId(null);
+      setBusy(null);
     }
   };
+  // A failed action reports under its own row. The section only carries the
+  // message when that row is gone.
+  const orphanedError =
+    error && !drafts.some((draft) => draft.session_id === error.sessionId) ? error.message : "";
 
   return (
     <section className="recording-recovery-section">
@@ -9300,48 +9404,63 @@ function RecordingRecovery({
         const duration = draft.segments
           .filter((segment) => segment.complete)
           .reduce((total, segment) => total + segment.duration_ms, 0);
-        const isBusy = busyId === draft.session_id;
+        const isBusy = busy?.sessionId === draft.session_id;
+        const confirmingDiscard = confirmDiscardId === draft.session_id;
+        const rowError = error?.sessionId === draft.session_id ? error.message : "";
         return (
           <div className="recording-recovery-row" key={draft.session_id}>
             <div>
               <strong>{draft.options.kind === "gif" ? "GIF" : "Video"} recording</strong>
               <small>
-                {new Date(draft.created_at_ms).toLocaleString()} · {formatRecordingTime(duration)}{" "}
-                recovered so far
+                {formatHistoryDate(draft.created_at_ms)} · {formatRecordingTime(duration)} recovered
+                so far
               </small>
-              {draft.last_error && (
-                <small className="warning">{recordingErrorMessage(draft.last_error)}</small>
+              {rowError ? (
+                <small className="settings-error" role="alert">
+                  {rowError}
+                </small>
+              ) : (
+                draft.last_error && (
+                  <small className="warning">{recordingErrorMessage(draft.last_error)}</small>
+                )
               )}
             </div>
             <div>
               <button
                 type="button"
-                disabled={Boolean(busyId)}
+                disabled={Boolean(busy)}
                 onClick={() => void run("recover_recording_draft", draft.session_id)}
               >
-                {isBusy ? "Recovering…" : "Recover"}
+                {isBusy && busy.recovering ? "Recovering…" : "Recover"}
               </button>
               <button
                 type="button"
-                className={confirmDiscardId === draft.session_id ? "danger" : ""}
-                disabled={Boolean(busyId)}
+                className={confirmingDiscard ? "danger" : ""}
+                disabled={Boolean(busy)}
                 onClick={() => {
-                  if (confirmDiscardId === draft.session_id) {
+                  // Disarm like the other History confirmations do.
+                  if (discardTimer.current) clearTimeout(discardTimer.current);
+                  if (confirmingDiscard) {
                     void run("discard_recording_draft", draft.session_id);
                   } else {
                     setConfirmDiscardId(draft.session_id);
+                    discardTimer.current = setTimeout(() => setConfirmDiscardId(null), 4_000);
                   }
                 }}
               >
-                {confirmDiscardId === draft.session_id ? "Discard permanently?" : "Discard"}
+                {isBusy && !busy.recovering
+                  ? "Discarding…"
+                  : confirmingDiscard
+                    ? "Discard permanently?"
+                    : "Discard"}
               </button>
             </div>
           </div>
         );
       })}
-      {error && (
+      {orphanedError && (
         <p className="settings-error" role="alert">
-          {error}
+          {orphanedError}
         </p>
       )}
     </section>
@@ -9369,30 +9488,54 @@ type PreferenceSectionId = (typeof PREFERENCE_SECTIONS)[number]["id"];
 /** Highlights the sidebar entry for whichever settings card is in view. */
 function useVisibleSection(
   scrollerRef: RefObject<HTMLElement | null>,
+  // The scroller only mounts once settings load, after this hook's first effect.
+  ready: boolean,
 ): [PreferenceSectionId, (id: PreferenceSectionId) => void] {
   const [visible, setVisible] = useState<PreferenceSectionId>(PREFERENCE_SECTIONS[0].id);
+  // A section chosen from the sidebar stays highlighted through the scroll it
+  // starts, and until the user scrolls: the last sections cannot reach the top.
+  const pinnedRef = useRef(false);
 
   useEffect(() => {
     const root = scrollerRef.current;
-    if (!root || typeof IntersectionObserver !== "function") return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const topMost = entries
-          .filter((entry) => entry.isIntersecting)
-          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0];
-        const id = topMost?.target.id as PreferenceSectionId | undefined;
-        if (id) setVisible(id);
-      },
-      { root, rootMargin: "0px 0px -68% 0px", threshold: 0 },
-    );
-    for (const section of PREFERENCE_SECTIONS) {
-      const element = root.querySelector(`#${section.id}`);
-      if (element) observer.observe(element);
-    }
-    return () => observer.disconnect();
-  }, [scrollerRef]);
+    if (!root) return;
+    const onScroll = () => {
+      if (pinnedRef.current) return;
+      // The reading line moves from the top of the view to its bottom as the
+      // page scrolls, so every section gets a turn, including the last ones.
+      const maxScroll = root.scrollHeight - root.clientHeight;
+      const progress = maxScroll > 0 ? Math.min(1, Math.max(0, root.scrollTop / maxScroll)) : 0;
+      const line = root.getBoundingClientRect().top + root.clientHeight * progress;
+      let current: PreferenceSectionId = PREFERENCE_SECTIONS[0].id;
+      for (const section of PREFERENCE_SECTIONS) {
+        const element = root.querySelector(`#${section.id}`);
+        if (element && element.getBoundingClientRect().top <= line) current = section.id;
+      }
+      setVisible(current);
+    };
+    const unpin = () => {
+      pinnedRef.current = false;
+    };
+    root.addEventListener("scroll", onScroll, { passive: true });
+    root.addEventListener("pointerdown", unpin);
+    window.addEventListener("wheel", unpin, { passive: true });
+    window.addEventListener("touchmove", unpin, { passive: true });
+    window.addEventListener("keydown", unpin);
+    return () => {
+      root.removeEventListener("scroll", onScroll);
+      root.removeEventListener("pointerdown", unpin);
+      window.removeEventListener("wheel", unpin);
+      window.removeEventListener("touchmove", unpin);
+      window.removeEventListener("keydown", unpin);
+    };
+  }, [scrollerRef, ready]);
 
-  return [visible, setVisible];
+  const select = useCallback((id: PreferenceSectionId) => {
+    pinnedRef.current = true;
+    setVisible(id);
+  }, []);
+
+  return [visible, select];
 }
 
 const PREFERENCE_FIND_MATCH_CLASS = "preference-find-match";
@@ -9737,9 +9880,10 @@ export function Preferences() {
   );
   const [highlightedPreference, setHighlightedPreference] = useState<string | null>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
-  const [visibleSection, setVisibleSection] = useVisibleSection(scrollerRef);
+  const [visibleSection, setVisibleSection] = useVisibleSection(scrollerRef, settings !== null);
   const find = usePreferencesFind(scrollerRef, recordingShortcut, settings);
   const settingsRef = useRef<AppSettings | null>(null);
+  const savedSettingsRef = useRef<AppSettings | null>(null);
   const pendingSettingsRef = useRef<AppSettings | null>(null);
   const saveDelayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const savedStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -9806,6 +9950,7 @@ export function Preferences() {
       const request = (async () => {
         try {
           const saved = await invoke<AppSettings>("update_settings", { settings: pendingSettings });
+          savedSettingsRef.current = saved;
           if (!pendingSettingsRef.current) {
             settingsRef.current = saved;
             if (activeRef.current) {
@@ -9820,6 +9965,20 @@ export function Preferences() {
           }
         } catch (error) {
           if (!pendingSettingsRef.current) {
+            // Put back what is actually stored. Keeping the rejected value on
+            // screen would resend it with, and so fail, every later change.
+            const lastSaved = savedSettingsRef.current;
+            if (lastSaved) {
+              settingsRef.current = lastSaved;
+              if (activeRef.current) {
+                setSettings(lastSaved);
+                applyAppearance(lastSaved.appearance ?? DEFAULT_APPEARANCE);
+                applyColorTheme(
+                  lastSaved.theme ?? DEFAULT_COLOR_THEME,
+                  lastSaved.custom_theme ?? DEFAULT_CUSTOM_THEME,
+                );
+              }
+            }
             updateSaveStatus({ kind: "error", message: `Couldn’t save changes: ${String(error)}` });
           }
         }
@@ -9850,6 +10009,7 @@ export function Preferences() {
     ]).then(([loadedSettings, canExclude]) => {
       if (!active) return;
       settingsRef.current = loadedSettings;
+      savedSettingsRef.current = loadedSettings;
       setSettings(loadedSettings);
       setCanExcludeRecordingControls(canExclude);
     });
@@ -10088,6 +10248,7 @@ function PreferencesSections({
 }) {
   const appearance = settings.appearance ?? DEFAULT_APPEARANCE;
   const shortcutHelp = platformShortcutHelp(detectShortcutPlatform());
+  const [outputDirectoryDraft, setOutputDirectoryDraft] = useState<string | null>(null);
 
   return (
     <>
@@ -10234,10 +10395,22 @@ function PreferencesSections({
               <input
                 id="output-directory"
                 aria-label="Save captures to"
-                value={settings.output_directory}
-                onChange={(event) => update("output_directory", event.target.value)}
+                value={outputDirectoryDraft ?? settings.output_directory}
+                onChange={(event) => {
+                  // An empty path saves as the default folder, which would
+                  // refill the field while it is being retyped.
+                  setOutputDirectoryDraft(event.target.value);
+                  if (event.target.value.trim()) update("output_directory", event.target.value);
+                }}
+                onBlur={() => setOutputDirectoryDraft(null)}
               />
-              <button type="button" onClick={() => void chooseDirectory()}>
+              <button
+                type="button"
+                onClick={() => {
+                  setOutputDirectoryDraft(null);
+                  void chooseDirectory();
+                }}
+              >
                 Choose…
               </button>
             </div>
@@ -10594,6 +10767,18 @@ function PreferencesSections({
               ariaLabel="Default microphone"
               options={[
                 { value: "off", label: "Off" },
+                // Keep a saved microphone selected while the list loads or it is unplugged.
+                ...(settings.recording.microphone_device_id &&
+                !recordingDevices.some(
+                  (device) => device.id === settings.recording.microphone_device_id,
+                )
+                  ? [
+                      {
+                        value: settings.recording.microphone_device_id,
+                        label: "Selected microphone",
+                      },
+                    ]
+                  : []),
                 ...recordingDevices.map((device) => ({ value: device.id, label: device.name })),
               ]}
               onChange={(value) =>

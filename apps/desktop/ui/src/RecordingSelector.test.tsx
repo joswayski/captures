@@ -2078,6 +2078,36 @@ describe("RecordingSelector", () => {
     expect(invoke).not.toHaveBeenCalledWith("start_capture", expect.anything());
   });
 
+  it("ignores recording shortcuts while recording is unavailable, like its disabled button", async () => {
+    preparedSession = { ...session, initial_mode: "screenshot", recording_available: false };
+    render(<RecordingSelector />);
+    expect(await screen.findByRole("button", { name: "Record" })).toBeDisabled();
+
+    fireEvent.keyDown(window, {
+      key: "5",
+      code: "Digit5",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+
+    expect(screen.getByRole("button", { name: "Screenshot", pressed: true })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Start recording" })).not.toBeInTheDocument();
+  });
+
+  it("selects a window target from the keyboard", async () => {
+    render(<RecordingSelector />);
+    fireEvent.click(await screen.findByRole("button", { name: "Window" }));
+    expect(screen.getByRole("button", { name: "Start recording" })).toBeDisabled();
+
+    // Enter and Space on a focused button arrive as a click.
+    const preferences = screen.getByRole("button", { name: "Select Captures Preferences" });
+    fireEvent.click(preferences);
+
+    expect(preferences).toHaveClass("selected");
+    expect(screen.getByRole("button", { name: "Start recording" })).toBeEnabled();
+    expect(invoke).not.toHaveBeenCalledWith("start_recording", expect.anything());
+  });
+
   it("switches to Region recording from its shortcut while the capture menu is open", async () => {
     render(<RecordingSelector />);
     fireEvent.click(await screen.findByRole("button", { name: "Screenshot" }));

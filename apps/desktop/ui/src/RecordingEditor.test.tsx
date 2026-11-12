@@ -516,6 +516,93 @@ describe("RecordingEditor", () => {
     });
   });
 
+  it("starts edits over after saving over the original, so a second save cannot trim twice", async () => {
+    const { container } = render(<RecordingEditor />);
+    expect(await screen.findByRole("heading", { name: "Edit recording" })).toBeInTheDocument();
+    const video = container.querySelector<HTMLVideoElement>("video");
+    expect(video).toHaveAttribute("src", artifact.media_url);
+
+    const trimStart = screen.getByRole("slider", { name: "Trim start" });
+    const trimEnd = screen.getByRole("slider", { name: "Trim end" });
+    fireEvent.keyDown(trimStart, { key: "PageUp" });
+    fireEvent.keyDown(trimStart, { key: "PageUp" });
+    fireEvent.keyDown(trimEnd, { key: "PageDown" });
+    fireEvent.keyDown(trimEnd, { key: "PageDown" });
+    expect(trimStart).toHaveAttribute("aria-valuetext", "0:02.000");
+    expect(trimEnd).toHaveAttribute("aria-valuetext", "0:06.750");
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("start_recording_export", {
+        request: expect.objectContaining({
+          overwrite_source: true,
+          edit: expect.objectContaining({ trim_start_ms: 2_000, trim_end_ms: 6_750 }),
+        }),
+      });
+    });
+    vi.mocked(invoke).mockClear();
+
+    // The overwrite keeps the artifact id; the file is now the 4.75 s selection.
+    await act(async () => {
+      eventHandlers.get("recording-export-complete")?.({
+        payload: {
+          export_id: "export-1",
+          artifact: { ...artifact, duration_ms: 4_750, size_bytes: 2_100_000 },
+          reveal_error: null,
+        },
+      });
+    });
+
+    expect(screen.getByRole("slider", { name: "Trim start" })).toHaveAttribute(
+      "aria-valuetext",
+      "0:00.000",
+    );
+    expect(screen.getByRole("slider", { name: "Trim end" })).toHaveAttribute(
+      "aria-valuetext",
+      "0:04.750",
+    );
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    // Same id means the same media URL, so the preview is pointed at the new file.
+    expect(container.querySelector("video")?.getAttribute("src")).not.toBe(artifact.media_url);
+    expect(invoke).toHaveBeenCalledWith("prepare_recording_timeline_preview", {
+      artifactId: artifact.id,
+    });
+
+    // A later, unrelated change saves the whole trimmed file, not a second cut.
+    fireEvent.change(screen.getByRole("textbox", { name: "Saved filename" }), {
+      target: { value: "Renamed recording" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("start_recording_export", {
+        request: expect.objectContaining({
+          file_stem: "Renamed recording",
+          edit: expect.objectContaining({ trim_start_ms: 0, trim_end_ms: null }),
+        }),
+      });
+    });
+  });
+
+  it("labels the Original resolution with the recording's own size, whatever is selected", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_recording_artifact") return { ...artifact, width: 3_840, height: 2_160 };
+      if (command === "get_settings") return settings;
+      if (command === "prepare_recording_timeline_preview") return timeline;
+      if (command === "estimate_recording_export") return { sizeBytes: 1_000_000, exact: false };
+      throw new Error(`unexpected command: ${command}`);
+    });
+    render(<RecordingEditor />);
+    expect(await screen.findByRole("heading", { name: "Edit recording" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("combobox", { name: "Output resolution" }));
+    fireEvent.click(screen.getByRole("option", { name: /1080p maximum/ }));
+    fireEvent.click(screen.getByRole("combobox", { name: "Output resolution" }));
+
+    expect(screen.getByRole("option", { name: /^Original/ })).toHaveTextContent(
+      "Original — 3840 × 2160",
+    );
+  });
+
   it("defaults history-only recordings to the Captures folder, not media.mp4 recovery paths", async () => {
     window.history.replaceState(
       {},

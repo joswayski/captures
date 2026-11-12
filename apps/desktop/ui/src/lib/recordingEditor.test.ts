@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 
 import {
   capturesTimestampStem,
+  editorCropAfterDrag,
   isHistoryRecoveryMediaPath,
   recordingEditedFileStem,
   recordingInitialOutputFormat,
@@ -212,5 +213,19 @@ describe("timeline trim handle geometry", () => {
     expect(editorVideoStyles).toMatch(/\.recording-editor\s*\{[^}]*overflow-x:\s*hidden/s);
     expect(editorVideoStyles).toMatch(/\.timeline-filmstrip i\s*\{[^}]*flex:\s*1 1 0/s);
     expect(editorVideoStyles).toMatch(/\.timeline-trim-end > span\s*\{[^}]*right:\s*0/s);
+  });
+});
+
+describe("editorCropAfterDrag", () => {
+  it("keeps a moved crop on whole pixels, like a resized one", () => {
+    const moved = editorCropAfterDrag(
+      { x: 100, y: 60, width: 400, height: 300 },
+      "move",
+      { x: 12.37288135593224, y: -7.6 },
+      { width: 1_140, height: 692 },
+      true,
+    );
+
+    expect(moved).toEqual({ x: 112, y: 52, width: 400, height: 300 });
   });
 });

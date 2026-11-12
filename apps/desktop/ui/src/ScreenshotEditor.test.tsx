@@ -4970,4 +4970,183 @@ describe("ScreenshotEditor", () => {
       restoreCanvas();
     }
   });
+
+  function drawArrow(pointerId = 61): HTMLCanvasElement {
+    setCanvasZoomPercent(100);
+    fireEvent.click(screen.getByRole("button", { name: "Arrow (A)" }));
+    const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
+    canvas.setPointerCapture = vi.fn();
+    canvas.hasPointerCapture = vi.fn(() => true);
+    canvas.releasePointerCapture = vi.fn();
+    setCanvasBounds(canvas);
+    fireEvent.pointerDown(canvas, { button: 0, pointerId, clientX: 120, clientY: 180 });
+    fireEvent.pointerMove(canvas, { pointerId, clientX: 360, clientY: 180 });
+    fireEvent.pointerUp(canvas, { button: 0, pointerId, clientX: 360, clientY: 180 });
+    return canvas;
+  }
+
+  it("undoes a whole slider drag in one step", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Canvas width");
+    drawArrow();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Drop shadow" }));
+
+    for (const value of ["55", "62", "70"]) {
+      fireEvent.change(screen.getByRole("slider", { name: "Shadow opacity" }), {
+        target: { value },
+      });
+    }
+    expect(screen.getByRole("slider", { name: "Shadow opacity" })).toHaveAttribute(
+      "aria-valuetext",
+      "70%",
+    );
+
+    // One undo restores the value from before the drag, not the previous tick.
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    const layers = screen.getByRole("region", { name: "Layers" });
+    fireEvent.click(within(layers).getByRole("button", { name: /ArrowShape/ }));
+    expect(screen.getByRole("slider", { name: "Shadow opacity" })).toHaveAttribute(
+      "aria-valuetext",
+      "45%",
+    );
+    expect(screen.getByRole("checkbox", { name: "Drop shadow" })).toBeChecked();
+  });
+
+  it("keeps separate undo steps for edits to different properties", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Canvas width");
+    drawArrow();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Drop shadow" }));
+    fireEvent.change(screen.getByRole("slider", { name: "Shadow opacity" }), {
+      target: { value: "70" },
+    });
+
+    // Draw, toggle, slider: three steps back to an empty document.
+    const undo = screen.getByRole("button", { name: "Undo" });
+    fireEvent.click(undo);
+    fireEvent.click(undo);
+    expect(undo).toBeEnabled();
+    fireEvent.click(undo);
+    expect(undo).toBeDisabled();
+  });
+
+  it("does not move the selected layer when arrow keys drive a dropdown", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Canvas width");
+    drawArrow();
+    openExportSettings();
+
+    const outputSize = screen.getByRole("combobox", { name: "Output size" });
+    fireEvent.keyDown(outputSize, { key: "ArrowDown" });
+    fireEvent.keyDown(outputSize, { key: "ArrowDown" });
+
+    // Only the drawn arrow is on the undo stack: no nudge was recorded.
+    const undo = screen.getByRole("button", { name: "Undo" });
+    fireEvent.click(undo);
+    expect(undo).toBeDisabled();
+  });
+
+  it("still nudges the selected layer with arrow keys on the canvas", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Canvas width");
+    drawArrow();
+
+    fireEvent.keyDown(window, { key: "ArrowDown" });
+
+    const undo = screen.getByRole("button", { name: "Undo" });
+    fireEvent.click(undo);
+    expect(undo).toBeEnabled();
+  });
+
+  it("does not leave a zero-size shape after a click with no drag", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Canvas width");
+
+    setCanvasZoomPercent(100);
+    chooseShapeTool("Rectangle (R)");
+    const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
+    canvas.setPointerCapture = vi.fn();
+    canvas.hasPointerCapture = vi.fn(() => true);
+    canvas.releasePointerCapture = vi.fn();
+    setCanvasBounds(canvas);
+
+    fireEvent.pointerDown(canvas, { button: 0, pointerId: 41, clientX: 220, clientY: 180 });
+    fireEvent.pointerUp(canvas, { button: 0, pointerId: 41, clientX: 220, clientY: 180 });
+    expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+
+    // A real drag still creates the shape.
+    fireEvent.pointerDown(canvas, { button: 0, pointerId: 42, clientX: 220, clientY: 180 });
+    fireEvent.pointerMove(canvas, { pointerId: 42, clientX: 320, clientY: 260 });
+    fireEvent.pointerUp(canvas, { button: 0, pointerId: 42, clientX: 320, clientY: 260 });
+    expect(screen.getByRole("button", { name: "Undo" })).toBeEnabled();
+  });
+
+  it("scales drop shadows with the canvas transform so the canvas matches the export", async () => {
+    const restoreCanvas = installExportableCanvas();
+    // Canvas shadows ignore the transform; pretend the editor paints at 2x.
+    const context = document.createElement("canvas").getContext("2d")!;
+    const blurs: number[] = [];
+    Object.assign(context, { getTransform: () => ({ a: 2, b: 0, c: 0, d: 2, e: 0, f: 0 }) });
+    Object.defineProperty(context, "shadowBlur", {
+      configurable: true,
+      get: () => 0,
+      set: (value: number) => blurs.push(value),
+    });
+
+    try {
+      render(<ScreenshotEditor />);
+      await screen.findByLabelText("Canvas width");
+      drawArrow(81);
+      fireEvent.click(screen.getByRole("checkbox", { name: "Drop shadow" }));
+      fireEvent.change(screen.getByRole("slider", { name: "Shadow blur" }), {
+        target: { value: "22" },
+      });
+
+      await waitFor(() => expect(blurs).toContain(44));
+      expect(blurs).not.toContain(22);
+    } finally {
+      restoreCanvas();
+    }
+  });
+
+  it("keeps the draft for edits made while a save is in flight", async () => {
+    const restoreCanvas = installExportableCanvas();
+    let finishSave: (() => void) | undefined;
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifact") return artifact;
+      if (command === "save_screenshot_edit") {
+        return new Promise((resolve) => {
+          finishSave = () => resolve({ artifact, path: artifact.path, format: "png" });
+        });
+      }
+      if (command === "estimate_screenshot_export") return 12_000;
+      const draft = draftCommandResult(String(command));
+      if (draft !== undefined || String(command).includes("screenshot_editor_draft")) {
+        return draft;
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    try {
+      render(<ScreenshotEditor />);
+      await screen.findByLabelText("Canvas width");
+      drawArrow(71);
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(finishSave).toBeDefined());
+
+      // The canvas stays editable during the save; this arrow is not in the file.
+      const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
+      fireEvent.pointerDown(canvas, { button: 0, pointerId: 72, clientX: 200, clientY: 400 });
+      fireEvent.pointerMove(canvas, { pointerId: 72, clientX: 500, clientY: 400 });
+      fireEvent.pointerUp(canvas, { button: 0, pointerId: 72, clientX: 500, clientY: 400 });
+
+      await act(async () => {
+        finishSave!();
+      });
+      await screen.findByText(/Saved/);
+      expect(invoke).not.toHaveBeenCalledWith("discard_screenshot_editor_draft", expect.anything());
+    } finally {
+      restoreCanvas();
+    }
+  });
 });

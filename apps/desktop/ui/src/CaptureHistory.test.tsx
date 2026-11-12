@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { startDrag } from "@crabnebula/tauri-plugin-drag";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import { CaptureHistory, HistoryCard } from "./App";
 import type { HistoryEntry, RecordingDraftManifest } from "./types";
@@ -665,6 +665,47 @@ describe("CaptureHistory", () => {
       expect(
         screen.queryByRole("heading", { name: "Interrupted recordings" }),
       ).not.toBeInTheDocument();
+    });
+  });
+
+  it("reports a failed recovery under its own row and names the running action", async () => {
+    const secondRecording = {
+      ...interruptedRecording,
+      session_id: "0b9d7c1e-58f4-4a3a-9c1b-4a2d9e7f6c55",
+    };
+    let finishDiscard: (() => void) | undefined;
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_capture_history") return [];
+      if (command === "get_recording_drafts") return [interruptedRecording, secondRecording];
+      if (command === "recover_recording_draft") throw new Error("No playable segments");
+      if (command === "discard_recording_draft") {
+        return new Promise<void>((resolve) => {
+          finishDiscard = resolve;
+        });
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    const { container } = render(<CaptureHistory />);
+    await screen.findByRole("heading", { name: "Interrupted recordings" });
+    const rows = () =>
+      [...container.querySelectorAll<HTMLElement>(".recording-recovery-row")].map((row) =>
+        within(row),
+      );
+
+    fireEvent.click(rows()[0].getByRole("button", { name: "Recover" }));
+    expect(await rows()[0].findByRole("alert")).toHaveTextContent("No playable segments");
+    expect(rows()[1].queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+
+    fireEvent.click(rows()[1].getByRole("button", { name: "Discard" }));
+    fireEvent.click(rows()[1].getByRole("button", { name: "Discard permanently?" }));
+    expect(await rows()[1].findByRole("button", { name: "Discarding…" })).toBeDisabled();
+    // The untouched Recover buttons keep their own label while the discard runs.
+    expect(screen.queryByRole("button", { name: "Recovering…" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Recover" })).toHaveLength(2);
+    await act(async () => {
+      finishDiscard!();
     });
   });
 });

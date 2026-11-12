@@ -155,7 +155,7 @@
  * confirmation, so a list of cards is not a wall of red.
  */
 .ui-btn-danger,
-:is(.history-delete, .history-clear-all, .recording-recovery-row button.danger) {
+button:is(.history-delete, .history-clear-all) {
   border-color: transparent;
   color: var(--text-subtle);
   background: transparent;
@@ -163,21 +163,27 @@
 }
 
 .ui-btn-danger:hover:not(:disabled),
-:is(.history-delete, .history-clear-all, .recording-recovery-row button.danger):hover:not(
-    :disabled
-  ) {
+button:is(.history-delete, .history-clear-all):hover:not(:disabled) {
   border-color: transparent;
   color: var(--danger-text);
   background: var(--danger-surface);
 }
 
-:is(.history-delete-confirm, .history-clear-all-confirm) {
+/*
+ * An armed confirmation is the loud state. These selectors must outrank the
+ * quiet rules above, or "Delete all forever" reads as muted text.
+ */
+button:is(.history-delete-confirm, .history-clear-all-confirm),
+.recording-recovery-row button.danger {
   border-color: transparent;
   color: #fff;
   background: var(--theme-signal-strong);
 }
 
-:is(.history-delete-confirm, .history-clear-all-confirm):hover:not(:disabled) {
+button:is(.history-delete-confirm, .history-clear-all-confirm):hover:not(:disabled),
+.recording-recovery-row button.danger:hover:not(:disabled) {
+  border-color: transparent;
+  color: #fff;
   background: var(--theme-signal-deep);
 }
 

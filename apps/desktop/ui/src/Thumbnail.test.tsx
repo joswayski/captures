@@ -100,6 +100,22 @@ describe("Thumbnail", () => {
     document.documentElement.style.removeProperty("--thumbnail-stack-drag-y");
   });
 
+  it("polls the clipboard only while a preview is showing", async () => {
+    useArtifactFixture([]);
+    const first = render(<Thumbnail />);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(invoke).toHaveBeenCalledWith("get_artifacts");
+    expect(invoke).not.toHaveBeenCalledWith("get_clipboard_state");
+    first.unmount();
+
+    useArtifactFixture([artifact]);
+    render(<Thumbnail />);
+    await screen.findByRole("article");
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("get_clipboard_state"));
+  });
+
   it("preserves the native hover presentation while focus moves to a viewer", async () => {
     render(<Thumbnail />);
 
