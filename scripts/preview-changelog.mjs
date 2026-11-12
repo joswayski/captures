@@ -31,6 +31,14 @@ export function previewChangelog(releases, throughTag) {
     }));
 }
 
+// Installed apps and the captur.es API reject a manifest over 256 KiB; stay
+// well under it so the platforms and notes always fit.
+export const MAX_MANIFEST_BYTES = 128 * 1024;
+
+export function manifestText(latest) {
+  return `${JSON.stringify(latest, null, 2)}\n`;
+}
+
 export function applyPreviewChangelog(latest, releases, throughTag) {
   const changelog = previewChangelog(releases, throughTag);
   if (changelog.length === 0) {
@@ -41,7 +49,16 @@ export function applyPreviewChangelog(latest, releases, throughTag) {
       `latest.json version ${latest?.version} does not match newest changelog ${changelog[0].version}`,
     );
   }
-  return { ...latest, changelog };
+  // Drop the oldest entries until the manifest fits; apps that far behind
+  // still update and show the newest notes.
+  const updated = { ...latest, changelog };
+  while (changelog.length > 1 && Buffer.byteLength(manifestText(updated)) > MAX_MANIFEST_BYTES) {
+    changelog.pop();
+  }
+  if (Buffer.byteLength(manifestText(updated)) > MAX_MANIFEST_BYTES) {
+    throw new Error(`latest.json is larger than ${MAX_MANIFEST_BYTES} bytes`);
+  }
+  return updated;
 }
 
 function main() {
@@ -54,7 +71,7 @@ function main() {
   const latest = JSON.parse(readFileSync(latestPath, "utf8"));
   const releases = JSON.parse(readFileSync(releasesPath, "utf8"));
   const updated = applyPreviewChangelog(latest, releases, throughTag);
-  writeFileSync(latestPath, `${JSON.stringify(updated, null, 2)}\n`);
+  writeFileSync(latestPath, manifestText(updated));
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

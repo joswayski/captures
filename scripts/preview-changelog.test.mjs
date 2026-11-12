@@ -6,7 +6,12 @@ import { spawnSync } from "node:child_process";
 import { test } from "vitest";
 import { fileURLToPath } from "node:url";
 
-import { applyPreviewChangelog, previewChangelog } from "./preview-changelog.mjs";
+import {
+  MAX_MANIFEST_BYTES,
+  applyPreviewChangelog,
+  manifestText,
+  previewChangelog,
+} from "./preview-changelog.mjs";
 import { encodedPreviewVersion } from "./preview-release.mjs";
 
 function release({ tag, body, draft = false, prerelease = true, id = 1, assets = [] }) {
@@ -37,6 +42,24 @@ test("stacks dated Preview notes newest first and ignores other releases", () =>
     { version: "2026.8.2704", display_version: "2026.08.27.4", notes: "Four" },
     { version: "2026.8.2702", display_version: "2026.08.27.2", notes: "Two" },
   ]);
+});
+
+test("drops the oldest changelog entries to keep latest.json under the size limit", () => {
+  const body = "x".repeat(20 * 1024);
+  const releases = Array.from({ length: 12 }, (_, index) =>
+    release({ tag: `v2026.08.27.${index + 1}`, body: `${index + 1} ${body}` }),
+  );
+  const latest = { version: "2026.8.2712", notes: "Twelve", platforms: {} };
+  const updated = applyPreviewChangelog(latest, releases);
+  const size = Buffer.byteLength(manifestText(updated));
+  assert.ok(size <= MAX_MANIFEST_BYTES, `${size} bytes`);
+  // About six 20 KiB entries fit in 128 KiB; the newest ones are kept, in order.
+  const kept = updated.changelog.map((entry) => entry.display_version);
+  assert.ok(kept.length >= 5 && kept.length < 12, kept.join());
+  assert.deepEqual(
+    kept,
+    Array.from({ length: kept.length }, (_, index) => `2026.08.27.${12 - index}`),
+  );
 });
 
 test("rejects a manifest that is not the newest changelog version", () => {
