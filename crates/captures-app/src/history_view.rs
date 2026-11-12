@@ -107,6 +107,7 @@ pub fn copy() -> &'static Copy {
 /// Discard (`.danger`) that arms "Discard permanently?" first.
 pub const RECOVER: &str = "Recover";
 pub const RECOVERING: &str = "Recovering…";
+pub const DISCARDING: &str = "Discarding…";
 pub const DISCARD: &str = "Discard";
 pub const DISCARD_CONFIRM: &str = "Discard permanently?";
 /// Shown for a bundle the shared recovery cannot read.
@@ -149,7 +150,7 @@ pub fn recording_error_message(message: &str) -> String {
 pub struct RecoveryRow {
     /// `strong`: "Video recording", "GIF recording", or "Unavailable recording".
     pub title: String,
-    /// `small`: `toLocaleString()` date · completed duration "recovered so far".
+    /// `small`: History card date · completed duration "recovered so far".
     pub detail: String,
 }
 
@@ -176,13 +177,13 @@ where
         Some(RecordingKind::Gif) => "GIF",
         None => "Unavailable",
     };
-    // en-US `Date.toLocaleString()`.
+    // Shipping's `formatHistoryDate`, the same as History cards.
     let date = created_at_ms
         .and_then(|ms| i64::try_from(ms).ok())
         .and_then(|ms| zone.timestamp_millis_opt(ms).single())
         .map_or_else(
             || "Unknown date".to_owned(),
-            |date| date.format("%-m/%-d/%Y, %-I:%M:%S %p").to_string(),
+            |date| date.format("%b %-d, %Y, %-I:%M %p").to_string(),
         );
     RecoveryRow {
         title: format!("{kind} recording"),
@@ -679,7 +680,7 @@ mod tests {
         assert_eq!(row.title, "GIF recording");
         assert_eq!(
             row.detail,
-            "9/26/2026, 2:50:45 PM · 1:02:03 recovered so far"
+            "Sep 26, 2026, 2:50 PM · 1:02:03 recovered so far"
         );
         let row = recovery_row_in(None, None, 59_999, &utc);
         assert_eq!(row.title, "Unavailable recording");

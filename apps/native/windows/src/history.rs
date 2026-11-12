@@ -250,6 +250,8 @@ struct RowLayout {
     title: Text,
     detail: Text,
     reason: Option<Text>,
+    /// `reason` is this row's Recover/Discard error, not a warning.
+    row_error: bool,
     recover: Option<Rect>,
     discard: Option<Rect>,
 }
@@ -465,10 +467,18 @@ pub struct History {
     pub drafts: Vec<Draft>,
     /// The row whose Discard reads "Discard permanently?".
     pub discard_armed: Option<u32>,
+    /// An armed Discard disarms at this deadline, like the other
+    /// History confirmations (shipping's 4 s timer).
+    discard_deadline: Option<Instant>,
     /// The row being recovered or discarded; every row waits for it.
     pub recovery_busy: Option<u32>,
-    /// `.settings-error` under the rows.
+    /// The busy row is discarding ("Discarding…"), not recovering.
+    recovery_discarding: bool,
+    /// A Recover or Discard error (or recovery warning) with the row it
+    /// belongs to. It shows under that row (`role="alert"`), or under the
+    /// section once the row is gone or for a list failure.
     pub recovery_error: Option<String>,
+    recovery_error_row: Option<u32>,
     /// Delete all arms until this deadline.
     pub confirm_all: Option<Instant>,
     pub deleting_all: bool,
@@ -556,8 +566,11 @@ impl History {
             error: None,
             drafts: Vec::new(),
             discard_armed: None,
+            discard_deadline: None,
             recovery_busy: None,
+            recovery_discarding: false,
             recovery_error: None,
+            recovery_error_row: None,
             confirm_all: None,
             deleting_all: false,
             next_serial: 1,
@@ -817,15 +830,23 @@ impl History {
             for serial in old.into_iter().chain([serial]) {
                 self.events.push(Event::Name(Target::Discard(serial)));
             }
+            self.discard_deadline =
+                Some(Instant::now() + Duration::from_millis(history_view::CONFIRM_TIMEOUT_MS));
+            self.arm_timer();
             self.relayout = true;
             return;
         }
+        self.discard_deadline = None;
         self.recovery_busy = Some(serial);
+        self.recovery_discarding = discard;
         self.recovery_error = None;
+        self.recovery_error_row = None;
         self.relayout = true;
-        if !discard {
-            self.events.push(Event::Name(Target::Recover(serial)));
-        }
+        self.events.push(Event::Name(if discard {
+            Target::Discard(serial)
+        } else {
+            Target::Recover(serial)
+        }));
         let (root, sender, hwnd) = (self.root.clone(), self.sender.clone(), self.hwnd.0 as isize);
         std::thread::spawn(move || {
             let recovery = RecordingRecovery::new(root, crate::recording::toolchain());
@@ -960,10 +981,17 @@ impl History {
                 .item(serial)
                 .and_then(|item| Some(item.action_label(*item.card.actions.get(i)?).into()))
                 .unwrap_or_default(),
-            Target::Recover(serial) if self.recovery_busy == Some(serial) => {
+            Target::Recover(serial)
+                if !self.recovery_discarding && self.recovery_busy == Some(serial) =>
+            {
                 history_view::RECOVERING.into()
             }
             Target::Recover(_) => history_view::RECOVER.into(),
+            Target::Discard(serial)
+                if self.recovery_discarding && self.recovery_busy == Some(serial) =>
+            {
+                history_view::DISCARDING.into()
+            }
             Target::Discard(serial) if self.discard_armed == Some(serial) => {
                 history_view::DISCARD_CONFIRM.into()
             }
@@ -1241,6 +1269,7 @@ impl History {
             }
             Done::Drafts(Err(error)) => {
                 self.recovery_error = Some(error);
+                self.recovery_error_row = None;
                 self.events.push(Event::Structure);
                 self.relayout = true;
             }
@@ -1268,7 +1297,10 @@ impl History {
     /// shipping, keeping an error (or a recovery warning) under the rows.
     fn recovery_done(&mut self, serial: u32, result: std::result::Result<Option<String>, String>) {
         self.recovery_busy = None;
+        self.recovery_discarding = false;
         self.discard_armed = None;
+        self.discard_deadline = None;
+        self.recovery_error_row = Some(serial);
         match result {
             Ok(warning) => self.recovery_error = warning,
             Err(error) => {
@@ -1277,6 +1309,7 @@ impl History {
             }
         }
         self.events.push(Event::Name(Target::Recover(serial)));
+        self.events.push(Event::Name(Target::Discard(serial)));
         self.events.push(Event::Structure);
         self.relayout = true;
         self.reload();
@@ -1287,6 +1320,13 @@ impl History {
         let now = Instant::now();
         if self.confirm_all.is_some_and(|at| at <= now) {
             self.disarm_all();
+        }
+        if self.discard_deadline.is_some_and(|at| at <= now) {
+            self.discard_deadline = None;
+            if let Some(serial) = self.discard_armed.take() {
+                self.events.push(Event::Name(Target::Discard(serial)));
+                self.relayout = true;
+            }
         }
         let expired: Vec<u32> = self
             .items
@@ -1323,6 +1363,7 @@ impl History {
             .iter()
             .flat_map(|item| item.confirm.into_iter().chain(item.restored))
             .chain(self.confirm_all)
+            .chain(self.discard_deadline)
             .min();
         unsafe {
             match next {
@@ -1570,12 +1611,15 @@ impl History {
             let rule_y = cy;
             cy += 1. + s4;
             let buttons = if draft.actionable() {
-                let recover = if self.recovery_busy == Some(draft.serial) {
+                let busy = self.recovery_busy == Some(draft.serial);
+                let recover = if busy && !self.recovery_discarding {
                     history_view::RECOVERING
                 } else {
                     history_view::RECOVER
                 };
-                let discard = if self.discard_armed == Some(draft.serial) {
+                let discard = if busy && self.recovery_discarding {
+                    history_view::DISCARDING
+                } else if self.discard_armed == Some(draft.serial) {
                     history_view::DISCARD_CONFIRM
                 } else {
                     history_view::DISCARD
@@ -1589,10 +1633,17 @@ impl History {
             let row_title =
                 g.text_sized(t, &draft.row.title, n("text-md"), "weight-medium", None)?;
             let detail = g.text(t, Style::Error, &draft.row.detail, text_w)?;
-            let reason = draft
-                .reason()
-                .map(|reason| g.text(t, Style::Error, &reason, text_w))
-                .transpose()?;
+            // Shipping shows this row's Recover/Discard error in place of
+            // its warning.
+            let row_error = self.recovery_error_row == Some(draft.serial);
+            let reason = (if row_error {
+                self.recovery_error.clone()
+            } else {
+                None
+            })
+            .or_else(|| draft.reason())
+            .map(|reason| g.text(t, Style::Error, &reason, text_w))
+            .transpose()?;
             let text_h = row_title.height
                 + 2.
                 + detail.height
@@ -1617,12 +1668,16 @@ impl History {
                 title: row_title,
                 detail,
                 reason,
+                row_error: row_error && self.recovery_error.is_some(),
                 recover,
                 discard,
             });
             cy += row_h;
         }
-        let error = match &self.recovery_error {
+        let orphaned = self
+            .recovery_error_row
+            .is_none_or(|serial| self.draft(serial).is_none());
+        let error = match self.recovery_error.as_ref().filter(|_| orphaned) {
             Some(error) => {
                 cy += s4;
                 let text = g.text(t, Style::Error, error, inner_w)?;
@@ -2394,7 +2449,12 @@ impl History {
             gfx::text(dc, &row.detail, x, y, c("text-subtle"))?;
             if let Some(reason) = &row.reason {
                 y += row.detail.height + 2.;
-                gfx::text(dc, reason, x, y, c("caution-text"))?;
+                let ink = if row.row_error {
+                    "danger-text"
+                } else {
+                    "caution-text"
+                };
+                gfx::text(dc, reason, x, y, c(ink))?;
             }
             for (target, r) in [
                 (Target::Recover(row.serial), row.recover),
@@ -2406,13 +2466,20 @@ impl History {
                 let hovered = enabled && self.hover == Some(target);
                 // Shipping adds `.danger` only to the armed Discard.
                 let danger = matches!(target, Target::Discard(s) if self.discard_armed == Some(s));
-                // `.ui-btn` (Recover) and `.ui-btn-danger` (Discard).
+                // `.ui-btn`; the armed Discard is the loud signal button
+                // (`.recording-recovery-row button.danger`).
                 let ink = if danger {
-                    if hovered {
-                        gfx::fill_round(dc, b, t.n("r-md"), c("danger-surface"))?;
-                        c("danger-text")
+                    let bg = if hovered {
+                        "theme-signal-deep"
                     } else {
-                        c("text-subtle")
+                        "theme-signal-strong"
+                    };
+                    gfx::fill_round(dc, b, t.n("r-md"), c(bg))?;
+                    D2D1_COLOR_F {
+                        r: 1.,
+                        g: 1.,
+                        b: 1.,
+                        a: 1.,
                     }
                 } else {
                     gfx::shadow(dc, b, t.n("r-md"), t.shadow("shadow-xs"))?;
@@ -3603,6 +3670,9 @@ pub fn render_offscreen(
     }
     if options.select.as_deref() == Some("recovery") {
         history.discard_armed = history.drafts.get(1).map(|d| d.serial);
+        // A failed Recover reports under its own row, replacing its warning.
+        history.recovery_error_row = history.drafts.first().map(|d| d.serial);
+        history.recovery_error = Some("No playable segments could be recovered".into());
     }
     history.layout(w, h)?;
     history.relayout = false;

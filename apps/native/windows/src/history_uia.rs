@@ -649,7 +649,12 @@ pub fn describe(h: &History, events: Vec<Event>) -> Vec<(Event, String)> {
         .map(|event| {
             let detail = match event {
                 Event::Name(target) => h.name(target),
-                Event::Alert(None) => h.error.clone().unwrap_or_default(),
+                // The page error, else a Recover/Discard error.
+                Event::Alert(None) => h
+                    .error
+                    .clone()
+                    .or_else(|| h.recovery_error.clone())
+                    .unwrap_or_default(),
                 Event::Alert(Some(serial)) => h
                     .item(serial)
                     .and_then(|it| it.error.clone())
