@@ -126,6 +126,13 @@ pub(super) enum Outcome {
 /// Explicit overrides, then packaged/repository Tauri sidecars, then PATH.
 /// A Windows GNU workbench still uses the shipped MSVC sidecar executable.
 pub(crate) fn toolchain() -> MediaToolchain {
+    let (ffmpeg, ffprobe) = tool_paths();
+    MediaToolchain::new(ffmpeg, ffprobe)
+}
+
+/// `(ffmpeg, ffprobe)` as [`toolchain`] finds them, for shared requests
+/// that take the paths.
+pub(crate) fn tool_paths() -> (PathBuf, PathBuf) {
     let target = format!("{}-pc-windows-msvc", std::env::consts::ARCH);
     let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../desktop/src-tauri/binaries");
     let executable = std::env::current_exe()
@@ -148,7 +155,7 @@ pub(crate) fn toolchain() -> MediaToolchain {
             })
             .unwrap_or_else(|| PathBuf::from(format!("{name}.exe")))
     };
-    MediaToolchain::new(
+    (
         tool("ffmpeg", "CAPTURES_FFMPEG"),
         tool("ffprobe", "CAPTURES_FFPROBE"),
     )

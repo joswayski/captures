@@ -55,10 +55,11 @@ dispatch and nightly. Each host answers `--preview-build-info` (`win32`, `gtk`)
 with the compiled Preview version, which the builder checks before bundling it
 as `captures`/`captures.exe`, the names the Preview installer updater requires.
 A Preview build starts as the resident app on the imported Preview profile and
-holds the package-use lock. Still missing against the wgpu package: the startup
-recovery companion and readiness handoff, in-app installation (Win32 has no
-update check; GTK checks and downloads only) and Win32 Open With/file
-associations (a path argument exits). GTK finds the packaged FFmpeg/FFprobe
+holds the package-use lock. Still missing against the wgpu package: GTK's startup
+recovery companion, readiness handoff and in-app installation (it checks and
+downloads only), and Win32's update notice window. Win32 now has the companion,
+readiness handoff, Preview check/download/install and Open With; see the Win32
+Preview updates and Open With slice below. GTK finds the packaged FFmpeg/FFprobe
 beside its executable. The AppImage runs GTK with `GDK_BACKEND=x11` (the Tauri
 CLI's GTK hook), so Wayland sessions get XWayland. Status: the Linux AppImage and
 `.deb` built in an orb; the AppImage launched under Xvfb with an isolated HOME
@@ -7463,3 +7464,41 @@ open/close cycles. Cold dust preparation target is under 16.7 ms, with a respons
 fallback if it cannot meet the deadline. These are targets, not measured claims.
 Preserve physical-footprint/process-tree measurement from #529 for comparisons;
 the initial runner's `ps` RSS is only a diagnostic, never a substitute.
+
+### Win32 Preview updates, Open With and startup recovery
+
+The Win32 host now ports the packaged wgpu host's remaining Preview behavior
+through shared code. Open With: an installed Preview accepts plain path and
+`file:` URI arguments (`preview_channel::local_media_path`), development builds
+`--open-media PATH` or `-- FILE...` with `--live`; files forward through the
+existing `captures_app::instance` election and import one at a time through
+`Request::OpenMedia` (the same import wgpu and GTK use), then open the screenshot
+or recording editor. Open With launches open only the editors, as shipping.
+Updates: the resident app owns `CheckWorker::preview`, checks at launch and
+every five minutes, and drives Preferences' Updates card with shipping's
+`UpdateSettings` copy (Check Now, Version N is available with Update now, the
+progress bar, Up to date, “Couldn’t check for updates”, “Update failed” with
+Try again, the captur.es fallback). The tray's Check for Updates checks and
+scrolls to the card. Update now downloads and verifies, then calls
+`launch_preview_install` with a restart intent (previews, editors, Preferences)
+and quits; it refuses during a capture or recording. The floating update notice
+window is not ported. Startup recovery: `recovery::Startup` arms before profile
+import, readiness is acknowledged after settings, a Direct2D device and the
+bundled media tools check out, forwarding and normal Quit finish it, and only
+the elected primary consumes the restart intent.
+
+Renderer: Win32 keeps reporting `updater::Renderer::Wgpu`. The Preview path
+(`preview::Client`) reads the Tauri-compatible `latest.json`, which has no
+renderer field; `ReleaseInfo.renderer` only labels the release and is compared
+in shutdown intents, and the recovery helper hard-codes `Wgpu` for non-macOS
+hosts. Only the signed development manifest (`UpdateClient`) matches
+`renderer`, and its published Windows/Linux manifests say `wgpu`. A new `Win32`
+or `Gtk` value would break the recovery helper's matching and every existing
+`wgpu` development manifest without changing what the Preview channel installs,
+so it waits until native publication resumes with per-host manifests.
+
+Verified only under Wine (x86_64-pc-windows-gnu): clippy, 54 tests (argument
+parsing for paths, file URIs, UNC URIs, flags and readiness pairs; card states)
+and offscreen renders of each card state. Physical Windows, a real NSIS install,
+Open With from Explorer, a real update and recovery after a failed launch are
+unverified. macOS, Linux: unchanged.

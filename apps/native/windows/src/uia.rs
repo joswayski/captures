@@ -173,6 +173,7 @@ fn target(id: Id) -> Option<Target> {
         Id::ResetColors => Some(Target::ResetColors),
         Id::Well(i) => Some(Target::Well(i)),
         Id::Hex(i) => Some(Target::Hex(i)),
+        Id::UpdateAction => Some(Target::UpdateAction),
         _ => None,
     }
 }
@@ -193,6 +194,7 @@ fn id_of(target: Target) -> Id {
         Target::ResetColors => Id::ResetColors,
         Target::Well(i) => Id::Well(i),
         Target::Hex(i) => Id::Hex(i),
+        Target::UpdateAction => Id::UpdateAction,
     }
 }
 
@@ -297,7 +299,7 @@ fn rect(host: &Host, id: Id) -> Rect {
         Id::Accents => scene.accent_rect(),
         Id::Folder => scene.field_rect(),
         Id::UpdateVersion => scene.update_copy_rect(),
-        Id::UpdateAction => scene.update_rects().0,
+        Id::UpdateAction => scene.target_rect(Target::UpdateAction),
         Id::UpdateStatus => scene.update_rects().1,
         Id::Find => scene.find_rects().0,
         Id::SaveStatus => scene.save_rect(),
@@ -326,6 +328,21 @@ fn name(host: &Host, id: Id) -> String {
         Id::Choose => "Choose…".into(),
         // Shipping repeats "Open"; the row title tells the two apart.
         Id::Open(which) => format!("{} {}", which.copy().2, which.copy().0),
+        Id::UpdateVersion | Id::UpdateAction | Id::UpdateStatus
+            if let Some(card) = &host.scene.update =>
+        {
+            match id {
+                Id::UpdateVersion => card.version.clone(),
+                Id::UpdateAction => card.action.into(),
+                // The status, then the alert text, as one `role="status"`.
+                _ => [card.heading.as_str(), card.detail.as_str()]
+                    .into_iter()
+                    .chain(card.error.as_deref())
+                    .filter(|text| !text.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(". "),
+            }
+        }
         Id::UpdateVersion => preferences::UPDATES_VERSION.into(),
         Id::UpdateAction => preferences::UPDATES_ACTION.into(),
         Id::UpdateStatus => preferences::UPDATES_TITLE.into(),
@@ -363,6 +380,8 @@ fn help(host: &Host, id: Id) -> String {
         Id::Modes => preferences::row("appearance").description.into(),
         Id::Accents => preferences::row("theme").description.into(),
         Id::Open(which) => which.copy().1.into(),
+        Id::UpdateVersion if let Some(card) = &host.scene.update => card.channel.into(),
+        Id::UpdateAction | Id::UpdateStatus if host.scene.update.is_some() => String::new(),
         Id::UpdateVersion => preferences::UPDATES_CHANNEL.into(),
         Id::UpdateAction | Id::UpdateStatus => preferences::UPDATES_DETAIL.into(),
         Id::Shortcut(i) => host.scene.shortcut_error(i).into(),
@@ -573,8 +592,8 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
             let scene = &host.scene;
             let enabled = match id {
                 Id::Switch(row) => scene.rows[row].enabled,
-                // No update worker in this host.
-                Id::UpdateAction => false,
+                // Enabled only with a Preview build's idle update worker.
+                Id::UpdateAction => scene.update_enabled(),
                 Id::Option(key, i) => scene
                     .select_options(key)
                     .get(i)
@@ -614,7 +633,9 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                     VARIANT::from(UIA_SearchLandmarkTypeId.0)
                 }
                 // `aria-live="polite"`.
-                UIA_LiveSettingPropertyId if matches!(id, Id::FindCount | Id::SaveStatus) => {
+                UIA_LiveSettingPropertyId
+                    if matches!(id, Id::FindCount | Id::SaveStatus | Id::UpdateStatus) =>
+                {
                     VARIANT::from(Polite.0)
                 }
                 UIA_AutomationIdPropertyId => VARIANT::from(BSTR::from(format!("{id:?}"))),
@@ -769,10 +790,10 @@ impl IRawElementProviderFragmentRoot_Impl for Node_Impl {
 impl IInvokeProvider_Impl for Node_Impl {
     fn Invoke(&self) -> Result<()> {
         let id = self.id;
-        if id == Id::UpdateAction {
-            return Err(HRESULT(UIA_E_ELEMENTNOTENABLED as _).into());
-        }
         with(|host| {
+            if id == Id::UpdateAction && !host.scene.update_enabled() {
+                return Err(HRESULT(UIA_E_ELEMENTNOTENABLED as _).into());
+            }
             if let Id::FindPart(part) = id
                 && !host.scene.find_enabled(part)
             {

@@ -97,6 +97,10 @@ pub struct Host {
     pick_color: Option<usize>,
     /// Capture History… was activated; the loop opens it.
     open_history: bool,
+    /// The Updates card's button was activated; the resident app runs it.
+    pub update_step: Option<crate::updates::Step>,
+    /// Check for Updates: scroll to the Updates card after the next layout.
+    jump_updates: bool,
     /// A `WM_APP_WAKE` was posted since the loop last checked `need`.
     woken: bool,
     /// The IME is associated (a text field has focus).
@@ -120,6 +124,7 @@ impl Host {
             None => preferences::login_item_unavailable(platform),
         };
         let mut scene = Scene::new(tokens, options.settings_file.clone(), detail.into());
+        scene.set_update(crate::live::update_card());
         scene.scale = unsafe { GetDpiForWindow(hwnd) } as f32 / 96.;
         scene.reduced_motion = appearance::reduced_motion();
         let dcomp = g.dcomp.clone().ok_or_else(Error::empty)?;
@@ -209,6 +214,8 @@ impl Host {
                 pick_folder: false,
                 pick_color: None,
                 open_history: false,
+                update_step: None,
+                jump_updates: false,
                 woken: false,
                 ime: false,
                 dragging: false,
@@ -268,6 +275,10 @@ impl Host {
             self.scene.relayout = false;
             let (w, h) = self.client_dips();
             self.scene.layout(&self.g, w, h)?;
+        }
+        if std::mem::take(&mut self.jump_updates) {
+            self.scene
+                .activate(crate::scene::Target::Nav(crate::scene::UPDATES_SECTION));
         }
         self.scene.prepare(&self.g)?;
         let s = self.scene.scale;
@@ -601,6 +612,7 @@ impl Host {
             Some(Action::ChooseFolder) => self.pick_folder = true,
             Some(Action::PickColor(i)) => self.pick_color = Some(i),
             Some(Action::OpenHistory) => self.open_history = true,
+            Some(Action::Update(step)) => self.update_step = Some(step),
             Some(Action::KeyboardSettings) => {
                 let platform = crate::scene::PLATFORM;
                 if let Err(error) = preferences::open_keyboard_settings(platform) {
@@ -609,6 +621,21 @@ impl Host {
             }
             None => {}
         }
+        self.need = true;
+    }
+
+    /// The resident app's Updates card; lays out again only when it changed.
+    pub fn set_update(&mut self, card: crate::updates::Card) {
+        if self.scene.update.as_ref() != Some(&card) {
+            self.scene.set_update(Some(card));
+            self.layout = true;
+            self.need = true;
+        }
+    }
+
+    /// Bring the Updates card into view, as shipping's Check for Updates.
+    pub fn show_updates(&mut self) {
+        self.jump_updates = true;
         self.need = true;
     }
 

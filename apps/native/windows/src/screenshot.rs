@@ -296,6 +296,12 @@ pub fn render(options: &Options, path: &std::path::Path) -> Result<()> {
             None => captures_app::preferences::login_item_unavailable(platform),
         };
         let mut scene = Scene::new(tokens, options.settings_file.clone(), detail.into());
+        // `--select update-STATE` draws a Preview build's Updates card.
+        if let Some(card) = options.select.as_deref().and_then(crate::updates::fixture) {
+            scene.set_update(Some(card));
+            scene.layout(&g, w as f32, h as f32)?;
+            scene.activate(crate::scene::Target::Nav(crate::scene::UPDATES_SECTION));
+        }
         scene.layout(&g, w as f32, h as f32)?;
         if let Some(query) = &options.find {
             // As if Ctrl+F was pressed and the query typed.

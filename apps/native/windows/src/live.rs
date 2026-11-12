@@ -6,12 +6,19 @@
 //! `interactive_launch_action` and `app_reactivation` decide.
 
 use std::cell::RefCell;
-use std::time::SystemTime;
+use std::collections::VecDeque;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::mpsc::{Receiver, channel};
+use std::time::{Duration, Instant, SystemTime};
 
 use captures_app::app_windows::{self, AppWindow, InteractiveLaunch, PrimaryWindow, Reactivation};
 use captures_app::instance::{Instance, Launch, OpenRequest};
 use captures_app::shortcuts::{CaptureShortcut, CaptureShortcuts};
 use captures_app::tray_notice;
+use captures_app::updater::checks::{CheckStatus, CheckWorker};
+use captures_app::updater::{HealthAcknowledgement, RestartCaptureWindow, RestartIntent};
+use captures_history::HistoryEntry;
 use windows::Win32::Foundation::{HWND, LPARAM, RECT, WPARAM};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -31,6 +38,20 @@ const WM_APP_LIVE: u32 = WM_APP + 20;
 
 struct Resident {
     options: Options,
+    /// The installed Preview's update worker; `None` in development builds.
+    /// Declared before `instance` so it is joined while the election is held.
+    updates: Option<CheckWorker>,
+    /// Update now was pressed: install once the package is verified.
+    update_install: bool,
+    /// Automatic checks after the first, as shipping's five-minute interval.
+    next_update_check: Instant,
+    /// Open With files waiting to import, in arrival order.
+    open_queue: VecDeque<PathBuf>,
+    /// The import running on its worker.
+    opening: Option<Receiver<(PathBuf, Result<HistoryEntry, String>)>>,
+    /// The startup acknowledgement, until settings, the renderer and the
+    /// bundled media tools are ready.
+    health: Option<Health>,
     instance: Instance,
     /// `None` when the notification area is unavailable: like the other
     /// hosts, closing the last window then quits.
@@ -47,12 +68,23 @@ struct Resident {
     clipboard: Option<HWND>,
 }
 
+/// Shipping's automatic update check interval.
+const UPDATE_INTERVAL: Duration = Duration::from_secs(5 * 60);
+
+/// The update readiness gate, as the wgpu host: persisted settings load, a
+/// Direct2D device starts and the bundled FFmpeg/FFprobe run.
+struct Health {
+    acknowledgement: HealthAcknowledgement,
+    renderer: bool,
+    tools: Receiver<Result<(), String>>,
+}
+
 thread_local! {
     static RESIDENT: RefCell<Option<Resident>> = const { RefCell::new(None) };
 }
 
 /// Run before any window opens. `None` means another process owns this
-/// profile and accepted the (bare) relaunch.
+/// profile and accepted the relaunch with any Open With files.
 pub fn elect(options: &Options) -> std::io::Result<Option<Instance>> {
     let root = options
         .history_root
@@ -66,7 +98,7 @@ pub fn elect(options: &Options) -> std::io::Result<Option<Instance>> {
         )
     };
     Ok(
-        match Instance::start(&root, OpenRequest::from_paths(Vec::new())?)? {
+        match Instance::start(&root, OpenRequest::from_paths(options.open.clone())?)? {
             Launch::Primary(instance) => Some(instance),
             Launch::Forwarded => None,
         },
@@ -107,9 +139,59 @@ pub fn start(options: &Options, instance: Instance) {
         }
     };
     let tray_missing = tray.is_none();
+    // An installed Preview checks for updates at launch and every five
+    // minutes after, as shipping; development builds make no request.
+    // `ReleaseInfo` keeps `Renderer::Wgpu` (see docs/native-rewrite.md).
+    let updates = captures_app::preview_channel::version().and_then(|_| {
+        let wake = wake_on(thread);
+        match CheckWorker::preview(captures_app::updater::Renderer::Wgpu, Arc::new(wake)) {
+            Ok(mut worker) => {
+                worker.check_automatically();
+                Some(worker)
+            }
+            Err(error) => {
+                eprintln!("Preview updates unavailable: {error}");
+                None
+            }
+        }
+    });
+    if updates.is_some() {
+        // Wakes the loop for the next automatic check; ends with the process.
+        let wake = wake_on(thread);
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(UPDATE_INTERVAL);
+                wake();
+            }
+        });
+    }
+    let health = options.health.clone().map(|acknowledgement| {
+        let (sender, tools) = channel();
+        let wake = wake_on(thread);
+        std::thread::spawn(move || {
+            let _ = sender.send(
+                crate::recording::toolchain()
+                    .verify()
+                    .map_err(|error| error.to_string()),
+            );
+            wake();
+        });
+        let tokens = crate::appearance::tokens(options.appearance.as_deref(), &settings);
+        Health {
+            acknowledgement,
+            renderer: crate::gfx::Gfx::new(&tokens, true).is_ok(),
+            tools,
+        }
+    });
     RESIDENT.with(|r| {
         *r.borrow_mut() = Some(Resident {
             options: options.clone(),
+            updates,
+            update_install: false,
+            next_update_check: Instant::now() + UPDATE_INTERVAL,
+            open_queue: VecDeque::new(),
+            opening: None,
+            health,
             instance,
             tray,
             shortcuts: None,
@@ -136,8 +218,21 @@ pub fn start(options: &Options, instance: Instance) {
         })
     });
     sync_shortcuts(&settings);
-    let launch =
-        app_windows::interactive_launch(settings.onboarding_completed, options.quiet, false, false);
+    // Open With opens only the files' editors, and an update restart only
+    // what was open before, as shipping; unfinished setup still shows.
+    let launch = match &options.restart {
+        Some(_) if settings.onboarding_completed => None,
+        _ => app_windows::interactive_launch(
+            settings.onboarding_completed,
+            options.quiet,
+            !options.open.is_empty(),
+            false,
+        ),
+    };
+    if let Some(restart) = &options.restart {
+        restore(options, restart);
+    }
+    open_media(options.open.clone());
     match launch {
         // A quiet launch stays in the notification area with the launch
         // notice for 5 s.
@@ -276,13 +371,9 @@ pub fn service() {
     for _ in 0..32 {
         let next = RESIDENT.with(|r| r.borrow().as_ref().map(|r| r.instance.next_request()));
         match next {
-            Some(Ok(Some(request))) => {
-                if !request.paths.is_empty() {
-                    // Opening files by path is not ported to the Win32 host.
-                    eprintln!("Opening files in the Win32 host is not supported yet.");
-                }
-                reactivate(&options);
-            }
+            // A relaunch with files opens their editors, as shipping.
+            Some(Ok(Some(request))) if !request.paths.is_empty() => open_media(request.paths),
+            Some(Ok(Some(_))) => reactivate(&options),
             Some(Err(error)) => {
                 eprintln!("Native instance forwarding failed: {error}");
                 break;
@@ -290,13 +381,294 @@ pub fn service() {
             _ => break,
         }
     }
+    opened(&options);
+    acknowledge(&options);
+    service_updates();
+}
+
+/// Acknowledge the installer's or recovery companion's readiness file once
+/// settings load, the renderer started and the media tools verified.
+fn acknowledge(options: &Options) {
+    let ready = RESIDENT.with(|r| {
+        let mut r = r.borrow_mut();
+        let health = r.as_mut()?.health.as_ref()?;
+        let tools = match health.tools.try_recv() {
+            Ok(result) => result,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return None,
+            Err(_) => Err("the media check stopped".into()),
+        };
+        Some((tools, health.renderer))
+    });
+    let Some((tools, renderer)) = ready else {
+        return;
+    };
+    let health = RESIDENT.with(|r| r.borrow_mut().as_mut()?.health.take());
+    let settings = captures_settings::load(&options.settings_file);
+    match (tools, renderer, settings, health) {
+        (Ok(()), true, Ok(_), Some(health)) => {
+            if let Err(error) = health.acknowledgement.acknowledge() {
+                eprintln!("Could not confirm startup: {error}");
+            }
+        }
+        (tools, renderer, settings, _) => eprintln!(
+            "Startup not confirmed: media tools {tools:?}, renderer {renderer}, settings {:?}",
+            settings.err().map(|e| e.to_string())
+        ),
+    }
+}
+
+/// Open With: import each file into History through the shared `OpenMedia`
+/// request on a worker, one at a time in arrival order, then open its
+/// editor. A file already in History reuses its entry; one being edited
+/// focuses its window.
+fn open_media(paths: Vec<PathBuf>) {
+    RESIDENT.with(|r| {
+        if let Some(r) = r.borrow_mut().as_mut() {
+            r.open_queue.extend(paths);
+            open_next(r);
+        }
+    });
+}
+
+fn open_next(r: &mut Resident) {
+    if r.opening.is_some() {
+        return;
+    }
+    let Some(path) = r.open_queue.pop_front() else {
+        return;
+    };
+    let root = r
+        .options
+        .history_root
+        .clone()
+        .unwrap_or_else(captures_app::default_history_root);
+    let open_artifact_ids = crate::editor::ids()
+        .into_iter()
+        .chain(crate::recording::ids())
+        .collect();
+    let (ffmpeg, ffprobe) = crate::recording::tool_paths();
+    let (sender, receiver) = channel();
+    let wake = wake_on(r.thread);
+    std::thread::spawn(move || {
+        let result = captures_app::execute(captures_app::Request::OpenMedia {
+            root,
+            path: path.clone(),
+            open_artifact_ids,
+            ffmpeg: Some(ffmpeg),
+            ffprobe: Some(ffprobe),
+        })
+        .map_err(|error| error.to_string())
+        .and_then(|response| match response {
+            captures_app::Response::OpenedMedia { artifact, .. } => Ok(artifact.entry),
+            _ => Err("Captures could not open this file.".to_owned()),
+        });
+        let _ = sender.send((path, result));
+        wake();
+    });
+    r.opening = Some(receiver);
+}
+
+/// A finished import: History reloads and the matching editor opens, or
+/// shipping's "Captures" error shows.
+fn opened(options: &Options) {
+    let result = RESIDENT.with(|r| {
+        let mut r = r.borrow_mut();
+        let r = r.as_mut()?;
+        let result = match r.opening.as_ref()?.try_recv() {
+            Ok(result) => result,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return None,
+            Err(_) => (PathBuf::new(), Err("The import worker stopped.".into())),
+        };
+        r.opening = None;
+        Some(result)
+    });
+    let Some((path, result)) = result else {
+        return;
+    };
+    match result {
+        Ok(entry) => {
+            crate::history::with_history(|h| h.reload());
+            let opened = if entry.kind.is_recording() {
+                crate::recording::open(options, &entry.id)
+            } else {
+                crate::editor::open(options, &entry.id)
+            };
+            if let Err(error) = opened {
+                show_error(&error.message());
+            }
+        }
+        Err(error) => {
+            eprintln!("Could not open {}: {error}", path.display());
+            show_error(&error);
+        }
+    }
+    RESIDENT.with(|r| {
+        if let Some(r) = r.borrow_mut().as_mut() {
+            open_next(r);
+        }
+    });
+}
+
+/// An update restart: the previews, editors and Preferences that were open.
+fn restore(options: &Options, restart: &RestartIntent) {
+    let root = options
+        .history_root
+        .clone()
+        .unwrap_or_else(captures_app::default_history_root);
+    let entries = captures_history::load(&root, chrono::Utc::now()).unwrap_or_default();
+    for id in &restart.preview_artifact_ids {
+        if let Some(entry) = entries.iter().find(|entry| &entry.id == id) {
+            crate::previews::restore(options, entry);
+        }
+    }
+    for window in &restart.capture_windows {
+        let result = match window {
+            RestartCaptureWindow::ScreenshotEditor { artifact_id, .. } => {
+                crate::editor::open(options, artifact_id)
+            }
+            RestartCaptureWindow::RecordingEditor { artifact_id } => {
+                crate::recording::open(options, artifact_id)
+            }
+        };
+        if let Err(error) = result {
+            eprintln!("Could not reopen a capture after the update: {error}");
+        }
+    }
+    if restart.restore_preferences {
+        open_preferences(options);
+    }
+}
+
+/// The Preferences Updates card for the current update state; `None` in a
+/// development build, which keeps "Updates unavailable".
+pub fn update_card() -> Option<crate::updates::Card> {
+    RESIDENT.with(|r| {
+        let r = r.try_borrow().ok()?;
+        let r = r.as_ref()?;
+        let worker = r.updates.as_ref()?;
+        Some(crate::updates::card(
+            captures_app::preview_channel::version()?,
+            worker.status(),
+            r.update_install,
+        ))
+    })
+}
+
+/// Publish worker progress, run the five-minute check, act on the card's
+/// button and hand a verified package to the update helper.
+fn service_updates() {
+    let step = crate::host::with_host(|h| h.update_step.take()).flatten();
+    let install = RESIDENT.with(|r| {
+        let mut r = r.borrow_mut();
+        let r = r.as_mut()?;
+        let worker = r.updates.as_mut()?;
+        worker.poll();
+        let now = Instant::now();
+        if now >= r.next_update_check {
+            r.next_update_check = now + UPDATE_INTERVAL;
+            if matches!(
+                worker.status(),
+                CheckStatus::Idle | CheckStatus::UpToDate | CheckStatus::Error { .. }
+            ) {
+                worker.check_automatically();
+            }
+        }
+        match step {
+            Some(crate::updates::Step::Check) => {
+                worker.check();
+            }
+            Some(crate::updates::Step::Download) => {
+                r.update_install = worker.download();
+            }
+            Some(crate::updates::Step::Install) => r.update_install = true,
+            None => {}
+        }
+        // A failed download or install ends this attempt.
+        if matches!(worker.status(), CheckStatus::DownloadError { .. }) {
+            r.update_install = false;
+        }
+        Some(r.update_install && matches!(worker.status(), CheckStatus::Staged { .. }))
+    });
+    if install == Some(true) {
+        install_update();
+    }
+    if let Some(card) = update_card() {
+        crate::host::with_host(|h| h.set_update(card));
+    }
+}
+
+/// Shipping's Update now after verification: refuse during a capture or
+/// recording, remember what is open, start the copied helper and quit. The
+/// helper waits for this process's package lock before running the
+/// installer, which relaunches with the readiness token.
+fn install_update() {
+    let blocker = if crate::recorder::active() {
+        Some("Finish or cancel the active recording before installing the update.")
+    } else if crate::capture::active() {
+        Some("Finish the capture before installing the update.")
+    } else {
+        None
+    };
+    if let Some(message) = blocker {
+        RESIDENT.with(|r| {
+            if let Some(r) = r.borrow_mut().as_mut() {
+                r.update_install = false;
+            }
+        });
+        return show_error(message);
+    }
+    let restart = RestartIntent {
+        restore_preferences: crate::host::with_host(|h| h.hwnd).is_some(),
+        preview_artifact_ids: crate::previews::ids(),
+        capture_windows: crate::editor::ids()
+            .into_iter()
+            .map(|artifact_id| RestartCaptureWindow::ScreenshotEditor {
+                artifact_id,
+                source_artifact_id: None,
+            })
+            .chain(
+                crate::recording::ids()
+                    .into_iter()
+                    .map(|artifact_id| RestartCaptureWindow::RecordingEditor { artifact_id }),
+            )
+            .collect(),
+    };
+    let result = RESIDENT.with(|r| {
+        let mut r = r.borrow_mut();
+        let r = r.as_mut().ok_or("Captures is closing")?;
+        let worker = r
+            .updates
+            .as_mut()
+            .ok_or("Preview updates are unavailable")?;
+        let result = worker
+            .launch_preview_install(restart)
+            .map_err(|error| error.to_string());
+        if result.is_err() {
+            r.update_install = false;
+        }
+        result
+    });
+    match result {
+        // Quit drains editors (drafts are kept) before the process exits.
+        Ok(()) => unsafe { PostQuitMessage(0) },
+        // The worker now reports Update failed with the reason.
+        Err(error) => eprintln!("Could not start the update: {error}"),
+    }
 }
 
 fn run(options: &Options, action: Action) {
     match action {
         // A left click first dismisses a visible launch notice, as shipping.
         Action::LeftClick if crate::startup_notice::hide() => {}
-        Action::Preferences | Action::CheckUpdates | Action::LeftClick => open_preferences(options),
+        // Check for Updates checks now and shows the Updates card.
+        Action::CheckUpdates => {
+            open_preferences(options);
+            crate::host::with_host(|h| {
+                h.update_step = Some(crate::updates::Step::Check);
+                h.show_updates();
+            });
+        }
+        Action::Preferences | Action::LeftClick => open_preferences(options),
         Action::History => {
             if let Err(error) = crate::history::open(options, None) {
                 eprintln!("couldn't open Capture History: {error}");

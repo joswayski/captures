@@ -67,12 +67,17 @@ their notices and `native_preview_update_helper`.
 
 A host built with `CAPTURES_NATIVE_PREVIEW_VERSION` starts as the resident app
 (`--live`) on the imported Preview profile and holds the package-use lock, as the
-wgpu host did. The Win32 and GTK hosts do not yet start the startup recovery
-companion described below and do not install updates (Win32's Check for
-Updates opens Preferences, whose Check Now stays disabled; GTK's Updates card only
-checks and downloads), and Win32 refuses files passed by path, so Windows Open
-With and file associations from an installed package fail to launch. GTK opens
-the desktop entry's `%U` files. The `.deb` depends on `libgtk-4-1` (GTK 4.6 or
+wgpu host did. The Win32 host now also starts the startup recovery companion
+described below, acknowledges readiness (settings, Direct2D device, bundled
+FFmpeg/FFprobe) for both the companion and the NSIS `/ARGS` relaunch, checks the
+Preview channel at launch and every five minutes, and installs from its
+Preferences Updates card (Update now downloads and verifies, then starts the
+copied helper and quits). Its update notice window is not ported. Win32 opens
+plain path and `file:` URI arguments, so Open With and file associations reach
+the editors, and forwards them to a running instance. None of this has had a
+physical Windows, real NSIS install or real update run. GTK still does not start
+the companion and only checks and downloads. GTK opens the desktop entry's `%U`
+files. The `.deb` depends on `libgtk-4-1` (GTK 4.6 or
 newer) in addition to the WebKitGTK/GTK 3 entries the CLI always adds. The
 AppImage carries `libgtk-4.so.1` and its libraries (linuxdeploy follows the
 binary's dependencies), but the CLI's GTK plugin is forced to GTK 3: it also

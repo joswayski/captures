@@ -1052,6 +1052,16 @@ thread_local! {
     static PREVIEWS: RefCell<Option<Previews>> = const { RefCell::new(None) };
 }
 
+/// The cards' History artifacts in stack order, for an update restart.
+pub fn ids() -> Vec<String> {
+    PREVIEWS.with(|p| {
+        p.try_borrow()
+            .ok()
+            .and_then(|p| p.as_ref().map(|p| p.stack.stack.ids().to_vec()))
+            .unwrap_or_default()
+    })
+}
+
 /// History Restore: bring a screenshot back as a card.
 pub fn restore(options: &crate::Options, entry: &HistoryEntry) {
     let root = options

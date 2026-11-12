@@ -29,6 +29,8 @@ use crate::tokens::Tokens;
 
 pub const PLATFORM: ShortcutPlatform = ShortcutPlatform::Windows;
 pub const NAV_WIDTH: f32 = 196.;
+/// The Updates section, which Check for Updates brings into view.
+pub const UPDATES_SECTION: usize = 6;
 /// Shipping's `@media (max-width: 720px)`: the sidebar hides, inline rows
 /// stack and grids drop to two columns.
 const COMPACT_MAX: f32 = 720.;
@@ -336,6 +338,9 @@ pub enum Target {
     Well(usize),
     /// Custom colors: a field's hex input.
     Hex(usize),
+    /// Updates' action button (a Preview build's Check Now, Update now or
+    /// Try again).
+    UpdateAction,
 }
 
 /// The host's editable text fields.
@@ -428,6 +433,10 @@ pub enum Kind {
     UpdateAction,
     /// `.update-settings-status`, right-aligned under Check Now.
     UpdateStatus,
+    /// `.update-settings-progress` while an update installs.
+    UpdateProgress,
+    /// The error and download fallback paragraphs under the row.
+    UpdateNotes,
     /// A `.shortcut-row > span`.
     ShortcutLabel(usize),
     /// `.shortcut-recorder`: field, key caps or the prompt.
@@ -600,6 +609,8 @@ pub enum Action {
     PickColor(usize),
     /// Open Capture History, outside the host borrow.
     OpenHistory,
+    /// The Updates card's button: the resident app runs it.
+    Update(crate::updates::Step),
 }
 
 /// Accessibility notifications, raised by the host outside its borrow.
@@ -786,6 +797,9 @@ struct Texts {
     open: [Option<Text>; 2],
     update_action: Option<Text>,
     update_status: Option<Text>,
+    /// The status's `small` detail, the error and the download fallback.
+    update_detail: Option<Text>,
+    update_notes: Vec<(f32, Text, &'static str)>,
     shortcut_labels: Vec<Text>,
     /// Key caps per recorder.
     caps: Vec<Vec<Text>>,
@@ -858,6 +872,12 @@ pub struct Scene {
     update_copy: usize,
     update_action: usize,
     update_status: usize,
+    update_progress: usize,
+    update_notes: usize,
+    update_ring: usize,
+    /// A Preview build's live Updates card; `None` keeps the development
+    /// "Updates unavailable" copy.
+    pub update: Option<crate::updates::Card>,
     shortcuts: Vec<ShortcutNodes>,
     selects: Vec<SelectNodes>,
     list: ListNodes,
@@ -999,6 +1019,10 @@ impl Scene {
             update_copy: 0,
             update_action: 0,
             update_status: 0,
+            update_progress: 0,
+            update_notes: 0,
+            update_ring: 0,
+            update: None,
             shortcuts: Vec::new(),
             selects: Vec::new(),
             list: ListNodes::default(),
@@ -1227,6 +1251,11 @@ impl Scene {
                         // `.ui-btn:disabled`.
                         self.nodes[self.update_action].opacity = 0.45;
                         self.update_status = self.add(Some(node), Kind::UpdateStatus, 0.);
+                        self.update_progress = self.add(Some(node), Kind::UpdateProgress, 0.);
+                        self.update_notes = self.add(Some(node), Kind::UpdateNotes, 0.);
+                        let radius = self.t.n("r-md");
+                        self.update_ring =
+                            self.ring(self.update_action, Ring::Full(radius), Target::UpdateAction);
                     }
                     Item::Shortcuts => {
                         let radius = self.t.n("r-md");
@@ -1997,7 +2026,11 @@ impl Scene {
                 Ok(content_h)
             }
             Item::CustomTheme => self.layout_custom(g, (x, y, width)),
+            Item::Updates if self.update.is_some() => self.layout_update(g, (x, y, width)),
             Item::Updates => {
+                self.nodes[self.update_progress].visible = false;
+                self.nodes[self.update_notes].visible = false;
+                self.nodes[self.update_action].opacity = 0.45;
                 // Like the other native hosts without an update worker: build
                 // identity on the left; a fixed-width Check Now with the
                 // right-aligned `--text-xs` status 4 px below it.
@@ -2552,7 +2585,8 @@ impl Scene {
                     Item::Accent => list.push(Target::Theme(self.theme_index())),
                     Item::Folder => list.push(Target::Choose),
                     Item::Utility(which) => list.push(Target::Open(which)),
-                    // Check Now is disabled, so it is not a Tab stop.
+                    // A disabled button is not a Tab stop.
+                    Item::Updates if self.update_enabled() => list.push(Target::UpdateAction),
                     Item::Updates => {}
                     // DOM order: Reset colors, then each color and hex input.
                     Item::CustomTheme if self.custom_shown() => {
@@ -2676,6 +2710,11 @@ impl Scene {
                 None
             }
             Target::Well(i) => Some(Action::PickColor(i)),
+            Target::UpdateAction => self
+                .update
+                .as_ref()
+                .and_then(|card| card.step)
+                .map(Action::Update),
             Target::Find(FindPart::Close) => {
                 self.find_close();
                 None
@@ -3658,6 +3697,16 @@ impl Scene {
                 }
                 vec![text]
             }
+            Item::Updates if let Some(card) = &self.update => vec![format!(
+                "{}{}{}{}{}{}{}",
+                card.version,
+                card.channel,
+                card.action,
+                card.heading,
+                card.detail,
+                card.error.as_deref().unwrap_or_default(),
+                crate::updates::FALLBACK,
+            )],
             Item::Updates => vec![format!(
                 "{}{}{}{}",
                 preferences::UPDATES_VERSION,
@@ -4082,7 +4131,109 @@ impl Scene {
             Target::ResetColors => self.custom.reset.base,
             Target::Well(i) => self.custom.wells[i],
             Target::Hex(i) => self.custom.boxes[i],
+            Target::UpdateAction => self.update_action,
         })
+    }
+
+    /// Follow the resident app's Updates card; `None` is a development build.
+    pub fn set_update(&mut self, card: Option<crate::updates::Card>) {
+        self.update = card;
+        if self.focus == Some(Target::UpdateAction) && !self.update_enabled() {
+            self.set_focus(None, false);
+        }
+    }
+
+    /// The Updates button can act (a Preview build that is not busy).
+    pub fn update_enabled(&self) -> bool {
+        self.update.as_ref().is_some_and(|card| card.step.is_some())
+    }
+
+    /// A Preview build's Updates row (`.update-settings-row`): two equal
+    /// columns, the build identity `--s-3` down on the left; on the right
+    /// the action and the status `--s-3` below it, right-aligned. The
+    /// progress bar spans the next grid row, and the error and download
+    /// fallback paragraphs follow as card children with their rules.
+    fn layout_update(&mut self, g: &Gfx, (x, y, width): (f32, f32, f32)) -> Result<f32> {
+        let card = self.update.clone().expect("update card");
+        let n = |name: &str| self.t.n(name);
+        let (s1, s2, s3, s5, s6, s12) =
+            (n("s-1"), n("s-2"), n("s-3"), n("s-5"), n("s-6"), n("s-12"));
+        let h_md = n("h-md");
+        let col_w = ((width - s6) / 2.).max(40.);
+        let title = g.text(&self.t, Style::RowTitle, &card.version, col_w)?;
+        let detail = g.text(&self.t, Style::RowDescription, card.channel, col_w)?;
+        let copy_h = title.height + 3. + detail.height;
+        self.texts.copies.push(CopyText {
+            item: Item::Updates,
+            title,
+            detail: Some(detail),
+            gap: 3.,
+        });
+        self.nodes[self.update_copy].rect = Rect::new(x, y + s3, col_w, copy_h);
+        let label = g.text(&self.t, Style::Control, card.action, 1e4)?;
+        let button_w = (label.width + 2. * s5 + 2.).ceil().max(2. * s12).min(col_w);
+        // An empty status keeps its line (`min-height`).
+        let heading = if card.heading.is_empty() {
+            "\u{a0}"
+        } else {
+            &card.heading
+        };
+        let status = g.text(&self.t, Style::Subtitle, heading, col_w)?;
+        let small = (!card.detail.is_empty())
+            .then(|| g.text(&self.t, Style::Small, &card.detail, col_w))
+            .transpose()?;
+        unsafe {
+            use windows::Win32::Graphics::DirectWrite::DWRITE_TEXT_ALIGNMENT_TRAILING;
+            for text in std::iter::once(&status).chain(small.as_ref()) {
+                text.layout.SetMaxWidth(col_w)?;
+                text.layout
+                    .SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING)?;
+            }
+        }
+        let status_h = status.height + small.as_ref().map_or(0., |s| s1 + s.height);
+        let right = x + width - col_w;
+        self.nodes[self.update_action].rect = Rect::new(x + width - button_w, y, button_w, h_md);
+        self.nodes[self.update_action].opacity = if card.step.is_some() { 1. } else { 0.45 };
+        self.nodes[self.update_ring].rect = Rect::new(0., 0., button_w, h_md);
+        self.nodes[self.update_status].rect = Rect::new(right, y + h_md + s3, col_w, status_h);
+        self.texts.update_action = Some(label);
+        self.texts.update_status = Some(status);
+        self.texts.update_detail = small;
+        let mut height = (s3 + copy_h).max(h_md + s3 + status_h);
+        self.nodes[self.update_progress].visible = card.progress.is_some();
+        if card.progress.is_some() {
+            // `grid-row: 2` of the row, `--s-6` below the first.
+            self.nodes[self.update_progress].rect = Rect::new(x, y + height + s6, width, 4.);
+            height += s6 + 4.;
+        }
+        // Card children: the gap, a rule, `--s-5` padding, then the text.
+        let mut notes = Vec::new();
+        let mut top = 0.;
+        let paragraphs = card
+            .error
+            .iter()
+            .map(|error| (error.as_str(), "danger-text", 0.))
+            .chain([(crate::updates::FALLBACK, "text-subtle", s2)]);
+        for (copy, color, margin) in paragraphs {
+            let text = g.text(&self.t, Style::RowDescription, copy, width)?;
+            // Shipping's "download from captur.es" link is underlined.
+            let link = "download from captur.es";
+            if let Some(start) = copy.find(link).filter(|_| color == "text-subtle") {
+                let range = windows::Win32::Graphics::DirectWrite::DWRITE_TEXT_RANGE {
+                    startPosition: copy[..start].encode_utf16().count() as u32,
+                    length: link.encode_utf16().count() as u32,
+                };
+                unsafe { text.layout.SetUnderline(true, range)? };
+            }
+            top += s5 + margin;
+            let next = top + 1. + s5 + text.height;
+            notes.push((top, text, color));
+            top = next;
+        }
+        self.nodes[self.update_notes].visible = true;
+        self.nodes[self.update_notes].rect = Rect::new(x, y + height, width, top);
+        self.texts.update_notes = notes;
+        Ok(height + top)
     }
 
     /// Updates' Check Now and status, in client DIPs.
@@ -4223,7 +4374,8 @@ impl Scene {
             Target::Hex(1),
         ];
         let custom = custom.into_iter().filter(|_| self.custom_shown());
-        for target in controls.chain(custom) {
+        let update = Some(Target::UpdateAction).filter(|_| self.update_enabled());
+        for target in controls.chain(custom).chain(update) {
             if self.target_rect(target).contains(x, y) {
                 return Some(target);
             }
@@ -4463,8 +4615,38 @@ impl Scene {
                 }
             }
             Kind::UpdateStatus => {
+                let current = self.update.as_ref().is_some_and(|card| card.current);
+                let color = c(if current {
+                    "positive-text"
+                } else {
+                    "text-subtle"
+                });
                 if let Some(status) = &self.texts.update_status {
-                    gfx::text(dc, status, 0., 0., c("text-subtle"))?;
+                    gfx::text(dc, status, 0., 0., color)?;
+                    if let Some(detail) = &self.texts.update_detail {
+                        let y = status.height + t.n("s-1");
+                        gfx::text(dc, detail, 0., y, c("text-subtle"))?;
+                    }
+                }
+            }
+            Kind::UpdateProgress => {
+                // `.update-settings-progress`: a sunken pill with the accent
+                // fill; an unknown total shows a third of it.
+                gfx::fill_round(dc, all, h / 2., c("surface-sunken"))?;
+                let fraction = self
+                    .update
+                    .as_ref()
+                    .and_then(|card| card.progress)
+                    .map_or(0., |p| p.unwrap_or(0.34));
+                if fraction > 0. {
+                    gfx::fill_round(dc, rect(0., 0., w * fraction, h), h / 2., c("theme-accent"))?;
+                }
+            }
+            Kind::UpdateNotes => {
+                // Each paragraph is a card child: a rule, then its text.
+                for (top, text, color) in &self.texts.update_notes {
+                    gfx::fill(dc, rect(0., *top, w, top + 1.), c("border-subtle"))?;
+                    gfx::text(dc, text, 0., top + 1. + t.n("s-5"), c(color))?;
                 }
             }
             Kind::ShortcutLabel(index) => {
@@ -4879,6 +5061,10 @@ fn hex_color(value: &str) -> windows::Win32::Graphics::Direct2D::Common::D2D1_CO
 /// A card's header copy; Shortcuts appends the platform intro like shipping.
 pub fn card_description(section: usize) -> String {
     let description = SECTIONS[section].description;
+    // Shipping's Updates copy, where the Preview channel can install.
+    if section == UPDATES_SECTION && captures_app::preview_channel::version().is_some() {
+        return "Preview builds check for a new version automatically. Update now installs it in place.".into();
+    }
     if SECTIONS[section].title == "Shortcuts" {
         format!(
             "{description} {}",

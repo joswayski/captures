@@ -63,6 +63,8 @@ mod tray;
 mod uia;
 #[cfg(windows)]
 mod uia_text;
+#[cfg(windows)]
+mod updates;
 
 /// The window `--scene` opens first.
 #[cfg(windows)]
@@ -116,10 +118,28 @@ pub struct Options {
     live: bool,
     /// `--captures-autostart`: a quiet resident launch that opens no window.
     quiet: bool,
+    /// Open With: local files to import into History and edit, from
+    /// `--open-media PATH`, everything after `--`, or (in a Preview build)
+    /// plain path and `file:` URI arguments.
+    open: Vec<std::path::PathBuf>,
+    /// The installed Preview profile replaces the default paths once the
+    /// startup recovery companion is armed (`main`).
+    preview_profile: bool,
+    /// `--native-update-ready-file` and `--native-update-ready-token` from the
+    /// Preview installer, or the startup recovery companion's own file.
+    health: Option<captures_app::updater::HealthAcknowledgement>,
+    /// Windows to restore after an update restart, taken after election.
+    restart: Option<captures_app::updater::RestartIntent>,
 }
 
 #[cfg(windows)]
 fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
+    parse_args(args, captures_app::preview_channel::version().is_some())
+}
+
+/// [`parse`] for a Preview build (`preview`) or a development build.
+#[cfg(windows)]
+fn parse_args(args: impl Iterator<Item = String>, preview: bool) -> Result<Options, String> {
     let mut options = Options {
         scene: Scene::Preferences,
         artifact: None,
@@ -134,15 +154,44 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
         crop: None,
         profile: false,
         // An installed Preview is the resident app, as its launchers expect.
-        live: captures_app::preview_channel::version().is_some(),
+        live: preview,
         quiet: false,
+        open: Vec::new(),
+        preview_profile: false,
+        health: None,
+        restart: None,
     };
     let mut profile = std::env::var_os("CAPTURES_NATIVE_PROFILE").map(std::path::PathBuf::from);
     let mut explicit = false;
+    let (mut ready_file, mut ready_token) = (None, None);
     let mut args = args.skip(1);
     while let Some(flag) = args.next() {
         let mut value = || args.next().ok_or_else(|| format!("{flag} needs a value"));
         match flag.as_str() {
+            "--open-media" => {
+                let path = value()?;
+                if path.is_empty() {
+                    return Err("--open-media needs a path".into());
+                }
+                options.open.push(path.into());
+            }
+            // Everything after `--` is a file to open.
+            "--" => options.open.extend(args.by_ref().map(Into::into)),
+            "--native-update-ready-file" if ready_file.is_none() => {
+                ready_file = Some(std::path::PathBuf::from(value()?));
+            }
+            "--native-update-ready-token" if ready_token.is_none() => {
+                ready_token = Some(value()?);
+            }
+            "--native-update-ready-file" | "--native-update-ready-token" => {
+                return Err(format!("duplicate {flag}"));
+            }
+            // Open With and file associations pass the file itself: a path,
+            // or a `file:` URI from some launchers. Only an installed Preview
+            // registers them, so development builds keep refusing strays.
+            path if preview && !path.is_empty() && !path.starts_with('-') => {
+                options.open.push(path.into());
+            }
             "--scene" => {
                 options.scene = match value()?.as_str() {
                     "preferences" => Scene::Preferences,
@@ -211,16 +260,47 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
     if matches!(options.scene, Scene::Editor | Scene::Recording) && options.artifact.is_none() {
         return Err("--scene editor/recording needs --artifact ID".into());
     }
+    options.open = std::mem::take(&mut options.open)
+        .into_iter()
+        .map(captures_app::preview_channel::local_media_path)
+        .collect::<Result<_, _>>()?;
+    if !options.open.is_empty() && (!options.live || options.screenshot.is_some()) {
+        return Err("Opening files needs the resident app (--live)".into());
+    }
+    match (ready_file, ready_token) {
+        (None, None) => {}
+        (Some(file), Some(token)) => {
+            // The Preview installer relaunches plain `--live` on the
+            // installed profile; a development check needs explicit paths.
+            let absolute = options
+                .history_root
+                .as_ref()
+                .is_some_and(|p| p.is_absolute())
+                && options.settings_file.is_absolute();
+            let installed = preview && !explicit && !options.profile;
+            let paths = absolute || installed;
+            if !options.live
+                || options.quiet
+                || options.screenshot.is_some()
+                || !options.open.is_empty()
+                || !paths
+            {
+                return Err("Update readiness needs a plain --live launch on the installed Preview profile or explicit absolute --history-root and --settings-file".into());
+            }
+            options.health = Some(
+                captures_app::updater::HealthAcknowledgement::new(file, token)
+                    .map_err(|error| error.to_string())?,
+            );
+        }
+        _ => {
+            return Err(
+                "--native-update-ready-file and --native-update-ready-token go together".into(),
+            );
+        }
+    }
     // An installed Preview's resident app uses its imported Preview profile
     // unless a development profile or explicit paths were given.
-    if options.live
-        && !explicit
-        && !options.profile
-        && let Some(startup) = captures_app::preview_channel::startup()?
-    {
-        options.history_root = Some(startup.history_root);
-        options.settings_file = startup.settings_file;
-    }
+    options.preview_profile = options.live && !explicit && !options.profile;
     Ok(options)
 }
 
@@ -271,13 +351,42 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::FAILURE;
         }
     };
-    let options = match parse(std::env::args()) {
+    let mut options = match parse(std::env::args()) {
         Ok(options) => options,
         Err(error) => {
             eprintln!("{error}");
             return std::process::ExitCode::from(2);
         }
     };
+    // An installed Preview arms its separate, renderer-free recovery helper
+    // before profile import can fail; development builds start none.
+    let recovery = if options.live && options.screenshot.is_none() {
+        match captures_app::updater::preview::recovery::Startup::start(options.health.clone()) {
+            Ok(recovery) => recovery,
+            Err(error) => {
+                eprintln!("Startup recovery unavailable: {error}. Continuing launch.");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    if let Some(recovery) = &recovery {
+        options.health = Some(recovery.acknowledgement.clone());
+    }
+    if options.preview_profile {
+        match captures_app::preview_channel::startup() {
+            Ok(Some(startup)) => {
+                options.history_root = Some(startup.history_root);
+                options.settings_file = startup.settings_file;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                eprintln!("Captures could not start: {error}");
+                return std::process::ExitCode::FAILURE;
+            }
+        }
+    }
     unsafe {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         if let Err(error) = CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok() {
@@ -288,9 +397,28 @@ fn main() -> std::process::ExitCode {
     let result = match &options.screenshot {
         Some(path) => screenshot::render(&options, path),
         None if options.live => match live::elect(&options) {
-            // Another process owns this profile and took the relaunch.
-            Ok(None) => return std::process::ExitCode::SUCCESS,
-            Ok(Some(instance)) => host::run(options, Some(instance)),
+            // Another process owns this profile and took the relaunch and
+            // any files; that is not a failed launch.
+            Ok(None) => {
+                if let Some(recovery) = &recovery {
+                    recovery.finish();
+                }
+                return std::process::ExitCode::SUCCESS;
+            }
+            Ok(Some(instance)) => {
+                // Only the elected primary consumes the installer's restart
+                // intent, before it decides which windows to show.
+                if let Some(health) = &options.health {
+                    match health.take_restart_intent() {
+                        Ok(restart) => options.restart = restart,
+                        Err(error) => {
+                            eprintln!("Captures could not start: {error}");
+                            return std::process::ExitCode::FAILURE;
+                        }
+                    }
+                }
+                host::run(options, Some(instance))
+            }
             Err(error) => Err(windows::core::Error::new(
                 windows::core::HRESULT(0x80004005u32 as i32),
                 format!("Could not start the resident app: {error}"),
@@ -299,7 +427,14 @@ fn main() -> std::process::ExitCode {
         None => host::run(options, None),
     };
     match result {
-        Ok(()) => std::process::ExitCode::SUCCESS,
+        Ok(()) => {
+            // A normal Quit (including one that hands off to the update
+            // helper) is not a failed launch.
+            if let Some(recovery) = &recovery {
+                recovery.finish();
+            }
+            std::process::ExitCode::SUCCESS
+        }
         Err(error) => {
             eprintln!("{error}");
             std::process::ExitCode::FAILURE
@@ -311,4 +446,152 @@ fn main() -> std::process::ExitCode {
 fn main() -> std::process::ExitCode {
     eprintln!("captures-windows runs on Windows only; see apps/native/gtk for Linux.");
     std::process::ExitCode::FAILURE
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::parse_args;
+    use std::path::PathBuf;
+
+    fn parse(preview: bool, args: &[&str]) -> Result<super::Options, String> {
+        let args = std::iter::once("captures.exe")
+            .chain(args.iter().copied())
+            .map(String::from);
+        parse_args(args, preview)
+    }
+
+    #[test]
+    fn preview_builds_open_plain_paths_and_file_uris() {
+        let options = parse(
+            true,
+            &[
+                r"C:\Users\me\Pictures\shot.png",
+                "file:///C:/Users/me/Videos/take%20one.mp4",
+            ],
+        )
+        .unwrap();
+        assert!(options.live);
+        assert_eq!(
+            options.open,
+            [
+                PathBuf::from(r"C:\Users\me\Pictures\shot.png"),
+                PathBuf::from(r"C:\Users\me\Videos\take one.mp4"),
+            ]
+        );
+        // Flags still parse beside files.
+        let quiet = parse(true, &["--captures-autostart", r"D:\a.gif"]).unwrap();
+        assert!(quiet.quiet);
+        assert_eq!(quiet.open, [PathBuf::from(r"D:\a.gif")]);
+        // A bare relaunch opens nothing.
+        assert!(parse(true, &[]).unwrap().open.is_empty());
+    }
+
+    #[test]
+    fn remote_or_malformed_uris_and_unknown_flags_are_refused() {
+        // A UNC file URI is a Windows path; an unparseable one is refused.
+        assert_eq!(
+            parse(true, &["file://server/share/a.png"]).unwrap().open,
+            [PathBuf::from(r"\\server\share\a.png")]
+        );
+        assert!(parse(true, &["file://[::1/a.png"]).is_err());
+        assert!(parse(true, &["--unknown"]).is_err());
+        assert!(parse(true, &["--open-media", ""]).is_err());
+        assert!(parse(true, &["--open-media"]).is_err());
+    }
+
+    #[test]
+    fn development_builds_open_files_only_explicitly_and_live() {
+        // A stray path is still an unknown argument.
+        assert!(parse(false, &[r"C:\a.png"]).is_err());
+        assert!(parse(false, &["--open-media", r"C:\a.png"]).is_err());
+        let options = parse(
+            false,
+            &[
+                "--live",
+                "--open-media",
+                r"C:\a.png",
+                "--",
+                "--not-a-flag.mp4",
+                "file:///C:/b.gif",
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            options.open,
+            [
+                PathBuf::from(r"C:\a.png"),
+                PathBuf::from("--not-a-flag.mp4"),
+                PathBuf::from(r"C:\b.gif"),
+            ]
+        );
+        // Offscreen renders never open files.
+        assert!(parse(true, &["--screenshot", r"C:\x.png", r"C:\a.png"]).is_err());
+    }
+
+    #[test]
+    fn update_readiness_flags_go_together_on_a_plain_live_launch() {
+        let token = "6f1c3b7a-2d4e-4f8a-9b0c-1d2e3f4a5b6c";
+        let ready = r"C:\Temp\captures-preview-x\ready";
+        let options = parse(
+            true,
+            &[
+                "--live",
+                "--native-update-ready-file",
+                ready,
+                "--native-update-ready-token",
+                token,
+            ],
+        )
+        .unwrap();
+        assert!(options.health.is_some() && options.preview_profile);
+        assert!(parse(true, &["--native-update-ready-file", ready]).is_err());
+        assert!(parse(true, &["--native-update-ready-token", token]).is_err());
+        // Not a canonical UUIDv4, a relative file, a duplicate, or with files.
+        let bad = [
+            vec![
+                "--native-update-ready-file",
+                ready,
+                "--native-update-ready-token",
+                "x",
+            ],
+            vec![
+                "--native-update-ready-file",
+                "ready",
+                "--native-update-ready-token",
+                token,
+            ],
+            vec![
+                "--native-update-ready-file",
+                ready,
+                "--native-update-ready-file",
+                ready,
+                "--native-update-ready-token",
+                token,
+            ],
+            vec![
+                "--native-update-ready-file",
+                ready,
+                "--native-update-ready-token",
+                token,
+                r"C:\a.png",
+            ],
+        ];
+        for args in bad {
+            assert!(parse(true, &args).is_err(), "{args:?}");
+        }
+        // A development build needs explicit absolute paths.
+        assert!(
+            parse(
+                false,
+                &[
+                    "--live",
+                    "--native-update-ready-file",
+                    ready,
+                    "--native-update-ready-token",
+                    token,
+                ],
+            )
+            .is_err()
+        );
+    }
 }

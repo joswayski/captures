@@ -190,6 +190,20 @@ pub fn exists() -> bool {
     EDITORS.with(|e| e.try_borrow().map_or(true, |e| !e.is_empty()))
 }
 
+/// The History artifacts open in screenshot editors, for an update restart.
+pub fn ids() -> Vec<String> {
+    EDITORS.with(|e| {
+        e.try_borrow()
+            .map(|e| {
+                e.iter()
+                    .filter(|editor| !editor.closing)
+                    .map(|editor| editor.artifact_id.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    })
+}
+
 /// Something that takes focus or a click.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Target {

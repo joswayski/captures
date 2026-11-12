@@ -34,8 +34,8 @@ mod worker;
 use output::Output;
 use preview::Preview;
 use timeline::Timeline;
-pub(crate) use worker::toolchain;
 use worker::{Job, Outcome, Presented, Worker};
+pub(crate) use worker::{tool_paths, toolchain};
 
 pub const SIZE: (f32, f32) = (1280., 840.);
 const WM_OUTCOME: u32 = WM_APP + 31;
@@ -55,6 +55,15 @@ pub fn windows() -> Vec<HWND> {
 
 pub fn exists() -> bool {
     WINDOWS.with(|w| w.try_borrow().map_or(true, |w| !w.is_empty()))
+}
+
+/// The History artifacts open in recording editors, for an update restart.
+pub fn ids() -> Vec<String> {
+    WINDOWS.with(|w| {
+        w.try_borrow()
+            .map(|w| w.iter().map(|w| w.id.clone()).collect())
+            .unwrap_or_default()
+    })
 }
 
 pub fn with_recording<R>(hwnd: HWND, f: impl FnOnce(&mut Recording) -> R) -> Option<R> {

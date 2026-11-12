@@ -255,9 +255,28 @@ with the sidecars and `native_preview_update_helper`; see
 The installed executable is `captures.exe`, which answers
 `--preview-build-info` with renderer `win32`. Such a build starts `--live`
 without flags on the imported Preview profile (unless `--profile` or explicit
-paths are given) and holds the package-use lock. It does not start the startup
-recovery companion, has no update check, and exits on a file path argument, so
-installed Open With and file associations do not work yet.
+paths are given) and holds the package-use lock. Before profile import it arms the shared startup
+recovery companion (`updater::preview::recovery::Startup`) and acknowledges its
+readiness file (or the installer's `--native-update-ready-file`/`-token`) once
+settings load, a Direct2D device starts and the bundled FFmpeg/FFprobe verify;
+forwarding to a running instance and a normal Quit finish it. An update restart
+reopens the previews, editors and Preferences recorded in the shared restart
+intent. Plain path and `file:` URI arguments (Open With, file associations),
+`--open-media PATH` and everything after `--` open each file through the shared
+`OpenMedia` import: screenshots in the screenshot editor, videos and GIFs in the
+recording editor, one at a time; a second launch forwards its files to the
+resident app. Development builds accept files only through `--open-media` or
+`--` with `--live`. The resident app runs the shared `CheckWorker::preview` at
+launch and every five minutes; Preferences' Updates card (`src/updates.rs`)
+shows shipping's copy and states (Check Now, Update now with progress, Up to
+date, “Couldn’t check for updates”, “Update failed” with Try again) and
+the tray's Check for Updates checks and scrolls to it. Update now downloads and
+verifies, then hands the package to the copied `native_preview_update_helper`
+and quits; it refuses while a capture or recording runs. Render the card with
+`--scene preferences --select update-idle|current|available|downloading|failed|check-failed`.
+The floating update notice window is not ported. None of this has run on
+Windows or against a real installed package; it is checked by Wine tests and
+offscreen renders only.
 
 On Linux (and in orbs), the tests also run under Wine 8 with a disposable prefix.
 Run `node apps/native/prepare.mjs --output apps/native/windows/resources` first.
