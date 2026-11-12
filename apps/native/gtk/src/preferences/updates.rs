@@ -1,194 +1,178 @@
-//! Preferences' Updates card on the native Preview channel only. An
-//! installed Preview build (`CAPTURES_NATIVE_PREVIEW_VERSION`) checks the
-//! signed Preview metadata through the shared `CheckWorker::preview`, which
-//! keeps the existing full and delta acquisition; development builds keep
-//! the static "Updates unavailable" copy and never make a request. There is
-//! no development endpoint, production or stable channel here.
-//!
-//! "Restart and install" shows disabled with a note: the Linux Preview
-//! package is still the wgpu build, so installing it would replace this host.
-
-/// Why a verified Preview cannot install from this host.
-pub const INSTALL_NOTE: &str =
-    "Installing is not available in this native build. Download the latest Preview from captur.es.";
-use std::cell::RefCell;
+//! Preferences' Updates card, as shipping's `UpdatePreferences`
+//! (`apps/desktop/ui/src/App.tsx`): build identity beside one action button
+//! with its status under it, the install progress, the open-captures warning,
+//! the error and the captur.es fallback. The resident app owns the Preview
+//! worker and the card's state (`crate::updates`); this only draws it.
+//! Development builds keep the static "Updates unavailable" copy and never
+//! make a request.
+use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
-use std::sync::Arc;
 
 use captures_app::preferences;
-use captures_app::update_notice::Action;
-use captures_app::updater::checks::{CheckWorker, Presentation};
 use gtk::glib;
 use gtk::prelude::*;
 
+use crate::updates::{Card, Step};
+
+/// Shipping's Updates header, once the card can update (a Preview build).
+pub const HEADER: &str =
+    "Preview builds check for a new version automatically. Update now installs it in place.";
+
 thread_local! {
-    /// The open card, woken on the main thread by the worker.
+    /// The open card, refreshed by the resident app.
     static OPEN: RefCell<Weak<Updates>> = const { RefCell::new(Weak::new()) };
-}
-
-pub struct Updates {
-    worker: RefCell<Option<CheckWorker>>,
-    /// Shown when no worker could start (a Preview build without its key).
-    error: Option<String>,
-    version: gtk::Label,
-    channel: gtk::Label,
-    check: gtk::Button,
-    status: gtk::Label,
-    acquisition: gtk::Box,
-    acquire: gtk::Button,
-    note: gtk::Label,
-}
-
-impl Drop for Updates {
-    fn drop(&mut self) {
-        // Joining can wait on a blocked request; never on the UI thread.
-        if let Some(worker) = self.worker.take() {
-            std::thread::spawn(move || drop(worker));
-        }
-    }
 }
 
 pub struct Widgets {
     pub version: gtk::Label,
     pub channel: gtk::Label,
-    pub check: gtk::Button,
-    pub status: gtk::Label,
-    /// The "Package verification" row and its button.
-    pub acquisition: gtk::Box,
-    pub acquire: gtk::Button,
-    /// Shown under the row while install is unavailable.
-    pub note: gtk::Label,
+    pub button: gtk::Button,
+    /// `.update-settings-status` (`role="status"`): heading and `small`.
+    pub heading: gtk::Label,
+    pub detail: gtk::Label,
+    pub progress: gtk::ProgressBar,
+    pub warning: gtk::Label,
+    pub error: gtk::Label,
+    /// The download fallback paragraph, shown with a Preview card.
+    pub fallback: gtk::Widget,
 }
 
-/// Start the Preview worker for an installed Preview build and keep the
-/// card's widgets in step with it.
+pub struct Updates {
+    widgets: Widgets,
+    step: Cell<Option<Step>>,
+    /// The pulse while the progress is indeterminate.
+    pulse: RefCell<Option<gtk::TickCallbackId>>,
+}
+
+/// Keep the card's widgets in step with the resident app's update state.
 pub fn connect(widgets: Widgets) -> Rc<Updates> {
-    let (worker, error) = if captures_app::preview_channel::version().is_some() {
-        // The worker wakes from its own thread; hop to the main loop.
-        let wake = Arc::new(|| {
-            glib::MainContext::default().invoke(|| {
-                if let Some(updates) = OPEN.with(|open| open.borrow().upgrade()) {
-                    updates.refresh();
-                }
-            });
-        });
-        // `ReleaseInfo` labels the Linux Preview package, still wgpu-built.
-        match CheckWorker::preview(captures_app::updater::Renderer::Wgpu, wake) {
-            Ok(mut worker) => {
-                worker.check_automatically();
-                (Some(worker), None)
-            }
-            Err(error) => (None, Some(error.to_string())),
-        }
-    } else {
-        (None, None)
-    };
     let updates = Rc::new(Updates {
-        worker: RefCell::new(worker),
-        error,
-        version: widgets.version,
-        channel: widgets.channel,
-        check: widgets.check,
-        status: widgets.status,
-        acquisition: widgets.acquisition,
-        acquire: widgets.acquire,
-        note: widgets.note,
+        widgets,
+        step: Cell::new(None),
+        pulse: RefCell::default(),
     });
     OPEN.with(|open| *open.borrow_mut() = Rc::downgrade(&updates));
     let weak = Rc::downgrade(&updates);
-    updates.check.connect_clicked(move |_| {
-        if let Some(updates) = weak.upgrade() {
-            if let Some(worker) = updates.worker.borrow_mut().as_mut() {
-                worker.check();
-            }
-            updates.refresh();
+    updates.widgets.button.connect_clicked(move |_| {
+        if let Some(step) = weak.upgrade().and_then(|updates| updates.step.get()) {
+            // The resident app refreshes the card; never under this borrow.
+            glib::idle_add_local_once(move || crate::updates::act(step));
         }
-    });
-    let weak = Rc::downgrade(&updates);
-    updates.acquire.connect_clicked(move |_| {
-        let Some(updates) = weak.upgrade() else {
-            return;
-        };
-        let action = updates.presentation().and_then(|copy| copy.acquisition);
-        if let (Some(worker), Some(button)) = (updates.worker.borrow_mut().as_mut(), action) {
-            match button.action {
-                Action::DownloadVerify => {
-                    worker.download();
-                }
-                Action::CancelDownload => {
-                    worker.cancel_download();
-                }
-                _ => {}
-            }
-        }
-        updates.refresh();
     });
     updates.refresh();
     updates
 }
 
+/// The resident app's state changed.
+pub fn refresh_open() {
+    if let Some(updates) = OPEN.with(|open| open.borrow().upgrade()) {
+        updates.refresh();
+    }
+}
+
 impl Updates {
-    fn presentation(&self) -> Option<Presentation> {
-        let mut worker = self.worker.borrow_mut();
-        let worker = worker.as_mut()?;
-        worker.poll();
-        Some(worker.presentation())
+    fn refresh(&self) {
+        let w = &self.widgets;
+        let Some(card) = crate::updates::current() else {
+            w.version.set_text(preferences::UPDATES_VERSION);
+            w.channel.set_text(preferences::UPDATES_CHANNEL);
+            set_button(&w.button, preferences::UPDATES_ACTION, false);
+            describe(&w.button, preferences::UPDATES_DETAIL);
+            w.heading.set_text(preferences::UPDATES_TITLE);
+            w.detail.set_visible(false);
+            for hidden in [w.warning.upcast_ref::<gtk::Widget>(), w.error.upcast_ref()] {
+                hidden.set_visible(false);
+            }
+            w.fallback.set_visible(false);
+            self.set_progress(None);
+            self.step.set(None);
+            return;
+        };
+        let Card {
+            version,
+            channel,
+            action,
+            step,
+            heading,
+            detail,
+            current,
+            progress,
+            warning,
+            error,
+        } = card;
+        w.version.set_text(&version);
+        w.channel.set_text(channel);
+        set_button(&w.button, action, step.is_some());
+        describe(
+            &w.button,
+            if step == Some(Step::ViewRelease) {
+                crate::updates::MANUAL_DETAIL
+            } else {
+                ""
+            },
+        );
+        // An empty status keeps its line, as shipping's `\u00a0`.
+        w.heading.set_text(if heading.is_empty() {
+            "\u{a0}"
+        } else {
+            &heading
+        });
+        if current {
+            w.heading.add_css_class("current");
+        } else {
+            w.heading.remove_css_class("current");
+        }
+        w.detail.set_text(&detail);
+        w.detail.set_visible(!detail.is_empty());
+        w.warning.set_text(warning.unwrap_or_default());
+        w.warning.set_visible(warning.is_some());
+        w.error.set_text(error.as_deref().unwrap_or_default());
+        w.error.set_visible(error.is_some());
+        w.fallback.set_visible(true);
+        self.set_progress(progress);
+        self.step.set(step);
     }
 
-    fn refresh(&self) {
-        let copy = self.presentation();
-        let (version, channel, status, action, detail, enabled, failed) = match &copy {
-            Some(copy) => (
-                copy.version.as_str(),
-                copy.channel,
-                copy.status.as_str(),
-                copy.action,
-                copy.detail,
-                copy.enabled,
-                copy.failed,
-            ),
-            None => (
-                preferences::UPDATES_VERSION,
-                preferences::UPDATES_CHANNEL,
-                self.error.as_deref().unwrap_or(preferences::UPDATES_TITLE),
-                preferences::UPDATES_ACTION,
-                preferences::UPDATES_DETAIL,
-                false,
-                self.error.is_some(),
-            ),
-        };
-        self.version.set_text(version);
-        self.channel.set_text(channel);
-        self.status.set_text(status);
-        if failed {
-            self.status.add_css_class("failed");
-        } else {
-            self.status.remove_css_class("failed");
+    /// `.update-settings-progress`: a fraction, or a pulse for an unknown
+    /// total (`Some(None)`).
+    fn set_progress(&self, progress: Option<Option<f32>>) {
+        let bar = &self.widgets.progress;
+        bar.set_visible(progress.is_some());
+        let pulsing = matches!(progress, Some(None));
+        if !pulsing && let Some(id) = self.pulse.borrow_mut().take() {
+            id.remove();
         }
-        self.check.set_label(action);
-        self.check.set_sensitive(enabled);
-        self.check.set_tooltip_text(Some(detail));
-        self.check
-            .update_property(&[gtk::accessible::Property::Description(detail)]);
-        let button = copy.and_then(|copy| copy.acquisition);
-        let install = button
-            .as_ref()
-            .is_some_and(|button| button.action == Action::Install);
-        self.acquisition.set_visible(button.is_some());
-        self.note.set_visible(install);
-        if let Some(button) = button {
-            if let Some(label) = self.acquire.child().and_downcast::<gtk::Label>() {
-                label.set_text(&button.label);
+        match progress {
+            Some(Some(fraction)) => {
+                bar.set_fraction(f64::from(fraction));
+                let percent = format!("{}%", (fraction * 100.).round());
+                bar.update_property(&[
+                    gtk::accessible::Property::ValueNow(f64::from(fraction) * 100.),
+                    gtk::accessible::Property::ValueText(&percent),
+                ]);
             }
-            self.acquire
-                .update_property(&[gtk::accessible::Property::Label(&button.label)]);
-            self.acquire.set_sensitive(button.enabled && !install);
-            self.acquire
-                .update_property(&[gtk::accessible::Property::Description(if install {
-                    INSTALL_NOTE
-                } else {
-                    ""
-                })]);
+            Some(None) if self.pulse.borrow().is_none() => {
+                bar.update_property(&[gtk::accessible::Property::ValueText("Installing")]);
+                *self.pulse.borrow_mut() = Some(bar.add_tick_callback(|bar, _| {
+                    bar.pulse();
+                    glib::ControlFlow::Continue
+                }));
+            }
+            _ => {}
         }
     }
+}
+
+/// The action button's text and name; disabled while busy.
+fn set_button(button: &gtk::Button, text: &str, enabled: bool) {
+    if let Some(label) = button.child().and_downcast::<gtk::Label>() {
+        label.set_text(text);
+    }
+    button.update_property(&[gtk::accessible::Property::Label(text)]);
+    button.set_sensitive(enabled);
+}
+
+fn describe(button: &gtk::Button, detail: &str) {
+    button.set_tooltip_text((!detail.is_empty()).then_some(detail));
+    button.update_property(&[gtk::accessible::Property::Description(detail)]);
 }

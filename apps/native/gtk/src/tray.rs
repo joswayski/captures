@@ -311,8 +311,14 @@ pub fn run(host: &Rc<Host>, action: Action) {
         Action::History => {
             host.show_history();
         }
-        Action::Preferences | Action::CheckUpdates => {
+        Action::Preferences => {
             host.show_preferences();
+        }
+        // Check for Updates checks now and shows the Updates card.
+        Action::CheckUpdates => {
+            host.show_preferences();
+            crate::updates::check_now();
+            crate::preferences::show_section("updates");
         }
         Action::SendFeedback => {
             host.show_feedback();

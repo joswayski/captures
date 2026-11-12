@@ -21,6 +21,7 @@ mod switch;
 mod system_look;
 mod tokens;
 mod tray;
+mod updates;
 mod widgets;
 
 use std::cell::{Cell, RefCell};
@@ -34,10 +35,12 @@ use gtk::{gio, glib, graphene};
 
 const USAGE: &str = "captures-gtk [--scene preferences|history|editor|recording|preview|feedback|setup|update|startup] [--artifact ID] [--appearance light|dark]\n\
   [--update available|single|closing|manual|downloading|restarting|error|checking|up-to-date]\n\
+  [--update-card idle|checking|current|available|closing|manual|downloading|verifying|restarting|failed|check-failed]\n\
   [--settings-file PATH] [--history-root PATH] [--size WxH] [--feedback-endpoint URL]\n\
   [--screenshot OUT.png] [--find QUERY] [--count N] [--exercise] [--quit-after SECONDS]\n\
   [--open-media PATH]... [-- FILE...]\n\
   --live [--captures-autostart] [--capture display|region|window|new|record-display] [--history-root PATH] [--settings-file PATH] [--open-media PATH]... [-- FILE...]\n\
+  --live --native-update-ready-file ABSOLUTE_PATH --native-update-ready-token UUID_V4 (update relaunches only)\n\
   record-display is an X11-only development entry point; the Record menu is not connected yet.";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -101,9 +104,19 @@ struct Options {
     capture: Option<tray::Action>,
     /// `--update NAME`: the fixture status `--scene update` shows.
     update: String,
+    /// `--update-card NAME`: a Preview Updates card fixture in Preferences.
+    update_card: Option<updates::Card>,
+    /// `--native-update-ready-file` and `--native-update-ready-token` from
+    /// the update helper, or the startup recovery companion's own file.
+    health: Option<captures_app::updater::HealthAcknowledgement>,
 }
 
 fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
+    parse_args(args, captures_app::preview_channel::version().is_some())
+}
+
+/// [`parse`] for a Preview build (`preview`) or a development build.
+fn parse_args(args: impl Iterator<Item = String>, preview: bool) -> Result<Options, String> {
     let mut options = Options {
         scene: Scene::Preferences,
         appearance: None,
@@ -121,11 +134,14 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
         scene_given: false,
         settings_given: false,
         // An installed Preview is the resident app, as its launchers expect.
-        live: captures_app::preview_channel::version().is_some(),
+        live: preview,
         quiet: false,
         capture: None,
         update: "available".into(),
+        update_card: None,
+        health: None,
     };
+    let (mut ready_file, mut ready_token) = (None, None);
     let mut args = args.skip(1);
     while let Some(flag) = args.next() {
         let mut value = || args.next().ok_or_else(|| format!("{flag} needs a value"));
@@ -152,6 +168,24 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
                     return Err(format!("unknown update fixture {name}"));
                 }
                 options.update = name;
+            }
+            "--update-card" => {
+                let name = value()?;
+                options.update_card = Some(updates::fixture(&name).ok_or_else(|| {
+                    format!(
+                        "unknown update card fixture {name}; one of {}",
+                        updates::FIXTURES.join(", ")
+                    )
+                })?);
+            }
+            "--native-update-ready-file" if ready_file.is_none() => {
+                ready_file = Some(PathBuf::from(value()?));
+            }
+            "--native-update-ready-token" if ready_token.is_none() => {
+                ready_token = Some(value()?);
+            }
+            "--native-update-ready-file" | "--native-update-ready-token" => {
+                return Err(format!("duplicate {flag}"));
             }
             "--appearance" => options.appearance = Some(value()?),
             "--settings-file" => {
@@ -196,9 +230,7 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
             }
             "--help" => return Err(USAGE.into()),
             // The installed desktop entry's `%U`: local paths or file URIs.
-            path if captures_app::preview_channel::version().is_some()
-                && !path.starts_with('-') =>
-            {
+            path if preview && !path.starts_with('-') => {
                 options
                     .open
                     .push(captures_app::preview_channel::local_media_path(
@@ -227,6 +259,40 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
             "--scene {} needs --artifact ID",
             options.scene.name()
         ));
+    }
+    if options.update_card.is_some() && (options.live || options.scene != Scene::Preferences) {
+        return Err("--update-card renders the Preferences fixture only".into());
+    }
+    match (ready_file, ready_token) {
+        (None, None) => {}
+        (Some(file), Some(token)) => {
+            // The update helper relaunches a plain `--live` on the installed
+            // profile; a development check needs explicit absolute paths.
+            let absolute = options
+                .history_root
+                .as_ref()
+                .is_some_and(|root| root.is_absolute())
+                && options.settings_given
+                && options.settings_file.is_absolute();
+            let installed = preview && options.history_root.is_none() && !options.settings_given;
+            if !options.live
+                || options.quiet
+                || options.capture.is_some()
+                || !options.open.is_empty()
+                || !(absolute || installed)
+            {
+                return Err("Update readiness needs a plain --live launch on the installed Preview profile or explicit absolute --history-root and --settings-file".into());
+            }
+            options.health = Some(
+                captures_app::updater::HealthAcknowledgement::new(file, token)
+                    .map_err(|error| error.to_string())?,
+            );
+        }
+        _ => {
+            return Err(
+                "--native-update-ready-file and --native-update-ready-token go together".into(),
+            );
+        }
     }
     Ok(options)
 }
@@ -773,6 +839,23 @@ fn main() -> glib::ExitCode {
         }
     };
     let started = Instant::now();
+    // An installed Preview arms its separate, renderer-free recovery helper
+    // before profile import can fail; development builds start none.
+    let recovery = if options.live {
+        match captures_app::updater::preview::recovery::Startup::start(options.health.clone()) {
+            Ok(recovery) => recovery,
+            Err(error) => {
+                eprintln!("Startup recovery unavailable: {error}. Continuing launch.");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    if let Some(recovery) = &recovery {
+        options.health = Some(recovery.acknowledgement.clone());
+    }
+    let mut update = live::Update::default();
     // Election precedes GTK, workers and windows; fixtures never take part.
     let instance = if options.live {
         if options.history_root.is_none() && !options.settings_given {
@@ -794,11 +877,16 @@ fn main() -> glib::ExitCode {
             .unwrap_or_else(captures_app::default_history_root);
         match live::elect(&root, &options.open) {
             Ok(Some(instance)) => Some(instance),
+            // Another process owns this profile and took the relaunch and
+            // any files; that is not a failed launch.
             Ok(None) => {
                 emit(
                     "forwarded",
                     serde_json::json!({"paths": options.open.len()}),
                 );
+                if let Some(recovery) = &recovery {
+                    recovery.finish();
+                }
                 return glib::ExitCode::SUCCESS;
             }
             Err(error) => {
@@ -809,7 +897,19 @@ fn main() -> glib::ExitCode {
     } else {
         None
     };
+    // Only the elected primary consumes an update's restart intent.
+    if let Some(health) = options.health.take() {
+        match health.take_restart_intent() {
+            Ok(restart) => update.restart = restart,
+            Err(error) => {
+                eprintln!("Captures could not start: {error}");
+                return glib::ExitCode::FAILURE;
+            }
+        }
+        update.health = Some(health);
+    }
     let instance = RefCell::new(instance);
+    let update = RefCell::new(Some(update));
     editor::register_fonts();
     let app = gtk::Application::builder()
         .application_id("es.captur.Captures.Gtk")
@@ -876,7 +976,13 @@ fn main() -> glib::ExitCode {
             }
         });
         if let Some(instance) = instance.borrow_mut().take() {
-            live::start(&host, instance, options.quiet, !options.open.is_empty());
+            live::start(
+                &host,
+                instance,
+                options.quiet,
+                !options.open.is_empty(),
+                update.borrow_mut().take().unwrap_or_default(),
+            );
             host.open_media(options.open.clone());
             emit(
                 "ready",
@@ -915,8 +1021,18 @@ fn main() -> glib::ExitCode {
                 return;
             }
         }
+        if let Some(card) = options.update_card.clone() {
+            updates::set_fixture(card);
+        }
         let window: gtk::ApplicationWindow = match options.scene {
-            Scene::Preferences => host.show_preferences(),
+            Scene::Preferences => {
+                let window = host.show_preferences();
+                // A card fixture opens on its card.
+                if options.update_card.is_some() {
+                    preferences::show_section("updates");
+                }
+                window
+            }
             Scene::Feedback => host.show_feedback(),
             Scene::Setup => host.show_setup(),
             Scene::Update => {
@@ -1029,7 +1145,13 @@ fn main() -> glib::ExitCode {
             live::stop(host);
         }
     });
-    app.run_with_args::<&str>(&[])
+    let code = app.run_with_args::<&str>(&[]);
+    // A normal Quit (including one that hands off to the update helper) is
+    // not a failed launch.
+    if let Some(recovery) = &recovery {
+        recovery.finish();
+    }
+    code
 }
 
 /// `profile.py --exercise`: six scripted mutations at 2, 6, … 22 s, like the
@@ -1093,4 +1215,96 @@ fn screenshot(window: &gtk::ApplicationWindow, path: &std::path::Path) -> Result
     let renderer = window.renderer().ok_or("no renderer")?;
     let texture = renderer.render_texture(&node, Some(&graphene::Rect::new(0., 0., w, h)));
     texture.save_to_png(path).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_args;
+
+    fn parse(preview: bool, args: &[&str]) -> Result<super::Options, String> {
+        let args = std::iter::once("captures")
+            .chain(args.iter().copied())
+            .map(String::from);
+        parse_args(args, preview)
+    }
+
+    #[test]
+    fn update_readiness_flags_go_together_on_a_plain_live_launch() {
+        let token = "6f1c3b7a-2d4e-4f8a-9b0c-1d2e3f4a5b6c";
+        let ready = "/tmp/captures-preview-x/ready";
+        let ok = [
+            "--live",
+            "--native-update-ready-file",
+            ready,
+            "--native-update-ready-token",
+            token,
+        ];
+        assert!(parse(true, &ok).unwrap().health.is_some());
+        // An installed Preview is live without the flag.
+        assert!(parse(true, &ok[1..]).unwrap().health.is_some());
+        assert!(parse(true, &["--native-update-ready-file", ready]).is_err());
+        assert!(parse(true, &["--native-update-ready-token", token]).is_err());
+        // Not a canonical UUIDv4, a relative file, a duplicate, quiet, or
+        // with files.
+        let bad: [&[&str]; 5] = [
+            &[
+                "--native-update-ready-file",
+                ready,
+                "--native-update-ready-token",
+                "x",
+            ],
+            &[
+                "--native-update-ready-file",
+                "ready",
+                "--native-update-ready-token",
+                token,
+            ],
+            &[
+                "--native-update-ready-file",
+                ready,
+                "--native-update-ready-file",
+                ready,
+                "--native-update-ready-token",
+                token,
+            ],
+            &[
+                "--captures-autostart",
+                "--native-update-ready-file",
+                ready,
+                "--native-update-ready-token",
+                token,
+            ],
+            &[
+                "--native-update-ready-file",
+                ready,
+                "--native-update-ready-token",
+                token,
+                "/tmp/a.png",
+            ],
+        ];
+        for args in bad {
+            assert!(parse(true, args).is_err(), "{args:?}");
+        }
+        // A development build needs explicit absolute paths.
+        assert!(parse(false, &ok).is_err());
+        let explicit = [
+            &ok[..],
+            &["--history-root", "/tmp/h", "--settings-file", "/tmp/s.json"],
+        ]
+        .concat();
+        assert!(parse(false, &explicit).unwrap().health.is_some());
+    }
+
+    #[test]
+    fn update_card_fixtures_render_only_in_preferences() {
+        assert!(
+            parse(false, &["--update-card", "downloading"])
+                .unwrap()
+                .update_card
+                .is_some()
+        );
+        assert!(parse(false, &["--update-card", "nope"]).is_err());
+        assert!(parse(false, &["--scene", "history", "--update-card", "idle"]).is_err());
+        assert!(parse(false, &["--live", "--update-card", "idle"]).is_err());
+    }
 }

@@ -964,13 +964,18 @@ fn note_item(notice: &Rc<UpdateNotice>, item: &notice::NoteItem) -> gtk::Box {
     row
 }
 
-type InlineButton<'a> = (&'a str, &'a str, Box<dyn Fn()>);
+pub(crate) type InlineButton<'a> = (&'a str, &'a str, Box<dyn Fn()>);
 
 /// Wrapping text with an optional text button after it (shipping's
 /// `<p>…<button>…</button>…</p>`): the button follows the last line when it
 /// fits and wraps to its own line otherwise, and stays a real keyboard and
 /// AT-SPI button, which a label link is not.
-fn inline(before: &str, button: Option<InlineButton>, after: &str, class: &str) -> gtk::Widget {
+pub(crate) fn inline(
+    before: &str,
+    button: Option<InlineButton>,
+    after: &str,
+    class: &str,
+) -> gtk::Widget {
     let text = description(before.trim_end(), class);
     let Some((label, accessible, clicked)) = button else {
         text.set_text(&format!("{}{after}", before.trim_end()));

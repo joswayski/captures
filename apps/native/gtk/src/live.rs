@@ -54,7 +54,13 @@ pub fn elect(history_root: &Path, open: &[PathBuf]) -> std::io::Result<Option<In
 
 /// Make `host` the resident app: keep running with no window, receive
 /// forwarded launches, and show the window shipping shows at launch.
-pub fn start(host: &Rc<Host>, instance: Instance, quiet: bool, opening_files: bool) {
+pub fn start(
+    host: &Rc<Host>,
+    instance: Instance,
+    quiet: bool,
+    opening_files: bool,
+    update: Update,
+) {
     *host.resident.borrow_mut() = Some(host.app.hold());
     HOST.with(|resident| *resident.borrow_mut() = Rc::downgrade(host));
     // The wake runs on the IPC worker; drain on the main loop, never inside
@@ -106,7 +112,14 @@ pub fn start(host: &Rc<Host>, instance: Instance, quiet: bool, opening_files: bo
         });
         SETTINGS.with(|watch| *watch.borrow_mut() = Some(monitor));
     }
-    let launch = app_windows::interactive_launch(onboarded(host), quiet, opening_files, false);
+    // An installed Preview checks for updates at launch and every 5 minutes.
+    crate::updates::start(host);
+    // An update restart reopens only what was open before, as shipping;
+    // unfinished setup still shows.
+    let launch = match &update.restart {
+        Some(_) if onboarded(host) => None,
+        _ => app_windows::interactive_launch(onboarded(host), quiet, opening_files, false),
+    };
     // A visible launch after an unclean exit opens Send Feedback with the
     // local review, as the wgpu host; nothing is sent or added unasked.
     let review = !quiet
@@ -140,6 +153,21 @@ pub fn start(host: &Rc<Host>, instance: Instance, quiet: bool, opening_files: bo
         }
         None => {}
     }
+    if let Some(restart) = &update.restart {
+        crate::updates::restore(host, restart);
+    }
+    if let Some(acknowledgement) = update.health {
+        crate::updates::acknowledge(host, acknowledgement);
+    }
+}
+
+/// An update's startup handoff for the elected primary.
+#[derive(Default)]
+pub struct Update {
+    /// The installer's or recovery companion's readiness file.
+    pub health: Option<captures_app::updater::HealthAcknowledgement>,
+    /// Windows to reopen after an update restart.
+    pub restart: Option<captures_app::updater::RestartIntent>,
 }
 
 /// Stop accepting forwarded launches and release the profile.
@@ -149,6 +177,8 @@ pub fn stop(host: &Host) {
         recorder.shutdown();
     }
     SETTINGS.with(|watch| watch.borrow_mut().take());
+    // Joined while the election is still held.
+    crate::updates::stop();
     SHORTCUTS.with(|shortcuts| shortcuts.borrow_mut().take());
     host.tray.borrow_mut().take();
     // Mark a clean exit before releasing the profile election.

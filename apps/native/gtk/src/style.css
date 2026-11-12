@@ -442,8 +442,37 @@ window.captures.countdown-window {
   color: var(--text-subtle);
   font-size: var(--text-sm);
 }
-.captures .update-settings-status.failed {
+.captures .update-settings-status.current {
+  color: var(--positive-text);
+}
+/* `.update-settings-progress`: a 4 px sunken pill with the accent fill. */
+.captures progressbar.update-settings-progress {
+  all: unset;
+}
+.captures progressbar.update-settings-progress > trough {
+  all: unset;
+  min-height: 4px;
+  border-radius: var(--r-pill);
+  background: var(--surface-sunken);
+}
+.captures progressbar.update-settings-progress > trough > progress {
+  all: unset;
+  min-height: 4px;
+  border-radius: var(--r-pill);
+  background: var(--theme-accent);
+}
+.captures .update-settings-error {
   color: var(--danger-text);
+  font-size: var(--text-sm);
+}
+.captures .update-settings-warning {
+  color: var(--caution-text);
+  font-size: var(--text-sm);
+  line-height: var(--lh-snug-sm);
+}
+/* `.update-settings .update-download-fallback { margin-top: var(--s-2) }`. */
+.captures .settings-card .update-download-fallback-row {
+  margin-top: var(--s-2);
 }
 
 /* ---------------------------------------------------------- buttons ---- */

@@ -33,6 +33,8 @@ const PLATFORM: ShortcutPlatform = ShortcutPlatform::Linux;
 /// Restyle the app for new look settings; see [`Options::on_look`].
 pub type OnLook = Box<dyn Fn(&AppSettings, bool) -> Rc<Tokens>>;
 type Listener = Box<dyn Fn(&AppSettings)>;
+/// Scroll a section's card into view; false before it has a layout.
+type Jump = Rc<dyn Fn(&str) -> bool>;
 
 pub struct Options {
     pub settings_file: PathBuf,
@@ -64,8 +66,10 @@ struct Prefs {
     status: gtk::Box,
     status_label: gtk::Label,
     status_generation: Rc<Cell<u64>>,
-    /// The Updates card's Preview worker, while the page is open.
+    /// The Updates card, while the page is open.
     updates: RefCell<Option<Rc<updates::Updates>>>,
+    /// Scroll a section's card into view; false before it has a layout.
+    jump: RefCell<Option<Jump>>,
 }
 
 impl Prefs {
@@ -193,6 +197,26 @@ pub fn restyle(tokens: Rc<Tokens>) {
     }
 }
 
+/// The resident app's update state changed: redraw an open Updates card.
+pub fn refresh_updates() {
+    updates::refresh_open();
+}
+
+/// Bring an open page's section into view (the tray's Check for Updates),
+/// once a newly opened window has laid out.
+pub fn show_section(section: &'static str) {
+    let mut tries = 0;
+    glib::timeout_add_local(Duration::from_millis(50), move || {
+        tries += 1;
+        let jump = OPEN.with(|open| open.borrow().upgrade()?.jump.borrow().clone());
+        match jump {
+            Some(jump) if jump(section) => glib::ControlFlow::Break,
+            _ if tries >= 40 => glib::ControlFlow::Break,
+            _ => glib::ControlFlow::Continue,
+        }
+    });
+}
+
 /// Measure `1ch` for [`capped`] once the stylesheet is installed.
 pub(crate) fn measure_ch(tokens: &Tokens) {
     let layout = gtk::Label::new(None).create_pango_layout(Some("0"));
@@ -265,6 +289,7 @@ pub fn build(
         status_label,
         status_generation: Rc::default(),
         updates: RefCell::default(),
+        jump: RefCell::default(),
     });
     OPEN.with(|open| *open.borrow_mut() = Rc::downgrade(&prefs));
 
@@ -377,6 +402,25 @@ pub fn build(
         sections.append(card);
     }
 
+    // Shipping scrolls the card to `scroll-margin-top: var(--s-6)`.
+    let jump: Jump = {
+        let (cards, scroller) = (cards.clone(), scroller.clone());
+        Rc::new(move |section: &str| {
+            let Some((_, card)) = cards.iter().find(|(id, _)| *id == section) else {
+                return false;
+            };
+            let Some(bounds) = card.compute_bounds(&content(&scroller)) else {
+                return false;
+            };
+            if card.height() == 0 {
+                return false;
+            }
+            let adjustment = scroller.vadjustment();
+            adjustment.set_value(f64::from(bounds.y()) - f64::from(margin));
+            true
+        })
+    };
+    *prefs.jump.borrow_mut() = Some(jump.clone());
     for (index, section) in SECTIONS.iter().enumerate() {
         let button = gtk::Button::with_label(section.title);
         button.add_css_class("nav-item");
@@ -387,20 +431,9 @@ pub fn build(
             button.add_css_class("active");
         }
         button.update_property(&[gtk::accessible::Property::Label(section.title)]);
-        let (cards, scroller) = (cards.clone(), scroller.clone());
+        let jump = jump.clone();
         button.connect_clicked(move |_| {
-            // Shipping scrolls the card to `scroll-margin-top: var(--s-6)`.
-            let Some(card) = cards
-                .iter()
-                .find(|(id, _)| *id == section.id)
-                .map(|(_, card)| card)
-            else {
-                return;
-            };
-            if let Some(bounds) = card.compute_bounds(&content(&scroller)) {
-                let adjustment = scroller.vadjustment();
-                adjustment.set_value(f64::from(bounds.y()) - f64::from(margin));
-            }
+            jump(section.id);
         });
         list.append(&button);
     }
@@ -445,7 +478,9 @@ pub fn build(
     // The window owns the page state until it closes; controls hold weak refs.
     let keep = RefCell::new(Some((prefs, find)));
     window.connect_close_request(move |_| {
-        keep.borrow_mut().take();
+        if let Some((prefs, _)) = keep.borrow_mut().take() {
+            prefs.jump.borrow_mut().take();
+        }
         glib::Propagation::Proceed
     });
     window
@@ -1675,12 +1710,20 @@ fn gif_card(prefs: &Rc<Prefs>) -> gtk::Box {
     card
 }
 
-/// Updates: build identity with the (unavailable) check, then the
-/// changelog switch.
+/// Updates: shipping's `UpdatePreferences`. Build identity beside the action
+/// and its status, the install progress under them, then the open-captures
+/// warning, the error, the captur.es fallback and the changelog switch.
+/// Development builds show the disabled Check Now and "Updates unavailable".
 fn updates_card(prefs: &Rc<Prefs>) -> gtk::Box {
     let tokens = prefs.tokens.borrow().clone();
-    let card = card(&tokens, 6, None);
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 24);
+    let s = |name: &str| tokens.number(name) as i32;
+    let preview = crate::updates::current().is_some();
+    let card = card(&tokens, 6, preview.then_some(updates::HEADER));
+    // `.update-settings-row`: two equal columns, then the progress bar
+    // spanning both (`grid-row: 2`, `--s-6` below).
+    let outer = gtk::Box::new(gtk::Orientation::Vertical, s("s-6"));
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, s("s-6"));
+    row.set_homogeneous(true);
     row.add_css_class("update-settings-row");
     let (identity, channel) = copy(
         preferences::UPDATES_VERSION,
@@ -1692,36 +1735,99 @@ fn updates_card(prefs: &Rc<Prefs>) -> gtk::Box {
         .and_downcast::<gtk::Label>()
         .expect("setting title");
     identity.set_valign(gtk::Align::Start);
+    identity.set_margin_top(s("s-3"));
     row.append(&identity);
-    let actions = gtk::Box::new(gtk::Orientation::Vertical, tokens.number("s-3") as i32);
+    // `.update-settings-actions`: right-aligned, `--s-3` apart.
+    let actions = gtk::Box::new(gtk::Orientation::Vertical, s("s-3"));
     actions.set_halign(gtk::Align::End);
-    let check = gtk::Button::with_label(preferences::UPDATES_ACTION);
-    check.add_css_class("ui-btn");
-    check.set_size_request(preferences::UPDATES_ACTION_WIDTH as i32, -1);
-    check.set_halign(gtk::Align::End);
-    actions.append(&check);
-    let status = label(preferences::UPDATES_TITLE, "update-settings-status");
-    status.set_xalign(1.);
+    // A label child, not `with_label`: GTK 4.14 drops a label-mode button's
+    // accessible label.
+    let button = gtk::Button::new();
+    button.set_child(Some(&gtk::Label::new(Some(preferences::UPDATES_ACTION))));
+    button.add_css_class("ui-btn");
+    button.set_size_request(
+        if preview {
+            2 * s("s-12")
+        } else {
+            preferences::UPDATES_ACTION_WIDTH as i32
+        },
+        -1,
+    );
+    button.set_halign(gtk::Align::End);
+    actions.append(&button);
+    // `.update-settings-status` (`role="status"`): heading, then `small`.
+    let status = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(s("s-1"))
+        .accessible_role(gtk::AccessibleRole::Status)
+        .build();
+    status.update_property(&[gtk::accessible::Property::Label("Update status")]);
+    let heading = description(preferences::UPDATES_TITLE, "update-settings-status");
+    let detail = description("", "update-settings-status");
+    for line in [&heading, &detail] {
+        line.set_xalign(1.);
+        line.set_justify(gtk::Justification::Right);
+        status.append(line);
+    }
     actions.append(&status);
     row.append(&actions);
-    add(&card, &row);
-    // Download and verify, for a Preview AppImage (the worker's staging).
-    let (acquisition, acquire) = utility_row(
-        "Package verification",
-        "Temporary storage only; nothing is installed or executed.",
-        "Download and verify",
-    );
-    add(&card, &acquisition);
-    let note = description(updates::INSTALL_NOTE, "setting-description");
-    card.append(&note);
+    outer.append(&row);
+    let progress = gtk::ProgressBar::new();
+    progress.add_css_class("update-settings-progress");
+    progress.set_pulse_step(0.05);
+    progress.update_property(&[
+        gtk::accessible::Property::Label("Installing update"),
+        gtk::accessible::Property::ValueMin(0.),
+        gtk::accessible::Property::ValueMax(100.),
+    ]);
+    progress.set_visible(false);
+    outer.append(&progress);
+    add(&card, &outer);
+    let warning = description("", "update-settings-warning");
+    warning.set_visible(false);
+    add(&card, &warning);
+    let error = description("", "update-settings-error");
+    error.set_accessible_role(gtk::AccessibleRole::Alert);
+    error.set_visible(false);
+    add(&card, &error);
+    // Shipping's Linux fallback: "download from captur.es" is a real button
+    // inline after the first sentence; the Debian/AppImage guidance follows
+    // on the next line, since an inline tail cannot wrap a long sentence.
+    let fallback = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    fallback.append(&crate::notices::inline(
+        crate::updates::FALLBACK_BEFORE,
+        Some((
+            crate::updates::FALLBACK_LINK,
+            crate::updates::FALLBACK_LINK,
+            Box::new(|| {
+                if let Err(error) = gio::AppInfo::launch_default_for_uri(
+                    crate::updates::DOWNLOAD_PAGE_URL,
+                    gio::AppLaunchContext::NONE,
+                ) {
+                    eprintln!("Could not open captur.es: {error}");
+                }
+            }),
+        )),
+        ".",
+        "update-download-fallback",
+    ));
+    fallback.append(&description(
+        crate::updates::FALLBACK_AFTER,
+        "update-download-fallback",
+    ));
+    fallback.add_css_class("update-download-fallback-row");
+    fallback.set_visible(false);
+    add(&card, &fallback);
     *prefs.updates.borrow_mut() = Some(updates::connect(updates::Widgets {
         version,
         channel,
-        check,
-        status,
-        acquisition,
-        acquire,
-        note,
+        button,
+        heading,
+        detail,
+        progress,
+        warning,
+        error,
+        fallback: fallback.upcast(),
     }));
     setting_switch(prefs, &card, "show_update_changelog", "");
     card

@@ -531,6 +531,54 @@ def preferences(binary, scratch):
         process.wait(timeout=10)
 
 
+def update_card(binary, scratch):
+    """The Preview Updates card's shipping states over AT-SPI, from the
+    `--update-card` fixtures: the one action button's name and sensitivity,
+    the status text, the install progress bar, the error alert and the
+    captur.es fallback button."""
+    settings = scratch / "update-card.json"
+    cases = {
+        # fixture: (button, enabled, status texts, progress, alert)
+        "idle": ("Check Now", True, [], False, None),
+        "checking": ("Checking now…", False, [], False, None),
+        "current": ("Check Now", True, ["Up to date"], False, None),
+        "available": ("Update now", True,
+                      ["Version 2026.11.13.2 is available", "104 MB download"], False, None),
+        "manual": ("View release", True, ["Version 2026.11.13.2 is available"], False, None),
+        "downloading": ("Installing…", False,
+                        ["Updating to version 2026.11.13.2", "52.0 MB / 104 MB · 50%"],
+                        True, None),
+        "restarting": ("Restarting…", False, ["Update complete", "Reopening Captures…"],
+                       False, None),
+        "failed": ("Try again", True, ["Update failed"], False,
+                   "Could not install the update: Native update signature verification failed."),
+        "check-failed": ("Check Now", True, ["Couldn’t check for updates"], False,
+                         "Could not reach the native update service."),
+    }
+    for fixture, (action, enabled, status, progress, alert) in cases.items():
+        process = launch(binary, "--settings-file", str(settings), "--size", "880x660",
+                         "--update-card", fixture)
+        try:
+            app = wait(lambda: application(process.pid), "the app on the accessibility bus")
+            button = wait(lambda: find(app, "push button", action), f"{fixture}: {action}")[0]
+            assert has_state(button, Atspi.StateType.SENSITIVE) == enabled, fixture
+            assert find(app, "push button", "download from captur.es"), fixture
+            texts = {node_text(n, name) for n, (_, name) in nodes(app)}
+            for text in status:
+                assert text in texts, f"{fixture}: no {text!r}"
+            bars = find(app, "progress bar", "Installing update")
+            assert bool([b for b in bars if has_state(b, Atspi.StateType.VISIBLE)]) == progress, \
+                fixture
+            alerts = [node_text(n, name) for n, (role, name) in nodes(app)
+                      if role in ("alert", "notification") and has_state(n, Atspi.StateType.VISIBLE)]
+            assert alerts == ([alert] if alert else []), f"{fixture}: {alerts}"
+            assert_accessible(app, f"Updates card ({fixture})")
+        finally:
+            process.terminate()
+            process.wait(timeout=10)
+    print(f"update_card: {len(cases)} Preview card states over AT-SPI")
+
+
 def editor(binary, scratch):
     root = scratch / "editor-history"
     write_history_entries(root, 3)
@@ -2808,7 +2856,7 @@ def recording_controls(binary, scratch):
               "failed resume preserves paused media, and save-on-Quit passed")
 
 
-STEPS = [history, preferences, editor, editor_close_keeps_open_text, recording, recording_controls, recording_menu,
+STEPS = [history, preferences, update_card, editor, editor_close_keeps_open_text, recording, recording_controls, recording_menu,
          recording_output, previews, preview_overflow, feedback, open_with, live, capture, selectors,
          new_capture, tray, shortcuts, setup, crash_review, notices]
 FIXTURE_LOG = None

@@ -55,11 +55,10 @@ dispatch and nightly. Each host answers `--preview-build-info` (`win32`, `gtk`)
 with the compiled Preview version, which the builder checks before bundling it
 as `captures`/`captures.exe`, the names the Preview installer updater requires.
 A Preview build starts as the resident app on the imported Preview profile and
-holds the package-use lock. Still missing against the wgpu package: GTK's startup
-recovery companion, readiness handoff and in-app installation (it checks and
-downloads only), and Win32's update notice window. Win32 now has the companion,
-readiness handoff, Preview check/download/install and Open With; see the Win32
-Preview updates and Open With slice below. GTK finds the packaged FFmpeg/FFprobe
+holds the package-use lock. Still missing against the wgpu package: the floating
+update notice window on both hosts. Win32 and GTK now have the startup recovery
+companion, readiness handoff and Preview check/download/install, and Win32 Open
+With; see the Win32 and GTK Preview updates slices below. GTK finds the packaged FFmpeg/FFprobe
 beside its executable. The AppImage runs GTK with `GDK_BACKEND=x11` (the Tauri
 CLI's GTK hook), so Wayland sessions get XWayland. Status: the Linux AppImage and
 `.deb` built in an orb; the AppImage launched under Xvfb with an isolated HOME
@@ -1546,7 +1545,8 @@ GTK 4.8 and 4.14 only; Wayland, Orca and real hardware remain open.
 Windows, macOS: unchanged.
 
 The GTK Updates card runs the shared update worker on the native Preview
-channel only. An installed Preview build (`CAPTURES_NATIVE_PREVIEW_VERSION`
+channel only. (Superseded by "GTK Preview updates and startup recovery" below:
+the card now installs and no longer shows the Package verification row.) An installed Preview build (`CAPTURES_NATIVE_PREVIEW_VERSION`
 and its public key, as `scripts/native-preview-build.mjs` sets) starts
 `CheckWorker::preview` and checks automatically. The card then follows the
 worker's `Presentation`: "Captures <version> · Preview · Experimental",
@@ -7502,3 +7502,47 @@ parsing for paths, file URIs, UNC URIs, flags and readiness pairs; card states)
 and offscreen renders of each card state. Physical Windows, a real NSIS install,
 Open With from Explorer, a real update and recovery after a failed launch are
 unverified. macOS, Linux: unchanged.
+
+### GTK Preview updates and startup recovery
+
+The GTK host now installs Preview updates through the same shared code as
+Win32 (`apps/native/gtk/src/updates.rs`). The resident app, not Preferences,
+owns `CheckWorker::preview` (still `Renderer::Wgpu`, for the reason in the
+Win32 slice): it checks at launch and every five minutes, and Preferences'
+Updates card follows shipping's `UpdatePreferences` copy: Check Now, Checking
+now…, "Version N is available" with its download size and Update now,
+Installing… with the status detail and a 4 px accent progress bar (a pulse
+while verifying), Up to date in positive text, "Couldn’t check for updates",
+"Update failed" with Try again, Update complete / Restarting…, shipping's
+open-captures warning, the error as an alert and the Linux captur.es fallback
+with a real "download from captur.es" button. The old Package verification row
+and disabled "Restart and install" note are gone. Update now downloads and
+verifies, then (refusing while a capture, selector or recording runs) calls
+`launch_preview_install` with the open previews, editors and Preferences,
+closes the editors so their drafts save, and quits; the copied helper replaces
+the AppImage (`InstallTarget::AppImage`, from `$APPIMAGE`) once the package-use
+lock is released, keeps `.Captures-previous-<uuid>.AppImage` until readiness,
+and relaunches with the readiness pair. A `.deb` install is
+`InstallTarget::Manual`, so the worker never stages it; the card then shows
+shipping's View release (the GitHub releases page), without a size, with the
+wgpu host's Debian copy as its description, and the fallback paragraph says
+Debian packages replace the app. The tray's Check for Updates checks and
+scrolls Preferences to the card. `recovery::Startup` arms before the Preview
+profile import; `--native-update-ready-file`/`--native-update-ready-token`
+parse as on Win32; only the elected primary takes the restart intent, which
+reopens previews, editors and Preferences instead of the launch window; the
+acknowledgement waits for loaded settings, a GDK display and the packaged
+FFmpeg/FFprobe beside the executable; forwarding and a normal Quit finish the
+companion. The fallback's Debian/AppImage sentence sits on its own line under
+the inline link (GTK's inline-link row cannot wrap a long tail).
+
+Verified on X11 (Xvfb) only: GTK fmt, clippy `-D warnings`, 11 tests (9 new:
+card states, the `.deb` card, readiness flag parsing, fixtures);
+`smoke.py --only update_card` (9 card states over AT-SPI: button name and
+sensitivity, status text, progress bar, error alert, fallback button) plus the
+preferences, live, tray, open_with and notices steps; `--update-card` renders of
+every state compared with Tauri's card markup and CSS; and a development
+`--live` launch with a hand-written ready file and restart intent, which
+reopened Preferences, one preview and one editor and wrote the token. A real
+AppImage replacement, a real `.deb`, recovery after a failed launch, Orca and
+Wayland are unverified. Windows, macOS: unchanged.

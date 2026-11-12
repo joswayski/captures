@@ -336,6 +336,11 @@ impl Previews {
         self.state.toggle_collapsed();
     }
 
+    /// The cards' History artifacts in stack order, for an update restart.
+    pub fn ids(&self) -> Vec<String> {
+        self.state.stack.borrow().ids().to_vec()
+    }
+
     /// Auto-copy finished for a capture's card: its clipboard chip.
     pub fn copied(&self, id: &str, result: Result<(), String>) {
         let card = self
