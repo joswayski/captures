@@ -3253,6 +3253,23 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         return (export["quality"] as? String ?? "preserve") != "preserve" || export["max_size_bytes"] is NSNumber
     }
 
+    private var footerActions: [CaptureButton] {
+        [cancelButton, saveButton, showInFolderButton].compactMap { $0 }
+    }
+
+    /// Save, Cancel and Show in Folder trade places while a save runs. AppKit
+    /// moves focus off a disabled Save to the next key view, which wraps to
+    /// Fit; keep it on the footer action that is available instead.
+    private func keepFooterFocus() {
+        func usable(_ button: CaptureButton) -> Bool {
+            button.isEnabled && !button.isHiddenOrHasHiddenAncestor
+        }
+        let actions = footerActions
+        guard !actions.contains(where: { window.firstResponder === $0 && usable($0) }),
+              let target = actions.first(where: usable) else { return }
+        window.makeFirstResponder(target)
+    }
+
     private func saveOrReplace() {
         if estimating {
             // Save supersedes a background estimate and runs once it stops.
@@ -3725,6 +3742,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
 
     private func updateControls() {
+        let footerFocused = footerActions.contains { window.firstResponder === $0 }
+        defer { if footerFocused { keepFooterFocus() } }
         if stagedDiffers || cropAdjustmentActive || playbackState != .idle {
             invalidateComparison()
         }

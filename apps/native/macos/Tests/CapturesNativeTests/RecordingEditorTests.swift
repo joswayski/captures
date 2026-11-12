@@ -181,9 +181,12 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertTrue(labels(in: controller.root).contains { $0.contains("replace unavailable") })
 
         worker.deferReplace = true
+        XCTAssertTrue(controller.window.makeFirstResponder(replace))
         replace.performClick(nil)
         XCTAssertEqual(worker.replaceCalls, 2)
         XCTAssertFalse(replace.isEnabled)
+        XCTAssertEqual((controller.window.firstResponder as? NSButton)?.title, "Cancel replacement",
+                       "a disabled Save hands focus to the footer's Cancel, not around the loop to Fit")
         XCTAssertFalse(controller.windowShouldClose(controller.window))
         let cancel = try button("Cancel replacement", in: controller.root)
         cancel.performClick(nil)
@@ -200,6 +203,8 @@ final class RecordingEditorTests: XCTestCase {
                       "shipping's save toast outlasts the refreshed thumbnails")
         XCTAssertFalse(replace.isEnabled, "Save stays disabled until anything changes, as in shipping")
         XCTAssertFalse(try button("Show in Folder", in: controller.root).isHidden)
+        XCTAssertEqual((controller.window.firstResponder as? NSButton)?.title, "Show in Folder",
+                       "focus stays in the save footer after the save")
     }
 
     func testRenamedSameIdentitySaveAdoptsItsNameAndChecksInvalidNames() throws {
