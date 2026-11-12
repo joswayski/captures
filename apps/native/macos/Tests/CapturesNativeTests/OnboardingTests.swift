@@ -142,6 +142,22 @@ final class OnboardingTests: XCTestCase {
                 view.appearance = NSAppearance(named: appearance == "dark" ? .darkAqua : .aqua)
                 view.layoutSubtreeIfNeeded()
                 let primary = view.primaryButton
+                // Single-line labels get their full cell width, so the eyebrow,
+                // row titles and Optional badge are never clipped.
+                var labels: [NSTextField] = []
+                func collect(_ parent: NSView) {
+                    for child in parent.subviews {
+                        if let field = child as? NSTextField, field.cell?.wraps == false { labels.append(field) }
+                        collect(child)
+                    }
+                }
+                collect(view)
+                XCTAssertTrue(labels.contains { $0.stringValue == "WELCOME TO CAPTURES" })
+                XCTAssertTrue(labels.contains { $0.stringValue == "Optional" })
+                for label in labels where !label.isHiddenOrHasHiddenAncestor {
+                    XCTAssertGreaterThanOrEqual(label.frame.width, ceil(try XCTUnwrap(label.cell).cellSize.width),
+                                                "\(label.stringValue) is clipped")
+                }
                 XCTAssertTrue(view.subviews.contains { ($0 as? NSTextField)?.stringValue == "WELCOME TO CAPTURES" })
                 XCTAssertTrue(view.subviews.contains {
                     ($0 as? NSTextField)?.stringValue.hasPrefix("Captures only reads the pixels you choose to capture.") == true

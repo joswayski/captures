@@ -457,12 +457,13 @@ final class OnboardingPermissionRow: NSView {
         let width = copyWidth(bounds.width)
         icon.frame = NSRect(x: padding, y: padding + 1, width: 22, height: 22)
         let x = padding + 22 + gap
-        let titleWidth = ceil(titleLabel.intrinsicContentSize.width)
+        let titleWidth = OnboardingView.labelWidth(titleLabel)
         titleLabel.frame = NSRect(x: x, y: padding, width: titleWidth, height: titleHeight)
         if let optionalLabel {
             let size = optionalLabel.intrinsicContentSize
             optionalLabel.frame = NSRect(x: x + titleWidth + tokens.number("s-4"),
-                y: padding + titleHeight - ceil(size.height) - 1, width: ceil(size.width), height: ceil(size.height))
+                y: padding + titleHeight - ceil(size.height) - 1,
+                width: OnboardingView.labelWidth(optionalLabel), height: ceil(size.height))
         }
         detail.preferredMaxLayoutWidth = width
         detail.frame = NSRect(x: x, y: padding + titleHeight + tokens.number("s-2"),
@@ -677,6 +678,12 @@ final class OnboardingView: NSView {
     /// Clears a restart that the host could not perform.
     func restartFailed() { restarting = false; update() }
 
+    /// A label's drawn width. `intrinsicContentSize` leaves out the cell's
+    /// 2 pt text inset on each side, which clipped the last glyph.
+    static func labelWidth(_ label: NSTextField) -> CGFloat {
+        ceil(label.cell?.cellSize.width ?? label.intrinsicContentSize.width)
+    }
+
     private func wrappedHeight(_ field: NSTextField, _ width: CGFloat) -> CGFloat {
         ceil(field.cell?.cellSize(forBounds: NSRect(x: 0, y: 0, width: width,
             height: .greatestFiniteMagnitude)).height ?? 0)
@@ -719,7 +726,7 @@ final class OnboardingView: NSView {
         let total = items.reduce(actionsHeight) { $0 + $1.1 + $1.2 }
         var y = max(tokens.number(short ? "s-6" : done == nil ? "s-9" : "s-7"), (bounds.height - total) / 2)
         for (view, height, after) in items {
-            let w = view === mark ? 40 : view === eyebrow ? ceil(eyebrow.intrinsicContentSize.width) : width
+            let w = view === mark ? 40 : view === eyebrow ? Self.labelWidth(eyebrow) : width
             view.frame = NSRect(x: x, y: y, width: w, height: height)
             y += height + after
         }
