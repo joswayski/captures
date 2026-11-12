@@ -22,6 +22,8 @@ final class ScreenshotCountdownContent: NSView {
     private let number = NSTextField(labelWithString: "")
     private let hint = NSTextField(labelWithString: "Press Esc to cancel")
     private(set) var cancelling = false
+    /// Spoken once the countdown is on screen (shipping's `aria-live="assertive"`).
+    private var announcing = false
     override var isFlipped: Bool { true }
 
     init(frame: NSRect, tokens: Tokens, remaining: Int, kind: CountdownKind = .screenshot) {
@@ -31,8 +33,11 @@ final class ScreenshotCountdownContent: NSView {
         super.init(frame: frame)
         wantsLayer = true
         layer?.backgroundColor = tokens.color("glass-countdown-scrim").cgColor
-        heading.setAccessibilityLabel(kind.heading)
+        // One element, like shipping's single live region: VoiceOver's focus
+        // on the panel reads the whole countdown, not just the heading.
+        setAccessibilityElement(true); setAccessibilityRole(.staticText)
         for field in [heading, number, hint] {
+            field.setAccessibilityElement(false)
             field.alignment = .center
             field.textColor = tokens.color(field === number ? "glass-text" : "glass-text-muted")
             addSubview(field)
@@ -45,7 +50,25 @@ final class ScreenshotCountdownContent: NSView {
     func setRemaining(_ value: Int) {
         guard number.stringValue != String(value) else { return }
         number.stringValue = String(value)
-        number.setAccessibilityLabel("\(kind.heading) \(value) seconds")
+        updateAccessibilityLabel()
+        if announcing { announce(String(value)) }
+    }
+
+    /// The first announcement carries the heading, the number and the hint;
+    /// each later second speaks only its number.
+    func announceStart() {
+        guard !announcing else { return }
+        announcing = true
+        announce(spokenText)
+    }
+
+    private var spokenText: String { "\(kind.heading) \(number.stringValue). \(hint.stringValue)" }
+    private func updateAccessibilityLabel() { setAccessibilityLabel(spokenText) }
+
+    private func announce(_ text: String) {
+        NSAccessibility.post(element: NSApp as Any, notification: .announcementRequested, userInfo: [
+            .announcement: text, .priority: NSAccessibilityPriorityLevel.high.rawValue,
+        ])
     }
 
     /// Shipping copy while Esc is being honoured, before the overlay closes.
@@ -53,6 +76,8 @@ final class ScreenshotCountdownContent: NSView {
         guard !cancelling else { return }
         cancelling = true
         hint.stringValue = "Cancelling…"
+        updateAccessibilityLabel()
+        if announcing { announce(hint.stringValue) }
     }
 
     /// Shipping `recording-countdown-fade-in` on the scrim and `-content-in`
@@ -100,6 +125,7 @@ final class ScreenshotCountdownPanel: NSPanel {
         guard !playedEntrance else { return }
         playedEntrance = true
         countdownContent.playEntrance()
+        countdownContent.announceStart()
     }
 
     init(screen: NSScreen, tokens: Tokens, remaining: Int, kind: CountdownKind = .screenshot) {

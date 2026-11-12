@@ -18,8 +18,10 @@ final class CountdownTests: XCTestCase {
             XCTAssertEqual(view.subviews.map(ObjectIdentifier.init), identities)
             let labels = view.subviews.compactMap { $0 as? NSTextField }
             XCTAssertEqual(labels.map(\.stringValue), ["SCREENSHOT IN", "7", "Press Esc to cancel"])
-            XCTAssertEqual(labels[0].accessibilityLabel(), "Screenshot in")
-            XCTAssertEqual(labels[1].accessibilityLabel(), "Screenshot in 7 seconds")
+            // One spoken element, like shipping's live region.
+            XCTAssertTrue(view.isAccessibilityElement())
+            XCTAssertEqual(view.accessibilityLabel(), "Screenshot in 7. Press Esc to cancel")
+            XCTAssertFalse(labels.contains { $0.isAccessibilityElement() })
             XCTAssertEqual(labels[1].textColor, tokens.color("glass-text"))
             for label in labels { XCTAssertTrue(view.bounds.contains(label.frame)) }
             XCTAssertLessThanOrEqual(labels[0].frame.maxY, labels[1].frame.minY)
@@ -45,13 +47,13 @@ final class CountdownTests: XCTestCase {
         let identities = view.subviews.map(ObjectIdentifier.init)
         var labels = view.subviews.compactMap { $0 as? NSTextField }
         XCTAssertEqual(labels.map(\.stringValue), ["RECORDING STARTS IN", "3", "Press Esc to cancel"])
-        XCTAssertEqual(labels[0].accessibilityLabel(), "Recording starts in")
-        XCTAssertEqual(labels[1].accessibilityLabel(), "Recording starts in 3 seconds")
+        XCTAssertEqual(view.accessibilityLabel(), "Recording starts in 3. Press Esc to cancel")
         XCTAssertFalse(view.cancelling)
         view.setCancelling()
         XCTAssertTrue(view.cancelling)
         XCTAssertEqual(view.subviews.map(ObjectIdentifier.init), identities)
         labels = view.subviews.compactMap { $0 as? NSTextField }
         XCTAssertEqual(labels.map(\.stringValue), ["RECORDING STARTS IN", "3", "Cancelling…"])
+        XCTAssertEqual(view.accessibilityLabel(), "Recording starts in 3. Cancelling…")
     }
 }
