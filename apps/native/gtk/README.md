@@ -45,8 +45,8 @@ New Capture…, Screenshot Display, Screenshot Region, Screenshot Window,
 Capture History…, Open Save Location, Preferences, Send Feedback… and Quit
 work; the recording rows stay in shipping's order but are disabled until the
 recording selection/options menu is connected, and Check for Updates…
-is enabled only in a Preview build with update metadata (it checks and opens
-Preferences on the Updates card). Without a StatusNotifier host the app opens Preferences and
+is enabled only in a Preview build with update metadata (it shows the update notice
+or checks, as shipping). Without a StatusNotifier host the app opens Preferences and
 quits when its last window closes. Once setup is finished, the saved global
 shortcuts are live through the shared `CaptureShortcuts`: X11 keys, or on
 Wayland the GlobalShortcuts portal (no X11 fallback); New Capture, Screenshot
@@ -164,8 +164,11 @@ Couldn't check, Update failed with Try again, and the captur.es fallback.
 Update now verifies the AppImage, then hands the open previews, editors and
 Preferences to the shared update helper and quits; the helper replaces the
 AppImage and relaunches it, which reopens those windows. A `.deb` install
-updates manually: its card offers View release. The tray's Check for Updates
-checks and scrolls to the card. `--update-card NAME` (`idle`, `checking`,
+updates manually: its card offers View release. A newly available version also
+opens shipping's floating update notice once (after any capture or recording),
+which refreshes in place and runs the same check, download, install and links.
+The tray's Check for Updates shows the notice for an update in hand; otherwise
+it checks and shows the notice, or says up to date or why the check failed. `--update-card NAME` (`idle`, `checking`,
 `current`, `available`, `closing`, `manual`, `downloading`, `verifying`,
 `restarting`, `failed`, `check-failed`) renders a fixture card in Preferences.
 `--live --native-update-ready-file PATH --native-update-ready-token UUID` is
@@ -174,7 +177,12 @@ the helper's relaunch; a development build needs explicit absolute
 (`--scene update --update NAME`, one of `captures_app::update_notice::FIXTURES`)
 renders shipping's card from the shared presentation and walks the shared
 stub (Update now downloads, restarts and closes; nothing is downloaded or
-installed). Live update checks do not open it yet.
+installed). `--scene update --update-live NAME` (`available`, `closing`,
+`manual`, `downloading`, `verifying`, `installing`, `failed`, `check-failed`)
+renders the live notice for one worker state, and a development `--live` app
+with `--update-script available|retry` runs a scripted update source (no
+network or install; installing only quits) for the smoke's
+`update_notice_live` step.
 
 `node scripts/native-preview-build.mjs build x86_64-unknown-linux-gnu VERSION
 --unsigned` packages this host (release, default `x11` feature, built in

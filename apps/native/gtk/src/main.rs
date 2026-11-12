@@ -36,6 +36,7 @@ use gtk::{gio, glib, graphene};
 const USAGE: &str = "captures-gtk [--scene preferences|history|editor|recording|preview|feedback|setup|update|startup] [--artifact ID] [--appearance light|dark]\n\
   [--update available|single|closing|manual|downloading|restarting|error|checking|up-to-date]\n\
   [--update-card idle|checking|current|available|closing|manual|downloading|verifying|restarting|failed|check-failed]\n\
+  [--update-live available|closing|manual|downloading|verifying|installing|failed|check-failed] [--update-script available|retry]\n\
   [--settings-file PATH] [--history-root PATH] [--size WxH] [--feedback-endpoint URL]\n\
   [--screenshot OUT.png] [--find QUERY] [--count N] [--exercise] [--quit-after SECONDS]\n\
   [--open-media PATH]... [-- FILE...]\n\
@@ -106,6 +107,11 @@ struct Options {
     update: String,
     /// `--update-card NAME`: a Preview Updates card fixture in Preferences.
     update_card: Option<updates::Card>,
+    /// `--update-live NAME`: `--scene update` on a live worker state.
+    update_live: Option<String>,
+    /// `--update-script NAME`: a development `--live` app's scripted
+    /// update source (`updates::LIVE_SCRIPTS`).
+    update_script: Option<String>,
     /// `--native-update-ready-file` and `--native-update-ready-token` from
     /// the update helper, or the startup recovery companion's own file.
     health: Option<captures_app::updater::HealthAcknowledgement>,
@@ -139,6 +145,8 @@ fn parse_args(args: impl Iterator<Item = String>, preview: bool) -> Result<Optio
         capture: None,
         update: "available".into(),
         update_card: None,
+        update_live: None,
+        update_script: None,
         health: None,
     };
     let (mut ready_file, mut ready_token) = (None, None);
@@ -177,6 +185,26 @@ fn parse_args(args: impl Iterator<Item = String>, preview: bool) -> Result<Optio
                         updates::FIXTURES.join(", ")
                     )
                 })?);
+            }
+            "--update-live" => {
+                let name = value()?;
+                if !updates::LIVE_FIXTURES.contains(&name.as_str()) {
+                    return Err(format!(
+                        "unknown live update fixture {name}; one of {}",
+                        updates::LIVE_FIXTURES.join(", ")
+                    ));
+                }
+                options.update_live = Some(name);
+            }
+            "--update-script" => {
+                let name = value()?;
+                if !updates::LIVE_SCRIPTS.contains(&name.as_str()) {
+                    return Err(format!(
+                        "unknown update script {name}; one of {}",
+                        updates::LIVE_SCRIPTS.join(", ")
+                    ));
+                }
+                options.update_script = Some(name);
             }
             "--native-update-ready-file" if ready_file.is_none() => {
                 ready_file = Some(PathBuf::from(value()?));
@@ -262,6 +290,12 @@ fn parse_args(args: impl Iterator<Item = String>, preview: bool) -> Result<Optio
     }
     if options.update_card.is_some() && (options.live || options.scene != Scene::Preferences) {
         return Err("--update-card renders the Preferences fixture only".into());
+    }
+    if options.update_live.is_some() && (options.live || options.scene != Scene::Update) {
+        return Err("--update-live renders --scene update only".into());
+    }
+    if options.update_script.is_some() && (!options.live || preview) {
+        return Err("--update-script scripts a development build's --live app only".into());
     }
     match (ready_file, ready_token) {
         (None, None) => {}
@@ -976,6 +1010,9 @@ fn main() -> glib::ExitCode {
             }
         });
         if let Some(instance) = instance.borrow_mut().take() {
+            if let Some(script) = &options.update_script {
+                updates::use_script(script);
+            }
             live::start(
                 &host,
                 instance,
@@ -1036,7 +1073,16 @@ fn main() -> glib::ExitCode {
             Scene::Feedback => host.show_feedback(),
             Scene::Setup => host.show_setup(),
             Scene::Update => {
-                let notice = notices::update(app, host.settings_file.clone(), &options.update);
+                let notice = match options
+                    .update_live
+                    .as_deref()
+                    .and_then(updates::live_fixture)
+                {
+                    Some((status, installing)) => {
+                        notices::update_live(app, host.settings_file.clone(), status, installing)
+                    }
+                    None => notices::update(app, host.settings_file.clone(), &options.update),
+                };
                 notice.window.present();
                 let window = notice.window.clone();
                 // The notice lives as long as its window.

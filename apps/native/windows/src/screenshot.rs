@@ -40,6 +40,7 @@ pub fn render(options: &Options, path: &std::path::Path) -> Result<()> {
             let spec = captures_app::app_windows::SETUP;
             (spec.width, spec.height)
         }
+        Window::Update => (720., 720.),
     };
     let (w, h) = options.size.unwrap_or((w as u32, h as u32));
     let canvas = tokens.color("surface-canvas");
@@ -277,6 +278,14 @@ pub fn render(options: &Options, path: &std::path::Path) -> Result<()> {
         } else {
             Box::new(move |dc| menu.borrow_mut().paint(dc, &g, &tokens, Some(&frozen)))
         }
+    } else if options.scene == Window::Update {
+        let paint = crate::update_notice::render_offscreen(
+            options,
+            g.clone(),
+            tokens,
+            (w as f32, h as f32),
+        )?;
+        Box::new(paint)
     } else if options.scene == Window::Feedback {
         let feedback =
             crate::feedback::render_offscreen(options, g.clone(), tokens, (w as f32, h as f32))?;

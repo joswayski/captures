@@ -16,14 +16,17 @@
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use captures_app::update_notice::format_update_size;
+use captures_app::update_notice::{UpdateStatus, format_update_size};
 use captures_app::updater::checks::{CheckStatus, CheckWorker};
-use captures_app::updater::{HealthAcknowledgement, RestartCaptureWindow, RestartIntent};
+use captures_app::updater::{
+    HealthAcknowledgement, ReleaseInfo, Renderer, RestartCaptureWindow, RestartIntent, Target,
+};
 use gtk::prelude::*;
 use gtk::{gio, glib};
 
+use crate::notices::UpdateNotice;
 use crate::{Host, emit};
 
 /// Shipping's automatic check interval.
@@ -206,7 +209,6 @@ pub fn card(
 /// `--scene preferences --update-card STATE`: a Preview card for offscreen
 /// renders and the smoke (see [`FIXTURES`]).
 pub fn fixture(name: &str) -> Option<Card> {
-    use captures_app::updater::{ReleaseInfo, Renderer, Target};
     let release = ReleaseInfo {
         renderer: Renderer::Wgpu,
         target: Target::LinuxX64,
@@ -284,17 +286,530 @@ pub const FIXTURES: [&str; 11] = [
     "check-failed",
 ];
 
+/// What the live notice needs beside the worker's status.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub struct NoticeFlags {
+    /// Update now (or Try again) was pressed and has not handed off or failed.
+    pub installing: bool,
+    /// The package can replace itself (an AppImage, not a `.deb`).
+    pub installable: bool,
+    /// A capture or editor is open (shipping's `will_close_open_captures`).
+    pub will_close: bool,
+    /// The last check was asked for (Check Now, Check again, the tray).
+    /// Shipping reports only a manual check's progress and failure.
+    pub manual: bool,
+}
+
+/// The shipping notice status (`update_notice::UpdateStatus`) for the live
+/// Preview worker's `status`, or `None` for a state shipping never
+/// publishes (idle, or an automatic check in flight or failed).
+///
+/// A verified package waiting on Update now reads as the available update.
+/// Once it hands off, the native install starts the helper and quits in the
+/// same main-loop turn, with no countdown to show, so the notice keeps the
+/// finished download (a full bar) rather than shipping's "Reopening in 3
+/// seconds…", which would promise a relaunch time the helper does not keep.
+pub fn notice_status(
+    current: &str,
+    status: &CheckStatus,
+    flags: NoticeFlags,
+) -> Option<UpdateStatus> {
+    let current_version = current.to_owned();
+    let current_display_version = display_version(current);
+    let downloading =
+        |release: &ReleaseInfo, downloaded: u64, total: Option<u64>| UpdateStatus::Downloading {
+            current_version: current_version.clone(),
+            current_display_version: current_display_version.clone(),
+            version: release.version.clone(),
+            display_version: display_version(&release.version),
+            downloaded,
+            total: total.filter(|total| *total > 0),
+        };
+    let available = |release: &ReleaseInfo, installable: bool| UpdateStatus::Available {
+        current_version: current_version.clone(),
+        current_display_version: current_display_version.clone(),
+        version: release.version.clone(),
+        display_version: display_version(&release.version),
+        notes: release
+            .notes
+            .clone()
+            .filter(|notes| !notes.trim().is_empty()),
+        changelog: Vec::new(),
+        installable,
+        manual_download_url: (!installable).then(|| RELEASES_URL.to_owned()),
+        download_size: (release.size > 0).then_some(release.size),
+        will_close_open_captures: flags.will_close,
+    };
+    Some(match status {
+        CheckStatus::Idle => return None,
+        CheckStatus::Checking if flags.manual => UpdateStatus::Checking {
+            current_version,
+            current_display_version,
+        },
+        CheckStatus::Checking => return None,
+        CheckStatus::UpToDate => UpdateStatus::UpToDate {
+            current_version,
+            current_display_version,
+        },
+        CheckStatus::Available { release } => available(release, flags.installable),
+        CheckStatus::Downloading {
+            release,
+            downloaded,
+            total,
+        } => downloading(release, *downloaded, Some(*total)),
+        CheckStatus::Verifying { release } | CheckStatus::Cancelling { release } => {
+            downloading(release, release.size, None)
+        }
+        CheckStatus::Staged { release, .. } if flags.installing => {
+            downloading(release, release.size, Some(release.size))
+        }
+        CheckStatus::Staged { release, .. } => available(release, true),
+        CheckStatus::DownloadError { message, .. } => UpdateStatus::Error {
+            current_version,
+            current_display_version,
+            message: format!("Could not install the update: {message}"),
+            retry_install: true,
+        },
+        CheckStatus::Error { message } if flags.manual => UpdateStatus::Error {
+            current_version,
+            current_display_version,
+            message: message.clone(),
+            retry_install: false,
+        },
+        CheckStatus::Error { .. } => return None,
+    })
+}
+
+/// The notice's Update now, View release or Try again for `status`.
+pub fn notice_step(status: &CheckStatus, flags: NoticeFlags) -> Option<Step> {
+    match status {
+        CheckStatus::Available { .. } if !flags.installable => Some(Step::ViewRelease),
+        CheckStatus::Available { .. } | CheckStatus::DownloadError { .. } => Some(Step::Download),
+        CheckStatus::Staged { .. } if !flags.installing => Some(Step::Install),
+        _ => None,
+    }
+}
+
+/// Shipping's `notice_disposition`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Disposition {
+    Show,
+    /// Wait until no capture or recording is running.
+    Defer,
+    Ignore,
+}
+
+/// A failure always shows; an available or downloading update waits for a
+/// running capture or recording; nothing else opens the notice.
+pub fn disposition(status: Option<&UpdateStatus>, capture_active: bool) -> Disposition {
+    match status {
+        Some(UpdateStatus::Error { .. }) => Disposition::Show,
+        Some(UpdateStatus::Available { .. } | UpdateStatus::Downloading { .. }) => {
+            if capture_active {
+                Disposition::Defer
+            } else {
+                Disposition::Show
+            }
+        }
+        _ => Disposition::Ignore,
+    }
+}
+
+/// What [`Schedule::next`] asks of the host for a closed notice. A visible
+/// notice simply follows the status in place.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Plan {
+    Ignore,
+    Show,
+    /// Ask again once the capture or recording ends.
+    Defer,
+    /// The tray's check found nothing (shipping's "Captures is up to date").
+    UpToDate,
+    /// The tray's check failed (shipping's "Could not check for updates").
+    CheckFailed(String),
+}
+
+#[derive(Clone, Default, PartialEq, Eq, Debug)]
+enum Wait {
+    #[default]
+    None,
+    /// A newly available version (`schedule_update_notice`): it shows once
+    /// no capture runs, if it is still the available version.
+    Version(String),
+    /// Show per [`disposition`] (the tray with an update in hand).
+    Show,
+    /// The tray's manual check: report its result.
+    Check,
+}
+
+/// Shipping's notice policy: once per newly available version
+/// (`notified_version`, cleared when up to date), deferred during a capture
+/// or recording; the tray shows it for an update in hand or after its check.
+#[derive(Default, Debug)]
+pub struct Schedule {
+    notified: Option<String>,
+    wait: Wait,
+}
+
+impl Schedule {
+    /// The tray's Check for Updates. Returns whether to start a manual check.
+    pub fn tray(&mut self, status: Option<&UpdateStatus>) -> bool {
+        let in_hand = matches!(
+            status,
+            Some(UpdateStatus::Available { .. } | UpdateStatus::Downloading { .. })
+        );
+        self.wait = if in_hand { Wait::Show } else { Wait::Check };
+        !in_hand
+    }
+
+    /// The step for the latest `status`.
+    pub fn next(
+        &mut self,
+        status: Option<&UpdateStatus>,
+        visible: bool,
+        capture_active: bool,
+    ) -> Plan {
+        match status {
+            Some(UpdateStatus::Available { version, .. })
+                if self.notified.as_deref() != Some(version) =>
+            {
+                self.notified = Some(version.clone());
+                if self.wait == Wait::None {
+                    self.wait = Wait::Version(version.clone());
+                }
+            }
+            Some(UpdateStatus::UpToDate { .. }) => self.notified = None,
+            _ => {}
+        }
+        match std::mem::take(&mut self.wait) {
+            Wait::None => Plan::Ignore,
+            Wait::Check => match status {
+                Some(UpdateStatus::UpToDate { .. }) => Plan::UpToDate,
+                Some(UpdateStatus::Error { message, .. }) => Plan::CheckFailed(message.clone()),
+                Some(UpdateStatus::Available { .. } | UpdateStatus::Downloading { .. }) => {
+                    self.show(Wait::Show, status, visible, capture_active)
+                }
+                // Still checking.
+                _ => {
+                    self.wait = Wait::Check;
+                    Plan::Ignore
+                }
+            },
+            Wait::Version(version) => match status {
+                Some(UpdateStatus::Available { version: now, .. }) if *now == version => {
+                    self.show(Wait::Version(version), status, visible, capture_active)
+                }
+                _ => Plan::Ignore,
+            },
+            Wait::Show => self.show(Wait::Show, status, visible, capture_active),
+        }
+    }
+
+    fn show(
+        &mut self,
+        wait: Wait,
+        status: Option<&UpdateStatus>,
+        visible: bool,
+        capture_active: bool,
+    ) -> Plan {
+        if visible {
+            return Plan::Ignore;
+        }
+        match disposition(status, capture_active) {
+            Disposition::Show => Plan::Show,
+            Disposition::Defer => {
+                self.wait = wait;
+                Plan::Defer
+            }
+            Disposition::Ignore => Plan::Ignore,
+        }
+    }
+}
+
+/// `--scene update --update-live NAME`: the live notice for one worker
+/// state, through [`notice_status`], for renders.
+pub fn live_fixture(name: &str) -> Option<(UpdateStatus, bool)> {
+    let release = Fake::release();
+    let flags = NoticeFlags {
+        installable: true,
+        ..NoticeFlags::default()
+    };
+    let (status, flags) = match name {
+        "available" => (CheckStatus::Available { release }, flags),
+        "closing" => (
+            CheckStatus::Available { release },
+            NoticeFlags {
+                will_close: true,
+                ..flags
+            },
+        ),
+        "manual" => (
+            CheckStatus::Available { release },
+            NoticeFlags {
+                installable: false,
+                ..flags
+            },
+        ),
+        "downloading" => (
+            CheckStatus::Downloading {
+                release,
+                downloaded: 52_000_000,
+                total: 104_000_000,
+            },
+            NoticeFlags {
+                installing: true,
+                ..flags
+            },
+        ),
+        "verifying" => (
+            CheckStatus::Verifying { release },
+            NoticeFlags {
+                installing: true,
+                ..flags
+            },
+        ),
+        "installing" => (
+            CheckStatus::Staged {
+                release,
+                sha256: String::new(),
+            },
+            NoticeFlags {
+                installing: true,
+                ..flags
+            },
+        ),
+        "failed" => (
+            CheckStatus::DownloadError {
+                release,
+                message: "Native update signature verification failed.".into(),
+            },
+            flags,
+        ),
+        "check-failed" => (
+            CheckStatus::Error {
+                message: "Could not reach the native update service.".into(),
+            },
+            NoticeFlags {
+                manual: true,
+                ..flags
+            },
+        ),
+        _ => return None,
+    };
+    Some((
+        notice_status(Fake::CURRENT, &status, flags)?,
+        flags.installing,
+    ))
+}
+
+/// Every [`live_fixture`] name.
+pub const LIVE_FIXTURES: [&str; 8] = [
+    "available",
+    "closing",
+    "manual",
+    "downloading",
+    "verifying",
+    "installing",
+    "failed",
+    "check-failed",
+];
+
+/// `--live --update-live NAME` scripts: `available` downloads and installs;
+/// `retry` fails its first download.
+pub const LIVE_SCRIPTS: [&str; 2] = ["available", "retry"];
+
+/// A scripted stand-in for the Preview worker (`--live --update-live`, in
+/// development builds only), so the smoke drives the live notice: checks
+/// find [`Fake::release`], downloads step to 75 % and verify, and the
+/// install quits without starting a helper.
+struct Fake {
+    status: CheckStatus,
+    /// Downloads that fail verification before one succeeds.
+    failures: u32,
+    due: Option<Instant>,
+}
+
+impl Fake {
+    const CURRENT: &str = "2026.11.1201";
+    const STEP: Duration = Duration::from_millis(400);
+
+    fn release() -> ReleaseInfo {
+        ReleaseInfo {
+            renderer: Renderer::Wgpu,
+            target: Target::LinuxX64,
+            version: "2026.11.1302".into(),
+            notes: Some(
+                "## What's Changed\n* Open the update notice from live checks by @joswayski in https://github.com/joswayski/captures/pull/612\n* Keep the notice in place while it downloads by @joswayski in https://github.com/joswayski/captures/pull/613".into(),
+            ),
+            size: 104_000_000,
+        }
+    }
+
+    fn busy(&self) -> bool {
+        matches!(
+            self.status,
+            CheckStatus::Checking | CheckStatus::Downloading { .. } | CheckStatus::Verifying { .. }
+        )
+    }
+
+    fn check(&mut self) -> bool {
+        if self.busy() {
+            return false;
+        }
+        self.status = CheckStatus::Checking;
+        self.due = Some(Instant::now() + Self::STEP);
+        true
+    }
+
+    fn download(&mut self) -> bool {
+        let (CheckStatus::Available { release } | CheckStatus::DownloadError { release, .. }) =
+            &self.status
+        else {
+            return false;
+        };
+        self.status = CheckStatus::Downloading {
+            total: release.size,
+            release: release.clone(),
+            downloaded: 0,
+        };
+        self.due = Some(Instant::now() + Self::STEP);
+        true
+    }
+
+    fn poll(&mut self) -> bool {
+        if self.due.is_none_or(|due| Instant::now() < due) {
+            return false;
+        }
+        self.due = Some(Instant::now() + Self::STEP);
+        self.status = match std::mem::replace(&mut self.status, CheckStatus::Idle) {
+            CheckStatus::Checking => CheckStatus::Available {
+                release: Self::release(),
+            },
+            CheckStatus::Downloading {
+                release,
+                downloaded,
+                total,
+            } if downloaded + total / 4 < total => CheckStatus::Downloading {
+                release,
+                downloaded: downloaded + total / 4,
+                total,
+            },
+            CheckStatus::Downloading { release, .. } => CheckStatus::Verifying { release },
+            CheckStatus::Verifying { release } if self.failures > 0 => {
+                self.failures -= 1;
+                CheckStatus::DownloadError {
+                    release,
+                    message: "Native update signature verification failed.".into(),
+                }
+            }
+            CheckStatus::Verifying { release } => CheckStatus::Staged {
+                release,
+                sha256: String::new(),
+            },
+            other => other,
+        };
+        if !self.busy() {
+            self.due = None;
+        }
+        true
+    }
+}
+
+/// The installed Preview's worker, or the development script.
+enum Source {
+    Preview(CheckWorker),
+    Fake(Fake),
+}
+
+impl Source {
+    fn status(&self) -> &CheckStatus {
+        match self {
+            Self::Preview(worker) => worker.status(),
+            Self::Fake(fake) => &fake.status,
+        }
+    }
+
+    fn poll(&mut self) -> bool {
+        match self {
+            Self::Preview(worker) => worker.poll(),
+            Self::Fake(fake) => fake.poll(),
+        }
+    }
+
+    fn check(&mut self) -> bool {
+        match self {
+            Self::Preview(worker) => worker.check(),
+            Self::Fake(fake) => fake.check(),
+        }
+    }
+
+    fn check_automatically(&mut self) -> bool {
+        match self {
+            Self::Preview(worker) => worker.check_automatically(),
+            Self::Fake(fake) => fake.check(),
+        }
+    }
+
+    fn download(&mut self) -> bool {
+        match self {
+            Self::Preview(worker) => worker.download(),
+            Self::Fake(fake) => fake.download(),
+        }
+    }
+
+    /// Only an installable package gets a staging directory, which is when
+    /// the shared worker offers its download.
+    fn installable(&self) -> bool {
+        match self {
+            Self::Preview(worker) => worker.presentation().acquisition.is_some(),
+            Self::Fake(_) => true,
+        }
+    }
+
+    fn current_version(&self) -> &'static str {
+        match self {
+            Self::Preview(_) => captures_app::preview_channel::version().unwrap_or_default(),
+            Self::Fake(_) => Fake::CURRENT,
+        }
+    }
+
+    fn launch_install(&mut self, restart: RestartIntent) -> Result<(), String> {
+        match self {
+            Self::Preview(worker) => worker
+                .launch_preview_install(restart)
+                .map_err(|error| error.to_string()),
+            // The script installs nothing; it only quits as the install would.
+            Self::Fake(_) => Ok(()),
+        }
+    }
+
+    fn shutdown(&mut self) {
+        if let Self::Preview(worker) = self {
+            worker.shutdown();
+        }
+    }
+}
+
 struct Resident {
     host: Weak<Host>,
-    worker: CheckWorker,
+    source: Source,
     /// Update now was pressed: install once the package is verified.
     installing: bool,
+    /// The last check was asked for, not automatic.
+    manual: bool,
+    schedule: Schedule,
+    /// A deferred notice is waiting for a capture to end.
+    deferred: bool,
 }
 
 thread_local! {
     static RESIDENT: RefCell<Option<Resident>> = const { RefCell::new(None) };
     /// `--update-card`: the fixture Preferences shows instead.
     static FIXTURE: RefCell<Option<Card>> = const { RefCell::new(None) };
+    /// `--live --update-live NAME`: the script [`start`] runs instead.
+    static SCRIPT: RefCell<Option<Fake>> = const { RefCell::new(None) };
+    /// The floating update notice, while open.
+    static NOTICE: RefCell<Option<Rc<UpdateNotice>>> = const { RefCell::new(None) };
 }
 
 /// Show `card` in Preferences instead of a live state (fixtures only).
@@ -302,45 +817,78 @@ pub fn set_fixture(card: Card) {
     FIXTURE.with(|fixture| *fixture.borrow_mut() = Some(card));
 }
 
-/// Start the installed Preview's worker for the resident app. Development
-/// builds make no request.
+/// Run the `--update-live` script instead of the Preview worker (a
+/// development build's live app; see [`LIVE_SCRIPTS`]).
+pub fn use_script(name: &str) {
+    let fake = Fake {
+        status: CheckStatus::Idle,
+        failures: u32::from(name == "retry"),
+        due: None,
+    };
+    SCRIPT.with(|script| *script.borrow_mut() = Some(fake));
+}
+
+/// Whether this app checks for updates: an installed Preview, or the script.
+pub fn enabled() -> bool {
+    captures_app::preview_channel::version().is_some()
+        || SCRIPT.with(|script| script.borrow().is_some())
+        || RESIDENT.with(|resident| resident.borrow().is_some())
+}
+
+/// Start the installed Preview's worker (or the development script) for
+/// the resident app. Development builds otherwise make no request.
 pub fn start(host: &Rc<Host>) {
-    if captures_app::preview_channel::version().is_none() {
-        return;
-    }
-    // The worker wakes from its own thread; serve it on the main loop.
-    let wake = Arc::new(|| {
-        glib::MainContext::default().invoke(|| {
-            glib::idle_add_local_once(service);
+    let source = if let Some(fake) = SCRIPT.with(|script| script.borrow_mut().take()) {
+        // The script has no thread to wake the main loop.
+        glib::timeout_add_local(Duration::from_millis(100), || {
+            if RESIDENT.with(|resident| resident.borrow().is_none()) {
+                return glib::ControlFlow::Break;
+            }
+            service();
+            glib::ControlFlow::Continue
         });
-    });
-    let mut worker = match CheckWorker::preview(captures_app::updater::Renderer::Wgpu, wake) {
-        Ok(worker) => worker,
-        Err(error) => {
-            eprintln!("Preview updates unavailable: {error}");
+        Source::Fake(fake)
+    } else {
+        if captures_app::preview_channel::version().is_none() {
             return;
         }
+        // The worker wakes from its own thread; serve it on the main loop.
+        let wake = Arc::new(|| {
+            glib::MainContext::default().invoke(|| {
+                glib::idle_add_local_once(service);
+            });
+        });
+        match CheckWorker::preview(Renderer::Wgpu, wake) {
+            Ok(worker) => Source::Preview(worker),
+            Err(error) => {
+                eprintln!("Preview updates unavailable: {error}");
+                return;
+            }
+        }
     };
-    worker.check_automatically();
-    RESIDENT.with(|resident| {
-        *resident.borrow_mut() = Some(Resident {
-            host: Rc::downgrade(host),
-            worker,
-            installing: false,
-        })
-    });
+    let mut resident = Resident {
+        host: Rc::downgrade(host),
+        source,
+        installing: false,
+        manual: false,
+        schedule: Schedule::default(),
+        deferred: false,
+    };
+    resident.source.check_automatically();
+    RESIDENT.with(|slot| *slot.borrow_mut() = Some(resident));
     glib::timeout_add_local(INTERVAL, || {
         let running = RESIDENT.with(|resident| {
             let mut resident = resident.borrow_mut();
             let Some(resident) = resident.as_mut() else {
                 return false;
             };
-            resident.worker.poll();
+            resident.source.poll();
             if matches!(
-                resident.worker.status(),
+                resident.source.status(),
                 CheckStatus::Idle | CheckStatus::UpToDate | CheckStatus::Error { .. }
-            ) {
-                resident.worker.check_automatically();
+            ) && resident.source.check_automatically()
+            {
+                resident.manual = false;
             }
             true
         });
@@ -355,8 +903,31 @@ pub fn start(host: &Rc<Host>) {
 
 /// Join the worker before the profile election is released.
 pub fn stop() {
+    if let Some(notice) = NOTICE.with(|notice| notice.borrow_mut().take()) {
+        notice.window.close();
+    }
     if let Some(mut resident) = RESIDENT.with(|resident| resident.borrow_mut().take()) {
-        resident.worker.shutdown();
+        resident.source.shutdown();
+    }
+}
+
+/// A capture or editor is open: Update now closes or reopens it.
+fn will_close(host: &Host) -> bool {
+    capture_active(host).is_some()
+        || !host.editors.borrow().is_empty()
+        || !host.recordings.borrow().is_empty()
+}
+
+impl Resident {
+    fn flags(&self, host: &Host) -> NoticeFlags {
+        NoticeFlags {
+            installing: self.installing,
+            // Only an available update depends on the package kind.
+            installable: !matches!(self.source.status(), CheckStatus::Available { .. })
+                || self.source.installable(),
+            will_close: will_close(host),
+            manual: self.manual,
+        }
     }
 }
 
@@ -370,26 +941,51 @@ pub fn current() -> Option<Card> {
         let resident = resident.try_borrow().ok()?;
         let resident = resident.as_ref()?;
         let host = resident.host.upgrade()?;
-        let status = resident.worker.status();
-        // Only an installable package gets a staging directory, which is
-        // when the shared worker offers its download.
-        let installable = !matches!(status, CheckStatus::Available { .. })
-            || resident.worker.presentation().acquisition.is_some();
+        let flags = resident.flags(&host);
         Some(card(
-            captures_app::preview_channel::version()?,
-            status,
-            resident.installing,
-            installable,
-            capture_active(&host).is_some()
-                || !host.editors.borrow().is_empty()
-                || !host.recordings.borrow().is_empty(),
+            resident.source.current_version(),
+            resident.source.status(),
+            flags.installing,
+            flags.installable,
+            flags.will_close,
         ))
     })
 }
 
-/// The tray's Check for Updates: check now; Preferences shows the card.
-pub fn check_now() {
-    act(Step::Check);
+/// The tray's Check for Updates, as shipping's `handle_tray_action`: an
+/// update in hand shows the notice; otherwise check now and report the
+/// result (the notice for an update, else a dialog).
+pub fn check_from_tray() {
+    let check = RESIDENT.with(|resident| {
+        let mut resident = resident.borrow_mut();
+        let resident = resident.as_mut()?;
+        let host = resident.host.upgrade()?;
+        let flags = resident.flags(&host);
+        let status = notice_status(
+            resident.source.current_version(),
+            resident.source.status(),
+            flags,
+        );
+        Some(resident.schedule.tray(status.as_ref()))
+    });
+    match check {
+        Some(true) => act(Step::Check),
+        Some(false) => service(),
+        None => {}
+    }
+}
+
+/// The notice's Update now, View release or Try again.
+pub fn act_from_notice() {
+    let step = RESIDENT.with(|resident| {
+        let resident = resident.borrow();
+        let resident = resident.as_ref()?;
+        let host = resident.host.upgrade()?;
+        notice_step(resident.source.status(), resident.flags(&host))
+    });
+    if let Some(step) = step {
+        act(step);
+    }
 }
 
 /// The card's button.
@@ -409,9 +1005,11 @@ pub fn act(step: Step) {
         };
         match step {
             Step::Check => {
-                resident.worker.check();
+                // A check already running now reports as asked for.
+                resident.manual = true;
+                resident.source.check();
             }
-            Step::Download => resident.installing = resident.worker.download(),
+            Step::Download => resident.installing = resident.source.download(),
             Step::Install => resident.installing = true,
             Step::ViewRelease => {}
         }
@@ -423,23 +1021,125 @@ pub fn act(step: Step) {
     service();
 }
 
-/// Publish worker progress and hand a verified package to the helper once
-/// Update now asked for it.
+/// Publish worker progress, hand a verified package to the helper once
+/// Update now asked for it, and open or refresh the notice.
 fn service() {
     let install = RESIDENT.with(|resident| {
         let mut resident = resident.borrow_mut();
         let resident = resident.as_mut()?;
-        resident.worker.poll();
+        resident.source.poll();
         // A failed download or install ends this attempt.
-        if matches!(resident.worker.status(), CheckStatus::DownloadError { .. }) {
+        if matches!(resident.source.status(), CheckStatus::DownloadError { .. }) {
             resident.installing = false;
         }
-        Some(resident.installing && matches!(resident.worker.status(), CheckStatus::Staged { .. }))
+        Some(resident.installing && matches!(resident.source.status(), CheckStatus::Staged { .. }))
     });
-    if install == Some(true) {
-        self::install();
+    if install == Some(true) && self::install() {
+        return;
     }
     crate::preferences::refresh_updates();
+    sync_notice();
+}
+
+/// Shipping's notice policy for the latest status: refresh a visible
+/// notice in place (never raising or focusing it), or open, defer or report
+/// per [`Schedule`].
+fn sync_notice() {
+    let notice = NOTICE.with(|notice| notice.borrow().clone());
+    let Some((host, status, installing, plan, wait)) = RESIDENT.with(|resident| {
+        let mut resident = resident.try_borrow_mut().ok()?;
+        let resident = resident.as_mut()?;
+        let host = resident.host.upgrade()?;
+        let flags = resident.flags(&host);
+        let status = notice_status(
+            resident.source.current_version(),
+            resident.source.status(),
+            flags,
+        );
+        let plan = resident.schedule.next(
+            status.as_ref(),
+            notice.is_some(),
+            capture_active(&host).is_some(),
+        );
+        // One pending recheck at a time while a capture runs.
+        let wait = plan == Plan::Defer && !std::mem::replace(&mut resident.deferred, true);
+        Some((host, status, flags.installing, plan, wait))
+    }) else {
+        return;
+    };
+    if let (Some(notice), Some(status)) = (&notice, &status) {
+        notice.set_live(status.clone(), installing);
+    }
+    match plan {
+        Plan::Ignore => {}
+        Plan::Show => {
+            if let Some(status) = status {
+                open_notice(&host, status, installing);
+            }
+        }
+        Plan::Defer => {
+            if wait {
+                emit("update-notice-deferred", serde_json::json!({}));
+                glib::timeout_add_local_once(Duration::from_secs(1), || {
+                    RESIDENT.with(|resident| {
+                        if let Some(resident) = resident.borrow_mut().as_mut() {
+                            resident.deferred = false;
+                        }
+                    });
+                    service();
+                });
+            }
+        }
+        Plan::UpToDate => dialog(
+            &host,
+            "Captures is up to date",
+            "You already have the newest available version.",
+            gtk::MessageType::Info,
+        ),
+        Plan::CheckFailed(message) => dialog(
+            &host,
+            "Could not check for updates",
+            &message,
+            gtk::MessageType::Error,
+        ),
+    }
+}
+
+/// Open the floating notice without taking focus, as shipping's
+/// non-focusable notice window.
+fn open_notice(host: &Host, status: UpdateStatus, installing: bool) {
+    let notice =
+        crate::notices::update_live(&host.app, host.settings_file.clone(), status, installing);
+    notice.window.connect_close_request(|window| {
+        NOTICE.with(|notice| {
+            let mut slot = notice.borrow_mut();
+            if slot.as_ref().is_some_and(|open| open.window == *window) {
+                slot.take();
+            }
+        });
+        glib::Propagation::Proceed
+    });
+    notice.window.set_visible(true);
+    NOTICE.with(|slot| *slot.borrow_mut() = Some(notice));
+}
+
+/// Shipping's tray result dialogs (`show_dialog`).
+#[allow(deprecated)] // GtkAlertDialog needs GTK 4.10.
+fn dialog(host: &Host, title: &str, message: &str, kind: gtk::MessageType) {
+    emit(
+        "update-dialog",
+        serde_json::json!({"title": title, "message": message}),
+    );
+    let dialog = gtk::MessageDialog::builder()
+        .title("Captures")
+        .text(title)
+        .secondary_text(message)
+        .message_type(kind)
+        .buttons(gtk::ButtonsType::Ok)
+        .build();
+    dialog.set_application(Some(&host.app));
+    dialog.connect_response(|dialog, _| dialog.destroy());
+    dialog.present();
 }
 
 /// What stops an install now, as shipping's `install_restart_blocker`.
@@ -456,12 +1156,13 @@ fn capture_active(host: &Host) -> Option<&'static str> {
 /// Shipping's Update now after verification: refuse during a capture or
 /// recording, remember what is open, start the copied helper and quit. The
 /// helper waits for this process's package lock, replaces the AppImage and
-/// relaunches it with the readiness token and this restart intent.
-fn install() {
+/// relaunches it with the readiness token and this restart intent. Returns
+/// whether the app is quitting.
+fn install() -> bool {
     let Some(host) =
         RESIDENT.with(|resident| resident.borrow().as_ref().and_then(|r| r.host.upgrade()))
     else {
-        return;
+        return false;
     };
     if let Some(message) = capture_active(&host) {
         RESIDENT.with(|resident| {
@@ -470,7 +1171,7 @@ fn install() {
             }
         });
         host.show_error(message);
-        return;
+        return false;
     }
     let restart = RestartIntent {
         restore_preferences: host.preferences.borrow().is_some(),
@@ -498,10 +1199,7 @@ fn install() {
     let result = RESIDENT.with(|resident| {
         let mut resident = resident.borrow_mut();
         let resident = resident.as_mut().ok_or("Captures is closing")?;
-        let result = resident
-            .worker
-            .launch_preview_install(restart)
-            .map_err(|error| error.to_string());
+        let result = resident.source.launch_install(restart);
         if result.is_err() {
             resident.installing = false;
         }
@@ -510,6 +1208,10 @@ fn install() {
     match result {
         Ok(()) => {
             emit("update-install", serde_json::json!({}));
+            // The notice leaves with the app.
+            if let Some(notice) = NOTICE.with(|notice| notice.borrow_mut().take()) {
+                notice.close_for_install();
+            }
             // Closing an editor saves its draft; then quit, which releases
             // the package lock the helper waits for.
             let editors: Vec<_> = host
@@ -522,9 +1224,13 @@ fn install() {
                 window.close();
             }
             host.app.quit();
+            true
         }
         // The worker now reports Update failed with the reason.
-        Err(error) => eprintln!("Could not start the update: {error}"),
+        Err(error) => {
+            eprintln!("Could not start the update: {error}");
+            false
+        }
     }
 }
 
@@ -774,5 +1480,224 @@ mod tests {
             assert!(fixture(name).is_some(), "{name}");
         }
         assert!(fixture("nope").is_none());
+    }
+
+    #[test]
+    fn live_worker_states_map_to_shipping_notice_statuses() {
+        let flags = NoticeFlags {
+            installable: true,
+            ..NoticeFlags::default()
+        };
+        let map = |status: &CheckStatus, flags| notice_status("2026.11.1201", status, flags);
+        let mut notes = release();
+        notes.notes = Some("* Fix it in https://github.com/joswayski/captures/pull/7".into());
+        let Some(UpdateStatus::Available {
+            display_version,
+            current_display_version,
+            notes: Some(_),
+            installable: true,
+            manual_download_url: None,
+            download_size: Some(104_000_000),
+            will_close_open_captures: true,
+            ..
+        }) = map(
+            &CheckStatus::Available { release: notes },
+            NoticeFlags {
+                will_close: true,
+                ..flags
+            },
+        )
+        else {
+            panic!("available");
+        };
+        assert_eq!(
+            (display_version.as_str(), current_display_version.as_str()),
+            ("2026.11.13.2", "2026.11.12.1")
+        );
+        // A `.deb`: View release on the releases page.
+        assert!(matches!(
+            map(&CheckStatus::Available { release: release() }, NoticeFlags::default()),
+            Some(UpdateStatus::Available { installable: false, manual_download_url: Some(url), .. })
+                if url == RELEASES_URL
+        ));
+        assert!(matches!(
+            map(
+                &CheckStatus::Downloading {
+                    release: release(),
+                    downloaded: 5,
+                    total: 10
+                },
+                flags
+            ),
+            Some(UpdateStatus::Downloading {
+                downloaded: 5,
+                total: Some(10),
+                ..
+            })
+        ));
+        for busy in [
+            CheckStatus::Verifying { release: release() },
+            CheckStatus::Cancelling { release: release() },
+        ] {
+            assert!(matches!(
+                map(&busy, flags),
+                Some(UpdateStatus::Downloading { total: None, .. })
+            ));
+        }
+        let staged = CheckStatus::Staged {
+            release: release(),
+            sha256: String::new(),
+        };
+        // Handing off: the finished download, not a countdown.
+        assert!(matches!(
+            map(
+                &staged,
+                NoticeFlags {
+                    installing: true,
+                    ..flags
+                }
+            ),
+            Some(UpdateStatus::Downloading {
+                downloaded: 104_000_000,
+                total: Some(104_000_000),
+                ..
+            })
+        ));
+        assert!(matches!(
+            map(&staged, flags),
+            Some(UpdateStatus::Available {
+                installable: true,
+                ..
+            })
+        ));
+        assert_eq!(
+            notice_step(&staged, flags),
+            Some(Step::Install),
+            "a held package installs"
+        );
+        let failed = CheckStatus::DownloadError {
+            release: release(),
+            message: "bad signature".into(),
+        };
+        assert!(matches!(
+            map(&failed, flags),
+            Some(UpdateStatus::Error { retry_install: true, message, .. })
+                if message == "Could not install the update: bad signature"
+        ));
+        assert_eq!(notice_step(&failed, flags), Some(Step::Download));
+        // Only a manual check reports progress or failure.
+        let error = CheckStatus::Error {
+            message: "offline".into(),
+        };
+        assert!(map(&error, flags).is_none());
+        assert!(map(&CheckStatus::Checking, flags).is_none());
+        let manual = NoticeFlags {
+            manual: true,
+            ..flags
+        };
+        assert!(matches!(
+            map(&error, manual),
+            Some(UpdateStatus::Error {
+                retry_install: false,
+                ..
+            })
+        ));
+        assert!(matches!(
+            map(&CheckStatus::Checking, manual),
+            Some(UpdateStatus::Checking { .. })
+        ));
+        assert!(map(&CheckStatus::Idle, manual).is_none());
+        assert_eq!(
+            notice_step(
+                &CheckStatus::Available { release: release() },
+                NoticeFlags::default()
+            ),
+            Some(Step::ViewRelease)
+        );
+        for name in LIVE_FIXTURES {
+            assert!(live_fixture(name).is_some(), "{name}");
+        }
+    }
+
+    #[test]
+    fn the_notice_shows_once_per_version_after_captures_and_from_the_tray() {
+        let flags = NoticeFlags {
+            installable: true,
+            ..NoticeFlags::default()
+        };
+        let status = |check: &CheckStatus| notice_status("2026.11.1201", check, flags);
+        let available = status(&CheckStatus::Available { release: release() });
+        let up_to_date = status(&CheckStatus::UpToDate);
+        let mut schedule = Schedule::default();
+        // Nothing until an update is found.
+        assert_eq!(
+            schedule.next(up_to_date.as_ref(), false, false),
+            Plan::Ignore
+        );
+        // A new version waits for the capture, then shows once.
+        assert_eq!(schedule.next(available.as_ref(), false, true), Plan::Defer);
+        assert_eq!(schedule.next(available.as_ref(), false, true), Plan::Defer);
+        assert_eq!(schedule.next(available.as_ref(), false, false), Plan::Show);
+        assert_eq!(schedule.next(available.as_ref(), true, false), Plan::Ignore);
+        // Later: the same version does not come back.
+        assert_eq!(
+            schedule.next(available.as_ref(), false, false),
+            Plan::Ignore
+        );
+        // Up to date resets it; the version shows again if it returns.
+        assert_eq!(
+            schedule.next(up_to_date.as_ref(), false, false),
+            Plan::Ignore
+        );
+        assert_eq!(schedule.next(available.as_ref(), false, false), Plan::Show);
+        // A version no longer available by the time the capture ends stays
+        // hidden.
+        let mut newer = release();
+        newer.version = "2026.11.1401".into();
+        let newer = status(&CheckStatus::Available { release: newer });
+        assert_eq!(schedule.next(newer.as_ref(), false, true), Plan::Defer);
+        assert_eq!(
+            schedule.next(up_to_date.as_ref(), false, false),
+            Plan::Ignore
+        );
+        // The tray: an update in hand shows (after a capture) without a check.
+        assert!(!schedule.tray(available.as_ref()));
+        assert_eq!(schedule.next(available.as_ref(), false, true), Plan::Defer);
+        assert_eq!(schedule.next(available.as_ref(), false, false), Plan::Show);
+        // Otherwise it checks and reports the result.
+        assert!(schedule.tray(up_to_date.as_ref()));
+        let checking = notice_status(
+            "2026.11.1201",
+            &CheckStatus::Checking,
+            NoticeFlags {
+                manual: true,
+                ..flags
+            },
+        );
+        assert_eq!(schedule.next(checking.as_ref(), false, false), Plan::Ignore);
+        assert_eq!(
+            schedule.next(up_to_date.as_ref(), false, false),
+            Plan::UpToDate
+        );
+        assert!(schedule.tray(None));
+        let failed = notice_status(
+            "2026.11.1201",
+            &CheckStatus::Error {
+                message: "offline".into(),
+            },
+            NoticeFlags {
+                manual: true,
+                ..flags
+            },
+        );
+        assert_eq!(
+            schedule.next(failed.as_ref(), false, false),
+            Plan::CheckFailed("offline".into())
+        );
+        // shipping's `notice_disposition`.
+        assert_eq!(disposition(failed.as_ref(), true), Disposition::Show);
+        assert_eq!(disposition(available.as_ref(), true), Disposition::Defer);
+        assert_eq!(disposition(up_to_date.as_ref(), false), Disposition::Ignore);
+        assert_eq!(disposition(None, false), Disposition::Ignore);
     }
 }

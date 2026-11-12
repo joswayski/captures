@@ -175,7 +175,7 @@ fn accelerators(settings: &captures_settings::AppSettings) -> Vec<String> {
 fn menu(settings: &captures_settings::AppSettings) -> Result<Menu, String> {
     let menu = Menu::new();
     // Check for Updates works only in a Preview build with update metadata.
-    let updates = captures_app::preview_channel::version().is_some();
+    let updates = crate::updates::enabled();
     for row in &MENU {
         let result = match *row {
             Row::Item(id, label, action, keys) => menu.append(&MenuItem::with_id(
@@ -314,12 +314,10 @@ pub fn run(host: &Rc<Host>, action: Action) {
         Action::Preferences => {
             host.show_preferences();
         }
-        // Check for Updates checks now and shows the Updates card.
-        Action::CheckUpdates => {
-            host.show_preferences();
-            crate::updates::check_now();
-            crate::preferences::show_section("updates");
-        }
+        // Shipping's `handle_tray_action`: an update in hand shows the
+        // notice; otherwise check now, then show the notice for an update
+        // or say up to date or why the check failed.
+        Action::CheckUpdates => crate::updates::check_from_tray(),
         Action::SendFeedback => {
             host.show_feedback();
         }

@@ -2374,6 +2374,71 @@ def notices(binary, scratch):
     print("notices: update notice notes, download, restart and dismissal over AT-SPI")
 
 
+def update_notice_live(binary, scratch):
+    """The live update notice on a development build's scripted update
+    source (`--update-script retry`): the launch check opens the notice
+    once, Later dismisses it, the tray's Check for Updates shows it again with the update in
+    hand, Update now downloads in place, a failed verification offers Try
+    again (an install retry), and the retry verifies, installs and quits
+    with the notice closed."""
+    root = scratch / "update-live-history"
+    settings = scratch / "update-live-settings.json"
+    settings.write_text(json.dumps({
+        "settings_schema_version": 5, "onboarding_completed": True, "appearance": "light",
+        "output_directory": str(scratch / "update-live-exports"),
+        "region_shortcut": "Ctrl+Shift+F7", "window_shortcut": "Ctrl+Shift+F8",
+        "display_shortcut": "Ctrl+Shift+F9", "new_capture_shortcut": "Ctrl+Shift+F10",
+        "launch_at_login": False, "show_mini_previews": False, "auto_copy_to_clipboard": False,
+        "show_update_changelog": True}))
+    log = scratch / "update-live.log"
+    env = dict(os.environ, GSK_RENDERER="cairo", GTK_A11Y="atspi", NO_AT_BRIDGE="0")
+    with log.open("w") as stream:
+        process = subprocess.Popen([binary, "--live", "--captures-autostart", "--update-script",
+                                    "retry", "--history-root", str(root), "--settings-file",
+                                    str(settings)], env=env, stdout=stream)
+
+    def events(name):
+        return [e for e in (json.loads(line) for line in log.read_text().splitlines()
+                            if line.startswith("{")) if e["event"] == name]
+    try:
+        wait(lambda: events("tray"), "the tray")
+        app = wait(lambda: application(process.pid), "the app on the accessibility bus")
+        dialog = wait(lambda: find(app, "dialog", "Update available"), "the live notice")[0]
+        assert_accessible(dialog, "live update notice")
+        assert find(dialog, "push button", "Open pull request 612"), "no pull request button"
+        assert [e["title"] for e in events("update-notice")] == ["Update available"]
+        press(find(dialog, "push button", "Later")[0])
+        wait(lambda: events("update-notice-dismissed"), "Later")
+        wait(lambda: not find(app, "dialog", "Update available"), "the notice to close")
+        # The tray shows the update in hand again; it does not recheck.
+        service = wait(lambda: [json.loads(line) for line in FIXTURE_LOG.read_text().splitlines()
+                                if json.loads(line).get("event") == "item"
+                                and json.loads(line)["sender"]], "the tray item")[-1]["service"]
+        rows, click = wait(lambda: tray_menu(service), "the tray menu")
+        assert ("Check for Updates…", True) in [(label, on) for _, label, on in rows], rows
+        click("Check for Updates…")
+        dialog = wait(lambda: find(app, "dialog", "Update available"), "the tray's notice")[0]
+        assert not [e for e in events("update-action") if e["step"] == "Check"], "the tray rechecked"
+        press(find(dialog, "push button", "Update now")[0])
+        wait(lambda: find(app, "dialog", "Updating Captures"), "the download in place")
+        assert len(events("update-notice-dismissed")) == 1
+        failed = wait(lambda: find(app, "dialog", "Update failed"), "the failed verification")[0]
+        assert [n for n, (role, _) in nodes(failed) if role == "alert"], "no error alert"
+        assert find(failed, "push button", "download from captur.es"), "no download fallback"
+        press(find(failed, "push button", "Try again")[0])
+        wait(lambda: events("update-install"), "the install")
+        assert process.wait(timeout=10) == 0, "the install did not quit"
+        assert events("update-notice-closed") == [{"event": "update-notice-closed", "by": "install"}]
+        steps = [e["step"] for e in events("update-action")]
+        assert steps == ["Download", "Download"], steps
+        print("update_notice_live: launch check opens once, Later, tray reopen, download in place, "
+              "Try again after a failed verification, install closes the notice and quits")
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+
+
 def crash_review(binary, scratch):
     """Crash diagnostics: a live app killed without its clean exit opens
     Send Feedback with the local review on the next visible launch. Add to
@@ -2858,7 +2923,7 @@ def recording_controls(binary, scratch):
 
 STEPS = [history, preferences, update_card, editor, editor_close_keeps_open_text, recording, recording_controls, recording_menu,
          recording_output, previews, preview_overflow, feedback, open_with, live, capture, selectors,
-         new_capture, tray, shortcuts, setup, crash_review, notices]
+         new_capture, tray, shortcuts, setup, crash_review, notices, update_notice_live]
 FIXTURE_LOG = None
 
 

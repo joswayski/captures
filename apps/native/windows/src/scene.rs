@@ -4143,6 +4143,19 @@ impl Scene {
         }
     }
 
+    /// The update notice's What's new / Hide: save the choice and move the
+    /// Updates card's switch, as shipping's shared setting.
+    pub fn set_show_update_changelog(&mut self, on: bool) {
+        if self.settings.show_update_changelog == on {
+            return;
+        }
+        if let Some(row) = self.rows.iter().position(|r| r.key == RowKey::Changelog) {
+            self.set_row(row, on);
+        }
+        self.settings.show_update_changelog = on;
+        self.save();
+    }
+
     /// The Updates button can act (a Preview build that is not busy).
     pub fn update_enabled(&self) -> bool {
         self.update.as_ref().is_some_and(|card| card.step.is_some())

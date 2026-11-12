@@ -274,7 +274,22 @@ the tray's Check for Updates checks and scrolls to it. Update now downloads and
 verifies, then hands the package to the copied `native_preview_update_helper`
 and quits; it refuses while a capture or recording runs. Render the card with
 `--scene preferences --select update-idle|current|available|downloading|failed|check-failed`.
-The floating update notice window is not ported. None of this has run on
+The floating update notice (`src/update_notice.rs`) is shipping's solid
+`--surface-raised` card in a non-activating, topmost DirectComposition window,
+placed by the shared `update_notice::placement` with a caret toward the tray
+icon (caretless tray-corner fallback without one). A newly available version
+opens it once per session, deferred while a capture or recording runs; an
+install started from it reopens it on failure; the tray's Check for Updates
+shows it while an update is available. Later/Close hide it (not while
+downloading or restarting), What's new / Hide persist `show_update_changelog`,
+Update now / Try again / Check again run the same steps as the Updates card,
+View release, pull request numbers and "download from captur.es" open the
+browser, and progress, restart and error states update in place. Its parts are
+exposed through `panel_uia.rs` (heading, status/alert lines, invokable
+buttons). Render it with `--scene update --update
+available|single|closing|manual|downloading|restarting|error|checking|up-to-date
+[--tool fallback] [--select notes-hidden] --screenshot PATH`. Not ported: the
+`ui-pop-in` entrance and the restart exit fade. None of this has run on
 Windows or against a real installed package; it is checked by Wine tests and
 offscreen renders only.
 

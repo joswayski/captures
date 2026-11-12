@@ -327,6 +327,7 @@ pub fn service() {
                 tray.update(&settings);
             }
         });
+        crate::update_notice::settings_changed(&settings);
         sync_shortcuts(&settings);
     }
     let recorder = crate::host::with_host(|h| h.scene.recording.is_some()).unwrap_or(false);
@@ -557,7 +558,9 @@ pub fn update_card() -> Option<crate::updates::Card> {
 /// Publish worker progress, run the five-minute check, act on the card's
 /// button and hand a verified package to the update helper.
 fn service_updates() {
-    let step = crate::host::with_host(|h| h.update_step.take()).flatten();
+    let step = crate::host::with_host(|h| h.update_step.take())
+        .flatten()
+        .or_else(crate::update_notice::take_step);
     let install = RESIDENT.with(|r| {
         let mut r = r.borrow_mut();
         let r = r.as_mut()?;
@@ -595,6 +598,45 @@ fn service_updates() {
     if let Some(card) = update_card() {
         crate::host::with_host(|h| h.set_update(card));
     }
+    sync_update_notice(false);
+}
+
+/// Hand the floating update notice the worker's status; `force` opens it
+/// (the tray's Check for Updates while an update is available).
+fn sync_update_notice(force: bool) {
+    let live = RESIDENT.with(|r| {
+        let r = r.try_borrow().ok()?;
+        let r = r.as_ref()?;
+        let worker = r.updates.as_ref()?;
+        let current = captures_app::preview_channel::version()?;
+        let capture_active = crate::capture::active() || crate::recorder::active();
+        // Shipping's `open_captures_will_close`: a capture or editor is open.
+        let will_close = capture_active
+            || !crate::editor::ids().is_empty()
+            || !crate::recording::ids().is_empty();
+        let status = crate::update_notice::status(
+            current,
+            worker.status(),
+            r.update_install,
+            true,
+            will_close,
+        );
+        Some(crate::update_notice::Live {
+            status,
+            step: crate::updates::card(current, worker.status(), r.update_install).step,
+            capture_active,
+            settings_file: r.options.settings_file.clone(),
+            appearance: r.options.appearance.clone(),
+            tray: tray_rect,
+        })
+    });
+    if let Some(live) = live {
+        if force {
+            crate::update_notice::show(live);
+        } else {
+            crate::update_notice::sync(live);
+        }
+    }
 }
 
 /// Shipping's Update now after verification: refuse during a capture or
@@ -615,6 +657,10 @@ fn install_update() {
                 r.update_install = false;
             }
         });
+        // Shipping returns the refusal to the notice that asked.
+        if crate::update_notice::blocked(message) {
+            return;
+        }
         return show_error(message);
     }
     let restart = RestartIntent {
@@ -661,6 +707,25 @@ fn run(options: &Options, action: Action) {
         // A left click first dismisses a visible launch notice, as shipping.
         Action::LeftClick if crate::startup_notice::hide() => {}
         // Check for Updates checks now and shows the Updates card.
+        // Shipping's `handle_tray_action`: an available or downloading
+        // update shows its notice instead.
+        Action::CheckUpdates
+            if RESIDENT.with(|r| {
+                r.borrow()
+                    .as_ref()
+                    .and_then(|r| r.updates.as_ref())
+                    .is_some_and(|w| {
+                        matches!(
+                            w.status(),
+                            CheckStatus::Available { .. }
+                                | CheckStatus::Downloading { .. }
+                                | CheckStatus::Verifying { .. }
+                        )
+                    })
+            }) =>
+        {
+            sync_update_notice(true)
+        }
         Action::CheckUpdates => {
             open_preferences(options);
             crate::host::with_host(|h| {

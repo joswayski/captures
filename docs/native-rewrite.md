@@ -55,8 +55,9 @@ dispatch and nightly. Each host answers `--preview-build-info` (`win32`, `gtk`)
 with the compiled Preview version, which the builder checks before bundling it
 as `captures`/`captures.exe`, the names the Preview installer updater requires.
 A Preview build starts as the resident app on the imported Preview profile and
-holds the package-use lock. Still missing against the wgpu package: the floating
-update notice window on both hosts. Win32 and GTK now have the startup recovery
+holds the package-use lock. Both hosts now have the floating update notice
+window (see the Win32 update notice and GTK live update notice slices).
+Win32 and GTK now have the startup recovery
 companion, readiness handoff and Preview check/download/install, and Win32 Open
 With; see the Win32 and GTK Preview updates slices below. GTK finds the packaged FFmpeg/FFprobe
 beside its executable. The AppImage runs GTK with `GDK_BACKEND=x11` (the Tauri
@@ -1798,8 +1799,8 @@ height, the notes take it otherwise), notes with pull requests as real
 buttons inline after the text, progress, restart, error with its download
 fallback, the close warning and footer. `--scene update --update NAME`
 drives it from the shared fixtures and stub; Hide/What's new persist
-`show_update_changelog`. Live update checks do not open it: with no GTK
-packaging there is no GTK Preview build. Compared with the Tauri harness
+`show_update_changelog`. Live Preview checks now open it too; see the GTK live
+update notice slice. Compared with the Tauri harness
 (`?view=update&mock=1`, `?view=startup&mock=1&platform=linux`) at 2x in
 light and dark over the same page colour: card sizes match every state; the
 launch notice card is 1 px taller (text 1–2 px lower). The close warning
@@ -1808,7 +1809,7 @@ follows shipping's `openCapturesUpdateWarning` through the shared
 after the update. Screenshot drafts are kept." for an update the app
 installs, "Open captures will close. Unsaved edits are kept as drafts." for
 a manual download, in every host that renders the shared presenter (GTK,
-wgpu, AppKit; Win32 has no update notice yet). Verified: the smoke's
+wgpu, AppKit, and later Win32). Verified: the smoke's
 `notices` step and the launch notice in its `live` and `setup` steps on X11
 and headless Sway 1.9.
 Windows, macOS: unchanged.
@@ -7482,7 +7483,7 @@ Try again, the captur.es fallback). The tray's Check for Updates checks and
 scrolls to the card. Update now downloads and verifies, then calls
 `launch_preview_install` with a restart intent (previews, editors, Preferences)
 and quits; it refuses during a capture or recording. The floating update notice
-window is not ported. Startup recovery: `recovery::Startup` arms before profile
+followed later (see the Win32 update notice slice below). Startup recovery: `recovery::Startup` arms before profile
 import, readiness is acknowledged after settings, a Direct2D device and the
 bundled media tools check out, forwarding and normal Quit finish it, and only
 the elected primary consumes the restart intent.
@@ -7502,6 +7503,46 @@ parsing for paths, file URIs, UNC URIs, flags and readiness pairs; card states)
 and offscreen renders of each card state. Physical Windows, a real NSIS install,
 Open With from Explorer, a real update and recovery after a failed launch are
 unverified. macOS, Linux: unchanged.
+
+### Win32 update notice
+
+The Win32 host now draws shipping's floating update notice
+(`apps/native/windows/src/update_notice.rs`) from the shared
+`update_notice::present` copy: a solid `--surface-raised` card with
+`--shadow-md`, a 1 px border and `--r-xl`, in a `WS_EX_NOACTIVATE` topmost
+DirectComposition window that never takes focus, placed by the shared
+`update_notice::placement` with a caret toward the notification-area icon, or
+the caretless tray-corner fallback when the icon has no rect. Rows follow
+shipping's four-track grid (compact cards share spare height; notes take it
+otherwise). The resident app maps `CheckWorker::preview` to shipping's
+`UpdateStatus` (verifying reads as a finished download, a verified package
+after Update now as the three-second restart, a failed download as "Could not
+install the update: …" with Try again installing). Shipping's
+`schedule_update_notice`/`notice_disposition`: a newly available version opens
+the notice once per session (forgotten after an up-to-date result), deferred
+while a capture, selector or recording runs; a failed install started from the
+notice shows even mid-capture; the tray's Check for Updates shows it while an
+update is available or downloading. Later/Close hide it except while
+downloading or restarting; What's new / Hide persist `show_update_changelog`
+(through Preferences when open, moving its switch); Update now, Try again and
+Check again use the Updates card's steps; View release, pull request numbers
+and "download from captur.es" open the browser; an install refused by a
+running capture becomes the notice's error. Notes scroll with the wheel. UI
+Automation reuses `panel_uia.rs`: title heading, description, notes headings
+and items, progress/restart/close-warning as status lines, the error as an
+alert, and every button invokable by its shipping name ("Open pull request N"
+for numbers). `--scene update --update NAME [--tool fallback] [--select
+notes-hidden]` renders the shared fixtures offscreen. Not ported: the
+`ui-pop-in` entrance and restart exit fade (the spinner, indeterminate bar and
+emptying restart bar do animate).
+
+Windows: implemented, verified under Wine only (x86_64-pc-windows-gnu): fmt,
+clippy `-D warnings`, 58 tests (4 new: status mapping, disposition, per-version
+dedupe with capture deferral, failed-install reopening) and offscreen renders of
+every fixture in light and dark compared with the Tauri harness
+(`?view=update&mock=1`). A live notice window, its placement against a real tray
+icon, focus behavior, Narrator and a real update are unverified. macOS, X11,
+Wayland: unchanged.
 
 ### GTK Preview updates and startup recovery
 
@@ -7526,8 +7567,8 @@ and relaunches with the readiness pair. A `.deb` install is
 `InstallTarget::Manual`, so the worker never stages it; the card then shows
 shipping's View release (the GitHub releases page), without a size, with the
 wgpu host's Debian copy as its description, and the fallback paragraph says
-Debian packages replace the app. The tray's Check for Updates checks and
-scrolls Preferences to the card. `recovery::Startup` arms before the Preview
+Debian packages replace the app. The tray's Check for Updates now follows
+shipping's `handle_tray_action` (see the GTK live update notice slice). `recovery::Startup` arms before the Preview
 profile import; `--native-update-ready-file`/`--native-update-ready-token`
 parse as on Win32; only the elected primary takes the restart intent, which
 reopens previews, editors and Preferences instead of the launch window; the
@@ -7546,3 +7587,51 @@ every state compared with Tauri's card markup and CSS; and a development
 reopened Preferences, one preview and one editor and wrote the token. A real
 AppImage replacement, a real `.deb`, recovery after a failed launch, Orca and
 Wayland are unverified. Windows, macOS: unchanged.
+
+### GTK live update notice
+
+Live Preview checks now open the GTK floating update notice, following
+shipping's `apps/desktop/src-tauri/src/updates.rs`. `updates::notice_status`
+maps the resident worker's `CheckStatus` to a Preview `UpdateStatus` for the
+shared `update_notice::present`: Available carries the display version, the
+release notes, the download size, the open-captures warning and, for a `.deb`,
+`installable: false` with the GitHub releases page; Downloading keeps its
+progress; Verifying and Cancelling are an indeterminate download; a package
+held by a capture reads as Available again (Update now installs it); a failed
+download or install is `Error { retry_install: true }`; and a check's progress
+or failure shows only after a manual check (`check_error_status`). Once Update
+now hands off, the native install starts the helper and quits in the same
+main-loop turn, so the notice shows the finished download (a full bar) and
+does not use shipping's three-second "Reopening in N seconds…" countdown,
+which would promise a relaunch time the helper does not keep. The notice
+closes as the app quits.
+
+`updates::Schedule` holds shipping's policy as a pure function: one notice per
+newly available version (`notified_version`, cleared on Up to date), deferred
+while a capture, selector or recording runs and shown afterwards only if that
+version is still available (`schedule_update_notice`, `notice_disposition`).
+A visible notice updates in place without raising or focusing; on X11 it maps
+with a zero user time, like shipping's non-focusable window. Notice actions
+run the real paths: Update now/Try again download (or install a held
+package), View release opens the releases page, Check again checks, and pull
+request and captur.es links open in the default browser. Hide/What's new still
+persist `show_update_changelog`, and dismissal is refused while busy. The
+tray's Check for Updates matches `handle_tray_action`: an update in hand shows
+the notice without rechecking; otherwise it checks and shows the notice for an
+update, or a "Captures is up to date" or "Could not check for updates" dialog.
+It no longer opens Preferences, as shipping's does not.
+
+`--scene update --update-live NAME` renders a live worker state through the
+same mapping; a development `--live` app takes `--update-script
+available|retry`, a scripted update source (no network, no install; the
+install only quits) that the smoke's new `update_notice_live` step drives.
+
+X11: implemented and verified under Xvfb: GTK fmt, clippy `-D warnings` with
+and without `layer-shell`, unit tests for the status mapping and the
+show/defer/dedupe/tray decisions, the smoke's `update_card`, `notices`,
+`live`, `tray` and `update_notice_live` steps, and light and dark
+`--update-live` renders compared with the fixture renders and shipping's
+`.update-*` CSS. Wayland: `notices` and `update_notice_live` passed on
+headless Sway 1.9. A real Preview check, download and AppImage install from
+the notice, a real `.deb`, focus behaviour under a real window manager and
+Orca are unverified. Windows, macOS: unchanged.

@@ -441,12 +441,16 @@ struct Live {
     restart: Option<gtk::Label>,
 }
 
-/// The update notice, driven by a shared fixture status (`--scene update`)
-/// through `update_notice::stub_next`; it never downloads or installs.
+/// The update notice: either a shared fixture status (`--scene update`)
+/// walked through `update_notice::stub_next`, which never downloads or
+/// installs, or the live Preview status from `updates.rs`, whose actions
+/// run the real check, download, install and links.
 pub struct UpdateNotice {
     pub window: gtk::ApplicationWindow,
     card: gtk::Box,
     settings_file: PathBuf,
+    /// Driven by `updates.rs` rather than the stub.
+    live_source: bool,
     status: RefCell<Option<UpdateStatus>>,
     view: RefCell<ViewState>,
     live: RefCell<Live>,
@@ -455,6 +459,35 @@ pub struct UpdateNotice {
 }
 
 pub fn update(app: &gtk::Application, settings_file: PathBuf, fixture: &str) -> Rc<UpdateNotice> {
+    update_notice(app, settings_file, notice::fixture(fixture), false, false)
+}
+
+/// The notice on a live status. Like shipping's non-focusable notice
+/// window, it opens without taking focus from the app in use (X11: a zero
+/// user time); a click on it still works.
+pub fn update_live(
+    app: &gtk::Application,
+    settings_file: PathBuf,
+    status: UpdateStatus,
+    installing: bool,
+) -> Rc<UpdateNotice> {
+    let notice = update_notice(app, settings_file, Some(status), installing, true);
+    #[cfg(feature = "x11")]
+    notice.window.connect_realize(|window| {
+        if let Some(surface) = window.surface().and_downcast::<gdk4_x11::X11Surface>() {
+            surface.set_user_time(0);
+        }
+    });
+    notice
+}
+
+fn update_notice(
+    app: &gtk::Application,
+    settings_file: PathBuf,
+    status: Option<UpdateStatus>,
+    installing: bool,
+    live_source: bool,
+) -> Rc<UpdateNotice> {
     let card = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .accessible_role(gtk::AccessibleRole::Dialog)
@@ -471,9 +504,11 @@ pub fn update(app: &gtk::Application, settings_file: PathBuf, fixture: &str) -> 
         window,
         card,
         settings_file,
-        status: RefCell::new(notice::fixture(fixture)),
+        live_source,
+        status: RefCell::new(status),
         view: RefCell::new(ViewState {
             show_changelog,
+            installing,
             ..ViewState::default()
         }),
         live: RefCell::default(),
@@ -522,6 +557,14 @@ impl UpdateNotice {
                     let _ = captures_settings::save(&self.settings_file, &settings);
                 }
                 self.render();
+            }
+            Action::Install if self.live_source => crate::updates::act_from_notice(),
+            Action::Check if self.live_source => crate::updates::act(crate::updates::Step::Check),
+            Action::OpenPullRequest { url } if self.live_source => {
+                open_url("pull_request", &url);
+            }
+            Action::OpenDownloadPage if self.live_source => {
+                open_url("download", notice::DOWNLOAD_PAGE_URL);
             }
             Action::Install | Action::Check => {
                 let status = self.status.borrow().clone();
@@ -594,6 +637,24 @@ impl UpdateNotice {
             source.remove();
         }
         crate::emit("update-notice-dismissed", serde_json::json!({}));
+        self.window.close();
+    }
+
+    /// Follow the live status in place: no raise, no focus.
+    pub fn set_live(self: &Rc<Self>, status: UpdateStatus, installing: bool) {
+        let unchanged = self.status.borrow().as_ref() == Some(&status)
+            && self.view.borrow().installing == installing;
+        if unchanged {
+            return;
+        }
+        *self.status.borrow_mut() = Some(status);
+        self.view.borrow_mut().installing = installing;
+        self.render();
+    }
+
+    /// The app is quitting to install the update.
+    pub fn close_for_install(&self) {
+        crate::emit("update-notice-closed", serde_json::json!({"by": "install"}));
         self.window.close();
     }
 
@@ -916,6 +977,18 @@ impl UpdateNotice {
             card.append(&row);
         }
     }
+}
+
+/// A link from the live notice, in the default browser.
+fn open_url(kind: &str, url: &str) {
+    let opened = gtk::gio::AppInfo::launch_default_for_uri(url, gtk::gio::AppLaunchContext::NONE);
+    if let Err(error) = &opened {
+        eprintln!("Could not open {url}: {error}");
+    }
+    crate::emit(
+        "update-notice-open-url",
+        serde_json::json!({"kind": kind, "url": url, "opened": opened.is_ok()}),
+    );
 }
 
 fn set_progress(bar: &gtk::ProgressBar, download: &notice::Download) {

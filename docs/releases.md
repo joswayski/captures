@@ -72,7 +72,8 @@ described below, acknowledges readiness (settings, Direct2D device, bundled
 FFmpeg/FFprobe) for both the companion and the NSIS `/ARGS` relaunch, checks the
 Preview channel at launch and every five minutes, and installs from its
 Preferences Updates card (Update now downloads and verifies, then starts the
-copied helper and quits). Its update notice window is not ported. Win32 opens
+copied helper and quits), and shows the floating update notice for new versions
+and failed installs. Win32 opens
 plain path and `file:` URI arguments, so Open With and file associations reach
 the editors, and forwards them to a running instance. None of this has had a
 physical Windows, real NSIS install or real update run. The GTK host does the
@@ -81,7 +82,8 @@ the packaged FFmpeg/FFprobe) for the companion and the helper's relaunch, checks
 at launch and every five minutes, and installs an AppImage from Preferences
 (Update now downloads and verifies, starts the copied helper with the open
 previews, editors and Preferences, and quits; the helper replaces the AppImage
-and relaunches it). A `.deb` install cannot replace itself: its card offers View
+and relaunches it), and shows the floating update notice for new versions and
+failed installs. A `.deb` install cannot replace itself: its card offers View
 release and the captur.es fallback, the manual package update path. No GTK
 AppImage or `.deb` has had a real update run. GTK opens the desktop entry's `%U`
 files. The `.deb` depends on `libgtk-4-1` (GTK 4.6 or

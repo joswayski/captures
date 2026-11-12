@@ -64,6 +64,8 @@ mod uia;
 #[cfg(windows)]
 mod uia_text;
 #[cfg(windows)]
+mod update_notice;
+#[cfg(windows)]
 mod updates;
 
 /// The window `--scene` opens first.
@@ -89,6 +91,10 @@ pub enum Scene {
     /// `--scene feedback`: Send Feedback (`--select typed|live|sent|error|idea`
     /// for screenshots).
     Feedback,
+    /// `--scene update --update NAME`: the floating update notice on a
+    /// shared `update_notice::fixture` status (`--tool fallback` without a
+    /// tray icon, `--select notes-hidden` with What's new collapsed).
+    Update,
 }
 
 #[cfg(windows)]
@@ -110,6 +116,8 @@ pub struct Options {
     select: Option<String>,
     /// `--crop X,Y,W,H`: the editor's Crop tool with that rectangle staged.
     crop: Option<[f64; 4]>,
+    /// `--update NAME`: the `--scene update` fixture.
+    update: Option<String>,
     /// `--profile DIR` or `CAPTURES_NATIVE_PROFILE`: a disposable profile for
     /// tests on a real PC. Settings, history and saves stay under DIR, and the
     /// launch-at-login registry entry is never touched.
@@ -152,6 +160,7 @@ fn parse_args(args: impl Iterator<Item = String>, preview: bool) -> Result<Optio
         tool: None,
         select: None,
         crop: None,
+        update: None,
         profile: false,
         // An installed Preview is the resident app, as its launchers expect.
         live: preview,
@@ -201,6 +210,7 @@ fn parse_args(args: impl Iterator<Item = String>, preview: bool) -> Result<Optio
                     "capture" => Scene::Capture,
                     "setup" => Scene::Setup,
                     "feedback" => Scene::Feedback,
+                    "update" => Scene::Update,
                     scene => return Err(format!("unsupported scene {scene}")),
                 };
             }
@@ -227,6 +237,16 @@ fn parse_args(args: impl Iterator<Item = String>, preview: bool) -> Result<Optio
             "--find" => options.find = Some(value()?),
             "--tool" => options.tool = Some(value()?),
             "--select" => options.select = Some(value()?),
+            "--update" => {
+                let name = value()?;
+                if !captures_app::update_notice::FIXTURES.contains(&name.as_str()) {
+                    return Err(format!(
+                        "--update is one of {}",
+                        captures_app::update_notice::FIXTURES.join(", ")
+                    ));
+                }
+                options.update = Some(name);
+            }
             "--crop" => {
                 let crop = value()?;
                 let parts: Vec<f64> = crop
@@ -256,6 +276,9 @@ fn parse_args(args: impl Iterator<Item = String>, preview: bool) -> Result<Optio
     }
     if options.quiet && !options.live {
         return Err("--captures-autostart needs --live".into());
+    }
+    if options.scene == Scene::Update && options.screenshot.is_none() {
+        return Err("--scene update renders with --screenshot".into());
     }
     if matches!(options.scene, Scene::Editor | Scene::Recording) && options.artifact.is_none() {
         return Err("--scene editor/recording needs --artifact ID".into());
