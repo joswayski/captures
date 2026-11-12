@@ -71,9 +71,10 @@ pub fn show(t: Tokens, keys: Vec<String>, visible_for: Duration, tray: TrayRect)
         eprintln!("failed to show Captures launch notice: {error}");
         return;
     }
-    // `role="status"`: announce the new notice to a listening reader.
-    let before = panel_uia::watch(panel_uia::Window::Notice).map(|_| Vec::new());
-    panel_uia::raise(panel_uia::Window::Notice, before);
+    // `role="status"`: announce the new notice. Raise it even before any
+    // reader has asked this process for a provider: at login autostart
+    // `UiaClientsAreListening` is still false, so gating on it went silent.
+    panel_uia::raise(panel_uia::Window::Notice, Some(Vec::new()));
 }
 
 /// The notice's parts for UI Automation: the status card and Close.

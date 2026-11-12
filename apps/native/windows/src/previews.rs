@@ -48,6 +48,8 @@ use crate::tokens::Tokens;
 const WM_MOUSELEAVE: u32 = 0x02A3;
 /// Drives the pile's fly and fan while they run.
 const MOTION_TIMER: usize = 7;
+/// Polls the pointer while empty areas let clicks through.
+const POLL_TIMER: usize = 8;
 /// Posted when a worker finished a Save or Delete.
 const WM_APP_PREVIEW_DONE: u32 = WM_APP + 31;
 
@@ -368,6 +370,14 @@ impl Stack {
                 (hit, r)
             })
             .collect()
+    }
+
+    /// The pointer is over a card, the toolbar or the pile, or the stack is
+    /// mid-fly; elsewhere clicks reach the window underneath, like shipping's
+    /// polled `set_thumbnail_ignore_cursor_events`.
+    pub fn solid(&self, x: f32, y: f32) -> bool {
+        let progress = self.progress();
+        (progress > 0. && progress < 1.) || self.pressed.is_some() || self.hit(x, y).is_some()
     }
 
     pub fn hit(&self, x: f32, y: f32) -> Option<Hit> {
@@ -1030,6 +1040,8 @@ struct Previews {
     sender: Sender<Done>,
     results: Receiver<Done>,
     tracking: bool,
+    /// `WS_EX_TRANSPARENT` is set: clicks pass through and `POLL_TIMER` runs.
+    passthrough: bool,
     /// The display the stack sits on, chosen when a card arrives.
     monitor: windows::Win32::Graphics::Gdi::HMONITOR,
     /// Hidden while New Capture or a countdown is open.
@@ -1162,6 +1174,7 @@ impl Previews {
             sender,
             results,
             tracking: false,
+            passthrough: false,
             monitor: Default::default(),
             suppressed: false,
         })
@@ -1399,6 +1412,56 @@ impl Previews {
         let _ = self.render();
     }
 
+    /// Let clicks through the window, polling the pointer until it is back
+    /// over the stack, or take them again.
+    fn set_passthrough(&mut self, on: bool) {
+        if self.passthrough == on {
+            return;
+        }
+        self.passthrough = on;
+        unsafe {
+            let style = GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE);
+            let flag = WS_EX_TRANSPARENT.0 as isize;
+            SetWindowLongPtrW(
+                self.hwnd,
+                GWL_EXSTYLE,
+                if on { style | flag } else { style & !flag },
+            );
+            if on {
+                SetTimer(Some(self.hwnd), POLL_TIMER, 50, None);
+            } else {
+                let _ = KillTimer(Some(self.hwnd), POLL_TIMER);
+            }
+        }
+    }
+
+    /// The pointer in client DIPs, or `None` outside the window.
+    fn cursor(&self) -> Option<(f32, f32)> {
+        let mut p = POINT::default();
+        let mut client = RECT::default();
+        unsafe {
+            GetCursorPos(&mut p).ok()?;
+            let _ = windows::Win32::Graphics::Gdi::ScreenToClient(self.hwnd, &mut p);
+            GetClientRect(self.hwnd, &mut client).ok()?;
+        }
+        (p.x >= client.left && p.x < client.right && p.y >= client.top && p.y < client.bottom)
+            .then(|| (p.x as f32 / self.scale, p.y as f32 / self.scale))
+    }
+
+    fn poll(&mut self) {
+        match self.cursor() {
+            Some((x, y)) if !self.stack.solid(x, y) => {}
+            // Back over the stack, or gone: Windows sends mouse input again.
+            at => {
+                self.set_passthrough(false);
+                if self.stack.pointer(at) {
+                    let _ = self.render();
+                    self.animate();
+                }
+            }
+        }
+    }
+
     /// Tick the frame timer while the fly or fan runs.
     fn animate(&self) {
         if self.stack.animating() {
@@ -1479,9 +1542,13 @@ impl Previews {
                     };
                     self.tracking = unsafe { TrackMouseEvent(&mut track) }.is_ok();
                 }
-                if self.stack.pointer(Some(point(lp, self.scale))) {
+                let (x, y) = point(lp, self.scale);
+                if self.stack.pointer(Some((x, y))) {
                     let _ = self.render();
                     self.animate();
+                }
+                if !self.stack.solid(x, y) {
+                    self.set_passthrough(true);
                 }
             }
             WM_MOUSELEAVE => {
@@ -1501,8 +1568,10 @@ impl Previews {
                     let _ = windows::Win32::Graphics::Gdi::ScreenToClient(self.hwnd, &mut p);
                 }
                 let at = (p.x as f32 / self.scale, p.y as f32 / self.scale);
+                // The first event over the pile starts its fan.
                 if self.stack.pointer(Some(at)) {
                     let _ = self.render();
+                    self.animate();
                 }
                 let control = !matches!(self.stack.hot, None | Some(Hit::Card(_)));
                 let cursor = if control { IDC_HAND } else { IDC_ARROW };
@@ -1530,6 +1599,7 @@ impl Previews {
             }
             WM_APP_PREVIEW_DONE => self.finish(),
             WM_TIMER if _wp.0 == MOTION_TIMER => self.motion_tick(),
+            WM_TIMER if _wp.0 == POLL_TIMER => self.poll(),
             _ => return None,
         }
         Some(LRESULT(0))
@@ -1583,8 +1653,13 @@ unsafe fn window() -> Result<HWND> {
             lpszClassName: class,
             ..Default::default()
         });
-        CreateWindowExW(
-            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_NOREDIRECTIONBITMAP,
+        let hwnd = CreateWindowExW(
+            // Layered so `WS_EX_TRANSPARENT` lets clicks reach other apps.
+            WS_EX_TOPMOST
+                | WS_EX_TOOLWINDOW
+                | WS_EX_NOACTIVATE
+                | WS_EX_NOREDIRECTIONBITMAP
+                | WS_EX_LAYERED,
             class,
             w!("Captures Previews"),
             WS_POPUP,
@@ -1596,7 +1671,9 @@ unsafe fn window() -> Result<HWND> {
             None,
             Some(instance.into()),
             None,
-        )
+        )?;
+        SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA)?;
+        Ok(hwnd)
     }
 }
 
@@ -1660,6 +1737,12 @@ mod tests {
         assert_eq!(s.hit(50., 234.), Some(Hit::Delete(1)));
         assert_eq!(s.hit(84., 234.), Some(Hit::Card(1)));
         assert_eq!(s.hit(40., 390.), Some(Hit::ClearAll));
+        // Clicks reach the window underneath everywhere else: above the top
+        // card, in the side margin, between cards and beside the toolbar.
+        assert!(s.solid(50., 50.) && s.solid(40., 390.));
+        for (x, y) in [(50., 10.), (10., 100.), (50., 208.), (300., 390.)] {
+            assert!(!s.solid(x, y), "({x}, {y}) should pass through");
+        }
     }
 
     #[test]

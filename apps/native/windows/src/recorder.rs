@@ -8,9 +8,7 @@
 //! The controls are topmost and never take focus; dragging the card moves
 //! them. They stay out of recordings (`WDA_EXCLUDEFROMCAPTURE`) unless
 //! Preferences includes them. Restart and Delete confirm with a system
-//! message box. Not ported yet: the HUD tooltips, its region Screenshot, the
-//! "Recording controls hidden" notice (New Capture or the tray brings hidden
-//! controls back) and recovery of a take left by a crash.
+//! message box.
 
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -185,6 +183,16 @@ pub fn protect_for_snapshot(protect: bool) {
             }
         }
     });
+}
+
+/// The HUD's Screenshot runs as a child of this take's flow, like the GTK
+/// host: the take keeps its generation and the screenshot owns Escape.
+/// `None` when no recording is running.
+pub fn begin_screenshot_flow() -> Option<std::result::Result<CaptureFlow, String>> {
+    RECORDER.with(|r| {
+        let r = r.try_borrow().ok()?;
+        Some(r.as_ref()?.flow.begin_recording_screenshot(0))
+    })
 }
 
 /// Read the controls for UI Automation: the HUD, its window and scale.
@@ -928,10 +936,11 @@ impl Recorder {
             WM_ERASEBKGND => return Some(LRESULT(1)),
             WM_MOUSEACTIVATE => return Some(LRESULT(MA_NOACTIVATE as isize)),
             WM_NCHITTEST => {
-                // Buttons are client area; the rest of the card drags the
-                // window (shipping `cursor: grab`).
+                // Buttons, disabled ones included so their tooltips show, are
+                // client area; the rest of the card drags the window
+                // (shipping `cursor: grab`).
                 let (x, y) = self.cursor();
-                let caption = self.hud.hit(x, y).is_none() && Hud::over_card(x, y);
+                let caption = self.hud.under(x, y).is_none() && Hud::over_card(x, y);
                 return Some(LRESULT(if caption { HTCAPTION } else { HTCLIENT } as isize));
             }
             WM_NCLBUTTONDBLCLK => {}

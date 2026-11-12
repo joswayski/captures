@@ -949,7 +949,7 @@ pub fn text(
             Vector2 { X: x, Y: y },
             &text.layout,
             &brush(dc, color)?,
-            D2D1_DRAW_TEXT_OPTIONS_NONE,
+            D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT,
         )
     };
     Ok(())
@@ -1014,7 +1014,7 @@ pub fn text_blur_shadow(
                     Vector2 { X: 0., Y: 0. },
                     &layout.layout,
                     black,
-                    D2D1_DRAW_TEXT_OPTIONS_NONE,
+                    D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT,
                 );
             }
             dc.SetTarget(&target);

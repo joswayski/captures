@@ -945,7 +945,7 @@ impl Editor {
                             windows_numerics::Vector2 { X: ox, Y: oy },
                             layout,
                             &gfx::brush(dc, t.color("text"))?,
-                            D2D1_DRAW_TEXT_OPTIONS_NONE,
+                            D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT,
                         );
                     }
                 }

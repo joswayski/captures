@@ -1434,7 +1434,7 @@ pub fn open(
         return Ok(());
     }
     let settings = captures_settings::load(&options.settings_file).unwrap_or_default();
-    let flow = CaptureFlow::begin(0)?;
+    let flow = crate::recorder::begin_screenshot_flow().unwrap_or_else(|| CaptureFlow::begin(0))?;
     let generation = flow.generation();
     let (freeze, include_cursor) = (settings.freeze_screen, settings.show_cursor_in_screenshots);
     let (sender, prepared) = channel();
