@@ -70,6 +70,11 @@ pub enum Hit {
     Save(usize),
     Card(usize),
     ClearAll,
+    /// `.thumbnail-stack-minimize`: collapse into the pile.
+    Minimize,
+    /// `.thumbnail-collapsed-hit-target`: the pile's one button, which
+    /// expands it.
+    Expand,
 }
 
 impl Hit {
@@ -81,7 +86,7 @@ impl Hit {
             | Self::Copy(i)
             | Self::Save(i)
             | Self::Card(i) => Some(i),
-            Self::ClearAll => None,
+            Self::ClearAll | Self::Minimize | Self::Expand => None,
         }
     }
 }
@@ -110,6 +115,8 @@ pub struct Stack {
     pub hovered: Option<usize>,
     pub hot: Option<Hit>,
     pub pressed: Option<Hit>,
+    /// The pointer is over the collapsed pile, which fans it.
+    pub pile_hovered: bool,
 }
 
 impl Stack {
@@ -123,6 +130,7 @@ impl Stack {
             hovered: None,
             hot: None,
             pressed: None,
+            pile_hovered: false,
         }
     }
 
@@ -167,6 +175,34 @@ impl Stack {
         let layout = self.stack.card_layout(index, self.top)?;
         let y = layout.y as f32 + self.offset();
         Some(rect(PAD, y, PAD + CARD_W, y + CARD_H))
+    }
+
+    pub fn collapsed(&self) -> bool {
+        self.stack.is_collapsed()
+    }
+
+    /// Shipping shows the toolbar (Clear all and Minimize) only for two or
+    /// more cards, and never on the pile.
+    fn toolbar(&self) -> bool {
+        !self.collapsed() && self.cards.len() >= 2
+    }
+
+    /// The front card of the collapsed pile, the pile's hit target.
+    fn front_rect(&self) -> Option<Rect> {
+        self.card_rect(self.cards.len().checked_sub(1)?)
+    }
+
+    /// Minimize sits beside Clear all, `gap: var(--s-1)`; the right anchor's
+    /// `row-reverse` puts it inside Clear all.
+    fn minimize_rect(&self) -> Rect {
+        let clear = self.clear_rect();
+        let step = CONTROL + 2.;
+        let x = if self.right {
+            clear.left - step
+        } else {
+            clear.left + step
+        };
+        rect(x, clear.top, x + CONTROL, clear.bottom)
     }
 
     fn clear_rect(&self) -> Rect {
@@ -238,8 +274,16 @@ impl Stack {
 
     pub fn hit(&self, x: f32, y: f32) -> Option<Hit> {
         let inside = |r: &Rect| x >= r.left && x < r.right && y >= r.top && y < r.bottom;
-        if inside(&self.clear_rect()) {
-            return Some(Hit::ClearAll);
+        if self.collapsed() {
+            return self.front_rect().filter(|r| inside(r)).map(|_| Hit::Expand);
+        }
+        if self.toolbar() {
+            if inside(&self.clear_rect()) {
+                return Some(Hit::ClearAll);
+            }
+            if inside(&self.minimize_rect()) {
+                return Some(Hit::Minimize);
+            }
         }
         for index in 0..self.cards.len() {
             let Some(card) = self.card_rect(index) else {
@@ -268,6 +312,14 @@ impl Stack {
     /// Pointer at `(x, y)` DIPs, or `None` when it left; true when the look
     /// changed.
     pub fn pointer(&mut self, at: Option<(f32, f32)>) -> bool {
+        if self.collapsed() {
+            let before = (self.pile_hovered, self.hot);
+            self.hovered = None;
+            self.hot = at.and_then(|(x, y)| self.hit(x, y));
+            self.pile_hovered = self.hot == Some(Hit::Expand);
+            return (self.pile_hovered, self.hot) != before;
+        }
+        self.pile_hovered = false;
         // Hover follows the card under the pointer, then targets its controls.
         let card = at.and_then(|(x, y)| {
             (0..self.cards.len()).find(|&i| {
@@ -291,6 +343,8 @@ impl Stack {
         let base = |i: usize| 100 * (i as u32 + 1);
         match hit {
             Hit::ClearAll => 1,
+            Hit::Minimize => 2,
+            Hit::Expand => 3,
             Hit::Card(i) => base(i),
             Hit::Close(i) => base(i) + 1,
             Hit::Delete(i) => base(i) + 2,
@@ -301,8 +355,11 @@ impl Stack {
     }
 
     fn uia_hit(key: u32) -> Option<Hit> {
-        if key == 1 {
-            return Some(Hit::ClearAll);
+        match key {
+            1 => return Some(Hit::ClearAll),
+            2 => return Some(Hit::Minimize),
+            3 => return Some(Hit::Expand),
+            _ => {}
         }
         let i = (key / 100).checked_sub(1)? as usize;
         Some(match key % 100 {
@@ -322,6 +379,24 @@ impl Stack {
     /// all previews.
     pub fn uia_items(&self) -> Vec<Item> {
         let mut items = Vec::new();
+        // The pile is one button; its cards leave the tree.
+        if self.collapsed() {
+            if let Some(front) = self.front_rect() {
+                let count = self.cards.len();
+                let name = if count == 1 {
+                    "Expand preview".to_owned()
+                } else {
+                    format!("Expand {count} previews")
+                };
+                items.push(Item::new(
+                    Self::uia_key(Hit::Expand),
+                    Role::Button,
+                    name,
+                    front,
+                ));
+            }
+            return items;
+        }
         for (index, card) in self.cards.iter().enumerate() {
             let Some(r) = self.card_rect(index) else {
                 continue;
@@ -362,49 +437,128 @@ impl Stack {
                 items.push(status);
             }
         }
-        if !self.cards.is_empty() {
+        if self.toolbar() {
             items.push(Item::new(
                 Self::uia_key(Hit::ClearAll),
                 Role::Button,
                 preview::STACK_CLEAR_ALL_LABEL,
                 self.clear_rect(),
             ));
+            items.push(Item::new(
+                Self::uia_key(Hit::Minimize),
+                Role::Button,
+                preview::STACK_MINIMIZE_LABEL,
+                self.minimize_rect(),
+            ));
         }
         items
     }
 
     pub fn paint(&self, dc: &ID2D1DeviceContext, g: &Gfx, t: &Tokens) -> Result<()> {
+        if self.collapsed() {
+            return self.paint_pile(dc, g, t);
+        }
         for index in 0..self.cards.len() {
             if let Some(card) = self.card_rect(index) {
                 self.paint_card(dc, g, t, index, card)?;
             }
         }
-        if !self.cards.is_empty() {
-            let r = self.clear_rect();
-            let hot = self.hot == Some(Hit::ClearAll);
-            // `.thumbnail-stack-control`
-            gfx::shadow(dc, r, t.n("r-md"), t.shadow("thumbnail-card-shadow"))?;
-            let fill = if hot {
-                "glass-raised-solid"
-            } else {
-                "glass-strong-solid"
+        if self.toolbar() {
+            for (hit, icon, side) in [
+                (Hit::ClearAll, "close", 16.),
+                (Hit::Minimize, "preview-stack", 24.),
+            ] {
+                let r = if hit == Hit::ClearAll {
+                    self.clear_rect()
+                } else {
+                    self.minimize_rect()
+                };
+                let hot = self.hot == Some(hit);
+                // `.thumbnail-stack-control`
+                gfx::shadow(dc, r, t.n("r-md"), t.shadow("thumbnail-card-shadow"))?;
+                let fill = if hot {
+                    "glass-raised-solid"
+                } else {
+                    "glass-strong-solid"
+                };
+                gfx::fill_round(dc, r, t.n("r-md"), t.color(fill))?;
+                let edge = if hot {
+                    "glass-border-strong"
+                } else {
+                    "glass-border"
+                };
+                gfx::border(dc, r, t.n("r-md"), 1., t.color(edge))?;
+                // `close` is a 24-unit icon at 16 px; `preview-stack` a
+                // 16-unit one, so 24 here draws it at 16 px too.
+                let inset = (CONTROL - 16.) / 2.;
+                gfx::icon(
+                    dc,
+                    &g.factory,
+                    icon,
+                    &[],
+                    (r.left + inset, r.top + inset, side),
+                    if side > 16. { 1.4 * 1.5 } else { 1.8 },
+                    t.color("glass-text"),
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The collapsed pile: oldest card first so the newest paints on top,
+    /// each rear card in its shared `collapsed_card_pose` (fanned while
+    /// hovered) under its `collapsed_dim_opacity` shade. The flattened
+    /// affine summary of the pose is drawn; the keystone, media blur and
+    /// the fly between list and pile are not.
+    fn paint_pile(&self, dc: &ID2D1DeviceContext, g: &Gfx, t: &Tokens) -> Result<()> {
+        let Some(front) = self.front_rect() else {
+            return Ok(());
+        };
+        let count = self.cards.len();
+        let gravity = if self.top { -1. } else { 1. };
+        let (cx, cy) = (
+            (front.left + front.right) / 2.,
+            (front.top + front.bottom) / 2.,
+        );
+        let mut base = Matrix3x2::identity();
+        unsafe { dc.GetTransform(&mut base) };
+        for index in 0..count {
+            let depth = count - 1 - index;
+            let pose = preview::collapsed_card_pose(
+                &self.cards[index].entry.id,
+                depth,
+                self.pile_hovered,
+                gravity,
+                self.top,
+            );
+            let (sin, cos) = (pose.rotation_deg as f32).to_radians().sin_cos();
+            let (sx, sy) = (pose.scale_x as f32, pose.scale_y as f32);
+            // Row vectors: move the front card's centre to the origin, scale,
+            // rotate clockwise, then move to the posed centre.
+            let pose_m = Matrix3x2 {
+                M11: sx * cos,
+                M12: sx * sin,
+                M21: -sy * sin,
+                M22: sy * cos,
+                M31: 0.,
+                M32: 0.,
             };
-            gfx::fill_round(dc, r, t.n("r-md"), t.color(fill))?;
-            let edge = if hot {
-                "glass-border-strong"
-            } else {
-                "glass-border"
-            };
-            gfx::border(dc, r, t.n("r-md"), 1., t.color(edge))?;
-            gfx::icon(
-                dc,
-                &g.factory,
-                "close",
-                &[],
-                (r.left + 6., r.top + 6., 16.),
-                1.8,
-                t.color("glass-text"),
-            )?;
+            let m = Matrix3x2::translation(-cx, -cy)
+                * pose_m
+                * Matrix3x2::translation(cx + pose.dx as f32, cy + pose.dy as f32)
+                * base;
+            unsafe { dc.SetTransform(&m) };
+            let result = self.paint_card(dc, g, t, index, front).and_then(|()| {
+                let dim = preview::collapsed_dim_opacity(depth) as f32;
+                if dim > 0. {
+                    let mut shade = t.color("glass-strong-solid");
+                    shade.a *= dim;
+                    gfx::fill_round(dc, front, t.n("thumbnail-card-radius"), shade)?;
+                }
+                Ok(())
+            });
+            unsafe { dc.SetTransform(&base) };
+            result?;
         }
         Ok(())
     }
@@ -607,12 +761,17 @@ impl Stack {
 /// `--scene capture --tool previews`: shipping's `?view=thumbnail&mock=1`
 /// pair, a saved 1600×1000 capture on the clipboard above an unsaved
 /// 1200×900 one, both showing `image`; `hovered` hovers the first.
-pub fn fixture(g: &Gfx, image: &image::RgbaImage, hovered: bool) -> Stack {
+pub fn fixture(g: &Gfx, image: &image::RgbaImage, select: Option<&str>) -> Stack {
     let mut stack = Stack::new(captures_settings::MiniPreviewPlacement::BottomLeft);
-    for (id, (w, h, size), saved) in [
+    let pile = matches!(select, Some("pile" | "pile-hover"));
+    let mut cards = vec![
         ("first", (1600, 1000, 842_000), true),
         ("second", (1200, 900, 432_000), false),
-    ] {
+    ];
+    if pile {
+        cards.insert(0, ("zeroth", (1920, 1080, 1_204_000), false));
+    }
+    for (id, (w, h, size), saved) in cards {
         let entry = serde_json::from_value(serde_json::json!({
             "id": id,
             "preview_url": "",
@@ -626,10 +785,19 @@ pub fn fixture(g: &Gfx, image: &image::RgbaImage, hovered: bool) -> Stack {
         .expect("fixture entry");
         stack.push(g, entry, Some(image));
     }
-    stack.cards[0].clipboard = true;
+    let last = stack.cards.len() - 1;
+    stack.cards[last - 1].clipboard = !pile;
+    stack.stack.set_collapsed(pile);
     stack.height = stack.content_height();
-    if hovered {
-        stack.pointer(Some((150., 90.)));
+    match select {
+        Some("pile-hover") => {
+            let front = stack.front_rect().expect("front card");
+            stack.pointer(Some((front.left + 40., front.top + 40.)));
+        }
+        Some("pile") | None => {}
+        Some(_) => {
+            stack.pointer(Some((150., 90.)));
+        }
     }
     stack
 }
@@ -912,8 +1080,13 @@ impl Previews {
             let placement = captures_settings::load(&self.options.settings_file)
                 .unwrap_or_default()
                 .mini_preview_placement;
-            let geometry =
-                preview::thumbnail_geometry(bounds, self.stack.cards.len(), false, None, placement);
+            let geometry = preview::thumbnail_geometry(
+                bounds,
+                self.stack.cards.len(),
+                self.stack.collapsed(),
+                None,
+                placement,
+            );
             self.stack.top = geometry.anchor.is_top();
             self.stack.right = placement.is_right();
             self.stack.height = geometry.height as f32;
@@ -987,6 +1160,14 @@ impl Previews {
     }
 
     fn run(&mut self, hit: Hit) {
+        if matches!(hit, Hit::Minimize | Hit::Expand) {
+            self.stack.stack.set_collapsed(hit == Hit::Minimize);
+            self.stack.hovered = None;
+            self.stack.hot = None;
+            self.stack.pile_hovered = false;
+            let _ = self.relayout();
+            return;
+        }
         let Some(index) = hit.card() else {
             // Clear all: dismiss every card; History keeps them.
             self.stack.cards.clear();
@@ -1077,7 +1258,7 @@ impl Previews {
                     post(hwnd);
                 });
             }
-            Hit::Card(_) | Hit::ClearAll => {}
+            Hit::Card(_) | Hit::ClearAll | Hit::Minimize | Hit::Expand => {}
         }
         let _ = self.render();
     }
@@ -1353,14 +1534,44 @@ mod tests {
             &[("Delete", false), ("Edit", false), ("Save file", false)]
         );
         assert_eq!(second.last(), Some(&("Copied to clipboard", true)));
-        assert_eq!(
-            items.last().map(|i| i.name.as_str()),
-            Some("Clear all previews")
-        );
+        let toolbar: Vec<_> = items[items.len() - 2..]
+            .iter()
+            .map(|i| i.name.as_str())
+            .collect();
+        assert_eq!(toolbar, ["Clear all previews", "Minimize previews"]);
         // Keys round-trip to the click targets.
         for hit in [Hit::ClearAll, Hit::Close(0), Hit::Save(1), Hit::Edit(3)] {
             assert_eq!(Stack::uia_hit(Stack::uia_key(hit)), Some(hit));
         }
+    }
+
+    #[test]
+    fn the_pile_is_one_expand_target_and_the_toolbar_needs_two_cards() {
+        use captures_settings::MiniPreviewPlacement as P;
+        // One card: no Clear all or Minimize (it has its own Close/Delete).
+        let single = stack(P::BottomLeft, &[false]);
+        assert!(single.uia_items().iter().all(|i| i.key > 3));
+        // Two cards: Minimize sits 2 DIPs beside Clear all, inside it on
+        // the right (`row-reverse`).
+        let mut s = stack(P::BottomLeft, &[true, false]);
+        assert_eq!((s.minimize_rect().left, s.minimize_rect().top), (58., 380.));
+        assert_eq!(s.hit(70., 390.), Some(Hit::Minimize));
+        let right = stack(P::BottomRight, &[true, false]);
+        assert_eq!(right.minimize_rect().right, right.clear_rect().left - 2.);
+        // Collapsed: only the front card answers, as Expand, and the tree is
+        // that one button.
+        s.stack.set_collapsed(true);
+        s.height = s.content_height();
+        let front = s.front_rect().expect("front card");
+        let (x, y) = (front.left + 10., front.top + 10.);
+        assert_eq!(s.hit(x, y), Some(Hit::Expand));
+        assert!(s.pointer(Some((x, y))));
+        assert!(s.pile_hovered && s.hovered.is_none());
+        assert_eq!(s.hit(40., front.top - 30.), None);
+        let items = s.uia_items();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].name, "Expand 2 previews");
+        assert_eq!(Stack::uia_hit(items[0].key), Some(Hit::Expand));
     }
 
     #[test]

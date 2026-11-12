@@ -127,7 +127,7 @@ pub fn render(options: &Options, path: &std::path::Path) -> Result<()> {
         let g = g.clone();
         if options.tool.as_deref() == Some("previews") {
             // The bottom-left stack over the desktop, as the 1280×800 mock.
-            let stack = crate::previews::fixture(&g, &desktop, options.select.is_some());
+            let stack = crate::previews::fixture(&g, &desktop, options.select.as_deref());
             let size = (w as f32, h as f32);
             let top = size.1 - stack.height;
             Box::new(move |dc| unsafe {
