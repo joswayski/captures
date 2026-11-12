@@ -16,6 +16,7 @@ use windows::Win32::Graphics::Direct2D::*;
 use windows::Win32::Graphics::DirectComposition::*;
 use windows::Win32::Graphics::DirectWrite::DWRITE_HIT_TEST_METRICS;
 use windows::Win32::Graphics::Gdi::{ScreenToClient, ValidateRect};
+use windows::Win32::UI::Accessibility::{UiaReturnRawElementProvider, UiaRootObjectId};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -23,6 +24,7 @@ use windows::core::*;
 use windows_numerics::Matrix3x2;
 
 use crate::gfx::{self, Gfx, Style, Text, rect};
+use crate::panel_uia::{self, Act, Item, Role};
 use crate::textfield::{self, Change, Editor, Key, TextField};
 use crate::tokens::Tokens;
 use crate::{Options, appearance};
@@ -651,6 +653,180 @@ impl Feedback {
         self.edited(Target::Message, change);
     }
 
+    // ------------------------------------------------------ automation ----
+
+    /// The automation key of a target.
+    fn uia_key(target: Target) -> u32 {
+        match target {
+            Target::Category(i) => 10 + i as u32,
+            Target::Message => 20,
+            Target::Contact => 21,
+            Target::Send => 40,
+        }
+    }
+
+    fn uia_target(key: u32) -> Option<Target> {
+        ORDER.into_iter().find(|&t| Self::uia_key(t) == key)
+    }
+
+    /// The parts in shipping's DOM order: the `<h1>` and intro, the
+    /// `<h2>` details card, the category `radiogroup`, the message
+    /// `<textarea>`, the contact `<input>`, the status or alert line and
+    /// Send, in client coordinates.
+    fn uia_items(&self) -> Vec<Item> {
+        let Some(lay) = &self.lay else {
+            return Vec::new();
+        };
+        let n = |name: &str| self.t.n(name);
+        let at = |x: f32, (text, y): &(Text, f32)| {
+            rect(
+                x,
+                y - self.scroll,
+                x + text.width,
+                y + text.height - self.scroll,
+            )
+        };
+        let page =
+            |r: D2D_RECT_F| rect(r.left, r.top - self.scroll, r.right, r.bottom - self.scroll);
+        let x = lay.left + 1. + n("s-6");
+        let mut items = vec![
+            Item::new(0, Role::Heading(1), copy::TITLE, at(lay.left, &lay.title)),
+            Item::new(1, Role::Text, copy::INTRO, at(lay.left, &lay.intro)),
+            Item::new(
+                2,
+                Role::Heading(2),
+                copy::META_TITLE,
+                at(x, &lay.meta_title),
+            ),
+        ];
+        let (version, system) = match &self.context {
+            Some(c) => (
+                c.app_version.clone(),
+                copy::system_label(&c.os, &c.os_version, &c.arch),
+            ),
+            None => (copy::LOADING.into(), copy::LOADING.into()),
+        };
+        for (i, ((label, value), (dt, dd, y))) in [
+            (copy::APP_VERSION_LABEL, version),
+            (copy::SYSTEM_LABEL, system),
+        ]
+        .into_iter()
+        .zip(&lay.meta)
+        .enumerate()
+        {
+            let line = dt.height.max(dd.height);
+            let r = rect(
+                x,
+                y - self.scroll,
+                lay.meta_card.right - 1. - n("s-6"),
+                y + line - self.scroll,
+            );
+            items.push(Item::new(
+                3 + i as u32,
+                Role::Text,
+                format!("{label}: {value}"),
+                r,
+            ));
+        }
+        let group = lay
+            .categories
+            .iter()
+            .map(|(_, _, r)| *r)
+            .reduce(|a, b| {
+                rect(
+                    a.left.min(b.left),
+                    a.top.min(b.top),
+                    a.right.max(b.right),
+                    a.bottom.max(b.bottom),
+                )
+            })
+            .unwrap_or(lay.form_card);
+        items.push(Item::new(5, Role::Group, "Feedback category", page(group)));
+        for (i, (_, _, r)) in lay.categories.iter().enumerate() {
+            let category = &copy::CATEGORIES[i];
+            let target = Target::Category(i);
+            let mut radio = Item::new(Self::uia_key(target), Role::Radio, category.label, page(*r));
+            radio.parent = Some(5);
+            radio.help = category.description.into();
+            radio.selected = self.category == i;
+            radio.focused = self.focus == Some(target);
+            items.push(radio);
+        }
+        for (target, name, help, value, r) in [
+            (
+                Target::Message,
+                copy::MESSAGE_LABEL,
+                copy::CATEGORIES[self.category].placeholder,
+                self.message_text(),
+                lay.message_box,
+            ),
+            (
+                Target::Contact,
+                copy::CONTACT_LABEL,
+                copy::CONTACT_HELP,
+                self.contact_text(),
+                lay.contact_box,
+            ),
+        ] {
+            let mut edit = Item::new(Self::uia_key(target), Role::Edit, name, page(r));
+            edit.help = help.into();
+            edit.value = Some(value);
+            edit.enabled = self.enabled(target);
+            edit.focused = self.focus == Some(target);
+            items.push(edit);
+        }
+        if let Some((text, r, _, _)) = &lay.note {
+            let role = match self.status {
+                Status::Error(_) => Role::Alert,
+                Status::Sent => Role::Status,
+                _ => Role::Text,
+            };
+            let name = match &self.status {
+                Status::Error(error) => error.clone(),
+                Status::Sent => copy::SENT.into(),
+                _ => copy::FIXTURE_DISABLED.into(),
+            };
+            let _ = text;
+            items.push(Item::new(30, role, name, page(*r)));
+        }
+        let mut send = Item::new(
+            40,
+            Role::Button,
+            if self.sending() {
+                copy::SENDING
+            } else {
+                copy::SEND
+            },
+            page(lay.send),
+        );
+        send.enabled = self.can_send();
+        send.focused = self.focus == Some(Target::Send);
+        items.push(send);
+        items
+    }
+
+    /// Apply an automation request through the paths clicks and typing use.
+    fn uia_act(&mut self, key: u32, act: Act) {
+        let Some(target) = Self::uia_target(key) else {
+            return;
+        };
+        match act {
+            Act::Invoke | Act::Select => self.activate(target),
+            Act::SetValue(text) if matches!(target, Target::Message | Target::Contact) => {
+                let change = self.editor(target).set_text(&text);
+                self.edited(target, change);
+            }
+            Act::Focus => {
+                self.set_focus(Some(target), true);
+                unsafe {
+                    let _ = SetFocus(Some(self.hwnd));
+                }
+            }
+            _ => {}
+        }
+        let _ = self.render();
+    }
+
     // ------------------------------------------------------------ paint ----
 
     fn resize(&mut self) -> Result<()> {
@@ -1218,6 +1394,22 @@ impl Feedback {
     }
 }
 
+/// Send Feedback's parts for UI Automation, while the window is open.
+pub fn uia_snapshot() -> Option<panel_uia::Snapshot> {
+    with_feedback(|f| panel_uia::Snapshot {
+        hwnd: f.hwnd,
+        scale: f.scale,
+        size: f.size,
+        name: copy::WINDOW_TITLE,
+        focusable: true,
+        items: f.uia_items(),
+    })
+}
+
+pub fn uia_act(key: u32, act: Act) -> Option<()> {
+    with_feedback(|f| f.uia_act(key, act))
+}
+
 pub fn register(instance: HINSTANCE) -> Result<()> {
     unsafe {
         RegisterClassW(&WNDCLASSW {
@@ -1333,7 +1525,16 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             textfield::ime_complete(hwnd);
         }
         match msg {
+            WM_GETOBJECT if lp.0 as i32 == UiaRootObjectId => {
+                return UiaReturnRawElementProvider(
+                    hwnd,
+                    wp,
+                    lp,
+                    &panel_uia::node(panel_uia::Window::Feedback, None),
+                );
+            }
             WM_DESTROY => {
+                let _ = UiaReturnRawElementProvider(hwnd, WPARAM(0), LPARAM(0), None);
                 FEEDBACK.with(|f| {
                     if let Ok(mut f) = f.try_borrow_mut() {
                         f.take();
@@ -1382,8 +1583,11 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             }
             _ => {}
         }
-        with_feedback(|f| f.handle(msg, wp, lp))
-            .flatten()
-            .unwrap_or_else(|| DefWindowProcW(hwnd, msg, wp, lp))
+        let before = panel_uia::watch(panel_uia::Window::Feedback);
+        let handled = with_feedback(|f| f.handle(msg, wp, lp)).flatten();
+        if handled.is_some() {
+            panel_uia::raise(panel_uia::Window::Feedback, before);
+        }
+        handled.unwrap_or_else(|| DefWindowProcW(hwnd, msg, wp, lp))
     }
 }

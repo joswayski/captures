@@ -14,12 +14,14 @@ use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
 use windows::Win32::Graphics::Direct2D::*;
 use windows::Win32::Graphics::DirectComposition::*;
 use windows::Win32::Graphics::Gdi::ValidateRect;
+use windows::Win32::UI::Accessibility::{UiaReturnRawElementProvider, UiaRootObjectId};
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
 
 use crate::gfx::{self, Gfx, Style, rect};
+use crate::panel_uia::{self, Act, Item, Role};
 use crate::tokens::Tokens;
 use crate::{Options, appearance};
 
@@ -64,9 +66,26 @@ pub struct Setup {
     pressed: bool,
     focused: bool,
     tracking: bool,
-    /// The primary button's rect from the last paint, for hit tests.
+    /// Part rects from the last paint, for hit tests and UI Automation.
+    rects: Rects,
+}
+
+/// Where the last paint put each part, in client DIPs.
+#[derive(Clone, Copy)]
+pub struct Rects {
+    title: D2D_RECT_F,
+    lede: Option<D2D_RECT_F>,
+    row: D2D_RECT_F,
+    error: Option<D2D_RECT_F>,
     button: D2D_RECT_F,
 }
+
+const EMPTY: D2D_RECT_F = D2D_RECT_F {
+    left: 0.,
+    top: 0.,
+    right: 0.,
+    bottom: 0.,
+};
 
 impl Setup {
     fn new(hwnd: HWND, options: &Options, g: Gfx, t: Tokens) -> Self {
@@ -87,7 +106,13 @@ impl Setup {
             pressed: false,
             focused: false,
             tracking: false,
-            button: rect(0., 0., 0., 0.),
+            rects: Rects {
+                title: EMPTY,
+                lede: None,
+                row: EMPTY,
+                error: None,
+                button: EMPTY,
+            },
         }
     }
 
@@ -182,18 +207,18 @@ impl Setup {
             px.0 as f32 / self.size.0.max(1.),
             px.1 as f32 / self.size.1.max(1.),
         );
-        let mut button = self.button;
+        let mut rects = self.rects;
         gfx::draw_surface(&surface, px, scale, 0., |dc| {
-            button = self.paint(dc)?;
+            rects = self.paint(dc)?;
             Ok(())
         })?;
-        self.button = button;
+        self.rects = rects;
         unsafe { self.g.dcomp.as_ref().ok_or_else(Error::empty)?.Commit() }
     }
 
-    /// Paint the whole window at the current size and return the primary
-    /// button's rect.
-    pub fn paint(&self, dc: &ID2D1DeviceContext) -> Result<D2D_RECT_F> {
+    /// Paint the whole window at the current size and return where each
+    /// part went.
+    pub fn paint(&self, dc: &ID2D1DeviceContext) -> Result<Rects> {
         let (g, t) = (&self.g, &self.t);
         let c = |name: &str| t.color(name);
         let n = |name: &str| t.n(name);
@@ -314,10 +339,13 @@ impl Setup {
         gfx::text(dc, &eyebrow, left, y, c("text-subtle"))?;
         y += eyebrow.height + copy_gap;
         gfx::text(dc, &title, left, y, c("text"))?;
+        let title_rect = rect(left, y, left + title.width, y + title.height);
         y += title.height;
+        let mut lede_rect = None;
         if let Some(lede) = &lede {
             y += copy_gap;
             gfx::text(dc, lede, left, y, c("text-subtle"))?;
+            lede_rect = Some(rect(left, y, left + lede.width, y + lede.height));
             y += lede.height;
         }
         y += gap;
@@ -376,8 +404,10 @@ impl Setup {
         }
         y += card_height + panel_gap;
 
+        let mut error_rect = None;
         if let Some(error) = &error {
             let r = rect(left, y, left + inner, y + error_height);
+            error_rect = Some(r);
             gfx::fill_round(dc, r, n("r-md"), c("danger-surface"))?;
             gfx::border(dc, r, n("r-md"), 1., c("danger-border"))?;
             gfx::text(
@@ -417,11 +447,58 @@ impl Setup {
             y + (button_height - label.height) / 2.,
             t.color_alpha("solid-ink", alpha),
         )?;
-        Ok(button)
+        Ok(Rects {
+            title: title_rect,
+            lede: lede_rect,
+            row: card,
+            error: error_rect,
+            button,
+        })
+    }
+
+    /// The parts in shipping's DOM order: `<h1>`, the lede, the
+    /// `aria-live="polite"` permission row, the `role="alert"` error and the
+    /// primary button.
+    fn uia_items(&self) -> Vec<Item> {
+        let copy = onboarding::copy();
+        let presentation = self.presentation.as_ref();
+        let r = self.rects;
+        let mut items = vec![Item::new(
+            0,
+            Role::Heading(1),
+            presentation.map_or(copy.title, |p| p.title),
+            r.title,
+        )];
+        if let Some(lede) = r.lede {
+            items.push(Item::new(1, Role::Text, copy.lede, lede));
+        }
+        let description = presentation.map_or(copy.checking, |p| p.screen_description);
+        let row = match presentation.and_then(|p| p.screen_status) {
+            Some(status) => format!("{}: {}. {description}", copy.screen_title, status.label),
+            None => format!("{}. {description}", copy.screen_title),
+        };
+        items.push(Item::new(2, Role::Status, row, r.row));
+        if let (Some(error), Some(rect)) = (&self.error, r.error) {
+            items.push(Item::new(3, Role::Alert, error.as_str(), rect));
+        }
+        let mut button = Item::new(
+            4,
+            Role::Button,
+            if self.finishing {
+                copy.finishing
+            } else {
+                presentation.map_or(copy.start, |p| p.primary_label)
+            },
+            r.button,
+        );
+        button.enabled = self.enabled();
+        button.focused = self.focused;
+        items.push(button);
+        items
     }
 
     fn hit(&self, x: f32, y: f32) -> bool {
-        let b = self.button;
+        let b = self.rects.button;
         x >= b.left && x < b.right && y >= b.top && y < b.bottom
     }
 
@@ -523,6 +600,39 @@ impl Setup {
     }
 }
 
+/// Setup's parts for UI Automation, while the window is open.
+pub fn uia_snapshot() -> Option<panel_uia::Snapshot> {
+    with_setup(|s| panel_uia::Snapshot {
+        hwnd: s.hwnd,
+        scale: s.scale,
+        size: s.size,
+        name: app_windows::SETUP.title,
+        focusable: true,
+        items: s.uia_items(),
+    })
+}
+
+/// The button is setup's only control: Invoke presses it, Focus focuses it.
+pub fn uia_act(key: u32, act: Act) -> Option<()> {
+    let hwnd = with_setup(|s| {
+        if key == 4 {
+            match act {
+                Act::Invoke => s.activate(),
+                Act::Focus => s.focused = true,
+                _ => {}
+            }
+        }
+        let _ = s.render();
+        s.hwnd
+    })?;
+    if matches!(act, Act::Focus) {
+        unsafe {
+            let _ = SetFocus(Some(hwnd));
+        }
+    }
+    Some(())
+}
+
 pub fn register(instance: HINSTANCE) -> Result<()> {
     unsafe {
         RegisterClassW(&WNDCLASSW {
@@ -615,7 +725,16 @@ pub fn render_offscreen(options: &Options, g: Gfx, t: Tokens, size: (f32, f32)) 
 extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     unsafe {
         match msg {
+            WM_GETOBJECT if lp.0 as i32 == UiaRootObjectId => {
+                return UiaReturnRawElementProvider(
+                    hwnd,
+                    wp,
+                    lp,
+                    &panel_uia::node(panel_uia::Window::Setup, None),
+                );
+            }
             WM_DESTROY => {
+                let _ = UiaReturnRawElementProvider(hwnd, WPARAM(0), LPARAM(0), None);
                 SETUP.with(|s| {
                     if let Ok(mut s) = s.try_borrow_mut() {
                         s.take();
@@ -653,7 +772,12 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             }
             _ => {}
         }
-        match with_setup(|s| s.handle(msg, wp, lp)).flatten() {
+        let before = panel_uia::watch(panel_uia::Window::Setup);
+        let handled = with_setup(|s| s.handle(msg, wp, lp)).flatten();
+        if handled == Some(false) {
+            panel_uia::raise(panel_uia::Window::Setup, before);
+        }
+        match handled {
             Some(true) => {
                 let _ = DestroyWindow(hwnd);
                 crate::live::setup_finished();

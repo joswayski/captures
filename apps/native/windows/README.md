@@ -123,8 +123,7 @@ the shared `captures-feedback` client on a worker; other launches are a fixture
 whose Send stays off. Tab moves through the categories, fields and Send.
 `--scene feedback [--select typed|live|sent|error|idea]` renders it offscreen
 (compared with the Tauri harness; Wine's DirectWrite stubs caret hit-testing,
-so caret placement needs a real PC). Not ported: UI Automation for the form,
-the textarea resize grip, line-based Home/End and the native hosts' optional
+so caret placement needs a real PC). Not ported: the textarea resize grip, line-based Home/End and the native hosts' optional
 crash-diagnostics card.
 
 Record (`recorder.rs`) switches the bar to Record ("Start recording"; its
@@ -209,7 +208,18 @@ while the icon has no rect and then falling back above the taskbar without a
 caret. Close or a tray left-click hides it early. `--scene capture --tool
 startup-notice [--select fallback|hover]` renders it offscreen (compared with
 the Tauri harness; not yet physically checked). Not ported: setup's calm
-pulse, UI Automation for setup and the notice, and the notice's arrive motion. Files forwarded by path are not opened. A physical Windows 11 check (4K, 150%) passed quiet launch, the
+pulse and the notice's arrive motion.
+
+Setup, Send Feedback and the launch notice share one UI Automation provider
+(`src/panel_uia.rs`) built from each window's parts in shipping's DOM order and
+roles: headings, the setup row as a polite status, the feedback categories as
+radio buttons in a "Feedback category" group (Selection), the message and
+contact as Edits (Value, placeholder and hint as help text), Send, Start
+capturing and Close as buttons (Invoke), and sent/error notes as status/alert
+lines. Focus, selection, value, enabled and name changes and new status or
+alert lines are raised as events, and the notice announces itself when it
+appears. Its event diffing is unit-tested; nothing has been checked with
+Narrator yet. Files forwarded by path are not opened. A physical Windows 11 check (4K, 150%) passed quiet launch, the
 menu and its disabled rows, left-click, residency after closing windows,
 relaunch forwarding and Quit (before shortcuts were registered). Wine
 cannot render Preferences (no DirectComposition) or open the tray menu.

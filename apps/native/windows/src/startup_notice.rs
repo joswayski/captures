@@ -15,12 +15,14 @@ use windows::Win32::Graphics::DirectComposition::*;
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromPoint, ValidateRect,
 };
+use windows::Win32::UI::Accessibility::{UiaReturnRawElementProvider, UiaRootObjectId};
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent};
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
 
 use crate::gfx::{self, Gfx, rect};
+use crate::panel_uia;
 use crate::tokens::Tokens;
 
 const CLASS: PCWSTR = w!("CapturesStartupNotice");
@@ -67,7 +69,54 @@ pub fn show(t: Tokens, keys: Vec<String>, visible_for: Duration, tray: TrayRect)
     hide();
     if let Err(error) = open(t, keys, visible_for, tray) {
         eprintln!("failed to show Captures launch notice: {error}");
+        return;
     }
+    // `role="status"`: announce the new notice to a listening reader.
+    let before = panel_uia::watch(panel_uia::Window::Notice).map(|_| Vec::new());
+    panel_uia::raise(panel_uia::Window::Notice, before);
+}
+
+/// The notice's parts for UI Automation: the status card and Close.
+pub fn uia_snapshot() -> Option<panel_uia::Snapshot> {
+    with_notice(|n| {
+        let card = n.placement.card_rect();
+        let card = rect(
+            card.x as f32,
+            card.y as f32,
+            (card.x + card.width) as f32,
+            (card.y + card.height) as f32,
+        );
+        let hint = if n.keys.is_empty() {
+            "Open History from the tray menu".to_string()
+        } else {
+            format!("{} {}", tray_notice::STARTUP_NOTICE_HINT, n.keys.join(" "))
+        };
+        let status = panel_uia::Item::new(
+            0,
+            panel_uia::Role::Status,
+            format!("{}. {hint}", tray_notice::STARTUP_NOTICE_TITLE),
+            card,
+        );
+        let mut close = panel_uia::Item::new(1, panel_uia::Role::Button, "Close", n.close);
+        close.parent = Some(0);
+        panel_uia::Snapshot {
+            hwnd: n.hwnd,
+            scale: n.scale,
+            size: (f32::INFINITY, f32::INFINITY),
+            name: tray_notice::STARTUP_NOTICE_WINDOW_TITLE,
+            focusable: false,
+            items: vec![status, close],
+        }
+    })
+}
+
+/// Close is the notice's only action.
+pub fn uia_act(key: u32, act: panel_uia::Act) -> Option<()> {
+    with_notice(|_| ())?;
+    if key == 1 && matches!(act, panel_uia::Act::Invoke) {
+        hide();
+    }
+    Some(())
 }
 
 /// Hide a visible notice. True when one was up (a tray left-click then only
@@ -422,6 +471,16 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             }
             WM_TIMER if wp.0 == HIDE_TIMER => {
                 hide();
+                LRESULT(0)
+            }
+            WM_GETOBJECT if lp.0 as i32 == UiaRootObjectId => UiaReturnRawElementProvider(
+                hwnd,
+                wp,
+                lp,
+                &panel_uia::node(panel_uia::Window::Notice, None),
+            ),
+            WM_DESTROY => {
+                let _ = UiaReturnRawElementProvider(hwnd, WPARAM(0), LPARAM(0), None);
                 LRESULT(0)
             }
             WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),

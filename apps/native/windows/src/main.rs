@@ -36,6 +36,8 @@ mod keys;
 #[cfg(windows)]
 mod live;
 #[cfg(windows)]
+mod panel_uia;
+#[cfg(windows)]
 mod previews;
 #[cfg(windows)]
 mod recorder;
