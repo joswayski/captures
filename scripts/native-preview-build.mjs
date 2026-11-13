@@ -75,6 +75,11 @@ export function nativeHostBuild(target) {
 export const SIDE_BY_SIDE = {
   productName: "Captures Native Test",
   identifier: "io.github.joswayski.captures.nativetest",
+  // NSIS closes running copies of the main binary by process name, so the
+  // test app must not be `captures.exe`. The Preview updater only installs
+  // over `captures(.exe)`, so its Update now refuses instead of replacing the
+  // installed Captures.
+  mainBinaryName: "captures-native-test",
 };
 
 export function bundleConfiguration(target, version, root = ROOT, sideBySide = false) {
@@ -92,7 +97,7 @@ export function bundleConfiguration(target, version, root = ROOT, sideBySide = f
     },
   };
   if (sideBySide) {
-    Object.assign(configuration, SIDE_BY_SIDE, { mainBinaryName: "captures" });
+    Object.assign(configuration, SIDE_BY_SIDE);
     configuration.bundle.fileAssociations = [];
   }
   if (TARGETS[target].renderer === "gtk") {
@@ -145,11 +150,9 @@ export function build(target, version, unsigned = false, sideBySide = false) {
     ],
     { env },
   );
-  const helper = join(
-    ROOT,
-    "apps/desktop/src-tauri/binaries",
-    `native_preview_update_helper-${target}${exe}`,
-  );
+  const binaries = join(ROOT, "apps/desktop/src-tauri/binaries");
+  mkdirSync(binaries, { recursive: true });
+  const helper = join(binaries, `native_preview_update_helper-${target}${exe}`);
   copyFileSync(join(release, `native_preview_update_helper${exe}`), helper);
   let nativeBinary;
   if (specification.renderer === "appkit") {
@@ -182,7 +185,8 @@ export function build(target, version, unsigned = false, sideBySide = false) {
   );
   if (info.renderer !== specification.renderer || info.version !== version)
     throw new Error("Native Preview binary identity/version mismatch");
-  copyFileSync(nativeBinary, join(release, `captures${exe}`));
+  const mainBinary = sideBySide ? SIDE_BY_SIDE.mainBinaryName : "captures";
+  copyFileSync(nativeBinary, join(release, `${mainBinary}${exe}`));
   const config = join(ROOT, "target/native-preview-bundle.json");
   const configuration = bundleConfiguration(target, version, ROOT, sideBySide);
   if (unsigned || sideBySide) configuration.bundle.createUpdaterArtifacts = false;

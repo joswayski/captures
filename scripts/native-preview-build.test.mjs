@@ -40,7 +40,7 @@ test("side-by-side test installers never share the installed app's identity or a
   const test = bundleConfiguration("x86_64-pc-windows-msvc", "2026.10.1101", undefined, true);
   assert.equal(test.productName, "Captures Native Test");
   assert.equal(test.identifier, "io.github.joswayski.captures.nativetest");
-  assert.equal(test.mainBinaryName, "captures");
+  assert.equal(test.mainBinaryName, "captures-native-test");
   assert.deepEqual(test.bundle.fileAssociations, []);
 });
 

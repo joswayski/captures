@@ -255,11 +255,12 @@ with the sidecars and `native_preview_update_helper`; see
 Add `--side-by-side` for a test installer that installs next to an existing
 Captures: it is named "Captures Native Test" with identifier
 `io.github.joswayski.captures.nativetest` (its own install folder, uninstall
-entry and shortcuts), registers no file associations and makes no updater
-artifacts. The app inside is unchanged, so its first launch still imports the
-installed Captures profile (quit Captures first), may re-point the shared
-launch-at-login entry, and Update now installs the real Preview; back up the
-login entry and do not press Update now when testing beside a real install.
+entry and shortcuts), runs as `captures-native-test.exe` so the installer never
+closes the real `captures.exe`, registers no file associations and makes no
+updater artifacts. Its Update now refuses, because the Preview updater only
+replaces `captures.exe`. Its first launch still imports the installed Captures
+profile (quit Captures first) and may re-point the shared launch-at-login
+entry; back that entry up when testing beside a real install.
 The installed executable is `captures.exe`, which answers
 `--preview-build-info` with renderer `win32`. Such a build starts `--live`
 without flags on the imported Preview profile (unless `--profile` or explicit
