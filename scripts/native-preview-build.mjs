@@ -69,7 +69,15 @@ export function nativeHostBuild(target) {
   };
 }
 
-export function bundleConfiguration(target, version, root = ROOT) {
+// `--side-by-side` test installers install next to an existing Captures: their
+// own product name, identifier (install folder, uninstall entry, shortcuts) and
+// no file associations, which would re-point the installed app's ProgIDs.
+export const SIDE_BY_SIDE = {
+  productName: "Captures Native Test",
+  identifier: "io.github.joswayski.captures.nativetest",
+};
+
+export function bundleConfiguration(target, version, root = ROOT, sideBySide = false) {
   updaterArtifactName(target, version);
   const recording = JSON.parse(
     readFileSync(join(root, "apps/desktop/src-tauri/tauri.recording.conf.json"), "utf8"),
@@ -83,6 +91,10 @@ export function bundleConfiguration(target, version, root = ROOT) {
       windows: { webviewInstallMode: { type: "skip" } },
     },
   };
+  if (sideBySide) {
+    Object.assign(configuration, SIDE_BY_SIDE, { mainBinaryName: "captures" });
+    configuration.bundle.fileAssociations = [];
+  }
   if (TARGETS[target].renderer === "gtk") {
     // The CLI always adds its WebKitGTK/GTK 3 dependencies; the host needs GTK 4.
     configuration.bundle.linux = { deb: { depends: ["libgtk-4-1"] } };
@@ -100,7 +112,7 @@ function run(command, arguments_, options = {}) {
   return execFileSync(command, arguments_, { cwd: ROOT, stdio: "inherit", ...options });
 }
 
-export function build(target, version, unsigned = false) {
+export function build(target, version, unsigned = false, sideBySide = false) {
   const specification = TARGETS[target];
   updaterArtifactName(target, version);
   const shipping = JSON.parse(
@@ -172,8 +184,8 @@ export function build(target, version, unsigned = false) {
     throw new Error("Native Preview binary identity/version mismatch");
   copyFileSync(nativeBinary, join(release, `captures${exe}`));
   const config = join(ROOT, "target/native-preview-bundle.json");
-  const configuration = bundleConfiguration(target, version);
-  if (unsigned) configuration.bundle.createUpdaterArtifacts = false;
+  const configuration = bundleConfiguration(target, version, ROOT, sideBySide);
+  if (unsigned || sideBySide) configuration.bundle.createUpdaterArtifacts = false;
   writeFileSync(config, `${JSON.stringify(configuration, null, 2)}\n`);
   // The existing CLI is ONLY a build-time installer bundler. No Tauri app build,
   // frontend assets, application shim or WebView runtime enters the executable.
@@ -275,8 +287,12 @@ export function manifest(directory, version, repository, tag, notes = "") {
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
   const [operation, target, version, output] = process.argv.slice(2);
-  if (operation === "build") build(target, version, output === "--unsigned");
-  else if (operation === "collect") collect(target, version, resolve(output));
+  if (operation === "build") {
+    const flags = process.argv.slice(5);
+    const unknown = flags.filter((flag) => !["--unsigned", "--side-by-side"].includes(flag));
+    if (unknown.length) throw new Error(`Unknown build flags: ${unknown.join(" ")}`);
+    build(target, version, flags.includes("--unsigned"), flags.includes("--side-by-side"));
+  } else if (operation === "collect") collect(target, version, resolve(output));
   else if (operation === "manifest") {
     const directory = resolve(target);
     writeFileSync(
@@ -285,6 +301,6 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
     );
   } else
     throw new Error(
-      "usage: native-preview-build.mjs build|collect TARGET VERSION [OUTPUT] | manifest DIRECTORY VERSION",
+      "usage: native-preview-build.mjs build TARGET VERSION [--unsigned] [--side-by-side] | collect TARGET VERSION OUTPUT | manifest DIRECTORY VERSION",
     );
 }

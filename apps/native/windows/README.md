@@ -252,6 +252,14 @@ as `ffmpeg.exe` and `ffprobe.exe`. No tools are downloaded by the host.
 `target/native-win32-preview`, as the unpublished, experimental NSIS installer
 with the sidecars and `native_preview_update_helper`; see
 [releases.md](../../../docs/releases.md#native-preview-packaging-and-recovery).
+Add `--side-by-side` for a test installer that installs next to an existing
+Captures: it is named "Captures Native Test" with identifier
+`io.github.joswayski.captures.nativetest` (its own install folder, uninstall
+entry and shortcuts), registers no file associations and makes no updater
+artifacts. The app inside is unchanged, so its first launch still imports the
+installed Captures profile (quit Captures first), may re-point the shared
+launch-at-login entry, and Update now installs the real Preview; back up the
+login entry and do not press Update now when testing beside a real install.
 The installed executable is `captures.exe`, which answers
 `--preview-build-info` with renderer `win32`. Such a build starts `--live`
 without flags on the imported Preview profile (unless `--profile` or explicit

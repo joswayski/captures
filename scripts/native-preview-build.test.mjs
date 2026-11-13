@@ -32,6 +32,16 @@ test("native packages preserve media and installed identity without a frontend o
   assert.deepEqual(linux.bundle.linux, { deb: { depends: ["libgtk-4-1"] } });
   assert.equal(windows.bundle.linux, undefined);
   assert.throws(() => bundleConfiguration("x86_64-pc-windows-msvc", "../other"), /Invalid/u);
+  assert.equal(windows.identifier, undefined);
+  assert.equal(windows.bundle.fileAssociations, undefined);
+});
+
+test("side-by-side test installers never share the installed app's identity or associations", () => {
+  const test = bundleConfiguration("x86_64-pc-windows-msvc", "2026.10.1101", undefined, true);
+  assert.equal(test.productName, "Captures Native Test");
+  assert.equal(test.identifier, "io.github.joswayski.captures.nativetest");
+  assert.equal(test.mainBinaryName, "captures");
+  assert.deepEqual(test.bundle.fileAssociations, []);
 });
 
 test("Windows and Linux package the Win32 and GTK hosts, never the wgpu workbench", () => {
