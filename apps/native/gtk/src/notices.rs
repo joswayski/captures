@@ -143,7 +143,13 @@ pub fn recording_hidden(
             }
         });
     }
-    #[cfg(not(feature = "x11"))]
+    #[cfg(feature = "layer-shell")]
+    crate::previews::layer_shell::recording_hidden(
+        &window,
+        hud_window.height(),
+        window.preferred_size().1.height(),
+    );
+    #[cfg(not(any(feature = "x11", feature = "layer-shell")))]
     let _ = hud_window;
     let weak = window.downgrade();
     glib::timeout_add_local_once(Duration::from_millis(6200), move || {

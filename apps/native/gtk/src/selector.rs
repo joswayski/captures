@@ -19,7 +19,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use captures_app::capture_flow::{self, CaptureFlow, PortalCapture};
+use captures_app::capture_flow::{self, CaptureFlow};
 use captures_app::capture_menu::{self, GuidanceTarget, MenuMode};
 use captures_app::region::RegionSession;
 use captures_app::selection::{self, Bounds, DragMode, DragOptions, Point, Rect};
@@ -110,6 +110,9 @@ struct Overlay {
     bounds: Cell<(f64, f64)>,
     done: Cell<bool>,
     portal: bool,
+    /// Record is offered: always on X11, with a ScreenCast monitor source
+    /// on Wayland.
+    recordable: bool,
     hidden: Vec<gtk::Window>,
     settings: captures_settings::AppSettings,
     started: Instant,
@@ -211,11 +214,6 @@ impl Host {
         if self.restore_recording_controls() {
             return;
         }
-        if wayland(self) {
-            return self.capture_failed(
-                "GTK recording currently requires X11. Wayland recording is not connected yet.",
-            );
-        }
         let overlay = self
             .selector
             .borrow()
@@ -229,12 +227,20 @@ impl Host {
             return;
         }
         let settings = captures_settings::load(&self.settings_file).unwrap_or_default();
-        self.select_on(
-            Kind::Menu,
-            None,
-            target,
-            Some((MenuMode::Recording, settings.recording)),
-        );
+        let recording = Some((MenuMode::Recording, settings.recording));
+        if !wayland(self) {
+            return self.select_on(Kind::Menu, None, target, recording);
+        }
+        // Refuse before any window leaves the screen or the portal is asked
+        // for a still.
+        let host = self.clone();
+        glib::spawn_future_local(async move {
+            if crate::capture::screencast_available().await {
+                host.select_on(Kind::Menu, None, target, recording);
+            } else {
+                host.capture_failed(crate::capture::SCREENCAST_UNAVAILABLE);
+            }
+        });
     }
 
     /// `display`: the display New Capture switches to.
@@ -259,7 +265,7 @@ impl Host {
         };
         let portal = wayland(self);
         let flow = if portal {
-            PortalCapture::begin().map(Flow::Portal)
+            crate::capture::begin_portal(self).map(Flow::Portal)
         } else if let Some(recorder) = self.recorder.borrow().as_ref() {
             recorder
                 .flow
@@ -302,16 +308,27 @@ impl Host {
                 glib::timeout_future(SETTLE).await;
             }
             let source = gio::spawn_blocking(move || {
+                // New Capture on Wayland records through the ScreenCast
+                // portal: Record needs its monitor source. Recording
+                // requests refuse before asking for a screenshot.
+                let recordable = !portal
+                    || (kind == Kind::Menu
+                        && crate::capture::screencast_sources()
+                            .is_some_and(|types| types & 1 != 0));
+                if !recordable && mode == MenuMode::Recording {
+                    return Err(crate::capture::SCREENCAST_UNAVAILABLE.to_owned());
+                }
                 prepare(kind, display, generation, portal, freeze, include_cursor)
+                    .map(|source| source.map(|source| (source, recordable)))
             })
             .await
             .unwrap_or_else(|_| Err("the capture worker stopped".into()));
             let Some(host) = host.upgrade() else { return };
             match source {
-                Ok(Some(source)) if capture_flow::is_current(generation) => {
+                Ok(Some((source, recordable))) if capture_flow::is_current(generation) => {
                     overlay(
                         &host, kind, source, portal, hidden, settings, started, generation, target,
-                        mode,
+                        mode, recordable,
                     );
                 }
                 result => {
@@ -423,6 +440,7 @@ fn overlay(
     generation: u64,
     target: MenuTarget,
     mode: MenuMode,
+    recordable: bool,
 ) {
     let (texture, display) = match &source {
         Source::Region(session) => (
@@ -580,6 +598,7 @@ fn overlay(
         bounds: Cell::new(display.as_ref().map_or((1., 1.), |d| d.overlay_size())),
         done: Cell::new(false),
         portal,
+        recordable,
         hidden,
         settings,
         started,
@@ -1113,7 +1132,7 @@ impl Overlay {
         }
         bar.set_window_available(self.portal || !self.windows().is_empty());
         bar.set_recording_available(
-            !self.portal
+            self.recordable
                 && self
                     .host
                     .upgrade()
@@ -1284,6 +1303,7 @@ impl Overlay {
                         generation,
                         old.target.get(),
                         MenuMode::Screenshot,
+                        old.recordable,
                     );
                 }
                 result => {
@@ -1353,6 +1373,10 @@ impl Overlay {
                 None => return,
             },
             (MenuTarget::Display, _) => Choice::Display,
+            // Recording a Wayland window: the ScreenCast picker chooses it.
+            (MenuTarget::Window, true) if self.capture_mode.get() == MenuMode::Recording => {
+                Choice::Window(Target::Display)
+            }
             // The portal's own window picker, or X11 without a window list.
             (MenuTarget::Window, _) if self.portal || !self.has_window_session() => {
                 let Some(host) = self.host.upgrade() else {
@@ -1396,6 +1420,9 @@ impl Overlay {
         let Some(host) = self.host.upgrade() else {
             return;
         };
+        if self.portal {
+            return self.record_portal(&host, choice);
+        }
         let display = match self.source.borrow().as_ref() {
             Some(Source::Menu { region, .. }) => region.display().clone(),
             _ => return self.cancel(&host),
@@ -1434,6 +1461,49 @@ impl Overlay {
         if let Some(Flow::X11(flow)) = flow {
             host.record_selected(flow, display, target, settings, self.hidden.clone());
         }
+    }
+
+    /// Wayland: the ScreenCast portal records Full screen and Window (its
+    /// picker chooses the screen or window when the take starts, as shipping
+    /// through XWayland). Region keeps the rectangle drawn over this still,
+    /// in still pixels, for the granted stream's first frame. Every Captures
+    /// window stays unmapped until the take ends.
+    fn record_portal(self: &Rc<Self>, host: &Rc<Host>, choice: Choice) {
+        use captures_recording::{CaptureRect, RecordingTarget};
+        let (target, region) = match choice {
+            Choice::Region(rect) => {
+                let Some(texture) = &self.texture else {
+                    return self.cancel(host);
+                };
+                let (width, height) = (texture.width() as u32, texture.height() as u32);
+                let scale = f64::from(width) / self.bounds.get().0.max(1.);
+                let crop = rect.to_physical(scale, width, height);
+                if crop.width == 0 || crop.height == 0 {
+                    return self.cancel(host);
+                }
+                let rect = CaptureRect {
+                    x: crop.x as i32,
+                    y: crop.y as i32,
+                    width: crop.width,
+                    height: crop.height,
+                };
+                (
+                    RecordingTarget::PortalRegion { selection: None },
+                    Some((rect, (width, height))),
+                )
+            }
+            Choice::Window(_) => (RecordingTarget::PortalWindow, None),
+            Choice::Display => (RecordingTarget::PortalDisplay, None),
+        };
+        let mut settings = self.settings.clone();
+        if let Some(bar) = &self.bar {
+            settings.recording = bar.recording.settings.borrow().clone();
+        }
+        self.close();
+        // The screenshot owner ends here; the take begins its own.
+        drop(host.capture.borrow_mut().take());
+        host.selector.borrow_mut().take();
+        host.record_portal(target, region, settings, self.hidden.clone());
     }
 
     fn hover(&self, x: f64, y: f64) {

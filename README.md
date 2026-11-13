@@ -215,7 +215,12 @@ On X11, Record mode selects Region, Window or Full screen with per-capture FPS,
 resolution, cursor/click, desktop audio and microphone options. Recording tray
 actions and shortcuts open the same controls. The HUD supports countdown,
 Pause/Resume, Stop/save, Restart/Delete confirmation, microphone mute and Hide;
-New Capture restores hidden controls. GTK Wayland recording is not connected yet.
+New Capture restores hidden controls. On Wayland the same Record mode, tray rows
+and shortcuts record through the desktop's ScreenCast portal: its picker chooses
+the screen or window for each segment, Region applies the area drawn over the
+portal still, Captures' windows stay hidden for the take, cursor and click
+options are unavailable, and desktops without the ScreenCast portal get an
+explanation instead of a recording.
 Physical Linux desktop, GPU, accessibility and mixed-DPI acceptance remain open.
 
 The Win32 workbench can open recordings from History, preview video and GIFs,

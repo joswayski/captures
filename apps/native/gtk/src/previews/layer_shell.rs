@@ -163,3 +163,47 @@ pub fn cover(window: &impl IsA<gtk::Window>) -> bool {
     }
     true
 }
+
+/// Shipping's HUD bottom gap: the controls sit this far above the bottom of
+/// the usable area, centred.
+pub const RECORDING_CONTROLS_GAP: i32 = 24;
+
+/// The recording controls as a Top layer surface anchored bottom centre,
+/// [`RECORDING_CONTROLS_GAP`] above the compositor's usable area, above
+/// windows on every workspace, with the keyboard only when clicked. Must run
+/// before the window is realized; returns whether it did.
+pub fn recording_controls(window: &impl IsA<gtk::Window>) -> bool {
+    let window = window.as_ref();
+    let wayland = WidgetExt::display(window).type_().name() == "GdkWaylandDisplay";
+    if !wayland || !gtk4_layer_shell::is_supported() {
+        return false;
+    }
+    window.init_layer_shell();
+    window.set_namespace(Some("captures-recording-controls"));
+    window.set_layer(Layer::Top);
+    window.set_keyboard_mode(KeyboardMode::OnDemand);
+    window.set_anchor(Edge::Bottom, true);
+    window.set_margin(Edge::Bottom, RECORDING_CONTROLS_GAP);
+    true
+}
+
+/// The hidden-controls notice as a click-through Overlay layer surface
+/// centred where the anchored controls were: `controls_height` and
+/// `height` are the two windows' heights. Never takes the keyboard.
+pub fn recording_hidden(window: &impl IsA<gtk::Window>, controls_height: i32, height: i32) -> bool {
+    let window = window.as_ref();
+    let wayland = WidgetExt::display(window).type_().name() == "GdkWaylandDisplay";
+    if !wayland || !gtk4_layer_shell::is_supported() {
+        return false;
+    }
+    window.init_layer_shell();
+    window.set_namespace(Some("captures-notice"));
+    window.set_layer(Layer::Overlay);
+    window.set_keyboard_mode(KeyboardMode::None);
+    window.set_anchor(Edge::Bottom, true);
+    window.set_margin(
+        Edge::Bottom,
+        (RECORDING_CONTROLS_GAP + (controls_height - height) / 2).max(0),
+    );
+    true
+}

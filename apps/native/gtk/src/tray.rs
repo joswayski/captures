@@ -111,15 +111,6 @@ const MENU: [Row; 15] = [
     Row::Item("quit", "Quit Captures", Action::Quit, None),
 ];
 
-/// The captures the GTK host can run so far.
-fn available(action: Action) -> bool {
-    !matches!(
-        action,
-        Action::RecordRegion | Action::RecordWindow | Action::RecordDisplay
-    ) || gtk::gdk::Display::default()
-        .is_some_and(|display| display.type_().name() == "GdkX11Display")
-}
-
 fn shortcut(settings: &captures_settings::AppSettings, shortcut: Shortcut) -> &str {
     match shortcut {
         Shortcut::NewCapture => &settings.new_capture_shortcut,
@@ -178,10 +169,12 @@ fn menu(settings: &captures_settings::AppSettings) -> Result<Menu, String> {
     let updates = crate::updates::enabled();
     for row in &MENU {
         let result = match *row {
-            Row::Item(id, label, action, keys) => menu.append(&MenuItem::with_id(
+            Row::Item(id, label, _, keys) => menu.append(&MenuItem::with_id(
                 id,
                 label,
-                available(action),
+                // Every row runs on X11 and Wayland; Wayland recording
+                // refuses at start where there is no ScreenCast portal.
+                true,
                 keys.and_then(|keys| accelerator(shortcut(settings, keys))),
             )),
             Row::Updates => menu.append(&MenuItem::with_id(

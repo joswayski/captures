@@ -1,6 +1,8 @@
 //! Live recording controls. New Capture transfers its X11 selection and
-//! capture guard here. Sessions and media never live on GTK's
-//! thread. The parent capture guard survives pauses, screenshots and hiding.
+//! capture guard here; on Wayland it hands over a ScreenCast portal target
+//! (and a Region drawn over its still). Sessions and media never live on
+//! GTK's thread. The parent capture guard survives pauses, screenshots and
+//! hiding.
 
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
@@ -10,8 +12,8 @@ use captures_app::capture_flow::{self, CaptureFlow};
 use captures_app::recording_hud::{self as hud, Control};
 use captures_capture::{DisplayDescriptor, XcapBackend};
 use captures_recording::{
-    AudioOptions, GifOptions, RecordingKind, RecordingOptions, RecordingSessionSnapshot,
-    RecordingState, RecordingTarget,
+    AudioOptions, CaptureRect, GifOptions, RecordingKind, RecordingOptions,
+    RecordingSessionSnapshot, RecordingState, RecordingTarget,
 };
 use captures_recording_platform::worker::{Command, Event, Worker};
 use gtk::prelude::*;
@@ -20,6 +22,8 @@ use gtk::{gdk, gio, glib};
 use crate::{Host, emit, widgets::Icon};
 
 const TITLE: &str = "Captures Recording Controls";
+/// The HUD note for a ScreenCast window take, whose stream omits it.
+const PORTAL_WINDOW_NOTE: &str = "Capture is limited to the portal-selected window";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Pending {
@@ -43,6 +47,9 @@ pub struct Controls {
     display: RefCell<Option<DisplayDescriptor>>,
     settings: captures_settings::AppSettings,
     target: Option<RecordingTarget>,
+    /// Wayland Region: the rectangle drawn over New Capture's still, in
+    /// that still's pixels, and the still's size.
+    portal_region: Option<(CaptureRect, (u32, u32))>,
     hidden: Vec<gtk::Window>,
     snapshot: RefCell<Option<RecordingSessionSnapshot>>,
     pending: Cell<Pending>,
@@ -72,24 +79,36 @@ impl Host {
         if self.restore_recording_controls() {
             return;
         }
-        if crate::capture::wayland(self) {
-            return self.capture_failed("The GTK recording development entry point currently requires X11. Wayland recording is not connected yet.");
-        }
         if self.capture.borrow().is_some() {
             return self.capture_failed("A capture is already in progress");
+        }
+        let settings = captures_settings::load(&self.settings_file).unwrap_or_default();
+        if crate::capture::wayland(self) {
+            let host = self.clone();
+            glib::spawn_future_local(async move {
+                if !crate::capture::screencast_available().await {
+                    return host.capture_failed(crate::capture::SCREENCAST_UNAVAILABLE);
+                }
+                // The portal's picker chooses the screen; nothing of
+                // Captures stays mapped for consent or the take.
+                let hidden: Vec<gtk::Window> = host
+                    .app
+                    .windows()
+                    .into_iter()
+                    .filter(|window| window.is_visible())
+                    .collect();
+                for window in &hidden {
+                    window.set_visible(false);
+                }
+                host.record_portal(RecordingTarget::PortalDisplay, None, settings, hidden);
+            });
+            return;
         }
         let flow = match CaptureFlow::begin(0) {
             Ok(flow) => flow,
             Err(error) => return self.capture_failed(&error),
         };
-        let controls = Controls::new(
-            self,
-            flow,
-            None,
-            None,
-            captures_settings::load(&self.settings_file).unwrap_or_default(),
-            Vec::new(),
-        );
+        let controls = Controls::new(self, flow, None, None, None, settings, Vec::new());
         *self.recorder.borrow_mut() = Some(controls.clone());
         controls.watch();
         glib::spawn_future_local(async move {
@@ -133,7 +152,51 @@ impl Host {
         settings: captures_settings::AppSettings,
         hidden: Vec<gtk::Window>,
     ) {
-        let controls = Controls::new(self, flow, Some(display), Some(target), settings, hidden);
+        let controls = Controls::new(
+            self,
+            flow,
+            Some(display),
+            Some(target),
+            None,
+            settings,
+            hidden,
+        );
+        *self.recorder.borrow_mut() = Some(controls.clone());
+        controls.watch();
+        glib::spawn_future_local(async move {
+            glib::timeout_future(crate::capture::SETTLE).await;
+            controls.send(Command::VerifyToolchain {
+                generation: controls.generation(),
+            });
+        });
+    }
+
+    /// Wayland: record a ScreenCast portal target. The portal asks for the
+    /// screen or window when each segment starts (after the countdown), as
+    /// shipping's portal recorder; no restore token is kept, so every
+    /// segment asks again. `hidden` (every Captures window) returns when the
+    /// take ends.
+    pub fn record_portal(
+        self: &Rc<Self>,
+        target: RecordingTarget,
+        region: Option<(CaptureRect, (u32, u32))>,
+        settings: captures_settings::AppSettings,
+        hidden: Vec<gtk::Window>,
+    ) {
+        let flow = match CaptureFlow::begin_portal(0) {
+            Ok(flow) => flow,
+            Err(error) => {
+                for window in &hidden {
+                    window.set_visible(true);
+                }
+                return self.capture_failed(&error);
+            }
+        };
+        emit(
+            "portal-recording",
+            serde_json::json!({"target": target, "region": region.map(|(rect, _)| rect)}),
+        );
+        let controls = Controls::new(self, flow, None, Some(target), region, settings, hidden);
         *self.recorder.borrow_mut() = Some(controls.clone());
         controls.watch();
         glib::spawn_future_local(async move {
@@ -181,6 +244,7 @@ impl Controls {
         flow: CaptureFlow,
         display: Option<DisplayDescriptor>,
         target: Option<RecordingTarget>,
+        portal_region: Option<(CaptureRect, (u32, u32))>,
         settings: captures_settings::AppSettings,
         hidden: Vec<gtk::Window>,
     ) -> Rc<Self> {
@@ -195,12 +259,18 @@ impl Controls {
         let outer = gtk::Box::new(gtk::Orientation::Vertical, 5);
         let card = gtk::Box::new(gtk::Orientation::Vertical, 2);
         card.add_css_class("recording-hud");
-        let copy = captures_app::capture_menu::visibility_note(
-            captures_app::capture_menu::MenuMode::Recording,
-            false,
-            false,
-        );
-        let privacy = gtk::Label::new(Some(&copy.text()));
+        // A portal window stream never contains the controls.
+        let copy = if target == Some(RecordingTarget::PortalWindow) {
+            PORTAL_WINDOW_NOTE.to_owned()
+        } else {
+            captures_app::capture_menu::visibility_note(
+                captures_app::capture_menu::MenuMode::Recording,
+                false,
+                false,
+            )
+            .text()
+        };
+        let privacy = gtk::Label::new(Some(&copy));
         privacy.add_css_class("recording-hud-privacy");
         card.append(&privacy);
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 16);
@@ -298,6 +368,7 @@ impl Controls {
             display: RefCell::new(display),
             settings,
             target,
+            portal_region,
             hidden,
             snapshot: RefCell::default(),
             pending: Cell::new(Pending::Prepare),
@@ -371,10 +442,14 @@ impl Controls {
             }
             glib::Propagation::Stop
         });
-        // Drag only the status/blank chrome, never a button or meter.
+        // Drag only the status/blank chrome, never a button or meter. A
+        // layer surface stays where the compositor anchors it.
+        let layered = controls.place();
         let drag = gtk::GestureClick::new();
         drag.set_button(gdk::BUTTON_PRIMARY);
-        status_column.add_controller(drag.clone());
+        if !layered {
+            status_column.add_controller(drag.clone());
+        }
         let window = controls.window.downgrade();
         drag.connect_pressed(move |gesture, _, x, y| {
             if let Some(window) = window.upgrade()
@@ -394,7 +469,6 @@ impl Controls {
                 }
             }
         });
-        controls.place();
         controls.refresh();
         controls
     }
@@ -644,11 +718,9 @@ impl Controls {
         match event {
             Event::ToolchainVerified { result, .. } => match result {
                 Ok(()) if self.current() => {
-                    let display = self
-                        .display
-                        .borrow()
-                        .clone()
-                        .expect("display before verification");
+                    // A portal target names no monitor; the portal picks it.
+                    let display = self.display.borrow().clone();
+                    let portal = self.target.as_ref().is_some_and(RecordingTarget::is_portal);
                     let settings = &self.settings.recording;
                     let options = RecordingOptions {
                         kind: RecordingKind::Video,
@@ -656,14 +728,21 @@ impl Controls {
                             .target
                             .clone()
                             .unwrap_or_else(|| RecordingTarget::Display {
-                                display_id: display.id.clone(),
+                                display_id: display
+                                    .as_ref()
+                                    .expect("display before verification")
+                                    .id
+                                    .clone(),
                             }),
                         frames_per_second: settings.video_fps,
                         max_resolution: settings.video_max_resolution,
                         countdown_seconds: settings.countdown_seconds,
-                        show_cursor: settings.show_cursor,
-                        highlight_clicks: settings.highlight_clicks,
-                        show_keystrokes: settings.show_keystrokes,
+                        // Wayland offers no cursor, click or keystroke
+                        // options (New Capture shows them Unavailable, and
+                        // shipping records no cursor there).
+                        show_cursor: settings.show_cursor && !portal,
+                        highlight_clicks: settings.highlight_clicks && !portal,
+                        show_keystrokes: settings.show_keystrokes && !portal,
                         audio: AudioOptions {
                             capture_system_audio: settings.capture_system_audio,
                             microphone_device_id: settings.microphone_device_id.clone(),
@@ -677,7 +756,7 @@ impl Controls {
                             generation: self.generation(),
                             options,
                             recovery_root: host.history_root.with_file_name("recording-recovery"),
-                            display: Some(display),
+                            display,
                         });
                     }
                 }
@@ -825,8 +904,32 @@ impl Controls {
                 }
                 Err(error) => self.terminal_error(error),
             },
-            Event::SelectRegion { reply, .. } => {
-                let _ = reply.send(None);
+            Event::SelectRegion { frame, reply, .. } => {
+                // The first granted frame of a Wayland Region take. The
+                // rectangle was drawn over New Capture's still: it applies
+                // only to a stream of the same size (one screen). Otherwise
+                // refuse rather than guess which part of the desktop it is.
+                let size = (frame.width(), frame.height());
+                let rect = self
+                    .portal_region
+                    .filter(|(_, still)| *still == size)
+                    .map(|(rect, _)| rect);
+                emit(
+                    "portal-region-frame",
+                    serde_json::json!({"frame": [size.0, size.1], "accepted": rect.is_some()}),
+                );
+                if rect.is_none() {
+                    let still = self.portal_region.map_or((0, 0), |(_, still)| still);
+                    if let Some(host) = self.host.upgrade() {
+                        host.capture_failed(&format!(
+                            "The shared screen ({} × {}) is not the desktop the region was \
+                             drawn on ({} × {}). Record Full screen, or share the same screen.",
+                            size.0, size.1, still.0, still.1
+                        ));
+                    }
+                    self.flow.borrow().cancel();
+                }
+                let _ = reply.send(rect);
             }
             Event::Microphones { .. } | Event::Retired => {}
         }
@@ -1048,7 +1151,14 @@ impl Controls {
         *self.notice.borrow_mut() = Some(window);
     }
 
-    fn place(&self) {
+    /// X11: bottom centre of the work area, kept off the taskbar. Wayland:
+    /// a layer surface anchored bottom centre where the compositor offers
+    /// wlr-layer-shell (true), else the compositor places the window.
+    fn place(&self) -> bool {
+        #[cfg(feature = "layer-shell")]
+        if crate::previews::layer_shell::recording_controls(&self.window) {
+            return true;
+        }
         #[cfg(feature = "x11")]
         if let Some(placer) =
             crate::previews::x11::Placer::new(&WidgetExt::display(&self.window)).map(Rc::new)
@@ -1073,6 +1183,7 @@ impl Controls {
                 }
             });
         }
+        false
     }
 
     fn end(&self) {

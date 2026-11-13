@@ -42,6 +42,52 @@ impl Flow {
     }
 }
 
+/// Shown instead of recording where the desktop portal has no ScreenCast
+/// monitor source (no xdg-desktop-portal, or a backend without ScreenCast).
+pub const SCREENCAST_UNAVAILABLE: &str = "Screen recording on Wayland needs the desktop's \
+    ScreenCast portal (xdg-desktop-portal with a ScreenCast backend), which this session \
+    does not provide.";
+
+/// The ScreenCast portal's `AvailableSourceTypes` (1 monitor, 2 window), or
+/// `None` when the portal or its ScreenCast interface is missing. Blocks on
+/// D-Bus: call it off the main thread.
+pub(crate) fn screencast_sources() -> Option<u32> {
+    let bus = gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE).ok()?;
+    let reply = bus
+        .call_sync(
+            Some("org.freedesktop.portal.Desktop"),
+            "/org/freedesktop/portal/desktop",
+            "org.freedesktop.DBus.Properties",
+            "Get",
+            Some(&("org.freedesktop.portal.ScreenCast", "AvailableSourceTypes").to_variant()),
+            Some(glib::VariantTy::new("(v)").expect("valid type")),
+            gio::DBusCallFlags::NONE,
+            5000,
+            gio::Cancellable::NONE,
+        )
+        .ok()?;
+    reply.child_value(0).as_variant()?.get::<u32>()
+}
+
+/// Whether the ScreenCast portal can share a monitor, asked off the main
+/// thread. Wayland recording checks it before hiding any window.
+pub(crate) async fn screencast_available() -> bool {
+    gio::spawn_blocking(|| screencast_sources().is_some_and(|types| types & 1 != 0))
+        .await
+        .unwrap_or(false)
+}
+
+/// A portal screenshot's ownership: a child of an accepted portal take
+/// (the HUD's Screenshot), or the whole capture gate otherwise.
+pub(crate) fn begin_portal(
+    host: &Host,
+) -> Result<captures_app::capture_flow::PortalCapture, String> {
+    match host.recorder.borrow().as_ref() {
+        Some(recorder) => recorder.flow.borrow().begin_recording_portal_screenshot(),
+        None => captures_app::capture_flow::PortalCapture::begin(),
+    }
+}
+
 pub fn wayland(host: &Host) -> bool {
     gdk::Display::default().is_some_and(|display| display.type_().name() == "GdkWaylandDisplay")
         || host
@@ -65,7 +111,7 @@ impl Host {
         let seconds = settings.screenshot_countdown_seconds;
         let portal = wayland(self);
         let flow = if portal {
-            captures_app::capture_flow::PortalCapture::begin().map(Flow::Portal)
+            begin_portal(self).map(Flow::Portal)
         } else {
             CaptureFlow::begin(seconds).map(Flow::X11)
         };

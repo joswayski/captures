@@ -40,9 +40,9 @@ const USAGE: &str = "captures-gtk [--scene preferences|history|editor|recording|
   [--settings-file PATH] [--history-root PATH] [--size WxH] [--feedback-endpoint URL]\n\
   [--screenshot OUT.png] [--find QUERY] [--count N] [--exercise] [--quit-after SECONDS]\n\
   [--open-media PATH]... [-- FILE...]\n\
-  --live [--captures-autostart] [--capture display|region|window|new|record-display] [--history-root PATH] [--settings-file PATH] [--open-media PATH]... [-- FILE...]\n\
+  --live [--captures-autostart] [--capture display|region|window|new|record-display|record-region|record-window] [--history-root PATH] [--settings-file PATH] [--open-media PATH]... [-- FILE...]\n\
   --live --native-update-ready-file ABSOLUTE_PATH --native-update-ready-token UUID_V4 (update relaunches only)\n\
-  record-display is an X11-only development entry point; the Record menu is not connected yet.";
+  record-display records the display under the pointer (X11) or through the ScreenCast portal (Wayland).";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Scene {
@@ -100,7 +100,7 @@ struct Options {
     live: bool,
     /// `--captures-autostart`: a quiet launch that opens no window.
     quiet: bool,
-    /// `--capture display|region|window`: start that screenshot once the
+    /// `--capture display|region|window|…`: start that capture once the
     /// live app is ready.
     capture: Option<tray::Action>,
     /// `--update NAME`: the fixture status `--scene update` shows.
@@ -229,6 +229,8 @@ fn parse_args(args: impl Iterator<Item = String>, preview: bool) -> Result<Optio
                     "window" => tray::Action::CaptureWindow,
                     "new" => tray::Action::NewCapture,
                     "record-display" => tray::Action::RecordDisplay,
+                    "record-region" => tray::Action::RecordRegion,
+                    "record-window" => tray::Action::RecordWindow,
                     other => return Err(format!("unsupported capture {other}")),
                 })
             }
@@ -1036,6 +1038,9 @@ fn main() -> glib::ExitCode {
                 Some(tray::Action::CaptureWindow) => host.capture_window(),
                 Some(tray::Action::NewCapture) => host.new_capture(),
                 Some(tray::Action::RecordDisplay) => host.record_display(),
+                // As the tray's Record rows: New Capture in Record mode.
+                Some(tray::Action::RecordRegion) => host.record_menu(capture_bar::Target::Region),
+                Some(tray::Action::RecordWindow) => host.record_menu(capture_bar::Target::Window),
                 Some(_) => host.capture_display(),
                 None => {}
             }

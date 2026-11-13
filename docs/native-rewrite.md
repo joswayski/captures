@@ -23,7 +23,7 @@ features, automated checks and physical acceptance are separate milestones.
 | macOS / AppKit | Capture, Preferences, History, previews, screenshot and recording editors | Recording-editor baseline audit recorded (95/95 tests, 96 renders; the End field clipping (2000 shown as 200) is fixed: both trim fields now fit the recording's longest value, verified on the Mac with 633/634 Swift tests passing (1 window-server skip) and inspected 960×760 and 760×540 light/dark renders of a 2 s fixture showing the full 2000; longer durations not rendered) and the trim-end comparison preview fixed (stays inside the exclusive trim end, verified on the Mac before and after); physical keyboard/VoiceOver review, live shipping comparison, full feature, hardware performance and accessibility gates remain open |
 | Windows / Win32 | Preferences, History, screenshot and recording editors, including recording crop/comparison, maximum-file-size exports and MP4/GIF format switching | A resident `--live` mode with single-instance forwarding and the shipping tray menu exists; New Capture and Screenshot Display open the Screenshot capture bar for Region and Full screen (physically checked on Windows 11 at 150%, including the tray-flyout and repeat-request fixes) and Window (physically checked on Windows 11 at 150%, including the picked-highlight and off-screen-origin fixes; an unobstructed window partly off the display saves only its on-screen part from the snapshot), with the screenshot countdown scrim (physically checked on Windows 11 at 150%: timing, fresh pixels, Esc and global Esc, reduced motion); Screenshot Region/Window rows and the global capture shortcuts with Print Screen and Win+Shift+S takeover open the bar on their target (physically checked on Windows 11 at 150% with injected input: every registered chord, tray rows, recorder release and Quit, about 380 ms key-to-bar in release; Win+Shift+S and Print Screen takeover still need a real key press; switching an open bar in place and recording shortcuts are not ported); saved screenshots join an expanded floating preview stack with the card actions and Clear all (physically checked on Windows 11 at 150%: placement in both corners, the Tauri look, every card action, focus never taken, hidden during New Capture, Restore; the cursor now follows the pointer's current position; Narrator in mouse mode reads every card's buttons, size line and Clear all; Minimize collapses into shipping's pile with the shared poses and an Expand button (rendered against shipping offscreen; fly and staggered fan motion on the shared tweens; no keystone, rear blur or carry; physically checked on Windows 11 at 150%: fly about 520 ms with no blank frames, Expand by click and UIA; that pass found the hover fan never started its frame timer and empty areas swallowed clicks, both fixed after it with shipping's pointer-polled click-through, not yet physically rechecked; Narrator's Insert+Enter on the never-focused pile does not expand it); motion and drags not ported); Record mode with the Record rows and shortcuts starts a take through the shared recording worker, using the bar's options row (FPS, Max resolution, Show cursor, Show clicks, Desktop audio and Microphone for that take only; physically checked on Windows 11 at 150%: lists by mouse and keyboard, microphone enumeration, reset per take; Esc with an open list closes the whole bar because the shared global Escape owns the key, as in Tauri) with the "RECORDING IN" countdown and floating controls (Stop, Pause/Resume, Restart and Delete with confirmation, Mute and level, Hide; excluded from captures by default; physically checked on Windows 11 at 150%: all three targets, countdown/Esc, Pause/Restart/Delete, mute, focus/drag, included controls, save-on-Quit; the hidden-controls chord and include hint were fixed after it; frame rates well below the setting (4–30 fps) come from the shared single-threaded openh264 encoder that Tauri also uses (measured in the orb: about 76 ms per 3840×2160 frame, about 18 ms at 1080p; colour conversion about 4.5 ms; openh264 threads/slices gave about 16% on 2 cores and doubled the bitrate), so it is a shared limit rather than a native regression, and Max resolution 1080p is the current workaround; hardware encoding is the likely fix; the HUD's Screenshot opens the bar on Region with Record locked and included controls kept out of the snapshot (the physical pass found it refused with "A capture is already in progress"; it now runs as a child of the take's flow like the GTK host, not yet physically rechecked); hover tooltips use the shared copy and placement (physically checked; the disabled Microphone's tooltip was missing because that button dragged the card, fixed after the pass, not yet rechecked; no fade); UI Automation exposes and invokes the controls with shipping names, announcing name flips and errors (Narrator in mouse mode speaks every control in shipping order; name flips are raised but not spoken because the controls never take focus); Hide shows the "Recording controls hidden" notice with the New Capture keys, click-through and excluded from captures for 6.2 s (physically checked: centred on the controls, click-through, closes after 6.27 s or on New Capture; no fade); no Tab focus by owner decision (a click never takes keyboard focus from the recorded app, unlike Tauri's Windows webview; UIA still invokes every button); History now lists interrupted recordings with Recover and two-step Discard through the shared recovery, physically checked by mouse, keyboard and Narrator; following Tauri a18afc62 the armed Discard is now signal red, disarms after 4 s and reads "Discarding…" while busy, a Recover/Discard error shows under its own row and is announced, and row dates use the History card format (rendered offscreen, not yet physically rechecked); a take whose app was force-killed leaves only an unfinished segment that the shared recovery skips, as Tauri does); first-run setup opens shipping's setup window on launch, relaunch and New Capture until it is finished (Ready row and Start capturing through the shared onboarding session; physically checked with keyboard and Narrator; no pulse yet), and finishing it or a quiet launch shows the tray-anchored launch notice (15 s / 5 s, Close and tray left-click dismiss; physically checked; no arrive motion; Narrator stayed silent: a quiet launch raised no notification, now always raised but not rechecked, and after setup the raised notification was not spoken); Send Feedback opens shipping's form and sends from the resident app through the shared client (physically checked on Windows 11 including the error alert and Narrator; emoji now draw in colour; the sent state still needs a real send); setup, the launch notice and Send Feedback expose UI Automation with shipping's roles and names (checked with Narrator on Windows 11); the rest of the floating previews still need migration from the older host. Format switching still needs physical interaction acceptance; scoped physical editor checks do not establish whole-app parity, performance or accessibility |
 | Linux / GTK4 on X11 | Screenshot and recording targets/options, countdown, recording controls, previews, Preferences, History and editors | Virtual-X11 input, accessibility-tree and decoded-media checks are not physical GPU, audio-device, Orca or mixed-DPI acceptance |
-| Linux / GTK4 on Wayland | Portal-mediated screenshots and development UI | Recording is not connected and remains disabled; physical GNOME/KDE, portal/PipeWire, accessibility and mixed-DPI acceptance remain open |
+| Linux / GTK4 on Wayland | Portal-mediated screenshots, ScreenCast portal recording (Full screen, Window, Region) with the X11 HUD/worker/History flow, and development UI | Headless-Sway portal/PipeWire checks with decoded media are not physical GNOME/KDE, real PipeWire device, Orca or mixed-DPI acceptance; the hidden notice still shows saved keys although the GlobalShortcuts portal owns them |
 
 Each host must pass feature and Tauri screenshot parity, real-hardware performance
 at least as good as the egui host, and accessibility acceptance. Packaging/update
@@ -1909,11 +1909,87 @@ saved-shortcut keycaps. On X11 it stays centered on the old HUD without taking
 keyboard focus or intercepting clicks. Its six-second arrival/hold/fade ends before
 the window closes at 6.2 seconds; disabling GTK animations leaves it still and
 visible until then. Restoring the HUD dismisses the notice immediately.
-Wayland recording and recording-control tooltip visual parity are still unfinished.
-Record controls are disabled on Wayland, and direct recording requests explicitly
-refuse it. AppKit,
+Recording-control tooltip visual parity is still unfinished. Wayland recording
+was connected in the GTK Wayland recording slice below. AppKit,
 Win32 and the wgpu workbench are unchanged; physical-device and accessibility
 acceptance remain separate gates, and Tauri remains the public app.
+
+### GTK Wayland recording through the ScreenCast portal
+
+The GTK host now records on Wayland, following shipping's portal path and
+reusing the shared `captures-recording-xcap` ScreenCast/PipeWire source the
+wgpu workbench uses. Everything above capture is the X11 flow: New Capture's
+Record mode with its per-take options, the tray's Record rows, their
+GlobalShortcuts-portal shortcuts, `--capture record-display|record-region|
+record-window`, the shared serialized worker, the "RECORDING IN" countdown, the
+HUD (Stop, Pause/Resume, Restart and Delete with confirmation, Mute, Hide, and
+its Region screenshot as a child portal capture of the take), History, previews
+and save-on-Quit.
+
+- Targets: Full screen is `portal_display` and Window `portal_window`; the
+  portal's picker chooses the screen or window when each segment starts, after
+  the countdown, with no invented monitor geometry. Region is `portal_region`:
+  the rectangle is drawn in New Capture over the portal still, converted to
+  still pixels, and handed to the granted stream's first frame through the
+  worker's `SelectRegion` callback, then persisted for resume, restart and
+  recovery. When the shared screen's size differs from the still (another
+  output was picked), the take is refused with an explanation rather than a
+  guessed crop. The wgpu workbench instead re-selects over the first frame.
+- Consent: no restore token or persistent grant; every new or resumed segment
+  asks the portal again, as shipping's portal recorder. Every Captures window
+  is unmapped for consent and the take; only the countdown and the HUD map.
+- Revocation: when the compositor or backend ends the stream, the shared
+  session fails the take; the HUD shows Failed with Retry and Delete, and the
+  partial segment stays in recording recovery, including after Quit.
+- Options: Show cursor and Show clicks are Unavailable on Wayland (shared
+  capability), and saved cursor/click/keystroke settings are dropped for
+  portal takes. The HUD shows shipping's "Use Hide controls to keep them out"
+  note; a window take says it is limited to the portal-selected window.
+- Placement: with the `layer-shell` feature on wlroots/KDE, the HUD is a Top
+  layer surface anchored bottom centre, 24 px up, and is not draggable; the
+  hidden notice is a click-through Overlay surface centred on it. Elsewhere
+  (GNOME) the compositor places both windows, and the status area still
+  starts a compositor move. A bare relaunch or New Capture restores hidden
+  controls.
+- Refusal: when the portal has no ScreenCast monitor source, New Capture keeps
+  Record disabled, and the Record rows, shortcuts and `--capture record-*`
+  show "Screen recording on Wayland needs the desktop's ScreenCast portal…"
+  before any window is hidden or any portal request is made. The tray's Record
+  rows are now enabled on both X11 and Wayland.
+
+Differences from Tauri (read from source, not run on Wayland here): shipping's
+AppImage runs GTK through XWayland, picks Display/Region in its own selector and
+passes a monitor target to `start_native_segment`. On Wayland, xcap's recorder
+then makes its own monitor-only ScreenCast request: source type 1, no cursor
+mode and no restore token, so it also asks every time. It crops the region from
+that stream using XWayland geometry. Shipping's README lists no window
+targeting, cursor capture or click highlights on Wayland. GTK adds portal Window
+recording (the picker's window) and maps Region onto the stream in stream
+pixels instead of XWayland coordinates. Like shipping, it records no cursor or
+clicks. The hidden notice still names the saved New Capture keys even though
+the GlobalShortcuts portal decides the real trigger; the launch notice already
+omits them on Wayland.
+
+Verified (orb, headless Sway 1.9, real xdg-desktop-portal 1.16, the pinned
+SHM-capable xdg-desktop-portal-wlr 0.7.1 with the chooser off, WirePlumber and
+the pinned PipeWire 1.0.5 fixture): the new `smoke.py --wayland --only
+wayland_recording` step passed with the default build and with `layer-shell`.
+On a coordinate-encoded 1280×1024 desktop, ffmpeg decoded the Full screen MP4
+independently: first-frame pixels at five points matched the gradient within
+6 levels, and the last frame matched the red background set mid-take. Pause and
+Resume made a second portal request with no persist or restore data. The HUD's
+child Region screenshot saved 200×100 of the live desktop. Hide and a bare
+relaunch restored the controls. The Region recording, 300×200 at (100, 120),
+persisted its selection, encoded at 300×200, and had its corners and centre
+match the desktop. Killing the backend mid-take left a Failed HUD and a
+retained, decodable segment of about 1.5 s after Quit. A fixture portal without
+ScreenCast refused both Record Display and Record Region with no portal
+request. The existing Wayland `capture`, `selectors`, `new_capture` and `tray`
+steps still pass. X11 is unchanged except that the tray's Record rows no longer
+depend on an X11 check, and its recording steps were rerun on Xvfb. macOS and
+Windows are unchanged. Physical GNOME/KDE portals (interactive consent and
+pickers), real PipeWire devices and microphones, multi-monitor/HiDPI, Orca and
+cutover acceptance remain open.
 
 ## Progress dashboard
 

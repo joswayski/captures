@@ -1797,7 +1797,8 @@ def selectors(binary, scratch):
 
 def new_capture(binary, scratch):
     """New Capture in Screenshot mode: shipping's bar as real controls over
-    AT-SPI (Record unavailable on Wayland), Close cancels,
+    AT-SPI (Record unavailable on Wayland without a ScreenCast monitor
+    source, as this fixture's portal), Close cancels,
     a drag plus Enter saves exactly the region, and Full screen saves the
     display. X11 also picks the fixture window and saves it; on Wayland the
     region crops the portal still, Full screen persists that same still
@@ -2100,8 +2101,8 @@ def tray_menu(service):
 
 
 def tray(binary, scratch):
-    """The live app's tray: shipping's menu rows in order (captures the GTK
-    host cannot run yet disabled), and real dbusmenu clicks for Capture
+    """The live app's tray: shipping's menu rows in order (all enabled;
+    Wayland recording refuses at start without ScreenCast), and real dbusmenu clicks for Capture
     History…, Screenshot Display (X11; Wayland's portal is the capture step's)
     and Quit Captures."""
     root = scratch / "tray-history"
@@ -2134,9 +2135,9 @@ def tray(binary, scratch):
                           "Preferences", "Send Feedback…", "Check for Updates…", "-",
                           "Quit Captures"], labels
         enabled = [label for _, label, on in rows if on and label != "-"]
-        recording = [] if isinstance(DESKTOP, Wayland) else ["Record Region", "Record Window", "Record Display"]
         assert enabled == ["New Capture…", "Screenshot Region", "Screenshot Window",
-                           "Screenshot Display", *recording, "Capture History…", "Open Save Location",
+                           "Screenshot Display", "Record Region", "Record Window", "Record Display",
+                           "Capture History…", "Open Save Location",
                            "Preferences", "Send Feedback…", "Quit Captures"], enabled
         # The quiet launch shows only the launch notice, which leaves by itself.
         wait(lambda: {"event": "startup-notice-closed", "by": "timeout"} in events(),
@@ -2515,7 +2516,7 @@ def recording_menu(binary, scratch):
     """Normal New Capture, tray and shortcut entry points feed real targets
     and temporary options to the same recorder, without changing Preferences."""
     if isinstance(DESKTOP, Wayland):
-        return  # new_capture and tray assert the explicit capability gate.
+        return  # wayland_recording covers the ScreenCast portal path.
     live = LiveCaptures(binary, scratch, "recording-menu")
     settings = json.loads(live.settings.read_text())
     settings.update(freeze_screen=False, recording={
@@ -2646,7 +2647,7 @@ def recording_controls(binary, scratch):
     pause/resume and child screenshots; cancellation/discard publish nothing.
     The green desktop shown only while paused must never enter the MP4."""
     if isinstance(DESKTOP, Wayland):
-        print("recording_controls: X11-only development entry point; Wayland not connected")
+        print("recording_controls: X11 only; Wayland records in wayland_recording")
         return
     profile = scratch / "recording-controls"
     profile.mkdir()
@@ -2921,9 +2922,353 @@ def recording_controls(binary, scratch):
               "failed resume preserves paused media, and save-on-Quit passed")
 
 
+WLR_BACKEND = None  # --wlr-backend: build_wayland_portal_fixture.sh's backend
+PIPEWIRE_DAEMON = None  # --pipewire-daemon: build_pipewire_fixture.sh's launcher
+SHOTS = None  # --shots: keep the Wayland recording step's screen captures here
+
+
+def bus_call(env, dest, path, method, *args):
+    return subprocess.run(["gdbus", "call", "--session", "--dest", dest, "--object-path", path,
+                           "--method", method, *args], env=env, capture_output=True, text=True)
+
+
+@contextlib.contextmanager
+def screencast_desktop(scratch, name):
+    """`private_desktop` plus a real ScreenCast stack on the same private bus:
+    PipeWire (the pinned fixture with --pipewire-daemon), WirePlumber, the
+    permission store, and the pinned SHM-capable xdg-desktop-portal-wlr behind
+    the public xdg-desktop-portal. Nothing is installed; the wlr chooser is
+    off, so consent is the backend's non-interactive grant of the one output.
+    Yields the launch environment and a function that kills the backend
+    (a revoked ScreenCast session)."""
+    logs = scratch / f"{name}-services"
+    logs.mkdir()
+    services = []
+    with private_desktop(scratch, name) as (env, _):
+        def spawn(label, command):
+            stream = (logs / f"{label}.log").open("w")
+            services.append((subprocess.Popen(command, env=env, stdout=stream, stderr=stream),
+                             stream))
+            return services[-1][0]
+
+        def owned(owner, process):
+            def has():
+                assert process.poll() is None, f"{owner} exited; see {logs}"
+                reply = bus_call(env, "org.freedesktop.DBus", "/org/freedesktop/DBus",
+                                 "org.freedesktop.DBus.NameHasOwner", owner)
+                return "true" in reply.stdout
+            wait(has, owner)
+
+        try:
+            runtime = Path(env["XDG_RUNTIME_DIR"])
+            spawn("pipewire", [str(PIPEWIRE_DAEMON) if PIPEWIRE_DAEMON else "pipewire"])
+            wait(lambda: (runtime / "pipewire-0").is_socket(), "the PipeWire socket")
+            spawn("wireplumber", ["wireplumber"])
+            # The policy must link the portal's stream before a take starts.
+            wait(lambda: "WirePlumber" in subprocess.run(
+                ["pw-cli", "ls", "Client"], env=env, capture_output=True, text=True).stdout,
+                "WirePlumber")
+            config = logs / "wlr.ini"
+            config.write_text("[screencast]\nchooser_type=none\noutput_name=HEADLESS-1\n"
+                              "max_fps=30\n")
+            store = spawn("permission-store", ["/usr/libexec/xdg-permission-store"])
+            owned("org.freedesktop.impl.portal.PermissionStore", store)
+            backend = spawn("portal-wlr", [str(WLR_BACKEND), "-c", str(config), "-l", "DEBUG"])
+            owned("org.freedesktop.impl.portal.desktop.wlr", backend)
+            portal = spawn("portal", ["/usr/libexec/xdg-desktop-portal"])
+            owned("org.freedesktop.portal.Desktop", portal)
+            # Screenshot consent exists only in this disposable profile.
+            assert bus_call(env, "org.freedesktop.impl.portal.PermissionStore",
+                            "/org/freedesktop/impl/portal/PermissionStore",
+                            "org.freedesktop.impl.portal.PermissionStore.SetPermission",
+                            "screenshot", "true", "screenshot", "", "['yes']").returncode == 0
+
+            def revoke():
+                backend.terminate()
+                backend.wait(timeout=10)
+            yield env, revoke, logs / "portal-wlr.log"
+        finally:
+            for process, stream in reversed(services):
+                if process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                stream.close()
+
+
+def gradient(path, width, height):
+    """Each pixel encodes its own position (R = x / 5, G = y / 4, B = 77), so
+    a shifted, scaled or stale frame cannot match."""
+    subprocess.run(["convert", "-size", f"{width}x{height}", "xc:black",
+                    "-channel", "R", "-fx", "floor(i/5)/255", "-channel", "G", "-fx",
+                    "floor(j/4)/255", "-channel", "B", "-fx", "77/255", "+channel",
+                    "-depth", "8", f"PNG24:{path}"], check=True)
+
+
+def decoded(media, seek=None, from_end=False):
+    """One independently decoded RGB frame: ffmpeg, not Captures' decoder."""
+    position = (["-sseof", seek] if from_end else ["-ss", seek]) if seek else []
+    info = json.loads(subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_streams", "-of", "json",
+         str(media)], capture_output=True, text=True, check=True).stdout)["streams"][0]
+    width, height = info["width"], info["height"]
+    frame = subprocess.check_output(["ffmpeg", "-v", "error", *position, "-i", str(media),
+                                     "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+                                    timeout=30)
+    assert len(frame) == width * height * 3, (len(frame), width, height)
+
+    def pixel(x, y):
+        at = (y * width + x) * 3
+        return tuple(frame[at:at + 3])
+    return (width, height), pixel
+
+
+def near(actual, expected, tolerance=6):
+    # H.264 4:2:0, quantization and range conversion move levels by up to ~5.
+    return all(abs(a - b) <= tolerance for a, b in zip(actual, expected))
+
+
+def wayland_recording(binary, scratch):
+    """Wayland recording through the real ScreenCast portal on the private
+    headless Sway: xdg-desktop-portal, the pinned xdg-desktop-portal-wlr and
+    PipeWire. Full screen (`--capture record-display`) with the countdown,
+    Pause/Resume (a second portal grant), a live background change and the
+    HUD's Region screenshot as a child; Region from New Capture in Record mode
+    over the portal still; then a revoked session (the backend killed mid-take)
+    leaving a failed, retained take. Every saved MP4 is decoded with ffmpeg and
+    its pixels compared with the coordinate-encoded desktop. Without a
+    ScreenCast portal, recording refuses before any portal request."""
+    if not isinstance(DESKTOP, Wayland):
+        print("wayland_recording: Wayland only (X11 records in recording_controls and recording_menu)")
+        return
+    width, height = Wayland.WIDTH, Wayland.HEIGHT
+    live = LiveCaptures(binary, scratch, "wayland-recording")
+    settings = json.loads(live.settings.read_text())
+    settings.update(freeze_screen=False, screenshot_countdown_seconds=0, recording={
+        "video_fps": 15, "countdown_seconds": 1, "show_cursor": True, "highlight_clicks": True,
+        "capture_system_audio": False, "microphone_device_id": None,
+        "open_editor_after_recording": False})
+    live.settings.write_text(json.dumps(settings))
+    background = scratch / "wayland-recording-gradient.png"
+    gradient(background, width, height)
+    shots = Path(SHOTS) if SHOTS else scratch / "wayland-recording-shots"
+    shots.mkdir(parents=True, exist_ok=True)
+
+    def shot(name):
+        subprocess.run(["grim", str(shots / f"{name}.png")], check=True, timeout=10)
+
+    def bg(value):
+        command = f"output * bg {value} fill" if isinstance(value, Path) else \
+            f"output * bg {value} solid_color"
+        subprocess.run(["swaymsg", command], check=True, stdout=subprocess.DEVNULL)
+        time.sleep(0.6)  # swaybg's next frame
+
+    def events(name):
+        return [e for e in live.events() if e["event"] == name]
+
+    def button(app, name):
+        return wait(lambda: [n for n in find(app, "push button", name)
+                             if has_state(n, Atspi.StateType.SENSITIVE)], name, timeout=30)[0]
+
+    def expected(x, y):
+        return (x // 5, y // 4, 77)
+
+    def saved_media(before):
+        saved = wait(lambda: events("recording-saved")[before:], "the saved recording",
+                     timeout=60)[0]
+        entry = live.entry(saved["id"])
+        return entry, next((live.root / saved["id"]).glob("*.mp4"))
+
+    if not WLR_BACKEND:
+        print("wayland_recording: SKIPPED, needs --wlr-backend "
+              "(apps/native/build_wayland_portal_fixture.sh) for a real ScreenCast portal")
+        return
+    recovery = live.root.with_name("recording-recovery")
+    try:
+        bg(background)
+        with screencast_desktop(scratch, "wayland-recording") as (env, revoke, wlr_log):
+            # Full screen: the portal picks the screen after the countdown.
+            before = len(events("recording-saved"))
+            live.run("record-display", env)
+            requested = wait(lambda: events("portal-recording"), "the portal recording")[0]
+            assert requested["target"] == {"type": "portal_display"}, requested
+            wait(lambda: events("countdown"), "the recording countdown")
+            shot("countdown")
+            app = live.app()
+            pause = button(app, "Pause recording")
+            assert_accessible(app, "the Wayland recording HUD")
+            # Wayland: no cursor or click overlay, whatever the settings say.
+            manifest = json.loads(next(recovery.glob("*/manifest.json")).read_text())
+            options = manifest["options"]
+            assert options["target"] == {"type": "portal_display"}, options
+            assert not options["show_cursor"] and not options["highlight_clicks"], options
+            assert not [n for n in DESKTOP.visible(live.process.pid)
+                        if re.search("Preferences", DESKTOP._node(n).get("name") or "")], \
+                "a Captures window stayed mapped for the take"
+            time.sleep(1.2)
+            shot("recording-hud")
+            requests = "select sources method invoked"
+            starts = wlr_log.read_text().count(requests)
+            press(pause)
+            press(button(app, "Resume recording"))
+            button(app, "Pause recording")
+            # No restore token: the resumed segment asked the portal again.
+            wait(lambda: wlr_log.read_text().count(requests) > starts,
+                 "a second portal request for the resumed segment")
+            assert "persist_mode" not in wlr_log.read_text(), "asked to persist the grant"
+            assert "restore data" not in wlr_log.read_text(), "reused a restore token"
+            bg("#c83c28")
+            time.sleep(1.0)
+            # The HUD's Region screenshot: a child portal still mid-take.
+            captured = len(events("captured"))
+            press(button(app, "Take a region screenshot"))
+            # A layer surface (the layer-shell build) is not in Sway's tree.
+            wait(lambda: find(live.app(), "frame", "Captures Region Selector"), "the selector")
+            time.sleep(0.8)
+            DESKTOP.drag(300, 300, 500, 400)
+            DESKTOP.key("Return")
+            child = wait(lambda: events("captured")[captured:], "the child screenshot",
+                         timeout=30)[0]
+            png = GdkPixbuf.Pixbuf.new_from_file(str(live.root / child["id"] / "capture.png"))
+            at = 50 * png.get_rowstride() + 100 * png.get_n_channels()
+            assert (png.get_width(), png.get_height()) == (200, 100), (png.get_width(), png.get_height())
+            assert near(tuple(png.get_pixels()[at:at + 3]), (200, 60, 40), 2), "child missed the desktop"
+            # Hide: the notice sits where the controls were, and a bare
+            # relaunch restores them (the GlobalShortcuts portal owns keys).
+            press(button(app, "Hide recording controls"))
+            wait(lambda: not find(app, "frame", "Captures Recording Controls"), "hidden HUD")
+            notice = guidance(app, "Recording controls hidden")[0]
+            assert find(notice, "label", "Open Captures from the tray, or press")
+            time.sleep(0.8)
+            shot("controls-hidden")
+            subprocess.run([binary, "--live", "--history-root", str(live.root),
+                            "--settings-file", str(live.settings)], env=env, check=True,
+                           timeout=30, stdout=subprocess.DEVNULL)
+            stop = button(app, "Stop recording")
+            wait(lambda: not find(app, "frame", "Recording controls hidden"),
+                 "restore dismisses the notice")
+            time.sleep(0.8)
+            press(stop)
+            entry, media = saved_media(before)
+            assert entry["target"] == {"type": "portal_display"}, entry
+            size, first = decoded(media)
+            assert size == (width, height), size
+            points = [(40, 40), (width - 40, 40), (640, 300), (40, 700), (width - 40, 700)]
+            report = {"display": {"size": size, "first": {}, "last": {}}}
+            for x, y in points:
+                report["display"]["first"][f"{x},{y}"] = first(x, y)
+                assert near(first(x, y), expected(x, y)), ("first frame", x, y, first(x, y))
+            _, last = decoded(media, "-0.3", from_end=True)
+            for x, y in points:
+                report["display"]["last"][f"{x},{y}"] = last(x, y)
+                assert near(last(x, y), (200, 60, 40)), ("last frame", x, y, last(x, y))
+            print(f"wayland_recording: Full screen {size[0]}×{size[1]} through the portal: "
+                  "first frame shows the gradient desktop, last the live red background; "
+                  "resume asked the portal again; the HUD's child screenshot saved")
+            live.stop()
+
+            # Region: drawn over New Capture's still, applied to the stream.
+            bg(background)
+            before = len(events("recording-saved"))
+            live.run("record-region", env)
+            bar = wait(lambda: find(live.app(), "frame", "Captures New Capture"), "New Capture")[0]
+            record = wait(lambda: find(bar, "toggle button", "Record")
+                          or find(bar, "push button", "Record"), "Record")[0]
+            assert has_state(record, Atspi.StateType.SENSITIVE), "Record disabled with ScreenCast"
+            start = wait(lambda: find(bar, "push button", "Start recording"), "Record mode")[0]
+            assert not has_state(start, Atspi.StateType.SENSITIVE), "recording without a region"
+            cursor = [n for role in ("switch", "check box", "toggle button")
+                      for n in find(bar, role, "Show cursor")][0]
+            assert not has_state(cursor, Atspi.StateType.SENSITIVE), "Wayland cursor offered"
+            time.sleep(0.5)
+            x, y, w, h = 100, 120, 300, 200
+            DESKTOP.drag(x, y, x + w, y + h)
+            wait(lambda: has_state(start, Atspi.StateType.SENSITIVE), "Start after a region")
+            shot("record-bar")
+            press(start)
+            app = live.app()
+            stop = button(app, "Stop recording")
+            frame = wait(lambda: events("portal-region-frame"), "the first granted frame")[0]
+            assert frame["frame"] == [width, height] and frame["accepted"], frame
+            manifest = json.loads(next(recovery.glob("*/manifest.json")).read_text())
+            selection = {"rect": {"x": x, "y": y, "width": w, "height": h},
+                         "frame_width": width, "frame_height": height}
+            assert manifest["options"]["target"] == {"type": "portal_region",
+                                                     "selection": selection}, manifest["options"]
+            time.sleep(1.5)
+            press(stop)
+            entry, media = saved_media(before)
+            assert entry["target"] == {"type": "portal_region", "selection": selection}, entry
+            size, first = decoded(media)
+            assert size == (w & ~1, h & ~1), size
+            report["region"] = {"size": size, "first": {}}
+            for cx, cy in ((2, 2), (size[0] - 3, 2), (2, size[1] - 3),
+                           (size[0] - 3, size[1] - 3), (size[0] // 2, size[1] // 2)):
+                report["region"]["first"][f"{cx},{cy}"] = first(cx, cy)
+                assert near(first(cx, cy), expected(x + cx, y + cy)), ("region", cx, cy, first(cx, cy))
+            print(f"wayland_recording: Region {size[0]}×{size[1]} at ({x}, {y}) drawn over the "
+                  "still, cropped from the granted stream, corners match the desktop")
+            live.stop()
+
+            # A revoked session: the backend dies mid-take. The take fails
+            # with its media retained for recovery, and Quit keeps it.
+            assert not list(recovery.glob("*/manifest.json")), "published takes kept drafts"
+            live.run("record-display", env)
+            app = live.app()
+            button(app, "Pause recording")
+            time.sleep(1.2)
+            revoke()
+            failure = wait(lambda: [n for n in find(app, "push button", "Retry recording")],
+                           "Retry after the session ended", timeout=30)
+            assert failure
+            time.sleep(0.5)
+            shot("session-revoked")
+            draft = json.loads(next(recovery.glob("*/manifest.json")).read_text())
+            assert draft["state"] == "failed" and draft["last_error"], draft
+            partial = next(recovery.glob("*/segment-000.mp4"))
+            seconds = float(json.loads(subprocess.run(
+                ["ffprobe", "-v", "error", "-show_format", "-of", "json", str(partial)],
+                capture_output=True, text=True, check=True).stdout)["format"]["duration"])
+            assert seconds > 0.3, seconds
+            live.stop()
+            assert partial.is_file(), "Quit discarded the failed take"
+            report["revoked"] = {"error": draft["last_error"], "retained_seconds": seconds}
+            print(f"wayland_recording: revoked session failed the take ({draft['last_error']!r}), "
+                  f"{seconds:.2f} s retained for recovery after Quit")
+
+        # Without a ScreenCast portal (the fixture portal has only a version),
+        # recording refuses before asking the portal for anything.
+        still = scratch / "wayland-recording-still.png"
+        still.write_bytes(fixture_png(width, height))
+        with private_desktop(scratch, "wayland-no-screencast", still) as (env, fixture_log):
+            for kind in ("record-display", "record-region"):
+                failed = len(events("capture-failed"))
+                live.run(kind, env)
+                error = wait(lambda: events("capture-failed")[failed:], "the refusal")[0]["error"]
+                assert "ScreenCast portal" in error, error
+                assert "request" not in fixture_log.read_text(), "refusal asked the portal"
+                if kind == "record-display":
+                    DESKTOP.window("^Captures$", live.process.pid)
+                    wait(lambda: [n for n, (_, text) in nodes(live.app())
+                                  if "ScreenCast portal" in (text or "")], "the error dialog")
+                    time.sleep(0.5)
+                    shot("screencast-unavailable")
+            live.stop()
+        report["refusal"] = error
+        (shots / "result.json").write_text(json.dumps(report, indent=2))
+        print("wayland_recording: without a ScreenCast portal, Record refuses with an honest "
+              "error and no portal request")
+    finally:
+        live.stop()
+        subprocess.run(["swaymsg", "output * bg #234567 solid_color"], stdout=subprocess.DEVNULL)
+
+
 STEPS = [history, preferences, update_card, editor, editor_close_keeps_open_text, recording, recording_controls, recording_menu,
          recording_output, previews, preview_overflow, feedback, open_with, live, capture, selectors,
-         new_capture, tray, shortcuts, setup, crash_review, notices, update_notice_live]
+         new_capture, tray, shortcuts, setup, crash_review, notices, update_notice_live,
+         wayland_recording]
 FIXTURE_LOG = None
 
 
@@ -3000,11 +3345,23 @@ def main():
                         help="wayland_drag_probe binary (virtual pointer and keyboard)")
     parser.add_argument("--only", action="append",
                         help="run just this step (repeatable): " + ", ".join(s.__name__ for s in STEPS))
+    parser.add_argument("--wlr-backend", type=Path,
+                        help="with --wayland: build_wayland_portal_fixture.sh's backend, for the "
+                        "real ScreenCast portal in wayland_recording")
+    parser.add_argument("--pipewire-daemon", type=Path,
+                        help="with --wlr-backend: build_pipewire_fixture.sh's private daemon "
+                        "(default: the installed pipewire)")
+    parser.add_argument("--shots", type=Path,
+                        help="keep wayland_recording's screen captures and result.json here")
     parser.add_argument("--desktop-fixture", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--still", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.desktop_fixture:
         return desktop_fixture(args.desktop_fixture, args.still)
+    global WLR_BACKEND, PIPEWIRE_DAEMON, SHOTS
+    WLR_BACKEND = args.wlr_backend and args.wlr_backend.resolve(strict=True)
+    PIPEWIRE_DAEMON = args.pipewire_daemon and args.pipewire_daemon.resolve(strict=True)
+    SHOTS = args.shots and args.shots.resolve()
     # Live launches must never rebind the machine's own screenshot keys.
     os.environ["CAPTURES_NATIVE_SKIP_SYSTEM_SHORTCUT_TAKEOVER"] = "1"
     assert not args.wayland or args.injector, "--wayland needs --injector"
