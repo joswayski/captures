@@ -262,7 +262,11 @@ fn previous_app_running() -> Result<bool, String> {
             "-NoProfile",
             "-NonInteractive",
             "-Command",
-            "Get-Process -Name captures -ErrorAction SilentlyContinue | ForEach-Object { $_.Id }",
+            // Windows PowerShell exits 1 when no process matches, even with
+            // SilentlyContinue, which made every first import fail as "could
+            // not confirm". Exit 0 once the listing ran; a missing or failing
+            // PowerShell still errors below.
+            "Get-Process -Name captures -ErrorAction SilentlyContinue | ForEach-Object { $_.Id }; exit 0",
         ])
         .output()
         .map_err(|e| e.to_string())?;
