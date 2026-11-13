@@ -28,6 +28,10 @@ use crate::tokens::Tokens;
 const CLASS: PCWSTR = w!("CapturesStartupNotice");
 const RETRY_TIMER: usize = 1;
 const HIDE_TIMER: usize = 2;
+const ANNOUNCE_TIMER: usize = 3;
+/// After the setup window or tray menu has handed focus back, so the focus
+/// change does not talk over the announcement.
+const ANNOUNCE_DELAY_MS: u32 = 400;
 const WM_MOUSELEAVE: u32 = 0x02A3;
 
 thread_local! {
@@ -69,12 +73,20 @@ pub fn show(t: Tokens, keys: Vec<String>, visible_for: Duration, tray: TrayRect)
     hide();
     if let Err(error) = open(t, keys, visible_for, tray) {
         eprintln!("failed to show Captures launch notice: {error}");
-        return;
     }
-    // `role="status"`: announce the new notice. Raise it even before any
-    // reader has asked this process for a provider: at login autostart
-    // `UiaClientsAreListening` is still false, so gating on it went silent.
-    panel_uia::raise(panel_uia::Window::Notice, Some(Vec::new()));
+    // `Notice::present` announces it once the window is visible.
+}
+
+/// `role="status"`: announce the shown notice. Raised whether or not
+/// `UiaClientsAreListening` is true yet (at login autostart it is not), and
+/// only once visible: a quiet launch usually waits for the tray icon's rect,
+/// and the announcement raised before then, while the window was still
+/// hidden, reached no client.
+fn announce() {
+    let copy = uia_snapshot().and_then(|s| s.items.into_iter().next().map(|i| i.name));
+    if let Some(copy) = copy {
+        panel_uia::opened(panel_uia::Window::Notice, &copy);
+    }
 }
 
 /// The notice's parts for UI Automation: the status card and Close.
@@ -253,6 +265,7 @@ impl Notice {
                 self.visible_for.as_millis() as u32,
                 None,
             );
+            SetTimer(Some(self.hwnd), ANNOUNCE_TIMER, ANNOUNCE_DELAY_MS, None);
         }
     }
 
@@ -472,6 +485,11 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             }
             WM_TIMER if wp.0 == HIDE_TIMER => {
                 hide();
+                LRESULT(0)
+            }
+            WM_TIMER if wp.0 == ANNOUNCE_TIMER => {
+                let _ = KillTimer(Some(hwnd), ANNOUNCE_TIMER);
+                announce();
                 LRESULT(0)
             }
             WM_GETOBJECT if lp.0 as i32 == UiaRootObjectId => UiaReturnRawElementProvider(

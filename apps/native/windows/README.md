@@ -288,10 +288,12 @@ browser, and progress, restart and error states update in place. Its parts are
 exposed through `panel_uia.rs` (heading, status/alert lines, invokable
 buttons). Render it with `--scene update --update
 available|single|closing|manual|downloading|restarting|error|checking|up-to-date
-[--tool fallback] [--select notes-hidden] --screenshot PATH`. Not ported: the
-`ui-pop-in` entrance and the restart exit fade. None of this has run on
-Windows or against a real installed package; it is checked by Wine tests and
-offscreen renders only.
+[--tool fallback] [--select notes-hidden] --screenshot PATH`, or without
+`--screenshot` as a live notice by the notification area until Later/Close
+(its buttons reach no worker). Not ported: the
+`ui-pop-in` entrance and the restart exit fade. A Windows 11 recheck at
+8ce4447b found caret, placement, announcement and live-fixture defects, fixed
+since and not yet rechecked; a real installed update is still untested.
 
 On Linux (and in orbs), the tests also run under Wine 8 with a disposable prefix.
 Run `node apps/native/prepare.mjs --output apps/native/windows/resources` first.

@@ -17,7 +17,7 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use captures_app::tray_notice::{Caret, LogicalRect, Placement};
+use captures_app::tray_notice::{self, Caret, LogicalRect, Placement};
 use captures_app::update_notice::{
     self as notice, Action, Icon, IconTone, Presentation, UpdateStatus, ViewState,
 };
@@ -50,6 +50,11 @@ pub const TITLE: &str = "Captures Update";
 const RELEASES_URL: &str = "https://github.com/joswayski/captures/releases";
 const CLASS: PCWSTR = w!("CapturesUpdateNotice");
 const ANIMATION_TIMER: usize = 1;
+/// Polls the tray icon rect before the first show, like the launch notice.
+const RETRY_TIMER: usize = 2;
+/// Announces the shown notice once focus has settled.
+const ANNOUNCE_TIMER: usize = 3;
+const ANNOUNCE_DELAY_MS: u32 = 400;
 const WM_MOUSELEAVE: u32 = 0x02A3;
 /// Shipping's restart countdown, which the restart bar empties over.
 const RESTART_SECONDS: f32 = 3.;
@@ -250,6 +255,8 @@ struct State {
 thread_local! {
     static NOTICE: RefCell<Option<Notice>> = const { RefCell::new(None) };
     static STATE: RefCell<State> = RefCell::default();
+    /// `--scene update` without `--screenshot`: closing the notice quits.
+    static FIXTURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Open, refresh or leave the notice for the worker's latest status.
@@ -318,9 +325,48 @@ pub fn settings_changed(settings: &captures_settings::AppSettings) {
 
 /// Hide the notice (Later/Close). True when one was up.
 pub fn hide() -> bool {
-    NOTICE
+    let hidden = NOTICE
         .with(|n| n.try_borrow_mut().ok().and_then(|mut n| n.take()))
-        .is_some()
+        .is_some();
+    if hidden && FIXTURE.get() {
+        unsafe { PostQuitMessage(0) };
+    }
+    hidden
+}
+
+/// `--scene update --update NAME` without `--screenshot`: the fixture as the
+/// live notice, anchored to the taskbar's notification area (`--tool
+/// fallback`: the caretless corner) until Later or Close quits. Its buttons
+/// reach no worker.
+pub fn open_fixture(options: &crate::Options) -> Result<()> {
+    let name = options.update.as_deref().unwrap_or("available");
+    let status =
+        notice::fixture(name).ok_or_else(|| Error::new(E_INVALIDARG, "unknown --update"))?;
+    FIXTURE.set(true);
+    open(Live {
+        status,
+        step: None,
+        capture_active: false,
+        settings_file: options.settings_file.clone(),
+        appearance: options.appearance.clone(),
+        tray: if options.tool.as_deref() == Some("fallback") {
+            || None
+        } else {
+            notification_area
+        },
+    })
+}
+
+/// The taskbar's notification area, standing in for the tray icon that a
+/// fixture without the resident app does not have.
+fn notification_area() -> Option<RECT> {
+    unsafe {
+        let taskbar = FindWindowW(w!("Shell_TrayWnd"), None).ok()?;
+        let area = FindWindowExW(Some(taskbar), None, w!("TrayNotifyWnd"), None).ok()?;
+        let mut r = RECT::default();
+        GetWindowRect(area, &mut r).ok()?;
+        (r.right > r.left && r.bottom > r.top).then_some(r)
+    }
 }
 
 fn with_notice<R>(f: impl FnOnce(&mut Notice) -> R) -> Option<R> {
@@ -334,6 +380,11 @@ struct Notice {
     appearance: Option<String>,
     settings_file: PathBuf,
     tray: TrayRect,
+    /// The last usable tray icon rect. A re-placement keeps it when a later
+    /// lookup fails, so the caret and position stay put.
+    anchor: Option<RECT>,
+    /// Tray rect polls before the first show.
+    attempts: u32,
     status: UpdateStatus,
     step: Option<Step>,
     view: ViewState,
@@ -395,7 +446,8 @@ fn open(live: Live) -> Result<()> {
             Some(instance.into()),
             None,
         )?;
-        let (placement, scale) = resolve((live.tray)(), presentation.card_height);
+        let mut anchor = None;
+        let (placement, scale) = anchored((live.tray)(), &mut anchor, presentation.card_height);
         NOTICE.with(|n| {
             *n.borrow_mut() = Some(Notice {
                 hwnd,
@@ -404,6 +456,8 @@ fn open(live: Live) -> Result<()> {
                 appearance: live.appearance,
                 settings_file: live.settings_file,
                 tray: live.tray,
+                anchor,
+                attempts: 0,
                 status: live.status,
                 step: live.step,
                 view,
@@ -423,14 +477,40 @@ fn open(live: Live) -> Result<()> {
                 animating: false,
             })
         });
-        with_notice(|n| {
-            n.place();
-            let _ = ShowWindow(n.hwnd, SW_SHOWNOACTIVATE);
-        });
+        if placement.caret == Caret::None && tray_notice::should_retry_tray_rect() {
+            // As the launch notice: the icon may have no rect yet (a quiet
+            // launch) or while the tray menu that chose Check for Updates
+            // closes; poll before falling back above the taskbar.
+            let delay = tray_notice::STARTUP_NOTICE_TRAY_RETRY_DELAY.as_millis() as u32;
+            SetTimer(Some(hwnd), RETRY_TIMER, delay, None);
+        } else {
+            with_notice(|n| n.present());
+        }
     }
-    // `role="dialog"`: announce the new notice to a listening reader.
-    panel_uia::raise(panel_uia::Window::Update, Some(Vec::new()));
     Ok(())
+}
+
+/// `role="dialog"` in a window that never takes focus: tell a reader it
+/// opened and what it says, as the webview's new dialog does.
+fn announce() {
+    let copy = with_notice(|n| format!("{}. {}", n.presentation.title, n.presentation.description));
+    if let Some(copy) = copy {
+        panel_uia::opened(panel_uia::Window::Update, &copy);
+    }
+}
+
+/// Placement for `card_height` at the tray icon rect `found`; when that is
+/// missing or unusable, at `anchor`, the last rect that gave a caret.
+fn anchored(found: Option<RECT>, anchor: &mut Option<RECT>, card_height: f64) -> (Placement, f32) {
+    let fresh = resolve(found, card_height);
+    if fresh.0.caret != Caret::None {
+        *anchor = found;
+        return fresh;
+    }
+    match *anchor {
+        Some(_) => resolve(*anchor, card_height),
+        None => fresh,
+    }
 }
 
 /// Placement in logical points on the tray's monitor (or the primary one),
@@ -483,11 +563,45 @@ impl Notice {
         }
         self.presentation = presentation;
         if height {
-            let (placement, scale) = resolve((self.tray)(), self.presentation.card_height);
-            (self.placement, self.scale) = (placement, scale);
-            self.place();
+            self.replace();
         } else {
             self.render_logged();
+        }
+    }
+
+    /// Present the notice for a new height at the tray icon, or at the last
+    /// usable icon rect when the lookup fails. It can fail transiently (the
+    /// physical recheck lost the caret and moved the card 8 pt left after
+    /// Hide); the icon has not moved, so neither does the notice.
+    fn replace(&mut self) {
+        let height = self.presentation.card_height;
+        (self.placement, self.scale) = anchored((self.tray)(), &mut self.anchor, height);
+        self.place();
+    }
+
+    /// Place and show the notice without activating it, then announce it.
+    fn present(&mut self) {
+        self.place();
+        unsafe {
+            let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
+            // After the tray menu (or another window) has handed focus back,
+            // so the focus change does not talk over the announcement.
+            SetTimer(Some(self.hwnd), ANNOUNCE_TIMER, ANNOUNCE_DELAY_MS, None);
+        }
+    }
+
+    /// One tray rect poll before the first show, as the launch notice.
+    fn retry(&mut self) {
+        self.attempts += 1;
+        let height = self.presentation.card_height;
+        (self.placement, self.scale) = anchored((self.tray)(), &mut self.anchor, height);
+        if self.placement.caret != Caret::None
+            || self.attempts >= tray_notice::STARTUP_NOTICE_TRAY_RETRY_ATTEMPTS
+        {
+            unsafe {
+                let _ = KillTimer(Some(self.hwnd), RETRY_TIMER);
+            }
+            self.present();
         }
     }
 
@@ -622,7 +736,9 @@ fn act(action: Action) {
                 h.scene.set_show_update_changelog(show);
                 h.need = true;
             });
+            // The fixture never writes settings.
             if saved.is_none()
+                && !FIXTURE.get()
                 && let Some(file) = file
                 && let Ok(mut settings) = captures_settings::load(&file)
                 && settings.show_update_changelog != show
@@ -1778,6 +1894,15 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 with_notice(|n| n.render_logged());
                 LRESULT(0)
             }
+            WM_TIMER if wp.0 == RETRY_TIMER => {
+                with_notice(|n| n.retry());
+                LRESULT(0)
+            }
+            WM_TIMER if wp.0 == ANNOUNCE_TIMER => {
+                let _ = KillTimer(Some(hwnd), ANNOUNCE_TIMER);
+                announce();
+                LRESULT(0)
+            }
             WM_GETOBJECT if lp.0 as i32 == UiaRootObjectId => UiaReturnRawElementProvider(
                 hwnd,
                 wp,
@@ -1942,6 +2067,32 @@ mod tests {
 
     fn mapped(check: &CheckStatus) -> UpdateStatus {
         status("2026.11.1201", check, false, true, false)
+    }
+
+    #[test]
+    fn a_failed_tray_lookup_keeps_the_caret_and_position_across_heights() {
+        use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN};
+        let (w, h) = unsafe { (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)) };
+        // An icon in the taskbar's notification area, bottom right.
+        let icon = RECT {
+            left: w - 200,
+            top: h - 40,
+            right: w - 176,
+            bottom: h - 4,
+        };
+        let mut anchor = None;
+        let (shown, _) = anchored(Some(icon), &mut anchor, 420.);
+        assert_eq!(shown.caret, Caret::Bottom);
+        assert_eq!(anchor, Some(icon));
+        // Hide collapses the notes; the lookup fails this time.
+        let (hidden, _) = anchored(None, &mut anchor, 180.);
+        assert_eq!(hidden.caret, Caret::Bottom);
+        assert_eq!((hidden.x, hidden.caret_x), (shown.x, shown.caret_x));
+        assert_eq!(hidden.y + hidden.height, shown.y + shown.height);
+        // Without any usable rect yet, it is the caretless fallback.
+        let mut none = None;
+        assert_eq!(anchored(None, &mut none, 180.).0.caret, Caret::None);
+        assert_eq!(none, None);
     }
 
     #[test]

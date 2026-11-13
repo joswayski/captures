@@ -268,6 +268,27 @@ pub enum Event {
     Structure,
     /// A `role="alert"` error appeared; the card's serial, or the page's.
     Alert(Option<u32>),
+    /// A Recover/Discard error appeared under its row (`Some(serial)`) or,
+    /// once that row is gone, under the section.
+    RecoveryAlert(Option<u32>),
+}
+
+/// A text part of the interrupted-recordings section, for UI Automation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecoveryPart {
+    Section,
+    /// `h2`.
+    Title,
+    /// `p.help-text`.
+    Help,
+    /// A row's `strong`.
+    RowTitle(u32),
+    /// A row's date and recovered duration.
+    Detail(u32),
+    /// A row's error (`role="alert"`) or warning.
+    Reason(u32),
+    /// The section's error once its row is gone.
+    Error,
 }
 
 enum Done {
@@ -1305,7 +1326,7 @@ impl History {
             Ok(warning) => self.recovery_error = warning,
             Err(error) => {
                 self.recovery_error = Some(error);
-                self.events.push(Event::Alert(None));
+                self.events.push(Event::RecoveryAlert(Some(serial)));
             }
         }
         self.events.push(Event::Name(Target::Recover(serial)));
@@ -1696,6 +1717,63 @@ impl History {
             rows,
             error,
         })
+    }
+
+    /// Whether the section is shown.
+    pub fn recovery_shown(&self) -> bool {
+        self.texts.recovery.is_some()
+    }
+
+    /// The row's error, shown in place of its warning, and whether it is
+    /// that error (`role="alert"`) rather than the warning.
+    pub fn recovery_reason(&self, serial: u32) -> Option<(String, bool)> {
+        let error = self
+            .recovery_error
+            .clone()
+            .filter(|_| self.recovery_error_row == Some(serial));
+        match error {
+            Some(error) => Some((error, true)),
+            None => self.draft(serial)?.reason().map(|reason| (reason, false)),
+        }
+    }
+
+    /// The section's own error: a Recover/Discard error whose row is gone.
+    pub fn recovery_orphaned_error(&self) -> Option<String> {
+        let orphaned = self
+            .recovery_error_row
+            .is_none_or(|serial| self.draft(serial).is_none());
+        self.recovery_error.clone().filter(|_| orphaned)
+    }
+
+    /// A section part's laid-out rect in client coordinates.
+    pub fn recovery_part_rect(&self, part: RecoveryPart) -> Option<Rect> {
+        let l = self.texts.recovery.as_ref()?;
+        let s6 = self.t.n("s-6");
+        let x = l.section.x + 1. + s6;
+        let at = |text: &Text, y: f32| Some(self.client(Rect::new(x, y, text.width, text.height)));
+        let row = |serial: u32| l.rows.iter().find(|row| row.serial == serial);
+        match part {
+            RecoveryPart::Section => Some(self.client(l.section)),
+            RecoveryPart::Title => at(&l.title, l.section.y + 1. + s6),
+            RecoveryPart::Help => at(&l.help, l.help_y),
+            RecoveryPart::RowTitle(serial) => {
+                let row = row(serial)?;
+                at(&row.title, row.text_y)
+            }
+            RecoveryPart::Detail(serial) => {
+                let row = row(serial)?;
+                at(&row.detail, row.text_y + row.title.height + 2.)
+            }
+            RecoveryPart::Reason(serial) => {
+                let row = row(serial)?;
+                let y = row.text_y + row.title.height + 2. + row.detail.height + 2.;
+                at(row.reason.as_ref()?, y)
+            }
+            RecoveryPart::Error => {
+                let (text, y) = l.error.as_ref()?;
+                at(text, *y)
+            }
+        }
     }
 
     /// A Recover or Discard button's rect in content coordinates.

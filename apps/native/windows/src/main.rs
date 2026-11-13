@@ -93,7 +93,8 @@ pub enum Scene {
     Feedback,
     /// `--scene update --update NAME`: the floating update notice on a
     /// shared `update_notice::fixture` status (`--tool fallback` without a
-    /// tray icon, `--select notes-hidden` with What's new collapsed).
+    /// tray icon, `--select notes-hidden` with What's new collapsed). Without
+    /// `--screenshot` it opens as the live floating notice until dismissed.
     Update,
 }
 
@@ -276,9 +277,6 @@ fn parse_args(args: impl Iterator<Item = String>, preview: bool) -> Result<Optio
     }
     if options.quiet && !options.live {
         return Err("--captures-autostart needs --live".into());
-    }
-    if options.scene == Scene::Update && options.screenshot.is_none() {
-        return Err("--scene update renders with --screenshot".into());
     }
     if matches!(options.scene, Scene::Editor | Scene::Recording) && options.artifact.is_none() {
         return Err("--scene editor/recording needs --artifact ID".into());

@@ -287,6 +287,10 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                 Role::Radio => UIA_RadioButtonControlTypeId.0,
                 Role::Edit => UIA_EditControlTypeId.0,
             }),
+            // Chromium's `<h1>`–`<h6>`: a Text element a reader calls "heading".
+            UIA_LocalizedControlTypePropertyId if matches!(i.role, Role::Heading(_)) => {
+                VARIANT::from(BSTR::from("heading"))
+            }
             UIA_HeadingLevelPropertyId => VARIANT::from(match i.role {
                 Role::Heading(level) => HeadingLevel1.0 + level.clamp(1, 9) - 1,
                 _ => HeadingLevel_None.0,
@@ -643,6 +647,32 @@ pub fn raise(window: Window, before: Option<Vec<Item>>) {
                 }
             };
         }
+    }
+}
+
+/// A window appeared without taking focus (the launch and update notices):
+/// raise WindowOpened on its root, its new parts, and `text` as one
+/// notification. Call once the window is visible: the quiet launch raised
+/// its announcement while the launch notice was still hidden, waiting for
+/// the tray icon, and a physical UIA logger saw nothing. `ImportantAll` so a focus change elsewhere (the
+/// setup window closing, the tray menu dismissing) does not flush it.
+pub fn opened(window: Window, text: &str) {
+    let root = node(window, None);
+    unsafe {
+        let _ = UiaRaiseAutomationEvent(&root, UIA_Window_WindowOpenedEventId);
+        let _ = UiaRaiseStructureChangedEvent(
+            &root,
+            StructureChangeType_ChildrenInvalidated,
+            runtime_id(window, None).as_mut_ptr(),
+            4,
+        );
+        let _ = UiaRaiseNotificationEvent(
+            &root,
+            NotificationKind_Other,
+            NotificationProcessing_ImportantAll,
+            &BSTR::from(text),
+            &BSTR::from(format!("{window:?}-opened").to_lowercase()),
+        );
     }
 }
 

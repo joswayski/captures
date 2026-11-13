@@ -681,16 +681,18 @@ impl Stack {
                 M32: cy as f32,
             } * base;
             unsafe { dc.SetTransform(&m) };
-            let result = self.paint_card(dc, g, t, index, local).and_then(|()| {
-                let dim =
-                    (preview::collapsed_dim_opacity(depth) * progress * (1. - 0.35 * fan)) as f32;
-                if dim > 0. {
-                    let mut shade = t.color("glass-strong-solid");
-                    shade.a *= dim;
-                    gfx::fill_round(dc, local, t.n("thumbnail-card-radius"), shade)?;
-                }
-                Ok(())
-            });
+            let result = glow(dc, t, local, (fan * progress) as f32)
+                .and_then(|()| self.paint_card(dc, g, t, index, local))
+                .and_then(|()| {
+                    let dim = (preview::collapsed_dim_opacity(depth) * progress * (1. - 0.35 * fan))
+                        as f32;
+                    if dim > 0. {
+                        let mut shade = t.color("glass-strong-solid");
+                        shade.a *= dim;
+                        gfx::fill_round(dc, local, t.n("thumbnail-card-radius"), shade)?;
+                    }
+                    Ok(())
+                });
             unsafe { dc.SetTransform(&base) };
             result?;
         }
@@ -890,6 +892,30 @@ impl Stack {
         }
         Ok(())
     }
+}
+
+/// The hovered pile's accent glow behind each card, eased in with its fan
+/// (the hovered `.thumbnail-stack-minimized > .thumbnail-card` box-shadow
+/// `0 0 0 1px` accent at 0.55 and `0 0 22px` accent at 0.28, after the
+/// card shadow that `paint_card` draws).
+fn glow(dc: &ID2D1DeviceContext, t: &Tokens, card: Rect, amount: f32) -> Result<()> {
+    if amount <= 0. {
+        return Ok(());
+    }
+    let accent = t.color("theme-accent");
+    let layer = |blur: f32, spread: f32, alpha: f32| crate::tokens::Shadow {
+        x: 0.,
+        y: 0.,
+        blur,
+        spread,
+        color: [accent.r, accent.g, accent.b, accent.a * alpha * amount],
+    };
+    gfx::shadow(
+        dc,
+        card,
+        t.n("thumbnail-card-radius"),
+        &[layer(0., 1., 0.55), layer(22., 0., 0.28)],
+    )
 }
 
 /// `--scene capture --tool previews`: shipping's `?view=thumbnail&mock=1`

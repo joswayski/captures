@@ -7,7 +7,9 @@
 //! the editor in this host so far), "File missing", the trash button, the
 //! date and details, the dropped-frame warning, its two actions and its
 //! error. Every card is in the tree, virtualised or not; cards outside the
-//! viewport report IsOffscreen.
+//! viewport report IsOffscreen. The interrupted-recordings section has its
+//! `h2`, help text and, per row, the title, date line, warning or
+//! `role="alert"` error, and Recover and Discard.
 use captures_app::history_view;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::ClientToScreen;
@@ -18,7 +20,7 @@ use windows::Win32::UI::Accessibility::*;
 use windows::core::*;
 
 use crate::history::{
-    Event, FILTERED_BODY, FILTERED_TITLE, FILTERS, History, Target, with_history,
+    Event, FILTERED_BODY, FILTERED_TITLE, FILTERS, History, RecoveryPart, Target, with_history,
 };
 use crate::scene::Rect;
 
@@ -47,9 +49,19 @@ pub enum Id {
     Warning(u32),
     Action(u32, usize),
     CardError(u32),
+    /// `.recording-recovery-section` and its `h2` and help text.
+    Recovery,
+    RecoveryTitle,
+    RecoveryHelp,
+    /// An interrupted recording's title, date line and warning or error.
+    RowTitle(u32),
+    RowDetail(u32),
+    RowReason(u32),
     /// An interrupted recording's Recover and Discard buttons.
     Recover(u32),
     Discard(u32),
+    /// The section's error once its row is gone.
+    RecoveryError,
 }
 
 fn unavailable() -> Error {
@@ -108,13 +120,30 @@ fn children(h: &History, id: Id) -> Vec<Id> {
             if h.error.is_some() {
                 list.push(Id::Error);
             }
-            for draft in h.drafts.iter().filter(|d| d.actionable()) {
-                list.extend([Id::Recover(draft.serial), Id::Discard(draft.serial)]);
+            if h.recovery_shown() {
+                list.push(Id::Recovery);
             }
             list.push(if empty_shown(h) { Id::Empty } else { Id::Grid });
             list
         }
         Id::Filters => (0..FILTERS.len()).map(Id::Filter).collect(),
+        Id::Recovery => {
+            let mut list = vec![Id::RecoveryTitle, Id::RecoveryHelp];
+            for draft in &h.drafts {
+                let serial = draft.serial;
+                list.extend([Id::RowTitle(serial), Id::RowDetail(serial)]);
+                if h.recovery_reason(serial).is_some() {
+                    list.push(Id::RowReason(serial));
+                }
+                if draft.actionable() {
+                    list.extend([Id::Recover(serial), Id::Discard(serial)]);
+                }
+            }
+            if h.recovery_orphaned_error().is_some() {
+                list.push(Id::RecoveryError);
+            }
+            list
+        }
         Id::Empty if h.loading => vec![Id::EmptyTitle],
         Id::Empty => vec![Id::EmptyTitle, Id::EmptyBody],
         Id::Grid => h
@@ -158,6 +187,14 @@ fn parent(id: Id) -> Option<Id> {
         | Id::Warning(s)
         | Id::Action(s, _)
         | Id::CardError(s) => Id::Card(s),
+        Id::RecoveryTitle
+        | Id::RecoveryHelp
+        | Id::RowTitle(_)
+        | Id::RowDetail(_)
+        | Id::RowReason(_)
+        | Id::Recover(_)
+        | Id::Discard(_)
+        | Id::RecoveryError => Id::Recovery,
         _ => Id::Root,
     })
 }
@@ -176,6 +213,7 @@ fn rect(h: &History, id: Id) -> Rect {
     let image_h = history_view::CARD_IMAGE_HEIGHT as f32;
     let body = (history_view::CARD_IMAGE_HEIGHT + history_view::CARD_DIVIDER) as f32 + 12.;
     let width = |serial: u32| card(serial).w - 26.;
+    let part = |part| h.recovery_part_rect(part).unwrap_or_default();
     match id {
         Id::Root => Rect::new(0., 0., h.w, h.h),
         Id::Title => h.client(Rect::new(l.heading.x, l.heading.y, l.heading.w, l.title_h)),
@@ -221,6 +259,13 @@ fn rect(h: &History, id: Id) -> Rect {
                 (c.y + c.h - 12. - (actions.y + actions.h + 6.)).max(0.),
             )
         }
+        Id::Recovery => part(RecoveryPart::Section),
+        Id::RecoveryTitle => part(RecoveryPart::Title),
+        Id::RecoveryHelp => part(RecoveryPart::Help),
+        Id::RowTitle(serial) => part(RecoveryPart::RowTitle(serial)),
+        Id::RowDetail(serial) => part(RecoveryPart::Detail(serial)),
+        Id::RowReason(serial) => part(RecoveryPart::Reason(serial)),
+        Id::RecoveryError => part(RecoveryPart::Error),
         _ => target(id).map_or_else(Rect::default, |t| h.target_rect(t)),
     }
 }
@@ -253,6 +298,19 @@ fn name(h: &History, id: Id) -> String {
         Id::CardError(serial) => item(serial)
             .and_then(|it| it.error.clone())
             .unwrap_or_default(),
+        Id::Recovery => String::new(),
+        Id::RecoveryTitle => copy.recovery_title.into(),
+        Id::RecoveryHelp => copy.recovery_help.into(),
+        Id::RowTitle(serial) => h
+            .draft(serial)
+            .map_or_else(String::new, |d| d.row.title.clone()),
+        Id::RowDetail(serial) => h
+            .draft(serial)
+            .map_or_else(String::new, |d| d.row.detail.clone()),
+        Id::RowReason(serial) => h
+            .recovery_reason(serial)
+            .map_or_else(String::new, |(reason, _)| reason),
+        Id::RecoveryError => h.recovery_orphaned_error().unwrap_or_default(),
         _ => target(id).map_or_else(String::new, |t| h.name(t)),
     }
 }
@@ -269,7 +327,7 @@ fn control_type(id: Id) -> UIA_CONTROLTYPE_ID {
         | Id::Recover(_)
         | Id::Discard(_) => UIA_ButtonControlTypeId,
         Id::Action(..) => UIA_ButtonControlTypeId,
-        Id::Filters | Id::Empty | Id::Grid | Id::Card(_) => UIA_GroupControlTypeId,
+        Id::Filters | Id::Empty | Id::Grid | Id::Card(_) | Id::Recovery => UIA_GroupControlTypeId,
         _ => UIA_TextControlTypeId,
     }
 }
@@ -300,6 +358,13 @@ fn runtime_id(id: Id) -> [i32; 4] {
         Id::CardError(s) => (21, s, 0),
         Id::Recover(s) => (22, s, 0),
         Id::Discard(s) => (23, s, 0),
+        Id::Recovery => (24, 0, 0),
+        Id::RecoveryTitle => (25, 0, 0),
+        Id::RecoveryHelp => (26, 0, 0),
+        Id::RowTitle(s) => (27, s, 0),
+        Id::RowDetail(s) => (28, s, 0),
+        Id::RowReason(s) => (29, s, 0),
+        Id::RecoveryError => (30, 0, 0),
     };
     // A distinct first part keeps these apart from Preferences' ids.
     [UiaAppendRuntimeId as i32, 100 + kind, a as i32, b as i32]
@@ -409,11 +474,26 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                     VARIANT::from(BSTR::from("region"))
                 }
                 UIA_HeadingLevelPropertyId if id == Id::Title => VARIANT::from(HeadingLevel1.0),
-                UIA_HeadingLevelPropertyId if id == Id::EmptyTitle => {
+                UIA_HeadingLevelPropertyId if matches!(id, Id::EmptyTitle | Id::RecoveryTitle) => {
                     VARIANT::from(HeadingLevel2.0)
                 }
+                // Shipping's buttons are only "Recover" and "Discard"; the
+                // row's title and date tell a reader which take they act on.
+                UIA_HelpTextPropertyId => match id {
+                    Id::Recover(serial) | Id::Discard(serial) => {
+                        h.draft(serial).map_or_else(VARIANT::default, |d| {
+                            VARIANT::from(BSTR::from(format!("{}, {}", d.row.title, d.row.detail)))
+                        })
+                    }
+                    _ => VARIANT::default(),
+                },
                 UIA_LiveSettingPropertyId => match id {
-                    Id::Error | Id::CardError(_) => VARIANT::from(Assertive.0),
+                    Id::Error | Id::CardError(_) | Id::RecoveryError => VARIANT::from(Assertive.0),
+                    Id::RowReason(serial)
+                        if h.recovery_reason(serial).is_some_and(|(_, error)| error) =>
+                    {
+                        VARIANT::from(Assertive.0)
+                    }
                     // The loading section is `aria-live="polite"`.
                     Id::Empty if h.loading => VARIANT::from(Polite.0),
                     _ => VARIANT::default(),
@@ -627,18 +707,28 @@ pub fn raise(events: &[(Event, String)]) {
                     );
                 }
                 Event::Alert(card) => {
-                    let alert = node(card.map_or(Id::Error, Id::CardError));
-                    let _ = UiaRaiseAutomationEvent(&alert, UIA_SystemAlertEventId);
-                    let _ = UiaRaiseNotificationEvent(
-                        &alert,
-                        NotificationKind_Other,
-                        NotificationProcessing_ImportantMostRecent,
-                        &BSTR::from(detail.as_str()),
-                        &BSTR::from("history-error"),
-                    );
+                    alert(card.map_or(Id::Error, Id::CardError), detail);
+                }
+                Event::RecoveryAlert(row) => {
+                    alert(row.map_or(Id::RecoveryError, Id::RowReason), detail);
                 }
             }
         }
+    }
+}
+
+/// A `role="alert"` appeared: raise SystemAlert and an assertive notification.
+fn alert(id: Id, text: &str) {
+    let alert = node(id);
+    unsafe {
+        let _ = UiaRaiseAutomationEvent(&alert, UIA_SystemAlertEventId);
+        let _ = UiaRaiseNotificationEvent(
+            &alert,
+            NotificationKind_Other,
+            NotificationProcessing_ImportantMostRecent,
+            &BSTR::from(text),
+            &BSTR::from("history-error"),
+        );
     }
 }
 
@@ -647,14 +737,17 @@ pub fn describe(h: &History, events: Vec<Event>) -> Vec<(Event, String)> {
     events
         .into_iter()
         .map(|event| {
+            // A row that went away reports under the section.
+            let event = match event {
+                Event::RecoveryAlert(Some(serial)) if h.draft(serial).is_none() => {
+                    Event::RecoveryAlert(None)
+                }
+                event => event,
+            };
             let detail = match event {
                 Event::Name(target) => h.name(target),
-                // The page error, else a Recover/Discard error.
-                Event::Alert(None) => h
-                    .error
-                    .clone()
-                    .or_else(|| h.recovery_error.clone())
-                    .unwrap_or_default(),
+                Event::Alert(None) => h.error.clone().unwrap_or_default(),
+                Event::RecoveryAlert(_) => h.recovery_error.clone().unwrap_or_default(),
                 Event::Alert(Some(serial)) => h
                     .item(serial)
                     .and_then(|it| it.error.clone())
@@ -664,4 +757,72 @@ pub fn describe(h: &History, events: Vec<Event>) -> Vec<(Event, String)> {
             (event, detail)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gfx::Gfx;
+
+    #[test]
+    fn interrupted_recordings_expose_their_text_error_and_row_names() {
+        unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok().unwrap() };
+        let data = std::env::temp_dir().join(format!("captures-recovery-{}", std::process::id()));
+        std::fs::create_dir_all(&data).unwrap();
+        let options = crate::parse(
+            [
+                "test",
+                "--history-root",
+                &data.join("history").to_string_lossy(),
+                "--settings-file",
+                &data.join("settings.json").to_string_lossy(),
+                "--scene",
+                "history",
+                "--select",
+                "recovery",
+            ]
+            .map(String::from)
+            .into_iter(),
+        )
+        .unwrap();
+        let tokens = crate::appearance::tokens(Some("light"), &Default::default());
+        let g = Gfx::new(&tokens, false).unwrap();
+        let h = crate::history::render_offscreen(&options, g, tokens, (1100., 900.)).unwrap();
+        assert!(children(&h, Id::Root).contains(&Id::Recovery));
+        let section = children(&h, Id::Recovery);
+        let names: Vec<String> = section.iter().map(|&id| name(&h, id)).collect();
+        let (first, second) = (h.drafts[0].serial, h.drafts[1].serial);
+        assert_eq!(section[0], Id::RecoveryTitle);
+        assert_eq!(names[0], "Interrupted recordings");
+        assert_eq!(section[1], Id::RecoveryHelp);
+        assert!(names[1].starts_with("These recordings stopped"));
+        // Row 1: title, date line, its Recover error in place of its warning.
+        assert_eq!(
+            &section[2..7],
+            &[
+                Id::RowTitle(first),
+                Id::RowDetail(first),
+                Id::RowReason(first),
+                Id::Recover(first),
+                Id::Discard(first),
+            ]
+        );
+        assert_eq!(names[2], "Video recording");
+        assert!(names[3].ends_with("1:23 recovered so far"), "{}", names[3]);
+        assert_eq!(names[4], "No playable segments could be recovered");
+        assert_eq!(h.recovery_reason(first), Some((names[4].clone(), true)));
+        assert_eq!(name(&h, Id::RowTitle(second)), "GIF recording");
+        assert_eq!(h.recovery_reason(second), None);
+        // Every part of the section is laid out where it is drawn.
+        for &id in &section {
+            let r = rect(&h, id);
+            assert!(r.w > 0. && r.h > 0., "{id:?} has no rect");
+            assert_eq!(parent(id), Some(Id::Recovery));
+        }
+        // The unreadable bundle shows its reason and no buttons.
+        let third = h.drafts[2].serial;
+        assert!(section.contains(&Id::RowReason(third)));
+        assert!(!section.contains(&Id::Recover(third)));
+        let _ = std::fs::remove_dir_all(&data);
+    }
 }
