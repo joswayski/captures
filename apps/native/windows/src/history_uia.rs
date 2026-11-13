@@ -298,8 +298,8 @@ fn name(h: &History, id: Id) -> String {
         Id::CardError(serial) => item(serial)
             .and_then(|it| it.error.clone())
             .unwrap_or_default(),
-        Id::Recovery => String::new(),
-        Id::RecoveryTitle => copy.recovery_title.into(),
+        // `aria-labelledby` its `h2`.
+        Id::Recovery | Id::RecoveryTitle => copy.recovery_title.into(),
         Id::RecoveryHelp => copy.recovery_help.into(),
         Id::RowTitle(serial) => h
             .draft(serial)
@@ -329,6 +329,17 @@ fn control_type(id: Id) -> UIA_CONTROLTYPE_ID {
         Id::Action(..) => UIA_ButtonControlTypeId,
         Id::Filters | Id::Empty | Id::Grid | Id::Card(_) | Id::Recovery => UIA_GroupControlTypeId,
         _ => UIA_TextControlTypeId,
+    }
+}
+
+/// The `h1` and `h2`s. UIA has no heading control type: like Chromium, a
+/// heading is a Text element with `UIA_HeadingLevelPropertyId`, which
+/// Narrator's heading navigation reads, and the localized type "heading".
+fn heading_level(id: Id) -> Option<UIA_HEADINGLEVEL_ID> {
+    match id {
+        Id::Title => Some(HeadingLevel1),
+        Id::EmptyTitle | Id::RecoveryTitle => Some(HeadingLevel2),
+        _ => None,
     }
 }
 
@@ -473,9 +484,11 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                 UIA_LocalizedLandmarkTypePropertyId if id == Id::Grid => {
                     VARIANT::from(BSTR::from("region"))
                 }
-                UIA_HeadingLevelPropertyId if id == Id::Title => VARIANT::from(HeadingLevel1.0),
-                UIA_HeadingLevelPropertyId if matches!(id, Id::EmptyTitle | Id::RecoveryTitle) => {
-                    VARIANT::from(HeadingLevel2.0)
+                UIA_LocalizedControlTypePropertyId if heading_level(id).is_some() => {
+                    VARIANT::from(BSTR::from("heading"))
+                }
+                UIA_HeadingLevelPropertyId => {
+                    VARIANT::from(heading_level(id).unwrap_or(HeadingLevel_None).0)
                 }
                 // Shipping's buttons are only "Recover" and "Discard"; the
                 // row's title and date tell a reader which take they act on.
@@ -789,6 +802,8 @@ mod tests {
         let g = Gfx::new(&tokens, false).unwrap();
         let h = crate::history::render_offscreen(&options, g, tokens, (1100., 900.)).unwrap();
         assert!(children(&h, Id::Root).contains(&Id::Recovery));
+        assert_eq!(name(&h, Id::Recovery), "Interrupted recordings");
+        assert_eq!(control_type(Id::Recovery), UIA_GroupControlTypeId);
         let section = children(&h, Id::Recovery);
         let names: Vec<String> = section.iter().map(|&id| name(&h, id)).collect();
         let (first, second) = (h.drafts[0].serial, h.drafts[1].serial);
@@ -824,5 +839,27 @@ mod tests {
         assert!(section.contains(&Id::RowReason(third)));
         assert!(!section.contains(&Id::Recover(third)));
         let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn headings_are_text_with_a_heading_level() {
+        // Narrator's H finds Text (or Group) elements with a HeadingLevel.
+        for (id, level) in [
+            (Id::Title, HeadingLevel1),
+            (Id::EmptyTitle, HeadingLevel2),
+            (Id::RecoveryTitle, HeadingLevel2),
+        ] {
+            assert_eq!(heading_level(id), Some(level), "{id:?}");
+            assert_eq!(control_type(id), UIA_TextControlTypeId, "{id:?}");
+        }
+        for id in [
+            Id::Root,
+            Id::Lede,
+            Id::Recovery,
+            Id::RecoveryHelp,
+            Id::RowTitle(1),
+        ] {
+            assert_eq!(heading_level(id), None, "{id:?}");
+        }
     }
 }

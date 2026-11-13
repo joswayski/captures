@@ -1493,31 +1493,9 @@ fn focus_overlay() {
 /// unless one of those menus was open. `RegionSession::prepare` then
 /// dismisses Start/Search as shipping does.
 fn wait_for_shell_menus(from_menu: bool) {
-    const CLASSES: [PCWSTR; 3] = [
-        w!("#32768"),
-        w!("TopLevelWindowForOverflowXamlIsland"),
-        w!("NotifyIconOverflowWindow"),
-    ];
-    let visible = || {
-        CLASSES.iter().any(|class| {
-            let mut after = None;
-            loop {
-                let Ok(hwnd) = (unsafe { FindWindowExW(None, after, *class, None) }) else {
-                    return false;
-                };
-                if hwnd.is_invalid() {
-                    return false;
-                }
-                if unsafe { IsWindowVisible(hwnd) }.as_bool() && !cloaked(hwnd) {
-                    return true;
-                }
-                after = Some(hwnd);
-            }
-        })
-    };
     let started = Instant::now();
-    let open = visible();
-    while visible() && started.elapsed() < Duration::from_millis(750) {
+    let open = shell_menus_open();
+    while shell_menus_open() && started.elapsed() < SHELL_MENUS_WAIT {
         std::thread::sleep(Duration::from_millis(16));
     }
     // Menu selection fade (`SPI_GETSELECTIONFADE`) and flyout close animations
@@ -1525,6 +1503,34 @@ fn wait_for_shell_menus(from_menu: bool) {
     if from_menu || open {
         std::thread::sleep(Duration::from_millis(200));
     }
+}
+
+/// How long to wait for the tray menu and overflow flyout to close.
+pub const SHELL_MENUS_WAIT: Duration = Duration::from_millis(750);
+
+/// A popup menu (the tray menu) or Windows 11's notification-area overflow
+/// flyout is visible.
+pub fn shell_menus_open() -> bool {
+    const CLASSES: [PCWSTR; 3] = [
+        w!("#32768"),
+        w!("TopLevelWindowForOverflowXamlIsland"),
+        w!("NotifyIconOverflowWindow"),
+    ];
+    CLASSES.iter().any(|class| {
+        let mut after = None;
+        loop {
+            let Ok(hwnd) = (unsafe { FindWindowExW(None, after, *class, None) }) else {
+                return false;
+            };
+            if hwnd.is_invalid() {
+                return false;
+            }
+            if unsafe { IsWindowVisible(hwnd) }.as_bool() && !cloaked(hwnd) {
+                return true;
+            }
+            after = Some(hwnd);
+        }
+    })
 }
 
 fn cloaked(hwnd: HWND) -> bool {

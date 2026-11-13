@@ -50,8 +50,17 @@ pub const TITLE: &str = "Captures Update";
 const RELEASES_URL: &str = "https://github.com/joswayski/captures/releases";
 const CLASS: PCWSTR = w!("CapturesUpdateNotice");
 const ANIMATION_TIMER: usize = 1;
-/// Polls the tray icon rect before the first show, like the launch notice.
+/// Polls the tray icon rect before the first show, like the launch notice,
+/// and after a caretless fallback show until the icon has a usable rect.
 const RETRY_TIMER: usize = 2;
+/// Polls before the first show while the tray menu or overflow flyout is
+/// still open (New Capture's bounded shell-menu wait).
+const MENU_WAIT_POLLS: u32 = (crate::capture::SHELL_MENUS_WAIT.as_millis()
+    / tray_notice::STARTUP_NOTICE_TRAY_RETRY_DELAY.as_millis()) as u32;
+/// After a fallback show, poll this often, this many times (a minute), for a
+/// usable tray rect, such as the overflow chevron once the flyout closes.
+const REPLACE_DELAY_MS: u32 = 250;
+const REPLACE_POLLS: u32 = 240;
 /// Announces the shown notice once focus has settled.
 const ANNOUNCE_TIMER: usize = 3;
 const ANNOUNCE_DELAY_MS: u32 = 400;
@@ -383,8 +392,12 @@ struct Notice {
     /// The last usable tray icon rect. A re-placement keeps it when a later
     /// lookup fails, so the caret and position stay put.
     anchor: Option<RECT>,
-    /// Tray rect polls before the first show.
+    /// Tray rect polls in this phase: with the tray menu or overflow flyout
+    /// open, and without.
+    menu_waits: u32,
     attempts: u32,
+    /// Shown (`present`); a caretless show keeps polling to re-place.
+    shown: bool,
     status: UpdateStatus,
     step: Option<Step>,
     view: ViewState,
@@ -447,7 +460,8 @@ fn open(live: Live) -> Result<()> {
             None,
         )?;
         let mut anchor = None;
-        let (placement, scale) = anchored((live.tray)(), &mut anchor, presentation.card_height);
+        let (placement, scale) =
+            anchored(tray_rect(live.tray), &mut anchor, presentation.card_height);
         NOTICE.with(|n| {
             *n.borrow_mut() = Some(Notice {
                 hwnd,
@@ -457,7 +471,9 @@ fn open(live: Live) -> Result<()> {
                 settings_file: live.settings_file,
                 tray: live.tray,
                 anchor,
+                menu_waits: 0,
                 attempts: 0,
+                shown: false,
                 status: live.status,
                 step: live.step,
                 view,
@@ -479,8 +495,9 @@ fn open(live: Live) -> Result<()> {
         });
         if placement.caret == Caret::None && tray_notice::should_retry_tray_rect() {
             // As the launch notice: the icon may have no rect yet (a quiet
-            // launch) or while the tray menu that chose Check for Updates
-            // closes; poll before falling back above the taskbar.
+            // launch), or the tray menu that chose Check for Updates and the
+            // overflow flyout holding the icon are still closing; poll before
+            // falling back above the taskbar.
             let delay = tray_notice::STARTUP_NOTICE_TRAY_RETRY_DELAY.as_millis() as u32;
             SetTimer(Some(hwnd), RETRY_TIMER, delay, None);
         } else {
@@ -496,6 +513,58 @@ fn announce() {
     let copy = with_notice(|n| format!("{}. {}", n.presentation.title, n.presentation.description));
     if let Some(copy) = copy {
         panel_uia::opened(panel_uia::Window::Update, &copy);
+    }
+}
+
+/// The tray icon rect, or none while the tray menu or overflow flyout is
+/// open: inside the flyout the icon's rect is above the taskbar (no caret),
+/// and once the flyout closes it moves to the hidden-icons chevron.
+fn tray_rect(tray: TrayRect) -> Option<RECT> {
+    if crate::capture::shell_menus_open() {
+        None
+    } else {
+        tray()
+    }
+}
+
+/// What one tray rect poll does with the notice.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Poll {
+    Wait,
+    /// The first show, at the caret or (bounds spent) the caretless fallback.
+    Show,
+    /// A fallback-placed notice moves to the usable rect, without focus.
+    Replace,
+    /// Stop polling; a fallback-placed notice stays where it is.
+    Stop,
+}
+
+/// The next step after a poll. `menu_waits` and `attempts` count this
+/// phase's polls, including this one, with the tray menu or overflow flyout
+/// open and without; `caret` says the poll found a usable rect (never while
+/// they are open).
+fn next_poll(shown: bool, menu_waits: u32, attempts: u32, menus_open: bool, caret: bool) -> Poll {
+    if shown {
+        return if caret {
+            Poll::Replace
+        } else if menu_waits + attempts >= REPLACE_POLLS {
+            Poll::Stop
+        } else {
+            Poll::Wait
+        };
+    }
+    if caret {
+        Poll::Show
+    } else if menus_open {
+        if menu_waits >= MENU_WAIT_POLLS {
+            Poll::Show
+        } else {
+            Poll::Wait
+        }
+    } else if attempts >= tray_notice::STARTUP_NOTICE_TRAY_RETRY_ATTEMPTS {
+        Poll::Show
+    } else {
+        Poll::Wait
     }
 }
 
@@ -575,12 +644,13 @@ impl Notice {
     /// Hide); the icon has not moved, so neither does the notice.
     fn replace(&mut self) {
         let height = self.presentation.card_height;
-        (self.placement, self.scale) = anchored((self.tray)(), &mut self.anchor, height);
+        (self.placement, self.scale) = anchored(tray_rect(self.tray), &mut self.anchor, height);
         self.place();
     }
 
     /// Place and show the notice without activating it, then announce it.
     fn present(&mut self) {
+        self.shown = true;
         self.place();
         unsafe {
             let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
@@ -590,18 +660,46 @@ impl Notice {
         }
     }
 
-    /// One tray rect poll before the first show, as the launch notice.
+    /// One tray rect poll: before the first show, as the launch notice but
+    /// first waiting (bounded) for the tray menu and overflow flyout to
+    /// close; after a caretless fallback show, until a usable rect appears.
     fn retry(&mut self) {
-        self.attempts += 1;
+        let open = crate::capture::shell_menus_open();
+        if open {
+            self.menu_waits += 1;
+        } else {
+            self.attempts += 1;
+        }
+        let found = if open { None } else { (self.tray)() };
         let height = self.presentation.card_height;
-        (self.placement, self.scale) = anchored((self.tray)(), &mut self.anchor, height);
-        if self.placement.caret != Caret::None
-            || self.attempts >= tray_notice::STARTUP_NOTICE_TRAY_RETRY_ATTEMPTS
-        {
-            unsafe {
-                let _ = KillTimer(Some(self.hwnd), RETRY_TIMER);
+        let (placement, scale) = anchored(found, &mut self.anchor, height);
+        let caret = placement.caret != Caret::None;
+        let hwnd = self.hwnd;
+        let stop = || unsafe {
+            let _ = KillTimer(Some(hwnd), RETRY_TIMER);
+        };
+        match next_poll(self.shown, self.menu_waits, self.attempts, open, caret) {
+            Poll::Wait => {}
+            Poll::Show => {
+                (self.placement, self.scale) = (placement, scale);
+                self.present();
+                if caret {
+                    stop();
+                } else {
+                    // Placed by the fallback (the flyout may stay open):
+                    // keep watching for the icon's rect.
+                    (self.menu_waits, self.attempts) = (0, 0);
+                    unsafe {
+                        SetTimer(Some(self.hwnd), RETRY_TIMER, REPLACE_DELAY_MS, None);
+                    }
+                }
             }
-            self.present();
+            Poll::Replace => {
+                stop();
+                (self.placement, self.scale) = (placement, scale);
+                self.place();
+            }
+            Poll::Stop => stop(),
         }
     }
 
@@ -2093,6 +2191,38 @@ mod tests {
         let mut none = None;
         assert_eq!(anchored(None, &mut none, 180.).0.caret, Caret::None);
         assert_eq!(none, None);
+    }
+
+    #[test]
+    fn an_overflow_flyout_delays_the_show_and_a_fallback_show_re_places_later() {
+        let tries = tray_notice::STARTUP_NOTICE_TRAY_RETRY_ATTEMPTS;
+        // Before the first show: wait out the open flyout (bounded) ...
+        assert_eq!(next_poll(false, 1, 0, true, false), Poll::Wait);
+        assert_eq!(
+            next_poll(false, MENU_WAIT_POLLS - 1, 0, true, false),
+            Poll::Wait
+        );
+        // ... then the tray rect retries begin afresh once it closes.
+        assert_eq!(
+            next_poll(false, MENU_WAIT_POLLS - 1, 1, false, false),
+            Poll::Wait
+        );
+        assert_eq!(next_poll(false, 3, 2, false, true), Poll::Show);
+        assert_eq!(next_poll(false, 0, tries, false, false), Poll::Show);
+        // A flyout still open past the bound: the caretless fallback shows.
+        assert_eq!(
+            next_poll(false, MENU_WAIT_POLLS, 0, true, false),
+            Poll::Show
+        );
+        // Fallback-placed: keep polling while the flyout stays open, then
+        // move to the chevron's rect once it appears.
+        assert_eq!(next_poll(true, 30, 0, true, false), Poll::Wait);
+        assert_eq!(next_poll(true, 30, 5, false, false), Poll::Wait);
+        assert_eq!(next_poll(true, 30, 6, false, true), Poll::Replace);
+        assert_eq!(
+            next_poll(true, REPLACE_POLLS - 1, 1, false, false),
+            Poll::Stop
+        );
     }
 
     #[test]

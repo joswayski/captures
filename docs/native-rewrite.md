@@ -7639,6 +7639,39 @@ the placement keeps its caret and edge across a failed lookup, and History's
 UIA tree holds the recovery rows' text and error), and offscreen renders of
 the notes-hidden and notes-shown notice identical to the earlier ones.
 
+Physical recheck at 5b4b82ef (Windows 11, 4K at 150%, Narrator, UIA
+inspection):
+
+- PASS: the caret stays put after Hide and What's new, and on launch-check
+  opens. History's interrupted-recording rows are read. The hovered pile
+  glows.
+- The update and launch notices raise their UIA notifications, but Narrator
+  did not speak them. In that setup it did not speak a WPF control app's own
+  notifications either, so the environment may be the cause. Unchanged.
+- From tray Check for Updates with the Captures icon in the hidden-icons
+  flyout, the notice opened caretless at 3129,1725 (684×336), above the
+  still-open flyout, and stayed there once it closed. While the flyout is
+  open the icon's rect lies inside it, above the taskbar, so the 20 × 50 ms
+  poll ended in the fallback. The notice now ignores the tray rect while a
+  popup menu or the overflow flyout is visible (`capture::shell_menus_open`,
+  New Capture's check from 59aa2a22), waits up to New Capture's 750 ms for
+  them to close, then polls as before. If it still shows by the caretless
+  fallback, it polls every 250 ms for up to a minute and moves to the first
+  usable rect (the hidden-icons chevron), without activating
+  (`next_poll`, Wine-tested).
+- History's title and section headings were Text without the localized type
+  "heading", and the interrupted-recordings group had no name. UIA has no
+  heading control type; Narrator's heading navigation reads
+  `UIA_HeadingLevelPropertyId` on Text or Group elements. History's `h1` and
+  `h2`s already reported HeadingLevel1/2 (as panel headings did), so these
+  now also report the localized type "heading", and the group is named
+  "Interrupted recordings" (Wine-tested). Why Narrator's H found no History
+  heading is therefore not explained by a missing level.
+
+These fixes are not physically rechecked. Checked: fmt, clippy `-D warnings`
+and 62 Wine tests (new: the flyout wait and fallback re-placement decision,
+and History's heading levels).
+
 Windows: implemented, verified under Wine only (x86_64-pc-windows-gnu): fmt,
 clippy `-D warnings`, 58 tests (4 new: status mapping, disposition, per-version
 dedupe with capture deferral, failed-install reopening) and offscreen renders of
