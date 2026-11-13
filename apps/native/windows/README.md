@@ -257,8 +257,10 @@ Captures: it is named "Captures Native Test" with identifier
 `io.github.joswayski.captures.nativetest` (its own install folder, uninstall
 entry and shortcuts), runs as `captures-native-test.exe` so the installer never
 closes the real `captures.exe`, registers no file associations and makes no
-updater artifacts. Its Update now refuses, because the Preview updater only
-replaces `captures.exe`. Its first launch still imports the installed Captures
+updater artifacts. It is compiled with `CAPTURES_NATIVE_PREVIEW_TEST`, so it
+never checks the Preview feed, downloads or installs an update, or runs the
+startup-recovery repair (an earlier test build's recovery companion tried to
+download the real Preview after a failed first launch). Its first launch still imports the installed Captures
 profile (quit Captures first) and may re-point the shared launch-at-login
 entry; back that entry up when testing beside a real install.
 The installed executable is `captures.exe`, which answers

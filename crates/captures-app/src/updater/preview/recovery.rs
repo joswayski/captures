@@ -44,6 +44,10 @@ impl Startup {
         let Some(version) = crate::preview_channel::version() else {
             return Ok(None);
         };
+        // Test installs never repair themselves from the real feed.
+        if !crate::preview_channel::updates_enabled() {
+            return Ok(None);
+        }
         let root = root()?;
         fs::create_dir_all(&root)?;
         prune_completed(&root);
@@ -296,6 +300,9 @@ fn repair(request: &Request, monitor: &mut Monitor, directory: &Path) -> Result<
         return Err(Error::Installation(
             "Debian packages require the manual installer",
         ));
+    }
+    if !crate::preview_channel::updates_enabled() {
+        return Err(Error::Installation("test installs never download a repair"));
     }
     let client = Client::new(
         &ENDPOINTS,

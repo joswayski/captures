@@ -15,6 +15,15 @@ pub const fn version() -> Option<&'static str> {
     option_env!("CAPTURES_NATIVE_PREVIEW_VERSION")
 }
 
+/// Side-by-side test installers (`native-preview-build.mjs --side-by-side`)
+/// set `CAPTURES_NATIVE_PREVIEW_TEST`: they keep the Preview profile and
+/// launch behavior but never check, download or install from the real feed,
+/// including through startup recovery, so they cannot replace the installed
+/// Captures.
+pub const fn updates_enabled() -> bool {
+    version().is_some() && option_env!("CAPTURES_NATIVE_PREVIEW_TEST").is_none()
+}
+
 pub fn public_key() -> Option<&'static str> {
     option_env!("CAPTURES_NATIVE_PREVIEW_PUBLIC_KEY")
 }

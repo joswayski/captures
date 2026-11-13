@@ -131,6 +131,8 @@ export function build(target, version, unsigned = false, sideBySide = false) {
     CARGO_TARGET_DIR: join(ROOT, "target"),
     CAPTURES_NATIVE_PREVIEW_VERSION: version,
     CAPTURES_NATIVE_PREVIEW_PUBLIC_KEY: publicKey,
+    // Side-by-side test builds: no update checks, installs or startup repairs.
+    ...(sideBySide ? { CAPTURES_NATIVE_PREVIEW_TEST: "1" } : {}),
   };
   const release = join(ROOT, "target", target, "release");
   mkdirSync(release, { recursive: true });

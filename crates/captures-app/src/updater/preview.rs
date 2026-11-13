@@ -133,6 +133,9 @@ impl Client {
     pub fn installed(renderer: Renderer) -> Result<Self, Error> {
         let current =
             crate::preview_channel::version().ok_or(Error::Configuration("not a Preview build"))?;
+        if !crate::preview_channel::updates_enabled() {
+            return Err(Error::Configuration("updates are off in test installs"));
+        }
         let key = crate::preview_channel::public_key()
             .ok_or(Error::Configuration("Preview public key is missing"))?;
         Self::new(
