@@ -44,26 +44,7 @@ pub struct Card {
 pub const FALLBACK: &str = "If this copy cannot update itself, download from captur.es and install over it. Settings and captures stay.";
 pub const CHANNEL: &str = "Preview channel";
 
-/// Shipping `display_version`: `2026.11.1205` reads `2026.11.12.5`.
-pub fn display_version(version: &str) -> String {
-    let normalized = version.trim_start_matches('v');
-    let core = normalized
-        .split_once(['-', '+'])
-        .map_or(normalized, |(core, _)| core);
-    let parts: Vec<_> = core.split('.').map(str::parse::<u32>).collect();
-    let [Ok(year), Ok(month), Ok(patch)] = parts[..] else {
-        return normalized.to_owned();
-    };
-    let (day, revision) = (patch / 100, patch % 100);
-    if !(2000..=9999).contains(&year)
-        || !(1..=12).contains(&month)
-        || !(1..=31).contains(&day)
-        || !(1..=99).contains(&revision)
-    {
-        return normalized.to_owned();
-    }
-    format!("{year:04}.{month:02}.{day:02}.{revision}")
-}
+pub use captures_app::updater::display_version;
 
 /// The card for `status`. `installing` is set once Update now (or Try
 /// again) was pressed and stays set until the install hands off or fails.

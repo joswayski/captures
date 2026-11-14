@@ -305,7 +305,7 @@ fn repair(request: &Request, monitor: &mut Monitor, directory: &Path) -> Result<
         return Err(Error::Installation("test installs never download a repair"));
     }
     let client = Client::new(
-        &ENDPOINTS,
+        endpoints(),
         crate::preview_channel::public_key().ok_or(Error::Signature)?,
         if cfg!(target_os = "macos") {
             Renderer::Appkit

@@ -16,6 +16,20 @@ const ENDPOINTS: [&str; 2] = [
     "https://captur.es/api/updates/preview",
     "https://github.com/joswayski/captures/releases/download/preview/latest.json",
 ];
+const STAGING_ENDPOINTS: [&str; 1] = [match crate::preview_channel::staging_feed() {
+    Some(feed) => feed,
+    None => "",
+}];
+
+/// The installed build's feed: a staging build's own feed, else the public one.
+/// Updates and startup repairs both read it.
+fn endpoints() -> &'static [&'static str] {
+    if crate::preview_channel::staging_feed().is_some() {
+        &STAGING_ENDPOINTS
+    } else {
+        &ENDPOINTS
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -138,15 +152,8 @@ impl Client {
         }
         let key = crate::preview_channel::public_key()
             .ok_or(Error::Configuration("Preview public key is missing"))?;
-        let staging;
         Self::new(
-            match crate::preview_channel::staging_feed() {
-                Some(feed) => {
-                    staging = [feed];
-                    &staging
-                }
-                None => &ENDPOINTS,
-            },
+            endpoints(),
             key,
             renderer,
             Target::current_host().ok_or(Error::Target)?,

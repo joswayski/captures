@@ -571,6 +571,27 @@ fn is_loopback(url: &Url) -> bool {
     })
 }
 
+/// Shipping `display_version`: `2026.11.1205` reads `2026.11.12.5`.
+pub fn display_version(version: &str) -> String {
+    let normalized = version.trim_start_matches('v');
+    let core = normalized
+        .split_once(['-', '+'])
+        .map_or(normalized, |(core, _)| core);
+    let parts: Vec<_> = core.split('.').map(str::parse::<u32>).collect();
+    let [Ok(year), Ok(month), Ok(patch)] = parts[..] else {
+        return normalized.to_owned();
+    };
+    let (day, revision) = (patch / 100, patch % 100);
+    if !(2000..=9999).contains(&year)
+        || !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || !(1..=99).contains(&revision)
+    {
+        return normalized.to_owned();
+    }
+    format!("{year:04}.{month:02}.{day:02}.{revision}")
+}
+
 fn validate_url(url: &Url, allow_loopback: bool) -> Result<(), Error> {
     if (url.scheme() != "https" && !(allow_loopback && url.scheme() == "http" && is_loopback(url)))
         || url.host_str().is_none()

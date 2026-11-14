@@ -772,8 +772,10 @@ impl CheckWorker {
             acquisition: self.acquisition(),
         };
         if self.preview {
-            presentation.version = format!("Captures {}", self.current_version);
-            presentation.channel = "Preview · Experimental";
+            // Shipping's Preferences identity, like the Win32/GTK cards.
+            presentation.version =
+                format!("Version {}", super::display_version(&self.current_version));
+            presentation.channel = "Preview channel";
             presentation.status = match &self.status {
                 CheckStatus::UpToDate => "You have the latest Preview".into(),
                 CheckStatus::Available { release } => {

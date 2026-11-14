@@ -241,9 +241,10 @@ fn prepare_profile(
     fs::create_dir_all(&history).map_err(|e| e.to_string())?;
     // Enroll only the installed channel's first profile. Subsequent launches
     // leave the OS-authoritative Preferences Off choice alone; development
-    // imports, fixtures and side-by-side test installs never change the
-    // installed Captures login entry.
-    if updates_enabled()
+    // imports, fixtures and side-by-side test and staging installs never
+    // enroll a login entry.
+    if version().is_some()
+        && !TEST
         && captures_settings::load(&destination.join("settings.json"))
             .map_err(|e| e.to_string())?
             .launch_at_login

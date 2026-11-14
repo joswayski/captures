@@ -1388,9 +1388,14 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                     self.customTheme = settings["custom_theme"] as? [String: Any] ?? [:]
                     self.resolvedTokens = self.makeTokens()
                     self.render()
-                    if let setup = self.appWindows.window(.setup), let health = self.updateHealth {
-                        setup.contentView?.layoutSubtreeIfNeeded()
-                        setup.displayIfNeeded()
+                    // The menu bar item and first render are done. Setup opens
+                    // only when access needs attention, and most launches never
+                    // show it, so readiness must not wait for that window.
+                    if let health = self.updateHealth {
+                        if let setup = self.appWindows.window(.setup) {
+                            setup.contentView?.layoutSubtreeIfNeeded()
+                            setup.displayIfNeeded()
+                        }
                         health.workspaceDidRender()
                     }
                     self.updateHealth?.settingsDidLoad()
