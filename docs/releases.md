@@ -157,6 +157,27 @@ every Captures process before restoring the backup to the `installed` location i
 to repair an executable. There is no automatic timeout rollback or profile rollback.
 Windows delegates replacement/relaunch to NSIS; Debian remains a manual update.
 
+### Native staging feed (update testing)
+
+`.github/workflows/native-staging.yml` (manual dispatch on main, input
+`version` such as `2026.11.1401`) builds signed, notarized
+`native-preview-build.mjs build TARGET VERSION --staging` packages for all three
+targets. Staging builds use the side-by-side "Captures Native Test" identity
+(`captures-native-test`, `io.github.joswayski.captures.nativetest`, no file
+associations, a separate `CapturesNativeTest` login item), so they install next
+to the public app. Unlike plain `--side-by-side` test builds, their updater is
+on, but it reads only the compiled-in
+`https://github.com/joswayski/captures/releases/download/native-staging/latest.json`
+and replaces only the test identity. Each run publishes a
+`native-staging-<version>` prerelease and repoints the `native-staging`
+release's `latest.json` at it. These tags never match the public
+`vYYYY.MM.DD.N` selector, and `/api/updates/preview` proxies only the `preview`
+release, so public clients never see them. To prove over-the-air updates,
+install one staging build, dispatch a higher version, and update from the app.
+Delete old `native-staging-*` releases when no longer needed. Staging builds
+still import the installed profile on first launch into the shared `Captures
+Native Preview` profile directory.
+
 ### Startup recovery companion
 
 Installed hosts start a copied `native_preview_update_helper --watch-startup`

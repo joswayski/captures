@@ -19,24 +19,56 @@ pub const fn version() -> Option<&'static str> {
 /// set `CAPTURES_NATIVE_PREVIEW_TEST`: they keep the Preview profile and
 /// launch behavior but never check, download or install from the real feed,
 /// including through startup recovery, so they cannot replace the installed
-/// Captures.
+/// Captures. Staging builds (`--staging`) are side-by-side test installs that
+/// update only from their compiled-in `CAPTURES_NATIVE_PREVIEW_FEED`.
 pub const fn updates_enabled() -> bool {
-    version().is_some() && option_env!("CAPTURES_NATIVE_PREVIEW_TEST").is_none()
+    version().is_some() && (!TEST || staging_feed().is_some())
 }
+
+const TEST: bool = option_env!("CAPTURES_NATIVE_PREVIEW_TEST").is_some();
+
+/// The only update feed of a staging build; `None` for every other build.
+pub const fn staging_feed() -> Option<&'static str> {
+    if TEST {
+        option_env!("CAPTURES_NATIVE_PREVIEW_FEED")
+    } else {
+        None
+    }
+}
+
+/// Installed package names the updater may replace. Test installs use the
+/// side-by-side identity from `native-preview-build.mjs`.
+pub const APP_BUNDLE: &str = if TEST {
+    "Captures Native Test.app"
+} else {
+    "Captures.app"
+};
+pub const EXECUTABLE: &str = if TEST {
+    "captures-native-test"
+} else {
+    "captures"
+};
+pub const BUNDLE_IDENTIFIER: &str = if TEST {
+    "io.github.joswayski.captures.nativetest"
+} else {
+    IDENTITY
+};
 
 /// The tray tooltip, so a side-by-side test install is distinguishable from
 /// the installed Captures in the notification area.
-pub const TRAY_NAME: &str = match option_env!("CAPTURES_NATIVE_PREVIEW_TEST") {
-    Some(_) => "Captures Native Test",
-    None => "Captures",
+pub const TRAY_NAME: &str = if TEST {
+    "Captures Native Test"
+} else {
+    "Captures"
 };
 
 /// The installed channel's login item name. Test installs use their own, so
 /// neither first-run enrollment nor their Preferences toggle can replace the
 /// installed Captures login item.
-pub const LOGIN_ITEM_NAME: &str = match option_env!("CAPTURES_NATIVE_PREVIEW_TEST") {
-    Some(_) => "CapturesNativeTest",
-    None => "Captures",
+pub const LOGIN_ITEM_NAME: &str = if TEST {
+    "CapturesNativeTest"
+} else {
+    "Captures"
 };
 
 pub fn public_key() -> Option<&'static str> {

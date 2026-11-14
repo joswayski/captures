@@ -76,11 +76,16 @@ export const SIDE_BY_SIDE = {
   productName: "Captures Native Test",
   identifier: "io.github.joswayski.captures.nativetest",
   // NSIS closes running copies of the main binary by process name, so the
-  // test app must not be `captures.exe`. The Preview updater only installs
-  // over `captures(.exe)`, so its Update now refuses instead of replacing the
-  // installed Captures.
+  // test app must not be `captures.exe`. A test build's updater only installs
+  // over this identity, never the installed Captures.
   mainBinaryName: "captures-native-test",
 };
+
+// `--staging` builds are side-by-side test installs whose updater is on, but
+// reads only this feed: the `native-staging` release that
+// `.github/workflows/native-staging.yml` publishes. Public clients never read it.
+export const STAGING_FEED =
+  "https://github.com/joswayski/captures/releases/download/native-staging/latest.json";
 
 export function bundleConfiguration(target, version, root = ROOT, sideBySide = false) {
   updaterArtifactName(target, version);
@@ -117,7 +122,9 @@ function run(command, arguments_, options = {}) {
   return execFileSync(command, arguments_, { cwd: ROOT, stdio: "inherit", ...options });
 }
 
-export function build(target, version, unsigned = false, sideBySide = false) {
+export function build(target, version, unsigned = false, sideBySide = false, staging = false) {
+  if (staging && unsigned) throw new Error("Staging builds publish signed updater artifacts");
+  sideBySide ||= staging;
   const specification = TARGETS[target];
   updaterArtifactName(target, version);
   const shipping = JSON.parse(
@@ -133,6 +140,8 @@ export function build(target, version, unsigned = false, sideBySide = false) {
     CAPTURES_NATIVE_PREVIEW_PUBLIC_KEY: publicKey,
     // Side-by-side test builds: no update checks, installs or startup repairs.
     ...(sideBySide ? { CAPTURES_NATIVE_PREVIEW_TEST: "1" } : {}),
+    // Staging builds update from the staging feed only.
+    ...(staging ? { CAPTURES_NATIVE_PREVIEW_FEED: STAGING_FEED } : {}),
   };
   const release = join(ROOT, "target", target, "release");
   mkdirSync(release, { recursive: true });
@@ -191,7 +200,7 @@ export function build(target, version, unsigned = false, sideBySide = false) {
   copyFileSync(nativeBinary, join(release, `${mainBinary}${exe}`));
   const config = join(ROOT, "target/native-preview-bundle.json");
   const configuration = bundleConfiguration(target, version, ROOT, sideBySide);
-  if (unsigned || sideBySide) configuration.bundle.createUpdaterArtifacts = false;
+  if (unsigned || (sideBySide && !staging)) configuration.bundle.createUpdaterArtifacts = false;
   writeFileSync(config, `${JSON.stringify(configuration, null, 2)}\n`);
   // The existing CLI is ONLY a build-time installer bundler. No Tauri app build,
   // frontend assets, application shim or WebView runtime enters the executable.
@@ -295,9 +304,16 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
   const [operation, target, version, output] = process.argv.slice(2);
   if (operation === "build") {
     const flags = process.argv.slice(5);
-    const unknown = flags.filter((flag) => !["--unsigned", "--side-by-side"].includes(flag));
+    const known = ["--unsigned", "--side-by-side", "--staging"];
+    const unknown = flags.filter((flag) => !known.includes(flag));
     if (unknown.length) throw new Error(`Unknown build flags: ${unknown.join(" ")}`);
-    build(target, version, flags.includes("--unsigned"), flags.includes("--side-by-side"));
+    build(
+      target,
+      version,
+      flags.includes("--unsigned"),
+      flags.includes("--side-by-side"),
+      flags.includes("--staging"),
+    );
   } else if (operation === "collect") collect(target, version, resolve(output));
   else if (operation === "manifest") {
     const directory = resolve(target);
@@ -307,6 +323,6 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
     );
   } else
     throw new Error(
-      "usage: native-preview-build.mjs build TARGET VERSION [--unsigned] [--side-by-side] | collect TARGET VERSION OUTPUT | manifest DIRECTORY VERSION",
+      "usage: native-preview-build.mjs build TARGET VERSION [--unsigned] [--side-by-side | --staging] | collect TARGET VERSION OUTPUT | manifest DIRECTORY VERSION",
     );
 }

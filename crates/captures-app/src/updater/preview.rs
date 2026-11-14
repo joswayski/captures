@@ -138,8 +138,15 @@ impl Client {
         }
         let key = crate::preview_channel::public_key()
             .ok_or(Error::Configuration("Preview public key is missing"))?;
+        let staging;
         Self::new(
-            &ENDPOINTS,
+            match crate::preview_channel::staging_feed() {
+                Some(feed) => {
+                    staging = [feed];
+                    &staging
+                }
+                None => &ENDPOINTS,
+            },
             key,
             renderer,
             Target::current_host().ok_or(Error::Target)?,
@@ -554,9 +561,9 @@ fn install_with(
     match &request.installation {
         InstallTarget::Windows { executable } => {
             if request.target != Target::WindowsX64
-                || executable
-                    .file_name()
-                    .is_none_or(|name| name != "captures.exe")
+                || executable.file_name().is_none_or(|name| {
+                    name.to_str() != Some(&format!("{}.exe", crate::preview_channel::EXECUTABLE))
+                })
             {
                 return Err(Error::Package);
             }
@@ -609,7 +616,9 @@ fn install_with(
             if !matches!(request.target, Target::MacArm64 | Target::MacX64)
                 || !app.is_absolute()
                 || !fs::symlink_metadata(app)?.is_dir()
-                || app.file_name().is_none_or(|name| name != "Captures.app")
+                || app
+                    .file_name()
+                    .is_none_or(|name| name != crate::preview_channel::APP_BUNDLE)
             {
                 return Err(Error::Package);
             }
@@ -618,14 +627,14 @@ fn install_with(
                 .prefix(".captures-preview-")
                 .tempdir_in(parent)?;
             extract_app(&payload, stage.path())?;
-            let replacement = stage.path().join("Captures.app");
+            let replacement = stage.path().join(crate::preview_channel::APP_BUNDLE);
             let info = plist::Value::from_file(replacement.join("Contents/Info.plist"))
                 .map_err(|_| Error::Package)?;
             let info = info.as_dictionary().ok_or(Error::Package)?;
             if info
                 .get("CFBundleIdentifier")
                 .and_then(plist::Value::as_string)
-                != Some(crate::preview_channel::IDENTITY)
+                != Some(crate::preview_channel::BUNDLE_IDENTIFIER)
                 || info
                     .get("CFBundleShortVersionString")
                     .and_then(plist::Value::as_string)
@@ -633,7 +642,7 @@ fn install_with(
                 || info
                     .get("CFBundleExecutable")
                     .and_then(plist::Value::as_string)
-                    != Some("captures")
+                    != Some(crate::preview_channel::EXECUTABLE)
             {
                 return Err(Error::Package);
             }
@@ -645,7 +654,12 @@ fn install_with(
                 return Err(error.into());
             }
             drop(lock);
-            launch_and_confirm(&app.join("Contents/MacOS/captures"), directory, &request)?;
+            launch_and_confirm(
+                &app.join("Contents/MacOS")
+                    .join(crate::preview_channel::EXECUTABLE),
+                directory,
+                &request,
+            )?;
             fs::remove_dir_all(backup)?;
         }
         InstallTarget::Manual => {
@@ -796,7 +810,10 @@ fn extract_app(payload: &[u8], destination: &Path) -> Result<(), Error> {
         let mut item = item?;
         let path = item.path()?.into_owned();
         let mut components = path.components();
-        if components.next() != Some(Component::Normal("Captures.app".as_ref()))
+        if components.next()
+            != Some(Component::Normal(
+                crate::preview_channel::APP_BUNDLE.as_ref(),
+            ))
             || components.any(|part| !matches!(part, Component::Normal(_)))
         {
             return Err(Error::ArchivePath);

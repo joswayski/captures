@@ -1,0 +1,229 @@
+name: Native staging
+
+# Signed native test builds for proving over-the-air updates before native
+# becomes the public app. Builds use the side-by-side "Captures Native Test"
+# identity and update only from the `native-staging` release's latest.json
+# (`STAGING_FEED` in scripts/native-preview-build.mjs). Their tags never match
+# the public `vYYYY.MM.DD.N` Preview selector, the website's update proxy reads
+# only the `preview` release, and public clients never read this feed.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: App version, e.g. 2026.11.1401 (2026.11.14.1); must increase for each staging build
+        required: true
+        type: string
+
+concurrency:
+  group: captures-native-staging
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Package ${{ matrix.name }}
+    environment: release
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    permissions:
+      contents: read
+      # Reads Apple signing material from AWS Secrets Manager (macOS only).
+      id-token: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - name: macOS Apple Silicon
+            os: macos-26
+            target: aarch64-apple-darwin
+          - name: Windows x64
+            os: windows-2025
+            target: x86_64-pc-windows-msvc
+          - name: Linux x64
+            os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      VERSION: ${{ inputs.version }}
+    steps:
+      - name: Restrict staging builds to main and a CalVer version
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "Native staging builds can only run from main." >&2
+            exit 1
+          fi
+          if [[ ! "$VERSION" =~ ^20[0-9]{2}\.(1[0-2]|[1-9])\.([1-9]|[12][0-9]|3[01])(0[1-9]|[1-9][0-9])$ ]]; then
+            echo "Version must look like 2026.11.1401." >&2
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential curl file libayatana-appindicator3-dev libasound2-dev \
+            libclang-dev libdbus-1-dev libegl-dev libgbm-dev libpipewire-0.3-dev \
+            libspa-0.2-dev librsvg2-dev libssl-dev libwayland-dev libwebkit2gtk-4.1-dev \
+            libxcb1-dev libxdo-dev libxrandr-dev nasm patchelf xdg-utils pkg-config wget \
+            xz-utils yasm zlib1g-dev libgtk-4-dev libxkbcommon-dev libx11-dev libxi-dev
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 1.94.0
+      - run: rustup toolchain install 1.95.0 --profile minimal
+      - uses: msys2/setup-msys2@v2
+        if: runner.os == 'Windows'
+        with:
+          msystem: UCRT64
+          path-type: inherit
+          install: >-
+            base-devel
+            diffutils
+            make
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-nasm
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-yasm
+            mingw-w64-ucrt-x86_64-zlib
+      - run: npm ci
+      - uses: ./.github/actions/prepare-media
+      - name: Use the release signing role
+        if: runner.os == 'macOS'
+        uses: aws-actions/configure-aws-credentials@v6.2.3
+        with:
+          role-to-assume: arn:aws:iam::395451633568:role/production-captures-release-signer
+          aws-region: us-east-1
+      - name: Load the Developer ID certificate and App Store Connect key
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          secret="$RUNNER_TEMP/apple.json"
+          aws secretsmanager get-secret-value --secret-id production/signing/release \
+            --query SecretString --output text | jq -e '.apple | objects' > "$secret"
+          jq -e 'all(.developer_id_p12_base64, .developer_id_p12_password, .app_store_connect_key_id,
+            .app_store_connect_issuer_id, .app_store_connect_private_key; type == "string" and length > 0)' \
+            "$secret" > /dev/null
+          keychain_password="$(openssl rand -hex 24)"
+          for value in "$(jq -r .developer_id_p12_base64 "$secret")" \
+                       "$(jq -r .developer_id_p12_password "$secret")" "$keychain_password"; do
+            echo "::add-mask::$value"
+          done
+          jq -r .app_store_connect_private_key "$secret" | while IFS= read -r line; do
+            [[ -n "$line" ]] && echo "::add-mask::$line"
+          done
+          delimiter="APPLE_KEY_$(openssl rand -hex 8)"
+          {
+            echo "APPLE_CERTIFICATE=$(jq -r .developer_id_p12_base64 "$secret")"
+            echo "APPLE_CERTIFICATE_PASSWORD=$(jq -r .developer_id_p12_password "$secret")"
+            echo "KEYCHAIN_PASSWORD=$keychain_password"
+            echo "APPLE_API_ISSUER=$(jq -r .app_store_connect_issuer_id "$secret")"
+            echo "APPLE_API_KEY=$(jq -r .app_store_connect_key_id "$secret")"
+            echo "APPLE_API_PRIVATE_KEY<<$delimiter"
+            jq -r .app_store_connect_private_key "$secret"
+            echo "$delimiter"
+          } >> "$GITHUB_ENV"
+          rm -f "$secret"
+      # Checks the updater key and, on macOS, writes the Apple credential files.
+      - run: node scripts/prepare-release-build.mjs "$VERSION"
+      - name: Import and verify the Developer ID certificate
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/captures-signing.keychain-db"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
+          security default-keychain -d user -s "$keychain"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
+          security set-keychain-settings -t 3600 -u "$keychain"
+          security import "$APPLE_CERTIFICATE_PATH" -k "$keychain" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s \
+            -k "$KEYCHAIN_PASSWORD" "$keychain"
+          identity="$(security find-identity -v -p codesigning "$keychain" | awk -F\" '/Developer ID Application/{print $2; exit}')"
+          if [[ -z "$identity" ]]; then
+            echo "The certificate is not a Developer ID Application identity." >&2
+            exit 1
+          fi
+          echo "APPLE_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
+      - name: Build the signed staging package
+        run: node scripts/native-preview-build.mjs build "${{ matrix.target }}" "$VERSION" --staging
+      - name: Notarize, staple, and validate the macOS DMG
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="target/${{ matrix.target }}/release/bundle/macos/Captures Native Test.app"
+          dmg="$(find "target/${{ matrix.target }}/release/bundle/dmg" -maxdepth 1 -type f -name '*.dmg' -print -quit)"
+          if [[ ! -d "$app" || -z "$dmg" ]]; then
+            echo "Could not find the packaged app and DMG." >&2
+            exit 1
+          fi
+          codesign --verify --deep --strict --verbose=2 "$app"
+          spctl --assess --type execute --verbose=2 "$app"
+          xcrun stapler validate "$app"
+          xcrun notarytool submit "$dmg" --key "$APPLE_API_KEY_PATH" \
+            --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER" --wait
+          xcrun stapler staple -v "$dmg"
+          spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
+          xcrun stapler validate "$dmg"
+      - name: Sign the version-bound updater artifacts
+        shell: bash
+        run: node scripts/native-preview-build.mjs collect "${{ matrix.target }}" "$VERSION" staging-assets
+      - uses: actions/upload-artifact@v4
+        with:
+          name: staging-${{ matrix.target }}
+          path: staging-assets/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish to the staging feed
+    needs: package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: staging-*
+          path: staging-assets
+          merge-multiple: true
+      - name: Publish the build and point the staging feed at it
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="native-staging-$VERSION"
+          if gh release view "$tag" > /dev/null 2>&1; then
+            echo "$tag already exists; staging versions must increase." >&2
+            exit 1
+          fi
+          gh release create "$tag" --prerelease --target "$GITHUB_SHA" \
+            --title "Native staging $VERSION (test builds, not the public app)" \
+            --notes "Signed Captures Native Test build for update testing. Not a public Preview." \
+            staging-assets/*
+          TAG="$tag" RELEASE_NOTES="Native staging $VERSION" \
+            node scripts/native-preview-build.mjs manifest staging-assets "$VERSION"
+          if ! gh release view native-staging > /dev/null 2>&1; then
+            gh release create native-staging --prerelease --target "$GITHUB_SHA" \
+              --title "Native staging feed (test builds only)" \
+              --notes "latest.json for Captures Native Test staging builds. Not a public Preview."
+          fi
+          gh release upload native-staging staging-assets/latest.json --clobber
+          echo "Staging feed now offers $VERSION from $tag." >> "$GITHUB_STEP_SUMMARY"

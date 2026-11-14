@@ -435,7 +435,9 @@ fn status(directory: &Path, phase: &str, detail: Option<&str>) -> Result<(), Err
 
 fn fingerprint(installation: &InstallTarget) -> Result<Option<String>, Error> {
     let path = match installation {
-        InstallTarget::Mac { app } => app.join("Contents/MacOS/captures"),
+        InstallTarget::Mac { app } => app
+            .join("Contents/MacOS")
+            .join(crate::preview_channel::EXECUTABLE),
         InstallTarget::Windows { executable } => executable.clone(),
         InstallTarget::AppImage { path } => path.clone(),
         InstallTarget::Manual => return Ok(None),
