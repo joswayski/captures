@@ -121,14 +121,14 @@ impl RecordingRecovery {
             let (status, kind, created_at_ms, completed_duration_ms, identity, reason, last_error) =
                 match parsed {
                     Ok((manifest, identity)) => {
-                        if manifest.state == RecordingState::Ready
-                            || manifest.state == RecordingState::Discarded
-                        {
+                        // Like shipping `get_recording_drafts`: only drafts
+                        // that captured or were finishing are interrupted.
+                        // Countdown/selection leftovers are not listed.
+                        if !recoverable(manifest.state) {
                             continue;
                         }
-                        let valid = recoverable(manifest.state);
                         (
-                            if valid { "recoverable" } else { "unavailable" },
+                            "recoverable",
                             Some(manifest.options.kind),
                             Some(manifest.created_at_ms),
                             manifest
@@ -138,7 +138,7 @@ impl RecordingRecovery {
                                 .map(|s| s.duration_ms)
                                 .sum(),
                             Some(identity),
-                            (!valid).then(|| "Draft is not interrupted".into()),
+                            None,
                             manifest.last_error,
                         )
                     }
@@ -924,6 +924,29 @@ mod tests {
         // description locked. The guard must explicitly unlock it instead.
         assert!(lease(base.path()).is_ok());
         drop(duplicate);
+    }
+
+    #[test]
+    fn listing_skips_drafts_that_never_recorded() {
+        let base = tempfile::tempdir().unwrap();
+        let recovery = RecordingRecovery::new(
+            base.path().join("history"),
+            MediaToolchain::from_command_names(),
+        );
+        let store = DraftStore::new(recovery.root.clone());
+        let mut ids = Vec::new();
+        for state in [RecordingState::Countdown, RecordingState::Paused] {
+            let id = uuid::Uuid::new_v4().to_string();
+            let mut manifest =
+                RecordingDraftManifest::new(id.clone(), options(RecordingKind::Video), 10);
+            manifest.state = state;
+            store.create(&manifest).unwrap();
+            ids.push(id);
+        }
+        let rows = recovery.list().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].session_id, ids[1]);
+        assert_eq!(rows[0].status, "recoverable");
     }
 
     #[test]
