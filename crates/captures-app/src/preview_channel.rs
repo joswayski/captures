@@ -24,6 +24,13 @@ pub const fn updates_enabled() -> bool {
     version().is_some() && option_env!("CAPTURES_NATIVE_PREVIEW_TEST").is_none()
 }
 
+/// The tray tooltip, so a side-by-side test install is distinguishable from
+/// the installed Captures in the notification area.
+pub const TRAY_NAME: &str = match option_env!("CAPTURES_NATIVE_PREVIEW_TEST") {
+    Some(_) => "Captures Native Test",
+    None => "Captures",
+};
+
 pub fn public_key() -> Option<&'static str> {
     option_env!("CAPTURES_NATIVE_PREVIEW_PUBLIC_KEY")
 }

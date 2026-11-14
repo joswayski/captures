@@ -74,7 +74,7 @@ impl Updates {
     fn refresh(&self) {
         let w = &self.widgets;
         let Some(card) = crate::updates::current() else {
-            w.version.set_text(preferences::UPDATES_VERSION);
+            w.version.set_text(preferences::updates_version());
             w.channel.set_text(preferences::UPDATES_CHANNEL);
             set_button(&w.button, preferences::UPDATES_ACTION, false);
             describe(&w.button, preferences::UPDATES_DETAIL);

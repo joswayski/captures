@@ -1726,7 +1726,7 @@ fn updates_card(prefs: &Rc<Prefs>) -> gtk::Box {
     row.set_homogeneous(true);
     row.add_css_class("update-settings-row");
     let (identity, channel) = copy(
-        preferences::UPDATES_VERSION,
+        preferences::updates_version(),
         preferences::UPDATES_CHANNEL,
         false,
     );

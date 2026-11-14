@@ -234,7 +234,7 @@ pub fn start(settings: &captures_settings::AppSettings) -> Option<Tray> {
         let icon = Icon::from_rgba(image.into_raw(), width, height)
             .map_err(|error| format!("Could not create tray icon: {error}"))?;
         TrayIconBuilder::new()
-            .with_tooltip("Captures")
+            .with_tooltip(captures_app::preview_channel::TRAY_NAME)
             .with_icon(icon)
             .with_menu(Box::new(menu(settings)?))
             .build()

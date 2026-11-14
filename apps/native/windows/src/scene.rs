@@ -2039,7 +2039,7 @@ impl Scene {
                 let title = g.text(
                     &self.t,
                     Style::RowTitle,
-                    preferences::UPDATES_VERSION,
+                    preferences::updates_version(),
                     copy_w,
                 )?;
                 let detail = g.text(
@@ -3709,7 +3709,7 @@ impl Scene {
             )],
             Item::Updates => vec![format!(
                 "{}{}{}{}",
-                preferences::UPDATES_VERSION,
+                preferences::updates_version(),
                 preferences::UPDATES_CHANNEL,
                 preferences::UPDATES_ACTION,
                 preferences::UPDATES_TITLE

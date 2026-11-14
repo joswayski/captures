@@ -115,7 +115,7 @@ fn copy(platform: ShortcutPlatform) -> Value {
                 .iter().map(|target| target[0]).collect::<Vec<_>>(),
         },
         "updates": {
-            "version": preferences::UPDATES_VERSION,
+            "version": preferences::updates_version(),
             "channel": preferences::UPDATES_CHANNEL,
             "action_width": preferences::UPDATES_ACTION_WIDTH,
             "title": preferences::UPDATES_TITLE,
@@ -234,7 +234,7 @@ mod tests {
         assert_eq!(result["sections"][0]["title"], "General");
         assert_eq!(result["sections"][5]["title"], "GIF export");
         assert_eq!(result["updates"]["channel"], "Native development");
-        assert_eq!(result["updates"]["version"], preferences::UPDATES_VERSION);
+        assert_eq!(result["updates"]["version"], preferences::updates_version());
         assert_eq!(
             result["rows"]["recording.gif_max_colors"]["accessibility_label"],
             "GIF palette colors"

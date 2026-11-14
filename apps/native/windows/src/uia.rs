@@ -343,7 +343,7 @@ fn name(host: &Host, id: Id) -> String {
                     .join(". "),
             }
         }
-        Id::UpdateVersion => preferences::UPDATES_VERSION.into(),
+        Id::UpdateVersion => preferences::updates_version().into(),
         Id::UpdateAction => preferences::UPDATES_ACTION.into(),
         Id::UpdateStatus => preferences::UPDATES_TITLE.into(),
         Id::Shortcut(i) => preferences::SHORTCUT_ROWS[i].0.into(),

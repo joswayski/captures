@@ -2642,7 +2642,7 @@ impl Preferences {
             let version = copy
                 .as_ref()
                 .map(|c| c.version.as_str())
-                .unwrap_or(preferences::UPDATES_VERSION);
+                .unwrap_or(preferences::updates_version());
             let channel = copy
                 .as_ref()
                 .map(|c| c.channel)
@@ -3264,7 +3264,7 @@ mod tests {
                         })
                         .unwrap_or_else(|| panic!("missing {label} at {width}"))
                 };
-                let version = text_rect(preferences::UPDATES_VERSION);
+                let version = text_rect(preferences::updates_version());
                 let channel = text_rect(preferences::UPDATES_CHANNEL);
                 let action = text_rect(preferences::UPDATES_ACTION);
                 let status = text_rect(preferences::UPDATES_TITLE);

@@ -566,7 +566,15 @@ pub fn open_keyboard_settings(platform: ShortcutPlatform) -> Result<(), String> 
 }
 
 /// Stable build identity; status belongs beside the disabled action, not here.
-pub const UPDATES_VERSION: &str = concat!("Version ", env!("CARGO_PKG_VERSION"));
+/// Preview builds without an update worker (side-by-side test installs) show
+/// their Preview version rather than the crate version.
+pub fn updates_version() -> &'static str {
+    static VERSION: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        let version = crate::preview_channel::version().unwrap_or(env!("CARGO_PKG_VERSION"));
+        format!("Version {version}")
+    });
+    &VERSION
+}
 pub const UPDATES_CHANNEL: &str = "Native development";
 pub const UPDATES_ACTION_WIDTH: f32 = 160.;
 /// Default copy for development hosts without an update worker.
@@ -734,7 +742,7 @@ mod tests {
             LOGIN_ITEM_DETAIL,
             "Start in the background when you sign in to your computer."
         );
-        assert!(UPDATES_VERSION.starts_with("Version "));
+        assert!(updates_version().starts_with("Version "));
         assert_eq!(UPDATES_CHANNEL, "Native development");
         assert_eq!(UPDATES_TITLE, "Updates unavailable");
     }
