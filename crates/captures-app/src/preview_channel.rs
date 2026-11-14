@@ -31,6 +31,14 @@ pub const TRAY_NAME: &str = match option_env!("CAPTURES_NATIVE_PREVIEW_TEST") {
     None => "Captures",
 };
 
+/// The installed channel's login item name. Test installs use their own, so
+/// neither first-run enrollment nor their Preferences toggle can replace the
+/// installed Captures login item.
+pub const LOGIN_ITEM_NAME: &str = match option_env!("CAPTURES_NATIVE_PREVIEW_TEST") {
+    Some(_) => "CapturesNativeTest",
+    None => "Captures",
+};
+
 pub fn public_key() -> Option<&'static str> {
     option_env!("CAPTURES_NATIVE_PREVIEW_PUBLIC_KEY")
 }
@@ -201,8 +209,9 @@ fn prepare_profile(
     fs::create_dir_all(&history).map_err(|e| e.to_string())?;
     // Enroll only the installed channel's first profile. Subsequent launches
     // leave the OS-authoritative Preferences Off choice alone; development
-    // imports and fixtures never change the installed Captures login entry.
-    if version().is_some()
+    // imports, fixtures and side-by-side test installs never change the
+    // installed Captures login entry.
+    if updates_enabled()
         && captures_settings::load(&destination.join("settings.json"))
             .map_err(|e| e.to_string())?
             .launch_at_login

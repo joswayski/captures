@@ -151,7 +151,7 @@ fn configure_platform(
         return Err("Login item directory must be absolute".into());
     }
     let path = base.join("autostart").join(if installed {
-        "Captures.desktop".into()
+        format!("{}.desktop", crate::preview_channel::LOGIN_ITEM_NAME)
     } else {
         format!("captures-native-{}.desktop", identity(history_root))
     });
@@ -215,7 +215,7 @@ fn configure_platform(
     let path =
         home.join("Library/LaunchAgents")
             .join(if crate::preview_channel::version().is_some() {
-                "Captures.plist".into()
+                format!("{}.plist", crate::preview_channel::LOGIN_ITEM_NAME)
             } else {
                 format!("dev.captures.native.{id}.plist")
             });
@@ -226,7 +226,7 @@ fn configure_platform(
 #[cfg(any(target_os = "macos", test))]
 fn launch_agent(id: &str, arguments: &[String]) -> String {
     let label = if crate::preview_channel::version().is_some() {
-        "Captures".into()
+        crate::preview_channel::LOGIN_ITEM_NAME.into()
     } else {
         format!("dev.captures.native.{id}")
     };
@@ -262,7 +262,7 @@ fn configure_platform(
     };
     let installed = crate::preview_channel::version().is_some();
     let name = if installed {
-        "Captures".into()
+        crate::preview_channel::LOGIN_ITEM_NAME.into()
     } else {
         format!("CapturesNative-{}", identity(history_root))
     };

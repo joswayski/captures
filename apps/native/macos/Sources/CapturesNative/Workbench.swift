@@ -864,9 +864,14 @@ func statusItemTemplate(source: NSImage) -> NSImage? {
     let template = NSImage(size: size)
     template.addRepresentation(bitmap)
     template.isTemplate = true
-    template.accessibilityDescription = "Captures"
+    template.accessibilityDescription = statusItemName
     return template
 }
+
+/// Side-by-side test installs (`--side-by-side`) stay distinguishable from
+/// the installed Captures in the menu bar, like Win32/GTK `TRAY_NAME`.
+let statusItemName = Bundle.main.bundleIdentifier == "io.github.joswayski.captures.nativetest"
+    ? "Captures Native Test" : "Captures"
 
 func configureStatusItemButton(_ button: NSStatusBarButton) {
     if let url = NativeResources.bundle.url(forResource: "tray-source", withExtension: "png"),
@@ -875,7 +880,7 @@ func configureStatusItemButton(_ button: NSStatusBarButton) {
     } else {
         button.title = "C"
     }
-    button.setAccessibilityLabel("Captures")
+    button.setAccessibilityLabel(statusItemName)
 }
 
 /// `.terminateLater` runs a nested modal loop. Invoke Quit from the run loop,

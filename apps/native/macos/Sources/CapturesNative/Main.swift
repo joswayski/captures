@@ -227,8 +227,14 @@ final class CapturesApplication: NSApplication {
             if options.live, options.nativeUpdateChecks == nil,
                try AppBridge().request(["operation": "preview_build_info"])["version"] is String {
                 options.previewChannel = true
-                options.nativeUpdateChecks = try UpdateCheckModel(transport: NativeUpdateCheckTransport(
-                    configuration: ["preview": true, "renderer": "appkit"]))
+                // Side-by-side test installs have no update client; like
+                // Win32 and GTK, run without update checks instead of exiting.
+                do {
+                    options.nativeUpdateChecks = try UpdateCheckModel(transport: NativeUpdateCheckTransport(
+                        configuration: ["preview": true, "renderer": "appkit"]))
+                } catch {
+                    FileHandle.standardError.write(Data("Preview updates unavailable: \(error.localizedDescription)\n".utf8))
+                }
             }
             if bundled {
                 runBundle(options)

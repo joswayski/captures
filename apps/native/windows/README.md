@@ -261,8 +261,10 @@ updater artifacts. It is compiled with `CAPTURES_NATIVE_PREVIEW_TEST`, so it
 never checks the Preview feed, downloads or installs an update, or runs the
 startup-recovery repair (an earlier test build's recovery companion tried to
 download the real Preview after a failed first launch). Its first launch still imports the installed Captures
-profile (quit Captures first) and may re-point the shared launch-at-login
-entry; back that entry up when testing beside a real install.
+profile (quit Captures first). It never enrolls in launch at login on that
+import, and its Preferences toggle uses its own `CapturesNativeTest` login
+item (Run value, LaunchAgent or autostart entry), so the installed Captures
+login item is left alone. Its tray icon is named "Captures Native Test".
 The installed executable is `captures.exe`, which answers
 `--preview-build-info` with renderer `win32`. Such a build starts `--live`
 without flags on the imported Preview profile (unless `--profile` or explicit
