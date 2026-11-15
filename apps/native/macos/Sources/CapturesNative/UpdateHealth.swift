@@ -102,7 +102,10 @@ extension NativeMediaTools {
         guard let directory = executable?.deletingLastPathComponent() else {
             throw UpdateHealthError.invalidFile
         }
-        let preview = executable?.lastPathComponent == "captures"
+        // Installed Previews and side-by-side test/staging installs
+        // (`native-preview-build.mjs --side-by-side`) bundle the tools beside
+        // the executable; development builds use `binaries/`.
+        let preview = ["captures", "captures-native-test"].contains(executable?.lastPathComponent)
         let ffmpeg = directory.appendingPathComponent(preview ? "ffmpeg" : "binaries/ffmpeg-\(suffix)").path
         let ffprobe = directory.appendingPathComponent(preview ? "ffprobe" : "binaries/ffprobe-\(suffix)").path
         guard FileManager.default.isExecutableFile(atPath: ffmpeg),

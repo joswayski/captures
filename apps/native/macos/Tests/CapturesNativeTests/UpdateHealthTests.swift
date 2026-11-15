@@ -152,6 +152,20 @@ final class UpdateHealthTests: XCTestCase {
         XCTAssertEqual(tools.ffprobe, binaries.appendingPathComponent("ffprobe-\(target)").path)
     }
 
+    func testSideBySideInstallUsesToolsBesideItsExecutable() throws {
+        let fixture = try makeEmptyFile()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        for name in ["ffmpeg", "ffprobe"] {
+            let tool = fixture.directory.appendingPathComponent(name)
+            try Data("#!/bin/sh\nexit 0\n".utf8).write(to: tool)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tool.path)
+        }
+        let executable = fixture.directory.appendingPathComponent("captures-native-test")
+        let tools = try NativeMediaTools.packaged(executable: executable)
+        XCTAssertEqual(tools.ffmpeg, fixture.directory.appendingPathComponent("ffmpeg").path)
+        XCTAssertEqual(tools.ffprobe, fixture.directory.appendingPathComponent("ffprobe").path)
+    }
+
     private enum Event { case workspace, settings, cancel }
 
     private func assertCoordinator(events: [Event], verificationSucceeds: Bool = true,
