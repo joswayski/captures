@@ -300,6 +300,25 @@ export function manifest(directory, version, repository, tag, notes = "") {
   return { version, notes, platforms };
 }
 
+/**
+ * Tauri config overlay for a "Tauri base" staging build: the public Tauri app
+ * with the side-by-side identity whose updater reads only the staging feed.
+ * Installing one and letting it update proves the Tauri→native cutover update
+ * (native-staging.yml `tauri_base`) without touching the public channel.
+ */
+export function tauriStagingConfiguration(version, root = ROOT) {
+  const release = JSON.parse(
+    readFileSync(join(root, "apps/desktop/src-tauri/tauri.recording.conf.json"), "utf8"),
+  );
+  return {
+    ...release,
+    ...SIDE_BY_SIDE,
+    version,
+    bundle: { ...release.bundle, fileAssociations: [] },
+    plugins: { updater: { endpoints: [STAGING_FEED] } },
+  };
+}
+
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
   const [operation, target, version, output] = process.argv.slice(2);
   if (operation === "build") {
@@ -315,7 +334,13 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
       flags.includes("--staging"),
     );
   } else if (operation === "collect") collect(target, version, resolve(output));
-  else if (operation === "manifest") {
+  else if (operation === "tauri-staging-config") {
+    // target is VERSION and version is OUTPUT for this operation.
+    writeFileSync(
+      resolve(version),
+      `${JSON.stringify(tauriStagingConfiguration(target), null, 2)}\n`,
+    );
+  } else if (operation === "manifest") {
     const directory = resolve(target);
     writeFileSync(
       join(directory, "latest.json"),
@@ -323,6 +348,6 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
     );
   } else
     throw new Error(
-      "usage: native-preview-build.mjs build TARGET VERSION [--unsigned] [--side-by-side | --staging] | collect TARGET VERSION OUTPUT | manifest DIRECTORY VERSION",
+      "usage: native-preview-build.mjs build TARGET VERSION [--unsigned] [--side-by-side | --staging] | collect TARGET VERSION OUTPUT | tauri-staging-config VERSION OUTPUT | manifest DIRECTORY VERSION",
     );
 }

@@ -8,7 +8,9 @@ import {
   bundleConfiguration,
   manifest,
   nativeHostBuild,
+  STAGING_FEED,
   TARGETS,
+  tauriStagingConfiguration,
   updaterArtifactName,
 } from "./native-preview-build.mjs";
 
@@ -42,6 +44,16 @@ test("side-by-side test installers never share the installed app's identity or a
   assert.equal(test.identifier, "io.github.joswayski.captures.nativetest");
   assert.equal(test.mainBinaryName, "captures-native-test");
   assert.deepEqual(test.bundle.fileAssociations, []);
+});
+
+test("Tauri staging bases update only from the staging feed under the test identity", () => {
+  const base = tauriStagingConfiguration("2026.11.1499");
+  assert.equal(base.version, "2026.11.1499");
+  assert.equal(base.identifier, "io.github.joswayski.captures.nativetest");
+  assert.equal(base.mainBinaryName, "captures-native-test");
+  assert.deepEqual(base.plugins.updater.endpoints, [STAGING_FEED]);
+  assert.deepEqual(base.bundle.fileAssociations, []);
+  assert.ok(base.bundle.externalBin.length > 0);
 });
 
 test("Windows and Linux package the Win32 and GTK hosts, never the wgpu workbench", () => {
