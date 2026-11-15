@@ -178,6 +178,15 @@ Delete old `native-staging-*` releases when no longer needed. Staging builds
 still import the installed profile on first launch into the shared `Captures
 Native Preview` profile directory.
 
+To prove the Tauri-to-native cutover, dispatch with `tauri_base` checked and a
+version below the next native staging build. It builds the Tauri app under the
+same test identity with `CAPTURES_SIDE_BY_SIDE`, which gives it its own
+`captures-native-test` profile and `CapturesNativeTest` login item (never
+enrolled at launch) and points its updater at the staging feed. Its installers
+go to a `native-staging-tauri-<version>` prerelease without changing the feed.
+Install that base, publish a higher native staging build, and update from the
+Tauri app.
+
 ### Startup recovery companion
 
 Installed hosts start a copied `native_preview_update_helper --watch-startup`

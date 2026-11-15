@@ -198,7 +198,11 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(
             tauri_plugin_autostart::Builder::new()
-                .app_name("Captures")
+                .app_name(if crate::models::SIDE_BY_SIDE_BUILD {
+                    "CapturesNativeTest"
+                } else {
+                    "Captures"
+                })
                 .arg(AUTOSTART_ARG)
                 .build(),
         );
@@ -633,7 +637,9 @@ fn refresh_autostart_registration(app: &tauri::App) {
     {
         let settings = app.state::<Arc<AppState>>().settings();
         // Register new installs too, not just entries created by a manual toggle.
+        // Side-by-side test builds never enroll themselves.
         if settings.launch_at_login
+            && !crate::models::SIDE_BY_SIDE_BUILD
             && let Err(error) = app.autolaunch().enable()
         {
             eprintln!("failed to refresh launch-at-login registration: {error}");

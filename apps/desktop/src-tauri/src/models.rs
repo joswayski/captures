@@ -599,27 +599,40 @@ fn migrate_output_directory(settings: &mut AppSettings, legacy: &Path, current: 
     }
 }
 
+/// Side-by-side staging builds (native-staging.yml `tauri_base`) keep their own
+/// profile and login item so testing never touches the installed Captures.
+pub const SIDE_BY_SIDE_BUILD: bool = option_env!("CAPTURES_SIDE_BY_SIDE").is_some();
+
+fn project_dirs() -> Option<ProjectDirs> {
+    let application = if SIDE_BY_SIDE_BUILD {
+        "captures-native-test"
+    } else {
+        "captures"
+    };
+    ProjectDirs::from("io", "github", application)
+}
+
 pub fn settings_path() -> PathBuf {
-    ProjectDirs::from("io", "github", "captures")
+    project_dirs()
         .map(|dirs| dirs.config_dir().join("settings.json"))
         .unwrap_or_else(|| PathBuf::from("settings.json"))
 }
 
 pub fn history_directory() -> PathBuf {
-    ProjectDirs::from("io", "github", "captures")
+    project_dirs()
         .map(|dirs| dirs.data_local_dir().join("capture-history"))
         .unwrap_or_else(|| PathBuf::from(".captures-history"))
 }
 
 pub fn recording_recovery_directory() -> PathBuf {
-    ProjectDirs::from("io", "github", "captures")
+    project_dirs()
         .map(|dirs| dirs.data_local_dir().join("recording-recovery"))
         .unwrap_or_else(|| PathBuf::from(".captures-recording-recovery"))
 }
 
 /// Unsaved screenshot editor sessions (layered document + PNG assets).
 pub fn screenshot_editor_drafts_directory() -> PathBuf {
-    ProjectDirs::from("io", "github", "captures")
+    project_dirs()
         .map(|dirs| dirs.data_local_dir().join("screenshot-editor-drafts"))
         .unwrap_or_else(|| PathBuf::from(".captures-screenshot-editor-drafts"))
 }
