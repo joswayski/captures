@@ -1066,9 +1066,12 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         let startup = startupDecision(options: options)
         if !options.live, startup.showsWindow { window.makeKeyAndOrderFront(nil) }
         if !options.live, startup.activatesApplication { NSApp.activate(ignoringOtherApps: true) }
-        Metrics.write(["event": "ready", "scene": scene, "window": window.windowNumber,
+        var ready: [String: Any] = ["event": "ready", "scene": scene, "window": window.windowNumber,
             "scale": window.backingScaleFactor, "appearance": appearance, "theme": theme,
-            "historyCount": historyCount, "referenceChips": options.referenceChips])
+            "referenceChips": options.referenceChips]
+        // The synthetic workbench table's row count; the live app reads real History.
+        if !options.live { ready["historyCount"] = historyCount }
+        Metrics.write(ready)
         DistributedNotificationCenter.default().addObserver(self, selector: #selector(systemAppearanceChanged),
             name: NSNotification.Name("AppleInterfaceThemeChangedNotification"), object: nil)
         if let path = options.screenshot {
