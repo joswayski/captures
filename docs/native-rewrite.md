@@ -1,18 +1,24 @@
 # Browser-free desktop migration
 
-Status: **opt-in native development; Tauri remains the public Preview and physical cross-platform acceptance remains open**.
+Status: **native is the public Preview since November 16, 2026, by owner decision once over-the-air updates were proven; the parity gates below remain open follow-up work**.
 This rewrite covers macOS, Windows, and Linux, feature by feature rather than one
 complete OS at a time. The replacement hosts use AppKit on macOS, Win32 with
 DirectComposition/Direct2D on Windows, and GTK4 on Linux. The older egui/wgpu
 workbench remains a performance comparator and receives CI-maintenance fixes only.
-Public downloads and installed updates continue to select
-validated Tauri Previews; native CI and development packages do not authorize a
-cutover or a stable release. Earlier experimental native packages remain in the
-archive. No WebView, JavaScript runtime, localhost server or Tauri runtime belongs
-in the replacement; the Tauri CLI can still bundle native development installers.
-Tauri/React remains the shipping behavior and visual baseline.
+Public downloads and installed updates now select validated native Previews
+(see docs/releases.md); this is not a stable release. No WebView, JavaScript
+runtime, localhost server or Tauri runtime belongs in the replacement; the Tauri
+CLI only bundles its installers. Tauri/React remains the behavior and visual
+baseline.
 
 ## Current cutover blockers (November 2026)
+
+Jose approved making native the public app once over-the-air updates worked,
+without waiting for every gate in this table. Before the switch, staging updates
+passed on his Mac and Windows PC: native to native (1501 → 1502) and Tauri to
+native (Tauri 1505 → native 1506), with read-only profile import, startup
+acknowledgement and no recovery alerts. Linux was not tested on physical
+hardware. The remaining rows are now post-cutover parity work.
 
 The implementation notes below are a chronological record, not a current checklist:
 an early slice's "not yet ported" can be superseded by a later slice. Implemented
@@ -27,9 +33,9 @@ features, automated checks and physical acceptance are separate milestones.
 
 Each host must pass feature and Tauri screenshot parity, real-hardware performance
 at least as good as the egui host, and accessibility acceptance. Packaging/update
-recovery must also be verified for the host being shipped. Only then can the owner
-approve replacing the public Tauri app. Native development commits or packages do
-not make that decision automatically, and no cutover date is committed.
+recovery must also be verified for the host being shipped. The owner approved the
+November 2026 switch before these gates closed; they remain the parity bar for
+follow-up work.
 
 Native migration tooling includes installed profile copy, pinned signature
 verification and a stopped-process helper, separately from the opt-in development

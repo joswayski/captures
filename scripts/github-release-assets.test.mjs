@@ -39,11 +39,11 @@ test("macOS historical helper sparse checkout includes every local import", () =
   }
 });
 
-test("updater URL rewrite uses the workflow CalVer tag, not GitHub draft tag_name", () => {
+test("updater URLs use the workflow CalVer tag, not GitHub draft tag_name", () => {
   const workflow = readFileSync(workflowPath, "utf8");
   assert.match(
     workflow,
-    /rewrite-updater-urls "\$RELEASE_ID" release-assets\/latest\.json "\$TAG"/u,
+    /TAG: \$\{\{ needs\.prepare\.outputs\.tag \}\}[\s\S]*?native-preview-build\.mjs manifest release-assets "\$APP_VERSION"/u,
   );
   assert.match(
     workflow,

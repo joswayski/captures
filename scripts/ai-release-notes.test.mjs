@@ -175,23 +175,19 @@ test("invalid or unavailable editorial output preserves exact fallback without l
   }
 });
 
-test("native migration stays out of AI and fallback notes while shared shipping code remains eligible", async () => {
+test("the egui/wgpu workbench stays out of AI and fallback notes while native hosts are eligible", async () => {
   const f = fixture();
   const native = f.commit(
-    {
-      "crates/captures-app/src/editor_session.rs": "NATIVE-BRUSH",
-      "crates/captures-settings-ffi/src/editor.rs": "NATIVE-FFI",
-      "apps/native/windows/src/editor.rs": "NATIVE-HOST",
-    },
+    { "apps/native/wgpu/src/editor.rs": "WORKBENCH-BRUSH" },
     "Smoother background brushing",
   );
   const options = {
     cwd: f.cwd,
     env,
     fetch: async () => {
-      throw new Error("native-only range must not call the provider");
+      throw new Error("workbench-only range must not call the provider");
     },
-    warn: () => assert.fail("native-only range must not fall back"),
+    warn: () => assert.fail("workbench-only range must not fall back"),
   };
   assert.equal(
     await aiReleaseNotes(f.base, native, fallback, options),
@@ -200,8 +196,8 @@ test("native migration stays out of AI and fallback notes while shared shipping 
   const shipped = f.commit(
     {
       "crates/captures-app/src/preview.rs": "SHIPPED-STACK",
-      "crates/captures-app/src/preview_drag.rs": "SHIPPED-DRAG",
-      "crates/captures-app/src/editor_session.rs": "NATIVE-BRUSH-UPDATE",
+      "apps/native/windows/src/editor.rs": "SHIPPED-DRAG",
+      "apps/native/wgpu/src/editor.rs": "WORKBENCH-BRUSH-UPDATE",
     },
     "Keep your capture handy",
   );
@@ -215,7 +211,7 @@ test("native migration stays out of AI and fallback notes while shared shipping 
       );
       assert.match(source.commits[0].diff, /SHIPPED-STACK/u);
       assert.match(source.commits[0].diff, /SHIPPED-DRAG/u);
-      assert.doesNotMatch(source.commits[0].diff, /NATIVE-/u);
+      assert.doesNotMatch(source.commits[0].diff, /WORKBENCH-/u);
       return reply([highlight(shipped)]);
     },
   });

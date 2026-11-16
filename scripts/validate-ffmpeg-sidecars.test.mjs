@@ -77,7 +77,7 @@ test("media cache is exact-key, always validated, and saved before signing", () 
   );
   assert.ok(
     workflow.indexOf("uses: ./release-tools/.github/actions/prepare-media") <
-      workflow.indexOf("uses: tauri-apps/tauri-action@v1"),
+      workflow.indexOf("node scripts/native-preview-build.mjs build"),
   );
   assert.match(workflow, /sparse-checkout:[\s\S]*?\.github\/actions\/prepare-media\/action.yml/u);
 });
