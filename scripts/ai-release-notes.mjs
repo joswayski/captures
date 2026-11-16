@@ -87,13 +87,7 @@ function git(cwd, args) {
 }
 
 function runtimePath(path) {
-  const roots = [
-    "apps/desktop/ui/src/",
-    "apps/desktop/src-tauri/src/",
-    "apps/native/",
-    "crates/",
-    "shared/",
-  ];
+  const roots = ["apps/desktop/ui/src/", "apps/desktop/src-tauri/src/", "crates/", "shared/"];
   return (
     roots.some((root) => path.startsWith(root)) &&
     !isUnreleasedNativePath(path) &&

@@ -1,25 +1,34 @@
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
-import { isPublicPreview } from "../shared/preview-runtime.ts";
+import { isTauriPreview } from "../shared/preview-runtime.ts";
 
 const ZERO_SHA = /^0{40}$/u;
-const DESKTOP_ROOTS = [".cargo/", "apps/desktop/", "apps/native/", "crates/", "shared/"];
+const DESKTOP_ROOTS = [".cargo/", "apps/desktop/", "crates/", "shared/"];
 const DESKTOP_EXACT_PATHS = new Set(["Cargo.lock", "Cargo.toml"]);
 const TEST_ONLY_PATH = /(?:^|\/)[^/]+\.test\.(?:[cm]?[jt]sx?)$/u;
 
 /** Files whose contents can change the installed desktop app. */
 export function isDesktopReleasePath(path) {
   const normalized = path.replace(/^\.\//u, "");
-  if (TEST_ONLY_PATH.test(normalized) || isUnreleasedNativePath(normalized)) return false;
+  if (TEST_ONLY_PATH.test(normalized)) return false;
   return (
     DESKTOP_EXACT_PATHS.has(normalized) || DESKTOP_ROOTS.some((root) => normalized.startsWith(root))
   );
 }
 
-/** The egui/wgpu workbench is maintenance-only and never ships in Previews. */
+/** Native parity work is not public Tauri behavior, even inside a linked crate. */
 export function isUnreleasedNativePath(path) {
-  return path.startsWith("apps/native/wgpu/");
+  return (
+    path.startsWith("apps/native/") ||
+    path.startsWith("crates/captures-settings-ffi/") ||
+    (path.startsWith("crates/captures-app/") &&
+      // These are the captures-app modules called by apps/desktop/src-tauri.
+      // Review this boundary when Tauri adopts more modules or native ships.
+      !["crates/captures-app/src/preview.rs", "crates/captures-app/src/preview_drag.rs"].includes(
+        path,
+      ))
+  );
 }
 
 function dependencyNames(pkg) {
@@ -203,10 +212,10 @@ export function releaseNotes(commits, repository, fallbackCommit = "") {
   return `## What's Changed\n${notes.join("\n")}\n`;
 }
 
-/** Nearest published public Preview on main's history, never an unmarked native or draft tag. */
+/** Nearest published Tauri Preview on main's history, never a native or draft tag. */
 export function previousPreviewTag(head, releases) {
   const tags = releases
-    .filter((release) => !release.draft && release.prerelease && isPublicPreview(release))
+    .filter((release) => !release.draft && release.prerelease && isTauriPreview(release))
     .map((release) => release.tag_name);
   if (tags.length === 0) return "";
   try {

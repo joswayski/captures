@@ -42,15 +42,13 @@ test("classifies installed-app paths without treating website, API, docs, or tes
     ".cargo/config.toml",
     "Cargo.toml",
     "Cargo.lock",
-    "apps/native/macos/Sources/CapturesNative/Main.swift",
-    "apps/native/windows/src/main.rs",
-    "apps/native/gtk/src/main.rs",
   ]) {
     assert.equal(isDesktopReleasePath(path), true, path);
   }
 
   for (const path of [
     "apps/native/wgpu/src/main.rs",
+    "apps/native/macos/Sources/CapturesNative/Main.swift",
     "apps/native/wgpu/Cargo.lock",
     "scripts/native-preview-build.mjs",
     "apps/web/src/pages/Home.tsx",
