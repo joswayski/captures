@@ -107,6 +107,18 @@ final class PrimitivesTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(list.frame.width, select.bounds.width)
         XCTAssertEqual(select.item(at: 1)?.title, "Compress", "titles and accessibility names are unchanged")
         list.display()
+        // The rows sit on an opaque card, not over whatever is behind the menu.
+        let surface = try XCTUnwrap(list.enclosingScrollView?.superview as? TokenSelectSurfaceView)
+        let bitmap = try XCTUnwrap(surface.bitmapImageRepForCachingDisplay(in: surface.bounds))
+        surface.cacheDisplay(in: surface.bounds, to: bitmap)
+        // Sample the listbox padding, left of the rows and away from the border.
+        let scale = CGFloat(bitmap.pixelsWide) / surface.bounds.width
+        let middle = try XCTUnwrap(bitmap.colorAt(x: Int(tokens.number("s-2") / 2 * scale),
+                                                  y: bitmap.pixelsHigh / 2)?.usingColorSpace(.sRGB))
+        let overlay = try XCTUnwrap(tokens.color("surface-overlay").usingColorSpace(.sRGB))
+        XCTAssertEqual(middle.alphaComponent, 1, accuracy: 0.01, "the open listbox is opaque")
+        XCTAssertEqual(middle.redComponent, overlay.redComponent, accuracy: 0.02)
+        XCTAssertEqual(middle.blueComponent, overlay.blueComponent, accuracy: 0.02)
         // Shipping `CustomSelect` keys from the shared controls model.
         XCTAssertTrue(select.handleSelectKey("end"))
         XCTAssertEqual(list.active, 2, "End jumps to the last option")

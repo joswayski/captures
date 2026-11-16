@@ -576,10 +576,14 @@ final class MiniPreviewButton: NSButton {
         let color = tokens.color(offersAction ? "theme-accent-ink" : "theme-accent-text")
         color.setStroke(); color.setFill()
         // Padding `3px 9px 3px 7px` inside a 1 px border; an 11 pt icon at 2.2 units.
-        let icon = NSRect(x: 8, y: (bounds.height - 11) / 2, width: 11, height: 11)
-        drawIcon(in: icon, lineWidth: 2.2)
+        // The pill fits "Show in editor", so the shorter "In editor" centres
+        // with its icon instead of leaving a gap on the right.
         let text = NSAttributedString(string: editorLabel, attributes: [
             .font: pillFont, .foregroundColor: color])
+        let group = 11 + 5 + ceil(text.size().width)
+        let icon = NSRect(x: max(8, floor((bounds.width - group) / 2)), y: (bounds.height - 11) / 2,
+                          width: 11, height: 11)
+        drawIcon(in: icon, lineWidth: 2.2)
         NSGraphicsContext.saveGraphicsState()
         NSBezierPath(rect: bounds.insetBy(dx: 1, dy: 1)).addClip()
         text.draw(at: NSPoint(x: icon.maxX + 5, y: (bounds.height - text.size().height) / 2))

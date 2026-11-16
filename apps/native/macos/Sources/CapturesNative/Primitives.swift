@@ -250,17 +250,23 @@ final class ClosurePopUpButton: NSPopUpButton {
         panel.isReleasedWhenClosed = false
         panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = true
         panel.level = window.level
-        let scroll = NSScrollView(frame: NSRect(origin: .zero, size: frame.size))
+        // The surface is drawn by its own view: AppKit owns an NSScrollView's
+        // layer and dropped the background and border set on it, leaving the
+        // rows floating over whatever was behind the menu.
+        let surface = TokenSelectSurfaceView(
+            frame: NSRect(origin: .zero, size: frame.size),
+            fill: tokens.color(selectStyle == .glass ? "glass-raised" : "surface-overlay"),
+            border: tokens.color(selectStyle == .glass ? "glass-border" : "border"),
+            radius: tokens.number("r-lg"))
+        // Transparent and inset rows keep the border visible under the scroll view.
+        let scroll = NSScrollView(frame: surface.bounds)
+        scroll.autoresizingMask = [.width, .height]
         scroll.drawsBackground = false; scroll.hasVerticalScroller = content.height > height
         scroll.scrollerStyle = .overlay; scroll.useTokenScrollers(tokens)
-        scroll.wantsLayer = true
-        scroll.layer?.cornerRadius = tokens.number("r-lg"); scroll.layer?.masksToBounds = true
-        scroll.layer?.borderWidth = 1
-        scroll.layer?.borderColor = tokens.color(selectStyle == .glass ? "glass-border" : "border").cgColor
-        scroll.layer?.backgroundColor = tokens.color(selectStyle == .glass ? "glass-raised" : "surface-overlay").cgColor
         list.frame = NSRect(x: 0, y: 0, width: frame.width, height: content.height)
         scroll.documentView = list
-        panel.contentView = scroll
+        surface.addSubview(scroll)
+        panel.contentView = surface
         window.addChildWindow(panel, ordered: .above)
         listbox = list; listboxWindow = panel
         list.revealActive()
@@ -380,6 +386,26 @@ final class ClosurePopUpButton: NSPopUpButton {
         chevron.move(to: point(4, edge)); chevron.line(to: point(8, tip)); chevron.line(to: point(12, edge))
         chevron.lineWidth = 1.7 * scale; chevron.lineCapStyle = .round; chevron.lineJoinStyle = .round
         glyph.faded(alpha).setStroke(); chevron.stroke()
+    }
+}
+
+/// The open listbox's rounded `--surface-overlay` (or glass) card and border.
+final class TokenSelectSurfaceView: NSView {
+    let fill: NSColor
+    let border: NSColor
+    let radius: CGFloat
+
+    init(frame: NSRect, fill: NSColor, border: NSColor, radius: CGFloat) {
+        self.fill = fill; self.border = border; self.radius = radius
+        super.init(frame: frame)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let card = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: radius, yRadius: radius)
+        fill.setFill(); card.fill()
+        border.setStroke(); card.lineWidth = 1; card.stroke()
     }
 }
 

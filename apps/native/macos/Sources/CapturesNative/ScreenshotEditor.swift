@@ -1880,6 +1880,15 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var terminationCompletion: ((Bool) -> Void)?
     private var terminationInFlight = false
     private var draining: Bool { closeRequested || terminationCompletion != nil }
+    /// Document edits that finish within this keep the controls and canvas
+    /// overlays as they were. Like shipping, a quick edit (placing an arrow)
+    /// doesn't grey the editor; disabling everything for one render flashed
+    /// the whole window. Export work still greys at once.
+    static let busyControlsDelay: TimeInterval = 0.3
+    private var commandGrace = false
+    private var commandGraceWork: DispatchWorkItem?
+    /// `state.busy` as the controls and canvas overlays show it.
+    private var controlsBusy: Bool { state.busy && !commandGrace }
     static let closeDelay: TimeInterval = 0.4
     private let exportBarRule = Surface()
     private(set) var lastSavedPath: String?
@@ -4642,7 +4651,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 let shape: EditorDrawOverlay.Shape = key == "t" ? .text : key == "a" ? .arrow : .pen
                 selected = sectionControl?.selectedSegment == Section.draw && drawOverlay.shape == shape
             }
-            button.isEnabled = state.snapshot != nil && (!state.busy || inlineTextInput != nil)
+            button.isEnabled = state.snapshot != nil && (!controlsBusy || inlineTextInput != nil)
                 && !draining && !importLoading && window.attachedSheet == nil
             button.selected = selected; button.primary = selected
             button.setAccessibilityValue(selected ? 1 : 0)
@@ -5617,10 +5626,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 "end": ["x": end.x, "y": end.y], "style": style, "opacity": opacity]
     }
 
-    private func cancelDrawingPreview() {
+    private func cancelDrawingPreview(restoreImage: Bool = true) {
         drawingPreviewEpoch += 1
         drawingPreviewPending = nil
-        if drawOverlay.pixelPreviewVisible || selectionOverlay.pixelPreviewVisible { preview.image = editedImage }
+        if restoreImage && (drawOverlay.pixelPreviewVisible || selectionOverlay.pixelPreviewVisible) {
+            preview.image = editedImage
+        }
         drawOverlay.pixelPreviewVisible = false
         selectionOverlay.pixelPreviewVisible = false
         selectionOverlay.workerPreview = nil
@@ -6603,11 +6614,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         updateToolRail()
         let inputResolved = inlineTextInput == nil && !draining
         let cropReady = sectionControl?.selectedSegment == Section.geometry && state.snapshot != nil
-            && !state.busy && inputResolved
+            && !controlsBusy && inputResolved
         let active = sectionControl?.selectedSegment == Section.draw
-            && state.snapshot != nil && !state.busy && inputResolved
+            && state.snapshot != nil && !controlsBusy && inputResolved
         let selectionReady = toolShowsTransformChrome
-            && state.snapshot != nil && !state.busy && inputResolved && !importLoading
+            && state.snapshot != nil && !controlsBusy && inputResolved && !importLoading
         // Park focus before hiding its overlay, otherwise AppKit advances to
         // the divider. Do not resign an overlay that stays visible: that would
         // cancel its gesture. Explicit divider/field focus stays untouched.
@@ -6618,7 +6629,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
         cropOverlay.croppingEnabled = cropReady && cropActive
         cropAspect.isEnabled = cropReady && cropActive
-        eraserMode?.isEnabled = state.snapshot != nil && !state.busy && inputResolved
+        eraserMode?.isEnabled = state.snapshot != nil && !controlsBusy && inputResolved
         wandTolerance?.isEnabled = active; wandContiguous.isEnabled = active
         brushSize?.isEnabled = active; brushSoftness?.isEnabled = active
         createTextPreset.isEnabled = active && createTextPreset.numberOfItems > 1
@@ -6643,7 +6654,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         selectionOverlay.selectedOnly = sectionControl?.selectedSegment == Section.draw
         selectionOverlay.selectionEnabled = selectionReady
         if window.firstResponder === viewportInput, state.snapshot != nil,
-           !state.busy, inputResolved, !importLoading {
+           !controlsBusy, inputResolved, !importLoading {
             focusActiveCanvas()
         }
     }
@@ -7311,8 +7322,18 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             return
         }
         guard let generation = state.beginCommand() else { return }
+        commandGrace = true
+        let grace = DispatchWorkItem { [weak self] in
+            guard let self, self.state.busy, self.state.generation == generation else { return }
+            self.commandGrace = false; self.commandGraceWork = nil; self.updateControls()
+        }
+        commandGraceWork?.cancel(); commandGraceWork = grace
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.busyControlsDelay, execute: grace)
         let clipboardChange = layerPasteboard.changeCount
-        cancelDrawingPreview()
+        // Keep showing the drawn preview until the rendered result replaces it;
+        // reverting first made a just-placed arrow blink out for a frame.
+        let heldPreview = drawOverlay.pixelPreviewVisible || selectionOverlay.pixelPreviewVisible
+        cancelDrawingPreview(restoreImage: false)
         if !preserveOutputAndStatus { invalidateOutput() }
         preferredLayerID = preferredSelection
         if !preserveOutputAndStatus { editorError = nil }
@@ -7341,6 +7362,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 }
                 if preserveOutputAndStatus {
                     self.preferredLayerID = nil
+                    if heldPreview { self.preview.image = self.editedImage }
                 } else {
                     self.publish(presentation, resetCrop: resetCrop)
                     self.editorError = nil
@@ -7349,6 +7371,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             case .failure(let error):
                 guard self.state.fail(generation: generation) else { return }
                 self.preferredLayerID = nil
+                if heldPreview { self.preview.image = self.editedImage }
                 // A rejected live edit ends its burst; queued edits built on it drop too.
                 self.liveQueue.removeAll()
                 self.showError("Editor action failed: \(error.localizedDescription)")
@@ -7435,7 +7458,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private func updateControls() {
         let settled = state.snapshot != nil && !state.busy && inlineTextInput == nil
-        let ready = settled && !draining
+        if !state.busy { commandGraceWork?.cancel(); commandGraceWork = nil; commandGrace = false }
+        // Controls stay enabled through a brief edit; `state.beginCommand`
+        // still ignores anything they start until it lands.
+        let ready = state.snapshot != nil && !controlsBusy && inlineTextInput == nil && !draining
         fields.forEach { $0.isEnabled = ready }
         applyCropButton?.isEnabled = ready
         if let applyCropButton {

@@ -348,6 +348,9 @@ final class HistoryThumbnailView: NSView, NSDraggingSource {
     var tokens: Tokens
     var image: NSImage? { didSet { needsDisplay = true } }
     var missing = false { didSet { needsDisplay = true } }
+    /// How far the card inset this view inside its border; the top corners
+    /// follow the card's inner radius.
+    var borderInset: CGFloat = 0 { didSet { if borderInset != oldValue { needsDisplay = true } } }
     var openable = false
     var draggable = false
     var onOpen: () -> Void = {}
@@ -487,7 +490,7 @@ final class HistoryThumbnailView: NSView, NSDraggingSource {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        let radius = tokens.number("r-xl")
+        let radius = max(0, tokens.number("r-xl") - borderInset)
         let clip = NSBezierPath()
         // Rounded top corners only, in flipped coordinates.
         clip.move(to: NSPoint(x: 0, y: bounds.maxY))
@@ -535,7 +538,7 @@ final class HistoryCardView: NSView {
     var baseHeight: CGFloat = 273 { didSet { needsLayout = true } }
     private(set) var actionButtons: [HistoryButton] = []
     private(set) var deleteButton: HistoryButton!
-    var selected = false { didSet { needsDisplay = true } }
+    var selected = false { didSet { needsDisplay = true; needsLayout = true } }
     var enabled = true
     var onSelect: () -> Void = {}
     var onOpen: () -> Void = {}
@@ -666,10 +669,15 @@ final class HistoryCardView: NSView {
         super.layout()
         installShadows()
         let imageHeight: CGFloat = 168
-        thumbnail.frame = NSRect(x: 0, y: 0, width: bounds.width, height: imageHeight)
+        // Shipping's image sits inside the card's 1 pt border (and here inside
+        // the 2 pt selection ring); edge to edge, it painted over both.
+        let inset: CGFloat = selected || window?.firstResponder === self ? 2 : 1
+        thumbnail.frame = NSRect(x: inset, y: inset, width: bounds.width - 2 * inset, height: imageHeight - inset)
+        thumbnail.borderInset = inset
         let chipWidth = ceil(missingLabel.intrinsicContentSize.width) + 2 * tokens.number("s-4")
         let chipHeight = tokens.number("text-sm") + 2 * tokens.number("s-3") + 2
-        missingLabel.frame = NSRect(x: (bounds.width - chipWidth) / 2, y: (imageHeight - chipHeight) / 2,
+        missingLabel.frame = NSRect(x: (thumbnail.bounds.width - chipWidth) / 2,
+                                    y: (thumbnail.bounds.height - chipHeight) / 2,
                                     width: chipWidth, height: chipHeight)
         let pad = tokens.number("s-5"), inner = bounds.width - 2 * pad
         var y = imageHeight + 1 + pad

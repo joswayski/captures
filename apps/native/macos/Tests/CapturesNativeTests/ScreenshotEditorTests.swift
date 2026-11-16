@@ -2139,7 +2139,12 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertEqual(worker.requests.count, 2)
         XCTAssertEqual(worker.requests.last?["rect"] as? [String: Double],
                        ["x": 160, "y": 108, "width": 320, "height": 180])
-        XCTAssertFalse(apply.isEnabled)
+        // A brief command leaves the controls alone (greying them all flashed
+        // the window) but still runs once; a slow one greys them.
+        XCTAssertTrue(apply.isEnabled, "a brief command keeps the controls as they were")
+        apply.performClick(nil)
+        XCTAssertEqual(worker.requests.count, 2, "a running command ignores another Apply")
+        waitUntil { !apply.isEnabled }
         worker.completePending(with: snapshot(id: "shot", width: 320, height: 180, unsaved: true))
         XCTAssertNil(controller.cropSelection)
         XCTAssertTrue(apply.isHidden)
@@ -2512,7 +2517,7 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertFalse(trim.isHiddenOrHasHiddenAncestor)
             try render(controller.root, name: "screenshot-editor-trim-minimum-\(appearance)")
             trim.performClick(nil)
-            XCTAssertFalse(trim.isEnabled, "one shared command owns busy state")
+            XCTAssertTrue(controller.state.busy, "one shared command owns busy state")
             waitUntil { !controller.state.busy }
             XCTAssertEqual(controller.state.snapshot?.width, initial.width)
             XCTAssertEqual(controller.state.snapshot?.height, initial.height)
@@ -6224,7 +6229,7 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(try XCTUnwrap(edit["delta_y"] as? Double), 30, accuracy: 1e-7)
             XCTAssertEqual(try XCTUnwrap(edit["display_scale"] as? Double), scale, accuracy: 1e-7)
             XCTAssertTrue(controller.state.busy)
-            XCTAssertFalse(overlay.selectionEnabled)
+            XCTAssertTrue(overlay.selectionEnabled, "a brief edit keeps the selection chrome on screen")
             XCTAssertEqual(try field("Layer X", in: controller.root).stringValue, "40")
             worker.completePending(with: published)
             XCTAssertEqual(try field("Layer X", in: controller.root).stringValue, "240")
@@ -6405,7 +6410,7 @@ final class ScreenshotEditorTests: XCTestCase {
             failureWorker.deferRequests = true
             surface.begin(at: press); surface.end(at: release)
             XCTAssertEqual(failureWorker.requests.count, 1); XCTAssertTrue(failure.state.busy)
-            XCTAssertFalse(surface.selectionEnabled)
+            XCTAssertTrue(surface.selectionEnabled, "a brief edit keeps the selection chrome on screen")
             XCTAssertEqual(failureWorker.requests[0]["id"] as? String, id)
             XCTAssertEqual((failureWorker.requests[0]["edit"] as? [String: Any])?["action"] as? String, "rotate")
             failureWorker.completePending(with: rotated.snapshot)
