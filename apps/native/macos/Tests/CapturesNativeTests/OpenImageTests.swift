@@ -251,6 +251,27 @@ final class OpenImageTests: XCTestCase {
             .contains { $0.contains("120 × 80") }, "duplicate Edit must preserve the staged crop")
         XCTAssertFalse(window.isVisible)
         XCTAssertEqual(table.selectedRow, selectedRow)
+
+        // Closing autosaves the draft and releases the editor; Edit from the
+        // preview builds a new one that restores the crop from that draft.
+        editor.performClose(nil)
+        XCTAssertNil(editor.attachedSheet, "close autosaves without asking")
+        try waitUntil { !editor.isVisible }
+        EditorWorker.flush()
+        let drafts = folder.appendingPathComponent("editor-drafts")
+        XCTAssertFalse(try FileManager.default.contentsOfDirectory(atPath: drafts.path).isEmpty,
+                       "closing the editor saves its draft")
+        controller.openPreview(first)
+        func reopenedWindow() -> NSWindow? {
+            NSApp.windows.first { $0 !== editor && $0.title.hasPrefix(EditorWindowTitle.screenshot) && $0.isVisible }
+        }
+        try waitUntil { reopenedWindow() != nil }
+        let reopened = try XCTUnwrap(reopenedWindow())
+        defer { reopened.performClose(nil); reopened.orderOut(nil) }
+        let reopenedControls = try XCTUnwrap(reopened.contentView)
+        try waitUntil { (try? self.canvasSize(in: reopenedControls)) == "120×80" }
+        XCTAssertFalse(window.isVisible)
+
         XCTAssertEqual(try XCTUnwrap(bridge.request([
             "operation": "history", "root": history.path])["artifacts"] as? [[String: Any]]).count, 2)
         XCTAssertEqual(try Data(contentsOf: firstSource), sourceBytes[0])
