@@ -144,7 +144,19 @@ final class OpenImageTests: XCTestCase {
         try waitUntil { !editor.isVisible }
         EditorWorker.flush() // The close flush lands before the source reloads.
         controller.openImages([source.path])
-        try waitUntil { !controller.externalOpenPending && editor.isVisible && !cropped() }
+        // A closed editor is released, so reopening builds a new window.
+        func reopenedWindow() -> NSWindow? {
+            NSApp.windows.first { $0 !== editor && $0.title.hasPrefix(EditorWindowTitle.screenshot) && $0.isVisible }
+        }
+        try waitUntil { !controller.externalOpenPending && reopenedWindow() != nil }
+        let reopenedEditor = try XCTUnwrap(reopenedWindow())
+        defer { reopenedEditor.performClose(nil); reopenedEditor.orderOut(nil) }
+        XCTAssertFalse(editor.isVisible)
+        let reopenedControls = try XCTUnwrap(reopenedEditor.contentView)
+        try waitUntil {
+            let size = try? self.canvasSize(in: reopenedControls)
+            return size != nil && size != "×" && size != "120×80"
+        }
         let reopened = try XCTUnwrap(AppBridge().request([
             "operation": "history", "root": history.path])["artifacts"] as? [[String: Any]])
         XCTAssertEqual(reopened.count, 1)

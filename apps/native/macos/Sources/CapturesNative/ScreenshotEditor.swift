@@ -2912,6 +2912,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         overlayHost.autoresizingMask = [.width, .height]
         overlayHost.wantsLayer = true
         overlayHost.canDrawSubviewsIntoLayer = true
+        // Clip like the viewport the overlays used to sit in directly.
+        overlayHost.layer?.masksToBounds = true
         viewportInput.addSubview(overlayHost)
         drawOverlay.frame = overlayHost.bounds
         drawOverlay.autoresizingMask = [.width, .height]
