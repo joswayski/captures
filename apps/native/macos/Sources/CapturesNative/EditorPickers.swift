@@ -205,7 +205,7 @@ final class ColorSwatchRow: NSView {
         didSet {
             swatchButtons.forEach { $0.isEnabled = isEnabled }
             customWell.isEnabled = isEnabled
-            if !isEnabled { customWell.deactivate() }
+            if !isEnabled { deactivate() }
         }
     }
 
@@ -263,7 +263,10 @@ final class ColorSwatchRow: NSView {
         }
     }
 
-    func deactivate() { customWell.deactivate() }
+    /// `NSColorWell.deactivate()` reaches for `NSColorPanel.shared`, which
+    /// builds the panel and its Metal-backed layers (tens of MB) even when no
+    /// well was ever opened; only an active well has anything to end.
+    func deactivate() { if customWell.isActive { customWell.deactivate() } }
 
     /// Rename the field (shipping "Stroke color" vs "Color" for open tools)
     /// and each swatch's accessible name.

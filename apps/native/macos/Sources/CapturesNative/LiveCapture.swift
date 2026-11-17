@@ -3480,6 +3480,9 @@ final class LiveCaptureController: NSObject {
                     self.screenshotEditor?.presenceChanged = { [weak self] artifactID in
                         self?.miniPreviews?.setEditorArtifacts(Set(artifactID.map { [$0] } ?? []))
                     }
+                    // A closed editor is released and rebuilt on the next open,
+                    // so its window and graphics memory are not kept idle.
+                    self.screenshotEditor?.didClose = { [weak self] in self?.screenshotEditor = nil }
                 }
                 self.screenshotEditor?.present(artifact: artifact, historyRoot: self.historyRoot,
                     outputDirectory: outputDirectory, sourceArtifactID: sourceArtifactID, completion: completion.map { finished in

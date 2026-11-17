@@ -1407,6 +1407,16 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
     }
 }
 
+/// Holds the viewport overlays; a press that misses all of them reaches the
+/// views below, as it did before they shared this host.
+private final class EditorOverlayHost: NSView {
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let target = super.hitTest(point)
+        return target === self ? nil : target
+    }
+}
+
 /// Label drawn inside a button; clicks fall through to the button.
 private final class EditorPassthroughLabel: NSTextField {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
@@ -1654,6 +1664,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     let drawOverlay = EditorDrawOverlay()
     let selectionOverlay = EditorSelectionOverlay()
     let cropOverlay = EditorCropOverlay()
+    private let overlayHost = EditorOverlayHost()
     /// Shipping `.screenshot-inline-text-frame`: the canvas text box, in the
     /// layer's own face, colour, plate and rotation (`updateInlineTextFrame`).
     private var inlineTextFrame: EditorInlineTextFrame!
@@ -2008,6 +2019,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         build(); restyle(tokens); updateControls()
     }
 
+    deinit {
+        // Released after a close (`didClose`): local event monitors outlive
+        // their weak owner unless removed.
+        [layerMenuMonitor, shapeFlyoutMonitor].compactMap { $0 }.forEach(NSEvent.removeMonitor)
+    }
+
     func present(artifact: CaptureArtifact, historyRoot: String, outputDirectory: String? = nil,
                  sourceArtifactID: String? = nil,
                  completion: ((Bool) -> Void)? = nil) {
@@ -2113,6 +2130,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
     /// Called on the main thread whenever `presentArtifactID` changes.
     var presenceChanged: (String?) -> Void = { _ in }
+    /// Called on the main thread after a close finishes with nothing queued
+    /// to reopen; the owner releases this controller and builds a new one on
+    /// the next open.
+    var didClose: () -> Void = {}
     private var reportedPresence: String?
 
     private func publishPresence() {
@@ -2883,7 +2904,16 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         canvasSurface.wantsLayer = true
         viewportInput.addSubview(canvasSurface)
         viewportInput.addSubview(preview)
-        drawOverlay.frame = viewportInput.bounds
+        // The draw, selection, crop and trim overlays each span the viewport
+        // and draw only strokes and chrome. Flattened into one transparent
+        // layer they share a single backing store instead of four
+        // viewport-sized IOSurfaces; frames, order and hit testing are unchanged.
+        overlayHost.frame = viewportInput.bounds
+        overlayHost.autoresizingMask = [.width, .height]
+        overlayHost.wantsLayer = true
+        overlayHost.canDrawSubviewsIntoLayer = true
+        viewportInput.addSubview(overlayHost)
+        drawOverlay.frame = overlayHost.bounds
         drawOverlay.autoresizingMask = [.width, .height]
         drawOverlay.setAccessibilityLabel("Screenshot drawing canvas")
         drawOverlay.onBegin = { [weak self] in
@@ -2912,7 +2942,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         drawOverlay.onBackgroundBrush = { [weak self] mode, points in
             self?.paintImageBackground(mode: mode, points: points)
         }
-        viewportInput.addSubview(drawOverlay)
+        overlayHost.addSubview(drawOverlay)
         selectionOverlay.frame = preview.frame
         selectionOverlay.autoresizingMask = [.width, .height]
         selectionOverlay.setAccessibilityLabel("Screenshot layer selection canvas")
@@ -2979,18 +3009,18 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         expandCanvasButton.setAccessibilityLabel(NativeEditorCanvas.expandCanvas)
         selectionOverlay.expandButton = expandCanvasButton
         selectionOverlay.onError = { [weak self] error in self?.showError("Layer interaction failed: \(error.localizedDescription)") }
-        viewportInput.addSubview(selectionOverlay)
-        cropOverlay.frame = viewportInput.bounds
+        overlayHost.addSubview(selectionOverlay)
+        cropOverlay.frame = overlayHost.bounds
         cropOverlay.autoresizingMask = [.width, .height]
         cropOverlay.setAccessibilityLabel("Screenshot crop canvas")
         cropOverlay.toolTip = "Drag to choose a crop. Hold Shift to lock the ratio. Escape cancels; Apply crop commits."
         cropOverlay.onChange = { [weak self] rect in self?.stageCropSelection(rect) }
         cropOverlay.onCancel = { [weak self] in self?.clearCropSelection() }
-        viewportInput.addSubview(cropOverlay)
-        trimPreviewView.frame = viewportInput.bounds
+        overlayHost.addSubview(cropOverlay)
+        trimPreviewView.frame = overlayHost.bounds
         trimPreviewView.autoresizingMask = [.width, .height]
         trimPreviewView.imageRect = { [weak self] in self?.presentedImageRect ?? .zero }
-        viewportInput.addSubview(trimPreviewView)
+        overlayHost.addSubview(trimPreviewView)
         // Above the canvas overlays: only its handle, bottom strip and Hide
         // take the pointer; every other press reaches the canvas below.
         compareView = CompressionCompareView(tokens: tokens)
@@ -7453,7 +7483,21 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         publishPresence()
         let pending = pendingPresentation
         pendingPresentation = nil
-        pending?.open()
+        if let pending { pending.open(); return }
+        // Nothing reopens this window: let the owner drop the controller so the
+        // window, its layer backing stores and decoded previews are freed. The
+        // flushed draft and session free stay ordered on the worker's queue.
+        // Deferred so AppKit finishes the close before the window goes away.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.isClosedAndIdle else { return }
+            self.didClose()
+        }
+    }
+
+    /// Closed with no session, close, open or termination drain in flight.
+    private var isClosedAndIdle: Bool {
+        state.artifactID == nil && !state.busy && !closeRequested && pendingPresentation == nil
+            && terminationCompletion == nil && !window.isVisible && !window.isMiniaturized
     }
 
     private func updateControls() {
