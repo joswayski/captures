@@ -511,7 +511,7 @@ fn embedded_bitmap_glyphs_are_already_straight_alpha() {
 
 #[test]
 fn rejects_missing_fonts_invalid_metrics_and_oversized_lines_then_recovers() {
-    assert!(TextRenderer::new([]).is_err());
+    assert!(TextRenderer::new(Vec::<Arc<[u8]>>::new()).is_err());
     assert!(TextRenderer::new([Arc::from(b"invalid".as_slice())]).is_err());
     let mut renderer = renderer();
     assert!(

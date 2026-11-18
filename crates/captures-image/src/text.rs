@@ -106,7 +106,9 @@ fn system_fonts() -> &'static fontdb::Database {
 
 /// Family names embedded in one font file (every face of a collection).
 #[must_use]
-pub fn font_family_names(bytes: &Arc<[u8]>) -> Vec<String> {
+pub fn font_family_names(
+    bytes: &(impl AsRef<[u8]> + Clone + Send + Sync + 'static),
+) -> Vec<String> {
     let mut db = fontdb::Database::new();
     db.load_font_source(fontdb::Source::Binary(Arc::new(bytes.clone())));
     let mut names = Vec::new();
@@ -121,7 +123,11 @@ pub fn font_family_names(bytes: &Arc<[u8]>) -> Vec<String> {
 }
 
 impl TextRenderer {
-    pub fn new(fonts: impl IntoIterator<Item = Arc<[u8]>>) -> Result<Self, String> {
+    /// Font bytes are shared, not copied: pass `Arc<[u8]>`, `FontBytes` or any
+    /// other cheaply cloned owner.
+    pub fn new(
+        fonts: impl IntoIterator<Item = impl AsRef<[u8]> + Send + Sync + 'static>,
+    ) -> Result<Self, String> {
         Self::with_fallback(fonts, &[], PlatformFonts::None)
     }
 
@@ -129,7 +135,7 @@ impl TextRenderer {
     /// the requested family (unlisted families follow in load order). Platform
     /// faces are only used when no supplied face covers a glyph in the line.
     pub fn with_fallback(
-        fonts: impl IntoIterator<Item = Arc<[u8]>>,
+        fonts: impl IntoIterator<Item = impl AsRef<[u8]> + Send + Sync + 'static>,
         fallback_families: &[&str],
         platform: PlatformFonts,
     ) -> Result<Self, String> {

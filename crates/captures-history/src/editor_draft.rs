@@ -10,7 +10,6 @@ use std::{
     fs,
     io::{Read, Write},
     path::{Path, PathBuf},
-    sync::Arc,
 };
 
 use serde::{Deserialize, Serialize};
@@ -45,13 +44,17 @@ pub struct SaveRequest {
     pub updated_at_ms: u64,
 }
 
+/// Immutable font file bytes. Bundled fonts borrow the binary's static data
+/// and restored drafts own their file contents, so neither is copied again.
+pub type FontBytes = bytes::Bytes;
+
 /// Trusted font files supplied by a native host, never bytes in command JSON.
 /// IDs identify immutable files; families map document keys to embedded names.
 /// Storage validates sizes/IDs, not font parsing or redistribution permissions.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FontAssets {
     pub families: BTreeMap<String, String>,
-    pub files: BTreeMap<String, Arc<[u8]>>,
+    pub files: BTreeMap<String, FontBytes>,
     /// Full copyright/license notices retained with redistributed font bytes.
     pub notices: String,
 }
@@ -282,7 +285,7 @@ pub fn load(
             for id in fonts.assets {
                 let bytes = read_font(&root.join(FONTS_DIR).join(format!("{id}.font")), remaining)?;
                 remaining -= bytes.len();
-                files.insert(id, Arc::from(bytes));
+                files.insert(id, FontBytes::from(bytes));
             }
             Ok::<_, Error>(FontAssets {
                 families: fonts.families,

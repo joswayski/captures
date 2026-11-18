@@ -1,6 +1,6 @@
-use std::{collections::BTreeMap, fs, sync::Arc};
+use std::{collections::BTreeMap, fs};
 
-use captures_history::editor_draft::{self, AssetInput, FontAssets, SaveRequest};
+use captures_history::editor_draft::{self, AssetInput, FontAssets, FontBytes, SaveRequest};
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
@@ -358,7 +358,7 @@ fn caller_roots_and_discard_are_isolated_from_other_drafts_history_and_exports()
 fn fonts(id: &str, bytes: &[u8]) -> FontAssets {
     FontAssets {
         families: BTreeMap::from([("sans".into(), "Embedded Family".into())]),
-        files: BTreeMap::from([(id.into(), Arc::from(bytes))]),
+        files: BTreeMap::from([(id.into(), FontBytes::copy_from_slice(bytes))]),
         notices: String::new(),
     }
 }
@@ -483,7 +483,7 @@ fn font_validation_precedes_mutation_and_shares_the_image_byte_budget() {
     let before = fs::read(&manifest).unwrap();
     let mut too_many = fonts("valid", b"font");
     too_many.files = (0..65)
-        .map(|i| (format!("f{i}"), Arc::from(b"x".as_slice())))
+        .map(|i| (format!("f{i}"), FontBytes::from_static(b"x")))
         .collect();
     for invalid in [
         fonts("../outside", b"x"),

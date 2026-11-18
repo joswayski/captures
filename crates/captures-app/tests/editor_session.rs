@@ -1,5 +1,7 @@
 use std::{collections::BTreeMap, fs, path::Path, sync::Arc};
 
+use captures_history::editor_draft::FontBytes;
+
 use captures_app::{
     editor::{
         AnnotationStylePatch, Element, ImageOrientation, LayerEdit, OptionalNullable, Point, Rect,
@@ -3620,7 +3622,9 @@ fn text_fonts() -> captures_history::editor_draft::FontAssets {
         notices: String::new(),
         files: BTreeMap::from([(
             "regular".into(),
-            Arc::from(include_bytes!("../../captures-image/tests/shaping-regular.ttf").as_slice()),
+            FontBytes::from_static(include_bytes!(
+                "../../captures-image/tests/shaping-regular.ttf"
+            )),
         )]),
     }
 }
@@ -3696,7 +3700,7 @@ fn text_session_owns_fonts_across_edits_output_and_draft_restore() {
     let mut changed_defaults = text_fonts();
     changed_defaults
         .files
-        .insert("regular".into(), Arc::from(b"new OS font".as_slice()));
+        .insert("regular".into(), FontBytes::from_static(b"new OS font"));
     assert_eq!(
         open_text(data.path(), &id, changed_defaults)
             .unwrap()
@@ -4038,7 +4042,9 @@ fn identical_layer_ids_measure_their_own_pinned_fonts_after_reopen() {
     let mut bold_fonts = text_fonts();
     bold_fonts.files.insert(
         "regular".into(),
-        Arc::from(include_bytes!("../../captures-image/tests/shaping-bold.ttf").as_slice()),
+        FontBytes::from_static(include_bytes!(
+            "../../captures-image/tests/shaping-bold.ttf"
+        )),
     );
     let mut regular = open_text(regular_data.path(), &regular_id, text_fonts()).unwrap();
     let mut bold = open_text(bold_data.path(), &bold_id, bold_fonts.clone()).unwrap();
@@ -4636,7 +4642,9 @@ fn unsupported_outline_glyphs_reject_visible_and_hidden_property_edits() {
         let mut fonts = text_fonts();
         fonts.files.insert(
             "regular".into(),
-            Arc::from(include_bytes!("../../captures-image/tests/shaping-bitmap.ttf").as_slice()),
+            FontBytes::from_static(include_bytes!(
+                "../../captures-image/tests/shaping-bitmap.ttf"
+            )),
         );
         let mut editor = open_text(data.path(), &id, fonts).unwrap();
         add_text(&mut editor);
@@ -4732,7 +4740,9 @@ fn typed_text_creation_uses_fresh_ids_measured_width_pixels_and_one_undo_step() 
     let mut fonts = text_fonts();
     fonts.files.insert(
         "bold".into(),
-        Arc::from(include_bytes!("../../captures-image/tests/shaping-bold.ttf").as_slice()),
+        FontBytes::from_static(include_bytes!(
+            "../../captures-image/tests/shaping-bold.ttf"
+        )),
     );
     let mut editor = open_text(data.path(), &id, fonts).unwrap();
     editor
@@ -4918,11 +4928,15 @@ fn typed_text_patches_fit_only_layout_changes_and_preserve_metadata_and_fixed_wi
     let mut fonts = text_fonts();
     fonts.files.insert(
         "bold".into(),
-        Arc::from(include_bytes!("../../captures-image/tests/shaping-bold.ttf").as_slice()),
+        FontBytes::from_static(include_bytes!(
+            "../../captures-image/tests/shaping-bold.ttf"
+        )),
     );
     fonts.files.insert(
         "italic".into(),
-        Arc::from(include_bytes!("../../captures-image/tests/shaping-italic.ttf").as_slice()),
+        FontBytes::from_static(include_bytes!(
+            "../../captures-image/tests/shaping-italic.ttf"
+        )),
     );
     fonts
         .families
@@ -5125,7 +5139,7 @@ fn bundled_font_styles_render_offline_and_preserve_bytes_and_license_on_reopen()
         );
     }
     for (id, bytes) in &fonts.files {
-        assert!(Arc::ptr_eq(bytes, &second.files[id]));
+        assert!(bytes.as_ptr() == second.files[id].as_ptr());
     }
     assert_eq!(fonts.notices, editor_fonts::NOTICE);
     assert!(fonts.notices.contains("SIL OPEN FONT LICENSE Version 1.1"));

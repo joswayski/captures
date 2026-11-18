@@ -419,7 +419,9 @@ fn decode_svg(bytes: &[u8], not_loaded: &str) -> Result<RgbaImage, String> {
             .get_or_init(|| {
                 let mut database = resvg::usvg::fontdb::Database::new();
                 for bytes in crate::editor_fonts::bundled().files.values() {
-                    database.load_font_data(bytes.to_vec());
+                    database.load_font_source(resvg::usvg::fontdb::Source::Binary(Arc::new(
+                        bytes.clone(),
+                    )));
                 }
                 database.set_sans_serif_family("Liberation Sans");
                 database.set_serif_family("Liberation Serif");

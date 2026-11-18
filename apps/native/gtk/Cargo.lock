@@ -558,6 +558,7 @@ dependencies = [
 name = "captures-history"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "captures-capture",
  "captures-recording",
  "chrono",

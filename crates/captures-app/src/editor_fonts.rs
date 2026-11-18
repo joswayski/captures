@@ -2,12 +2,9 @@
 //! No download or substitution for saved draft fonts; a reopened draft that
 //! lacks a bundled family pins it only when its text first uses that family.
 
-use std::{
-    collections::BTreeMap,
-    sync::{Arc, OnceLock},
-};
+use std::{collections::BTreeMap, sync::OnceLock};
 
-use captures_history::editor_draft::FontAssets;
+use captures_history::editor_draft::{FontAssets, FontBytes};
 
 pub const NOTICE: &str = concat!(
     include_str!("../fonts/liberation/LICENSE"),
@@ -116,7 +113,7 @@ pub fn bundled() -> FontAssets {
                     } else {
                         format!("liberation-{family}-2-1-5-{style}")
                     },
-                    Arc::from(bytes),
+                    FontBytes::from_static(bytes),
                 )
             })
             .collect(),
@@ -129,7 +126,7 @@ pub fn bundled() -> FontAssets {
 /// family this build does not bundle (such as a reopened draft's own font).
 /// Hosts use it to draw the inline text editor in the layer's face.
 #[must_use]
-pub fn bundled_face(family: &str, bold: bool, italic: bool) -> Option<Arc<[u8]>> {
+pub fn bundled_face(family: &str, bold: bool, italic: bool) -> Option<FontBytes> {
     let style = match (bold, italic) {
         (false, false) => "regular",
         (true, false) => "bold",
