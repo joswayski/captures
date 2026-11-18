@@ -8,6 +8,7 @@ rust-version.workspace = true
 [dependencies]
 captures-recording = { path = "../captures-recording" }
 captures-video = { path = "../captures-video" }
+fast_image_resize = "6.1"
 image.workspace = true
 parking_lot.workspace = true
 thiserror.workspace = true

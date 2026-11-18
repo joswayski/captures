@@ -97,8 +97,15 @@ impl H264Mp4Writer {
             Err(error) => return Err(error.into()),
         }
 
+        // Screen-content mode spent 35-85 ms per 1440p-4K frame, so 60 FPS
+        // recordings encoded only every third to fifth frame. Camera mode with
+        // sliced, threaded encoding is 2-3x faster at the same PSNR on UI.
+        let threads =
+            std::thread::available_parallelism().map_or(1, |threads| threads.get().min(4));
         let config = EncoderConfig::new()
-            .usage_type(UsageType::ScreenContentRealTime)
+            .usage_type(UsageType::CameraVideoRealTime)
+            .num_threads(u16::try_from(threads).unwrap_or(1))
+            .max_slice_len(16_000)
             .max_frame_rate(FrameRate::from_hz(f32::from(frame_rate)))
             .bitrate(BitRate::from_bps(bitrate_bps.max(250_000)))
             .rate_control_mode(RateControlMode::Bitrate)

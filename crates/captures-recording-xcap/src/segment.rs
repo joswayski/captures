@@ -677,7 +677,7 @@ fn record_frames(
     stop_requested: &AtomicBool,
 ) -> XcapRecordingResult<WorkerOutcome> {
     let EncoderContext {
-        transform,
+        mut transform,
         frame_rate,
         mut writer,
         started_at,
@@ -979,7 +979,8 @@ mod tests {
                 height: 200,
             }
         );
-        let transform = FrameTransform::new(source, MaxResolution::Original, 1_280, 900).unwrap();
+        let mut transform =
+            FrameTransform::new(source, MaxResolution::Original, 1_280, 900).unwrap();
         assert_eq!(transform.dimensions(), (300, 200));
         let rgb = transform.rgb(&frame);
         let expected = |x: u32, y: u32| {

@@ -1,5 +1,9 @@
 use captures_recording::{CaptureRect, MaxResolution};
-use image::{RgbaImage, imageops::FilterType};
+use fast_image_resize::{
+    FilterType, PixelType, ResizeAlg, ResizeOptions, Resizer,
+    images::{CroppedImage, Image, ImageRef},
+};
+use image::RgbaImage;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FrameRect {
@@ -41,6 +45,8 @@ pub struct FrameTransform {
     source: FrameRect,
     output_width: u32,
     output_height: u32,
+    resizer: Resizer,
+    scaled: Vec<u8>,
 }
 
 impl FrameTransform {
@@ -70,6 +76,8 @@ impl FrameTransform {
             source,
             output_width: output_width.max(2),
             output_height: output_height.max(2),
+            resizer: Resizer::new(),
+            scaled: Vec::new(),
         })
     }
 
@@ -78,13 +86,13 @@ impl FrameTransform {
     }
 
     #[cfg(test)]
-    pub fn rgb(&self, frame: &RgbaImage) -> Vec<u8> {
+    pub fn rgb(&mut self, frame: &RgbaImage) -> Vec<u8> {
         let mut rgb = Vec::new();
         self.rgb_into(frame, &mut rgb);
         rgb
     }
 
-    pub fn rgb_into(&self, frame: &RgbaImage, rgb: &mut Vec<u8>) {
+    pub fn rgb_into(&mut self, frame: &RgbaImage, rgb: &mut Vec<u8>) {
         let needed = usize::try_from(self.output_width)
             .unwrap_or_default()
             .saturating_mul(usize::try_from(self.output_height).unwrap_or_default())
@@ -104,20 +112,43 @@ impl FrameTransform {
             }
             return;
         }
-        let view = image::imageops::crop_imm(
-            frame,
-            self.source.x,
-            self.source.y,
-            self.source.width,
-            self.source.height,
-        );
-        let output = image::imageops::resize(
-            &*view,
-            self.output_width,
-            self.output_height,
-            FilterType::Triangle,
-        );
-        copy_rgb(output.as_raw(), rgb);
+        // Runs for every captured frame. image's generic resize took about
+        // 200 ms per 4K frame, which capped downscaled recordings near 5 FPS.
+        let len = self.output_width as usize * self.output_height as usize * 4;
+        self.scaled.resize(len, 0);
+        let Ok(frame) = ImageRef::new(
+            frame.width(),
+            frame.height(),
+            frame.as_raw(),
+            PixelType::U8x4,
+        ) else {
+            return;
+        };
+        // A cropped view clamps the filter at the crop edge; a crop option
+        // would blend in pixels from outside the recorded area.
+        let (Ok(source), Ok(mut output)) = (
+            CroppedImage::new(
+                &frame,
+                self.source.x,
+                self.source.y,
+                self.source.width,
+                self.source.height,
+            ),
+            Image::from_slice_u8(
+                self.output_width,
+                self.output_height,
+                &mut self.scaled,
+                PixelType::U8x4,
+            ),
+        ) else {
+            return;
+        };
+        let options = ResizeOptions::new()
+            .resize_alg(ResizeAlg::Convolution(FilterType::Bilinear))
+            .use_alpha(false);
+        if self.resizer.resize(&source, &mut output, &options).is_ok() {
+            copy_rgb(&self.scaled, rgb);
+        }
     }
 }
 
@@ -164,7 +195,7 @@ mod tests {
     #[test]
     fn constrains_and_converts_selected_frames() {
         let frame = RgbaImage::from_pixel(1_920, 1_080, Rgba([20, 40, 60, 255]));
-        let transform = FrameTransform::new(
+        let mut transform = FrameTransform::new(
             FrameRect {
                 x: 0,
                 y: 0,
@@ -180,6 +211,34 @@ mod tests {
         let rgb = transform.rgb(&frame);
         assert_eq!(rgb.len(), 1_280 * 720 * 3);
         assert_eq!(&rgb[..3], &[20, 40, 60]);
+        let split = RgbaImage::from_fn(400, 200, |x, _| {
+            Rgba(if x < 200 {
+                [255, 0, 0, 255]
+            } else {
+                [0, 0, 255, 255]
+            })
+        });
+        let mut cropped = FrameTransform::new(
+            FrameRect {
+                x: 200,
+                y: 0,
+                width: 200,
+                height: 200,
+            },
+            MaxResolution::P720,
+            split.width(),
+            split.height(),
+        )
+        .expect("crop");
+        cropped.output_width = 100;
+        cropped.output_height = 100;
+        // Only the selected (blue) half may reach the output, even at its edge.
+        assert!(
+            cropped
+                .rgb(&split)
+                .chunks_exact(3)
+                .all(|pixel| pixel == [0, 0, 255])
+        );
         let mut reused = vec![1, 2, 3];
         transform.rgb_into(&frame, &mut reused);
         assert_eq!(reused, rgb);
