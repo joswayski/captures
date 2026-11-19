@@ -1970,7 +1970,7 @@ reusing the shared `captures-recording-xcap` ScreenCast/PipeWire source the
 wgpu workbench uses. Everything above capture is the X11 flow: New Capture's
 Record mode with its per-take options, the tray's Record rows, their
 GlobalShortcuts-portal shortcuts, `--capture record-display|record-region|
-record-window`, the shared serialized worker, the "RECORDING IN" countdown, the
+record-window`, the shared serialized worker, the "RECORDING STARTS IN" countdown, the
 HUD (Stop, Pause/Resume, Restart and Delete with confirmation, Mute, Hide, and
 its Region screenshot as a child portal capture of the take), History, previews
 and save-on-Quit.

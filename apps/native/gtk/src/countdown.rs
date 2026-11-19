@@ -177,7 +177,7 @@ impl Content {
         content.imp().recording.set(recording);
         let labels = [
             gtk::Label::new(Some(if recording {
-                "RECORDING IN"
+                "RECORDING STARTS IN"
             } else {
                 "SCREENSHOT IN"
             })),
@@ -201,8 +201,9 @@ impl Content {
     fn set_remaining(&self, seconds: u8) {
         self.imp().labels.get().expect("labels")[1].set_label(&seconds.to_string());
         self.queue_allocate();
+        // Shipping's headings: "Recording starts in" / "Screenshot in".
         let kind = if self.imp().recording.get() {
-            "Recording"
+            "Recording starts"
         } else {
             "Screenshot"
         };
