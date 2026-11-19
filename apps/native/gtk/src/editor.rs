@@ -2429,6 +2429,51 @@ impl State {
         });
     }
 
+    /// Whether the focused widget moves through options or values with the
+    /// arrow keys itself: a dropdown or its list, a slider, a number field.
+    fn focus_uses_arrows(&self) -> bool {
+        let mut widget = self.canvas.root().and_then(|root| root.focus());
+        while let Some(current) = widget {
+            if current.is::<gtk::Popover>()
+                || current.is::<gtk::Scale>()
+                || current.is::<gtk::SpinButton>()
+                || current.is::<gtk::ListBox>()
+                || current.is::<gtk::ListView>()
+                || current.accessible_role() == gtk::AccessibleRole::ComboBox
+            {
+                return true;
+            }
+            widget = current.parent();
+        }
+        false
+    }
+
+    /// Shipping `nudgeSelected`: move the selected, unlocked layer. A run of
+    /// nudges on one layer is one Undo step, like shipping's coalescing.
+    fn nudge_selected(&self, dx: f64, dy: f64) -> bool {
+        let Some(id) = self.selected.borrow().clone() else {
+            return false;
+        };
+        let locked = self
+            .presented
+            .borrow()
+            .as_ref()
+            .is_some_and(|p| p.layers.iter().any(|l| l.id == id && l.locked));
+        if !locked {
+            self.submit(Request::Live {
+                key: format!("nudge:{id}"),
+                request: Box::new(Request::Layer {
+                    id,
+                    edit: LayerEdit::Translate {
+                        delta_x: dx,
+                        delta_y: dy,
+                    },
+                }),
+            });
+        }
+        true
+    }
+
     fn delete_selected(&self) {
         let id = self.selected.borrow().clone();
         let locked = self.presented.borrow().as_ref().is_some_and(|p| {
@@ -2770,6 +2815,21 @@ impl State {
             (true, "minus" | "KP_Subtract") => self.zoom_by(1. / 1.25),
             _ if control || typing => return false,
             (_, "Delete" | "BackSpace") => self.delete_selected(),
+            // Shipping nudges the selected layer 1 px (10 with Shift), except
+            // when a focused control already uses the arrow (Tauri a18afc62).
+            (
+                _,
+                "Left" | "Right" | "Up" | "Down" | "KP_Left" | "KP_Right" | "KP_Up" | "KP_Down",
+            ) if !self.focus_uses_arrows() => {
+                let step = if shift { 10. } else { 1. };
+                let (dx, dy) = match name.trim_start_matches("KP_") {
+                    "Left" => (-step, 0.),
+                    "Right" => (step, 0.),
+                    "Up" => (0., -step),
+                    _ => (0., step),
+                };
+                return self.nudge_selected(dx, dy);
+            }
             (_, "Escape") => {
                 let gesture = self.gesture.borrow_mut().take();
                 if self.crop.get().is_some() {
