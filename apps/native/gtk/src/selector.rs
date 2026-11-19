@@ -1576,6 +1576,10 @@ impl Overlay {
             layer.put(&button, 0., 0.);
         }
         self.root.add_overlay(layer);
+        // Shipping's targets precede the capture controls in Tab order.
+        if let Some(bar) = &self.bar {
+            layer.insert_before(&self.root, Some(&bar.root));
+        }
         // Follow the surface's size: overlay points to widget pixels.
         let weak = Rc::downgrade(self);
         let placed = Cell::new((0, 0));
