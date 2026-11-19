@@ -4089,7 +4089,12 @@ def main():
             time.sleep(.2)
             save_layers(lambda values: values[-1]["text"] == "Readable native text"
                         and values[-1]["fontFamily"] == "serif", "plain text applied")
-            prop_click(37, TEXT["format"])   # Bold: the first of five format buttons.
+            # New text is bold by default; Bold (the first of five format
+            # buttons) toggles it off and back on before Italic.
+            assert layers()[-1]["bold"], "new Text shares the bold default"
+            prop_click(37, TEXT["format"])
+            save_layers(lambda values: not values[-1]["bold"], "bold toggled off")
+            prop_click(37, TEXT["format"])
             prop_click(98, TEXT["format"])   # Italic.
             save_layers(lambda values: values[-1]["bold"] and values[-1]["italic"], "traits applied")
             shot(editor, "text-without-shadow")
@@ -4171,7 +4176,8 @@ def main():
             future = save_layers(lambda values: len(values) == 3, "carried preset creates later label")[-1]
             assert future["fontFamily"] == "mono" and future["background"] == "#ff3b5c"
             assert future["fontSize"] == 24 and future["color"] == "#ffffff"
-            assert not future["bold"] and not future["italic"] and not future["outlined"]
+            # The carried preset keeps the bold default, not the edited label's Italic.
+            assert future["bold"] and not future["italic"] and not future["outlined"]
             assert future["align"] == "center" and not future["roundedBackground"]
             assert future["id"] != created["id"]
             shot(editor, "text-preset-carried-created")

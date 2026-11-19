@@ -57,8 +57,9 @@ def main():
     env.pop("WAYLAND_DISPLAY", None)
     children = []
     with (output / "processes.log").open("w") as log:
-        def spawn(command, announce=False):
-            child = subprocess.Popen(command, env=env, stdout=subprocess.PIPE if announce else log, stderr=log)
+        def spawn(command, announce=False, stdout=None):
+            child = subprocess.Popen(command, env=env, stdout=subprocess.PIPE if announce else stdout or log,
+                                     stderr=log)
             children.append(child)
             return child
 
@@ -110,8 +111,14 @@ exec /usr/bin/ffmpeg "$@"
                     previous_path = env["PATH"]
                     env["PATH"] = str(tools) + os.pathsep + previous_path
                     write_completed_settings(root / "settings.json")
+                    # The opt-in layout probe reports each frame's recovery controls,
+                    # so clicks follow the rendered rows instead of fixed coordinates.
+                    layout = output / f"{appearance}-layout.jsonl"
+                    env["CAPTURES_NATIVE_LAYOUT_PROBE"] = "1"
                     app = spawn([str(binary), "--live", "--open-history", "--history-root", str(history),
-                                 "--settings-file", str(root / "settings.json"), "--appearance", appearance])
+                                 "--settings-file", str(root / "settings.json"), "--appearance", appearance],
+                                stdout=layout.open("w"))
+                    del env["CAPTURES_NATIVE_LAYOUT_PROBE"]
                     env["PATH"] = previous_path
                     window = run("xdotool", "search", "--sync", "--onlyvisible", "--pid", str(app.pid),
                                  "--name", "^Capture History$").decode().splitlines()[0]
@@ -132,6 +139,25 @@ exec /usr/bin/ffmpeg "$@"
                             "sleep", ".1", "mousedown", "1", "sleep", ".1", "mouseup", "1")
                         time.sleep(.3)
 
+                    def find(action, session):
+                        for line in reversed(layout.read_text().splitlines()):
+                            try:
+                                event = json.loads(line)
+                            except ValueError:
+                                continue
+                            if event.get("event") == "recovery-layout":
+                                return next((control for control in event["detail"]["controls"]
+                                             if control["action"] == action and control["session"] == session
+                                             and control["enabled"]), None)
+                        return None
+
+                    def control(action, session=None):
+                        """Center of an enabled recovery control once its row has settled."""
+                        wait(lambda: find(action, session))
+                        time.sleep(.3)
+                        left, top, right, bottom = wait(lambda: find(action, session))["rect"]
+                        return round((left + right) / 2), round((top + bottom) / 2)
+
                     def key(name):
                         run("xdotool", "windowactivate", "--sync", window, "windowfocus", "--sync", window,
                             "key", name)
@@ -144,44 +170,44 @@ exec /usr/bin/ffmpeg "$@"
                     # History content starts below the header (no capture row, as in shipping).
                     # Shipping's inline confirmation: the first press arms the
                     # row's Discard as "Discard permanently?"; Escape disarms it.
-                    click(938, 287)  # First bundle's Discard.
+                    click(*control("Discard", video.name))
                     screenshot("confirmation")
                     assert digest_tree(video) == video_before
                     run("xdotool", "key", "Escape")
                     time.sleep(.2)
                     assert digest_tree(video) == video_before
-                    click(938, 287)
+                    click(*control("Discard", video.name))
                     assert digest_tree(video) == video_before
-                    click(938, 287)  # Discard permanently? (grows left of the same edge).
+                    click(*control("Discard permanently?", video.name))
                     wait(lambda: not video.exists())
                     assert digest_tree(gif) == gif_before
                     assert digest_tree(history) == original_history
                     screenshot("discarded")
                     gate.touch()
-                    click(854, 310)  # Recover the remaining GIF.
+                    click(*control("Recover", gif.name))
                     wait(entered.exists)
                     screenshot("busy")
-                    click(99, 310)  # Cancel recovery while the encoder is gated.
+                    click(*control("Cancel recovery"))  # While the encoder is gated.
                     wait(lambda: not list(gif.glob(".recovery-*")))
                     gate.unlink()
                     assert digest_tree(gif) == gif_before
                     assert digest_tree(history) == original_history
                     screenshot("cancelled")
-                    click(235, 225)  # Refresh clears the previous action's error.
+                    click(*control("Refresh"))  # Refresh clears the previous action's error.
                     history.chmod(0o555)
                     try:
-                        click(854, 287)
+                        click(*control("Recover", gif.name))
                         wait(lambda: (gif / "publication-intent-v1.json").exists())
                         time.sleep(.5)
                         assert digest_tree(history) == original_history
                         screenshot("publication-error")
                     finally:
                         history.chmod(0o755)
-                    click(235, 225)
+                    click(*control("Refresh"))
                     if appearance == "dark":
                         entered.unlink()
                         gate.touch()
-                    click(854, 287)  # Retry the same publication intent after restoring access.
+                    click(*control("Recover", gif.name))  # Retry the same publication intent.
                     if appearance == "dark":
                         wait(entered.exists)
                         key("Right")  # A newer History card selection must prevent automatic editor focus.
