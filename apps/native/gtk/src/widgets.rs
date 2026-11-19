@@ -62,15 +62,30 @@ mod icon_imp {
             cr.set_line_width(self.stroke.get());
             cr.set_line_cap(gtk::cairo::LineCap::Round);
             cr.set_line_join(gtk::cairo::LineJoin::Round);
-            for line in polylines {
+            // Shipping `.capture-icon-spark`: `capture`'s last path is filled,
+            // unlike the viewfinder corners (as AppKit and Win32 draw it).
+            let filled = (self.name.borrow().as_str() == "capture")
+                .then(|| polylines.len().saturating_sub(1));
+            let trace = |line: &[[f32; 2]]| {
                 let mut points = line.iter();
-                let Some(first) = points.next() else { continue };
-                cr.move_to(first[0].into(), first[1].into());
-                for point in points {
-                    cr.line_to(point[0].into(), point[1].into());
+                if let Some(first) = points.next() {
+                    cr.move_to(first[0].into(), first[1].into());
+                    for point in points {
+                        cr.line_to(point[0].into(), point[1].into());
+                    }
+                }
+            };
+            for (index, line) in polylines.iter().enumerate() {
+                if Some(index) != filled {
+                    trace(line);
                 }
             }
             let _ = cr.stroke();
+            if let Some(index) = filled {
+                trace(&polylines[index]);
+                cr.close_path();
+                let _ = cr.fill();
+            }
         }
     }
 }
