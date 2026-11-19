@@ -229,6 +229,25 @@ final class RecordingHUDTests: XCTestCase {
             tokens: tokens, excludedFromCapture: false)
         XCTAssertTrue(included.subviews.compactMap { ($0 as? NSTextField)?.stringValue }
             .contains("These controls will show in recordings · Use Hide controls to keep them out"))
+        XCTAssertNil(included.noticeLink, "without exclusion there is no setting to link to")
+
+        // macOS can keep the controls out: the notice links to that preference
+        // instead of pointing at Hide controls, and follows the setting.
+        let linked = RecordingHUDView(frame: NSRect(x: 0, y: 0, width: 430, height: 102),
+            tokens: tokens, excludedFromCapture: false, canExcludeControls: true)
+        var opened: [String] = []
+        linked.openPreference = { opened.append($0) }
+        let link = try XCTUnwrap(linked.noticeLink)
+        XCTAssertEqual(link.text, "These controls will show in recordings")
+        XCTAssertEqual(link.accessibilityRole(), .link)
+        XCTAssertFalse(linked.subviews.contains { ($0 as? NSTextField)?.isHidden == false
+            && ($0 as? NSTextField)?.stringValue.contains("Hide controls") == true })
+        XCTAssertEqual(link.frame.midX, linked.bounds.midX, accuracy: 1, "the notice stays centred")
+        link.performClick(nil)
+        XCTAssertEqual(opened, ["include_recording_controls_in_captures"])
+        linked.setControlsExcluded(true)
+        XCTAssertEqual(linked.noticeLink?.text, "These controls won’t show in recordings")
+        XCTAssertNil(link.superview, "the old link is replaced")
     }
 
     func testHiddenNoticeIsFixedGlassNoninteractiveAndExplainsRestoration() throws {

@@ -141,6 +141,12 @@ final class ScreenshotCountdownPanel: NSPanel {
     /// it lingers so the restored desktop is immediately usable.
     func closeAfterCancelling() {
         countdownContent.setCancelling()
+        fadeOutAndClose()
+    }
+
+    /// Shipping `.recording-countdown.exiting`, used as well once a recording
+    /// is running: fade out without taking input, then close.
+    func fadeOutAndClose() {
         countdownContent.playExit()
         ignoresMouseEvents = true
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.cancelLinger) { [self] in close() }

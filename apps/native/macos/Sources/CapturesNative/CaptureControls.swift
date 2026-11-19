@@ -588,6 +588,8 @@ final class CaptureNoteLink: NSButton {
     private let tokens: Tokens
     private let parts: [(String, Bool)]
     let setting: String
+    /// The type size token: the capture bar's `--text-xs`, the HUD's `--text-2xs`.
+    private let fontToken: String
     var actionBlock: (() -> Void)?
     private var hovered = false
     private var hoverTracking: NSTrackingArea?
@@ -596,8 +598,8 @@ final class CaptureNoteLink: NSButton {
 
     override var isFlipped: Bool { true }
 
-    init(parts: [(String, Bool)], setting: String, tokens: Tokens) {
-        self.parts = parts; self.setting = setting; self.tokens = tokens
+    init(parts: [(String, Bool)], setting: String, tokens: Tokens, fontToken: String = "text-xs") {
+        self.parts = parts; self.setting = setting; self.tokens = tokens; self.fontToken = fontToken
         super.init(frame: .zero)
         title = ""; isBordered = false; setButtonType(.momentaryPushIn)
         target = self; action = #selector(activate)
@@ -613,7 +615,7 @@ final class CaptureNoteLink: NSButton {
         let result = NSMutableAttributedString()
         for (text, strong) in parts {
             result.append(NSAttributedString(string: text, attributes: [
-                .font: NSFont.systemFont(ofSize: tokens.number("text-xs"),
+                .font: NSFont.systemFont(ofSize: tokens.number(fontToken),
                     weight: strong ? .bold : .medium),
                 .foregroundColor: tokens.color(active ? "theme-accent-text-strong"
                     : strong ? "glass-text" : "glass-text-subtle"),

@@ -6,7 +6,8 @@ struct NativeRecordingCapabilities: Equatable {
     let microphone: Bool
     let cursorControl: Bool
     let clickHighlights: Bool
-    let controlsExcluded: Bool
+    /// Follows the include preference during a take.
+    var controlsExcluded: Bool
     /// False on Linux; macOS can keep the controls out of captures.
     let canExcludeControls: Bool
 

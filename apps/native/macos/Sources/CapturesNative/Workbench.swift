@@ -1816,6 +1816,9 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                 self.appWindows.window(.preferences)?.appearance = chosen
             }, settingsChanged: { [weak self] settings in
                 self?.options.nativeUpdateChecks?.setShowChangelog(settings.bool("show_update_changelog", true))
+                if let include = settings["include_recording_controls_in_captures"] as? Bool {
+                    self?.liveController?.recordingControlsInclusionChanged(include: include)
+                }
                 guard let enabled = settings["show_mini_previews"] as? Bool,
                       let placement = settings["mini_preview_placement"] as? String,
                       let include = settings["include_mini_previews_in_captures"] as? Bool

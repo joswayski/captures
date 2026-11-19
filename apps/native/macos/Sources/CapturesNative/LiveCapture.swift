@@ -2131,13 +2131,18 @@ final class LiveCaptureController: NSObject {
             guard !preparingRegion, !preparingWindow, !preparingUnified, !preparingRecording,
                   regionPanel == nil, windowPanel == nil, unifiedPanel == nil else { return }
             guard let remaining = state["remaining"] as? Int else { throw AppBridgeError.invalidResponse }
-            countdownPanel?.countdownContent.setRemaining(remaining)
+            // The last number holds while a recording engine starts (shipping never shows 0).
+            if remaining > 0 { countdownPanel?.countdownContent.setRemaining(remaining) }
             guard remaining == 0, !snapshotPending else { return }
-            snapshotPending = true; countdownPanel?.close(); countdownPanel = nil
+            snapshotPending = true
             if recordingPendingStart {
+                // Shipping keeps the countdown up until the take is running and
+                // then shows the controls, so the screen never looks like it is
+                // recording before it is. The panel stays out of captures.
                 startRecording(on: screen(for: display), generation: generation)
                 return
             }
+            countdownPanel?.close(); countdownPanel = nil
             if unifiedSession != nil { status.stringValue = "Capturing screenshot…" }
             else if windowSession != nil { status.stringValue = "Capturing window…" }
             else if regionSession != nil { status.stringValue = "Capturing region…" }
@@ -2190,7 +2195,10 @@ final class LiveCaptureController: NSObject {
             return
         }
         status.stringValue = "Starting recording…"
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+        // Without a countdown, give the just-closed capture bar a moment to
+        // leave the screen; a held countdown already covers it.
+        let settle: TimeInterval = countdownPanel == nil ? 0.3 : 0
+        DispatchQueue.main.asyncAfter(deadline: .now() + settle) { [weak self] in
             guard let self, self.flowGeneration == generation else { return }
             self.run({ [recordingGate, recordingCapabilities] in
                 try session.start(generation: generation,
@@ -2213,6 +2221,11 @@ final class LiveCaptureController: NSObject {
                         return
                     }
                     self.recordingPendingStart = false
+                    // The take is running: the held countdown fades as the controls appear.
+                    if let countdown = self.countdownPanel {
+                        self.countdownPanel = nil
+                        countdown.fadeOutAndClose()
+                    }
                     self.finishSelectorForRecording(generation: generation)
                     let hud = self.makeRecordingHUD(screen: screen)
                     hud.hud.setPaused(false, elapsedMilliseconds: snapshot.elapsedMilliseconds)
@@ -2262,7 +2275,10 @@ final class LiveCaptureController: NSObject {
 
     private func makeRecordingHUD(screen: NSScreen) -> RecordingHUDPanel {
         let hud = RecordingHUDPanel(screen: screen, tokens: tokens,
-            excludedFromCapture: recordingCapabilities?.controlsExcluded == true)
+            excludedFromCapture: recordingCapabilities?.controlsExcluded == true,
+            canExcludeControls: recordingCapabilities?.canExcludeControls == true)
+        // The notice opens Preferences at its row; the take keeps running.
+        hud.hud.openPreference = { [weak self] setting in self?.showPreferenceSetting(setting) }
         hud.hud.pauseOrResume = { [weak self] in self?.pauseOrResumeRecording() }
         hud.hud.toggleMicrophone = { [weak self] in self?.toggleRecordingMicrophone() }
         hud.hud.restart = { [weak self] in self?.confirmRestartRecording() }
@@ -2796,6 +2812,19 @@ final class LiveCaptureController: NSObject {
                 self.recordingHiddenNoticeTimer = nil
             }
         recordingControlsVisibilityChanged(true)
+    }
+
+    /// Preferences changed "Include recording controls in captures" while a
+    /// take may be running: the controls' notice and capture exclusion follow
+    /// it, as do later segments (resume, microphone changes).
+    func recordingControlsInclusionChanged(include: Bool) {
+        guard recordingSession != nil, var capabilities = recordingCapabilities,
+              capabilities.canExcludeControls, capabilities.controlsExcluded == include else { return }
+        capabilities.controlsExcluded = !include
+        recordingCapabilities = capabilities
+        guard let hud = recordingHUD else { return }
+        hud.hud.setControlsExcluded(!include)
+        hud.sharingType = include ? .readOnly : .none
     }
 
     @discardableResult func showRecordingControls() -> Bool {

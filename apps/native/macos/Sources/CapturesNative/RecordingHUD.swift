@@ -139,7 +139,11 @@ final class RecordingHUDTooltipView: GlassTooltipView {
 
 final class RecordingHUDView: NSView {
     private let tokens: Tokens
-    private let defaultNotice: String
+    /// Where the controls can be kept out of captures (macOS), the notice
+    /// links to that Preferences row instead of pointing at Hide controls.
+    private let canExcludeControls: Bool
+    private(set) var noticeLink: CaptureNoteLink?
+    private(set) var controlsExcluded: Bool
     private let statusDot = NSView()
     private let timerLabel = NSTextField(labelWithString: "0:00")
     private let statusLabel = NSTextField(labelWithString: "")
@@ -182,6 +186,8 @@ final class RecordingHUDView: NSView {
     var stop: () -> Void = {}
     var discard: () -> Void = {}
     var hide: () -> Void = {}
+    /// Opens Preferences at a setting (the notice's link).
+    var openPreference: (String) -> Void = { _ in }
 
     override var isFlipped: Bool { true }
 
@@ -190,11 +196,11 @@ final class RecordingHUDView: NSView {
     /// The styled tooltip currently shown, for tests and accessibility checks.
     var visibleTooltip: String? { tooltipView.isHidden ? nil : tooltipView.text }
 
-    init(frame: NSRect, tokens: Tokens, excludedFromCapture: Bool = true) {
+    init(frame: NSRect, tokens: Tokens, excludedFromCapture: Bool = true,
+         canExcludeControls: Bool = false) {
         self.tokens = tokens
-        defaultNotice = excludedFromCapture
-            ? "These controls won’t show in recordings"
-            : "These controls will show in recordings · Use Hide controls to keep them out"
+        self.canExcludeControls = canExcludeControls
+        controlsExcluded = excludedFromCapture
         func button(_ icon: CaptureButtonIcon, x: CGFloat) -> CaptureButton {
             let button = CaptureButton("", frame: NSRect(x: x, y: 39, width: 38, height: 34),
                 tokens: tokens, glass: true) {}
@@ -225,7 +231,7 @@ final class RecordingHUDView: NSView {
         noticeLabel.textColor = tokens.color(RecordingHUDColorToken.glassTextSubtle.rawValue)
         noticeLabel.lineBreakMode = .byTruncatingTail
         addSubview(noticeLabel)
-        showNotice(defaultNotice)
+        setControlsExcluded(excludedFromCapture)
 
         statusDot.frame = NSRect(x: 17, y: 43, width: 10, height: 10)
         statusDot.wantsLayer = true; statusDot.layer?.cornerRadius = 5
@@ -470,7 +476,39 @@ final class RecordingHUDView: NSView {
         errorLabel.isHidden = errorText == nil
     }
 
-    /// Shipping `.recording-hud-privacy`: subtle 2xs text with **will**/**won’t** in bold glass text.
+    /// Shipping `.recording-hud-privacy`. Where the controls can be kept out
+    /// of captures, the sentence links to "Include recording controls in
+    /// captures" like the capture bar's note; elsewhere it is plain text that
+    /// points at Hide controls.
+    func setControlsExcluded(_ excluded: Bool) {
+        controlsExcluded = excluded
+        noticeLink?.removeFromSuperview(); noticeLink = nil
+        guard canExcludeControls else {
+            noticeLabel.isHidden = false
+            showNotice(excluded ? "These controls won’t show in recordings"
+                : "These controls will show in recordings · Use Hide controls to keep them out")
+            return
+        }
+        noticeLabel.isHidden = true
+        let setting = "include_recording_controls_in_captures"
+        let link = CaptureNoteLink(parts: [("These controls ", false),
+            (excluded ? "won’t" : "will", true), (" show in recordings", false)],
+            setting: setting, tokens: tokens, fontToken: "text-2xs")
+        // Like the other controls it never takes focus from the recorded app.
+        link.refusesFirstResponder = true
+        link.actionBlock = { [weak self] in self?.openPreference(setting) }
+        link.frame.origin = NSPoint(x: ((bounds.width - link.frame.width) / 2).rounded(),
+            y: (noticeLabel.frame.midY - link.frame.height / 2).rounded())
+        // Below the tooltip, which is added last.
+        if tooltipView.superview === self {
+            addSubview(link, positioned: .below, relativeTo: tooltipView)
+        } else {
+            addSubview(link)
+        }
+        noticeLink = link
+    }
+
+    /// Subtle 2xs text with **will**/**won’t** in bold glass text.
     private func showNotice(_ text: String) {
         let size = tokens.number("text-2xs")
         let paragraph = NSMutableParagraphStyle()
@@ -559,12 +597,12 @@ func formatRecordingTime(milliseconds: UInt64) -> String {
 final class RecordingHUDPanel: NSPanel {
     let hud: RecordingHUDView
 
-    init(screen: NSScreen, tokens: Tokens, excludedFromCapture: Bool) {
+    init(screen: NSScreen, tokens: Tokens, excludedFromCapture: Bool, canExcludeControls: Bool) {
         let size = NSSize(width: 430, height: 102)
         let visible = screen.visibleFrame
         let origin = NSPoint(x: visible.midX - size.width / 2, y: visible.minY + 20)
         hud = RecordingHUDView(frame: NSRect(origin: .zero, size: size), tokens: tokens,
-            excludedFromCapture: excludedFromCapture)
+            excludedFromCapture: excludedFromCapture, canExcludeControls: canExcludeControls)
         super.init(contentRect: NSRect(origin: origin, size: size), styleMask: [.borderless],
             backing: .buffered, defer: false)
         title = "Captures Recording Controls"
