@@ -72,11 +72,16 @@ struct Prefs {
     jump: RefCell<Option<Jump>>,
 }
 
+/// A setting's value at a dotted path, as JSON.
+fn setting(settings: &AppSettings, path: &str) -> Value {
+    let json = serde_json::to_value(settings).unwrap_or_default();
+    json.pointer(&pointer(path)).cloned().unwrap_or(Value::Null)
+}
+
 impl Prefs {
     /// The persisted value at a dotted path, as JSON.
     fn get(&self, path: &str) -> Value {
-        let json = serde_json::to_value(&*self.settings.borrow()).unwrap_or_default();
-        json.pointer(&pointer(path)).cloned().unwrap_or(Value::Null)
+        setting(&self.settings.borrow(), path)
     }
 
     /// Write one setting, save, then refresh the look and dependent rows.
@@ -97,9 +102,11 @@ impl Prefs {
                 self.show_status(true, preferences::SAVED);
                 saved
             }
+            // Like Tauri a18afc62, a refused save rolls back to the stored
+            // settings; the listeners below put the rows back.
             Err(error) => {
                 self.show_status(false, &preferences::save_error(&error.to_string()));
-                next
+                self.settings.borrow().clone()
             }
         };
         *self.settings.borrow_mut() = saved.clone();
@@ -686,6 +693,13 @@ fn setting_switch(
             prefs.set(path, Value::Bool(on));
         }
     });
+    let shown = switch.downgrade();
+    prefs.listen(move |settings| {
+        let on = setting(settings, path).as_bool().unwrap_or_default();
+        if let Some(switch) = shown.upgrade().filter(|switch| switch.is_on() != on) {
+            switch.activate_toggle_quietly(on);
+        }
+    });
     prefs.switches.borrow_mut().push(switch.clone());
     add(card, &row);
     (row, switch, detail_label)
@@ -694,11 +708,12 @@ fn setting_switch(
 /// A shipping `CustomSelect` bound to a setting. Numeric settings store the
 /// chosen option as a number; `off` stores null (Default microphone).
 fn select(prefs: &Rc<Prefs>, path: &'static str, options: Vec<(String, String)>) -> Rc<Choice> {
-    let current = match prefs.get(path) {
+    let choice_value = |value: Value| match value {
         Value::Null => "off".into(),
         Value::String(value) => value,
         other => other.to_string(),
     };
+    let current = choice_value(prefs.get(path));
     let numeric = prefs.get(path).is_number();
     let weak = Rc::downgrade(prefs);
     let choice = Choice::new(
@@ -719,6 +734,12 @@ fn select(prefs: &Rc<Prefs>, path: &'static str, options: Vec<(String, String)>)
     );
     choice.set_options(options);
     choice.set(&current);
+    let shown = Rc::downgrade(&choice);
+    prefs.listen(move |settings| {
+        if let Some(choice) = shown.upgrade() {
+            choice.set(&choice_value(setting(settings, path)));
+        }
+    });
     prefs.choices.borrow_mut().push(choice.clone());
     choice
 }
@@ -1157,12 +1178,28 @@ fn capture_card(prefs: &Rc<Prefs>, window: &gtk::ApplicationWindow) -> gtk::Box 
     entry.set_text(prefs.get("output_directory").as_str().unwrap_or_default());
     let title = preferences::row("output_directory").title;
     entry.update_property(&[gtk::accessible::Property::Label(title)]);
+    // Like shipping, an empty path is not saved: it would save as the default
+    // folder mid-retype. Leaving the field shows the stored folder again.
     let weak = Rc::downgrade(prefs);
     entry.connect_changed(move |entry| {
-        if let Some(prefs) = weak.upgrade() {
+        if let Some(prefs) = weak.upgrade()
+            && !entry.text().trim().is_empty()
+        {
             prefs.set("output_directory", Value::String(entry.text().into()));
         }
     });
+    let focus = gtk::EventControllerFocus::new();
+    let (weak, shown) = (Rc::downgrade(prefs), entry.downgrade());
+    focus.connect_leave(move |_| {
+        if let (Some(prefs), Some(entry)) = (weak.upgrade(), shown.upgrade()) {
+            let stored = prefs.get("output_directory");
+            let stored = stored.as_str().unwrap_or_default();
+            if entry.text() != stored {
+                entry.set_text(stored);
+            }
+        }
+    });
+    entry.add_controller(focus);
     field.append(&entry);
     let choose = gtk::Button::with_label("Choose…");
     choose.add_css_class("ui-btn");

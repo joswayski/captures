@@ -27,6 +27,7 @@ packages=(
   libdbus-1-dev
   libdrm-dev
   libegl-dev
+  libgtk-4-dev
   libevdev-dev
   libexpat1-dev
   libffi-dev

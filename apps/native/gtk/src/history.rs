@@ -19,6 +19,7 @@ use std::sync::{Arc, Mutex};
 
 use captures_app::history_view::{self, Card, CardAction};
 use captures_history::{ArtifactKind, HistoryEntry};
+use captures_recording_platform::{RecordingRecovery, RecoveryDraft};
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 
@@ -111,6 +112,15 @@ struct State {
     visibility_queued: Cell<bool>,
     /// Frames spent waiting for rows the list has not laid out yet.
     layout_waits: Cell<u32>,
+    /// Shipping `RecordingRecovery`: interrupted takes above the cards.
+    recovery: Recovery,
+    drafts: RefCell<Vec<RecoveryDraft>>,
+    /// The draft being recovered (true) or discarded (false); every row waits.
+    recovery_busy: RefCell<Option<(String, bool)>>,
+    /// The draft whose Discard awaits its second click, with its timeout.
+    discard_armed: RefCell<Option<(String, glib::SourceId)>>,
+    /// The last Recover/Discard error and the draft it came from.
+    recovery_error: RefCell<Option<(String, String)>>,
 }
 
 pub fn build(
@@ -156,6 +166,11 @@ pub fn build(
         list: RefCell::default(),
         visibility_queued: Cell::new(false),
         layout_waits: Cell::new(0),
+        recovery: Recovery::new(&tokens),
+        drafts: RefCell::default(),
+        recovery_busy: RefCell::default(),
+        discard_armed: RefCell::default(),
+        recovery_error: RefCell::default(),
     });
     state.connect_chrome();
 
@@ -258,19 +273,32 @@ impl State {
         let weak = Rc::downgrade(self);
         glib::spawn_future_local(async move {
             let loaded = gio::spawn_blocking(move || {
+                // A take in progress holds the recovery lease, so listing
+                // fails until it ends; the rows already shown stay.
+                let drafts =
+                    RecordingRecovery::new(root.clone(), crate::recording::toolchain()).list();
                 captures_history::load(&root, chrono::Utc::now()).map(|entries| {
-                    entries
+                    let entries = entries
                         .into_iter()
                         .map(|entry| {
                             let missing = history_view::media_missing(&root, &entry);
                             (entry, missing)
                         })
-                        .collect::<Vec<_>>()
+                        .collect::<Vec<_>>();
+                    (entries, drafts)
                 })
             })
             .await;
             let Some(state) = weak.upgrade() else { return };
             state.loading.set(false);
+            let loaded = loaded.map(|loaded| {
+                loaded.map(|(entries, drafts)| {
+                    if let Ok(drafts) = drafts {
+                        *state.drafts.borrow_mut() = drafts;
+                    }
+                    entries
+                })
+            });
             match loaded {
                 Ok(Ok(entries)) => {
                     *state.items.borrow_mut() = entries
@@ -295,7 +323,7 @@ impl State {
     }
 
     /// Recompute the rows; the list rebinds only the rows on screen.
-    fn rebuild(&self) {
+    fn rebuild(self: &Rc<Self>) {
         let items = self.items.borrow();
         let filter = self.filter.get();
         let shown: Vec<usize> = (0..items.len())
@@ -307,6 +335,10 @@ impl State {
         }
         if self.error.borrow().is_some() {
             keys.push("error".into());
+        }
+        self.render_recovery();
+        if !self.drafts.borrow().is_empty() || self.recovery_error.borrow().is_some() {
+            keys.push("recovery".into());
         }
         if self.loading.get() {
             keys.push("loading".into());
@@ -622,6 +654,216 @@ impl State {
     }
 }
 
+impl State {
+    /// Rebuild the interrupted-recording rows, keeping keyboard focus on
+    /// the same button.
+    fn render_recovery(self: &Rc<Self>) {
+        let section = &self.recovery;
+        let focused = section
+            .root
+            .root()
+            .and_then(|root| root.focus())
+            .filter(|focus| focus.is_ancestor(&section.rows))
+            .map(|focus| focus.widget_name());
+        while let Some(child) = section.rows.first_child() {
+            section.rows.remove(&child);
+        }
+        let drafts = self.drafts.borrow();
+        let busy = self.recovery_busy.borrow().clone();
+        let armed = self
+            .discard_armed
+            .borrow()
+            .as_ref()
+            .map(|(id, _)| id.clone());
+        let error = self.recovery_error.borrow().clone();
+        let gap = self.tokens.number("s-3") as i32;
+        for draft in drafts.iter() {
+            let copy = history_view::recovery_row(
+                draft.kind,
+                draft.created_at_ms,
+                draft.completed_duration_ms,
+            );
+            let row = gtk::Box::new(
+                gtk::Orientation::Horizontal,
+                self.tokens.number("s-6") as i32,
+            );
+            row.add_css_class("recording-recovery-row");
+            let text = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            text.set_hexpand(true);
+            text.set_valign(gtk::Align::Center);
+            text.append(&label(&copy.title, "recording-recovery-name"));
+            let detail = label(&copy.detail, "recording-recovery-detail");
+            detail.set_wrap(true);
+            text.append(&detail);
+            let actionable = draft.status == "recoverable" && draft.identity.is_some();
+            // A failed action reports under its own row, in place of the
+            // reason the take stopped.
+            let row_error = error
+                .as_ref()
+                .filter(|(id, _)| *id == draft.session_id)
+                .map(|(_, message)| message.clone());
+            let reason = if actionable {
+                draft
+                    .last_error
+                    .as_deref()
+                    .map(history_view::recording_error_message)
+            } else {
+                Some(
+                    draft
+                        .reason
+                        .clone()
+                        .unwrap_or_else(|| history_view::RECOVERY_UNAVAILABLE.into()),
+                )
+            };
+            if let Some(message) = &row_error {
+                let line = label(message, "recording-recovery-detail");
+                line.add_css_class("settings-error");
+                line.set_wrap(true);
+                line.set_accessible_role(gtk::AccessibleRole::Alert);
+                text.append(&line);
+            } else if let Some(reason) = reason {
+                let line = label(&reason, "recording-recovery-detail");
+                line.add_css_class("warning");
+                line.set_wrap(true);
+                text.append(&line);
+            }
+            row.append(&text);
+            if actionable {
+                let actions = gtk::Box::new(gtk::Orientation::Horizontal, gap);
+                actions.set_valign(gtk::Align::Center);
+                let this_busy = busy.as_ref().filter(|(id, _)| *id == draft.session_id);
+                let recover = gtk::Button::with_label(if this_busy.is_some_and(|(_, r)| *r) {
+                    history_view::RECOVERING
+                } else {
+                    history_view::RECOVER
+                });
+                let confirming = armed.as_deref() == Some(draft.session_id.as_str());
+                let discard = gtk::Button::with_label(if this_busy.is_some_and(|(_, r)| !*r) {
+                    history_view::DISCARDING
+                } else if confirming {
+                    history_view::DISCARD_CONFIRM
+                } else {
+                    history_view::DISCARD
+                });
+                set_class(&discard, "confirm", confirming);
+                let description = format!("{}, {}", copy.title, copy.detail);
+                for (button, name, discarding) in
+                    [(&recover, "recover", false), (&discard, "discard", true)]
+                {
+                    button.add_css_class("ui-btn");
+                    button.add_css_class("recovery-action");
+                    button.set_widget_name(&format!("{name}:{}", draft.session_id));
+                    button.set_sensitive(busy.is_none());
+                    button.update_property(&[gtk::accessible::Property::Description(&description)]);
+                    let weak = Rc::downgrade(self);
+                    let id = draft.session_id.clone();
+                    let identity = draft.identity.clone().unwrap_or_default();
+                    button.connect_clicked(move |_| {
+                        if let Some(state) = weak.upgrade() {
+                            state.recovery_step(&id, identity.clone(), discarding);
+                        }
+                    });
+                    actions.append(button);
+                }
+                row.append(&actions);
+            }
+            section.rows.append(&row);
+        }
+        // The section carries the message only when its row is gone.
+        let orphaned = error
+            .filter(|(id, _)| !drafts.iter().any(|draft| draft.session_id == *id))
+            .map(|(_, message)| message);
+        section
+            .error
+            .set_label(orphaned.as_deref().unwrap_or_default());
+        section.error.set_visible(orphaned.is_some());
+        drop(drafts);
+        if let Some(name) = focused {
+            let mut child = section.rows.first_child();
+            while let Some(row) = child {
+                let mut found = None;
+                let mut stack = vec![row.clone()];
+                while let Some(widget) = stack.pop() {
+                    if widget.widget_name() == name {
+                        found = Some(widget);
+                        break;
+                    }
+                    let mut inner = widget.first_child();
+                    while let Some(next) = inner {
+                        inner = next.next_sibling();
+                        stack.push(next);
+                    }
+                }
+                if let Some(widget) = found {
+                    widget.grab_focus();
+                    break;
+                }
+                child = row.next_sibling();
+            }
+        }
+    }
+
+    /// Shipping `RecordingRecovery.run`: Recover at once; Discard arms
+    /// "Discard permanently?" for four seconds first.
+    fn recovery_step(self: &Rc<Self>, id: &str, identity: String, discard: bool) {
+        if self.recovery_busy.borrow().is_some() {
+            return;
+        }
+        let armed = self
+            .discard_armed
+            .borrow()
+            .as_ref()
+            .is_some_and(|(armed, _)| armed == id);
+        if let Some((_, timer)) = self.discard_armed.borrow_mut().take() {
+            timer.remove();
+        }
+        if discard && !armed {
+            let weak = Rc::downgrade(self);
+            let timer = glib::timeout_add_local_once(
+                std::time::Duration::from_millis(history_view::CONFIRM_TIMEOUT_MS),
+                move || {
+                    if let Some(state) = weak.upgrade() {
+                        state.discard_armed.borrow_mut().take();
+                        state.render_recovery();
+                    }
+                },
+            );
+            *self.discard_armed.borrow_mut() = Some((id.to_owned(), timer));
+            self.render_recovery();
+            return;
+        }
+        *self.recovery_busy.borrow_mut() = Some((id.to_owned(), !discard));
+        *self.recovery_error.borrow_mut() = None;
+        self.render_recovery();
+        let (root, id) = (self.root.clone(), id.to_owned());
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let target = id.clone();
+            let result = gio::spawn_blocking(move || {
+                let recovery = RecordingRecovery::new(root, crate::recording::toolchain());
+                if discard {
+                    recovery.discard(&target, &identity).map(|_| ())
+                } else {
+                    let cancel = captures_media::CancelToken::default();
+                    recovery
+                        .recover(&target, &identity, &cancel, |_| {})
+                        .map(|_| ())
+                }
+            })
+            .await
+            .unwrap_or_else(|_| Err("the recovery worker stopped".into()));
+            let Some(state) = weak.upgrade() else { return };
+            *state.recovery_busy.borrow_mut() = None;
+            if let Err(error) = result {
+                *state.recovery_error.borrow_mut() =
+                    Some((id, history_view::recording_error_message(&error)));
+            }
+            // A recovered take joins History; either way the row changes.
+            state.reload();
+        });
+    }
+}
+
 fn set_class(widget: &impl IsA<gtk::Widget>, class: &str, on: bool) {
     if on {
         widget.add_css_class(class);
@@ -721,6 +963,38 @@ impl Header {
     }
 }
 
+/// Shipping `.recording-recovery-section`: heading, help, one row per
+/// interrupted take, and an error whose row is gone.
+struct Recovery {
+    root: gtk::Box,
+    rows: gtk::Box,
+    error: gtk::Label,
+}
+
+impl Recovery {
+    fn new(tokens: &Tokens) -> Recovery {
+        let copy = history_view::copy();
+        let gap = tokens.number("s-4") as i32;
+        let root = gtk::Box::new(gtk::Orientation::Vertical, gap);
+        root.add_css_class("recording-recovery-section");
+        root.set_hexpand(true);
+        let title = label(copy.recovery_title, "recording-recovery-title");
+        title.set_accessible_role(gtk::AccessibleRole::Heading);
+        root.append(&title);
+        let help = label(copy.recovery_help, "recording-recovery-help");
+        help.set_wrap(true);
+        root.append(&help);
+        let rows = gtk::Box::new(gtk::Orientation::Vertical, gap);
+        root.append(&rows);
+        let error = label("", "settings-error");
+        error.set_wrap(true);
+        error.set_accessible_role(gtk::AccessibleRole::Alert);
+        error.set_visible(false);
+        root.append(&error);
+        Recovery { root, rows, error }
+    }
+}
+
 /// `.history-toolbar` filter pills with counts.
 struct Toolbar {
     root: gtk::Box,
@@ -799,6 +1073,7 @@ impl Slot {
             "header" => reparent(&state.header.root, &self.inner),
             "toolbar" => reparent(&state.toolbar.root, &self.inner),
             "error" => reparent(&state.header.error, &self.inner),
+            "recovery" => reparent(&state.recovery.root, &self.inner),
             "loading" | "empty" | "filtered-empty" => {
                 self.inner.append(&empty_state(key));
             }

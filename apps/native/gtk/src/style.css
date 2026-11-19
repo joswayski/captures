@@ -624,6 +624,55 @@ window.captures.countdown-window {
   background: var(--danger-surface);
   font-size: var(--text-sm);
 }
+/* `.recording-recovery-section` (windows.css, primitives.css). */
+.captures .recording-recovery-section {
+  margin-top: var(--s-6);
+  padding: var(--s-6);
+  border: 1px solid var(--caution-surface);
+  border-radius: var(--r-xl);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-sm);
+}
+.captures .recording-recovery-title {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-tight);
+}
+.captures .recording-recovery-help {
+  color: var(--text-subtle);
+  font-size: var(--text-sm);
+  line-height: var(--lh-snug-sm);
+}
+.captures .recording-recovery-row {
+  padding-top: var(--s-4);
+  border-top: 1px solid var(--border-subtle);
+}
+.captures .recording-recovery-name {
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+}
+.captures .recording-recovery-detail {
+  margin-top: 2px;
+  color: var(--text-subtle);
+  font-size: var(--text-sm);
+}
+.captures .recording-recovery-detail.warning {
+  color: var(--caution-text);
+}
+.captures .recording-recovery-detail.settings-error,
+.captures .recording-recovery-section .settings-error {
+  color: var(--danger-text);
+  font-size: var(--text-sm);
+}
+/* The armed Discard is the loud state (primitives.css). */
+.captures button.ui-btn.recovery-action.confirm {
+  border-color: transparent;
+  color: #ffffff;
+  background: var(--theme-signal-strong);
+}
+.captures button.ui-btn.recovery-action.confirm:hover {
+  background: var(--theme-signal-deep);
+}
 .captures .history-grid-row {
   padding-top: var(--s-6);
 }

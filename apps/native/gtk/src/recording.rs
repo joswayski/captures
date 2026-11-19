@@ -128,7 +128,7 @@ enum Outcome {
 /// and older frames are dropped.
 type LatestFrame = Arc<Mutex<Option<(u64, Arc<RgbaImage>)>>>;
 
-fn toolchain() -> MediaToolchain {
+pub(crate) fn toolchain() -> MediaToolchain {
     let (ffmpeg, ffprobe) = media_tools();
     MediaToolchain::new(ffmpeg, ffprobe)
 }
