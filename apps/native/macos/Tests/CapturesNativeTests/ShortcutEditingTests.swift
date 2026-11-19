@@ -271,6 +271,10 @@ final class ShortcutEditingTests: XCTestCase {
                 root.subviews.flatMap(\.subviews).compactMap { $0 as? NSTextField }
                     .contains { $0.stringValue == message }
             }
+            // The refused Ctrl+Q rolls back to the stored Command+Shift+4.
+            let rolledBack = try XCTUnwrap(controller.shortcutRecorder(identifier: "region_shortcut"))
+            XCTAssertTrue(rolledBack.keys.contains("4"), "\(rolledBack.keys)")
+            XCTAssertFalse(rolledBack.keys.contains("Q"))
             let tokens = try XCTUnwrap(Tokens.variants["\(appearance)-mustard"])
             // Shrink within each layout, cross the sidebar breakpoint, then grow back.
             for width in [CGFloat(880), 721, 720, 560, 1000] {
@@ -281,8 +285,8 @@ final class ShortcutEditingTests: XCTestCase {
                 XCTAssertEqual(copy.count, 2)
                 let history = try XCTUnwrap(root.subviews.compactMap { $0 as? CaptureButton }
                     .first { $0.title == PreferencesPolicy.text("history") })
-                let retry = try XCTUnwrap(root.subviews.compactMap { $0 as? CaptureButton }
-                    .first { $0.title == "Retry" })
+                // Like Tauri, a refused save has no Retry: the page rolls back.
+                XCTAssertFalse(root.subviews.compactMap { $0 as? CaptureButton }.contains { $0.title == "Retry" })
                 let status = try XCTUnwrap(root.subviews.flatMap(\.subviews).compactMap { $0 as? NSTextField }
                     .first { $0.stringValue == message })
                 let pill = try XCTUnwrap(status.superview)
@@ -292,9 +296,7 @@ final class ShortcutEditingTests: XCTestCase {
                     XCTAssertGreaterThanOrEqual(label.frame.width, inkWidth, "full header copy at \(width)")
                 }
                 XCTAssertLessThanOrEqual(history.frame.maxX + tokens.number("s-4"), pill.frame.minX)
-                XCTAssertLessThanOrEqual(pill.frame.maxX + tokens.number("s-4"), retry.frame.minX)
-                XCTAssertEqual(retry.frame.maxX, root.bounds.width - tokens.number("s-8"))
-                XCTAssertFalse(retry.isHidden)
+                XCTAssertEqual(pill.frame.maxX, root.bounds.width - tokens.number("s-8"))
                 XCTAssertLessThanOrEqual(pill.frame.width, 360)
                 XCTAssertLessThan(status.frame.width, status.intrinsicContentSize.width)
                 XCTAssertEqual(status.lineBreakMode, .byTruncatingTail)
