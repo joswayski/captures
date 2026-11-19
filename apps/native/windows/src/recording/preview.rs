@@ -166,11 +166,21 @@ impl Recording {
         });
         let height = (media_h + 2. * self.t.n("s-5")).clamp(160., self.height * 0.58);
         self.rects[PREVIEW] = Rect::new(title.x, top, title.w, 46. + height);
-        let right = title.x + title.w - self.t.n("s-5");
-        self.rects[slot(Target::Actual)] = Rect::new(right - 66., top + 7., 66., 32.);
-        self.rects[slot(Target::Fit)] = Rect::new(right - 132., top + 7., 66., 32.);
-        self.rects[slot(Target::Loop)] =
-            Rect::new(right - 132. - self.t.n("s-4") - 132., top + 7., 132., 32.);
+        // Shipping `.recording-preview-toolbar`: a 132 × 36 `.editor-segmented`
+        // track (1 px border, 3 px padding) holding two `--h-sm` segments, and
+        // the `--h-sm` Loop preview button `--s-4` before it.
+        let right = title.x + title.w - 1. - self.t.n("s-5");
+        let (track, segment) = (self.size_track(), self.t.n("h-sm"));
+        let seg_w = (track.w - 8.) / 2.;
+        self.rects[slot(Target::Fit)] = Rect::new(track.x + 4., track.y + 4., seg_w, segment);
+        self.rects[slot(Target::Actual)] =
+            Rect::new(track.x + 4. + seg_w, track.y + 4., seg_w, segment);
+        self.rects[slot(Target::Loop)] = Rect::new(
+            right - track.w - self.t.n("s-4") - 116.,
+            track.y + 4.,
+            116.,
+            segment,
+        );
         self.clamp_preview_scroll();
         self.place_play();
         self.dirty[PREVIEW] = true;
@@ -179,6 +189,18 @@ impl Recording {
         }
         self.layout_timeline();
         self.layout_output();
+    }
+
+    /// The Fit / 100% segmented track, centered in the 46 px toolbar.
+    fn size_track(&self) -> Rect {
+        let r = self.rects[PREVIEW];
+        let height = self.t.n("h-sm") + 8.;
+        Rect::new(
+            r.x + r.w - 1. - self.t.n("s-5") - 132.,
+            r.y + 1. + (45. - height) / 2.,
+            132.,
+            height,
+        )
     }
 
     pub(super) fn preview_view(&self) -> Rect {
@@ -318,6 +340,15 @@ impl Recording {
             "text-muted",
             false,
         )?;
+        let track = self.size_track();
+        let track = gfx::rect(
+            track.x - r.x,
+            track.y - r.y,
+            track.x + track.w - r.x,
+            track.y + track.h - r.y,
+        );
+        gfx::fill_round(dc, track, t.n("r-lg"), t.color("surface-sunken"))?;
+        gfx::border(dc, track, t.n("r-lg"), 1., t.color("border-subtle"))?;
         let view = self.preview_view();
         let clip = gfx::rect(
             view.x - r.x,
@@ -417,6 +448,26 @@ impl Recording {
                 2.,
                 t.color("theme-accent-ink"),
             )?;
+        } else if matches!(target, Target::Fit | Target::Actual) {
+            // A segment of the size track: the active one is the raised thumb.
+            if self.toggled(target) == Some(true) {
+                gfx::shadow(dc, all, t.n("r-sm"), t.shadow("shadow-xs"))?;
+                gfx::fill_round(dc, all, t.n("r-sm"), t.color("surface-raised"))?;
+                gfx::border(dc, all, t.n("r-sm"), 1., t.color("border-subtle"))?;
+            }
+            let text = self.g.text(t, Style::Control, target.label(), r.w)?;
+            let color = t.color(if self.toggled(target) == Some(true) || hovered {
+                "text"
+            } else {
+                "text-subtle"
+            });
+            gfx::text(
+                dc,
+                &text,
+                ((r.w - text.width) / 2.).round(),
+                (r.h - text.height) / 2.,
+                color,
+            )?;
         } else {
             let selected = self.toggled(target) == Some(true);
             gfx::fill_round(
@@ -461,6 +512,8 @@ impl Recording {
                 all,
                 if target == Target::Play {
                     28.
+                } else if matches!(target, Target::Fit | Target::Actual) {
+                    t.n("r-sm")
                 } else {
                     t.n("r-md")
                 },

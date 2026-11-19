@@ -428,7 +428,8 @@ impl Recording {
             (self.width - width) / 2.,
             self.t.n("s-8") - self.page_scroll,
             width,
-            34.,
+            // Shipping's header is only the `--text-2xl` h1 at `--leading-tight`.
+            self.t.n("text-2xl") * self.t.n("leading-tight"),
         )
     }
 
@@ -1330,19 +1331,24 @@ impl Recording {
                     )?;
                 } else {
                     let primary = target == Target::Save;
-                    gfx::fill_round(
-                        dc,
-                        local,
-                        t.n("r-md"),
-                        t.color(if primary {
-                            "theme-accent"
-                        } else if active {
-                            "surface-hover"
-                        } else {
-                            "surface-raised"
-                        }),
-                    )?;
-                    if !primary {
+                    // Shipping `.recording-destination button` is a ghost
+                    // button: no fill or border until hovered.
+                    let ghost = target == Target::Change;
+                    if !ghost || active {
+                        gfx::fill_round(
+                            dc,
+                            local,
+                            t.n("r-md"),
+                            t.color(if primary {
+                                "theme-accent"
+                            } else if active {
+                                "surface-hover"
+                            } else {
+                                "surface-raised"
+                            }),
+                        )?;
+                    }
+                    if !primary && !ghost {
                         gfx::border(dc, local, t.n("r-md"), 1., t.color("control-border"))?;
                     }
                     let label = if target == Target::Change {
@@ -1365,6 +1371,8 @@ impl Recording {
                     let x = (r.w - total) / 2.;
                     let color = if primary {
                         "theme-accent-ink"
+                    } else if ghost && active {
+                        "text"
                     } else {
                         "text-muted"
                     };

@@ -508,6 +508,17 @@ impl Recording {
         .label
     }
 
+    fn quality_help_height(&self, width: f32) -> f32 {
+        self.g
+            .text(
+                &self.t,
+                Style::Small,
+                self.output.values.mode.description(),
+                width,
+            )
+            .map_or(15., |text| text.height)
+    }
+
     pub fn maximum_estimate_rect(&self) -> Rect {
         let field = self.target_rect(Target::MaximumSize);
         Rect::new(field.x, field.y + field.h + self.t.n("s-5"), field.w, 44.)
@@ -998,7 +1009,9 @@ impl Recording {
             let qw = (card_w - 2. * pad).min(430.);
             if self.shown(Target::QualityMode) {
                 self.rects[slot(Target::QualityMode)] = Rect::new(x + pad, field_y, qw, h);
-                field_y += h + gap + 18. + self.t.n("s-3");
+                // Shipping `.editor-field-help` under the select: `--s-3` above.
+                field_y += h + self.t.n("s-3") + self.quality_help_height(qw);
+                field_y += gap + 18. + self.t.n("s-3");
             }
             if self.shown(Target::Quality) {
                 self.rects[slot(Target::Quality)] = Rect::new(x + pad, field_y, qw, h);
@@ -1112,7 +1125,7 @@ impl Recording {
             (Target::Height, "Height"),
             (Target::Fps, "Frame rate"),
             (Target::GifWidth, "Maximum width"),
-            (Target::QualityMode, "Save quality"),
+            (Target::QualityMode, "Quality mode"),
             (Target::Quality, "Quality"),
             (Target::MaximumSize, "Maximum file size"),
         ] {
@@ -1127,6 +1140,19 @@ impl Recording {
                 Rect::new(r.x - base.x, r.y - base.y - 18. - t.n("s-3"), r.w, 18.),
                 "text-subtle",
                 false,
+            )?;
+        }
+        if self.shown(Target::QualityMode) {
+            let r = self.target_rect(Target::QualityMode);
+            let help = self
+                .g
+                .text(t, Style::Small, self.output.values.mode.description(), r.w)?;
+            gfx::text(
+                dc,
+                &help,
+                r.x - base.x,
+                r.y - base.y + r.h + t.n("s-3"),
+                t.color("text-subtle"),
             )?;
         }
         if self.shown(Target::MaximumSize) {

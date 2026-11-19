@@ -389,15 +389,16 @@ impl Setup {
                     &g.factory,
                     "setup-check",
                     &[],
-                    (right - status_width, ry + (line - check) / 2., check * 1.5),
+                    (right - check, ry + (line - check) / 2., check * 1.5),
                     2.,
                     color,
                 )?;
             }
+            // Shipping puts the label first and the check after it.
             gfx::text(
                 dc,
                 text,
-                right - text.width,
+                right - status_width,
                 ry + (line - text.height) / 2.,
                 color,
             )?;
