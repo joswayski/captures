@@ -1,18 +1,27 @@
 # Captures patch to global-hotkey 0.8.0
 
 This is the crates.io 0.8.0 source, manifests, examples, README and licenses.
-The root Tauri workspace and the isolated native wgpu workspace both use it.
+The root Tauri workspace and the isolated native wgpu and GTK workspaces use it.
 No dependency version or public API changes are included.
 
-The only source change is in `src/platform_impl/x11/mod.rs`: flush queued
-`XUngrabKey` requests after unregistering and after rolling back a failed grab.
-The polling event loop does not flush output. Without this fix, Escape remains
-grabbed by the X server even after the library reports successful unregister,
-until an unrelated later registration flushes the connection.
+Both source changes are in `src/platform_impl/x11/mod.rs`.
 
-The same fix is proposed upstream in
-https://github.com/tauri-apps/global-hotkey/pull/197 (still unmerged when vendored).
-Remove this copy and both Cargo patches when a released version includes it.
+1. Flush queued `XUngrabKey` requests after unregistering and after rolling back
+   a failed grab. The event loop does not flush output. Without this fix, Escape
+   remains grabbed by the X server even after the library reports successful
+   unregister, until an unrelated later registration flushes the connection.
+
+   The same fix is proposed upstream in
+   https://github.com/tauri-apps/global-hotkey/pull/197 (still unmerged when vendored).
+
+2. The event thread blocks in `wait_for_event` instead of polling the connection
+   and its command channel every 50 ms. Upstream's loop woke 20 times a second for
+   as long as a manager existed, which is the whole life of a tray application,
+   and delayed each key event by up to 50 ms. The manager now shares the thread's
+   connection and, after queuing a command, sends a `ClientMessage` to an unmapped
+   window that connection owns, which ends the wait. Not proposed upstream yet.
+
+Remove this copy and the Cargo patches when a released version includes both.
 
 Regression check from the repository root, on a disposable X11 display:
 

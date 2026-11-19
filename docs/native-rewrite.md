@@ -111,10 +111,19 @@ A side-by-side pass of the GTK host against the Tauri harness, plus idle cost:
   6 px and 4 px field gaps, and no steppers on disabled number fields; the
   Quality mode and Quality selects stop at shipping's 430 px.
 
+- Resident app on X11: the vendored `global-hotkey` event thread polled the X
+  connection every 50 ms for as long as shortcuts were registered, in the Tauri
+  app as well as the GTK and wgpu hosts. It now blocks until a key event or a
+  register/unregister command arrives. Orb measurement of a quiet GTK tray
+  launch over 20 s (debug build, Xvfb): 403 wake-ups and 30 ms of CPU before,
+  2 wake-ups and 0 ms after. Key events are no longer held for up to 50 ms.
+
 Status: X11 only, under Xvfb with software GL: renders compared with the Tauri
 harness in both appearances, and the History, Preferences, editor and recording
-AT-SPI smoke steps pass. Wayland, real GPUs and Orca are not rechecked. Windows
-and macOS are unchanged by this pass.
+AT-SPI smoke steps pass; for the hotkey thread, the private-X11 Escape test and
+the live, capture, tray and shortcuts smoke steps pass. Wayland (which uses the
+GlobalShortcuts portal, not this thread), real GPUs and Orca are not rechecked.
+Windows and macOS are unchanged by this pass.
 
 ## Host direction
 

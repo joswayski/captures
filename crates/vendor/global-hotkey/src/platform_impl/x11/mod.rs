@@ -3,12 +3,16 @@
 // SPDX-License-Identifier: MIT
 
 use std::collections::BTreeMap;
+use std::sync::{Arc, OnceLock};
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use keyboard_types::{Code, Modifiers};
 use x11rb::connection::Connection;
 use x11rb::errors::ReplyError;
-use x11rb::protocol::xproto::{ConnectionExt, GrabMode, KeyButMask, Keycode, ModMask, Window};
+use x11rb::protocol::xproto::{
+    AtomEnum, ClientMessageEvent, ConnectionExt, CreateWindowAux, EventMask, GrabMode, KeyButMask,
+    Keycode, ModMask, Window, WindowClass,
+};
 use x11rb::protocol::{xkb, ErrorKind, Event};
 use x11rb::rust_connection::RustConnection;
 use xkeysym::RawKeysym;
@@ -23,27 +27,47 @@ enum ThreadMessage {
     DropThread,
 }
 
+/// The event thread's connection and its unmapped wake window. The thread
+/// blocks until the X server has an event for it; a `ClientMessage` sent to
+/// this window is that event when a command is waiting.
+type Wake = Arc<OnceLock<(Arc<RustConnection>, Window)>>;
+
 pub struct GlobalHotKeyManager {
     thread_tx: Sender<ThreadMessage>,
+    wake: Wake,
 }
 
 impl GlobalHotKeyManager {
     pub fn new() -> crate::Result<Self> {
         let (thread_tx, thread_rx) = unbounded();
-        std::thread::spawn(|| {
-            if let Err(_err) = events_processor(thread_rx) {
+        let wake = Wake::default();
+        let published = wake.clone();
+        std::thread::spawn(move || {
+            if let Err(_err) = events_processor(thread_rx, published) {
                 #[cfg(feature = "tracing")]
                 tracing::error!("{}", _err);
             }
         });
-        Ok(Self { thread_tx })
+        Ok(Self { thread_tx, wake })
+    }
+
+    /// Queue `message` and wake the event thread. Before the thread has
+    /// published its connection it has not blocked yet, and it reads queued
+    /// commands before it first does.
+    fn send(&self, message: ThreadMessage) {
+        let _ = self.thread_tx.send(message);
+        if let Some((conn, window)) = self.wake.get() {
+            let event = ClientMessageEvent::new(32, *window, AtomEnum::NOTICE, [0u32; 5]);
+            if let Ok(cookie) = conn.send_event(false, *window, EventMask::NO_EVENT, event) {
+                cookie.ignore_error();
+            }
+            let _ = conn.flush();
+        }
     }
 
     pub fn register(&self, hotkey: HotKey) -> crate::Result<()> {
         let (tx, rx) = crossbeam_channel::bounded(1);
-        let _ = self
-            .thread_tx
-            .send(ThreadMessage::RegisterHotKey(hotkey, tx));
+        self.send(ThreadMessage::RegisterHotKey(hotkey, tx));
 
         if let Ok(result) = rx.recv() {
             result?;
@@ -54,9 +78,7 @@ impl GlobalHotKeyManager {
 
     pub fn unregister(&self, hotkey: HotKey) -> crate::Result<()> {
         let (tx, rx) = crossbeam_channel::bounded(1);
-        let _ = self
-            .thread_tx
-            .send(ThreadMessage::UnRegisterHotKey(hotkey, tx));
+        self.send(ThreadMessage::UnRegisterHotKey(hotkey, tx));
 
         if let Ok(result) = rx.recv() {
             result?;
@@ -67,9 +89,7 @@ impl GlobalHotKeyManager {
 
     pub fn register_all(&self, hotkeys: &[HotKey]) -> crate::Result<()> {
         let (tx, rx) = crossbeam_channel::bounded(1);
-        let _ = self
-            .thread_tx
-            .send(ThreadMessage::RegisterHotKeys(hotkeys.to_vec(), tx));
+        self.send(ThreadMessage::RegisterHotKeys(hotkeys.to_vec(), tx));
 
         if let Ok(result) = rx.recv() {
             result?;
@@ -80,9 +100,7 @@ impl GlobalHotKeyManager {
 
     pub fn unregister_all(&self, hotkeys: &[HotKey]) -> crate::Result<()> {
         let (tx, rx) = crossbeam_channel::bounded(1);
-        let _ = self
-            .thread_tx
-            .send(ThreadMessage::UnRegisterHotKeys(hotkeys.to_vec(), tx));
+        self.send(ThreadMessage::UnRegisterHotKeys(hotkeys.to_vec(), tx));
 
         if let Ok(result) = rx.recv() {
             result?;
@@ -94,7 +112,7 @@ impl GlobalHotKeyManager {
 
 impl Drop for GlobalHotKeyManager {
     fn drop(&mut self) {
-        let _ = self.thread_tx.send(ThreadMessage::DropThread);
+        self.send(ThreadMessage::DropThread);
     }
 }
 
@@ -230,19 +248,20 @@ struct HotKeyState {
     mods: ModMask,
 }
 
-fn events_processor(thread_rx: Receiver<ThreadMessage>) -> Result<(), String> {
+fn events_processor(thread_rx: Receiver<ThreadMessage>, wake: Wake) -> Result<(), String> {
     let mut hotkeys = BTreeMap::<Keycode, Vec<HotKeyState>>::new();
 
     let (conn, screen) = RustConnection::connect(None)
         .map_err(|err| format!("Unable to open x11 connection, maybe you are not running under X11? Other window systems on Linux are not supported by `global-hotkey` crate: {err}"))?;
+    let conn = Arc::new(conn);
 
-    xkb::ConnectionExt::xkb_use_extension(&conn, 1, 0)
+    xkb::ConnectionExt::xkb_use_extension(&*conn, 1, 0)
         .map_err(|err| format!("Unable to send xkb_use_extension request to x11 server: {err}"))?
         .reply()
         .map_err(|err| format!("xkb_use_extension request to x11 server has failed: {err}"))?;
 
     xkb::ConnectionExt::xkb_per_client_flags(
-        &conn,
+        &*conn,
         xkb::ID::USE_CORE_KBD.into(),
         xkb::PerClientFlag::DETECTABLE_AUTO_REPEAT,
         xkb::PerClientFlag::DETECTABLE_AUTO_REPEAT,
@@ -256,50 +275,73 @@ fn events_processor(thread_rx: Receiver<ThreadMessage>) -> Result<(), String> {
 
     let root = conn.setup().roots[screen].root;
 
+    // An unmapped window of our own: a `ClientMessage` sent to it with no
+    // event mask is delivered to this connection, which ends the wait below.
+    let wake_window = conn
+        .generate_id()
+        .map_err(|err| format!("Unable to allocate the x11 wake window: {err}"))?;
+    conn.create_window(
+        x11rb::COPY_DEPTH_FROM_PARENT,
+        wake_window,
+        root,
+        0,
+        0,
+        1,
+        1,
+        0,
+        WindowClass::INPUT_ONLY,
+        x11rb::COPY_FROM_PARENT,
+        &CreateWindowAux::new(),
+    )
+    .map_err(|err| format!("Unable to send create_window request to x11 server: {err}"))?
+    .check()
+    .map_err(|err| format!("create_window request to x11 server has failed: {err}"))?;
+    let _ = wake.set((conn.clone(), wake_window));
+
     // X11 sends masks for Lock keys as well, and we only care about the 4 below
     let full_mask = KeyButMask::CONTROL | KeyButMask::SHIFT | KeyButMask::MOD4 | KeyButMask::MOD1;
 
-    loop {
-        while let Ok(Some(event)) = conn.poll_for_event() {
-            match event {
-                Event::KeyPress(event) => {
-                    let keycode = event.detail;
+    let key_event = |event: Event, hotkeys: &mut BTreeMap<Keycode, Vec<HotKeyState>>| match event {
+        Event::KeyPress(event) => {
+            let keycode = event.detail;
 
-                    let event_mods = event.state & full_mask;
-                    let event_mods = ModMask::from(event_mods.bits());
+            let event_mods = event.state & full_mask;
+            let event_mods = ModMask::from(event_mods.bits());
 
-                    if let Some(entry) = hotkeys.get_mut(&keycode) {
-                        for state in entry {
-                            if event_mods == state.mods && !state.pressed {
-                                GlobalHotKeyEvent::send(GlobalHotKeyEvent {
-                                    id: state.id,
-                                    state: crate::HotKeyState::Pressed,
-                                });
-                                state.pressed = true;
-                            }
-                        }
+            if let Some(entry) = hotkeys.get_mut(&keycode) {
+                for state in entry {
+                    if event_mods == state.mods && !state.pressed {
+                        GlobalHotKeyEvent::send(GlobalHotKeyEvent {
+                            id: state.id,
+                            state: crate::HotKeyState::Pressed,
+                        });
+                        state.pressed = true;
                     }
                 }
-                Event::KeyRelease(event) => {
-                    let keycode = event.detail;
-
-                    if let Some(entry) = hotkeys.get_mut(&keycode) {
-                        for state in entry {
-                            if state.pressed {
-                                GlobalHotKeyEvent::send(GlobalHotKeyEvent {
-                                    id: state.id,
-                                    state: crate::HotKeyState::Released,
-                                });
-                                state.pressed = false;
-                            }
-                        }
-                    }
-                }
-                _ => {}
             }
         }
+        Event::KeyRelease(event) => {
+            let keycode = event.detail;
 
-        if let Ok(msg) = thread_rx.try_recv() {
+            if let Some(entry) = hotkeys.get_mut(&keycode) {
+                for state in entry {
+                    if state.pressed {
+                        GlobalHotKeyEvent::send(GlobalHotKeyEvent {
+                            id: state.id,
+                            state: crate::HotKeyState::Released,
+                        });
+                        state.pressed = false;
+                    }
+                }
+            }
+        }
+        _ => {}
+    };
+
+    loop {
+        // Commands first. One queued before `wake` was published above is
+        // read here; later ones arrive with a wake event.
+        while let Ok(msg) = thread_rx.try_recv() {
             match msg {
                 ThreadMessage::RegisterHotKey(hotkey, tx) => {
                     let _ = tx.send(register_hotkey(&conn, root, &mut hotkeys, hotkey));
@@ -329,7 +371,15 @@ fn events_processor(thread_rx: Receiver<ThreadMessage>) -> Result<(), String> {
             }
         }
 
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        // Sleep until a key or wake event arrives, instead of polling the
+        // connection every 50 ms for as long as the application runs.
+        let event = conn
+            .wait_for_event()
+            .map_err(|err| format!("The x11 connection was lost: {err}"))?;
+        key_event(event, &mut hotkeys);
+        while let Ok(Some(event)) = conn.poll_for_event() {
+            key_event(event, &mut hotkeys);
+        }
     }
 }
 

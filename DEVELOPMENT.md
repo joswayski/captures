@@ -216,9 +216,10 @@ env -u WAYLAND_DISPLAY CAPTURES_TEST_PRIVATE_X11=1 xvfb-run -a \
   cargo test -p captures-app --test escape_hotkey -- --ignored
 ```
 
-The root and native wgpu workspaces use the existing `global-hotkey` 0.8.0
-dependency from `crates/vendor/global-hotkey`, with an X11 ungrab-flush fix until
-upstream releases it. See its `PATCHES.md` for provenance and removal criteria.
+The root, native wgpu and native GTK workspaces use the existing `global-hotkey`
+0.8.0 dependency from `crates/vendor/global-hotkey`, with an X11 ungrab-flush fix
+and an X11 event thread that blocks instead of polling every 50 ms, until upstream
+releases them. See its `PATCHES.md` for provenance and removal criteria.
 
 The JS/TS toolchain uses Vite 8 (Rolldown/Oxc), Vitest 5, stable native Go
 TypeScript 7 (`tsc`), Oxlint and Oxfmt. Node 24/npm 11 remain the runtime and
