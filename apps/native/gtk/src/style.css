@@ -673,6 +673,11 @@ window.captures.countdown-window {
 .captures button.ui-btn.recovery-action.confirm:hover {
   background: var(--theme-signal-deep);
 }
+/* `.recording-window-target`: invisible until keyboard focus, which the
+   overlay draws as its hovered outline. */
+.captures button.capture-window-target {
+  all: unset;
+}
 .captures .history-grid-row {
   padding-top: var(--s-6);
 }

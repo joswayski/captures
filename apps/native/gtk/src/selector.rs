@@ -127,6 +127,10 @@ struct Overlay {
     capture_mode: Cell<MenuMode>,
     aspect: Cell<Option<f64>>,
     display_card: Option<gtk::Box>,
+    /// New Capture on X11: shipping's `.recording-window-target` buttons,
+    /// one "Select <window>" per window for the keyboard and AT-SPI. The
+    /// layer is click-through; pointer input stays with the hit test.
+    window_targets: gtk::Fixed,
 }
 
 impl Host {
@@ -220,7 +224,13 @@ impl Host {
             .as_ref()
             .map(|handle| handle.0.clone());
         if let Some(overlay) = overlay.filter(|overlay| overlay.kind == Kind::Menu) {
-            if !overlay.done.get() && !overlay.state.borrow().primary.starting {
+            // Like Tauri a18afc62, shortcuts honour the bar's disabled Record
+            // and Window buttons.
+            let available = overlay.bar.as_ref().is_some_and(|bar| {
+                bar.modes[1].is_sensitive()
+                    && (target != MenuTarget::Window || bar.targets[1].is_sensitive())
+            });
+            if available && !overlay.done.get() && !overlay.state.borrow().primary.starting {
                 overlay.capture_mode.set(MenuMode::Recording);
                 overlay.retarget(target);
             }
@@ -611,6 +621,7 @@ fn overlay(
         capture_mode: Cell::new(mode),
         aspect: Cell::new(None),
         display_card,
+        window_targets: gtk::Fixed::new(),
     });
     *link.borrow_mut() = Rc::downgrade(&overlay);
     overlay.guidance();
@@ -653,6 +664,9 @@ fn overlay(
         Kind::Region => overlay.region_input(),
         Kind::Window => overlay.window_input(),
         Kind::Menu => overlay.menu_input(),
+    }
+    if kind == Kind::Menu && !portal {
+        overlay.add_window_targets();
     }
     if kind == Kind::Menu {
         overlay.retarget(target);
@@ -1190,6 +1204,9 @@ impl Overlay {
         if let Some(card) = &self.display_card {
             card.set_visible(target == MenuTarget::Display);
         }
+        self.window_targets.set_visible(
+            target == MenuTarget::Window && self.window_targets.first_child().is_some(),
+        );
         self.area.set_cursor_from_name(Some(match target {
             MenuTarget::Region => "crosshair",
             MenuTarget::Window => "pointer",
@@ -1504,6 +1521,102 @@ impl Overlay {
         drop(host.capture.borrow_mut().take());
         host.selector.borrow_mut().take();
         host.record_portal(target, region, settings, self.hidden.clone());
+    }
+
+    /// Tauri a18afc62: window targets can be chosen from the keyboard. Each
+    /// window gets a focusable "Select <title>" button over its outline,
+    /// front to back; focus highlights it like hover, and Enter or Space
+    /// selects it (auto-start honoured).
+    fn add_window_targets(self: &Rc<Self>) {
+        let layer = &self.window_targets;
+        layer.set_can_target(false);
+        layer.set_visible(false);
+        for (index, window) in self.windows().iter().enumerate() {
+            let button = gtk::Button::new();
+            button.add_css_class("capture-window-target");
+            let label = format!(
+                "Select {}",
+                if window.title.trim().is_empty() {
+                    "window"
+                } else {
+                    window.title.trim()
+                }
+            );
+            button.update_property(&[gtk::accessible::Property::Label(&label)]);
+            let focus = gtk::EventControllerFocus::new();
+            let weak = Rc::downgrade(self);
+            focus.connect_enter(move |_| {
+                if let Some(overlay) = weak.upgrade() {
+                    overlay.state.borrow_mut().hovered = Some(Some(index));
+                    overlay.guidance();
+                    overlay.describe_target();
+                    overlay.area.queue_draw();
+                }
+            });
+            button.add_controller(focus);
+            let weak = Rc::downgrade(self);
+            button.connect_clicked(move |_| {
+                let Some(overlay) = weak.upgrade() else {
+                    return;
+                };
+                if overlay.done.get() || overlay.state.borrow().primary.starting {
+                    return;
+                }
+                {
+                    let mut state = overlay.state.borrow_mut();
+                    state.hovered = Some(Some(index));
+                    state.selected = Some(Some(index));
+                }
+                overlay.sync_bar();
+                overlay.area.queue_draw();
+                if overlay.settings.auto_start_on_selection {
+                    overlay.start();
+                }
+            });
+            layer.put(&button, 0., 0.);
+        }
+        self.root.add_overlay(layer);
+        // Follow the surface's size: overlay points to widget pixels.
+        let weak = Rc::downgrade(self);
+        let placed = Cell::new((0, 0));
+        layer.add_tick_callback(move |_, _| {
+            let Some(overlay) = weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            let size = (overlay.area.width(), overlay.area.height());
+            if size.0 > 0 && placed.replace(size) != size {
+                let (bounds_w, bounds_h) = overlay.bounds.get();
+                overlay.place_window_targets(
+                    f64::from(size.0) / bounds_w.max(1.),
+                    f64::from(size.1) / bounds_h.max(1.),
+                );
+            }
+            glib::ControlFlow::Continue
+        });
+    }
+
+    /// Lay the window targets over their outlines at the surface's scale.
+    fn place_window_targets(&self, sx: f64, sy: f64) {
+        let origin = match self.source.borrow().as_ref() {
+            Some(Source::Menu {
+                window: Some(window),
+                ..
+            }) => (window.display().x, window.display().y),
+            _ => return,
+        };
+        let windows = self.windows();
+        let mut child = self.window_targets.first_child();
+        for window in &windows {
+            let Some(button) = child else { break };
+            child = button.next_sibling();
+            let x = f64::from(window.x - origin.0).max(0.) * sx;
+            let y = f64::from(window.y - origin.1).max(0.) * sy;
+            button.set_size_request(
+                ((f64::from(window.width) * sx).round() as i32).max(1),
+                ((f64::from(window.height) * sy).round() as i32).max(1),
+            );
+            self.window_targets.move_(&button, x, y);
+        }
     }
 
     fn hover(&self, x: f64, y: f64) {
