@@ -285,13 +285,17 @@ impl Controls {
         }
         privacy.add_css_class("recording-hud-privacy");
         card.append(&privacy);
-        let row = gtk::Box::new(gtk::Orientation::Horizontal, 16);
+        // `.recording-hud-main` (12 px gap) holding `.recording-hud-status`:
+        // an 11 px dot column, an 8 px gap and the text, 96 px at least.
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        let status_group = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let dot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         dot.add_css_class("recording-hud-dot");
         dot.set_valign(gtk::Align::Center);
-        row.append(&dot);
+        dot.set_margin_end(1);
+        status_group.append(&dot);
         let status_column = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        status_column.set_size_request(80, -1);
+        status_column.set_size_request(77, -1);
         let elapsed = gtk::Label::new(Some("0:00"));
         elapsed.add_css_class("recording-hud-time");
         elapsed.set_xalign(0.);
@@ -300,7 +304,8 @@ impl Controls {
         status.set_xalign(0.);
         status_column.append(&elapsed);
         status_column.append(&status);
-        row.append(&status_column);
+        status_group.append(&status_column);
+        row.append(&status_group);
         let meter = gtk::ProgressBar::new();
         meter.add_css_class("recording-hud-meter");
         meter.update_property(&[gtk::accessible::Property::Label("Microphone level")]);
