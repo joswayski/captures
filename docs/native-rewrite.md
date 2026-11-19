@@ -69,6 +69,12 @@ no parity gate.
 
 ### Tauri bug sweep parity (a18afc62, 29b686b2)
 
+Preview capture highlight: shipping's `.thumbnail-capture-highlight` (an accent
+ring and 18 px glow held for 1 s, then faded over 3.5 s on an S-curve) now plays
+on GTK preview cards once their image shows, as a GTK CSS animation with the
+curve baked into its stops (checked on Xvfb X11 at 1.2, 2.4, 4 and 7 s). AppKit
+already plays it (`preview_capture_highlight`); Win32 does not yet.
+
 On November 12 a review pass fixed these Tauri behaviours. Native parity means
 matching them, so each was checked against the shared crates and every host:
 

@@ -1848,6 +1848,74 @@ window.captures.preview-stack-window {
     var(--shadow-md),
     0 0 0 1px rgba(255, 255, 255, 0.08);
 }
+/* `.thumbnail-capture-highlight` (mini-preview.css): an accent ring that
+   holds for 1 s, then fades over 3.5 s. Shipping's S-curve fade is baked
+   into the stops so the timeline itself runs linearly. */
+@keyframes preview-capture-highlight {
+  0% {
+    box-shadow:
+      var(--shadow-md),
+      0 0 0 1px alpha(var(--theme-accent), 0.850),
+      0 0 18px alpha(var(--theme-accent), 0.240);
+  }
+  22.222% {
+    box-shadow:
+      var(--shadow-md),
+      0 0 0 1px alpha(var(--theme-accent), 0.850),
+      0 0 18px alpha(var(--theme-accent), 0.240);
+  }
+  31.9% {
+    box-shadow:
+      var(--shadow-md),
+      0 0 0 1px alpha(var(--theme-accent), 0.824),
+      0 0 18px alpha(var(--theme-accent), 0.233);
+  }
+  41.7% {
+    box-shadow:
+      var(--shadow-md),
+      0 0 0 1px alpha(var(--theme-accent), 0.740),
+      0 0 18px alpha(var(--theme-accent), 0.209);
+  }
+  51.4% {
+    box-shadow:
+      var(--shadow-md),
+      0 0 0 1px alpha(var(--theme-accent), 0.601),
+      0 0 18px alpha(var(--theme-accent), 0.170);
+  }
+  61.1% {
+    box-shadow:
+      var(--shadow-md),
+      0 0 0 1px alpha(var(--theme-accent), 0.425),
+      0 0 18px alpha(var(--theme-accent), 0.120);
+  }
+  70.8% {
+    box-shadow:
+      var(--shadow-md),
+      0 0 0 1px alpha(var(--theme-accent), 0.249),
+      0 0 18px alpha(var(--theme-accent), 0.070);
+  }
+  80.6% {
+    box-shadow:
+      var(--shadow-md),
+      0 0 0 1px alpha(var(--theme-accent), 0.110),
+      0 0 18px alpha(var(--theme-accent), 0.031);
+  }
+  90.3% {
+    box-shadow:
+      var(--shadow-md),
+      0 0 0 1px alpha(var(--theme-accent), 0.026),
+      0 0 18px alpha(var(--theme-accent), 0.007);
+  }
+  100% {
+    box-shadow:
+      var(--shadow-md),
+      0 0 0 1px alpha(var(--theme-accent), 0.000),
+      0 0 18px alpha(var(--theme-accent), 0.000);
+  }
+}
+.captures .preview-card.capture-highlight {
+  animation: preview-capture-highlight 4500ms linear 1;
+}
 /* `.thumbnail-editor-active`: one solid accent ring while its editor is open. */
 .captures .preview-card.editor-active {
   box-shadow:

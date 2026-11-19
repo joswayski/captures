@@ -941,6 +941,8 @@ impl State {
             .flatten();
             if let (Some(card), Some(texture)) = (weak.upgrade(), pixbuf) {
                 card.image.set_texture(Some(texture));
+                // Shipping `thumbnail-capture-highlight` once the image shows.
+                card.root.add_css_class("capture-highlight");
             }
         });
     }
