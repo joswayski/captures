@@ -435,7 +435,9 @@ final class OnboardingPermissionRow: NSView {
         return max(118, buttonWidth, status.isHidden ? 0 : status.intrinsicContentSize.width)
     }
     private func copyWidth(_ width: CGFloat) -> CGFloat {
-        max(120, width - 2 * padding - 22 - 2 * gap - actionsWidth)
+        // Shipping `.permission-copy p { max-width: 44ch }`.
+        let ch = ("0" as NSString).size(withAttributes: [.font: detail.font as Any]).width
+        return min(ceil(44 * ch), max(120, width - 2 * padding - 22 - 2 * gap - actionsWidth))
     }
     private func detailHeight(_ width: CGFloat) -> CGFloat {
         ceil(detail.cell?.cellSize(forBounds: NSRect(x: 0, y: 0, width: width,
@@ -579,6 +581,13 @@ final class OnboardingView: NSView {
             title.stringValue = strings.title; lede.stringValue = strings.lede
             addSubview(mark); addSubview(eyebrow)
         }
+        // Shipping `.onboarding-lede { line-height: 1.5 }`.
+        let leading = NSMutableParagraphStyle()
+        leading.minimumLineHeight = tokens.number("text-md") * 1.5
+        leading.maximumLineHeight = leading.minimumLineHeight
+        lede.attributedStringValue = NSAttributedString(string: lede.stringValue, attributes: [
+            .font: lede.font as Any, .foregroundColor: lede.textColor as Any, .paragraphStyle: leading,
+        ])
         var views: [NSView] = [title, lede, cards, errorBox]
         if done != nil { views.append(refreshButton) }
         views.append(primaryButton)
@@ -704,13 +713,16 @@ final class OnboardingView: NSView {
             items.append((mark as NSView, 40, tokens.number("s-2") + gap))
             items.append((eyebrow as NSView, ceil(eyebrow.intrinsicContentSize.height), gap))
         }
-        title.preferredMaxLayoutWidth = width; lede.preferredMaxLayoutWidth = width
+        // Shipping `.onboarding-lede { max-width: 54ch }`.
+        let ch = ("0" as NSString).size(withAttributes: [.font: lede.font as Any]).width
+        let ledeWidth = min(width, ceil(54 * ch))
+        title.preferredMaxLayoutWidth = width; lede.preferredMaxLayoutWidth = ledeWidth
         lede.isHidden = short
         if short {
             items.append((title as NSView, wrappedHeight(title, width), tokens.number("s-5")))
         } else {
             items.append((title as NSView, wrappedHeight(title, width), gap))
-            items.append((lede as NSView, wrappedHeight(lede, width), tokens.number("s-7")))
+            items.append((lede as NSView, wrappedHeight(lede, ledeWidth), tokens.number("s-7")))
         }
         let screenHeight = screenRow.height(forWidth: width)
         let microphoneHeight = microphoneRow.isHidden ? 0 : microphoneRow.height(forWidth: width)
@@ -727,7 +739,8 @@ final class OnboardingView: NSView {
         let total = items.reduce(actionsHeight) { $0 + $1.1 + $1.2 }
         var y = max(tokens.number(short ? "s-6" : done == nil ? "s-9" : "s-7"), (bounds.height - total) / 2)
         for (view, height, after) in items {
-            let w = view === mark ? 40 : view === eyebrow ? Self.labelWidth(eyebrow) : width
+            let w = view === mark ? 40 : view === eyebrow ? Self.labelWidth(eyebrow)
+                : view === lede ? ledeWidth : width
             view.frame = NSRect(x: x, y: y, width: w, height: height)
             y += height + after
         }
