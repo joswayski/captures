@@ -21,6 +21,7 @@ use gtk::prelude::*;
 
 use crate::editor::controls::{Choice, NumberField};
 use crate::editor::properties::{RangeSlider, check_row};
+use crate::widgets::MaxWidth;
 
 /// The opened source, as shipping's `RecordingArtifact` describes it.
 #[derive(Clone, Copy)]
@@ -175,7 +176,7 @@ pub(super) struct Output {
     custom: [NumberField; 2],
     mode: Rc<Choice>,
     help: gtk::Label,
-    preset_field: gtk::Box,
+    preset_field: gtk::Widget,
     preset: Rc<Choice>,
     maximum_field: gtk::Box,
     show_field: gtk::Box,
@@ -211,7 +212,8 @@ fn card(title: &str, classes: &[&str]) -> gtk::Box {
 /// `.editor-field`: caption over its control. The caption is presentational;
 /// each control carries shipping's own accessible name.
 fn field(caption: &str, control: &impl IsA<gtk::Widget>, class: &str) -> gtk::Box {
-    let field = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    // `.editor-field { gap: var(--s-3) }`.
+    let field = gtk::Box::new(gtk::Orientation::Vertical, 6);
     field.add_css_class("editor-field");
     if !class.is_empty() {
         field.add_css_class(class);
@@ -226,13 +228,25 @@ fn field(caption: &str, control: &impl IsA<gtk::Widget>, class: &str) -> gtk::Bo
 }
 
 fn columns(count: usize, children: &[&gtk::Widget]) -> gtk::Box {
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    // `.editor-number-grid { gap: var(--s-3) }`, its labels `gap: var(--s-2)`.
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     row.add_css_class("editor-number-grid");
     row.set_homogeneous(true);
     for child in children.iter().take(count) {
+        if let Some(field) = child.downcast_ref::<gtk::Box>() {
+            field.set_spacing(4);
+        }
         row.append(*child);
     }
     row
+}
+
+/// Shipping `max-width: 430px` on the quality selects. The wrapper takes the
+/// field's place among its siblings, so it carries the field's class.
+fn capped_field(field: &gtk::Box) -> gtk::Widget {
+    let capped = MaxWidth::new(field, 430);
+    capped.add_css_class("editor-field");
+    capped.upcast()
 }
 
 fn set_class(widget: &impl IsA<gtk::Widget>, class: &str, on: bool) {
@@ -348,6 +362,7 @@ impl Output {
         // Crop & size.
         let crop_card = card("Crop & size", &[]);
         let crop_check = check_row("Crop recording", false);
+        crop_check.add_css_class("editor-crop-toggle");
         crop_card.append(&crop_check);
         let crop_field = |name: &str, index: usize| {
             NumberField::new(
@@ -435,11 +450,11 @@ impl Output {
                 }),
             ),
         );
-        quality_card.append(&field(
+        quality_card.append(&capped_field(&field(
             "Quality mode",
             &mode.root,
             "editor-quality-mode-field",
-        ));
+        )));
         let help = gtk::Label::new(None);
         help.add_css_class("editor-field-help");
         help.set_xalign(0.);
@@ -459,7 +474,7 @@ impl Output {
             ),
         );
         preset.set_described(described(ui::menus(false, 2, 2).quality_presets));
-        let preset_field = field("Quality", &preset.root, "editor-quality-preset");
+        let preset_field = capped_field(&field("Quality", &preset.root, "editor-quality-preset"));
         quality_card.append(&preset_field);
         let limit = NumberField::new(
             "Maximum file size",

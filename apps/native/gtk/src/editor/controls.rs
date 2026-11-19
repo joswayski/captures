@@ -308,6 +308,10 @@ impl NumberField {
 
     pub(crate) fn set_sensitive(&self, on: bool) {
         self.root.set_sensitive(on);
+        // Shipping renders no steppers on a disabled field.
+        if let Some(steppers) = self.root.last_child() {
+            steppers.set_visible(on);
+        }
         if on {
             self.root.remove_css_class("is-disabled");
         } else {

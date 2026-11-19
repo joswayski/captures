@@ -1741,9 +1741,29 @@ popover.captures-menu .choice-description {
   margin-top: var(--s-4);
   font-size: var(--text-sm);
 }
-.captures .editor-card button.editor-aspect-lock {
+/* Outranks `.check-row.compact`, whose 8 px top margin otherwise wins. */
+.captures .editor-card button.check-row.compact.editor-aspect-lock {
   margin-top: var(--s-6);
   margin-bottom: var(--s-4);
+}
+/* Shipping `.check-row` in the Crop & size card: a 16 px row in the text
+   colour, not the screenshot editor's 28 px muted property row. */
+.captures .editor-card button.editor-crop-toggle,
+.captures .editor-card button.editor-aspect-lock {
+  min-height: 16px;
+}
+.captures .editor-card button.editor-crop-toggle .check-box,
+.captures .editor-card button.editor-aspect-lock .check-box {
+  min-width: 14px;
+  min-height: 14px;
+}
+.captures .editor-card button.editor-crop-toggle .check-caption,
+.captures .editor-card button.editor-aspect-lock .check-caption {
+  color: var(--text);
+  font-weight: var(--weight-regular);
+}
+.captures .editor-card button.editor-crop-toggle .check-caption {
+  font-size: var(--text-md);
 }
 .captures .editor-field-help {
   margin-top: var(--s-3);

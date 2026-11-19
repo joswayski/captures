@@ -105,6 +105,12 @@ A side-by-side pass of the GTK host against the Tauri harness, plus idle cost:
   shipping's stepper column, the zoom preset uses the body font with its
   chevron at the far edge, and rail tools are centred 38 px squares.
 
+- Recording editor: Fit and 100% share the wider label's width; the Crop & size
+  card uses shipping's 16 px check rows in the text colour with its 16 px gap
+  above Lock aspect ratio (a more specific rule had been winning with 8 px),
+  6 px and 4 px field gaps, and no steppers on disabled number fields; the
+  Quality mode and Quality selects stop at shipping's 430 px.
+
 Status: X11 only, under Xvfb with software GL: renders compared with the Tauri
 harness in both appearances, and the History, Preferences, editor and recording
 AT-SPI smoke steps pass. Wayland, real GPUs and Orca are not rechecked. Windows

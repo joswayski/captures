@@ -485,6 +485,8 @@ pub fn build(app: &gtk::Application, tokens: Rc<Tokens>, options: Options) -> Re
     let zoom = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     zoom.add_css_class("recording-segments");
     zoom.set_valign(gtk::Align::Center);
+    // Shipping's segments share the width of the wider label.
+    zoom.set_homogeneous(true);
     let fit = segment("Fit");
     let actual = segment("100%");
     zoom.append(&fit);
