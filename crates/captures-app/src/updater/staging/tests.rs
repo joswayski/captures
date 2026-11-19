@@ -135,8 +135,12 @@ fn zip_fixture(names: &[&str]) -> Vec<u8> {
         writer
             .start_file(
                 *name,
+                // zip 9 records DOS as the host when tests run on Windows, and
+                // staging ignores mode bits from DOS entries. Pin Unix so every
+                // OS stages the same bytes and the mode-bit cases stay meaningful.
                 zip::write::SimpleFileOptions::default()
                     .compression_method(zip::CompressionMethod::Stored)
+                    .system(zip::System::Unix)
                     .unix_permissions(0o644),
             )
             .unwrap();
