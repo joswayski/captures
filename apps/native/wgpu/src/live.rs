@@ -10878,6 +10878,14 @@ mod tests {
     use super::*;
     use std::fs;
 
+    /// The capture gate is process-wide and the harness runs tests in
+    /// parallel: a test that owns a real flow holds this for its whole body.
+    fn own_capture_gate() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     fn display(id: &str, is_primary: bool) -> DisplayDescriptor {
         DisplayDescriptor {
             id: id.into(),
@@ -11367,6 +11375,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn wayland_hud_screenshot_is_a_portal_action_and_child_cleanup_keeps_the_take() {
+        let _gate = own_capture_gate();
         let root = tempfile::tempdir().unwrap();
         let ctx = egui::Context::default();
         ctx.set_embed_viewports(false);
@@ -13019,6 +13028,7 @@ mod tests {
 
     #[test]
     fn capture_viewports_do_not_depend_on_workspace_or_preview_rendering() {
+        let _gate = own_capture_gate();
         let root = tempfile::tempdir().unwrap();
         let ctx = egui::Context::default();
         ctx.set_embed_viewports(false);
@@ -13054,6 +13064,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn portal_region_recording_selects_on_the_stream_frame_then_counts_down() {
+        let _gate = own_capture_gate();
         let root = tempfile::tempdir().unwrap();
         let ctx = egui::Context::default();
         ctx.set_embed_viewports(false);

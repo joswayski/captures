@@ -194,7 +194,7 @@ impl Server {
                 } else if line.starts_with("PUT /object?") {
                     state.parts.push((line.clone(), body));
                     if let Some(gate) = &state.hold_object {
-                        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+                        let deadline = std::time::Instant::now() + Duration::from_secs(120);
                         while gate.load(Ordering::Acquire) && std::time::Instant::now() < deadline {
                             thread::sleep(Duration::from_millis(2));
                         }
@@ -977,8 +977,9 @@ fn unauthorized_share_invalidates_account_without_exposing_a_link() {
 }
 
 fn worker_reply(worker: &captures_account::native::Worker) -> captures_account::native::State {
-    // Generous: busy CI runners (parallel preview builds) can stall the worker.
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    // Generous: the self-hosted Linux VM shares its host with the Windows runners
+    // and can stall every test thread for tens of seconds under parallel builds.
+    let deadline = std::time::Instant::now() + Duration::from_secs(120);
     loop {
         if let Some(captures_account::native::Event::Finished(state)) = worker.try_recv() {
             return state;
@@ -1131,7 +1132,7 @@ fn native_worker_cancel_during_http_retains_the_same_asset_for_explicit_retry() 
     worker.send(Command::Open(worker_selection(path)));
     assert!(worker_reply(&worker).error.is_none());
     worker.send(Command::Upload(SharePatch::default()));
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let deadline = std::time::Instant::now() + Duration::from_secs(120);
     loop {
         if matches!(
             worker.try_recv(),

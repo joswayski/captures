@@ -869,7 +869,7 @@ mod tests {
     }
 
     fn wait_idle(worker: &mut CheckWorker) {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + Duration::from_secs(60);
         loop {
             worker.poll();
             if !worker.checking() {
@@ -1186,7 +1186,7 @@ mod tests {
             assert!(worker.check());
             wait_idle(&mut worker);
             assert!(worker.download());
-            let deadline = Instant::now() + Duration::from_secs(10);
+            let deadline = Instant::now() + Duration::from_secs(60);
             while !matches!(
                 worker.status(),
                 CheckStatus::Downloading {
