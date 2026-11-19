@@ -136,7 +136,7 @@ recording settings and applies only to this take, like shipping; the open
 lists take the pointer and arrow keys, Enter and Esc. Keyboard focus through
 the bar's controls and UI Automation are not ported. Confirming hands the capture flow
 to the shared recording worker, which verifies FFmpeg, prepares the session,
-then shows the "RECORDING IN" countdown (Esc cancels the take) and starts.
+then shows the "RECORDING STARTS IN" countdown (Esc cancels the take) and starts.
 The controls (`hud.rs`, shipping `.recording-hud` at 430×102) float centered
 20 px above the bottom of the display: a topmost, non-activating window,
 excluded from captures with `WDA_EXCLUDEFROMCAPTURE` unless Preferences

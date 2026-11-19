@@ -36,7 +36,7 @@ pub struct Countdown {
     reduced: bool,
     scrim: Animation,
     content: Animation,
-    /// "RECORDING IN" rather than "SCREENSHOT IN".
+    /// "RECORDING STARTS IN" rather than "SCREENSHOT IN".
     recording: bool,
 }
 
@@ -149,7 +149,7 @@ impl Countdown {
         );
         let size = (self.px.0 as f32 / self.scale, self.px.1 as f32 / self.scale);
         let heading = if self.recording {
-            "RECORDING IN"
+            "RECORDING STARTS IN"
         } else {
             "SCREENSHOT IN"
         };

@@ -1,7 +1,7 @@
 //! A live recording: New Capture's Record hands its flow, display and target
 //! here. The shared `captures_recording_platform` worker owns the session and
 //! media off the UI thread; this module runs the recording countdown
-//! (`.recording-countdown`, "RECORDING IN"), then the floating controls
+//! (`.recording-countdown`, "RECORDING STARTS IN"), then the floating controls
 //! (`hud`) at the bottom of the display, and publishes the take to History
 //! with a mini preview, like the GTK host's `recording_controls`.
 //!
