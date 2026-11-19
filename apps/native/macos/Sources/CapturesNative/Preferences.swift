@@ -661,7 +661,6 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     private var statusKind = "idle"
     private var statusGeneration = 0
     private var historyButton: CaptureButton?
-    private var retryButton: CaptureButton?
     private var findBar: Surface?
     private var findField: NSTextField?
     private var findQuery = ""
@@ -672,6 +671,9 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     private var matchIndex = 0
     private var latestRevision = 0
     private var saveFailed = false
+    /// The settings last read from or written to disk. Like Tauri a18afc62,
+    /// a refused save rolls the page back to these.
+    private var storedSettings: [String: Any] = [:]
     private var rebuilding = false
     private var shortcutRecorders: [String: ShortcutRecorderButton] = [:]
     private var shortcutErrors: [String: NSTextField] = [:]
@@ -750,6 +752,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
                 if let initialAppearance { self.settings["appearance"] = initialAppearance }
                 if let initialTheme { self.settings["theme"] = initialTheme }
                 self.appearanceChanged(self.settings.string("appearance", "system"), self.settings.string("theme", "mustard"), value["custom_theme"] as? [String: Any] ?? [:])
+                self.storedSettings = self.settings
                 self.settingsChanged(self.settings)
                 self.settingsPersisted(self.settings)
                 self.restyle()
@@ -836,8 +839,6 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         status.font = .systemFont(ofSize: tokens.number("text-xs"), weight: .medium)
         status.lineBreakMode = .byTruncatingTail
         statusPill.addSubview(status); root.addSubview(statusPill)
-        retryButton = actionButton("Retry", x: 0, y: 20, width: 64, parent: root) { [weak self] in self?.retrySave() }
-        retryButton?.autoresizingMask = [.minXMargin]; retryButton?.isHidden = true
         headerRule = Surface(frame: NSRect(x: width, y: Self.headerHeight, width: root.bounds.width - width, height: 1))
         headerRule.autoresizingMask = [.width]
         headerRule.wantsLayer = true; headerRule.layer?.backgroundColor = tokens.color("border-subtle").cgColor
@@ -857,27 +858,23 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         installKeyViewLoop()
     }
 
-    /// Shipping DOM order: the section nav, the header's History button (and
-    /// the native Retry), the find bar, then each card's controls in order.
+    /// Shipping DOM order: the section nav, the header's History button, the
+    /// find bar, then each card's controls in order.
     /// The first section starts keyboard focus.
     private func installKeyViewLoop() {
         var order: [NSView] = sections.compactMap { navButtons[$0.0] as NSView? }
-        order += ([historyButton, retryButton, findBar] as [NSView?]).compactMap { $0 }
+        order += ([historyButton, findBar] as [NSView?]).compactMap { $0 }
         order.append(scroll)
         KeyViewLoop.install(order, window: root.window, initial: order.first)
     }
 
     /// Shipping `.preferences-header-actions`: History, then the save status
-    /// (and the native Retry after a failed save) at the trailing edge.
+    /// at the trailing edge.
     private func layoutHeaderActions() {
         let gap = tokens.number("s-4")
         let copyWidth = ceil(max(headerTitle.intrinsicContentSize.width,
             headerSubtitle.intrinsicContentSize.width))
         var x = root.bounds.width - tokens.number("s-8")
-        if let retryButton, !retryButton.isHidden {
-            retryButton.frame.origin.x = x - retryButton.frame.width
-            x = retryButton.frame.minX - gap
-        }
         if !statusPill.isHidden {
             // Bound the whole capsule, reserving History and the header copy.
             let available = x - (historyButton?.frame.width ?? 0) - gap
@@ -2033,13 +2030,20 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
             guard let self, revision == self.latestRevision else { return }
             switch result {
             case .success(let saved):
-                self.settings = saved; self.settingsChanged(saved)
+                self.settings = saved; self.storedSettings = saved; self.settingsChanged(saved)
                 self.settingsPersisted(saved)
                 self.setStatus(PreferencesPolicy.text("saved"), kind: "saved")
             case .failure(let error):
                 self.saveFailed = true
                 self.setStatus(PreferencesPolicy.template("save_error_template", error: error.localizedDescription),
                     kind: "error")
+                // Keep the stored settings, not the refused value that every
+                // later save would resend; the rebuilt cards show them.
+                self.settings = self.storedSettings
+                self.settingsChanged(self.storedSettings)
+                self.appearanceChanged(self.settings.string("appearance", "system"),
+                    self.settings.string("theme", "mustard"), self.settings["custom_theme"] as? [String: Any] ?? [:])
+                self.restyle()
             }
         }
         if rerender {
@@ -2065,7 +2069,6 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         statusPill.layer?.borderWidth = border == nil ? 0 : 1
         statusPill.layer?.borderColor = tokens.color(border ?? fill).cgColor
         status.textColor = tokens.color(color)
-        retryButton?.isHidden = statusKind != "error" || !saveFailed
         layoutHeaderActions()
         // Shipping `.preferences-save-status`: ui-pop-in over --dur-2 when it appears.
         if appearing, root.window?.isVisible == true {
@@ -2080,7 +2083,6 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         }
     }
 
-    func retrySave() { if saveFailed { changed(rerender: false) } }
     func flush() {
         if let field = root.window?.firstResponder as? NSTextView,
            let editor = field.delegate as? NSTextField {
