@@ -38,6 +38,7 @@ x11rb = { version = "0.13", optional = true }
 # wlr-layer-shell stack placement (wlroots, KDE): needs the gtk4-layer-shell
 # C library (`build_layer_shell.sh`); used only where the compositor offers it.
 gtk4-layer-shell = { version = "0.5", optional = true }
+pangocairo = "0.20"
 
 [features]
 default = ["x11"]

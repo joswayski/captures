@@ -2354,6 +2354,12 @@ popover.captures-menu button.choice-option.active {
   color: var(--text);
   background: var(--surface-selected);
 }
+/* `.screenshot-text-style-menu button`: 38 px rows with 6 px padding
+   (GTK's min-height excludes padding and border). */
+popover.captures-menu button.choice-option.text-style-option {
+  min-height: 24px;
+  padding: var(--s-3) var(--s-4);
+}
 .captures .text-style-preview,
 popover.captures-menu .text-style-preview {
   padding: 0 var(--s-2);
@@ -2375,14 +2381,15 @@ popover.captures-menu .text-style-preview.style-mono-box {
   font-size: 15px;
   font-weight: var(--weight-semibold);
 }
+/* `-webkit-text-stroke: 1.2px var(--text)`, stroked in code
+   (`.text-style-outline`) because GTK CSS has no text stroke. */
 .captures .text-style-preview.style-outlined,
 popover.captures-menu .text-style-preview.style-outlined {
   color: transparent;
-  text-shadow:
-    -1px 0 var(--text),
-    1px 0 var(--text),
-    0 -1px var(--text),
-    0 1px var(--text);
+}
+.captures .text-style-outline,
+popover.captures-menu .text-style-outline {
+  color: var(--text);
 }
 .captures .text-style-preview.style-box,
 .captures .text-style-preview.style-mono-box,

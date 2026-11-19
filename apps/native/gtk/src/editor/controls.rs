@@ -340,15 +340,59 @@ pub(crate) struct Choice {
     changed: Rc<dyn Fn(String)>,
 }
 
-pub(crate) fn style_preview(preset: &str) -> gtk::Label {
+/// The "Text" sample for a preset: the overlay to append, and its label
+/// for restyling. GTK CSS cannot stroke glyphs (`-webkit-text-stroke`), and it
+/// drops the shadows of transparent text, so Outlined strokes the label's
+/// own layout over it in `.text-style-outline`'s color.
+pub(crate) fn style_preview(preset: &str) -> (gtk::Overlay, gtk::Label) {
     let sample = gtk::Label::new(Some("Text"));
     sample.add_css_class("text-style-preview");
     sample.add_css_class(&format!("style-{preset}"));
     sample.set_width_chars(1);
     sample.set_size_request(72, 24);
-    sample.set_valign(gtk::Align::Center);
     sample.set_accessible_role(gtk::AccessibleRole::Presentation);
-    sample
+    let outline = gtk::DrawingArea::new();
+    outline.add_css_class("text-style-outline");
+    outline.set_can_target(false);
+    outline.set_accessible_role(gtk::AccessibleRole::Presentation);
+    let label = sample.downgrade();
+    outline.set_draw_func(move |area, cr, _, _| {
+        let Some(label) = label.upgrade() else { return };
+        if !label.has_css_class("style-outlined") {
+            return;
+        }
+        let (x, y) = label.layout_offsets();
+        #[allow(deprecated)]
+        let color = area.style_context().color();
+        cr.move_to(f64::from(x), f64::from(y));
+        pangocairo::functions::layout_path(cr, &label.layout());
+        cr.set_source_rgba(
+            f64::from(color.red()),
+            f64::from(color.green()),
+            f64::from(color.blue()),
+            f64::from(color.alpha()),
+        );
+        cr.set_line_width(1.2);
+        let _ = cr.stroke();
+    });
+    let overlay = gtk::Overlay::new();
+    overlay.set_child(Some(&sample));
+    overlay.add_overlay(&outline);
+    overlay.set_valign(gtk::Align::Center);
+    (overlay, sample)
+}
+
+/// Restyle a `style_preview` sample for another preset.
+fn restyle_preview(sample: &gtk::Label, preset: &str) {
+    for class in sample.css_classes() {
+        if class.starts_with("style-") {
+            sample.remove_css_class(&class);
+        }
+    }
+    sample.add_css_class(&format!("style-{preset}"));
+    if let Some(outline) = sample.parent().and_then(|overlay| overlay.last_child()) {
+        outline.queue_draw();
+    }
 }
 
 impl Choice {
@@ -371,8 +415,8 @@ impl Choice {
         trigger.set_accessible_role(gtk::AccessibleRole::ComboBox);
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         let preview = preview.then(|| {
-            let sample = style_preview("standard");
-            row.append(&sample);
+            let (root, sample) = style_preview("standard");
+            row.append(&root);
             sample
         });
         let caption = gtk::Label::new(None);
@@ -464,12 +508,7 @@ impl Choice {
         self.caption
             .set_label(self.caption_override.borrow().as_deref().unwrap_or(&label));
         if let Some(sample) = &self.preview {
-            for class in sample.css_classes() {
-                if class.starts_with("style-") {
-                    sample.remove_css_class(&class);
-                }
-            }
-            sample.add_css_class(&format!("style-{value}"));
+            restyle_preview(sample, value);
         }
         let name = format!("{}: {label}", self.name.borrow());
         self.trigger
@@ -508,7 +547,8 @@ impl Choice {
             option.set_accessible_role(gtk::AccessibleRole::MenuItemRadio);
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
             if self.preview.is_some() {
-                row.append(&style_preview(id));
+                option.add_css_class("text-style-option");
+                row.append(&style_preview(id).0);
             }
             let caption = gtk::Label::new(Some(label));
             caption.set_xalign(0.);
