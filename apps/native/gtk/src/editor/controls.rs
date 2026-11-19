@@ -252,6 +252,8 @@ impl NumberField {
     pub(crate) fn new(name: &str, range: (f64, f64), changed: impl Fn(f64) + 'static) -> Self {
         let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         root.add_css_class("number-input");
+        // `overflow: hidden` keeps the stepper column inside the radius.
+        root.set_overflow(gtk::Overflow::Hidden);
         let spin = gtk::SpinButton::with_range(range.0, range.1, 1.);
         spin.set_digits(0);
         spin.set_numeric(true);

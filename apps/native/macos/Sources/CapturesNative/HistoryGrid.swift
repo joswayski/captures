@@ -269,9 +269,12 @@ final class HistoryButton: NSButton {
             fill = tokens.color("theme-signal-deep"); border = nil; text = tokens.color("theme-signal-ink")
         case (.ghost, false): fill = nil; border = nil; text = tokens.color("text-muted")
         case (.ghost, true): fill = tokens.color("surface-hover"); border = nil; text = tokens.color("text")
-        // Shipping's quiet `.history-delete`: transparent `--text-subtle`, danger on hover.
-        case (.overlay, false): fill = nil; border = nil; text = tokens.color("text-subtle")
-        case (.overlay, true): fill = tokens.color("danger-surface"); border = nil; text = tokens.color("danger-text")
+        // Shipping's `.history-image-wrap > .history-delete`: a raised chip that
+        // reads over any thumbnail, signal red on hover.
+        case (.overlay, false):
+            fill = tokens.color("surface-raised").withAlphaComponent(0.88)
+            border = tokens.color("border-subtle"); text = tokens.color("text")
+        case (.overlay, true): fill = tokens.color("theme-signal"); border = nil; text = .white
         }
         let alpha: CGFloat = isEnabled ? 1 : 0.45
         let radius = tokens.number("r-md")

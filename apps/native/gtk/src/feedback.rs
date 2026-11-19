@@ -90,9 +90,12 @@ pub fn build(
     {
         let term = label(name, "feedback-meta-term");
         term.set_size_request(112, -1);
+        // A wrapped value keeps its term on the first line.
+        term.set_valign(gtk::Align::Start);
         let value = label(copy::LOADING, "feedback-meta-value");
         value.set_wrap(true);
-        value.set_wrap_mode(gtk::pango::WrapMode::Char);
+        // `overflow-wrap: anywhere`: break between words first.
+        value.set_wrap_mode(gtk::pango::WrapMode::WordChar);
         value.set_hexpand(true);
         value.update_relation(&[gtk::accessible::Relation::LabelledBy(&[term.upcast_ref()])]);
         rows.attach(&term, 0, row as i32, 1, 1);

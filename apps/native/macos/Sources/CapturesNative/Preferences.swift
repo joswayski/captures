@@ -1451,7 +1451,13 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         addLabel(folder.title, frame: NSRect(x: inset, y: y, width: contentWidth, height: 17),
             size: tokens.number("text-md"), weight: .medium, parent: card)
         let fieldY = y + 17 + tokens.number("s-4")
-        let directory = NSTextField(string: settings.string("output_directory"))
+        let directory = NSTextField(frame: .zero)
+        // Shipping's field padding with the path vertically centred, not
+        // pinned to the top edge of the 32 pt field.
+        let directoryCell = TokenNumberFieldCell(textCell: settings.string("output_directory"))
+        directoryCell.isEditable = true; directoryCell.isScrollable = true
+        directoryCell.leadingInset = tokens.number("s-5"); directoryCell.trailingInset = tokens.number("s-5")
+        directory.cell = directoryCell
         directory.frame = NSRect(x: inset, y: fieldY, width: contentWidth - chooseWidth - tokens.number("s-4"),
             height: tokens.number("h-md"))
         directory.identifier = NSUserInterfaceItemIdentifier("setting.output_directory")

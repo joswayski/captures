@@ -20,7 +20,7 @@ pub const SECTIONS: [Section; 8] = [
         id: "general",
         title: "General",
         description: if crate::preview_channel::version().is_some() {
-            "Startup and app behavior."
+            "Keep Captures ready when you need it."
         } else {
             "Startup and app behavior for this native development profile."
         },
