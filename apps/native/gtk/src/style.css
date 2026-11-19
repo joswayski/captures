@@ -1496,6 +1496,13 @@ popover.captures-menu .choice-description {
 .captures .editor-hint.warning {
   color: var(--caution-text);
 }
+/* `.screenshot-make-copy`: 12 px to its rule, then 4 px plus the actions'
+   6 px gap to Save (the bar's 12 px spacing less 2). */
+.captures .editor-make-copy {
+  margin-right: -2px;
+  padding-right: var(--s-5);
+  border-right: 1px solid var(--border-subtle);
+}
 .captures .editor-switch-label {
   color: var(--text-muted);
   font-size: var(--text-xs);

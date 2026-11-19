@@ -1164,7 +1164,9 @@ window per artifact) or `--scene editor --artifact ID`. It has the shipping
 header (draft banner, canvas size, undo/redo, Fit and zoom), the tool rail
 with the Shapes flyout, the canvas, the Layers list (select, show/hide,
 locked background) and the export save row (filename, folder, Copy image,
-notice and hint, Save as new file, Save). Select/move, crop, the five closed
+notice and hint, Save as new file ruled off from Save by shipping's 1 px
+divider and hidden when the format or a missing source forces a new file,
+Save). Select/move, crop, the five closed
 shapes, line, arrow and freehand work through the shared `EditorSession` on a
 worker thread, with the shared `editor_export` plan and `timestamp_stem` name.
 The canvas is retained: the composited image is uploaded as one texture only

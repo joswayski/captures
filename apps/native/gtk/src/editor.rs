@@ -788,8 +788,11 @@ pub fn build(
     status.append(&notice);
     status.append(&hint);
     bar.append(&status);
-    let as_new = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    // `.screenshot-make-copy`: a 36 px row ruled off from Save on its right.
+    let as_new = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    as_new.add_css_class("editor-make-copy");
     as_new.set_valign(gtk::Align::Center);
+    as_new.set_size_request(-1, 36);
     let save_as_new = TokenSwitch::new(tokens.clone(), false);
     save_as_new.update_property(&[gtk::accessible::Property::Label("Save as new file")]);
     as_new.append(&save_as_new);
@@ -2250,7 +2253,11 @@ impl State {
         if w.save_as_new.is_on() != view.saving_copy {
             w.save_as_new.activate_toggle_quietly(view.saving_copy);
         }
-        w.save_as_new.set_sensitive(!view.format_requires_copy);
+        // Shipping drops the toggle (and its rule) when the format forces a
+        // new file instead of showing it disabled.
+        if let Some(row) = w.save_as_new.parent() {
+            row.set_visible(!view.format_requires_copy);
+        }
     }
 
     fn set_options(&self, options: ExportOptions) {
