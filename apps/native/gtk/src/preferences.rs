@@ -428,41 +428,13 @@ pub fn build(
         })
     };
     *prefs.jump.borrow_mut() = Some(jump.clone());
-    for (index, section) in SECTIONS.iter().enumerate() {
-        let button = gtk::Button::with_label(section.title);
-        button.add_css_class("nav-item");
-        if let Some(child) = button.child().and_downcast::<gtk::Label>() {
-            child.set_xalign(0.);
-        }
-        if index == 0 {
-            button.add_css_class("active");
-        }
-        button.update_property(&[gtk::accessible::Property::Label(section.title)]);
-        let jump = jump.clone();
-        button.connect_clicked(move |_| {
-            jump(section.id);
-        });
-        list.append(&button);
-    }
-    // The section whose card sits under the probe line is the active entry.
-    let follow = {
-        let (list, scroller, cards) = (list.clone(), scroller.clone(), cards.clone());
-        move || {
-            let content = content(&scroller);
-            let adjustment = scroller.vadjustment();
-            // Cards in shipping order, as (section index, top).
-            let shown: Vec<(usize, f32)> = SECTIONS
-                .iter()
-                .enumerate()
-                .filter_map(|(index, section)| {
-                    let (_, card) = cards.iter().find(|(id, _)| *id == section.id)?;
-                    Some((index, card.compute_bounds(&content)?.y()))
-                })
-                .collect();
-            let tops: Vec<f32> = shown.iter().map(|(_, top)| *top).collect();
-            let probe = adjustment.value() as f32 + margin + 1.;
-            let at_end = adjustment.value() + adjustment.page_size() >= adjustment.upper() - 1.;
-            let active = shown[preferences::visible_section(&tops, probe, at_end)].0;
+    // Tauri a18afc62: a section chosen from the sidebar stays highlighted
+    // through the scroll it starts, and until the user scrolls or presses a
+    // key, since the last sections cannot reach the top.
+    let pinned = Rc::new(Cell::new(false));
+    let highlight = {
+        let list = list.clone();
+        move |active: usize| {
             let mut child = list.first_child();
             let mut index = 0;
             while let Some(widget) = child {
@@ -476,6 +448,81 @@ pub fn build(
             }
         }
     };
+    for (index, section) in SECTIONS.iter().enumerate() {
+        let button = gtk::Button::with_label(section.title);
+        button.add_css_class("nav-item");
+        if let Some(child) = button.child().and_downcast::<gtk::Label>() {
+            child.set_xalign(0.);
+        }
+        if index == 0 {
+            button.add_css_class("active");
+        }
+        button.update_property(&[gtk::accessible::Property::Label(section.title)]);
+        let (jump, pinned, highlight) = (jump.clone(), pinned.clone(), highlight.clone());
+        button.connect_clicked(move |_| {
+            pinned.set(true);
+            highlight(index);
+            jump(section.id);
+        });
+        list.append(&button);
+    }
+    // The section whose card has passed the reading line is the active entry.
+    let follow = {
+        let (scroller, cards, pinned) = (scroller.clone(), cards.clone(), pinned.clone());
+        move || {
+            if pinned.get() {
+                return;
+            }
+            let content = content(&scroller);
+            let adjustment = scroller.vadjustment();
+            // Cards in shipping order, as (section index, top).
+            let shown: Vec<(usize, f32)> = SECTIONS
+                .iter()
+                .enumerate()
+                .filter_map(|(index, section)| {
+                    let (_, card) = cards.iter().find(|(id, _)| *id == section.id)?;
+                    Some((index, card.compute_bounds(&content)?.y()))
+                })
+                .collect();
+            let tops: Vec<f32> = shown.iter().map(|(_, top)| *top).collect();
+            let page = adjustment.page_size() as f32;
+            let line = preferences::reading_line(
+                adjustment.value() as f32,
+                (adjustment.upper() - adjustment.page_size()) as f32,
+                page,
+            );
+            highlight(shown[preferences::visible_section(&tops, line, false)].0);
+        }
+    };
+    // Shipping unpins on pointerdown in the page, wheel, touch and keys.
+    let unpin = |pinned: &Rc<Cell<bool>>| {
+        let pinned = pinned.clone();
+        move || pinned.set(false)
+    };
+    let press = gtk::GestureClick::new();
+    press.set_button(0);
+    press.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let f = unpin(&pinned);
+    press.connect_pressed(move |_, _, _, _| f());
+    scroller.add_controller(press);
+    let wheel = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::BOTH_AXES);
+    wheel.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let f = unpin(&pinned);
+    wheel.connect_scroll_begin(move |_| f());
+    let f = unpin(&pinned);
+    wheel.connect_scroll(move |_, _, _| {
+        f();
+        glib::Propagation::Proceed
+    });
+    scroller.add_controller(wheel);
+    let keys = gtk::EventControllerKey::new();
+    keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let f = unpin(&pinned);
+    keys.connect_key_pressed(move |_, _, _, _| {
+        f();
+        glib::Propagation::Proceed
+    });
+    window.add_controller(keys);
     scroller
         .vadjustment()
         .connect_value_changed(move |_| follow());

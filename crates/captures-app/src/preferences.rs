@@ -94,6 +94,19 @@ pub fn visible_section(card_tops: &[f32], probe: f32, at_end: bool) -> usize {
         .unwrap_or_default()
 }
 
+/// Tauri a18afc62's reading line, in content coordinates: it moves from the
+/// top of the view to its bottom as the page scrolls, so every card gets a
+/// turn, including the last ones that cannot reach the top. Pass it to
+/// [`visible_section`] with `at_end: false`.
+pub fn reading_line(scroll: f32, max_scroll: f32, page: f32) -> f32 {
+    let progress = if max_scroll > 0. {
+        (scroll / max_scroll).clamp(0., 1.)
+    } else {
+        0.
+    };
+    scroll + page * progress
+}
+
 /// A title/description pair for one setting row.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Row {
@@ -636,6 +649,21 @@ pub fn find_count_label(query: &str, count: usize, index: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reading_line_reaches_cards_that_cannot_scroll_to_the_top() {
+        // Cards at 0, 400, 800, 900 in a 1000 px page over 500 px of view.
+        let tops = [0., 400., 800., 900.];
+        let line = |scroll| reading_line(scroll, 500., 500.);
+        assert_eq!(visible_section(&tops, line(0.), false), 0);
+        // Halfway: line at 250 + 250 = 500 passes the second card only.
+        assert_eq!(visible_section(&tops, line(250.), false), 1);
+        // Near the end the third card gets its turn before the last.
+        assert_eq!(visible_section(&tops, line(400.), false), 2);
+        assert_eq!(visible_section(&tops, line(500.), false), 3);
+        // A page that fits without scrolling reads from its top.
+        assert_eq!(reading_line(0., 0., 500.), 0.);
+    }
 
     #[test]
     fn sections_rows_and_options_match_shipping() {
