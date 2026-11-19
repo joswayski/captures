@@ -2087,7 +2087,12 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         destination.frame = NSRect(x: folderLeft, y: y + 1,
                                    width: max(0, changeButton.frame.minX - gap - folderLeft),
                                    height: 14)
-        let folderWidth = min(destination.frame.width, destination.intrinsicContentSize.width)
+        // Shipping `.recording-destination output`: the whole path up to 190px,
+        // middle-truncated past that. Measured from the string, because a
+        // truncating label's intrinsic width follows its last (squeezed) frame.
+        let pathWidth = ceil((destination.stringValue as NSString).size(withAttributes: [
+            .font: destination.font as Any]).width) + 4
+        let folderWidth = min(destination.frame.width, 190, pathWidth)
         destination.frame = NSRect(x: destination.frame.maxX - folderWidth, y: y + 1,
                                    width: folderWidth, height: 14)
         savingToLabel.frame = NSRect(x: destination.frame.minX - 52, y: y + 1, width: 48, height: 14)

@@ -1636,6 +1636,12 @@ final class RecordingEditorTests: XCTestCase {
             XCTAssertTrue(fps.superview!.bounds.contains(maximumWidth.frame))
             XCTAssertLessThanOrEqual(destination.frame.maxX + 4, change.frame.minX,
                                      "the save folder never runs under Change…")
+            // `.recording-destination output` shows up to 190px of the path.
+            XCTAssertGreaterThanOrEqual(destination.frame.width,
+                min(150, ceil((destination.stringValue as NSString).size(withAttributes: [
+                    .font: destination.font as Any]).width)),
+                "the save folder is not squeezed to a few characters")
+            XCTAssertLessThanOrEqual(destination.frame.width, 190)
             // GIFs replace the audio rows with the shipping note.
             let gifNote = try XCTUnwrap(descendants(in: controller.root)
                 .compactMap { $0 as? NSTextField }
