@@ -105,11 +105,16 @@ final class ScreenshotCountdownContent: NSView {
         heading.font = .systemFont(ofSize: labelSize, weight: .medium)
         number.font = .monospacedDigitSystemFont(ofSize: numberSize, weight: .bold)
         hint.font = .systemFont(ofSize: tokens.number("text-md"))
-        let height = labelSize * 1.4 + numberSize * 1.2 + tokens.number("s-7") + tokens.number("text-md") * 1.5
+        // Shipping `.countdown-number`: line-height 0.95 with 0.04em / 0.06em
+        // margins, so its slot is 1.05em; the field's taller line box is
+        // centred on that slot instead of pushing the hint down.
+        let slot = numberSize * 1.05, line = numberSize * 1.2
+        let height = labelSize * 1.4 + slot + tokens.number("s-7") + tokens.number("text-md") * 1.5
         let top = (bounds.height - height) / 2
         heading.frame = NSRect(x: 0, y: top, width: bounds.width, height: labelSize * 1.4)
-        number.frame = NSRect(x: 0, y: heading.frame.maxY, width: bounds.width, height: numberSize * 1.2)
-        hint.frame = NSRect(x: 0, y: number.frame.maxY + tokens.number("s-7"), width: bounds.width, height: tokens.number("text-md") * 1.5)
+        number.frame = NSRect(x: 0, y: heading.frame.maxY + (slot - line) / 2, width: bounds.width, height: line)
+        hint.frame = NSRect(x: 0, y: heading.frame.maxY + slot + tokens.number("s-7"),
+                            width: bounds.width, height: tokens.number("text-md") * 1.5)
     }
 }
 

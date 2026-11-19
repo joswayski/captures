@@ -261,19 +261,23 @@ final class CaptureButton: NSButton {
                 .faded(isEnabled ? 1 : 0.4).setFill()
             path.fill()
         } else {
-            let fill = !isEnabled ? (glass ? "glass" : "surface-sunken")
+            // Shipping disables the primary with `opacity: 0.4`, keeping the accent.
+            let fadedPrimary = primary && !isEnabled
+            let fill = fadedPrimary ? "theme-accent" : !isEnabled ? (glass ? "glass" : "surface-sunken")
                 : signal ? "theme-signal-surface"
                 : primary ? "theme-accent"
                 : cell?.isHighlighted == true ? (glass ? "glass-active" : "surface-active")
                 : selected ? (glass ? "glass-active" : "surface-selected") : (glass ? "glass-raised" : "control")
-            tokens.color(fill).setFill()
+            tokens.color(fill).faded(fadedPrimary ? 0.4 : 1).setFill()
             path.fill()
+            if !fadedPrimary {
             tokens.color(signal && isEnabled ? "theme-signal"
                 : primary && isEnabled ? "theme-accent"
                 : selected && isEnabled ? "theme-accent"
                 : (glass ? "glass-border" : "control-border")).setStroke()
             path.lineWidth = 1
             path.stroke()
+            }
         }
         let font = NSFont.systemFont(ofSize: textSize ?? tokens.number("text-md"),
                                      weight: textWeight ?? (solid || primary ? .semibold : .medium)) // Shipping primaries are semibold.
@@ -283,6 +287,9 @@ final class CaptureButton: NSButton {
             ? (signal ? "theme-signal"
                 : primary ? "theme-accent-ink" : glass ? "glass-text" : "text")
             : (glass ? "glass-text-subtle" : "text-faint"))
+        if primary && !isEnabled && !solid {
+            foreground = tokens.color("theme-accent-ink").faded(0.4)
+        }
         if hudControl {
             foreground = tokens.color(!isEnabled ? "glass-text-subtle"
                 : signal && !hovered && cell?.isHighlighted != true ? "theme-signal"
@@ -412,18 +419,14 @@ final class CaptureButton: NSButton {
             tokens.color("theme-signal").setFill()
             NSBezierPath(ovalIn: dot).fill()
         case .record:
-            NSBezierPath(ovalIn: rect.insetBy(dx: 3, dy: 3)).fill()
+            // Shipping `.capture-record-dot`: always `--theme-signal`, 9 pt in a segment.
+            let side: CGFloat = slidingSegment ? 9 : 10
+            tokens.color("theme-signal").faded(isEnabled ? 1 : 0.4).setFill()
+            NSBezierPath(ovalIn: NSRect(x: rect.midX - side / 2, y: rect.midY - side / 2,
+                                        width: side, height: side)).fill()
         case .capture:
-            let path = NSBezierPath(); path.lineWidth = 1.5
-            let length: CGFloat = 5
-            for (origin, dx, dy) in [(NSPoint(x: rect.minX, y: rect.minY), length, length),
-                                     (NSPoint(x: rect.maxX, y: rect.minY), -length, length),
-                                     (NSPoint(x: rect.minX, y: rect.maxY), length, -length),
-                                     (NSPoint(x: rect.maxX, y: rect.maxY), -length, -length)] {
-                path.move(to: NSPoint(x: origin.x + dx, y: origin.y))
-                path.line(to: origin); path.line(to: NSPoint(x: origin.x, y: origin.y + dy))
-            }
-            path.stroke()
+            // Shipping `CaptureIcon`: rounded corner brackets and a filled spark.
+            ShippingIcons.stroke("capture", in: rect, width: iconStrokeWidth)
         case .window:
             let path = NSBezierPath(roundedRect: rect.insetBy(dx: 1, dy: 2), xRadius: 2, yRadius: 2)
             path.lineWidth = 1.4; path.stroke()

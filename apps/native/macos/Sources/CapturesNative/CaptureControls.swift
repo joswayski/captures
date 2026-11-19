@@ -767,6 +767,11 @@ final class CaptureControlsView: NSView {
     /// Shipping `.capture-segmented-indicator`s for the mode and target switches.
     let modeIndicator = NSView()
     let targetIndicator = NSView()
+    /// The switches' sunken tracks.
+    let modeTrack = NSView()
+    let targetTrack = NSView()
+    /// Whether the narrow bar has room for the "Aspect" label.
+    private var aspectLabelFits = true
     private var captureEnabled = false
     private(set) var menuState: CaptureMenuPolicy.Menu?
     var switchTarget: (UnifiedCaptureTarget) -> Void = { _ in }
@@ -831,63 +836,91 @@ final class CaptureControlsView: NSView {
 
         let narrow = frame.width < 820
         let close = control("Close", x: 8, width: 32) { [weak self] in self?.cancel() }
+        close.frame = NSRect(x: 8, y: 14, width: 32, height: 32)
         close.icon = .shipping("close"); close.iconOnly = true; close.iconSide = 15
         close.setAccessibilityLabel("Close capture controls")
+        // Shipping `.capture-action-switch` / `.recording-target-switch`: a
+        // 36 pt track (1 pt border, 3 pt padding) of 28 pt segments sized to
+        // their 12 px label, 15 px icon, `--s-3` gap and `--s-5` padding.
+        // The narrow bar keeps everything on one row with `--s-3` padding.
+        let segmentFont = NSFont.systemFont(ofSize: tokens.number("text-sm"), weight: .medium)
+        let segmentPadding = tokens.number(narrow ? "s-3" : "s-5")
+        func segmentWidth(_ title: String) -> CGFloat {
+            ceil((title as NSString).size(withAttributes: [.font: segmentFont]).width)
+                + 15 + tokens.number("s-3") + 2 * segmentPadding
+        }
+        func segment(_ button: CaptureButton, x: CGFloat) {
+            button.frame = NSRect(x: x, y: 14, width: segmentWidth(button.title), height: 28)
+            button.textSize = tokens.number("text-sm"); button.iconSide = 15
+        }
+        let modeTrackX: CGFloat = 48
         let screenshot = screenshotButton
-        screenshot.frame = NSRect(x: 48, y: 12, width: narrow ? 88 : 92, height: 36)
+        segment(screenshot, x: modeTrackX + 4)
         addSubview(screenshot)
         screenshot.icon = .capture
         screenshot.actionBlock = { [weak self] in self?.selectMode(.screenshot, notify: true) }
         screenshot.setAccessibilityRole(.radioButton); screenshot.setAccessibilityLabel("Screenshot")
         screenshot.enterActionBlock = { [weak self] in self?.confirm() }
-        let recordX = screenshot.frame.maxX + 4
         let record = recordButton
-        record.frame = NSRect(x: recordX, y: 12, width: narrow ? 64 : 76, height: 36)
+        segment(record, x: screenshot.frame.maxX)
         addSubview(record)
         record.icon = .record
         record.actionBlock = { [weak self] in self?.selectMode(.record, notify: true) }
         record.setAccessibilityRole(.radioButton); record.setAccessibilityLabel("Record video")
+        modeTrack.frame = NSRect(x: modeTrackX, y: 10, width: record.frame.maxX + 4 - modeTrackX, height: 36)
 
-        let dividerX = record.frame.maxX + 8
-        let divider = NSView(frame: NSRect(x: dividerX, y: 18, width: 1, height: 24))
+        let dividerX = modeTrack.frame.maxX + 8
+        let divider = NSView(frame: NSRect(x: dividerX, y: 16, width: 1, height: 24))
         divider.wantsLayer = true; divider.layer?.backgroundColor = tokens.color("glass-border").cgColor
         addSubview(divider)
 
-        var x = dividerX + 9
+        let targetTrackX = dividerX + 9
+        var x = targetTrackX + 4
         for mode in UnifiedCaptureTarget.allCases {
-            let width: CGFloat
-            if narrow {
-                width = mode == .region ? 62 : mode == .window ? 68 : 94
-            } else {
-                width = mode == .display ? 106 : 78
-            }
-            let button = control(mode.title, x: x, width: width) { [weak self] in
+            let button = control(mode.title, x: x, width: 0) { [weak self] in
                 self?.selectTarget(mode, notify: true)
             }
+            segment(button, x: x)
             button.setAccessibilityRole(.radioButton)
             button.setAccessibilityLabel(mode.title)
             // Shipping `CaptureTargetIcon` (15 px), from the shared icon set.
-            button.icon = .shipping(mode.iconName); button.iconSide = 15
+            button.icon = .shipping(mode.iconName)
             button.enterActionBlock = { [weak self] in self?.confirm() }
             targetButtons[mode] = button
-            x += width + 4
+            x = button.frame.maxX
+        }
+        targetTrack.frame = NSRect(x: targetTrackX, y: 10, width: x + 4 - targetTrackX, height: 36)
+        for track in [modeTrack, targetTrack] {
+            track.wantsLayer = true
+            track.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.32).cgColor
+            track.layer?.cornerRadius = tokens.number("r-lg")
+            track.setAccessibilityElement(false)
+            addSubview(track, positioned: .below, relativeTo: nil)
         }
 
-        let pickerX = x + 4
-        let pickerWidth = frame.width - 122 - 8 - pickerX
-        aspectLabel.frame = NSRect(x: pickerX, y: 21, width: 42, height: 18)
+        // Shipping `.recording-region-aspect-picker`: an `--s-3`-spaced 11 px
+        // label and a content-sized select, 150 pt together.
+        let pickerX = targetTrack.frame.maxX + 8
+        let pickerRight = frame.width - 122 - 8
         aspectLabel.font = .systemFont(ofSize: tokens.number("text-xs"), weight: .medium)
         aspectLabel.textColor = tokens.color("glass-text-subtle")
+        let labelSize = aspectLabel.intrinsicContentSize
+        let selectWidth = min(150 - ceil(labelSize.width) - tokens.number("s-3"), pickerRight - pickerX)
+        let labelFits = pickerRight - pickerX >= ceil(labelSize.width) + tokens.number("s-3") + 76
+        aspectLabel.frame = NSRect(x: pickerX, y: 10 + (36 - labelSize.height) / 2,
+                                   width: ceil(labelSize.width), height: labelSize.height)
+        aspectLabelFits = labelFits
         addSubview(aspectLabel)
-        aspectMenu.frame = NSRect(x: pickerX + 44, y: 12,
-            width: pickerWidth - 44, height: 36)
+        let selectX = labelFits ? aspectLabel.frame.maxX + tokens.number("s-3") : pickerX
+        aspectMenu.frame = NSRect(x: selectX, y: 10,
+            width: labelFits ? selectWidth : max(60, pickerRight - pickerX), height: 36)
         aspectMenu.tokens = tokens
         aspectMenu.addItems(withTitles: RegionSelection.presets.map { $0.0 })
         aspectMenu.setAccessibilityLabel("Region aspect ratio")
         aspectMenu.bindChange { [weak self] index in self?.changeAspect(index) }
         addSubview(aspectMenu)
 
-        displayMenu.frame = NSRect(x: pickerX, y: 12, width: pickerWidth, height: 36)
+        displayMenu.frame = NSRect(x: pickerX, y: 10, width: min(220, pickerRight - pickerX), height: 36)
         displayMenu.tokens = tokens; displayMenu.addItems(withTitles: displayTitles)
         displayMenu.selectItem(at: selectedDisplay)
         displayMenu.setAccessibilityLabel("Display")
@@ -909,11 +942,16 @@ final class CaptureControlsView: NSView {
             (modeIndicator, screenshot), (targetIndicator, targetButtons[.region]),
         ]
         for (indicator, below) in indicators {
+            // Shipping `.on-media .capture-segmented-indicator`: raised glass,
+            // `--shadow-sm` and an inset `--glass-border` ring at `--r-sm`.
             indicator.wantsLayer = true
-            indicator.layer?.backgroundColor = tokens.color("glass-active").cgColor
-            indicator.layer?.borderColor = tokens.color("theme-accent").cgColor
+            indicator.layer?.backgroundColor = tokens.color("glass-raised").cgColor
+            indicator.layer?.borderColor = tokens.color("glass-border").cgColor
             indicator.layer?.borderWidth = 1
-            indicator.layer?.cornerRadius = tokens.number("r-md")
+            indicator.layer?.cornerRadius = tokens.number("r-sm")
+            indicator.layer?.shadowColor = NSColor.black.cgColor
+            indicator.layer?.shadowOpacity = 0.32; indicator.layer?.shadowRadius = 3
+            indicator.layer?.shadowOffset = NSSize(width: 0, height: -2)
             indicator.setAccessibilityElement(false)
             addSubview(indicator, positioned: .below, relativeTo: below)
         }
@@ -1228,7 +1266,7 @@ final class CaptureControlsView: NSView {
     /// placement and offscreen or Reduce Motion changes jump; otherwise it
     /// slides over the shipping `--dur-4` `--ease-standard` transition.
     private func slideIndicator(_ indicator: NSView, to button: NSButton) {
-        let target = button.frame.insetBy(dx: 1, dy: 1)
+        let target = button.frame
         let placed = indicator.frame.width > 0
         let tween = NativeMotion.transition("segmented_indicator", tokens: tokens)
         guard placed, window?.isVisible == true, tween.duration > 0 else {
@@ -1261,7 +1299,7 @@ final class CaptureControlsView: NSView {
             button.needsDisplay = true
         }
         if let button = targetButtons[target] { slideIndicator(targetIndicator, to: button) }
-        aspectLabel.isHidden = target != .region
+        aspectLabel.isHidden = target != .region || !aspectLabelFits
         aspectMenu.isHidden = target != .region
         displayMenu.isHidden = target != .display
         if notify { switchTarget(target) }

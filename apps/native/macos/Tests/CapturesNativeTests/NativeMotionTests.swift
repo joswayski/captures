@@ -184,17 +184,17 @@ final class NativeMotionTests: XCTestCase {
         let record = try XCTUnwrap(buttons.first { $0.title == "Record" })
         let region = try XCTUnwrap(buttons.first { $0.title == "Region" })
         XCTAssertTrue(screenshot.slidingSegment && record.slidingSegment && region.slidingSegment)
-        XCTAssertEqual(view.modeIndicator.frame, screenshot.frame.insetBy(dx: 1, dy: 1))
-        XCTAssertEqual(view.targetIndicator.frame, region.frame.insetBy(dx: 1, dy: 1))
+        XCTAssertEqual(view.modeIndicator.frame, screenshot.frame)
+        XCTAssertEqual(view.targetIndicator.frame, region.frame)
         let indicatorIndex = try XCTUnwrap(view.subviews.firstIndex(of: view.modeIndicator))
         let screenshotIndex = try XCTUnwrap(view.subviews.firstIndex(of: screenshot))
         XCTAssertLessThan(indicatorIndex, screenshotIndex, "the indicator sits under its segments")
         // Offscreen changes jump straight to the new segment.
         view.selectMode(.record, notify: false)
-        XCTAssertEqual(view.modeIndicator.frame, record.frame.insetBy(dx: 1, dy: 1))
+        XCTAssertEqual(view.modeIndicator.frame, record.frame)
         view.selectTarget(.display, notify: false)
         let display = try XCTUnwrap(buttons.first { $0.title == UnifiedCaptureTarget.display.title })
-        XCTAssertEqual(view.targetIndicator.frame, display.frame.insetBy(dx: 1, dy: 1))
+        XCTAssertEqual(view.targetIndicator.frame, display.frame)
     }
 
     func testSavedNoticeEntranceLeavesThePanelGeometryUntouched() throws {

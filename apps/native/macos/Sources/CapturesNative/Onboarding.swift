@@ -695,7 +695,8 @@ final class OnboardingView: NSView {
         // window hides the lede and tightens the stage padding and gap.
         let short = AppWindowLayout.short(height: bounds.height)
         let inset = tokens.number(short ? "s-7" : "s-8")
-        let width = min(620, max(0, bounds.width - 2 * inset))
+        // Shipping `.onboarding-stage { max-width: 620px }` includes its padding.
+        let width = min(620 - 2 * inset, max(0, bounds.width - 2 * inset))
         let x = (bounds.width - width) / 2
         let gap = tokens.number("s-3")
         var items: [(NSView, CGFloat, CGFloat)] = [] // view, height, gap after
