@@ -261,8 +261,8 @@ final class HistoryClearTests: XCTestCase {
         func assertInside(_ width: CGFloat) throws {
             for title in ["Back to Preferences", "All 2", "Screenshots 1", "Video 1", "Delete all"] {
                 let frame = try control(title).frame
-                XCTAssertGreaterThanOrEqual(frame.minX, 28, "\(title) at \(width)")
-                XCTAssertLessThanOrEqual(frame.maxX, width - 28 + 0.5, "\(title) at \(width)")
+                XCTAssertGreaterThanOrEqual(frame.minX, 24, "\(title) at \(width)")
+                XCTAssertLessThanOrEqual(frame.maxX, width - 24 + 0.5, "\(title) at \(width)")
             }
             XCTAssertLessThanOrEqual(grid.visibleCards.map(\.frame.maxX).max() ?? 0, grid.bounds.width + 0.5)
             // Shipping History is only the header, filters and grid: the

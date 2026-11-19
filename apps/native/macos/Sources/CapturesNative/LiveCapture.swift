@@ -925,16 +925,16 @@ final class LiveCaptureController: NSObject {
     /// Stack the toolbar, error, recovery section and grid from the current root size.
     private func layoutHistory() {
         guard let historyScroll, let grid else { return }
-        let width = root.bounds.width - 56
+        let width = root.bounds.width - 48
         let showToolbar = historyLoaded && !artifacts.isEmpty
-        var x: CGFloat = 28
+        var x: CGFloat = 24
         for (_, pill) in historyFilterButtons {
             pill.isHidden = !showToolbar
             pill.frame = NSRect(x: x, y: contentTop, width: pill.preferredWidth, height: tokens.number("h-sm"))
             x += pill.preferredWidth + tokens.number("s-2")
         }
         toolbarDivider.isHidden = !showToolbar
-        toolbarDivider.frame = NSRect(x: 28, y: contentTop + tokens.number("h-sm") + tokens.number("s-5"),
+        toolbarDivider.frame = NSRect(x: 24, y: contentTop + tokens.number("h-sm") + tokens.number("s-5"),
                                       width: width, height: 1)
         var y: CGFloat = showToolbar ? toolbarDivider.frame.maxY + tokens.number("s-6") : contentTop
         statusBackground.isHidden = !statusAlert
@@ -943,15 +943,15 @@ final class LiveCaptureController: NSObject {
             let insetX = tokens.number("s-5"), insetY = tokens.number("s-4")
             let textWidth = max(0, width - 2 * insetX)
             let height = textHeight(status.stringValue, font: font, width: textWidth)
-            statusBackground.frame = NSRect(x: 28, y: y, width: width, height: height + 2 * insetY)
-            status.frame = NSRect(x: 28 + insetX, y: y + insetY, width: textWidth, height: height)
+            statusBackground.frame = NSRect(x: 24, y: y, width: width, height: height + 2 * insetY)
+            status.frame = NSRect(x: 24 + insetX, y: y + insetY, width: textWidth, height: height)
             y = statusBackground.frame.maxY + tokens.number("s-6")
         }
         if !recoveryPanel.isHidden {
-            recoveryPanel.frame.origin = NSPoint(x: 28, y: y)
+            recoveryPanel.frame.origin = NSPoint(x: 24, y: y)
             y = recoveryPanel.frame.maxY + tokens.number("s-6")
         }
-        historyScroll.frame = NSRect(x: 28, y: y, width: width, height: max(0, root.bounds.height - y - 16))
+        historyScroll.frame = NSRect(x: 24, y: y, width: width, height: max(0, root.bounds.height - y - 16))
         grid.compact = AppWindowLayout.compact(width: root.bounds.width)
         grid.tile(force: true)
         emptyState.frame = historyScroll.frame
@@ -976,7 +976,8 @@ final class LiveCaptureController: NSObject {
         deleteAllCancelButton.isEnabled = !clearingHistory
         let font = NSFont.systemFont(ofSize: tokens.number("text-sm"), weight: .medium)
         func width(_ text: String) -> CGFloat { ceil((text as NSString).size(withAttributes: [.font: font]).width) }
-        let height = tokens.number("h-md"), left: CGFloat = 28, right = root.bounds.width - 28
+        // `.capture-history` pads `--s-8` (24 pt) on each side.
+        let height = tokens.number("h-md"), left: CGFloat = 24, right = root.bounds.width - 24
         let compact = AppWindowLayout.compact(width: root.bounds.width)
         let deleteWidth = width(deleteAllButton.title) + 15 + tokens.number("s-3") + 2 * tokens.number("s-5")
         let cancelWidth = width(copy.cancel) + 2 * tokens.number("s-5")
@@ -1010,15 +1011,18 @@ final class LiveCaptureController: NSObject {
                 headerBottom = y + height
             }
         } else {
-            deleteAllButton.frame = NSRect(x: right - deleteWidth, y: ledeTop - 10, width: deleteWidth, height: height)
+            deleteAllButton.frame = NSRect(x: right - deleteWidth, y: ledeTop, width: deleteWidth, height: height)
             deleteAllCancelButton.frame = NSRect(x: deleteAllButton.frame.minX - gap - cancelWidth,
-                                                 y: ledeTop - 10, width: cancelWidth, height: height)
+                                                 y: ledeTop, width: cancelWidth, height: height)
             let actionsLeft = deleteAllButton.isHidden ? right + 12
                 : deleteAllCancelButton.isHidden ? deleteAllButton.frame.minX : deleteAllCancelButton.frame.minX
             let ledeWidth = max(0, min(ledeCap, actionsLeft - 12 - left))
             let ledeHeight = ledeLabel.map { max(20, textHeight(copy.lede, font: $0.font!, width: ledeWidth)) } ?? 20
             ledeLabel?.frame = NSRect(x: left, y: ledeTop, width: ledeWidth, height: ledeHeight)
-            headerBottom = max(ledeTop + ledeHeight, deleteAllButton.isHidden ? 0 : ledeTop - 10 + height)
+            // Shipping `.history-heading` aligns the actions with the lede's last line.
+            let actionsTop = ledeTop + max(0, ledeHeight - height)
+            deleteAllButton.frame.origin.y = actionsTop; deleteAllCancelButton.frame.origin.y = actionsTop
+            headerBottom = max(ledeTop + ledeHeight, deleteAllButton.isHidden ? 0 : actionsTop + height)
         }
 
         let gridTop = headerBottom + tokens.number("s-6")

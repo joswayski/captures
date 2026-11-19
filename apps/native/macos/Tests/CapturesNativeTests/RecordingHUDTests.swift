@@ -269,10 +269,12 @@ final class RecordingHUDTests: XCTestCase {
         let padding = tokens.number("s-5")
         XCTAssertEqual(notice.tile.frame, NSRect(x: padding, y: 20, width: 34, height: 34))
         XCTAssertEqual(notice.tile.glyph, "capture")
-        XCTAssertEqual(notice.titleLabel.frame.minX, notice.tile.frame.maxX + padding)
+        // The title's frame sits 2 pt left so its NSTextField inset puts the
+        // drawn title on the same edge as the directly drawn copy.
+        XCTAssertEqual(notice.titleLabel.frame.minX + 2, notice.tile.frame.maxX + padding)
         let first = try XCTUnwrap(notice.bodyItems.first)
         XCTAssertEqual(first.text, copy.beforeKeys)
-        XCTAssertEqual(first.frame.minX, notice.titleLabel.frame.minX, "copy is left-aligned")
+        XCTAssertEqual(first.frame.minX, notice.titleLabel.frame.minX + 2, "copy is left-aligned")
         XCTAssertEqual(notice.bodyItems.filter(\.chip).map(\.text), copy.keys)
         XCTAssertEqual(notice.bodyItems.last?.text, copy.afterKeys)
         for item in notice.bodyItems {

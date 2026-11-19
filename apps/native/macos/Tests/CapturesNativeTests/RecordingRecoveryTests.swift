@@ -115,7 +115,7 @@ final class RecordingRecoveryTests: XCTestCase {
             let lede = try XCTUnwrap(root.subviews.compactMap { $0 as? NSTextField }
                 .first { $0.stringValue.contains("appear here for 30 days") })
             XCTAssertEqual(panel.frame.minY, lede.frame.maxY + tokens.number("s-6"), accuracy: 0.5)
-            XCTAssertEqual(panel.frame.minX, 28)
+            XCTAssertEqual(panel.frame.minX, 24, "`.capture-history` pads --s-8")
             XCTAssertEqual(panel.frame.size, NSSize(width: 944, height: 176))
             XCTAssertTrue(root.bounds.contains(panel.frame))
             let row = try XCTUnwrap(panel.subviews.compactMap { $0 as? NSScrollView }.first?.documentView)

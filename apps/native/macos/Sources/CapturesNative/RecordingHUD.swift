@@ -752,7 +752,8 @@ final class RecordingControlsHiddenNoticeView: NSView {
         }
         let bodyHeight = CGFloat(rows.count) * lineHeight + CGFloat(rows.count - 1) * gap
         let top = floor((bounds.height - titleHeight - 3 - bodyHeight) / 2)
-        titleLabel.frame = NSRect(x: left, y: top, width: width, height: titleHeight)
+        // An NSTextField draws 2 pt in from its frame; the body is drawn directly.
+        titleLabel.frame = NSRect(x: left - 2, y: top, width: width + 2, height: titleHeight)
         var items: [BodyItem] = []
         var y = top + titleHeight + 3
         for row in rows {
