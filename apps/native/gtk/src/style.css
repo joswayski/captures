@@ -1637,9 +1637,6 @@ popover.captures-menu .choice-description {
   color: var(--text);
   font-weight: var(--weight-semibold);
 }
-.captures .timeline-selected {
-  color: var(--text-subtle);
-}
 .captures .timeline-track {
   border: 1px solid var(--border);
   border-radius: var(--r-md);

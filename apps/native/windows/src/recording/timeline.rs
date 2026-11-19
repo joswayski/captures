@@ -242,14 +242,6 @@ impl Recording {
         let summary = ui::trim_summary(self.timeline.start, self.timeline.end, duration);
         let line = Rect::new(t.n("s-6"), t.n("s-5"), r.w - 2. * t.n("s-6"), 20.);
         self.draw_text(dc, Style::Strong, &summary.range, line, "text", false)?;
-        self.draw_text(
-            dc,
-            Style::Option,
-            &summary.selected,
-            line,
-            "text-subtle",
-            true,
-        )?;
         let track = self.timeline_track();
         let (x, y) = (track.x - r.x, track.y - r.y);
         let bounds = gfx::rect(x, y, x + track.w, y + track.h);

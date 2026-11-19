@@ -38,6 +38,13 @@ pub fn paths(name: &str) -> Option<&'static [&'static str]> {
             "M12 3a3 3 0 0 1 3 3v5a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3Z",
             "M6 11a6 6 0 0 0 11.4 2.6M12 18v3M9 21h6",
         ],
+        // Native preview playback speaker (Tauri previews through `<video>`).
+        "volume" => &[
+            "M11 5 6 9H3v6h3l5 4Z",
+            "M15.5 8.5a5 5 0 0 1 0 7",
+            "M18.5 5.5a9.2 9.2 0 0 1 0 13",
+        ],
+        "volume-muted" => &["M11 5 6 9H3v6h3l5 4Z", "m16 9 6 6M22 9l-6 6"],
         "microphone-muted" => &[
             "M12 3a3 3 0 0 1 3 3v5a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3Z",
             "M6 11a6 6 0 0 0 11.4 2.6M12 18v3M9 21h6",
@@ -661,6 +668,8 @@ mod tests {
             "target-display",
             "microphone",
             "microphone-muted",
+            "volume",
+            "volume-muted",
             "trash",
             "hide-controls",
             "close",

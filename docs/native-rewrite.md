@@ -3033,7 +3033,7 @@ accepting an unchanged layer count. Physical-platform and IME gates stay open.
 | --- | --- | --- |
 | Shared core | Settings/migrations, history/artifact lifecycle, capture coordination, recording engines/runtime, screenshot draft storage and document geometry/undo | Remaining editor actions and host bindings; installed-data migration/rollback |
 | Capture and History | Region/window/display screenshots, countdown/cancel, seven configurable launch shortcuts, copy/save, shipping History header/card grid/empty and error states, counted media filters, History Restore to a floating preview with per-card errors, the capture menu's Capturing/Starting/Switching states and inline start/switch errors, two-step delete and delete all, missing-recording cards, original-recording export/reveal | Full input/coordinate/permission acceptance; large histories and editor reopen/restore |
-| Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices and HUD microphone meter; both hosts provide frame scrubbing, retained full-source thumbnail timelines, graphical/numeric trim, graphical/numeric crop, display-only Fit/100%, preset/custom output size, track volume/mute/mono, selectable GIF cadence, quality-mapped palettes and maximum width, Play/Pause with accepted-mix Sound on by default (like the shipping `<video>`), opt-in Loop preview pill, and MP4/GIF save-new-copy | Device-change parity and physical recording/audio acceptance |
+| Recording workflow | Pause/resume/restart/mute/stop/discard, Hide/Show, passive region guide, screenshots during recording, ready/saved notices and HUD microphone meter; both hosts provide frame scrubbing, retained full-source thumbnail timelines, graphical/numeric trim, graphical/numeric crop, display-only Fit/100%, preset/custom output size, track volume/mute/mono, selectable GIF cadence, quality-mapped palettes and maximum width, Play/Pause with accepted-mix sound on by default (like the shipping `<video>`) and an AppKit speaker mute, opt-in Loop preview pill, and MP4/GIF save-new-copy | Device-change parity and physical recording/audio acceptance |
 | Supporting UI | First-run setup, appearance/preferences, resident tray/menu bar, live-profile single-instance forwarding/relaunch, opt-in development Open With packages and login items, retained preview stacks with collapsed drag and sway and a staggered hover fan, 3D pile tilt, Gaussian depth/hover/streak blurs and box shadows, editor presence, hover blur, stale-pointer suppression, glass tooltips, and shipping exit, flight and micro-motion, explicit optional feedback, permission recovery on a denied capture, OS reduced-motion change notifications (wgpu on Windows/Linux) | Remaining Preferences parity, remaining preview effects (backdrop blur), physical setup/login, permission revocation and installed Open With acceptance, crash reporting |
 | Editors | Shared draft storage, geometry/undo, image/annotation rendering, hit-testing and encoding; both hosts connect layers, canvas selection/move/rotation/resize, move/resize snapping, curve and endpoint grips, Fit/100%/zoom steps/wheel and magnify zoom/pan/Recenter, canvas fill/transparency/trim, import, image transforms, annotation styles, Rectangle/Ellipse/Triangle/Diamond/Star/Line/Arrow/Pen/Wand/Erase/Restore with live brush pixels, Text with bundled fonts (all four families offered on every draft, pinned on first use; missing glyphs fall back to other bundled faces, then installed fonts) and shared new-text drop shadow, the shipping Erase/Restore brush ring, Trim edges hover preview, Wand loupe, the shipping header/rail and export bar (copy, overwrite Save, save-new-copy) | Remaining text parity (shipping's OS font stacks versus bundled faces, IME), Tauri inspector design parity; remaining recording-editor parity |
 | Release readiness | Native build/test/fixture jobs on macOS, Windows and Linux; real-media private-X11 exercises; unsigned development package staging | Physical acceptance, accessibility/IME, Wayland live capture, release packaging/signing/updater, performance/energy and rollback gates |
@@ -4696,8 +4696,8 @@ shows shipping's "—", the comparison is hidden, and Save shows shipping's erro
 ("media processing failed: WebM export is not available in the bundled media
 tools", `recording_editor_ui::WEBM_EXPORT_ERROR`) without encoding.
 Deliberate native differences remain: the edited preview decodes after a short
-settle delay rather than on a live `<video>`, and AppKit keeps a Position slider
-where wgpu has a Position (ms) field with Seek.
+settle delay rather than on a live `<video>`, and wgpu keeps a Position (ms) field
+with Seek. AppKit, like shipping, seeks only from the timeline track.
 Physical audio playback acceptance remains open.
 One worker serializes media operations; failed seek/edit preserves the accepted
 frame, and values that have not applied yet gate scrubbing/export. Failed edits keep
@@ -4789,8 +4789,9 @@ and retry states; failure leaves the rest of editing available, while accepted w
 keeps the existing close/quit gate. Seeking and applying edits do not regenerate the
 strip or turn thumbnail clicks into a new seek gesture. AppKit also provides
 Play/Pause of the accepted trim and spatial edits, with accepted-mix Sound on by
-default like the shipping unmuted `<video>`; the Sound and ↻ Loop preview pills can turn
-them off or on. A transient Loop control can
+default like the shipping unmuted `<video>`; a speaker icon mutes or unmutes preview
+playback (restarting the stream at the same frame while playing) and the ↻ Loop preview
+pill turns looping on or off. A transient Loop control can
 repeat nonempty trims without changing accepted edits, exports or dirty identity. It
 passes a shared Rust Loop flag to the gapless `playback_open_v3` stream, so laps keep
 their decoders pre-rolled and one audio device; no Swift toolchain verified this slice.

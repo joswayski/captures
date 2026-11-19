@@ -377,7 +377,6 @@ struct Widgets {
     fit: gtk::Button,
     actual: gtk::Button,
     range: gtk::Label,
-    selected: gtk::Label,
     track: SnapshotArea,
     track_overlay: gtk::Overlay,
     handles: [gtk::Scale; 2],
@@ -590,9 +589,7 @@ pub fn build(app: &gtk::Application, tokens: Rc<Tokens>, options: Options) -> Re
     summary.add_css_class("timeline-summary");
     let range = label("", "timeline-range");
     range.set_hexpand(true);
-    let selected = label("", "timeline-selected");
     summary.append(&range);
-    summary.append(&selected);
     timeline.append(&summary);
     let track_overlay = gtk::Overlay::new();
     let track = SnapshotArea::new(|_, _, _| {});
@@ -852,7 +849,6 @@ pub fn build(app: &gtk::Application, tokens: Rc<Tokens>, options: Options) -> Re
             fit,
             actual,
             range,
-            selected,
             track,
             track_overlay,
             handles,
@@ -1837,7 +1833,6 @@ impl State {
         let duration = self.duration();
         let summary = ui::trim_summary(start as u64, end as u64, duration);
         self.w.range.set_label(&summary.range);
-        self.w.selected.set_label(&summary.selected);
         for (handle, value) in self.w.handles.iter().zip([start, end]) {
             let adjustment = handle.adjustment();
             adjustment.set_upper(duration as f64);

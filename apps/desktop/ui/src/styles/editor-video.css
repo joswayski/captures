@@ -357,10 +357,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-.timeline-summary span {
-  color: var(--text-subtle);
-}
-
 .timeline-track {
   --timeline-inset: var(--s-2);
   position: relative;

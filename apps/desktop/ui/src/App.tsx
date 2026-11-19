@@ -5022,7 +5022,6 @@ export function RecordingEditor() {
   }
 
   const duration = Math.max(1, artifact.duration_ms);
-  const trimmedDuration = Math.max(1, trimEnd - trimStart);
   const originalOutputDimensions = editorOutputDimensions(
     cropEnabled ? crop.width : artifact.width,
     cropEnabled ? crop.height : artifact.height,
@@ -5554,7 +5553,6 @@ export function RecordingEditor() {
           <strong>
             {formatEditorTime(trimStart, duration)} – {formatEditorTime(trimEnd, duration)}
           </strong>
-          <span>{formatEditorTime(trimmedDuration, duration)} selected</span>
         </div>
         <div
           ref={timelineRef}

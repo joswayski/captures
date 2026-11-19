@@ -83,8 +83,6 @@ pub fn format_editor_time(milliseconds: u64, duration_ms: u64) -> String {
 pub struct TrimSummary {
     /// `0:00.000 – 0:03.000`
     pub range: String,
-    /// `0:03.000 selected`
-    pub selected: String,
 }
 
 /// The timeline card's `.timeline-summary` row.
@@ -95,10 +93,6 @@ pub fn trim_summary(start_ms: u64, end_ms: u64, duration_ms: u64) -> TrimSummary
             "{} – {}",
             format_editor_time(start_ms, duration),
             format_editor_time(end_ms, duration)
-        ),
-        selected: format!(
-            "{} selected",
-            format_editor_time(end_ms.saturating_sub(start_ms).max(1), duration)
         ),
     }
 }
@@ -621,8 +615,6 @@ mod tests {
         assert_eq!(format_editor_time(61_234, 60_000), "1:01");
         let summary = trim_summary(250, 2_750, 3_000);
         assert_eq!(summary.range, "0:00.250 – 0:02.750");
-        assert_eq!(summary.selected, "0:02.500 selected");
-        assert_eq!(trim_summary(5, 5, 0).selected, "0:00.001 selected");
         assert_eq!(dropped_frames_warning(0), None);
         assert_eq!(
             dropped_frames_warning(1).as_deref(),

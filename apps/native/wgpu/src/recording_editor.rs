@@ -4020,7 +4020,6 @@ fn show_timeline_card(
             ui.horizontal(|ui| {
                 ui.label(text(tokens, summary.range, "text-sm", "text").strong());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(text(tokens, summary.selected, "text-sm", "text-subtle"));
                     if let Some(error) = view.thumbnail_error.clone() {
                         let retry = ui
                             .add_enabled(

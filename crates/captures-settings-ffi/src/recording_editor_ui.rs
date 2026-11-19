@@ -238,7 +238,7 @@ mod tests {
         let summary =
             call(json!({"operation":"trim_summary","start_ms":0,"end_ms":3000,"duration_ms":3000}));
         assert_eq!(summary["result"]["range"], "0:00.000 – 0:03.000");
-        assert_eq!(summary["result"]["selected"], "0:03.000 selected");
+        assert!(summary["result"].get("selected").is_none());
         let estimate = call(json!({"operation":"estimate","estimate_bytes":7,
             "estimate_exact":true,"original_bytes":8}));
         assert_eq!(estimate["result"]["label"], "7 B");

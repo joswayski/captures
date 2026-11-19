@@ -1052,11 +1052,10 @@ enum RecordingEditorCopy {
             as? String ?? "\(milliseconds) ms"
     }
 
-    static func trimSummary(start: UInt64, end: UInt64, duration: UInt64)
-        -> (range: String, selected: String) {
+    static func trimSummary(start: UInt64, end: UInt64, duration: UInt64) -> String {
         let value = request(["operation": "trim_summary", "start_ms": start, "end_ms": end,
                              "duration_ms": duration])
-        return (value?["range"] as? String ?? "", value?["selected"] as? String ?? "")
+        return value?["range"] as? String ?? ""
     }
 
     static func fileSize(_ bytes: UInt64) -> String {
