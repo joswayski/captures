@@ -197,6 +197,16 @@ impl View {
         let mut discard = false;
         let confirming = self.confirmation.clone();
         let mut recover = None;
+        // Opt-in smoke geometry, one line per frame, like History's card actions.
+        let mut probe = std::env::var_os("CAPTURES_NATIVE_LAYOUT_PROBE").map(|_| Vec::new());
+        let mut probed = |action: &str, session: Option<&str>, response: &egui::Response| {
+            if let Some(probe) = &mut probe {
+                let rect = response.rect;
+                probe.push(serde_json::json!({"action": action, "session": session,
+                    "enabled": response.enabled(),
+                    "rect": [rect.min.x, rect.min.y, rect.max.x, rect.max.y]}));
+            }
+        };
         // Shipping `.recording-recovery-section`: a raised card in Capture History.
         let copy = captures_app::history_view::copy();
         let height = (ui.available_height() * 0.5).min(240.);
@@ -214,9 +224,9 @@ impl View {
                     .size(tokens.number("text-lg"))
                     .strong(),
             );
-            refresh = ui
-                .add_enabled(enabled && idle, egui::Button::new("Refresh").small())
-                .clicked();
+            let response = ui.add_enabled(enabled && idle, egui::Button::new("Refresh").small());
+            probed("Refresh", None, &response);
+            refresh = response.clicked();
         });
         ui.label(
             egui::RichText::new(copy.recovery_help)
@@ -234,10 +244,11 @@ impl View {
                     Some(RecoveryProgress::Publishing) => "Adding recording to History…",
                     _ => "Checking playable segments…",
                 });
-                if ui.add_enabled(!cancel.is_cancelled() && !matches!(self.stage, Some(RecoveryProgress::Publishing)),
+                let response = ui.add_enabled(!cancel.is_cancelled() && !matches!(self.stage, Some(RecoveryProgress::Publishing)),
                     egui::Button::new(if cancel.is_cancelled() { "Cancelling…" } else { "Cancel recovery" }))
-                    .on_hover_text("Cancellation stops preparation; it cannot undo a recording already published to History.").clicked()
-                {
+                    .on_hover_text("Cancellation stops preparation; it cannot undo a recording already published to History.");
+                probed("Cancel recovery", None, &response);
+                if response.clicked() {
                     cancel.cancel();
                 }
             }
@@ -299,14 +310,18 @@ impl View {
                                         .fill(tokens.color("danger-surface"))
                                         .stroke(egui::Stroke::NONE);
                                 }
-                                if ui.add_enabled(available, button).clicked() {
+                                let response = ui.add_enabled(available, button);
+                                probed(label, Some(&draft.session_id), &response);
+                                if response.clicked() {
                                     if armed {
                                         discard = true;
                                     } else {
                                         confirm = target.clone();
                                     }
                                 }
-                                if ui.add_enabled(available, egui::Button::new("Recover")).clicked() {
+                                let response = ui.add_enabled(available, egui::Button::new("Recover"));
+                                probed("Recover", Some(&draft.session_id), &response);
+                                if response.clicked() {
                                     recover = target.clone();
                                 }
                             });
@@ -316,6 +331,12 @@ impl View {
             }
         });
             });
+        if let Some(probe) = probe {
+            println!(
+                "{}",
+                serde_json::json!({"event": "recovery-layout", "detail": {"controls": probe}})
+            );
+        }
         if let Some(target) = confirm {
             self.confirmation = Some(target);
         }
