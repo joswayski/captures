@@ -247,6 +247,17 @@ pub(crate) fn recording_hidden(hidden: bool) {
     });
 }
 
+/// The desktop's description of the New Capture trigger once the
+/// GlobalShortcuts portal has bound it; `None` before then or off the portal.
+pub(crate) fn portal_new_capture_trigger() -> Option<String> {
+    SHORTCUTS.with(|cell| match cell.borrow().as_ref()?.portal_status()? {
+        captures_app::shortcuts::PortalShortcutStatus::Bound { mut triggers, .. } => {
+            triggers.remove(CaptureShortcut::NewCapture.id())
+        }
+        _ => None,
+    })
+}
+
 /// Run queued shortcut presses on the main loop.
 fn drain_shortcuts() {
     let Some(host) = HOST.with(|resident| resident.borrow().upgrade()) else {

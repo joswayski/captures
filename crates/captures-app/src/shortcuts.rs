@@ -562,6 +562,9 @@ enum Backend {
     Portal(portal::Worker),
 }
 
+/// The trigger text a portal shortcut gets when the desktop omits its own.
+pub const PORTAL_TRIGGER_FALLBACK: &str = "Assigned by desktop";
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PortalShortcutStatus {
     Pending,

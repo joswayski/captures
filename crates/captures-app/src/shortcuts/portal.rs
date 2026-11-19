@@ -502,7 +502,7 @@ fn bound_shortcuts(
         if fields.next().is_some() || triggers.contains_key(id) {
             return Err(error("duplicate or invalid shortcut tuple"));
         }
-        let mut trigger = "Assigned by desktop".to_owned();
+        let mut trigger = super::PORTAL_TRIGGER_FALLBACK.to_owned();
         while let Some(name) = properties.next() {
             let item = properties
                 .next()

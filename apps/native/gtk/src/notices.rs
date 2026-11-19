@@ -62,11 +62,10 @@ fn window(
 /// It borrows the notice frame, but not the tray-corner placement or focus.
 pub fn recording_hidden(
     app: &gtk::Application,
-    shortcut: &str,
+    copy: captures_app::recording_hud::HiddenNoticeCopy,
     hud_window: &gtk::ApplicationWindow,
 ) -> gtk::ApplicationWindow {
     use captures_app::recording_hud as hud;
-    let copy = hud::hidden_notice_copy(shortcut, captures_app::shortcuts::ShortcutPlatform::Linux);
     let card = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(12)

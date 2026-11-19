@@ -63,6 +63,24 @@ impl HiddenNoticeCopy {
         words.push(self.after_keys.to_owned());
         words.join(" ")
     }
+
+    /// Wayland's GlobalShortcuts portal decides the real New Capture trigger,
+    /// so name the desktop's own description instead of the saved keys, or
+    /// only the tray while the portal has not described one.
+    pub fn with_desktop_trigger(mut self, trigger: Option<&str>) -> Self {
+        match trigger.map(str::trim).filter(|trigger| {
+            !trigger.is_empty() && *trigger != crate::shortcuts::PORTAL_TRIGGER_FALLBACK
+        }) {
+            Some(trigger) => self.keys = vec![trigger.to_owned()],
+            None => {
+                self.keys.clear();
+                if let Some(tray) = self.before_keys.strip_suffix(", or press") {
+                    self.before_keys = tray.to_owned();
+                }
+            }
+        }
+        self
+    }
 }
 
 /// The notice copy for the saved New Capture shortcut (the default when it is
@@ -479,6 +497,26 @@ mod tests {
             !blank.keys.is_empty(),
             "a blank shortcut falls back to the default"
         );
+    }
+
+    #[test]
+    fn hidden_notice_names_the_portal_trigger_or_only_the_tray() {
+        use crate::shortcuts::ShortcutPlatform;
+        let saved = || hidden_notice_copy("CommandOrControl+Shift+Space", ShortcutPlatform::Linux);
+        let bound = saved().with_desktop_trigger(Some(" Super+Alt+C "));
+        assert_eq!(bound.keys, ["Super+Alt+C"]);
+        assert_eq!(
+            bound.detail(),
+            "Open Captures from the tray, or press Super+Alt+C to bring them back."
+        );
+        for unknown in [None, Some(""), Some("Assigned by desktop")] {
+            let copy = saved().with_desktop_trigger(unknown);
+            assert!(copy.keys.is_empty(), "{unknown:?}");
+            assert_eq!(
+                copy.detail(),
+                "Open Captures from the tray to bring them back."
+            );
+        }
     }
 
     fn input(state: RecordingState) -> Input {

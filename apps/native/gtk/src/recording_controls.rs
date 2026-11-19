@@ -1142,11 +1142,14 @@ impl Controls {
         let Some(host) = self.host.upgrade() else {
             return;
         };
-        let window = crate::notices::recording_hidden(
-            &host.app,
+        let mut copy = captures_app::recording_hud::hidden_notice_copy(
             &self.settings.new_capture_shortcut,
-            &self.window,
+            captures_app::shortcuts::ShortcutPlatform::Linux,
         );
+        if crate::capture::wayland(&host) {
+            copy = copy.with_desktop_trigger(crate::live::portal_new_capture_trigger().as_deref());
+        }
+        let window = crate::notices::recording_hidden(&host.app, copy, &self.window);
         window.set_visible(true);
         *self.notice.borrow_mut() = Some(window);
     }
