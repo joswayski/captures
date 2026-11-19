@@ -563,7 +563,10 @@ def update_restart_launch(binary, output, env, spawn, wait, windows, run):
     assert secondary.returncode == 0, secondary.stderr
     assert marker.read_bytes() == contents, "secondary consumed primary intent"
     assert ready.read_bytes() == b"", "secondary acknowledged readiness"
-    preferences = windows(primary.pid, "^Captures Preferences$")[0]
+    # The forwarded launch reactivates the primary's Preferences, which can
+    # briefly remap it on a slower host; wait rather than sample once.
+    preferences = wait(lambda: windows(primary.pid, "^Captures Preferences$"),
+                       "primary Preferences after the forwarded launch")[0]
     run("xdotool", "windowactivate", "--sync", preferences, "windowfocus", "--sync", preferences,
         "sleep", ".4", "key", "ctrl+q")
     assert primary.wait(timeout=20) == 0

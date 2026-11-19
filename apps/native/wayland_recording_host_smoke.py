@@ -312,7 +312,9 @@ def run_appearance(binary, pointer, root, appearance, env, portal_mode, interrup
             assert len(videos) == 1 and videos[0]["codec_name"] == "h264", probe
             assert (int(videos[0]["width"]), int(videos[0]["height"])) == expected_size, probe
             duration = float(probe["format"]["duration"])
-            assert 1.0 <= duration <= 6, duration
+            # A 1.5 s take plus HUD polling and stop latency; the cap only
+            # rejects a take that kept running, not a slower self-hosted runner.
+            assert 1.0 <= duration <= 10, duration
             # Corners sit inside the encoded gradient. H.264 4:2:0, quantization
             # and YUV range conversion shift levels by up to about 5, so allow 6:
             # still tight enough to reject a crop that is off by ~30 px or more.
