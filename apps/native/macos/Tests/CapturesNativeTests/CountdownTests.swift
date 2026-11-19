@@ -23,6 +23,11 @@ final class CountdownTests: XCTestCase {
             XCTAssertEqual(view.accessibilityLabel(), "Screenshot in 7. Press Esc to cancel")
             XCTAssertFalse(labels.contains { $0.isAccessibilityElement() })
             XCTAssertEqual(labels[1].textColor, tokens.color("glass-text"))
+            // Shipping letter-spacing: wide heading, tighter numeral.
+            let kern = { (field: NSTextField) in
+                field.attributedStringValue.attribute(.kern, at: 0, effectiveRange: nil) as? CGFloat ?? 0 }
+            XCTAssertGreaterThan(kern(labels[0]), 0)
+            XCTAssertLessThan(kern(labels[1]), 0)
             for label in labels { XCTAssertTrue(view.bounds.contains(label.frame)) }
             XCTAssertLessThanOrEqual(labels[0].frame.maxY, labels[1].frame.minY)
             XCTAssertLessThanOrEqual(labels[1].frame.maxY, labels[2].frame.minY)

@@ -225,7 +225,8 @@ export async function prepare(destination, testDestination) {
         ),
         numbers: Object.fromEntries(
           Object.entries(raw).flatMap(([key, value]) =>
-            /^-?[\d.]+(px|ms)?$/.test(value) ? [[key, parseFloat(value)]] : [],
+            // `em` values (the tracking tokens) stay font-relative multipliers.
+            /^-?[\d.]+(px|ms|em)?$/.test(value) ? [[key, parseFloat(value)]] : [],
           ),
         ),
         easings: Object.fromEntries(

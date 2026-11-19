@@ -50,6 +50,7 @@ final class ScreenshotCountdownContent: NSView {
     func setRemaining(_ value: Int) {
         guard number.stringValue != String(value) else { return }
         number.stringValue = String(value)
+        applyTracking()
         updateAccessibilityLabel()
         if announcing { announce(String(value)) }
     }
@@ -98,6 +99,18 @@ final class ScreenshotCountdownContent: NSView {
         }
     }
 
+    /// Shipping letter-spacing: the heading uses `--tracking-wide` (0.04em)
+    /// and the numeral `--tracking-tighter` (-0.022em).
+    private func applyTracking() {
+        for (field, em) in [(heading, tokens.number("tracking-wide")), (number, tokens.number("tracking-tighter"))] {
+            guard let font = field.font, let color = field.textColor else { continue }
+            let paragraph = NSMutableParagraphStyle(); paragraph.alignment = .center
+            field.attributedStringValue = NSAttributedString(string: field.stringValue, attributes: [
+                .font: font, .foregroundColor: color, .paragraphStyle: paragraph, .kern: font.pointSize * em,
+            ])
+        }
+    }
+
     override func layout() {
         super.layout()
         let labelSize = min(tokens.number("countdown-label-max"), max(tokens.number("countdown-label-min"), bounds.width * 0.016))
@@ -105,6 +118,7 @@ final class ScreenshotCountdownContent: NSView {
         heading.font = .systemFont(ofSize: labelSize, weight: .medium)
         number.font = .monospacedDigitSystemFont(ofSize: numberSize, weight: .bold)
         hint.font = .systemFont(ofSize: tokens.number("text-md"))
+        applyTracking()
         // Shipping `.countdown-number`: line-height 0.95 with 0.04em / 0.06em
         // margins, so its slot is 1.05em. Digits have no descenders, so the
         // field's taller line box can be cut to the slot without clipping.
