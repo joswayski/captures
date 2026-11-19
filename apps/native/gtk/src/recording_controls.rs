@@ -260,17 +260,29 @@ impl Controls {
         let card = gtk::Box::new(gtk::Orientation::Vertical, 2);
         card.add_css_class("recording-hud");
         // A portal window stream never contains the controls.
-        let copy = if target == Some(RecordingTarget::PortalWindow) {
-            PORTAL_WINDOW_NOTE.to_owned()
+        let privacy = gtk::Label::new(None);
+        if target == Some(RecordingTarget::PortalWindow) {
+            privacy.set_text(PORTAL_WINDOW_NOTE);
         } else {
-            captures_app::capture_menu::visibility_note(
+            // Shipping's `.recording-hud-privacy strong`: bold in `--glass-text`.
+            let note = captures_app::capture_menu::visibility_note(
                 captures_app::capture_menu::MenuMode::Recording,
                 false,
                 false,
-            )
-            .text()
-        };
-        let privacy = gtk::Label::new(Some(&copy));
+            );
+            let strong = host.tokens.borrow().rgba("glass-text");
+            privacy.set_markup(&format!(
+                "{}<span weight=\"bold\" foreground=\"#{:02x}{:02x}{:02x}\" fgalpha=\"{}%\">{}</span>{}{}",
+                note.lead,
+                (strong.red() * 255.).round() as u8,
+                (strong.green() * 255.).round() as u8,
+                (strong.blue() * 255.).round() as u8,
+                (strong.alpha() * 100.).round().max(1.) as u8,
+                note.emphasis,
+                note.trail,
+                note.hint.unwrap_or_default()
+            ));
+        }
         privacy.add_css_class("recording-hud-privacy");
         card.append(&privacy);
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 16);
@@ -1171,14 +1183,19 @@ impl Controls {
                     surface.set_skip_taskbar_hint(true);
                     surface.set_skip_pager_hint(true);
                     let (pin, weak) = (placer.clone(), surface.downgrade());
+                    let window = window.downgrade();
                     placer.watch_managed(&surface, move || {
-                        if let Some(surface) = weak.upgrade() {
+                        if let (Some(surface), Some(window)) = (weak.upgrade(), window.upgrade()) {
                             pin.pin(&surface);
+                            // The surface can still be 0×0 when the window
+                            // manager maps it, which put the HUD's corner at
+                            // the bottom centre; the window's size is known.
+                            let (_, size) = window.preferred_size();
                             if let Some((_, area)) = pin.areas(&surface) {
                                 pin.move_to(
                                     &surface,
-                                    area.x + (area.width - f64::from(surface.width())) / 2.,
-                                    area.y + area.height - f64::from(surface.height()) - 24.,
+                                    area.x + (area.width - f64::from(size.width())) / 2.,
+                                    area.y + area.height - f64::from(size.height()) - 24.,
                                 );
                             }
                         }
