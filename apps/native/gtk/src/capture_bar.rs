@@ -169,7 +169,8 @@ impl Bar {
                 .collect(),
         );
         aspect.set("free");
-        aspect.root.set_hexpand(true);
+        // Shipping's select keeps its content width inside the 150 px picker.
+        aspect.root.set_halign(gtk::Align::Start);
         aspect_box.append(&aspect.root);
         top.append(&aspect_box);
 
