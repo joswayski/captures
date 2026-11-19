@@ -175,8 +175,8 @@ final class FeedbackTests: XCTestCase {
             for child in document.subviews where !child.isHidden {
                 XCTAssertTrue(document.bounds.contains(child.frame), "\(child)")
             }
-            // Three equal radio cards in one row; right-aligned footer with the
-            // status to its left.
+            // Shipping's ≤720 px grid: Bug and Idea share a row and Other wraps
+            // below Bug; right-aligned footer with the status to its left.
             let cards = form.categoryButtons.map { $0.convert($0.bounds, to: document) }
             let details = try XCTUnwrap(document.subviews.first { view in
                 view.subviews.contains { ($0 as? NSTextField)?.stringValue == FeedbackCopy.text("meta_title") }
@@ -186,8 +186,9 @@ final class FeedbackTests: XCTestCase {
             })
             XCTAssertGreaterThan(details.frame.minY, intro.frame.maxY)
             XCTAssertLessThan(details.frame.maxY, cards[0].minY, "included details precede Category")
-            XCTAssertEqual(Set(cards.map(\.minY)).count, 1)
-            XCTAssertLessThan(cards[0].maxX, cards[1].minX); XCTAssertLessThan(cards[1].maxX, cards[2].minX)
+            XCTAssertEqual(cards[0].minY, cards[1].minY)
+            XCTAssertLessThan(cards[0].maxX, cards[1].minX)
+            XCTAssertEqual(cards[2].minX, cards[0].minX); XCTAssertGreaterThan(cards[2].minY, cards[0].maxY)
             XCTAssertGreaterThanOrEqual(cards[0].height, 62)
             let send = form.sendButton.frame
             XCTAssertEqual(send.maxX, document.bounds.width - 24, accuracy: 1)

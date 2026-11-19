@@ -241,6 +241,9 @@ final class FeedbackController: NSObject, NSTextViewDelegate, NSTextFieldDelegat
     private let categoryGroup = Surface()
     private let messageLabel = NSTextField(labelWithString: FeedbackCopy.text("message_label"))
     private let messageScroll = NSScrollView()
+    /// Carries the message field's border, radius and fill: an
+    /// `NSScrollView`'s own layer styling does not draw reliably.
+    private let messageBox = Surface()
     private let contactLabel = NSTextField(labelWithString: FeedbackCopy.text("contact_label"))
     private let optionalBadge = NSTextField(labelWithString: FeedbackCopy.text("optional_badge").uppercased())
     private let contactHelp = NSTextField(wrappingLabelWithString: FeedbackCopy.text("contact_help"))
@@ -316,7 +319,9 @@ final class FeedbackController: NSObject, NSTextViewDelegate, NSTextFieldDelegat
         messagePlaceholder.setAccessibilityElement(false)
         message.addSubview(messagePlaceholder)
         messageScroll.documentView = message
-        formCard.addSubview(messageScroll)
+        messageBox.wantsLayer = true
+        messageBox.addSubview(messageScroll)
+        formCard.addSubview(messageBox)
         formCard.addSubview(contactLabel)
         optionalBadge.alignment = .center; optionalBadge.wantsLayer = true
         optionalBadge.setAccessibilityElement(false)
@@ -395,8 +400,9 @@ final class FeedbackController: NSObject, NSTextViewDelegate, NSTextFieldDelegat
         style(intro, size: "text-sm", color: "text-subtle")
         for label in [categoryLabel, messageLabel, contactLabel] { style(label, size: "text-sm", color: "text-muted", weight: .medium) }
         style(optionalBadge, size: "text-2xs", color: "text-subtle", weight: .medium)
+        let centred = NSMutableParagraphStyle(); centred.alignment = .center
         optionalBadge.attributedStringValue = NSAttributedString(string: FeedbackCopy.text("optional_badge").uppercased(), attributes: [
-            .font: NSFont.systemFont(ofSize: tokens.number("text-2xs"), weight: .medium),
+            .font: NSFont.systemFont(ofSize: tokens.number("text-2xs"), weight: .medium), .paragraphStyle: centred,
             .foregroundColor: tokens.color("text-subtle"), .kern: tokens.number("text-2xs") * 0.04,
         ])
         optionalBadge.layer?.backgroundColor = tokens.color("surface-sunken").cgColor
@@ -428,7 +434,7 @@ final class FeedbackController: NSObject, NSTextViewDelegate, NSTextFieldDelegat
         contact.placeholderAttributedString = NSAttributedString(string: FeedbackCopy.text("contact_placeholder"), attributes: [
             .font: NSFont.systemFont(ofSize: tokens.number("text-md")), .foregroundColor: tokens.color("text-faint"),
         ])
-        for field in [messageScroll as NSView, contact] {
+        for field in [messageBox as NSView, contact] {
             field.layer?.cornerRadius = tokens.number("r-md")
             field.layer?.backgroundColor = tokens.color("surface-field").cgColor
             field.layer?.borderWidth = 1
@@ -470,7 +476,8 @@ final class FeedbackController: NSObject, NSTextViewDelegate, NSTextFieldDelegat
         y = eyebrow.frame.maxY + s("s-2")
         heading.frame = NSRect(x: x, y: y, width: shell, height: height(heading, width: shell))
         y = heading.frame.maxY + s("s-4")
-        let introWidth = min(shell, 56 * s("text-sm") * 0.56)
+        let zero = ("0" as NSString).size(withAttributes: [.font: intro.font ?? NSFont.systemFont(ofSize: s("text-sm"))]).width
+        let introWidth = min(shell, ceil(56 * zero))
         intro.frame = NSRect(x: x, y: y, width: introWidth, height: height(intro, width: introWidth))
         y = intro.frame.maxY + s("s-6")
 
@@ -496,19 +503,28 @@ final class FeedbackController: NSObject, NSTextViewDelegate, NSTextFieldDelegat
         categoryLabel.frame = NSRect(x: pad, y: cy, width: inner, height: height(categoryLabel, width: inner))
         cy = categoryLabel.frame.maxY + s("s-3")
         let gap = s("s-3")
-        let cardWidth = floor((inner - gap * 2) / 3)
+        // Shipping `@media (max-width: 720px)`: two columns, Other wraps.
+        let columns = width <= 720 ? 2 : 3
+        let cardWidth = floor((inner - gap * CGFloat(columns - 1)) / CGFloat(columns))
         let cardHeight = categoryButtons.map { $0.fittingHeight(width: cardWidth) }.max() ?? 62
-        categoryGroup.frame = NSRect(x: pad, y: cy, width: inner, height: cardHeight)
+        let rows = (categoryButtons.count + columns - 1) / columns
+        categoryGroup.frame = NSRect(x: pad, y: cy, width: inner,
+                                     height: CGFloat(rows) * cardHeight + CGFloat(rows - 1) * gap)
         for (index, button) in categoryButtons.enumerated() {
-            let left = CGFloat(index) * (cardWidth + gap)
-            button.frame = NSRect(x: left, y: 0, width: index == 2 ? inner - left : cardWidth, height: cardHeight)
+            let column = index % columns, row = index / columns
+            let left = CGFloat(column) * (cardWidth + gap)
+            let lastInRow = column == columns - 1
+            button.frame = NSRect(x: left, y: CGFloat(row) * (cardHeight + gap),
+                                  width: lastInRow ? inner - left : cardWidth, height: cardHeight)
         }
         cy = categoryGroup.frame.maxY + s("s-5")
         rules[0].frame = NSRect(x: pad, y: cy, width: inner, height: 1)
         cy += 1 + s("s-5")
         messageLabel.frame = NSRect(x: pad, y: cy, width: inner, height: height(messageLabel, width: inner))
         cy = messageLabel.frame.maxY + s("s-3")
-        messageScroll.frame = NSRect(x: pad, y: cy, width: inner, height: 148)
+        messageBox.frame = NSRect(x: pad, y: cy, width: inner, height: 148)
+        messageBox.layer?.masksToBounds = true
+        messageScroll.frame = messageBox.bounds.insetBy(dx: 1, dy: 1)
         let messageWidth = messageScroll.contentSize.width
         if message.frame.width != messageWidth || message.frame.height < messageScroll.contentSize.height {
             message.frame = NSRect(x: 0, y: 0, width: messageWidth,
@@ -521,16 +537,18 @@ final class FeedbackController: NSObject, NSTextViewDelegate, NSTextFieldDelegat
         let placeholderWidth = max(1, messageWidth - placeholderX * 2)
         messagePlaceholder.frame = NSRect(x: placeholderX, y: message.textContainerInset.height,
             width: placeholderWidth, height: height(messagePlaceholder, width: placeholderWidth))
-        cy = messageScroll.frame.maxY + s("s-5")
+        cy = messageBox.frame.maxY + s("s-5")
         rules[1].frame = NSRect(x: pad, y: cy, width: inner, height: 1)
         cy += 1 + s("s-5")
-        let labelSize = contactLabel.intrinsicContentSize
-        contactLabel.frame = NSRect(x: pad, y: cy, width: ceil(labelSize.width), height: height(contactLabel, width: inner))
+        contactLabel.frame = NSRect(x: pad, y: cy, width: inner, height: height(contactLabel, width: inner))
+        // A label draws its text 2 pt in from its frame.
+        let labelText = ceil(contactLabel.attributedStringValue.size().width) + 2
         let badgeSize = optionalBadge.attributedStringValue.size()
+        // Shipping `.feedback-optional`: 1 px × `--s-3` padding, `--s-2` after the label.
         let badgeHeight = ceil(badgeSize.height) + 2
-        optionalBadge.frame = NSRect(x: contactLabel.frame.maxX + s("s-2"),
+        optionalBadge.frame = NSRect(x: pad + labelText + s("s-2"),
             y: contactLabel.frame.midY - badgeHeight / 2,
-            width: ceil(badgeSize.width) + s("s-3") * 2 + 4, height: badgeHeight)
+            width: ceil(badgeSize.width) + s("s-3") * 2, height: badgeHeight)
         optionalBadge.layer?.cornerRadius = badgeHeight / 2
         cy = contactLabel.frame.maxY + s("s-3")
         contact.frame = NSRect(x: pad, y: cy, width: inner, height: s("h-lg"))
@@ -571,7 +589,7 @@ final class FeedbackController: NSObject, NSTextViewDelegate, NSTextFieldDelegat
     }
 
     private func updateFieldBorders() {
-        messageScroll.layer?.borderColor = tokens.color(messageFocused ? "theme-accent" : "control-border").cgColor
+        messageBox.layer?.borderColor = tokens.color(messageFocused ? "theme-accent" : "control-border").cgColor
         let contactFocused = contact.currentEditor() != nil
         contact.layer?.borderColor = tokens.color(contactFocused ? "theme-accent" : "control-border").cgColor
     }

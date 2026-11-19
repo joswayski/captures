@@ -1683,6 +1683,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         filenameField.cell = filenameCell
         filenameField.isBezeled = false; filenameField.isBordered = false
         filenameField.drawsBackground = false; filenameField.focusRingType = .none
+        // Shipping `.recording-destination button`: a borderless 10 px text button.
+        changeButton.quiet = true; changeButton.textSize = tokens.number("text-2xs")
         filenameField.delegate = self
         filenameField.setAccessibilityLabel("Saved filename")
         filenameField.font = .systemFont(ofSize: tokens.number("text-sm"))

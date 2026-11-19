@@ -762,10 +762,12 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         addSubview(depthShade)
 
         let inset: CGFloat = 8
+        Self.makeChip(dimensions); Self.makeChip(warningLabel)
         dimensions.font = .systemFont(ofSize: tokens.number("text-2xs")); dimensions.textColor = tokens.color("glass-text")
-        let metadataWidth = ceil(dimensions.attributedStringValue.size().width) + 8
-        dimensions.frame = NSRect(x: inset, y: bounds.height - 25,
-                                  width: min(metadataWidth, bounds.width - inset * 2), height: 17)
+        // Shipping `.thumbnail-meta > span`: 3 px × `--s-3` padding at 1.3 line height.
+        let metadataWidth = ceil(dimensions.attributedStringValue.size().width) + Self.chipPadding * 2
+        dimensions.frame = NSRect(x: inset, y: bounds.height - inset - Self.chipHeight,
+                                  width: min(metadataWidth, bounds.width - inset * 2), height: Self.chipHeight)
         styleLabelBacking(dimensions); addSubview(dimensions)
         warningLabel.font = .systemFont(ofSize: tokens.number("text-2xs"))
         warningLabel.textColor = tokens.color("theme-accent-text")
@@ -885,7 +887,7 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         let warning = pointer.map { String(cString: $0) }
         warningLabel.stringValue = warning ?? ""
         warningLabel.setAccessibilityLabel(warning)
-        let width = ceil(warningLabel.attributedStringValue.size().width) + 8
+        let width = ceil(warningLabel.attributedStringValue.size().width) + Self.chipPadding * 2
         warningLabel.frame = NSRect(x: dimensions.frame.maxX + tokens.number("s-3"), y: dimensions.frame.minY,
                                     width: min(width, max(0, bounds.width - dimensions.frame.maxX - 16)),
                                     height: dimensions.frame.height)
@@ -1329,9 +1331,25 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         if !focusedControl { setChromeVisible(false) }
     }
 
+    /// `--s-3` of horizontal padding and 19 pt height (10 px text at 1.3, 3 px above and below).
+    static let chipPadding: CGFloat = 6, chipHeight: CGFloat = 19
+
+    /// A metadata chip: text centred both ways inside its padded frame.
+    private static func makeChip(_ label: NSTextField) {
+        let text = label.stringValue
+        let cell = FeedbackFieldCell(textCell: text)
+        cell.horizontalInset = 0; cell.alignment = .center
+        cell.isEditable = false; cell.isSelectable = false
+        cell.isBordered = false; cell.drawsBackground = false
+        cell.lineBreakMode = .byTruncatingTail; cell.truncatesLastVisibleLine = true
+        label.cell = cell
+        label.isBordered = false; label.drawsBackground = false
+    }
+
     private func styleLabelBacking(_ label: NSTextField) {
         label.wantsLayer = true
-        label.layer?.backgroundColor = tokens.color("glass-strong").cgColor
+        // Shipping's translucent `rgba(10, 10, 14, 0.66)` chip fill, not opaque glass.
+        label.layer?.backgroundColor = NSColor(srgbRed: 10 / 255, green: 10 / 255, blue: 14 / 255, alpha: 0.66).cgColor
         label.layer?.cornerRadius = tokens.number("r-xs")
         label.layer?.masksToBounds = true
     }

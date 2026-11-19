@@ -109,7 +109,8 @@ final class RecordingSavedNoticeView: NSView {
         addSubview(heading)
         detail.font = .systemFont(ofSize: tokens.number("text-xs"))
         detail.textColor = tokens.color("glass-text-muted"); detail.maximumNumberOfLines = 3
-        detail.lineBreakMode = .byTruncatingTail
+        // Truncating tail forces one line; shipping wraps the detail to two.
+        detail.lineBreakMode = .byWordWrapping; detail.cell?.truncatesLastVisibleLine = true
         addSubview(detail)
         // `.recording-saved-reveal`: a 14 pt icon before an xs label.
         primaryButton.textSize = tokens.number("text-xs"); primaryButton.iconSide = 14
