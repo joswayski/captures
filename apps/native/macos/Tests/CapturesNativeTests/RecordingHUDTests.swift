@@ -60,8 +60,9 @@ final class RecordingHUDTests: XCTestCase {
             let fill = try XCTUnwrap(meter.subviews.first)
             XCTAssertTrue(meter.isAccessibilityElement())
             XCTAssertFalse(fill.isAccessibilityElement())
+            // Shipping's meter is a bare pill: its state is spoken, not printed.
             XCTAssertFalse(hud.subviews.compactMap { $0 as? NSTextField }
-                .first { $0.stringValue == "OFF" }?.isAccessibilityElement() ?? true)
+                .contains { $0.stringValue == "OFF" && !$0.isHidden })
             XCTAssertEqual(meter.accessibilityValue() as? String, "0%, off")
             XCTAssertEqual(fill.frame.width, 0)
             XCTAssertFalse(microphone.isEnabled)
@@ -153,7 +154,8 @@ final class RecordingHUDTests: XCTestCase {
         hud.setMicrophone(muted: false, available: true)
         let buttons = hud.subviews.compactMap { $0 as? CaptureButton }
         XCTAssertTrue(buttons.allSatisfy { $0.hudControl && $0.frame.height == 34 })
-        XCTAssertEqual(hud.layer?.cornerRadius, tokens.number("r-xl"))
+        XCTAssertEqual(hud.card.layer?.cornerRadius, tokens.number("r-2xl"))
+        XCTAssertEqual(hud.card.frame, NSRect(x: 6, y: 6, width: 418, height: 70), "shipping's inset card")
         let microphone = try XCTUnwrap(buttons.first { $0.accessibilityLabel() == "Mute microphone" })
 
         func background(_ x: CGFloat, _ y: CGFloat) throws -> NSColor {

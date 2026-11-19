@@ -106,13 +106,13 @@ final class ScreenshotCountdownContent: NSView {
         number.font = .monospacedDigitSystemFont(ofSize: numberSize, weight: .bold)
         hint.font = .systemFont(ofSize: tokens.number("text-md"))
         // Shipping `.countdown-number`: line-height 0.95 with 0.04em / 0.06em
-        // margins, so its slot is 1.05em; the field's taller line box is
-        // centred on that slot instead of pushing the hint down.
-        let slot = numberSize * 1.05, line = numberSize * 1.2
+        // margins, so its slot is 1.05em. Digits have no descenders, so the
+        // field's taller line box can be cut to the slot without clipping.
+        let slot = numberSize * 1.05
         let height = labelSize * 1.4 + slot + tokens.number("s-7") + tokens.number("text-md") * 1.5
         let top = (bounds.height - height) / 2
         heading.frame = NSRect(x: 0, y: top, width: bounds.width, height: labelSize * 1.4)
-        number.frame = NSRect(x: 0, y: heading.frame.maxY + (slot - line) / 2, width: bounds.width, height: line)
+        number.frame = NSRect(x: 0, y: heading.frame.maxY, width: bounds.width, height: slot)
         hint.frame = NSRect(x: 0, y: heading.frame.maxY + slot + tokens.number("s-7"),
                             width: bounds.width, height: tokens.number("text-md") * 1.5)
     }

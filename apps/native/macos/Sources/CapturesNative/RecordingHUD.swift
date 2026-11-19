@@ -161,6 +161,8 @@ final class RecordingHUDView: NSView {
     private let meterTrack = NSView()
     private let meterFill = NSView()
     private let meterLabel = NSTextField(labelWithString: "OFF")
+    /// The visible glass card; the view itself stays clear.
+    let card = NSView()
     private var meterLevel = 0.0
     private var lifecycleButtons: [CaptureButton] = []
     private var controlIDs: [ObjectIdentifier: String] = [:]
@@ -202,30 +204,41 @@ final class RecordingHUDView: NSView {
         self.canExcludeControls = canExcludeControls
         controlsExcluded = excludedFromCapture
         func button(_ icon: CaptureButtonIcon, x: CGFloat) -> CaptureButton {
-            let button = CaptureButton("", frame: NSRect(x: x, y: 39, width: 38, height: 34),
+            let button = CaptureButton("", frame: NSRect(x: x, y: 30, width: 34, height: 34),
                 tokens: tokens, glass: true) {}
             button.icon = icon
             return button
         }
-        stopButton = button(.stopSquare, x: 104)
-        pauseButton = button(.shipping("pause"), x: 144)
-        restartButton = button(.shipping("restart"), x: 184)
-        screenshotButton = button(.shipping("capture"), x: 224)
-        microphoneButton = button(.shipping("microphone"), x: 304)
-        trashButton = button(.shipping("trash"), x: 344)
-        hideButton = button(.shipping("hide-controls"), x: 384)
+        // Shipping `.recording-hud-actions`: 34 pt buttons (Stop 36) at a
+        // 4 pt gap, right-aligned 15 pt inside the 418 pt card, with the
+        // 34 × 4 level meter between Screenshot and Microphone.
+        stopButton = button(.stopSquare, x: 101)
+        stopButton.frame.size.width = 36
+        pauseButton = button(.shipping("pause"), x: 141)
+        restartButton = button(.shipping("restart"), x: 179)
+        screenshotButton = button(.shipping("capture"), x: 217)
+        microphoneButton = button(.shipping("microphone"), x: 301)
+        trashButton = button(.shipping("trash"), x: 339)
+        hideButton = button(.shipping("hide-controls"), x: 381)
         tooltipView = RecordingHUDTooltipView(tokens: tokens)
         super.init(frame: frame)
+        // Shipping `.recording-hud`: a 418 × 70 card 6 pt inside the 430 × 102
+        // window (r-2xl, 6/8/8 padding); the rest of the window stays clear
+        // for tooltips and the error line.
         wantsLayer = true
-        layer?.backgroundColor = tokens.color(RecordingHUDColorToken.glassStrong.rawValue).cgColor
-        layer?.cornerRadius = tokens.number("r-xl")
-        layer?.borderWidth = 1
-        layer?.borderColor = tokens.color(RecordingHUDColorToken.glassBorder.rawValue).cgColor
-        layer?.shadowColor = NSColor.black.cgColor; layer?.shadowOpacity = 0.44
-        layer?.shadowRadius = 22; layer?.shadowOffset = NSSize(width: 0, height: -8)
+        card.frame = NSRect(x: 6, y: 6, width: frame.width - 12, height: 70)
+        card.wantsLayer = true
+        card.layer?.backgroundColor = tokens.color(RecordingHUDColorToken.glassStrong.rawValue).cgColor
+        card.layer?.cornerRadius = tokens.number("r-2xl")
+        card.layer?.borderWidth = 1
+        card.layer?.borderColor = tokens.color(RecordingHUDColorToken.glassBorder.rawValue).cgColor
+        card.layer?.shadowColor = NSColor.black.cgColor; card.layer?.shadowOpacity = 0.44
+        card.layer?.shadowRadius = 8; card.layer?.shadowOffset = NSSize(width: 0, height: -3)
+        card.setAccessibilityElement(false)
+        addSubview(card)
         setAccessibilityRole(.group); setAccessibilityLabel("Recording controls")
 
-        noticeLabel.frame = NSRect(x: 16, y: 8, width: 398, height: 18)
+        noticeLabel.frame = NSRect(x: 15, y: 12, width: frame.width - 30, height: 14)
         noticeLabel.alignment = .center
         noticeLabel.font = .systemFont(ofSize: tokens.number("text-2xs"), weight: .medium)
         noticeLabel.textColor = tokens.color(RecordingHUDColorToken.glassTextSubtle.rawValue)
@@ -233,7 +246,7 @@ final class RecordingHUDView: NSView {
         addSubview(noticeLabel)
         setControlsExcluded(excludedFromCapture)
 
-        statusDot.frame = NSRect(x: 17, y: 43, width: 10, height: 10)
+        statusDot.frame = NSRect(x: 15, y: 42, width: 10, height: 10)
         statusDot.wantsLayer = true; statusDot.layer?.cornerRadius = 5
         // Shipping `box-shadow: 0 0 0 4px rgba(signal, 0.16)` halo.
         statusDot.layer?.borderWidth = 0; statusDot.layer?.masksToBounds = false
@@ -242,11 +255,12 @@ final class RecordingHUDView: NSView {
         statusDot.layer?.shadowPath = CGPath(ellipseIn: CGRect(x: -4, y: -4, width: 18, height: 18),
                                              transform: nil)
         addSubview(statusDot)
-        timerLabel.frame = NSRect(x: 34, y: 31, width: 68, height: 30)
-        timerLabel.font = .monospacedDigitSystemFont(ofSize: 22, weight: .semibold)
+        // Shipping `.recording-hud-status strong`: `--text-lg` (15 px) semibold.
+        timerLabel.frame = NSRect(x: 32, y: 31, width: 68, height: 20)
+        timerLabel.font = .monospacedDigitSystemFont(ofSize: 15, weight: .semibold)
         timerLabel.textColor = tokens.color(RecordingHUDColorToken.glassText.rawValue); addSubview(timerLabel)
-        statusLabel.frame = NSRect(x: 34, y: 60, width: 76, height: 16)
-        statusLabel.font = .systemFont(ofSize: 9, weight: .semibold)
+        statusLabel.frame = NSRect(x: 32, y: 49, width: 68, height: 14)
+        statusLabel.font = .systemFont(ofSize: tokens.number("text-2xs"), weight: .semibold)
         statusLabel.textColor = tokens.color(RecordingHUDColorToken.glassTextSubtle.rawValue)
         addSubview(statusLabel)
 
@@ -268,14 +282,16 @@ final class RecordingHUDView: NSView {
             }
             addSubview(button)
         }
-        meterTrack.frame = NSRect(x: 267, y: 58, width: 32, height: 6)
+        // Shipping `.recording-microphone-level`: an inline 34 × 4 pill,
+        // rgba(0,0,0,.4) track with a `--positive` fill and no text label.
+        meterTrack.frame = NSRect(x: 259, y: 45, width: 34, height: 4)
         meterTrack.wantsLayer = true
-        meterTrack.layer?.backgroundColor = tokens.color(RecordingHUDColorToken.glassActive.rawValue).cgColor
-        meterTrack.layer?.cornerRadius = 3
-        meterFill.frame = NSRect(x: 0, y: 0, width: 0, height: 6)
+        meterTrack.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.4).cgColor
+        meterTrack.layer?.cornerRadius = 2
+        meterFill.frame = NSRect(x: 0, y: 0, width: 0, height: 4)
         meterFill.wantsLayer = true
-        meterFill.layer?.backgroundColor = tokens.color(RecordingHUDColorToken.glassText.rawValue).cgColor
-        meterFill.layer?.cornerRadius = 3
+        meterFill.layer?.backgroundColor = tokens.color("positive").cgColor
+        meterFill.layer?.cornerRadius = 2
         meterFill.setAccessibilityElement(false)
         meterTrack.addSubview(meterFill); addSubview(meterTrack)
         meterLabel.frame = NSRect(x: 262, y: 39, width: 42, height: 16)
@@ -283,7 +299,6 @@ final class RecordingHUDView: NSView {
         meterLabel.font = .systemFont(ofSize: 9, weight: .medium)
         meterLabel.textColor = tokens.color(RecordingHUDColorToken.glassTextSubtle.rawValue)
         meterLabel.setAccessibilityElement(false)
-        addSubview(meterLabel)
         meterTrack.setAccessibilityElement(true)
         meterTrack.setAccessibilityRole(.progressIndicator)
         meterTrack.setAccessibilityLabel("Microphone level")
@@ -474,6 +489,8 @@ final class RecordingHUDView: NSView {
         errorLabel.stringValue = errorText ?? ""
         errorLabel.setAccessibilityLabel(errorText)
         errorLabel.isHidden = errorText == nil
+        // The card grows to hold the error line, as shipping's does.
+        card.frame.size.height = errorText == nil ? 70 : errorLabel.frame.maxY + 6 - card.frame.minY
     }
 
     /// Shipping `.recording-hud-privacy`. Where the controls can be kept out
