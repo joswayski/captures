@@ -3436,6 +3436,10 @@ window.captures.capture-surface {
   border-spacing: var(--s-4);
   border-top: 1px solid var(--glass-border);
 }
+/* Selects in `.recording-field` inherit its semibold caption weight. */
+.captures .capture-recording-options button.select-trigger {
+  font-weight: var(--weight-semibold);
+}
 .captures .capture-recording-caption {
   color: var(--glass-text-subtle);
   font-size: var(--text-2xs);

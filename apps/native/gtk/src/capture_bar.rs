@@ -490,8 +490,8 @@ impl RecordingFields {
         )]);
         microphone.set("");
         microphone.set_sensitive(false);
-        let microphone_field = Self::field(capture_menu::FIELD_MICROPHONE, &microphone.root, 180);
-        microphone_field.set_hexpand(true);
+        // Shipping's `minmax(180px, 240px)` column: the bar always has room.
+        let microphone_field = Self::field(capture_menu::FIELD_MICROPHONE, &microphone.root, 240);
         root.append(&microphone_field);
         let fields = Rc::new(Self {
             root,
