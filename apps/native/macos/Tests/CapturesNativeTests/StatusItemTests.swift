@@ -148,6 +148,39 @@ final class StatusItemTests: XCTestCase {
             "finishing consumes the prior visibility state")
     }
 
+    func testCaptureFromAnotherAppKeepsDocumentsBehindIt() throws {
+        // Hand activation back to the session's frontmost app, so the test
+        // leaves activation where it found it.
+        guard let other = NSWorkspace.shared.frontmostApplication,
+              other.processIdentifier != ProcessInfo.processInfo.processIdentifier else {
+            throw XCTSkip("needs another frontmost app")
+        }
+        let editor = NSWindow(contentRect: NSRect(x: 40, y: 40, width: 240, height: 160),
+            styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        editor.isReleasedWhenClosed = false
+        let preview = NSPanel(contentRect: NSRect(x: 300, y: 40, width: 120, height: 80),
+            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        editor.orderFront(nil); preview.orderFrontRegardless()
+        defer { editor.orderOut(nil); preview.orderOut(nil) }
+
+        var handoff = CaptureActivationHandoff()
+        handoff.begin(frontmost: other, capturesActive: true)
+        XCTAssertNil(handoff.previousApp, "a capture started inside Captures keeps its focus")
+        handoff.begin(frontmost: other, capturesActive: false)
+        XCTAssertEqual(handoff.previousApp?.processIdentifier, other.processIdentifier)
+
+        handoff.activate(windows: [editor, preview])
+        XCTAssertFalse(editor.isVisible, "the capture surface must not raise a background editor")
+        XCTAssertTrue(preview.isVisible, "floating previews are not documents")
+
+        var restored = false
+        handoff.finish { restored = true }
+        XCTAssertTrue(restored)
+        XCTAssertTrue(editor.isVisible, "the editor comes back once the capture ends")
+        XCTAssertNil(handoff.previousApp)
+        XCTAssertTrue(handoff.concealed.isEmpty)
+    }
+
     func testReopenFollowsShippingWindowPriorityOtherwiseShowsPreferences() {
         XCTAssertEqual(appReactivation(onboardingComplete: false, restoreRecordingControls: true,
                                        visible: [.history]), .showSetup)
