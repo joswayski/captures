@@ -89,6 +89,27 @@ matching them, so each was checked against the shared crates and every host:
 | Unranged media reads capped at 2 MiB for video | Not applicable: native reads media through ffmpeg, not a webview asset protocol. |
 | Screenshot editor Undo coalescing, zoom-scaled shadows, no zero-size shapes, dropdown arrow keys, drafts kept during save; overlay acts only on the primary button; capture-bar shortcuts respect disabled states and window targets take the keyboard; Preferences rollback on rejected save, sidebar highlight, "Update failed / Try again", "Selected microphone", folder commits on blur/Enter; late saved-notice results ignored | Not yet audited on native hosts; open parity items. |
 
+### GTK polish pass (November 19)
+
+A side-by-side pass of the GTK host against the Tauri harness, plus idle cost:
+
+- The screenshot and recording editors polled their worker channel every 16 ms
+  for as long as the window was open. Worker results and playback frames now
+  wake the UI thread when they arrive (`src/wake.rs`). Measured in an orb
+  (debug build, Xvfb, 10 s with an idle window): 621 main-thread wake-ups and
+  50–60 ms of CPU before, 0–1 wake-ups and 0 ms after; renders are byte-identical.
+- History's Delete is shipping's raised chip over the thumbnail (88% raised
+  surface, subtle border, small shadow, full-strength icon; signal red on hover)
+  instead of a borderless, faint icon.
+- Screenshot editor: the canvas W/H fields centre their value and show
+  shipping's stepper column, the zoom preset uses the body font with its
+  chevron at the far edge, and rail tools are centred 38 px squares.
+
+Status: X11 only, under Xvfb with software GL: renders compared with the Tauri
+harness in both appearances, and the History, Preferences, editor and recording
+AT-SPI smoke steps pass. Wayland, real GPUs and Orca are not rechecked. Windows
+and macOS are unchanged by this pass.
+
 ## Host direction
 
 Captures goes fully native on every platform (owner decision, November 2026,

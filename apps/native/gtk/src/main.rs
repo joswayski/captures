@@ -22,6 +22,7 @@ mod system_look;
 mod tokens;
 mod tray;
 mod updates;
+mod wake;
 mod widgets;
 
 use std::cell::{Cell, RefCell};

@@ -33,6 +33,7 @@ use image::RgbaImage;
 
 use crate::switch::TokenSwitch;
 use crate::tokens::Tokens;
+use crate::wake::{Outbox, Wake};
 use crate::widgets::{Icon, MaxWidth, SnapshotArea, WidthWatch, icon_button};
 
 mod canvas_bar;
@@ -367,6 +368,20 @@ pub fn build(
     let session: Arc<std::sync::Mutex<Option<EditorSession>>> = Arc::default();
     let (jobs, inbox) = mpsc::channel::<Job>();
     let (results, outcomes) = std::sync::mpsc::channel::<Outcome>();
+    // Worker results wake the UI thread; nothing polls while the editor idles.
+    let late: Rc<RefCell<std::rc::Weak<State>>> = Rc::default();
+    let wake = {
+        let late = late.clone();
+        Wake::new(move || {
+            let Some(state) = late.borrow().upgrade() else {
+                return;
+            };
+            while let Ok(outcome) = outcomes.try_recv() {
+                state.receive(outcome);
+            }
+        })
+    };
+    let results = Outbox::new(results, wake.clone());
     {
         let session = session.clone();
         let (root, id) = (options.history_root.clone(), options.artifact_id.clone());
@@ -565,6 +580,8 @@ pub fn build(
     for tool in RAIL_TOOLS {
         let button = gtk::Button::new();
         button.add_css_class("editor-rail-button");
+        // Shipping's 38 px squares, centred in the rail instead of stretched.
+        button.set_halign(gtk::Align::Center);
         let icon = Icon::new(tool.icon, 18).with_stroke(1.75);
         if tool.key == editor_chrome::SHAPES_KEY {
             // Shipping's flyout cue: a 7 px corner wedge in the text colour.
@@ -702,7 +719,6 @@ pub fn build(
     // `.screenshot-export-bar`: the Export settings panel over the save row.
     let footer = gtk::Box::new(gtk::Orientation::Vertical, 12);
     footer.add_css_class("editor-export-bar");
-    let late: Rc<RefCell<std::rc::Weak<State>>> = Rc::default();
     let export = {
         let late = late.clone();
         export_bar::ExportBar::new(move |options| {
@@ -940,17 +956,7 @@ pub fn build(
     *late.borrow_mut() = Rc::downgrade(&state);
     state.connect(&window);
 
-    // Deliver worker results on the UI thread.
-    let weak = Rc::downgrade(&state);
-    glib::timeout_add_local(std::time::Duration::from_millis(16), move || {
-        let Some(state) = weak.upgrade() else {
-            return glib::ControlFlow::Break;
-        };
-        while let Ok(outcome) = outcomes.try_recv() {
-            state.receive(outcome);
-        }
-        glib::ControlFlow::Continue
-    });
+    window.connect_destroy(move |_| wake.remove());
 
     // Flush the draft on close, as shipping's autosave does.
     let weak = Rc::downgrade(&state);

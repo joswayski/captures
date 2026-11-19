@@ -30,6 +30,7 @@ use image::RgbaImage;
 use crate::editor::compare::Compare;
 use crate::switch::TokenSwitch;
 use crate::tokens::Tokens;
+use crate::wake::{Outbox, Wake};
 use crate::widgets::{Icon, MaxWidth, SnapshotArea, WidthWatch, icon_button};
 
 mod output;
@@ -176,7 +177,7 @@ fn texture_of(pixels: &RgbaImage) -> gdk::Texture {
 fn worker(
     options: &Options,
     jobs: mpsc::Receiver<Job>,
-    out: mpsc::Sender<Outcome>,
+    out: Outbox<Outcome>,
     latest: LatestFrame,
     looping: Arc<AtomicBool>,
 ) {
@@ -261,6 +262,7 @@ fn worker(
                                 }
                                 *latest.lock().expect("frame") =
                                     Some((frame.position_ms, frame.pixels()));
+                                out.wake();
                             }
                             Ok(())
                         })();
@@ -431,8 +433,28 @@ pub fn build(app: &gtk::Application, tokens: Rc<Tokens>, options: Options) -> Re
     let (results, outcomes) = mpsc::channel();
     let latest = LatestFrame::default();
     let looping = Arc::<AtomicBool>::default();
-    worker(&options, inbox, results, latest.clone(), looping.clone());
     let state_cell: Rc<RefCell<std::rc::Weak<State>>> = Rc::default();
+    // Worker results and playback frames wake the UI thread; nothing polls
+    // while the editor idles.
+    let wake = {
+        let state_cell = state_cell.clone();
+        Wake::new(move || {
+            let Some(state) = state_cell.borrow().upgrade() else {
+                return;
+            };
+            while let Ok(outcome) = outcomes.try_recv() {
+                state.receive(outcome);
+            }
+            state.present_playback_frame();
+        })
+    };
+    worker(
+        &options,
+        inbox,
+        Outbox::new(results, wake.clone()),
+        latest.clone(),
+        looping.clone(),
+    );
 
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
     root.add_css_class("recording-editor");
@@ -849,17 +871,7 @@ pub fn build(app: &gtk::Application, tokens: Rc<Tokens>, options: Options) -> Re
     // Start on Play, not the filename entry, so nothing looks edited.
     GtkWindowExt::set_focus(&window, Some(&state.w.play));
 
-    let weak = Rc::downgrade(&state);
-    glib::timeout_add_local(Duration::from_millis(16), move || {
-        let Some(state) = weak.upgrade() else {
-            return glib::ControlFlow::Break;
-        };
-        while let Ok(outcome) = outcomes.try_recv() {
-            state.receive(outcome);
-        }
-        state.present_playback_frame();
-        glib::ControlFlow::Continue
-    });
+    window.connect_destroy(move |_| wake.remove());
     let weak = Rc::downgrade(&state);
     window.connect_close_request(move |_| {
         if let Some(state) = weak.upgrade()

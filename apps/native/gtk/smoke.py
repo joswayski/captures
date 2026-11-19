@@ -68,6 +68,10 @@ def application(pid):
     return None
 
 
+# AT-SPI 2.5x renamed these roles; the steps use the names Ubuntu 24.04 reports.
+ROLE_NAMES = {"button": "push button"}
+
+
 def nodes(root):
     """Every live node; rows rebinding mid-walk disappear and are skipped."""
     stack = [root]
@@ -76,7 +80,8 @@ def nodes(root):
         try:
             if node is None:
                 continue
-            identity = (node.get_role_name(), node.get_name())
+            role = node.get_role_name()
+            identity = (ROLE_NAMES.get(role, role), node.get_name())
             children = [node.get_child_at_index(i) for i in range(node.get_child_count())]
         except GLib.Error:
             continue

@@ -51,6 +51,8 @@ fn dimension(caption: &str, field: &NumberField) -> gtk::Box {
     field.spin.set_hexpand(false);
     field.spin.set_width_chars(5);
     field.spin.set_max_width_chars(5);
+    // Shipping centres the canvas size in its field.
+    field.spin.set_alignment(0.5);
     row.append(&field.root);
     row
 }

@@ -71,6 +71,12 @@ pub fn css(t: &Tokens) -> String {
             "image-hover" => {
                 mix(t.rgba("surface-sunken"), t.rgba("theme-accent"), 0.12).to_string()
             }
+            // `color-mix(in srgb, var(--surface-raised) 88%, transparent)`.
+            "history-delete-surface" => {
+                let mut surface = t.rgba("surface-raised");
+                surface.set_alpha(surface.alpha() * 0.88);
+                surface.to_string()
+            }
             // Shipping's `[data-appearance="dark"]` swap for active quiet
             // buttons: readable accent on light, accent text on dark.
             "accent-active-text" => t.css(if t.rgba("text").red() < 0.5 {

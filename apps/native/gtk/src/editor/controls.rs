@@ -441,9 +441,10 @@ impl Choice {
     /// Stretch the trigger to its row's height (an inline suffix select).
     pub(crate) fn fill_height(&self) {
         self.trigger.set_vexpand(true);
-        // Explicit, so the expansion stops here instead of growing the row.
+        // Explicit, so the expansion stops here instead of growing the row;
+        // the caption still pushes the chevron to the trigger's far edge.
         self.root.set_vexpand(false);
-        self.caption.set_hexpand(false);
+        self.root.set_hexpand(false);
     }
 
     pub(crate) fn set(&self, value: &str) {
