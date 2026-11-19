@@ -185,7 +185,9 @@ def main():
                         if recorder:
                             recorder.communicate(b"q", timeout=10)
                             assert recorder.wait(timeout=10) == 0
-                        run("xdotool", "key", "alt+F4")
+                        # Address Preferences itself: focus can move during the pause above.
+                        run("xdotool", "windowactivate", "--sync", preference, "windowfocus", "--sync", preference,
+                            "key", "alt+F4")
                         wait(lambda: not preferences_windows())
                         assert all(path.read_bytes() == data for path, data in preserved.items()), "navigation changed History bytes"
                         assert set(preserved) == {path for path in history.glob("*/*")
