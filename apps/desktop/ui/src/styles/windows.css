@@ -2090,6 +2090,7 @@
   min-width: 148px;
   min-height: var(--h-xl);
   padding: 0 var(--s-6);
+  border-radius: var(--r-md);
   font-size: var(--text-md);
 }
 

@@ -2807,8 +2807,8 @@ popover.captures-menu.canvas-bg-menu > contents {
   background: var(--danger-surface);
   font-size: var(--text-sm);
 }
-/* Not a `.ui-btn` in shipping: the browser's own button box (square, 2 px
-   transparent border, no shadow) with the solid recipe. */
+/* Not a `.ui-btn` in shipping: the browser's own button box (2 px
+   transparent border, no shadow) with the solid recipe and `--r-md` corners. */
 .captures button.onboarding-primary-button {
   all: unset;
   /* Chromium sizes buttons border-box: 148 × `--h-xl` overall. */
@@ -2817,6 +2817,7 @@ popover.captures-menu.canvas-bg-menu > contents {
   margin-top: var(--s-5);
   padding: 0 var(--s-6);
   border: 2px solid transparent;
+  border-radius: var(--r-md);
   color: var(--solid-ink);
   background: var(--solid);
   font-size: var(--text-md);
