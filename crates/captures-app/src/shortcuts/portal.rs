@@ -238,9 +238,7 @@ impl Session {
             .add_match(
                 MatchRule::new_signal(REQUEST, "Response").with_sender(DESKTOP),
                 move |_: (), _, message| {
-                    if message
-                        .sender()
-                        .is_some_and(|sender| sender.as_ref() == pinned)
+                    if message.sender().is_some_and(|sender| *sender == *pinned)
                         && let Some(path) = message.path()
                     {
                         let _ = out.send((
@@ -398,7 +396,7 @@ impl Session {
                     return Err(error("timed out waiting for shortcut consent"));
                 }
                 for (path, response) in self.responses.try_iter() {
-                    if path == handle.as_ref() {
+                    if *path == *handle {
                         let (code, results) = response?;
                         return match code {
                             0 => Ok(results),
