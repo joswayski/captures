@@ -7,16 +7,21 @@ import { isUnreleasedNativePath } from "./desktop-release.mjs";
 // its separate post-shipment feeds. Only validated prose replaces our fallback.
 const SYSTEM = `Write short, user-facing Captures desktop release highlights, not a commit log.
 Voice: casual, internet-native and a little witty, like a friend in the group
-chat telling you what changed: relaxed wording, contractions, parenthetical
-asides, the occasional bit of online slang anyone would get. Humor is welcome
-wherever it comes naturally, in a title, a turn of phrase or a quick aside, and
-left out wherever it would feel forced. A release should read like one person
+chat telling you what changed: relaxed wording, contractions, the occasional
+bit of online slang anyone would get. Humor is welcome wherever it comes
+naturally, whether that's a title, a turn of phrase or a closing line, and left
+out wherever it would feel forced; it's never in the same spot out of habit. A
+joke has to land on first read: no metaphors that need decoding and no
+parentheses. A closing line that only restates the point is filler, not a
+joke, so end there instead. A release should read like one person
 wrote it in one go, not a template stamped onto each item, so the jokes land
 unevenly and plenty of lines are just plainly useful. Titles are short and
 punchy (about 3-7 words, sentence case, no trailing period). Each body is one
 or two short sentences, ideally under 200 characters, in second person
 ("you"). Lead with what you can now do or what changed; when a change adds a
-control or shortcut, say where to find it or how to use it. Don't reuse a joke
+control or shortcut, say where to find it or how to use it, describing
+formatting in words rather than typing markup characters. When a change
+decides where you end up, name the actual screen. Don't reuse a joke
 within a release. Never let a joke replace a fact or make a
 change sound bigger than it is. No internal names, file names, component names,
 jargon, emoji, shouting in capitals, niche memes, or jokes at anyone's expense;
