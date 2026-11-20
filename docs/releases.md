@@ -306,7 +306,7 @@ match the same installed-app scope check. This keeps skipped website and API
 changes from appearing later in the next real desktop update message.
 
 During draft preparation, `scripts/ai-release-notes.mjs` asks Gemini for up to
-five short, user-facing highlights. It follows Caper's warm, concise editorial
+five short, user-facing highlights. It follows Caper's casual, lightly witty editorial
 prompt and Gemini request configuration, but writes the existing release body,
 not a separate highlights feed. Packaging and the updater reuse that body;
 the Preview warning remains unchanged.
@@ -459,12 +459,12 @@ Previews are intentionally experimental. Creating an installer and signing a
 Tauri updater archive do not by themselves make a stable release. Do not publish
 the stable channel until every gate below is enforced and passes:
 
-| Platform or concern | Required before production publishing | Current implementation |
-| --- | --- | --- |
-| macOS | Developer ID Application signature, Apple notarization, stapled ticket, and clean-machine Gatekeeper validation | CI signs and notarizes the app, notarizes and staples the DMG, and verifies both; clean-Mac validation remains manual |
-| Windows | Publicly trusted Authenticode signatures and RFC 3161 timestamps on both `captures.exe` and the NSIS installer | Updater archives are signed, but Authenticode is not configured |
-| Linux | `SHA256SUMS` plus GitHub build-provenance attestations for the `.deb` and AppImage | Checksums and updater signatures exist; attestations are not configured |
-| All platforms | Every downloadable artifact must come from the tested commit, pass clean-machine installation, and remain unpublished if any platform is incomplete | The workflow validates the complete staged release before publishing; Windows and provenance gates remain |
+| Platform or concern | Required before production publishing                                                                                                               | Current implementation                                                                                                |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| macOS               | Developer ID Application signature, Apple notarization, stapled ticket, and clean-machine Gatekeeper validation                                     | CI signs and notarizes the app, notarizes and staples the DMG, and verifies both; clean-Mac validation remains manual |
+| Windows             | Publicly trusted Authenticode signatures and RFC 3161 timestamps on both `captures.exe` and the NSIS installer                                      | Updater archives are signed, but Authenticode is not configured                                                       |
+| Linux               | `SHA256SUMS` plus GitHub build-provenance attestations for the `.deb` and AppImage                                                                  | Checksums and updater signatures exist; attestations are not configured                                               |
+| All platforms       | Every downloadable artifact must come from the tested commit, pass clean-machine installation, and remain unpublished if any platform is incomplete | The workflow validates the complete staged release before publishing; Windows and provenance gates remain             |
 
 These signatures have separate trust boundaries:
 
@@ -481,10 +481,10 @@ while using different release metadata and updater endpoints.
 
 Create a GitHub environment named `release`, restrict its deployment branches to `main`, and add these environment secrets:
 
-| Secret | Purpose |
-| --- | --- |
-| `TAURI_SIGNING_PRIVATE_KEY` | Dedicated Tauri updater private key |
-| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Password for that updater key |
+| Secret                               | Purpose                             |
+| ------------------------------------ | ----------------------------------- |
+| `TAURI_SIGNING_PRIVATE_KEY`          | Dedicated Tauri updater private key |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Password for that updater key       |
 
 The Apple Developer ID certificate and App Store Connect key are not GitHub
 secrets. Like caper and dbm, the macOS package job assumes the
@@ -553,14 +553,14 @@ The same Artifact Signing account, validated identity, and Public Trust certific
 
 Add these non-secret values as variables on the existing `release` environment:
 
-| Variable | Value |
-| --- | --- |
-| `AZURE_CLIENT_ID` | Entra application or workload identity client ID |
-| `AZURE_TENANT_ID` | Entra tenant ID |
-| `AZURE_SUBSCRIPTION_ID` | Azure subscription containing Artifact Signing |
-| `AZURE_ARTIFACT_SIGNING_ENDPOINT` | Regional Artifact Signing endpoint |
-| `AZURE_ARTIFACT_SIGNING_ACCOUNT` | Artifact Signing account name |
-| `AZURE_ARTIFACT_SIGNING_PROFILE` | Public Trust certificate profile name |
+| Variable                          | Value                                            |
+| --------------------------------- | ------------------------------------------------ |
+| `AZURE_CLIENT_ID`                 | Entra application or workload identity client ID |
+| `AZURE_TENANT_ID`                 | Entra tenant ID                                  |
+| `AZURE_SUBSCRIPTION_ID`           | Azure subscription containing Artifact Signing   |
+| `AZURE_ARTIFACT_SIGNING_ENDPOINT` | Regional Artifact Signing endpoint               |
+| `AZURE_ARTIFACT_SIGNING_ACCOUNT`  | Artifact Signing account name                    |
+| `AZURE_ARTIFACT_SIGNING_PROFILE`  | Public Trust certificate profile name            |
 
 The Windows package job must request `id-token: write`, authenticate to Azure with OIDC, and integrate Artifact Signing with Tauri so that both `captures.exe` and the final NSIS installer are signed. Sign with SHA-256 and use Microsoft's RFC 3161 timestamp service. Timestamping is required because Artifact Signing certificates are intentionally short-lived.
 
