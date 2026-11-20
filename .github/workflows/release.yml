@@ -244,9 +244,9 @@ jobs:
         id: draft
         env:
           GH_TOKEN: ${{ github.token }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          ANTHROPIC_MODEL: ${{ vars.CAPTURES_RELEASE_NOTES_MODEL }}
-          ANTHROPIC_EFFORT: ${{ vars.CAPTURES_RELEASE_NOTES_EFFORT }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ vars.CAPTURES_RELEASE_NOTES_MODEL }}
+          GEMINI_THINKING_LEVEL: ${{ vars.CAPTURES_RELEASE_NOTES_THINKING_LEVEL }}
           DISPLAY_VERSION: ${{ needs.version.outputs.display_version }}
           RELEASE_SHA: ${{ needs.queue.outputs.release_sha }}
           TAG: ${{ needs.version.outputs.tag }}

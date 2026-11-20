@@ -305,17 +305,19 @@ Release notes are generated from only the commits in the release range that
 match the same installed-app scope check. This keeps skipped website and API
 changes from appearing later in the next real desktop update message.
 
-During draft preparation, `scripts/ai-release-notes.mjs` asks Anthropic for up to
+During draft preparation, `scripts/ai-release-notes.mjs` asks Gemini for up to
 five short, user-facing highlights. It follows Caper's warm, concise editorial
-prompt and Opus request configuration, but writes the existing release body,
+prompt and Gemini request configuration, but writes the existing release body,
 not a separate highlights feed. Packaging and the updater reuse that body;
 the Preview warning remains unchanged.
 
-Set the repository Actions secret `ANTHROPIC_API_KEY`. Optional repository
-variables `CAPTURES_RELEASE_NOTES_MODEL` and `CAPTURES_RELEASE_NOTES_EFFORT`
-override `claude-opus-5-5` and `high`. Generation uses structured JSON output,
-16,000 output tokens, Anthropic server-side fallbacks, and a five-minute timeout.
-It sends filtered source diffs and commit messages to Anthropic, never capture
+Set the repository Actions secret `GEMINI_API_KEY`: a Gemini API key from
+Google AI Studio whose project uses the paid tier. Optional repository
+variables `CAPTURES_RELEASE_NOTES_MODEL` and
+`CAPTURES_RELEASE_NOTES_THINKING_LEVEL` (`low`, `medium`, `high` or `xhigh`)
+override `gemini-4-neon` and `medium`. Generation uses structured JSON output,
+32,768 output tokens shared with thinking, and a five-minute timeout.
+It sends filtered source diffs and commit messages to Google, never capture
 files or installed-app data. There is no AI request from the desktop app.
 
 Evidence uses the exact previous-Tauri-Preview-to-target first-parent range. Only
@@ -339,7 +341,7 @@ output retain the original commit-based notes. A successful empty result stays
 quiet instead of restoring technical commit bullets. Generation happens once
 per draft preparation, so all installers in that build share the same notes;
 a fresh release-workflow run may generate different wording. Existing published
-releases are not backfilled, and `channel_only` does not call Anthropic.
+releases are not backfilled, and `channel_only` does not call Gemini.
 
 If an in-app update download fails, the notice keeps the error on screen and
 offers **download from captur.es**, which opens the website installer section.

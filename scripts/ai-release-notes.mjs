@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { isUnreleasedNativePath } from "./desktop-release.mjs";
 
-// Match Caper's current editorial voice and Opus request configuration, without
+// Match Caper's current editorial voice and Gemini request configuration, without
 // its separate post-shipment feeds. Only validated prose replaces our fallback.
 const SYSTEM = `Write short, warm, user-facing Captures desktop release highlights, not a commit log.
 Voice: a friendly person telling a friend what's new. Titles are short and
@@ -135,29 +135,37 @@ function evidence(before, after, cwd) {
 }
 
 function requestBody(source, env) {
-  const effort = env.ANTHROPIC_EFFORT || "high";
-  if (!["low", "medium", "high", "xhigh", "max"].includes(effort))
-    throw new Error("invalid effort");
+  const level = env.GEMINI_THINKING_LEVEL || "medium";
+  if (!["low", "medium", "high", "xhigh"].includes(level))
+    throw new Error("invalid thinking level");
+  // Thinking shares maxOutputTokens with the answer; 32,768 is the most one
+  // non-streaming request may produce before Gemini asks to continue.
   const encode = (limit) =>
     JSON.stringify({
-      model: env.ANTHROPIC_MODEL || "claude-opus-5-5",
-      max_tokens: 16_000,
-      system: SYSTEM,
-      messages: [
+      systemInstruction: { parts: [{ text: SYSTEM }] },
+      contents: [
         {
           role: "user",
-          content: JSON.stringify({
-            ...source,
-            commits: source.commits.map(({ diff, ...commit }) => ({
-              ...commit,
-              diff: diff.slice(0, limit),
-              diffTruncated: diff.length > limit,
-            })),
-          }),
+          parts: [
+            {
+              text: JSON.stringify({
+                ...source,
+                commits: source.commits.map(({ diff, ...commit }) => ({
+                  ...commit,
+                  diff: diff.slice(0, limit),
+                  diffTruncated: diff.length > limit,
+                })),
+              }),
+            },
+          ],
         },
       ],
-      output_config: { effort, format: { type: "json_schema", schema: SCHEMA } },
-      fallbacks: "default",
+      generationConfig: {
+        maxOutputTokens: 32_768,
+        responseMimeType: "application/json",
+        responseJsonSchema: SCHEMA,
+        thinkingConfig: { thinkingLevel: level.toUpperCase() },
+      },
     });
   if (encode(0).length > MAX_REQUEST) throw new Error("metadata exceeds budget");
   let low = 0;
@@ -191,17 +199,15 @@ function plainText(value, max) {
 }
 
 function render(response, source) {
-  if (
-    response.type !== "message" ||
-    response.stop_reason !== "end_turn" ||
-    !Array.isArray(response.content)
-  )
+  const [candidate, ...others] = Array.isArray(response.candidates) ? response.candidates : [];
+  const parts = candidate?.content?.parts;
+  if (others.length || candidate?.finishReason !== "STOP" || !Array.isArray(parts))
     throw new Error("incomplete response");
-  const blocks = response.content.filter(
-    (block) => !["thinking", "redacted_thinking", "fallback"].includes(block.type),
-  );
-  if (blocks.length !== 1 || blocks[0].type !== "text") throw new Error("invalid response");
-  const result = JSON.parse(blocks[0].text);
+  // Thought summaries carry no notes; the answer is the remaining text.
+  const texts = parts.filter((part) => !part?.thought).map((part) => part?.text);
+  if (!texts.length || !texts.every((text) => typeof text === "string"))
+    throw new Error("invalid response");
+  const result = JSON.parse(texts.join(""));
   if (
     !exactKeys(result, ["highlights"]) ||
     !Array.isArray(result.highlights) ||
@@ -239,18 +245,16 @@ export async function aiReleaseNotes(
   } = {},
 ) {
   try {
-    if (!env.ANTHROPIC_API_KEY) throw new Error("missing key");
+    if (!env.GEMINI_API_KEY) throw new Error("missing key");
+    const model = env.GEMINI_MODEL || "gemini-4-neon";
+    if (!/^[a-z0-9][a-z0-9.-]{0,63}$/u.test(model)) throw new Error("invalid model");
     const source = evidence(before, after, cwd);
     if (!source.commits.length)
       return "## What's Changed\nNo user-facing desktop changes in this Preview.\n";
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+    const response = await fetch(url, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": env.ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
-        "anthropic-beta": "server-side-fallback-2026-07-01",
-      },
+      headers: { "Content-Type": "application/json", "x-goog-api-key": env.GEMINI_API_KEY },
       body: requestBody(source, env),
       signal: AbortSignal.timeout(300_000),
     });

@@ -36,16 +36,14 @@ function fixture(native = true) {
   return { cwd, git, commit, base };
 }
 
-function reply(highlights, extra = {}) {
-  return Response.json({
-    type: "message",
-    stop_reason: "end_turn",
-    content: [{ type: "text", text: JSON.stringify({ highlights }) }],
-    ...extra,
-  });
+function reply(
+  highlights,
+  { parts = [{ text: JSON.stringify({ highlights }) }], finishReason = "STOP" } = {},
+) {
+  return Response.json({ candidates: [{ content: { role: "model", parts }, finishReason }] });
 }
 const fallback = "## What's Changed\n* Original commit notes with links\n";
-const env = { ANTHROPIC_API_KEY: "test-key" };
+const env = { GEMINI_API_KEY: "test-key" };
 const highlight = (commit) => ({
   title: "Keep your capture handy",
   body: "You can reopen your last screenshot.",
@@ -80,15 +78,16 @@ test.each([true, false])(
       cwd: f.cwd,
       env,
       fetch: async (url, options) => {
-        assert.equal(url, "https://api.anthropic.com/v1/messages");
-        assert.equal(options.headers["x-api-key"], "test-key");
-        assert.equal(options.headers["anthropic-beta"], "server-side-fallback-2026-07-01");
+        assert.equal(
+          url,
+          "https://generativelanguage.googleapis.com/v1beta/models/gemini-4-neon:generateContent",
+        );
+        assert.equal(options.headers["x-goog-api-key"], "test-key");
         request = JSON.parse(options.body);
         return reply([highlight(after)], {
-          content: [
-            { type: "thinking", thinking: "not release prose" },
-            { type: "fallback" },
-            { type: "text", text: JSON.stringify({ highlights: [highlight(after)] }) },
+          parts: [
+            { text: "not release prose", thought: true },
+            { text: JSON.stringify({ highlights: [highlight(after)] }), thoughtSignature: "x" },
           ],
         });
       },
@@ -97,11 +96,11 @@ test.each([true, false])(
       notes,
       "## What's Changed\n* Keep your capture handy — You can reopen your last screenshot.\n",
     );
-    assert.equal(request.model, "claude-opus-5-5");
-    assert.equal(request.output_config.effort, "high");
-    assert.equal(request.max_tokens, 16000);
-    assert.equal(request.fallbacks, "default");
-    const source = JSON.parse(request.messages[0].content);
+    assert.equal(request.generationConfig.thinkingConfig.thinkingLevel, "MEDIUM");
+    assert.equal(request.generationConfig.maxOutputTokens, 32768);
+    assert.equal(request.generationConfig.responseMimeType, "application/json");
+    assert.equal(request.systemInstruction.parts.length, 1);
+    const source = JSON.parse(request.contents[0].parts[0].text);
     assert.equal(source.runtime, "Tauri");
     assert.deepEqual(
       source.commits.map(({ commit }) => commit),
@@ -109,7 +108,7 @@ test.each([true, false])(
     );
     assert.match(source.commits[0].diff, /REOPEN-SCREENSHOT/u);
     assert.doesNotMatch(
-      request.messages[0].content,
+      request.contents[0].parts[0].text,
       /WEB-ONLY|TEST-SECRET|PRIVATE-KEY|TEST-ONLY|OTHER-RUNTIME|FUTURE-CHANGE/u,
     );
   },
@@ -122,13 +121,13 @@ test("oversized diffs retain every commit and mark truncation within the request
   let source;
   const notes = await aiReleaseNotes(f.base, after, fallback, {
     cwd: f.cwd,
-    env: { ...env, ANTHROPIC_MODEL: "custom-model", ANTHROPIC_EFFORT: "medium" },
-    fetch: async (_, options) => {
+    env: { ...env, GEMINI_MODEL: "custom-model", GEMINI_THINKING_LEVEL: "high" },
+    fetch: async (url, options) => {
       assert.ok(options.body.length <= 400_000);
       const request = JSON.parse(options.body);
-      assert.equal(request.model, "custom-model");
-      assert.equal(request.output_config.effort, "medium");
-      source = JSON.parse(request.messages[0].content);
+      assert.match(url, /\/models\/custom-model:generateContent$/u);
+      assert.equal(request.generationConfig.thinkingConfig.thinkingLevel, "HIGH");
+      source = JSON.parse(request.contents[0].parts[0].text);
       return reply([]);
     },
   });
@@ -151,8 +150,11 @@ test("invalid or unavailable editorial output preserves exact fallback without l
     async () => new Response("sensitive provider body", { status: 429 }),
     async () => new Response("x".repeat(128 * 1024 + 1)),
     async () => new Response("malformed JSON"),
-    async () => reply([good], { stop_reason: "max_tokens" }),
-    async () => reply([good], { content: [{ type: "tool_use" }] }),
+    async () => reply([good], { finishReason: "MAX_TOKENS" }),
+    async () => reply([good], { finishReason: "SAFETY" }),
+    async () => reply([good], { parts: [{ text: "secret summary", thought: true }] }),
+    async () => Response.json({ promptFeedback: { blockReason: "PROHIBITED_CONTENT" } }),
+    async () => reply([good], { parts: [{ functionCall: { name: "run" } }] }),
     async () => reply([{ ...good, commits: [f.base] }]),
     async () => reply([{ ...good, commits: [after, after] }]),
     async () => reply([{ ...good, body: "<script>unsafe</script>" }]),
@@ -208,7 +210,7 @@ test("native migration stays out of AI and fallback notes while shared shipping 
   const notes = await aiReleaseNotes(f.base, shipped, fallback, {
     ...options,
     fetch: async (_, options) => {
-      const source = JSON.parse(JSON.parse(options.body).messages[0].content);
+      const source = JSON.parse(JSON.parse(options.body).contents[0].parts[0].text);
       assert.deepEqual(
         source.commits.map(({ commit }) => commit),
         [shipped],
@@ -253,7 +255,17 @@ test("quiet ranges skip the API; missing key, missing baseline and excessive met
   );
   assert.equal(await aiReleaseNotes("", after, fallback, options), fallback);
   assert.equal(await aiReleaseNotes(f.base, after, fallback, { ...options, env: {} }), fallback);
-  f.commit({ "crates/core/src/lib.rs": "code" }, "Improve capture");
+  const changed = f.commit({ "crates/core/src/lib.rs": "code" }, "Improve capture");
+  for (const setting of [
+    { GEMINI_MODEL: "../files/x" },
+    { GEMINI_MODEL: "Gemini 4 Neon" },
+    { GEMINI_THINKING_LEVEL: "minimal" },
+    { GEMINI_THINKING_LEVEL: "max" },
+  ])
+    assert.equal(
+      await aiReleaseNotes(f.base, changed, fallback, { ...options, env: { ...env, ...setting } }),
+      fallback,
+    );
   // Feed the message over stdin rather than the OS's argument-size limit.
   execFileSync("git", ["commit", "--amend", "-F", "-"], {
     cwd: f.cwd,
