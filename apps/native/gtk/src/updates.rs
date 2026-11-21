@@ -1396,7 +1396,9 @@ mod tests {
         let reopening = card("2026.11.1201", &status, false, true, true);
         assert_eq!(
             reopening.warning,
-            Some("Your open captures will reopen after the update. Unsaved screenshot edits are kept.")
+            Some(
+                "Your open captures will reopen after the update. Unsaved screenshot edits are kept."
+            )
         );
         // Only an available update warns.
         assert!(
