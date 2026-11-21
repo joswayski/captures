@@ -23,12 +23,20 @@ const UPDATE_EVENT: &str = "update-status-changed";
 const RELEASES_URL: &str = "https://github.com/joswayski/captures/releases";
 const DOWNLOAD_PAGE_URL: &str = "https://captur.es/#download";
 const UPDATE_NOTICE_WIDTH: f64 = 400.0;
-const UPDATE_NOTICE_COMPACT_HEIGHT: f64 = 168.0;
-const UPDATE_NOTICE_NOTES_HEIGHT: f64 = 122.0;
+/// Card heights measured from the rendered notice (border included), plus a
+/// few points of slack. The card stretches to fill its window, so any extra
+/// height shows up as empty space between the header and the buttons.
+const UPDATE_NOTICE_HEADER_HEIGHT: f64 = 68.0;
+/// Not now / Update now. Hidden while downloading or restarting.
+const UPDATE_NOTICE_FOOTER_HEIGHT: f64 = 56.0;
+const UPDATE_NOTICE_NOTES_HEIGHT: f64 = 166.0;
 const UPDATE_NOTICE_MAX_HEIGHT: f64 = 480.0;
 const UPDATE_NOTICE_STACK_HEIGHT: f64 = 72.0;
-const UPDATE_NOTICE_WARNING_HEIGHT: f64 = 56.0;
-const UPDATE_NOTICE_STATUS_HEIGHT: f64 = 56.0;
+const UPDATE_NOTICE_WARNING_HEIGHT: f64 = 48.0;
+/// "Checking…" / "No updates are available."
+const UPDATE_NOTICE_STATUS_HEIGHT: f64 = 26.0;
+/// Download progress or the restart countdown.
+const UPDATE_NOTICE_PROGRESS_HEIGHT: f64 = 62.0;
 const UPDATE_NOTICE_ERROR_HEIGHT: f64 = 96.0;
 const RESTART_COUNTDOWN_SECONDS: u8 = 3;
 const RESTART_FADE_DURATION: Duration = Duration::from_millis(400);
@@ -1193,12 +1201,16 @@ fn update_notice_height(status: &UpdateStatus, show_changelog: bool) -> f64 {
         } => UPDATE_NOTICE_WARNING_HEIGHT,
         _ => 0.0,
     };
-    let status_body = match status {
-        UpdateStatus::Available { .. } => 0.0,
-        UpdateStatus::Error { .. } => UPDATE_NOTICE_ERROR_HEIGHT,
-        _ => UPDATE_NOTICE_STATUS_HEIGHT,
+    let (status_body, footer) = match status {
+        UpdateStatus::Available { .. } => (0.0, UPDATE_NOTICE_FOOTER_HEIGHT),
+        UpdateStatus::Error { .. } => (UPDATE_NOTICE_ERROR_HEIGHT, UPDATE_NOTICE_FOOTER_HEIGHT),
+        UpdateStatus::Downloading { .. } | UpdateStatus::Restarting { .. } => {
+            (UPDATE_NOTICE_PROGRESS_HEIGHT, 0.0)
+        }
+        _ => (UPDATE_NOTICE_STATUS_HEIGHT, UPDATE_NOTICE_FOOTER_HEIGHT),
     };
-    (UPDATE_NOTICE_COMPACT_HEIGHT + notes + warning + status_body).min(UPDATE_NOTICE_MAX_HEIGHT)
+    (UPDATE_NOTICE_HEADER_HEIGHT + status_body + notes + warning + footer)
+        .min(UPDATE_NOTICE_MAX_HEIGHT)
 }
 
 fn show_update_changelog(app: &AppHandle) -> bool {
@@ -2124,8 +2136,8 @@ mod tests {
         ]);
         assert_eq!(update_notice_height(&single, true), 290.0);
         assert_eq!(update_notice_height(&stacked, true), 434.0);
-        assert_eq!(update_notice_height(&single, false), 168.0);
-        assert_eq!(update_notice_height(&stacked, false), 168.0);
+        assert_eq!(update_notice_height(&single, false), 124.0);
+        assert_eq!(update_notice_height(&stacked, false), 124.0);
         let warned = UpdateStatus::Available {
             current_version: "2026.7.1901".into(),
             current_display_version: "2026.07.19.1".into(),
@@ -2142,8 +2154,8 @@ mod tests {
             download_size: None,
             will_close_open_captures: true,
         };
-        assert_eq!(update_notice_height(&warned, true), 346.0);
-        assert_eq!(update_notice_height(&warned, false), 224.0);
+        assert_eq!(update_notice_height(&warned, true), 338.0);
+        assert_eq!(update_notice_height(&warned, false), 172.0);
         let failed = UpdateStatus::Error {
             current_version: "2026.7.1901".into(),
             current_display_version: "2026.07.19.1".into(),
@@ -2152,8 +2164,8 @@ mod tests {
                     .into(),
             retry_install: true,
         };
-        assert_eq!(update_notice_height(&failed, true), 264.0);
-        assert_eq!(update_notice_height(&failed, false), 264.0);
+        assert_eq!(update_notice_height(&failed, true), 220.0);
+        assert_eq!(update_notice_height(&failed, false), 220.0);
     }
 
     #[test]
