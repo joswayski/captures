@@ -1142,7 +1142,7 @@ export function transformImageElement(
   };
 }
 
-const SUPPORTED_IMAGE_EXTENSIONS = new Set([
+export const SUPPORTED_IMAGE_EXTENSIONS = new Set([
   "avif",
   "bmp",
   "gif",

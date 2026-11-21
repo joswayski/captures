@@ -318,6 +318,7 @@ pub fn run() {
             mark_internal_file_drop,
             preview_file_drop_landing,
             read_prepared_drag_image,
+            read_picked_image,
             prepared_drag_artifact_id,
             get_capture_history,
             restore_history_artifact,
@@ -3045,6 +3046,30 @@ fn read_prepared_drag_image(
         return Err("the prepared drag image is no longer available".to_owned());
     }
     fs::read(&prepared.path).map_err(|error| error.to_string())
+}
+
+/// Image extensions the screenshot editor's Add images picker offers. Keep in
+/// sync with `SUPPORTED_IMAGE_EXTENSIONS` in the editor UI.
+const PICKED_IMAGE_EXTENSIONS: &[&str] =
+    &["avif", "bmp", "gif", "jpeg", "jpg", "png", "svg", "webp"];
+
+/// Read an image the user chose in the editor's filtered Add images dialog.
+///
+/// The dialog replaces an HTML file input because WKWebView's open panel in
+/// wry ignores `accept`, so macOS offered every file type. Only image
+/// extensions are read so the command cannot fetch arbitrary files.
+#[tauri::command]
+fn read_picked_image(path: PathBuf) -> CommandResult<Vec<u8>> {
+    let is_image = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            PICKED_IMAGE_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str())
+        });
+    if !is_image {
+        return Err("choose a PNG, JPEG, WebP, GIF, or another image file".to_owned());
+    }
+    fs::read(&path).map_err(|error| error.to_string())
 }
 
 /// Artifact id for the staged preview drag, when the drop is from a mini preview.

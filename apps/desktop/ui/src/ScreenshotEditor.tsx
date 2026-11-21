@@ -115,6 +115,7 @@ import {
   isPolygonShapeKind,
   isFullyOutsideCanvas,
   isSupportedImageFile,
+  SUPPORTED_IMAGE_EXTENSIONS,
   loadImageFile,
   outputDimensions,
   positionImportedImageAtEdge,
@@ -5406,6 +5407,41 @@ export function ScreenshotEditor() {
     saveEditedImageRef.current = saveEditedImage;
   });
 
+  const chooseImageFiles = async () => {
+    // wry's macOS open panel ignores the file input's `accept`, so the app
+    // uses the dialog plugin, whose filter works on every OS. The browser
+    // dev harness keeps the HTML input.
+    if (!isTauri()) {
+      fileInputRef.current?.click();
+      return;
+    }
+    try {
+      const selected = await open({
+        multiple: true,
+        title: "Add images",
+        filters: [{ name: "Images", extensions: [...SUPPORTED_IMAGE_EXTENSIONS] }],
+      });
+      if (!selected?.length) return;
+      const files = await Promise.all(
+        selected.map(async (path) => {
+          const bytes = await invoke<number[]>("read_picked_image", { path });
+          const name = path.split(/[\\/]/).at(-1) ?? path;
+          const extension = name.split(".").at(-1)?.toLowerCase() ?? "";
+          const type =
+            extension === "svg"
+              ? "image/svg+xml"
+              : extension === "jpg"
+                ? "image/jpeg"
+                : `image/${extension}`;
+          return new File([Uint8Array.from(bytes)], name, { type });
+        }),
+      );
+      loadDroppedFiles(files);
+    } catch (reason) {
+      setError(`Images could not be added: ${String(reason)}`);
+    }
+  };
+
   const chooseDestinationDirectory = async () => {
     if (!artifact || busy) return;
     setError("");
@@ -5884,7 +5920,7 @@ export function ScreenshotEditor() {
             <button
               type="button"
               className="screenshot-add-image"
-              onClick={() => fileInputRef.current?.click()}
+              onClick={() => void chooseImageFiles()}
             >
               <EditorIcon name="image" /> Add images
             </button>
@@ -6515,7 +6551,7 @@ export function ScreenshotEditor() {
               type="button"
               aria-label="Add image layer"
               title="Add image layer"
-              onClick={() => fileInputRef.current?.click()}
+              onClick={() => void chooseImageFiles()}
             >
               <EditorIcon name="plus" />
             </button>
