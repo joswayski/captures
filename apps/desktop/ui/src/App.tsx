@@ -7473,7 +7473,10 @@ export function Thumbnail() {
     };
 
     const stopNativeTracking = () => {
-      document.documentElement.classList.remove("thumbnail-native-tracking");
+      document.documentElement.classList.remove(
+        "thumbnail-native-tracking",
+        "thumbnail-native-hover",
+      );
       clearNativeHover();
       clearThumbnailCssCursor();
       setIgnoreCursorEvents(true, true);
@@ -7538,6 +7541,10 @@ export function Thumbnail() {
       maybeUnlockCardHover(position);
       const ignore = shouldIgnoreThumbnailCursorEvents(position);
       const kind = applyThumbnailNativeHover(position);
+      // Samples own hover paint even after the pointer leaves. The window turns
+      // click-through before WebKit sees the exit, so CSS :hover would keep
+      // the last control (often Delete) lit while another app has focus.
+      document.documentElement.classList.add("thumbnail-native-hover");
       if (ignore || kind === "default") {
         // Empty space after collapse still sits inside the native window.
         // Document-wide native cursor rules would keep the arrow over apps
@@ -7574,7 +7581,10 @@ export function Thumbnail() {
       consecutiveNullPolls = 0;
       invalidatePointerPoll();
       // Drop native-only presentation so CSS hover works while we re-arm.
-      document.documentElement.classList.remove("thumbnail-native-tracking");
+      document.documentElement.classList.remove(
+        "thumbnail-native-tracking",
+        "thumbnail-native-hover",
+      );
       clearNativeClasses();
       clearThumbnailCssCursor();
       cursorKind = "default";

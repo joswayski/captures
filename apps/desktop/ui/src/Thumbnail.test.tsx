@@ -91,7 +91,10 @@ describe("Thumbnail", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    document.documentElement.classList.remove("thumbnail-native-tracking");
+    document.documentElement.classList.remove(
+      "thumbnail-native-tracking",
+      "thumbnail-native-hover",
+    );
     document.documentElement.removeAttribute("data-thumbnail-cursor");
     document.documentElement.style.cursor = "";
     Reflect.deleteProperty(document, "elementFromPoint");
@@ -568,7 +571,7 @@ describe("Thumbnail", () => {
     render(<Thumbnail />);
     await screen.findByRole("article");
 
-    document.documentElement.classList.add("thumbnail-native-tracking");
+    document.documentElement.classList.add("thumbnail-native-tracking", "thumbnail-native-hover");
     Object.defineProperty(document, "hidden", {
       configurable: true,
       get: () => false,
@@ -580,6 +583,7 @@ describe("Thumbnail", () => {
       expect(vi.mocked(invoke)).toHaveBeenCalledWith("refresh_thumbnail_interactivity");
     });
     expect(document.documentElement).not.toHaveClass("thumbnail-native-tracking");
+    expect(document.documentElement).not.toHaveClass("thumbnail-native-hover");
   });
 
   it("applies grab and pointer cursors from DOM hover without waiting for a click", async () => {
@@ -2992,6 +2996,8 @@ describe("Thumbnail", () => {
       expect(vi.mocked(invoke)).toHaveBeenCalledWith("set_thumbnail_cursor", { kind: "default" });
     });
     expect(document.documentElement).not.toHaveClass("thumbnail-native-tracking");
+    // Click-through hides the exit from WebKit; stale CSS :hover must stay gated.
+    expect(document.documentElement).toHaveClass("thumbnail-native-hover");
     expect(document.documentElement).not.toHaveAttribute("data-thumbnail-cursor");
     expect(document.documentElement.style.cursor).toBe("");
   });

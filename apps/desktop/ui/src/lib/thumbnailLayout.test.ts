@@ -933,7 +933,7 @@ describe("thumbnail stack layout", () => {
       /\.thumbnail-stack\[data-thumbnail-suppress-card-hover="true"\]\s+\.thumbnail-card:focus-within/,
     );
     expect(thumbnailStyles).toMatch(
-      /html:not\(\.thumbnail-native-tracking\) \.icon-button\.delete:hover/,
+      /html:not\(\.thumbnail-native-hover\) \.icon-button\.delete:hover/,
     );
     expect(thumbnailStyles).toMatch(/\.icon-button\.delete\[data-native-pointer-hover="true"\]/);
     expect(thumbnailStyles).not.toMatch(/(?:^|\n)\.icon-button\.delete:hover/m);
