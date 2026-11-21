@@ -3783,8 +3783,7 @@ async fn finish_capture(
         (image, None)
     };
     let encode_task = tauri::async_runtime::spawn_blocking(move || -> Result<_, AppError> {
-        let image_png = storage::encode_png(&image_for_encoding)?;
-        let preview_png = storage::encode_thumbnail_png(&image_for_encoding)?;
+        let (image_png, preview_png) = storage::encode_png_and_thumbnail(&image_for_encoding)?;
         let history_entry = HistoryEntry {
             id: history_artifact_id.clone(),
             kind: ArtifactKind::Screenshot,

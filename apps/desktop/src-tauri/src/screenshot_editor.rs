@@ -311,8 +311,7 @@ pub async fn save_screenshot_edit(
             let image = decode_editor_png(&task_png)?;
             let width = image.width();
             let height = image.height();
-            let image_png = storage::encode_png(&image)?;
-            let preview_png = storage::encode_thumbnail_png(&image)?;
+            let (image_png, preview_png) = storage::encode_png_and_thumbnail(&image)?;
             let output = encode_save_export(
                 &image,
                 &image_png,

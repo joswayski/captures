@@ -340,11 +340,12 @@ struct OpenedStillStore<'a> {
 async fn decode_opened_still(path: PathBuf) -> Result<OpenedStillPixels, AppError> {
     tauri::async_runtime::spawn_blocking(move || {
         let image = screenshot_editor::decode_still_image_file(&path)?;
+        let (image_png, preview_png) = storage::encode_png_and_thumbnail(&image)?;
         Ok(OpenedStillPixels {
             width: image.width(),
             height: image.height(),
-            image_png: storage::encode_png(&image)?,
-            preview_png: storage::encode_thumbnail_png(&image)?,
+            image_png,
+            preview_png,
         })
     })
     .await

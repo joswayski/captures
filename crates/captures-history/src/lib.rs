@@ -396,6 +396,19 @@ pub fn encode_thumbnail_png(image: &RgbaImage) -> Result<Vec<u8>, Error> {
     }
     encode_png(image)
 }
+/// The lossless PNG and its thumbnail, encoded at the same time and
+/// byte-identical to [`encode_png`] and [`encode_thumbnail_png`]. A new capture
+/// waits for both, and scaling the thumbnail takes longer than the PNG.
+pub fn encode_png_and_thumbnail(image: &RgbaImage) -> Result<(Vec<u8>, Vec<u8>), Error> {
+    std::thread::scope(|scope| {
+        let thumbnail = scope.spawn(|| encode_thumbnail_png(image));
+        let png = encode_png(image);
+        let thumbnail = thumbnail
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+        Ok((png?, thumbnail?))
+    })
+}
 pub fn encode_png_with_quality(
     image: &RgbaImage,
     compression: CompressionType,
@@ -638,5 +651,17 @@ mod tests {
         let portrait = RgbaImage::new(600, 1200);
         let decoded = image::load_from_memory(&encode_thumbnail_png(&portrait).unwrap()).unwrap();
         assert_eq!((decoded.width(), decoded.height()), (160, 320));
+    }
+
+    #[test]
+    fn png_and_thumbnail_pair_matches_the_separate_encoders_in_order() {
+        // Larger than a thumbnail, so the two outputs differ.
+        let image = RgbaImage::from_fn(900, 500, |x, y| {
+            image::Rgba([(x % 256) as u8, (y % 256) as u8, ((x + y) % 256) as u8, 255])
+        });
+        let (png, thumbnail) = encode_png_and_thumbnail(&image).unwrap();
+        assert_eq!(png, encode_png(&image).unwrap());
+        assert_eq!(thumbnail, encode_thumbnail_png(&image).unwrap());
+        assert_ne!(png, thumbnail);
     }
 }

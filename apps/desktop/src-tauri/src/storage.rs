@@ -461,6 +461,11 @@ pub fn encode_thumbnail_png(image: &RgbaImage) -> Result<Vec<u8>, AppError> {
     captures_history::encode_thumbnail_png(image).map_err(Into::into)
 }
 
+/// `(encode_png, encode_thumbnail_png)` for one image, encoded concurrently.
+pub fn encode_png_and_thumbnail(image: &RgbaImage) -> Result<(Vec<u8>, Vec<u8>), AppError> {
+    captures_history::encode_png_and_thumbnail(image).map_err(Into::into)
+}
+
 fn encode_drag_icon_png(preview_png: &[u8]) -> Result<Vec<u8>, AppError> {
     let preview =
         image::load_from_memory(preview_png).map_err(|error| AppError::Image(error.to_string()))?;
