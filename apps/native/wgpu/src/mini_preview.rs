@@ -562,9 +562,10 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> (Option<Actio
         let chip = clipboard_chip_rect(ui, tokens, card, inset);
         clipboard_chip(ui, tokens, chip, chip_pose);
     }
-    let label = view.message.map(str::to_owned).unwrap_or_else(|| {
-        captures_app::preview::card_metadata(view.size_bytes)
-    });
+    let label = view
+        .message
+        .map(str::to_owned)
+        .unwrap_or_else(|| captures_app::preview::card_metadata(view.size_bytes));
     let label_position = card.left_bottom() + egui::vec2(inset, -inset);
     let mut label_job = egui::text::LayoutJob::simple(
         label,
@@ -4564,10 +4565,7 @@ mod tests {
                 !locked,
                 "{texts:?}"
             );
-            assert_eq!(
-                texts.iter().any(|text| text == "246 KB"),
-                locked
-            );
+            assert_eq!(texts.iter().any(|text| text == "246 KB"), locked);
             assert_eq!(
                 uses_texture(&output, blurred),
                 !locked && !rejected && !dragging
