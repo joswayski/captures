@@ -190,6 +190,17 @@ the canvas. Hover a layer that hangs off an edge to preview the clipped part
 and expand. Locked layers keep size and position until unlocked; layer width
 and height stay proportional.
 
+Current source adds editor keys on macOS, Windows, and Linux. In the screenshot
+editor, `Ctrl`/`Cmd`+`S` saves, `Ctrl`/`Cmd`+`Shift`+`C` copies the image,
+`Ctrl`/`Cmd`+`Y` redoes (as `Ctrl`/`Cmd`+`Shift`+`Z` already does), and `Enter`
+applies a drawn crop. Holding an arrow key to nudge a layer is one Undo step,
+`Esc` that closes a dropdown or layer menu keeps the layer selected, and
+shortcuts keep working after you click a slider or checkbox. In the
+recording editor, `Space` plays or pauses, `Left`/`Right` step the playhead by
+about a frame (`Shift` for one second), `Home`/`End` jump to the trim start or
+end, `I`/`O` set the trim start or end at the playhead, and `Ctrl`/`Cmd`+`S`
+saves. A focused text field, button, slider, or menu keeps its own keys.
+
 ## Development
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for local setup, validation, and packaging.

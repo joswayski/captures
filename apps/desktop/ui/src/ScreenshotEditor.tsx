@@ -285,6 +285,26 @@ type PanGesture = {
   originPanY: number;
 };
 
+const NON_TEXT_INPUT_TYPES = new Set(["range", "checkbox", "radio", "button", "file"]);
+
+/** True for controls the user types into, which keep their own editing keys. */
+function isTextEntryTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  if (target instanceof HTMLInputElement) return !NON_TEXT_INPUT_TYPES.has(target.type);
+  return target.matches("textarea, select, [contenteditable=true]");
+}
+
+/** Keys a focused range input handles itself. */
+function isSliderKey(key: string): boolean {
+  return (
+    key.startsWith("Arrow") ||
+    key === "Home" ||
+    key === "End" ||
+    key === "PageUp" ||
+    key === "PageDown"
+  );
+}
+
 /** True when a keyboard event is Command (Mac) or Ctrl (Windows/Linux). */
 function isPanModifierKey(event: KeyboardEvent): boolean {
   return (
@@ -2117,6 +2137,9 @@ export function ScreenshotEditor() {
   /** Save clicked while copy is still running; start it as soon as copy finishes. */
   const pendingSaveAfterCopyRef = useRef(false);
   const saveEditedImageRef = useRef<() => Promise<void>>(async () => undefined);
+  const copyEditedImageRef = useRef<() => Promise<void>>(async () => undefined);
+  /** Applies the pending crop and reports whether there was one. */
+  const applyPendingCropRef = useRef<() => boolean>(() => false);
   /** Bumps to cancel in-flight debounced draft writes. */
   const draftSaveGenerationRef = useRef(0);
   const draftWriteRef = useRef<Promise<void>>(Promise.resolve());
@@ -2532,6 +2555,19 @@ export function ScreenshotEditor() {
       return writing;
     },
     [writeEditorDraft],
+  );
+
+  // The backend runs draft commands concurrently, so a discard sent while an
+  // autosave is still being written could finish first and leave that draft
+  // behind. Queue it after every older write instead.
+  const discardEditorDraftAfterWrites = useCallback(
+    (artifactKey: string) => {
+      draftWriteRef.current = draftWriteRef.current
+        .catch(() => undefined)
+        .then(() => discardEditorDraft(artifactKey))
+        .catch(() => undefined);
+    },
+    [discardEditorDraft],
   );
 
   const flushEditorDraft = useCallback(
@@ -3174,8 +3210,11 @@ export function ScreenshotEditor() {
       const current = documentRef.current;
       const element = current?.elements.find(({ id }) => id === selectedId);
       if (!current || !element || element.locked) return;
+      // A held arrow key repeats ~30 times a second; without a key, a few
+      // seconds of nudging would push every older step out of the undo history.
       commitDocument(
         replaceElement(current, element.id, translateElement(element, deltaX, deltaY)),
+        `${element.id}:nudge`,
       );
     },
     [commitDocument, selectedId],
@@ -3325,9 +3364,9 @@ export function ScreenshotEditor() {
     const onKeyDown = (event: KeyboardEvent) => {
       const command = event.metaKey || event.ctrlKey;
       const target = event.target as HTMLElement | null;
-      const editingField =
-        target instanceof Element &&
-        target.matches("input, textarea, select, [contenteditable=true]");
+      // Sliders and checkboxes keep focus after a click in Chromium
+      // webviews; they must not swallow undo, delete or tool keys.
+      const editingField = isTextEntryTarget(target);
       const interactiveTarget =
         target instanceof Element &&
         target.matches("input, textarea, select, button, a, [contenteditable=true]");
@@ -3364,7 +3403,22 @@ export function ScreenshotEditor() {
         setManualZoom(100);
         return;
       }
+      if (command && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "s") {
+        // Also keeps the webview's own "save page" from opening.
+        event.preventDefault();
+        if (!event.repeat) void saveEditedImageRef.current();
+        return;
+      }
       if (editingField) return;
+      // A focused slider uses these keys itself; they must not also move a layer.
+      if (target instanceof HTMLInputElement && target.type === "range" && isSliderKey(event.key)) {
+        return;
+      }
+      if (command && event.shiftKey && !event.altKey && event.key.toLowerCase() === "c") {
+        event.preventDefault();
+        if (!event.repeat) void copyEditedImageRef.current();
+        return;
+      }
       // Let the webview dispatch copy/paste with the current clipboard contents.
       if (command && ["c", "v"].includes(event.key.toLowerCase())) return;
       if (command && event.key.toLowerCase() === "d") {
@@ -3377,7 +3431,26 @@ export function ScreenshotEditor() {
         else undo();
         return;
       }
+      if (command && !event.shiftKey && event.key.toLowerCase() === "y") {
+        event.preventDefault();
+        redo();
+        return;
+      }
+      // Enter confirms a drawn crop, as Escape cancels it. A focused button
+      // keeps Enter, except the tool rail the Crop tool was just picked from.
+      if (
+        event.key === "Enter" &&
+        !command &&
+        !event.defaultPrevented &&
+        (!interactiveTarget || target?.closest(".screenshot-tool-rail")) &&
+        applyPendingCropRef.current()
+      ) {
+        event.preventDefault();
+        return;
+      }
       if (event.key === "Escape") {
+        // A dropdown or layer popover already used this Escape to close itself.
+        if (event.defaultPrevented) return;
         if (shapesMenuOpen) {
           event.preventDefault();
           setShapesMenuOpen(false);
@@ -5391,7 +5464,7 @@ export function ScreenshotEditor() {
             // Compress JPEG still needs the flattened PNG length as Est. size's
             // baseline. Preserve quality keeps the capture file as the original.
             if (qualityMode !== "preserve") {
-              sourceBytes = (await canvasPngBytes(canvas)).length;
+              sourceBytes = await estimateCanvasExportBytes(canvas, "png", 100);
             }
             const estimateQuality =
               exportFormat === "jpeg" && qualityMode !== "preserve" ? Number(jpegQuality) : 100;
@@ -5547,10 +5620,10 @@ export function ScreenshotEditor() {
       // let the pending autosave write it.
       if (documentRef.current === savedDocument) {
         draftSaveGenerationRef.current += 1;
-        void discardEditorDraft(result.artifact.id).catch(() => undefined);
+        discardEditorDraftAfterWrites(result.artifact.id);
         // Window may still be keyed by the previous capture when Save as new file saved a new id.
         if (draftArtifactId && draftArtifactId !== result.artifact.id) {
-          void discardEditorDraft(draftArtifactId).catch(() => undefined);
+          discardEditorDraftAfterWrites(draftArtifactId);
         }
       }
       setSaved(result);
@@ -5573,6 +5646,12 @@ export function ScreenshotEditor() {
   };
   useLayoutEffect(() => {
     saveEditedImageRef.current = saveEditedImage;
+    copyEditedImageRef.current = copyEditedImage;
+    applyPendingCropRef.current = () => {
+      if (tool !== "crop" || !cropSelection) return false;
+      applyCrop();
+      return true;
+    };
   });
 
   const chooseImageFiles = async () => {
@@ -5725,13 +5804,15 @@ export function ScreenshotEditor() {
   ]);
 
   useEffect(() => {
-    if (!canPreviewCompression) return;
+    // Each preview flattens, encodes and round-trips the full image. Only the
+    // comparison shows it, so skip that work while the comparison is hidden.
+    if (!showCompressCompare) return;
     const timer = window.setTimeout(() => {
       void loadCompressPreview();
     }, 280);
     return () => window.clearTimeout(timer);
   }, [
-    canPreviewCompression,
+    showCompressCompare,
     exportFormat,
     imageRevision,
     jpegQuality,
@@ -5998,6 +6079,8 @@ export function ScreenshotEditor() {
               disabled={undoStack.length === 0}
               onClick={undo}
               aria-label="Undo"
+              aria-keyshortcuts="Meta+Z Control+Z"
+              title="Undo (Command/Ctrl+Z)"
             >
               <EditorIcon name="undo" />
             </button>
@@ -6006,6 +6089,8 @@ export function ScreenshotEditor() {
               disabled={redoStack.length === 0}
               onClick={redo}
               aria-label="Redo"
+              aria-keyshortcuts="Meta+Shift+Z Control+Shift+Z Control+Y"
+              title="Redo (Command/Ctrl+Shift+Z or Ctrl+Y)"
             >
               <EditorIcon name="redo" />
             </button>
@@ -6014,6 +6099,7 @@ export function ScreenshotEditor() {
                 type="button"
                 className={zoomMode === "fit" ? "active" : ""}
                 aria-label="Fit canvas"
+                aria-pressed={zoomMode === "fit"}
                 title="Fit canvas to window"
                 onClick={activateFitZoom}
               >
@@ -6022,7 +6108,8 @@ export function ScreenshotEditor() {
               <button
                 type="button"
                 aria-label="Zoom out"
-                title="Zoom out"
+                aria-keyshortcuts="Meta+Minus Control+Minus"
+                title="Zoom out (Command/Ctrl+−)"
                 disabled={displayScale * 100 <= MIN_SCREENSHOT_ZOOM_PERCENT + 0.05}
                 onClick={() => zoomBy(1 / KEYBOARD_ZOOM_FACTOR)}
               >
@@ -6057,7 +6144,8 @@ export function ScreenshotEditor() {
               <button
                 type="button"
                 aria-label="Zoom in"
-                title="Zoom in"
+                aria-keyshortcuts="Meta+Plus Control+Plus"
+                title="Zoom in (Command/Ctrl++)"
                 disabled={displayScale * 100 >= MAX_SCREENSHOT_ZOOM_PERCENT - 0.05}
                 onClick={() => zoomBy(KEYBOARD_ZOOM_FACTOR)}
               >
@@ -7292,7 +7380,13 @@ export function ScreenshotEditor() {
                     <button type="button" onClick={() => setCropSelection(null)}>
                       Clear
                     </button>
-                    <button type="button" className="primary cta-pulse" onClick={applyCrop}>
+                    <button
+                      type="button"
+                      className="primary cta-pulse"
+                      aria-keyshortcuts="Enter"
+                      title="Apply crop (Enter)"
+                      onClick={applyCrop}
+                    >
                       Apply crop
                     </button>
                   </div>
@@ -8284,6 +8378,7 @@ export function ScreenshotEditor() {
                 .join(" ")}
               title="Copy the edited image to the clipboard. Does not save a file."
               aria-label={success?.kind === "copy" ? "Copied" : "Copy image"}
+              aria-keyshortcuts="Meta+Shift+C Control+Shift+C"
               aria-busy={busy === "copying" ? true : undefined}
               disabled={busy === "saving"}
               onClick={() => void copyEditedImage()}
@@ -8349,6 +8444,7 @@ export function ScreenshotEditor() {
               type="button"
               className="primary"
               title={saveHint}
+              aria-keyshortcuts="Meta+S Control+S"
               disabled={busy === "saving"}
               onClick={() => void saveEditedImage()}
             >

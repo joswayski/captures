@@ -4486,6 +4486,15 @@ describe("ScreenshotEditor", () => {
         { timeout: 3_000 },
       );
       expect(screen.queryByText("+60%")).not.toBeInTheDocument();
+
+      // Export settings stayed closed, so nothing showed a before/after image
+      // and none was encoded. Opening the comparison requests the current one.
+      const previews = () =>
+        vi.mocked(invoke).mock.calls.filter(([command]) => command === "preview_screenshot_export");
+      expect(previews()).toHaveLength(0);
+      openExportSettings();
+      await waitFor(() => expect(previews()).toHaveLength(1), { timeout: 3_000 });
+      expect(previews()[0][1]).toMatchObject({ qualityMode: "compress", pngMaxColors: 256 });
     } finally {
       restoreCanvas();
     }
@@ -5060,6 +5069,142 @@ describe("ScreenshotEditor", () => {
     expect(undo).toBeEnabled();
   });
 
+  it("folds a held arrow key into one undo step", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Canvas width");
+    drawArrow();
+
+    for (let press = 0; press < 5; press += 1) {
+      fireEvent.keyDown(window, { key: "ArrowDown", repeat: press > 0 });
+    }
+
+    // Draw, then the whole nudge: two steps back to an empty document.
+    const undo = screen.getByRole("button", { name: "Undo" });
+    fireEvent.click(undo);
+    expect(undo).toBeEnabled();
+    fireEvent.click(undo);
+    expect(undo).toBeDisabled();
+  });
+
+  it("keeps undo and redo keys working while a slider has focus, and leaves its arrows alone", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Canvas width");
+    drawArrow();
+    const undo = screen.getByRole("button", { name: "Undo" });
+    const redo = screen.getByRole("button", { name: "Redo" });
+    const opacity = screen.getByRole("slider", { name: "Opacity" });
+
+    // The slider's own key must not also nudge the layer: one undo empties the stack.
+    fireEvent.keyDown(opacity, { key: "ArrowRight" });
+    fireEvent.keyDown(opacity, { key: "z", ctrlKey: true });
+    expect(undo).toBeDisabled();
+    expect(redo).toBeEnabled();
+
+    fireEvent.keyDown(window, { key: "y", ctrlKey: true });
+    expect(undo).toBeEnabled();
+    expect(redo).toBeDisabled();
+    // A text field still keeps Command/Ctrl+Z for its own typing.
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Saved filename" }), {
+      key: "z",
+      ctrlKey: true,
+    });
+    expect(undo).toBeEnabled();
+  });
+
+  it("keeps the layer selected when Escape only closes a dropdown", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Canvas width");
+    drawArrow();
+    const layer = within(screen.getByRole("region", { name: "Layers" })).getByRole("button", {
+      name: /ArrowShape/,
+    });
+    expect(layer).toHaveAttribute("aria-pressed", "true");
+    openExportSettings();
+
+    const outputSize = screen.getByRole("combobox", { name: "Output size" });
+    fireEvent.click(outputSize);
+    expect(outputSize).toHaveAttribute("aria-expanded", "true");
+    fireEvent.keyDown(outputSize, { key: "Escape" });
+    expect(outputSize).toHaveAttribute("aria-expanded", "false");
+    expect(layer).toHaveAttribute("aria-pressed", "true");
+
+    // With nothing left to close, Escape deselects as before.
+    fireEvent.keyDown(outputSize, { key: "Escape" });
+    expect(layer).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("applies a drawn crop with Enter, but not from a field or another button", async () => {
+    render(<ScreenshotEditor />);
+    await screen.findByLabelText("Canvas width");
+    setCanvasZoomPercent(100);
+    fireEvent.click(screen.getByRole("button", { name: "Crop (C)" }));
+    const canvas = screen.getByLabelText("Screenshot editing canvas").querySelector("canvas")!;
+    setCanvasBounds(canvas);
+    canvas.setPointerCapture = vi.fn();
+    canvas.hasPointerCapture = vi.fn(() => true);
+    canvas.releasePointerCapture = vi.fn();
+
+    // Nothing drawn yet: Enter has no crop to apply.
+    fireEvent.keyDown(window, { key: "Enter" });
+    expect(screen.getByLabelText("Canvas width")).toHaveValue(1_440);
+
+    fireEvent.pointerDown(canvas, { button: 0, pointerId: 71, clientX: 100, clientY: 100 });
+    fireEvent.pointerMove(canvas, { pointerId: 71, clientX: 300, clientY: 200 });
+    fireEvent.pointerUp(canvas, { button: 0, pointerId: 71, clientX: 300, clientY: 200 });
+    expect(screen.getByLabelText("Crop width")).toHaveValue("200");
+
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Saved filename" }), { key: "Enter" });
+    fireEvent.keyDown(screen.getByRole("button", { name: "Clear" }), { key: "Enter" });
+    expect(screen.getByLabelText("Canvas width")).toHaveValue(1_440);
+
+    // The Crop tool button still has focus after a mouse pick.
+    fireEvent.keyDown(screen.getByRole("button", { name: "Crop (C)" }), { key: "Enter" });
+    expect(screen.getByLabelText("Canvas width")).toHaveValue(200);
+    expect(screen.getByLabelText("Canvas height")).toHaveValue(100);
+  });
+
+  it("saves and copies the image from the keyboard, once per press", async () => {
+    const restoreCanvas = installExportableCanvas();
+    const calls = (name: string) =>
+      vi.mocked(invoke).mock.calls.filter(([command]) => command === name);
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifact") return artifact;
+      if (command === "copy_screenshot_edit") return undefined;
+      if (command === "save_screenshot_edit") {
+        return { artifact, path: artifact.path, format: "png" };
+      }
+      const draft = draftCommandResult(String(command));
+      if (draft !== undefined || String(command).includes("screenshot_editor_draft")) {
+        return draft;
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    try {
+      render(<ScreenshotEditor />);
+      await screen.findByLabelText("Canvas width");
+      const filename = screen.getByRole("textbox", { name: "Saved filename" });
+
+      // Plain C picks the Crop tool and Command/Ctrl+C copies a layer; neither copies the image.
+      fireEvent.keyDown(window, { key: "c" });
+      fireEvent.keyDown(window, { key: "c", ctrlKey: true });
+      fireEvent.keyDown(window, { key: "C", ctrlKey: true, shiftKey: true, repeat: true });
+      expect(calls("copy_screenshot_edit")).toHaveLength(0);
+      fireEvent.keyDown(window, { key: "C", metaKey: true, shiftKey: true });
+      await waitFor(() => expect(calls("copy_screenshot_edit")).toHaveLength(1));
+      await screen.findByRole("button", { name: "Copied" });
+
+      // Save also works while typing the file name.
+      fireEvent.keyDown(filename, { key: "s", ctrlKey: true, repeat: true });
+      expect(calls("save_screenshot_edit")).toHaveLength(0);
+      const press = fireEvent.keyDown(filename, { key: "s", ctrlKey: true });
+      expect(press).toBe(false);
+      await waitFor(() => expect(calls("save_screenshot_edit")).toHaveLength(1));
+    } finally {
+      restoreCanvas();
+    }
+  });
+
   it("does not leave a zero-size shape after a click with no drag", async () => {
     render(<ScreenshotEditor />);
     await screen.findByLabelText("Canvas width");
@@ -5189,6 +5334,58 @@ describe("ScreenshotEditor", () => {
       });
       await screen.findByText(/Saved/);
       expect(invoke).not.toHaveBeenCalledWith("discard_screenshot_editor_draft", expect.anything());
+    } finally {
+      restoreCanvas();
+    }
+  });
+
+  it("discards the draft after a save only once the autosave still being written has finished", async () => {
+    const restoreCanvas = installExportableCanvas();
+    let finishDraftWrite: (() => void) | undefined;
+    const order: string[] = [];
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifact") return artifact;
+      if (command === "save_screenshot_edit") {
+        return { artifact, path: artifact.path, format: "png" };
+      }
+      if (command === "estimate_screenshot_export") return 12_000;
+      if (command === "save_screenshot_editor_draft") {
+        order.push("draft write started");
+        return new Promise<void>((resolve) => {
+          finishDraftWrite = () => {
+            order.push("draft write finished");
+            resolve();
+          };
+        });
+      }
+      if (command === "discard_screenshot_editor_draft") {
+        order.push("draft discarded");
+        return undefined;
+      }
+      const draft = draftCommandResult(String(command));
+      if (draft !== undefined || String(command).includes("screenshot_editor_draft")) {
+        return draft;
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    try {
+      render(<ScreenshotEditor />);
+      await screen.findByLabelText("Canvas width");
+      drawArrow(81);
+      await waitFor(() => expect(finishDraftWrite).toBeDefined(), { timeout: 3_000 });
+
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      await screen.findByText(/Saved/);
+      await act(async () => undefined);
+      expect(order).toEqual(["draft write started"]);
+
+      await act(async () => {
+        finishDraftWrite!();
+      });
+      await waitFor(() =>
+        expect(order).toEqual(["draft write started", "draft write finished", "draft discarded"]),
+      );
     } finally {
       restoreCanvas();
     }

@@ -113,10 +113,14 @@
   user-select: none;
 }
 
-.screenshot-editor button:focus-visible,
-.screenshot-editor select:focus-visible,
-.screenshot-editor input:focus-visible,
-.screenshot-editor textarea:focus-visible {
+/* The three menus are portaled to <body>, outside the editor root. */
+:is(
+    .screenshot-editor,
+    .screenshot-canvas-bg-menu,
+    .screenshot-text-style-menu,
+    .screenshot-layer-menu-panel
+  )
+  :is(button, select, input, textarea):focus-visible {
   outline: 2px solid var(--theme-accent);
   outline-offset: 2px;
 }
