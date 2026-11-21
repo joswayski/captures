@@ -864,6 +864,17 @@ export function installPreviewBackend(): void {
         if (url) window.open(url, "_blank", "noopener,noreferrer");
         return undefined;
       }
+      if (command === "open_update_release") {
+        const version = payloadString(payload, "version");
+        if (version) {
+          window.open(
+            `https://github.com/joswayski/captures/releases/tag/v${version}`,
+            "_blank",
+            "noopener,noreferrer",
+          );
+        }
+        return undefined;
+      }
       if (command === "select_capture_display") return selectCaptureDisplay(payload);
       if (
         command === "get_thumbnail_pointer_position" ||

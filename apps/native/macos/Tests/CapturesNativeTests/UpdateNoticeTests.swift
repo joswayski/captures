@@ -110,7 +110,7 @@ final class UpdateNoticeTests: XCTestCase {
         XCTAssertEqual(p.notes?.groups.map(\.displayVersion), ["2026.08.27.5", "2026.08.27.3"])
         XCTAssertEqual(p.notes?.groups.first?.items.first?.pullNumber, 265)
         XCTAssertEqual(p.notes?.groups.first?.items.first?.pullURL, "https://github.com/joswayski/captures/pull/265")
-        XCTAssertEqual(p.dismiss?.label, "Later")
+        XCTAssertEqual(p.dismiss?.label, "Not now")
         XCTAssertEqual(p.primary?.label, "Update now")
         XCTAssertNil(p.revealNotes)
 
@@ -122,7 +122,7 @@ final class UpdateNoticeTests: XCTestCase {
 
         try model.load(fixture: "closing")
         XCTAssertEqual(try model.presentation().closeWarning,
-            "Open captures reopen after the update. Screenshot drafts are kept.")
+            "Your open captures will reopen after the update. Unsaved screenshot edits are kept.")
 
         try model.load(fixture: "restarting")
         p = try model.presentation()

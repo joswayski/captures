@@ -2413,8 +2413,8 @@ def update_notice_live(binary, scratch):
         assert_accessible(dialog, "live update notice")
         assert find(dialog, "push button", "Open pull request 612"), "no pull request button"
         assert [e["title"] for e in events("update-notice")] == ["Update available"]
-        press(find(dialog, "push button", "Later")[0])
-        wait(lambda: events("update-notice-dismissed"), "Later")
+        press(find(dialog, "push button", "Not now")[0])
+        wait(lambda: events("update-notice-dismissed"), "Not now")
         wait(lambda: not find(app, "dialog", "Update available"), "the notice to close")
         # The tray shows the update in hand again; it does not recheck.
         service = wait(lambda: [json.loads(line) for line in FIXTURE_LOG.read_text().splitlines()

@@ -161,7 +161,7 @@ def main():
             app = App("flow", "--update-state", "available")
             report = app.report("Update available")
             assert report["notes"]["stacked"] and report["notes"]["groups"] == ["2026.08.27.5", "2026.08.27.3"], report
-            assert report["footer"] == {"dismiss": "Later", "primary": "Update now", "enabled": True}, report
+            assert report["footer"] == {"dismiss": "Not now", "primary": "Update now", "enabled": True}, report
             window = app.window()
             app.wait_size(window, window_height(434))
             # With the token font stack "#265" wraps under its bullet in the first group.

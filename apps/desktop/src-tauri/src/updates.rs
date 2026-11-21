@@ -418,6 +418,16 @@ pub fn open_update_changelog_url(app: AppHandle, url: String) -> Result<(), Stri
         .map_err(|error| error.to_string())
 }
 
+/// Opens the GitHub release for a dated Preview version shown in the notice.
+#[tauri::command]
+pub fn open_update_release(app: AppHandle, version: String) -> Result<(), String> {
+    let url = release_page_url(&version)
+        .ok_or_else(|| "that is not a published Captures version".to_owned())?;
+    app.opener()
+        .open_url(&url, None::<&str>)
+        .map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 pub async fn check_for_updates(app: AppHandle) -> Result<UpdateStatus, String> {
     check_for_updates_inner(&app, true).await
@@ -1280,6 +1290,22 @@ fn changelog_pull_request_url(url: &str) -> Option<String> {
     Some(format!("https://github.com/{owner}/{repo}/pull/{number}"))
 }
 
+/// Release tags are `v` plus the dotted display version, such as `v2026.11.21.1`.
+fn release_page_url(display_version: &str) -> Option<String> {
+    let mut parts = display_version.split('.');
+    let lengths = [
+        parts.next()?.len(),
+        parts.next()?.len(),
+        parts.next()?.len(),
+        parts.next()?.len(),
+    ];
+    let digits = display_version
+        .chars()
+        .all(|character| character.is_ascii_digit() || character == '.');
+    (parts.next().is_none() && digits && lengths[..3] == [4, 2, 2] && (1..=2).contains(&lengths[3]))
+        .then(|| format!("{RELEASES_URL}/tag/v{display_version}"))
+}
+
 fn download_error_is_retryable(error: &str) -> bool {
     let normalized = error.to_ascii_lowercase();
     normalized.contains("403")
@@ -1568,10 +1594,11 @@ mod tests {
         check_error_status, display_version, download_error_is_retryable, download_retry_delay,
         install_error_message, manifest_download_size, mark_restart_pending, notice_disposition,
         notice_restore_plan, open_captures_will_close_from, release_channel_enabled,
-        restart_blocker, should_begin_deferred_restore, should_hide_update_notice_status,
-        should_refresh_update_notice, should_wait_for_capture_start, stacked_changelog,
-        take_restart_marker, tray_update_item, unsaved_mini_previews_are_open,
-        update_available_menu_label, update_notice_height, version_is_newer_than,
+        release_page_url, restart_blocker, should_begin_deferred_restore,
+        should_hide_update_notice_status, should_refresh_update_notice,
+        should_wait_for_capture_start, stacked_changelog, take_restart_marker, tray_update_item,
+        unsaved_mini_previews_are_open, update_available_menu_label, update_notice_height,
+        version_is_newer_than,
     };
 
     #[test]
@@ -1897,6 +1924,30 @@ mod tests {
             changelog_pull_request_url("https://example.com/joswayski/captures/pull/249").is_none()
         );
         assert!(changelog_pull_request_url("javascript:alert(1)").is_none());
+    }
+
+    #[test]
+    fn opens_release_pages_only_for_dated_preview_versions() {
+        assert_eq!(
+            release_page_url("2026.11.21.1"),
+            Some("https://github.com/joswayski/captures/releases/tag/v2026.11.21.1".into()),
+        );
+        assert_eq!(
+            release_page_url("2026.11.09.12"),
+            Some("https://github.com/joswayski/captures/releases/tag/v2026.11.09.12".into()),
+        );
+        for rejected in [
+            "2026.11.2101",
+            "2026.11.21",
+            "2026.11.21.1.2",
+            "2026.11.21.123",
+            "v2026.11.21.1",
+            "2026.11.21.1/../../pulls",
+            "0.1.0",
+            "",
+        ] {
+            assert!(release_page_url(rejected).is_none(), "{rejected}");
+        }
     }
 
     #[test]

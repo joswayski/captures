@@ -1056,7 +1056,9 @@ mod tests {
         assert_eq!(notice.footer.unwrap().primary.unwrap(), install);
         assert_eq!(
             notice.close_warning.as_deref(),
-            Some("Open captures reopen after the update. Screenshot drafts are kept.")
+            Some(
+                "Your open captures will reopen after the update. Unsaved screenshot edits are kept."
+            )
         );
         assert!(worker.check());
         wait_idle(&mut worker);

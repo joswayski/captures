@@ -2238,7 +2238,7 @@ mod tests {
         assert_eq!(p.title, "Update available");
         assert_eq!(p.description, "Version 2026.11.13.2 · 104 MB");
         let footer = p.footer.unwrap();
-        assert_eq!(footer.dismiss.label, "Later");
+        assert_eq!(footer.dismiss.label, "Not now");
         assert_eq!(footer.primary.unwrap().label, "Update now");
         assert_eq!(
             p.notes.unwrap().groups[0].items[0]

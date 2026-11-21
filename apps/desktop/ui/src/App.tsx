@@ -714,7 +714,7 @@ function useUpdateStatus() {
 
 function openCapturesUpdateWarning(installable: boolean): string {
   return installable
-    ? "Open captures reopen after the update. Screenshot drafts are kept."
+    ? "Your open captures will reopen after the update. Unsaved screenshot edits are kept."
     : "Open captures will close. Unsaved edits are kept as drafts.";
 }
 
@@ -751,6 +751,24 @@ function UpdateDownloadFallback({ source }: { source: "notice" | "preferences" }
   );
 }
 
+/** Dated Preview versions (`2026.11.21.1`) map to their `v…` GitHub release. */
+const RELEASE_VERSION_PATTERN = /^\d{4}\.\d{2}\.\d{2}\.\d{1,2}$/;
+
+function UpdateVersionLink({ version }: { version: string }) {
+  if (!RELEASE_VERSION_PATTERN.test(version)) return <>{version}</>;
+  return (
+    <button
+      type="button"
+      className="update-version-link"
+      title="View this release on GitHub"
+      onClick={() => void invoke("open_update_release", { version })}
+    >
+      {version}
+      <ExternalPreferenceIcon />
+    </button>
+  );
+}
+
 export function UpdateNotice() {
   const status = useUpdateStatus();
   const [showChangelog, setShowChangelog] = useState(true);
@@ -777,17 +795,6 @@ export function UpdateNotice() {
       cleanup.dispose();
     };
   }, []);
-
-  const persistShowChangelog = (next: boolean) => {
-    setShowChangelog(next);
-    void invoke<AppSettings>("get_settings")
-      .then((current) =>
-        invoke("update_settings", {
-          settings: { ...current, show_update_changelog: next },
-        }),
-      )
-      .catch(() => undefined);
-  };
 
   const close = () => {
     setActionError("");
@@ -838,17 +845,29 @@ export function UpdateNotice() {
             : status?.state === "checking"
               ? "Checking for updates"
               : "Loading update details";
-  const description = restarting
-    ? `Version ${restarting.display_version}`
+  const version = restarting
+    ? restarting.display_version
     : downloading
-      ? `Version ${downloading.display_version}`
+      ? downloading.display_version
       : error
-        ? "Your current version was not changed."
+        ? null
         : available
-          ? `Version ${available.display_version}${installableDownloadSize ? ` · ${formatUpdateSize(installableDownloadSize)}` : ""}`
+          ? available.display_version
           : status?.state === "up_to_date"
-            ? `Version ${status.current_display_version}`
-            : "This should only take a moment.";
+            ? status.current_display_version
+            : null;
+  const description = version ? (
+    <>
+      Version {downloading || restarting ? version : <UpdateVersionLink version={version} />}
+      {available && installableDownloadSize
+        ? ` · ${formatUpdateSize(installableDownloadSize)}`
+        : ""}
+    </>
+  ) : error ? (
+    "Your current version was not changed."
+  ) : (
+    "This should only take a moment."
+  );
   const dismissBlocked = Boolean(downloading || restarting || installing);
 
   useEffect(() => {
@@ -896,15 +915,6 @@ export function UpdateNotice() {
             <h1 id="update-notice-title">{title}</h1>
             <p id="update-notice-description">{description}</p>
           </div>
-          {available && !error && !notesVisible && (
-            <button
-              type="button"
-              className="update-notes-reveal"
-              onClick={() => persistShowChangelog(true)}
-            >
-              What’s new
-            </button>
-          )}
         </header>
 
         <div className={`update-notice-body${notesVisible ? "" : " update-notice-body-status"}`}>
@@ -913,16 +923,7 @@ export function UpdateNotice() {
               className={`update-notes${stacked ? " update-notes-stacked" : ""}`}
               aria-label="What's new"
             >
-              <div className="update-notes-heading">
-                <h2>What’s new</h2>
-                <button
-                  type="button"
-                  className="update-notes-toggle"
-                  onClick={() => persistShowChangelog(false)}
-                >
-                  Hide
-                </button>
-              </div>
+              <h2 className="update-notes-heading">What’s new</h2>
               {stacked && (
                 <p className="update-notes-intro">
                   This update includes all of the following changes:
@@ -938,7 +939,11 @@ export function UpdateNotice() {
                         className="update-notes-group"
                         aria-labelledby={stacked ? headingId : undefined}
                       >
-                        {stacked && <h3 id={headingId}>{group.displayVersion}</h3>}
+                        {stacked && (
+                          <h3 id={headingId}>
+                            <UpdateVersionLink version={group.displayVersion} />
+                          </h3>
+                        )}
                         {group.items.length > 0 ? (
                           <ul className="update-notes-list">
                             {group.items.map((note, index) => {
@@ -1063,7 +1068,7 @@ export function UpdateNotice() {
         {!downloading && !restarting && (
           <footer className="update-notice-footer">
             <button className="update-dismiss" type="button" disabled={installing} onClick={close}>
-              {available ? "Later" : "Close"}
+              {available ? "Not now" : "Close"}
             </button>
             {available && !error && (
               <button

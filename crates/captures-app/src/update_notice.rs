@@ -25,7 +25,7 @@ const ERROR_HEIGHT: f64 = 96.0;
 /// download leaves them closed with their drafts.
 pub fn open_captures_warning(installable: bool) -> &'static str {
     if installable {
-        "Open captures reopen after the update. Screenshot drafts are kept."
+        "Your open captures will reopen after the update. Unsaved screenshot edits are kept."
     } else {
         "Open captures will close. Unsaved edits are kept as drafts."
     }
@@ -528,7 +528,7 @@ pub enum IconTone {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum Action {
-    /// Later/Close/Escape.
+    /// Not now/Close/Escape.
     Dismiss,
     /// Update now, View release, or Try again after an install failure.
     Install,
@@ -883,7 +883,7 @@ pub fn present(status: Option<&UpdateStatus>, view: &ViewState) -> Presentation 
         };
         Footer {
             dismiss: button(
-                if available { "Later" } else { "Close" },
+                if available { "Not now" } else { "Close" },
                 enabled,
                 Action::Dismiss,
             ),
@@ -1358,7 +1358,7 @@ mod tests {
         );
         assert_eq!(notes.hide.action, Action::HideNotes);
         let footer = p.footer.unwrap();
-        assert_eq!(footer.dismiss.label, "Later");
+        assert_eq!(footer.dismiss.label, "Not now");
         assert_eq!(footer.primary.unwrap().label, "Update now");
         assert!(p.close_warning.is_none());
         assert!(!p.dismiss_blocked);
@@ -1373,7 +1373,9 @@ mod tests {
         assert_eq!(p.reveal_notes.unwrap().action, Action::ShowNotes);
         assert_eq!(
             p.close_warning.as_deref(),
-            Some("Open captures reopen after the update. Screenshot drafts are kept.")
+            Some(
+                "Your open captures will reopen after the update. Unsaved screenshot edits are kept."
+            )
         );
         assert_eq!(p.card_height, 168.0 + 56.0);
         let shown = present(Some(&status), &view(true));
@@ -1475,7 +1477,7 @@ mod tests {
             .unwrap();
         assert_eq!(primary.action, Action::Check);
 
-        // An install command failure over an available update keeps "Later".
+        // An install command failure over an available update keeps "Not now".
         let status = fixture("available").unwrap();
         let p = present(
             Some(&status),
@@ -1488,7 +1490,7 @@ mod tests {
         assert_eq!(p.visual_state, "error");
         assert!(p.notes.is_none() && p.reveal_notes.is_none());
         let footer = p.footer.unwrap();
-        assert_eq!(footer.dismiss.label, "Later");
+        assert_eq!(footer.dismiss.label, "Not now");
         assert_eq!(footer.primary.unwrap().label, "Try again");
     }
 

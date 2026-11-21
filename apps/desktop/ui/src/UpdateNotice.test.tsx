@@ -77,9 +77,13 @@ describe("UpdateNotice", () => {
         name: "Update available",
       }),
     ).toBeInTheDocument();
-    expect(screen.getByText("Version 2026.07.19.2 · 12.6 MB")).toBeInTheDocument();
+    expect(document.getElementById("update-notice-description")).toHaveTextContent(
+      /^Version 2026\.07\.19\.2 · 12\.6 MB$/,
+    );
     expect(
-      screen.queryByText("Open captures reopen after the update. Screenshot drafts are kept."),
+      screen.queryByText(
+        "Your open captures will reopen after the update. Unsaved screenshot edits are kept.",
+      ),
     ).not.toBeInTheDocument();
     expect(screen.getByText("Adds automatic releases")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open pull request 1" })).toHaveTextContent("#1");
@@ -109,7 +113,10 @@ describe("UpdateNotice", () => {
 
     render(<UpdateNotice />);
 
-    expect(await screen.findByText("Version 2026.07.19.2")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "2026.07.19.2" })).toBeInTheDocument();
+    expect(document.getElementById("update-notice-description")).toHaveTextContent(
+      /^Version 2026\.07\.19\.2$/,
+    );
     expect(screen.queryByText(/12\.6 MB/u)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "View release" })).toBeInTheDocument();
     expect(
@@ -118,7 +125,7 @@ describe("UpdateNotice", () => {
     expect(screen.queryByText(/Open captures reopen/u)).not.toBeInTheDocument();
   });
 
-  it("dismisses Later through a native command instead of Window.hide", async () => {
+  it("dismisses Not now through a native command instead of Window.hide", async () => {
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "get_update_status") return available;
       if (command === "dismiss_update_notice") return undefined;
@@ -126,7 +133,7 @@ describe("UpdateNotice", () => {
     });
 
     render(<UpdateNotice />);
-    fireEvent.click(await screen.findByRole("button", { name: "Later" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Not now" }));
 
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("dismiss_update_notice"));
   });
@@ -153,8 +160,10 @@ describe("UpdateNotice", () => {
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open pull request 262" })).toHaveTextContent("#262");
     expect(screen.queryByText("Fix the latest Preview only")).not.toBeInTheDocument();
-    expect(screen.getByText("Version 2026.08.27.5 · 12.6 MB")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Later" }));
+    expect(document.getElementById("update-notice-description")).toHaveTextContent(
+      /^Version 2026\.08\.27\.5 · 12\.6 MB$/,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Not now" }));
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("dismiss_update_notice"));
   });
 
@@ -262,7 +271,7 @@ describe("UpdateNotice", () => {
     render(<UpdateNotice />);
 
     const warning = await screen.findByText(
-      "Open captures reopen after the update. Screenshot drafts are kept.",
+      "Your open captures will reopen after the update. Unsaved screenshot edits are kept.",
     );
     const notes = screen.getByRole("region", { name: "What's new" });
     const updateNow = screen.getByRole("button", { name: "Update now" });
@@ -295,7 +304,9 @@ describe("UpdateNotice", () => {
     render(<UpdateNotice />);
 
     expect(
-      await screen.findByText("Open captures reopen after the update. Screenshot drafts are kept."),
+      await screen.findByText(
+        "Your open captures will reopen after the update. Unsaved screenshot edits are kept.",
+      ),
     ).toBeInTheDocument();
     await waitFor(() => expect(updateStatusChanged).toBeDefined());
     await act(async () => {
@@ -306,7 +317,9 @@ describe("UpdateNotice", () => {
 
     await waitFor(() => {
       expect(
-        screen.queryByText("Open captures reopen after the update. Screenshot drafts are kept."),
+        screen.queryByText(
+          "Your open captures will reopen after the update. Unsaved screenshot edits are kept.",
+        ),
       ).not.toBeInTheDocument();
     });
   });
@@ -406,7 +419,7 @@ describe("UpdateNotice", () => {
     expect(notice.style.getPropertyValue("--tray-caret-x")).toBe("252px");
     expect(container.querySelector(".tray-notice-caret")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Update now" })).not.toHaveFocus();
-    expect(screen.getByRole("button", { name: "Later" })).not.toHaveFocus();
+    expect(screen.getByRole("button", { name: "Not now" })).not.toHaveFocus();
   });
 
   it("does not focus an action when an update is available", async () => {
@@ -418,7 +431,7 @@ describe("UpdateNotice", () => {
     expect(
       screen.queryByRole("button", { name: "download from captur.es" }),
     ).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Later" })).not.toHaveFocus();
+    expect(screen.getByRole("button", { name: "Not now" })).not.toHaveFocus();
   });
 
   it("does not let Escape dismiss an in-progress installation", async () => {
@@ -454,39 +467,31 @@ describe("UpdateNotice", () => {
     render(<UpdateNotice />);
     fireEvent.click(await screen.findByRole("button", { name: "Update now" }));
 
-    expect(await screen.findByRole("button", { name: "Later" })).toBeDisabled();
+    expect(await screen.findByRole("button", { name: "Not now" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Update now" })).toBeDisabled();
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.getByRole("dialog", { name: "Update available" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Later" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Not now" })).toBeDisabled();
 
     finishInstall();
-    await waitFor(() => expect(screen.getByRole("button", { name: "Later" })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Not now" })).toBeEnabled());
   });
 
-  it("can hide release notes from the update notice", async () => {
-    vi.mocked(invoke).mockImplementation(async (command, args) => {
+  it("always shows release notes and links the version to its GitHub release", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "get_update_status") return available;
       if (command === "get_settings") return { show_update_changelog: true };
-      if (command === "update_settings")
-        return (args as { settings: { show_update_changelog: boolean } }).settings;
+      if (command === "open_update_release") return undefined;
       throw new Error(`unexpected command: ${command}`);
     });
 
     render(<UpdateNotice />);
 
     expect(await screen.findByRole("region", { name: "What's new" })).toBeInTheDocument();
-    expect(screen.getByText("Adds automatic releases")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Hide" }));
-
-    await waitFor(() => {
-      expect(screen.queryByRole("region", { name: "What's new" })).not.toBeInTheDocument();
-    });
-    expect(screen.queryByText("Adds automatic releases")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "What’s new" })).toBeInTheDocument();
-    expect(invoke).toHaveBeenCalledWith("update_settings", {
-      settings: expect.objectContaining({ show_update_changelog: false }),
-    });
+    expect(screen.queryByRole("button", { name: "Hide" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "What’s new" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "2026.07.19.2" }));
+    expect(invoke).toHaveBeenCalledWith("open_update_release", { version: "2026.07.19.2" });
   });
 
   it("stays compact when release notes are turned off", async () => {
@@ -505,7 +510,7 @@ describe("UpdateNotice", () => {
     expect(
       screen.queryByText("Fix post-update launch notice position on macOS"),
     ).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "What’s new" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "What’s new" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Update now" })).toBeInTheDocument();
   });
 });

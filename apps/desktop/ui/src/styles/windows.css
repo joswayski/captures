@@ -2213,7 +2213,7 @@
 .update-notice-header {
   display: grid;
   padding: var(--s-6) var(--s-6) var(--s-5);
-  grid-template-columns: 36px minmax(0, 1fr) auto;
+  grid-template-columns: 36px minmax(0, 1fr);
   align-items: center;
   gap: var(--s-4);
 }
@@ -2281,31 +2281,44 @@
   font-variant-numeric: tabular-nums;
 }
 
-.update-notes-reveal,
-.update-notes-toggle {
+.update-version-link {
+  display: inline-flex;
   padding: 0;
+  align-items: center;
+  gap: var(--s-1);
   border: 0;
-  color: var(--text-subtle);
+  color: inherit;
   background: transparent;
-  font-size: var(--text-xs);
-  font-weight: var(--weight-semibold);
-  letter-spacing: var(--tracking-wide);
-  text-transform: uppercase;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 0.16em;
   cursor: pointer;
+  transition:
+    color var(--dur-3) var(--ease-standard),
+    text-decoration-color var(--dur-3) var(--ease-standard);
 }
 
-.update-notes-reveal {
-  padding: var(--s-2) var(--s-3);
-  border-radius: var(--r-sm);
+.update-version-link .capture-selector-preferences-icon {
+  width: 0.85em;
+  height: 0.85em;
+  opacity: 0.6;
+  transition: opacity var(--dur-3) var(--ease-standard);
 }
 
-.update-notes-reveal:hover,
-.update-notes-toggle:hover {
+.update-version-link:hover,
+.update-version-link:focus-visible {
   color: var(--text);
+  text-decoration-color: currentColor;
 }
 
-.update-notes-reveal:focus-visible,
-.update-notes-toggle:focus-visible {
+.update-version-link:hover .capture-selector-preferences-icon,
+.update-version-link:focus-visible .capture-selector-preferences-icon {
+  opacity: 1;
+}
+
+.update-version-link:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
   border-radius: var(--r-sm);

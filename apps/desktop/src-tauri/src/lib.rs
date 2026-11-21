@@ -371,6 +371,7 @@ pub fn run() {
             updates::dismiss_update_notice,
             updates::open_update_download_page,
             updates::open_update_changelog_url,
+            updates::open_update_release,
             recording::prepare_recording,
             recording::get_recording_selection,
             recording::select_capture_display,

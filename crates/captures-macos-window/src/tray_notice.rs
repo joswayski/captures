@@ -18,6 +18,13 @@ impl NoticeRect {
             && other.y + other.height <= self.y + self.height
     }
 
+    /// The menu-bar status item window spans the full menu bar (33 pt on a
+    /// notched MacBook) while the unobscured auxiliary areas are only the
+    /// 32 pt safe-area inset, so compare only the horizontal span.
+    fn spans_horizontally(self, other: Self) -> bool {
+        other.width > 0.0 && other.x >= self.x && other.x + other.width <= self.x + self.width
+    }
+
     fn flip(self, primary_top: f64) -> Self {
         Self {
             y: primary_top - self.y - self.height,
@@ -43,7 +50,10 @@ fn resolve_geometry(
 ) -> TrayNoticeGeometry {
     let tray = tray.filter(|tray| {
         monitor.contains(*tray)
-            && (safe_top <= 0.0 || auxiliary_areas.iter().any(|area| area.contains(*tray)))
+            && (safe_top <= 0.0
+                || auxiliary_areas
+                    .iter()
+                    .any(|area| area.spans_horizontally(*tray)))
     });
     let monitor = monitor.flip(primary_top);
     let mut work_area = work_area.flip(primary_top);
@@ -140,6 +150,29 @@ mod tests {
             );
             assert_eq!(geometry.tray.is_some(), visible, "status item x={x}");
             assert_eq!(geometry.work_area, rect(0.0, 32.0, 1512.0, 950.0));
+        }
+    }
+
+    #[test]
+    fn notched_menu_bar_accepts_full_height_status_item_windows() {
+        // Measured on a 16" MacBook Pro: the status item window is the full
+        // 33 pt menu bar, one point taller than the 32 pt auxiliary areas.
+        let monitor = rect(0.0, 0.0, 1728.0, 1117.0);
+        let work = rect(0.0, 0.0, 1728.0, 1084.0);
+        let areas = [
+            rect(0.0, 1085.0, 771.0, 32.0),
+            rect(956.0, 1085.0, 772.0, 32.0),
+        ];
+        for (x, visible) in [(1082.0, true), (940.0, false), (760.0, false)] {
+            let geometry = resolve_geometry(
+                1117.0,
+                monitor,
+                work,
+                Some(rect(x, 1084.0, 34.0, 33.0)),
+                32.0,
+                areas,
+            );
+            assert_eq!(geometry.tray.is_some(), visible, "status item x={x}");
         }
     }
 
