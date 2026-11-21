@@ -7,6 +7,8 @@ import {
   type CSSProperties,
   type ReactNode,
   type RefObject,
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useId,
@@ -22,7 +24,6 @@ import { CustomSelect } from "./CustomSelect";
 import { Feedback } from "./Feedback";
 import { NumberInput } from "./NumberInput";
 import { Onboarding } from "./Onboarding";
-import { ScreenshotEditor } from "./ScreenshotEditor";
 import { RangeSlider } from "./RangeSlider";
 import {
   APPEARANCE_MODES,
@@ -389,6 +390,12 @@ function useAppearanceSync() {
   }, []);
 }
 
+// The editor is over a quarter of the UI's script. Every other window, including
+// the capture overlay and mini previews kept loaded in the background, skips it.
+const ScreenshotEditor = lazy(async () => ({
+  default: (await import("./ScreenshotEditor")).ScreenshotEditor,
+}));
+
 export function App() {
   useAppearanceSync();
   const view = query("view");
@@ -399,7 +406,17 @@ export function App() {
   if (view === "screenshot-countdown") return <ScreenshotCountdown />;
   if (view === "recording-hud") return <RecordingHud />;
   if (view === "recording-editor") return <RecordingEditor />;
-  if (view === "screenshot-editor") return <ScreenshotEditor />;
+  if (view === "screenshot-editor") {
+    return (
+      <Suspense
+        fallback={
+          <main className="screenshot-editor screenshot-editor-loading">Loading screenshot…</main>
+        }
+      >
+        <ScreenshotEditor />
+      </Suspense>
+    );
+  }
   if (view === "recording-saved") return <RecordingSavedNotice />;
   if (view === "recording-controls-hidden") return <RecordingControlsHiddenNotice />;
   if (view === "thumbnail") return <Thumbnail />;
@@ -1833,6 +1850,7 @@ export function HistoryCard({
                 : `${entry.kind === "gif" ? "GIF" : "Video"} recording poster`
             }
             loading="lazy"
+            decoding="async"
             draggable={false}
           />
         </button>
@@ -1966,13 +1984,16 @@ export function HistoryCard({
   );
 }
 
+// Built once: every history refresh formats one date per card.
+const HISTORY_DATE_FORMAT = new Intl.DateTimeFormat(undefined, {
+  dateStyle: "medium",
+  timeStyle: "short",
+});
+
 function formatHistoryDate(value: string | number): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "Unknown date";
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(date);
+  return HISTORY_DATE_FORMAT.format(date);
 }
 
 function HistoryIcon() {
