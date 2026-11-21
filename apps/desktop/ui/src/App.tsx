@@ -9256,9 +9256,7 @@ export function ThumbnailCard({
       </div>
       <div className="thumbnail-bottom-bar">
         <div className="thumbnail-meta">
-          <span>
-            {artifact.width} × {artifact.height} · {formatFileSize(artifact.size_bytes)}
-          </span>
+          <span>{formatFileSize(artifact.size_bytes)}</span>
           {!chrome.clipboardCurrent && !chrome.historySaved ? (
             <span className="warning">Not in History</span>
           ) : !chrome.clipboardCurrent && chrome.copyFailed ? (

@@ -543,7 +543,7 @@ impl Stack {
             }
             let bar = rect(r.left + 8., r.bottom - 30., r.right - 8., r.bottom - 8.);
             let meta =
-                preview::card_metadata(card.entry.width, card.entry.height, card.entry.size_bytes);
+                preview::card_metadata(card.entry.size_bytes);
             let mut text = Item::new(group + 6, Role::Text, meta, bar);
             text.parent = Some(group);
             items.push(text);
@@ -743,7 +743,7 @@ impl Stack {
         let bottom = r.bottom - 8.;
         if !hovered {
             let meta =
-                preview::card_metadata(card.entry.width, card.entry.height, card.entry.size_bytes);
+                preview::card_metadata(card.entry.size_bytes);
             let text = g.text_sized(t, &meta, t.n("text-2xs"), "weight-regular", None)?;
             let h = t.n("text-2xs") * 1.3 + 6.;
             let chip = rect(
@@ -1804,7 +1804,7 @@ mod tests {
                 ("Edit", true),
                 ("Copy", true),
                 ("Show in Folder", true),
-                ("1600 × 1000 · 842 KB", true),
+                ("842 KB", true),
             ]
         );
         // Unsaved, on the clipboard and busy: no Close or Copy, buttons off,

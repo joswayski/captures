@@ -663,7 +663,7 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     var pileGlowOpacity: Float { pileGlow.opacity }
     /// `thumbnail-capture-highlight`: the accent outline a new card fades out.
     private let highlightRing = CALayer()
-    private let dimensions: NSTextField
+    private let sizeLabel: NSTextField
     /// `.thumbnail-meta .warning` beside the metadata.
     private let warningLabel = NSTextField(labelWithString: "")
     private let status = NSTextField(labelWithString: "")
@@ -716,7 +716,7 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     var dragEnded: ((NSPoint, NSDragOperation) -> Void)?
     var isOutboundFileDragEnabled: Bool { !compact && preparedDragPath != nil }
     private(set) var artifactID: String
-    var hasVisibleLabels: Bool { !dimensions.isHidden || !status.isHidden }
+    var hasVisibleLabels: Bool { !sizeLabel.isHidden || !status.isHidden }
     override var isFlipped: Bool { true }
 
     init(frame: NSRect, artifactID: String, image: NSImage, tokens: Tokens,
@@ -728,8 +728,7 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         self.mirrored = rightAnchor
         self.saved = saved
         imageView = MiniPreviewImageView(frame: frame, image: image)
-        dimensions = NSTextField(labelWithString: Self.metadata(width: width, height: height,
-                                                                sizeBytes: sizeBytes))
+        sizeLabel = NSTextField(labelWithString: Self.metadata(sizeBytes: sizeBytes))
         clipboardChip = MiniPreviewClipboardChip(tokens: tokens)
         super.init(frame: frame)
         wantsLayer = true
@@ -762,13 +761,13 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         addSubview(depthShade)
 
         let inset: CGFloat = 8
-        Self.makeChip(dimensions); Self.makeChip(warningLabel)
-        dimensions.font = .systemFont(ofSize: tokens.number("text-2xs")); dimensions.textColor = tokens.color("glass-text")
+        Self.makeChip(sizeLabel); Self.makeChip(warningLabel)
+        sizeLabel.font = .systemFont(ofSize: tokens.number("text-2xs")); sizeLabel.textColor = tokens.color("glass-text")
         // Shipping `.thumbnail-meta > span`: 3 px × `--s-3` padding at 1.3 line height.
-        let metadataWidth = ceil(dimensions.attributedStringValue.size().width) + Self.chipPadding * 2
-        dimensions.frame = NSRect(x: inset, y: bounds.height - inset - Self.chipHeight,
+        let metadataWidth = ceil(sizeLabel.attributedStringValue.size().width) + Self.chipPadding * 2
+        sizeLabel.frame = NSRect(x: inset, y: bounds.height - inset - Self.chipHeight,
                                   width: min(metadataWidth, bounds.width - inset * 2), height: Self.chipHeight)
-        styleLabelBacking(dimensions); addSubview(dimensions)
+        styleLabelBacking(sizeLabel); addSubview(sizeLabel)
         warningLabel.font = .systemFont(ofSize: tokens.number("text-2xs"))
         warningLabel.textColor = tokens.color("theme-accent-text")
         warningLabel.alignment = .center
@@ -888,10 +887,10 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         warningLabel.stringValue = warning ?? ""
         warningLabel.setAccessibilityLabel(warning)
         let width = ceil(warningLabel.attributedStringValue.size().width) + Self.chipPadding * 2
-        warningLabel.frame = NSRect(x: dimensions.frame.maxX + tokens.number("s-3"), y: dimensions.frame.minY,
-                                    width: min(width, max(0, bounds.width - dimensions.frame.maxX - 16)),
-                                    height: dimensions.frame.height)
-        warningLabel.isHidden = warning == nil || dimensions.isHidden || isExiting
+        warningLabel.frame = NSRect(x: sizeLabel.frame.maxX + tokens.number("s-3"), y: sizeLabel.frame.minY,
+                                    width: min(width, max(0, bounds.width - sizeLabel.frame.maxX - 16)),
+                                    height: sizeLabel.frame.height)
+        warningLabel.isHidden = warning == nil || sizeLabel.isHidden || isExiting
     }
 
     /// Clear all retains the presented media, including a partial hover/arrival.
@@ -918,7 +917,7 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         } else {
             setMediaHovered(true, animated: false)
         }
-        dimensions.isHidden = true; warningLabel.isHidden = true; status.isHidden = true
+        sizeLabel.isHidden = true; warningLabel.isHidden = true; status.isHidden = true
         actionButtons.forEach { $0.tooltipChanged?($0, false) }
     }
 
@@ -1172,15 +1171,13 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         status.toolTip = detail
     }
 
-    static func metadata(width: Int, height: Int, sizeBytes: UInt64) -> String {
-        guard let value = captures_preview_card_metadata_v1(UInt32(clamping: width),
-                                                            UInt32(clamping: height), sizeBytes)
-        else { return "\(width) × \(height)" }
+    static func metadata(sizeBytes: UInt64) -> String {
+        guard let value = captures_preview_card_metadata_v1(sizeBytes) else { return "" }
         defer { captures_settings_free_v1(value) }
         return String(cString: value)
     }
 
-    var metadataText: String { dimensions.stringValue }
+    var metadataText: String { sizeLabel.stringValue }
 
     func setClipboardCurrent(_ current: Bool, startedAt: CFTimeInterval? = nil) {
         guard clipboardCurrent != current else { return }
@@ -1259,7 +1256,7 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         depthShade.isHidden = !compact || depth == 0
         depthShade.layer?.backgroundColor = tokens.color("glass-strong-solid")
             .withAlphaComponent(CGFloat(captures_preview_dim_opacity_v1(depth))).cgColor
-        dimensions.isHidden = compact || chromeVisible
+        sizeLabel.isHidden = compact || chromeVisible
         status.isHidden = compact || status.stringValue.isEmpty
         actionButtons.forEach { if $0 !== editButton { $0.isHidden = compact || !chromeVisible } }
         if clipboardCurrent { copyButton?.isHidden = true }
@@ -1293,7 +1290,7 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         closeButton?.isHidden = !visible || !saved
         // An open, leaving or lingering editor keeps the control pinned.
         editButton?.isHidden = !visible && !editorPinned
-        dimensions.isHidden = visible
+        sizeLabel.isHidden = visible
         setMediaHovered(visible)
         updateWarning()
     }

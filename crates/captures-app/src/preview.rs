@@ -936,9 +936,9 @@ pub fn format_file_size(bytes: u64) -> String {
     }
 }
 
-/// Idle mini-preview metadata: pixel dimensions and file size.
-pub fn card_metadata(width: u32, height: u32, size_bytes: u64) -> String {
-    format!("{width} × {height} · {}", format_file_size(size_bytes))
+/// Idle mini-preview metadata: the file size.
+pub fn card_metadata(size_bytes: u64) -> String {
+    format_file_size(size_bytes)
 }
 
 /// One card plus its gap: the distance a shipping overflow cue scrolls.
@@ -1019,7 +1019,7 @@ mod tests {
         assert_eq!(format_file_size(999_400), "999 KB");
         assert_eq!(format_file_size(999_600), "1.0 MB");
         assert_eq!(format_file_size(99_960), "100 KB");
-        assert_eq!(card_metadata(1440, 900, 245_760), "1440 × 900 · 246 KB");
+        assert_eq!(card_metadata(245_760), "246 KB");
     }
 
     #[test]

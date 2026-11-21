@@ -941,7 +941,7 @@ final class MiniPreviewTests: XCTestCase {
         _ = NSApplication.shared
         let controller = try presentedController(artifact(id: "owned", previewPath: "/owned.png"))
         defer { controller.close() }
-        XCTAssertEqual(controller.metadataText(for: "owned"), "800 × 600 · 0 B")
+        XCTAssertEqual(controller.metadataText(for: "owned"), "0 B")
         let panel = try XCTUnwrap(NSApp.windows.compactMap { $0 as? MiniPreviewPanel }
             .first { $0.isVisible && $0.previewView.artifactIDs == ["owned"] })
         let card = try XCTUnwrap(panel.previewView.subviewsRecursive

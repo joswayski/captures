@@ -440,9 +440,9 @@ char *captures_icon_polylines_v1(const char *name);
  * envelope; free with captures_settings_free_v1. */
 char *captures_editor_chrome_v1(const char *request_json);
 
-/* Idle mini-preview metadata, e.g. "1440 × 900 · 246 KB", matching the
- * shipping card. Returns owned UTF-8; free with captures_settings_free_v1. */
-char *captures_preview_card_metadata_v1(uint32_t width, uint32_t height, uint64_t size_bytes);
+/* Idle mini-preview metadata, e.g. "246 KB", matching the shipping card.
+ * Returns owned UTF-8; free with captures_settings_free_v1. */
+char *captures_preview_card_metadata_v1(uint64_t size_bytes);
 
 /* Expanded-stack overflow cue edges, with the shipping 1 px tolerance. Bit 1:
  * cards hidden above the viewport; bit 2: cards hidden below. */

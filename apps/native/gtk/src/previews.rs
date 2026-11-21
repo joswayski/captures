@@ -676,11 +676,7 @@ impl State {
         bottom.set_margin_end(8);
         bottom.set_margin_bottom(8);
         bottom.set_can_target(false);
-        let meta = gtk::Label::new(Some(&preview::card_metadata(
-            entry.width,
-            entry.height,
-            entry.size_bytes,
-        )));
+        let meta = gtk::Label::new(Some(&preview::card_metadata(entry.size_bytes)));
         meta.add_css_class("preview-meta");
         meta.set_hexpand(true);
         meta.set_halign(gtk::Align::Start);

@@ -563,7 +563,7 @@ pub fn show(ui: &mut egui::Ui, tokens: &Tokens, view: View<'_>) -> (Option<Actio
         clipboard_chip(ui, tokens, chip, chip_pose);
     }
     let label = view.message.map(str::to_owned).unwrap_or_else(|| {
-        captures_app::preview::card_metadata(view.width, view.height, view.size_bytes)
+        captures_app::preview::card_metadata(view.size_bytes)
     });
     let label_position = card.left_bottom() + egui::vec2(inset, -inset);
     let mut label_job = egui::text::LayoutJob::simple(
@@ -3136,7 +3136,7 @@ mod tests {
                     _ => None,
                 })
             };
-            assert_eq!(text("391 × 207 · 246 KB").is_some(), !hovered && !focused);
+            assert_eq!(text("246 KB").is_some(), !hovered && !focused);
             assert_eq!(text("Copy").is_some(), hovered || focused);
             if hovered || focused {
                 let save = text("Save file").unwrap();
@@ -3414,7 +3414,7 @@ mod tests {
                     matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == label)
                 })
             };
-            (focused, painted("Copy"), painted("391 × 207 · 246 KB"))
+            (focused, painted("Copy"), painted("246 KB"))
         };
         let (_, copy, size) = frame(vec![]);
         assert!(!copy && size, "idle chrome stays hidden");
@@ -4565,7 +4565,7 @@ mod tests {
                 "{texts:?}"
             );
             assert_eq!(
-                texts.iter().any(|text| text == "391 × 207 · 246 KB"),
+                texts.iter().any(|text| text == "246 KB"),
                 locked
             );
             assert_eq!(
