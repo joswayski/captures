@@ -48,6 +48,7 @@ import {
   editorCropAfterDrag,
   formatEditorTime,
   recordingEditedFileStem,
+  recordingEditorKeyCommand,
   recordingFilenameError,
   recordingInitialOutputFormat,
   recordingSourceFormat,
@@ -4551,6 +4552,8 @@ export function RecordingEditor() {
   const playheadMsRef = useRef(0);
   const videoRef = useRef<HTMLVideoElement>(null);
   const previewMediaRef = useRef<HTMLDivElement>(null);
+  const playButtonRef = useRef<HTMLButtonElement>(null);
+  const saveButtonRef = useRef<HTMLButtonElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
   const timelineScrubbingRef = useRef(false);
   /** Pending trim-handle press; edge only moves after a small drag threshold. */
@@ -4761,8 +4764,8 @@ export function RecordingEditor() {
     previewLoopRef.current = previewLoop;
   }, [previewLoop]);
 
-  // Drive the timeline playhead from the video clock every frame while playing so
-  // it moves smoothly instead of jumping on sparse timeupdate events (~4 Hz).
+  // Keep playback inside the trim range, checked every frame because timeupdate
+  // events are sparse (~4 Hz).
   useEffect(() => {
     if (!previewPlaying) return;
     let frameId = 0;
@@ -4783,7 +4786,8 @@ export function RecordingEditor() {
             setPreviewPlaying(false);
           }
         } else if (!video.paused) {
-          setPlayheadMs(currentMs);
+          // TimelinePlayhead draws this frame; state catches up on pause.
+          playheadMsRef.current = currentMs;
         }
       }
       frameId = window.requestAnimationFrame(tick);
@@ -4899,6 +4903,51 @@ export function RecordingEditor() {
   useEffect(() => {
     playheadMsRef.current = playheadMs;
   }, [playheadMs]);
+
+  const artifactDurationMs = artifact ? Math.max(1, artifact.duration_ms) : 0;
+  const seekTo = useCallback(
+    (milliseconds: number) => {
+      const next = clampNumber(milliseconds, 0, artifactDurationMs);
+      // Key repeats can arrive before the next render publishes the playhead.
+      playheadMsRef.current = next;
+      setPlayheadMs(next);
+      if (videoRef.current) videoRef.current.currentTime = next / 1_000;
+    },
+    [artifactDurationMs],
+  );
+
+  // Editor-wide keys. Play and Save go through their buttons, so a key can
+  // never do what its button currently refuses.
+  useEffect(() => {
+    if (!artifactDurationMs) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing) return;
+      const focusOnControl =
+        event.target instanceof Element &&
+        event.target.closest(RECORDING_EDITOR_KEY_OWNERS) !== null;
+      const command = recordingEditorKeyCommand(event, focusOnControl);
+      if (!command) return;
+      event.preventDefault();
+      if (command.type === "save") {
+        // A repeat would start a second save as soon as the first one finished.
+        if (!event.repeat) saveButtonRef.current?.click();
+      } else if (command.type === "toggle-playback") {
+        if (!event.repeat) playButtonRef.current?.click();
+      } else if (command.type === "seek-by") {
+        seekTo(playheadMsRef.current + command.deltaMs);
+      } else if (command.type === "seek-to-trim") {
+        seekTo(command.edge === "start" ? trimStartRef.current : trimEndRef.current);
+      } else if (command.edge === "start") {
+        setTrimStart(clampNumber(playheadMsRef.current, 0, trimEndRef.current - 1));
+      } else {
+        setTrimEnd(
+          clampNumber(playheadMsRef.current, trimStartRef.current + 1, artifactDurationMs),
+        );
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [artifactDurationMs, seekTo]);
 
   const revokeCompressPreviewUrls = useCallback(() => {
     const { before, after } = compressPreviewUrlsRef.current;
@@ -5030,7 +5079,7 @@ export function RecordingEditor() {
     );
   }
 
-  const duration = Math.max(1, artifact.duration_ms);
+  const duration = artifactDurationMs;
   const originalOutputDimensions = editorOutputDimensions(
     cropEnabled ? crop.width : artifact.width,
     cropEnabled ? crop.height : artifact.height,
@@ -5143,11 +5192,6 @@ export function RecordingEditor() {
     });
   };
 
-  const seekTo = (milliseconds: number) => {
-    const next = clampNumber(milliseconds, 0, duration);
-    setPlayheadMs(next);
-    if (videoRef.current) videoRef.current.currentTime = next / 1_000;
-  };
   const timelineTimeAtPointer = (clientX: number) => {
     const bounds = timelineRef.current?.getBoundingClientRect();
     if (!bounds) return 0;
@@ -5461,7 +5505,10 @@ export function RecordingEditor() {
                 preload="auto"
                 onClick={() => void togglePreviewPlayback()}
                 onPlay={() => setPreviewPlaying(true)}
-                onPause={() => setPreviewPlaying(false)}
+                onPause={(event) => {
+                  setPreviewPlaying(false);
+                  setPlayheadMs(event.currentTarget.currentTime * 1_000);
+                }}
                 onEnded={(event) => handlePreviewEnded(event.currentTarget)}
                 onLoadedMetadata={(event) => {
                   event.currentTarget.currentTime = playheadMs / 1_000;
@@ -5494,9 +5541,12 @@ export function RecordingEditor() {
             )}
             {artifact.kind === "video" && (
               <button
+                ref={playButtonRef}
                 type="button"
                 className={`recording-preview-overlay-play${previewPlaying ? " playing" : ""}`}
                 aria-label={previewPlaying ? "Pause preview" : "Play preview"}
+                aria-keyshortcuts="Space"
+                title={previewPlaying ? "Pause (Space)" : "Play (Space)"}
                 onClick={() => void togglePreviewPlayback()}
               >
                 <PauseResumeIcon paused={!previewPlaying} />
@@ -5617,6 +5667,8 @@ export function RecordingEditor() {
             className="timeline-trim-handle timeline-trim-start"
             style={{ ["--trim" as string]: timelineHandleTrim(trimStart, duration) }}
             aria-label="Trim start"
+            aria-keyshortcuts="I"
+            title="Trim start · I sets it at the playhead"
             aria-valuemin={0}
             aria-valuemax={Math.max(0, trimEnd - 1)}
             aria-valuenow={Math.round(trimStart)}
@@ -5642,6 +5694,8 @@ export function RecordingEditor() {
             className="timeline-trim-handle timeline-trim-end"
             style={{ ["--trim" as string]: timelineHandleTrim(trimEnd, duration) }}
             aria-label="Trim end"
+            aria-keyshortcuts="O"
+            title="Trim end · O sets it at the playhead"
             aria-valuemin={Math.min(duration, trimStart + 1)}
             aria-valuemax={duration}
             aria-valuenow={Math.round(trimEnd)}
@@ -5661,9 +5715,12 @@ export function RecordingEditor() {
           >
             <span>{formatEditorTime(trimEnd, duration)}</span>
           </button>
-          <div className="timeline-playhead" style={{ left: `${(playheadMs / duration) * 100}%` }}>
-            <i />
-          </div>
+          <TimelinePlayhead
+            videoRef={videoRef}
+            playing={previewPlaying}
+            positionMs={playheadMs}
+            durationMs={duration}
+          />
         </div>
       </section>
 
@@ -6108,9 +6165,12 @@ export function RecordingEditor() {
               Show in Folder
             </button>
             <button
+              ref={saveButtonRef}
               className="primary"
               type="button"
               aria-busy={Boolean(exportId)}
+              aria-keyshortcuts="Meta+S Control+S"
+              title="Save (Command/Ctrl+S)"
               disabled={Boolean(exportId) || alreadySaved}
               onClick={() => void startExport()}
             >
@@ -6123,6 +6183,53 @@ export function RecordingEditor() {
     </main>
   );
 }
+
+/**
+ * While the preview plays, follows the video clock every frame from its own
+ * state, so only this marker re-renders instead of the whole editor.
+ */
+function TimelinePlayhead({
+  videoRef,
+  playing,
+  positionMs,
+  durationMs,
+}: {
+  videoRef: RefObject<HTMLVideoElement | null>;
+  playing: boolean;
+  positionMs: number;
+  durationMs: number;
+}) {
+  const [playbackMs, setPlaybackMs] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!playing) return;
+    let frameId = 0;
+    const tick = () => {
+      const video = videoRef.current;
+      if (video && !video.paused) setPlaybackMs(video.currentTime * 1_000);
+      frameId = window.requestAnimationFrame(tick);
+    };
+    frameId = window.requestAnimationFrame(tick);
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      setPlaybackMs(null);
+    };
+  }, [playing, videoRef]);
+
+  const shownMs = playing && playbackMs !== null ? playbackMs : positionMs;
+  return (
+    <div
+      className="timeline-playhead"
+      style={{ left: `${(clampNumber(shownMs, 0, durationMs) / durationMs) * 100}%` }}
+    >
+      <i />
+    </div>
+  );
+}
+
+/** Focused controls that use Space, arrows, Home/End or letters themselves. */
+const RECORDING_EDITOR_KEY_OWNERS =
+  "input, textarea, select, button, a[href], [contenteditable='true'], [role='slider'], [role='listbox'], [role='option']";
 
 function editorOutputDimensions(
   width: number,

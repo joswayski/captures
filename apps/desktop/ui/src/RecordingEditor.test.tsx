@@ -388,6 +388,82 @@ describe("RecordingEditor", () => {
     fireEvent.pointerUp(trimEnd, { pointerId: 2 });
   });
 
+  it("plays, steps, trims and saves from the keyboard without taking keys from a focused control", async () => {
+    const { container } = render(<RecordingEditor />);
+    expect(await screen.findByRole("heading", { name: "Edit recording" })).toBeInTheDocument();
+    const video = container.querySelector<HTMLVideoElement>("video")!;
+    let paused = true;
+    Object.defineProperty(video, "paused", { configurable: true, get: () => paused });
+    const play = vi.spyOn(video, "play").mockImplementation(async () => {
+      paused = false;
+    });
+    const pause = vi.spyOn(video, "pause").mockImplementation(() => {
+      paused = true;
+    });
+    const trimStart = screen.getByRole("slider", { name: "Trim start" });
+    const trimEnd = screen.getByRole("slider", { name: "Trim end" });
+    const playheadLeft = (milliseconds: number) => ({
+      left: `${(milliseconds / artifact.duration_ms) * 100}%`,
+    });
+    const playhead = () => container.querySelector(".timeline-playhead");
+
+    // One press is about a frame; Shift is a second. The far ends clamp.
+    fireEvent.keyDown(document.body, { key: "ArrowRight" });
+    expect(video.currentTime).toBeCloseTo(0.033);
+    fireEvent.keyDown(document.body, { key: "ArrowRight", shiftKey: true });
+    fireEvent.keyDown(document.body, { key: "ArrowRight", shiftKey: true });
+    expect(playhead()).toHaveStyle(playheadLeft(2_033));
+    fireEvent.keyDown(document.body, { key: "ArrowLeft" });
+    expect(playhead()).toHaveStyle(playheadLeft(2_000));
+
+    fireEvent.keyDown(document.body, { key: "i" });
+    expect(trimStart).toHaveAttribute("aria-valuetext", "0:02.000");
+    fireEvent.keyDown(document.body, { key: "End" });
+    expect(playhead()).toHaveStyle(playheadLeft(8_750));
+    for (let press = 0; press < 3; press += 1) {
+      fireEvent.keyDown(document.body, { key: "ArrowLeft", shiftKey: true });
+    }
+    fireEvent.keyDown(document.body, { key: "o" });
+    expect(trimEnd).toHaveAttribute("aria-valuetext", "0:05.750");
+    // The end can never cross the start, wherever the playhead is.
+    fireEvent.keyDown(document.body, { key: "Home" });
+    expect(playhead()).toHaveStyle(playheadLeft(2_000));
+    fireEvent.keyDown(document.body, { key: "o" });
+    expect(trimEnd).toHaveAttribute("aria-valuetext", "0:02.001");
+
+    fireEvent.keyDown(document.body, { key: " " });
+    await waitFor(() => expect(play).toHaveBeenCalledOnce());
+    fireEvent.play(video);
+    fireEvent.keyDown(document.body, { key: " ", repeat: true });
+    expect(pause).not.toHaveBeenCalled();
+    fireEvent.keyDown(document.body, { key: " " });
+    expect(pause).toHaveBeenCalledOnce();
+
+    // A focused control owns these keys: typing a name must not play or trim.
+    const filename = screen.getByRole("textbox", { name: "Saved filename" });
+    for (const key of [" ", "i", "o", "Home", "ArrowRight"]) fireEvent.keyDown(filename, { key });
+    expect(play).toHaveBeenCalledOnce();
+    expect(trimStart).toHaveAttribute("aria-valuetext", "0:02.000");
+    expect(playhead()).toHaveStyle(playheadLeft(2_000));
+    // A focused trim handle moves its own edge, not the playhead.
+    fireEvent.keyDown(trimStart, { key: "PageDown" });
+    expect(trimStart).toHaveAttribute("aria-valuetext", "0:01.000");
+
+    // Save works from a field, and a held key cannot start a second save.
+    const exports = () =>
+      vi.mocked(invoke).mock.calls.filter(([command]) => command === "start_recording_export");
+    fireEvent.keyDown(filename, { key: "s", ctrlKey: true, repeat: true });
+    expect(exports()).toHaveLength(0);
+    fireEvent.keyDown(filename, { key: "s", metaKey: true });
+    await waitFor(() => expect(exports()).toHaveLength(1));
+    expect(exports()[0][1]).toMatchObject({
+      request: { edit: { trim_start_ms: 1_000, trim_end_ms: 2_001 } },
+    });
+    await screen.findByRole("button", { name: "Cancel" });
+    fireEvent.keyDown(document.body, { key: "s", ctrlKey: true });
+    expect(exports()).toHaveLength(1);
+  });
+
   it("updates the playhead every animation frame while the preview is playing", async () => {
     const rafQueue: FrameRequestCallback[] = [];
     const raf = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {

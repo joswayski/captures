@@ -329,3 +329,39 @@ export function timelineKeyboardDelta(key: string, duration: number): number | n
   if (key === "PageUp") return 1_000;
   return null;
 }
+
+/** About one frame at 30 fps; a smaller playhead step would not change the preview. */
+const PLAYHEAD_KEY_STEP_MS = 33;
+const PLAYHEAD_KEY_LARGE_STEP_MS = 1_000;
+
+export type RecordingEditorKeyCommand =
+  | { type: "save" }
+  | { type: "toggle-playback" }
+  | { type: "seek-by"; deltaMs: number }
+  | { type: "seek-to-trim"; edge: "start" | "end" }
+  | { type: "trim-to-playhead"; edge: "start" | "end" };
+
+/**
+ * Editor-wide keys. `focusOnControl` is true while a field, button, slider or
+ * menu has focus: that control keeps its own keys, so only Save applies there.
+ */
+export function recordingEditorKeyCommand(
+  event: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey">,
+  focusOnControl: boolean,
+): RecordingEditorKeyCommand | null {
+  const key = event.key.toLowerCase();
+  if (event.metaKey || event.ctrlKey) {
+    return key === "s" && !event.altKey && !event.shiftKey ? { type: "save" } : null;
+  }
+  if (focusOnControl || event.altKey) return null;
+  if (key === " ") return { type: "toggle-playback" };
+  if (key === "home") return { type: "seek-to-trim", edge: "start" };
+  if (key === "end") return { type: "seek-to-trim", edge: "end" };
+  if (key === "i") return { type: "trim-to-playhead", edge: "start" };
+  if (key === "o") return { type: "trim-to-playhead", edge: "end" };
+  if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+    const step = event.shiftKey ? PLAYHEAD_KEY_LARGE_STEP_MS : PLAYHEAD_KEY_STEP_MS;
+    return { type: "seek-by", deltaMs: event.key === "ArrowLeft" ? -step : step };
+  }
+  return null;
+}
