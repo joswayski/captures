@@ -6017,6 +6017,12 @@ export function RecordingEditor() {
               spellCheck={false}
               disabled={Boolean(exportId)}
               onFocus={(event) => event.currentTarget.select()}
+              onMouseDown={(event) => {
+                // Keep the click's caret placement from clearing the select-all on focus.
+                if (document.activeElement === event.currentTarget) return;
+                event.preventDefault();
+                event.currentTarget.focus();
+              }}
               onChange={(event) => {
                 setFilenameStem(event.target.value);
                 setError("");
