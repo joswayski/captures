@@ -525,6 +525,7 @@ impl MediaToolchain {
             .ok_or(MediaToolError::IncompleteMetadata)?;
         let out = thread::spawn(move || read_capped(stdout, 8 * 1024 * 1024));
         let err = thread::spawn(move || read_capped(stderr, 64 * 1024));
+        let mut exit_poll = ExitPoll::default();
         let status = loop {
             if cancel.is_cancelled() {
                 let _ = child.kill();
@@ -536,7 +537,7 @@ impl MediaToolchain {
             if let Some(status) = child.try_wait()? {
                 break status;
             }
-            thread::sleep(Duration::from_millis(50));
+            exit_poll.wait();
         };
         let stdout = out
             .join()
@@ -751,6 +752,12 @@ impl MediaToolchain {
                 let path = temporary_output_path(destination, &format!("normalized-{index}"));
                 self.normalize_recording_segment(segment, &path, audio, cancel)?;
                 normalized.push(path);
+            }
+            // A single normalized segment is already the finished recording:
+            // move it into place instead of copying the whole file and then
+            // deleting the original.
+            if let [only] = normalized.as_slice() {
+                return commit_temporary(only, destination);
             }
             self.concatenate_segments(&normalized, destination, cancel)
         })();
@@ -1469,9 +1476,11 @@ impl MediaToolchain {
             sample_edit.trim_end_ms = Some(start_ms + window_ms);
             let sample_spec = sampled_export_spec(spec, window_ms, trimmed_ms);
             let destination = scratch.path().join(format!("sample-{index}.{extension}"));
-            let outcome = self.export(
+            // Reuse the probe from above instead of running ffprobe per sample.
+            let outcome = self.export_with_probe(
                 input,
                 &destination,
+                &probe,
                 &sample_edit,
                 &sample_spec,
                 cancel,
@@ -2687,6 +2696,7 @@ fn run_command(
         let mut bytes = Vec::new();
         stderr.read_to_end(&mut bytes).map(|_| bytes)
     });
+    let mut exit_poll = ExitPoll::default();
     loop {
         if cancel.is_cancelled() {
             let _ = child.kill();
@@ -2700,7 +2710,28 @@ fn run_command(
             })??;
             return complete_child(status, &stderr);
         }
-        thread::sleep(Duration::from_millis(50));
+        exit_poll.wait();
+    }
+}
+
+/// Waits between checks for a media tool's exit and for cancellation. Probes,
+/// muxes and stream copies finish in a few milliseconds, so the wait starts
+/// short and doubles up to the 50 ms that bounds cancellation latency for long
+/// encodes.
+struct ExitPoll(Duration);
+
+impl ExitPoll {
+    const LONGEST: Duration = Duration::from_millis(50);
+
+    fn wait(&mut self) {
+        thread::sleep(self.0);
+        self.0 = (self.0 * 2).min(Self::LONGEST);
+    }
+}
+
+impl Default for ExitPoll {
+    fn default() -> Self {
+        Self(Duration::from_millis(1))
     }
 }
 
