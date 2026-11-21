@@ -16,6 +16,7 @@ import {
   useState,
 } from "react";
 
+import { ColorPickerButton } from "./ColorPicker";
 import { CompressionPreview } from "./CompressionPreview";
 import { CustomSelect } from "./CustomSelect";
 import { Feedback } from "./Feedback";
@@ -9854,14 +9855,16 @@ function ThemeColorField({
     <div className="custom-theme-field">
       <label htmlFor={pickerId}>{label}</label>
       <div className="custom-theme-color-control">
-        <input
-          id={pickerId}
-          type="color"
+        <ColorPickerButton
+          className="custom-theme-color-swatch"
+          style={{ background: value }}
+          label={`${label} color`}
+          triggerLabel={`${label} color picker`}
           value={value}
-          aria-label={`${label} color picker`}
-          onChange={(event) => onChange(event.target.value)}
+          onChange={onChange}
         />
         <input
+          id={pickerId}
           key={value}
           type="text"
           defaultValue={value.toUpperCase()}

@@ -114,10 +114,8 @@ import {
   arrowHeadLength,
   editorCanvasPaintScale,
   scaleArrowStrokeForLength,
-  annotationDropShadowMetrics,
   annotationDropShadowPad,
   annotationHasDropShadow,
-  dropShadowCanvasColor,
   resolvedDropShadowStyle,
   textDropShadowStyle,
   textLayoutBounds,
@@ -1512,9 +1510,6 @@ describe("screenshot editor geometry", () => {
     expect(auto.opacity).toBe(45);
     expect(auto.offsetX).toBe(0);
     expect(auto.offsetY).toBeGreaterThan(0);
-    expect(annotationDropShadowMetrics({ ...base, dropShadow: true }).color).toBe(
-      "rgba(0, 0, 0, 0.45)",
-    );
 
     const custom = {
       ...base,
@@ -1529,13 +1524,6 @@ describe("screenshot editor geometry", () => {
     };
     const resolved = resolvedDropShadowStyle(custom);
     expect(resolved).toEqual(custom.dropShadowStyle);
-    expect(annotationDropShadowMetrics(custom)).toEqual({
-      color: "rgba(255, 59, 92, 0.8)",
-      blur: 18,
-      offsetX: 12,
-      offsetY: -6,
-    });
-    expect(dropShadowCanvasColor(resolved)).toBe("rgba(255, 59, 92, 0.8)");
     expect(annotationDropShadowPad(custom)).toBeGreaterThan(
       annotationDropShadowPad({ ...base, dropShadow: true }),
     );

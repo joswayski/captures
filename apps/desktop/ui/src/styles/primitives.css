@@ -1128,3 +1128,108 @@ button:is(.history-delete-confirm, .history-clear-all-confirm):hover:not(:disabl
     transform: translateY(0) scale(1);
   }
 }
+
+/* -------------------------------------------------------- color picker ---- */
+
+/* Captures' own picker; the native color input only offers presets on macOS. */
+.color-picker-popover {
+  position: fixed;
+  z-index: 300;
+  display: grid;
+  width: 240px;
+  gap: var(--s-5);
+  padding: var(--s-5);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  background: var(--surface-overlay);
+  box-shadow: var(--shadow-lg);
+  color: var(--text);
+  animation: ui-pop-in var(--dur-2) var(--ease-out);
+}
+
+.color-picker-saturation,
+.color-picker-hue {
+  position: relative;
+  border-radius: var(--r-md);
+  outline: none;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.color-picker-saturation {
+  height: 150px;
+  background:
+    linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, transparent),
+    var(--picker-hue);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.color-picker-hue {
+  height: 12px;
+  border-radius: var(--r-pill);
+  background: linear-gradient(
+    to right,
+    #f00 0%,
+    #ff0 16.67%,
+    #0f0 33.33%,
+    #0ff 50%,
+    #00f 66.67%,
+    #f0f 83.33%,
+    #f00 100%
+  );
+  cursor: ew-resize;
+}
+
+.color-picker-hue .color-picker-thumb {
+  top: 50%;
+}
+
+.color-picker-saturation:focus-visible,
+.color-picker-hue:focus-visible {
+  box-shadow: var(--focus-ring-tight);
+}
+
+.color-picker-thumb {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.35),
+    0 1px 3px rgba(0, 0, 0, 0.35);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.color-picker-hex-row {
+  display: grid;
+  grid-template-columns: var(--h-md) minmax(0, 1fr);
+  gap: var(--s-3);
+}
+
+.color-picker-preview {
+  height: var(--h-md);
+  border: 1px solid var(--control-border);
+  border-radius: var(--r-sm);
+}
+
+.color-picker-hex {
+  min-width: 0;
+  height: var(--h-md);
+  padding: 1px var(--s-3);
+  border: 1px solid var(--control-border);
+  border-radius: var(--r-sm);
+  background: var(--surface-field);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  outline: none;
+}
+
+.color-picker-hex:focus {
+  border-color: var(--theme-accent);
+  box-shadow: var(--focus-ring-tight);
+}

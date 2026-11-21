@@ -3256,28 +3256,7 @@
 }
 
 .screenshot-custom-color {
-  overflow: hidden;
-  border-radius: var(--r-sm);
   background: conic-gradient(#f44, #ff4, #4f4, #4ff, #44f, #f4f, #f44);
-  cursor: pointer;
-}
-
-.screenshot-custom-color::after {
-  position: absolute;
-  inset: 4px;
-  border: 1px solid var(--border-strong);
-  border-radius: 3px;
-  background: var(--surface-raised);
-  content: "";
-  pointer-events: none;
-}
-
-.screenshot-custom-color input {
-  position: absolute;
-  inset: -8px;
-  width: 40px;
-  height: 40px;
-  opacity: 0;
   cursor: pointer;
 }
 

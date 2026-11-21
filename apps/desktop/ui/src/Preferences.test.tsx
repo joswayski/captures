@@ -529,9 +529,10 @@ describe("Preferences", () => {
     const editor = screen.getByRole("group", { name: "Custom theme colors" });
     expect(editor).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText("Accent color picker"), {
-      target: { value: "#123456" },
-    });
+    fireEvent.click(screen.getByRole("button", { name: "Accent color picker" }));
+    const accentHex = screen.getByRole("textbox", { name: "Accent color hex value" });
+    fireEvent.change(accentHex, { target: { value: "123456" } });
+    fireEvent.keyDown(accentHex, { key: "Enter" });
     const signalHex = screen.getByRole("textbox", {
       name: "Recording signal hex value",
     });

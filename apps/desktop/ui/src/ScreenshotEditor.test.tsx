@@ -1650,9 +1650,11 @@ describe("ScreenshotEditor", () => {
     // A named preset carries forward; manual label properties do not.
     fireEvent.change(inlineEditor, { target: { value: "Keep this label" } });
     fireEvent.change(screen.getByLabelText("Size"), { target: { value: "83" } });
-    fireEvent.change(screen.getByRole("group", { name: "Text color" }).querySelector("input")!, {
-      target: { value: "#2367ab" },
-    });
+    fireEvent.click(screen.getByRole("button", { name: "Text color: custom color" }));
+    const textHex = screen.getByRole("textbox", { name: "Text color hex value" });
+    fireEvent.change(textHex, { target: { value: "#2367ab" } });
+    fireEvent.keyDown(textHex, { key: "Enter" });
+    fireEvent.keyDown(textHex, { key: "Escape" });
     fireEvent.change(screen.getByLabelText("Font"), { target: { value: "serif" } });
     fireEvent.click(screen.getByRole("button", { name: "Text (T)" }));
     expect(screen.getByRole("button", { name: "New text style: Outlined" })).toBeInTheDocument();
@@ -5083,14 +5085,43 @@ describe("ScreenshotEditor", () => {
 
   it("scales drop shadows with the canvas transform so the canvas matches the export", async () => {
     const restoreCanvas = installExportableCanvas();
-    // Canvas shadows ignore the transform; pretend the editor paints at 2x.
+    // The shadow pass draws a blurred mask at the backing-store offset; pretend
+    // the editor paints at 2x and check where the shadow lands.
     const context = document.createElement("canvas").getContext("2d")!;
-    const blurs: number[] = [];
-    Object.assign(context, { getTransform: () => ({ a: 2, b: 0, c: 0, d: 2, e: 0, f: 0 }) });
-    Object.defineProperty(context, "shadowBlur", {
-      configurable: true,
-      get: () => 0,
-      set: (value: number) => blurs.push(value),
+    const shadowDraws: number[][] = [];
+    Object.assign(context, {
+      canvas: Object.assign(document.createElement("canvas"), { width: 4000, height: 4000 }),
+      getTransform: () => ({ a: 2, b: 0, c: 0, d: 2, e: 0, f: 0 }),
+      getLineDash: () => [],
+      drawImage: vi.fn((source: unknown, ...args: number[]) => {
+        if (source instanceof HTMLCanvasElement && args.length === 8) shadowDraws.push(args);
+      }),
+    });
+    const maskContext = {
+      setLineDash: vi.fn(),
+      setTransform: vi.fn(),
+      beginPath: vi.fn(),
+      moveTo: vi.fn(),
+      lineTo: vi.fn(),
+      quadraticCurveTo: vi.fn(),
+      stroke: vi.fn(),
+      fill: vi.fn(),
+      fillRect: vi.fn(),
+      getImageData: (_x: number, _y: number, width: number, height: number) => ({
+        data: new Uint8ClampedArray(width * height * 4),
+      }),
+      putImageData: vi.fn(),
+      closePath: vi.fn(),
+    };
+    const getContext = HTMLCanvasElement.prototype.getContext as unknown as ReturnType<
+      typeof vi.fn
+    >;
+    getContext.mockImplementation(function (
+      this: HTMLCanvasElement,
+      _type: string,
+      options?: unknown,
+    ) {
+      return options ? maskContext : context;
     });
 
     try {
@@ -5098,12 +5129,25 @@ describe("ScreenshotEditor", () => {
       await screen.findByLabelText("Canvas width");
       drawArrow(81);
       fireEvent.click(screen.getByRole("checkbox", { name: "Drop shadow" }));
+      const xOffset = screen.getByRole("spinbutton", { name: "Shadow X offset" });
+      fireEvent.change(xOffset, { target: { value: "40" } });
+      fireEvent.blur(xOffset);
       fireEvent.change(screen.getByRole("slider", { name: "Shadow blur" }), {
-        target: { value: "22" },
+        target: { value: "0" },
       });
 
-      await waitFor(() => expect(blurs).toContain(44));
-      expect(blurs).not.toContain(22);
+      // With no blur the mask is drawn 1:1, shifted by twice the 40px offset
+      // from where it was rasterized (the mask transform's translation is -left).
+      await waitFor(() => {
+        const draw = shadowDraws.at(-1);
+        expect(draw).toBeDefined();
+        const [, , width, , drawnLeft, , drawnWidth] = draw!;
+        expect(drawnWidth).toBe(width);
+        const maskTransform = [...maskContext.setTransform.mock.calls]
+          .reverse()
+          .find((call: number[]) => call[0] === 2)!;
+        expect(drawnLeft + maskTransform[4]).toBe(80);
+      });
     } finally {
       restoreCanvas();
     }

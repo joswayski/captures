@@ -156,7 +156,7 @@ function clampDropShadowNumber(value: number, min: number, max: number, fallback
   return Math.min(max, Math.max(min, value));
 }
 
-function parseCssHexColor(value: string): { r: number; g: number; b: number } | null {
+export function parseCssHexColor(value: string): { r: number; g: number; b: number } | null {
   const raw = value.trim().replace(/^#/, "");
   if (/^[0-9a-fA-F]{3}$/.test(raw)) {
     return {
@@ -196,31 +196,6 @@ export function resolvedDropShadowStyle(style: ElementStyle): DropShadowStyle {
       DROP_SHADOW_OFFSET_MAX,
       fallback.offsetY,
     ),
-  };
-}
-
-export function dropShadowCanvasColor(shadow: DropShadowStyle): string {
-  const rgb = parseCssHexColor(shadow.color) ?? { r: 0, g: 0, b: 0 };
-  const alpha = Math.max(0, Math.min(1, shadow.opacity / 100));
-  return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha})`;
-}
-
-/**
- * Canvas shadow metrics in document pixels. Custom knobs win; otherwise a
- * thick arrow gets a slightly larger pool than a hairline.
- */
-export function annotationDropShadowMetrics(style: ElementStyle): {
-  color: string;
-  blur: number;
-  offsetX: number;
-  offsetY: number;
-} {
-  const shadow = resolvedDropShadowStyle(style);
-  return {
-    color: dropShadowCanvasColor(shadow),
-    blur: shadow.blur,
-    offsetX: shadow.offsetX,
-    offsetY: shadow.offsetY,
   };
 }
 

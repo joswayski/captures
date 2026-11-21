@@ -15,6 +15,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 
+import { ColorPickerButton } from "./ColorPicker";
 import { CompressionPreview } from "./CompressionPreview";
 import { createCleanupRegistry } from "./lib/cleanupRegistry";
 import { eventTargetBelongsToSelectIn } from "./lib/customSelectMenu";
@@ -162,7 +163,7 @@ import {
   trimDocumentToContent,
   transformImageElement,
   visibleContentBounds,
-  annotationDropShadowMetrics,
+  parseCssHexColor,
   annotationHasDropShadow,
   DROP_SHADOW_BLUR_MAX,
   DROP_SHADOW_OFFSET_MAX,
@@ -908,42 +909,203 @@ function undoCoalesceKey(before: ScreenshotElement, after: ScreenshotElement): s
   return `${before.id}:${paths.includes(".text") ? ".text" : paths.join(",")}`;
 }
 
-function applyAnnotationDropShadow(context: CanvasRenderingContext2D, style: ElementStyle): void {
-  const metrics = annotationDropShadowMetrics(style);
-  // Canvas shadows ignore the current transform, and the editor paints through
-  // a zoom/DPR scale while export paints at 1:1. Scale them here so the canvas
-  // shows the shadow that Copy and Save produce.
-  const transform = context.getTransform?.();
-  const scale = transform ? Math.hypot(transform.a, transform.b) || 1 : 1;
-  context.shadowColor = metrics.color;
-  context.shadowBlur = metrics.blur * scale;
-  context.shadowOffsetX = metrics.offsetX * scale;
-  context.shadowOffsetY = metrics.offsetY * scale;
+/** Context state the ink painters read but do not always set themselves. */
+const SHADOW_MASK_STATE_KEYS = [
+  "strokeStyle",
+  "fillStyle",
+  "lineWidth",
+  "lineCap",
+  "lineJoin",
+  "miterLimit",
+  "font",
+  "textAlign",
+  "textBaseline",
+  "direction",
+] as const;
+
+let dropShadowMaskCanvas: HTMLCanvasElement | undefined;
+
+/** Widths of three box blurs whose sum approximates a Gaussian of `sigma`. */
+function gaussianBoxWidths(sigma: number): number[] {
+  const ideal = Math.sqrt((12 * sigma * sigma) / 3 + 1);
+  let lower = Math.floor(ideal);
+  if (lower % 2 === 0) lower -= 1;
+  const lowerCount = Math.round(
+    (12 * sigma * sigma - 3 * lower * lower - 12 * lower - 9) / (-4 * lower - 4),
+  );
+  return [0, 1, 2].map((index) => (index < lowerCount ? lower : lower + 2));
 }
 
-function clearAnnotationDropShadow(context: CanvasRenderingContext2D): void {
-  context.shadowColor = "transparent";
-  context.shadowBlur = 0;
-  context.shadowOffsetX = 0;
-  context.shadowOffsetY = 0;
+/** One sliding-window box blur along rows or columns; outside the mask is transparent. */
+function boxBlurAxis(
+  source: Float32Array,
+  target: Float32Array,
+  width: number,
+  height: number,
+  radius: number,
+  horizontal: boolean,
+): void {
+  const length = horizontal ? width : height;
+  const lines = horizontal ? height : width;
+  const step = horizontal ? 1 : width;
+  const lineStep = horizontal ? width : 1;
+  const scale = 1 / (radius * 2 + 1);
+  for (let line = 0; line < lines; line += 1) {
+    const base = line * lineStep;
+    let sum = 0;
+    for (let index = 0; index <= Math.min(radius, length - 1); index += 1) {
+      sum += source[base + index * step];
+    }
+    for (let index = 0; index < length; index += 1) {
+      target[base + index * step] = sum * scale;
+      if (index + radius + 1 < length) sum += source[base + (index + radius + 1) * step];
+      if (index - radius >= 0) sum -= source[base + (index - radius) * step];
+    }
+  }
+}
+
+/** Gaussian-blur the mask's alpha in place and paint every pixel the shadow color. */
+function blurShadowMask(
+  mask: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  sigma: number,
+  rgb: { r: number; g: number; b: number },
+): void {
+  const image = mask.getImageData(0, 0, width, height);
+  const pixels = image.data;
+  const alpha = new Float32Array(width * height);
+  const scratch = new Float32Array(width * height);
+  for (let index = 0; index < alpha.length; index += 1) alpha[index] = pixels[index * 4 + 3];
+  for (const boxWidth of gaussianBoxWidths(sigma)) {
+    const radius = (boxWidth - 1) / 2;
+    if (radius <= 0) continue;
+    boxBlurAxis(alpha, scratch, width, height, radius, true);
+    boxBlurAxis(scratch, alpha, width, height, radius, false);
+  }
+  for (let index = 0; index < alpha.length; index += 1) {
+    const offset = index * 4;
+    pixels[offset] = rgb.r;
+    pixels[offset + 1] = rgb.g;
+    pixels[offset + 2] = rgb.b;
+    pixels[offset + 3] = alpha[index];
+  }
+  mask.putImageData(image, 0, 0);
 }
 
 /**
- * Paint annotation ink, optionally as a shadow pass then a crisp pass so the
- * fill/stroke stay their authored opacity (a single shadowed fill would darken
- * translucent fills).
+ * Paint the ink's drop shadow without the canvas shadow API. WebKit on macOS
+ * shadows the ink's bounding box when blur is 0 and drops the shadow when
+ * blur is set, so rasterize the ink into a mask, tint it, blur its alpha, and
+ * composite it at the offset. The editor, Copy, and Save then match everywhere.
+ */
+function paintAnnotationDropShadow(
+  context: CanvasRenderingContext2D,
+  style: ElementStyle,
+  bounds: EditorRect,
+  paint: (target: CanvasRenderingContext2D) => void,
+): void {
+  const shadow = resolvedDropShadowStyle(style);
+  const transform = context.getTransform?.();
+  if (shadow.opacity <= 0 || !transform || typeof document === "undefined") return;
+  // Shadow knobs are document pixels along the canvas axes; scale them to the
+  // backing store the same way for the zoomed editor and the 1:1 export.
+  const scale = Math.hypot(transform.a, transform.b) || 1;
+  const sigma = (shadow.blur * scale) / 2; // shadowBlur is twice the standard deviation
+  const spread = Math.ceil(sigma * 3) + 2;
+  const offsetX = shadow.offsetX * scale;
+  const offsetY = shadow.offsetY * scale;
+  const corners = [
+    [bounds.x, bounds.y],
+    [bounds.x + bounds.width, bounds.y],
+    [bounds.x, bounds.y + bounds.height],
+    [bounds.x + bounds.width, bounds.y + bounds.height],
+  ].map(([x, y]) => ({
+    x: transform.a * x + transform.c * y + transform.e,
+    y: transform.b * x + transform.d * y + transform.f,
+  }));
+  // Only rasterize ink whose shadow can land on the canvas.
+  const left = Math.max(
+    Math.floor(Math.min(...corners.map(({ x }) => x))) - spread,
+    -offsetX - spread,
+  );
+  const top = Math.max(
+    Math.floor(Math.min(...corners.map(({ y }) => y))) - spread,
+    -offsetY - spread,
+  );
+  const right = Math.min(
+    Math.ceil(Math.max(...corners.map(({ x }) => x))) + spread,
+    context.canvas.width - offsetX + spread,
+  );
+  const bottom = Math.min(
+    Math.ceil(Math.max(...corners.map(({ y }) => y))) + spread,
+    context.canvas.height - offsetY + spread,
+  );
+  if (right <= left || bottom <= top) return;
+
+  // Blur wide shadows at reduced resolution; smoothing on upscale hides it.
+  const downscale = Math.max(1, sigma / 1.5);
+  const width = Math.max(1, Math.ceil((right - left) / downscale));
+  const height = Math.max(1, Math.ceil((bottom - top) / downscale));
+  dropShadowMaskCanvas ??= document.createElement("canvas");
+  dropShadowMaskCanvas.width = width;
+  dropShadowMaskCanvas.height = height;
+  const mask = dropShadowMaskCanvas.getContext("2d", { willReadFrequently: true });
+  if (!mask || mask === context) return;
+
+  const state = mask as unknown as Record<string, unknown>;
+  const source = context as unknown as Record<string, unknown>;
+  for (const key of SHADOW_MASK_STATE_KEYS) state[key] = source[key];
+  mask.setLineDash(context.getLineDash?.() ?? []);
+  mask.setTransform(
+    transform.a / downscale,
+    transform.b / downscale,
+    transform.c / downscale,
+    transform.d / downscale,
+    (transform.e - left) / downscale,
+    (transform.f - top) / downscale,
+  );
+  paint(mask);
+
+  const rgb = parseCssHexColor(shadow.color) ?? { r: 0, g: 0, b: 0 };
+  mask.setTransform(1, 0, 0, 1, 0, 0);
+  mask.globalCompositeOperation = "source-in";
+  mask.fillStyle = `rgb(${rgb.r}, ${rgb.g}, ${rgb.b})`;
+  mask.fillRect(0, 0, width, height);
+  mask.globalCompositeOperation = "source-over";
+  if (sigma / downscale >= 0.3) blurShadowMask(mask, width, height, sigma / downscale, rgb);
+
+  context.save();
+  context.setTransform(1, 0, 0, 1, 0, 0);
+  context.globalAlpha *= shadow.opacity / 100;
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  context.drawImage(
+    dropShadowMaskCanvas,
+    0,
+    0,
+    width,
+    height,
+    left + offsetX,
+    top + offsetY,
+    width * downscale,
+    height * downscale,
+  );
+  context.restore();
+}
+
+/**
+ * Paint annotation ink, with its drop shadow underneath when enabled, so the
+ * fill/stroke keep their authored opacity.
  */
 function paintAnnotationInk(
   context: CanvasRenderingContext2D,
   style: ElementStyle,
-  paint: () => void,
+  bounds: EditorRect,
+  paint: (target: CanvasRenderingContext2D) => void,
 ): void {
-  if (annotationHasDropShadow(style)) {
-    applyAnnotationDropShadow(context, style);
-    paint();
-    clearAnnotationDropShadow(context);
-  }
-  paint();
+  if (annotationHasDropShadow(style)) paintAnnotationDropShadow(context, style, bounds, paint);
+  paint(context);
 }
 
 function configureAnnotationStroke(context: CanvasRenderingContext2D, style: ElementStyle): void {
@@ -1011,16 +1173,20 @@ function paintShapeGeometry(
 function drawShape(
   context: CanvasRenderingContext2D,
   element: Extract<ScreenshotElement, { kind: "shape" }>,
+  bounds: EditorRect,
 ): void {
   context.save();
   configureAnnotationStroke(context, element.style);
-  paintAnnotationInk(context, element.style, () => paintShapeGeometry(context, element));
+  paintAnnotationInk(context, element.style, bounds, (target) =>
+    paintShapeGeometry(target, element),
+  );
   context.restore();
 }
 
 function drawText(
   context: CanvasRenderingContext2D,
   element: Extract<ScreenshotElement, { kind: "text" }>,
+  bounds: EditorRect,
 ): void {
   const boxWidth = Math.max(element.fontSize * 0.5, element.width);
   const lineHeight = element.fontSize * TEXT_LINE_HEIGHT_RATIO;
@@ -1036,7 +1202,7 @@ function drawText(
         ? element.x + boxWidth
         : element.x;
   const shadowStyle = textDropShadowStyle(element);
-  const paintPlate = () => {
+  const paintPlate = (target: CanvasRenderingContext2D) => {
     const pad = textBackgroundPad(element.fontSize);
     const backgroundX = element.x - pad.x;
     const backgroundY = element.y - pad.y;
@@ -1044,42 +1210,42 @@ function drawText(
     const backgroundHeight = contentHeight + pad.y * 2;
     const backgroundRadius = textBackgroundRadius(element, backgroundWidth, backgroundHeight);
     if (backgroundRadius > 0) {
-      context.beginPath();
-      context.roundRect(
+      target.beginPath();
+      target.roundRect(
         backgroundX,
         backgroundY,
         backgroundWidth,
         backgroundHeight,
         backgroundRadius,
       );
-      context.fill();
+      target.fill();
     } else {
-      context.fillRect(backgroundX, backgroundY, backgroundWidth, backgroundHeight);
+      target.fillRect(backgroundX, backgroundY, backgroundWidth, backgroundHeight);
     }
   };
-  const paintGlyphs = () => {
-    context.fillStyle = element.color;
-    context.strokeStyle = element.color;
-    context.lineWidth = textOutlineWidth(element.fontSize);
-    context.lineJoin = "round";
+  const paintGlyphs = (target: CanvasRenderingContext2D) => {
+    target.fillStyle = element.color;
+    target.strokeStyle = element.color;
+    target.lineWidth = textOutlineWidth(element.fontSize);
+    target.lineJoin = "round";
     lines.forEach((line, index) => {
       const sample = line || " ";
-      const draw = textGlyphDrawY(element.y, element.fontSize, index, context.measureText(sample));
-      context.textBaseline = draw.baseline;
+      const draw = textGlyphDrawY(element.y, element.fontSize, index, target.measureText(sample));
+      target.textBaseline = draw.baseline;
       if (element.outlined) {
-        context.strokeText(sample, anchorX, draw.y);
+        target.strokeText(sample, anchorX, draw.y);
       } else {
-        context.fillText(sample, anchorX, draw.y);
+        target.fillText(sample, anchorX, draw.y);
       }
     });
   };
   if (textHasBackgroundPlate(element)) {
     // Shadow the plate once so glyphs sitting on it do not cast a second pool.
     context.fillStyle = element.background!;
-    paintAnnotationInk(context, shadowStyle, paintPlate);
-    paintGlyphs();
+    paintAnnotationInk(context, shadowStyle, bounds, paintPlate);
+    paintGlyphs(context);
   } else {
-    paintAnnotationInk(context, shadowStyle, paintGlyphs);
+    paintAnnotationInk(context, shadowStyle, bounds, paintGlyphs);
   }
   context.restore();
 }
@@ -1125,14 +1291,14 @@ function paintScreenshotElement(
       paintImageElementSource(context, element, cached.image);
     }
   } else if (element.kind === "text") {
-    drawText(context, element);
+    drawText(context, element, elementLocalBounds(element, measureTextElementLine));
   } else if (element.kind === "shape") {
-    drawShape(context, element);
+    drawShape(context, element, elementLocalBounds(element));
   } else {
     context.save();
     configureAnnotationStroke(context, element.style);
-    paintAnnotationInk(context, element.style, () => {
-      drawSmoothPath(context, element.points);
+    paintAnnotationInk(context, element.style, elementLocalBounds(element), (target) => {
+      drawSmoothPath(target, element.points);
     });
     context.restore();
   }
@@ -8254,7 +8420,13 @@ function TextStylePicker({
     if (!open) return undefined;
     const closeOutside = (event: PointerEvent) => {
       const target = event.target as Node;
-      if (!pickerRef.current?.contains(target) && !menuRef.current?.contains(target)) {
+      // A custom color picker floats in its own portal above this menu.
+      const inColorPicker = target instanceof Element && target.closest(".color-picker-popover");
+      if (
+        !pickerRef.current?.contains(target) &&
+        !menuRef.current?.contains(target) &&
+        !inColorPicker
+      ) {
         setOpen(false);
       }
     };
@@ -8399,7 +8571,13 @@ function CanvasBackgroundPicker({
     if (!open) return undefined;
     const closeOutside = (event: PointerEvent) => {
       const target = event.target as Node;
-      if (!pickerRef.current?.contains(target) && !menuRef.current?.contains(target)) {
+      // A custom color picker floats in its own portal above this menu.
+      const inColorPicker = target instanceof Element && target.closest(".color-picker-popover");
+      if (
+        !pickerRef.current?.contains(target) &&
+        !menuRef.current?.contains(target) &&
+        !inColorPicker
+      ) {
         setOpen(false);
       }
     };
@@ -8603,6 +8781,9 @@ function ColorField({
   /** Swatches only; legend is for assistive tech. */
   compact?: boolean;
 }) {
+  const presetActive = COLOR_SWATCHES.some((color) =>
+    value.toLowerCase().startsWith(color.toLowerCase()),
+  );
   return (
     <fieldset
       className={["screenshot-color-field", compact ? "compact" : ""].filter(Boolean).join(" ")}
@@ -8619,13 +8800,14 @@ function ColorField({
             onClick={() => onChange(color)}
           />
         ))}
-        <label className="screenshot-custom-color" title="Custom color">
-          <input
-            type="color"
-            value={value.slice(0, 7)}
-            onChange={(event) => onChange(event.target.value)}
-          />
-        </label>
+        <ColorPickerButton
+          className={["screenshot-custom-color", presetActive ? "" : "active"]
+            .filter(Boolean)
+            .join(" ")}
+          label={label}
+          value={value}
+          onChange={onChange}
+        />
       </div>
     </fieldset>
   );
