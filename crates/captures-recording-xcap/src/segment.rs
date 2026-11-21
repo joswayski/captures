@@ -411,6 +411,8 @@ impl XcapRecordingSegment {
         let latest_frame = Arc::new(Mutex::new(Some(first_image)));
         let dropped_frames = Arc::new(AtomicU64::new(0));
         let stop_on_disconnect = recorder.is_portal();
+        // The portal stream is negotiated at no more than the recording rate.
+        let source_matches_frame_rate = recorder.is_portal();
         let capture_worker = {
             let stop_requested = stop_requested.clone();
             let warning = warning.clone();
@@ -426,6 +428,7 @@ impl XcapRecordingSegment {
                         &stop_requested,
                         &warning,
                         stop_on_disconnect,
+                        source_matches_frame_rate,
                     );
                 }) {
                 Ok(worker) => worker,
@@ -644,12 +647,18 @@ fn receive_frames(
     stop_requested: &AtomicBool,
     warning: &Mutex<Option<String>>,
     stop_on_disconnect: bool,
+    source_matches_frame_rate: bool,
 ) {
     while !stop_requested.load(Ordering::Acquire) {
         match receiver.recv_timeout(CONTROL_POLL_INTERVAL) {
             Ok(frame) => match frame_image(frame) {
                 Ok(image) => {
-                    if latest_frame.lock().replace(image).is_some() {
+                    // A frame the encoder never took is lost only when the source
+                    // is paced to the recording. Windows Graphics Capture and the
+                    // X11 poller deliver as fast as the display allows, so there
+                    // the encoder just uses the newest frame each tick; its own
+                    // late ticks are counted in `record_frames`.
+                    if latest_frame.lock().replace(image).is_some() && source_matches_frame_rate {
                         dropped_frames.fetch_add(1, Ordering::Relaxed);
                     }
                 }
@@ -930,13 +939,17 @@ fn companion_audio_path(output_path: &Path, suffix: &str) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::mpsc;
 
     use captures_recording::{CaptureRect, MaxResolution, PortalRegionSelection};
     use image::{Rgba, RgbaImage};
+    use parking_lot::Mutex;
     use xcap::Frame;
 
-    use super::{FrameRect, FrameTransform, portal_source_rect, select_while_draining};
+    use super::{
+        FrameRect, FrameTransform, portal_source_rect, receive_frames, select_while_draining,
+    };
 
     /// Each pixel encodes its own coordinates, so a shifted, transposed or
     /// unscaled crop cannot match.
@@ -1098,5 +1111,35 @@ mod tests {
         let (_tx, rx) = mpsc::sync_channel(1);
         let (chosen, _, latest) = select_while_draining(rx, &first, &|_| None).unwrap();
         assert!(chosen.is_none() && latest.is_none());
+    }
+
+    #[test]
+    fn only_a_source_paced_to_the_recording_counts_replaced_frames_as_dropped() {
+        for (source_matches_frame_rate, expected_dropped) in [(false, 0), (true, 2)] {
+            let (tx, rx) = mpsc::channel();
+            for index in 0..3_u8 {
+                tx.send(Frame {
+                    width: 1,
+                    height: 1,
+                    raw: vec![index, 0, 0, 255],
+                })
+                .unwrap();
+            }
+            drop(tx);
+            let latest_frame = Mutex::new(None);
+            let dropped_frames = AtomicU64::new(0);
+            receive_frames(
+                rx,
+                &latest_frame,
+                &dropped_frames,
+                &AtomicBool::new(false),
+                &Mutex::new(None),
+                false,
+                source_matches_frame_rate,
+            );
+            // Either way the encoder gets the newest frame.
+            assert_eq!(latest_frame.lock().take().unwrap().get_pixel(0, 0).0[0], 2);
+            assert_eq!(dropped_frames.load(Ordering::Relaxed), expected_dropped);
+        }
     }
 }
