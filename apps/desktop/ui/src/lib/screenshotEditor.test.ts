@@ -96,6 +96,8 @@ import {
   TEXT_OPTICAL_CENTER_NUDGE_RATIO,
   visibleContentBounds,
   wrapTextLines,
+  estimateTextWidth,
+  textLines,
   composingTextBoxWidth,
   createPlacedTextElement,
   defaultTextBoxWidth,
@@ -241,13 +243,13 @@ describe("measured text interaction geometry", () => {
         for (const handle of handles) {
           const opposite = oppositeResizeHandle(handle);
           const fixed = elementWorldPoint(element, resizeHandlePoint(before, opposite));
-          const next = resizeElement(
-            element,
-            before,
-            { ...before, width: nextWidth },
-            measure,
-            handle,
-          );
+          // Side grips reflow the column; corners and top/bottom scale the label.
+          const scale = nextWidth / width;
+          const request =
+            handle === "e" || handle === "w"
+              ? { ...before, width: nextWidth }
+              : { ...before, width: before.width * scale, height: before.height * scale };
+          const next = resizeElement(element, before, request, measure, handle);
           const after = elementLocalBounds(next, measure);
           expect(after.height).not.toBe(before.height);
           const actual = elementWorldPoint(next, resizeHandlePoint(after, opposite));
@@ -279,8 +281,9 @@ describe("measured text interaction geometry", () => {
         "nw",
       );
       if (next.kind !== "text") throw new Error("expected text");
-      expect(next.autoWidth).toBe(false);
+      expect(next.autoWidth).toBe(true);
       expect(next.fontSize).toBe(Math.min(512, Math.max(8, Math.round(20 * scale))));
+      expect(next.width).toBeCloseTo((element.width * next.fontSize) / element.fontSize, 8);
       const actual = elementWorldPoint(
         next,
         resizeHandlePoint(elementLocalBounds(next, measure), "se"),
@@ -2161,7 +2164,8 @@ describe("screenshot editor geometry", () => {
       roundedBackground: false,
     };
     const textBounds = elementBounds(text);
-    // Stretching taller scales type size so the selection box drag is visible.
+    // Stretching taller scales the whole label: type and column together, so
+    // every line keeps its breaks instead of reflowing into a narrow column.
     const taller = {
       ...textBounds,
       height: textBounds.height * 2,
@@ -2170,10 +2174,12 @@ describe("screenshot editor geometry", () => {
     expect(resizedTaller).toMatchObject({
       kind: "text",
       fontSize: 80,
-      width: 120,
+      width: 240,
       x: textBounds.x,
       y: textBounds.y,
     });
+    if (resizedTaller.kind !== "text") throw new Error("expected text");
+    expect(textLines(resizedTaller)).toEqual(textLines(text));
 
     const wider = {
       ...textBounds,
@@ -2190,6 +2196,12 @@ describe("screenshot editor geometry", () => {
       elementBounds(text).height,
     );
 
+    // A side grip never narrows the column past the longest word ("friend").
+    const squeezed = resizeElement(text, textBounds, { ...textBounds, width: 10 }, undefined, "e");
+    if (squeezed.kind !== "text") throw new Error("expected text");
+    expect(squeezed.width).toBe(Math.ceil(estimateTextWidth("friend", 40)));
+    expect(textLines(squeezed)).toEqual(["Hi", "there", "friend"]);
+
     const autoWidth: EditorTextElement = {
       ...text,
       id: "auto",
@@ -2201,9 +2213,9 @@ describe("screenshot editor geometry", () => {
       ...elementBounds(autoWidth),
       height: elementBounds(autoWidth).height * 2,
     });
-    expect(autoTaller).toMatchObject({ kind: "text", autoWidth: false, fontSize: 80 });
+    expect(autoTaller).toMatchObject({ kind: "text", autoWidth: true, fontSize: 80 });
     if (autoTaller.kind !== "text") throw new Error("expected text");
-    expect(autoTaller.width).toBe(autoWidth.width);
+    expect(autoTaller.width).toBe(autoWidth.width * 2);
 
     const autoWider = resizeElement(autoWidth, elementBounds(autoWidth), {
       ...elementBounds(autoWidth),
@@ -2219,26 +2231,31 @@ describe("screenshot editor geometry", () => {
       autoWidth,
     );
 
-    // A free corner drag controls width independently of type size.
+    // A corner drag on a plated label scales the plate and type together.
     const bubbleLabel: EditorTextElement = {
       ...autoWidth,
       id: "bubble-label",
+      text: "Tomato",
+      width: fittedAutoWidthTextBox("Tomato", 40),
       background: "#111318",
       roundedBackground: true,
       fontFamily: "rounded",
       align: "center",
     };
     const bubbleStart = elementBounds(bubbleLabel);
-    const stretched = resizeElement(bubbleLabel, bubbleStart, {
-      ...bubbleStart,
-      width: bubbleStart.width * 2,
-      height: bubbleStart.height * 1.1,
-    });
-    expect(stretched).toMatchObject({ kind: "text", autoWidth: false, fontSize: 44 });
-    if (stretched.kind !== "text") throw new Error("expected text");
-    const bubbleEnd = elementBounds(stretched);
-    expect(bubbleEnd.width).toBeCloseTo(bubbleStart.width * 2);
-    expect(bubbleEnd.height).toBeCloseTo(bubbleStart.height * 1.1);
+    const scaledBubble = resizeElement(
+      bubbleLabel,
+      bubbleStart,
+      { ...bubbleStart, width: bubbleStart.width * 1.5, height: bubbleStart.height * 1.5 },
+      undefined,
+      "se",
+    );
+    expect(scaledBubble).toMatchObject({ kind: "text", autoWidth: true, fontSize: 60 });
+    if (scaledBubble.kind !== "text") throw new Error("expected text");
+    expect(textLines(scaledBubble)).toEqual(["Tomato"]);
+    const bubbleEnd = elementBounds(scaledBubble);
+    expect(bubbleEnd.width / bubbleStart.width).toBeCloseTo(1.5, 1);
+    expect(bubbleEnd.height / bubbleStart.height).toBeCloseTo(1.5, 1);
 
     // Background plates expand paint/selection bounds beyond the layout box.
     const bubble: EditorTextElement = {

@@ -931,6 +931,19 @@ function hardBreakToken(
   return parts.length > 0 ? parts : [token];
 }
 
+/** Widest single word, the narrowest column that wraps without splitting words. */
+export function longestTextWordWidth(
+  text: string,
+  fontSize: number,
+  measure: (line: string) => number = (line) => estimateTextWidth(line, fontSize),
+): number {
+  let widest = 0;
+  for (const word of text.split(/\s+/)) {
+    if (word) widest = Math.max(widest, measure(word));
+  }
+  return Math.ceil(widest);
+}
+
 /**
  * Word-wrap `text` into lines that fit within `maxWidth`.
  * Explicit newlines always break. Tokens wider than the box are hard-broken.
@@ -3601,7 +3614,7 @@ export function resizeElement(
   measure?: TextMeasurement,
   handle?: ResizeHandle,
 ): ScreenshotElement {
-  const next = resizeElementLocal(element, initialBounds, nextBounds);
+  const next = resizeElementLocal(element, initialBounds, nextBounds, measure, handle);
   if (!handle) return next;
   const opposite = oppositeResizeHandle(handle);
   const anchor = resizeHandlePoint(initialBounds, opposite);
@@ -3616,10 +3629,13 @@ export function resizeElement(
   );
 }
 
-function resizeElementLocal(
+/** Unanchored resize mapping; `resizeElement` then pins the opposite grip. */
+export function resizeElementLocal(
   element: ScreenshotElement,
   initialBounds: EditorRect,
   nextBounds: EditorRect,
+  measure?: TextMeasurement,
+  handle?: ResizeHandle,
 ): ScreenshotElement {
   const scaleX = nextBounds.width / Math.max(1, initialBounds.width);
   const scaleY = nextBounds.height / Math.max(1, initialBounds.height);
@@ -3648,21 +3664,33 @@ function resizeElementLocal(
     ) {
       return element;
     }
-    // Horizontal drags set a wrapping column without scaling the letters.
-    // Vertical drags change type size; corners change both axes independently.
-    // Once resized, typing respects the user's column instead of auto-fitting it.
-    const nextFontSize =
-      Math.abs(scaleY - 1) < 0.001
-        ? element.fontSize
-        : clamp(Math.round(element.fontSize * Math.max(0.05, scaleY)), 8, 512);
-    const pad = textInteractionPad(element, nextFontSize);
+    const measureLine = measure ? (line: string) => measure(element, line) : undefined;
+    // Side grips (or a width-only change) set a wrapping column at the same
+    // type size. The column never splits a word: it stops at the longest one.
+    if (handle === "e" || handle === "w" || (!handle && Math.abs(scaleY - 1) < 0.001)) {
+      const pad = textInteractionPad(element);
+      return {
+        ...element,
+        x: nextBounds.x + pad.x,
+        y: nextBounds.y + pad.y,
+        width: Math.max(
+          minTextBoxWidth(element.fontSize),
+          longestTextWordWidth(element.text, element.fontSize, measureLine),
+          nextBounds.width - pad.x * 2,
+        ),
+        autoWidth: false,
+      };
+    }
+    // Corners and top/bottom grips scale the whole label: type size and column
+    // grow together, so every line keeps its breaks and auto-width stays on.
+    const fontSize = clamp(Math.round(element.fontSize * Math.max(0.05, scaleY)), 8, 512);
+    const pad = textInteractionPad(element, fontSize);
     return {
       ...element,
-      fontSize: nextFontSize,
+      fontSize,
       x: nextBounds.x + pad.x,
       y: nextBounds.y + pad.y,
-      width: Math.max(minTextBoxWidth(nextFontSize), nextBounds.width - pad.x * 2),
-      autoWidth: false,
+      width: Math.max(minTextBoxWidth(fontSize), (element.width * fontSize) / element.fontSize),
     };
   }
 

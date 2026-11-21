@@ -151,6 +151,7 @@
           "width": 119.87200000000001,
           "height": 185.215
         },
+        "handle": "e",
         "expected": {
           "id": "text-0",
           "kind": "text",
@@ -189,6 +190,7 @@
           "width": 74.92,
           "height": 129.6505
         },
+        "handle": "s",
         "expected": {
           "id": "text-0",
           "kind": "text",
@@ -201,7 +203,7 @@
           "blendMode": "multiply",
           "text": "  A  B  \n\nC\n",
           "fontSize": 16,
-          "width": 35.400000000000006,
+          "width": 20.425531914893618,
           "fontFamily": "explicit-test-face",
           "bold": true,
           "italic": true,
@@ -216,8 +218,7 @@
               1,
               "two"
             ]
-          },
-          "autoWidth": false
+          }
         }
       },
       {
@@ -227,6 +228,7 @@
           "width": 97.396,
           "height": 296.344
         },
+        "handle": "se",
         "expected": {
           "id": "text-0",
           "kind": "text",
@@ -239,7 +241,7 @@
           "blendMode": "multiply",
           "text": "  A  B  \n\nC\n",
           "fontSize": 38,
-          "width": 34.036,
+          "width": 48.51063829787234,
           "fontFamily": "explicit-test-face",
           "bold": true,
           "italic": true,
@@ -254,8 +256,7 @@
               1,
               "two"
             ]
-          },
-          "autoWidth": false
+          }
         }
       },
       {
@@ -265,6 +266,7 @@
           "width": 0.007492,
           "height": 0.037043
         },
+        "handle": "nw",
         "expected": {
           "id": "text-0",
           "kind": "text",
@@ -277,7 +279,7 @@
           "blendMode": "multiply",
           "text": "  A  B  \n\nC\n",
           "fontSize": 8,
-          "width": 8,
+          "width": 10.212765957446809,
           "fontFamily": "explicit-test-face",
           "bold": true,
           "italic": true,
@@ -292,8 +294,7 @@
               1,
               "two"
             ]
-          },
-          "autoWidth": false
+          }
         }
       },
       {
@@ -303,6 +304,7 @@
           "width": 2996.8,
           "height": 5556.45
         },
+        "handle": "ne",
         "expected": {
           "id": "text-0",
           "kind": "text",
@@ -315,7 +317,7 @@
           "blendMode": "multiply",
           "text": "  A  B  \n\nC\n",
           "fontSize": 512,
-          "width": 2172.1600000000003,
+          "width": 653.6170212765958,
           "fontFamily": "explicit-test-face",
           "bold": true,
           "italic": true,
@@ -330,8 +332,7 @@
               1,
               "two"
             ]
-          },
-          "autoWidth": false
+          }
         }
       },
       {
@@ -341,6 +342,7 @@
           "width": 74.95746,
           "height": 333.387
         },
+        "handle": "n",
         "expected": {
           "id": "text-0",
           "kind": "text",
@@ -353,7 +355,83 @@
           "blendMode": "multiply",
           "text": "  A  B  \n\nC\n",
           "fontSize": 42,
-          "width": 21,
+          "width": 53.61702127659574,
+          "fontFamily": "explicit-test-face",
+          "bold": true,
+          "italic": true,
+          "align": "left",
+          "color": "#2174c5",
+          "background": "#e2e4e6",
+          "roundedBackground": true,
+          "outlined": false,
+          "dropShadow": true,
+          "futureMetadata": {
+            "preserve": [
+              1,
+              "two"
+            ]
+          }
+        }
+      },
+      {
+        "next": {
+          "x": -31.5,
+          "y": 27.25,
+          "width": 75.002412,
+          "height": 333.387
+        },
+        "handle": "sw",
+        "expected": {
+          "id": "text-0",
+          "kind": "text",
+          "x": 2.6199999999999974,
+          "y": 55.49,
+          "rotation": 0.3,
+          "visible": true,
+          "locked": true,
+          "opacity": 61,
+          "blendMode": "multiply",
+          "text": "  A  B  \n\nC\n",
+          "fontSize": 42,
+          "width": 53.61702127659574,
+          "fontFamily": "explicit-test-face",
+          "bold": true,
+          "italic": true,
+          "align": "left",
+          "color": "#2174c5",
+          "background": "#e2e4e6",
+          "roundedBackground": true,
+          "outlined": false,
+          "dropShadow": true,
+          "futureMetadata": {
+            "preserve": [
+              1,
+              "two"
+            ]
+          }
+        }
+      },
+      {
+        "next": {
+          "x": -31.5,
+          "y": 27.25,
+          "width": 0.007492,
+          "height": 185.215
+        },
+        "handle": "w",
+        "expected": {
+          "id": "text-0",
+          "kind": "text",
+          "x": -9.04,
+          "y": 46.42,
+          "rotation": 0.3,
+          "visible": true,
+          "locked": true,
+          "opacity": 61,
+          "blendMode": "multiply",
+          "text": "  A  B  \n\nC\n",
+          "fontSize": 23.5,
+          "width": 12,
           "fontFamily": "explicit-test-face",
           "bold": true,
           "italic": true,
@@ -376,22 +454,23 @@
         "next": {
           "x": -31.5,
           "y": 27.25,
-          "width": 75.002412,
-          "height": 333.387
+          "width": 119.87200000000001,
+          "height": 185.215
         },
+        "handle": null,
         "expected": {
           "id": "text-0",
           "kind": "text",
-          "x": 2.6199999999999974,
-          "y": 55.49,
+          "x": -9.04,
+          "y": 46.42,
           "rotation": 0.3,
           "visible": true,
           "locked": true,
           "opacity": 61,
           "blendMode": "multiply",
           "text": "  A  B  \n\nC\n",
-          "fontSize": 42,
-          "width": 21,
+          "fontSize": 23.5,
+          "width": 74.95200000000001,
           "fontFamily": "explicit-test-face",
           "bold": true,
           "italic": true,
@@ -1826,6 +1905,7 @@
           "width": 201.472,
           "height": 97.09
         },
+        "handle": "e",
         "expected": {
           "id": "text-11",
           "kind": "text",
@@ -1864,6 +1944,7 @@
           "width": 125.92,
           "height": 67.963
         },
+        "handle": "s",
         "expected": {
           "id": "text-11",
           "kind": "text",
@@ -1876,7 +1957,7 @@
           "blendMode": "multiply",
           "text": "fi\nAB",
           "fontSize": 16,
-          "width": 86.4,
+          "width": 55.148936170212764,
           "fontFamily": "explicit-test-face",
           "bold": true,
           "italic": true,
@@ -1892,7 +1973,7 @@
               "two"
             ]
           },
-          "autoWidth": false
+          "autoWidth": true
         }
       },
       {
@@ -1902,6 +1983,7 @@
           "width": 163.696,
           "height": 155.34400000000002
         },
+        "handle": "se",
         "expected": {
           "id": "text-11",
           "kind": "text",
@@ -1914,7 +1996,7 @@
           "blendMode": "multiply",
           "text": "fi\nAB",
           "fontSize": 38,
-          "width": 100.336,
+          "width": 130.9787234042553,
           "fontFamily": "explicit-test-face",
           "bold": true,
           "italic": true,
@@ -1930,7 +2012,7 @@
               "two"
             ]
           },
-          "autoWidth": false
+          "autoWidth": true
         }
       },
       {
@@ -1940,6 +2022,7 @@
           "width": 0.012592,
           "height": 0.019418
         },
+        "handle": "nw",
         "expected": {
           "id": "text-11",
           "kind": "text",
@@ -1952,7 +2035,7 @@
           "blendMode": "multiply",
           "text": "fi\nAB",
           "fontSize": 8,
-          "width": 8,
+          "width": 27.574468085106382,
           "fontFamily": "explicit-test-face",
           "bold": true,
           "italic": true,
@@ -1968,7 +2051,7 @@
               "two"
             ]
           },
-          "autoWidth": false
+          "autoWidth": true
         }
       },
       {
@@ -1978,6 +2061,7 @@
           "width": 5036.8,
           "height": 2912.7000000000003
         },
+        "handle": "ne",
         "expected": {
           "id": "text-11",
           "kind": "text",
@@ -1990,7 +2074,7 @@
           "blendMode": "multiply",
           "text": "fi\nAB",
           "fontSize": 512,
-          "width": 4212.16,
+          "width": 1764.7659574468084,
           "fontFamily": "explicit-test-face",
           "bold": true,
           "italic": true,
@@ -2006,7 +2090,7 @@
               "two"
             ]
           },
-          "autoWidth": false
+          "autoWidth": true
         }
       },
       {
@@ -2016,6 +2100,7 @@
           "width": 125.98295999999999,
           "height": 174.762
         },
+        "handle": "n",
         "expected": {
           "id": "text-11",
           "kind": "text",
@@ -2028,7 +2113,85 @@
           "blendMode": "multiply",
           "text": "fi\nAB",
           "fontSize": 42,
-          "width": 57.74296,
+          "width": 144.7659574468085,
+          "fontFamily": "explicit-test-face",
+          "bold": true,
+          "italic": true,
+          "align": "left",
+          "color": "#2174c5",
+          "background": "#e2e4e6",
+          "roundedBackground": true,
+          "outlined": false,
+          "dropShadow": true,
+          "futureMetadata": {
+            "preserve": [
+              1,
+              "two"
+            ]
+          },
+          "autoWidth": true
+        }
+      },
+      {
+        "next": {
+          "x": -31.5,
+          "y": 27.25,
+          "width": 126.05851200000001,
+          "height": 174.762
+        },
+        "handle": "sw",
+        "expected": {
+          "id": "text-11",
+          "kind": "text",
+          "x": 2.6199999999999974,
+          "y": 55.49,
+          "rotation": 0.3,
+          "visible": true,
+          "locked": true,
+          "opacity": 61,
+          "blendMode": "multiply",
+          "text": "fi\nAB",
+          "fontSize": 42,
+          "width": 144.7659574468085,
+          "fontFamily": "explicit-test-face",
+          "bold": true,
+          "italic": true,
+          "align": "left",
+          "color": "#2174c5",
+          "background": "#e2e4e6",
+          "roundedBackground": true,
+          "outlined": false,
+          "dropShadow": true,
+          "futureMetadata": {
+            "preserve": [
+              1,
+              "two"
+            ]
+          },
+          "autoWidth": true
+        }
+      },
+      {
+        "next": {
+          "x": -31.5,
+          "y": 27.25,
+          "width": 0.012592,
+          "height": 97.09
+        },
+        "handle": "w",
+        "expected": {
+          "id": "text-11",
+          "kind": "text",
+          "x": -9.04,
+          "y": 46.42,
+          "rotation": 0.3,
+          "visible": true,
+          "locked": true,
+          "opacity": 61,
+          "blendMode": "multiply",
+          "text": "fi\nAB",
+          "fontSize": 23.5,
+          "width": 18,
           "fontFamily": "explicit-test-face",
           "bold": true,
           "italic": true,
@@ -2051,22 +2214,23 @@
         "next": {
           "x": -31.5,
           "y": 27.25,
-          "width": 126.05851200000001,
-          "height": 174.762
+          "width": 201.472,
+          "height": 97.09
         },
+        "handle": null,
         "expected": {
           "id": "text-11",
           "kind": "text",
-          "x": 2.6199999999999974,
-          "y": 55.49,
+          "x": -9.04,
+          "y": 46.42,
           "rotation": 0.3,
           "visible": true,
           "locked": true,
           "opacity": 61,
           "blendMode": "multiply",
           "text": "fi\nAB",
-          "fontSize": 42,
-          "width": 57.81851200000001,
+          "fontSize": 23.5,
+          "width": 156.55200000000002,
           "fontFamily": "explicit-test-face",
           "bold": true,
           "italic": true,
@@ -3263,6 +3427,7 @@
           "width": 308.672,
           "height": 195.09
         },
+        "handle": "e",
         "expected": {
           "id": "text-20",
           "kind": "text",
@@ -3308,6 +3473,7 @@
           "width": 192.92000000000002,
           "height": 136.563
         },
+        "handle": "s",
         "expected": {
           "id": "text-20",
           "kind": "text",
@@ -3320,7 +3486,7 @@
           "blendMode": "multiply",
           "text": "AB\nC",
           "fontSize": 16,
-          "width": 55.400000000000006,
+          "width": 34.04255319148936,
           "fontFamily": "explicit-test-face",
           "bold": true,
           "italic": true,
@@ -3336,7 +3502,7 @@
               "two"
             ]
           },
-          "autoWidth": false,
+          "autoWidth": true,
           "dropShadowStyle": {
             "color": "#123456",
             "opacity": 38,
@@ -3353,6 +3519,7 @@
           "width": 250.79600000000002,
           "height": 312.144
         },
+        "handle": "se",
         "expected": {
           "id": "text-20",
           "kind": "text",
@@ -3365,7 +3532,7 @@
           "blendMode": "multiply",
           "text": "AB\nC",
           "fontSize": 38,
-          "width": 97.436,
+          "width": 80.85106382978724,
           "fontFamily": "explicit-test-face",
           "bold": true,
           "italic": true,
@@ -3381,7 +3548,7 @@
               "two"
             ]
           },
-          "autoWidth": false,
+          "autoWidth": true,
           "dropShadowStyle": {
             "color": "#123456",
             "opacity": 38,
@@ -3398,6 +3565,7 @@
           "width": 0.019292000000000004,
           "height": 0.039018000000000004
         },
+        "handle": "nw",
         "expected": {
           "id": "text-20",
           "kind": "text",
@@ -3410,7 +3578,7 @@
           "blendMode": "multiply",
           "text": "AB\nC",
           "fontSize": 8,
-          "width": 8,
+          "width": 17.02127659574468,
           "fontFamily": "explicit-test-face",
           "bold": true,
           "italic": true,
@@ -3426,7 +3594,7 @@
               "two"
             ]
           },
-          "autoWidth": false,
+          "autoWidth": true,
           "dropShadowStyle": {
             "color": "#123456",
             "opacity": 38,
@@ -3443,6 +3611,7 @@
           "width": 7716.800000000001,
           "height": 5852.7
         },
+        "handle": "ne",
         "expected": {
           "id": "text-20",
           "kind": "text",
@@ -3455,7 +3624,7 @@
           "blendMode": "multiply",
           "text": "AB\nC",
           "fontSize": 512,
-          "width": 7222.160000000001,
+          "width": 1089.3617021276596,
           "fontFamily": "explicit-test-face",
           "bold": true,
           "italic": true,
@@ -3471,7 +3640,7 @@
               "two"
             ]
           },
-          "autoWidth": false,
+          "autoWidth": true,
           "dropShadowStyle": {
             "color": "#123456",
             "opacity": 38,
@@ -3488,6 +3657,7 @@
           "width": 193.01646,
           "height": 351.16200000000003
         },
+        "handle": "n",
         "expected": {
           "id": "text-20",
           "kind": "text",
@@ -3500,7 +3670,99 @@
           "blendMode": "multiply",
           "text": "AB\nC",
           "fontSize": 42,
-          "width": 36.776459999999986,
+          "width": 89.36170212765957,
+          "fontFamily": "explicit-test-face",
+          "bold": true,
+          "italic": true,
+          "align": "left",
+          "color": "#2174c5",
+          "background": "#e2e4e6",
+          "roundedBackground": true,
+          "outlined": false,
+          "dropShadow": true,
+          "futureMetadata": {
+            "preserve": [
+              1,
+              "two"
+            ]
+          },
+          "autoWidth": true,
+          "dropShadowStyle": {
+            "color": "#123456",
+            "opacity": 38,
+            "blur": 17,
+            "offsetX": -29,
+            "offsetY": 7
+          }
+        }
+      },
+      {
+        "next": {
+          "x": -31.5,
+          "y": 27.25,
+          "width": 193.13221200000004,
+          "height": 351.16200000000003
+        },
+        "handle": "sw",
+        "expected": {
+          "id": "text-20",
+          "kind": "text",
+          "x": 46.620000000000005,
+          "y": 99.49,
+          "rotation": 0.3,
+          "visible": true,
+          "locked": true,
+          "opacity": 61,
+          "blendMode": "multiply",
+          "text": "AB\nC",
+          "fontSize": 42,
+          "width": 89.36170212765957,
+          "fontFamily": "explicit-test-face",
+          "bold": true,
+          "italic": true,
+          "align": "left",
+          "color": "#2174c5",
+          "background": "#e2e4e6",
+          "roundedBackground": true,
+          "outlined": false,
+          "dropShadow": true,
+          "futureMetadata": {
+            "preserve": [
+              1,
+              "two"
+            ]
+          },
+          "autoWidth": true,
+          "dropShadowStyle": {
+            "color": "#123456",
+            "opacity": 38,
+            "blur": 17,
+            "offsetX": -29,
+            "offsetY": 7
+          }
+        }
+      },
+      {
+        "next": {
+          "x": -31.5,
+          "y": 27.25,
+          "width": 0.019292000000000004,
+          "height": 195.09
+        },
+        "handle": "w",
+        "expected": {
+          "id": "text-20",
+          "kind": "text",
+          "x": 39.959999999999994,
+          "y": 95.42,
+          "rotation": 0.3,
+          "visible": true,
+          "locked": true,
+          "opacity": 61,
+          "blendMode": "multiply",
+          "text": "AB\nC",
+          "fontSize": 23.5,
+          "width": 18,
           "fontFamily": "explicit-test-face",
           "bold": true,
           "italic": true,
@@ -3530,22 +3792,23 @@
         "next": {
           "x": -31.5,
           "y": 27.25,
-          "width": 193.13221200000004,
-          "height": 351.16200000000003
+          "width": 308.672,
+          "height": 195.09
         },
+        "handle": null,
         "expected": {
           "id": "text-20",
           "kind": "text",
-          "x": 46.620000000000005,
-          "y": 99.49,
+          "x": 39.959999999999994,
+          "y": 95.42,
           "rotation": 0.3,
           "visible": true,
           "locked": true,
           "opacity": 61,
           "blendMode": "multiply",
           "text": "AB\nC",
-          "fontSize": 42,
-          "width": 36.89221200000003,
+          "fontSize": 23.5,
+          "width": 165.75200000000004,
           "fontFamily": "explicit-test-face",
           "bold": true,
           "italic": true,

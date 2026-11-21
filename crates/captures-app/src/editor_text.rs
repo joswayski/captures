@@ -5,7 +5,9 @@
 
 use serde::Serialize;
 
-use crate::editor::{ElementStyle, Point, Rect, TextElement, annotation_drop_shadow_pad};
+use crate::editor::{
+    ElementStyle, Point, Rect, ResizeHandle, TextElement, annotation_drop_shadow_pad,
+};
 
 /// Named shipping treatments. Hosts stage these fields, preserving an existing
 /// plate color and all content, size, alignment, shadow and geometry fields.
@@ -416,10 +418,20 @@ pub fn selection_bounds(element: &TextElement) -> Result<Rect, String> {
     })
 }
 
-/// Map a text layer between selection boxes. Width-only resizing reflows text;
-/// other drags scale type by height and set width independently. Any real resize
-/// makes the box fixed-width; a click preserves the original auto-width state.
-pub fn resize(element: &TextElement, initial: Rect, next: Rect) -> Result<TextElement, String> {
+/// Map a text layer between selection boxes. Side grips (or a width-only
+/// change without a grip) set a wrapping column at the same type size, never
+/// narrower than the longest word, and make the box fixed-width. Corners and
+/// top/bottom grips scale type and column together by height, so every line
+/// keeps its breaks and auto-width labels stay auto-width. A click preserves
+/// the original element. `measure` returns one line's advance at the
+/// element's current size.
+pub fn resize(
+    element: &TextElement,
+    initial: Rect,
+    next: Rect,
+    handle: Option<ResizeHandle>,
+    mut measure: impl FnMut(&str) -> Result<f64, String>,
+) -> Result<TextElement, String> {
     validate(element)?;
     if ![
         initial.width,
@@ -441,21 +453,51 @@ pub fn resize(element: &TextElement, initial: Rect, next: Rect) -> Result<TextEl
     }
     let scale_y = next.height / initial.height.max(1.);
     let mut resized = element.clone();
-    let size = if (scale_y - 1.).abs() < 0.001 {
-        element.font_size
-    } else {
-        (element.font_size * scale_y.max(0.05))
-            .round()
-            .clamp(8., 512.)
+    let column = match handle {
+        Some(handle) => matches!(handle, ResizeHandle::E | ResizeHandle::W),
+        None => (scale_y - 1.).abs() < 0.001,
     };
-    let pad = interaction_pad(element, size);
-    resized.font_size = size;
-    resized.base.x = next.x + pad.x;
-    resized.base.y = next.y + pad.y;
-    resized.width = minimum_width(size).max(next.width - pad.x * 2.);
-    resized.auto_width = Some(false);
+    if column {
+        let size = element.font_size;
+        let pad = interaction_pad(element, size);
+        let mut longest_word = 0_f64;
+        for word in element
+            .text
+            .split(whitespace)
+            .filter(|word| !word.is_empty())
+        {
+            longest_word = longest_word.max(advance(word, &mut measure)?);
+        }
+        resized.base.x = next.x + pad.x;
+        resized.base.y = next.y + pad.y;
+        resized.width = minimum_width(size)
+            .max(longest_word.ceil())
+            .max(next.width - pad.x * 2.);
+        resized.auto_width = Some(false);
+    } else {
+        let size = (element.font_size * scale_y.max(0.05))
+            .round()
+            .clamp(8., 512.);
+        let pad = interaction_pad(element, size);
+        resized.font_size = size;
+        resized.base.x = next.x + pad.x;
+        resized.base.y = next.y + pad.y;
+        resized.width = minimum_width(size).max(element.width * size / element.font_size);
+    }
     validate(&resized)?;
     Ok(resized)
+}
+
+/// Fontless resize for callers without shaping, using the UTF-16 estimate.
+pub(crate) fn resize_estimated(
+    element: &TextElement,
+    initial: Rect,
+    next: Rect,
+    handle: Option<ResizeHandle>,
+) -> Result<TextElement, String> {
+    resize(element, initial, next, handle, |line| {
+        estimate(line, element.font_size)
+    })
 }
 
 /// Fit an auto-width element while preserving every unrelated document field.

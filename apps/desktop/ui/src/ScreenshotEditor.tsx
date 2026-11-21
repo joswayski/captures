@@ -4272,7 +4272,9 @@ export function ScreenshotEditor() {
       const minSize = 8 / Math.max(0.01, displayScale);
       const snapThreshold = ALIGNMENT_SNAP_SCREEN_PX / Math.max(0.01, displayScale);
       // Hold Shift while dragging a corner to keep the original aspect ratio.
-      const lockAspectRatio = event.shiftKey;
+      // Text corners always scale proportionally so lines keep their breaks.
+      const lockAspectRatio =
+        event.shiftKey || (gesture.element.kind === "text" && isResizeCornerHandle(gesture.handle));
       const pointer = elementLocalPoint(gesture.element, point);
       const rotatedElement = elementRotation(gesture.element) !== 0;
       const freeBounds = resizeBoundsFromHandle(

@@ -4,7 +4,7 @@ import {
   applyTextStylePreset,
   createPlacedTextElement,
   elementLocalBounds,
-  resizeElement,
+  resizeElementLocal,
   fitAutoWidthTextElement,
   fitEditingAutoWidthTextElement,
   textBackgroundPad,
@@ -129,18 +129,27 @@ function cases() {
     const selection = elementLocalBounds(element);
     const scales = [0, 11, 20].includes(index)
       ? [
-          [1.6, 1],
-          [1, 0.7],
-          [1.3, 1.6],
-          [0.0001, 0.0002],
-          [40, 30],
-          [1.0005, 1.8],
-          [1.0011, 1.8],
+          [1.6, 1, "e"],
+          [1, 0.7, "s"],
+          [1.3, 1.6, "se"],
+          [0.0001, 0.0002, "nw"],
+          [40, 30, "ne"],
+          [1.0005, 1.8, "n"],
+          [1.0011, 1.8, "sw"],
+          [0.0001, 1, "w"],
+          [1.6, 1, null],
         ]
       : [];
-    const resizes = scales.map(([x, y]) => {
+    const resizes = scales.map(([x, y, handle]) => {
       const next = { x: -31.5, y: 27.25, width: selection.width * x, height: selection.height * y };
-      return { next, expected: resizeElement(element, selection, next) };
+      const expected = resizeElementLocal(
+        element,
+        selection,
+        next,
+        (_, line) => recordedMeasure(line),
+        handle ?? undefined,
+      );
+      return { next, handle, expected };
     });
     return {
       element,

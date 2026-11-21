@@ -25,6 +25,7 @@ struct Case {
 #[derive(Deserialize)]
 struct ResizeCase {
     next: Rect,
+    handle: Option<ResizeHandle>,
     expected: Value,
 }
 
@@ -188,10 +189,25 @@ fn selection_and_resize_match_shipping_utf16_wrap_plate_shadow_and_type_scaling(
                 .unwrap(),
             selection_bounds(&case.element).unwrap()
         );
+        let measure = |text: &str| {
+            case.measurements
+                .get(text)
+                .copied()
+                .ok_or_else(|| format!("unexpected measurement {text:?}"))
+        };
         for resized in case.resizes {
             compare(
-                &serde_json::to_value(resize(&case.element, case.selection, resized.next).unwrap())
+                &serde_json::to_value(
+                    resize(
+                        &case.element,
+                        case.selection,
+                        resized.next,
+                        resized.handle,
+                        measure,
+                    )
                     .unwrap(),
+                )
+                .unwrap(),
                 &resized.expected,
             );
         }
@@ -328,7 +344,7 @@ fn auto_width_narrow_letters_never_wrap_in_paint_selection_or_inline_layout() {
 }
 
 #[test]
-fn text_resize_reflows_width_and_scales_height_independently_with_updated_padding() {
+fn text_side_grips_reflow_at_word_boundaries_and_corners_scale_whole_label() {
     let mut element = cases().remove(0).element;
     element.font_size = 20.;
     element.width = 100.;
@@ -336,40 +352,53 @@ fn text_resize_reflows_width_and_scales_height_independently_with_updated_paddin
     element.background = Some("#2174c5".into());
     element.drop_shadow = Some(false);
     element.auto_width = Some(true);
+    // 10px per character: "three" (50) is the longest word.
+    let measure = |text: &str| Ok(text.chars().count() as f64 * 10.);
     let initial = selection_bounds(&element).unwrap();
-    assert_eq!(resize(&element, initial, initial).unwrap(), element);
-    for (width_scale, height_scale, size) in [
-        (0.5, 1., 20.),
-        (1., 2., 40.),
-        (3., 2., 40.),
-        (2., 2., 40.),
-        (1., 0.01, 8.),
-        (1., 100., 512.),
+    for handle in [None, Some(ResizeHandle::E), Some(ResizeHandle::Se)] {
+        assert_eq!(
+            resize(&element, initial, initial, handle, measure).unwrap(),
+            element
+        );
+    }
+    let narrow = Rect {
+        width: 1.,
+        ..initial
+    };
+    for handle in [ResizeHandle::E, ResizeHandle::W] {
+        let column = resize(&element, initial, narrow, Some(handle), measure).unwrap();
+        assert_eq!(column.font_size, 20.);
+        assert_eq!(column.width, 50.);
+        assert_eq!(column.auto_width, Some(false));
+    }
+    let wide = Rect {
+        width: initial.width * 2.,
+        ..initial
+    };
+    let column = resize(&element, initial, wide, Some(ResizeHandle::E), measure).unwrap();
+    assert!((column.width - (wide.width - 20. * 0.72)).abs() < 1e-9);
+    for (handle, height_scale, size) in [
+        (ResizeHandle::Se, 2., 40.),
+        (ResizeHandle::Nw, 0.5, 10.),
+        (ResizeHandle::S, 3., 60.),
+        (ResizeHandle::Ne, 0.01, 8.),
+        (ResizeHandle::N, 100., 512.),
     ] {
         let next = Rect {
             x: 12.,
             y: 18.,
-            width: initial.width * width_scale,
+            width: initial.width * 0.3,
             height: initial.height * height_scale,
         };
-        let resized = resize(&element, initial, next).unwrap();
-        assert_eq!(resized.font_size, size);
-        assert_eq!(resized.auto_width, Some(false));
-        assert!(
-            (resized.width - (next.width - size * 0.72).max(8_f64.max((size * 0.5).round()))).abs()
-                < 1e-9
-        );
-        assert!((resized.base.x - (next.x + size * 0.36)).abs() < 1e-9);
-        assert!((resized.base.y - (next.y + size * 0.22)).abs() < 1e-9);
-        assert_eq!(resized.color, element.color);
-        assert_eq!(resized.background, element.background);
+        let scaled = resize(&element, initial, next, Some(handle), measure).unwrap();
+        assert_eq!(scaled.font_size, size);
+        assert_eq!(scaled.auto_width, Some(true));
+        assert!((scaled.width - 100. * size / 20.).abs() < 1e-9);
+        assert!((scaled.base.x - (next.x + size * 0.36)).abs() < 1e-9);
+        assert!((scaled.base.y - (next.y + size * 0.22)).abs() < 1e-9);
+        assert_eq!(scaled.color, element.color);
+        assert_eq!(scaled.background, element.background);
     }
-    let next = Rect {
-        width: initial.width / 2.,
-        ..initial
-    };
-    let reflowed = resize(&element, initial, next).unwrap();
-    assert!(selection_bounds(&reflowed).unwrap().height > initial.height);
 }
 
 #[test]
@@ -385,7 +414,12 @@ fn text_resize_preserves_fractional_size_within_height_tolerance_and_floors_scal
                 height: initial.height * height_scale,
                 ..initial
             };
-            assert_eq!(resize(&text, initial, next).unwrap().font_size, 31.25);
+            assert_eq!(
+                resize(&text, initial, next, None, |t: &str| Ok(t.len() as f64))
+                    .unwrap()
+                    .font_size,
+                31.25
+            );
         }
     }
     text.font_size = 400.;
@@ -394,11 +428,16 @@ fn text_resize_preserves_fractional_size_within_height_tolerance_and_floors_scal
         height: initial.height * 0.01,
         ..initial
     };
-    assert_eq!(resize(&text, initial, next).unwrap().font_size, 20.);
+    assert_eq!(
+        resize(&text, initial, next, None, |t: &str| Ok(t.len() as f64))
+            .unwrap()
+            .font_size,
+        20.
+    );
 }
 
 #[test]
-fn text_exposes_all_eight_grips_and_only_shift_corners_lock_aspect() {
+fn text_exposes_all_eight_grips_and_corners_always_scale_proportionally() {
     let mut text = cases().remove(0).element;
     text.base.x = 300.;
     text.base.y = 300.;
@@ -442,15 +481,20 @@ fn text_exposes_all_eight_grips_and_only_shift_corners_lock_aspect() {
         let Element::Text(free) = drag.preview(current, false).unwrap().element else {
             panic!()
         };
-        assert_eq!(free.font_size, if dy == 0. { 40. } else { 80. });
-        assert_eq!(free.width, if dx == 0. { 200. } else { 240. });
-        assert_eq!(free.auto_width, Some(false));
-        if dx != 0. && dy != 0. {
+        if dy == 0. {
+            // Side grips set a column at the same size.
+            assert_eq!(free.font_size, 40.);
+            assert_eq!(free.width, 240.);
+            assert_eq!(free.auto_width, Some(false));
+        } else {
+            // Top/bottom and corners scale the whole label, even without Shift.
+            assert_eq!(free.font_size, 80.);
+            assert_eq!(free.width, 400.);
+            assert_eq!(free.auto_width, Some(true));
             let Element::Text(locked) = drag.preview(current, true).unwrap().element else {
                 panic!()
             };
             assert!((locked.width / locked.font_size - text.width / text.font_size).abs() < 1e-9);
-            assert_ne!(locked.width, free.width);
         }
     }
 }

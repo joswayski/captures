@@ -1215,6 +1215,9 @@ impl ResizeDrag {
         if !current.x.is_finite() || !current.y.is_finite() {
             return Err("Resize coordinates must be finite.".into());
         }
+        // Text corners always scale proportionally so lines keep their breaks.
+        let lock_aspect =
+            lock_aspect || (matches!(self.element, Element::Text(_)) && is_corner(self.handle));
         let minimum = 8. / self.display_scale.max(0.01);
         let threshold = ALIGNMENT_SNAP_SCREEN_PX / self.display_scale.max(0.01);
         let center = rect_center(self.element.selection_bounds()?);
@@ -1227,7 +1230,12 @@ impl ResizeDrag {
             lock_aspect,
         );
         let candidate = |bounds, measure: &mut TextMeasurer<'_>| -> Result<Element, String> {
-            let mut element = resize_element(&self.element, self.initial_bounds, bounds)?;
+            let mut element = resize_element(
+                &self.element,
+                self.initial_bounds,
+                bounds,
+                Some(self.handle),
+            )?;
             if matches!(element, Element::Text(_)) {
                 let opposite = opposite_resize_handle(self.handle);
                 let before = rotate_point(
@@ -2614,7 +2622,12 @@ fn snap_resized_bounds(
     (next, guides)
 }
 
-fn resize_element(element: &Element, initial: Rect, next: Rect) -> Result<Element, String> {
+fn resize_element(
+    element: &Element,
+    initial: Rect,
+    next: Rect,
+    handle: Option<ResizeHandle>,
+) -> Result<Element, String> {
     let scale_x = next.width / initial.width.max(1.);
     let scale_y = next.height / initial.height.max(1.);
     let map = |point: Point| Point {
@@ -2633,7 +2646,9 @@ fn resize_element(element: &Element, initial: Rect, next: Rect) -> Result<Elemen
             image.width = (image.width * scale_x).max(1.);
             image.height = (image.height * scale_y).max(1.);
         }
-        Element::Text(text) => *text = crate::editor_text::resize(text, initial, next)?,
+        Element::Text(text) => {
+            *text = crate::editor_text::resize_estimated(text, initial, next, handle)?;
+        }
         Element::Shape(shape) => {
             let start = map(Point {
                 x: shape.base.x,
