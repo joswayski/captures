@@ -451,7 +451,11 @@ pub async fn save_screenshot_edit(
 }
 
 /// Persist a layered screenshot editor session so reopening restores unsaved work.
-#[tauri::command]
+///
+/// Draft commands write, sync and delete files, so they run off the main
+/// thread that every window, the tray and the shortcuts share. The editor
+/// queues its own draft calls, which keeps them in order.
+#[tauri::command(async)]
 pub fn save_screenshot_editor_draft(
     request: SaveScreenshotEditorDraftRequest,
 ) -> CommandResult<()> {
@@ -460,7 +464,7 @@ pub fn save_screenshot_editor_draft(
 }
 
 /// Load a previously autosaved editor draft, if one exists for this capture.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn load_screenshot_editor_draft(
     artifact_id: String,
 ) -> CommandResult<Option<LoadedScreenshotEditorDraft>> {
@@ -472,7 +476,7 @@ pub fn load_screenshot_editor_draft(
     .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn discard_screenshot_editor_draft(artifact_id: String) -> CommandResult<()> {
     discard_screenshot_editor_draft_files(&artifact_id).map_err(|error| error.to_string())
 }
