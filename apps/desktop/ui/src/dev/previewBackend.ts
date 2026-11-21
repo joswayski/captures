@@ -510,7 +510,10 @@ function updateStatus(): UpdateStatus {
       retry_install: true,
     };
   }
-  const latestNotes = previewNotes("Fix post-update launch notice position on macOS", 265);
+  const latestNotes = previewNotes(
+    "Launch notice lands under the tray — After an update, the launch notice now points at the menu bar icon on macOS instead of floating in the corner.",
+    265,
+  );
   return {
     ...base,
     state: "available",
@@ -532,7 +535,10 @@ function updateStatus(): UpdateStatus {
       {
         version: "2026.8.2703",
         display_version: "2026.08.27.3",
-        notes: previewNotes("Redesign the desktop UI around one design system", 262),
+        notes: previewNotes(
+          "One design system — Every desktop window now shares the same colors, spacing and controls.",
+          262,
+        ),
       },
     ],
     installable: true,

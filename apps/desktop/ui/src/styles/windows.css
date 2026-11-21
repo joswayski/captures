@@ -2409,6 +2409,17 @@
   margin-top: var(--s-3);
 }
 
+.update-notes-title {
+  display: block;
+  margin-bottom: var(--s-1);
+  color: var(--text);
+  font-weight: var(--weight-semibold);
+}
+
+.update-notes-list li:has(.update-notes-title) + li {
+  margin-top: var(--s-4);
+}
+
 .update-notes-pr {
   padding: 0;
   border: 0;

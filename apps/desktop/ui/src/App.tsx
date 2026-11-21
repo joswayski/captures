@@ -950,6 +950,9 @@ export function UpdateNotice() {
                               const pullRequest = note.pullRequest;
                               return (
                                 <li key={`${group.version}-${index}-${note.text}`}>
+                                  {note.title ? (
+                                    <strong className="update-notes-title">{note.title}</strong>
+                                  ) : null}
                                   {note.text}
                                   {pullRequest ? (
                                     <>

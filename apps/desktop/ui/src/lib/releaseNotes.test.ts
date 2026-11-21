@@ -54,6 +54,20 @@ describe("releaseNoteItems", () => {
     ]);
   });
 
+  it("splits editorial highlights into a title and description", () => {
+    expect(
+      releaseNoteItems(
+        "* Image picker filters images — The picker now shows only supported formats, like PNG — and JPEG.",
+      ),
+    ).toEqual([
+      {
+        title: "Image picker filters images",
+        text: "The picker now shows only supported formats, like PNG — and JPEG.",
+        pullRequest: null,
+      },
+    ]);
+  });
+
   it("omits dependency updates from product-facing release notes", () => {
     expect(
       releaseNoteItems(

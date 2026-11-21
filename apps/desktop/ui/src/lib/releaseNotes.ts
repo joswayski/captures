@@ -10,6 +10,8 @@ export interface ReleaseNotePullRequest {
 }
 
 export interface ReleaseNoteItem {
+  /** Highlight title from editorial notes written as `Title — description`. */
+  title?: string;
   text: string;
   pullRequest: ReleaseNotePullRequest | null;
 }
@@ -83,7 +85,16 @@ export function releaseNoteItems(markdown: string): ReleaseNoteItem[] {
       isDependencyUpdateLine(text)
     )
       continue;
-    items.push({ text, pullRequest: pullRequestFromLine(body) });
+    const pullRequest = pullRequestFromLine(body);
+    // ai-release-notes.mjs writes each highlight as `Title — description`.
+    const separator = text.indexOf(" — ");
+    const title = separator > 0 ? text.slice(0, separator).trim() : "";
+    const description = separator > 0 ? text.slice(separator + 3).trim() : "";
+    items.push(
+      title && description && title.length <= 100
+        ? { title, text: description, pullRequest }
+        : { text, pullRequest },
+    );
   }
 
   return items;
