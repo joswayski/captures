@@ -862,8 +862,6 @@ struct StackFly {
 struct PreviewRenderCard {
     artifact_id: String,
     generation: u64,
-    width: u32,
-    height: u32,
     texture: egui::TextureHandle,
     blurred: Option<egui::TextureHandle>,
     arrive_blurred: Option<egui::TextureHandle>,
@@ -7714,8 +7712,6 @@ impl Live {
                 Some(PreviewRenderCard {
                     artifact_id: artifact_id.clone(),
                     generation: card.generation,
-                    width: card.width,
-                    height: card.height,
                     texture: card.texture.clone()?,
                     blurred: card.blurred.clone(),
                     arrive_blurred: card.arrive_blurred.clone(),
@@ -7997,8 +7993,6 @@ impl Live {
                             crate::mini_preview::View {
                                 artifact_id: &card.artifact_id,
                                 texture: &card.texture,
-                                width: card.width,
-                                height: card.height,
                                 size_bytes: card.size_bytes,
                                 busy: card.busy,
                                 message: card.message.as_deref(),

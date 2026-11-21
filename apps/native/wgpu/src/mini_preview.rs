@@ -133,8 +133,6 @@ pub fn stack_controls_visible(count: usize, collapsed: bool) -> bool {
 pub struct View<'a> {
     pub artifact_id: &'a str,
     pub texture: &'a egui::TextureHandle,
-    pub width: u32,
-    pub height: u32,
     pub size_bytes: u64,
     pub busy: Option<Busy>,
     pub message: Option<&'a str>,
@@ -2774,8 +2772,6 @@ mod tests {
             View {
                 artifact_id: "artifact",
                 texture,
-                width: 320,
-                height: 180,
                 size_bytes: 245_760,
                 clipboard_current: false,
                 saved_feedback: false,
@@ -2834,8 +2830,6 @@ mod tests {
                 View {
                     artifact_id: "saved",
                     texture: &texture,
-                    width: 310,
-                    height: 170,
                     size_bytes: 245_760,
                     clipboard_current: false,
                     saved_feedback: false,
@@ -3099,8 +3093,6 @@ mod tests {
                 View {
                     artifact_id: "fixture",
                     texture: &texture,
-                    width: 391,
-                    height: 207,
                     size_bytes: 245_760,
                     clipboard_current: false,
                     saved_feedback: false,
@@ -3371,8 +3363,6 @@ mod tests {
                     View {
                         artifact_id: "fixture",
                         texture: &texture,
-                        width: 391,
-                        height: 207,
                         size_bytes: 245_760,
                         clipboard_current: false,
                         saved_feedback: false,
@@ -3451,8 +3441,6 @@ mod tests {
                 View {
                     artifact_id: "fixture",
                     texture: &texture,
-                    width: 391,
-                    height: 207,
                     size_bytes: 245_760,
                     clipboard_current,
                     saved_feedback,
@@ -3939,8 +3927,6 @@ mod tests {
             View {
                 artifact_id: "warning",
                 texture: &texture,
-                width: 320,
-                height: 180,
                 size_bytes: 1_024,
                 clipboard_current: false,
                 saved_feedback: false,
@@ -4323,8 +4309,6 @@ mod tests {
                 View {
                     artifact_id: "red",
                     texture: &texture,
-                    width: 2,
-                    height: 2,
                     size_bytes: 245_760,
                     clipboard_current: false,
                     saved_feedback: false,
@@ -4481,8 +4465,6 @@ mod tests {
             View {
                 artifact_id: "fixture",
                 texture: &texture,
-                width: 391,
-                height: 207,
                 size_bytes: 245_760,
                 clipboard_current: false,
                 saved_feedback: false,
