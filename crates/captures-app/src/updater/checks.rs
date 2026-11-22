@@ -777,57 +777,50 @@ impl CheckWorker {
         })
     }
 
+    /// The tray row from the shared `update_notice::tray_update_item`. A
+    /// verified package still waits for its install, so it reads as available;
+    /// verification is part of installing.
     fn tray_item(&self) -> TrayItem {
-        let available = |release: &ReleaseInfo| {
-            let changes: usize = release
-                .changelog
-                .iter()
-                .filter_map(|entry| entry.notes.as_deref())
-                .map(|notes| crate::update_notice::release_note_items(notes).len())
-                .sum();
-            let changes = if changes > 0 {
-                changes
-            } else {
-                release.notes.as_deref().map_or(0, |notes| {
-                    crate::update_notice::release_note_items(notes).len()
-                })
-            };
-            TrayItem {
-                label: match changes {
-                    0 => "Update Available".into(),
-                    1 => "Update Available — 1 change".into(),
-                    count => format!("Update Available — {count} changes"),
-                },
-                enabled: true,
-                pin_first: true,
-                tooltip: "Captures — Update available",
-            }
-        };
-        match &self.status {
-            // A verified package still waits for Restart and install.
+        use crate::update_notice::{UpdateStatus, tray_tooltip, tray_update_item};
+        let current_version = self.current_version.clone();
+        let current_display_version = super::display_version(&current_version);
+        let status = match &self.status {
             CheckStatus::Available { release } | CheckStatus::Staged { release, .. } => {
-                available(release)
+                Some(UpdateStatus::Available {
+                    current_version,
+                    current_display_version,
+                    version: release.version.clone(),
+                    display_version: super::display_version(&release.version),
+                    notes: release.notes.clone(),
+                    changelog: release.changelog.clone(),
+                    installable: self.staging_enabled,
+                    manual_download_url: None,
+                    download_size: Some(release.size),
+                    will_close_open_captures: false,
+                })
             }
-            CheckStatus::Downloading { .. }
-            | CheckStatus::Verifying { .. }
-            | CheckStatus::Cancelling { .. } => TrayItem {
-                label: "Installing Update…".into(),
-                enabled: false,
-                pin_first: true,
-                tooltip: "Captures — Installing update",
-            },
-            CheckStatus::Checking => TrayItem {
-                label: "Checking for Updates…".into(),
-                enabled: false,
-                pin_first: false,
-                tooltip: "Captures",
-            },
-            _ => TrayItem {
-                label: "Check for Updates…".into(),
-                enabled: self.thread.is_some(),
-                pin_first: false,
-                tooltip: "Captures",
-            },
+            CheckStatus::Downloading { release, .. }
+            | CheckStatus::Verifying { release }
+            | CheckStatus::Cancelling { release } => Some(UpdateStatus::Downloading {
+                current_version,
+                current_display_version,
+                version: release.version.clone(),
+                display_version: super::display_version(&release.version),
+                downloaded: 0,
+                total: None,
+            }),
+            CheckStatus::Checking => Some(UpdateStatus::Checking {
+                current_version,
+                current_display_version,
+            }),
+            _ => None,
+        };
+        let item = tray_update_item(status.as_ref());
+        TrayItem {
+            label: item.label,
+            enabled: item.enabled && (item.pin_first || self.thread.is_some()),
+            pin_first: item.pin_first,
+            tooltip: tray_tooltip(status.as_ref()),
         }
     }
 
