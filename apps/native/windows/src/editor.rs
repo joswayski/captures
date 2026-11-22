@@ -63,6 +63,7 @@ use crate::tokens::Tokens;
 use crate::{Options, appearance};
 
 mod background;
+mod canvas_hint;
 mod crop;
 pub use crop::ASPECT_LABEL;
 mod compare;
@@ -458,6 +459,8 @@ pub struct Presented {
     pub has_draft: bool,
     /// Shipping `canTrimEdges`.
     pub can_trim: bool,
+    /// What Trim edges would cut, for its hover preview.
+    pub trim_preview: Option<captures_app::editor_canvas::CanvasTrimPreview>,
     /// The layer card's Merge down, Merge visible and Flatten states.
     pub merge_down_ids: Vec<String>,
     pub can_merge_visible: bool,
@@ -797,6 +800,8 @@ pub struct Editor {
     /// Something other than the brush ring changed since the last overlay
     /// draw (a staged crop can change inside the same bounds).
     overlay_rest_dirty: bool,
+    /// Whether the overlay last drew the Trim edges preview.
+    trim_shown: bool,
     motions: Vec<Motion>,
     dcomp: Option<IDCompositionDesktopDevice>,
     _target: Option<IDCompositionTarget>,
@@ -1050,6 +1055,7 @@ fn present(session: &mut EditorSession, artifact_id: &str, published: &mut Publi
         style: snapshot.initial_annotation_style.clone(),
         has_draft: snapshot.has_draft,
         can_trim: snapshot.can_trim,
+        trim_preview: snapshot.trim_preview.clone(),
         merge_down_ids: snapshot
             .merge_down_ids
             .iter()
@@ -1433,6 +1439,7 @@ impl Editor {
             overlay_drawn: (None, None),
             overlay_fresh: true,
             overlay_rest_dirty: true,
+            trim_shown: false,
             motions: Vec::new(),
             dcomp: None,
             _target: None,
@@ -2104,7 +2111,7 @@ impl Editor {
         if let Some(id) = options.select.as_ref().filter(|s| {
             !s.starts_with("drop")
                 && !s.starts_with("export")
-                && !matches!(s.as_str(), "layer-menu" | "rotate")
+                && !matches!(s.as_str(), "layer-menu" | "rotate" | "trim")
         }) {
             if self.layer_count() > 0
                 && (0..self.layer_count()).any(|i| self.layer(i).is_some_and(|l| l.id == *id))
@@ -3513,6 +3520,11 @@ impl Editor {
                 self.nodes[layered.base].props = true;
             }
         }
+        let trim = self.trim_hint().is_some();
+        if trim != self.trim_shown {
+            self.trim_shown = trim;
+            self.overlay_changed();
+        }
     }
 
     /// The control under a client point.
@@ -4334,6 +4346,7 @@ impl Editor {
         let t = &self.t;
         let accent = t.color("theme-accent");
         let offset = self.move_offset();
+        self.draw_trim_hint(dc)?;
         self.draw_guides(dc)?;
         if let Some(outline) = self.selection_outline() {
             let screen: Vec<(f32, f32)> = outline
@@ -6703,13 +6716,24 @@ pub fn render_offscreen(
     let mut session = session;
     // `--select rotate`: an image layer placed in memory and selected, with
     // its grips and rotate handle (the fixture's background is locked).
-    let rotating = options.select.as_deref() == Some("rotate");
-    let placed = rotating
+    // `trim`: the same layer over a hidden background, with Trim edges
+    // hovered.
+    let select = options.select.as_deref();
+    let placed = matches!(select, Some("rotate" | "trim"))
         .then(|| {
             let image = RgbaImage::from_pixel(420, 240, image::Rgba([232, 96, 64, 255]));
             session.import_images([("rotate.png".to_owned(), image)], None, None)
         })
         .and_then(std::result::Result::ok);
+    if select == Some("trim") {
+        let background = session.snapshot().document.elements[0].base().id.clone();
+        session
+            .execute(Request::Layer {
+                id: background,
+                edit: LayerEdit::Visibility { visible: false },
+            })
+            .map_err(fail)?;
+    }
     let presented = present(&mut session, &id, &mut Published::default());
     let mode = entry.mode.unwrap_or(CaptureMode::Region);
     let mut editor = Editor::new(
@@ -6725,7 +6749,7 @@ pub fn render_offscreen(
     editor.w = w;
     editor.h = h;
     editor.receive(Outcome::Presented(Box::new(presented)));
-    if let Some(layer) = placed {
+    if let Some(layer) = placed.filter(|_| select != Some("trim")) {
         editor.set_selected(Some(layer));
     }
     // `--select export`: the Export settings panel open, with the
@@ -6773,6 +6797,10 @@ pub fn render_offscreen(
         Some("layer-menu") => {
             editor.place();
             editor.toggle_layer_card(0);
+        }
+        Some("trim") => {
+            editor.hover = Some(Target::Trim);
+            editor.refresh(false);
         }
         Some("drop") => editor.drag_enter(None),
         Some("drop-stack") => {
@@ -7527,6 +7555,79 @@ mod tests {
         let background = e.layer(1).unwrap().id.clone();
         e.set_selected(Some(background));
         assert!(e.rotate_grip().is_none());
+        drop(e);
+        let _ = std::fs::remove_dir_all(data);
+        unsafe { CoUninitialize() };
+    }
+    /// Shipping's Trim edges preview: shown only while the enabled button is
+    /// hovered or focused, outlining the visible layer it keeps.
+    #[test]
+    fn trim_preview_follows_hover_and_focus() {
+        use captures_app::editor_canvas::CanvasEdge;
+        use windows::Win32::System::Com::*;
+        unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok().unwrap() };
+        let data = std::env::temp_dir().join(format!("captures-trim-{}", std::process::id()));
+        let capture = captures_app::persist_screenshot(
+            &data.join("history"),
+            &RgbaImage::from_pixel(640, 360, Rgba([20, 50, 80, 255])),
+            CaptureMode::Region,
+        )
+        .unwrap();
+        let options = crate::parse(
+            [
+                "test".into(),
+                "--profile".into(),
+                data.to_string_lossy().into_owned(),
+                "--scene".into(),
+                "editor".into(),
+                "--artifact".into(),
+                capture.entry.id,
+                "--select".into(),
+                "trim".into(),
+            ]
+            .into_iter(),
+        )
+        .unwrap();
+        let tokens = crate::appearance::tokens(Some("light"), &Default::default());
+        let mut e = render_offscreen(
+            &options,
+            Gfx::new(&tokens, false).unwrap(),
+            tokens,
+            (1280., 840.),
+        )
+        .unwrap();
+        let (jobs, inbox) = channel();
+        e.jobs = jobs;
+        let move_to = |e: &mut Editor, x: f32, y: f32| {
+            let (x, y) = ((x * e.scale) as u32, (y * e.scale) as u32);
+            e.handle(WM_MOUSEMOVE, WPARAM(0), LPARAM((x | (y << 16)) as isize));
+        };
+        move_to(&mut e, 4., 300.);
+        assert!(e.trim_hint().is_none() && !e.trim_shown);
+        let trim = e.l.trim;
+        move_to(&mut e, trim.x + trim.w / 2., trim.y + trim.h / 2.);
+        // The 420 × 240 layer is the only visible content on 640 × 360.
+        let preview = e.trim_hint().expect("hovered Trim previews").clone();
+        assert!(e.trim_shown);
+        assert_eq!((preview.keep.width, preview.keep.height), (420., 240.));
+        for (edge, margin) in [
+            (CanvasEdge::Top, preview.margins.top),
+            (CanvasEdge::Right, preview.margins.right),
+            (CanvasEdge::Bottom, preview.margins.bottom),
+            (CanvasEdge::Left, preview.margins.left),
+        ] {
+            assert_eq!(preview.edges.contains(&edge), margin > 0., "{edge:?}");
+        }
+        move_to(&mut e, 4., 300.);
+        assert!(e.trim_hint().is_none() && !e.trim_shown);
+        e.set_focus(Some(Target::Trim), true);
+        assert!(e.trim_hint().is_some());
+        e.activate(Target::Trim);
+        assert!(
+            inbox
+                .try_iter()
+                .any(|job| matches!(job, Job::Apply(Request::TrimCanvas)))
+        );
         drop(e);
         let _ = std::fs::remove_dir_all(data);
         unsafe { CoUninitialize() };

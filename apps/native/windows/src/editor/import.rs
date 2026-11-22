@@ -553,38 +553,37 @@ fn edge_glow(
             90.,
         ),
     };
-    hint_bloom(dc, t, bloom, angle, 0.55)?;
+    hint_bloom(
+        dc,
+        t.color("theme-accent"),
+        bloom,
+        angle,
+        captures_app::editor_canvas::SNAP_BLOOM_STOPS,
+    )?;
     for (blur, alpha) in [(36., 0.4), (20., 0.65), (8., 0.95)] {
         gfx::glow(dc, bar, 2.5, blur, t.color_alpha("theme-accent", alpha))?;
     }
     gfx::fill_round(dc, bar, 2.5, t.color("theme-accent"))
 }
 
-/// `.screenshot-drop-snap-bloom` (and the Expand/Trim blooms): the accent
-/// at `alpha` fading out across `r` along `angle` (CSS degrees; 0 starts at
-/// the bottom edge), with shipping's 0.55 / 0.22 / 0.06 / 0 stops.
+/// `.screenshot-drop-snap-bloom` (and the Expand/Trim blooms): `color`
+/// fading out across `r` along `angle` (CSS degrees; 0 starts at the bottom
+/// edge) through `(position, alpha)` stops, faded at both ends along the edge.
 pub(super) fn hint_bloom(
     dc: &ID2D1DeviceContext,
-    t: &crate::tokens::Tokens,
+    color: D2D1_COLOR_F,
     r: windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F,
     angle: f32,
-    alpha: f32,
+    stops: [(f64, f64); 4],
 ) -> Result<()> {
     use windows::Win32::Graphics::Direct2D::Common::D2D1_GRADIENT_STOP;
-    let accent = t.color("theme-accent");
-    let stop = |position: f32, share: f32| D2D1_GRADIENT_STOP {
-        position,
+    let stops = stops.map(|(position, alpha)| D2D1_GRADIENT_STOP {
+        position: position as f32,
         color: D2D1_COLOR_F {
-            a: accent.a * alpha * share,
-            ..accent
+            a: color.a * alpha as f32,
+            ..color
         },
-    };
-    let stops = [
-        stop(0., 1.),
-        stop(0.38, 0.4),
-        stop(0.72, 0.11),
-        stop(1., 0.),
-    ];
+    });
     let (w, h) = (r.right - r.left, r.bottom - r.top);
     let a = angle.to_radians();
     let (dx, dy) = (a.sin(), -a.cos());

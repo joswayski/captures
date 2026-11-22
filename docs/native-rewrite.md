@@ -970,6 +970,18 @@ transparent 0 % keyframe. Windows: offscreen render of the peak frame in
 light and dark (temporary, removed hook). The live animation has not been
 watched. macOS, Linux: unchanged.
 
+Windows Trim edges hover preview: while the enabled button is hovered or
+focused, the overlay draws shipping's `.screenshot-canvas-trim-hint` from
+the session's `trim_preview`: the discarded margins in `--trim-rgb` at
+14 % with the 24 px inset glow, the 1.5 px dashed rectangle that stays with
+its 1 px ring and 22 px glow, and on each cut edge the 4 px red pill with its
+three glows and the 96 px outward bloom (the drop guide's `hint_bloom` now
+takes a color and stops). The breathing and particle animations are omitted,
+as in GTK. Windows: `--select trim` renders it in light and dark over an
+in-memory layer with the background hidden; a test checks that hover and
+focus show it, leaving hides it, the cut edges match the margins and Trim
+still submits `TrimCanvas`. A real pointer hover is unverified.
+
 Hardware pass 16 verified crop dragging/dashes/apply/undo, field commits,
 Properties scroll, rename selection and reorder, compositor pulse idle,
 and final-window shutdown. Follow-up fixes keep the dragged row's 0.42
