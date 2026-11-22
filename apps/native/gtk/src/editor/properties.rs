@@ -343,6 +343,8 @@ impl CropSection {
         apply.add_css_class("property-action");
         apply.add_css_class("primary");
         apply.add_css_class("cta-pulse");
+        apply.set_tooltip_text(Some("Apply crop (Enter)"));
+        apply.update_property(&[gtk::accessible::Property::KeyShortcuts("Enter")]);
         actions.append(&clear);
         actions.append(&apply);
         staged.append(&actions);

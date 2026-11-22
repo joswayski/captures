@@ -47,6 +47,9 @@ mod sidebar_resize;
 mod text;
 pub use text::register_fonts;
 
+/// Shipping's layer clipboard marker type.
+const LAYER_CLIPBOARD_TYPE: &str = "application/x-captures-editor-layer";
+
 /// Shipping Fit: `(clientWidth - 56) / width`, so 28 px a side.
 const FIT_INSET: f64 = 28.;
 
@@ -104,9 +107,9 @@ enum Job {
     Apply(Request),
     /// An uncommitted brush stroke, rendered without touching history.
     Preview(Request),
-    /// Decode image files and import them as one edit.
+    /// Decode image files (or one pasted PNG) and import them as one edit.
     Import {
-        paths: Vec<PathBuf>,
+        source: ImportSource,
         selected_id: Option<String>,
         point: Option<Point>,
     },
@@ -115,6 +118,11 @@ enum Job {
         options: ExportOptions,
         mode: captures_capture::CaptureMode,
     },
+}
+
+enum ImportSource {
+    Files(Vec<PathBuf>),
+    Pasted(Vec<u8>),
 }
 
 enum Outcome {
@@ -301,6 +309,8 @@ struct State {
     preview_dirty: Cell<bool>,
     /// The previous primary press, for double-click editing.
     last_press: Cell<Option<(std::time::Instant, f64, f64)>>,
+    /// The marker this editor last put on the clipboard with a copied layer.
+    layer_marker: RefCell<Option<String>>,
     widgets: Widgets,
 }
 
@@ -354,6 +364,13 @@ fn label(text: &str, class: &str) -> gtk::Label {
     label.add_css_class(class);
     label.set_xalign(0.);
     label
+}
+
+/// Shipping's `title` naming a control's keys, and its `aria-keyshortcuts`.
+fn shortcut(widget: &impl IsA<gtk::Widget>, tooltip: &str, keys: &str) {
+    let widget = widget.upcast_ref::<gtk::Widget>();
+    widget.set_tooltip_text(Some(tooltip));
+    widget.update_property(&[gtk::accessible::Property::KeyShortcuts(keys)]);
 }
 
 fn icon_only(icon: &str, side: i32, name: &str, class: &str) -> gtk::Button {
@@ -434,11 +451,22 @@ pub fn build(
                         },
                         Job::Preview(request) => Outcome::Preview(session.preview_drawing(request)),
                         Job::Import {
-                            paths,
+                            source,
                             selected_id,
                             point,
-                        } => match captures_app::editor_image_decode::decode_imports(paths)
-                            .and_then(|images| session.import_images(images, selected_id, point))
+                        } => match match source {
+                            ImportSource::Files(paths) => {
+                                captures_app::editor_image_decode::decode_imports(paths)
+                            }
+                            ImportSource::Pasted(bytes) => {
+                                captures_app::editor_image_decode::decode_import_bytes(
+                                    &bytes,
+                                    "Pasted image",
+                                )
+                                .map(|image| vec![("Pasted image".to_owned(), image)])
+                            }
+                        }
+                        .and_then(|images| session.import_images(images, selected_id, point))
                         {
                             Ok(layer) => Outcome::Imported(Box::new(present(session, &id)), layer),
                             Err(error) => Outcome::Failed(error),
@@ -521,6 +549,12 @@ pub fn build(
     let right = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     let undo = icon_only("undo", 16, header::UNDO, "editor-icon-button");
     let redo = icon_only("redo", 16, header::REDO, "editor-icon-button");
+    shortcut(&undo, "Undo (Ctrl+Z)", "Control+Z");
+    shortcut(
+        &redo,
+        "Redo (Ctrl+Shift+Z or Ctrl+Y)",
+        "Control+Shift+Z Control+Y",
+    );
     right.set_valign(gtk::Align::Center);
     for button in [&undo, &redo] {
         button.set_valign(gtk::Align::Center);
@@ -535,6 +569,7 @@ pub fn build(
     let fit = icon_only("fit", 14, header::FIT_TOOLTIP, "editor-zoom-button");
     fit.update_property(&[gtk::accessible::Property::Label(header::FIT)]);
     let zoom_out = icon_only("minus", 14, header::ZOOM_OUT, "editor-zoom-button");
+    shortcut(&zoom_out, "Zoom out (Ctrl+−)", "Control+Minus");
     // `.screenshot-editor-zoom-slider`: shipping's logarithmic 5–800% range.
     let zoom_slider = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0., 1., 0.001);
     zoom_slider.add_css_class("editor-zoom-slider");
@@ -550,6 +585,7 @@ pub fn build(
     );
     slider_wrap.append(&zoom_slider);
     let zoom_in = icon_only("plus", 14, header::ZOOM_IN, "editor-zoom-button");
+    shortcut(&zoom_in, "Zoom in (Ctrl++)", "Control+Plus");
     let zoom_preset_changed: PresetHandler = Rc::default();
     let zoom_preset = {
         let changed = zoom_preset_changed.clone();
@@ -789,6 +825,11 @@ pub fn build(
     let file_column = MaxWidth::new(&file, 390);
     bar.append(&file_column);
     let (copy, _, _) = icon_button("copy", "Copy image", &["ui-btn"]);
+    shortcut(
+        &copy,
+        "Copy the edited image to the clipboard. Does not save a file.",
+        "Control+Shift+C",
+    );
     copy.set_valign(gtk::Align::End);
     bar.append(&copy);
     let status = gtk::Box::new(gtk::Orientation::Vertical, 2);
@@ -810,6 +851,7 @@ pub fn build(
     // `.screenshot-make-copy`: a 36 px row ruled off from Save on its right.
     let as_new = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     as_new.add_css_class("editor-make-copy");
+    as_new.set_tooltip_text(Some("Save as a new file and leave the original untouched"));
     as_new.set_valign(gtk::Align::Center);
     as_new.set_size_request(-1, 36);
     let save_as_new = TokenSwitch::new(tokens.clone(), false);
@@ -818,6 +860,7 @@ pub fn build(
     as_new.append(&label("Save as new file", "editor-switch-label"));
     bar.append(&as_new);
     let (save, _, _) = icon_button("save", "Save", &["ui-btn", "primary", "editor-save"]);
+    save.update_property(&[gtk::accessible::Property::KeyShortcuts("Control+S")]);
     save.set_valign(gtk::Align::Center);
     bar.append(&save);
     root.append(&footer);
@@ -928,6 +971,7 @@ pub fn build(
         inline: RefCell::default(),
         input_counter: Cell::default(),
         last_press: Cell::default(),
+        layer_marker: RefCell::default(),
         properties,
         pointer: Cell::default(),
         preview_busy: Cell::default(),
@@ -1441,16 +1485,24 @@ impl State {
 
     /// Import image files as one edit, below the selection or at `point`.
     fn import_files(&self, paths: Vec<PathBuf>, point: Option<Point>) {
-        if paths.is_empty() {
-            return;
+        if !paths.is_empty() {
+            self.import(ImportSource::Files(paths), point);
         }
+    }
+
+    /// Import a pasted image as a new layer.
+    fn import_png(&self, bytes: Vec<u8>) {
+        self.import(ImportSource::Pasted(bytes), None);
+    }
+
+    fn import(&self, source: ImportSource, point: Option<Point>) {
         if self.text_active() {
             self.finish_text();
         }
         *self.notice.borrow_mut() = None;
         self.busy.set(true);
         let _ = self.jobs.send(Job::Import {
-            paths,
+            source,
             selected_id: self.selected.borrow().clone(),
             point,
         });
@@ -2504,6 +2556,127 @@ impl State {
         true
     }
 
+    /// Whether a focused button outside the tool rail would take Enter.
+    fn focus_on_button(&self) -> bool {
+        let focus = self.canvas.root().and_then(|root| root.focus());
+        let button = focus.and_then(|focus| {
+            if focus.is::<gtk::Button>() {
+                Some(focus)
+            } else {
+                focus.ancestor(gtk::Button::static_type())
+            }
+        });
+        button.is_some_and(|button| {
+            !button
+                .parent()
+                .is_some_and(|p| p.has_css_class("editor-rail"))
+        })
+    }
+
+    /// Shipping Ctrl+D: duplicate the selected layer above it and select it.
+    fn duplicate_selected(&self) -> bool {
+        let Some(id) = self.selected.borrow().clone() else {
+            return false;
+        };
+        if self.text_active() {
+            self.finish_text();
+        }
+        let new_id = uuid::Uuid::new_v4().to_string();
+        *self.pending_select.borrow_mut() = Some(new_id.clone());
+        self.submit(Request::Layer {
+            id,
+            edit: LayerEdit::Duplicate { new_id },
+        });
+        self.select_tool("v");
+        true
+    }
+
+    /// Shipping copies the selected layer within this editor and claims the
+    /// clipboard with a marker; another app's copy replaces the marker, so a
+    /// stale layer never hides a copied image.
+    fn copy_layer(&self) -> bool {
+        let Some(id) = self.selected.borrow().clone() else {
+            return false;
+        };
+        let marker = uuid::Uuid::new_v4().to_string();
+        let provider = gdk::ContentProvider::for_bytes(
+            LAYER_CLIPBOARD_TYPE,
+            &glib::Bytes::from_owned(marker.clone().into_bytes()),
+        );
+        if self
+            .canvas
+            .clipboard()
+            .set_content(Some(&provider))
+            .is_err()
+        {
+            return false;
+        }
+        *self.layer_marker.borrow_mut() = Some(marker);
+        self.submit(Request::CopyLayer { id });
+        true
+    }
+
+    /// Shipping paste: this editor's copied layer while the clipboard still
+    /// holds its marker, otherwise copied image files or an image.
+    fn paste(self: &Rc<Self>) {
+        let clipboard = self.canvas.clipboard();
+        let formats = clipboard.formats();
+        let weak = Rc::downgrade(self);
+        if formats.contain_mime_type(LAYER_CLIPBOARD_TYPE) && self.layer_marker.borrow().is_some() {
+            clipboard.read_async(
+                &[LAYER_CLIPBOARD_TYPE],
+                glib::Priority::DEFAULT,
+                gtk::gio::Cancellable::NONE,
+                move |result| {
+                    let Some(state) = weak.upgrade() else { return };
+                    let Ok((stream, _)) = result else { return };
+                    let bytes = stream
+                        .read_bytes(256, gtk::gio::Cancellable::NONE)
+                        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned());
+                    if bytes.ok() == *state.layer_marker.borrow() {
+                        let new_id = uuid::Uuid::new_v4().to_string();
+                        let after_id = state.selected.borrow().clone();
+                        *state.pending_select.borrow_mut() = Some(new_id.clone());
+                        state.submit(Request::PasteLayer { new_id, after_id });
+                        state.select_tool("v");
+                    }
+                },
+            );
+            return;
+        }
+        if formats.contains_type(gdk::FileList::static_type()) {
+            clipboard.read_value_async(
+                gdk::FileList::static_type(),
+                glib::Priority::DEFAULT,
+                gtk::gio::Cancellable::NONE,
+                move |result| {
+                    let (Some(state), Ok(value)) = (weak.upgrade(), result) else {
+                        return;
+                    };
+                    let Ok(files) = value.get::<gdk::FileList>() else {
+                        return;
+                    };
+                    let paths: Vec<_> = files
+                        .files()
+                        .iter()
+                        .filter_map(|file| file.path())
+                        .filter(|path| captures_app::editor_session::is_supported_image_path(path))
+                        .collect();
+                    state.import_files(paths, None);
+                },
+            );
+            return;
+        }
+        if formats.contains_type(gdk::Texture::static_type()) {
+            clipboard.read_texture_async(gtk::gio::Cancellable::NONE, move |result| {
+                let (Some(state), Ok(Some(texture))) = (weak.upgrade(), result) else {
+                    return;
+                };
+                state.import_png(texture.save_to_png_bytes().to_vec());
+            });
+        }
+    }
+
     fn delete_selected(&self) {
         let id = self.selected.borrow().clone();
         let locked = self.presented.borrow().as_ref().is_some_and(|p| {
@@ -2819,7 +2992,7 @@ impl State {
         window.add_controller(keys);
     }
 
-    fn key(&self, key: gdk::Key, modifiers: gdk::ModifierType) -> bool {
+    fn key(self: &Rc<Self>, key: gdk::Key, modifiers: gdk::ModifierType) -> bool {
         let control = modifiers.contains(gdk::ModifierType::CONTROL_MASK);
         let shift = modifiers.contains(gdk::ModifierType::SHIFT_MASK);
         let typing = self
@@ -2834,16 +3007,31 @@ impl State {
             .name()
             .map(|n| n.to_string())
             .unwrap_or_default();
+        let alt = modifiers.contains(gdk::ModifierType::ALT_MASK);
+        // Shipping's order: zoom and Save work from a field too; the rest
+        // leaves a text field its own keys.
         match (control, name.as_str()) {
+            (true, "plus" | "equal" | "KP_Add") => self.zoom_by(1.25),
+            (true, "minus" | "underscore" | "KP_Subtract") => self.zoom_by(1. / 1.25),
+            (true, "0" | "KP_0") => self.zoom_to(100., None),
+            (true, "s") if !alt && !shift => self.save(),
+            _ if typing => return false,
+            (true, "c") if shift && !alt => self.copy(),
+            (true, "c") => return self.copy_layer(),
+            (true, "v") => self.paste(),
+            (true, "d") => return self.duplicate_selected(),
             (true, "z") if shift => self.submit(Request::Redo),
             (true, "z") => self.submit(Request::Undo),
-            (true, "y") => self.submit(Request::Redo),
-            (true, "c") if !typing => self.copy(),
-            (true, "s") => self.save(),
-            (true, "0") => self.set_viewport(Viewport::default()),
-            (true, "plus" | "equal" | "KP_Add") => self.zoom_by(1.25),
-            (true, "minus" | "KP_Subtract") => self.zoom_by(1. / 1.25),
-            _ if control || typing => return false,
+            (true, "y") if !shift => self.submit(Request::Redo),
+            _ if control => return false,
+            // Enter applies a staged crop, as Escape drops it. A focused
+            // button keeps Enter, except the tool rail Crop was picked from.
+            (_, "Return" | "KP_Enter") => {
+                if self.crop.get().is_none() || self.focus_on_button() {
+                    return false;
+                }
+                self.apply_crop();
+            }
             (_, "Delete" | "BackSpace") => self.delete_selected(),
             // Shipping nudges the selected layer 1 px (10 with Shift), except
             // when a focused control already uses the arrow (Tauri a18afc62).
