@@ -405,7 +405,7 @@ const TILE: f32 = colors::TILE as f32;
 
 /// Every Properties control, in build order.
 /// The bar's property-style controls, in DOM order.
-pub fn bar_props() -> [Prop; 10] {
+pub fn bar_props() -> [Prop; 11] {
     use super::export::Ex;
     [
         Prop::Export(Ex::Size),
@@ -416,6 +416,7 @@ pub fn bar_props() -> [Prop; 10] {
         Prop::Export(Ex::Compress),
         Prop::Number(Num::MaxSize),
         Prop::Export(Ex::Unit),
+        Prop::Export(Ex::Compare),
         Prop::Filename,
         Prop::Export(Ex::Format),
     ]
@@ -1393,6 +1394,7 @@ impl Editor {
                 Ex::Unit => "Screenshot file size unit",
                 Ex::Format => "Format",
                 Ex::Lock => "Lock output aspect ratio",
+                Ex::Compare => captures_app::compression_compare::SHOW,
             }
             .into(),
         }
@@ -1488,6 +1490,7 @@ impl Editor {
             Prop::Preset => self.toggle_menu(MenuKind::Preset),
             Prop::Blend => self.toggle_menu(MenuKind::Blend),
             Prop::Export(Ex::Lock) => self.toggle_lock(),
+            Prop::Export(Ex::Compare) => self.show_compare(),
             Prop::Export(ex) => self.toggle_menu(MenuKind::Export(ex)),
             Prop::CropAction(false) => self.set_crop(None),
             Prop::CropAction(true) => self.apply_crop(),
@@ -1924,7 +1927,7 @@ impl Editor {
                     let r = rect(x, y, x + THUMB, y + THUMB);
                     gfx::ring(dc, r, THUMB / 2., 0., 2., c("theme-accent"))
                 }
-                Prop::StyleTrigger | Prop::Format(_) | Prop::Export(Ex::Lock) => {
+                Prop::StyleTrigger | Prop::Format(_) | Prop::Export(Ex::Lock | Ex::Compare) => {
                     gfx::ring(dc, all, t.n("r-md"), 2., 4., c("theme-accent"))
                 }
                 // The filename's frame turns accent instead (`outline: none`),
@@ -1979,6 +1982,7 @@ impl Editor {
             Prop::Format(i) => self.draw_format(dc, i, layer, (w, h))?,
             Prop::Export(Ex::Lock) => self.draw_lock(dc, layer, (w, h))?,
             Prop::Export(Ex::Format) => self.draw_format_select(dc, layer, (w, h))?,
+            Prop::Export(Ex::Compare) => self.draw_show_compare(dc, layer, (w, h))?,
             Prop::Export(ex) => self.draw_select(dc, MenuKind::Export(ex), layer, (w, h))?,
             Prop::Filename => {
                 if !lit {

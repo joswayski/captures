@@ -21,7 +21,7 @@ use windows::Win32::UI::Accessibility::*;
 use windows::core::*;
 
 use crate::editor::{
-    CUSTOM, Check, Editor, Event, Ex, Field, MenuKind, Num, Prop, Target, with_editor,
+    CUSTOM, Check, ComparePart, Editor, Event, Ex, Field, MenuKind, Num, Prop, Target, with_editor,
 };
 use crate::scene::Rect;
 
@@ -66,6 +66,8 @@ pub enum Id {
     Control(Target),
     /// The open layer ⋯ card (`role="dialog"`).
     LayerCard,
+    /// `.compression-preview-frame` (`role="group"`) over the canvas.
+    Compare,
     /// The open Background color card (`role="dialog"`).
     BgMenu,
     /// The open Text style menu (`role="menu"` of `menuitemradio`) or Font
@@ -113,7 +115,11 @@ fn children(e: &Editor, id: Id) -> Vec<Id> {
             if e.flyout {
                 list.push(Id::Flyout);
             }
-            list.extend([Id::Canvas, c(Target::Divider), Id::Layers, Id::Properties]);
+            list.push(Id::Canvas);
+            if e.compare_visible() {
+                list.push(Id::Compare);
+            }
+            list.extend([c(Target::Divider), Id::Layers, Id::Properties]);
             // `.screenshot-export-options` precedes the save row.
             list.extend(e.export_props().into_iter().map(|p| c(Target::Prop(p))));
             list.extend([
@@ -150,6 +156,12 @@ fn children(e: &Editor, id: Id) -> Vec<Id> {
             c(Target::Prop(Prop::Check(Check::Solid))),
             Id::ColorField(Field::Canvas),
         ],
+        Id::Compare => [ComparePart::Handle, ComparePart::Range, ComparePart::Hide]
+            .into_iter()
+            .map(Target::Compare)
+            .filter(|&t| e.exists(t))
+            .map(c)
+            .collect(),
         Id::LayerCard if e.card_row().is_some() => e
             .card_targets()
             .into_iter()
@@ -259,6 +271,7 @@ fn parent(e: &Editor, id: Id) -> Option<Id> {
             Id::Row(i)
         }
         Id::Control(Target::LayerAct(_)) => Id::LayerCard,
+        Id::Control(Target::Compare(_)) => Id::Compare,
         _ => Id::Root,
     })
 }
@@ -298,6 +311,7 @@ fn rect(e: &Editor, id: Id) -> Rect {
         Id::Hint => l.hint_line,
         Id::Control(target) => e.target_rect(target),
         Id::LayerCard => e.card_geom().map(|g| g.rect).unwrap_or_default(),
+        Id::Compare => e.compare_rect(),
         Id::BgMenu => e.bg_menu_rect(),
         Id::Menu => e.menu_rect().unwrap_or_default(),
         Id::MenuItem(i) => e.menu_item_rect(i),
@@ -331,6 +345,7 @@ fn name(e: &Editor, id: Id) -> String {
             .map(|l| captures_app::editor_layers::menu::settings_label(&l.name))
             .unwrap_or_default(),
         Id::BgMenu => editor_chrome::colors::CANVAS_BACKGROUND.into(),
+        Id::Compare => captures_app::compression_compare::GROUP_LABEL.into(),
         Id::Menu => match e.open_menu_state() {
             Some((MenuKind::Style, _)) => e.style_label().into(),
             Some((MenuKind::Font, _)) => "Font".into(),
@@ -392,6 +407,7 @@ fn control_type(e: &Editor, id: Id) -> UIA_CONTROLTYPE_ID {
         | Id::Properties
         | Id::ShapePicker
         | Id::ModeGroup
+        | Id::Compare
         | Id::ColorField(_) => UIA_GroupControlTypeId,
         Id::Flyout => UIA_MenuControlTypeId,
         Id::List => UIA_ListControlTypeId,
@@ -402,6 +418,7 @@ fn control_type(e: &Editor, id: Id) -> UIA_CONTROLTYPE_ID {
         Id::Control(Target::Divider) => UIA_SeparatorControlTypeId,
         Id::Control(Target::SaveAsNew | Target::Prop(Prop::Check(_))) => UIA_CheckBoxControlTypeId,
         Id::Control(Target::Prop(Prop::Range(_))) => UIA_SliderControlTypeId,
+        Id::Control(Target::Compare(ComparePart::Range)) => UIA_SliderControlTypeId,
         Id::Control(_) => UIA_ButtonControlTypeId,
         Id::BannerText | Id::LayersTitle | Id::Location | Id::Notice | Id::Hint => {
             UIA_TextControlTypeId
@@ -437,6 +454,7 @@ fn runtime_id(id: Id) -> [i32; 4] {
             Target::More(i) => (39, i as i32),
             Target::LayerAct(act) => (40, act as i32),
             Target::Prop(Prop::Blend) => (41, 0),
+            Target::Compare(part) => (42, part as i32),
             Target::Prop(Prop::Export(ex)) => (37, ex as i32),
             Target::Prop(Prop::Filename) => (38, 0),
             Target::Prop(Prop::Shape(i)) => (16, i as i32),
@@ -486,6 +504,7 @@ fn runtime_id(id: Id) -> [i32; 4] {
             (100 + k, a)
         }
         Id::LayerCard => (25, 0),
+        Id::Compare => (26, 0),
     };
     // A distinct second part keeps these apart from Preferences' and
     // History's ids; the host provider's prefix keeps windows apart.
@@ -587,6 +606,16 @@ fn range(e: &Editor, id: Id) -> Option<(f64, f64, f64, f64, f64)> {
                 40.,
             ))
         }
+        Id::Control(Target::Compare(ComparePart::Range)) => {
+            use captures_app::compression_compare as compare;
+            Some((
+                e.compare_split() * 100.,
+                compare::MIN_SPLIT * 100.,
+                compare::MAX_SPLIT * 100.,
+                compare::KEY_STEP * 100.,
+                compare::PAGE_STEP * 100.,
+            ))
+        }
         Id::Control(Target::Prop(Prop::Range(range))) => {
             let (min, max) = crate::editor::range_bounds(range);
             Some((
@@ -606,6 +635,9 @@ fn value(e: &Editor, id: Id) -> Option<String> {
     Some(match id {
         Id::Control(Target::Slider) => e.slider_text(),
         Id::Control(Target::Divider) => format!("{} pixels wide", e.sidebar_width()),
+        Id::Control(Target::Compare(ComparePart::Range)) => {
+            format!("{}", (e.compare_split() * 1000.).round() / 10.)
+        }
         Id::Control(Target::Prop(Prop::Range(range))) => {
             crate::editor::range_text(range, e.range_value(range))
         }
@@ -679,9 +711,12 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                 // `.screenshot-properties` is `overflow-y: auto`.
                 Id::Properties => pattern == UIA_ScrollPatternId,
                 _ if pattern == UIA_ScrollItemPatternId => scroll_item(id).is_some(),
-                Id::Control(Target::Slider | Target::Divider | Target::Prop(Prop::Range(_))) => {
-                    pattern == UIA_RangeValuePatternId || pattern == UIA_ValuePatternId
-                }
+                Id::Control(
+                    Target::Slider
+                    | Target::Divider
+                    | Target::Prop(Prop::Range(_))
+                    | Target::Compare(ComparePart::Range),
+                ) => pattern == UIA_RangeValuePatternId || pattern == UIA_ValuePatternId,
                 Id::Control(Target::Shape(_)) => {
                     pattern == UIA_SelectionItemPatternId || pattern == UIA_InvokePatternId
                 }
@@ -1096,6 +1131,11 @@ impl IRangeValueProvider_Impl for Node_Impl {
                     e.zoom_to(value.clamp(5., 800.), None)
                 }
                 Id::Control(Target::Divider) => e.resize_sidebar(Some(value as f32)),
+                Id::Control(Target::Compare(ComparePart::Range))
+                    if e.enabled(Target::Compare(ComparePart::Range)) =>
+                {
+                    e.set_compare_split(value / 100.)
+                }
                 Id::Control(Target::Prop(Prop::Range(range)))
                     if e.exists(Target::Prop(Prop::Range(range))) =>
                 {

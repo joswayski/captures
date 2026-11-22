@@ -894,8 +894,7 @@ unit). The estimate encodes on a thread the worker starts, one at a time
 with the newest options next, so edits keep flowing. UIA: the disclosure has
 ExpandCollapse, the selects are combo boxes with Value and ExpandCollapse,
 and the filename and number fields take Value. Deviations: the panel opens
-without shipping's 3 px rise, and the before/after comparison is a separate
-change. Windows: `--select export|export-custom|export-compress|export-maximum|export-menu`
+without shipping's 3 px rise; the before/after comparison is described below. Windows: `--select export|export-custom|export-compress|export-maximum|export-menu`
 renders it offscreen in light and dark. A test drives the size, lock, unit,
 format and filename through the editor. A live window, driven only through
 UIA, expanded the panel, chose Maximum file size from the Save quality list
@@ -920,6 +919,26 @@ renders it offscreen in light and dark; a test checks the enabled actions,
 the live opacity edit and Duplicate; a live window driven only through UIA
 expanded and collapsed it, listed its controls with their enabled states and
 opened the Blend list. Physical pointer use is unverified.
+
+The Windows screenshot editor now draws shipping's `CompressionPreview`.
+It covers the canvas while Compress or Maximum file size is chosen and
+Export settings are open. The live edit is on the left of a draggable
+divider and the file Save would write is on the right, with the
+Before/After badges (savings in `positive-text`), Hide, the round handle,
+the invisible full-width range (it yields to drawing tools), the radial
+veil with the Processing pill while an encode runs, and the After hint
+while a drawing tool is over the After side. A drawing gesture or inline
+text fades it out. Hide keeps it away until the quality mode changes, and
+meanwhile Export settings shows Comparison · Show before / after. One
+encode on the estimate thread feeds both Est. size and the After side, as
+in GTK. `compression_compare` owns the copy, badges and bounds. UIA: a
+`Compression comparison` group follows the canvas, with the handle, a
+RangeValue slider and Hide. Deviations: no `backdrop-filter` (the glass is
+solid), and no `--glass-shadow` on the handle, pill or hint. Windows:
+`--select export-compress` and `export-compare-hidden` render it in light
+and dark, a test drives quality, Hide, Show, drawing and the range keys, and
+a live window driven only through UIA chose Compress, set the split, hid it
+and showed it again. Physical dragging is unverified.
 Apply crop pulse: shipping's `screenshot-cta-pulse` (2.4 s ease-in-out,
 infinite, a 0 → 5 px accent `box-shadow` at 22 % and back) is a ring visual
 under Apply crop, drawn once at its 50 % frame, whose opacity a repeating

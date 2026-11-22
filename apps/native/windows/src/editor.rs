@@ -65,6 +65,7 @@ use crate::{Options, appearance};
 mod background;
 mod crop;
 pub use crop::ASPECT_LABEL;
+mod compare;
 mod eraser;
 mod export;
 mod fields;
@@ -75,6 +76,7 @@ mod props;
 mod rows;
 mod text;
 mod text_section;
+pub use compare::Part as ComparePart;
 pub use export::Ex;
 pub use layer_menu::Act;
 pub use menu::MenuKind;
@@ -249,6 +251,8 @@ pub enum Target {
     More(usize),
     /// A button of the open layer settings card.
     LayerAct(layer_menu::Act),
+    /// A control of the compression comparison over the canvas.
+    Compare(compare::Part),
 }
 
 /// Accessibility notifications, raised after the frame.
@@ -325,6 +329,8 @@ enum Kind {
     /// `.screenshot-layer-menu-panel` and its scrolling sections.
     LayerCard,
     LayerScroll,
+    /// `.compression-preview-frame` over the canvas.
+    Compare,
     /// The Text style menu or the Font list, and its highlighted row.
     Menu,
     MenuLit,
@@ -491,6 +497,8 @@ enum Job {
     /// Encode the document as Save would, for Est. size.
     Estimate {
         options: ExportOptions,
+        /// Also decode the encode for the before/after comparison.
+        compare: bool,
     },
 }
 
@@ -512,7 +520,10 @@ enum Outcome {
     /// `Job::Import` added layers; the last one's ID.
     Imported(Box<Presented>, String),
     /// `Job::Estimate`'s encode.
-    Estimated(std::result::Result<editor_export::ExportEstimate, String>),
+    Estimated(
+        std::result::Result<editor_export::ExportEstimate, String>,
+        Option<Image>,
+    ),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -757,6 +768,9 @@ pub struct Editor {
     card_node: usize,
     card_clip: usize,
     card_body: usize,
+    /// The compression comparison and its frame.
+    compare: compare::CompareUi,
+    compare_node: usize,
     last_solid: String,
     controls: Vec<(Target, Layered)>,
     /// Layer rows built so far; rows past the layer count are hidden.
@@ -1183,14 +1197,17 @@ fn spawn_worker(
                         Err(error) => Outcome::Failed(error),
                     },
                     // Encoded beside the session so edits keep going.
-                    Job::Estimate { options } => {
+                    Job::Estimate {
+                        options,
+                        compare: comparing,
+                    } => {
                         let pixels = session.pixels();
                         let results = results.clone();
                         let original = original_bytes;
                         std::thread::spawn(move || {
-                            let estimate =
-                                editor_export::estimate_export(&pixels, options, original);
-                            if results.send(Outcome::Estimated(estimate)).is_ok() {
+                            let (estimate, after) =
+                                compare::estimate(&pixels, options, original, comparing);
+                            if results.send(Outcome::Estimated(estimate, after)).is_ok() {
                                 post(hwnd, WM_APP_OUTCOME);
                             }
                         });
@@ -1395,6 +1412,8 @@ impl Editor {
             card_node: 0,
             card_clip: 0,
             card_body: 0,
+            compare: compare::CompareUi::default(),
+            compare_node: 0,
             last_solid: editor_chrome::colors::DEFAULT_CANVAS_BACKGROUND.into(),
             controls: Vec::new(),
             rows: 0,
@@ -1461,6 +1480,11 @@ impl Editor {
         self.page = self.add(Some(self.well), Kind::Page, PAGE_BLEED);
         self.image_node = self.add(Some(self.well), Kind::Image, 0.);
         self.overlay = self.add(Some(self.well), Kind::Overlay, 0.);
+        self.compare_node = self.add(Some(self.well), Kind::Compare, 0.);
+        self.nodes[self.compare_node].visible = false;
+        for part in compare::PARTS {
+            self.control(self.compare_node, Target::Compare(part), compare::BLEED);
+        }
         self.caret = self.add(Some(self.well), Kind::Caret, 0.);
         self.nodes[self.caret].visible = false;
         let rail = self.add(Some(root), Kind::Rail, 0.);
@@ -1650,6 +1674,7 @@ impl Editor {
                 i < self.layer_count()
             }
             Target::LayerAct(act) => self.card_act_exists(act),
+            Target::Compare(part) => self.compare_part_exists(part),
             // Shipping hides the toggle when the format can only save a copy.
             Target::SaveAsNew => self.export_view().is_some_and(|v| !v.format_requires_copy),
             Target::Prop(prop) => self.prop_exists(prop),
@@ -1669,6 +1694,7 @@ impl Editor {
             Target::Fit | Target::Slider | Target::Background => p.is_some(),
             Target::AddImages | Target::AddLayer => p.is_some(),
             Target::LayerAct(act) => self.card_act_enabled(act),
+            Target::Compare(part) => self.compare_part_enabled(part),
             Target::Tool(_) => true,
             Target::Save => {
                 self.export_view()
@@ -1750,6 +1776,7 @@ impl Editor {
                 .map(|l| l.menu_label.clone())
                 .unwrap_or_default(),
             Target::LayerAct(act) => act.name().into(),
+            Target::Compare(part) => Self::compare_part_name(part).into(),
         }
     }
 
@@ -2141,6 +2168,7 @@ impl Editor {
             Target::ExportSettings => self.toggle_export_settings(),
             Target::More(i) => self.toggle_layer_card(i),
             Target::LayerAct(act) => self.layer_action(act),
+            Target::Compare(part) => self.activate_compare(part),
             Target::Change => self.pick_folder = true,
             Target::Undo => {
                 self.set_crop(None);
@@ -2436,7 +2464,7 @@ impl Editor {
                     self.schedule_estimate();
                 }
             }
-            Outcome::Estimated(result) => self.receive_estimate(result),
+            Outcome::Estimated(result, after) => self.receive_estimate(result, after),
             Outcome::Preview(result) => {
                 self.preview_busy = false;
                 let now = Instant::now();
@@ -3191,6 +3219,7 @@ impl Editor {
                     self.row_part(target)
                 }
                 Target::LayerAct(act) => self.card_act_rect(act).unwrap_or_default(),
+                Target::Compare(part) => self.compare_part_rect(part),
                 Target::Shape(i) => {
                     let (s2, s3) = (self.t.n("s-2"), self.t.n("s-3"));
                     let cell = editor_chrome::SHAPE_FLYOUT_BUTTON as f32;
@@ -3273,6 +3302,7 @@ impl Editor {
         let well = Rect::new(0., 0., self.l.well.w, self.l.well.h);
         self.set_rect(self.overlay, well);
         self.place_thumb();
+        self.place_compare();
         let Some(r) = self.image_rect() else {
             self.set_visible(self.page, false);
             self.set_visible(self.image_node, false);
@@ -3461,6 +3491,18 @@ impl Editor {
         if self.bg_open && self.bg_menu_rect().contains(x, y) {
             return Self::bg_menu_props().map(Target::Prop).find(|&t| inside(t));
         }
+        // The comparison's controls sit over the canvas; its range yields to
+        // a drawing tool (`is-draw-locked`).
+        for part in [
+            compare::Part::Hide,
+            compare::Part::Handle,
+            compare::Part::Range,
+        ] {
+            let target = Target::Compare(part);
+            if inside(target) && (part != compare::Part::Range || self.enabled(target)) {
+                return Some(target);
+            }
+        }
         if inside(Target::Divider) {
             return Some(Target::Divider);
         }
@@ -3498,7 +3540,12 @@ impl Editor {
         self.controls
             .iter()
             .map(|(t, _)| *t)
-            .filter(|t| !matches!(t, Target::Layer(_) | Target::Eye(_) | Target::Lock(_)))
+            .filter(|t| {
+                !matches!(
+                    t,
+                    Target::Layer(_) | Target::Eye(_) | Target::Lock(_) | Target::Compare(_)
+                )
+            })
             .filter(|&t| in_props || header_prop(t) || !matches!(t, Target::Prop(_)))
             .find(|&t| inside(t))
     }
@@ -3538,6 +3585,8 @@ impl Editor {
             Target::AddImages,
         ]);
         list.extend((0..RAIL_TOOLS.len()).map(Target::Tool));
+        // `.compression-preview-frame` follows the canvas in the viewport.
+        list.extend(compare::PARTS.map(Target::Compare));
         list.push(Target::Divider);
         list.push(Target::AddLayer);
         for i in 0..self.layer_count() {
@@ -3705,6 +3754,9 @@ impl Editor {
                 self.set_slider(next);
                 return true;
             }
+        }
+        if self.compare_key(vk) {
+            return true;
         }
         if self.flyout {
             let columns = editor_chrome::SHAPE_FLYOUT_COLUMNS as isize;
@@ -3978,6 +4030,7 @@ impl Editor {
             Kind::Ctl(target, layer) => self.draw_control(dc, target, layer, (w, h))?,
             Kind::BgMenu => self.draw_bg_menu(dc, (w, h))?,
             Kind::LayerCard => self.draw_layer_card(dc, (w, h))?,
+            Kind::Compare => self.draw_compare(dc, (w, h))?,
             Kind::LayerScroll => self.draw_layer_scroll(dc, (w, h))?,
         }
         Ok(())
@@ -4416,6 +4469,9 @@ impl Editor {
         }
         if let Target::LayerAct(act) = target {
             return self.draw_layer_act(dc, act, layer, (w, h));
+        }
+        if let Target::Compare(part) = target {
+            return self.draw_compare_part(dc, part, layer, (w, h));
         }
         let t = &self.t;
         let g = &self.g;
@@ -4869,7 +4925,7 @@ impl Editor {
                 gfx::text(dc, &text, x + 15. + s3, (h - text.height) / 2., ink)?;
                 let _ = s5;
             }
-            Target::Prop(_) | Target::LayerAct(_) => {}
+            Target::Prop(_) | Target::LayerAct(_) | Target::Compare(_) => {}
         }
         Ok(())
     }
@@ -5511,7 +5567,9 @@ impl Editor {
                     }
                     self.tracking = true;
                 }
-                if let Some((y0, from)) = self.thumb_drag {
+                if self.compare.dragging {
+                    self.drag_compare(x);
+                } else if let Some((y0, from)) = self.thumb_drag {
                     self.drag_props_thumb(y - y0, from);
                 } else if let Some((x0, w0)) = self.divider_drag {
                     self.resize_sidebar(Some(w0 + x0 - x));
@@ -5539,6 +5597,7 @@ impl Editor {
                 }
                 self.set_pointer(Some((x, y)));
                 self.hover_props_thumb(Some((x, y)));
+                self.compare_pointer_moved();
                 // The brush ring follows the pointer in the overlay.
                 if self.brush_mode().is_some() {
                     self.ring_changed();
@@ -5548,6 +5607,7 @@ impl Editor {
                 self.tracking = false;
                 self.set_pointer(None);
                 self.hover_props_thumb(None);
+                self.compare_pointer_moved();
                 if self.tool == "b" {
                     self.ring_changed();
                 }
@@ -5663,14 +5723,24 @@ impl Editor {
                         self.pressed = Some(target);
                         self.refresh(true);
                     }
+                    Some(
+                        target @ Target::Compare(
+                            part @ (compare::Part::Handle | compare::Part::Range),
+                        ),
+                    ) if self.enabled(target) => self.press_compare(part, x),
                     Some(target) if self.enabled(target) => {
                         self.pressed = Some(target);
                         self.set_focus(Some(target), false);
                     }
                     Some(_) => {}
-                    None if self.l.well.contains(x, y) && !self.flyout => {
+                    // The processing veil takes presses (`cursor: wait`).
+                    None if self.l.well.contains(x, y)
+                        && !self.flyout
+                        && !self.compare_blocks(x, y) =>
+                    {
                         self.set_focus(None, false);
                         self.begin(x, y, msg == WM_LBUTTONDBLCLK);
+                        self.sync_compare();
                     }
                     None => {}
                 }
@@ -5696,11 +5766,13 @@ impl Editor {
                     self.hover_props_thumb(Some((x, y)));
                 }
                 self.slider_drag = false;
+                self.compare.dragging = false;
                 if let Some((range, value)) = self.range_drag {
                     self.set_range(range, value, false);
                 }
                 if self.gesture.is_some() {
                     self.finish();
+                    self.sync_compare();
                 }
                 let hit = self.hit(x, y);
                 if self.drop_row(x, y) {
@@ -5936,6 +6008,7 @@ fn button_slot(target: Target) -> usize {
         | Target::Lock(_)
         | Target::More(_)
         | Target::LayerAct(_)
+        | Target::Compare(_)
         | Target::Prop(_) => SLOTS - 1,
     }
 }
@@ -6560,17 +6633,25 @@ pub fn render_offscreen(
         match select {
             "export-custom" => editor.apply_export_choice(export::Ex::Size, 3),
             "export-maximum" => editor.apply_export_choice(export::Ex::Quality, 2),
-            "export-compress" => editor.apply_export_choice(export::Ex::Quality, 1),
+            "export-compress" | "export-compare-hidden" => {
+                editor.apply_export_choice(export::Ex::Quality, 1)
+            }
             _ => {}
         }
     }
+    if options.select.as_deref() == Some("export-compare-hidden") {
+        editor.compare.dismissed = true;
+    }
     editor.export.estimating = false;
     editor.export.estimate_dirty = false;
-    editor.receive_estimate(editor_export::estimate_export(
+    let (estimate, after) = compare::estimate(
         &session.pixels(),
         editor.options,
         editor_export::original_size_bytes(&root, &editor.artifact_id),
-    ));
+        editor.compare_visible(),
+    );
+    editor.export.compare_sent = editor.compare_visible();
+    editor.receive_estimate(estimate, after);
     editor.start_tool(options);
     editor.layout(w, h)?;
     // `--select drop`: files dragged in with the default guide;
@@ -7252,5 +7333,110 @@ mod tests {
         e.activate(Target::ExportSettings);
         assert_eq!(e.focus, Some(Target::ExportSettings));
         let _ = std::fs::remove_dir_all(&data);
+    }
+    /// Shipping `CompressionPreview` over the canvas: shown while Compress
+    /// or Maximum is chosen with Export settings open, its After side from
+    /// the estimate's own encode; Hide keeps it away until the quality mode
+    /// changes or Show before / after brings it back.
+    #[test]
+    fn compression_comparison_follows_quality_and_hide() {
+        use windows::Win32::System::Com::*;
+        unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok().unwrap() };
+        let data = std::env::temp_dir().join(format!("captures-compare-{}", std::process::id()));
+        let capture = captures_app::persist_screenshot(
+            &data.join("history"),
+            &RgbaImage::from_pixel(640, 360, Rgba([20, 50, 80, 255])),
+            CaptureMode::Region,
+        )
+        .unwrap();
+        let options = crate::parse(
+            [
+                "test".into(),
+                "--profile".into(),
+                data.to_string_lossy().into_owned(),
+                "--scene".into(),
+                "editor".into(),
+                "--artifact".into(),
+                capture.entry.id,
+            ]
+            .into_iter(),
+        )
+        .unwrap();
+        let tokens = crate::appearance::tokens(Some("light"), &Default::default());
+        let mut e = render_offscreen(
+            &options,
+            Gfx::new(&tokens, false).unwrap(),
+            tokens,
+            (1280., 840.),
+        )
+        .unwrap();
+        let (jobs, inbox) = channel();
+        e.jobs = jobs;
+        let estimates = |inbox: &Receiver<Job>| -> Vec<bool> {
+            inbox
+                .try_iter()
+                .filter_map(|job| match job {
+                    Job::Estimate { compare, .. } => Some(compare),
+                    _ => None,
+                })
+                .collect()
+        };
+        let hide = Target::Compare(ComparePart::Hide);
+        let range = Target::Compare(ComparePart::Range);
+        let show = Target::Prop(Prop::Export(Ex::Compare));
+
+        // Preserve never compares; Compress with the panel closed neither.
+        e.activate(Target::ExportSettings);
+        assert!(!e.compare_visible());
+        e.apply_export_choice(Ex::Quality, 1);
+        assert!(e.compare_visible() && e.exists(hide) && !e.exists(range));
+        assert_eq!(estimates(&inbox), [true], "one encode serves both");
+        let (estimate, after) = compare::estimate(
+            &RgbaImage::from_pixel(64, 36, Rgba([20, 50, 80, 255])),
+            e.options,
+            None,
+            true,
+        );
+        assert!(estimate.unwrap().baseline_bytes.is_some());
+        e.receive_estimate(
+            Ok(editor_export::ExportEstimate {
+                bytes: 10,
+                baseline_bytes: Some(40),
+            }),
+            after,
+        );
+        assert!(e.exists(range) && e.enabled(range));
+        // A drawing tool keeps the canvas: only the handle moves the split.
+        e.select_tool("p");
+        assert!(!e.enabled(range) && e.enabled(Target::Compare(ComparePart::Handle)));
+        e.select_tool("v");
+        e.set_focus(Some(range), true);
+        e.key(VK_END, false, false);
+        assert_eq!(
+            e.compare_split(),
+            captures_app::compression_compare::MAX_SPLIT
+        );
+
+        // Hide, then Show before / after in the panel.
+        e.activate(hide);
+        e.prepare().unwrap();
+        assert!(!e.compare_visible() && e.exists(show));
+        assert!(e.export_props().contains(&Prop::Export(Ex::Compare)));
+        e.activate(show);
+        e.prepare().unwrap();
+        assert!(e.compare_visible() && !e.exists(show));
+        assert_eq!(estimates(&inbox), [true], "shown again, it asks anew");
+
+        // A new quality mode brings a hidden comparison back.
+        e.activate(hide);
+        e.export.estimating = false;
+        e.apply_export_choice(Ex::Quality, 2);
+        assert!(e.compare_visible());
+        e.apply_export_choice(Ex::Quality, 0);
+        e.prepare().unwrap();
+        assert!(!e.compare_visible() && !e.exists(show));
+        drop(e);
+        let _ = std::fs::remove_dir_all(data);
+        unsafe { CoUninitialize() };
     }
 }

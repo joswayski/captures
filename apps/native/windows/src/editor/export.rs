@@ -39,11 +39,13 @@ pub enum Ex {
     Format,
     /// Lock output aspect ratio.
     Lock,
+    /// Comparison's Show before / after, while the comparison is hidden.
+    Compare,
 }
 
 impl Ex {
     pub fn is_select(self) -> bool {
-        self != Ex::Lock
+        !matches!(self, Ex::Lock | Ex::Compare)
     }
 }
 
@@ -56,15 +58,17 @@ pub enum Item {
     Compress,
     Maximum,
     Estimate,
+    Compare,
 }
 
-pub const ITEMS: [Item; 6] = [
+pub const ITEMS: [Item; 7] = [
     Item::Size,
     Item::Custom,
     Item::Quality,
     Item::Compress,
     Item::Maximum,
     Item::Estimate,
+    Item::Compare,
 ];
 
 /// The export state shipping keeps in the screenshot editor's UI.
@@ -83,6 +87,8 @@ pub struct ExportUi {
     pub estimate: EstimateState,
     pub estimating: bool,
     pub estimate_dirty: bool,
+    /// Whether the estimate with the worker also decodes the comparison.
+    pub compare_sent: bool,
 }
 
 impl Default for ExportUi {
@@ -96,6 +102,7 @@ impl Default for ExportUi {
             estimate: EstimateState::default(),
             estimating: false,
             estimate_dirty: false,
+            compare_sent: false,
         }
     }
 }
@@ -137,6 +144,10 @@ impl Editor {
             Item::Custom => matches!(self.options.size, ExportSize::Custom { .. }),
             Item::Compress => self.options.quality == ExportQuality::Compress,
             Item::Maximum => self.options.quality == ExportQuality::Maximum,
+            // `canPreviewCompression && compressCompareDismissed`.
+            Item::Compare => {
+                self.options.quality != ExportQuality::Preserve && self.compare.dismissed
+            }
             Item::Size | Item::Quality | Item::Estimate => true,
         }
     }
@@ -160,6 +171,9 @@ impl Editor {
         }
         if self.export_item_shown(Item::Maximum) {
             list.extend([Prop::Number(Num::MaxSize), Prop::Export(Ex::Unit)]);
+        }
+        if self.export_item_shown(Item::Compare) {
+            list.push(Prop::Export(Ex::Compare));
         }
         list
     }
@@ -207,7 +221,7 @@ impl Editor {
                 };
                 plain(&[("PNG", ""), ("JPEG", jpeg), ("WebP", "")])
             }
-            Ex::Lock => Vec::new(),
+            Ex::Lock | Ex::Compare => Vec::new(),
         }
     }
 
@@ -236,7 +250,7 @@ impl Editor {
                 ExportFormat::Jpeg => 1,
                 ExportFormat::Webp => 2,
             }),
-            Ex::Lock => None,
+            Ex::Lock | Ex::Compare => None,
         }
     }
 
@@ -285,7 +299,7 @@ impl Editor {
                     _ => ExportFormat::Png,
                 };
             }
-            Ex::Lock => {}
+            Ex::Lock | Ex::Compare => {}
         }
         self.set_export_options(options);
     }
@@ -296,7 +310,9 @@ impl Editor {
             self.export_dirty();
             return;
         }
+        let previous = self.options.quality;
         self.options = options;
+        self.compare_quality_changed(previous);
         self.notice = None;
         self.events.push(Event::Notice);
         self.schedule_estimate();
@@ -308,6 +324,7 @@ impl Editor {
         let before = self.export_props();
         self.export_changed();
         self.props_changed();
+        self.sync_compare();
         if before != self.export_props() {
             self.events.push(Event::Structure);
         }
@@ -422,7 +439,7 @@ impl Editor {
     }
 
     /// Every panel control, shown or not.
-    fn export_props_all(&self) -> [Prop; 8] {
+    fn export_props_all(&self) -> [Prop; 9] {
         [
             Prop::Export(Ex::Size),
             Prop::Number(Num::OutputWidth),
@@ -432,6 +449,7 @@ impl Editor {
             Prop::Export(Ex::Compress),
             Prop::Number(Num::MaxSize),
             Prop::Export(Ex::Unit),
+            Prop::Export(Ex::Compare),
         ]
     }
 
@@ -476,8 +494,12 @@ impl Editor {
         }
         self.export.estimating = true;
         self.export.estimate_dirty = false;
+        let compare = self.compare_visible();
+        self.export.compare_sent = compare;
+        self.compare_changed();
         let _ = self.jobs.send(super::Job::Estimate {
             options: self.options,
+            compare,
         });
     }
 
@@ -485,9 +507,11 @@ impl Editor {
     pub(super) fn receive_estimate(
         &mut self,
         result: std::result::Result<editor_export::ExportEstimate, String>,
+        after: Option<super::Image>,
     ) {
         self.export.estimating = false;
-        if self.export.estimate_dirty {
+        // Superseded, or the comparison opened while a plain estimate ran.
+        if self.export.estimate_dirty || (self.compare_visible() && !self.export.compare_sent) {
             self.schedule_estimate();
             return;
         }
@@ -499,6 +523,7 @@ impl Editor {
             },
             Err(_) => EstimateState::default(),
         };
+        self.receive_after(after);
         self.export_dirty();
     }
 
@@ -540,6 +565,9 @@ impl Editor {
                 Item::Compress => 148.,
                 Item::Maximum if compact => 176.,
                 Item::Maximum => 212.,
+                Item::Compare => self
+                    .compare_button_w()
+                    .max(caption_w(captures_app::compression_compare::SHOW_CAPTION)),
                 Item::Estimate => {
                     let label = view.as_ref().map_or("", |v| &v.estimate_label);
                     let mut width = self.g.text(t, Style::MonoSmall, label, 1e4)?.width;
@@ -612,6 +640,10 @@ impl Editor {
             }),
             Prop::Export(Ex::Quality) => control(Item::Quality),
             Prop::Export(Ex::Compress) => control(Item::Compress),
+            Prop::Export(Ex::Compare) => control(Item::Compare).map(|r| Rect {
+                w: self.compare_button_w(),
+                ..r
+            }),
             Prop::Export(Ex::Unit) => control(Item::Maximum).map(|r| Rect {
                 x: r.x + r.w - UNIT_W,
                 w: UNIT_W,
@@ -664,6 +696,10 @@ impl Editor {
             (Item::Compress, "Quality"),
             (Item::Maximum, "Maximum file size"),
             (Item::Estimate, "Est. size"),
+            (
+                Item::Compare,
+                captures_app::compression_compare::SHOW_CAPTION,
+            ),
         ];
         for (item, caption) in captions {
             let Some(r) = self.export_item(item) else {
