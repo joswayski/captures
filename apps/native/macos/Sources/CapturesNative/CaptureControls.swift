@@ -2015,6 +2015,7 @@ final class UnifiedCapturePanel: NSPanel {
         super.init(contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         title = "Captures Capture Controls"
         isReleasedWhenClosed = false; isOpaque = false; backgroundColor = .clear; hasShadow = false
+        colorSpace = .sRGB
         level = .screenSaver; collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         sharingType = .none; acceptsMouseMovedEvents = true; contentView = selector
         makeFirstResponder(selector)

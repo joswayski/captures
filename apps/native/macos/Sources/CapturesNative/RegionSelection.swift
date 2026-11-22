@@ -365,6 +365,7 @@ final class RegionSelectionPanel: NSPanel {
             tokens: tokens, autoStart: autoStart, confirm: confirm, cancel: cancel)
         super.init(contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         isReleasedWhenClosed = false; isOpaque = false; backgroundColor = .clear; hasShadow = false
+        colorSpace = .sRGB
         level = .screenSaver; collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         sharingType = .none; acceptsMouseMovedEvents = true; contentView = selector
         makeFirstResponder(selector)
