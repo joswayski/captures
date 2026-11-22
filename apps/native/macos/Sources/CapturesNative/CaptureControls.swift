@@ -546,6 +546,9 @@ final class RecordingSwitchButton: NSButton {
         needsDisplay = true
     }
 
+    override func resetCursorRects() {
+        if isEnabled { addCursorRect(bounds, cursor: .pointingHand) }
+    }
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let hoverTracking { removeTrackingArea(hoverTracking) }
@@ -560,10 +563,14 @@ final class RecordingSwitchButton: NSButton {
         let track = NSRect(x: 1, y: (bounds.height - 18) / 2, width: 30, height: 18)
         let path = NSBezierPath(roundedRect: track, xRadius: 9, yRadius: 9)
         if isOn {
-            tokens.color("theme-accent").setFill(); path.fill()
+            tokens.color(isEnabled && hovered ? "theme-accent-hover" : "theme-accent").setFill(); path.fill()
+            drawTactileSurface(in: path, radius: 9, tokens: tokens,
+                               primary: true, hovered: hovered, pressed: cell?.isHighlighted == true,
+                               isFlipped: isFlipped)
         } else {
             NSColor.black.withAlphaComponent(0.35).setFill(); path.fill()
-            tokens.color("glass-border-strong").setStroke(); path.lineWidth = 1; path.stroke()
+            tokens.color(isEnabled && hovered ? "glass-text-subtle" : "glass-border-strong").setStroke()
+            path.lineWidth = 1; path.stroke()
         }
         let knob = NSRect(x: track.minX + 3 + (isOn ? 12 : 0), y: track.midY - 6, width: 12, height: 12)
         tokens.color(isOn ? "theme-accent-ink" : "glass-text-subtle").setFill()
@@ -597,6 +604,9 @@ final class CaptureNoteLink: NSButton {
     static let icon: CGFloat = 10
 
     override var isFlipped: Bool { true }
+    override func resetCursorRects() {
+        if isEnabled { addCursorRect(bounds, cursor: .pointingHand) }
+    }
 
     init(parts: [(String, Bool)], setting: String, tokens: Tokens, fontToken: String = "text-xs") {
         self.parts = parts; self.setting = setting; self.tokens = tokens; self.fontToken = fontToken

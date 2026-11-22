@@ -62,6 +62,12 @@ final class ColorSwatchButton: NSButton {
         didSet { needsDisplay = true; setAccessibilityValue(active) }
     }
     var pressed: (() -> Void)?
+    private var hovered = false
+    private var hoverTracking: NSTrackingArea?
+
+    override var isEnabled: Bool {
+        didSet { window?.invalidateCursorRects(for: self); needsDisplay = true }
+    }
 
     init(swatchHex: String, label: String, tokens: Tokens) {
         self.swatchHex = swatchHex; self.tokens = tokens
@@ -78,6 +84,19 @@ final class ColorSwatchButton: NSButton {
 
     @objc private func activateSwatch() { pressed?() }
 
+    override func resetCursorRects() {
+        if isEnabled { addCursorRect(bounds, cursor: .pointingHand) }
+    }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTracking { removeTrackingArea(hoverTracking) }
+        let tracking = NSTrackingArea(rect: .zero,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
+        addTrackingArea(tracking); hoverTracking = tracking
+    }
+    override func mouseEntered(with event: NSEvent) { hovered = true; needsDisplay = true }
+    override func mouseExited(with event: NSEvent) { hovered = false; needsDisplay = true }
+
     private var circle: NSRect {
         let side = EditorColors.metric("tile")
         return NSRect(x: bounds.midX - side / 2, y: bounds.midY - side / 2, width: side, height: side)
@@ -91,6 +110,11 @@ final class ColorSwatchButton: NSButton {
             NSBezierPath(ovalIn: circle.insetBy(dx: -4, dy: -4)).fill()
             tokens.color("surface-raised").setFill()
             NSBezierPath(ovalIn: circle.insetBy(dx: -2, dy: -2)).fill()
+        } else if isEnabled && hovered {
+            tokens.color("border-strong").setFill()
+            NSBezierPath(ovalIn: circle.insetBy(dx: -3, dy: -3)).fill()
+            tokens.color("surface-raised").setFill()
+            NSBezierPath(ovalIn: circle.insetBy(dx: -1.5, dy: -1.5)).fill()
         }
         (NSColor(hex: swatchHex) ?? .black).withAlphaComponent(alpha).setFill()
         let dot = NSBezierPath(ovalIn: circle.insetBy(dx: 0.5, dy: 0.5))
@@ -119,6 +143,10 @@ final class CustomColorWell: NSColorWell {
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func resetCursorRects() {
+        if isEnabled { addCursorRect(bounds, cursor: .pointingHand) }
+    }
 
     @objc private func customColorChanged() { change?(color) }
 

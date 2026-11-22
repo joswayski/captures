@@ -1,4 +1,5 @@
 import AppKit
+import QuartzCore
 import CCapturesSettings
 
 // Shared shipping UI primitives drawn from design tokens (`styles/base.css`,
@@ -12,6 +13,104 @@ func drawFocusRing(_ tokens: Tokens, in rect: NSRect, radius: CGFloat) {
     ring.lineWidth = 2
     tokens.color("theme-accent").withAlphaComponent(0.55).setStroke()
     ring.stroke()
+}
+
+/// Tactile 3D camera-key finish matching the marketing site's `.download-button`
+/// and `.source-button`: vertical matte sheen, curved top specular highlight
+/// (`inset 0 1px 0`), and subtle bottom inner lip (`inset 0 -1px 0`).
+func drawTactileSurface(in path: NSBezierPath, radius: CGFloat, tokens: Tokens,
+                        primary: Bool, hovered: Bool, pressed: Bool, isFlipped: Bool,
+                        alpha: CGFloat = 1) {
+    let rect = path.bounds
+    guard rect.width > 2, rect.height > 2, alpha > 0 else { return }
+    NSGraphicsContext.saveGraphicsState()
+    path.addClip()
+    let angle: CGFloat = isFlipped ? 90 : 270
+    let dark = tokens.color("text").brightnessComponent > 0.5
+    let topAlpha: CGFloat
+    let bottomAlpha: CGFloat
+    if pressed {
+        topAlpha = primary ? 0.05 : 0.03
+        bottomAlpha = primary ? 0.14 : (dark ? 0.12 : 0.08)
+    } else if primary {
+        topAlpha = hovered ? 0.28 : 0.20
+        bottomAlpha = hovered ? 0.05 : 0.09
+    } else {
+        topAlpha = hovered ? (dark ? 0.16 : 0.08) : (dark ? 0.10 : 0.05)
+        bottomAlpha = hovered ? (dark ? 0.06 : 0.04) : (dark ? 0.09 : 0.06)
+    }
+    let start = (pressed ? NSColor.black : NSColor.white).withAlphaComponent(topAlpha * alpha)
+    let end = NSColor.black.withAlphaComponent(bottomAlpha * alpha)
+    NSGradient(starting: start, ending: end)?.draw(in: rect, angle: angle)
+
+    // Curved top specular rim (`inset 0 1px 0`) hugging the rounded corners.
+    if !pressed {
+        let topName = primary
+            ? (hovered ? "primary-highlight-hover" : "primary-highlight")
+            : (hovered ? "control-highlight-hover" : "control-highlight")
+        let dy: CGFloat = isFlipped ? 1 : -1
+        let topRim = NSBezierPath(roundedRect: rect.offsetBy(dx: 0, dy: dy),
+                                  xRadius: radius, yRadius: radius)
+        tokens.color(topName).faded(alpha).setStroke()
+        topRim.lineWidth = primary ? 1.35 : 1.15
+        topRim.stroke()
+    }
+
+    // Subtle bottom inner bevel (`inset 0 -1px 0`) for physical keycap depth.
+    let bottomName = primary ? "primary-edge-bottom" : "control-edge-bottom"
+    let bottomDy: CGFloat = isFlipped ? -1 : 1
+    let bottomRim = NSBezierPath(roundedRect: rect.offsetBy(dx: 0, dy: bottomDy),
+                                 xRadius: radius, yRadius: radius)
+    tokens.color(bottomName).faded(alpha).setStroke()
+    bottomRim.lineWidth = 1
+    bottomRim.stroke()
+    NSGraphicsContext.restoreGraphicsState()
+}
+
+/// Apply homepage-style 3D outer shadow, primary accent hover glow, and subtle
+/// `-1 pt` hover lift (presentation-held so hit targets and tooltips stay fixed).
+func applyTactileElevation(on view: NSView, tokens: Tokens, radius: CGFloat,
+                           raised: Bool, primary: Bool, hovered: Bool, pressed: Bool,
+                           enabled: Bool, inset: CGFloat = 1) {
+    let liftKey = "captures.tactile.lift"
+    guard raised, enabled, view.bounds.width > 2, view.bounds.height > 2 else {
+        BoxShadowLayers.remove(from: view.layer)
+        view.layer?.removeAnimation(forKey: liftKey)
+        return
+    }
+    view.wantsLayer = true
+    guard let layer = view.layer else { return }
+    layer.masksToBounds = false
+    let shadows: [BoxShadowLayer]
+    if pressed {
+        shadows = tokens.shadow("shadow-xs")
+    } else if primary {
+        var layers = tokens.shadow(hovered ? "shadow-btn-primary-hover" : "shadow-btn-primary")
+        if hovered, let accent = tokens.colors["theme-accent"], accent.count >= 3 {
+            layers.insert(BoxShadowLayer(x: 0, y: 6, blur: 20, spread: 0,
+                                         color: [accent[0], accent[1], accent[2], 0.30]), at: 0)
+        }
+        shadows = layers
+    } else {
+        shadows = tokens.shadow(hovered ? "shadow-btn-hover" : "shadow-btn")
+    }
+    BoxShadowLayers.install(shadows, on: layer, bounds: view.bounds.insetBy(dx: inset, dy: inset),
+                            radius: radius)
+
+    if NativeMotion.reduceMotion || (!hovered && !pressed) {
+        layer.removeAnimation(forKey: liftKey)
+    } else {
+        let dy: Double = pressed ? 0.5 : -1.0
+        let pose = MotionKeyframes.Frame(offset: 0, opacity: 1, translateY: dy, scale: 1)
+        let down: CGFloat = view.superview?.isFlipped == true ? 1 : -1
+        let hold = CABasicAnimation(keyPath: "transform")
+        hold.fromValue = NSValue(caTransform3D: NativeMotion.transform(pose, layer: layer, down: down))
+        hold.toValue = hold.fromValue
+        hold.duration = 0
+        hold.fillMode = .both
+        hold.isRemovedOnCompletion = false
+        layer.add(hold, forKey: liftKey)
+    }
 }
 
 /// Shipping scroll bars: a 10 pt bar whose transparent 3 pt border leaves a
@@ -125,7 +224,11 @@ final class ClosurePopUpButton: NSPopUpButton {
     var isListboxOpen: Bool { listbox != nil }
 
     override var isEnabled: Bool {
-        didSet { if !isEnabled { closeListbox() } }
+        didSet {
+            if !isEnabled { closeListbox() }
+            window?.invalidateCursorRects(for: self)
+            needsDisplay = true
+        }
     }
 
     @objc func selectedValue() { change?(indexOfSelectedItem) }
@@ -298,6 +401,9 @@ final class ClosurePopUpButton: NSPopUpButton {
         NSAccessibility.post(element: self, notification: .layoutChanged)
     }
 
+    override func resetCursorRects() {
+        if isEnabled { addCursorRect(bounds, cursor: .pointingHand) }
+    }
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let pointerTracking { removeTrackingArea(pointerTracking) }
@@ -503,7 +609,8 @@ final class TokenSelectListView: NSView {
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let pointerTracking { removeTrackingArea(pointerTracking) }
-        let tracking = NSTrackingArea(rect: .zero, options: [.mouseMoved, .activeAlways, .inVisibleRect],
+        let tracking = NSTrackingArea(rect: .zero,
+                                      options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
                                       owner: self, userInfo: nil)
         addTrackingArea(tracking); pointerTracking = tracking
     }
@@ -511,7 +618,14 @@ final class TokenSelectListView: NSView {
     override func mouseMoved(with event: NSEvent) {
         if let index = index(at: convert(event.locationInWindow, from: nil)), options[index].enabled {
             active = index
+            NSCursor.pointingHand.set()
+        } else {
+            NSCursor.arrow.set()
         }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        NSCursor.arrow.set()
     }
 
     override func mouseDown(with event: NSEvent) {}

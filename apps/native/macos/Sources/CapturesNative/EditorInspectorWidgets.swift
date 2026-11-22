@@ -212,6 +212,13 @@ final class EditorFormatButton: NSButton {
 
     @objc private func activateFormat() { pressed?() }
 
+    override var isEnabled: Bool {
+        didSet { window?.invalidateCursorRects(for: self); needsDisplay = true }
+    }
+
+    override func resetCursorRects() {
+        if isEnabled { addCursorRect(bounds, cursor: .pointingHand) }
+    }
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let pointerTracking { removeTrackingArea(pointerTracking) }
@@ -225,20 +232,32 @@ final class EditorFormatButton: NSButton {
     override func draw(_ dirtyRect: NSRect) {
         let alpha: CGFloat = isEnabled ? 1 : 0.45
         let hovered = isEnabled && pointerInside
+        let pressed = isEnabled && cell?.isHighlighted == true
         let radius = tokens.number(borderless ? "r-md" : "r-sm")
         let shape = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: radius, yRadius: radius)
         let ink: NSColor
         if active {
-            tokens.color("theme-accent").faded(alpha).setFill(); shape.fill()
-            tokens.color("theme-accent").faded(alpha).setStroke()
+            tokens.color(hovered ? "theme-accent-hover" : "theme-accent").faded(alpha).setFill(); shape.fill()
+            drawTactileSurface(in: shape, radius: radius, tokens: tokens,
+                               primary: true, hovered: hovered, pressed: pressed,
+                               isFlipped: isFlipped, alpha: alpha)
+            NSColor.black.withAlphaComponent(0.22 * alpha).setStroke()
             ink = tokens.color("theme-accent-ink").faded(alpha)
             shape.lineWidth = 1; shape.stroke()
         } else if borderless {
-            if hovered { tokens.color("surface-hover").setFill(); shape.fill() }
+            if hovered {
+                tokens.color("surface-hover").setFill(); shape.fill()
+                tokens.color("border-subtle").setStroke(); shape.lineWidth = 1; shape.stroke()
+            }
             ink = tokens.color(hovered ? "text" : "text-muted").faded(alpha)
         } else {
             tokens.color(hovered ? "control-hover" : "control").faded(alpha).setFill(); shape.fill()
-            tokens.color("border-subtle").faded(alpha).setStroke()
+            if isEnabled {
+                drawTactileSurface(in: shape, radius: radius, tokens: tokens,
+                                   primary: false, hovered: hovered, pressed: pressed,
+                                   isFlipped: isFlipped, alpha: alpha)
+            }
+            tokens.color(hovered ? "border-strong" : "control-border").faded(alpha).setStroke()
             ink = tokens.color(hovered ? "text" : "text-muted").faded(alpha)
             shape.lineWidth = 1; shape.stroke()
         }

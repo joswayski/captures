@@ -4882,11 +4882,15 @@ impl Scene {
             }
             Kind::History { lit } => {
                 let radius = t.n("r-md");
-                gfx::fill_round(dc, all, radius, c("surface-raised"))?;
-                if lit {
-                    gfx::fill_round(dc, all, radius, c("surface-hover"))?;
-                }
-                gfx::border(dc, all, radius, 1., c("border"))?;
+                let (bg, edge) = if lit {
+                    ("control-hover", "border-strong")
+                } else {
+                    gfx::shadow(dc, all, radius, t.shadow("shadow-btn"))?;
+                    ("control", "control-border")
+                };
+                gfx::fill_round(dc, all, radius, c(bg))?;
+                gfx::tactile_finish(dc, &g.factory, (all, radius), t, false, lit, 1.)?;
+                gfx::border(dc, all, radius, 1., c(edge))?;
                 if let Some(label) = &self.texts.history {
                     let (x, y) = centered(label, t.n("s-5") + 1.);
                     gfx::text(dc, label, x, y, c("text"))?;
@@ -5023,7 +5027,7 @@ impl Scene {
                     gfx::shadow(dc, all, radius, t.shadow("shadow-btn"))?;
                 }
                 gfx::fill_round(dc, all, radius, c(bg))?;
-                gfx::top_highlight(dc, all, radius, c("control-highlight"))?;
+                gfx::tactile_finish(dc, &g.factory, (all, radius), t, false, lit, 1.)?;
                 gfx::border(dc, all, radius, 1., c(edge))?;
                 let label = match n.kind {
                     Kind::Open { which, .. } => &self.texts.open[which.index()],
@@ -5040,7 +5044,7 @@ impl Scene {
                 let radius = t.n("r-md");
                 gfx::shadow(dc, all, radius, t.shadow("shadow-btn"))?;
                 gfx::fill_round(dc, all, radius, c("control"))?;
-                gfx::top_highlight(dc, all, radius, c("control-highlight"))?;
+                gfx::tactile_finish(dc, &g.factory, (all, radius), t, false, false, 1.)?;
                 gfx::border(dc, all, radius, 1., c("control-border"))?;
                 if let Some(label) = &self.texts.update_action {
                     let (x, y) = centered(label, (w - label.width) / 2.);

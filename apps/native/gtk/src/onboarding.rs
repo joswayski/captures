@@ -122,6 +122,7 @@ pub fn build(
     let shell = MaxWidth::centered(&stage, spec.width as i32);
     shell.add_css_class("onboarding-shell");
     window.set_child(Some(&shell));
+    window.connect_realize(|w| crate::capture_bar::point_at_buttons(w.upcast_ref()));
 
     // Shipping `@media (max-height: 600px)`: tighter stage, no lede. The
     // default 560 px window is always short.

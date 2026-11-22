@@ -4979,7 +4979,7 @@ impl Editor {
                     ("control", "control-border")
                 };
                 gfx::fill_round(dc, all, r_md, c(bg))?;
-                gfx::top_highlight(dc, all, r_md, c("control-highlight"))?;
+                gfx::tactile_finish(dc, &g.factory, (all, r_md), t, false, lit, 1.)?;
                 gfx::border(dc, all, r_md, 1., c(edge))?;
                 let text = g.text(t, Style::Button, "Copy image", 1e4)?;
                 let x = (w - 15. - s3 - text.width) / 2.;
@@ -5026,7 +5026,7 @@ impl Editor {
             }
             Target::Save => {
                 if !lit {
-                    gfx::shadow(dc, all, r_md, t.shadow("shadow-btn"))?;
+                    gfx::shadow(dc, all, r_md, t.shadow("shadow-btn-primary"))?;
                 }
                 let bg = if lit {
                     "theme-accent-hover"
@@ -5034,7 +5034,7 @@ impl Editor {
                     "theme-accent"
                 };
                 gfx::fill_round(dc, all, r_md, c(bg))?;
-                gfx::top_highlight(dc, all, r_md, c("primary-highlight"))?;
+                gfx::tactile_finish(dc, &g.factory, (all, r_md), t, true, lit, 1.)?;
                 gfx::border(
                     dc,
                     all,
@@ -5044,7 +5044,7 @@ impl Editor {
                         r: 0.,
                         g: 0.,
                         b: 0.,
-                        a: 0.16,
+                        a: 0.24,
                     },
                 )?;
                 let text = g.text(t, Style::Strong, "Save", 1e4)?;

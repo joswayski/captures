@@ -121,6 +121,9 @@ final class StartupNoticeCloseButton: NSButton {
     /// The panel never activates Captures, so the first click must act.
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
+    override func resetCursorRects() {
+        if isEnabled { addCursorRect(bounds, cursor: .pointingHand) }
+    }
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let tracking { removeTrackingArea(tracking) }
@@ -128,8 +131,14 @@ final class StartupNoticeCloseButton: NSButton {
             options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
         addTrackingArea(area); tracking = area
     }
-    override func mouseEntered(with event: NSEvent) { hovered = true; needsDisplay = true }
-    override func mouseExited(with event: NSEvent) { hovered = false; needsDisplay = true }
+    override func mouseEntered(with event: NSEvent) {
+        hovered = true; needsDisplay = true
+        if isEnabled { NSCursor.pointingHand.set() }
+    }
+    override func mouseExited(with event: NSEvent) {
+        hovered = false; needsDisplay = true
+        NSCursor.arrow.set()
+    }
 
     override func draw(_ dirtyRect: NSRect) {
         let active = hovered || cell?.isHighlighted == true

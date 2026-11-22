@@ -323,6 +323,7 @@ pub fn build(
         }
     });
     window.set_child(Some(&watch));
+    window.connect_realize(|w| crate::capture_bar::point_at_buttons(w.upcast_ref()));
     // Also decide from the requested width before layout: the wide layout's
     // minimum (nav plus page) would otherwise hold a narrow window wider.
     let from_default = move |window: &gtk::ApplicationWindow| {

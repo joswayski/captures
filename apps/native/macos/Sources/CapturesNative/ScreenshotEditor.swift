@@ -1474,6 +1474,9 @@ final class EditorMakeCopySwitch: NSButton {
             + tokens.number("s-5") + 1
     }
 
+    override func resetCursorRects() {
+        if isEnabled { addCursorRect(bounds, cursor: .pointingHand) }
+    }
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let hoverTracking { removeTrackingArea(hoverTracking) }
@@ -1490,7 +1493,8 @@ final class EditorMakeCopySwitch: NSButton {
         let on = state == .on
         let track = NSRect(x: 0, y: ((bounds.height - 16) / 2).rounded(), width: 28, height: 16)
         let path = NSBezierPath(roundedRect: track.insetBy(dx: 0.5, dy: 0.5), xRadius: 7.5, yRadius: 7.5)
-        tokens.color(on ? "theme-accent" : "surface-field").faded(alpha).setFill(); path.fill()
+        tokens.color(on ? (isEnabled && hovered ? "theme-accent-hover" : "theme-accent") : "surface-field")
+            .faded(alpha).setFill(); path.fill()
         if !on {
             tokens.color(isEnabled && hovered ? "text-faint" : "border-strong").faded(alpha).setStroke()
             path.lineWidth = 1; path.stroke()
@@ -1501,7 +1505,7 @@ final class EditorMakeCopySwitch: NSButton {
         NSBezierPath(ovalIn: knob).fill()
         if window?.firstResponder === self { drawFocusRing(tokens, in: track.insetBy(dx: -2, dy: -2), radius: 10) }
         var attributes = labelAttributes
-        attributes[.foregroundColor] = tokens.color("text-muted").faded(alpha)
+        attributes[.foregroundColor] = tokens.color(isEnabled && hovered ? "text" : "text-muted").faded(alpha)
         let size = (Self.label as NSString).size(withAttributes: attributes)
         (Self.label as NSString).draw(at: NSPoint(x: track.maxX + tokens.number("s-3"),
             y: (bounds.height - size.height) / 2), withAttributes: attributes)

@@ -100,27 +100,27 @@ enum ShippingIcons {
 // NSButton keeps keyboard activation, target/action and accessibility behavior;
 // only the visual treatment is custom. No stock Aqua bezel in the content UI.
 final class CaptureButton: NSButton, TokenRestyling {
-    var tokens: Tokens! { didSet { needsDisplay = true } }
+    var tokens: Tokens! { didSet { refreshElevation(); needsDisplay = true } }
     func restyle(tokens: Tokens) { self.tokens = tokens }
-    var selected = false
-    var glass = false
-    var primary = false
+    var selected = false { didSet { needsDisplay = true } }
+    var glass = false { didSet { refreshElevation(); needsDisplay = true } }
+    var primary = false { didSet { refreshElevation(); needsDisplay = true } }
     /// Neutral high-contrast action (`--solid`), e.g. the setup primary button.
-    var solid = false { didSet { needsDisplay = true } }
-    var signal = false
+    var solid = false { didSet { refreshElevation(); needsDisplay = true } }
+    var signal = false { didSet { refreshElevation(); needsDisplay = true } }
     /// Shipping armed confirmation (`.recording-recovery-row button.danger`):
     /// `--theme-signal-strong` fill and white text, `--theme-signal-deep` on hover.
-    var armed = false { didSet { needsDisplay = true } }
+    var armed = false { didSet { refreshElevation(); needsDisplay = true } }
     /// A segment whose selected fill is its switch's sliding indicator view
     /// (shipping `.capture-segmented-indicator`), so it draws no idle chrome.
-    var slidingSegment = false { didSet { updateTrackingAreas(); needsDisplay = true } }
+    var slidingSegment = false { didSet { updateTrackingAreas(); refreshElevation(); needsDisplay = true } }
     /// A sliding segment's label: `--glass-text-muted`, easing to
     /// `--glass-text` over `--dur-3` `--ease-standard` while selected or hovered.
     private lazy var segmentLabel = NativeBoolTransition("segment_label", tokens: tokens, view: self)
-    var hudControl = false { didSet { updateTrackingAreas(); needsDisplay = true } }
+    var hudControl = false { didSet { updateTrackingAreas(); refreshElevation(); needsDisplay = true } }
     /// Shipping quiet editor chrome (header icon buttons, `.screenshot-canvas-tool`):
     /// no fill until hover, muted ink that lifts to text, `.selected` for an active state.
-    var quiet = false { didSet { updateTrackingAreas(); needsDisplay = true } }
+    var quiet = false { didSet { updateTrackingAreas(); refreshElevation(); needsDisplay = true } }
     /// Overrides for shipping chrome: icon size/stroke, text size and corner radius.
     var iconSide: CGFloat? { didSet { needsDisplay = true } }
     var iconStrokeWidth: CGFloat = 1.8 { didSet { needsDisplay = true } }
@@ -130,16 +130,18 @@ final class CaptureButton: NSButton, TokenRestyling {
     /// Shipping `.screenshot-canvas-bg-trigger`: an 11 pt `--text-subtle`
     /// chevron 6 pt after the label, with 8 pt leading and 6 pt trailing padding.
     var trailingChevron = false { didSet { needsDisplay = true } }
-    var cornerRadius: CGFloat? { didSet { needsDisplay = true } }
+    var cornerRadius: CGFloat? { didSet { refreshElevation(); needsDisplay = true } }
     /// Canvas background chip drawn in place of an icon; `.clear` is transparent.
     var swatch: NSColor? { didSet { needsDisplay = true } }
     private var hoverTracking: NSTrackingArea?
     private var hovered = false
-    var icon: CaptureButtonIcon? { didSet { updateTrackingAreas(); needsDisplay = true } }
+    private var pressed = false
+    private var appliedHandCursor = false
+    var icon: CaptureButtonIcon? { didSet { updateTrackingAreas(); refreshElevation(); needsDisplay = true } }
     /// Draw only the icon; the title stays the accessible name.
     var iconOnly = false { didSet { needsDisplay = true } }
     /// A fully rounded (circular) shape, e.g. the recording preview's play control.
-    var circular = false { didSet { needsDisplay = true } }
+    var circular = false { didSet { refreshElevation(); needsDisplay = true } }
     /// Shipping `.capture-record-dot` on Start recording: a signal dot ringed
     /// in accent ink whose `::after` copy plays `recording-ready-ping` while
     /// the button is enabled (resting invisible under reduced motion).
@@ -151,6 +153,27 @@ final class CaptureButton: NSButton, TokenRestyling {
     var highlightChanged: ((CaptureButton, Bool) -> Void)?
     var enterActionBlock: (() -> Void)?
     var escapeActionBlock: (() -> Void)?
+
+    override var isEnabled: Bool {
+        didSet {
+            if !isEnabled && appliedHandCursor {
+                appliedHandCursor = false
+                NSCursor.arrow.set()
+            }
+            refreshElevation()
+            window?.invalidateCursorRects(for: self)
+            needsDisplay = true
+        }
+    }
+
+    override var isHidden: Bool {
+        didSet {
+            if isHidden && appliedHandCursor {
+                appliedHandCursor = false
+                NSCursor.arrow.set()
+            }
+        }
+    }
 
     init(_ title: String, frame: NSRect, tokens: Tokens, glass: Bool = false, action: @escaping () -> Void) {
         super.init(frame: frame)
@@ -169,6 +192,41 @@ final class CaptureButton: NSButton, TokenRestyling {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     @objc private func activate() { actionBlock?() }
 
+    private var isRaisedControl: Bool {
+        !hudControl && !quiet && icon?.isEditorTool != true && !slidingSegment
+    }
+
+    private var effectiveRadius: CGFloat {
+        let editorTool = icon?.isEditorTool == true
+        return circular ? min(bounds.width, bounds.height) / 2 - 1
+            : cornerRadius ?? tokens.number(editorTool ? "r-lg" : hudControl ? "r-sm" : "r-md")
+    }
+
+    private func refreshElevation() {
+        guard let tokens else { return }
+        applyTactileElevation(on: self, tokens: tokens, radius: effectiveRadius,
+                              raised: isRaisedControl, primary: primary,
+                              hovered: hovered, pressed: pressed, enabled: isEnabled)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil && appliedHandCursor {
+            appliedHandCursor = false
+            NSCursor.arrow.set()
+        }
+        refreshElevation()
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        refreshElevation()
+    }
+
+    override func resetCursorRects() {
+        if isEnabled { addCursorRect(bounds, cursor: .pointingHand) }
+    }
+
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let hoverTracking { removeTrackingArea(hoverTracking) }
@@ -179,12 +237,25 @@ final class CaptureButton: NSButton, TokenRestyling {
     }
 
     override func mouseEntered(with event: NSEvent) {
-        hovered = true; needsDisplay = true
+        hovered = true; refreshElevation(); needsDisplay = true
+        if isEnabled && window?.isKeyWindow != true {
+            NSCursor.pointingHand.set(); appliedHandCursor = true
+        }
         highlightChanged?(self, true)
     }
     override func mouseExited(with event: NSEvent) {
-        hovered = false; needsDisplay = true
+        hovered = false; refreshElevation(); needsDisplay = true
+        if appliedHandCursor {
+            appliedHandCursor = false; NSCursor.arrow.set()
+        }
         highlightChanged?(self, window?.firstResponder === self)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard isEnabled else { return }
+        pressed = true; refreshElevation(); needsDisplay = true
+        super.mouseDown(with: event)
+        pressed = false; refreshElevation(); needsDisplay = true
     }
 
     override func becomeFirstResponder() -> Bool {
@@ -220,80 +291,95 @@ final class CaptureButton: NSButton, TokenRestyling {
 
     override func draw(_ dirtyRect: NSRect) {
         let editorTool = icon?.isEditorTool == true
-        let radius = circular ? min(bounds.width, bounds.height) / 2 - 1
-            : cornerRadius ?? tokens.number(editorTool ? "r-lg" : hudControl ? "r-sm" : "r-md")
+        let radius = effectiveRadius
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1),
             xRadius: radius, yRadius: radius)
+        let activePress = pressed || cell?.isHighlighted == true
         if hudControl {
-            let active = cell?.isHighlighted == true
             let fill: String? = !isEnabled ? nil
-                : signal ? (hovered || active ? "theme-signal" : "theme-signal-surface")
-                : active || selected ? "glass-active" : hovered ? "glass-hover" : nil
+                : signal ? (hovered || activePress ? "theme-signal" : "theme-signal-surface")
+                : activePress || selected ? "glass-active" : hovered ? "glass-hover" : nil
             if let fill { tokens.color(fill).setFill(); path.fill() }
             if isEnabled && (signal || selected) {
                 tokens.color(signal ? "theme-signal" : "theme-accent")
-                    .withAlphaComponent(signal ? 0.4 : 0.3).setStroke()
+                    .withAlphaComponent(signal ? 0.45 : 0.35).setStroke()
+                path.lineWidth = 1; path.stroke()
+            } else if isEnabled && hovered {
+                tokens.color("glass-border").setStroke()
                 path.lineWidth = 1; path.stroke()
             }
         } else if quiet {
-            let pressed = cell?.isHighlighted == true
-            if selected || (isEnabled && (hovered || pressed)) {
+            if selected || (isEnabled && (hovered || activePress)) {
                 tokens.color(selected ? "surface-selected" : "surface-hover").setFill()
                 path.fill()
+                tokens.color(selected ? "theme-accent" : "border-subtle")
+                    .withAlphaComponent(selected ? 0.32 : 1).setStroke()
+                path.lineWidth = 1; path.stroke()
             }
         } else if editorTool {
-            if isEnabled && (selected || hovered || cell?.isHighlighted == true) {
+            if isEnabled && (selected || hovered || activePress) {
                 tokens.color(selected ? "theme-accent" : "surface-hover").setFill()
                 path.fill()
+                if selected {
+                    drawTactileSurface(in: path, radius: radius, tokens: tokens,
+                                       primary: true, hovered: hovered, pressed: activePress,
+                                       isFlipped: isFlipped)
+                    NSColor.black.withAlphaComponent(0.22).setStroke()
+                    path.lineWidth = 1; path.stroke()
+                } else {
+                    tokens.color("border-subtle").setStroke()
+                    path.lineWidth = 1; path.stroke()
+                }
             }
         } else if slidingSegment {
-            if isEnabled && cell?.isHighlighted == true {
+            if isEnabled && activePress {
                 tokens.color(glass ? "glass-active" : "surface-active").setFill()
                 path.fill()
             }
         } else if armed && isEnabled {
-            tokens.color(hovered || cell?.isHighlighted == true ? "theme-signal-deep" : "theme-signal-strong").setFill()
+            tokens.color(hovered || activePress ? "theme-signal-deep" : "theme-signal-strong").setFill()
             path.fill()
+            drawTactileSurface(in: path, radius: radius, tokens: tokens,
+                               primary: true, hovered: hovered, pressed: activePress,
+                               isFlipped: isFlipped)
+            NSColor.black.withAlphaComponent(0.24).setStroke()
+            path.lineWidth = 1; path.stroke()
         } else if solid {
-            tokens.color(cell?.isHighlighted == true ? "solid-hover" : "solid")
-                .faded(isEnabled ? 1 : 0.4).setFill()
+            let alpha: CGFloat = isEnabled ? 1 : 0.4
+            tokens.color(isEnabled && (hovered || activePress) ? "solid-hover" : "solid")
+                .faded(alpha).setFill()
             path.fill()
+            if isEnabled {
+                drawTactileSurface(in: path, radius: radius, tokens: tokens,
+                                   primary: false, hovered: hovered, pressed: activePress,
+                                   isFlipped: isFlipped)
+                NSColor.black.withAlphaComponent(0.2).setStroke()
+                path.lineWidth = 1; path.stroke()
+            }
         } else {
             // Shipping disables the primary with `opacity: 0.4`, keeping the accent.
             let fadedPrimary = primary && !isEnabled
-            let pressed = cell?.isHighlighted == true
             let fill = fadedPrimary ? "theme-accent" : !isEnabled ? (glass ? "glass" : "surface-sunken")
-                : signal ? "theme-signal-surface"
-                : primary ? (hovered && !pressed ? "theme-accent-hover" : "theme-accent")
-                : pressed ? (glass ? "glass-active" : "surface-active")
+                : signal ? (hovered || activePress ? "theme-signal" : "theme-signal-surface")
+                : primary ? (hovered && !activePress ? "theme-accent-hover" : "theme-accent")
+                : activePress ? (glass ? "glass-active" : "surface-active")
                 : selected ? (glass ? "glass-active" : "surface-selected")
                 : hovered ? (glass ? "glass-hover" : "control-hover")
                 : (glass ? "glass-raised" : "control")
             let baseColor = tokens.color(fill).faded(fadedPrimary ? 0.4 : 1)
             baseColor.setFill()
             path.fill()
-            // Tactile camera-key finish: subtle vertical lift + crisp 1 pt top highlight.
-            if isEnabled && !pressed {
-                NSGraphicsContext.saveGraphicsState()
-                path.addClip()
-                let sheenTop = NSColor.white.withAlphaComponent(primary ? 0.14 : 0.05)
-                let sheenBottom = NSColor.black.withAlphaComponent(primary ? 0.06 : 0.04)
-                NSGradient(starting: sheenTop, ending: sheenBottom)?.draw(in: path.bounds, angle: 90)
-                let highlight = tokens.color(primary ? "primary-highlight" : "control-highlight")
-                let inset = min(radius, path.bounds.width / 2)
-                let line = NSBezierPath()
-                line.move(to: NSPoint(x: path.bounds.minX + inset, y: path.bounds.minY + 1))
-                line.line(to: NSPoint(x: path.bounds.maxX - inset, y: path.bounds.minY + 1))
-                highlight.setStroke()
-                line.lineWidth = 1
-                line.stroke()
-                NSGraphicsContext.restoreGraphicsState()
+            if isEnabled {
+                drawTactileSurface(in: path, radius: radius, tokens: tokens,
+                                   primary: primary || (signal && (hovered || activePress)),
+                                   hovered: hovered, pressed: activePress, isFlipped: isFlipped)
             }
             if !fadedPrimary {
                 let borderColor = signal && isEnabled ? tokens.color("theme-signal")
-                    : primary && isEnabled ? NSColor.black.withAlphaComponent(0.18)
+                    : primary && isEnabled ? NSColor.black.withAlphaComponent(0.24)
                     : selected && isEnabled ? tokens.color("theme-accent")
-                    : tokens.color(glass ? "glass-border" : (hovered ? "border-strong" : "control-border"))
+                    : tokens.color(glass ? (hovered ? "glass-border-strong" : "glass-border")
+                                         : (hovered ? "border-strong" : "control-border"))
                 borderColor.setStroke()
                 path.lineWidth = 1
                 path.stroke()
@@ -304,7 +390,7 @@ final class CaptureButton: NSButton, TokenRestyling {
         var foreground = solid
             ? tokens.color("solid-ink").faded(isEnabled ? 1 : 0.4)
             : tokens.color(isEnabled
-            ? (signal ? "theme-signal"
+            ? (signal ? (hovered || activePress ? "theme-signal-ink" : "theme-signal")
                 : primary ? "theme-accent-ink" : glass ? "glass-text" : "text")
             : (glass ? "glass-text-subtle" : "text-faint"))
         if primary && !isEnabled && !solid {

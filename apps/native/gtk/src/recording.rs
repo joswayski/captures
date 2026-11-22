@@ -805,6 +805,7 @@ pub fn build(app: &gtk::Application, tokens: Rc<Tokens>, options: Options) -> Re
         }
     });
     window.set_child(Some(&watch));
+    window.connect_realize(|w| crate::capture_bar::point_at_buttons(w.upcast_ref()));
     // Decide from the requested size before the first layout too, and refit
     // the preview whenever the window height (`vh`) changes.
     window.connect_realize({

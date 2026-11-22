@@ -473,6 +473,8 @@ final class RecordingHUDTests: XCTestCase {
         XCTAssertEqual(hud.visibleTooltip, "Mute microphone")
         let hide = try XCTUnwrap(buttons.first { $0.accessibilityLabel() == "Hide recording controls" })
         hide.mouseEntered(with: event)
+        XCTAssertEqual(tooltip.frame.maxX, hide.frame.maxX, accuracy: 0.5,
+            "switching buttons must jump the tooltip immediately instead of sliding across")
         RunLoop.current.run(until: Date().addingTimeInterval(0.3))
         XCTAssertEqual(tooltip.frame.maxX, hide.frame.maxX, accuracy: 0.5,
             "the last three tooltips right-align like shipping")

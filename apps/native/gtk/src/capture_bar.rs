@@ -66,8 +66,8 @@ pub struct Bar {
 /// Shipping `.recording-selector-panel button { cursor: pointer }`: the bar
 /// sits over the selector's crosshair, so its controls show a pointing hand
 /// and its blank glass the default arrow.
-fn point_at_buttons(widget: &gtk::Widget) {
-    if widget.is::<gtk::Button>() {
+pub(crate) fn point_at_buttons(widget: &gtk::Widget) {
+    if widget.is::<gtk::Button>() || widget.is::<gtk::CheckButton>() || widget.is::<gtk::Switch>() {
         widget.set_cursor_from_name(Some("pointer"));
     }
     let mut child = widget.first_child();

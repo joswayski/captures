@@ -377,6 +377,7 @@ impl Controls {
         tooltip.update_state(&[gtk::accessible::State::Hidden(true)]);
         tooltip_layer.put(&tooltip, 0., 0.);
         window.set_child(Some(&overlay));
+        window.connect_realize(|w| crate::capture_bar::point_at_buttons(w.upcast_ref()));
         let worker = Worker::new(
             || {
                 let (ffmpeg, ffprobe) = crate::recording::media_tools();

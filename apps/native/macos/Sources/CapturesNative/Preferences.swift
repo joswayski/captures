@@ -61,9 +61,14 @@ final class ShortcutRecorderButton: NSButton {
     private(set) var recording = false
     private(set) var keys: [String] = []
     private(set) var error = ""
+    private var hovered = false
+    private var hoverTracking: NSTrackingArea?
 
     override var acceptsFirstResponder: Bool { true }
     override var isFlipped: Bool { true }
+    override var isEnabled: Bool {
+        didSet { window?.invalidateCursorRects(for: self); needsDisplay = true }
+    }
 
     init(frame: NSRect, tokens: Tokens, label: String, keys: [String]) {
         super.init(frame: frame)
@@ -76,6 +81,19 @@ final class ShortcutRecorderButton: NSButton {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     @objc private func activateRecorder() { beginRecording?() }
+
+    override func resetCursorRects() {
+        if isEnabled { addCursorRect(bounds, cursor: .pointingHand) }
+    }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTracking { removeTrackingArea(hoverTracking) }
+        let tracking = NSTrackingArea(rect: .zero,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
+        addTrackingArea(tracking); hoverTracking = tracking
+    }
+    override func mouseEntered(with event: NSEvent) { hovered = true; needsDisplay = true }
+    override func mouseExited(with event: NSEvent) { hovered = false; needsDisplay = true }
 
     func startRecording() {
         recording = true; keys = []; error = ""; updateAccessibility(); needsDisplay = true
@@ -167,7 +185,7 @@ final class ShortcutRecorderButton: NSButton {
         let outline = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: radius, yRadius: radius)
         tokens.color("surface-field").setFill(); outline.fill()
         let focused = recording || window?.firstResponder === self
-        tokens.color(focused ? "theme-accent" : "control-border").setStroke()
+        tokens.color(focused ? "theme-accent" : (isEnabled && hovered ? "border-strong" : "control-border")).setStroke()
         outline.lineWidth = 1; outline.stroke()
         if focused { drawFocusRing(tokens, in: bounds.insetBy(dx: -1, dy: -1), radius: radius + 1) }
         guard !keys.isEmpty else {
@@ -334,7 +352,9 @@ class PreferenceHoverButton: NSButton {
     var actionBlock: (() -> Void)?
 
     override var isFlipped: Bool { true }
-    override var isEnabled: Bool { didSet { needsDisplay = true } }
+    override var isEnabled: Bool {
+        didSet { window?.invalidateCursorRects(for: self); needsDisplay = true }
+    }
 
     func configure(label: String, role: NSAccessibility.Role) {
         isBordered = false; setButtonType(.momentaryPushIn)
@@ -346,6 +366,9 @@ class PreferenceHoverButton: NSButton {
 
     @objc private func activate() { if isEnabled { actionBlock?() } }
 
+    override func resetCursorRects() {
+        if isEnabled { addCursorRect(bounds, cursor: .pointingHand) }
+    }
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let hoverTracking { removeTrackingArea(hoverTracking) }
@@ -379,9 +402,16 @@ final class PreferenceNavButton: PreferenceHoverButton {
 
     override func draw(_ dirtyRect: NSRect) {
         let radius = tokens.number("r-md")
-        let path = NSBezierPath(roundedRect: bounds, xRadius: radius, yRadius: radius)
-        if active { tokens.color("surface-active").setFill(); path.fill() }
-        else if hovered { tokens.color("surface-hover").setFill(); path.fill() }
+        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: radius, yRadius: radius)
+        if active {
+            tokens.color("surface-active").setFill(); path.fill()
+            drawTactileSurface(in: path, radius: radius, tokens: tokens,
+                               primary: false, hovered: hovered, pressed: cell?.isHighlighted == true,
+                               isFlipped: isFlipped)
+            tokens.color("border-subtle").setStroke(); path.lineWidth = 1; path.stroke()
+        } else if hovered {
+            tokens.color("surface-hover").setFill(); path.fill()
+        }
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.capturesUI(ofSize: tokens.number("text-md"), weight: .medium),
             .foregroundColor: tokens.color(active || hovered ? "text" : "text-subtle"),
@@ -424,7 +454,11 @@ final class PreferenceSwitchButton: PreferenceHoverButton {
         let track = switchRect
         let path = NSBezierPath(roundedRect: track.insetBy(dx: 0.5, dy: 0.5), xRadius: 9, yRadius: 9)
         if isOn {
-            tokens.color("theme-accent").faded(alpha).setFill(); path.fill()
+            tokens.color(isEnabled && hovered ? "theme-accent-hover" : "theme-accent").faded(alpha).setFill()
+            path.fill()
+            drawTactileSurface(in: path, radius: 9, tokens: tokens,
+                               primary: true, hovered: hovered, pressed: cell?.isHighlighted == true,
+                               isFlipped: isFlipped, alpha: alpha)
         } else {
             tokens.color("surface-sunken").faded(alpha).setFill(); path.fill()
             tokens.color(isEnabled && hovered ? "text-subtle" : "border-strong")
@@ -469,10 +503,15 @@ final class PreferenceSegmentButton: PreferenceHoverButton {
 
     override func draw(_ dirtyRect: NSRect) {
         let radius = tokens.number("r-sm")
+        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: radius, yRadius: radius)
         if active && paintsActiveFill {
-            let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: radius, yRadius: radius)
             tokens.color("surface-raised").setFill(); path.fill()
+            drawTactileSurface(in: path, radius: radius, tokens: tokens,
+                               primary: false, hovered: hovered, pressed: cell?.isHighlighted == true,
+                               isFlipped: isFlipped)
             tokens.color("border-subtle").setStroke(); path.lineWidth = 1; path.stroke()
+        } else if !active && isEnabled && hovered {
+            tokens.color("surface-hover").setFill(); path.fill()
         }
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.capturesUI(ofSize: tokens.number("text-sm"), weight: .medium),
@@ -507,9 +546,13 @@ final class ThemeChipButton: PreferenceHoverButton {
         let chip = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: radius, yRadius: radius)
         if active {
             tokens.color("surface-raised").setFill(); chip.fill()
-            tokens.color("border").setStroke(); chip.lineWidth = 1; chip.stroke()
+            drawTactileSurface(in: chip, radius: radius, tokens: tokens,
+                               primary: false, hovered: hovered, pressed: cell?.isHighlighted == true,
+                               isFlipped: isFlipped)
+            tokens.color(hovered ? "border-strong" : "border").setStroke(); chip.lineWidth = 1; chip.stroke()
         } else if hovered {
             tokens.color("surface-hover").setFill(); chip.fill()
+            tokens.color("border-subtle").setStroke(); chip.lineWidth = 1; chip.stroke()
         }
         let gap = tokens.number("s-3")
         let square = NSRect(x: gap, y: (bounds.height - 18) / 2, width: 18, height: 18)
@@ -541,7 +584,7 @@ final class ThemeChipButton: PreferenceHoverButton {
         edge.lineWidth = 1; edge.stroke()
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.capturesUI(ofSize: tokens.number("text-sm"), weight: .medium),
-            .foregroundColor: tokens.color(active ? "text" : "text-muted"),
+            .foregroundColor: tokens.color(active || hovered ? "text" : "text-muted"),
         ]
         let size = (chipLabel as NSString).size(withAttributes: attributes)
         (chipLabel as NSString).draw(at: NSPoint(x: square.maxX + gap, y: (bounds.height - size.height) / 2),
@@ -573,9 +616,13 @@ final class PreferenceCornerButton: PreferenceHoverButton {
         let radius = tokens.number("r-sm")
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 2.5, dy: 2.5), xRadius: radius, yRadius: radius)
         if active {
-            tokens.color("theme-accent").setFill(); path.fill()
+            tokens.color(hovered ? "theme-accent-hover" : "theme-accent").setFill(); path.fill()
+            drawTactileSurface(in: path, radius: radius, tokens: tokens,
+                               primary: true, hovered: hovered, pressed: cell?.isHighlighted == true,
+                               isFlipped: isFlipped)
+            NSColor.black.withAlphaComponent(0.22).setStroke(); path.lineWidth = 1; path.stroke()
         } else {
-            tokens.color("surface-raised").setFill(); path.fill()
+            tokens.color(isEnabled && hovered ? "control-hover" : "surface-raised").setFill(); path.fill()
             tokens.color(isEnabled && hovered ? "theme-accent" : "border-strong").setStroke()
             path.lineWidth = 1; path.stroke()
         }

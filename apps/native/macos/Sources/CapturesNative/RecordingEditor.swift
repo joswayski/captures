@@ -4301,6 +4301,9 @@ final class RecordingPreviewToggle: NSButton {
 
     override var state: NSControl.StateValue { didSet { needsDisplay = true } }
 
+    override func resetCursorRects() {
+        if isEnabled { addCursorRect(bounds, cursor: .pointingHand) }
+    }
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let hoverTracking { removeTrackingArea(hoverTracking) }
@@ -4325,9 +4328,13 @@ final class RecordingPreviewToggle: NSButton {
         let pill = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: radius, yRadius: radius)
         if on {
             tokens.color("surface-active").setFill(); pill.fill()
-            tokens.color("border").setStroke(); pill.lineWidth = 1; pill.stroke()
+            drawTactileSurface(in: pill, radius: radius, tokens: tokens,
+                               primary: false, hovered: hovered, pressed: cell?.isHighlighted == true,
+                               isFlipped: isFlipped)
+            tokens.color(lit ? "border-strong" : "border").setStroke(); pill.lineWidth = 1; pill.stroke()
         } else if lit {
             tokens.color("surface-hover").setFill(); pill.fill()
+            tokens.color("border-subtle").setStroke(); pill.lineWidth = 1; pill.stroke()
         }
         let ink = tokens.color(!isEnabled ? "text-faint" : on || lit ? "text" : "text-subtle")
         let label: [NSAttributedString.Key: Any] = [

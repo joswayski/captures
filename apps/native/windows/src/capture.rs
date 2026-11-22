@@ -2094,28 +2094,46 @@ impl Menu {
         // `.recording-start`
         if let Some((r, label, enabled)) = &layout.primary {
             let opacity = if *enabled { 1. } else { 0.4 };
-            let lift = if *enabled && hovered(Hit::Primary) {
-                -1.
-            } else {
-                0.
-            };
+            let is_hovered = *enabled && hovered(Hit::Primary);
+            let lift = if is_hovered { -1. } else { 0. };
             let r = rect(r.left, r.top + lift, r.right, r.bottom + lift);
             let pill = (r.bottom - r.top) / 2.;
-            let shadow = [Shadow {
-                x: 0.,
-                y: 6.,
-                blur: 18.,
-                spread: 0.,
-                color: [0., 0., 0., 0.34 * opacity],
-            }];
-            gfx::shadow(dc, r, pill, &shadow)?;
-            let fill = if *enabled && hovered(Hit::Primary) {
+            if is_hovered {
+                let accent = t.color("theme-accent");
+                let shadows = [
+                    Shadow {
+                        x: 0.,
+                        y: 8.,
+                        blur: 24.,
+                        spread: 0.,
+                        color: [accent.r, accent.g, accent.b, 0.3 * opacity],
+                    },
+                    Shadow {
+                        x: 0.,
+                        y: 6.,
+                        blur: 18.,
+                        spread: 0.,
+                        color: [0., 0., 0., 0.38 * opacity],
+                    },
+                ];
+                gfx::shadow(dc, r, pill, &shadows)?;
+            } else {
+                let shadow = [Shadow {
+                    x: 0.,
+                    y: 5.,
+                    blur: 16.,
+                    spread: 0.,
+                    color: [0., 0., 0., 0.36 * opacity],
+                }];
+                gfx::shadow(dc, r, pill, &shadow)?;
+            }
+            let fill = if is_hovered {
                 "theme-accent-hover"
             } else {
                 "theme-accent"
             };
             gfx::fill_round(dc, r, pill, t.color_alpha(fill, opacity))?;
-            gfx::top_highlight(dc, r, pill, t.color_alpha("primary-highlight", opacity))?;
+            gfx::tactile_finish(dc, &g.factory, (r, pill), t, true, is_hovered, opacity)?;
             gfx::border(
                 dc,
                 r,
@@ -2125,7 +2143,7 @@ impl Menu {
                     r: 0.,
                     g: 0.,
                     b: 0.,
-                    a: 0.16 * opacity,
+                    a: 0.24 * opacity,
                 },
             )?;
             let ink = t.color_alpha("theme-accent-ink", opacity);

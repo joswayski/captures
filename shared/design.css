@@ -186,9 +186,13 @@
 
   --control: var(--n-4);
   --control-hover: var(--n-5);
-  --control-border: rgba(255, 255, 255, 0.13);
-  --control-highlight: rgba(255, 255, 255, 0.11);
-  --primary-highlight: rgba(255, 255, 255, 0.32);
+  --control-border: rgba(255, 255, 255, 0.14);
+  --control-highlight: rgba(255, 255, 255, 0.2);
+  --control-highlight-hover: rgba(255, 255, 255, 0.28);
+  --control-edge-bottom: rgba(0, 0, 0, 0.32);
+  --primary-highlight: rgba(255, 255, 255, 0.44);
+  --primary-highlight-hover: rgba(255, 255, 255, 0.56);
+  --primary-edge-bottom: rgba(0, 0, 0, 0.24);
 
   /* High-contrast neutral fill, used for the one confirming action on a surface
      that should not compete with the themed capture action. */
@@ -197,7 +201,10 @@
   --solid-ink: var(--n-1);
 
   --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.36);
-  --shadow-btn: 0 1px 2px rgba(0, 0, 0, 0.32), 0 1px 1px rgba(0, 0, 0, 0.2);
+  --shadow-btn: 0 2px 6px rgba(0, 0, 0, 0.38), 0 1px 2px rgba(0, 0, 0, 0.28);
+  --shadow-btn-hover: 0 5px 14px rgba(0, 0, 0, 0.46), 0 2px 4px rgba(0, 0, 0, 0.3);
+  --shadow-btn-primary: 0 5px 16px rgba(0, 0, 0, 0.38), 0 1px 3px rgba(0, 0, 0, 0.28);
+  --shadow-btn-primary-hover: 0 8px 22px rgba(0, 0, 0, 0.44), 0 2px 6px rgba(0, 0, 0, 0.32);
   --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.32);
   --shadow-md: 0 8px 20px rgba(0, 0, 0, 0.38);
   --shadow-lg: 0 18px 44px rgba(0, 0, 0, 0.46);
@@ -255,16 +262,23 @@
 
   --control: #ffffff;
   --control-hover: #f7f8fa;
-  --control-border: rgba(20, 21, 23, 0.14);
-  --control-highlight: rgba(255, 255, 255, 0.9);
-  --primary-highlight: rgba(255, 255, 255, 0.42);
+  --control-border: rgba(20, 21, 23, 0.15);
+  --control-highlight: rgba(255, 255, 255, 0.96);
+  --control-highlight-hover: #ffffff;
+  --control-edge-bottom: rgba(20, 21, 23, 0.1);
+  --primary-highlight: rgba(255, 255, 255, 0.54);
+  --primary-highlight-hover: rgba(255, 255, 255, 0.68);
+  --primary-edge-bottom: rgba(0, 0, 0, 0.2);
 
   --solid: var(--n-12);
   --solid-hover: #2b2d32;
   --solid-ink: #ffffff;
 
   --shadow-xs: 0 1px 2px rgba(20, 21, 23, 0.06);
-  --shadow-btn: 0 1px 2px rgba(20, 21, 23, 0.08), 0 1px 1px rgba(20, 21, 23, 0.04);
+  --shadow-btn: 0 2px 5px rgba(20, 21, 23, 0.11), 0 1px 2px rgba(20, 21, 23, 0.07);
+  --shadow-btn-hover: 0 5px 14px rgba(20, 21, 23, 0.15), 0 2px 4px rgba(20, 21, 23, 0.09);
+  --shadow-btn-primary: 0 5px 14px rgba(20, 21, 23, 0.16), 0 1px 3px rgba(20, 21, 23, 0.12);
+  --shadow-btn-primary-hover: 0 8px 20px rgba(20, 21, 23, 0.2), 0 2px 5px rgba(20, 21, 23, 0.14);
   --shadow-sm: 0 1px 3px rgba(20, 21, 23, 0.08), 0 1px 2px rgba(20, 21, 23, 0.04);
   --shadow-md: 0 6px 18px rgba(20, 21, 23, 0.09), 0 1px 3px rgba(20, 21, 23, 0.06);
   --shadow-lg: 0 16px 40px rgba(20, 21, 23, 0.12), 0 2px 6px rgba(20, 21, 23, 0.06);

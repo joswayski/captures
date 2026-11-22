@@ -2969,7 +2969,7 @@ impl History {
                 let primary = action == CardAction::Edit;
                 let ink = if primary {
                     if !lit {
-                        gfx::shadow(dc, all, r_md, t.shadow("shadow-btn"))?;
+                        gfx::shadow(dc, all, r_md, t.shadow("shadow-btn-primary"))?;
                     }
                     let bg = if lit {
                         "theme-accent-hover"
@@ -2977,7 +2977,7 @@ impl History {
                         "theme-accent"
                     };
                     gfx::fill_round(dc, all, r_md, c(bg))?;
-                    gfx::top_highlight(dc, all, r_md, c("primary-highlight"))?;
+                    gfx::tactile_finish(dc, &g.factory, (all, r_md), t, true, lit, 1.)?;
                     gfx::border(
                         dc,
                         all,
@@ -2987,7 +2987,7 @@ impl History {
                             r: 0.,
                             g: 0.,
                             b: 0.,
-                            a: 0.16,
+                            a: 0.24,
                         },
                     )?;
                     c("theme-accent-ink")
@@ -3001,7 +3001,7 @@ impl History {
                         ("control", "control-border")
                     };
                     gfx::fill_round(dc, all, r_md, c(bg))?;
-                    gfx::top_highlight(dc, all, r_md, c("control-highlight"))?;
+                    gfx::tactile_finish(dc, &g.factory, (all, r_md), t, false, lit, 1.)?;
                     gfx::border(dc, all, r_md, 1., c(edge))?;
                     c("text")
                 };

@@ -441,14 +441,25 @@ final class RecordingHUDView: NSView {
                   rightAligned: tooltip.rightAligned, progress: 0, bounds: bounds),
               let shown = RecordingHUDPolicy.tooltipFrame(anchor: button.frame, textSize: textSize,
                   rightAligned: tooltip.rightAligned, progress: 1, bounds: bounds) else { return }
-        let wasHidden = tooltipView.isHidden || tooltipView.alphaValue == 0
+        // A chip still on screen (including one fading out from the previous
+        // button) jumps straight to its new button at full opacity instead of
+        // sliding across the HUD.
+        let wasHidden = tooltipView.isHidden
         tooltipView.isHidden = false
         tooltipView.needsLayout = true
-        guard duration > 0 else {
-            tooltipView.frame = shown; tooltipView.alphaValue = 1
+        guard duration > 0, wasHidden else {
+            tooltipView.layer?.removeAllAnimations()
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0
+                context.allowsImplicitAnimation = false
+                tooltipView.frame = shown
+                tooltipView.alphaValue = 1
+            }
+            tooltipView.needsDisplay = true
             return
         }
-        if wasHidden { tooltipView.frame = hidden; tooltipView.alphaValue = 0 }
+        tooltipView.layer?.removeAllAnimations()
+        tooltipView.frame = hidden; tooltipView.alphaValue = 0
         NSAnimationContext.runAnimationGroup { context in
             context.duration = duration; context.timingFunction = spec.timing
             tooltipView.animator().frame = shown

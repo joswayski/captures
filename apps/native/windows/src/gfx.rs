@@ -920,31 +920,124 @@ pub fn border(
     ring(dc, r, radius, -width, 0., color)
 }
 
-/// Crisp 1 DIP inner top specular highlight (`inset 0 1px 0`) along a tactile
-/// button's upper edge.
-pub fn top_highlight(
+/// Tactile 3D camera-key finish matching the marketing site's `.download-button`
+/// and `.source-button`: vertical matte sheen, curved top specular highlight
+/// (`inset 0 1px 0`), and subtle bottom inner lip (`inset 0 -1px 0`).
+pub fn tactile_finish(
     dc: &ID2D1DeviceContext,
-    r: D2D_RECT_F,
-    radius: f32,
-    color: D2D1_COLOR_F,
+    factory: &ID2D1Factory1,
+    (r, radius): (D2D_RECT_F, f32),
+    t: &Tokens,
+    primary: bool,
+    hovered: bool,
+    opacity: f32,
 ) -> Result<()> {
-    let inset = radius.min((r.right - r.left) / 2.).max(1.);
-    let x0 = r.left + inset;
-    let x1 = r.right - inset;
-    if x1 <= x0 {
+    if r.right - r.left <= 2. || r.bottom - r.top <= 2. || opacity <= 0. {
         return Ok(());
     }
-    let y = r.top + 1.5;
+    let dark = t.color("text").r > 0.5;
+    let (top_alpha, bottom_alpha) = match (primary, hovered) {
+        (true, true) => (0.28, 0.05),
+        (true, false) => (0.20, 0.09),
+        (false, true) => (
+            if dark { 0.16 } else { 0.08 },
+            if dark { 0.06 } else { 0.04 },
+        ),
+        (false, false) => (
+            if dark { 0.10 } else { 0.05 },
+            if dark { 0.09 } else { 0.06 },
+        ),
+    };
+    let stops = [
+        D2D1_GRADIENT_STOP {
+            position: 0.,
+            color: D2D1_COLOR_F {
+                r: 1.,
+                g: 1.,
+                b: 1.,
+                a: top_alpha * opacity,
+            },
+        },
+        D2D1_GRADIENT_STOP {
+            position: 1.,
+            color: D2D1_COLOR_F {
+                r: 0.,
+                g: 0.,
+                b: 0.,
+                a: bottom_alpha * opacity,
+            },
+        },
+    ];
+    let top_color = t.color_alpha(
+        match (primary, hovered) {
+            (true, true) => "primary-highlight-hover",
+            (true, false) => "primary-highlight",
+            (false, true) => "control-highlight-hover",
+            (false, false) => "control-highlight",
+        },
+        opacity,
+    );
+    let bottom_color = t.color_alpha(
+        if primary {
+            "primary-edge-bottom"
+        } else {
+            "control-edge-bottom"
+        },
+        opacity,
+    );
     unsafe {
-        dc.DrawLine(
-            Vector2 { X: x0, Y: y },
-            Vector2 { X: x1, Y: y },
-            &brush(dc, color)?,
-            1.,
-            None,
-        );
+        let clip = factory.CreateRoundedRectangleGeometry(&rounded(r, radius))?;
+        let mut layer = D2D1_LAYER_PARAMETERS1 {
+            contentBounds: rect(-1e6, -1e6, 1e6, 1e6),
+            geometricMask: std::mem::ManuallyDrop::new(Some(clip.cast()?)),
+            maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+            maskTransform: Matrix3x2::identity(),
+            opacity: 1.,
+            ..Default::default()
+        };
+        dc.PushLayer(&layer, None::<&ID2D1Layer>);
+        let drawn: Result<()> = (|| {
+            let target: &ID2D1RenderTarget = dc;
+            let collection = target.CreateGradientStopCollection(
+                &stops,
+                D2D1_GAMMA_2_2,
+                D2D1_EXTEND_MODE_CLAMP,
+            )?;
+            let sheen = target.CreateLinearGradientBrush(
+                &D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
+                    startPoint: Vector2 {
+                        X: r.left,
+                        Y: r.top,
+                    },
+                    endPoint: Vector2 {
+                        X: r.left,
+                        Y: r.bottom,
+                    },
+                },
+                None,
+                &collection,
+            )?;
+            dc.FillRoundedRectangle(&rounded(r, radius), &sheen);
+            let top_rect = rect(r.left, r.top + 1., r.right, r.bottom + 1.);
+            dc.DrawRoundedRectangle(
+                &rounded(top_rect, radius),
+                &brush(dc, top_color)?,
+                if primary { 1.35 } else { 1.15 },
+                None,
+            );
+            let bottom_rect = rect(r.left, r.top - 1., r.right, r.bottom - 1.);
+            dc.DrawRoundedRectangle(
+                &rounded(bottom_rect, radius),
+                &brush(dc, bottom_color)?,
+                1.,
+                None,
+            );
+            Ok(())
+        })();
+        dc.PopLayer();
+        std::mem::ManuallyDrop::drop(&mut layer.geometricMask);
+        drawn
     }
-    Ok(())
 }
 
 /// A band between `from` and `to` DIPs outside `r` (negative is inside), as a

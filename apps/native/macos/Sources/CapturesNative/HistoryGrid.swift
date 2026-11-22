@@ -214,12 +214,21 @@ final class HistoryButton: NSButton {
     enum Style { case primary, secondary, danger, confirm, ghost, overlay, confirmOverlay }
     enum Glyph { case edit, save, trash, restore, check, back }
 
-    var tokens: Tokens
-    var style: Style { didSet { needsDisplay = true } }
+    var tokens: Tokens { didSet { refreshElevation(); needsDisplay = true } }
+    var style: Style { didSet { refreshElevation(); needsDisplay = true } }
     var glyph: Glyph? { didSet { needsDisplay = true } }
     var actionBlock: () -> Void
     private var hovered = false
+    private var pressed = false
     private var tracking: NSTrackingArea?
+
+    override var isEnabled: Bool {
+        didSet {
+            refreshElevation()
+            window?.invalidateCursorRects(for: self)
+            needsDisplay = true
+        }
+    }
 
     init(_ title: String, frame: NSRect, tokens: Tokens, style: Style, glyph: Glyph? = nil,
          action: @escaping () -> Void) {
@@ -235,15 +244,49 @@ final class HistoryButton: NSButton {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     @objc private func activate() { actionBlock() }
 
+    private var isRaisedStyle: Bool {
+        switch style {
+        case .primary, .secondary, .confirm, .overlay, .confirmOverlay: return true
+        case .danger, .ghost: return false
+        }
+    }
+
+    private func refreshElevation() {
+        applyTactileElevation(on: self, tokens: tokens, radius: tokens.number("r-md"),
+                              raised: isRaisedStyle, primary: style == .primary,
+                              hovered: hovered, pressed: pressed, enabled: isEnabled,
+                              inset: 0.5)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        refreshElevation()
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        refreshElevation()
+    }
+
+    override func resetCursorRects() {
+        if isEnabled { addCursorRect(bounds, cursor: .pointingHand) }
+    }
+
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let tracking { removeTrackingArea(tracking) }
-        let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+        let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
                                   owner: self, userInfo: nil)
         addTrackingArea(area); tracking = area
     }
-    override func mouseEntered(with event: NSEvent) { hovered = true; needsDisplay = true }
-    override func mouseExited(with event: NSEvent) { hovered = false; needsDisplay = true }
+    override func mouseEntered(with event: NSEvent) { hovered = true; refreshElevation(); needsDisplay = true }
+    override func mouseExited(with event: NSEvent) { hovered = false; refreshElevation(); needsDisplay = true }
+    override func mouseDown(with event: NSEvent) {
+        guard isEnabled else { return }
+        pressed = true; refreshElevation(); needsDisplay = true
+        super.mouseDown(with: event)
+        pressed = false; refreshElevation(); needsDisplay = true
+    }
     override func becomeFirstResponder() -> Bool {
         needsDisplay = true
         guard super.becomeFirstResponder() else { return false }
@@ -254,32 +297,55 @@ final class HistoryButton: NSButton {
     override func resignFirstResponder() -> Bool { needsDisplay = true; return super.resignFirstResponder() }
 
     override func draw(_ dirtyRect: NSRect) {
-        let active = isEnabled && (hovered || cell?.isHighlighted == true)
+        let activePress = pressed || cell?.isHighlighted == true
+        let active = isEnabled && (hovered || activePress)
         let fill: NSColor?, border: NSColor?, text: NSColor
         switch (style, active) {
-        case (.primary, false): fill = tokens.color("theme-accent"); border = nil; text = tokens.color("theme-accent-ink")
-        case (.primary, true): fill = tokens.color("theme-accent-hover"); border = nil; text = tokens.color("theme-accent-ink")
+        case (.primary, false):
+            fill = tokens.color("theme-accent")
+            border = NSColor.black.withAlphaComponent(0.24)
+            text = tokens.color("theme-accent-ink")
+        case (.primary, true):
+            fill = tokens.color("theme-accent-hover")
+            border = NSColor.black.withAlphaComponent(0.24)
+            text = tokens.color("theme-accent-ink")
         case (.secondary, false): fill = tokens.color("control"); border = tokens.color("control-border"); text = tokens.color("text")
         case (.secondary, true): fill = tokens.color("control-hover"); border = tokens.color("border-strong"); text = tokens.color("text")
         case (.danger, false): fill = nil; border = nil; text = tokens.color("text-subtle")
-        case (.danger, true): fill = tokens.color("danger-surface"); border = nil; text = tokens.color("danger-text")
+        case (.danger, true): fill = tokens.color("danger-surface"); border = tokens.color("danger-border"); text = tokens.color("danger-text")
         case (.confirm, false), (.confirmOverlay, false):
-            fill = tokens.color("theme-signal-strong"); border = nil; text = tokens.color("theme-signal-ink")
+            fill = tokens.color("theme-signal-strong")
+            border = NSColor.black.withAlphaComponent(0.24)
+            text = tokens.color("theme-signal-ink")
         case (.confirm, true), (.confirmOverlay, true):
-            fill = tokens.color("theme-signal-deep"); border = nil; text = tokens.color("theme-signal-ink")
+            fill = tokens.color("theme-signal-deep")
+            border = NSColor.black.withAlphaComponent(0.24)
+            text = tokens.color("theme-signal-ink")
         case (.ghost, false): fill = nil; border = nil; text = tokens.color("text-muted")
-        case (.ghost, true): fill = tokens.color("surface-hover"); border = nil; text = tokens.color("text")
+        case (.ghost, true): fill = tokens.color("surface-hover"); border = tokens.color("border-subtle"); text = tokens.color("text")
         // Shipping's `.history-image-wrap > .history-delete`: a raised chip that
         // reads over any thumbnail, signal red on hover.
         case (.overlay, false):
             fill = tokens.color("surface-raised").withAlphaComponent(0.88)
             border = tokens.color("border-subtle"); text = tokens.color("text")
-        case (.overlay, true): fill = tokens.color("theme-signal"); border = nil; text = .white
+        case (.overlay, true):
+            fill = tokens.color("theme-signal")
+            border = NSColor.black.withAlphaComponent(0.24)
+            text = .white
         }
         let alpha: CGFloat = isEnabled ? 1 : 0.45
         let radius = tokens.number("r-md")
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: radius, yRadius: radius)
-        if let fill { fill.withAlphaComponent(fill.alphaComponent * alpha).setFill(); path.fill() }
+        if let fill {
+            fill.withAlphaComponent(fill.alphaComponent * alpha).setFill(); path.fill()
+            if isRaisedStyle && isEnabled {
+                let strongTone = style == .primary || style == .confirm || style == .confirmOverlay
+                    || (style == .overlay && active)
+                drawTactileSurface(in: path, radius: radius, tokens: tokens,
+                                   primary: strongTone, hovered: hovered, pressed: activePress,
+                                   isFlipped: isFlipped, alpha: alpha)
+            }
+        }
         if let border { border.withAlphaComponent(border.alphaComponent * alpha).setStroke(); path.lineWidth = 1; path.stroke() }
         let foreground = text.faded(alpha)
         let font = NSFont.capturesUI(ofSize: tokens.number("text-sm"),
@@ -1112,10 +1178,18 @@ final class HistoryFilterPill: NSButton {
         return ceil(label + tokens.number("s-3") + count + 2 * tokens.number("s-4"))
     }
 
+    override var isEnabled: Bool {
+        didSet { window?.invalidateCursorRects(for: self); needsDisplay = true }
+    }
+
+    override func resetCursorRects() {
+        if isEnabled { addCursorRect(bounds, cursor: .pointingHand) }
+    }
+
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let tracking { removeTrackingArea(tracking) }
-        let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+        let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
                                   owner: self, userInfo: nil)
         addTrackingArea(area); tracking = area
     }
@@ -1131,9 +1205,14 @@ final class HistoryFilterPill: NSButton {
         let hover = isEnabled && hovered && !active
         if active {
             tokens.color("surface-raised").faded(alpha).setFill(); path.fill()
-            tokens.color("border").faded(alpha).setStroke(); path.lineWidth = 1; path.stroke()
+            drawTactileSurface(in: path, radius: radius, tokens: tokens,
+                               primary: false, hovered: hovered, pressed: cell?.isHighlighted == true,
+                               isFlipped: isFlipped, alpha: alpha)
+            tokens.color(hovered ? "border-strong" : "border").faded(alpha).setStroke()
+            path.lineWidth = 1; path.stroke()
         } else if hover {
             tokens.color("surface-hover").setFill(); path.fill()
+            tokens.color("border-subtle").setStroke(); path.lineWidth = 1; path.stroke()
         }
         let text = tokens.color(active || hover ? "text" : "text-subtle").faded(alpha)
         let labelAttributes: [NSAttributedString.Key: Any] = [.font: pillFont, .foregroundColor: text]

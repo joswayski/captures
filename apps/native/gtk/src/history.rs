@@ -242,6 +242,7 @@ pub fn build(
         }
     });
     window.set_child(Some(&watch));
+    window.connect_realize(|w| crate::capture_bar::point_at_buttons(w.upcast_ref()));
 
     state.rebuild();
     state.reload();
