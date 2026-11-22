@@ -511,7 +511,7 @@ mod tests {
         // A light theme still paints the dark media glass.
         assert_eq!(card.fill, tokens().color("glass-strong-solid"));
         assert_ne!(card.fill, tokens().color("surface-raised"));
-        assert_eq!(card.corner_radius.nw, 10);
+        assert_eq!(card.corner_radius.nw, tokens().number("r-lg").round() as u8);
         assert_eq!(card.stroke, Stroke::new(1., tokens().color("glass-border")));
         assert_eq!(
             tokens().color("glass-strong-solid"),

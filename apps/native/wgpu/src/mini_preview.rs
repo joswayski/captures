@@ -3135,11 +3135,9 @@ mod tests {
                 let save = text("Save file").unwrap();
                 assert_eq!(
                     save.fallback_color,
-                    Color32::from_rgb(23, 24, 27).gamma_multiply(if busy.is_some() {
-                        0.7
-                    } else {
-                        1.
-                    }),
+                    tokens
+                        .color("theme-accent-ink")
+                        .gamma_multiply(if busy.is_some() { 0.7 } else { 1. }),
                     "busy yellow actions must not turn white"
                 );
             }
@@ -4339,9 +4337,12 @@ mod tests {
                 },
             );
             let mut output = ctx.end_pass();
-            // CSS depth1=.13748, glass-strong-solid=(15,15,18). Premultiplied
-            // 8-bit overlay rounds to (2,2,2,35), not black or full opacity.
-            let shade = egui::Color32::from_rgba_premultiplied(2, 2, 2, 35);
+            // CSS depth1=.13748, premultiplied 8-bit glass-strong-solid overlay
+            // has alpha 35, not black or full opacity.
+            let shade = tokens
+                .color("glass-strong-solid")
+                .gamma_multiply(captures_app::preview::collapsed_dim_opacity(1) as f32);
+            assert_eq!(shade.a(), 35);
             assert_eq!(
                 output.shapes.iter().any(|shape| matches!(&shape.shape,
                 egui::Shape::Rect(rect) if rect.fill == shade)),

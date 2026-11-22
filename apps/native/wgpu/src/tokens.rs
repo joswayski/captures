@@ -154,7 +154,7 @@ mod tests {
         );
         assert_eq!(
             variants["dark-mustard"].color("theme-accent"),
-            Color32::from_rgb(255, 202, 40)
+            Color32::from_rgb(255, 184, 0)
         );
         for tokens in variants.values() {
             for motion in captures_app::motion::Motion::ALL {
