@@ -609,6 +609,31 @@ final class RootWindowCloseHandler: NSObject, NSWindowDelegate {
         terminate()
     }
 
+    /// Moves a hidden root window's content, frame, appearance and focus into
+    /// a window from `makeWindow`, which becomes the root window this handler
+    /// hides on close, and detaches the old one. Returns the new window, or
+    /// nil when the root window is shown, minimized, full screen or has a
+    /// sheet, which leaves it alone (see `scheduleHistoryWindowRecycle`).
+    func recycleHiddenRootWindow(making makeWindow: () -> NSWindow) -> NSWindow? {
+        guard let old = rootWindow, !old.isVisible, !old.isMiniaturized,
+              !old.styleMask.contains(.fullScreen), old.attachedSheet == nil,
+              let content = old.contentView else { return nil }
+        let fresh = makeWindow()
+        fresh.setFrame(old.frame, display: false)
+        fresh.appearance = old.appearance
+        fresh.autorecalculatesKeyViewLoop = old.autorecalculatesKeyViewLoop
+        let initial = old.initialFirstResponder
+        let focused = old.firstResponder as? NSView
+        old.delegate = nil
+        old.contentView = NSView()
+        fresh.contentView = content
+        fresh.initialFirstResponder = initial
+        if let focused, focused.window === fresh { fresh.makeFirstResponder(focused) }
+        fresh.delegate = self
+        rootWindow = fresh
+        return fresh
+    }
+
     // Key status arrives inside makeKeyAndOrderFront, before the first draw.
     func windowDidBecomeKey(_ notification: Notification) {
         guard (notification.object as? NSWindow) === rootWindow else { return }
@@ -2368,22 +2393,9 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     }
 
     private func recycleHistoryWindow() {
-        guard options.live, let old = window, !old.isVisible, !old.isMiniaturized,
-              !old.styleMask.contains(.fullScreen), old.attachedSheet == nil,
-              let handler = rootWindowCloseHandler, let content = old.contentView else { return }
-        let fresh = AppWindows.makeWindow(.history)
-        fresh.setFrame(old.frame, display: false)
-        fresh.appearance = old.appearance
-        fresh.autorecalculatesKeyViewLoop = old.autorecalculatesKeyViewLoop
-        let initial = old.initialFirstResponder
-        let focused = old.firstResponder as? NSView
-        old.delegate = nil
-        old.contentView = NSView()
-        fresh.contentView = content
-        fresh.initialFirstResponder = initial
-        if let focused, focused.window === fresh { fresh.makeFirstResponder(focused) }
-        fresh.delegate = handler
-        handler.rootWindow = fresh
+        guard options.live, let handler = rootWindowCloseHandler,
+              let fresh = handler.recycleHiddenRootWindow(making: { AppWindows.makeWindow(.history) })
+        else { return }
         appWindows.adopt(fresh, as: .history)
         window = fresh
         liveController?.historyWindowReplaced(fresh)

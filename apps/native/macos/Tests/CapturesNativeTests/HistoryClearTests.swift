@@ -282,6 +282,80 @@ final class HistoryClearTests: XCTestCase {
                       "the cards it showed reopen with their thumbnails, without a reload")
     }
 
+    func testHiddenHistoryMovesToAFreshWindowThatStillHidesOnClose() throws {
+        _ = NSApplication.shared
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let image = PreviewView.fixtureImage(scale: 1)
+        let path = directory.appendingPathComponent("fixture.png")
+        try XCTUnwrap(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])).write(to: path)
+        let first = AppWindows.makeWindow(.history)
+        first.setFrame(NSRect(x: 120, y: 140, width: 1000, height: 640), display: false)
+        let root = Surface(frame: first.contentLayoutRect); first.contentView = root
+        let tokens = try XCTUnwrap(Tokens.variants["dark-mustard"])
+        let transport = HistoryTransport(path: path.path, width: image.width, height: image.height,
+            failPartway: false, kinds: ["screenshot", "screenshot", "screenshot"])
+        let controller = LiveCaptureController(root: root, window: first, tokens: tokens,
+            historyRoot: directory.path, settingsPath: directory.appendingPathComponent("settings.json").path,
+            transport: transport, recoveryWorker: EmptyRecoveryWorker(), showPreferenceSetting: { _ in })
+        defer { withExtendedLifetime(controller) {} }
+        var hidden = 0, terminated = 0
+        let handler = RootWindowCloseHandler(rootWindow: first, closePreviews: {},
+                                             terminate: { terminated += 1 }, hidesRootWindow: true)
+        handler.rootWindowHidden = { hidden += 1 }
+        first.delegate = handler
+        var windows = [first]
+        defer { windows.forEach { $0.delegate = nil; $0.orderOut(nil) } }
+        let grid = try historyGrid(root)
+        controller.releaseHistoryResources()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+
+        first.makeKeyAndOrderFront(nil)
+        controller.historyDidShow()
+        XCTAssertEqual(grid.visibleCards.count, 3)
+        XCTAssertTrue(first.makeFirstResponder(grid))
+        first.performClose(nil)
+        XCTAssertFalse(first.isVisible)
+        XCTAssertEqual(hidden, 1)
+
+        let second = try XCTUnwrap(handler.recycleHiddenRootWindow(making: { AppWindows.makeWindow(.history) }))
+        windows.append(second)
+        XCTAssertFalse(second === first)
+        XCTAssertTrue(second.contentView === root, "History's content moves to the new window")
+        XCTAssertFalse(first.contentView === root)
+        XCTAssertEqual(second.frame, first.frame)
+        XCTAssertTrue(second.firstResponder === grid, "focus moves with the content")
+        XCTAssertTrue(handler.rootWindow === second)
+        XCTAssertTrue(second.delegate === handler)
+        XCTAssertNil(first.delegate, "the old window keeps no delegate")
+        XCTAssertFalse(second.isVisible, "the swap does not show History")
+
+        controller.historyWindowReplaced(second)
+        second.makeKeyAndOrderFront(nil)
+        controller.historyDidShow()
+        XCTAssertEqual(grid.visibleCards.count, 3, "History shows its cards in the new window")
+        second.performClose(nil)
+        XCTAssertFalse(second.isVisible)
+        XCTAssertEqual(hidden, 2, "closing the new window still hides History")
+        first.close()
+        XCTAssertEqual(terminated, 0, "neither window's close quits")
+
+        let third = try XCTUnwrap(handler.recycleHiddenRootWindow(making: { AppWindows.makeWindow(.history) }),
+                                  "a second close recycles again")
+        windows.append(third)
+        XCTAssertTrue(third.contentView === root)
+        XCTAssertTrue(third.delegate === handler)
+        XCTAssertNil(second.delegate)
+
+        // Reopened inside the recycle delay: the visible window stays as it is.
+        third.makeKeyAndOrderFront(nil)
+        XCTAssertNil(handler.recycleHiddenRootWindow(making: { AppWindows.makeWindow(.history) }))
+        XCTAssertTrue(handler.rootWindow === third)
+        XCTAssertTrue(third.contentView === root)
+        XCTAssertTrue(third.isVisible)
+    }
+
     func testHistoryWindowReflowsDownToItsMinimumSize() throws {
         _ = NSApplication.shared
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
