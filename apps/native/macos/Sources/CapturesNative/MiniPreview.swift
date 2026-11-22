@@ -14,6 +14,35 @@ private final class MiniPreviewImageView: NSView {
     let image: NSImage
     init(frame: NSRect, image: NSImage) { self.image = image; super.init(frame: frame) }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    /// Hand Core Animation a bitmap of `draw(_:)` as the layer's contents.
+    /// A drawn backing store in the floating panel made every hover, Close
+    /// and Delete animation hold about 100 MB of graphics memory.
+    override var wantsUpdateLayer: Bool { true }
+    override func updateLayer() {
+        let scale = window?.backingScaleFactor ?? layer?.contentsScale ?? 2
+        let width = Int((bounds.width * scale).rounded(.up)), height = Int((bounds.height * scale).rounded(.up))
+        // The same pixels the drawn backing store held on the XDR display:
+        // extended Display P3 in half floats.
+        guard width > 0, height > 0, let space = CGColorSpace(name: CGColorSpace.extendedDisplayP3),
+              let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 16, bytesPerRow: 0,
+                                      space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                                          | CGBitmapInfo.floatComponents.rawValue
+                                          | CGBitmapInfo.byteOrder16Little.rawValue) else { return }
+        context.scaleBy(x: scale, y: scale)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: isFlipped)
+        draw(bounds)
+        NSGraphicsContext.restoreGraphicsState()
+        // Like a backing store: pixels at 1:1 from the bottom-left, the
+        // rounded-up fraction clipped rather than the bitmap rescaled.
+        layer?.contentsGravity = .bottomLeft
+        layer?.contentsScale = scale
+        layer?.contents = context.makeImage()
+    }
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        needsDisplay = true
+    }
     override func draw(_ dirtyRect: NSRect) {
         let scale = max(bounds.width / image.size.width, bounds.height / image.size.height)
         let size = NSSize(width: image.size.width * scale, height: image.size.height * scale)
