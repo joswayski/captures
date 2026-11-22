@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
 
+use captures_app::capture_menu::{PREFERENCE_HIGHLIGHT, PreferenceTarget};
 use captures_app::preferences::{self, SECTIONS};
 use captures_app::shortcuts::{
     ShortcutKeyEvent, ShortcutPlatform, ShortcutRecording, record_shortcut, shortcut_display_tokens,
@@ -35,6 +36,10 @@ pub type OnLook = Box<dyn Fn(&AppSettings, bool) -> Rc<Tokens>>;
 type Listener = Box<dyn Fn(&AppSettings)>;
 /// Scroll a section's card into view; false before it has a layout.
 type Jump = Rc<dyn Fn(&str) -> bool>;
+/// Scroll to a capture-menu link's row and highlight it; false before layout.
+type Reveal = Rc<dyn Fn(PreferenceTarget) -> bool>;
+/// Shipping `.preference-target-highlight`.
+const TARGET_HIGHLIGHT: &str = "preference-target-highlight";
 
 pub struct Options {
     pub settings_file: PathBuf,
@@ -69,6 +74,9 @@ struct Prefs {
     updates: RefCell<Option<Rc<updates::Updates>>>,
     /// Scroll a section's card into view; false before it has a layout.
     jump: RefCell<Option<Jump>>,
+    reveal: RefCell<Option<Reveal>>,
+    /// Switch rows by setting path, for [`reveal`].
+    rows: RefCell<Vec<(&'static str, gtk::Box, TokenSwitch)>>,
 }
 
 /// A setting's value at a dotted path, as JSON.
@@ -206,6 +214,22 @@ pub fn show_section(section: &'static str) {
     });
 }
 
+/// Shipping `requestedPreferenceTarget`: once an open page has laid out,
+/// scroll the target's row to the centre under the Capture entry, focus its
+/// switch and highlight the row for [`PREFERENCE_HIGHLIGHT`].
+pub fn reveal(target: PreferenceTarget) {
+    let mut tries = 0;
+    glib::timeout_add_local(Duration::from_millis(50), move || {
+        tries += 1;
+        let reveal = OPEN.with(|open| open.borrow().upgrade()?.reveal.borrow().clone());
+        match reveal {
+            Some(reveal) if reveal(target) => glib::ControlFlow::Break,
+            _ if tries >= 40 => glib::ControlFlow::Break,
+            _ => glib::ControlFlow::Continue,
+        }
+    });
+}
+
 /// Measure `1ch` for [`capped`] once the stylesheet is installed.
 pub(crate) fn measure_ch(tokens: &Tokens) {
     let layout = gtk::Label::new(None).create_pango_layout(Some("0"));
@@ -279,6 +303,8 @@ pub fn build(
         status_label,
         updates: RefCell::default(),
         jump: RefCell::default(),
+        reveal: RefCell::default(),
+        rows: RefCell::default(),
     });
     OPEN.with(|open| *open.borrow_mut() = Rc::downgrade(&prefs));
 
@@ -448,6 +474,7 @@ pub fn build(
         });
         list.append(&button);
     }
+    let (reveal_pinned, reveal_highlight) = (pinned.clone(), highlight.clone());
     // The section whose card has passed the reading line is the active entry.
     let follow = {
         let (scroller, cards, pinned) = (scroller.clone(), cards.clone(), pinned.clone());
@@ -505,6 +532,58 @@ pub fn build(
         glib::Propagation::Proceed
     });
     window.add_controller(keys);
+    let reveal: Reveal = {
+        let (prefs, find, window) = (Rc::downgrade(&prefs), find.clone(), window.downgrade());
+        let (pinned, highlight) = (reveal_pinned, reveal_highlight);
+        let capture = SECTIONS
+            .iter()
+            .position(|section| section.id == "capture")
+            .expect("a Capture section");
+        let timer: Rc<RefCell<Option<glib::SourceId>>> = Rc::default();
+        Rc::new(move |target: PreferenceTarget| {
+            let Some(prefs) = prefs.upgrade() else {
+                return false;
+            };
+            let rows = prefs.rows.borrow();
+            let Some((_, row, switch)) = rows
+                .iter()
+                .find(|(path, _, _)| *path == target.setting_key())
+            else {
+                return false;
+            };
+            if row.height() == 0 {
+                return false;
+            }
+            pinned.set(true);
+            highlight(capture);
+            find.scroll_to(row.upcast_ref());
+            // `focus({ preventScroll: true })` after a pointer click: no ring.
+            switch.grab_focus();
+            if let Some(window) = window.upgrade() {
+                window.set_focus_visible(false);
+            }
+            for (_, other, _) in rows.iter() {
+                if other != row {
+                    other.remove_css_class(TARGET_HIGHLIGHT);
+                }
+            }
+            row.add_css_class(TARGET_HIGHLIGHT);
+            // A newer link restarts the timer; the highlight then drops at once.
+            if let Some(source) = timer.borrow_mut().take() {
+                source.remove();
+            }
+            let (row, fired) = (row.clone(), timer.clone());
+            *timer.borrow_mut() = Some(glib::timeout_add_local_once(
+                PREFERENCE_HIGHLIGHT,
+                move || {
+                    fired.borrow_mut().take();
+                    row.remove_css_class(TARGET_HIGHLIGHT);
+                },
+            ));
+            true
+        })
+    };
+    *prefs.reveal.borrow_mut() = Some(reveal);
     scroller
         .vadjustment()
         .connect_value_changed(move |_| follow());
@@ -516,6 +595,7 @@ pub fn build(
     window.connect_close_request(move |_| {
         if let Some((prefs, _)) = keep.borrow_mut().take() {
             prefs.jump.borrow_mut().take();
+            prefs.reveal.borrow_mut().take();
         }
         glib::Propagation::Proceed
     });
@@ -730,6 +810,10 @@ fn setting_switch(
         }
     });
     prefs.switches.borrow_mut().push(switch.clone());
+    prefs
+        .rows
+        .borrow_mut()
+        .push((path, row.clone(), switch.clone()));
     add(card, &row);
     (row, switch, detail_label)
 }

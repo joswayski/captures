@@ -281,7 +281,7 @@ impl Find {
 
     /// `scrollIntoView({ block: "center" })`, smooth unless animations are
     /// off (GTK's reduced-motion setting).
-    fn scroll_to(&self, target: &gtk::Widget) {
+    pub(super) fn scroll_to(&self, target: &gtk::Widget) {
         let viewport = self.scroller.child().expect("viewport");
         let content = viewport.first_child().unwrap_or(viewport);
         let Some(bounds) = target.compute_bounds(&content) else {

@@ -10,11 +10,13 @@ use std::{
     rc::Rc,
 };
 
-use captures_app::capture_menu::{self, MenuMode, PrimaryState, RecordingToggle};
-use gtk::prelude::*;
+use captures_app::capture_menu::{self, MenuMode, PreferenceTarget, PrimaryState, RecordingToggle};
+use captures_app::motion::Transition;
+use gtk::{glib, graphene, gsk, prelude::*};
 
 use crate::editor::controls::Choice;
-use crate::widgets::Icon;
+use crate::tokens::Tokens;
+use crate::widgets::{Icon, SnapshotArea};
 
 /// Shipping `REGION_ASPECT_PRESETS`.
 pub const ASPECT_PRESETS: [(&str, &str, Option<f64>); 6] = [
@@ -55,7 +57,9 @@ pub struct Bar {
     primary_dot: gtk::Box,
     visibility: gtk::Label,
     confirm: gtk::Box,
-    auto_start: gtk::Label,
+    /// Shipping's `CapturePreferenceLink` around the auto-capture note.
+    pub preferences_link: gtk::Button,
+    link_target: Cell<Option<PreferenceTarget>>,
     note: gtk::Box,
 }
 
@@ -99,7 +103,7 @@ fn segment(icon: Option<&str>, label: &str) -> gtk::ToggleButton {
     button
 }
 
-fn group(label: &str, buttons: &[&gtk::ToggleButton]) -> gtk::Box {
+fn group(label: &str, buttons: &[&gtk::ToggleButton], tokens: &Rc<Tokens>) -> gtk::Overlay {
     let group = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .accessible_role(gtk::AccessibleRole::Group)
@@ -112,7 +116,89 @@ fn group(label: &str, buttons: &[&gtk::ToggleButton]) -> gtk::Box {
     for button in &buttons[1..] {
         button.set_group(Some(buttons[0]));
     }
-    group
+    // The thumb is drawn under the buttons, which still size the control.
+    let indicator = segmented_indicator(buttons, tokens);
+    let overlay = gtk::Overlay::new();
+    overlay.set_child(Some(&indicator));
+    overlay.add_overlay(&group);
+    overlay.set_measure_overlay(&group, true);
+    overlay
+}
+
+/// Shipping `.capture-segmented-indicator` on media: a raised glass thumb
+/// behind the pressed segment. It lands under the first segment without
+/// motion (shipping adds `.ready` after measuring), then slides to each
+/// newly pressed one over `SegmentedIndicator`, at once with animations off.
+fn segmented_indicator(buttons: &[&gtk::ToggleButton], tokens: &Rc<Tokens>) -> SnapshotArea {
+    #[derive(Default)]
+    struct Slide {
+        /// The rectangle last drawn, and where the current slide began.
+        shown: Cell<Option<[f32; 4]>>,
+        from: Cell<Option<[f32; 4]>>,
+        since_us: Cell<i64>,
+    }
+    let slide = Rc::new(Slide::default());
+    let tween = Transition::SegmentedIndicator.resolve(&**tokens);
+    let buttons: Vec<gtk::ToggleButton> = buttons.iter().map(|button| (*button).clone()).collect();
+    let area = SnapshotArea::new(|_, _, _| {});
+    let weak = area.downgrade();
+    let (draw_slide, draw_buttons, tokens) = (slide.clone(), buttons.clone(), tokens.clone());
+    area.set_draw(move |snapshot, _, _| {
+        let Some(area) = weak.upgrade() else { return };
+        let Some(bounds) = draw_buttons
+            .iter()
+            .find(|button| button.is_active())
+            .and_then(|button| button.compute_bounds(&area))
+        else {
+            draw_slide.shown.set(None);
+            return;
+        };
+        let target = [bounds.x(), bounds.y(), bounds.width(), bounds.height()];
+        let reduced = !area.settings().is_gtk_enable_animations();
+        let rect = match (draw_slide.from.get(), tween) {
+            (Some(from), Some(tween)) => {
+                let elapsed = (glib::monotonic_time() - draw_slide.since_us.get()) as f64 / 1000.;
+                let t = tween.progress(elapsed, reduced) as f32;
+                std::array::from_fn(|i| from[i] + (target[i] - from[i]) * t)
+            }
+            _ => target,
+        };
+        draw_slide.shown.set(Some(rect));
+        let [x, y, width, height] = rect;
+        let bounds = graphene::Rect::new(x, y, width, height);
+        let thumb = gsk::RoundedRect::from_rect(bounds, tokens.number("r-sm"));
+        for (dx, dy, blur, spread, color) in tokens.shadow("shadow-sm") {
+            snapshot.append_outset_shadow(&thumb, &color, dx, dy, spread, blur);
+        }
+        snapshot.push_rounded_clip(&thumb);
+        snapshot.append_color(&tokens.rgba("glass-raised"), &bounds);
+        snapshot.pop();
+        // `inset 0 0 0 1px var(--glass-border)`.
+        snapshot.append_border(&thumb, &[1.; 4], &[tokens.rgba("glass-border"); 4]);
+    });
+    for button in &buttons {
+        let (slide, area) = (slide.clone(), area.clone());
+        button.connect_toggled(move |button| {
+            if !button.is_active() {
+                return;
+            }
+            slide.from.set(slide.shown.get());
+            slide.since_us.set(glib::monotonic_time());
+            area.queue_draw();
+            let Some(tween) = tween else { return };
+            let (slide, end) = (slide.clone(), tween.duration_ms);
+            area.add_tick_callback(move |area, _| {
+                area.queue_draw();
+                let elapsed = (glib::monotonic_time() - slide.since_us.get()) as f64 / 1000.;
+                if elapsed < end {
+                    glib::ControlFlow::Continue
+                } else {
+                    glib::ControlFlow::Break
+                }
+            });
+        });
+    }
+    area
 }
 
 fn text(copy: &str, class: Option<&str>) -> gtk::Label {
@@ -154,7 +240,7 @@ impl Bar {
         let screenshot = segment(Some("capture"), "Screenshot");
         let record = segment(None, "Record");
         screenshot.set_active(true);
-        top.append(&group("Capture type", &[&screenshot, &record]));
+        top.append(&group("Capture type", &[&screenshot, &record], &tokens));
         let divider = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         divider.add_css_class("capture-bar-divider");
         divider.set_valign(gtk::Align::Center);
@@ -169,6 +255,7 @@ impl Bar {
         top.append(&group(
             "Capture target",
             &[&targets[0], &targets[1], &targets[2]],
+            &tokens,
         ));
 
         let aspect_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -211,6 +298,11 @@ impl Bar {
         let primary_dot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         primary_dot.add_css_class("capture-record-dot");
         primary_dot.set_valign(gtk::Align::Center);
+        // Shipping's `::after` ping over the dot while Record can start.
+        let ping = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        ping.add_css_class("capture-record-ping");
+        ping.set_hexpand(true);
+        primary_dot.append(&ping);
         content.append(&primary_dot);
         let primary_label = gtk::Label::new(None);
         content.append(&primary_label);
@@ -243,8 +335,19 @@ impl Bar {
         confirm.append(&key);
         confirm.append(&text(after.trim_start(), None));
         note.append(&confirm);
-        let auto_start_label = text(capture_menu::AUTO_START_NOTE, None);
-        note.append(&auto_start_label);
+        let preferences_link = gtk::Button::new();
+        preferences_link.add_css_class("capture-bar-preferences-link");
+        let link = gtk::Box::new(gtk::Orientation::Horizontal, 5);
+        link.append(&text(capture_menu::AUTO_START_NOTE, None));
+        let icon = Icon::new("external-link", 10).with_stroke(1.6);
+        icon.add_css_class("capture-bar-preferences-icon");
+        icon.set_valign(gtk::Align::Center);
+        link.append(&icon);
+        preferences_link.set_child(Some(&link));
+        preferences_link.update_property(&[gtk::accessible::Property::Label(
+            capture_menu::AUTO_START_NOTE,
+        )]);
+        note.append(&preferences_link);
         root.append(&note);
         point_at_buttons(root.upcast_ref());
 
@@ -265,7 +368,8 @@ impl Bar {
             primary_dot,
             visibility,
             confirm,
-            auto_start: auto_start_label,
+            preferences_link,
+            link_target: Cell::new(None),
             note,
         };
         bar.sync(
@@ -276,6 +380,11 @@ impl Bar {
             PrimaryState::default(),
         );
         bar
+    }
+
+    /// The Preferences row the note's link opens, while it shows one.
+    pub fn link_target(&self) -> Option<PreferenceTarget> {
+        self.link_target.get()
     }
 
     pub fn set_recording_available(&self, available: bool) {
@@ -299,7 +408,16 @@ impl Bar {
         state: PrimaryState,
     ) {
         self.modes[if mode == MenuMode::Recording { 1 } else { 0 }].set_active(true);
-        self.recording.root.set_visible(mode == MenuMode::Recording);
+        // `recording-options-arrive` plays each time the row appears.
+        let options = mode == MenuMode::Recording;
+        if options != self.recording.root.is_visible() {
+            if options {
+                self.recording.root.add_css_class("arrive");
+            } else {
+                self.recording.root.remove_css_class("arrive");
+            }
+        }
+        self.recording.root.set_visible(options);
         if mode == MenuMode::Recording {
             self.recording.load_microphones();
         }
@@ -329,7 +447,7 @@ impl Bar {
         self.display.set_sensitive(!busy && self.several_displays);
         self.primary.set_sensitive(can_start && !state.starting);
         self.confirm.set_visible(!auto_start);
-        self.auto_start.set_visible(auto_start);
+        self.preferences_link.set_visible(auto_start);
         let note = capture_menu::visibility_note(mode, false, false);
         self.visibility.set_markup(&format!(
             "{}<b>{}</b>{}{}",
@@ -339,6 +457,7 @@ impl Bar {
             note.hint.unwrap_or_default()
         ));
         let confirm = capture_menu::confirm_note(auto_start);
+        self.link_target.set(confirm.target);
         self.note
             .update_property(&[gtk::accessible::Property::Label(&format!(
                 "{} {} {}",

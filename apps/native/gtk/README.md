@@ -23,7 +23,9 @@ restores the two newest entries (`--count N` for more, or `--artifact ID`) as fl
 `--scene feedback` opens Send Feedback (a fixture whose Send stays off unless
 `--feedback-endpoint URL` is given; loopback HTTP is allowed for tests, and
 `https://captur.es/api/feedback` sends real feedback), and
-`--find QUERY` opens Preferences Find with a typed query. Open With:
+`--find QUERY` opens Preferences Find with a typed query, and
+`--preference-target ID` (`auto-start-on-selection` or
+`include-recording-controls-in-captures`) opens it on that highlighted row. Open With:
 `--open-media PATH` (repeatable) or `-- FILE...` imports each file into
 History through the shared `OpenMedia` request and opens its editor; without
 `--scene` no Preferences window opens, and a file Captures cannot open reports
@@ -90,7 +92,9 @@ centred size badge; Window keeps the clicked window until confirmed (and is
 disabled when X11 lists no windows); Full screen shows the display identity
 card. Enter confirms from the surface, a segment or Take screenshot, but not
 from Close or a select; Escape and Close cancel; auto-capture follows
-Preferences. While the controls are open, the saved Region, Window and
+Preferences, and its note links to that row (the bar closes and Preferences
+scrolls to the row and highlights it for 2.4 s, as shipping's
+`requestedPreferenceTarget`). While the controls are open, the saved Region, Window and
 Display chords (and New Capture's, as Region) switch the target in place
 through the shared selector routing. Repeating the current target freezes the
 visible controls into a new selection: Display and New Capture reopen the bar;

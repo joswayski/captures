@@ -1219,6 +1219,21 @@ impl Overlay {
                 overlay.cancel(&host);
             }
         });
+        // Shipping's `onOpenPreference`: close the bar, then open Preferences
+        // on the linked row.
+        let weak = Rc::downgrade(self);
+        bar.preferences_link.connect_clicked(move |_| {
+            if let Some(overlay) = weak.upgrade()
+                && let Some(host) = overlay.host.upgrade()
+            {
+                let target = overlay.bar.as_ref().and_then(|bar| bar.link_target());
+                overlay.cancel(&host);
+                host.show_preferences();
+                if let Some(target) = target {
+                    crate::preferences::reveal(target);
+                }
+            }
+        });
         for (button, target) in
             bar.targets
                 .iter()

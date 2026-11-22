@@ -1074,6 +1074,14 @@ def previews(binary, scratch):
         # runner's full-tree walk cannot miss it. The status role differs
         # across GTK releases, so match the chip by its text.
         stack = wait(lambda: find(app, "frame", "Captures Previews"), "the previews window")[0]
+        # Edit opens the editor and the control becomes the pressed
+        # "Show in editor" pill; closing the editor brings Edit back.
+        press(find(stack, "push button", "Edit")[0])
+        pill = wait(lambda: find(stack, "push button", "Show in editor"), "the In editor pill")[0]
+        assert has_state(pill, Atspi.StateType.PRESSED), "the present pill is pressed"
+        DESKTOP.close(DESKTOP.window("Captures Screenshot Editor"))
+        wait(lambda: len(find(stack, "push button", "Edit")) == 2
+             and not find(stack, "push button", "Show in editor"), "Edit after the editor closes")
         press(find(stack, "push button", "Copy")[0])
         try:
             chip = wait(lambda: [text for text in (node_text(n, name)

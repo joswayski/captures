@@ -10,6 +10,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use captures_app::preview::{self, PreviewDropLanding, PreviewStack};
+use captures_app::preview_chrome::{self, EditorPresence};
 use captures_app::preview_motion::ExitKind;
 use captures_history::HistoryEntry;
 use gtk::prelude::*;
@@ -58,6 +59,8 @@ struct Card {
     /// Hover-only controls; untargetable while hidden, as shipping's
     /// `pointer-events: none` overlays.
     controls: Vec<gtk::Button>,
+    /// Shipping's `.thumbnail-editor-control` (screenshots only).
+    edit: Option<EditControl>,
     hovered: Cell<bool>,
     focused: Cell<bool>,
     /// Shipping's stale-pointer hover lock: a card that appears under a
@@ -424,12 +427,41 @@ impl State {
         }
     }
 
-    fn sync_editing(&self) {
+    fn sync_editing(self: &Rc<Self>) {
+        let reduced = !self.window.settings().is_gtk_enable_animations();
         for card in self.cards.borrow().iter() {
-            if (self.actions.editing)(&card.entry.id) {
+            let editing = (self.actions.editing)(&card.entry.id);
+            if editing {
                 card.root.add_css_class("editor-active");
             } else {
                 card.root.remove_css_class("editor-active");
+            }
+            let Some(edit) = &card.edit else { continue };
+            let mut presence = edit.presence.get();
+            let now = now_ms();
+            presence.set_active(editing, now, reduced);
+            edit.presence.set(presence);
+            edit.apply();
+            card.refresh();
+            // One wake for the next Leaving → Lingering → Idle step.
+            if let Some(source) = edit.wake.borrow_mut().take() {
+                source.remove();
+            }
+            if let Some(delay) = presence.next_change_in_ms(now, reduced) {
+                let (weak, card_weak) = (Rc::downgrade(self), Rc::downgrade(card));
+                *edit.wake.borrow_mut() = Some(glib::timeout_add_local_once(
+                    std::time::Duration::from_millis(delay.ceil() as u64 + 1),
+                    move || {
+                        if let Some(card) = card_weak.upgrade()
+                            && let Some(edit) = &card.edit
+                        {
+                            edit.wake.borrow_mut().take();
+                        }
+                        if let Some(state) = weak.upgrade() {
+                            state.sync_editing();
+                        }
+                    },
+                ));
             }
         }
     }
@@ -750,20 +782,13 @@ impl State {
         root.add_overlay(&top);
 
         let mut controls = vec![close.clone(), delete.clone()];
-        let edit = (!recording).then(|| {
-            let edit = icon_control(
-                "edit",
-                captures_app::preview_chrome::EDIT_LABEL,
-                &["preview-icon-button", "preview-overlay"],
-            );
-            edit.set_halign(gtk::Align::End);
-            edit.set_valign(gtk::Align::Start);
-            edit.set_margin_end(8);
-            edit.set_margin_top(8);
-            root.add_overlay(&edit);
-            controls.push(edit.clone());
-            edit
+        let edit_control = (!recording).then(|| {
+            let control = EditControl::new((self.actions.editing)(&entry.id));
+            root.add_overlay(&control.button);
+            control.apply();
+            control
         });
+        let edit = edit_control.as_ref().map(|control| control.button.clone());
 
         // `.thumbnail-main-actions`: a centered 140 px column.
         let main = gtk::Box::new(gtk::Orientation::Vertical, 6);
@@ -793,6 +818,7 @@ impl State {
             image,
             chip,
             controls,
+            edit: edit_control,
             hovered: Cell::new(false),
             focused: Cell::new(false),
             lock_origin: Cell::new(None),
@@ -1114,6 +1140,120 @@ fn primary_button(saved: bool) -> gtk::Button {
     button
 }
 
+/// The Edit icon that becomes the "In editor" pill while an editor shows
+/// the capture, and stays pinned while it leaves and lingers.
+struct EditControl {
+    button: gtk::Button,
+    compact: Icon,
+    pill: Icon,
+    /// "In editor" at rest, "Show in editor" on hover or keyboard focus,
+    /// sharing one cell so the pill never changes width.
+    label: gtk::Stack,
+    presence: Cell<EditorPresence>,
+    wake: RefCell<Option<glib::SourceId>>,
+}
+
+impl EditControl {
+    fn new(active: bool) -> Self {
+        let button = gtk::Button::new();
+        button.set_cursor_from_name(Some("pointer"));
+        button.add_css_class("preview-editor-control");
+        button.set_halign(gtk::Align::End);
+        button.set_valign(gtk::Align::Start);
+        button.set_margin_end(8);
+        button.set_margin_top(8);
+        let face = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        face.add_css_class("preview-editor-face");
+        let compact = Icon::new("edit", 16).with_stroke(1.8);
+        let pill = Icon::new("edit", 11).with_stroke(2.2);
+        for icon in [&compact, &pill] {
+            icon.set_valign(gtk::Align::Center);
+            face.append(icon);
+        }
+        let label = gtk::Stack::builder()
+            .hhomogeneous(true)
+            .transition_type(gtk::StackTransitionType::Crossfade)
+            .transition_duration(160)
+            .build();
+        label.add_css_class("preview-editor-label");
+        for (name, text) in [
+            ("rest", preview_chrome::EDITOR_PRESENT_LABEL),
+            ("hover", preview_chrome::EDITOR_SHOW_LABEL),
+        ] {
+            let text = gtk::Label::new(Some(text));
+            // Shipping's shared grid cell keeps both labels at its start.
+            text.set_xalign(0.);
+            label.add_named(&text, Some(name));
+        }
+        face.append(&label);
+        button.set_child(Some(&face));
+        let control = Self {
+            button,
+            compact,
+            pill,
+            label,
+            presence: Cell::new(EditorPresence::new(active, now_ms())),
+            wake: RefCell::default(),
+        };
+        // Hover and keyboard focus show the action on a present pill.
+        let motion = gtk::EventControllerMotion::new();
+        let stack = control.label.clone();
+        motion.connect_enter(move |_, _, _| stack.set_visible_child_name("hover"));
+        let (stack, button) = (control.label.clone(), control.button.clone());
+        motion.connect_leave(move |_| {
+            if !button.has_visible_focus() {
+                stack.set_visible_child_name("rest");
+            }
+        });
+        control.button.add_controller(motion);
+        let focus = gtk::EventControllerFocus::new();
+        let (stack, button) = (control.label.clone(), control.button.clone());
+        focus.connect_enter(move |_| {
+            if button.has_visible_focus() {
+                stack.set_visible_child_name("hover");
+            }
+        });
+        let stack = control.label.clone();
+        focus.connect_leave(move |_| stack.set_visible_child_name("rest"));
+        control.button.add_controller(focus);
+        control
+    }
+
+    /// Show the presence's phase on the control.
+    fn apply(&self) {
+        let phase = self.presence.get().phase();
+        let present = phase.present();
+        for (class, on) in [
+            ("is-present", present),
+            ("pinned", phase.pinned()),
+            ("leaving", phase == preview_chrome::EditorPhase::Leaving),
+        ] {
+            if on {
+                self.button.add_css_class(class);
+            } else {
+                self.button.remove_css_class(class);
+            }
+        }
+        self.compact.set_visible(!present);
+        self.pill.set_visible(present);
+        self.label.set_visible(present);
+        self.button.set_tooltip_text(phase.tooltip());
+        self.button
+            .update_property(&[gtk::accessible::Property::Label(phase.accessible_label())]);
+        // Shipping `aria-pressed` while present.
+        self.button
+            .update_state(&[gtk::accessible::State::Pressed(if present {
+                gtk::AccessibleTristate::True
+            } else {
+                gtk::AccessibleTristate::False
+            })]);
+    }
+}
+
+fn now_ms() -> f64 {
+    glib::monotonic_time() as f64 / 1000.
+}
+
 impl Card {
     /// Hover or focus shows the controls over a dimmed image; only this
     /// card's nodes change.
@@ -1137,6 +1277,16 @@ impl Card {
         self.image.set_dimmed(active);
         for button in &self.controls {
             button.set_can_target(active);
+        }
+        if let Some(edit) = &self.edit {
+            let phase = edit.presence.get().phase();
+            if active {
+                edit.button.add_css_class("revealed");
+            } else {
+                edit.button.remove_css_class("revealed");
+            }
+            edit.button
+                .set_can_target((active || phase.pinned()) && phase.interactive());
         }
     }
 

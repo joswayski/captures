@@ -536,6 +536,7 @@ impl Choice {
             gtk::PositionType::Bottom
         });
         let list = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        list.add_css_class("choice-list");
         list.set_accessible_role(gtk::AccessibleRole::Menu);
         list.update_property(&[gtk::accessible::Property::Label(&self.name.borrow())]);
         let width = self.trigger.width();

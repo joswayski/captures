@@ -88,6 +88,8 @@ struct Options {
     screenshot: Option<PathBuf>,
     /// Preferences opens Find with this query.
     find: Option<String>,
+    /// Preferences opens on this capture-menu link's row (`--preference-target`).
+    preference_target: Option<captures_app::capture_menu::PreferenceTarget>,
     /// Where Send feedback posts; without it the form is a fixture.
     feedback_endpoint: Option<String>,
     size: Option<(i32, i32)>,
@@ -135,6 +137,7 @@ fn parse_args(args: impl Iterator<Item = String>, preview: bool) -> Result<Optio
         artifact: None,
         screenshot: None,
         find: None,
+        preference_target: None,
         feedback_endpoint: None,
         size: None,
         count: 2,
@@ -242,6 +245,13 @@ fn parse_args(args: impl Iterator<Item = String>, preview: bool) -> Result<Optio
             "--history-root" => options.history_root = Some(value()?.into()),
             "--screenshot" => options.screenshot = Some(value()?.into()),
             "--find" => options.find = Some(value()?),
+            "--preference-target" => {
+                let id = value()?;
+                options.preference_target = Some(
+                    captures_app::capture_menu::PreferenceTarget::from_id(&id)
+                        .ok_or_else(|| format!("unknown preference target {id}"))?,
+                );
+            }
             "--feedback-endpoint" => options.feedback_endpoint = Some(value()?),
             "--open-media" => options.open.push(value()?.into()),
             // Everything after `--` is a local path (Open With).
@@ -1129,6 +1139,9 @@ fn main() -> glib::ExitCode {
                 // A card fixture opens on its card.
                 if options.update_card.is_some() {
                     preferences::show_section("updates");
+                }
+                if let Some(target) = options.preference_target {
+                    preferences::reveal(target);
                 }
                 window
             }
