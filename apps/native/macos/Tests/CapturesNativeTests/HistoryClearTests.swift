@@ -224,6 +224,44 @@ final class HistoryClearTests: XCTestCase {
         }
     }
 
+    func testClosedHistoryKeepsNoCardsAndReopensWithItsThumbnails() throws {
+        _ = NSApplication.shared
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let image = PreviewView.fixtureImage(scale: 1)
+        let path = directory.appendingPathComponent("fixture.png")
+        try XCTUnwrap(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])).write(to: path)
+        let frame = NSRect(x: 0, y: 0, width: 1000, height: 600)
+        let window = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let root = Surface(frame: frame); window.contentView = root
+        let tokens = try XCTUnwrap(Tokens.variants["dark-mustard"])
+        let transport = HistoryTransport(path: path.path, width: image.width, height: image.height,
+            failPartway: false, kinds: ["screenshot", "screenshot", "screenshot"])
+        let controller = LiveCaptureController(root: root, window: window, tokens: tokens,
+            historyRoot: directory.path, settingsPath: directory.appendingPathComponent("settings.json").path,
+            transport: transport, recoveryWorker: EmptyRecoveryWorker(), showPreferenceSetting: { _ in })
+        defer { withExtendedLifetime(controller) {} }
+        window.makeKeyAndOrderFront(nil)
+        let grid = try historyGrid(root)
+        try waitUntil { grid.visibleCards.count == 3 && grid.visibleCards.allSatisfy { $0.thumbnail.image != nil } }
+
+        window.orderOut(nil)
+        controller.releaseHistoryResources()
+        XCTAssertTrue(grid.visibleCards.isEmpty, "a closed History window keeps no card views")
+        controller.refreshHistory()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+        XCTAssertTrue(grid.visibleCards.isEmpty, "reloading History while closed tiles nothing")
+
+        window.makeKeyAndOrderFront(nil)
+        controller.historyDidShow()
+        XCTAssertEqual(grid.visibleCards.count, 3)
+        XCTAssertTrue(grid.visibleCards.allSatisfy { $0.thumbnail.image != nil },
+                      "the cards it showed reopen with their thumbnails, without a reload")
+    }
+
     func testHistoryWindowReflowsDownToItsMinimumSize() throws {
         _ = NSApplication.shared
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

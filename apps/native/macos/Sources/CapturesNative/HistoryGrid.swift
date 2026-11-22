@@ -876,6 +876,20 @@ final class HistoryGridView: NSView {
     }
     private var cards: [String: HistoryCardView] = [:]
     private var observing = false
+    /// While the window is closed, keep no card views (or their layers); the
+    /// next show tiles again from `items`.
+    var suspended = false {
+        didSet {
+            guard oldValue != suspended else { return }
+            if suspended {
+                for view in cards.values { view.removeFromSuperview() }
+                cards = [:]
+                onKeyViewsChanged()
+            } else {
+                tile(force: true)
+            }
+        }
+    }
 
     init(tokens: Tokens) {
         self.tokens = tokens
@@ -959,7 +973,7 @@ final class HistoryGridView: NSView {
 
     /// Size the document to its rows and lay out only the visible cards.
     func tile(force: Bool) {
-        guard let scroll = enclosingScrollView, let layout = currentLayout() else { return }
+        guard !suspended, let scroll = enclosingScrollView, let layout = currentLayout() else { return }
         let extras = rowExtras(layout)
         let size = NSSize(width: scroll.contentSize.width,
                           height: max(scroll.contentSize.height,

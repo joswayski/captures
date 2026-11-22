@@ -476,6 +476,9 @@ final class RootWindowCloseHandler: NSObject, NSWindowDelegate {
     private let closePreviews: () -> Void
     private let terminate: () -> Void
     private let hidesRootWindow: Bool
+    /// The live History window was closed (hidden), or shown again.
+    var rootWindowHidden: () -> Void = {}
+    var rootWindowShown: () -> Void = {}
 
     init(rootWindow: NSWindow, closePreviews: @escaping () -> Void,
          terminate: @escaping () -> Void, hidesRootWindow: Bool = false) {
@@ -487,6 +490,7 @@ final class RootWindowCloseHandler: NSObject, NSWindowDelegate {
         guard sender === rootWindow else { return true }
         if hidesRootWindow {
             sender.orderOut(nil)
+            rootWindowHidden()
             return false
         }
         closePreviews()
@@ -497,6 +501,18 @@ final class RootWindowCloseHandler: NSObject, NSWindowDelegate {
         guard let closing = notification.object as? NSWindow,
               closing === rootWindow else { return }
         terminate()
+    }
+
+    // Key status arrives inside makeKeyAndOrderFront, before the first draw.
+    func windowDidBecomeKey(_ notification: Notification) {
+        guard (notification.object as? NSWindow) === rootWindow else { return }
+        rootWindowShown()
+    }
+
+    func windowDidChangeOcclusionState(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow, window === rootWindow,
+              window.occlusionState.contains(.visible) else { return }
+        rootWindowShown()
     }
 }
 
@@ -1048,6 +1064,12 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         let rootWindowCloseHandler = RootWindowCloseHandler(rootWindow: window,
             closePreviews: { [weak miniPreviews] in miniPreviews?.close() },
             terminate: { requestApplicationTermination() }, hidesRootWindow: options.live)
+        rootWindowCloseHandler.rootWindowHidden = { [weak self] in
+            self?.liveController?.releaseHistoryResources()
+        }
+        rootWindowCloseHandler.rootWindowShown = { [weak self] in
+            self?.liveController?.historyDidShow()
+        }
         self.rootWindowCloseHandler = rootWindowCloseHandler
         window.delegate = rootWindowCloseHandler
         if options.live {
@@ -2208,6 +2230,11 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         render()
         updateShortcutState()
         liveController?.refreshHistory()
+        // A closed History window kept no cards. Tile and draw them before it
+        // is ordered front, so it never shows its empty last frame.
+        liveController?.historyDidShow()
+        window.contentView?.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
         if window.isMiniaturized { window.deminiaturize(nil) }
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)

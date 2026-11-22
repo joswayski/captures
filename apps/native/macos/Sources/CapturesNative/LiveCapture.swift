@@ -444,7 +444,7 @@ final class LiveCaptureController: NSObject {
     private var thumbnailKeys: [String: String] = [:]
     private var thumbnailFailures: [String: String] = [:]
     private var thumbnailRequests: Set<String> = []
-    private static let thumbnailCacheLimit = 96
+    private static let thumbnailCacheLimit = 36
     /// Shipping two-step deletion: the armed card or Delete all, and their reverts.
     private var confirmDeleteID: String?
     private var confirmDeleteTimer: Timer?
@@ -1432,16 +1432,44 @@ final class LiveCaptureController: NSObject {
                       self.thumbnailKey(current) == key else { return }
                 guard let image else { self.thumbnailFailures[id] = key; return }
                 self.thumbnails[id] = image; self.thumbnailKeys[id] = key
-                if self.thumbnails.count > Self.thumbnailCacheLimit {
-                    let visible = Set(self.grid.visibleCards.map(\.artifactID))
-                    for cached in self.thumbnails.keys where !visible.contains(cached) && cached != id {
-                        self.thumbnails[cached] = nil; self.thumbnailKeys[cached] = nil
-                    }
-                }
+                self.evictThumbnails(keeping: id)
                 self.updateActions()
             }
         }
     }
+
+    /// Keep the tiled cards' thumbnails and the nearest rows around them, so
+    /// scrolling back a little never reloads, and drop the farthest beyond the
+    /// limit instead of all off-screen ones at once.
+    private func evictThumbnails(keeping id: String) {
+        guard thumbnails.count > Self.thumbnailCacheLimit else { return }
+        let rows = Dictionary(historyRows.enumerated().map { (artifacts[$1].id, $0) },
+                              uniquingKeysWith: { first, _ in first })
+        let visible = Set(grid.visibleCards.map(\.artifactID))
+        let visibleRows = visible.compactMap { rows[$0] }
+        let center = visibleRows.isEmpty ? rows[id] ?? 0
+            : visibleRows.reduce(0, +) / visibleRows.count
+        let candidates = thumbnails.keys
+            .filter { !visible.contains($0) && $0 != id }
+            .sorted { abs((rows[$0] ?? Int.max / 2) - center) > abs((rows[$1] ?? Int.max / 2) - center) }
+        for cached in candidates.prefix(thumbnails.count - Self.thumbnailCacheLimit) {
+            thumbnails[cached] = nil; thumbnailKeys[cached] = nil
+        }
+    }
+
+    /// The closed History window keeps no tiled cards, and only the decoded
+    /// thumbnails of the cards it showed, so reopening draws them at once.
+    func releaseHistoryResources() {
+        guard let grid, !grid.suspended else { return }
+        let shown = Set(grid.visibleCards.map(\.artifactID))
+        for id in thumbnails.keys where !shown.contains(id) {
+            thumbnails[id] = nil; thumbnailKeys[id] = nil
+        }
+        grid.suspended = true
+        refreshGrid(busy: historyBusy)
+    }
+
+    func historyDidShow() { grid?.suspended = false }
 
     private func gridSelectionChanged() {
         if !reloadingHistorySelection { userSelectionGeneration += 1 }
