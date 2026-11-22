@@ -44,9 +44,10 @@ function reply(
 }
 const fallback = "## What's Changed\n* Original commit notes with links\n";
 const env = { GEMINI_API_KEY: "test-key" };
-const highlight = (commit) => ({
+const highlight = (commit, platforms = ["macos", "windows", "linux"]) => ({
   title: "Keep your capture handy",
   body: "You can reopen your last screenshot.",
+  platforms,
   commits: [commit],
 });
 
@@ -84,17 +85,19 @@ test.each([true, false])(
         );
         assert.equal(options.headers["x-goog-api-key"], "test-key");
         request = JSON.parse(options.body);
-        return reply([highlight(after)], {
+        const highlights = [highlight(after, ["linux"])];
+        return reply(highlights, {
           parts: [
             { text: "not release prose", thought: true },
-            { text: JSON.stringify({ highlights: [highlight(after)] }), thoughtSignature: "x" },
+            { text: JSON.stringify({ highlights }), thoughtSignature: "x" },
           ],
         });
       },
     });
+    // Only the GTK host changed, so only Linux lists the highlight.
     assert.equal(
       notes,
-      "## What's Changed\n* Keep your capture handy — You can reopen your last screenshot.\n",
+      "## What's Changed\n* **Linux:** Keep your capture handy — You can reopen your last screenshot.\n",
     );
     assert.equal(request.generationConfig.thinkingConfig.thinkingLevel, "MEDIUM");
     assert.equal(request.generationConfig.maxOutputTokens, 32768);
@@ -107,6 +110,7 @@ test.each([true, false])(
       [after],
     );
     assert.match(source.commits[0].diff, /REOPEN-SCREENSHOT/u);
+    assert.deepEqual(source.commits[0].platforms, ["linux"]);
     assert.doesNotMatch(
       request.contents[0].parts[0].text,
       /WEB-ONLY|TEST-SECRET|PRIVATE-KEY|TEST-ONLY|OTHER-RUNTIME|FUTURE-CHANGE/u,
@@ -163,6 +167,10 @@ test("invalid or unavailable editorial output preserves exact fallback without l
     async () => reply([{ ...good, body: "x".repeat(501) }]),
     async () => reply([{ ...good, extra: "unexpected" }]),
     async () => reply(Array(6).fill(good)),
+    async () => reply([{ title: good.title, body: good.body, commits: good.commits }]),
+    async () => reply([{ ...good, platforms: [] }]),
+    async () => reply([{ ...good, platforms: ["ios"] }]),
+    async () => reply([{ ...good, platforms: ["linux", "linux"] }]),
   ];
   for (const fetch of cases) {
     const warnings = [];
@@ -175,6 +183,42 @@ test("invalid or unavailable editorial output preserves exact fallback without l
     assert.equal(notes, fallback);
     assert.deepEqual(warnings, [[]], "no raw provider error or source content reaches diagnostics");
   }
+});
+
+test("platform-specific highlights are labelled and limited to the hosts their commits touch", async () => {
+  const f = fixture();
+  const windows = f.commit(
+    { "apps/native/windows/src/preferences.rs": "COPY" },
+    "Copy text from Preferences",
+  );
+  const after = f.commit(
+    { "apps/native/gtk/src/tray.rs": "TRAY", "apps/native/macos/Sources/Tray.swift": "TRAY" },
+    "Tray follows the theme",
+  );
+  const notesFor = (highlights) =>
+    aiReleaseNotes(f.base, after, fallback, {
+      cwd: f.cwd,
+      env,
+      fetch: async (_, options) => {
+        const source = JSON.parse(JSON.parse(options.body).contents[0].parts[0].text);
+        assert.deepEqual(
+          source.commits.map(({ platforms }) => platforms),
+          [["windows"], ["macos", "linux"]],
+        );
+        return reply(highlights);
+      },
+      warn: () => {},
+    });
+  assert.equal(
+    await notesFor([
+      { ...highlight(windows, ["windows"]), title: "Copy text" },
+      { ...highlight(after, ["linux", "macos"]), title: "Tray follows theme" },
+    ]),
+    "## What's Changed\n* **Windows:** Copy text — You can reopen your last screenshot.\n* **macOS, Linux:** Tray follows theme — You can reopen your last screenshot.\n",
+  );
+  // A Windows-only commit cannot put a highlight in the Mac app.
+  assert.equal(await notesFor([highlight(windows, ["windows", "macos"])]), fallback);
+  assert.equal(await notesFor([highlight(windows)]), fallback);
 });
 
 test("the egui/wgpu workbench stays out of AI and fallback notes while native hosts are eligible", async () => {
@@ -214,6 +258,8 @@ test("the egui/wgpu workbench stays out of AI and fallback notes while native ho
       assert.match(source.commits[0].diff, /SHIPPED-STACK/u);
       assert.match(source.commits[0].diff, /SHIPPED-DRAG/u);
       assert.doesNotMatch(source.commits[0].diff, /WORKBENCH-/u);
+      // Shared crate changes reach every platform.
+      assert.deepEqual(source.commits[0].platforms, ["macos", "windows", "linux"]);
       return reply([highlight(shipped)]);
     },
   });

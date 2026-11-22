@@ -411,8 +411,57 @@ fn list_body(line: &str) -> &str {
     })
 }
 
-/// Turns GitHub's generated release Markdown into concise notice copy.
+/// The desktop OS a release highlight applies to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NotePlatform {
+    MacOs,
+    Windows,
+    Linux,
+}
+
+impl NotePlatform {
+    pub const CURRENT: Self = if cfg!(target_os = "macos") {
+        Self::MacOs
+    } else if cfg!(windows) {
+        Self::Windows
+    } else {
+        Self::Linux
+    };
+
+    fn parse(label: &str) -> Option<Self> {
+        [Self::MacOs, Self::Windows, Self::Linux]
+            .into_iter()
+            .find(|platform| platform.label().eq_ignore_ascii_case(label.trim()))
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::MacOs => "macOS",
+            Self::Windows => "Windows",
+            Self::Linux => "Linux",
+        }
+    }
+}
+
+/// ai-release-notes.mjs prefixes platform-specific highlights with a bold
+/// `**macOS, Linux:**` label. Returns the platforms and the rest of the line.
+fn platform_label(body: &str) -> Option<(Vec<NotePlatform>, &str)> {
+    let (label, rest) = body.strip_prefix("**")?.split_once(":**")?;
+    let platforms = label
+        .split(',')
+        .map(NotePlatform::parse)
+        .collect::<Option<Vec<_>>>()?;
+    Some((platforms, rest.trim_start()))
+}
+
+/// Turns GitHub's generated release Markdown into concise notice copy for
+/// this OS: highlights labelled for other platforms are left out.
 pub fn release_note_items(markdown: &str) -> Vec<NoteItem> {
+    platform_note_items(markdown, Some(NotePlatform::CURRENT))
+}
+
+/// `release_note_items` for `platform`, or every platform's notes for `None`.
+fn platform_note_items(markdown: &str, platform: Option<NotePlatform>) -> Vec<NoteItem> {
     let mut items = Vec::new();
     let mut skipping_alert = false;
     for source_line in markdown.lines() {
@@ -432,7 +481,13 @@ pub fn release_note_items(markdown: &str) -> Vec<NoteItem> {
         if is_heading(line) || is_full_changelog(line) {
             continue;
         }
-        let body = list_body(line);
+        let mut body = list_body(line);
+        if let Some((platforms, rest)) = platform_label(body) {
+            if platform.is_some_and(|platform| !platforms.contains(&platform)) {
+                continue;
+            }
+            body = rest;
+        }
         let text = plain_text(body);
         if text.is_empty()
             || is_first_contribution(&text)
@@ -520,11 +575,26 @@ fn change_count(changelog: &[ChangelogEntry], notes: Option<&str>) -> usize {
     }
 }
 
-/// One group per skipped Preview with product-facing notes, newest first.
+/// One group per skipped Preview with product-facing notes for this OS,
+/// newest first.
 pub fn stacked_release_notes(
     changelog: &[ChangelogEntry],
     fallback_notes: Option<&str>,
     fallback_display_version: &str,
+) -> Vec<NoteGroup> {
+    stacked_platform_notes(
+        changelog,
+        fallback_notes,
+        fallback_display_version,
+        Some(NotePlatform::CURRENT),
+    )
+}
+
+fn stacked_platform_notes(
+    changelog: &[ChangelogEntry],
+    fallback_notes: Option<&str>,
+    fallback_display_version: &str,
+    platform: Option<NotePlatform>,
 ) -> Vec<NoteGroup> {
     if !changelog.is_empty() {
         return changelog
@@ -533,7 +603,7 @@ pub fn stacked_release_notes(
                 let items = entry
                     .notes
                     .as_deref()
-                    .map(release_note_items)
+                    .map(|notes| platform_note_items(notes, platform))
                     .unwrap_or_default();
                 (!items.is_empty()).then(|| NoteGroup {
                     version: entry.version.clone(),
@@ -543,7 +613,9 @@ pub fn stacked_release_notes(
             })
             .collect();
     }
-    let items = fallback_notes.map(release_note_items).unwrap_or_default();
+    let items = fallback_notes
+        .map(|notes| platform_note_items(notes, platform))
+        .unwrap_or_default();
     if items.is_empty() {
         return Vec::new();
     }
@@ -881,9 +953,18 @@ pub fn present(status: Option<&UpdateStatus>, view: &ViewState) -> Presentation 
                 stacked,
                 intro: stacked
                     .then(|| "This update includes all of the following changes:".to_owned()),
-                empty: groups
-                    .is_empty()
-                    .then(|| "Release notes aren’t available for this update.".to_owned()),
+                empty: groups.is_empty().then(|| {
+                    if stacked_platform_notes(changelog, notes.as_deref(), display_version, None)
+                        .is_empty()
+                    {
+                        "Release notes aren’t available for this update.".to_owned()
+                    } else {
+                        format!(
+                            "This update has no highlights for {}.",
+                            NotePlatform::CURRENT.label()
+                        )
+                    }
+                }),
                 group_empty: "Release notes aren’t available for this release.".into(),
                 groups,
             })
@@ -1569,6 +1650,61 @@ mod tests {
         );
         assert_eq!(version_link("0.1.0"), None);
         assert_eq!(version_link("2026.11.2202"), None);
+    }
+
+    #[test]
+    fn highlights_labelled_for_other_platforms_are_left_out() {
+        let notes = "## What's Changed\n* **Windows:** Copy text — Select it in Preferences.\n* **macOS, Linux:** Tray follows theme — It matches your menu bar.\n* Shared fix — Everyone gets it.\n* **Not a platform:** Odd — Stays as written.";
+        let highlight = |title: &str, text: &str| NoteItem {
+            title: Some(title.into()),
+            text: text.into(),
+            pull_request: None,
+        };
+        let titles = |platform| {
+            platform_note_items(notes, platform)
+                .into_iter()
+                .map(|item| item.title.unwrap())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            titles(Some(NotePlatform::MacOs)),
+            ["Tray follows theme", "Shared fix", "Not a platform: Odd"]
+        );
+        assert_eq!(
+            titles(Some(NotePlatform::Windows)),
+            ["Copy text", "Shared fix", "Not a platform: Odd"]
+        );
+        assert_eq!(
+            platform_note_items(notes, Some(NotePlatform::Linux))[0],
+            highlight("Tray follows theme", "It matches your menu bar.")
+        );
+
+        // A release with only another platform's highlights says so.
+        let other = match NotePlatform::CURRENT {
+            NotePlatform::Windows => "macOS",
+            _ => "Windows",
+        };
+        let status = UpdateStatus::Available {
+            current_version: "2026.11.2201".into(),
+            current_display_version: "2026.11.22.1".into(),
+            version: "2026.11.2202".into(),
+            display_version: "2026.11.22.2".into(),
+            notes: Some(format!("* **{other}:** Copy text — Select it.")),
+            changelog: Vec::new(),
+            installable: true,
+            manual_download_url: None,
+            download_size: None,
+            will_close_open_captures: false,
+        };
+        let notes = present(Some(&status), &view(true)).notes.unwrap();
+        assert!(notes.groups.is_empty());
+        assert_eq!(
+            notes.empty.unwrap(),
+            format!(
+                "This update has no highlights for {}.",
+                NotePlatform::CURRENT.label()
+            )
+        );
     }
 
     #[test]

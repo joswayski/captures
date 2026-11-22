@@ -57,7 +57,7 @@ Native apps for macOS (AppKit), Windows (Win32), and Linux (GTK4):
 - **Automatic updates:** Installed apps check for signed updates on launch and every few minutes, or manually from Preferences and the menu bar / tray. If Captures will not open or cannot install an update, reinstall using the links above. Older dated releases live in the [release archive](https://github.com/joswayski/captures/releases).
 - **Windows:** The installer is not Authenticode-signed yet, so SmartScreen may warn on first install.
 - **AppImage:** Replace your existing copy (normally `~/.local/bin/Captures.AppImage`) and mark it executable (`chmod +x`).
-- **Release notes:** Highlights are generated during the release build from source changes only; the desktop app never sends captures or app data to generate them.
+- **Release notes:** Highlights are generated during the release build from source changes only; the desktop app never sends captures or app data to generate them. The update notice shows only the highlights for your platform.
 - **Upgrading from older builds:** Earlier installs update automatically and import existing settings read-only. See [docs/releases.md](docs/releases.md) for backup and recovery details.
 
 ## Features

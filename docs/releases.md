@@ -389,6 +389,11 @@ During draft preparation, `scripts/ai-release-notes.mjs` asks Gemini for up to
 five short, user-facing highlights. It follows Caper's casual, lightly witty editorial
 prompt and Gemini request configuration, but writes the existing release body,
 not a separate highlights feed. Packaging and the updater reuse that body.
+Each highlight lists the platforms it applies to, limited to the native hosts its
+commits touch (shared crates reach all three). Platform-specific highlights get
+a bold `**Windows:**` or `**macOS, Linux:**` label, and the app's update notice
+shows only the unlabelled highlights and those labelled for its own OS, without
+the label. Older installed apps show every highlight with its label.
 
 Set the repository Actions secret `GEMINI_API_KEY`: a Gemini API key from
 Google AI Studio whose project uses the paid tier. Optional repository

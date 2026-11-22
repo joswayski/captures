@@ -42,15 +42,30 @@ user-visible behavior. For mixed commits describe only the behavior supported
 by the diff. If that is unclear, omit the highlight. Return zero highlights for
 internal-only work; do not invent generic improvements or announce future
 availability to fill space. Shared code alone does not prove every platform
-exposes a feature. Explicitly qualify macOS, Windows, Linux, X11 or Wayland
-when a change is specific to that platform. Stubs, workbenches and test
+exposes a feature. Each app shows only the highlights for its own platform, so
+list in platforms exactly the platforms ("macos", "windows", "linux") whose
+users get the change: all three when everyone does, fewer when it is specific
+to some. Each commit's platforms says which apps its files can reach. The host
+labels platform-specific highlights, so don't name the platform in the title or
+body; still qualify X11 or Wayland when a Linux change is specific to one of
+them. Stubs, workbenches and test
 fixtures do not establish shipped features. Do not infer cloud uploads, sharing,
 AI capture features or new permissions from unrelated changes.
 Group related changes into at most five highlights total; zero is valid.
 Omit maintenance, dependencies, tests, documentation and implementation details.
 Never invent capabilities, benchmarks, guarantees or numeric performance claims.
-Plain text only: no HTML, Markdown or control characters. Supply title, body and
-full evidence commit SHAs only; the host assigns all release metadata.`;
+Plain text only: no HTML, Markdown or control characters. Supply title, body,
+platforms and full evidence commit SHAs only; the host assigns all release
+metadata.`;
+
+const PLATFORMS = ["macos", "windows", "linux"];
+const PLATFORM_LABELS = { macos: "macOS", windows: "Windows", linux: "Linux" };
+// Files under a native host reach only that host's app; shared code reaches all.
+const HOST_PLATFORMS = {
+  "apps/native/macos/": "macos",
+  "apps/native/windows/": "windows",
+  "apps/native/gtk/": "linux",
+};
 
 const SCHEMA = {
   type: "object",
@@ -63,7 +78,7 @@ const SCHEMA = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["title", "body", "commits"],
+        required: ["title", "body", "platforms", "commits"],
         properties: {
           title: {
             type: "string",
@@ -72,6 +87,12 @@ const SCHEMA = {
           body: {
             type: "string",
             description: "One or two casual sentences, ideally under 200 characters, at most 500.",
+          },
+          platforms: {
+            type: "array",
+            description: "The platforms whose users get this change.",
+            minItems: 1,
+            items: { type: "string", enum: PLATFORMS },
           },
           commits: {
             type: "array",
@@ -109,6 +130,16 @@ function runtimePath(path) {
   );
 }
 
+function platformsFor(paths) {
+  const platforms = new Set();
+  for (const path of paths) {
+    const host = Object.keys(HOST_PLATFORMS).find((root) => path.startsWith(root));
+    if (!host) return [...PLATFORMS];
+    platforms.add(HOST_PLATFORMS[host]);
+  }
+  return PLATFORMS.filter((platform) => platforms.has(platform));
+}
+
 function evidence(before, after, cwd) {
   // No known previous release means no defensible change range for AI prose.
   if (!before || !/^[0-9a-f]{40}$/u.test(after)) throw new Error("release range unavailable");
@@ -140,7 +171,14 @@ function evidence(before, after, cwd) {
       "--",
       ...paths,
     ]);
-    commits.push({ commit: sha, subject, body: body.join("\n"), paths, diff });
+    commits.push({
+      commit: sha,
+      subject,
+      body: body.join("\n"),
+      platforms: platformsFor(paths),
+      paths,
+      diff,
+    });
   }
   return { runtime: "native", commits };
 }
@@ -304,20 +342,35 @@ function render(result, source) {
     result.highlights.length > 5
   )
     throw new Error("invalid highlights");
-  const candidates = new Set(source.commits.map(({ commit }) => commit));
+  const candidates = new Map(source.commits.map(({ commit, platforms }) => [commit, platforms]));
   for (const item of result.highlights) {
     if (
-      !exactKeys(item, ["title", "body", "commits"]) ||
+      !exactKeys(item, ["title", "body", "platforms", "commits"]) ||
       !plainText(item.title, 100) ||
       !plainText(item.body, 500) ||
       !Array.isArray(item.commits) ||
       !item.commits.length ||
       new Set(item.commits).size !== item.commits.length ||
-      !item.commits.every((commit) => candidates.has(commit))
+      !item.commits.every((commit) => candidates.has(commit)) ||
+      !Array.isArray(item.platforms) ||
+      !item.platforms.length ||
+      new Set(item.platforms).size !== item.platforms.length ||
+      // A highlight reaches only platforms its commits' files can reach.
+      !item.platforms.every((platform) =>
+        item.commits.some((commit) => candidates.get(commit).includes(platform)),
+      )
     )
       throw new Error("unsupported highlight");
   }
-  const lines = result.highlights.map(({ title, body }) => `* ${title} — ${body}`);
+  // update_notice.rs shows a labelled highlight only on the platforms it names.
+  const lines = result.highlights.map(({ title, body, platforms }) => {
+    const label = PLATFORMS.filter((platform) => platforms.includes(platform))
+      .map((platform) => PLATFORM_LABELS[platform])
+      .join(", ");
+    return platforms.length === PLATFORMS.length
+      ? `* ${title} — ${body}`
+      : `* **${label}:** ${title} — ${body}`;
+  });
   return `## What's Changed\n${lines.join("\n") || "No user-facing desktop changes in this release."}\n`;
 }
 
