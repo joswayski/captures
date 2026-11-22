@@ -111,6 +111,27 @@ pub fn render(options: &Options, path: &std::path::Path) -> Result<()> {
                 menu.open = Some((crate::capture::Field::Aspect, state));
             }
         }
+        // `--tool display --select display` opens the Display select over two
+        // displays; `display-switching` draws the bar while one prepares.
+        if let Some(select @ ("display" | "display-switching")) = options.select.as_deref() {
+            menu.displays = vec![
+                (
+                    "1".into(),
+                    "Generic PnP Monitor".into(),
+                    format!("{} × {} · Primary", w * 2, h * 2),
+                ),
+                ("2".into(), "DELL U2723QE".into(), "3840 × 2160".into()),
+            ];
+            if select == "display" {
+                let state = captures_app::controls::select::State {
+                    open: true,
+                    active: 1,
+                };
+                menu.open = Some((crate::capture::Field::Display, state));
+            } else {
+                menu.switching = true;
+            }
+        }
         // The fixture window below; `--select` hovers it, `--select desktop`
         // the display.
         menu.windows = vec![(

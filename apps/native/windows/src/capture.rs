@@ -14,8 +14,9 @@
 //! only) and hands the flow, display, target and those choices to
 //! `recorder`. A drawn region moves by its frame and resizes by its corner
 //! handles under a W × H label; Shift squares it and the Aspect select locks
-//! its ratio (the shared `selection` geometry). The Display select,
-//! keyboard focus through the bar and UI Automation are not ported yet.
+//! its ratio (the shared `selection` geometry). Full screen's Display select
+//! prepares another display and reopens the bar there. Keyboard focus
+//! through the bar and UI Automation are not ported yet.
 
 use std::cell::RefCell;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
@@ -79,6 +80,31 @@ pub enum Field {
     Microphone,
     /// `.recording-region-aspect-picker`.
     Aspect,
+    /// `.recording-display-picker`.
+    Display,
+}
+
+/// The Display select's width (`.recording-display-picker`).
+const DISPLAY_W: f32 = 190.;
+
+/// Shipping's Display select options as `(id, label, description)`: the OS
+/// name or `Display N`, then `W × H` and ` · Primary`.
+fn display_options(displays: &[DisplayDescriptor]) -> Vec<(String, String, String)> {
+    displays
+        .iter()
+        .enumerate()
+        .map(|(index, d)| {
+            let name = d.name.trim();
+            let label = if name.is_empty() {
+                format!("Display {}", index + 1)
+            } else {
+                name.to_owned()
+            };
+            let primary = if d.is_primary { " · Primary" } else { "" };
+            let detail = format!("{} × {}{primary}", d.width, d.height);
+            (d.id.clone(), label, detail)
+        })
+        .collect()
 }
 
 /// Shipping `REGION_ASPECT_PRESETS` (`lib/selection.ts`).
@@ -223,8 +249,8 @@ impl RecordOptions {
                     selected,
                 )
             }
-            // The menu's own select (`Menu::entries`).
-            Field::Aspect => (Vec::new(), Vec::new(), 0),
+            // The menu's own selects (`Menu::entries`).
+            Field::Aspect | Field::Display => (Vec::new(), Vec::new(), 0),
         }
     }
 
@@ -275,7 +301,7 @@ impl RecordOptions {
                     self.microphone = entry.id;
                 }
             }
-            Field::Aspect => {}
+            Field::Aspect | Field::Display => {}
         }
     }
 
@@ -418,6 +444,9 @@ struct FieldBox {
 struct Listbox {
     rect: Rect,
     rows: Vec<(Rect, gfx::Text, bool, bool)>,
+    /// Each row's `.custom-select-option-copy small` line (the Display
+    /// select's size), if any.
+    details: Vec<Option<gfx::Text>>,
     check: gfx::Text,
 }
 
@@ -481,6 +510,14 @@ pub struct Menu {
     pub recording_locked: bool,
     /// The open listbox and its highlighted row.
     pub open: Option<(Field, select::State)>,
+    /// The Display select's options as `(id, label, description)` and the
+    /// shown display's index.
+    pub displays: Vec<(String, String, String)>,
+    pub display_index: usize,
+    /// Another display is being prepared (shipping `switchingDisplay`).
+    pub switching: bool,
+    /// A display chosen in the select, for `Capture` to switch to.
+    switch_to: Option<usize>,
 }
 
 impl Menu {
@@ -490,6 +527,11 @@ impl Menu {
         display: (String, u32, u32),
         auto_start: bool,
     ) -> Self {
+        let only = (
+            String::new(),
+            display.0.clone(),
+            format!("{} × {}", display.1, display.2),
+        );
         Self {
             target,
             mode: MenuMode::Screenshot,
@@ -511,6 +553,10 @@ impl Menu {
             record: RecordOptions::new(&captures_settings::AppSettings::default()),
             recording_locked: false,
             open: None,
+            displays: vec![only],
+            display_index: 0,
+            switching: false,
+            switch_to: None,
         }
     }
 
@@ -522,6 +568,9 @@ impl Menu {
     /// A drawn region of at least two DIPs each way (shipping
     /// `isCapturableSelection`), a picked window, or Full screen.
     fn can_start(&self) -> bool {
+        if self.switching {
+            return false;
+        }
         match self.target {
             Target::Display => true,
             Target::Region => selection::capturable(self.selection.map(logical)),
@@ -537,13 +586,39 @@ impl Menu {
                 vec![false; ASPECT_PRESETS.len()],
                 self.aspect,
             ),
+            Field::Display => (
+                self.displays.iter().map(|d| d.1.clone()).collect(),
+                vec![false; self.displays.len()],
+                self.display_index,
+            ),
             _ => self.record.entries(field),
+        }
+    }
+
+    /// Each option's description line (the Display select's size).
+    fn details(&self, field: Field) -> Vec<Option<String>> {
+        match field {
+            Field::Display => self.displays.iter().map(|d| Some(d.2.clone())).collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// The closed trigger's label.
+    fn value(&self, field: Field) -> String {
+        match field {
+            Field::Aspect | Field::Display => {
+                let (labels, _, selected) = self.entries(field);
+                labels.into_iter().nth(selected).unwrap_or_default()
+            }
+            _ => self.record.value(field),
         }
     }
 
     fn field_enabled(&self, field: Field) -> bool {
         match field {
             Field::Aspect => true,
+            // Shipping disables it with one display and while switching.
+            Field::Display => self.displays.len() > 1 && !self.switching,
             _ => self.record.enabled(field),
         }
     }
@@ -551,6 +626,11 @@ impl Menu {
     fn choose(&mut self, field: Field, index: usize) {
         match field {
             Field::Aspect => self.set_aspect(index),
+            Field::Display => {
+                if index != self.display_index && !self.switching {
+                    self.switch_to = Some(index);
+                }
+            }
             _ => self.record.choose(field, index),
         }
     }
@@ -697,22 +777,32 @@ impl Menu {
         };
         let (aw, tw) = (box_width(&action), box_width(&targets));
         // `.recording-region-aspect-picker`: 150 px, "Aspect" then the select.
+        // `.recording-display-picker`: a 190 px select with no caption.
         const ASPECT_W: f32 = 150.;
-        let aspect = if self.target == Target::Region {
-            let caption = g.text_sized(t, "Aspect", t.n("text-xs"), "weight-medium", None)?;
-            let value = g.text_sized(
-                t,
-                ASPECT_PRESETS[self.aspect].0,
-                t.n("text-sm"),
-                "weight-regular",
-                None,
-            )?;
-            Some((caption, value))
-        } else {
-            None
+        let picker = match self.target {
+            Target::Region => Some((Field::Aspect, "Aspect", ASPECT_W)),
+            Target::Display => Some((Field::Display, "", DISPLAY_W)),
+            Target::Window => None,
         };
-        let primary =
-            capture_menu::primary_action(self.mode, self.auto_start, PrimaryState::default());
+        let picker = match picker {
+            Some((field, caption, width)) => {
+                let caption = g.text_sized(t, caption, t.n("text-xs"), "weight-medium", None)?;
+                let value = g.text_sized(
+                    t,
+                    &self.value(field),
+                    t.n("text-sm"),
+                    "weight-regular",
+                    None,
+                )?;
+                Some((field, caption, value, width))
+            }
+            None => None,
+        };
+        let state = PrimaryState {
+            switching_display: self.switching,
+            ..PrimaryState::default()
+        };
+        let primary = capture_menu::primary_action(self.mode, self.auto_start, state);
         let primary = if primary.hidden {
             None
         } else {
@@ -728,7 +818,7 @@ impl Menu {
             + 1.
             + GAP
             + tw
-            + aspect.as_ref().map_or(0., |_| GAP + ASPECT_W)
+            + picker.as_ref().map_or(0., |p| GAP + p.3)
             + primary.as_ref().map_or(0., |(w, _)| GAP + 4. + w)
             + PAD;
         // `These controls **won’t** show in screenshots · Press Enter…`: the
@@ -810,23 +900,30 @@ impl Menu {
         place(x, targets);
         x += tw;
         let mut pickers = Vec::new();
-        if let Some((caption, value)) = aspect {
+        if let Some((field, caption, value, box_w)) = picker {
             let left = x + GAP;
-            let trigger = left + caption.width + 6.;
-            // The flex item sizes to its trigger: `--s-4` padding, the label,
-            // the `--s-5` gap, the 14 px chevron and the 1 px border.
-            let width =
-                (1. + 8. + value.width + 12. + 14. + 8. + 1.).min(left + ASPECT_W - trigger);
+            let (trigger, width) = if field == Field::Display {
+                // The trigger fills the picker; a long name ellipsizes before
+                // the chevron.
+                g.ellipsis(&value, (box_w - 2. - 16. - 12. - 14.).max(1.))?;
+                (left, box_w)
+            } else {
+                // The flex item sizes to its trigger: `--s-4` padding, the
+                // label, the `--s-5` gap, the 14 px chevron and the border.
+                let trigger = left + caption.width + 6.;
+                let w = (1. + 8. + value.width + 12. + 14. + 8. + 1.).min(left + box_w - trigger);
+                (trigger, w)
+            };
             pickers.push(FieldBox {
                 caption,
                 x: left,
                 caption_y: cy - CAPTION_H / 2.,
                 control: rect(trigger, cy - 18., trigger + width, cy + 18.),
                 value,
-                hit: Hit::Select(Field::Aspect),
-                enabled: true,
+                hit: Hit::Select(field),
+                enabled: self.field_enabled(field),
             });
-            x = left + ASPECT_W;
+            x = left + box_w;
         }
         let primary = primary.map(|(w, text)| {
             let px = x + GAP + 4.;
@@ -961,11 +1058,30 @@ impl Menu {
             };
             texts.push(g.text_sized(t, label, t.n("text-sm"), weight, None)?);
         }
+        let mut details = Vec::new();
+        for detail in self.details(field) {
+            details.push(match detail {
+                Some(detail) => {
+                    Some(g.text_sized(t, &detail, t.n("text-xs"), "weight-regular", None)?)
+                }
+                None => None,
+            });
+        }
+        details.resize_with(texts.len(), || None);
+        // `.custom-select-option-copy`: the label's 1 px block padding, then
+        // the `small` line 2 px below it.
         let row_h = texts
             .iter()
-            .map(|text| text.height + 2. + 12.)
+            .zip(&details)
+            .map(|(text, detail)| {
+                text.height + 2. + detail.as_ref().map_or(0., |d| 2. + d.height) + 12.
+            })
             .fold(28_f32, f32::max);
-        let label_w = texts.iter().map(|text| text.width).fold(0., f32::max);
+        let label_w = texts
+            .iter()
+            .zip(&details)
+            .map(|(text, detail)| text.width.max(detail.as_ref().map_or(0., |d| d.width)))
+            .fold(0., f32::max);
         let content_w = (label_w + 16. + check.width + 16. + 8. + 2.).ceil();
         let content_h = texts.len() as f32 * row_h + 8.;
         let (w, h) = self.size;
@@ -997,6 +1113,7 @@ impl Menu {
         Ok(Listbox {
             rect: list,
             rows,
+            details,
             check,
         })
     }
@@ -1386,7 +1503,16 @@ impl Menu {
                 if lit {
                     gfx::fill_round(dc, *row, 6., t.color("glass-hover"))?;
                 }
-                gfx::text(dc, label, row.left + 8., cy - label.height / 2., color)?;
+                match listbox.details.get(index).and_then(Option::as_ref) {
+                    Some(detail) => {
+                        let top = cy - (label.height + 2. + detail.height) / 2.;
+                        gfx::text(dc, label, row.left + 8., top, color)?;
+                        let y = top + label.height + 2.;
+                        let subtle = t.color("glass-text-subtle");
+                        gfx::text(dc, detail, row.left + 8., y, subtle)?;
+                    }
+                    None => gfx::text(dc, label, row.left + 8., cy - label.height / 2., color)?,
+                }
                 if *selected {
                     let check = &listbox.check;
                     let x = row.right - 8. - check.width;
@@ -1657,8 +1783,12 @@ pub struct Handoff {
     pub tokens: Tokens,
 }
 
+/// A display's prepared session and every display for the Display select;
+/// `None` when the flow was cancelled meanwhile.
+type Prepared = std::result::Result<Option<(WindowSession, Vec<DisplayDescriptor>)>, String>;
+
 enum Phase {
-    Preparing(Receiver<std::result::Result<Option<WindowSession>, String>>),
+    Preparing(Receiver<Prepared>),
     Selecting(Box<Overlay>, Box<WindowSession>),
     Counting(Box<Counting>),
     Capturing(Receiver<CaptureResult>),
@@ -1675,6 +1805,9 @@ struct Capture {
     root: std::path::PathBuf,
     wake: std::sync::Arc<dyn Fn() + Send + Sync>,
     phase: Phase,
+    /// The display the Display select is switching to, preparing while the
+    /// bar stays on the current one.
+    switching: Option<Receiver<Prepared>>,
 }
 
 struct Overlay {
@@ -1764,22 +1897,8 @@ pub fn open(
     }
     let settings = captures_settings::load(&options.settings_file).unwrap_or_default();
     let flow = crate::recorder::begin_screenshot_flow().unwrap_or_else(|| CaptureFlow::begin(0))?;
-    let generation = flow.generation();
-    let (freeze, include_cursor) = (settings.freeze_screen, settings.show_cursor_in_screenshots);
-    let (sender, prepared) = channel();
-    let worker_wake = wake.clone();
-    std::thread::spawn(move || {
-        wait_for_shell_menus(from_menu);
-        let result = pointer_display().and_then(|display| {
-            match WindowSession::prepare(&display, generation, freeze, include_cursor, 0.) {
-                Ok(session) => Ok(Some(session)),
-                Err(captures_app::Error::Cancelled) => Ok(None),
-                Err(error) => Err(error.to_string()),
-            }
-        });
-        let _ = sender.send(result);
-        worker_wake();
-    });
+    let wake: std::sync::Arc<dyn Fn() + Send + Sync> = std::sync::Arc::new(wake);
+    let prepared = prepare(flow.generation(), &settings, None, from_menu, &wake);
     let tokens = crate::appearance::tokens(options.appearance.as_deref(), &settings);
     let root = options
         .history_root
@@ -1793,11 +1912,46 @@ pub fn open(
             settings,
             tokens,
             root,
-            wake: std::sync::Arc::new(wake),
+            wake,
             phase: Phase::Preparing(prepared),
+            switching: None,
         })
     });
     Ok(())
+}
+
+/// Prepare `display` (else the one under the pointer) and list every display
+/// on a worker, waking the host loop when done.
+fn prepare(
+    generation: u64,
+    settings: &captures_settings::AppSettings,
+    display: Option<String>,
+    from_menu: bool,
+    wake: &std::sync::Arc<dyn Fn() + Send + Sync>,
+) -> Receiver<Prepared> {
+    let (freeze, include_cursor) = (settings.freeze_screen, settings.show_cursor_in_screenshots);
+    let (sender, prepared) = channel();
+    let wake = wake.clone();
+    std::thread::spawn(move || {
+        wait_for_shell_menus(from_menu);
+        let result = display
+            .map_or_else(pointer_display, Ok)
+            .and_then(|display| {
+                match WindowSession::prepare(&display, generation, freeze, include_cursor, 0.) {
+                    Ok(session) => {
+                        let displays = captures_capture::XcapBackend
+                            .displays()
+                            .unwrap_or_else(|_| vec![session.display().clone()]);
+                        Ok(Some((session, displays)))
+                    }
+                    Err(captures_app::Error::Cancelled) => Ok(None),
+                    Err(error) => Err(error.to_string()),
+                }
+            });
+        let _ = sender.send(result);
+        wake();
+    });
+    prepared
 }
 
 fn focus_overlay() {
@@ -1897,10 +2051,16 @@ pub fn service() -> Option<Outcome> {
             })));
         }
         let capture = slot.as_mut()?;
+        if let Err(error) = capture.finish_switch() {
+            capture.flow.cancel();
+            *slot = None;
+            let result = Err(error.message().to_string());
+            return Some(Outcome::Captured(Box::new(result)));
+        }
         let finished = match &mut capture.phase {
             Phase::Preparing(prepared) => match prepared.try_recv() {
-                Ok(Ok(Some(session))) => {
-                    if let Err(error) = capture.show(session) {
+                Ok(Ok(Some((session, displays)))) => {
+                    if let Err(error) = capture.show(session, displays) {
                         capture.flow.cancel();
                         Some(Err(error.message().to_string()))
                     } else {
@@ -1941,8 +2101,60 @@ pub fn service() -> Option<Outcome> {
 }
 
 impl Capture {
-    fn show(&mut self, session: WindowSession) -> Result<()> {
+    /// Shipping `switchDisplay`: prepare the chosen display while the bar
+    /// reads "Switching…", then reopen it there.
+    fn switch_display(&mut self, index: usize) {
+        let Phase::Selecting(overlay, _) = &mut self.phase else {
+            return;
+        };
+        let Some((id, ..)) = overlay.menu.displays.get(index) else {
+            return;
+        };
+        if self.switching.is_some() || index == overlay.menu.display_index {
+            return;
+        }
+        let id = id.clone();
+        overlay.menu.switching = true;
+        let _ = overlay.render(&self.tokens);
+        let generation = self.flow.generation();
+        self.switching = Some(prepare(
+            generation,
+            &self.settings,
+            Some(id),
+            false,
+            &self.wake,
+        ));
+    }
+
+    /// Show the switched display once it is prepared. A failed switch keeps
+    /// the bar on its display; a cancelled flow ends with the bar.
+    fn finish_switch(&mut self) -> Result<()> {
+        let Some(receiver) = &self.switching else {
+            return Ok(());
+        };
+        let prepared = match receiver.try_recv() {
+            Err(TryRecvError::Empty) => return Ok(()),
+            Ok(prepared) => prepared,
+            Err(TryRecvError::Disconnected) => Err("The capture worker stopped".into()),
+        };
+        self.switching = None;
+        match prepared {
+            Ok(Some((session, displays))) => self.show(session, displays)?,
+            Ok(None) => {}
+            Err(error) => {
+                eprintln!("Could not switch displays: {error}");
+                if let Phase::Selecting(overlay, _) = &mut self.phase {
+                    overlay.menu.switching = false;
+                    let _ = overlay.render(&self.tokens);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn show(&mut self, session: WindowSession, displays: Vec<DisplayDescriptor>) -> Result<()> {
         let display = session.display().clone();
+        let displays_switched = matches!(self.phase, Phase::Selecting(..));
         let g = match crate::host::with_host(|h| h.g.clone()) {
             Some(g) => g,
             None => Gfx::new(&self.tokens, true)?,
@@ -1976,6 +2188,25 @@ impl Capture {
             menu.controls_excluded = !self.settings.include_recording_controls_in_captures;
             menu.record = RecordOptions::new(&self.settings);
             menu.windows = window_rects(&session);
+            menu.displays = display_options(&displays);
+            menu.display_index = displays
+                .iter()
+                .position(|d| d.id == display.id)
+                .unwrap_or_default();
+            if menu.displays.is_empty() {
+                menu.displays = display_options(std::slice::from_ref(&display));
+            }
+            // A display switch keeps the bar's target, mode, aspect and this
+            // capture's Record options; the region and window pick reset.
+            let mut microphones = None;
+            if let Phase::Selecting(previous, _) = &mut self.phase {
+                let old = &mut previous.menu;
+                menu.target = old.target;
+                menu.mode = old.mode;
+                menu.aspect = old.aspect;
+                std::mem::swap(&mut menu.record, &mut old.record);
+                microphones = previous.microphones.take();
+            }
             let mut overlay = Overlay {
                 hwnd,
                 menu,
@@ -1986,14 +2217,23 @@ impl Capture {
                 _target: target,
                 _visual: visual,
                 surface,
-                microphones: None,
+                microphones,
             };
             load_microphones(&mut overlay, &self.wake);
             overlay.render(&self.tokens)?;
             let _ = ShowWindow(hwnd, SW_SHOW);
             let _ = SetForegroundWindow(hwnd);
             let _ = SetFocus(Some(hwnd));
+            // Dropping the previous display's overlay closes it.
             self.phase = Phase::Selecting(Box::new(overlay), Box::new(session));
+        }
+        // Shipping re-arms a Full screen auto-start on the new display.
+        if let Phase::Selecting(overlay, _) = &self.phase
+            && overlay.menu.target == Target::Display
+            && overlay.menu.auto_start
+            && displays_switched
+        {
+            self.confirm();
         }
         Ok(())
     }
@@ -2269,7 +2509,11 @@ impl Capture {
                 if overlay.menu.open.is_some()
                     && key.is_some_and(|key| overlay.menu.listbox_key(key))
                 {
+                    let switch = overlay.menu.switch_to.take();
                     let _ = overlay.render(&self.tokens);
+                    if let Some(index) = switch {
+                        self.switch_display(index);
+                    }
                     return Some(LRESULT(0));
                 }
                 match vk {
@@ -2329,7 +2573,11 @@ impl Capture {
             }
             Some(hit @ (Hit::Toggle(_) | Hit::Select(_) | Hit::Option(_))) => {
                 overlay.menu.option_action(hit);
+                let switch = overlay.menu.switch_to.take();
                 let _ = overlay.render(&self.tokens);
+                if let Some(index) = switch {
+                    self.switch_display(index);
+                }
             }
             None => {}
         }
@@ -2646,6 +2894,43 @@ mod tests {
     #[test]
     fn full_screen_starts_without_a_selection() {
         assert!(menu(Target::Display, false).can_start());
+    }
+
+    #[test]
+    fn display_select_lists_displays_and_switches_once() {
+        let display = |id: &str, name: &str, primary| DisplayDescriptor {
+            id: id.into(),
+            name: name.into(),
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080,
+            scale_factor: 1.,
+            is_primary: primary,
+        };
+        let options = display_options(&[display("a", "  ", false), display("b", "DELL", true)]);
+        assert_eq!(
+            options,
+            [
+                ("a".into(), "Display 1".into(), "1920 × 1080".into()),
+                ("b".into(), "DELL".into(), "1920 × 1080 · Primary".into()),
+            ]
+        );
+        let mut m = menu(Target::Display, false);
+        // One display: shipping disables the select.
+        assert!(!m.field_enabled(Field::Display));
+        m.displays = options;
+        assert!(m.field_enabled(Field::Display));
+        // Choosing the shown display does nothing; another asks to switch.
+        m.choose(Field::Display, 0);
+        assert_eq!(m.switch_to.take(), None);
+        m.choose(Field::Display, 1);
+        assert_eq!(m.switch_to.take(), Some(1));
+        // While switching, the select and the primary are disabled.
+        m.switching = true;
+        assert!(!m.field_enabled(Field::Display) && !m.can_start());
+        m.choose(Field::Display, 1);
+        assert_eq!(m.switch_to, None);
     }
 
     #[test]

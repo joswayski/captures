@@ -116,8 +116,12 @@ a drawn region shows its W × H label and four corner handles: dragging the fram
 moves it, a handle resizes it, and a press elsewhere draws a new one; Shift
 squares a drag (pressing or releasing it mid-drag re-runs it) and the Aspect
 select (Free, 1 : 1, 4 : 3, 3 : 2, 16 : 9, 9 : 16) locks drags and refits a
-drawn region around its center (--select aspect|aspect-top renders it). The
-Display select is not ported yet. A physical Windows 11 check (4K, 150%) confirmed pixel-exact
+drawn region around its center (--select aspect|aspect-top renders it). On
+Full screen the Display select lists every display (name, then W × H and
+Primary; disabled with one display) and reopens the bar on the chosen one,
+keeping its target, mode, aspect and Record options while the primary reads
+"Switching…" (`--tool display --select display|display-switching` renders
+it). A physical Windows 11 check (4K, 150%) confirmed pixel-exact
 Region and Full screen captures, the clipboard and History; a second New
 Capture now refocuses the open bar instead of an error, and the snapshot waits
 for the tray menu and overflow flyout to close (a recheck passed both; the
