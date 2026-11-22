@@ -3495,9 +3495,27 @@ final class LiveCaptureController: NSObject {
     private func recordingEditorClosed(_ artifactID: String) {
         let screen = recordingEditorNoticeScreens.removeValue(forKey: artifactID)
             ?? lastRecordingNoticeScreen ?? NSScreen.main
-        guard !capturing, artifacts.contains(where: { $0.id == artifactID }),
+        guard !capturing, let artifact = artifacts.first(where: { $0.id == artifactID }),
               let screen else { return }
         recordingSavedNotice.present(artifactID: artifactID, screen: screen)
+        // Shipping reads the artifact when the notice opens: an exported
+        // recording offers Show in Folder instead of saving a second copy.
+        if let path = artifact.availableSavedPath {
+            recordingSavedNotice.savedFromHistory(artifactID: artifactID, path: path)
+            return
+        }
+        // An editor save may close the window before History reloads.
+        run({ [historyRoot] in
+            let recordings = try NativeRecordingInfo.request([
+                "operation": "history", "root": historyRoot,
+            ])["recordings"] as? [[String: Any]] ?? []
+            return recordings.compactMap(CaptureArtifact.init)
+                .first(where: { $0.id == artifactID })?.availableSavedPath
+        }) { [weak self] result in
+            if case .success(let path?) = result {
+                self?.recordingSavedNotice.savedFromHistory(artifactID: artifactID, path: path)
+            }
+        }
     }
 
     private func editScreenshot() {
