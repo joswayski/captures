@@ -1490,8 +1490,9 @@ fn extract_preview(
     validate_position(probe, position_ms)?;
     let path = scratch.join(format!("frame-{}.png", uuid::Uuid::new_v4()));
     let result = tools
-        .extract_edited_frame(
+        .extract_preview_frame(
             source,
+            probe,
             edit,
             export,
             position_ms,

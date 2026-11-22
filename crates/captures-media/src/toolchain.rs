@@ -47,6 +47,8 @@ const PLAYBACK_MAX_HEIGHT: u32 = 720;
 const PLAYBACK_MAX_FRAMES_PER_SECOND: u16 = 30;
 const PLAYBACK_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const PLAYBACK_MAX_DIAGNOSTIC_BYTES: usize = 64 * 1024;
+/// zlib level for preview PNGs that are decoded at once and deleted.
+const PREVIEW_PNG_COMPRESSION_LEVEL: u8 = 1;
 const EXPORT_COMPARISON_SAMPLE_MS: u64 = 1_500;
 const EXPORT_COMPARISON_FRAME_LEAD_MS: u64 = 1_000;
 const EXPORT_COMPARISON_MAX_PNG_BYTES: u64 = 128 * 1024 * 1024;
@@ -950,7 +952,7 @@ impl MediaToolchain {
         destination: &Path,
         cancel: &CancelToken,
     ) -> Result<(), MediaToolError> {
-        self.extract_still(input, at_ms, destination, None, cancel)
+        self.extract_still(input, at_ms, destination, None, None, cancel)
     }
 
     fn extract_still(
@@ -959,6 +961,7 @@ impl MediaToolchain {
         at_ms: u64,
         destination: &Path,
         filter: Option<&str>,
+        compression_level: Option<u8>,
         cancel: &CancelToken,
     ) -> Result<(), MediaToolError> {
         let temporary = temporary_output_path(destination, "png");
@@ -1000,7 +1003,11 @@ impl MediaToolchain {
                 if !filters.is_empty() {
                     command.args(["-vf", &filters.join(",")]);
                 }
-                command.args(["-frames:v", "1"]).arg(&temporary);
+                command.args(["-frames:v", "1"]);
+                if let Some(level) = compression_level {
+                    command.args(["-compression_level", &level.to_string()]);
+                }
+                command.arg(&temporary);
                 run_command(&mut command, cancel, "FFmpeg")?;
                 if temporary.is_file() {
                     return commit_temporary(&temporary, destination);
@@ -1051,11 +1058,53 @@ impl MediaToolchain {
         destination: &Path,
         cancel: &CancelToken,
     ) -> Result<(), MediaToolError> {
+        self.extract_edited_still(input, probe, edit, spec, at_ms, destination, None, cancel)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn extract_edited_still(
+        &self,
+        input: &Path,
+        probe: &ProbeResult,
+        edit: &EditSpec,
+        spec: &ExportSpec,
+        at_ms: u64,
+        destination: &Path,
+        compression_level: Option<u8>,
+        cancel: &CancelToken,
+    ) -> Result<(), MediaToolError> {
         validate_edit_spec(probe, edit)?;
         let attempts = export_attempts(probe, edit, spec)?;
         let attempt = attempts.first().ok_or(MediaToolError::IncompleteMetadata)?;
         let filter = preview_video_filter(probe, edit, spec, attempt)?;
-        self.extract_still(input, at_ms, destination, Some(&filter), cancel)
+        self.extract_still(
+            input,
+            at_ms,
+            destination,
+            Some(&filter),
+            compression_level,
+            cancel,
+        )
+    }
+
+    /// `extract_edited_frame` for a preview frame that is decoded at once and
+    /// deleted: it takes the caller's trusted probe of `input` instead of
+    /// running ffprobe again, and writes the PNG with zlib level
+    /// `PREVIEW_PNG_COMPRESSION_LEVEL`, which skips most of FFmpeg's time on
+    /// a large frame. PNG is lossless, so the pixels are the same.
+    #[allow(clippy::too_many_arguments)]
+    pub fn extract_preview_frame(
+        &self,
+        input: &Path,
+        probe: &ProbeResult,
+        edit: &EditSpec,
+        spec: &ExportSpec,
+        at_ms: u64,
+        destination: &Path,
+        cancel: &CancelToken,
+    ) -> Result<(), MediaToolError> {
+        let level = Some(PREVIEW_PNG_COMPRESSION_LEVEL);
+        self.extract_edited_still(input, probe, edit, spec, at_ms, destination, level, cancel)
     }
 
     /// Encode a short sample and return matching source-filtered and encoded
@@ -5490,6 +5539,37 @@ mod tests {
                         tools.probe(&output).unwrap().metadata.height
                     ),
                     (120, 110)
+                );
+                // The editor's preview path (trusted probe, light PNG
+                // compression) must decode to exactly the same pixels.
+                let preview = directory
+                    .path()
+                    .join(format!("{extension}-{position}-preview.png"));
+                tools
+                    .extract_preview_frame(
+                        &source,
+                        &tools.probe(&source).unwrap(),
+                        &edit,
+                        &export,
+                        position,
+                        &preview,
+                        &CancelToken::default(),
+                    )
+                    .unwrap();
+                let pixels = |path: &std::path::Path| {
+                    let output = std::process::Command::new(&ffmpeg)
+                        .args(["-v", "error", "-i"])
+                        .arg(path)
+                        .args(["-f", "rawvideo", "-pix_fmt", "rgba", "-"])
+                        .output()
+                        .unwrap();
+                    assert!(output.status.success());
+                    output.stdout
+                };
+                assert_eq!(
+                    pixels(&preview),
+                    pixels(&output),
+                    "{extension} at {position}"
                 );
                 let rgb = sample_rgb(&ffmpeg, &output, 0);
                 assert!(
