@@ -196,6 +196,24 @@ final class RecordingHUDTests: XCTestCase {
             "Stop retains its signal surface without a hover")
     }
 
+    func testControlsAndHiddenNoticeStayUpWhenCapturesDeactivatesAndNeverTakeFocus() throws {
+        _ = NSApplication.shared
+        let screen = try XCTUnwrap(NSScreen.main)
+        let tokens = try XCTUnwrap(Tokens.variants["dark-mustard"])
+        // A click on Pause or Mute can activate Captures; the next click in the
+        // recorded app deactivates it, and a default NSPanel would hide then.
+        let hud = RecordingHUDPanel(screen: screen, tokens: tokens, excludedFromCapture: true, canExcludeControls: true)
+        defer { hud.close() }
+        XCTAssertFalse(hud.hidesOnDeactivate)
+        XCTAssertFalse(hud.canBecomeKey)
+        XCTAssertEqual(hud.sharingType, .none)
+        let notice = RecordingControlsHiddenNoticePanel(screen: screen, tokens: tokens, shortcut: "CommandOrControl+Shift+Alt+KeyJ")
+        defer { notice.close() }
+        XCTAssertFalse(notice.hidesOnDeactivate)
+        XCTAssertFalse(notice.canBecomeKey)
+        XCTAssertEqual(notice.sharingType, .none)
+    }
+
     func testRecordingTimeAndStatusMatchShippingCopy() throws {
         // Same cases as captures_app::recording_timeline::format_recording_time.
         let cases: [(UInt64, String)] = [(0, "0:00"), (999, "0:00"), (94_000, "1:34"),

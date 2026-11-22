@@ -625,6 +625,9 @@ final class RecordingHUDPanel: NSPanel {
         title = "Captures Recording Controls"
         isReleasedWhenClosed = false; isOpaque = false; backgroundColor = .clear
         hasShadow = false; level = .floating; collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        // A click on a control can activate Captures; the controls must stay
+        // up when the recorded app takes focus back (NSPanel hides by default).
+        hidesOnDeactivate = false
         sharingType = excludedFromCapture ? .none : .readOnly
         // Shipping `startHudDrag`: the HUD background moves the window; buttons still click.
         isMovableByWindowBackground = true
@@ -835,6 +838,7 @@ final class RecordingControlsHiddenNoticePanel: NSPanel {
         hasShadow = false
         level = .floating
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        hidesOnDeactivate = false
         sharingType = .none
         ignoresMouseEvents = true
         contentView = RecordingControlsHiddenNoticeView(
