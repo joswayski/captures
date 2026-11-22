@@ -256,9 +256,17 @@ final class HistoryClearTests: XCTestCase {
             historyRoot: directory.path, settingsPath: directory.appendingPathComponent("settings.json").path,
             transport: transport, recoveryWorker: EmptyRecoveryWorker(), showPreferenceSetting: { _ in })
         defer { withExtendedLifetime(controller) {} }
-        window.makeKeyAndOrderFront(nil)
         let grid = try historyGrid(root)
-        try waitUntil { grid.visibleCards.count == 3 && grid.visibleCards.allSatisfy { $0.thumbnail.image != nil } }
+        // Launch builds History hidden and releases it at once: nothing is
+        // tiled until the first show, which tiles before the window draws.
+        controller.releaseHistoryResources()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+        XCTAssertTrue(grid.visibleCards.isEmpty, "History built hidden tiles no cards")
+        window.makeKeyAndOrderFront(nil)
+        controller.historyDidShow()
+        XCTAssertEqual(grid.visibleCards.count, 3, "the first show tiles its cards at once")
+        XCTAssertTrue(grid.visibleCards.allSatisfy { $0.thumbnail.image != nil },
+                      "thumbnails decoded while hidden, so the first show draws them at once")
 
         window.orderOut(nil)
         controller.releaseHistoryResources()

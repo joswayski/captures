@@ -974,8 +974,17 @@ final class HistoryGridView: NSView {
 
     /// Size the document to its rows and lay out only the visible cards.
     func tile(force: Bool) {
-        guard !suspended, let scroll = enclosingScrollView, let layout = currentLayout() else { return }
+        guard let scroll = enclosingScrollView, let layout = currentLayout() else { return }
         let extras = rowExtras(layout)
+        if suspended {
+            // Hidden: no card views, but the first screen's thumbnails decode
+            // now, so the next show draws its cards complete on the first frame.
+            let shown = visibleRect.isEmpty ? NSRect(origin: .zero, size: scroll.contentSize) : visibleRect
+            for index in layout.visibleItems(items.count, in: shown, extras: extras) where items[index].image == nil {
+                onNeedsThumbnail(index)
+            }
+            return
+        }
         let size = NSSize(width: scroll.contentSize.width,
                           height: max(scroll.contentSize.height,
                                       layout.contentHeight(items.count, extras: extras)))
