@@ -1342,6 +1342,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         feedbackController?.restyle(tokens)
         sharingController?.restyle(tokens)
         updateNotice?.restyle(tokens)
+        miniPreviews?.restyle(tokens)
         renderPermissionSheet()
         liveStyleRevision += 1
         rebuildRenderedLiveWorkspaceIfNeeded()
@@ -1413,6 +1414,8 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                     if !self.options.themeOverride { self.theme = settings.string("theme", "mustard") }
                     self.customTheme = settings["custom_theme"] as? [String: Any] ?? [:]
                     self.resolvedTokens = self.makeTokens()
+                    // Mini previews outlive renders; they start before settings load.
+                    self.miniPreviews?.restyle(self.tokens)
                     self.render()
                     // The menu bar item and first render are done. Setup opens
                     // only when access needs attention, and most launches never
@@ -1830,6 +1833,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                     self.feedbackController?.restyle(self.tokens)
                     self.sharingController?.restyle(self.tokens)
                     self.updateNotice?.restyle(self.tokens)
+                    self.miniPreviews?.restyle(self.tokens)
                 }
                 let chosen = appearance == "system" ? nil : NSAppearance(named: appearance == "dark" ? .darkAqua : .aqua)
                 self.window.appearance = chosen

@@ -1176,6 +1176,22 @@ pub fn set_suppressed(suppressed: bool) {
     });
 }
 
+/// Settings changed elsewhere: redraw the stack in the saved appearance and
+/// accent.
+pub fn settings_changed(settings: &captures_settings::AppSettings) {
+    PREVIEWS.with(|p| {
+        let Ok(mut p) = p.try_borrow_mut() else {
+            return;
+        };
+        let Some(previews) = p.as_mut() else { return };
+        previews.tokens =
+            crate::appearance::tokens(previews.options.appearance.as_deref(), settings);
+        if let Err(error) = previews.render() {
+            eprintln!("Could not restyle the mini previews: {error}");
+        }
+    });
+}
+
 impl Previews {
     fn new(options: &crate::Options, settings: &captures_settings::AppSettings) -> Result<Self> {
         let tokens = crate::appearance::tokens(options.appearance.as_deref(), settings);

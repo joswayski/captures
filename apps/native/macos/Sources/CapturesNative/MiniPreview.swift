@@ -2659,7 +2659,7 @@ final class MiniPreviewController {
     private let policy: NativePreviewPolicy
     private let stack: NativePreviewStack
     var restartArtifactIDs: [String] { stack.ids }
-    private let tokens: Tokens
+    private var tokens: Tokens
     private let imageLoader: (String) throws -> NSImage
     private let screenProvider: () -> [NSScreen]
     private var panel: MiniPreviewPanel?
@@ -2941,6 +2941,13 @@ final class MiniPreviewController {
                 }
             }
         }
+    }
+
+    /// Redraw the stack in a new appearance or accent.
+    func restyle(_ tokens: Tokens) {
+        precondition(Thread.isMainThread)
+        self.tokens = tokens
+        if !stack.ids.isEmpty { makePanel(); updateVisibility() }
     }
 
     func updateSettings(_ settings: MiniPreviewSettings) {

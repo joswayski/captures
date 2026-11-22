@@ -328,6 +328,7 @@ pub fn service() {
             }
         });
         crate::update_notice::settings_changed(&settings);
+        crate::previews::settings_changed(&settings);
         sync_shortcuts(&settings);
     }
     let recorder = crate::host::with_host(|h| h.scene.recording.is_some()).unwrap_or(false);

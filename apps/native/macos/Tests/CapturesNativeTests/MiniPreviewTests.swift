@@ -582,6 +582,26 @@ final class MiniPreviewTests: XCTestCase {
         XCTAssertEqual(try saveTitle(), "Save file", "a directory is not a saved screenshot")
     }
 
+    func testRestyleRedrawsTheStackInTheNewAccent() throws {
+        _ = NSApplication.shared
+        let controller = MiniPreviewController(tokens: tokens, imageLoader: { _ in self.solidImage(.blue) })
+        defer { controller.close() }
+        let shown = artifact(id: "shown", previewPath: "/shown.png")
+        controller.restore(shown, on: nil, settings: previewSettings()) { _ in }
+        try waitUntil { controller.decodedArtifactIDs.contains(shown.id) }
+        func saveFill() throws -> String? {
+            let card = try XCTUnwrap(controller.previewView?.card(for: shown.id))
+            return try XCTUnwrap(card.subviews.compactMap { $0 as? MiniPreviewButton }
+                .first { $0.kind == .save }).chromeBackground.rgbHex
+        }
+        XCTAssertEqual(try saveFill(), tokens.color("theme-accent").rgbHex)
+        let mint = Tokens.variants["dark-mint"]!
+        XCTAssertNotEqual(mint.color("theme-accent").rgbHex, tokens.color("theme-accent").rgbHex)
+        controller.restyle(mint)
+        XCTAssertEqual(try saveFill(), mint.color("theme-accent").rgbHex, "Save file follows the chosen accent")
+        XCTAssertEqual(controller.presentedArtifactIDs, ["shown"], "restyling keeps the stack")
+    }
+
     func testStaleAsyncDragPreparationCannotAttachToReplacementIdentity() throws {
         _ = NSApplication.shared
         let controller = MiniPreviewController(tokens: tokens, imageLoader: { _ in self.solidImage(.blue) })
