@@ -29,7 +29,7 @@ use image::RgbaImage;
 
 use crate::editor::compare::Compare;
 use crate::switch::TokenSwitch;
-use crate::tokens::Tokens;
+use crate::tokens::{self, LiveTokens, Tokens};
 use crate::wake::{Outbox, Wake};
 use crate::widgets::{Icon, MaxWidth, SnapshotArea, WidthWatch, icon_button};
 
@@ -309,7 +309,7 @@ pub struct RecordingEditor {
 }
 
 struct State {
-    tokens: Rc<Tokens>,
+    tokens: LiveTokens,
     jobs: mpsc::Sender<Job>,
     latest: LatestFrame,
     looping: Arc<AtomicBool>,
@@ -822,7 +822,7 @@ pub fn build(app: &gtk::Application, tokens: Rc<Tokens>, options: Options) -> Re
     });
 
     let state = Rc::new(State {
-        tokens,
+        tokens: LiveTokens::new(tokens),
         jobs,
         latest,
         looping,
@@ -915,6 +915,14 @@ pub fn build(app: &gtk::Application, tokens: Rc<Tokens>, options: Options) -> Re
 impl RecordingEditor {
     pub fn present(&self) {
         self.window.present();
+    }
+
+    /// Preferences changed the appearance or accent: draw with `tokens` from
+    /// now on (the CSS provider restyles the rest).
+    pub fn set_tokens(&self, tokens: Rc<Tokens>) {
+        self._state.w.save_as_new.set_tokens(tokens.clone());
+        self._state.tokens.set(tokens);
+        tokens::redraw_tree(self.window.upcast_ref());
     }
 
     /// `--exercise`: move the trim start in or out by a second and re-apply.
@@ -1051,7 +1059,7 @@ impl State {
                 }
                 let (_, natural) = child.preferred_size();
                 let (w, h) = (natural.width(), natural.height());
-                let bottom = y + height - state.tokens.number("s-5") - 40.;
+                let bottom = y + height - state.tokens.get().number("s-5") - 40.;
                 return Some(gdk::Rectangle::new(
                     (x + width / 2.) as i32 - w / 2,
                     bottom as i32 - h,
@@ -2267,7 +2275,7 @@ impl State {
     }
 
     fn draw_preview(&self, snapshot: &gtk::Snapshot, width: f32, height: f32) {
-        let t = &self.tokens;
+        let t = self.tokens.get();
         snapshot.append_color(
             &t.rgba("surface-sunken"),
             &graphene::Rect::new(0., 0., width, height),
@@ -2306,7 +2314,7 @@ impl State {
     /// The After encode right of the divider, the divider, and the veil
     /// while a new comparison encodes (shipping `is-cover`).
     fn draw_compare(&self, snapshot: &gtk::Snapshot, bounds: &graphene::Rect) {
-        let t = &self.tokens;
+        let t = self.tokens.get();
         if let Some(after) = self.compare.texture.borrow().as_ref() {
             let x = bounds.x() + bounds.width() * self.compare.split.get() as f32;
             snapshot.push_clip(&graphene::Rect::new(
@@ -2340,7 +2348,7 @@ impl State {
         scale: f32,
         crop: CropRect,
     ) {
-        let t = &self.tokens;
+        let t = self.tokens.get();
         let accent = t.rgba("theme-accent");
         let ink = t.rgba("theme-accent-ink");
         let rect = graphene::Rect::new(
@@ -2416,7 +2424,7 @@ impl State {
     }
 
     fn draw_track(&self, snapshot: &gtk::Snapshot, _width: f32, height: f32) {
-        let t = &self.tokens;
+        let t = self.tokens.get();
         let (left, track_width) = self.track_rect();
         let (left, track_width) = (left as f32, track_width as f32);
         // `.timeline-filmstrip`: inset by `--timeline-inset` on every side.

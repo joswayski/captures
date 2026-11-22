@@ -584,6 +584,12 @@ impl Host {
         let tokens = Rc::new(tokens);
         self.provider.load_from_data(&style::css(&tokens));
         *self.tokens.borrow_mut() = tokens.clone();
+        for (_, editor) in self.editors.borrow().iter() {
+            editor.set_tokens(tokens.clone());
+        }
+        for (_, editor) in self.recordings.borrow().iter() {
+            editor.set_tokens(tokens.clone());
+        }
         tokens
     }
 

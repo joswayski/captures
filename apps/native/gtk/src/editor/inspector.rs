@@ -21,7 +21,7 @@ use super::controls::{
     Choice, ColorField, DropShadow, NumberField, ShadowEdit, field, pair, pressed,
 };
 use super::properties::{RangeSlider, check_row, text};
-use crate::tokens::Tokens;
+use crate::tokens::LiveTokens;
 use crate::widgets::Icon;
 
 /// The plate a Box preset or the Text background check adds.
@@ -108,7 +108,7 @@ struct ShapeSection {
 }
 
 impl ShapeSection {
-    fn new(tokens: &Rc<Tokens>, sink: &Rc<Sink>) -> Self {
+    fn new(tokens: &LiveTokens, sink: &Rc<Sink>) -> Self {
         let root = gtk::Box::new(gtk::Orientation::Vertical, 12);
         root.add_css_class("property-section");
         let stroke_check = check_row("Stroke", true);
@@ -344,7 +344,7 @@ fn format_button(child: &impl IsA<gtk::Widget>, name: &str) -> gtk::Button {
 }
 
 impl TextSection {
-    fn new(tokens: &Rc<Tokens>, sink: &Rc<Sink>) -> Self {
+    fn new(tokens: &LiveTokens, sink: &Rc<Sink>) -> Self {
         let root = gtk::Box::new(gtk::Orientation::Vertical, 12);
         root.add_css_class("property-section");
         let current: Rc<RefCell<Option<TextElement>>> = Rc::default();
@@ -692,7 +692,7 @@ pub(super) struct Inspector {
 }
 
 impl Inspector {
-    pub(super) fn new(tokens: &Rc<Tokens>, content: &gtk::Box) -> Self {
+    pub(super) fn new(tokens: &LiveTokens, content: &gtk::Box) -> Self {
         let sink = Rc::new(Sink::default());
         let inspector = Inspector {
             defaults: DefaultsSection::new(tokens),
@@ -813,7 +813,7 @@ pub(super) struct DefaultsSection {
 }
 
 impl DefaultsSection {
-    pub(super) fn new(tokens: &Rc<Tokens>) -> Rc<Self> {
+    pub(super) fn new(tokens: &LiveTokens) -> Rc<Self> {
         let values = Rc::new(Defaults {
             style: RefCell::new(ElementStyle::default()),
             opacity: Cell::new(100.),

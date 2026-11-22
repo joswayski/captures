@@ -9,7 +9,7 @@ use std::rc::Rc;
 use gtk::prelude::*;
 use gtk::{gdk, glib, graphene};
 
-use crate::tokens::Tokens;
+use crate::tokens::LiveTokens;
 use crate::widgets::SnapshotArea;
 
 /// `sidebarMinWidth`.
@@ -28,7 +28,7 @@ pub(crate) struct SidebarResize {
 }
 
 impl SidebarResize {
-    pub(crate) fn new(tokens: &Rc<Tokens>, sidebar: &impl IsA<gtk::Widget>) -> Rc<Self> {
+    pub(crate) fn new(tokens: &LiveTokens, sidebar: &impl IsA<gtk::Widget>) -> Rc<Self> {
         let handle = SnapshotArea::new(|_, _, _| {});
         handle.set_accessible_role(gtk::AccessibleRole::Separator);
         handle.set_focusable(true);
@@ -49,11 +49,12 @@ impl SidebarResize {
             hovered: Cell::new(false),
             sidebar: sidebar.clone().upcast(),
         });
-        let accent = tokens.rgba("theme-accent");
+        let live = tokens.clone();
         {
             let weak = Rc::downgrade(&resize);
             handle.set_draw(move |snapshot, w, h| {
                 let Some(resize) = weak.upgrade() else { return };
+                let accent = live.get().rgba("theme-accent");
                 if resize.hovered.get()
                     || resize.drag_from.get().is_some()
                     || resize.handle.has_visible_focus()

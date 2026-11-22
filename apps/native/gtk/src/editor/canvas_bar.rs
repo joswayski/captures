@@ -12,7 +12,7 @@ use gtk::{gdk, graphene, gsk};
 
 use super::controls::{ColorField, NumberField};
 use super::properties::check_row;
-use crate::tokens::Tokens;
+use crate::tokens::LiveTokens;
 use crate::widgets::{Icon, SnapshotArea, icon_button};
 
 /// `MAX_SCREENSHOT_OUTPUT_DIMENSION`.
@@ -59,7 +59,7 @@ fn dimension(caption: &str, field: &NumberField) -> gtk::Box {
 }
 
 impl CanvasBar {
-    pub(super) fn new(tokens: &Rc<Tokens>, send: impl Fn(Request) + 'static) -> Rc<Self> {
+    pub(super) fn new(tokens: &LiveTokens, send: impl Fn(Request) + 'static) -> Rc<Self> {
         let send: Send = Rc::new(send);
         let syncing = Rc::new(Cell::new(false));
         let root = gtk::Box::new(gtk::Orientation::Horizontal, 2);
@@ -122,14 +122,13 @@ impl CanvasBar {
         background.add_css_class("canvas-bg-trigger");
         background.set_tooltip_text(Some(colors::BACKGROUND_TOOLTIP));
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        let checker = (
-            tokens.rgba("canvas-checker-a"),
-            tokens.rgba("canvas-checker-b"),
-        );
-        let rim = tokens.rgba("border-strong");
         let chip = {
             let value = value.clone();
+            let live = tokens.clone();
             SnapshotArea::new(move |snapshot, w, h| {
+                let t = live.get();
+                let checker = (t.rgba("canvas-checker-a"), t.rgba("canvas-checker-b"));
+                let rim = t.rgba("border-strong");
                 let bounds = graphene::Rect::new(0., 0., w, h);
                 let round = gsk::RoundedRect::from_rect(bounds, 3.);
                 snapshot.push_rounded_clip(&round);
@@ -206,7 +205,7 @@ impl CanvasBar {
         }
     }
 
-    fn open_menu(self: &Rc<Self>, tokens: &Rc<Tokens>, send: &Send) {
+    fn open_menu(self: &Rc<Self>, tokens: &LiveTokens, send: &Send) {
         let popover = gtk::Popover::new();
         popover.add_css_class("captures-menu");
         popover.add_css_class("canvas-bg-menu");

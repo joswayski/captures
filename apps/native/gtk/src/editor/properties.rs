@@ -397,7 +397,7 @@ pub(super) struct Properties {
 }
 
 impl Properties {
-    pub(super) fn new(tokens: &Rc<crate::tokens::Tokens>) -> Self {
+    pub(super) fn new(tokens: &crate::tokens::LiveTokens) -> Self {
         let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
         content.add_css_class("editor-properties");
         let heading = gtk::Box::new(gtk::Orientation::Horizontal, 0);

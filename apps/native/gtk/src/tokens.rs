@@ -137,6 +137,37 @@ impl Tokens {
     }
 }
 
+/// The tokens an open window draws with, read at draw time so a look change
+/// (appearance or accent in Preferences) can swap them in place.
+#[derive(Clone)]
+pub struct LiveTokens(std::rc::Rc<std::cell::RefCell<std::rc::Rc<Tokens>>>);
+
+impl LiveTokens {
+    pub fn new(tokens: std::rc::Rc<Tokens>) -> Self {
+        Self(std::rc::Rc::new(std::cell::RefCell::new(tokens)))
+    }
+
+    pub fn get(&self) -> std::rc::Rc<Tokens> {
+        self.0.borrow().clone()
+    }
+
+    pub fn set(&self, tokens: std::rc::Rc<Tokens>) {
+        *self.0.borrow_mut() = tokens;
+    }
+}
+
+/// Queue a redraw of `widget` and everything under it, for snapshot-drawn
+/// parts after [`LiveTokens::set`]; CSS-styled widgets follow the provider.
+pub fn redraw_tree(widget: &gtk::Widget) {
+    use gtk::prelude::*;
+    widget.queue_draw();
+    let mut child = widget.first_child();
+    while let Some(current) = child {
+        redraw_tree(&current);
+        child = current.next_sibling();
+    }
+}
+
 fn css_rgba([r, g, b, a]: [f32; 4]) -> String {
     format!(
         "rgba({},{},{},{})",

@@ -34,7 +34,7 @@ use gtk::{gdk, glib, graphene, gsk};
 use image::RgbaImage;
 
 use crate::switch::TokenSwitch;
-use crate::tokens::Tokens;
+use crate::tokens::{self, LiveTokens, Tokens};
 use crate::wake::{Outbox, Wake};
 use crate::widgets::{Icon, MaxWidth, SnapshotArea, WidthWatch, icon_button};
 
@@ -287,7 +287,7 @@ pub struct Editor {
 }
 
 struct State {
-    tokens: Rc<Tokens>,
+    tokens: LiveTokens,
     output_directory: PathBuf,
     default_stem: String,
     mode: captures_capture::CaptureMode,
@@ -454,6 +454,7 @@ pub fn build(
         .default_height(840)
         .build();
     window.add_css_class("captures");
+    let live = LiveTokens::new(tokens.clone());
     window.set_size_request(860, 600);
 
     // The worker thread owns the session; the UI thread reads results.
@@ -608,7 +609,7 @@ pub fn build(
         .build();
     // Requests from the canvas toolbar reach the worker once State exists.
     let canvas_jobs = jobs.clone();
-    let canvas_bar = canvas_bar::CanvasBar::new(&tokens, move |request| {
+    let canvas_bar = canvas_bar::CanvasBar::new(&live, move |request| {
         let _ = canvas_jobs.send(Job::Apply(request));
     });
     left.append(&canvas_bar.root);
@@ -817,12 +818,12 @@ pub fn build(
         .child(&layers)
         .build();
     panel.append(&layer_scroller);
-    let properties = properties::Properties::new(&tokens);
+    let properties = properties::Properties::new(&live);
     let sidebar = properties::sidebar(&panel, &properties.root);
     sidebar.add_css_class("editor-layers");
     body.append(&sidebar);
     // The resize separator straddles the panel's left edge.
-    let resize = sidebar_resize::SidebarResize::new(&tokens, &sidebar);
+    let resize = sidebar_resize::SidebarResize::new(&live, &sidebar);
     let body_overlay = gtk::Overlay::new();
     body_overlay.set_child(Some(&body));
     body_overlay.add_overlay(&resize.handle);
@@ -1039,7 +1040,7 @@ pub fn build(
     let original_bytes =
         editor_export::original_size_bytes(&options.history_root, &options.artifact_id);
     let state = Rc::new_cyclic(|me| State {
-        tokens,
+        tokens: live,
         output_directory,
         default_stem: captures_app::recording_editor_ui::timestamp_stem(&options.created_at),
         mode,
@@ -1157,6 +1158,14 @@ pub fn build(
 impl Editor {
     pub fn present(&self) {
         self.window.present();
+    }
+
+    /// Preferences changed the appearance or accent: draw with `tokens` from
+    /// now on (the CSS provider restyles the rest).
+    pub fn set_tokens(&self, tokens: Rc<Tokens>) {
+        self.state.widgets.save_as_new.set_tokens(tokens.clone());
+        self.state.tokens.set(tokens);
+        tokens::redraw_tree(self.window.upcast_ref());
     }
 
     /// Manual zoom (percent of image pixels) for the profile exercise.
@@ -3907,7 +3916,7 @@ impl State {
         else {
             return;
         };
-        let accent = self.tokens.rgba("theme-accent");
+        let accent = self.tokens.get().rgba("theme-accent");
         let base = element.base();
         let curve = match element {
             Element::Shape(shape) if captures_app::editor_canvas::is_curveable(shape) => {
@@ -4074,7 +4083,7 @@ impl State {
         if suppressed || !self.compare_visible() {
             return;
         }
-        let t = &self.tokens;
+        let t = self.tokens.get();
         if let Some(after) = self.compare.texture.borrow().as_ref() {
             let x = bounds.x() + bounds.width() * self.compare.split.get() as f32;
             snapshot.push_clip(&graphene::Rect::new(
@@ -4100,7 +4109,7 @@ impl State {
     }
 
     fn draw(&self, snapshot: &gtk::Snapshot, width: f32, height: f32) {
-        let t = &self.tokens;
+        let t = self.tokens.get();
         let light = t.rgba("text").red() < 0.5;
         // `--editor-canvas`: a deeper well in light mode.
         snapshot.append_color(
@@ -4353,7 +4362,7 @@ impl State {
         match mode {
             BrushMode::Erase => rgba(&cr, brush_cursor::ERASE_FILL_RGBA),
             BrushMode::Restore => {
-                let accent = self.tokens.rgba("theme-accent");
+                let accent = self.tokens.get().rgba("theme-accent");
                 cr.set_source_rgba(
                     accent.red().into(),
                     accent.green().into(),

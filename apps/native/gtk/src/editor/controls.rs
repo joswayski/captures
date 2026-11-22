@@ -12,7 +12,7 @@ use gtk::prelude::*;
 use gtk::{gdk, graphene, gsk};
 
 use super::properties::{RangeSlider, check_row, text};
-use crate::tokens::Tokens;
+use crate::tokens::LiveTokens;
 use crate::widgets::{Icon, SnapshotArea};
 
 /// `DROP_SHADOW_BLUR_MAX` and `DROP_SHADOW_OFFSET_MAX` (`captures-image`).
@@ -76,7 +76,7 @@ pub(crate) struct ColorField {
 
 impl ColorField {
     pub(crate) fn new(
-        tokens: &Rc<Tokens>,
+        tokens: &LiveTokens,
         label: &str,
         changed: impl Fn(String) + 'static,
     ) -> Rc<Self> {
@@ -130,9 +130,10 @@ impl ColorField {
         custom.add_css_class("custom-color");
         custom.set_tooltip_text(Some(colors::CUSTOM_COLOR));
         custom.update_property(&[gtk::accessible::Property::Label(colors::CUSTOM_COLOR)]);
-        let inner = tokens.rgba("surface-raised");
-        let rim = tokens.rgba("border-strong");
+        let live = tokens.clone();
         let wheel = SnapshotArea::new(move |snapshot, w, h| {
+            let t = live.get();
+            let (inner, rim) = (t.rgba("surface-raised"), t.rgba("border-strong"));
             // `conic-gradient(#f44, #ff4, #4f4, #4ff, #44f, #f4f, #f44)`.
             let cr = snapshot.append_cairo(&graphene::Rect::new(0., 0., w, h));
             let (cx, cy) = (f64::from(w) / 2., f64::from(h) / 2.);
@@ -640,7 +641,7 @@ pub(crate) struct DropShadow {
 }
 
 impl DropShadow {
-    pub(crate) fn new(tokens: &Rc<Tokens>, edit: impl Fn(ShadowEdit) + 'static) -> Self {
+    pub(crate) fn new(tokens: &LiveTokens, edit: impl Fn(ShadowEdit) + 'static) -> Self {
         let edit: Rc<dyn Fn(ShadowEdit)> = Rc::new(edit);
         let syncing = Rc::new(Cell::new(false));
         let root = gtk::Box::new(gtk::Orientation::Vertical, 12);
