@@ -568,6 +568,8 @@ final class EditorDrawOverlay: EditorViewportGestureView {
     var canvasSize = NSSize.zero {
         didSet { if canvasSize != oldValue { cancelGesture() }; needsDisplay = true }
     }
+    /// Live keyboard modifiers (⌘ pans); tests pin them.
+    var currentModifiers: () -> NSEvent.ModifierFlags = { NSEvent.modifierFlags }
     var drawingEnabled = false {
         didSet {
             isHidden = !drawingEnabled
@@ -780,7 +782,7 @@ final class EditorDrawOverlay: EditorViewportGestureView {
     func brushHover(at point: NSPoint?) -> NativeBrushRing.Hover? {
         guard drawingEnabled, shape.isBackgroundBrush, let point else { return nil }
         let stroking = startPoint != nil
-        let panning = isViewportPanning || NSEvent.modifierFlags.contains(.command)
+        let panning = isViewportPanning || currentModifiers().contains(.command)
         let overImage = presentedImageRect.contains(point)
             && (brushOverImage?(canvasPoint(for: point)) ?? true)
         return NativeBrushRing.hover(overImage: overImage, stroking: stroking, panning: panning)

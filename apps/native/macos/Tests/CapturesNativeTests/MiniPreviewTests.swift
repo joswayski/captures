@@ -1489,7 +1489,8 @@ final class MiniPreviewTests: XCTestCase {
             let from = try XCTUnwrap(move.fromValue as? NSValue).pointValue.y
             let to = try XCTUnwrap(move.toValue as? NSValue).pointValue.y
             XCTAssertEqual(from, original, accuracy: 0.1)
-            XCTAssertEqual(to - from, topAnchor ? -368 : 368, accuracy: 0.1)
+            // Two 176-point card slots (160 card + 16 gap).
+            XCTAssertEqual(to - from, topAnchor ? -352 : 352, accuracy: 0.1)
             XCTAssertEqual(move.beginTime, firstMove.beginTime, accuracy: 0.001,
                            "a shorter second exit must not advance the first dust deadline")
             RunLoop.current.run(until: Date().addingTimeInterval(0.1))
@@ -1965,7 +1966,8 @@ final class MiniPreviewTests: XCTestCase {
         let panel = fixturePanel(ids: ids,
             images: Dictionary(uniqueKeysWithValues: ids.map { ($0, image) }))
         defer { panel.close() }
-        XCTAssertEqual(panel.previewView.documentHeight, 1_528)
+        // Eight 160-point cards, seven 16-point gaps, padding and the control gutter.
+        XCTAssertEqual(panel.previewView.documentHeight, 1_472)
         XCTAssertGreaterThan(panel.previewView.documentHeight, panel.previewView.bounds.height)
         XCTAssertEqual(panel.previewView.scrollOffsetY,
             panel.previewView.documentHeight - panel.previewView.bounds.height, accuracy: 0.5)

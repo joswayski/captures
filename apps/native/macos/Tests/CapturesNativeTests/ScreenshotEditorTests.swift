@@ -8213,6 +8213,8 @@ final class ScreenshotEditorTests: XCTestCase {
         overlay.canvasSize = NSSize(width: 640, height: 360); overlay.drawingEnabled = true
         overlay.imageRect = { NSRect(x: 20, y: 10, width: 160, height: 90) }
         overlay.shape = .erase
+        // A ⌘ held on the real keyboard during the run must not turn hover into panning.
+        overlay.currentModifiers = { [] }
         var sampled: [NSPoint] = []
         // Only the left half of the canvas holds a visible image.
         overlay.brushOverImage = { point in sampled.append(point); return point.x < 320 }
