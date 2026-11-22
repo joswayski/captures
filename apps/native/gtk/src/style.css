@@ -3156,6 +3156,19 @@ window.captures.notice-window {
   box-shadow: var(--shadow-md);
   animation: notice-pop-in var(--dur-4) var(--ease-out);
 }
+.captures .update-notice.restarting {
+  animation: update-restart-exit var(--dur-4) var(--ease-in) 3s forwards;
+}
+@keyframes update-restart-exit {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
 @keyframes notice-pop-in {
   from {
     opacity: 0;

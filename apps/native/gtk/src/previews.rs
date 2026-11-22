@@ -494,6 +494,7 @@ impl State {
     /// Clear all: every card streaks out as it looks now, the bottom card
     /// first, without the survivors settling.
     fn clear_all(&self) {
+        self.pile.toolbar_clear();
         let ids = self.stack.borrow().ids().to_vec();
         self.stack.borrow_mut().remove_all(&ids);
         let top = self.pile.is_top_anchor();

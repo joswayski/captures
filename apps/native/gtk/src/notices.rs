@@ -1118,8 +1118,13 @@ impl UpdateNotice {
             section.append(&bar);
             body.append(&section);
             live.restart = Some(message);
+            // `.update-notice:has(.update-restarting)`: the card leaves as
+            // the countdown ends; a failed restart drops the class and it
+            // comes back.
+            self.card.add_css_class("restarting");
         } else {
             self.restart_started.set(None);
+            self.card.remove_css_class("restarting");
         }
         if let Some(error) = &p.error {
             let message = description(&error.message, "update-error");

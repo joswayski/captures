@@ -71,6 +71,14 @@ mod imp {
         pub on_exited: RefCell<Option<Box<dyn Fn()>>>,
         /// A carried pile's gravity (`None`: ±1 from its corner).
         pub gravity: Cell<Option<f64>>,
+        /// Shipping's hit-target sparkles: the two layers' motion, the
+        /// accent dot colour, and when the hover that plays them began.
+        pub sparkle: RefCell<Option<(Animation, Animation, gtk::gdk::RGBA)>>,
+        pub sparkle_since: Cell<Option<f64>>,
+        /// The stack toolbar's In, Out, Exit and Clear motion, and the one
+        /// playing with its start.
+        pub toolbar_motion: RefCell<Option<[Animation; 4]>>,
+        pub toolbar: Cell<Option<(super::ToolbarPhase, f64)>>,
         pub carry: Cell<super::Carry>,
         /// The tallest the expanded stack may be (the work area's room).
         pub max_height: Cell<Option<f64>>,
@@ -138,7 +146,11 @@ mod imp {
             let obj = self.obj();
             let mut child = obj.first_child();
             while let Some(widget) = child {
-                obj.snapshot_child(&widget, snapshot);
+                if self.controls.borrow().as_ref() == Some(&widget) {
+                    obj.snapshot_toolbar(&widget, snapshot);
+                } else {
+                    obj.snapshot_child(&widget, snapshot);
+                }
                 let id = self
                     .cards
                     .borrow()
@@ -147,6 +159,9 @@ mod imp {
                     .map(|card| card.id.clone());
                 if let Some(id) = id {
                     obj.snapshot_dust(&id, snapshot);
+                }
+                if imp_is_expand(self, &widget) {
+                    obj.snapshot_sparkles(snapshot);
                 }
                 child = widget.next_sibling();
             }
@@ -236,10 +251,44 @@ fn mix(rest: CollapsedCardPose, fan: CollapsedCardPose, t: f64) -> CollapsedCard
     }
 }
 
+/// Shipping's `thumbnail-stack-toolbar-entering`, `-leaving`, `-exiting`
+/// and `-clearing`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolbarPhase {
+    In,
+    Out,
+    Exit,
+    Clear,
+}
+
+/// Whether `widget` is the collapsed pile's hit target.
+fn imp_is_expand(imp: &imp::Pile, widget: &gtk::Widget) -> bool {
+    imp.expand
+        .borrow()
+        .as_ref()
+        .is_some_and(|expand| expand.upcast_ref::<gtk::Widget>() == widget)
+}
+
 impl Pile {
     pub fn new(tokens: &Tokens, controls: &impl IsA<gtk::Widget>) -> Pile {
         let pile: Pile = glib::Object::new();
         let imp = pile.imp();
+        let toolbar = |motion: Motion| motion.resolve(tokens).expect("stack toolbar tokens");
+        *imp.toolbar_motion.borrow_mut() = Some([
+            toolbar(Motion::PreviewToolbarIn),
+            toolbar(Motion::PreviewToolbarOut),
+            toolbar(Motion::PreviewToolbarExit),
+            toolbar(Motion::PreviewToolbarClear),
+        ]);
+        *imp.sparkle.borrow_mut() = Some((
+            Motion::PreviewPileSparkle
+                .resolve(tokens)
+                .expect("pile sparkle tokens"),
+            Motion::PreviewPileSparkleLate
+                .resolve(tokens)
+                .expect("pile sparkle tokens"),
+            tokens.rgba("theme-accent"),
+        ));
         *imp.motion.borrow_mut() = Some((
             Transition::PreviewStackFly
                 .resolve(tokens)
@@ -432,6 +481,7 @@ impl Pile {
             ..Carry::default()
         });
         imp.hovered.set(true);
+        self.set_sparkling(false);
         self.animate();
     }
 
@@ -649,6 +699,13 @@ impl Pile {
     /// Add the newest card; it rises in with shipping's arrival.
     pub fn add_card(&self, card: PileCard) {
         let imp = self.imp();
+        // A capture after an exit or Clear all brings the toolbar back.
+        if matches!(
+            imp.toolbar.get(),
+            Some((ToolbarPhase::Exit | ToolbarPhase::Clear, _))
+        ) {
+            imp.toolbar.set(None);
+        }
         // Paint order is child order: cards stay under the cues and controls.
         card.root.insert_before(self, imp.cues.borrow().first());
         // The newest card comes into view.
@@ -705,7 +762,13 @@ impl Pile {
         if !collapsed {
             imp.hovered.set(false);
             *imp.fan.borrow_mut() = StackFan::default();
+            self.set_sparkling(false);
         }
+        self.start_toolbar(if collapsed {
+            ToolbarPhase::Out
+        } else {
+            ToolbarPhase::In
+        });
         self.update_cards();
         self.animate();
     }
@@ -720,6 +783,7 @@ impl Pile {
         if !imp.collapsed.get() {
             return;
         }
+        self.set_sparkling(hovered);
         let ids = self.depths();
         let cards: Vec<(&str, usize)> = ids.iter().map(|(id, d)| (id.as_str(), *d)).collect();
         let fan_tween = self.tweens().1;
@@ -729,6 +793,189 @@ impl Pile {
                 .set(hovered, self.now_ms(), &cards, &fan_tween, self.reduced());
         if changed {
             self.animate();
+        }
+    }
+
+    /// Clear all: the toolbar leaves with the first Close streak.
+    pub fn toolbar_clear(&self) {
+        self.start_toolbar(ToolbarPhase::Clear);
+    }
+
+    /// Play `phase` on the toolbar; at once (nothing plays) with animations off.
+    fn start_toolbar(&self, phase: ToolbarPhase) {
+        let imp = self.imp();
+        if self.reduced() {
+            imp.toolbar.set(None);
+        } else {
+            imp.toolbar.set(Some((phase, self.now_ms())));
+        }
+        self.update_cards();
+        self.animate();
+    }
+
+    /// The toolbar's motion and how far it has played, while it plays.
+    fn toolbar_pose(&self, now: f64) -> Option<(ToolbarPhase, Animation, f64)> {
+        let imp = self.imp();
+        let (phase, since) = imp.toolbar.get()?;
+        let motion = (*imp.toolbar_motion.borrow())?;
+        let animation = motion[phase as usize];
+        Some((phase, animation, now - since))
+    }
+
+    /// End an entrance or a collapse once it has played; an exit or clear
+    /// holds its last frame until a new capture arrives.
+    fn settle_toolbar(&self) -> bool {
+        let Some((phase, animation, elapsed)) = self.toolbar_pose(self.now_ms()) else {
+            return false;
+        };
+        if animation.running(elapsed, false) {
+            return true;
+        }
+        if matches!(phase, ToolbarPhase::In | ToolbarPhase::Out) {
+            self.imp().toolbar.set(None);
+            self.update_cards();
+            self.queue_resize();
+        }
+        false
+    }
+
+    /// The toolbar under its pose: opacity, rise, scale about its centre
+    /// and the dissolve blur.
+    fn snapshot_toolbar(&self, toolbar: &gtk::Widget, snapshot: &gtk::Snapshot) {
+        let Some((_, animation, elapsed)) = self.toolbar_pose(self.now_ms()) else {
+            self.snapshot_child(toolbar, snapshot);
+            return;
+        };
+        let pose = animation.pose_at(elapsed, false);
+        if pose.opacity <= 0. {
+            return;
+        }
+        let Some(bounds) = toolbar.compute_bounds(self) else {
+            return;
+        };
+        let centre = bounds.center();
+        snapshot.save();
+        snapshot.translate(&centre);
+        snapshot.translate(&graphene::Point::new(
+            pose.translate_x as f32,
+            pose.translate_y as f32,
+        ));
+        snapshot.scale((pose.scale * pose.scale_x) as f32, pose.scale as f32);
+        snapshot.translate(&graphene::Point::new(-centre.x(), -centre.y()));
+        snapshot.push_opacity(pose.opacity);
+        let blurred = pose.blur > 0.;
+        if blurred {
+            snapshot.push_blur(pose.blur);
+        }
+        self.snapshot_child(toolbar, snapshot);
+        if blurred {
+            snapshot.pop();
+        }
+        snapshot.pop();
+        snapshot.restore();
+    }
+
+    /// Shipping plays the sparkles on a hovered collapsed pile, but not
+    /// while it is carried or with animations off.
+    fn set_sparkling(&self, on: bool) {
+        let imp = self.imp();
+        let on = on && !self.reduced() && imp.carry.get().since.is_none();
+        if on == imp.sparkle_since.get().is_some() {
+            return;
+        }
+        if !on {
+            imp.sparkle_since.set(None);
+            self.queue_draw();
+            return;
+        }
+        imp.sparkle_since.set(Some(self.now_ms()));
+        self.add_tick_callback(|pile, _| {
+            pile.queue_draw();
+            if pile.imp().sparkle_since.get().is_some() {
+                glib::ControlFlow::Continue
+            } else {
+                glib::ControlFlow::Break
+            }
+        });
+    }
+
+    /// `.thumbnail-collapsed-hit-target::before/::after`: each layer of
+    /// dots rises and fades over the pile, `PreviewPileSparkle` and its late
+    /// twin, with the layer's centre as the transform origin.
+    fn snapshot_sparkles(&self, snapshot: &gtk::Snapshot) {
+        let imp = self.imp();
+        let Some(since) = imp.sparkle_since.get() else {
+            return;
+        };
+        let Some((early, late, accent)) = *imp.sparkle.borrow() else {
+            return;
+        };
+        let Some(expand) = imp.expand.borrow().clone() else {
+            return;
+        };
+        let Some(bounds) = expand.compute_bounds(self) else {
+            return;
+        };
+        let layer = preview_motion::sparkle_layer(
+            (
+                f64::from(bounds.x()),
+                f64::from(bounds.y()),
+                f64::from(bounds.width()),
+                f64::from(bounds.height()),
+            ),
+            imp.top_anchor.get(),
+        );
+        let elapsed = self.now_ms() - since;
+        let centre = graphene::Point::new(
+            (layer.0 + layer.2 / 2.) as f32,
+            (layer.1 + layer.3 / 2.) as f32,
+        );
+        let white = gtk::gdk::RGBA::WHITE;
+        let layers: [(&Animation, &[preview_motion::SparkleDot]); 2] = [
+            (&early, &preview_motion::SPARKLES_EARLY),
+            (&late, &preview_motion::SPARKLES_LATE),
+        ];
+        for (animation, dots) in layers {
+            let pose = animation.pose_repeating(elapsed, false);
+            if pose.opacity <= 0. {
+                continue;
+            }
+            snapshot.save();
+            snapshot.translate(&centre);
+            snapshot.translate(&graphene::Point::new(0., pose.translate_y as f32));
+            snapshot.scale(pose.scale as f32, pose.scale as f32);
+            snapshot.translate(&graphene::Point::new(-centre.x(), -centre.y()));
+            snapshot.push_opacity(pose.opacity);
+            for dot in dots {
+                let (x, y) = preview_motion::sparkle_center(dot, layer);
+                let base = if dot.accent { accent } else { white };
+                let color = gtk::gdk::RGBA::new(
+                    base.red(),
+                    base.green(),
+                    base.blue(),
+                    base.alpha() * dot.alpha as f32,
+                );
+                let clear = gtk::gdk::RGBA::new(color.red(), color.green(), color.blue(), 0.);
+                let fade = dot.fade as f32;
+                let core = (dot.core / dot.fade) as f32;
+                let (x, y) = (x as f32, y as f32);
+                // `radial-gradient(circle, color 0 core, transparent fade)`.
+                snapshot.append_radial_gradient(
+                    &graphene::Rect::new(x - fade, y - fade, 2. * fade, 2. * fade),
+                    &graphene::Point::new(x, y),
+                    fade,
+                    fade,
+                    0.,
+                    1.,
+                    &[
+                        gsk::ColorStop::new(0., color),
+                        gsk::ColorStop::new(core, color),
+                        gsk::ColorStop::new(1., clear),
+                    ],
+                );
+            }
+            snapshot.pop();
+            snapshot.restore();
         }
     }
 
@@ -782,9 +1029,12 @@ impl Pile {
         let collapsed = imp.collapsed.get();
         let cards = imp.cards.borrow();
         let count = cards.len();
-        // Shipping hides the stack toolbar while minimized.
+        // Shipping hides the stack toolbar while minimized, after it leaves.
         if let Some(controls) = imp.controls.borrow().as_ref() {
-            controls.set_visible(!collapsed);
+            let phase = imp.toolbar.get().map(|(phase, _)| phase);
+            controls.set_visible(!collapsed || phase == Some(ToolbarPhase::Out));
+            // The toolbar takes no input while it moves.
+            controls.set_can_target(phase.is_none());
         }
         if let Some(expand) = imp.expand.borrow().as_ref() {
             expand.set_visible(collapsed);
@@ -832,6 +1082,21 @@ impl Pile {
 
     fn running(&self) -> bool {
         let imp = self.imp();
+        if self.is_clearing()
+            && !matches!(
+                imp.toolbar.get(),
+                Some((ToolbarPhase::Clear | ToolbarPhase::Exit, _))
+            )
+            && !imp.collapsed.get()
+            && !self.reduced()
+        {
+            imp.toolbar.set(Some((ToolbarPhase::Exit, self.now_ms())));
+            self.update_cards();
+        }
+        let toolbar = self.settle_toolbar();
+        if toolbar {
+            self.queue_draw();
+        }
         let now = self.now_ms();
         let reduced = self.reduced();
         let (fly, fan, arrive) = self.tweens();
@@ -844,7 +1109,8 @@ impl Pile {
             .borrow_mut()
             .retain(|_, start| !reduced && now - *start < reject_ms);
         let deepest = imp.cards.borrow().len().saturating_sub(1);
-        fly.running(now - since, reduced)
+        toolbar
+            || fly.running(now - since, reduced)
             || imp.fan.borrow().running(deepest, now, &fan, reduced)
             || !imp.arrivals.borrow().is_empty()
             || !imp.rejects.borrow().is_empty()
