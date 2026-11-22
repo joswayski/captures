@@ -195,7 +195,7 @@ fn recovery_retries_http_and_tampering_then_installs_signed_fix_only_after_packa
         drop(host);
         drop(package);
         let outcome = worker.join().unwrap();
-        assert_eq!(outcome.is_ok(), confirms_startup);
+        assert_eq!(outcome.is_ok(), confirms_startup, "{outcome:?}");
         assert_eq!(fs::read(&installed).unwrap(), payload);
         assert_eq!(fs::read(history).unwrap(), b"retain my captures and drafts");
         assert_eq!(directory.join("completed").is_file(), confirms_startup);

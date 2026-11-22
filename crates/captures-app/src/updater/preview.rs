@@ -612,13 +612,14 @@ impl Download {
             .create_new(true)
             .write(true)
             .open(self.directory.path().join("install.log"))?;
-        Command::new(copy)
-            .arg("--install")
-            .arg(&request)
-            .stdin(Stdio::null())
-            .stdout(log.try_clone()?)
-            .stderr(log)
-            .spawn()?;
+        spawn_fresh(
+            Command::new(copy)
+                .arg("--install")
+                .arg(&request)
+                .stdin(Stdio::null())
+                .stdout(log.try_clone()?)
+                .stderr(log),
+        )?;
         // The child now owns the persistent request/artifact/log directory. It
         // retains it on failure so there is actionable recovery evidence.
         let _ = self.directory.keep();
@@ -1094,6 +1095,25 @@ fn record_backup(directory: &Path, installed: &Path, backup: &Path) -> Result<()
     Ok(())
 }
 
+/// Starts a program this process just wrote or copied. A thread that forks
+/// while that file is still open for writing hands its child the descriptor
+/// until the child execs, so the exec can briefly fail with ETXTBSY on Linux.
+/// Retry that instead of failing an update or recovery whose files are in place.
+fn spawn_fresh(command: &mut Command) -> std::io::Result<std::process::Child> {
+    let started = std::time::Instant::now();
+    loop {
+        match command.spawn() {
+            Err(error)
+                if error.kind() == std::io::ErrorKind::ExecutableFileBusy
+                    && started.elapsed() < Duration::from_secs(2) =>
+            {
+                std::thread::sleep(Duration::from_millis(20))
+            }
+            result => return result,
+        }
+    }
+}
+
 /// `installer`: `executable` is the verified NSIS installer, which relaunches
 /// Captures itself.
 fn launch_and_confirm(
@@ -1157,7 +1177,7 @@ fn launch_and_confirm(
                 .spawn()?,
         )
     } else {
-        Some(
+        Some(spawn_fresh(
             Command::new(executable)
                 .env_remove("APPIMAGE")
                 .env_remove("APPDIR")
@@ -1166,9 +1186,8 @@ fn launch_and_confirm(
                 .arg(&ready)
                 .arg("--native-update-ready-token")
                 .arg(&token)
-                .stdin(Stdio::null())
-                .spawn()?,
-        )
+                .stdin(Stdio::null()),
+        )?)
     };
     let started = std::time::Instant::now();
     loop {

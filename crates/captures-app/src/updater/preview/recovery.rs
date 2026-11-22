@@ -79,13 +79,14 @@ impl Startup {
         let helper = directory.path().join(name);
         fs::copy(std::env::current_exe()?.with_file_name(name), &helper)?;
         let log = new_file(&directory.path().join("recovery.log"))?;
-        let mut child = Command::new(helper)
-            .arg("--watch-startup")
-            .arg(request_path)
-            .stdin(Stdio::null())
-            .stdout(log.try_clone()?)
-            .stderr(log)
-            .spawn()?;
+        let mut child = spawn_fresh(
+            Command::new(helper)
+                .arg("--watch-startup")
+                .arg(request_path)
+                .stdin(Stdio::null())
+                .stdout(log.try_clone()?)
+                .stderr(log),
+        )?;
         // Confirm the separate process has retained the original lock/ready
         // handles before allowing migration to fail or the GUI to crash.
         let started = Instant::now();
