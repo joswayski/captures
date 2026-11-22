@@ -60,17 +60,56 @@ pub enum Kind {
 enum Source {
     Region(Box<RegionSession>),
     Window(Arc<WindowSession>),
-    /// New Capture on X11: both sessions over one display, and the
+    /// New Capture on X11: one frozen display for every target, and the
     /// displays the bar can switch to.
     /// `window` is absent where the session lists no windows (an X11
     /// session without EWMH): Window is then unavailable, as shipping.
     Menu {
-        region: Box<RegionSession>,
+        region: MenuFrame,
         window: Option<Arc<WindowSession>>,
         displays: Vec<(String, String)>,
     },
     /// A portal still in its own pixels; selection is in overlay points.
     Portal(Arc<image::RgbaImage>),
+}
+
+/// New Capture's display for Region and Full screen. The window session
+/// also captures regions and the display from its one frozen frame, as the
+/// AppKit and Win32 New Capture do; a region session (a second grab) only
+/// where windows cannot be listed.
+enum MenuFrame {
+    Window(Arc<WindowSession>),
+    Region(Box<RegionSession>),
+}
+
+impl MenuFrame {
+    fn display(&self) -> &captures_capture::DisplayDescriptor {
+        match self {
+            MenuFrame::Window(session) => session.display(),
+            MenuFrame::Region(session) => session.display(),
+        }
+    }
+
+    fn frozen_preview(&self) -> Option<std::borrow::Cow<'_, image::RgbaImage>> {
+        match self {
+            MenuFrame::Window(session) => session.frozen_preview(),
+            MenuFrame::Region(session) => session.frozen_preview(),
+        }
+    }
+
+    fn capture(
+        &self,
+        root: &std::path::Path,
+        rect: Rect,
+        after_countdown: bool,
+    ) -> Result<captures_app::Artifact, captures_app::Error> {
+        match self {
+            MenuFrame::Window(session) => {
+                session.capture(root, &Target::Region { rect }, after_countdown)
+            }
+            MenuFrame::Region(session) => session.capture(root, rect, after_countdown),
+        }
+    }
 }
 
 /// What a confirmed overlay captures.
@@ -467,21 +506,17 @@ fn prepare(
             .map(|session| Source::Region(Box::new(session))),
         Kind::Window => WindowSession::prepare(&display, generation, freeze, include_cursor, 0.)
             .map(|session| Source::Window(Arc::new(session))),
-        Kind::Menu => RegionSession::prepare(&display, generation, freeze, include_cursor)
-            .and_then(|region| {
-                let window = match WindowSession::prepare(
-                    &display,
-                    generation,
-                    freeze,
-                    include_cursor,
-                    0.,
-                ) {
-                    Ok(window) => Some(Arc::new(window)),
-                    Err(captures_app::Error::Cancelled) => {
-                        return Err(captures_app::Error::Cancelled);
-                    }
-                    Err(_) => None,
-                };
+        Kind::Menu => {
+            match WindowSession::prepare(&display, generation, freeze, include_cursor, 0.) {
+                Ok(window) => {
+                    let window = Arc::new(window);
+                    Ok((MenuFrame::Window(window.clone()), Some(window)))
+                }
+                Err(captures_app::Error::Cancelled) => Err(captures_app::Error::Cancelled),
+                Err(_) => RegionSession::prepare(&display, generation, freeze, include_cursor)
+                    .map(|region| (MenuFrame::Region(Box::new(region)), None)),
+            }
+            .map(|(region, window)| {
                 let displays = captures_capture::XcapBackend
                     .displays()
                     .map(|displays| {
@@ -500,12 +535,13 @@ fn prepare(
                             .collect()
                     })
                     .unwrap_or_default();
-                Ok(Source::Menu {
-                    region: Box::new(region),
+                Source::Menu {
+                    region,
                     window,
                     displays,
-                })
-            }),
+                }
+            })
+        }
     };
     match result {
         Ok(source) => Ok(Some(source)),
@@ -2078,7 +2114,8 @@ impl Overlay {
             return;
         };
         let display = match &source {
-            Source::Region(region) | Source::Menu { region, .. } => Some(region.display().clone()),
+            Source::Region(region) => Some(region.display().clone()),
+            Source::Menu { region, .. } => Some(region.display().clone()),
             Source::Window(window) => Some(window.display().clone()),
             Source::Portal(_) => None,
         };
