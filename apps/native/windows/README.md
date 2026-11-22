@@ -344,7 +344,11 @@ Clear all and Minimize enter with shipping's
 blur as it collapses, hold and fade when a Close or Delete leaves one card,
 and leave with the first streak of Clear all, taking no pointer while they
 move and showing or hiding at once under reduced motion (`--select
-toolbar-in|toolbar-out`). A new card holds shipping's capture highlight
+toolbar-in|toolbar-out`). Hovered or focused, Minimize grows inward into
+shipping's 92 DIP "Show less" pill (width over 240 ms, the icon trading
+places with the label over 180 ms, both `--ease-out`), keeps it while the
+stack collapses and shows its icon while the toolbar enters or leaves
+otherwise (`--select show-less`). A new card holds shipping's capture highlight
 (a 1 px accent ring with an 18 px accent glow) for 1 s, then fades it over
 3.5 s, skipped under reduced motion (`--select highlight`). Hovering eases
 the card's look like shipping's transitions: the image's blur and dim over

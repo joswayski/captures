@@ -20,7 +20,8 @@
 //! on GTK. Arriving cards rise out of shipping's 3 px blur (`blurred`);
 //! a closing card's image stretches under the streak's stepped horizontal
 //! blur, and Clear all keeps each card's own look. Clear all and Minimize
-//! enter, dissolve and leave with the shared `StackToolbar` motions.
+//! enter, dissolve and leave with the shared `StackToolbar` motions, and
+//! Minimize grows into "Show less" while hovered or focused.
 //!
 //! Dragging an expanded card's image drags its file out (`crate::drag`);
 //! an accepted drop elsewhere dismisses the card and a drop back on the
@@ -224,6 +225,8 @@ pub struct Stack {
     /// The tokens [`Self::toolbar`]'s motions resolve against; `None`
     /// (offscreen fixtures) shows and hides it at once.
     pub toolbar_tokens: Option<Tokens>,
+    /// Minimize growing into "Show less" while hovered or focused.
+    minimize: Morph,
 }
 
 /// A card's hover look easing toward `on` since `at`, from where each
@@ -252,6 +255,33 @@ impl HoverFade {
 
     fn running(&self, now: f64) -> bool {
         now - self.at < HOVER_MS[1]
+    }
+}
+
+/// Minimize's "Show less" morph easing toward `open` since `at`, from where
+/// it was then: its width (`--thumbnail-minimize-morph`, 240 ms) and the
+/// icon-to-label swap (`--thumbnail-minimize-swap`, 180 ms), both
+/// `--ease-out`.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct Morph {
+    open: bool,
+    at: f64,
+    from: [f32; 2],
+}
+
+const MORPH_MS: [f64; 2] = [240., 180.];
+
+impl Morph {
+    fn values(&self, now: f64, ease: captures_app::motion::CubicBezier) -> [f32; 2] {
+        let target = f32::from(u8::from(self.open));
+        std::array::from_fn(|i| {
+            let p = ease.ease(((now - self.at) / MORPH_MS[i]).clamp(0., 1.)) as f32;
+            self.from[i] + (target - self.from[i]) * p
+        })
+    }
+
+    fn running(&self, now: f64) -> bool {
+        now - self.at < MORPH_MS[0]
     }
 }
 
@@ -499,6 +529,49 @@ impl Stack {
             focus: None,
             toolbar: StackToolbar::default(),
             toolbar_tokens: None,
+            minimize: Morph::default(),
+        }
+    }
+
+    /// Grow Minimize into "Show less" while it is hovered or focused and the
+    /// toolbar is idle, or shrink it back, from where it is now.
+    pub fn sync_minimize(&mut self, now: f64) {
+        let open = self.toolbar()
+            && (self.hot == Some(Hit::Minimize) || self.focus == Some(Hit::Minimize));
+        if open != self.minimize.open {
+            let from = self.morph_values(now);
+            self.minimize = Morph {
+                open,
+                at: now,
+                from,
+            };
+        }
+    }
+
+    fn morph_values(&self, now: f64) -> [f32; 2] {
+        let ease = self
+            .toolbar_tokens
+            .as_ref()
+            .and_then(|t| captures_app::motion::MotionTokens::easing(t, "ease-out"))
+            .and_then(|[x1, y1, x2, y2]| captures_app::motion::CubicBezier::new(x1, y1, x2, y2));
+        match ease {
+            Some(ease) if !self.instant() => self.minimize.values(now, ease),
+            _ => [f32::from(u8::from(self.minimize.open)); 2],
+        }
+    }
+
+    /// Minimize's width and icon-to-label swap now (0 the icon, 1 "Show
+    /// less"). Shipping keeps "Show less" while the stack collapses and the
+    /// icon while the toolbar enters or leaves otherwise.
+    fn minimize_look(&self) -> [f32; 2] {
+        let now = now_ms();
+        let forced = self
+            .toolbar_tokens
+            .as_ref()
+            .and_then(|t| self.toolbar.minimize_override(t, now, self.reduced));
+        match forced {
+            Some(open) => [f32::from(u8::from(open)); 2],
+            None => self.morph_values(now),
         }
     }
 
@@ -780,6 +853,7 @@ impl Stack {
             || (!self.instant() && self.hover_fades.values().any(|fade| fade.running(now)));
         pile || arriving
             || self.toolbar_moving()
+            || (!self.instant() && self.minimize.running(now))
             || !self.exits.is_empty()
             || scrolling
             || cues
@@ -1181,16 +1255,20 @@ impl Stack {
     }
 
     /// Minimize sits beside Clear all, `gap: var(--s-1)`; the right anchor's
-    /// `row-reverse` puts it inside Clear all.
+    /// `row-reverse` puts it inside Clear all. As "Show less" it grows
+    /// inward, away from Clear all, to 92 DIPs.
     fn minimize_rect(&self) -> Rect {
         let clear = self.clear_rect();
         let step = CONTROL + 2.;
-        let x = if self.right {
-            clear.left - step
+        let width = CONTROL
+            + (preview::STACK_MINIMIZE_HOVER_WIDTH as f32 - CONTROL) * self.minimize_look()[0];
+        if self.right {
+            let right = clear.left - 2.;
+            rect(right - width, clear.top, right, clear.bottom)
         } else {
-            clear.left + step
-        };
-        rect(x, clear.top, x + CONTROL, clear.bottom)
+            let x = clear.left + step;
+            rect(x, clear.top, x + width, clear.bottom)
+        }
     }
 
     fn clear_rect(&self) -> Rect {
@@ -1572,7 +1650,8 @@ impl Stack {
         hit: Hit,
         r: Rect,
     ) -> Result<()> {
-        let hot = self.hot == Some(hit);
+        // Minimize's hover is the "Show less" morph, on the resting glass.
+        let hot = self.hot == Some(hit) && hit == Hit::ClearAll;
         gfx::shadow(dc, r, t.n("r-md"), t.shadow("thumbnail-card-shadow"))?;
         let fill = if hot {
             "glass-raised-solid"
@@ -1588,21 +1667,65 @@ impl Stack {
         gfx::border(dc, r, t.n("r-md"), 1., t.color(edge))?;
         // `close` is a 24-unit icon at 16 px; `preview-stack` a 16-unit one,
         // so 24 here draws it at 16 px too.
-        let (icon, side) = if hit == Hit::ClearAll {
-            ("close", 16.)
+        let (icon, side, swap) = if hit == Hit::ClearAll {
+            ("close", 16., 0.)
         } else {
-            ("preview-stack", 24.)
+            ("preview-stack", 24., self.minimize_look()[1])
         };
-        let inset = (CONTROL - 16.) / 2.;
-        gfx::icon(
-            dc,
-            &g.factory,
-            icon,
-            &[],
-            (r.left + inset, r.top + inset, side),
-            if side > 16. { 1.4 * 1.5 } else { 1.8 },
-            t.color("glass-text"),
-        )
+        // `--thumbnail-minimize-slide`: away from the pile's screen edge.
+        let slide = if self.right { -1. } else { 1. };
+        let (cx, cy) = ((r.left + r.right) / 2., (r.top + r.bottom) / 2.);
+        unsafe { dc.PushAxisAlignedClip(&r, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE) };
+        let result = (|| {
+            // The icon fades, slides back 8 DIPs and shrinks to 0.8 ...
+            let mut base = Matrix3x2::identity();
+            unsafe { dc.GetTransform(&mut base) };
+            let s = 1. - 0.2 * swap;
+            let posed = Matrix3x2 {
+                M11: s,
+                M12: 0.,
+                M21: 0.,
+                M22: s,
+                M31: cx - s * cx - slide * 8. * swap,
+                M32: cy - s * cy,
+            } * base;
+            unsafe { dc.SetTransform(&posed) };
+            let drawn = faded(dc, 1. - swap, || {
+                gfx::icon(
+                    dc,
+                    &g.factory,
+                    icon,
+                    &[],
+                    (cx - 8., cy - 8., side),
+                    if side > 16. { 1.4 * 1.5 } else { 1.8 },
+                    t.color("glass-text"),
+                )
+            });
+            unsafe { dc.SetTransform(&base) };
+            drawn?;
+            if swap <= 0. {
+                return Ok(());
+            }
+            // ... as "Show less" fades in from 4 DIPs the other way.
+            let label = g.text_sized(
+                t,
+                preview::STACK_MINIMIZE_HOVER_LABEL,
+                t.n("text-2xs"),
+                "weight-semibold",
+                None,
+            )?;
+            faded(dc, swap, || {
+                gfx::text(
+                    dc,
+                    &label,
+                    cx - label.width / 2. + slide * 4. * (1. - swap),
+                    cy - label.height / 2.,
+                    t.color("glass-text"),
+                )
+            })
+        })();
+        unsafe { dc.PopAxisAlignedClip() };
+        result
     }
 
     /// The sparkles run: the pile is hovered, at rest and not being carried
@@ -2527,6 +2650,11 @@ pub fn fixture(g: &Gfx, image: &image::RgbaImage, select: Option<&str>) -> Stack
             stack.pointer(Some((at.left + 4., at.top + 4.)));
             stack.tips = stack.tip_targets().map(Tip::settled);
         }
+        // The pointer on Minimize, which reads "Show less".
+        Some("show-less") => {
+            let at = stack.minimize_rect();
+            stack.pointer(Some((at.left + 4., at.top + 4.)));
+        }
         // The hovered newest card 160 ms into its Close: sliding and fading
         // out while its image streaks.
         Some("streak") => {
@@ -2571,6 +2699,7 @@ pub fn fixture(g: &Gfx, image: &image::RgbaImage, select: Option<&str>) -> Stack
             stack.pointer(Some((150., 90.)));
         }
     }
+    stack.sync_minimize(now_ms());
     stack.sync_cues();
     stack
 }
@@ -3361,6 +3490,7 @@ impl Previews {
         self.stack.sync_cues();
         self.stack.sync_focus();
         self.stack.sync_hover(now_ms());
+        self.stack.sync_minimize(now_ms());
         self.stack.sync_tips(&self.tokens, crate::tooltip::now_ms());
         let (stack, g, t) = (&self.stack, &self.g, &self.tokens);
         gfx::draw_surface(surface, self.px, (self.scale, self.scale), 0., |dc| {
@@ -4120,6 +4250,46 @@ mod tests {
         stack.sync_toolbar(ToolbarCause::Other);
         stack.height = stack.content_height();
         stack
+    }
+
+    #[test]
+    fn minimize_grows_inward_into_show_less_while_hovered() {
+        use captures_settings::MiniPreviewPlacement as P;
+        for placement in [P::BottomLeft, P::BottomRight] {
+            let mut s = stack(placement, &[false, false]);
+            let clear = s.clear_rect();
+            let rest = s.minimize_rect();
+            s.pointer(Some((rest.left + 4., rest.top + 4.)));
+            s.sync_minimize(now_ms());
+            let open = s.minimize_rect();
+            assert_eq!(open.right - open.left, 92., "{placement:?}");
+            // It grows away from Clear all, which stays put.
+            if s.right {
+                assert_eq!((open.right, open.left), (rest.right, rest.right - 92.));
+            } else {
+                assert_eq!(open.left, rest.left);
+            }
+            assert_eq!(s.clear_rect().left, clear.left);
+            // The grown pill keeps the pointer it grew under.
+            let far = if s.right {
+                open.left + 4.
+            } else {
+                open.right - 4.
+            };
+            assert_eq!(s.hit(far, open.top + 4.), Some(Hit::Minimize));
+            // Leaving shrinks it back.
+            s.pointer(None);
+            s.sync_minimize(now_ms());
+            assert_eq!(s.minimize_rect(), rest);
+        }
+        // While the toolbar enters it keeps its icon.
+        let mut s = stack(P::BottomLeft, &[false, false]);
+        s.toolbar_tokens = Some(Tokens::variant("light", "mustard"));
+        s.focus = Some(Hit::Minimize);
+        s.sync_minimize(now_ms());
+        s.toolbar = StackToolbar::default();
+        s.toolbar.set(true, ToolbarCause::Expand, now_ms());
+        assert_eq!(s.minimize_look(), [0., 0.]);
     }
 
     #[test]
