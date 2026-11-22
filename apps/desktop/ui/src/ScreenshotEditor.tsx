@@ -2154,6 +2154,8 @@ export function ScreenshotEditor() {
   /** Bumps to cancel in-flight debounced draft writes. */
   const draftSaveGenerationRef = useRef(0);
   const draftWriteRef = useRef<Promise<void>>(Promise.resolve());
+  /** The autosave failure currently reported in the footer, if any. */
+  const draftFailureRef = useRef<string | null>(null);
   /**
    * Image assets the backend already holds for the current draft, keyed by
    * source URL so unchanged layers are not re-encoded and re-sent every autosave.
@@ -2764,8 +2766,19 @@ export function ScreenshotEditor() {
         if (generation !== draftSaveGenerationRef.current) return;
         try {
           await persistEditorDraft(editorDocument, draftArtifactId);
-        } catch {
-          // Keep editing; the next change or close flush can retry.
+          const shown = draftFailureRef.current;
+          draftFailureRef.current = null;
+          if (shown !== null) setError((current) => (current === shown ? "" : current));
+        } catch (reason) {
+          // Keep editing; the next change or close flush can retry. Closing
+          // now would lose these edits, so say why once, not on every retry.
+          const detail = reason instanceof Error ? reason.message : String(reason);
+          const message = /draft/i.test(detail)
+            ? detail
+            : `Unsaved edits could not be kept as a draft: ${detail}`;
+          if (draftFailureRef.current === message) return;
+          draftFailureRef.current = message;
+          setError(message);
         }
       })();
     }, SCREENSHOT_EDITOR_DRAFT_SAVE_MS);

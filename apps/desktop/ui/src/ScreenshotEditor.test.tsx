@@ -515,6 +515,44 @@ describe("ScreenshotEditor", () => {
     },
   );
 
+  it("reports a failed draft autosave and clears the report once a save succeeds", async () => {
+    const restore = installExportableCanvas();
+    try {
+      render(<ScreenshotEditor />);
+      await screen.findByLabelText("Canvas width");
+
+      let diskFull = true;
+      const previousInvoke = vi.mocked(invoke).getMockImplementation()!;
+      vi.mocked(invoke).mockImplementation((command, args, options) => {
+        if (command === "save_screenshot_editor_draft" && diskFull) {
+          return Promise.reject("No space left on device (os error 28)");
+        }
+        return previousInvoke(command, args, options);
+      });
+      const resize = (width: string) => {
+        fireEvent.change(screen.getByLabelText("Canvas width"), { target: { value: width } });
+        fireEvent.blur(screen.getByLabelText("Canvas width"));
+      };
+
+      resize("1200");
+      expect(
+        await screen.findByText(
+          "Unsaved edits could not be kept as a draft: No space left on device (os error 28)",
+          {},
+          { timeout: 3_000 },
+        ),
+      ).toHaveAttribute("role", "alert");
+
+      diskFull = false;
+      resize("1100");
+      await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument(), {
+        timeout: 3_000,
+      });
+    } finally {
+      restore();
+    }
+  });
+
   it("resolves the close handler even when draft flush never finishes", async () => {
     // Regression: awaiting an unbounded draft encode/IPC made the red X a no-op
     // because Tauri only destroy()s after onCloseRequested settles.
