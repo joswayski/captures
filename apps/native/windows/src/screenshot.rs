@@ -97,6 +97,20 @@ pub fn render(options: &Options, path: &std::path::Path) -> Result<()> {
         if target == crate::capture::Target::Region && options.select.is_some() {
             menu.selection = Some(crate::gfx::rect(320., 180., 860., 500.));
         }
+        // `--select aspect` opens the Aspect select on 16 : 9; `aspect-top`
+        // also moves the region to the top edge (its size label inside).
+        if let Some(select @ ("aspect" | "aspect-top")) = options.select.as_deref() {
+            menu.aspect = 4;
+            if select == "aspect-top" {
+                menu.selection = Some(crate::gfx::rect(320., 10., 860., 314.));
+            } else {
+                let state = captures_app::controls::select::State {
+                    open: true,
+                    active: 4,
+                };
+                menu.open = Some((crate::capture::Field::Aspect, state));
+            }
+        }
         // The fixture window below; `--select` hovers it, `--select desktop`
         // the display.
         menu.windows = vec![(

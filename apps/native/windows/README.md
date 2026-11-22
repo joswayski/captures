@@ -104,8 +104,13 @@ applies, the result is copied to the clipboard and History reloads. One shared
 `WindowSession` snapshot serves all three targets. A screenshot delay shows
 shipping's countdown scrim ("SCREENSHOT IN", the number and "Press Esc to
 cancel") on the selected display with the shared entry and exit motions; Esc
-cancels it and the capture reads fresh pixels once it closes. The Aspect and
-Display selects are not ported yet. A physical Windows 11 check (4K, 150%) confirmed pixel-exact
+cancels it and the capture reads fresh pixels once it closes. Like shipping,
+a drawn region shows its W × H label and four corner handles: dragging the frame
+moves it, a handle resizes it, and a press elsewhere draws a new one; Shift
+squares a drag (pressing or releasing it mid-drag re-runs it) and the Aspect
+select (Free, 1 : 1, 4 : 3, 3 : 2, 16 : 9, 9 : 16) locks drags and refits a
+drawn region around its center (--select aspect|aspect-top renders it). The
+Display select is not ported yet. A physical Windows 11 check (4K, 150%) confirmed pixel-exact
 Region and Full screen captures, the clipboard and History; a second New
 Capture now refocuses the open bar instead of an error, and the snapshot waits
 for the tray menu and overflow flyout to close (a recheck passed both; the

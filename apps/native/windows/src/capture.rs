@@ -12,8 +12,10 @@
 //! shows shipping's `recording-options-row` (FPS, Max resolution, Show
 //! cursor, Show clicks, Desktop audio and Microphone, kept for this capture
 //! only) and hands the flow, display, target and those choices to
-//! `recorder`; the Aspect and Display selects, keyboard focus through the
-//! bar and UI Automation are not ported yet.
+//! `recorder`. A drawn region moves by its frame and resizes by its corner
+//! handles under a W × H label; Shift squares it and the Aspect select locks
+//! its ratio (the shared `selection` geometry). The Display select,
+//! keyboard focus through the bar and UI Automation are not ported yet.
 
 use std::cell::RefCell;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
@@ -22,7 +24,7 @@ use std::time::{Duration, Instant};
 use captures_app::capture_flow::CaptureFlow;
 use captures_app::capture_menu::{self, MenuMode, PrimaryState, RecordingToggle};
 use captures_app::controls::select;
-use captures_app::selection::Point;
+use captures_app::selection::{self, Bounds, DragMode, DragOptions, Point};
 use captures_app::window::{self as window_target, WindowSession};
 use captures_capture::{DisplayDescriptor, LogicalRect};
 use captures_recording::{CaptureRect, MaxResolution, RecordingTarget};
@@ -69,12 +71,38 @@ enum Hit {
     Option(usize),
 }
 
-/// The Record options row's selects.
+/// The bar's selects: the Record options row's, and Region's Aspect.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Field {
     Fps,
     Resolution,
     Microphone,
+    /// `.recording-region-aspect-picker`.
+    Aspect,
+}
+
+/// Shipping `REGION_ASPECT_PRESETS` (`lib/selection.ts`).
+const ASPECT_PRESETS: [(&str, Option<f64>); 6] = [
+    ("Free", None),
+    ("1 : 1", Some(1.)),
+    ("4 : 3", Some(4. / 3.)),
+    ("3 : 2", Some(3. / 2.)),
+    ("16 : 9", Some(16. / 9.)),
+    ("9 : 16", Some(9. / 16.)),
+];
+/// `dragSelectionRect`'s default smallest resize.
+const MINIMUM_SIZE: f64 = 16.;
+/// Grab distance around a 10 px `.handle`'s center.
+const HANDLE_REACH: f32 = 8.;
+/// The mouse messages' Shift flag (`MK_SHIFT`).
+const MK_SHIFT: usize = 0x0004;
+
+/// A region drag in progress: shipping `RecordingRegionDrag`.
+#[derive(Clone, Copy, Debug)]
+struct RegionDrag {
+    mode: DragMode,
+    origin: (f32, f32),
+    initial: D2D_RECT_F,
 }
 
 /// `capture_menu::RESOLUTION_OPTIONS` order.
@@ -195,6 +223,8 @@ impl RecordOptions {
                     selected,
                 )
             }
+            // The menu's own select (`Menu::entries`).
+            Field::Aspect => (Vec::new(), Vec::new(), 0),
         }
     }
 
@@ -245,6 +275,7 @@ impl RecordOptions {
                     self.microphone = entry.id;
                 }
             }
+            Field::Aspect => {}
         }
     }
 
@@ -300,9 +331,54 @@ fn contains(r: &Rect, x: f32, y: f32) -> bool {
     x >= r.left && x < r.right && y >= r.top && y < r.bottom
 }
 
+/// A D2D rect as the shared selection geometry's rect.
+fn logical(r: Rect) -> selection::Rect {
+    selection::Rect {
+        x: r.left.into(),
+        y: r.top.into(),
+        width: (r.right - r.left).into(),
+        height: (r.bottom - r.top).into(),
+    }
+}
+
+fn d2d(r: selection::Rect) -> Rect {
+    rect(
+        r.x as f32,
+        r.y as f32,
+        (r.x + r.width) as f32,
+        (r.y + r.height) as f32,
+    )
+}
+
 fn alpha(mut color: D2D1_COLOR_F, a: f32) -> D2D1_COLOR_F {
     color.a *= a;
     color
+}
+
+/// Shade everything in `size` but `r` (a closed evenodd cutout in shipping).
+fn shade_around(
+    dc: &ID2D1DeviceContext,
+    (w, h): (f32, f32),
+    r: Rect,
+    color: D2D1_COLOR_F,
+) -> Result<()> {
+    let r = rect(
+        r.left.max(0.),
+        r.top.max(0.),
+        r.right.min(w),
+        r.bottom.min(h),
+    );
+    for band in [
+        rect(0., 0., w, r.top),
+        rect(0., r.bottom, w, h),
+        rect(0., r.top, r.left, r.bottom),
+        rect(r.right, r.top, w, r.bottom),
+    ] {
+        if band.right > band.left && band.bottom > band.top {
+            gfx::fill(dc, band, color)?;
+        }
+    }
+    Ok(())
 }
 
 /// `rgba(4, 5, 8, a)`: shipping's capture shade.
@@ -354,9 +430,20 @@ struct Layout {
     switches: [Rect; 2],
     divider: Rect,
     segments: Vec<Segment>,
+    /// The first row's select (Aspect), its caption to its left.
+    pickers: Vec<FieldBox>,
     primary: Option<(Rect, gfx::Text, bool)>,
     note: Vec<(gfx::Text, f32, bool)>,
     note_y: f32,
+}
+
+impl Layout {
+    /// Every select and switch on the bar.
+    fn fields(&self) -> impl Iterator<Item = &FieldBox> {
+        self.pickers
+            .iter()
+            .chain(self.options.iter().flat_map(|(_, fields)| fields))
+    }
 }
 
 /// The menu's state and drawing, shared by the live window and the
@@ -369,7 +456,14 @@ pub struct Menu {
     pub controls_excluded: bool,
     pub size: (f32, f32),
     pub selection: Option<Rect>,
-    drag: Option<(f32, f32)>,
+    drag: Option<RegionDrag>,
+    /// Shift held: a square region (shipping `forceSquare`).
+    shift: bool,
+    /// The last pointer position, for re-running a drag when Shift or the
+    /// aspect changes mid-gesture.
+    pointer: (f32, f32),
+    /// The Aspect select's `ASPECT_PRESETS` index.
+    pub aspect: usize,
     hover: Option<Hit>,
     pressed: Option<Hit>,
     display: (String, u32, u32),
@@ -403,6 +497,9 @@ impl Menu {
             size,
             selection: None,
             drag: None,
+            shift: false,
+            pointer: (0., 0.),
+            aspect: 0,
             hover: None,
             pressed: None,
             display,
@@ -422,14 +519,140 @@ impl Menu {
         std::mem::replace(&mut self.hovered, hit) != hit
     }
 
-    /// A drawn region of at least one DIP each way, or Full screen.
+    /// A drawn region of at least two DIPs each way (shipping
+    /// `isCapturableSelection`), a picked window, or Full screen.
     fn can_start(&self) -> bool {
         match self.target {
             Target::Display => true,
-            Target::Region => self
-                .selection
-                .is_some_and(|r| r.right - r.left >= 1. && r.bottom - r.top >= 1.),
+            Target::Region => selection::capturable(self.selection.map(logical)),
             Target::Window => self.picked.is_some(),
+        }
+    }
+
+    /// A select's options, which are disabled, and the selected index.
+    fn entries(&self, field: Field) -> (Vec<String>, Vec<bool>, usize) {
+        match field {
+            Field::Aspect => (
+                ASPECT_PRESETS.map(|(label, _)| label.to_string()).to_vec(),
+                vec![false; ASPECT_PRESETS.len()],
+                self.aspect,
+            ),
+            _ => self.record.entries(field),
+        }
+    }
+
+    fn field_enabled(&self, field: Field) -> bool {
+        match field {
+            Field::Aspect => true,
+            _ => self.record.enabled(field),
+        }
+    }
+
+    fn choose(&mut self, field: Field, index: usize) {
+        match field {
+            Field::Aspect => self.set_aspect(index),
+            _ => self.record.choose(field, index),
+        }
+    }
+
+    fn aspect_ratio(&self) -> Option<f64> {
+        ASPECT_PRESETS
+            .get(self.aspect)
+            .and_then(|(_, ratio)| *ratio)
+    }
+
+    fn bounds(&self) -> Bounds {
+        Bounds {
+            width: self.size.0.into(),
+            height: self.size.1.into(),
+        }
+    }
+
+    /// Shipping `changeRegionAspect`: re-run a drag in progress, else snap a
+    /// settled region to the new ratio around its center.
+    fn set_aspect(&mut self, index: usize) {
+        self.aspect = index.min(ASPECT_PRESETS.len() - 1);
+        if self.drag.is_some() {
+            return self.apply_drag();
+        }
+        let Some(ratio) = self.aspect_ratio() else {
+            return;
+        };
+        if let Some(r) = self
+            .selection
+            .map(logical)
+            .filter(|r| selection::capturable(Some(*r)))
+        {
+            let fitted = selection::constrain(r, Some(ratio), Some(self.bounds()), MINIMUM_SIZE);
+            self.selection = Some(d2d(fitted));
+        }
+    }
+
+    /// What a press at `(x, y)` does to the region: a corner handle resizes,
+    /// the frame moves, anywhere else draws a new one.
+    fn region_mode(&self, x: f32, y: f32) -> DragMode {
+        let Some(r) = self.selection.filter(|_| self.can_start()) else {
+            return DragMode::Create;
+        };
+        let near = |cx: f32, cy: f32| (x - cx).hypot(y - cy) <= HANDLE_REACH;
+        if near(r.left, r.top) {
+            DragMode::Nw
+        } else if near(r.right, r.top) {
+            DragMode::Ne
+        } else if near(r.left, r.bottom) {
+            DragMode::Sw
+        } else if near(r.right, r.bottom) {
+            DragMode::Se
+        } else if contains(&r, x, y) {
+            DragMode::Move
+        } else {
+            DragMode::Create
+        }
+    }
+
+    /// Shipping `applyRegionDrag` at the last pointer position.
+    fn apply_drag(&mut self) {
+        let Some(drag) = self.drag else { return };
+        let (w, h) = self.size;
+        let point = |(x, y): (f32, f32)| Point {
+            x: f64::from(x.clamp(0., w)),
+            y: f64::from(y.clamp(0., h)),
+        };
+        let r = selection::drag(
+            drag.mode,
+            point(drag.origin),
+            point(self.pointer),
+            logical(drag.initial),
+            self.bounds(),
+            DragOptions {
+                minimum_size: MINIMUM_SIZE,
+                aspect_ratio: self.aspect_ratio(),
+                force_square: self.shift,
+            },
+        );
+        self.selection = Some(d2d(r));
+    }
+
+    /// Shift pressed or released: a drag snaps between square and its
+    /// aspect at once (shipping re-runs it on `keydown`/`keyup`).
+    fn set_shift(&mut self, shift: bool) -> bool {
+        if std::mem::replace(&mut self.shift, shift) == shift || self.drag.is_none() {
+            return false;
+        }
+        self.apply_drag();
+        true
+    }
+
+    /// The pointer cursor's resize or move shape over the region.
+    fn region_cursor(&self, x: f32, y: f32) -> PCWSTR {
+        let mode = self
+            .drag
+            .map_or_else(|| self.region_mode(x, y), |drag| drag.mode);
+        match mode {
+            DragMode::Nw | DragMode::Se => IDC_SIZENWSE,
+            DragMode::Ne | DragMode::Sw => IDC_SIZENESW,
+            DragMode::Move => IDC_SIZEALL,
+            DragMode::Create => IDC_CROSS,
         }
     }
 
@@ -473,6 +696,21 @@ impl Menu {
             8. + items.iter().map(|i| width(&i.0)).sum::<f32>()
         };
         let (aw, tw) = (box_width(&action), box_width(&targets));
+        // `.recording-region-aspect-picker`: 150 px, "Aspect" then the select.
+        const ASPECT_W: f32 = 150.;
+        let aspect = if self.target == Target::Region {
+            let caption = g.text_sized(t, "Aspect", t.n("text-xs"), "weight-medium", None)?;
+            let value = g.text_sized(
+                t,
+                ASPECT_PRESETS[self.aspect].0,
+                t.n("text-sm"),
+                "weight-regular",
+                None,
+            )?;
+            Some((caption, value))
+        } else {
+            None
+        };
         let primary =
             capture_menu::primary_action(self.mode, self.auto_start, PrimaryState::default());
         let primary = if primary.hidden {
@@ -490,6 +728,7 @@ impl Menu {
             + 1.
             + GAP
             + tw
+            + aspect.as_ref().map_or(0., |_| GAP + ASPECT_W)
             + primary.as_ref().map_or(0., |(w, _)| GAP + 4. + w)
             + PAD;
         // `These controls **won’t** show in screenshots · Press Enter…`: the
@@ -570,6 +809,25 @@ impl Menu {
         let target_box = rect(x, cy - 18., x + tw, cy + 18.);
         place(x, targets);
         x += tw;
+        let mut pickers = Vec::new();
+        if let Some((caption, value)) = aspect {
+            let left = x + GAP;
+            let trigger = left + caption.width + 6.;
+            // The flex item sizes to its trigger: `--s-4` padding, the label,
+            // the `--s-5` gap, the 14 px chevron and the 1 px border.
+            let width =
+                (1. + 8. + value.width + 12. + 14. + 8. + 1.).min(left + ASPECT_W - trigger);
+            pickers.push(FieldBox {
+                caption,
+                x: left,
+                caption_y: cy - CAPTION_H / 2.,
+                control: rect(trigger, cy - 18., trigger + width, cy + 18.),
+                value,
+                hit: Hit::Select(Field::Aspect),
+                enabled: true,
+            });
+            x = left + ASPECT_W;
+        }
         let primary = primary.map(|(w, text)| {
             let px = x + GAP + 4.;
             (rect(px, cy - 20., px + w, cy + 20.), text, self.can_start())
@@ -579,14 +837,16 @@ impl Menu {
         } else {
             None
         };
-        let listbox = match (self.open, &options) {
-            (Some((field, _)), Some((_, fields))) => {
-                match fields.iter().find(|f| f.hit == Hit::Select(field)) {
-                    Some(f) => Some(self.listbox_layout(g, t, field, f.control)?),
-                    None => None,
-                }
-            }
-            _ => None,
+        let trigger = self.open.and_then(|(field, _)| {
+            pickers
+                .iter()
+                .chain(options.iter().flat_map(|(_, fields)| fields))
+                .find(|f| f.hit == Hit::Select(field))
+                .map(|f| (field, f.control))
+        });
+        let listbox = match trigger {
+            Some((field, control)) => Some(self.listbox_layout(g, t, field, control)?),
+            None => None,
         };
         Ok(Layout {
             panel,
@@ -596,6 +856,7 @@ impl Menu {
             switches: [action_box, target_box],
             divider,
             segments,
+            pickers,
             primary,
             note: note
                 .into_iter()
@@ -688,7 +949,7 @@ impl Menu {
 
     /// The open glass `.custom-select-listbox`, placed like shipping.
     fn listbox_layout(&self, g: &Gfx, t: &Tokens, field: Field, trigger: Rect) -> Result<Listbox> {
-        let (labels, disabled, selected) = self.record.entries(field);
+        let (labels, disabled, selected) = self.entries(field);
         let check = g.text_sized(t, "✓", t.n("text-sm"), "weight-regular", None)?;
         let mut texts = Vec::new();
         for (index, label) in labels.iter().enumerate() {
@@ -751,10 +1012,9 @@ impl Menu {
                 .position(|(r, ..)| contains(r, x, y))
                 .map(Hit::Option);
         }
-        if let Some((_, fields)) = &layout.options
-            && let Some(field) = fields
-                .iter()
-                .find(|f| f.enabled && contains(&f.control, x, y))
+        if let Some(field) = layout
+            .fields()
+            .find(|f| f.enabled && contains(&f.control, x, y))
         {
             return Some(field.hit);
         }
@@ -806,13 +1066,16 @@ impl Menu {
         let glass_text = t.color("glass-text");
         let accent = t.color("theme-accent");
         match self.target {
-            // `.capture-shade-full`; once drawn, the cutout shade is hidden
-            // until keyboard focus and only the frame remains.
-            Target::Region => match self.selection {
+            // `CaptureDim`: the shade, cut out around a drawn region, then
+            // `.recording-selection-frame` with its size and handles.
+            Target::Region => match self
+                .selection
+                .filter(|r| r.right > r.left && r.bottom > r.top)
+            {
                 None => gfx::fill(dc, full, shade(0.38))?,
                 Some(r) => {
-                    gfx::ring(dc, r, 2., 0., 1., t.color("selection-hairline-outer"))?;
-                    gfx::border(dc, r, 2., 1.5, accent)?;
+                    shade_around(dc, self.size, r, shade(0.38))?;
+                    self.paint_frame(dc, g, t, r)?;
                 }
             },
             // `.recording-target-window`: clear until a target is hovered; the
@@ -835,16 +1098,7 @@ impl Menu {
                     })
                 };
                 if let Some((r, _)) = self.hovered.or(self.picked).flatten().and_then(clip) {
-                    for band in [
-                        rect(0., 0., w, r.top),
-                        rect(0., r.bottom, w, h),
-                        rect(0., r.top, r.left, r.bottom),
-                        rect(r.right, r.top, w, r.bottom),
-                    ] {
-                        if band.right > band.left && band.bottom > band.top {
-                            gfx::fill(dc, band, shade(0.3))?;
-                        }
-                    }
+                    shade_around(dc, self.size, r, shade(0.3))?;
                 }
                 let hovered_window = self.hovered.flatten();
                 let mut marked: Vec<usize> = picked.into_iter().collect();
@@ -992,6 +1246,7 @@ impl Menu {
             }
             gfx::text(dc, label, x + 22., cy - label.height / 2., ink)?;
         }
+        self.paint_fields(dc, g, t, &layout.pickers)?;
         if let Some((row_top, fields)) = &layout.options {
             self.paint_options(dc, g, t, &layout.panel, *row_top, fields)?;
         }
@@ -1022,6 +1277,17 @@ impl Menu {
     ) -> Result<()> {
         let border = rect(panel.left + 1., row_top, panel.right - 1., row_top + 1.);
         gfx::fill(dc, border, t.color("glass-border"))?;
+        self.paint_fields(dc, g, t, fields)
+    }
+
+    /// Selects and switches with their captions.
+    fn paint_fields(
+        &self,
+        dc: &ID2D1DeviceContext,
+        g: &Gfx,
+        t: &Tokens,
+        fields: &[FieldBox],
+    ) -> Result<()> {
         let accent = t.color("theme-accent");
         for f in fields {
             let cy_caption = f.caption_y + (CAPTION_H - f.caption.height) / 2.;
@@ -1164,6 +1430,56 @@ impl Menu {
         gfx::text(dc, &text, x + px, y + py, t.color("glass-text"))
     }
 
+    /// `.recording-selection-frame.movable`: the 1.5 px accent border inside
+    /// its hairlines, the centered `.selection-dimensions` label above it
+    /// (inside once the region reaches the top 30 px) and the four corner
+    /// `.handle`s.
+    fn paint_frame(&self, dc: &ID2D1DeviceContext, g: &Gfx, t: &Tokens, r: Rect) -> Result<()> {
+        let accent = t.color("theme-accent");
+        gfx::ring(dc, r, 2., 0., 1., t.color("selection-hairline-outer"))?;
+        gfx::border(dc, r, 2., 1.5, accent)?;
+        let inner = rect(r.left + 1.5, r.top + 1.5, r.right - 1.5, r.bottom - 1.5);
+        if inner.right > inner.left && inner.bottom > inner.top {
+            gfx::border(dc, inner, 0.5, 1., t.color("selection-hairline-inner"))?;
+        }
+        let size = format!(
+            "{} × {}",
+            (r.right - r.left).round() as i64,
+            (r.bottom - r.top).round() as i64
+        );
+        let text = g.text_sized(t, &size, t.n("text-xs"), "weight-semibold", None)?;
+        let (w, h) = (text.width + 16., text.height + 8.);
+        let x = ((r.left + r.right - w) / 2.).round();
+        let y = if r.top < 30. {
+            r.top + 1.5 + 6.
+        } else {
+            r.top + 1.5 - 30.
+        };
+        let label = rect(x, y, x + w, y + h);
+        gfx::shadow(dc, label, 6., t.shadow("shadow-sm"))?;
+        gfx::fill_round(dc, label, 6., accent)?;
+        gfx::text(dc, &text, x + 8., y + 4., t.color("theme-accent-ink"))?;
+        let handle_shadow = [Shadow {
+            x: 0.,
+            y: 1.,
+            blur: 4.,
+            spread: 0.,
+            color: [0., 0., 0., 0.4],
+        }];
+        for (cx, cy) in [
+            (r.left, r.top),
+            (r.right, r.top),
+            (r.left, r.bottom),
+            (r.right, r.bottom),
+        ] {
+            let dot = rect(cx - 5., cy - 5., cx + 5., cy + 5.);
+            gfx::shadow(dc, dot, 5., &handle_shadow)?;
+            gfx::fill_round(dc, dot, 5., t.color("theme-accent-ink"))?;
+            gfx::fill_round(dc, rect(cx - 3., cy - 3., cx + 3., cy + 3.), 3., accent)?;
+        }
+        Ok(())
+    }
+
     fn identity(&self, dc: &ID2D1DeviceContext, g: &Gfx, t: &Tokens) -> Result<()> {
         let (name, pw, ph) = &self.display;
         let identity = capture_menu::display_identity(name, *pw, *ph, None);
@@ -1197,17 +1513,17 @@ impl Menu {
 
     /// Pointer motion; true when the menu needs a repaint.
     fn moved(&mut self, x: f32, y: f32) -> bool {
-        if let Some((sx, sy)) = self.drag {
-            let (w, h) = self.size;
-            let (x, y) = (x.clamp(0., w), y.clamp(0., h));
-            self.selection = Some(rect(sx.min(x), sy.min(y), sx.max(x), sy.max(y)));
+        self.pointer = (x, y);
+        if self.drag.is_some() {
+            self.apply_drag();
             return true;
         }
         let hover = self.hit(x, y);
         let mut changed = false;
         // Pointing at an enabled row highlights it (`onPointerEnter`).
-        if let (Some(Hit::Option(index)), Some((field, state))) = (hover, self.open.as_mut())
-            && !self.record.entries(*field).1[index]
+        if let (Some(Hit::Option(index)), Some((field, _))) = (hover, self.open)
+            && !self.entries(field).1[index]
+            && let Some((_, state)) = self.open.as_mut()
             && state.active != index
         {
             state.active = index;
@@ -1235,8 +1551,22 @@ impl Menu {
             return true;
         }
         if self.pressed.is_none() && self.target == Target::Region && !self.over_panel(x, y) {
-            self.drag = Some((x, y));
-            self.selection = None;
+            // Shipping `onPointerDown`: a handle resizes, the frame moves and
+            // anywhere else draws a new region from this point.
+            let mode = self.region_mode(x, y);
+            let origin = rect(x, y, x, y);
+            self.pointer = (x, y);
+            self.drag = Some(RegionDrag {
+                mode,
+                origin: (x, y),
+                initial: match mode {
+                    DragMode::Create => origin,
+                    _ => self.selection.unwrap_or(origin),
+                },
+            });
+            if matches!(mode, DragMode::Create) {
+                self.selection = Some(origin);
+            }
             return true;
         }
         closed
@@ -1247,22 +1577,16 @@ impl Menu {
         match hit {
             Hit::Toggle(toggle) => self.record.toggle(toggle),
             Hit::Select(field) if self.open.is_some_and(|(o, _)| o == field) => self.open = None,
-            Hit::Select(field) if self.record.enabled(field) => {
-                let (_, disabled, selected) = self.record.entries(field);
+            Hit::Select(field) if self.field_enabled(field) => {
+                let (_, disabled, selected) = self.entries(field);
                 self.open = Some((field, select::open(&disabled, selected)));
             }
             // A disabled row leaves the listbox open, like shipping.
             Hit::Option(index) => {
                 if let Some((field, _)) = self.open
-                    && !self
-                        .record
-                        .entries(field)
-                        .1
-                        .get(index)
-                        .copied()
-                        .unwrap_or(true)
+                    && !self.entries(field).1.get(index).copied().unwrap_or(true)
                 {
-                    self.record.choose(field, index);
+                    self.choose(field, index);
                     self.open = None;
                 }
             }
@@ -1275,10 +1599,10 @@ impl Menu {
         let Some((field, state)) = self.open else {
             return false;
         };
-        let (_, disabled, selected) = self.record.entries(field);
+        let (_, disabled, selected) = self.entries(field);
         let outcome = select::key(state, &disabled, selected, key);
         if let Some(index) = outcome.chosen {
-            self.record.choose(field, index);
+            self.choose(field, index);
         }
         self.open = outcome.state.open.then_some((field, outcome.state));
         outcome.handled
@@ -1294,11 +1618,16 @@ impl Menu {
 
     /// Release; returns the action to run.
     fn released(&mut self, x: f32, y: f32) -> Option<Hit> {
-        if self.drag.take().is_some() {
+        if let Some(drag) = self.drag {
+            self.pointer = (x, y);
+            self.apply_drag();
+            self.drag = None;
             if !self.can_start() {
                 self.selection = None;
             }
-            return (self.auto_start && self.can_start()).then_some(Hit::Primary);
+            // Only a finished create auto-starts; move and resize adjust.
+            let created = matches!(drag.mode, DragMode::Create);
+            return (created && self.auto_start && self.can_start()).then_some(Hit::Primary);
         }
         let hit = self.hit(x, y);
         (self.pressed.take() == hit).then_some(hit).flatten()
@@ -1886,7 +2215,8 @@ impl Capture {
             WM_ERASEBKGND => return Some(LRESULT(1)),
             WM_MOUSEMOVE => {
                 let (x, y) = point(lp, overlay.scale);
-                let mut changed = overlay.menu.moved(x, y);
+                let mut changed = overlay.menu.set_shift(wp.0 & MK_SHIFT != 0);
+                changed |= overlay.menu.moved(x, y);
                 if overlay.menu.target == Target::Window {
                     let hit = (!overlay.menu.over_panel(x, y)).then(|| {
                         session.hit_test(Point {
@@ -1902,6 +2232,7 @@ impl Capture {
             }
             WM_LBUTTONDOWN => {
                 let (x, y) = point(lp, overlay.scale);
+                overlay.menu.set_shift(wp.0 & MK_SHIFT != 0);
                 if overlay.menu.pressed(x, y) {
                     unsafe { SetCapture(hwnd) };
                     let _ = overlay.render(&self.tokens);
@@ -1917,6 +2248,11 @@ impl Capture {
                     overlay.menu.released(x, y)
                 };
                 let _ = overlay.render(&self.tokens);
+            }
+            WM_KEYDOWN | WM_KEYUP if VIRTUAL_KEY(wp.0 as u16) == VK_SHIFT => {
+                if overlay.menu.set_shift(msg == WM_KEYDOWN) {
+                    let _ = overlay.render(&self.tokens);
+                }
             }
             WM_KEYDOWN => {
                 let vk = VIRTUAL_KEY(wp.0 as u16);
@@ -1957,7 +2293,7 @@ impl Capture {
                 } else if overlay.menu.over_panel(x, y) {
                     IDC_ARROW
                 } else if overlay.menu.target == Target::Region {
-                    IDC_CROSS
+                    overlay.menu.region_cursor(x, y)
                 } else if overlay.menu.target == Target::Window {
                     // `--capture-action-cursor`
                     IDC_HAND
@@ -1974,6 +2310,7 @@ impl Capture {
             Some(Hit::Primary) => self.confirm(),
             Some(Hit::Target(target)) => {
                 overlay.menu.target = target;
+                overlay.menu.open = None;
                 let auto = target == Target::Display && overlay.menu.auto_start;
                 let _ = overlay.render(&self.tokens);
                 if auto {
@@ -2222,6 +2559,88 @@ mod tests {
         m.moved(2000., -50.);
         let r = m.selection.expect("clamped selection");
         assert_eq!((r.left, r.top, r.right, r.bottom), (1200., 0., 1280., 700.));
+    }
+
+    fn edges(m: &Menu) -> (f32, f32, f32, f32) {
+        let r = m.selection.expect("selection");
+        (r.left, r.top, r.right, r.bottom)
+    }
+
+    #[test]
+    fn a_drawn_region_moves_resizes_and_redraws_like_shipping() {
+        let mut m = menu(Target::Region, true);
+        m.pressed(100., 100.);
+        m.moved(300., 200.);
+        assert_eq!(m.released(300., 200.), Some(Hit::Primary));
+        m.auto_start = false;
+        // Inside the frame drags it, clamped to the display; no auto-start.
+        assert!(m.pressed(150., 150.));
+        m.moved(1250., 150.);
+        assert_eq!(m.released(1250., 150.), None);
+        assert_eq!(edges(&m), (1080., 100., 1280., 200.));
+        // A corner handle (within its reach) resizes from the opposite corner.
+        m.pressed(1083., 104.);
+        m.moved(1000., 50.);
+        m.released(1000., 50.);
+        assert_eq!(edges(&m), (997., 46., 1280., 200.));
+        // Outside the frame starts over.
+        m.pressed(10., 700.);
+        m.moved(60., 780.);
+        m.released(60., 780.);
+        assert_eq!(edges(&m), (10., 700., 60., 780.));
+    }
+
+    #[test]
+    fn auto_start_ignores_move_and_resize() {
+        let mut m = menu(Target::Region, true);
+        m.selection = Some(rect(100., 100., 300., 200.));
+        m.pressed(200., 150.);
+        m.moved(220., 160.);
+        assert_eq!(m.released(220., 160.), None);
+        m.pressed(320., 210.);
+        m.moved(340., 260.);
+        assert_eq!(m.released(340., 260.), None);
+        assert_eq!(edges(&m), (120., 110., 340., 260.));
+    }
+
+    #[test]
+    fn shift_squares_a_drag_until_it_is_released() {
+        let mut m = menu(Target::Region, false);
+        m.pressed(100., 100.);
+        m.moved(400., 200.);
+        assert_eq!(edges(&m), (100., 100., 400., 200.));
+        // Pressing Shift mid-drag re-runs it at once, without a move.
+        assert!(m.set_shift(true));
+        assert_eq!(edges(&m), (100., 100., 400., 400.));
+        assert!(!m.set_shift(true));
+        assert!(m.set_shift(false));
+        assert_eq!(edges(&m), (100., 100., 400., 200.));
+        m.released(400., 200.);
+        // Outside a drag Shift changes nothing.
+        assert!(!m.set_shift(true));
+        assert_eq!(edges(&m), (100., 100., 400., 200.));
+    }
+
+    #[test]
+    fn aspect_locks_drags_and_snaps_a_settled_region() {
+        let mut m = menu(Target::Region, false);
+        m.selection = Some(rect(100., 100., 500., 200.));
+        // 1 : 1 refits around the center inside the old box.
+        m.set_aspect(1);
+        assert_eq!(edges(&m), (250., 100., 350., 200.));
+        // 16 : 9 locks a new drag; Shift still forces a square over it.
+        m.set_aspect(4);
+        m.pressed(0., 0.);
+        m.moved(320., 10.);
+        assert_eq!(edges(&m), (0., 0., 320., 180.));
+        m.set_shift(true);
+        assert_eq!(edges(&m), (0., 0., 320., 320.));
+        m.released(320., 10.);
+        // Free leaves the region alone.
+        m.set_aspect(0);
+        assert_eq!(edges(&m), (0., 0., 320., 320.));
+        let (labels, _, selected) = m.entries(Field::Aspect);
+        assert_eq!((labels[4].as_str(), selected), ("16 : 9", 0));
     }
 
     #[test]
