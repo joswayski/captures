@@ -442,6 +442,12 @@ final class HistoryThumbnailView: NSView, NSDraggingSource {
         setAccessibilityRole(.button)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    private var drawnPhase = CGPoint(x: -1, y: -1)
+    override var wantsUpdateLayer: Bool { true }
+    override func updateLayer() { drawnPhase = drawIntoLayerContents() }
+    override func viewDidChangeBackingProperties() { super.viewDidChangeBackingProperties(); needsDisplay = true }
+    /// Redraw when a move put this view on a different pixel phase.
+    func redrawIfPixelPhaseChanged() { if window != nil, pixelPhase != drawnPhase { needsDisplay = true } }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -676,6 +682,15 @@ final class HistoryCardView: NSView {
         setAccessibilityRole(.group)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    private var drawnPhase = CGPoint(x: -1, y: -1)
+    override var wantsUpdateLayer: Bool { true }
+    override func updateLayer() { drawnPhase = drawIntoLayerContents() }
+    override func viewDidChangeBackingProperties() { super.viewDidChangeBackingProperties(); needsDisplay = true }
+    override func setFrameOrigin(_ newOrigin: NSPoint) {
+        super.setFrameOrigin(newOrigin)
+        if window != nil, pixelPhase != drawnPhase { needsDisplay = true }
+        thumbnail.redrawIfPixelPhaseChanged()
+    }
 
     func configure(_ item: HistoryGridItem, selected: Bool, enabled: Bool, copy: HistoryCopy) {
         artifactID = item.id; card = item.card; self.selected = selected; self.enabled = enabled
@@ -1289,3 +1304,53 @@ extension HistoryGridView: KeyViewParticipant {
     }
 }
 extension HistoryThumbnailView: KeyViewParticipant {}
+
+/// History cards lift on hover. Redrawing a drawn backing store inside the
+/// lifted card made every hover hold about 100 MB of graphics memory until
+/// Core Animation went idle (like the mini preview media), so the card and
+/// its thumbnail hand the layer a bitmap of the same `draw(_:)` instead, in
+/// the window's colour space at 8 bits per channel. Like AppKit's backing
+/// store, the bitmap is drawn on the window's pixel grid: a card at a
+/// fractional pixel position is offset by that fraction and cropped back.
+private extension NSView {
+    /// The fraction of a device pixel by which the bottom-left corner sits
+    /// off the window's pixel grid.
+    var pixelPhase: CGPoint {
+        let scale = window?.backingScaleFactor ?? layer?.contentsScale ?? 2
+        let corner = convert(NSPoint(x: bounds.minX, y: isFlipped ? bounds.maxY : bounds.minY), to: nil)
+        let x = corner.x * scale, y = corner.y * scale
+        return CGPoint(x: x - x.rounded(.down), y: y - y.rounded(.down))
+    }
+
+    /// Returns the pixel phase it drew at.
+    @discardableResult func drawIntoLayerContents() -> CGPoint {
+        guard let layer else { return .zero }
+        let scale = window?.backingScaleFactor ?? layer.contentsScale
+        let phase = pixelPhase
+        let pixels = CGSize(width: bounds.width * scale, height: bounds.height * scale)
+        let width = Int((pixels.width + phase.x).rounded(.up)), height = Int((pixels.height + phase.y).rounded(.up))
+        guard pixels.width > 0, pixels.height > 0,
+              let space = window?.colorSpace?.cgColorSpace ?? CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: space, bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
+                                          | CGBitmapInfo.byteOrder32Little.rawValue)
+        else { layer.contents = nil; return phase }
+        context.translateBy(x: phase.x, y: phase.y)
+        context.scaleBy(x: scale, y: scale)
+        if isFlipped { context.translateBy(x: 0, y: bounds.height); context.scaleBy(x: 1, y: -1) }
+        // AppKit clips draw(_:) to the bounds, which trims strokes that straddle the edge.
+        context.clip(to: bounds)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: isFlipped)
+        draw(bounds)
+        NSGraphicsContext.restoreGraphicsState()
+        layer.contentsScale = scale
+        layer.contentsGravity = .resize
+        // contentsRect is in unit coordinates from the top-left of the image.
+        layer.contentsRect = CGRect(x: phase.x / CGFloat(width),
+                                    y: (CGFloat(height) - phase.y - pixels.height) / CGFloat(height),
+                                    width: pixels.width / CGFloat(width), height: pixels.height / CGFloat(height))
+        layer.contents = context.makeImage()
+        return phase
+    }
+}
