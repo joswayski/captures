@@ -130,7 +130,7 @@ export default function Home({
             ) : (
               <>
                 <p className="max-w-xl text-sm leading-relaxed text-ink-muted">
-                  Available for macOS, Windows, and Linux. Open this page on your computer to
+                  Captures runs on macOS, Windows, and Linux. Open this page on your computer to
                   download it.
                 </p>
                 <div className="mt-8">
@@ -357,7 +357,7 @@ function CopyEmailRow({ email }: { email: string }) {
         {status === "copied"
           ? "Email address copied to clipboard."
           : status === "failed"
-            ? `Couldn’t copy. Email ${email}`
+            ? `Couldn’t copy. Email ${email}.`
             : ""}
       </span>
     </>
