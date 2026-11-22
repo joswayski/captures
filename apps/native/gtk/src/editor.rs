@@ -16,9 +16,11 @@ use std::sync::Arc;
 use std::sync::mpsc;
 
 use captures_app::editor::{
-    ClosedShapeCreate, ClosedShapeKind, CropDrag, Document, ElementStyle, FreehandPathCreate,
-    LayerEdit, LayerPlacement, OpenShapeCreate, OpenShapeKind, Point, Rect,
+    AlignmentGuide, ClosedShapeCreate, ClosedShapeKind, CropDrag, Document, Element, ElementStyle,
+    FreehandPathCreate, GuideOrientation, LayerEdit, LayerPlacement, OpenShapeCreate,
+    OpenShapeKind, Point, Rect, ResizeHandle, TextBounds,
 };
+use captures_app::editor_canvas::{CanvasExpandPreview, CurveEdit, CurveHandle};
 use captures_app::editor_chrome::{self, RAIL_TOOLS, SHAPE_TOOLS, brush_cursor, header};
 use captures_app::editor_export::{self, EstimateState, ExportSource, ExportTarget};
 use captures_app::editor_image_background::BrushMode;
@@ -37,6 +39,7 @@ use crate::wake::{Outbox, Wake};
 use crate::widgets::{Icon, MaxWidth, SnapshotArea, WidthWatch, icon_button};
 
 mod canvas_bar;
+mod canvas_chrome;
 pub(crate) mod compare;
 pub(crate) mod controls;
 mod export_bar;
@@ -81,6 +84,17 @@ struct Presented {
     /// Document family keys to installed face names (`"rounded"` → Nunito).
     font_families: BTreeMap<String, String>,
     active_input: Option<ActiveInput>,
+    /// Font-measured text geometry, for grip hit tests.
+    text_bounds: TextBounds,
+    /// Overflow preview per visible layer hanging past the canvas.
+    canvas_expand: BTreeMap<String, CanvasExpandPreview>,
+}
+
+/// A layer gesture's uncommitted frame: pixels, outlines and snap guides.
+struct GestureFrame {
+    pixels: Arc<RgbaImage>,
+    outlines: BTreeMap<String, [Point; 4]>,
+    guides: Vec<AlignmentGuide>,
 }
 
 /// The session's live text input, when one is active.
@@ -129,7 +143,7 @@ enum Outcome {
     Presented(Box<Presented>),
     /// Images were imported; select the last new layer.
     Imported(Box<Presented>, String),
-    Preview(Result<Arc<RgbaImage>, String>),
+    Preview(Result<GestureFrame, String>),
     Saved(
         Result<
             (
@@ -197,6 +211,12 @@ fn present(session: &mut EditorSession, artifact_id: &str) -> Presented {
                 layer_id: input.layer_id.to_owned(),
                 layout: input.layout.clone(),
             }),
+        text_bounds: snapshot.text_bounds.clone(),
+        canvas_expand: snapshot
+            .canvas_expand
+            .iter()
+            .map(|(id, preview)| ((*id).to_owned(), preview.clone()))
+            .collect(),
         source: snapshot.original_export_path.map(|path| ExportSource {
             artifact_id: snapshot
                 .source_artifact_id
@@ -226,12 +246,31 @@ enum Gesture {
         start: Point,
         end: Point,
     },
+    /// Dragging a grip on the selected layer: resize, rotate or a curve dot.
+    Layer {
+        id: String,
+        drag: LayerDrag,
+        start: Point,
+        current: Point,
+        shift: bool,
+    },
     /// Panning from the viewport it started with.
     Pan {
         from: Viewport,
         dx: f64,
         dy: f64,
     },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum LayerDrag {
+    Resize(ResizeHandle),
+    /// The outline and rotation the drag started from.
+    Rotate {
+        outline: [Point; 4],
+        initial: f64,
+    },
+    Curve(CurveHandle),
 }
 
 /// A layer drop target: the row id and which side of it.
@@ -311,6 +350,13 @@ struct State {
     last_press: Cell<Option<(std::time::Instant, f64, f64)>>,
     /// The marker this editor last put on the clipboard with a copied layer.
     layer_marker: RefCell<Option<String>>,
+    /// The latest preview of a grip drag on the worker.
+    gesture_frame: RefCell<Option<GestureFrame>>,
+    /// Shipping's Expand canvas action, the layer it grows the canvas for,
+    /// and whether the pointer is on it (the ghost shows then).
+    expand_action: gtk::Button,
+    expand_for: RefCell<Option<String>>,
+    expand_armed: Cell<bool>,
     widgets: Widgets,
 }
 
@@ -449,7 +495,15 @@ pub fn build(
                             Ok(()) => Outcome::Presented(Box::new(present(session, &id))),
                             Err(error) => Outcome::Failed(error),
                         },
-                        Job::Preview(request) => Outcome::Preview(session.preview_drawing(request)),
+                        Job::Preview(request) => {
+                            Outcome::Preview(session.preview_drawing_with_geometry(request).map(
+                                |frame| GestureFrame {
+                                    pixels: frame.pixels,
+                                    outlines: frame.selection_outlines,
+                                    guides: frame.guides,
+                                },
+                            ))
+                        }
                         Job::Import {
                             source,
                             selected_id,
@@ -718,6 +772,11 @@ pub fn build(
         widget.set_visible(false);
         text_overlay.add_overlay(widget);
     }
+    // `.screenshot-canvas-expand-action`.
+    let expand_action = gtk::Button::with_label(captures_app::editor_canvas::EXPAND_CANVAS);
+    expand_action.add_css_class("editor-expand-action");
+    expand_action.set_visible(false);
+    text_overlay.add_overlay(&expand_action);
     text_overlay.set_hexpand(true);
     body.append(&text_overlay);
     let panel = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -972,6 +1031,10 @@ pub fn build(
         input_counter: Cell::default(),
         last_press: Cell::default(),
         layer_marker: RefCell::default(),
+        gesture_frame: RefCell::default(),
+        expand_action,
+        expand_for: RefCell::default(),
+        expand_armed: Cell::default(),
         properties,
         pointer: Cell::default(),
         preview_busy: Cell::default(),
@@ -1311,6 +1374,7 @@ impl State {
         self.sync_zoom();
         // Only the canvas node changes; the texture is reused as is.
         self.canvas.queue_draw();
+        self.text_overlay.queue_allocate();
         self.style_text_field();
     }
 
@@ -1591,26 +1655,71 @@ impl State {
         brush_cursor::hover(over_image, stroking, panning)
     }
 
-    /// Render the stroke so far on the worker, one request at a time.
+    /// Render the brush stroke or grip drag so far on the worker, one
+    /// request at a time.
     fn preview_brush(&self) {
         if self.preview_busy.get() {
             self.preview_dirty.set(true);
             return;
         }
-        let (Some(Gesture::Brush(points)), Some(mode)) =
-            (self.gesture.borrow().clone(), self.brush_mode())
-        else {
-            return;
+        let gesture = self.gesture.borrow().clone();
+        let request = match (gesture, self.brush_mode()) {
+            (Some(Gesture::Brush(points)), Some(mode)) => {
+                let eraser = &self.properties.eraser;
+                Request::PaintImageBackground {
+                    points,
+                    size: eraser.size.value(),
+                    softness: eraser.softness.value(),
+                    mode,
+                }
+            }
+            (Some(gesture @ Gesture::Layer { .. }), _) => {
+                let Some(request) = self.layer_request(&gesture) else {
+                    return;
+                };
+                request
+            }
+            _ => return,
         };
         self.preview_busy.set(true);
         self.preview_dirty.set(false);
-        let eraser = &self.properties.eraser;
-        let _ = self.jobs.send(Job::Preview(Request::PaintImageBackground {
-            points,
-            size: eraser.size.value(),
-            softness: eraser.softness.value(),
-            mode,
-        }));
+        let _ = self.jobs.send(Job::Preview(request));
+    }
+
+    /// The layer edit a grip drag stands for now.
+    fn layer_request(&self, gesture: &Gesture) -> Option<Request> {
+        let Gesture::Layer {
+            id,
+            drag,
+            start,
+            current,
+            shift,
+        } = gesture
+        else {
+            return None;
+        };
+        let scale = self.zoom_percent().unwrap_or(100.) / 100.;
+        let edit = match drag {
+            LayerDrag::Resize(handle) => LayerEdit::Resize {
+                handle: *handle,
+                current: *current,
+                display_scale: scale,
+                lock_aspect: *shift,
+            },
+            LayerDrag::Rotate { outline, initial } => LayerEdit::Rotate {
+                radians: canvas_chrome::rotation(*outline, *initial, *start, *current, *shift)?,
+            },
+            LayerDrag::Curve(handle) => LayerEdit::Curve {
+                edit: CurveEdit::Move {
+                    handle: *handle,
+                    point: *current,
+                },
+            },
+        };
+        Some(Request::Layer {
+            id: id.clone(),
+            edit,
+        })
     }
 
     /// The Shapes flyout (`repeat(3, 44px)`).
@@ -1666,6 +1775,7 @@ impl State {
             }
             Outcome::Presented(presented) => {
                 self.busy.set(false);
+                self.gesture_frame.borrow_mut().take();
                 self.drain_queued();
                 let first = self.presented.borrow().is_none();
                 let changed_pixels = self
@@ -1732,12 +1842,16 @@ impl State {
             }
             Outcome::Preview(result) => {
                 self.preview_busy.set(false);
-                let stroking = matches!(*self.gesture.borrow(), Some(Gesture::Brush(_)));
+                let stroking = matches!(
+                    *self.gesture.borrow(),
+                    Some(Gesture::Brush(_) | Gesture::Layer { .. })
+                );
                 match result {
-                    // Only a stroke still in progress shows its preview; the
+                    // Only a gesture still in progress shows its preview; the
                     // committed result replaces it once the worker publishes.
-                    Ok(pixels) if stroking => {
-                        *self.texture.borrow_mut() = Some(texture_of(&pixels));
+                    Ok(frame) if stroking => {
+                        *self.texture.borrow_mut() = Some(texture_of(&frame.pixels));
+                        *self.gesture_frame.borrow_mut() = Some(frame);
                         self.canvas.queue_draw();
                     }
                     Ok(_) => {}
@@ -1764,6 +1878,7 @@ impl State {
             }
             Outcome::Failed(error) => {
                 self.busy.set(false);
+                self.restore_frame();
                 self.drain_queued();
                 self.text_failed();
                 *self.notice.borrow_mut() = Some((error, true));
@@ -2775,6 +2890,9 @@ impl State {
         self.text_overlay
             .connect_get_child_position(move |_, child| {
                 let state = weak.upgrade()?;
+                if child == state.expand_action.upcast_ref::<gtk::Widget>() {
+                    return state.expand_rect();
+                }
                 if !state.compare.owns(child) {
                     return state.text_field_rect();
                 }
@@ -2880,6 +2998,7 @@ impl State {
         motion.connect_motion(move |_, x, y| {
             let Some(state) = weak.upgrade() else { return };
             state.pointer.set(Some((x, y)));
+            state.hover_grips(x, y);
             // Only the brush ring follows the pointer; nothing else redraws.
             if state.brush_mode().is_some() {
                 state.sync_cursor();
@@ -2907,6 +3026,34 @@ impl State {
                 state.choose_images();
             }
         });
+        let weak = Rc::downgrade(self);
+        self.expand_action.connect_clicked(move |_| {
+            let Some(state) = weak.upgrade() else { return };
+            let id = state.expand_for.borrow().clone();
+            if let Some(id) = id {
+                state.expand_armed.set(false);
+                state.submit(Request::Layer {
+                    id,
+                    edit: LayerEdit::ExpandCanvas,
+                });
+            }
+        });
+        let hover = gtk::EventControllerMotion::new();
+        let weak = Rc::downgrade(self);
+        hover.connect_enter(move |_, _, _| {
+            if let Some(state) = weak.upgrade() {
+                state.expand_armed.set(true);
+                state.canvas.queue_draw();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        hover.connect_leave(move |_| {
+            if let Some(state) = weak.upgrade() {
+                state.expand_armed.set(false);
+                state.canvas.queue_draw();
+            }
+        });
+        self.expand_action.add_controller(hover);
         // Dropped files import at the drop point, as shipping's drop guide.
         let drop = gtk::DropTarget::new(gdk::FileList::static_type(), gdk::DragAction::COPY);
         let weak = Rc::downgrade(self);
@@ -3050,6 +3197,10 @@ impl State {
             }
             (_, "Escape") => {
                 let gesture = self.gesture.borrow_mut().take();
+                if matches!(gesture, Some(Gesture::Layer { .. })) {
+                    self.preview_dirty.set(false);
+                    self.restore_frame();
+                }
                 if self.crop.get().is_some() {
                     self.set_crop(None);
                 } else if gesture.is_none() {
@@ -3117,6 +3268,35 @@ impl State {
                 }
             }
             return;
+        }
+        if self.transform_tool() {
+            if double && self.edit_curve_at(point) {
+                self.last_press.set(None);
+                return;
+            }
+            if let Some((element, outline, hit)) = self.grip_at(point) {
+                let drag = match hit {
+                    canvas_chrome::Hit::Rotate => LayerDrag::Rotate {
+                        outline,
+                        initial: element.base().rotation(),
+                    },
+                    canvas_chrome::Hit::Resize(handle) => LayerDrag::Resize(handle),
+                    canvas_chrome::Hit::Curve(handle) => LayerDrag::Curve(handle),
+                };
+                if !matches!(drag, LayerDrag::Resize(_)) {
+                    self.canvas.set_cursor_from_name(Some("grabbing"));
+                }
+                self.canvas.set_tooltip_text(None);
+                *self.gesture.borrow_mut() = Some(Gesture::Layer {
+                    id: element.base().id.clone(),
+                    drag,
+                    start: point,
+                    current: point,
+                    shift,
+                });
+                self.canvas.queue_draw();
+                return;
+            }
         }
         let gesture = match tool.as_str() {
             "c" => {
@@ -3208,9 +3388,22 @@ impl State {
                 drop(gesture);
                 self.viewport.set(viewport);
                 self.canvas.queue_draw();
-                if self.text_active() {
+                if self.text_active() || self.expand_action.is_visible() {
                     self.text_overlay.queue_allocate();
                 }
+                return;
+            }
+            Some(Gesture::Layer {
+                current,
+                shift: held,
+                ..
+            }) => {
+                if let Some(point) = point {
+                    *current = point;
+                }
+                *held = shift;
+                drop(gesture);
+                self.preview_brush();
                 return;
             }
             Some(Gesture::Shape { end, .. } | Gesture::Move { end, .. }) => {
@@ -3251,6 +3444,18 @@ impl State {
         let opacity = defaults.opacity.get();
         let request = match gesture {
             Gesture::Pan { .. } => None,
+            Gesture::Layer { start, current, .. } if !moved(start, current) => {
+                self.restore_frame();
+                None
+            }
+            gesture @ Gesture::Layer { .. } => {
+                self.preview_dirty.set(false);
+                let request = self.layer_request(&gesture);
+                if request.is_none() {
+                    self.restore_frame();
+                }
+                request
+            }
             Gesture::Move { id, start, end } if moved(start, end) => Some(Request::Layer {
                 id,
                 edit: LayerEdit::Translate {
@@ -3308,7 +3513,329 @@ impl State {
             *self.notice.borrow_mut() = None;
             self.submit(request);
         }
+        self.sync_cursor();
         self.canvas.queue_draw();
+    }
+
+    /// Shipping `toolShowsTransformChrome`: Select and the shape tools.
+    fn transform_tool(&self) -> bool {
+        let tool = self.tool.borrow();
+        *tool == "v" || *tool == "a" || SHAPE_TOOLS.iter().any(|shape| shape.key == *tool)
+    }
+
+    fn display_scale(&self) -> f64 {
+        self.zoom_percent().unwrap_or(100.) / 100.
+    }
+
+    /// The selected layer, its outline and the grip under `point`.
+    fn grip_at(&self, point: Point) -> Option<(Element, [Point; 4], canvas_chrome::Hit)> {
+        let id = self.selected.borrow().clone()?;
+        let presented = self.presented.borrow();
+        let presented = presented.as_ref()?;
+        let element = presented
+            .document
+            .elements
+            .iter()
+            .find(|element| element.base().id == id)?;
+        let outline = *presented.outlines.get(&id)?;
+        let bounds = &presented.text_bounds;
+        let hit = canvas_chrome::hit(
+            element,
+            outline,
+            point,
+            self.display_scale(),
+            (presented.document.width, presented.document.height),
+            &mut |text| {
+                bounds
+                    .bounds(text)
+                    .or_else(|_| captures_app::editor_text::selection_bounds(text))
+            },
+        )?;
+        Some((element.clone(), outline, hit))
+    }
+
+    /// The selected, unlocked line or arrow.
+    fn selected_curve(&self) -> Option<captures_app::editor::ShapeElement> {
+        let id = self.selected.borrow().clone()?;
+        let presented = self.presented.borrow();
+        presented
+            .as_ref()?
+            .document
+            .elements
+            .iter()
+            .find_map(|element| match element {
+                Element::Shape(shape)
+                    if shape.base.id == id
+                        && !shape.base.locked
+                        && captures_app::editor_canvas::is_curveable(shape) =>
+                {
+                    Some(shape.clone())
+                }
+                _ => None,
+            })
+    }
+
+    /// Shipping's double-click on a selected line or arrow: a control dot
+    /// goes away, and the path gains a dot there.
+    fn edit_curve_at(&self, point: Point) -> bool {
+        let Some(shape) = self.selected_curve() else {
+            return false;
+        };
+        let radius = canvas_chrome::HIT_PX / self.display_scale();
+        let edit = match captures_app::editor_canvas::hit_test_curve_handle(&shape, point, radius) {
+            Some(CurveHandle::Control { index }) => CurveEdit::Remove { index },
+            Some(_) => return false,
+            None => {
+                let (_, _, distance) =
+                    captures_app::editor_canvas::closest_point_on_curve(&shape, point);
+                if distance > captures_app::editor_canvas::curve_path_hit_radius(&shape, radius) {
+                    return false;
+                }
+                CurveEdit::Insert { point }
+            }
+        };
+        self.submit(Request::Layer {
+            id: shape.base.id.clone(),
+            edit: LayerEdit::Curve { edit },
+        });
+        true
+    }
+
+    /// Drop a grip drag's preview and show the committed frame again.
+    fn restore_frame(&self) {
+        if self.gesture_frame.borrow_mut().take().is_some()
+            && let Some(presented) = self.presented.borrow().as_ref()
+        {
+            *self.texture.borrow_mut() = Some(texture_of(&presented.pixels));
+        }
+        self.canvas.queue_draw();
+    }
+
+    /// Grip cursors and shipping's hover tips over the selected layer.
+    fn hover_grips(&self, x: f64, y: f64) {
+        if self.gesture.borrow().is_some() || self.brush_mode().is_some() {
+            return;
+        }
+        let point = self.to_document(x, y).filter(|_| self.transform_tool());
+        let found = point.and_then(|point| {
+            let id = self.selected.borrow().clone()?;
+            let element = self
+                .presented
+                .borrow()
+                .as_ref()?
+                .document
+                .elements
+                .iter()
+                .find(|element| element.base().id == id && !element.base().locked)?
+                .clone();
+            let hit = self.grip_at(point).map(|(_, _, hit)| hit);
+            Some((element, hit, point))
+        });
+        let hint = found.as_ref().and_then(|(element, hit, point)| {
+            canvas_chrome::hint(element, *hit, *point, self.display_scale())
+        });
+        if self.canvas.tooltip_text().as_deref() != hint.as_deref() {
+            self.canvas.set_tooltip_text(hint.as_deref());
+        }
+        match found {
+            Some((element, Some(hit), _)) => self
+                .canvas
+                .set_cursor_from_name(Some(canvas_chrome::cursor(hit, element.base().rotation()))),
+            _ => self.sync_cursor(),
+        }
+    }
+
+    /// The selected layer's chrome: dashed bounds, grips, curve dots and the
+    /// rotation grip, following a move offset or a grip drag's preview.
+    fn draw_selection(&self, snapshot: &gtk::Snapshot, id: &str, gesture: Option<&Gesture>) {
+        let presented = self.presented.borrow();
+        let Some(presented) = presented.as_ref() else {
+            return;
+        };
+        let Some(element) = presented
+            .document
+            .elements
+            .iter()
+            .find(|element| element.base().id == id)
+        else {
+            return;
+        };
+        let frame = self.gesture_frame.borrow();
+        let Some(points) = frame
+            .as_ref()
+            .and_then(|frame| frame.outlines.get(id))
+            .or_else(|| presented.outlines.get(id))
+            .copied()
+        else {
+            return;
+        };
+        let (ox, oy) = match gesture {
+            Some(Gesture::Move { start, end, .. }) => (end.x - start.x, end.y - start.y),
+            _ => (0., 0.),
+        };
+        let screen = |p: Point| {
+            self.to_screen(Point {
+                x: p.x + ox,
+                y: p.y + oy,
+            })
+        };
+        let Some(outline) = points
+            .iter()
+            .map(|p| screen(*p))
+            .collect::<Option<Vec<_>>>()
+            .and_then(|points| <[(f64, f64); 4]>::try_from(points).ok())
+        else {
+            return;
+        };
+        let accent = self.tokens.rgba("theme-accent");
+        let base = element.base();
+        let curve = match element {
+            Element::Shape(shape) if captures_app::editor_canvas::is_curveable(shape) => {
+                Some(shape)
+            }
+            _ => None,
+        };
+        let live = !base.locked && base.visible && self.transform_tool();
+        let idle = gesture.is_none() && frame.is_none();
+        canvas_chrome::selection(snapshot, &outline, curve.is_some(), live && idle, accent);
+        if let Some(shape) = curve.filter(|_| live) {
+            let mut shape = shape.clone();
+            let show = match gesture {
+                None => frame.is_none(),
+                Some(Gesture::Layer {
+                    drag: LayerDrag::Curve(handle),
+                    current,
+                    ..
+                }) => captures_app::editor_canvas::apply_curve_edit(
+                    &mut shape,
+                    CurveEdit::Move {
+                        handle: *handle,
+                        point: *current,
+                    },
+                )
+                .is_ok(),
+                _ => false,
+            };
+            if show && let Some(handles) = captures_app::editor_canvas::curve_handles(&shape) {
+                let map = |points: &[Point]| -> Vec<(f64, f64)> {
+                    points.iter().filter_map(|p| self.to_screen(*p)).collect()
+                };
+                if let (Some(start), Some(end)) =
+                    (self.to_screen(handles.start), self.to_screen(handles.end))
+                {
+                    let angle = (outline[1].1 - outline[0].1).atan2(outline[1].0 - outline[0].0);
+                    canvas_chrome::curve(
+                        snapshot,
+                        [start, end],
+                        &map(&handles.controls),
+                        &map(&handles.starters),
+                        angle,
+                        accent,
+                    );
+                }
+            }
+        }
+        if live
+            && idle
+            && let Some(grip) = captures_app::editor::rotation_handle(
+                points,
+                base.rotation(),
+                self.display_scale(),
+                presented.document.width,
+                presented.document.height,
+            )
+            && let (Some(anchor), Some(handle)) =
+                (self.to_screen(grip.anchor), self.to_screen(grip.handle))
+        {
+            canvas_chrome::rotation_grip(snapshot, anchor, handle, accent);
+        }
+        // `.screenshot-align-snap-guide`: 2 px accent lines with a glow.
+        if let Some(frame) = frame.as_ref()
+            && let Some(image) = self.image_rect()
+        {
+            for guide in &frame.guides {
+                let rect = match guide.orientation {
+                    GuideOrientation::Vertical => self
+                        .to_screen(Point {
+                            x: guide.position,
+                            y: 0.,
+                        })
+                        .map(|(x, _)| (x - 1., image.y, 2., image.height)),
+                    GuideOrientation::Horizontal => self
+                        .to_screen(Point {
+                            x: 0.,
+                            y: guide.position,
+                        })
+                        .map(|(_, y)| (image.x, y - 1., image.width, 2.)),
+                };
+                let Some((x, y, w, h)) = rect else { continue };
+                let bounds = graphene::Rect::new(x as f32, y as f32, w as f32, h as f32);
+                let mut glow = accent;
+                glow.set_alpha(0.75);
+                snapshot.append_outset_shadow(
+                    &gsk::RoundedRect::from_rect(bounds, 0.),
+                    &glow,
+                    0.,
+                    0.,
+                    0.,
+                    10.,
+                );
+                snapshot.append_color(&accent, &bounds);
+            }
+        }
+    }
+
+    /// The layer the Expand canvas action is for: the selected layer while
+    /// it hangs past the canvas and nothing is being dragged.
+    fn expand_target(&self) -> Option<CanvasExpandPreview> {
+        if self.gesture.borrow().is_some()
+            || self.gesture_frame.borrow().is_some()
+            || !self.transform_tool()
+        {
+            return None;
+        }
+        let id = self.selected.borrow().clone()?;
+        self.presented
+            .borrow()
+            .as_ref()?
+            .canvas_expand
+            .get(&id)
+            .cloned()
+    }
+
+    /// Show, hide and place the Expand canvas action (outside a snapshot).
+    fn sync_expand(&self) {
+        let target = self
+            .expand_target()
+            .and_then(|_| self.selected.borrow().clone());
+        let shown = target.is_some();
+        *self.expand_for.borrow_mut() = target;
+        if self.expand_action.is_visible() != shown {
+            self.expand_action.set_visible(shown);
+            if !shown {
+                self.expand_armed.set(false);
+            }
+        }
+        self.text_overlay.queue_allocate();
+        self.canvas.queue_draw();
+    }
+
+    /// Where the action sits: centred outside the largest overflow gap,
+    /// kept inside the canvas.
+    fn expand_rect(&self) -> Option<gdk::Rectangle> {
+        let preview = self.expand_target()?;
+        let anchor = captures_app::editor_canvas::inset_anchor(
+            preview.anchor,
+            preview.anchor_edge,
+            captures_app::editor_canvas::EXPAND_ACTION_INSET / self.display_scale(),
+        );
+        let (x, y) = self.to_screen(anchor)?;
+        let (_, natural) = self.expand_action.preferred_size();
+        let (w, h) = (natural.width(), natural.height());
+        let (cw, ch) = (self.canvas.width(), self.canvas.height());
+        let left = ((x as i32) - w / 2).clamp(4, (cw - w - 4).max(4));
+        let top = ((y as i32) - h / 2).clamp(4, (ch - h - 4).max(4));
+        Some(gdk::Rectangle::new(left, top, w, h))
     }
 
     /// The After encode right of the divider, the divider, and the veil while
@@ -3421,29 +3948,34 @@ impl State {
 
         let accent = t.rgba("theme-accent");
         let gesture = self.gesture.borrow().clone();
-        // The selected layer's outline, moved with a live drag.
+        // Expand canvas: the overflow tint and, while the action is hovered,
+        // the ghost of the grown canvas.
+        let expand = self.expand_target();
+        snapshot.push_clip(&graphene::Rect::new(0., 0., width, height));
+        if let Some(preview) = &expand {
+            canvas_chrome::expand(
+                snapshot,
+                preview,
+                &|point| self.to_screen(point),
+                self.expand_armed.get(),
+                accent,
+            );
+        }
+        snapshot.pop();
+        let wanted = expand.and(self.selected.borrow().clone());
+        if wanted != *self.expand_for.borrow() {
+            // Widgets cannot change during a snapshot.
+            let me = self.me.clone();
+            glib::idle_add_local_once(move || {
+                if let Some(state) = me.upgrade() {
+                    state.sync_expand();
+                }
+            });
+        }
+        // The selected layer's chrome, moved with a live drag.
         let selected = self.selected.borrow().clone();
-        if let Some(id) = selected
-            && let Some(points) = self
-                .presented
-                .borrow()
-                .as_ref()
-                .and_then(|p| p.outlines.get(&id).copied())
-        {
-            let (ox, oy) = match &gesture {
-                Some(Gesture::Move { start, end, .. }) => (end.x - start.x, end.y - start.y),
-                _ => (0., 0.),
-            };
-            let screen: Vec<(f64, f64)> = points
-                .iter()
-                .filter_map(|p| {
-                    self.to_screen(Point {
-                        x: p.x + ox,
-                        y: p.y + oy,
-                    })
-                })
-                .collect();
-            stroke(snapshot, &screen, true, accent, 1.5);
+        if let Some(id) = selected {
+            self.draw_selection(snapshot, &id, gesture.as_ref());
         }
         match &gesture {
             Some(Gesture::Shape { tool, start, end }) => {

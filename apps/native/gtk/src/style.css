@@ -3915,3 +3915,21 @@ window.captures.recording-controls-window {
     transform: translateY(5px) scale(0.985);
   }
 }
+
+/* `.screenshot-canvas-expand-action`: the accent Expand canvas pill. */
+.captures button.editor-expand-action {
+  min-height: 0;
+  padding: var(--s-2) var(--s-4);
+  border: 0;
+  border-radius: var(--r-sm);
+  color: var(--theme-accent-ink);
+  background: var(--theme-accent);
+  box-shadow: var(--shadow-md);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--sm-tracking);
+}
+.captures button.editor-expand-action:hover,
+.captures button.editor-expand-action:focus-visible {
+  background: var(--theme-accent-hover);
+}
