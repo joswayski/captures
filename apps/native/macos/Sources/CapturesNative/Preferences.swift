@@ -48,7 +48,7 @@ final class NativeLoginItemService: LoginItemServicing {
     }
 }
 
-final class ClosureColorWell: NSColorWell {
+final class ClosureColorWell: WheelColorWell {
     var change: ((NSColor) -> Void)?
     @objc func selectedColor() { change?(color) }
 }

@@ -127,9 +127,35 @@ final class ColorSwatchButton: NSButton {
     override var focusRingMaskBounds: NSRect { circle }
 }
 
+/// A color well whose system panel shows only the color wheel (hue and
+/// saturation circle plus brightness), without the other picker modes or an
+/// opacity slider: Captures colors are opaque `#RRGGBB`, so alpha would be dropped.
+class WheelColorWell: NSColorWell {
+    /// The picker mask only applies before `NSColorPanel.shared` exists, so it
+    /// is set when the first well is made, without building the panel.
+    private static let wheelOnly: Void = {
+        NSColorPanel.setPickerMask(.wheelModeMask)
+        NSColorPanel.setPickerMode(.wheel)
+    }()
+
+    override init(frame: NSRect) {
+        _ = WheelColorWell.wheelOnly
+        super.init(frame: frame)
+        if #available(macOS 14.0, *) { supportsAlpha = false }
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func activate(_ exclusive: Bool) {
+        super.activate(exclusive)
+        // macOS 13 has no `supportsAlpha`.
+        if #unavailable(macOS 14.0) { NSColorPanel.shared.showsAlpha = false }
+    }
+}
+
 /// The shipping custom-color tile (`.screenshot-custom-color`): a conic hue
 /// square that opens the system color panel, like the shipping `<input type=color>`.
-final class CustomColorWell: NSColorWell {
+final class CustomColorWell: WheelColorWell {
     var tokens: Tokens { didSet { needsDisplay = true } }
     var change: ((NSColor) -> Void)?
 
