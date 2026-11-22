@@ -10,6 +10,7 @@ captures-recording = { path = "../captures-recording" }
 thiserror.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
 core-graphics.workspace = true
 cpal = "0.16"
 hound = "3.5"

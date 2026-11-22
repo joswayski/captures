@@ -5,13 +5,24 @@ use std::{
         Arc, Condvar, Mutex,
         atomic::{AtomicBool, Ordering},
     },
+    thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
 
 use captures_recording::{
     AudioDevice, AudioDeviceKind, RecordingOptions, RecordingSegmentInfo, RecordingTarget,
 };
+use core_foundation::{
+    base::{CFType, TCFType},
+    dictionary::{CFDictionary, CFDictionaryRef},
+    number::CFNumber,
+    string::{CFString, CFStringRef},
+};
 use core_graphics::display::CGDisplay as CoreGraphicsDisplay;
+use core_graphics::window::{
+    copy_window_info, kCGNullWindowID, kCGWindowListOptionAll, kCGWindowNumber, kCGWindowOwnerPID,
+    kCGWindowSharingState,
+};
 use screencapturekit::{
     audio_devices::AudioInputDevice,
     cg::CGRect,
@@ -43,6 +54,7 @@ pub struct NativeRecordingSegment {
     height: u32,
     failure: Arc<Mutex<Option<String>>>,
     started_at: Instant,
+    window_refresh: Option<CapturesWindowRefresh>,
 }
 
 struct CaptureSource {
@@ -50,6 +62,9 @@ struct CaptureSource {
     pixel_width: f64,
     pixel_height: f64,
     frame: CGRect,
+    /// The display and Captures windows a display or region recording that
+    /// excludes Captures keeps; `None` when nothing needs refreshing.
+    excluding_captures: Option<(SCDisplay, Vec<u32>)>,
 }
 
 impl NativeRecordingSegment {
@@ -235,6 +250,9 @@ impl NativeRecordingSegment {
             ));
         }
 
+        let window_refresh = source
+            .excluding_captures
+            .map(|(display, kept)| CapturesWindowRefresh::spawn(stream.clone(), display, kept));
         Ok(Self {
             stream,
             _output_queue: output_queue,
@@ -246,6 +264,7 @@ impl NativeRecordingSegment {
             height,
             failure,
             started_at,
+            window_refresh,
         })
     }
 
@@ -269,6 +288,9 @@ impl NativeRecordingSegment {
         // stopped delivering samples. The media collected up to that point is
         // still valid, so always detach the outputs and finalize the writer.
         // A writer or stream-delegate failure remains fatal below.
+        if let Some(refresh) = self.window_refresh.take() {
+            refresh.finish();
+        }
         let _ = self.stream.stop_capture();
         let _ = self
             .stream
@@ -307,6 +329,9 @@ impl NativeRecordingSegment {
 
     pub fn discard(mut self) -> MacRecordingResult<()> {
         let path = self.path.clone();
+        if let Some(refresh) = self.window_refresh.take() {
+            refresh.finish();
+        }
         let _ = self.stream.stop_capture();
         let _ = self
             .stream
@@ -420,12 +445,14 @@ fn filter_for_target(
             let display = find_display(content, display_id)?;
             let scale = display_pixel_scale(&display);
             let frame = display.frame();
-            let filter = display_content_filter(&display, content, exclude_captures_app);
+            let (filter, excluding_captures) =
+                display_content_filter(display.clone(), content, exclude_captures_app);
             Ok(CaptureSource {
                 filter,
                 pixel_width: f64::from(display.width()) * scale,
                 pixel_height: f64::from(display.height()) * scale,
                 frame,
+                excluding_captures,
             })
         }
         RecordingTarget::Region {
@@ -434,7 +461,8 @@ fn filter_for_target(
             let display = find_display(content, display_id)?;
             let scale = display_pixel_scale(&display);
             let display_frame = display.frame();
-            let filter = display_content_filter(&display, content, exclude_captures_app);
+            let (filter, excluding_captures) =
+                display_content_filter(display, content, exclude_captures_app);
             Ok(CaptureSource {
                 filter,
                 pixel_width: f64::from(rect.width) * scale,
@@ -445,6 +473,7 @@ fn filter_for_target(
                     f64::from(rect.width),
                     f64::from(rect.height),
                 ),
+                excluding_captures,
             })
         }
         RecordingTarget::Window { window_id } => {
@@ -457,30 +486,189 @@ fn filter_for_target(
                 pixel_width: frame.size.width * scale,
                 pixel_height: frame.size.height * scale,
                 frame,
+                excluding_captures: None,
             })
         }
     }
 }
 
 fn display_content_filter(
-    display: &SCDisplay,
+    display: SCDisplay,
     content: &SCShareableContent,
     exclude_captures_app: bool,
-) -> SCContentFilter {
+) -> (SCContentFilter, Option<(SCDisplay, Vec<u32>)>) {
     if exclude_captures_app {
-        let applications = current_process_applications(content);
-        let application_refs = applications.iter().collect::<Vec<_>>();
-        SCContentFilter::create()
-            .with_display(display)
-            .with_excluding_applications(&application_refs, &[])
-            .build()
+        let kept = regular_captures_windows(content);
+        let filter = excluding_captures_filter(&display, content, &kept);
+        (filter, Some((display, window_ids(&kept))))
     } else {
         // Keep Captures (and its recording controls) in the stream for demos
         // and product feedback when the preference is enabled.
-        SCContentFilter::create()
-            .with_display(display)
+        let filter = SCContentFilter::create()
+            .with_display(&display)
             .with_excluding_windows(&[])
-            .build()
+            .build();
+        (filter, None)
+    }
+}
+
+/// Leaves Captures' recording controls, capture surfaces, notices and mini
+/// previews out of the stream, but keeps `kept`: its regular windows, such as
+/// Preferences, History and editors. ScreenCaptureKit ignores AppKit's
+/// `sharingType`, so the whole app is excluded and only these come back; a
+/// window Captures opens later stays out until the refresh adds it.
+fn excluding_captures_filter(
+    display: &SCDisplay,
+    content: &SCShareableContent,
+    kept: &[SCWindow],
+) -> SCContentFilter {
+    let applications = current_process_applications(content);
+    let application_refs = applications.iter().collect::<Vec<_>>();
+    let kept_refs = kept.iter().collect::<Vec<_>>();
+    SCContentFilter::create()
+        .with_display(display)
+        .with_excluding_applications(&application_refs, &kept_refs)
+        .build()
+}
+
+/// Captures' normal-level windows. Everything it floats over the desktop
+/// (controls, overlays, countdowns, notices, mini previews) sits higher, and
+/// windows AppKit marks `NSWindowSharingNone`, such as the Share form, stay out.
+fn regular_captures_windows(content: &SCShareableContent) -> Vec<SCWindow> {
+    let process_id = current_process_id();
+    let unshared = unshared_window_ids(process_id);
+    content
+        .windows()
+        .into_iter()
+        .filter(|window| {
+            is_regular_window_of(
+                window.owning_application().map(|app| app.process_id()),
+                window.window_layer(),
+                process_id,
+            ) && !unshared.contains(&window.window_id())
+        })
+        .collect()
+}
+
+/// `kCGNormalWindowLevel`.
+const NORMAL_WINDOW_LAYER: i32 = 0;
+
+const fn is_regular_window_of(owner: Option<i32>, layer: i32, process_id: i32) -> bool {
+    matches!(owner, Some(owner) if owner == process_id) && layer == NORMAL_WINDOW_LAYER
+}
+
+/// The window numbers of `process_id`'s windows with `kCGWindowSharingNone`.
+/// The window server still reports AppKit's `sharingType` here even though
+/// ScreenCaptureKit no longer applies it.
+fn unshared_window_ids(process_id: i32) -> Vec<u32> {
+    let Some(list) = copy_window_info(kCGWindowListOptionAll, kCGNullWindowID) else {
+        return Vec::new();
+    };
+    list.get_all_values()
+        .into_iter()
+        .filter_map(|entry| {
+            if entry.is_null() {
+                return None;
+            }
+            // SAFETY: CGWindowListCopyWindowInfo returns an array of
+            // dictionaries that `list` keeps alive for this closure.
+            let entry: CFDictionary<CFString, CFType> =
+                unsafe { CFDictionary::wrap_under_get_rule(entry as CFDictionaryRef) };
+            let number = |key: CFStringRef| {
+                // SAFETY: the window info keys are immutable CFString constants.
+                entry
+                    .find(unsafe { CFString::wrap_under_get_rule(key) })?
+                    .downcast::<CFNumber>()?
+                    .to_i64()
+            };
+            // SAFETY (each key read): the keys are immutable CFString constants.
+            let owner = number(unsafe { kCGWindowOwnerPID })?;
+            let sharing = number(unsafe { kCGWindowSharingState })?;
+            if owner != i64::from(process_id) || sharing != 0 {
+                return None;
+            }
+            u32::try_from(number(unsafe { kCGWindowNumber })?).ok()
+        })
+        .collect()
+}
+
+fn window_ids(windows: &[SCWindow]) -> Vec<u32> {
+    let mut ids = windows.iter().map(SCWindow::window_id).collect::<Vec<_>>();
+    ids.sort_unstable();
+    ids
+}
+
+/// How often a recording that excludes Captures looks for regular Captures
+/// windows opened, closed or moved to another level since the last filter.
+const WINDOW_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
+
+/// Keeps a recording's Captures exclusion current: Preferences or an editor
+/// opened mid-recording joins the stream within `WINDOW_REFRESH_INTERVAL`.
+struct CapturesWindowRefresh {
+    stop: Arc<(Mutex<bool>, Condvar)>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl CapturesWindowRefresh {
+    fn spawn(stream: SCStream, display: SCDisplay, mut kept: Vec<u32>) -> Self {
+        let stop = Arc::new((Mutex::new(false), Condvar::new()));
+        let thread_stop = stop.clone();
+        let thread = thread::Builder::new()
+            .name("captures-recording-windows".to_owned())
+            .spawn(move || {
+                let (flag, wake) = &*thread_stop;
+                loop {
+                    let stopped = flag
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let (stopped, _) = wake
+                        .wait_timeout_while(stopped, WINDOW_REFRESH_INTERVAL, |stopped| !*stopped)
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    if *stopped {
+                        return;
+                    }
+                    drop(stopped);
+                    let Ok(content) = SCShareableContent::get() else {
+                        continue;
+                    };
+                    let windows = regular_captures_windows(&content);
+                    let ids = window_ids(&windows);
+                    if ids != kept
+                        && stream
+                            .update_content_filter(&excluding_captures_filter(
+                                &display, &content, &windows,
+                            ))
+                            .is_ok()
+                    {
+                        kept = ids;
+                    }
+                }
+            })
+            // Without the thread the recording keeps its starting windows.
+            .ok();
+        Self { stop, thread }
+    }
+
+    /// Stops the refresh before the stream it updates stops.
+    fn finish(mut self) {
+        self.signal_stop();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+
+    fn signal_stop(&self) {
+        let (stopped, wake) = &*self.stop;
+        *stopped
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = true;
+        wake.notify_all();
+    }
+}
+
+impl Drop for CapturesWindowRefresh {
+    fn drop(&mut self) {
+        self.signal_stop();
     }
 }
 
@@ -551,8 +739,12 @@ fn find_window(content: &SCShareableContent, id: &str) -> MacRecordingResult<SCW
         .ok_or(MacRecordingError::TargetUnavailable)
 }
 
+fn current_process_id() -> i32 {
+    i32::try_from(std::process::id()).unwrap_or_default()
+}
+
 fn current_process_applications(content: &SCShareableContent) -> Vec<SCRunningApplication> {
-    let process_id = i32::try_from(std::process::id()).unwrap_or_default();
+    let process_id = current_process_id();
     content
         .applications()
         .into_iter()
@@ -563,8 +755,8 @@ fn current_process_applications(content: &SCShareableContent) -> Vec<SCRunningAp
 #[cfg(test)]
 mod tests {
     use super::{
-        VideoFrameKind, capture_pointer_options, intersection_area, microphone_choices,
-        pixel_scale_from_dimensions, video_frame_kind,
+        VideoFrameKind, capture_pointer_options, intersection_area, is_regular_window_of,
+        microphone_choices, pixel_scale_from_dimensions, video_frame_kind,
     };
     use screencapturekit::cm::SCFrameStatus;
     use screencapturekit::prelude::CGRect;
@@ -634,6 +826,19 @@ mod tests {
             .with_shows_mouse_clicks(false);
         assert!(configuration.shows_cursor());
         assert!(!configuration.shows_mouse_clicks());
+    }
+
+    #[test]
+    fn excluding_captures_keeps_only_its_normal_level_windows() {
+        // Preferences, History and editors sit at the normal level.
+        assert!(is_regular_window_of(Some(42), 0, 42));
+        // Recording controls and notices float; capture surfaces sit at the
+        // screen saver level.
+        assert!(!is_regular_window_of(Some(42), 3, 42));
+        assert!(!is_regular_window_of(Some(42), 1000, 42));
+        // Another app's window is not Captures' to keep.
+        assert!(!is_regular_window_of(Some(7), 0, 42));
+        assert!(!is_regular_window_of(None, 0, 42));
     }
 
     #[test]
