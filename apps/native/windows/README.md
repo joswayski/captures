@@ -125,7 +125,13 @@ Full screen the Display select lists every display (name, then W × H and
 Primary; disabled with one display) and reopens the bar on the chosen one,
 keeping its target, mode, aspect and Record options while the primary reads
 "Switching…" (`--tool display --select display|display-switching` renders
-it). A physical Windows 11 check (4K, 150%) confirmed pixel-exact
+it). Like shipping, the bar shows the capture guidance chip 16% down the
+display (Region's "Drag to select a region", hidden while drawing; Window's
+"Select a window to continue" or "Click to capture this display" until a
+window is picked) and fades it away from a nearby pointer; Record's options
+row slides in, Start recording's dot pings while it is enabled, and lists pop
+in, all on the shared motion specs and at rest under reduced motion (rendered
+offscreen and unit-tested; the live motion was not watched). A physical Windows 11 check (4K, 150%) confirmed pixel-exact
 Region and Full screen captures, the clipboard and History; a second New
 Capture now refocuses the open bar instead of an error, and the snapshot waits
 for the tray menu and overflow flyout to close (a recheck passed both; the

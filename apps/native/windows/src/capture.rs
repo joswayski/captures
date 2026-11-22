@@ -15,7 +15,9 @@
 //! `recorder`. A drawn region moves by its frame and resizes by its corner
 //! handles under a W × H label; Shift squares it and the Aspect select locks
 //! its ratio (the shared `selection` geometry). Full screen's Display select
-//! prepares another display and reopens the bar there. Keyboard focus
+//! prepares another display and reopens the bar there. The guidance chip,
+//! options-row arrive, ready ping and list pop-in run on a frame timer only
+//! while they move. Keyboard focus
 //! through the bar and UI Automation are not ported yet.
 
 use std::cell::RefCell;
@@ -24,8 +26,11 @@ use std::time::{Duration, Instant};
 
 use captures_app::capture_error;
 use captures_app::capture_flow::CaptureFlow;
-use captures_app::capture_menu::{self, MenuMode, PrimaryState, RecordingToggle};
+use captures_app::capture_menu::{
+    self, GuidanceChip, GuidanceTarget, MenuMode, PrimaryState, RecordingToggle,
+};
 use captures_app::controls::select;
+use captures_app::motion::{Motion, Pose};
 use captures_app::selection::{self, Bounds, DragMode, DragOptions, Point};
 use captures_app::window::{self as window_target, WindowSession};
 use captures_capture::{DisplayDescriptor, LogicalRect};
@@ -42,6 +47,7 @@ use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
+use windows_numerics::Matrix3x2;
 
 use crate::countdown::{Countdown, Tick};
 use crate::gfx::{self, Gfx, Style, rect};
@@ -465,6 +471,8 @@ struct Layout {
     primary: Option<(Rect, gfx::Text, bool)>,
     note: Vec<(gfx::Text, f32, bool)>,
     note_y: f32,
+    /// `.capture-guidance` at rest, 16% down the display.
+    guidance: Option<GuidanceBox>,
 }
 
 impl Layout {
@@ -522,6 +530,27 @@ pub struct Menu {
     /// A repeated shortcut is freezing the bar into a new snapshot
     /// (shipping's `starting` while it recaptures).
     pub starting: bool,
+    /// The motion clock (`tooltip::now_ms`) and Windows' reduced motion, set
+    /// before each paint. Offscreen renders keep reduced motion, so every
+    /// motion draws at rest.
+    pub clock: f64,
+    pub reduced: bool,
+    /// `CaptureGuidance`: the Region chip (true) or the Window one, and its
+    /// shared motion.
+    guidance: Option<(bool, GuidanceChip)>,
+    /// The pointer is over the chip, so it fades out of the way.
+    guidance_over: bool,
+    /// When Record's options row (and the primary's ready ping) mounted.
+    record_since: Option<f64>,
+    /// The open listbox's field and when it popped in.
+    open_since: Option<(Field, f64)>,
+}
+
+/// The chip's frame with its title and hint lines.
+struct GuidanceBox {
+    rect: Rect,
+    title: gfx::Text,
+    hint: gfx::Text,
 }
 
 /// What a capture shortcut did to the open bar.
@@ -580,7 +609,114 @@ impl Menu {
             switching: false,
             switch_to: None,
             starting: false,
+            clock: 0.,
+            reduced: true,
+            guidance: None,
+            guidance_over: false,
+            record_since: None,
+            open_since: None,
         }
+    }
+
+    /// Which guidance chip shows, if any: Region's, or Window's until a
+    /// window is picked (over the desktop it offers the display).
+    fn guidance_target(&self) -> Option<GuidanceTarget> {
+        match self.target {
+            Target::Region => Some(GuidanceTarget::Region),
+            Target::Window if self.picked.is_none() => Some(if self.hovered == Some(None) {
+                GuidanceTarget::Display
+            } else {
+                GuidanceTarget::Window
+            }),
+            _ => None,
+        }
+    }
+
+    /// Follow the bar's state with its motions at `self.clock`: the chip
+    /// mounts with its target (Region and Window are separate chips, like
+    /// shipping's two elements) and fades out while a region is drawn or the
+    /// pointer covers it; the options row and listbox replay their entrance
+    /// whenever they mount.
+    fn sync_motion(&mut self, t: &Tokens) {
+        let now = self.clock;
+        match (self.mode, self.record_since) {
+            (MenuMode::Recording, None) => self.record_since = Some(now),
+            (MenuMode::Screenshot, Some(_)) => self.record_since = None,
+            _ => {}
+        }
+        let open = self.open.map(|(field, _)| field);
+        if open != self.open_since.map(|(field, _)| field) {
+            self.open_since = open.map(|field| (field, now));
+        }
+        let creating = self
+            .drag
+            .is_some_and(|drag| matches!(drag.mode, DragMode::Create));
+        let Some(target) = self.guidance_target() else {
+            self.guidance = None;
+            return;
+        };
+        let region = target == GuidanceTarget::Region;
+        let shown = !(self.guidance_over || region && creating);
+        match &mut self.guidance {
+            Some((r, chip)) if *r == region => chip.set_shown(shown, now),
+            _ => {
+                self.guidance = GuidanceChip::new(t, self.reduced, now, shown, false)
+                    .map(|chip| (region, chip));
+            }
+        }
+    }
+
+    /// The bar's poses at `self.clock`: the options row's arrive and the open
+    /// listbox's pop-in (`ui-pop-in`).
+    fn options_pose(&self, t: &Tokens) -> Pose {
+        // `pose_at` holds the first frame through the 40 ms delay even under
+        // reduced motion, where the row must simply be there.
+        let motion = Motion::CaptureMenuOptionsArrive.resolve(t);
+        match (self.record_since, motion) {
+            (Some(since), Some(motion)) if !self.reduced => {
+                motion.pose_at(self.clock - since, false)
+            }
+            _ => Pose::REST,
+        }
+    }
+
+    fn listbox_pose(&self, t: &Tokens) -> Pose {
+        match (self.open_since, Motion::PopoverIn.resolve(t)) {
+            (Some((_, since)), Some(motion)) => motion.pose_at(self.clock - since, self.reduced),
+            _ => Pose::REST,
+        }
+    }
+
+    /// The enabled Start recording dot's `recording-ready-ping`, repeating
+    /// from when Record mounted; at rest (hidden) under reduced motion.
+    fn ping_pose(&self, t: &Tokens) -> Option<Pose> {
+        let since = self.record_since?;
+        let motion = Motion::CaptureRecordReadyPing.resolve(t)?;
+        Some(motion.pose_repeating(self.clock - since, self.reduced))
+    }
+
+    /// True while a motion runs and the window must keep painting.
+    fn animating(&self, t: &Tokens) -> bool {
+        let now = self.clock;
+        let running = |since: Option<f64>, motion: Motion| {
+            since.is_some_and(|since| {
+                motion
+                    .resolve(t)
+                    .is_some_and(|m| m.running(now - since, self.reduced))
+            })
+        };
+        let primary =
+            capture_menu::primary_action(self.mode, self.auto_start, PrimaryState::default());
+        let pinging = self.mode == MenuMode::Recording
+            && !self.reduced
+            && !primary.hidden
+            && self.can_start();
+        self.guidance
+            .as_ref()
+            .is_some_and(|(_, chip)| chip.animating(now))
+            || running(self.record_since, Motion::CaptureMenuOptionsArrive)
+            || running(self.open_since.map(|(_, at)| at), Motion::PopoverIn)
+            || pinging
     }
 
     /// A capture shortcut with the bar up (shared `busy_route`, shipping's
@@ -1011,7 +1147,34 @@ impl Menu {
             Some((field, control)) => Some(self.listbox_layout(g, t, field, control)?),
             None => None,
         };
+        // `.capture-guidance`: `--s-4 --s-6` padding, a `--text-md` semibold
+        // title over a `--text-xs` medium hint, 2 px apart.
+        let guidance = match self.guidance_target() {
+            Some(target) => {
+                let copy = capture_menu::guidance(target, false);
+                let title = g.text_sized(
+                    t,
+                    copy.title,
+                    t.n("text-md"),
+                    "weight-semibold",
+                    Some("tracking-tight"),
+                )?;
+                let hint = g.text_sized(t, copy.hint, t.n("text-xs"), "weight-medium", None)?;
+                let (px, py) = (t.n("s-6"), t.n("s-4"));
+                let gw = (title.width.max(hint.width) + 2. * px + 2.).ceil();
+                let gh = (title.height + 2. + hint.height + 2. * py + 2.).ceil();
+                let gl = ((w - gw) / 2.).round();
+                let gt = capture_menu::guidance_top(f64::from(h)).round() as f32;
+                Some(GuidanceBox {
+                    rect: rect(gl, gt, gl + gw, gt + gh),
+                    title,
+                    hint,
+                })
+            }
+            None => None,
+        };
         Ok(Layout {
+            guidance,
             panel,
             options,
             listbox,
@@ -1231,6 +1394,7 @@ impl Menu {
         t: &Tokens,
         frozen: Option<&ID2D1Bitmap1>,
     ) -> Result<()> {
+        self.sync_motion(t);
         let layout = self.layout(g, t)?;
         let (w, h) = self.size;
         let full = rect(0., 0., w, h);
@@ -1326,6 +1490,9 @@ impl Menu {
                 gfx::border(dc, full, 0., 2., accent)?;
                 self.identity(dc, g, t)?;
             }
+        }
+        if let (Some(guide), Some((_, chip))) = (&layout.guidance, &self.guidance) {
+            self.paint_guidance(dc, t, guide, chip.pose(self.clock))?;
         }
         // `.recording-selector-panel`
         gfx::shadow(dc, layout.panel, 18., t.shadow("glass-shadow"))?;
@@ -1424,6 +1591,15 @@ impl Menu {
                 let dot = rect(x + 2., cy - 6., x + 14., cy + 6.);
                 gfx::fill_round(dc, dot, 6., t.color_alpha("theme-signal", opacity))?;
                 gfx::border(dc, dot, 6., 1.5, alpha(ink, 0.6))?;
+                // `recording-ready-ping`: a 0.7 copy of the dot swells to 2×
+                // and fades while Start recording is enabled.
+                if let Some(ping) = self.ping_pose(t).filter(|_| *enabled) {
+                    let center = (x + 8., cy);
+                    with_pose(dc, &ping, center, || {
+                        let ping = rect(x + 3., cy - 5., x + 13., cy + 5.);
+                        gfx::fill_round(dc, ping, 5., t.color_alpha("theme-signal", 0.7))
+                    })?;
+                }
             } else {
                 gfx::icon(dc, &g.factory, "capture", &[], (x, cy - 8., 16.), 1.8, ink)?;
             }
@@ -1431,7 +1607,11 @@ impl Menu {
         }
         self.paint_fields(dc, g, t, &layout.pickers)?;
         if let Some((row_top, fields)) = &layout.options {
-            self.paint_options(dc, g, t, &layout.panel, *row_top, fields)?;
+            // `recording-options-arrive`: fades in from 5 px up, 40 ms late.
+            let pose = self.options_pose(t);
+            with_pose(dc, &pose, (0., 0.), || {
+                self.paint_options(dc, g, t, &layout.panel, *row_top, fields)
+            })?;
         }
         // `.capture-selector-note`
         for (text, x, strong) in &layout.note {
@@ -1443,7 +1623,12 @@ impl Menu {
             gfx::text(dc, text, *x, layout.note_y, color)?;
         }
         if let Some(listbox) = &layout.listbox {
-            self.paint_listbox(dc, t, listbox)?;
+            // `ui-pop-in` about the listbox's center.
+            let r = listbox.rect;
+            let center = ((r.left + r.right) / 2., (r.top + r.bottom) / 2.);
+            with_pose(dc, &self.listbox_pose(t), center, || {
+                self.paint_listbox(dc, t, listbox)
+            })?;
         }
         self.layout = Some(layout);
         Ok(())
@@ -1672,6 +1857,50 @@ impl Menu {
         Ok(())
     }
 
+    /// `.capture-guidance`: a strong-glass card, its title over the muted
+    /// hint, at the chip's pose (fade, entrance slide, feedback nudge).
+    fn paint_guidance(
+        &self,
+        dc: &ID2D1DeviceContext,
+        t: &Tokens,
+        guide: &GuidanceBox,
+        chip: capture_menu::GuidancePose,
+    ) -> Result<()> {
+        let pose = Pose {
+            opacity: chip.opacity,
+            translate_x: chip.translate_x,
+            translate_y: chip.translate_y,
+            ..Pose::REST
+        };
+        let feedback = chip.accent;
+        with_pose(dc, &pose, (0., 0.), || {
+            let r = guide.rect;
+            let radius = t.n("r-xl");
+            gfx::shadow(dc, r, radius, t.shadow("glass-shadow"))?;
+            gfx::fill_round(dc, r, radius, t.color("glass-strong"))?;
+            let edge = if feedback {
+                let alpha = capture_menu::GUIDANCE_FEEDBACK_BORDER_ALPHA as f32;
+                t.color_alpha("theme-accent", alpha)
+            } else {
+                t.color("glass-border-strong")
+            };
+            gfx::border(dc, r, radius, 1., edge)?;
+            let cx = (r.left + r.right) / 2.;
+            let top = r.top + 1. + t.n("s-4");
+            let title = &guide.title;
+            gfx::text(dc, title, cx - title.width / 2., top, t.color("glass-text"))?;
+            let hint = &guide.hint;
+            let y = top + title.height + capture_menu::GUIDANCE_ROW_GAP as f32;
+            gfx::text(
+                dc,
+                hint,
+                cx - hint.width / 2.,
+                y,
+                t.color("glass-text-muted"),
+            )
+        })
+    }
+
     fn identity(&self, dc: &ID2D1DeviceContext, g: &Gfx, t: &Tokens) -> Result<()> {
         let (name, pw, ph) = &self.display;
         let identity = capture_menu::display_identity(name, *pw, *ph, None);
@@ -1712,6 +1941,25 @@ impl Menu {
         }
         let hover = self.hit(x, y);
         let mut changed = false;
+        // The chip fades away from a pointer near it (shipping
+        // `isPointerOverCaptureGuidance`, with hysteresis).
+        if let Some(r) = self
+            .layout
+            .as_ref()
+            .and_then(|l| l.guidance.as_ref())
+            .map(|g| g.rect)
+        {
+            let over = capture_menu::pointer_over_guidance(
+                x.into(),
+                y.into(),
+                r.left.into(),
+                r.top.into(),
+                r.right.into(),
+                r.bottom.into(),
+                self.guidance_over,
+            );
+            changed |= std::mem::replace(&mut self.guidance_over, over) != over;
+        }
         // Pointing at an enabled row highlights it (`onPointerEnter`).
         if let (Some(Hit::Option(index)), Some((field, _))) = (hover, self.open)
             && !self.entries(field).1[index]
@@ -1824,6 +2072,47 @@ impl Menu {
         let hit = self.hit(x, y);
         (self.pressed.take() == hit).then_some(hit).flatten()
     }
+}
+
+/// Draw `f` at a motion pose: its opacity through a layer, and its
+/// translation and scale about `origin` composed onto the current transform.
+fn with_pose(
+    dc: &ID2D1DeviceContext,
+    pose: &Pose,
+    origin: (f32, f32),
+    f: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    let opacity = pose.opacity.clamp(0., 1.) as f32;
+    if opacity <= 0. {
+        return Ok(());
+    }
+    let (s, (ox, oy)) = (pose.scale as f32, origin);
+    let mut base = Matrix3x2::default();
+    unsafe { dc.GetTransform(&mut base) };
+    let local = Matrix3x2 {
+        M11: s,
+        M12: 0.,
+        M21: 0.,
+        M22: s,
+        M31: ox - ox * s + pose.translate_x as f32,
+        M32: oy - oy * s + pose.translate_y as f32,
+    };
+    let layer = D2D1_LAYER_PARAMETERS1 {
+        contentBounds: rect(-1e6, -1e6, 1e6, 1e6),
+        maskTransform: Matrix3x2::identity(),
+        opacity,
+        ..Default::default()
+    };
+    unsafe {
+        dc.SetTransform(&(local * base));
+        dc.PushLayer(&layer, None::<&ID2D1Layer>);
+    }
+    let result = f();
+    unsafe {
+        dc.PopLayer();
+        dc.SetTransform(&base);
+    }
+    result
 }
 
 /// What confirmation captures.
@@ -2602,6 +2891,9 @@ impl Capture {
                 let _ = ValidateRect(Some(hwnd), None);
             },
             WM_ERASEBKGND => return Some(LRESULT(1)),
+            WM_TIMER if wp.0 == FRAME_TIMER => {
+                let _ = overlay.render(&self.tokens);
+            }
             WM_MOUSEMOVE => {
                 let (x, y) = point(lp, overlay.scale);
                 let mut changed = overlay.menu.set_shift(wp.0 & MK_SHIFT != 0);
@@ -2745,12 +3037,25 @@ impl Overlay {
             scale,
             ..
         } = self;
+        menu.clock = crate::tooltip::now_ms();
+        menu.reduced = crate::appearance::reduced_motion();
         gfx::draw_surface(surface, *px, (*scale, *scale), 0., |dc| {
             menu.paint(dc, g, t, frozen.as_ref())
         })?;
-        unsafe { g.dcomp.as_ref().ok_or_else(Error::empty)?.Commit() }
+        // Repaint at about 60 fps only while a motion runs.
+        unsafe {
+            if menu.animating(t) {
+                SetTimer(Some(self.hwnd), FRAME_TIMER, 16, None);
+            } else {
+                let _ = KillTimer(Some(self.hwnd), FRAME_TIMER);
+            }
+            g.dcomp.as_ref().ok_or_else(Error::empty)?.Commit()
+        }
     }
 }
+
+/// The overlay's motion frame timer.
+const FRAME_TIMER: usize = 1;
 
 extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     let handled = CAPTURE.with(|c| {
@@ -3080,6 +3385,50 @@ mod tests {
         assert!(!m.field_enabled(Field::Display) && !m.can_start());
         m.choose(Field::Display, 1);
         assert_eq!(m.switch_to, None);
+    }
+
+    #[test]
+    fn bar_motions_play_on_mount_and_settle() {
+        let t = Tokens::variant("dark", "mustard");
+        let mut m = menu(Target::Region, false);
+        m.reduced = false;
+        m.clock = 1_000.;
+        m.sync_motion(&t);
+        let chip = |m: &Menu| m.guidance.as_ref().unwrap().1.pose(m.clock);
+        // The chip mounts transparent, 6 px high, and settles.
+        assert_eq!(chip(&m).opacity, 0.);
+        assert!(m.animating(&t));
+        m.clock = 2_000.;
+        assert_eq!((chip(&m).opacity, chip(&m).translate_y), (1., 0.));
+        assert!(!m.animating(&t));
+        // Drawing a region fades it out; Window mounts a new chip.
+        m.pressed(100., 100.);
+        m.sync_motion(&t);
+        m.clock = 3_000.;
+        assert_eq!(chip(&m).opacity, 0.);
+        m.released(300., 300.);
+        m.target = Target::Window;
+        m.sync_motion(&t);
+        assert_eq!(chip(&m).opacity, 0.);
+        // Record's options row arrives after its 40 ms delay, and the ready
+        // ping keeps the frame timer running once a region can start.
+        m.target = Target::Region;
+        m.mode = MenuMode::Recording;
+        m.sync_motion(&t);
+        assert_eq!(m.options_pose(&t).opacity, 0.);
+        m.clock = 3_020.;
+        assert_eq!(m.options_pose(&t).translate_y, -5.);
+        m.clock = 5_000.;
+        assert_eq!(m.options_pose(&t), Pose::REST);
+        assert!(m.can_start() && m.animating(&t));
+        // Reduced motion draws everything at rest at once.
+        m.reduced = true;
+        m.mode = MenuMode::Screenshot;
+        m.sync_motion(&t);
+        m.mode = MenuMode::Recording;
+        m.sync_motion(&t);
+        assert_eq!(m.options_pose(&t), Pose::REST);
+        assert!(!m.animating(&t));
     }
 
     #[test]
