@@ -80,7 +80,7 @@ test.each([true, false])(
       fetch: async (url, options) => {
         assert.equal(
           url,
-          "https://generativelanguage.googleapis.com/v1beta/models/gemini-4-neon:generateContent",
+          "https://generativelanguage.googleapis.com/v1beta/models/gemini-4-hydrogen:generateContent",
         );
         assert.equal(options.headers["x-goog-api-key"], "test-key");
         request = JSON.parse(options.body);
@@ -273,4 +273,37 @@ test("quiet ranges skip the API; missing key, missing baseline and excessive met
     fallback,
   );
   assert.equal(calls, 0);
+});
+
+test("OpenRouter writes the notes when Gemini fails or answers invalidly", async () => {
+  const f = fixture();
+  const after = f.commit({ "crates/core/src/lib.rs": "capture" }, "Improve capture");
+  const geminiFailures = [
+    async () => new Response('{"error":{"status":"RESOURCE_EXHAUSTED"}}', { status: 429 }),
+    async () => reply([{ ...highlight(after), commits: [f.base] }]),
+  ];
+  for (const gemini of geminiFailures) {
+    const requests = [];
+    const notes = await aiReleaseNotes(f.base, after, fallback, {
+      cwd: f.cwd,
+      env: { ...env, OPENROUTER_API_KEY: "router-key" },
+      fetch: async (url, options) => {
+        requests.push(JSON.parse(options.body));
+        if (!url.startsWith("https://openrouter.ai/")) return gemini();
+        assert.equal(url, "https://openrouter.ai/api/v1/chat/completions");
+        assert.equal(options.headers.Authorization, "Bearer router-key");
+        const [geminiRequest, request] = requests;
+        assert.equal(request.model, "meta/muse-spark-1.3");
+        assert.equal(request.messages[1].content, geminiRequest.contents[0].parts[0].text);
+        const content = JSON.stringify({ highlights: [highlight(after)] });
+        return Response.json({ choices: [{ finish_reason: "stop", message: { content } }] });
+      },
+      warn: () => assert.fail("the fallback answered"),
+    });
+    assert.equal(
+      notes,
+      "## What's Changed\n* Keep your capture handy — You can reopen your last screenshot.\n",
+    );
+    assert.equal(requests.length, 2);
+  }
 });

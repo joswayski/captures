@@ -327,7 +327,15 @@ Set the repository Actions secret `GEMINI_API_KEY`: a Gemini API key from
 Google AI Studio whose project uses the paid tier. Optional repository
 variables `CAPTURES_RELEASE_NOTES_MODEL` and
 `CAPTURES_RELEASE_NOTES_THINKING_LEVEL` (`low`, `medium`, `high` or `xhigh`)
-override `gemini-4-neon` and `medium`. Generation uses structured JSON output,
+override `gemini-4-hydrogen` and `medium`.
+
+The optional repository secret `OPENROUTER_API_KEY`
+(`gh secret set OPENROUTER_API_KEY --repo joswayski/captures`) adds a fallback:
+when Gemini fails, such as when its credits run out, or its answer fails
+validation, the same prompt goes to `meta/muse-spark-1.3` on OpenRouter with the
+same schema and checks. The variable `CAPTURES_RELEASE_NOTES_FALLBACK_MODEL`
+overrides that model with any OpenRouter model whose provider supports
+structured outputs. Generation uses structured JSON output,
 32,768 output tokens shared with thinking, and a five-minute timeout.
 It sends filtered source diffs and commit messages to Google, never capture
 files or installed-app data. There is no AI request from the desktop app.

@@ -209,7 +209,30 @@ function plainText(value, max) {
   );
 }
 
-function render(response, source) {
+async function post(fetch, url, headers, body) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...headers },
+    body,
+    signal: AbortSignal.timeout(300_000),
+  });
+  if (!response.ok) throw new Error("provider unavailable");
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of response.body) {
+    size += chunk.length;
+    if (size > MAX_RESPONSE) throw new Error("response too large");
+    chunks.push(chunk);
+  }
+  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+
+async function askGemini(source, env, fetch) {
+  const model = env.GEMINI_MODEL || "gemini-4-hydrogen";
+  if (!/^[a-z0-9][a-z0-9.-]{0,63}$/u.test(model)) throw new Error("invalid model");
+  const body = requestBody(source, env);
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+  const response = await post(fetch, url, { "x-goog-api-key": env.GEMINI_API_KEY }, body);
   const [candidate, ...others] = Array.isArray(response.candidates) ? response.candidates : [];
   const parts = candidate?.content?.parts;
   if (others.length || candidate?.finishReason !== "STOP" || !Array.isArray(parts))
@@ -218,7 +241,63 @@ function render(response, source) {
   const texts = parts.filter((part) => !part?.thought).map((part) => part?.text);
   if (!texts.length || !texts.every((text) => typeof text === "string"))
     throw new Error("invalid response");
-  const result = JSON.parse(texts.join(""));
+  return JSON.parse(texts.join(""));
+}
+
+/** The fallback writer, used when Gemini fails or answers invalidly. */
+async function askOpenRouter(source, env, fetch) {
+  const model = env.OPENROUTER_MODEL || "meta/muse-spark-1.3";
+  if (!/^[a-z0-9][a-z0-9._-]{0,63}\/[a-z0-9][a-z0-9._-]{0,63}$/u.test(model))
+    throw new Error("invalid fallback model");
+  // The same system prompt and budgeted evidence Gemini receives.
+  const gemini = JSON.parse(requestBody(source, { ...env, GEMINI_THINKING_LEVEL: "" }));
+  const body = JSON.stringify({
+    model,
+    max_tokens: 32_768,
+    messages: [
+      { role: "system", content: gemini.systemInstruction.parts[0].text },
+      { role: "user", content: gemini.contents[0].parts[0].text },
+    ],
+    response_format: {
+      type: "json_schema",
+      json_schema: { name: "highlights", strict: true, schema: SCHEMA },
+    },
+    // Only providers that enforce the schema may serve the request.
+    provider: { require_parameters: true },
+  });
+  const response = await post(
+    fetch,
+    "https://openrouter.ai/api/v1/chat/completions",
+    { Authorization: `Bearer ${env.OPENROUTER_API_KEY}` },
+    body,
+  );
+  const [choice, ...others] = Array.isArray(response.choices) ? response.choices : [];
+  if (
+    others.length ||
+    choice?.finish_reason !== "stop" ||
+    typeof choice?.message?.content !== "string"
+  )
+    throw new Error("incomplete response");
+  return JSON.parse(choice.message.content);
+}
+
+/** Gemini's validated answer, else the OpenRouter fallback's when its key is set. */
+async function ask(source, env, fetch) {
+  const writers = [
+    ...(env.GEMINI_API_KEY ? [askGemini] : []),
+    ...(env.OPENROUTER_API_KEY ? [askOpenRouter] : []),
+  ];
+  for (const [index, writer] of writers.entries()) {
+    try {
+      return render(await writer(source, env, fetch), source);
+    } catch (error) {
+      if (index === writers.length - 1) throw error;
+    }
+  }
+  throw new Error("missing key");
+}
+
+function render(result, source) {
   if (
     !exactKeys(result, ["highlights"]) ||
     !Array.isArray(result.highlights) ||
@@ -256,28 +335,11 @@ export async function aiReleaseNotes(
   } = {},
 ) {
   try {
-    if (!env.GEMINI_API_KEY) throw new Error("missing key");
-    const model = env.GEMINI_MODEL || "gemini-4-neon";
-    if (!/^[a-z0-9][a-z0-9.-]{0,63}$/u.test(model)) throw new Error("invalid model");
+    if (!env.GEMINI_API_KEY && !env.OPENROUTER_API_KEY) throw new Error("missing key");
     const source = evidence(before, after, cwd);
     if (!source.commits.length)
       return "## What's Changed\nNo user-facing desktop changes in this release.\n";
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-goog-api-key": env.GEMINI_API_KEY },
-      body: requestBody(source, env),
-      signal: AbortSignal.timeout(300_000),
-    });
-    if (!response.ok) throw new Error("provider unavailable");
-    const chunks = [];
-    let size = 0;
-    for await (const chunk of response.body) {
-      size += chunk.length;
-      if (size > MAX_RESPONSE) throw new Error("response too large");
-      chunks.push(chunk);
-    }
-    return render(JSON.parse(Buffer.concat(chunks).toString("utf8")), source);
+    return await ask(source, env, fetch);
   } catch {
     // Never log provider errors or source content: they can contain secrets.
     warn();

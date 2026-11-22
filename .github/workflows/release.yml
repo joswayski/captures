@@ -259,6 +259,9 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ vars.CAPTURES_RELEASE_NOTES_MODEL }}
           GEMINI_THINKING_LEVEL: ${{ vars.CAPTURES_RELEASE_NOTES_THINKING_LEVEL }}
+          # Writes the notes when Gemini fails or answers invalidly, such as when credits run out.
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_MODEL: ${{ vars.CAPTURES_RELEASE_NOTES_FALLBACK_MODEL }}
           DISPLAY_VERSION: ${{ needs.version.outputs.display_version }}
           RELEASE_SHA: ${{ needs.queue.outputs.release_sha }}
           TAG: ${{ needs.version.outputs.tag }}
