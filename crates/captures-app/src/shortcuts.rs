@@ -145,6 +145,8 @@ impl InputOrder {
 #[derive(Default)]
 struct Routes {
     bindings: Bindings,
+    /// Bindings another app held at the last registration.
+    occupied: BTreeSet<u32>,
     armed: BTreeSet<u32>,
     // Only native-queue events have a receipt revision. Asynchronous commands
     // gain one when the event-loop owner takes them, never on a worker.
@@ -164,6 +166,13 @@ struct Routes {
 }
 
 impl Routes {
+    /// The bindings Captures holds while not suspended.
+    fn owned(&self) -> Bindings {
+        let mut owned = self.bindings.clone();
+        owned.retain(|id, _| !self.occupied.contains(id));
+        owned
+    }
+
     fn clear(&mut self) {
         self.armed.clear();
         self.pending.clear();
@@ -441,35 +450,32 @@ impl Registration for Rc<GlobalHotKeyManager> {
     }
 }
 
-fn rebind(manager: &dyn Registration, old: &Bindings, new: &Bindings) -> Result<(), String> {
-    let added: Vec<_> = new
-        .iter()
-        .filter(|(id, _)| !old.contains_key(id))
-        .map(|(_, binding)| binding.key)
-        .collect();
+/// Claim `new`'s added chords one by one and release `old`'s removed ones.
+/// A chord another app already holds (Xbox Game Bar's Win+Alt+R, say) is
+/// skipped and returned instead of costing every other shortcut, as
+/// shipping's New Capture survived a later chord's conflict.
+fn rebind(
+    manager: &dyn Registration,
+    old: &Bindings,
+    new: &Bindings,
+) -> Result<Vec<(HotKey, String)>, String> {
     let removed: Vec<_> = old
         .iter()
         .filter(|(id, _)| !new.contains_key(id))
         .map(|(_, binding)| binding.key)
         .collect();
-    // X11 processes one registration command per 50ms worker tick. Batching
-    // avoids seven serial ticks on focus changes, but is NOT transactional:
-    // later keys can be grabbed even after an earlier key fails.
-    if !added.is_empty()
-        && let Err(error) = manager.register_all(&added)
-    {
-        let mut rollback_failed = false;
-        for key in added {
-            rollback_failed |= manager.unregister(key).is_err();
-        }
-        return Err(format!(
-            "Could not register capture shortcuts: {error}{}",
-            if rollback_failed {
-                "; shortcut cleanup failed; restart the native app"
-            } else {
-                ""
+    let mut added = Vec::new();
+    let mut occupied = Vec::new();
+    for (_, binding) in new.iter().filter(|(id, _)| !old.contains_key(id)) {
+        match manager.register(binding.key) {
+            Ok(()) => added.push(binding.key),
+            Err(error) => {
+                // Drop any partial grab (X11 grabs per lock mask); Windows
+                // holds nothing after a failure, so its error means nothing.
+                let _ = manager.unregister(binding.key);
+                occupied.push((binding.key, error));
             }
-        ));
+        }
     }
     if !removed.is_empty()
         && let Err(error) = manager.unregister_all(&removed)
@@ -491,20 +497,26 @@ fn rebind(manager: &dyn Registration, old: &Bindings, new: &Bindings) -> Result<
             }
         ));
     }
-    Ok(())
+    Ok(occupied)
 }
 
+/// `registered` becomes what Captures now holds. Returns the desired chords
+/// another app holds; they stay unregistered and the next sync retries them.
 fn sync_bindings(
     manager: &dyn Registration,
     registered: &mut Bindings,
     desired: &Bindings,
     suspended: bool,
-) -> Result<(), String> {
+) -> Result<BTreeSet<u32>, String> {
     let empty = Bindings::new();
     let next = if suspended { &empty } else { desired };
-    rebind(manager, registered, next)?;
+    let occupied = rebind(manager, registered, next)?;
     registered.clone_from(next);
-    Ok(())
+    for (key, error) in &occupied {
+        registered.remove(&key.id());
+        eprintln!("Could not register capture shortcut {key}: {error}");
+    }
+    Ok(occupied.iter().map(|(key, _)| key.id()).collect())
 }
 
 fn suspend_routes(
@@ -518,7 +530,7 @@ fn suspend_routes(
         let settled = if suspended {
             registered.is_empty()
         } else {
-            *registered == routes.bindings
+            *registered == routes.owned()
         };
         if routes.suspended == suspended && settled {
             return Ok(());
@@ -534,12 +546,21 @@ fn suspend_routes(
     let result = sync_bindings(manager, registered, &desired, suspended);
     let mut routes = routes.lock().unwrap();
     routes.restoring = false;
-    if result.is_ok() {
-        routes.suspended = suspended;
-    } else {
-        routes.clear();
+    match result {
+        Ok(occupied) => {
+            routes.suspended = suspended;
+            if !occupied.is_empty() {
+                // A partial grab may have seen a chord Captures does not hold.
+                routes.clear();
+            }
+            routes.occupied = occupied;
+            Ok(())
+        }
+        Err(error) => {
+            routes.clear();
+            Err(error)
+        }
     }
-    result
 }
 
 /// One live host owns this object on the AppKit/winit event-loop thread. OS
@@ -707,11 +728,11 @@ impl CaptureShortcuts {
         let result = sync_bindings(manager.as_ref(), &mut self.registered, &next, suspended);
         sync_win_shift_s_takeover(&self.registered);
         let mut routes = self.dispatcher.routes.lock().unwrap();
-        if result.is_ok() {
-            routes.bindings = next;
-        }
         routes.enabled = enabled;
-        result
+        let occupied = result?;
+        routes.bindings = next;
+        routes.occupied = occupied;
+        Ok(())
     }
 
     /// Release OS grabs while Preferences owns keyboard focus so its recorder
@@ -1385,7 +1406,7 @@ mod tests {
     }
 
     #[test]
-    fn restore_retains_in_flight_chords_but_failure_discards_them_without_waking() {
+    fn restore_retains_in_flight_chords_but_an_occupied_chord_discards_them() {
         struct BackendDuringRestore<'a> {
             routes: &'a Mutex<Routes>,
             chord: u32,
@@ -1430,17 +1451,15 @@ mod tests {
                     fail,
                 };
                 let mut registered = Bindings::new();
-                assert_eq!(
-                    suspend_routes(&backend, &mut registered, &routes, false).is_err(),
-                    fail
-                );
+                suspend_routes(&backend, &mut registered, &routes, false).unwrap();
                 let mut state = routes.lock().unwrap();
                 assert!(!state.restoring);
-                assert_eq!(state.suspended, fail);
+                // Another app holding one chord no longer blocks the rest.
+                assert!(!state.suspended);
                 if fail {
                     assert!(state.armed.is_empty() && state.pending.is_empty());
-                    assert!(registered.is_empty());
-                    state.suspended = false;
+                    assert!(!registered.contains_key(&chord));
+                    assert_eq!(registered.len(), state.bindings.len() - 1);
                     assert!(!state.event(chord, HotKeyState::Released, false));
                 } else {
                     if !release {
@@ -1489,13 +1508,17 @@ mod tests {
         assert_eq!(*backend.keys.borrow(), desired.keys().copied().collect());
         backend.fail_cleanup = None;
         suspend_routes(&backend, &mut registered, &routes, true).unwrap();
+        // A chord another app holds stays free; the rest still restore.
         backend.fail = Some(key);
-        assert!(suspend_routes(&backend, &mut registered, &routes, false).is_err());
-        assert!(backend.keys.borrow().is_empty());
-        assert!(registered.is_empty());
-        assert!(routes.lock().unwrap().suspended);
-        // The opposite reversal is safe too: returning to Preferences after
-        // failed restoration must keep every key released for the recorder.
+        suspend_routes(&backend, &mut registered, &routes, false).unwrap();
+        let others: BTreeSet<_> = desired.keys().copied().filter(|id| *id != key).collect();
+        assert_eq!(*backend.keys.borrow(), others);
+        assert!(!registered.contains_key(&key));
+        assert!(!routes.lock().unwrap().suspended);
+        // Settled: resuming again does not churn registrations.
+        suspend_routes(&backend, &mut registered, &routes, false).unwrap();
+        // Returning to Preferences releases every key for the recorder, and
+        // the next restore retries the occupied chord.
         suspend_routes(&backend, &mut registered, &routes, true).unwrap();
         assert!(backend.keys.borrow().is_empty());
         backend.fail = None;
@@ -1511,25 +1534,23 @@ mod tests {
     }
 
     #[test]
-    fn registration_failure_cleans_partial_additions_and_retains_old_chords() {
-        let old = bindings(&settings()).unwrap();
-        let mut changed = settings();
-        changed.region_shortcut = "Alt+4".into();
-        changed.window_shortcut = "Alt+5".into();
-        let next = bindings(&changed).unwrap();
-        let failed = next
-            .keys()
-            .filter(|id| !old.contains_key(id))
-            .max()
-            .copied()
-            .unwrap();
+    fn a_chord_another_app_holds_does_not_cost_the_other_shortcuts() {
+        // Windows: Xbox Game Bar owns Win+Alt+R, the default Record Region.
+        // Every other chord, New Capture included, must still register.
+        let next = bindings(&settings()).unwrap();
+        let new_capture = "Ctrl+Alt+F10".parse::<HotKey>().unwrap().id();
+        let taken = *next.keys().find(|id| **id != new_capture).unwrap();
         let backend = Backend {
-            keys: RefCell::new(old.keys().copied().collect()),
-            fail: Some(failed),
+            fail: Some(taken),
             ..Backend::default()
         };
-        assert!(rebind(&backend, &old, &next).is_err());
-        assert_eq!(*backend.keys.borrow(), old.keys().copied().collect());
+        let mut registered = Bindings::new();
+        let occupied = sync_bindings(&backend, &mut registered, &next, false).unwrap();
+        assert_eq!(occupied, BTreeSet::from([taken]));
+        let others: BTreeSet<_> = next.keys().copied().filter(|id| *id != taken).collect();
+        assert!(others.contains(&new_capture));
+        assert_eq!(*backend.keys.borrow(), others);
+        assert_eq!(registered.keys().copied().collect::<BTreeSet<_>>(), others);
     }
 
     #[test]
@@ -1568,48 +1589,6 @@ mod tests {
             rebind(&backend, &old, &next)
                 .unwrap_err()
                 .contains("release")
-        );
-        assert_eq!(*backend.keys.borrow(), old.keys().copied().collect());
-    }
-
-    #[test]
-    fn failed_registration_reports_failure_to_clean_its_partial_grab() {
-        let next = bindings(&settings()).unwrap();
-        let failed = next.keys().next().copied();
-        let backend = Backend {
-            fail: failed,
-            fail_cleanup: failed,
-            ..Backend::default()
-        };
-        assert!(
-            rebind(&backend, &Bindings::new(), &next)
-                .unwrap_err()
-                .contains("cleanup failed")
-        );
-    }
-
-    #[test]
-    fn rollback_attempts_every_added_key_even_after_a_cleanup_error() {
-        let old = bindings(&settings()).unwrap();
-        let mut changed = settings();
-        changed.region_shortcut = "Alt+4".into();
-        changed.window_shortcut = "Alt+5".into();
-        changed.display_shortcut = "Alt+6".into();
-        let next = bindings(&changed).unwrap();
-        let keys: Vec<_> = next
-            .keys()
-            .filter(|key| !old.contains_key(key))
-            .copied()
-            .collect();
-        let backend = Backend {
-            keys: RefCell::new(old.keys().copied().collect()),
-            fail: Some(keys[1]),
-            fail_cleanup: Some(keys[0]),
-        };
-        assert!(
-            rebind(&backend, &old, &next)
-                .unwrap_err()
-                .contains("cleanup failed")
         );
         assert_eq!(*backend.keys.borrow(), old.keys().copied().collect());
     }
