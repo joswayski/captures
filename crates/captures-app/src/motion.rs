@@ -257,6 +257,7 @@ const CLIPBOARD_CHIP_ARRIVE: &[Keyframe] = &[
     frame(0.55, Pose::with(1., 0., 0.99)),
     frame(1., Pose::REST),
 ];
+const LABELS_REVEAL: &[Keyframe] = &[frame(0., Pose::hidden(4., 0.96)), frame(1., Pose::REST)];
 /// `thumbnail-stack-sparkle`. Shipping eases opacity through its 30 % key but
 /// the transform only from 0 to 100 %; the 30 % transform here is that eased
 /// value (`ease-out` at 0.3), so each segment lands on the shipping curve.
@@ -449,6 +450,10 @@ pub enum Motion {
     /// `.clipboard-confirmation`: `clipboard-confirmation-arrive 1.15s
     /// var(--ease-standard) both`.
     PreviewClipboardChipArrive,
+    /// A card's labels (size, warning, clipboard chip, editor control) easing
+    /// back in once it lands from the expanding pile, which hides them. Native
+    /// only: shipping kept them on the compact cards.
+    PreviewLabelsReveal,
     /// `.thumbnail-collapsed-hit-target:hover::before`:
     /// `thumbnail-stack-sparkle 1.8s var(--ease-out) infinite`.
     PreviewPileSparkle,
@@ -512,7 +517,7 @@ pub enum Motion {
 }
 
 impl Motion {
-    pub const ALL: [Self; 35] = [
+    pub const ALL: [Self; 36] = [
         Self::UpdateNoticeIn,
         Self::UpdateNoticeRestartExit,
         Self::StartupNoticeIn,
@@ -532,6 +537,7 @@ impl Motion {
         Self::PreviewCaptureHighlight,
         Self::PreviewActionIconPop,
         Self::PreviewClipboardChipArrive,
+        Self::PreviewLabelsReveal,
         Self::PreviewPileSparkle,
         Self::PreviewPileSparkleLate,
         Self::PreviewToolbarIn,
@@ -572,6 +578,7 @@ impl Motion {
             Self::PreviewCaptureHighlight => "preview_capture_highlight",
             Self::PreviewActionIconPop => "preview_action_icon_pop",
             Self::PreviewClipboardChipArrive => "preview_clipboard_chip_arrive",
+            Self::PreviewLabelsReveal => "preview_labels_reveal",
             Self::PreviewPileSparkle => "preview_pile_sparkle",
             Self::PreviewPileSparkleLate => "preview_pile_sparkle_late",
             Self::PreviewToolbarIn => "preview_toolbar_in",
@@ -649,6 +656,12 @@ impl Motion {
                 0.,
                 Ease("ease-standard"),
                 CLIPBOARD_CHIP_ARRIVE,
+            ),
+            Self::PreviewLabelsReveal => spec(
+                Millis(280.),
+                0.,
+                Bezier([0.22, 0.65, 0.28, 1.]),
+                LABELS_REVEAL,
             ),
             Self::PreviewPileSparkle => spec(Millis(1_800.), 0., Ease("ease-out"), PILE_SPARKLE),
             Self::PreviewPileSparkleLate => {
@@ -1511,6 +1524,9 @@ mod tests {
             .unwrap();
         assert_eq!(chip.pose_at(0., false).translate_y, 4.);
         assert_eq!(chip.pose_at(0.28 * 1_150., false).scale, 1.03);
+        let labels = Motion::PreviewLabelsReveal.resolve(&Shipping).unwrap();
+        assert_eq!(labels.pose_at(0., false).opacity, 0.);
+        assert_eq!(labels.pose_at(280., false), Pose::REST);
         let pop = Motion::PreviewActionIconPop.resolve(&Shipping).unwrap();
         assert_eq!(pop.pose_at(0., false).opacity, 0.25);
         assert_eq!(pop.pose_at(200., false), Pose::REST);

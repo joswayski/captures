@@ -26,6 +26,10 @@ pub const DUST_HOLD_MS: f64 = 2_900.0;
 /// first and each card above it 36 ms later, capped at 180 ms.
 pub const CLEAR_STAGGER_MS: f64 = 36.0;
 pub const CLEAR_STAGGER_MAX_MS: f64 = 180.0;
+/// Expand's label reveal ([`crate::motion::Motion::PreviewLabelsReveal`]),
+/// from the pile's front card back.
+pub const LABEL_REVEAL_STAGGER_MS: f64 = 45.0;
+pub const LABEL_REVEAL_STAGGER_MAX_MS: f64 = 180.0;
 /// `THUMBNAIL_DISSOLVE_WAVE_MS`: the ash front travels from the trash control
 /// to the farthest corner in this long.
 pub const DISSOLVE_WAVE_MS: f64 = 720.0;
@@ -108,6 +112,12 @@ pub fn clear_delay_ms(count: usize, index: usize, top_anchor: bool) -> f64 {
         count.saturating_sub(index + 1)
     };
     (from_bottom as f64 * CLEAR_STAGGER_MS).min(CLEAR_STAGGER_MAX_MS)
+}
+
+/// When a card that landed from the expanding pile at `depth` (0 is the
+/// front card) starts easing its labels back in.
+pub fn label_reveal_delay_ms(depth: usize) -> f64 {
+    (depth as f64 * LABEL_REVEAL_STAGGER_MS).min(LABEL_REVEAL_STAGGER_MAX_MS)
 }
 
 /// One card leaving the stack while it keeps its slot.
@@ -1737,6 +1747,9 @@ mod tests {
         assert_eq!(clear_delay_ms(3, 0, true), 0.);
         assert_eq!(clear_delay_ms(3, 2, true), 72.);
         assert_eq!(clear_delay_ms(12, 0, false), CLEAR_STAGGER_MAX_MS);
+        assert_eq!(label_reveal_delay_ms(0), 0.);
+        assert_eq!(label_reveal_delay_ms(2), 90.);
+        assert_eq!(label_reveal_delay_ms(9), LABEL_REVEAL_STAGGER_MAX_MS);
     }
 
     #[test]

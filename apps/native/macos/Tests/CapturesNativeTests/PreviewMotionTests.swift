@@ -14,7 +14,7 @@ final class PreviewMotionTests: XCTestCase {
         let catalog = NativeMotion.catalog
         for name in ["preview_dismiss", "preview_dismiss_streak", "preview_delete_fallback",
                      "preview_capture_highlight", "preview_action_icon_pop",
-                     "preview_clipboard_chip_arrive", "preview_pile_sparkle",
+                     "preview_clipboard_chip_arrive", "preview_labels_reveal", "preview_pile_sparkle",
                      "preview_pile_sparkle_late", "preview_toolbar_in", "preview_toolbar_out",
                      "preview_toolbar_exit", "preview_toolbar_clear"] {
             let spec = try XCTUnwrap(catalog.keyframes[name], name)
@@ -255,6 +255,10 @@ final class PreviewMotionTests: XCTestCase {
         XCTAssertEqual(entering.frame.width, 28, "enter ignores hover until its motion ends")
         XCTAssertEqual(expanded.visibleCardLabelCount, 0, "cards fly out of the pile compact")
         try waitUntil { expanded.visibleCardLabelCount == 2 }
+        // Landed labels ease in from the pile's front card back.
+        let front = try XCTUnwrap(expanded.card(for: "newer")?.labelRevealBeginTime)
+        let rear = try XCTUnwrap(expanded.card(for: "older")?.labelRevealBeginTime)
+        XCTAssertEqual(rear - front, 0.045, accuracy: 0.01)
         try waitUntil { entering.frame.width == 92 }
         XCTAssertTrue(entering.isEnabled, "idle hover and input resume after enter")
     }

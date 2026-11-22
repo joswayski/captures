@@ -542,6 +542,10 @@ char *captures_preview_motion_tables_v1(void);
  * the bottom card leaves first, 36 ms apart, capped at 180 ms. */
 double captures_preview_clear_delay_ms_v1(size_t count, size_t index, bool top_anchor);
 
+/* When (ms) a card landing from the expanding pile at `depth` (0 = front)
+ * starts its "preview_labels_reveal": 45 ms apart, capped at 180 ms. */
+double captures_preview_label_reveal_delay_ms_v1(size_t depth);
+
 /* Owned immutable region session. Prepare/capture may block; use a worker after
  * hiding capture windows. Begin/retain a capture-flow guard on the event-loop
  * thread first. Freeze and cursor settings are fixed at prepare. No pixel data

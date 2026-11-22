@@ -1193,6 +1193,12 @@ pub extern "C" fn captures_preview_clear_delay_ms_v1(
     preview_motion::clear_delay_ms(count, index, top_anchor)
 }
 
+/// When an expanded card from pile `depth` starts easing its labels in.
+#[unsafe(no_mangle)]
+pub extern "C" fn captures_preview_label_reveal_delay_ms_v1(depth: usize) -> f64 {
+    preview_motion::label_reveal_delay_ms(depth)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1229,6 +1235,7 @@ mod tests {
             assert_eq!(parsed["sparkles"]["early"][0]["accent"], true);
         }
         assert_eq!(captures_preview_clear_delay_ms_v1(3, 0, false), 72.);
+        assert_eq!(captures_preview_label_reveal_delay_ms_v1(1), 45.);
     }
 
     #[test]

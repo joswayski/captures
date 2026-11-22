@@ -775,6 +775,10 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     var isOutboundFileDragEnabled: Bool { !compact && preparedDragPath != nil }
     private(set) var artifactID: String
     var hasVisibleLabels: Bool { !sizeLabel.isHidden || !status.isHidden }
+    /// When the size label's expand reveal starts (layer time), while it plays.
+    var labelRevealBeginTime: CFTimeInterval? {
+        sizeLabel.layer?.animation(forKey: "preview-labels-reveal")?.beginTime
+    }
     override var isFlipped: Bool { true }
 
     /// Keeps the collapsed pile's pose: see `MiniPreviewCardLayer`.
@@ -1356,6 +1360,28 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         }
         setMediaHovered(!compact && chromeVisible, animated: false)
         updateWarning()
+    }
+
+    /// A card landing from the expanding pile eases back the labels compact
+    /// hid (size, warning, status, clipboard chip, a pinned editor control and
+    /// its ring) after `delay` seconds, instead of showing them at once.
+    func revealLabels(delay: Double) {
+        guard !compact, !isExiting, window?.isVisible == true else { return }
+        let views: [NSView?] = [sizeLabel, warningLabel, status, clipboardChip, editButton]
+        for view in views.compactMap({ $0 }) where !view.isHidden {
+            NativeMotion.play("preview_labels_reveal", on: view, tokens: tokens, delay: delay,
+                              key: "preview-labels-reveal")
+        }
+        guard editorRing.opacity > 0, !NativeMotion.reduceMotion,
+              let spec = NativeMotion.catalog.keyframes["preview_labels_reveal"] else { return }
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 0
+        fade.toValue = editorRing.opacity
+        fade.duration = NativeMotion.seconds(spec.duration, tokens: tokens)
+        fade.timingFunction = NativeMotion.timingFunction(spec.easing, tokens: tokens)
+        fade.beginTime = editorRing.convertTime(CACurrentMediaTime(), from: nil) + delay
+        fade.fillMode = .backwards
+        editorRing.add(fade, forKey: "preview-editor-ring")
     }
 
     @discardableResult private func addButton(_ title: String, _ kind: MiniPreviewButtonKind, x: CGFloat,
@@ -2240,14 +2266,19 @@ final class MiniPreviewView: NSView {
                 card.setDepthShade(visible: collapsing, animated: true)
             }
         }
-        // Expanded cards get their labels back when the flight ends on the
-        // main-queue clock (the same clock as the collapse rebuild), not on
-        // Core Animation's completion, which never arrives while the window
-        // server is not compositing the panel (an occluded panel).
+        // Expanded cards ease their labels back, front card first, when the
+        // flight ends on the main-queue clock (the same clock as the collapse
+        // rebuild), not on Core Animation's completion, which never arrives
+        // while the window server is not compositing the panel (an occluded
+        // panel).
         if !collapsing {
             DispatchQueue.main.asyncAfter(deadline: .now() + fly.duration) { [weak self] in
                 guard let self, self.flyToken == token else { return }
-                for (card, _) in moves { card.setCompact(false, depth: 0) }
+                for (card, _) in moves {
+                    card.setCompact(false, depth: 0)
+                    let depth = depths[card.artifactID] ?? 0
+                    card.revealLabels(delay: captures_preview_label_reveal_delay_ms_v1(depth) / 1000)
+                }
             }
         }
         return fly.duration
