@@ -110,7 +110,7 @@ fn children(e: &Editor, id: Id) -> Vec<Id> {
             if e.exists(Target::Undo) {
                 list.extend([c(Target::Undo), c(Target::Redo)]);
             }
-            list.extend([Id::Zoom, Id::Stub(Stub::AddImages), Id::Tools]);
+            list.extend([Id::Zoom, c(Target::AddImages), Id::Tools]);
             if e.flyout {
                 list.push(Id::Flyout);
             }
@@ -179,7 +179,7 @@ fn children(e: &Editor, id: Id) -> Vec<Id> {
         Id::Flyout => (0..SHAPE_TOOLS.len())
             .map(|i| c(Target::Shape(i)))
             .collect(),
-        Id::Layers => vec![Id::LayersTitle, Id::Stub(Stub::AddLayer), Id::List],
+        Id::Layers => vec![Id::LayersTitle, c(Target::AddLayer), Id::List],
         Id::List => (0..e.layer_count()).map(Id::Row).collect(),
         Id::Row(i) if i < e.layer_count() => vec![
             if e.renaming() == Some(i) {
@@ -239,7 +239,7 @@ fn parent(e: &Editor, id: Id) -> Option<Id> {
         | Id::Control(Target::Prop(Prop::Preset)) => Id::Zoom,
         Id::Control(Target::Tool(_)) => Id::Tools,
         Id::Control(Target::Shape(_)) => Id::Flyout,
-        Id::LayersTitle | Id::Stub(Stub::AddLayer) | Id::List => Id::Layers,
+        Id::LayersTitle | Id::Control(Target::AddLayer) | Id::List => Id::Layers,
         Id::Row(_) => Id::List,
         Id::ShapePicker | Id::ColorField(_) | Id::ModeGroup => Id::Properties,
         Id::InlineText => Id::Canvas,
@@ -412,6 +412,8 @@ fn runtime_id(id: Id) -> [i32; 4] {
             Target::Save => (15, 0),
             Target::Trim => (21, 0),
             Target::Background => (30, 0),
+            Target::AddImages => (33, 0),
+            Target::AddLayer => (34, 0),
             Target::Prop(Prop::Shape(i)) => (16, i as i32),
             Target::Prop(Prop::Check(check)) => (17, check as i32),
             Target::Prop(Prop::Swatch(field, i)) => (18, field as i32 * 16 + i as i32),
@@ -431,8 +433,6 @@ fn runtime_id(id: Id) -> [i32; 4] {
     };
     let stub = |s: Stub| -> (i32, i32) {
         match s {
-            Stub::AddImages => (5, 0),
-            Stub::AddLayer => (6, 0),
             Stub::LayerMenu(i) => (7, i as i32),
             Stub::ExportSettings => (8, 0),
             Stub::Change => (9, 0),

@@ -38,6 +38,40 @@ pub fn pick_folder(owner: HWND, title: &str, current: &str) -> Result<Option<Str
 
 const E_FAIL_HRESULT: HRESULT = windows::Win32::Foundation::E_FAIL;
 
+/// Ask for image files, as shipping's Add images `open({ multiple: true,
+/// filters: Images })`; empty when cancelled. Modal, like [`pick_folder`].
+pub fn pick_images(owner: HWND, title: &str) -> Result<Vec<std::path::PathBuf>> {
+    unsafe {
+        let dialog: IFileOpenDialog =
+            CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)?;
+        let options = dialog.GetOptions()?;
+        dialog
+            .SetOptions(options | FOS_ALLOWMULTISELECT | FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST)?;
+        dialog.SetTitle(&HSTRING::from(title))?;
+        let spec = w!("*.png;*.jpg;*.jpeg;*.webp;*.tif;*.tiff;*.gif;*.bmp;*.svg");
+        dialog.SetFileTypes(&[windows::Win32::UI::Shell::Common::COMDLG_FILTERSPEC {
+            pszName: w!("Images"),
+            pszSpec: spec,
+        }])?;
+        if let Err(error) = dialog.Show(Some(owner)) {
+            if error.code() == ERROR_CANCELLED.to_hresult() {
+                return Ok(Vec::new());
+            }
+            return Err(error);
+        }
+        let items = dialog.GetResults()?;
+        let mut paths = Vec::new();
+        for i in 0..items.GetCount()? {
+            let name = items.GetItemAt(i)?.GetDisplayName(SIGDN_FILESYSPATH)?;
+            if let Ok(path) = name.to_string() {
+                paths.push(path.into());
+            }
+            CoTaskMemFree(Some(name.0 as *const _));
+        }
+        Ok(paths)
+    }
+}
+
 thread_local! {
     /// The color dialog's sixteen custom colors, kept for the session.
     static CUSTOM_COLORS: std::cell::RefCell<[COLORREF; 16]> =

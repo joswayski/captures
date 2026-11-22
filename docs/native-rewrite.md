@@ -855,6 +855,29 @@ temporary, removed hook; Wine's DirectWrite stubs `HitTestTextRange`, so the
 selected name draws without its highlight there (as in Preferences Find).
 macOS, Linux: unchanged.
 
+Editor shortcuts and image import (November 2026 gap pass): Ctrl+V,
+Ctrl+D, Enter and the arrow keys now do what shipping's `onKeyDown` and
+`onPaste` do. Arrows nudge the selected unlocked layer 1 px (10 with Shift)
+through `LayerEdit::Translate`, one undo step per run; nudges made while
+the worker is busy add up instead of replacing each other. Ctrl+D
+duplicates the selected layer above itself and selects the copy under
+Select. Enter applies a staged crop unless a control other than the rail
+has focus. Ctrl+C with a layer selected claims the clipboard with a private
+marker and copies the layer in the session (`CopyLayer`); Ctrl+V pastes that
+layer while the clipboard still holds the marker, otherwise it imports the
+clipboard's image files, PNG or `CF_DIBV5`. Ctrl+Shift+C copies the image.
+Add images and Add image layer open a multi-select image picker. Files
+dropped on the window (OLE `IDropTarget`) show the shared `image_drop_guide`
+while they are dragged: shipping's edge bar, outward bloom and toast, or the
+stack light for "Place on top". They import at the drop point. Every import
+decodes on the worker as one undoable `import_images` and selects the last
+layer. Deviations: the guide is drawn at rest (no edge pulse, bloom breathing
+or particles), and with nothing selected Ctrl+C still copies the image as
+before. Windows: offscreen renders of both guides in light and dark; tests
+drive the keys and a real worker import; a live window's UIA tree shows both
+buttons enabled with Invoke. Real drags, key presses and the picker were not
+exercised on the desktop. macOS, Linux: unchanged.
+
 Apply crop pulse: shipping's `screenshot-cta-pulse` (2.4 s ease-in-out,
 infinite, a 0 → 5 px accent `box-shadow` at 22 % and back) is a ring visual
 under Apply crop, drawn once at its 50 % frame, whose opacity a repeating

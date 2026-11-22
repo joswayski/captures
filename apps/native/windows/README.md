@@ -92,7 +92,9 @@ render one Preferences, History, screenshot-editor or recording-shell frame offs
 (Direct2D bitmap, WIC PNG) and exit, for parity
 comparisons; `--find QUERY` renders it with Find open and the query typed, and
 `--tool KEY` starts the editor with a rail tool or shape, `--select LAYER`
-with that layer selected, and `--crop X,Y,W,H` with that crop staged. On other platforms the binary is a stub, so `cargo check` and
+with that layer selected (`--select drop` or `drop-stack` with image files
+dragged over the canvas: the default guide, or the pointer over the image), and
+`--crop X,Y,W,H` with that crop staged. On other platforms the binary is a stub, so `cargo check` and
 `clippy` still run; cross-check with `--target x86_64-pc-windows-gnu`.
 
 `--live` runs the resident app (`src/live.rs`): the first launch for a profile

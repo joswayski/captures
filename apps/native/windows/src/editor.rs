@@ -67,6 +67,7 @@ mod crop;
 pub use crop::ASPECT_LABEL;
 mod eraser;
 mod fields;
+mod import;
 mod menu;
 mod props;
 mod rows;
@@ -234,14 +235,15 @@ pub enum Target {
     Prop(Prop),
     /// The Canvas group's Background color trigger.
     Background,
+    /// The header's Add images and the Layers heading's Add image layer.
+    AddImages,
+    AddLayer,
 }
 
 /// Shipping controls this host does not implement yet: drawn disabled and
 /// exposed to UI Automation as disabled.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Stub {
-    AddImages,
-    AddLayer,
     LayerMenu(usize),
     ExportSettings,
     Change,
@@ -472,6 +474,12 @@ enum Job {
     Preview(Request),
     /// Publish the session's pixels again (a cancelled preview).
     Refresh,
+    /// Decode images and add them as one undoable edit.
+    Import {
+        source: import::Source,
+        selected: Option<String>,
+        point: Option<Point>,
+    },
 }
 
 /// A preview's changed pixels and selection outlines.
@@ -489,6 +497,8 @@ enum Outcome {
     Failed(String),
     /// `Job::Flush` finished.
     Flushed,
+    /// `Job::Import` added layers; the last one's ID.
+    Imported(Box<Presented>, String),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -615,10 +625,20 @@ pub struct Editor {
     range_drag: Option<(Range, f64)>,
     /// The latest live edit waiting for the one in flight.
     pending: Option<Request>,
+    /// A layer a request in flight creates (a duplicate, paste or import),
+    /// selected once a reply contains it.
+    select_after: Option<String>,
+    /// The clipboard sequence number of this editor's layer Copy marker.
+    layer_marker: Option<u32>,
+    /// Files are being dragged over the window, and where they would land.
+    drop_active: bool,
+    drop_guide: Option<captures_app::editor_session::ImageDropGuide>,
     /// Numbers each label Size or Text change, so none fold into another.
     edit_seq: u64,
     /// A custom color to ask for once the window is released.
     pick_color: Option<Field>,
+    /// Add images' file picker, opened once the window is released.
+    pick_images: bool,
     /// Eraser mode and settings, window-local like shipping's.
     pub eraser: props::Eraser,
     /// The staged crop rectangle (shipping `cropSelection`).
@@ -1110,6 +1130,20 @@ fn spawn_worker(
                     Job::Refresh => {
                         Outcome::Presented(Box::new(present(session, &id, &mut published)))
                     }
+                    Job::Import {
+                        source,
+                        selected,
+                        point,
+                    } => match source
+                        .decode()
+                        .and_then(|images| session.import_images(images, selected, point))
+                    {
+                        Ok(layer) => Outcome::Imported(
+                            Box::new(present(session, &id, &mut published)),
+                            layer,
+                        ),
+                        Err(error) => Outcome::Failed(error),
+                    },
                     Job::Copy => {
                         let pixels = session.pixels();
                         Outcome::Copied(
@@ -1231,8 +1265,13 @@ impl Editor {
             thumb_hover: false,
             range_drag: None,
             pending: None,
+            select_after: None,
+            layer_marker: None,
+            drop_active: false,
+            drop_guide: None,
             edit_seq: 0,
             pick_color: None,
+            pick_images: false,
             eraser: props::Eraser::default(),
             crop: None,
             crop_aspect: 0,
@@ -1377,6 +1416,7 @@ impl Editor {
         self.rename_caret = self.add(Some(self.list_over), Kind::FieldCaret, 0.);
         self.nodes[self.rename_caret].visible = false;
         self.drop_line = self.add(Some(self.list_over), Kind::DropLine, rows::DROP_LINE_GLOW);
+        self.control(self.layers_heading, Target::AddLayer, 0.);
         self.nodes[self.drop_line].visible = false;
         self.properties = self.add(Some(sidebar), Kind::Properties, 0.);
         self.props_clip = self.add(Some(self.properties), Kind::Group, 0.);
@@ -1437,6 +1477,7 @@ impl Editor {
         ] {
             self.control(self.zoom, target, 0.);
         }
+        self.control(self.header, Target::AddImages, 0.);
         let slider = self.layered(Target::Slider).base;
         self.thumb = self.add(Some(slider), Kind::Thumb, 2.);
         self.bar = self.add(Some(root), Kind::Bar, 0.);
@@ -1528,6 +1569,7 @@ impl Editor {
             Target::ZoomOut => p.is_some() && percent > ZOOM_MIN + 0.05,
             Target::ZoomIn => p.is_some() && percent < ZOOM_MAX - 0.05,
             Target::Fit | Target::Slider | Target::Background => p.is_some(),
+            Target::AddImages | Target::AddLayer => p.is_some(),
             Target::Tool(_) => true,
             Target::Save => {
                 self.export_view()
@@ -1597,6 +1639,8 @@ impl Editor {
             Target::Save => "Save".into(),
             Target::Prop(prop) => self.prop_name(prop),
             Target::Background => self.background_label(),
+            Target::AddImages => header::ADD_IMAGES.into(),
+            Target::AddLayer => editor_chrome::layers::ADD.into(),
         }
     }
 
@@ -1610,6 +1654,7 @@ impl Editor {
             Target::Tool(i) if RAIL_TOOLS[i].key == editor_chrome::SHAPES_KEY => {
                 editor_chrome::shapes_tooltip(SHAPE_TOOLS[self.last_shape].key)
             }
+            Target::AddLayer => editor_chrome::layers::ADD.into(),
             Target::Divider => "Drag to resize · Double-click to reset".into(),
             Target::SaveAsNew => "Save as a new file and leave the original untouched".into(),
             Target::Save => self.export_view().map(|v| v.hint).unwrap_or_default(),
@@ -1620,8 +1665,6 @@ impl Editor {
 
     pub fn stub_name(&self, stub: Stub) -> String {
         match stub {
-            Stub::AddImages => header::ADD_IMAGES.into(),
-            Stub::AddLayer => editor_chrome::layers::ADD.into(),
             Stub::LayerMenu(i) => self
                 .layer(i)
                 .map(|l| l.menu_label.clone())
@@ -1635,8 +1678,6 @@ impl Editor {
     pub fn stub_rect(&self, stub: Stub) -> Rect {
         let l = &self.l;
         match stub {
-            Stub::AddImages => l.add_images,
-            Stub::AddLayer => l.add_layer,
             Stub::LayerMenu(i) => {
                 let row = self.target_rect(Target::Layer(i));
                 let lock = self.target_rect(Target::Lock(i));
@@ -1933,7 +1974,7 @@ impl Editor {
 
     /// `--tool KEY`: start with a rail tool or a grouped shape.
     fn start_tool(&mut self, options: &Options) {
-        if let Some(id) = &options.select {
+        if let Some(id) = options.select.as_ref().filter(|s| !s.starts_with("drop")) {
             if self.layer_count() > 0
                 && (0..self.layer_count()).any(|i| self.layer(i).is_some_and(|l| l.id == *id))
             {
@@ -2004,6 +2045,7 @@ impl Editor {
                 self.submit(Request::TrimCanvas);
             }
             Target::Background => self.set_bg_menu(!self.bg_open),
+            Target::AddImages | Target::AddLayer => self.pick_images = true,
             Target::Undo => {
                 self.set_crop(None);
                 self.submit(Request::Undo)
@@ -2170,6 +2212,15 @@ impl Editor {
     }
 
     fn receive(&mut self, outcome: Outcome) {
+        // Shipping selects the last imported image and returns to Select.
+        let outcome = match outcome {
+            Outcome::Imported(presented, layer) => {
+                self.select_after = Some(layer);
+                self.select_tool("v");
+                Outcome::Presented(presented)
+            }
+            outcome => outcome,
+        };
         match outcome {
             Outcome::Presented(mut presented) => {
                 self.busy = false;
@@ -2201,7 +2252,12 @@ impl Editor {
                     self.arm_autosave();
                 }
                 let count = presented.layers.len();
-                let selected = if !first && count > old_count {
+                let wanted = self
+                    .select_after
+                    .take_if(|id| presented.layers.iter().any(|l| l.id == *id));
+                let selected = if wanted.is_some() {
+                    wanted
+                } else if !first && count > old_count {
                     // A new layer is on top; select it, as shipping does.
                     presented.layers.first().map(|l| l.id.clone())
                 } else {
@@ -2329,8 +2385,10 @@ impl Editor {
                 Err(error) => self.set_notice(Some((format!("Couldn’t copy: {error}"), true))),
             },
             Outcome::Flushed => self.close_ready = self.closing,
+            Outcome::Imported(..) => unreachable!("mapped to Presented above"),
             Outcome::Failed(error) => {
                 self.busy = false;
+                self.select_after = None;
                 self.set_notice(Some((error, true)));
                 if let Some(next) = self.pending.take() {
                     self.submit(next);
@@ -2800,6 +2858,8 @@ impl Editor {
         let add = g.text(&t, Style::Button, header::ADD_IMAGES, 1e4)?;
         let add_w = 2. + 2. * s5 + 16. + s3 + add.width;
         l.add_images = Rect::new(w - s5 - add_w, mid, add_w, CONTROL_H);
+        set(Target::AddImages, l.add_images);
+        set(Target::AddLayer, l.add_layer);
         let slider_w = header_layout.zoom_slider_width as f32;
         let preset_w = header_layout.zoom_preset_width as f32;
         let zoom_w = 2. + 3. * ZOOM_BUTTON + slider_w + preset_w;
@@ -3000,6 +3060,7 @@ impl Editor {
                 Kind::Bar => l.bar,
                 Kind::Flyout => l.flyout,
                 Kind::BgMenu => Rect::default(),
+                Kind::LayersHeading => l.sidebar,
                 Kind::Zoom | Kind::List | Kind::Ctl(..) => Rect::default(),
                 _ => Rect::default(),
             };
@@ -3335,9 +3396,11 @@ impl Editor {
             Target::Slider,
             Target::ZoomIn,
             Target::Prop(Prop::Preset),
+            Target::AddImages,
         ]);
         list.extend((0..RAIL_TOOLS.len()).map(Target::Tool));
         list.push(Target::Divider);
+        list.push(Target::AddLayer);
         for i in 0..self.layer_count() {
             // A row being renamed is `tabIndex=-1`; its input has focus.
             if self.renaming() != Some(i) {
@@ -3518,6 +3581,16 @@ impl Editor {
         let letter = |key: VIRTUAL_KEY| vk == key;
         match vk {
             VK_TAB => self.focus_step(!shift),
+            // Enter confirms a drawn crop, as Escape cancels it. A focused
+            // control keeps Enter, except the rail Crop was picked from.
+            VK_RETURN
+                if !ctrl
+                    && self.tool == "c"
+                    && self.crop.is_some()
+                    && matches!(self.focus, None | Some(Target::Tool(_))) =>
+            {
+                self.apply_crop()
+            }
             VK_SPACE | VK_RETURN if self.focus.is_some() => {
                 if let Some(focus) = self.focus {
                     self.set_focus(Some(focus), true);
@@ -3527,7 +3600,16 @@ impl Editor {
             _ if ctrl && letter(VK_Z) && shift => self.activate(Target::Redo),
             _ if ctrl && letter(VK_Z) => self.activate(Target::Undo),
             _ if ctrl && letter(VK_Y) => self.activate(Target::Redo),
-            _ if ctrl && letter(VK_C) => self.activate(Target::Copy),
+            _ if ctrl && shift && letter(VK_C) => self.activate(Target::Copy),
+            // Shipping copies the selected layer; with nothing selected
+            // this host keeps copying the image.
+            _ if ctrl && letter(VK_C) => {
+                if !self.copy_layer() {
+                    self.activate(Target::Copy);
+                }
+            }
+            _ if ctrl && letter(VK_V) => self.paste(),
+            _ if ctrl && letter(VK_D) => self.duplicate_selected(),
             _ if ctrl && letter(VK_S) => self.activate(Target::Save),
             _ if ctrl && (letter(VK_0) || letter(VK_NUMPAD0)) => self.activate(Target::Fit),
             _ if ctrl && matches!(vk, VK_OEM_PLUS | VK_ADD) => self.zoom_by(KEYBOARD_ZOOM),
@@ -3542,6 +3624,17 @@ impl Editor {
                 }
                 self.set_crop(None);
                 self.overlay_changed();
+            }
+            // Shipping `nudgeSelected`: 1 px, 10 with Shift.
+            VK_LEFT | VK_RIGHT | VK_UP | VK_DOWN => {
+                let step = if shift { 10. } else { 1. };
+                let (dx, dy) = match vk {
+                    VK_LEFT => (-step, 0.),
+                    VK_RIGHT => (step, 0.),
+                    VK_UP => (0., -step),
+                    _ => (0., step),
+                };
+                self.nudge_selected(dx, dy);
             }
             _ => {
                 let ch = char::from_u32(u32::from(vk.0)).map(|c| c.to_ascii_lowercase());
@@ -3655,19 +3748,6 @@ impl Editor {
                     py + (19. - count.height) / 2.,
                     c("text-subtle"),
                 )?;
-                // Add image layer: not in this host yet.
-                let add = self.l.add_layer;
-                let ax = add.x - self.l.sidebar.x;
-                let ay = add.y - self.l.sidebar.y;
-                gfx::icon(
-                    dc,
-                    &g.factory,
-                    "plus",
-                    &[],
-                    (ax + 7., ay + 7., 16.),
-                    1.8,
-                    t.color_alpha("text-muted", 0.45),
-                )?;
             }
             Kind::Properties => {
                 gfx::fill(dc, rect(0., 0., 1., h), c("border-subtle"))?;
@@ -3758,7 +3838,7 @@ impl Editor {
         let t = &self.t;
         let g = &self.g;
         let c = |name: &str| t.color(name);
-        let (s2, s3, s4) = (t.n("s-2"), t.n("s-3"), t.n("s-4"));
+        let (s2, s4) = (t.n("s-2"), t.n("s-4"));
         gfx::fill(dc, rect(0., 0., w, h), c("surface-raised"))?;
         gfx::fill(dc, rect(0., h - 1., w, h), c("border-subtle"))?;
         let l = &self.l;
@@ -3797,30 +3877,6 @@ impl Editor {
             dc,
             rect(split, group.top + 9., split + 1., group.top + 25.),
             c("border"),
-        )?;
-        let dim = |name: &str| t.color_alpha(name, 0.4);
-        // Add images: not in this host yet (disabled `.screenshot-add-image`).
-        let add = local(l.add_images);
-        let radius = t.n("r-md");
-        gfx::fill_round(dc, add, radius, t.color_alpha("control", 0.45))?;
-        gfx::border(dc, add, radius, 1., dim("control-border"))?;
-        let text = g.text(t, Style::Button, header::ADD_IMAGES, 1e4)?;
-        let x = add.left + 1. + t.n("s-5");
-        gfx::icon(
-            dc,
-            &g.factory,
-            "image",
-            &[],
-            (x, (add.top + add.bottom - 16.) / 2., 16.),
-            1.8,
-            t.color_alpha("text", 0.45),
-        )?;
-        gfx::text(
-            dc,
-            &text,
-            x + 16. + s3,
-            cy(&text),
-            t.color_alpha("text", 0.45),
         )?;
         Ok(())
     }
@@ -3934,6 +3990,10 @@ impl Editor {
             points.push((r.x as f32, r.y as f32));
             points.push(((r.x + r.width) as f32, (r.y + r.height) as f32));
         }
+        if let Some(r) = self.drop_bounds() {
+            points.push((r.x, r.y));
+            points.push((r.x + r.w, r.y + r.h));
+        }
         let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
         for (x, y) in &points {
             x0 = x0.min(*x);
@@ -4040,7 +4100,8 @@ impl Editor {
         self.draw_crop(dc)?;
         self.draw_grips(dc)?;
         self.draw_brush_ring(dc)?;
-        self.draw_text(dc)
+        self.draw_text(dc)?;
+        self.draw_drop(dc)
     }
 
     fn draw_bar(&self, dc: &ID2D1DeviceContext, (w, h): (f32, f32)) -> Result<()> {
@@ -4318,6 +4379,41 @@ impl Editor {
                 )?;
             }
             Target::Background => self.draw_bg_trigger(dc, lit, (w, h))?,
+            // `.screenshot-add-image`: a control-surface button.
+            Target::AddImages => {
+                let (bg, edge) = if lit {
+                    ("control-hover", "border-strong")
+                } else {
+                    ("control", "control-border")
+                };
+                gfx::fill_round(dc, all, r_md, c(bg))?;
+                gfx::border(dc, all, r_md, 1., c(edge))?;
+                let text = g.text(t, Style::Button, header::ADD_IMAGES, 1e4)?;
+                let x = 1. + s5;
+                gfx::icon(
+                    dc,
+                    &g.factory,
+                    "image",
+                    &[],
+                    (x, (h - 16.) / 2., 16.),
+                    1.8,
+                    c("text"),
+                )?;
+                gfx::text(
+                    dc,
+                    &text,
+                    x + 16. + s3,
+                    ((h - text.height) / 2.).round(),
+                    c("text"),
+                )?;
+            }
+            // `.screenshot-layers-heading button`.
+            Target::AddLayer => {
+                if lit {
+                    gfx::fill_round(dc, all, r_md, c("surface-hover"))?;
+                }
+                icon("plus", 16., 1.8, c(if lit { "text" } else { "text-muted" }))?;
+            }
             Target::Undo | Target::Redo => {
                 if lit {
                     gfx::fill_round(dc, all, r_md, c("surface-hover"))?;
@@ -5619,7 +5715,7 @@ impl Editor {
 }
 
 /// `Layout::buttons`: twelve fixed controls, the rail, and a spare.
-const SLOTS: usize = 13 + RAIL_TOOLS.len() + 1;
+const SLOTS: usize = 15 + RAIL_TOOLS.len() + 1;
 
 /// Where each button's rect lives in `Layout::buttons`.
 fn button_slot(target: Target) -> usize {
@@ -5639,6 +5735,8 @@ fn button_slot(target: Target) -> usize {
         // One slot per rail tool.
         Target::Tool(i) => 12 + i,
         Target::Background => 12 + RAIL_TOOLS.len(),
+        Target::AddImages => 13 + RAIL_TOOLS.len(),
+        Target::AddLayer => 14 + RAIL_TOOLS.len(),
         // Laid out from their own rects, never through `Layout::buttons`.
         Target::Shape(_)
         | Target::Layer(_)
@@ -6046,6 +6144,7 @@ pub fn open(options: &Options, artifact_id: &str) -> Result<()> {
             editor.start_tool(options);
         }
         EDITORS.with(|e| e.borrow_mut().push(editor));
+        import::register_drop(hwnd);
         let _ = ShowWindow(hwnd, SW_SHOW);
     }
     Ok(())
@@ -6083,6 +6182,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             }
             WM_DESTROY => {
                 let _ = UiaReturnRawElementProvider(hwnd, WPARAM(0), LPARAM(0), None);
+                import::revoke_drop(hwnd);
                 let closed = EDITORS.with(|e| {
                     let mut e = e.try_borrow_mut().ok()?;
                     let index = e.iter().position(|editor| editor.hwnd == hwnd)?;
@@ -6170,6 +6270,19 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 Err(error) => eprintln!("color picker failed: {error}"),
             }
         }
+        // So is the Add images picker.
+        if with_editor(hwnd, |e| std::mem::take(&mut e.pick_images)) == Some(true) {
+            match crate::dialog::pick_images(hwnd, header::ADD_IMAGES) {
+                Ok(paths) if !paths.is_empty() => {
+                    with_editor(hwnd, |e| e.add_images(paths));
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    let text = format!("Images could not be added: {}", error.message());
+                    with_editor(hwnd, |e| e.set_notice(Some((text, true))));
+                }
+            }
+        }
         // Destroyed outside `with_editor`, so `WM_DESTROY` can remove it.
         // Taken, not read: DestroyWindow sends messages back into this
         // wndproc (WM_UAHDESTROYWINDOW), which must not destroy again or the
@@ -6227,6 +6340,17 @@ pub fn render_offscreen(
     editor.h = h;
     editor.receive(Outcome::Presented(Box::new(presented)));
     editor.start_tool(options);
+    editor.layout(w, h)?;
+    // `--select drop`: files dragged in with the default guide;
+    // `drop-stack`: the pointer over the middle of the image.
+    match options.select.as_deref() {
+        Some("drop") => editor.drag_enter(None),
+        Some("drop-stack") => {
+            let w = editor.l.well;
+            editor.drag_enter(Some((w.x + w.w / 2., w.y + w.h / 2.)));
+        }
+        _ => {}
+    }
     if let Some([x, y, width, height]) = options.crop {
         editor.select_tool("c");
         editor.set_crop(Some(DocRect {
@@ -6446,6 +6570,198 @@ mod tests {
         assert_eq!(e.crop_aspect, 0, "outside focus commits keyboard choice");
         drop(e);
         std::fs::remove_dir_all(data).unwrap();
+        unsafe { CoUninitialize() };
+    }
+
+    /// Shipping's editor shortcuts that act on the selection or the crop:
+    /// arrows nudge (Shift ×10, one undo key, adding up while busy),
+    /// Ctrl+D duplicates and selects the copy, Enter applies a staged crop
+    /// unless another control has focus.
+    #[test]
+    fn layer_shortcuts_reach_the_session() {
+        use windows::Win32::System::Com::*;
+        unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok().unwrap() };
+        let data = std::env::temp_dir().join(format!("captures-keys-{}", std::process::id()));
+        let capture = captures_app::persist_screenshot(
+            &data.join("history"),
+            &RgbaImage::from_pixel(640, 360, Rgba([20, 50, 80, 255])),
+            CaptureMode::Region,
+        )
+        .unwrap();
+        let options = crate::parse(
+            [
+                "test".into(),
+                "--profile".into(),
+                data.to_string_lossy().into_owned(),
+                "--scene".into(),
+                "editor".into(),
+                "--artifact".into(),
+                capture.entry.id,
+            ]
+            .into_iter(),
+        )
+        .unwrap();
+        let tokens = crate::appearance::tokens(Some("light"), &Default::default());
+        let mut e = render_offscreen(
+            &options,
+            Gfx::new(&tokens, false).unwrap(),
+            tokens,
+            (1280., 840.),
+        )
+        .unwrap();
+        let (jobs, inbox) = channel();
+        e.jobs = jobs;
+        let sent = |inbox: &Receiver<Job>| -> Vec<Request> {
+            inbox
+                .try_iter()
+                .filter_map(|job| match job {
+                    Job::Apply(request) => Some(request),
+                    _ => None,
+                })
+                .collect()
+        };
+        let id = e.layer(0).unwrap().id.clone();
+        e.set_selected(Some(id.clone()));
+
+        // The locked background doesn't move.
+        e.key(VK_RIGHT, false, false);
+        assert!(sent(&inbox).is_empty());
+        e.presented.as_mut().unwrap().layers[0].locked = false;
+        e.key(VK_RIGHT, false, false);
+        let nudge = |requests: &[Request]| match requests {
+            [Request::Live { key, request }] => match request.as_ref() {
+                Request::Layer {
+                    edit: LayerEdit::Translate { delta_x, delta_y },
+                    ..
+                } => (key.clone(), *delta_x, *delta_y),
+                other => panic!("not a nudge: {other:?}"),
+            },
+            other => panic!("expected one live edit, got {other:?}"),
+        };
+        assert_eq!(nudge(&sent(&inbox)), (format!("nudge:{id}"), 1., 0.));
+        // Busy: Shift+Up then Left wait as one queued nudge.
+        e.key(VK_UP, false, true);
+        e.key(VK_LEFT, false, false);
+        assert!(sent(&inbox).is_empty());
+        let queued = e.pending.take().into_iter().collect::<Vec<_>>();
+        assert_eq!(nudge(&queued), (format!("nudge:{id}"), -1., -10.));
+        e.busy = false;
+
+        // Ctrl+D duplicates and selects the copy once the session has it.
+        e.select_tool("p");
+        e.key(VK_D, true, false);
+        let requests = sent(&inbox);
+        let [
+            Request::Layer {
+                id: from,
+                edit: LayerEdit::Duplicate { new_id },
+            },
+        ] = requests.as_slice()
+        else {
+            panic!("expected a duplicate, got {requests:?}");
+        };
+        assert_eq!(from, &id);
+        assert_eq!(e.select_after.as_ref(), Some(new_id));
+        assert_eq!(e.tool, "v");
+        e.busy = false;
+
+        // Enter applies a staged crop, but not while Save has focus.
+        e.select_tool("c");
+        let rect = DocRect {
+            x: 10.,
+            y: 20.,
+            width: 300.,
+            height: 200.,
+        };
+        e.set_crop(Some(rect));
+        e.set_focus(Some(Target::Save), true);
+        e.key(VK_RETURN, false, false);
+        assert!(
+            !sent(&inbox)
+                .iter()
+                .any(|r| matches!(r, Request::Crop { .. })),
+            "a focused button keeps Enter"
+        );
+        e.busy = false;
+        e.set_focus(None, false);
+        e.key(VK_RETURN, false, false);
+        let requests = sent(&inbox);
+        assert!(
+            matches!(requests.as_slice(), [Request::Crop { rect: r }] if *r == rect),
+            "{requests:?}"
+        );
+        assert_eq!((e.tool, e.crop), ("v", None));
+        drop(e);
+        let _ = std::fs::remove_dir_all(data);
+        unsafe { CoUninitialize() };
+    }
+
+    /// Dropped, pasted and picked files go through the worker as one
+    /// import; the editor selects the new layer under Select, and rejects
+    /// files the decoders can't read without asking the worker.
+    #[test]
+    fn imported_files_become_the_selected_layer() {
+        use windows::Win32::System::Com::*;
+        unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok().unwrap() };
+        let data = std::env::temp_dir().join(format!("captures-import-{}", std::process::id()));
+        let root = data.join("history");
+        let capture = captures_app::persist_screenshot(
+            &root,
+            &RgbaImage::from_pixel(640, 360, Rgba([20, 50, 80, 255])),
+            CaptureMode::Region,
+        )
+        .unwrap();
+        let png = data.join("drop.png");
+        RgbaImage::from_pixel(120, 80, Rgba([200, 30, 30, 255]))
+            .save(&png)
+            .unwrap();
+        let options = crate::parse(
+            [
+                "test".into(),
+                "--profile".into(),
+                data.to_string_lossy().into_owned(),
+                "--scene".into(),
+                "editor".into(),
+                "--artifact".into(),
+                capture.entry.id.clone(),
+            ]
+            .into_iter(),
+        )
+        .unwrap();
+        let tokens = crate::appearance::tokens(Some("light"), &Default::default());
+        let mut e = render_offscreen(
+            &options,
+            Gfx::new(&tokens, false).unwrap(),
+            tokens,
+            (1280., 840.),
+        )
+        .unwrap();
+        let (jobs, inbox) = channel();
+        let (results, outcomes) = channel();
+        let worker = spawn_worker(root, capture.entry.id, inbox, results, 0, Vec::new());
+        e.jobs = jobs;
+        e.select_tool("p");
+
+        e.add_images(vec![data.join("notes.txt")]);
+        assert_eq!(
+            e.notice_text(),
+            Some((captures_app::editor_session::DROP_UNSUPPORTED.into(), true))
+        );
+        e.add_images(vec![png]);
+        assert!(e.busy);
+        // The worker's first reply is the opened session.
+        let _opened = outcomes.recv().unwrap();
+        let outcome = outcomes.recv().unwrap();
+        assert!(matches!(outcome, Outcome::Imported(..)));
+        e.receive(outcome);
+        assert_eq!(e.layer_count(), 2);
+        let top = e.layer(0).unwrap();
+        assert!(top.is_image && !top.locked);
+        assert_eq!(e.selected.as_deref(), Some(top.id.as_str()));
+        assert_eq!(e.tool, "v");
+        drop(e);
+        worker.join().unwrap();
+        let _ = std::fs::remove_dir_all(data);
         unsafe { CoUninitialize() };
     }
 
