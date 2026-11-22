@@ -208,6 +208,14 @@ type CachedImage = {
   status: "loading" | "loaded" | "error";
 };
 
+/** A detached canvas keeps its pixels until it is collected; free them now. */
+function releaseCanvasPixels(image: CachedImage["image"]): void {
+  if (image instanceof HTMLCanvasElement) {
+    image.width = 0;
+    image.height = 0;
+  }
+}
+
 type EditorGesture =
   | {
       kind: "move";
@@ -620,6 +628,8 @@ const MAX_SCREENSHOT_ZOOM_PERCENT = 800;
 const KEYBOARD_ZOOM_FACTOR = 1.25;
 /** Edits to one property closer together than this share a single undo entry. */
 const UNDO_COALESCE_MS = 600;
+/** Undo and redo steps on each side of the document whose edited images stay decoded. */
+const DECODED_HISTORY_STEPS = 3;
 const WHEEL_ZOOM_SENSITIVITY = 0.002;
 const SCREENSHOT_ZOOM_OPTIONS = [50, 100, 200] as const;
 const LAYER_CLIPBOARD_TYPE = "application/x-captures-editor-layer";
@@ -2451,6 +2461,35 @@ export function ScreenshotEditor() {
     [invalidateCompressPreview],
   );
 
+  // Every eraser stroke, wand click, merge and flatten stores its result under
+  // a new `data:` source, and a stroke's entry is a full-resolution canvas.
+  // Keep the entries within a few undo or redo steps so stepping through
+  // history never shows a blank layer, and release the rest. An older step
+  // decodes again from its data URL, which starts here before undo reaches it.
+  useEffect(() => {
+    if (!editorDocument) return;
+    const nearby = new Set<string>();
+    const keep = (document: ScreenshotDocument) => {
+      for (const src of collectDocumentImageSources(document)) nearby.add(src);
+    };
+    keep(editorDocument);
+    undoStack.slice(-DECODED_HISTORY_STEPS).forEach(keep);
+    redoStack.slice(0, DECODED_HISTORY_STEPS).forEach(keep);
+    const copied = layerClipboardRef.current?.element;
+    if (copied?.kind === "image") {
+      nearby.add(copied.src);
+      if (copied.originalSrc) nearby.add(copied.originalSrc);
+    }
+    for (const [src, cached] of imageCacheRef.current) {
+      if (nearby.has(src) || !src.startsWith("data:") || cached.status === "loading") continue;
+      imageCacheRef.current.delete(src);
+      releaseCanvasPixels(cached.image);
+    }
+    for (const src of nearby) {
+      if (src.startsWith("data:")) ensureImage(src);
+    }
+  }, [editorDocument, undoStack, redoStack, ensureImage]);
+
   /** Encode any document image URL to PNG bytes for draft persistence. */
   const pngBytesForSource = useCallback(
     async (src: string): Promise<number[]> => {
@@ -2532,6 +2571,13 @@ export function ScreenshotEditor() {
           },
         });
         cache.persisted = new Set(payload.assets.map((asset) => asset.id));
+        // The backend has just dropped every other asset, so their ids are
+        // dead. Forgetting them also stops this map from holding the data URL
+        // of every eraser stroke for the life of the window.
+        const saved = new Set(collectDocumentImageSources(document));
+        for (const src of cache.assetIdBySource.keys()) {
+          if (!saved.has(src)) cache.assetIdBySource.delete(src);
+        }
       };
       try {
         await save(true);

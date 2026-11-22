@@ -2984,6 +2984,111 @@ describe("ScreenshotEditor", () => {
     }
   });
 
+  it("frees eraser canvases more than a few undo steps back and decodes them again on undo", async () => {
+    const brushArtifact = { ...artifact, width: 20, height: 10 };
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_artifact") return brushArtifact;
+      const draft = draftCommandResult(String(command));
+      if (draft !== undefined || String(command).includes("screenshot_editor_draft")) {
+        return draft;
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    const context = {
+      clearRect: vi.fn(),
+      fillRect: vi.fn(),
+      drawImage: vi.fn(),
+      getImageData: vi.fn((_x: number, _y: number, width: number, height: number) => {
+        const data = new Uint8ClampedArray(width * height * 4);
+        for (let index = 3; index < data.length; index += 4) data[index] = 255;
+        return { data, width, height, colorSpace: "srgb" } as ImageData;
+      }),
+      putImageData: vi.fn(),
+      save: vi.fn(),
+      restore: vi.fn(),
+      translate: vi.fn(),
+      transform: vi.fn(),
+      setTransform: vi.fn(),
+      setLineDash: vi.fn(),
+      strokeRect: vi.fn(),
+      imageSmoothingEnabled: true,
+      imageSmoothingQuality: "high",
+    } as unknown as CanvasRenderingContext2D;
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(context);
+    // Each stroke's working canvas, in order, under its own data URL.
+    const strokeCanvases: HTMLCanvasElement[] = [];
+    vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockImplementation(function (
+      this: HTMLCanvasElement,
+    ) {
+      strokeCanvases.push(this);
+      return `data:image/png;base64,stroke-${strokeCanvases.length}`;
+    });
+
+    const imageSources: string[] = [];
+    const originalImage = window.Image;
+    class LoadedImage {
+      onload: ((event: Event) => void) | null = null;
+      onerror: ((event: Event) => void) | null = null;
+      naturalWidth = brushArtifact.width;
+      naturalHeight = brushArtifact.height;
+      width = brushArtifact.width;
+      height = brushArtifact.height;
+      crossOrigin = "";
+      set src(value: string) {
+        imageSources.push(value);
+        if (!value.startsWith("data:")) {
+          queueMicrotask(() => this.onload?.(new Event("load")));
+        }
+      }
+    }
+    // @ts-expect-error focused Image decode stub
+    window.Image = LoadedImage;
+
+    try {
+      render(<ScreenshotEditor />);
+      await screen.findByLabelText("Canvas width");
+      fireEvent.click(screen.getByRole("button", { name: "Eraser (B)" }));
+      fireEvent.click(screen.getByRole("button", { name: "Erase" }));
+      fireEvent.change(screen.getByLabelText("Brush size"), { target: { value: "4" } });
+
+      const canvas = document.querySelector("canvas.screenshot-canvas") as HTMLCanvasElement;
+      setCanvasBounds(canvas, brushArtifact.width, brushArtifact.height);
+      for (let stroke = 1; stroke <= 6; stroke += 1) {
+        fireEvent.pointerDown(canvas, {
+          button: 0,
+          clientX: stroke * 2,
+          clientY: 5,
+          pointerId: stroke,
+        });
+        fireEvent.pointerUp(canvas, { clientX: stroke * 2, clientY: 5, pointerId: stroke });
+        await waitFor(() => expect(strokeCanvases).toHaveLength(stroke));
+      }
+
+      // The current stroke and the three undo steps behind it stay decoded.
+      await waitFor(() => expect(strokeCanvases[0].width).toBe(0));
+      expect(strokeCanvases.map(({ width, height }) => [width, height])).toEqual([
+        [0, 0],
+        [0, 0],
+        [20, 10],
+        [20, 10],
+        [20, 10],
+        [20, 10],
+      ]);
+      expect(imageSources.filter((src) => src.startsWith("data:"))).toEqual([]);
+
+      // One step back brings the second stroke within reach, so it decodes
+      // from its data URL before undo gets to it.
+      fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+      await waitFor(() => {
+        expect(imageSources).toContain("data:image/png;base64,stroke-2");
+      });
+      expect(imageSources).not.toContain("data:image/png;base64,stroke-1");
+    } finally {
+      window.Image = originalImage;
+    }
+  });
+
   it("keeps a solid canvas fill until an erase stroke actually changes pixels", async () => {
     const brushArtifact = { ...artifact, width: 20, height: 10 };
     vi.mocked(invoke).mockImplementation(async (command) => {
