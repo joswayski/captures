@@ -1127,6 +1127,10 @@ impl Editor {
                 let lock = self.shift_down();
                 self.resize_request(&id, handle, end, lock)
             }
+            Some(Gesture::Rotate { .. }) => match self.rotate_request() {
+                Some(request) => request,
+                None => return,
+            },
             Some(Gesture::Move { id, start, end }) => Request::Layer {
                 id,
                 edit: LayerEdit::DragMove {

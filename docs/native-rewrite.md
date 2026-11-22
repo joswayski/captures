@@ -939,6 +939,21 @@ solid), and no `--glass-shadow` on the handle, pill or hint. Windows:
 and dark, a test drives quality, Hide, Show, drawing and the range keys, and
 a live window driven only through UIA chose Compress, set the split, hid it
 and showed it again. Physical dragging is unverified.
+
+The Windows screenshot editor now has shipping's rotate handle, which the
+transform section's Shift snap note already described. With Select or a
+shape tool, the selected unlocked, visible layer shows a grip 28 px outside
+its top edge. When that does not fit the canvas, the grip moves to the next
+spot `rotation_handle` picks. It is drawn like `drawShapeRotationHandle`:
+a stem, a 22 % accent disc with an accent rim, and the rotate glyph. It is
+hit-tested before the resize grips. Dragging turns the layer about its
+centre through the shared `preview_rotation`, snapping by the window's
+Shift rotation snap while Shift is held. The worker previews the turn and
+`LayerEdit::Rotate` commits it as one undo step. Deviations: the hand cursor
+stands in for `grab`, and the \"Drag to rotate\" hover tip is not shown.
+Windows: `--select rotate` places an in-memory image layer and renders the
+handle offscreen, and a test drags it a quarter turn through the window
+procedure. A real pointer drag is unverified.
 Apply crop pulse: shipping's `screenshot-cta-pulse` (2.4 s ease-in-out,
 infinite, a 0 → 5 px accent `box-shadow` at 22 % and back) is a ring visual
 under Apply crop, drawn once at its 50 % frame, whose opacity a repeating

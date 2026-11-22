@@ -73,6 +73,7 @@ mod import;
 mod layer_menu;
 mod menu;
 mod props;
+mod rotate;
 mod rows;
 mod text;
 mod text_section;
@@ -552,6 +553,15 @@ enum Gesture {
         start: Point,
         end: Point,
     },
+    /// Turning the selected layer by its rotate handle, from the outline
+    /// and rotation it had at the press.
+    Rotate {
+        id: String,
+        outline: [Point; 4],
+        initial: f64,
+        start: Point,
+        end: Point,
+    },
     /// Panning from the viewport it started with, from a client point.
     Pan {
         from: Viewport,
@@ -583,7 +593,8 @@ pub struct Layout {
     pub add_layer: Rect,
     pub flyout: Rect,
     pub export_settings: Rect,
-    /// The open .screenshot-export-settings panel and its items, in`n    /// `export::ITEMS` order (empty when hidden).
+    /// The open .screenshot-export-settings panel and its items, in
+    /// `export::ITEMS` order (empty when hidden).
     pub panel: Rect,
     pub items: [Rect; export::ITEMS.len()],
     pub filename: Rect,
@@ -2089,11 +2100,11 @@ impl Editor {
 
     /// `--tool KEY`: start with a rail tool or a grouped shape.
     fn start_tool(&mut self, options: &Options) {
-        if let Some(id) = options
-            .select
-            .as_ref()
-            .filter(|s| !s.starts_with("drop") && !s.starts_with("export") && *s != "layer-menu")
-        {
+        if let Some(id) = options.select.as_ref().filter(|s| {
+            !s.starts_with("drop")
+                && !s.starts_with("export")
+                && !matches!(s.as_str(), "layer-menu" | "rotate")
+        }) {
             if self.layer_count() > 0
                 && (0..self.layer_count()).any(|i| self.layer(i).is_some_and(|l| l.id == *id))
             {
@@ -2470,7 +2481,11 @@ impl Editor {
                 let now = Instant::now();
                 self.preview_ready = self.preview_sent.map(|sent| now + (now - sent));
                 let layer = match &self.gesture {
-                    Some(Gesture::Resize { id, .. } | Gesture::Move { id, .. }) => Some(id.clone()),
+                    Some(
+                        Gesture::Resize { id, .. }
+                        | Gesture::Move { id, .. }
+                        | Gesture::Rotate { id, .. },
+                    ) => Some(id.clone()),
                     _ => None,
                 };
                 let previewing = layer.is_some() || matches!(self.gesture, Some(Gesture::Brush(_)));
@@ -2613,6 +2628,19 @@ impl Editor {
         let Some(point) = self.to_document(x, y) else {
             return;
         };
+        // Shipping hit-tests the rotate grip before the resize grips.
+        if let Some((id, outline, initial)) = self.rotate_hit(point) {
+            self.gesture = Some(Gesture::Rotate {
+                id,
+                outline,
+                initial,
+                start: point,
+                end: point,
+            });
+            self.preview_outline = None;
+            self.overlay_changed();
+            return;
+        }
         if let Some(handle) = self.handle_at(point)
             && let Some(id) = self.selected.clone()
         {
@@ -2718,7 +2746,7 @@ impl Editor {
                     self.preview_gesture();
                 }
             }
-            Some(Gesture::Resize { end, .. }) => {
+            Some(Gesture::Resize { end, .. } | Gesture::Rotate { end, .. }) => {
                 if let Some(point) = point {
                     *end = point;
                 }
@@ -2741,6 +2769,7 @@ impl Editor {
     }
 
     fn finish(&mut self) {
+        let rotation = self.rotate_request();
         let Some(gesture) = self.gesture.take() else {
             return;
         };
@@ -2755,6 +2784,12 @@ impl Editor {
         let lock = self.shift_down();
         let request = match gesture {
             Gesture::Pan { .. } => None,
+            Gesture::Rotate { .. } => {
+                if rotation.is_none() && self.preview_outline.take().is_some() {
+                    let _ = self.jobs.send(Job::Refresh);
+                }
+                rotation
+            }
             Gesture::Resize {
                 id,
                 handle,
@@ -2850,7 +2885,10 @@ impl Editor {
         self.guides.clear();
         if matches!(
             gesture,
-            Gesture::Resize { .. } | Gesture::Brush(_) | Gesture::Move { .. }
+            Gesture::Resize { .. }
+                | Gesture::Rotate { .. }
+                | Gesture::Brush(_)
+                | Gesture::Move { .. }
         ) {
             self.preview_outline = None;
             let _ = self.jobs.send(Job::Refresh);
@@ -4242,7 +4280,7 @@ impl Editor {
     fn selection_outline(&self) -> Option<[Point; 4]> {
         if matches!(
             self.gesture,
-            Some(Gesture::Resize { .. } | Gesture::Move { .. })
+            Some(Gesture::Resize { .. } | Gesture::Move { .. } | Gesture::Rotate { .. })
         ) && let Some(outline) = self.preview_outline
         {
             return Some(outline);
@@ -4319,6 +4357,7 @@ impl Editor {
         }
         self.draw_crop(dc)?;
         self.draw_grips(dc)?;
+        self.draw_rotate_handle(dc)?;
         self.draw_brush_ring(dc)?;
         self.draw_text(dc)?;
         self.draw_drop(dc)
@@ -5861,6 +5900,16 @@ impl Editor {
                         Some(target) if self.enabled(target) => IDC_HAND,
                         Some(_) => IDC_ARROW,
                         None if self.in_text(x, y) => IDC_IBEAM,
+                        // Windows has no grab cursor; the hand reads as one.
+                        None if self.l.well.contains(x, y)
+                            && (matches!(self.gesture, Some(Gesture::Rotate { .. }))
+                                || self
+                                    .to_document(x, y)
+                                    .and_then(|p| self.rotate_hit(p))
+                                    .is_some()) =>
+                        {
+                            IDC_HAND
+                        }
                         None if self.l.well.contains(x, y) => {
                             match self.to_document(x, y).and_then(|p| self.handle_at(p)) {
                                 Some(ResizeHandle::N | ResizeHandle::S) => IDC_SIZENS,
@@ -6606,6 +6655,15 @@ pub fn render_offscreen(
     )
     .map_err(fail)?;
     let mut session = session;
+    // `--select rotate`: an image layer placed in memory and selected, with
+    // its grips and rotate handle (the fixture's background is locked).
+    let rotating = options.select.as_deref() == Some("rotate");
+    let placed = rotating
+        .then(|| {
+            let image = RgbaImage::from_pixel(420, 240, image::Rgba([232, 96, 64, 255]));
+            session.import_images([("rotate.png".to_owned(), image)], None, None)
+        })
+        .and_then(std::result::Result::ok);
     let presented = present(&mut session, &id, &mut Published::default());
     let mode = entry.mode.unwrap_or(CaptureMode::Region);
     let mut editor = Editor::new(
@@ -6621,6 +6679,9 @@ pub fn render_offscreen(
     editor.w = w;
     editor.h = h;
     editor.receive(Outcome::Presented(Box::new(presented)));
+    if let Some(layer) = placed {
+        editor.set_selected(Some(layer));
+    }
     // `--select export`: the Export settings panel open, with the
     // estimate a window would get from its worker.
     // `export-custom` and `export-maximum` also pick that size or mode.
@@ -7333,6 +7394,96 @@ mod tests {
         e.activate(Target::ExportSettings);
         assert_eq!(e.focus, Some(Target::ExportSettings));
         let _ = std::fs::remove_dir_all(&data);
+    }
+    /// Shipping's rotate handle: a drag a quarter turn round the layer's
+    /// centre commits `LayerEdit::Rotate` by π/2; a locked layer has none.
+    #[test]
+    fn rotate_handle_turns_the_selected_layer() {
+        use windows::Win32::System::Com::*;
+        unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok().unwrap() };
+        let data = std::env::temp_dir().join(format!("captures-rotate-{}", std::process::id()));
+        let capture = captures_app::persist_screenshot(
+            &data.join("history"),
+            &RgbaImage::from_pixel(640, 360, Rgba([20, 50, 80, 255])),
+            CaptureMode::Region,
+        )
+        .unwrap();
+        let options = crate::parse(
+            [
+                "test".into(),
+                "--profile".into(),
+                data.to_string_lossy().into_owned(),
+                "--scene".into(),
+                "editor".into(),
+                "--artifact".into(),
+                capture.entry.id,
+                "--select".into(),
+                "rotate".into(),
+            ]
+            .into_iter(),
+        )
+        .unwrap();
+        let tokens = crate::appearance::tokens(Some("light"), &Default::default());
+        let mut e = render_offscreen(
+            &options,
+            Gfx::new(&tokens, false).unwrap(),
+            tokens,
+            (1280., 840.),
+        )
+        .unwrap();
+        let (jobs, inbox) = channel();
+        e.jobs = jobs;
+        let id = e.selected.clone().expect("the placed layer");
+        let grip = e.rotate_grip().expect("a rotate handle");
+        let outline = e.selection_outline().unwrap();
+        let centre = Point {
+            x: (outline[0].x + outline[2].x) / 2.,
+            y: (outline[0].y + outline[2].y) / 2.,
+        };
+        let radius = (grip.handle.x - centre.x).hypot(grip.handle.y - centre.y);
+        let client = |e: &Editor, p: Point| {
+            let (x, y) = e.to_well(p).unwrap();
+            let (x, y) = (
+                ((x + e.l.well.x) * e.scale).round() as u32,
+                ((y + e.l.well.y) * e.scale).round() as u32,
+            );
+            LPARAM((x | (y << 16)) as isize)
+        };
+        let press = client(&e, grip.handle);
+        e.handle(WM_LBUTTONDOWN, WPARAM(0), press);
+        assert!(matches!(e.gesture, Some(Gesture::Rotate { .. })));
+        // The handle sits above the centre; right of it is a quarter turn.
+        let quarter = client(
+            &e,
+            Point {
+                x: centre.x + radius,
+                y: centre.y,
+            },
+        );
+        e.handle(WM_MOUSEMOVE, WPARAM(0), quarter);
+        e.handle(WM_LBUTTONUP, WPARAM(0), quarter);
+        let rotations: Vec<f64> = inbox
+            .try_iter()
+            .filter_map(|job| match job {
+                Job::Apply(Request::Layer {
+                    id: layer,
+                    edit: LayerEdit::Rotate { radians },
+                }) if layer == id => Some(radians),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(rotations.len(), 1, "{rotations:?}");
+        assert!(
+            (rotations[0] - std::f64::consts::FRAC_PI_2).abs() < 0.02,
+            "{rotations:?}"
+        );
+        // The locked background shows none.
+        let background = e.layer(1).unwrap().id.clone();
+        e.set_selected(Some(background));
+        assert!(e.rotate_grip().is_none());
+        drop(e);
+        let _ = std::fs::remove_dir_all(data);
+        unsafe { CoUninitialize() };
     }
     /// Shipping `CompressionPreview` over the canvas: shown while Compress
     /// or Maximum is chosen with Export settings open, its After side from

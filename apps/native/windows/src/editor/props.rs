@@ -734,7 +734,7 @@ impl Editor {
     }
 
     /// Shipping's `transformSelected`: a selection while Select or a shape
-    /// tool is active. The rotate handle itself is not in this host yet.
+    /// tool is active.
     fn transform_selected(&self) -> bool {
         let shape_tool = self.tool == "a" || SHAPE_TOOLS.iter().any(|s| s.key == self.tool);
         self.selected.is_some() && (self.tool == "v" || shape_tool)
