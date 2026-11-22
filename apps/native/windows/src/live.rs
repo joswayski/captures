@@ -391,6 +391,13 @@ pub fn service() {
     while let Some(action) = RESIDENT.with(|r| r.borrow().as_ref()?.tray.as_ref()?.next_action()) {
         run(&options, action);
     }
+    // An open bar takes every capture chord (shipping retargets it in place).
+    let selector = crate::capture::selector_generation();
+    RESIDENT.with(|r| {
+        if let Some(shortcuts) = r.borrow().as_ref().and_then(|r| r.shortcuts.as_ref()) {
+            shortcuts.set_selector_generation(selector);
+        }
+    });
     while let Some(shortcut) =
         RESIDENT.with(|r| r.borrow().as_ref()?.shortcuts.as_ref()?.next_action())
     {
@@ -861,8 +868,8 @@ fn retheme_windows() {
 /// Register the saved capture shortcuts, or follow a change to them. Like
 /// shipping, none are live until first-run setup finishes, and registering
 /// takes over overlapping OS keys (Print Screen for Snipping Tool,
-/// Win+Shift+S). While New Capture is open the shared capture flow drops
-/// shortcut presses: switching its target in place is not ported yet.
+/// Win+Shift+S). While New Capture's bar is up every chord routes to it
+/// (`capture::selector_generation`), which switches or recaptures in place.
 fn sync_shortcuts(settings: &captures_settings::AppSettings) {
     RESIDENT.with(|r| {
         let mut r = r.borrow_mut();
@@ -962,6 +969,19 @@ fn new_capture(options: &Options, target: crate::capture::Target, mode: MenuMode
     // A running recording owns the capture flow: bring its controls back.
     if crate::recorder::active() {
         return crate::recorder::restore();
+    }
+    // An open bar switches in place or recaptures itself, like shipping.
+    let action = match mode {
+        MenuMode::Screenshot => captures_app::capture_error::Action::Screenshot,
+        MenuMode::Recording => captures_app::capture_error::Action::Record,
+    };
+    let action = action(match target {
+        crate::capture::Target::Region => captures_app::capture_error::Target::Region,
+        crate::capture::Target::Window => captures_app::capture_error::Target::Window,
+        crate::capture::Target::Display => captures_app::capture_error::Target::Display,
+    });
+    if crate::capture::shortcut(action) {
+        return;
     }
     open_capture(options, target, mode, from_menu);
 }

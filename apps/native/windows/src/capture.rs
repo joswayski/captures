@@ -22,6 +22,7 @@ use std::cell::RefCell;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::time::{Duration, Instant};
 
+use captures_app::capture_error;
 use captures_app::capture_flow::CaptureFlow;
 use captures_app::capture_menu::{self, MenuMode, PrimaryState, RecordingToggle};
 use captures_app::controls::select;
@@ -518,6 +519,27 @@ pub struct Menu {
     pub switching: bool,
     /// A display chosen in the select, for `Capture` to switch to.
     switch_to: Option<usize>,
+    /// A repeated shortcut is freezing the bar into a new snapshot
+    /// (shipping's `starting` while it recaptures).
+    pub starting: bool,
+}
+
+/// What a capture shortcut did to the open bar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ShortcutEffect {
+    Ignored,
+    /// Switched mode and target in place.
+    Switched,
+    /// Freeze the screen with the bar in it and reopen the bar there.
+    Recapture,
+}
+
+fn route_target(target: Target) -> capture_error::Target {
+    match target {
+        Target::Region => capture_error::Target::Region,
+        Target::Window => capture_error::Target::Window,
+        Target::Display => capture_error::Target::Display,
+    }
 }
 
 impl Menu {
@@ -557,6 +579,49 @@ impl Menu {
             display_index: 0,
             switching: false,
             switch_to: None,
+            starting: false,
+        }
+    }
+
+    /// A capture shortcut with the bar up (shared `busy_route`, shipping's
+    /// in-bar shortcut handling): another mode or target switches in place,
+    /// clearing the hover and, off Window, the picked window; the same
+    /// screenshot target again recaptures. Like Tauri a18afc62, shortcuts
+    /// honour the bar's disabled Record button.
+    fn shortcut(&mut self, action: capture_error::Action) -> ShortcutEffect {
+        if self.starting || self.switching {
+            return ShortcutEffect::Ignored;
+        }
+        let screenshot_target =
+            (self.mode == MenuMode::Screenshot).then_some(route_target(self.target));
+        let activity = capture_error::Activity::Menu { screenshot_target };
+        match capture_error::busy_route(action, activity, None, false) {
+            capture_error::BusyRoute::SwitchMenu { record, target } => {
+                if record && self.recording_locked {
+                    return ShortcutEffect::Ignored;
+                }
+                self.mode = if record {
+                    MenuMode::Recording
+                } else {
+                    MenuMode::Screenshot
+                };
+                self.target = match target {
+                    capture_error::Target::Region => Target::Region,
+                    capture_error::Target::Window => Target::Window,
+                    capture_error::Target::Display => Target::Display,
+                };
+                self.hovered = None;
+                self.hover = None;
+                self.open = None;
+                self.drag = None;
+                if self.target != Target::Window {
+                    self.picked = None;
+                }
+                ShortcutEffect::Switched
+            }
+            capture_error::BusyRoute::RecaptureMenu { .. }
+            | capture_error::BusyRoute::RecaptureSelector(_) => ShortcutEffect::Recapture,
+            _ => ShortcutEffect::Ignored,
         }
     }
 
@@ -568,7 +633,7 @@ impl Menu {
     /// A drawn region of at least two DIPs each way (shipping
     /// `isCapturableSelection`), a picked window, or Full screen.
     fn can_start(&self) -> bool {
-        if self.switching {
+        if self.switching || self.starting {
             return false;
         }
         match self.target {
@@ -618,7 +683,7 @@ impl Menu {
         match field {
             Field::Aspect => true,
             // Shipping disables it with one display and while switching.
-            Field::Display => self.displays.len() > 1 && !self.switching,
+            Field::Display => self.displays.len() > 1 && !self.switching && !self.starting,
             _ => self.record.enabled(field),
         }
     }
@@ -799,6 +864,7 @@ impl Menu {
             None => None,
         };
         let state = PrimaryState {
+            starting: self.starting,
             switching_display: self.switching,
             ..PrimaryState::default()
         };
@@ -1805,9 +1871,13 @@ struct Capture {
     root: std::path::PathBuf,
     wake: std::sync::Arc<dyn Fn() + Send + Sync>,
     phase: Phase,
-    /// The display the Display select is switching to, preparing while the
-    /// bar stays on the current one.
-    switching: Option<Receiver<Prepared>>,
+    /// The display the Display select is switching to, or a recapture of the
+    /// bar's own display (true), preparing while the bar stays up.
+    switching: Option<(Receiver<Prepared>, bool)>,
+    /// The bar shows a snapshot of the capture UI itself: Full screen saves
+    /// that snapshot, and no countdown runs (shipping
+    /// `screenshot_countdown_seconds_for_capture_ui`).
+    recaptured: bool,
 }
 
 struct Overlay {
@@ -1890,8 +1960,9 @@ pub fn open(
     wake: impl Fn() + Send + Sync + Clone + 'static,
 ) -> std::result::Result<(), String> {
     if active() {
-        // Shipping ignores a second request (`CaptureInProgress`); bring the
-        // open controls forward so Enter and Esc keep reaching them.
+        // `live` routes requests to an open bar (`shortcut`) first; anything
+        // left is refused like shipping's `CaptureInProgress`. Bring the open
+        // controls forward so Enter and Esc keep reaching them.
         focus_overlay();
         return Ok(());
     }
@@ -1915,6 +1986,7 @@ pub fn open(
             wake,
             phase: Phase::Preparing(prepared),
             switching: None,
+            recaptured: false,
         })
     });
     Ok(())
@@ -1952,6 +2024,47 @@ fn prepare(
         wake();
     });
     prepared
+}
+
+/// The open bar's flow generation, for routing capture shortcuts to it
+/// (`CaptureShortcuts::set_selector_generation`). `None` while it prepares,
+/// switches, counts down, captures, or sits on a running take (that take's
+/// routes keep New Capture restoring its controls).
+pub fn selector_generation() -> Option<u64> {
+    CAPTURE.with(|c| {
+        let c = c.try_borrow().ok()?;
+        let capture = c.as_ref()?;
+        match &capture.phase {
+            Phase::Selecting(overlay, _)
+                if capture.switching.is_none() && !overlay.menu.recording_locked =>
+            {
+                Some(capture.flow.generation())
+            }
+            _ => None,
+        }
+    })
+}
+
+/// A capture shortcut or tray item while New Capture is open: the bar
+/// switches or recaptures (`capture_error::busy_route`). False when no bar
+/// is open, so the caller opens one.
+pub fn shortcut(action: capture_error::Action) -> bool {
+    CAPTURE.with(|c| {
+        let Ok(mut c) = c.try_borrow_mut() else {
+            return false;
+        };
+        let Some(capture) = c.as_mut() else {
+            return false;
+        };
+        if capture.switching.is_none()
+            && let Phase::Selecting(overlay, _) = &capture.phase
+            && overlay.menu.recording_locked
+        {
+            return false;
+        }
+        capture.shortcut(action);
+        true
+    })
 }
 
 fn focus_overlay() {
@@ -2117,21 +2230,45 @@ impl Capture {
         overlay.menu.switching = true;
         let _ = overlay.render(&self.tokens);
         let generation = self.flow.generation();
-        self.switching = Some(prepare(
-            generation,
-            &self.settings,
-            Some(id),
-            false,
-            &self.wake,
-        ));
+        let prepared = prepare(generation, &self.settings, Some(id), false, &self.wake);
+        self.switching = Some((prepared, false));
     }
 
-    /// Show the switched display once it is prepared. A failed switch keeps
-    /// the bar on its display; a cancelled flow ends with the bar.
+    /// A capture shortcut while the bar is up.
+    fn shortcut(&mut self, action: capture_error::Action) {
+        let Phase::Selecting(overlay, session) = &mut self.phase else {
+            return;
+        };
+        match overlay.menu.shortcut(action) {
+            ShortcutEffect::Ignored => {}
+            ShortcutEffect::Switched => {
+                load_microphones(overlay, &self.wake);
+                let _ = overlay.render(&self.tokens);
+            }
+            // Shipping freezes the screen with the open bar in it and opens
+            // the bar on that snapshot (its region and window selectors
+            // without the bar are not ported, so the bar reopens for them).
+            ShortcutEffect::Recapture if self.switching.is_none() => {
+                let id = session.display().id.clone();
+                overlay.menu.starting = true;
+                let _ = overlay.render(&self.tokens);
+                let mut settings = self.settings.clone();
+                settings.freeze_screen = true;
+                let generation = self.flow.generation();
+                let prepared = prepare(generation, &settings, Some(id), false, &self.wake);
+                self.switching = Some((prepared, true));
+            }
+            ShortcutEffect::Recapture => {}
+        }
+    }
+
+    /// Show the switched or recaptured display once it is prepared. A failed
+    /// switch keeps the bar as it was; a cancelled flow ends with the bar.
     fn finish_switch(&mut self) -> Result<()> {
-        let Some(receiver) = &self.switching else {
+        let Some((receiver, recapture)) = &self.switching else {
             return Ok(());
         };
+        let recapture = *recapture;
         let prepared = match receiver.try_recv() {
             Err(TryRecvError::Empty) => return Ok(()),
             Ok(prepared) => prepared,
@@ -2139,12 +2276,16 @@ impl Capture {
         };
         self.switching = None;
         match prepared {
-            Ok(Some((session, displays))) => self.show(session, displays)?,
+            Ok(Some((session, displays))) => {
+                self.recaptured = recapture;
+                self.show(session, displays)?;
+            }
             Ok(None) => {}
             Err(error) => {
-                eprintln!("Could not switch displays: {error}");
+                eprintln!("Could not prepare the capture: {error}");
                 if let Phase::Selecting(overlay, _) = &mut self.phase {
                     overlay.menu.switching = false;
+                    overlay.menu.starting = false;
                     let _ = overlay.render(&self.tokens);
                 }
             }
@@ -2308,10 +2449,18 @@ impl Capture {
                 },
                 None => window_target::Target::Display,
             }),
+            // A recaptured bar saves its snapshot of the capture UI.
+            (Target::Display, _) if self.recaptured => {
+                Choice::Session(window_target::Target::Display)
+            }
             (Target::Display, _) => Choice::Display,
             _ => return,
         };
-        let seconds = self.settings.screenshot_countdown_seconds;
+        let seconds = if self.recaptured {
+            0
+        } else {
+            self.settings.screenshot_countdown_seconds
+        };
         if self.flow.start_countdown(seconds).is_err() {
             return self.cancel();
         }
@@ -2931,6 +3080,51 @@ mod tests {
         assert!(!m.field_enabled(Field::Display) && !m.can_start());
         m.choose(Field::Display, 1);
         assert_eq!(m.switch_to, None);
+    }
+
+    #[test]
+    fn shortcuts_switch_the_open_bar_or_recapture_it() {
+        use capture_error::{Action, Target as T};
+        let mut m = menu(Target::Window, false);
+        m.picked = Some(Some(0));
+        m.hovered = Some(Some(0));
+        // Another target in Screenshot switches in place; Window keeps its
+        // pick, others drop it and the hover.
+        assert_eq!(
+            m.shortcut(Action::Screenshot(T::Window)),
+            ShortcutEffect::Recapture
+        );
+        assert_eq!(
+            m.shortcut(Action::Record(T::Window)),
+            ShortcutEffect::Switched
+        );
+        assert_eq!((m.mode, m.target), (MenuMode::Recording, Target::Window));
+        assert_eq!((m.picked, m.hovered), (Some(Some(0)), None));
+        // In Record, the Screenshot chord for the same target switches back.
+        assert_eq!(
+            m.shortcut(Action::Screenshot(T::Display)),
+            ShortcutEffect::Switched
+        );
+        assert_eq!((m.mode, m.target), (MenuMode::Screenshot, Target::Display));
+        assert_eq!(m.picked, None);
+        // New Capture switches Full screen to Region, then recaptures it.
+        assert_eq!(m.shortcut(Action::NewCapture), ShortcutEffect::Switched);
+        assert_eq!(m.target, Target::Region);
+        assert_eq!(m.shortcut(Action::NewCapture), ShortcutEffect::Recapture);
+        // A running take's bar keeps Record disabled; nothing routes while
+        // it recaptures or switches displays.
+        m.recording_locked = true;
+        assert_eq!(
+            m.shortcut(Action::Record(T::Region)),
+            ShortcutEffect::Ignored
+        );
+        m.recording_locked = false;
+        m.starting = true;
+        assert_eq!(
+            m.shortcut(Action::Screenshot(T::Window)),
+            ShortcutEffect::Ignored
+        );
+        assert_eq!(m.target, Target::Region);
     }
 
     #[test]

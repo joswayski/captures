@@ -134,8 +134,12 @@ Window open the bar on that target (shipping's bar-less selectors are not
 ported). After setup, `--live` registers the saved capture shortcuts with the
 shared `CaptureShortcuts` owner, which takes over Print Screen and Win+Shift+S
 from Snipping Tool like shipping: New Capture and the screenshot shortcuts open
-the bar on their target, the recording shortcuts open it in Record, and presses
-while New Capture is open are dropped (switching it in place is not ported).
+the bar on their target, the recording shortcuts open it in Record, and while
+the bar is up every chord and tray row routes to it through the shared
+`busy_route`: another mode or target switches it in place, and the same
+screenshot target again freezes the screen with the bar in it and reopens the
+bar on that snapshot (no countdown; Full screen saves that snapshot). Unit-tested;
+no chord was pressed physically while the bar was up.
 An active Preferences shortcut recorder releases the registrations. A key
 press skips the tray menu's 200 ms fade wait. A physical Windows 11 check
 (4K, 150%, injected input) passed every registered chord, the tray rows, the
