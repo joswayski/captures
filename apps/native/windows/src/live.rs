@@ -379,9 +379,10 @@ pub fn service() {
             Err(error) => show_error(&error),
         },
         None => {}
-        // Shipping also scrolls to the row and highlights it; Windows
-        // Preferences cannot reveal a row yet, so it opens at the top.
-        Some(Outcome::Preferences(_row)) => open_preferences(&options),
+        Some(Outcome::Preferences(row)) => {
+            open_preferences(&options);
+            crate::host::with_host(|h| h.show_target(row));
+        }
         Some(Outcome::Record(handoff)) => {
             let thread = RESIDENT.with(|r| r.borrow().as_ref().map(|r| r.thread));
             if let Some(thread) = thread {

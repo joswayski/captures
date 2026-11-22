@@ -418,6 +418,15 @@ pub fn render(options: &Options, path: &std::path::Path) -> Result<()> {
             scene.activate(crate::scene::Target::Nav(crate::scene::UPDATES_SECTION));
         }
         scene.layout(&g, w as f32, h as f32)?;
+        // `--select auto-start-on-selection` (a capture-bar link's target id)
+        // draws that row revealed and highlighted.
+        if let Some(target) = options
+            .select
+            .as_deref()
+            .and_then(captures_app::capture_menu::PreferenceTarget::from_id)
+        {
+            scene.reveal_target(target);
+        }
         if let Some(query) = &options.find {
             // As if Ctrl+F was pressed and the query typed.
             scene.find_reveal(&g);

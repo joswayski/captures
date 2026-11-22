@@ -10,6 +10,7 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
+use captures_app::capture_menu::PreferenceTarget;
 use captures_app::controls::select;
 use captures_app::motion::CubicBezier;
 use captures_app::preferences::{
@@ -119,6 +120,22 @@ fn find_count(item: Item) -> usize {
         Item::SelectGrid(keys) => keys.len(),
         _ => 1,
     }
+}
+
+/// The first find target of `item`, by index in `Scene::find_targets`.
+fn find_target_of(item: Item) -> Option<usize> {
+    let mut index = 0;
+    for (_, items) in CARDS.iter() {
+        // The card header.
+        index += 1;
+        for &other in *items {
+            if other == item {
+                return Some(index);
+            }
+            index += find_count(other);
+        }
+    }
+    None
 }
 
 /// One row of a settings card.
@@ -978,6 +995,8 @@ pub struct Scene {
     /// Every find target in document order; nodes are fixed, text and
     /// boxes follow the layout.
     find_targets: Vec<FindTarget>,
+    /// The find target lit by a capture-bar link (`preference-target-highlight`).
+    target_highlight: Option<usize>,
     /// Shortcut-row and grid-cell boxes from the last `layout_item`.
     sub_boxes: Vec<Rect>,
     /// The window has keyboard focus; the caret shows only then.
@@ -1136,6 +1155,7 @@ impl Scene {
             save_mark: None,
             header_row: (0., 0.),
             find_targets: Vec::new(),
+            target_highlight: None,
             sub_boxes: Vec::new(),
             window_focused: true,
             text_selection: None,
@@ -4198,7 +4218,7 @@ impl Scene {
             .min(self.find.matches.len().saturating_sub(1));
         for i in 0..self.find_targets.len() {
             let node = self.find_targets[i].node;
-            let shown = self.find.matches.contains(&i);
+            let shown = self.find.matches.contains(&i) || self.target_highlight == Some(i);
             if self.nodes[node].visible != shown {
                 self.nodes[node].visible = shown;
                 self.nodes[node].props = true;
@@ -4243,6 +4263,53 @@ impl Scene {
         // `scrollIntoView({ behavior: "smooth", block: "center" })`.
         let view = self.viewport_rect().h;
         self.set_scroll(bounds.y + bounds.h / 2. - view / 2., true);
+    }
+
+    /// A capture-bar link's row (shipping `requestedPreferenceTarget`): the
+    /// Capture section lights, the row scrolls to the centre and takes focus,
+    /// and its highlight fades in (`preference-target-highlight-in`) until
+    /// [`Scene::clear_target_highlight`].
+    pub fn reveal_target(&mut self, target: PreferenceTarget) {
+        let Some(row) = FLAGS.iter().position(|&key| key == target.setting_key()) else {
+            return;
+        };
+        let item = Item::Switch(row + 1);
+        let Some(index) = find_target_of(item) else {
+            return;
+        };
+        self.clear_target_highlight();
+        if let Some((section, _)) = CARDS.iter().find(|(_, items)| items.contains(&item)) {
+            self.pinned = true;
+            self.set_active(*section);
+        }
+        let bounds = self.find_targets[index].bounds;
+        let view = self.viewport_rect().h;
+        self.set_scroll(bounds.y + bounds.h / 2. - view / 2., true);
+        // `focus({ preventScroll: true })`; a disabled input takes no focus.
+        if self.rows[row + 1].enabled {
+            self.set_focus(Some(Target::Row(row + 1)), false);
+        }
+        self.target_highlight = Some(index);
+        let node = self.find_targets[index].node;
+        self.nodes[node].visible = true;
+        self.nodes[node].dirty = true;
+        self.animate_curve(node, Prop::Opacity, (0., 1.), "dur-3", "ease-out");
+    }
+
+    /// The highlight's `PREFERENCE_HIGHLIGHT` ended: it goes at once, as
+    /// shipping drops the class, unless Find still matches the row.
+    pub fn clear_target_highlight(&mut self) {
+        let Some(index) = self.target_highlight.take() else {
+            return;
+        };
+        let node = self.find_targets[index].node;
+        self.motions
+            .retain(|m| !(m.node == node && m.prop == Prop::Opacity));
+        let target = &mut self.nodes[node];
+        target.visible = self.find.matches.contains(&index);
+        target.opacity = 1.;
+        target.dirty = true;
+        target.props = true;
     }
 
     /// Ctrl+F (`revealFind`): open the bar, focus the input, select its text.
@@ -5236,7 +5303,7 @@ impl Scene {
             }
             Kind::Match(index) => {
                 let radius = t.n("r-lg");
-                if self.find.current == Some(index) {
+                if self.find.current == Some(index) || self.target_highlight == Some(index) {
                     // `0 0 0 2px` accent at 0.62 and a `0 0 20px` glow at 0.18.
                     gfx::glow(dc, all, radius, 20., t.color_alpha("theme-accent", 0.18))?;
                     gfx::ring(dc, all, radius, 0., 2., t.color_alpha("theme-accent", 0.62))?;
@@ -5787,6 +5854,55 @@ mod tests {
         );
         // The Recording card's switches follow the Capture ones.
         assert!(CARDS[4].1.contains(&Item::Switch(FLAGS.len() + 1)));
+    }
+
+    #[test]
+    fn capture_bar_links_reveal_and_highlight_their_row() {
+        let tokens = crate::appearance::tokens(Some("light"), &Default::default());
+        let g = Gfx::new(&tokens, false).unwrap();
+        let file = std::env::temp_dir().join("captures-reveal-target-settings.json");
+        let mut scene = Scene::new(tokens, file, String::new());
+        scene.layout(&g, 900., 600.).unwrap();
+        for (target, key) in [
+            (
+                PreferenceTarget::AutoStartOnSelection,
+                "auto_start_on_selection",
+            ),
+            (
+                PreferenceTarget::IncludeRecordingControlsInCaptures,
+                "include_recording_controls_in_captures",
+            ),
+        ] {
+            scene.reveal_target(target);
+            let row = FLAGS.iter().position(|k| *k == key).unwrap() + 1;
+            let index = scene.target_highlight.expect("a highlight");
+            let FindTarget {
+                node,
+                ref text,
+                bounds,
+            } = scene.find_targets[index];
+            assert!(text.starts_with(scene.rows[row].title), "{text}");
+            assert!(scene.nodes[node].visible);
+            assert_eq!(scene.focus, Some(Target::Row(row)));
+            assert!(!scene.focus_visible);
+            assert_eq!(scene.active, CARDS[2].0, "the Capture section lights");
+            // Centred in the viewport (the column scrolls far enough here).
+            let view = scene.viewport_rect().h;
+            let centre = bounds.y + bounds.h / 2. - scene.scroll;
+            assert!(
+                (centre - view / 2.).abs() <= 1.,
+                "{centre} vs {}",
+                view / 2.
+            );
+        }
+        // A newer link moves the highlight; the old row's is gone.
+        let first = find_target_of(Item::Switch(2)).unwrap();
+        assert!(!scene.nodes[scene.find_targets[first].node].visible);
+        let index = scene.target_highlight.unwrap();
+        let node = scene.find_targets[index].node;
+        scene.clear_target_highlight();
+        assert_eq!(scene.target_highlight, None);
+        assert!(!scene.nodes[node].visible);
     }
 
     #[test]

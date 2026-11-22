@@ -226,9 +226,14 @@ checkboxes and the note); unit- and render-checked (`--select focus-segment`
 and friends), not exercised live. The note's "These controls won't show…"
 and, with Auto-capture on, its auto-capture copy are shipping's Preferences
 links (external icon, `--glass-hover` when lit); following one closes the bar
-and opens Preferences, which cannot yet scroll to and highlight the row as
-shipping does. Like shipping's `beginPanelDrag`, the bar's blank glass drags
-it, kept 8 px inside the display, until the bar closes (unit-tested, not
+and opens Preferences, which lights Capture in the sidebar, scrolls the row to
+the centre, focuses its switch and frames it with shipping's
+`preference-target-highlight` (accent ring and glow, fading in over `--dur-3`,
+at once under reduced motion) for `PREFERENCE_HIGHLIGHT`'s 2.4 s; render it with
+`--scene preferences --select auto-start-on-selection` or
+`include-recording-controls-in-captures` (unit- and render-checked; a live link
+click was not exercised). Like shipping's `beginPanelDrag`, the bar's blank
+glass drags it, kept 8 px inside the display, until the bar closes (unit-tested, not
 dragged physically; the cursor stays the arrow, as on the recording controls,
 since Windows has no stock grab cursor). Confirming hands the capture flow
 to the shared recording worker, which verifies FFmpeg, prepares the session,

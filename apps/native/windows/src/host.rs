@@ -37,6 +37,8 @@ const WM_APP_WAKE: u32 = WM_APP + 2;
 const WM_APP_MICROPHONES: u32 = WM_APP + 3;
 const WM_MOUSELEAVE: u32 = 0x02A3;
 const TIMER_MOTION: usize = 1;
+/// A capture-bar link's row highlight ends (`PREFERENCE_HIGHLIGHT`).
+const TIMER_HIGHLIGHT: usize = 2;
 const SEGMENTS: usize = 16;
 
 thread_local! {
@@ -101,6 +103,8 @@ pub struct Host {
     pub update_step: Option<crate::updates::Step>,
     /// Check for Updates: scroll to the Updates card after the next layout.
     jump_updates: bool,
+    /// A capture-bar link: reveal and highlight this row after the next layout.
+    reveal: Option<captures_app::capture_menu::PreferenceTarget>,
     /// A `WM_APP_WAKE` was posted since the loop last checked `need`.
     woken: bool,
     /// The IME is associated (a text field has focus).
@@ -230,6 +234,7 @@ impl Host {
                 open_feedback: false,
                 update_step: None,
                 jump_updates: false,
+                reveal: None,
                 woken: false,
                 ime: false,
                 dragging: false,
@@ -294,6 +299,12 @@ impl Host {
         if std::mem::take(&mut self.jump_updates) {
             self.scene
                 .activate(crate::scene::Target::Nav(crate::scene::UPDATES_SECTION));
+        }
+        if let Some(target) = self.reveal.take() {
+            self.scene.reveal_target(target);
+            // A newer link restarts the timer, as shipping clears its timeout.
+            let ms = captures_app::capture_menu::PREFERENCE_HIGHLIGHT.as_millis() as u32;
+            unsafe { SetTimer(Some(self.hwnd), TIMER_HIGHLIGHT, ms, None) };
         }
         self.scene.prepare(&self.g)?;
         let s = self.scene.scale;
@@ -652,6 +663,13 @@ impl Host {
         self.need = true;
     }
 
+    /// Scroll to a capture-bar link's row and highlight it, as shipping's
+    /// `requestedPreferenceTarget`.
+    pub fn show_target(&mut self, target: captures_app::capture_menu::PreferenceTarget) {
+        self.reveal = Some(target);
+        self.need = true;
+    }
+
     /// Rebuild the tokens from the saved appearance and accent; every surface
     /// redraws in the new palette.
     fn retheme(&mut self) {
@@ -800,6 +818,13 @@ impl Host {
                     }
                     self.timer = false;
                 }
+                self.need = true;
+            }
+            WM_TIMER if wp.0 == TIMER_HIGHLIGHT => {
+                unsafe {
+                    let _ = KillTimer(Some(self.hwnd), TIMER_HIGHLIGHT);
+                }
+                self.scene.clear_target_highlight();
                 self.need = true;
             }
             WM_APP_LOGIN => self.login_results(),
