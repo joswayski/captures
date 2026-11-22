@@ -112,9 +112,9 @@ gone from the repository. The manifest retains a separately signed
 cannot install an AppImage fallback. Once on native, Debian installs use the
 manual package update path.
 
-Native per-file update patches have release tooling that no workflow runs yet.
-Wire it in only when native publication resumes, with Win32 and GTK packages
-built and published per target. For each release it would:
+Native per-file update patches (`capturespatch1`) have release tooling that no
+workflow runs; they serve only signed schema-2 development manifests. The public
+feed uses [patch updates](#patch-updates) instead. For each release it would:
 
 1. `scripts/native-update-retain.sh download "$BASES"` fetches the retained full
    archives (`<version>--<target>.<tar.gz|zip>`) from the draft
@@ -187,6 +187,52 @@ install one staging build, dispatch a higher version, and update from the app.
 Delete old `native-staging-*` releases when no longer needed. Staging builds
 still import the installed profile on first launch into the shared `Captures
 Native Preview` profile directory.
+
+### Patch updates
+
+An update from a recent release can download a patch instead of the whole
+updater artifact (`crates/captures-app/src/updater/preview/delta.rs`), as dbm
+does. Each platform in `latest.json` may list `patches`: `{from, url, size,
+signature}`. A patch is a bzip2 bsdiff that rebuilds a signed release file
+from the installed copy, so the result faces the same version- and
+target-bound signature check as a full download:
+
+- **AppImage:** from the running `$APPIMAGE` to the new AppImage. Its squashfs
+  stays compressed, so the patch carries the changed files' compressed blocks
+  (17 MB of 113 MB from 2026.11.21.9 to .10).
+- **macOS:** the `.app.tar.gz` is compressed, so patches rebuild
+  `Captures-<version>-<target>.app.tar`, a deterministic tar of the bundle
+  (sorted entries, regular files and folders only, modes 755/644, no owners or
+  times). The client tars the installed app the same way; the helper installs
+  the rebuilt tar like the `.tar.gz`. Only that tar's `.sig` is published (1 MB
+  of 32 MB from .9 to .10). DMG and updated installs hold identical bundles.
+- **Windows and Debian:** always the full download. The NSIS installer is
+  solid-compressed (a bsdiff is as large as the installer) and leaves no copy
+  to patch from; patching Windows would need an install path that replaces
+  files without NSIS.
+
+A missing or changed base, a failed download or a signature mismatch falls
+back to the full artifact in the same attempt, so a patch only makes an update
+smaller. Clients from before patch support ignore the field.
+
+`scripts/native-preview-patches.mjs generate` runs after `collect` in each
+package job. It downloads the target's artifact from the five newest earlier
+native releases of the same feed (public releases with `captures-native.json`,
+or `native-staging-*`), writes `Captures-<version>-<target>.from-<base>.patch`
+with `native_preview_update_helper --make-patch` (which checks that the patch
+rebuilds the new file exactly) and, for macOS, signs the bundle tar from
+`--bundle-tar`. Patches not smaller than half the full artifact are dropped.
+Failures are warnings; the release continues with full downloads. `manifest`
+lists whatever patches the release carries. Patches stay on their releases.
+
+The staging feed always makes patches. Public releases make them only when the
+repository variable `CAPTURES_UPDATE_PATCHES` is `true`. Prove a patch update on
+staging first: install one staging build, dispatch a higher version, and check
+that Preferences offers the patch size and the update installs. Then:
+
+```sh
+gh variable set CAPTURES_UPDATE_PATCHES --repo joswayski/captures --body true
+```
 
 ### Startup recovery companion
 

@@ -1,6 +1,7 @@
 //! Installed Preview acquisition using the existing Tauri-compatible manifest.
 //! Unlike development manifests, latest.json is not itself signed. Only verified
 //! artifact bytes, including their signed version/target filename, can install.
+pub mod delta;
 pub mod recovery;
 
 #[cfg(all(test, windows))]
@@ -100,6 +101,9 @@ struct Asset {
     url: String,
     signature: String,
     size: Option<u64>,
+    /// Parsed leniently by [`delta::select`]; see [`delta`].
+    #[serde(default)]
+    patches: serde_json::Value,
 }
 
 pub struct Pending {
@@ -109,6 +113,8 @@ pub struct Pending {
     signature: String,
     key: PublicKey,
     installation: InstallTarget,
+    patch: Option<delta::Offer>,
+    full_size: u64,
 }
 
 pub struct Download {
@@ -237,19 +243,23 @@ impl Client {
             if size > MAX_ARTIFACT_BYTES {
                 return Err(Error::Size);
             }
+            let patch = delta::select(&asset.patches, &self.current, size, &self.installation);
             return Ok(Some(Pending {
                 info: ReleaseInfo {
                     renderer: self.renderer,
                     target: self.target,
                     version: version.to_string(),
                     notes: manifest.notes,
-                    size,
+                    // What this update downloads, the patch when one applies.
+                    size: patch.as_ref().map_or(size, |patch| patch.size),
                 },
                 http: self.http.clone(),
                 url,
                 signature: asset.signature.clone(),
                 key: self.key.clone(),
                 installation: self.installation.clone(),
+                patch,
+                full_size: size,
             }));
         }
         Err(last_error)
@@ -267,7 +277,9 @@ impl Pending {
     }
 
     /// [`Pending::download`], reporting `verifying` once every byte has
-    /// arrived and before the signature and hash checks run.
+    /// arrived and before the signature and hash checks run. A listed patch
+    /// from this installation is tried first; any failure except cancellation
+    /// downloads the full artifact instead, restarting progress at its size.
     pub fn download_verifying(
         &self,
         directory: &Path,
@@ -275,20 +287,76 @@ impl Pending {
         mut progress: impl FnMut(u64, u64),
         verifying: impl FnOnce(),
     ) -> Result<Download, Error> {
-        check_cancel(cancel)?;
-        let mut response = successful(
-            self.http
-                .get(self.url.clone())
-                .send()
-                .map_err(|_| Error::Network)?,
+        let mut verifying = Some(verifying);
+        if let Some(patch) = &self.patch {
+            match self.rebuild(patch, cancel, &mut progress, &mut verifying) {
+                Ok(bytes) => return self.keep(directory, &bytes, &patch.signature, cancel),
+                Err(Error::Cancelled) => return Err(Error::Cancelled),
+                // Any other patch failure falls back to the full artifact.
+                Err(_) => {}
+            }
+        }
+        let bytes = self.fetch(
+            self.url.clone(),
+            MAX_ARTIFACT_BYTES,
+            self.full_size,
+            cancel,
+            &mut progress,
         )?;
-        if response
-            .content_length()
-            .is_some_and(|size| size > MAX_ARTIFACT_BYTES)
-        {
+        if let Some(verifying) = verifying.take() {
+            verifying();
+        }
+        verify(
+            &self.key,
+            &self.signature,
+            &bytes,
+            self.info.target,
+            &self.info.version,
+        )?;
+        self.keep(directory, &bytes, &self.signature, cancel)
+    }
+
+    /// The release's signed file, rebuilt from the installed copy.
+    fn rebuild(
+        &self,
+        patch: &delta::Offer,
+        cancel: &CancelToken,
+        progress: &mut impl FnMut(u64, u64),
+        verifying: &mut Option<impl FnOnce()>,
+    ) -> Result<Vec<u8>, Error> {
+        let bytes = self.fetch(patch.url()?, patch.size, patch.size, cancel, progress)?;
+        if bytes.len() as u64 != patch.size {
             return Err(Error::Size);
         }
-        let total = response.content_length().unwrap_or(self.info.size);
+        let rebuilt = delta::apply(&delta::base(&self.installation)?, &bytes, cancel)?;
+        verify_named(
+            &self.key,
+            &patch.signature,
+            &rebuilt,
+            &delta::target_name(self.info.target, &self.info.version),
+        )?;
+        // Only now: a fallback's progress must still reach the UI, which stops
+        // following progress once it shows Verifying.
+        if let Some(verifying) = verifying.take() {
+            verifying();
+        }
+        Ok(rebuilt)
+    }
+
+    fn fetch(
+        &self,
+        url: Url,
+        limit: u64,
+        expected: u64,
+        cancel: &CancelToken,
+        progress: &mut impl FnMut(u64, u64),
+    ) -> Result<Vec<u8>, Error> {
+        check_cancel(cancel)?;
+        let mut response = successful(self.http.get(url).send().map_err(|_| Error::Network)?)?;
+        if response.content_length().is_some_and(|size| size > limit) {
+            return Err(Error::Size);
+        }
+        let total = response.content_length().unwrap_or(expected);
         let mut bytes = Vec::new();
         let mut buffer = [0u8; 64 * 1024];
         loop {
@@ -297,20 +365,23 @@ impl Pending {
             if count == 0 {
                 break;
             }
-            if bytes.len() as u64 + count as u64 > MAX_ARTIFACT_BYTES {
+            if bytes.len() as u64 + count as u64 > limit {
                 return Err(Error::Size);
             }
             bytes.extend_from_slice(&buffer[..count]);
             progress(bytes.len() as u64, total);
         }
-        verifying();
-        verify(
-            &self.key,
-            &self.signature,
-            &bytes,
-            self.info.target,
-            &self.info.version,
-        )?;
+        Ok(bytes)
+    }
+
+    /// Persist verified bytes and the signature the helper checks again.
+    fn keep(
+        &self,
+        directory: &Path,
+        bytes: &[u8],
+        signature: &str,
+        cancel: &CancelToken,
+    ) -> Result<Download, Error> {
         check_cancel(cancel)?;
         let directory = tempfile::Builder::new()
             .prefix("captures-preview-")
@@ -319,15 +390,15 @@ impl Pending {
             .write(true)
             .create_new(true)
             .open(directory.path().join("artifact"))?;
-        artifact.write_all(&bytes)?;
+        artifact.write_all(bytes)?;
         artifact.sync_all()?;
         Ok(Download {
             directory,
-            sha256: format!("{:x}", Sha256::digest(&bytes)),
+            sha256: format!("{:x}", Sha256::digest(bytes)),
             request: InstallRequest {
                 version: self.info.version.clone(),
                 target: self.info.target,
-                signature: self.signature.clone(),
+                signature: signature.to_owned(),
                 installation: self.installation.clone(),
                 executable: std::env::current_exe()?,
                 preferences_visible: false,
@@ -346,7 +417,15 @@ fn verify(
     target: Target,
     version: &str,
 ) -> Result<(), Error> {
-    verify_named(key, signature, bytes, &artifact_name(target, version))
+    // A macOS patch rebuilds the same release's signed `.app.tar`.
+    verify_named(key, signature, bytes, &artifact_name(target, version)).or_else(|error| {
+        match target {
+            Target::MacArm64 | Target::MacX64 => {
+                verify_named(key, signature, bytes, &delta::target_name(target, version))
+            }
+            _ => Err(error),
+        }
+    })
 }
 
 fn verify_named(
@@ -489,6 +568,12 @@ pub fn verify_package(version: &str, artifact: &Path, signature: &Path) -> Resul
     // installs' cutover. Native AppImage acquisition remains format-bound.
     if target == Target::LinuxX64 && artifact.extension().is_some_and(|ext| ext == "deb") {
         name = name.replace(".AppImage", ".deb");
+    }
+    // The bundle tar macOS patches rebuild.
+    if matches!(target, Target::MacArm64 | Target::MacX64)
+        && artifact.extension().is_some_and(|ext| ext == "tar")
+    {
+        name = delta::target_name(target, version);
     }
     verify_named(
         &key,
@@ -828,9 +913,16 @@ fn windows_installer_command(
     Ok(command)
 }
 
+/// Extracts the signed `.app.tar.gz`, or the uncompressed `.app.tar` a patch
+/// rebuilt (a tar starts with the bundle's name, never the gzip magic).
 fn extract_app(payload: &[u8], destination: &Path) -> Result<(), Error> {
     use std::path::Component;
-    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(payload));
+    let reader: Box<dyn Read + '_> = if payload.starts_with(&[0x1f, 0x8b]) {
+        Box::new(flate2::read::GzDecoder::new(payload))
+    } else {
+        Box::new(payload)
+    };
+    let mut archive = tar::Archive::new(reader);
     let mut size = 0u64;
     for (count, item) in archive.entries()?.enumerate() {
         if count >= staging::MAX_ENTRIES {
@@ -977,6 +1069,163 @@ mod tests {
             }
             assert_eq!(server.join().unwrap(), ["/latest.json", "/package"]);
         }
+    }
+
+    #[test]
+    fn patch_updates_rebuild_the_signed_file_or_fall_back_to_the_full_artifact() {
+        let pair = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
+        let key = pair.pk.to_box().unwrap().to_string();
+        let sign = |bytes: &[u8], name: &str| {
+            let comment = format!("timestamp:1\tfile:{name}");
+            let signature =
+                minisign::sign(None, &pair.sk, Cursor::new(bytes), Some(&comment), None).unwrap();
+            crate::editor_layers::base64(signature.into_string().as_bytes())
+        };
+        let root = tempfile::tempdir().unwrap();
+        let old: Vec<u8> = (0..300_000u32).map(|n| (n % 253) as u8).collect();
+        let mut new = old.clone();
+        new[4096..4105].copy_from_slice(b"new build");
+
+        // AppImage: the patch rebuilds the AppImage from $APPIMAGE. Then the
+        // same release with a changed installed copy downloads in full.
+        let appimage = root.path().join("Captures.AppImage");
+        let name = "Captures-2026.11.2110-x86_64-unknown-linux-gnu.AppImage";
+        let patch = delta::make(&old, &new).unwrap();
+        for (installed, via_patch) in [(old.clone(), true), (b"edited".to_vec(), false)] {
+            fs::write(&appimage, &installed).unwrap();
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let signature = sign(&new, name);
+            let metadata = serde_json::to_vec(&serde_json::json!({
+                "version": "2026.11.2110",
+                "platforms": {"linux-x86_64": {
+                    "url": format!("{url}/full"), "signature": signature, "size": new.len(),
+                    "patches": [
+                        {"from": "2026.11.2108", "url": format!("{url}/older"), "size": 1, "signature": signature},
+                        {"from": "2026.11.2109", "url": format!("{url}/patch"), "size": patch.len(), "signature": signature},
+                    ]
+                }}
+            }))
+            .unwrap();
+            let mut responses = vec![(200, metadata), (200, patch.clone())];
+            if !via_patch {
+                responses.push((200, new.clone()));
+            }
+            let server = super::super::tests::serve(listener, responses);
+            let client = Client::new(
+                &[&format!("{url}/latest.json")],
+                &key,
+                Renderer::Wgpu,
+                Target::LinuxX64,
+                "2026.11.2109",
+                InstallTarget::AppImage {
+                    path: appimage.clone(),
+                },
+            )
+            .unwrap();
+            let cancel = CancelToken::default();
+            let pending = client.check(&cancel).unwrap().unwrap();
+            assert_eq!(pending.info.size, patch.len() as u64);
+            let totals = std::cell::RefCell::new(Vec::new());
+            let directory = tempfile::tempdir().unwrap();
+            let download = pending
+                .download_verifying(
+                    directory.path(),
+                    &cancel,
+                    |_, total| totals.borrow_mut().push(Some(total)),
+                    || totals.borrow_mut().push(None),
+                )
+                .unwrap();
+            // Verifying comes once, last, also after a failed patch.
+            let totals = totals.into_inner();
+            assert_eq!(totals.iter().filter(|total| total.is_none()).count(), 1);
+            assert_eq!(totals.last(), Some(&None));
+            assert_eq!(
+                fs::read(download.directory.path().join("artifact")).unwrap(),
+                new
+            );
+            let mut expected = vec!["/latest.json", "/patch"];
+            if !via_patch {
+                expected.push("/full");
+                assert_eq!(totals[totals.len() - 2], Some(new.len() as u64));
+            }
+            assert_eq!(server.join().unwrap(), expected);
+        }
+
+        // macOS: the patch rebuilds the release's signed bundle tar from the
+        // installed app, which verifies and extracts like the `.tar.gz`.
+        let installed = root.path().join("installed/Captures.app");
+        let released = root.path().join("released/Captures.app");
+        for (app, binary) in [(&installed, &old), (&released, &new)] {
+            fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
+            fs::write(app.join("Contents/MacOS/captures"), binary).unwrap();
+        }
+        let (base, target) = (
+            delta::bundle_tar(&installed).unwrap(),
+            delta::bundle_tar(&released).unwrap(),
+        );
+        let patch = delta::make(&base, &target).unwrap();
+        let tar_name = "Captures-2026.11.2110-aarch64-apple-darwin.app.tar";
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let metadata = serde_json::to_vec(&serde_json::json!({
+            "version": "2026.11.2110",
+            "platforms": {"darwin-aarch64": {
+                "url": format!("{url}/full"),
+                "signature": sign(b"full", "Captures-2026.11.2110-aarch64-apple-darwin.app.tar.gz"),
+                "size": 10 * patch.len(),
+                "patches": [{"from": "2026.11.2109", "url": format!("{url}/patch"),
+                    "size": patch.len(), "signature": sign(&target, tar_name)}]
+            }}
+        }))
+        .unwrap();
+        let server = super::super::tests::serve(listener, vec![(200, metadata), (200, patch)]);
+        let client = Client::new(
+            &[&format!("{url}/latest.json")],
+            &key,
+            Renderer::Appkit,
+            Target::MacArm64,
+            "2026.11.2109",
+            InstallTarget::Mac { app: installed },
+        )
+        .unwrap();
+        let cancel = CancelToken::default();
+        let directory = tempfile::tempdir().unwrap();
+        let download = client
+            .check(&cancel)
+            .unwrap()
+            .unwrap()
+            .download(directory.path(), &cancel, |_, _| {})
+            .unwrap();
+        let artifact = fs::read(download.directory.path().join("artifact")).unwrap();
+        assert_eq!(artifact, target);
+        // What the helper checks again before installing.
+        let key = PublicKey::decode(&key).unwrap();
+        verify(
+            &key,
+            &download.request.signature,
+            &artifact,
+            Target::MacArm64,
+            "2026.11.2110",
+        )
+        .unwrap();
+        assert!(
+            verify(
+                &key,
+                &download.request.signature,
+                &artifact,
+                Target::MacArm64,
+                "2026.11.2111"
+            )
+            .is_err()
+        );
+        let stage = tempfile::tempdir().unwrap();
+        extract_app(&artifact, stage.path()).unwrap();
+        assert_eq!(
+            fs::read(stage.path().join("Captures.app/Contents/MacOS/captures")).unwrap(),
+            new
+        );
+        assert_eq!(server.join().unwrap(), ["/latest.json", "/patch"]);
     }
 
     #[test]

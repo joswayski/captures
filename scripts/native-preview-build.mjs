@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import {
   copyFileSync,
+  existsSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -40,6 +41,32 @@ export function updaterArtifactName(target, version) {
   if (!TARGETS[target] || !/^\d+\.\d+\.\d+$/u.test(version))
     throw new Error("Invalid native release target/version");
   return `Captures-${version}-${target}${TARGETS[target].suffix}`;
+}
+
+/** The signed file a patch update rebuilds (`delta::target_name`): macOS
+ * patches rebuild the uncompressed bundle tar, AppImage patches the AppImage. */
+export function patchTargetName(target, version) {
+  return target.includes("apple-darwin")
+    ? updaterArtifactName(target, version).replace(/\.gz$/u, "")
+    : updaterArtifactName(target, version);
+}
+
+export function patchName(target, version, base) {
+  return `Captures-${version}-${target}.from-${base}.patch`;
+}
+
+/** Patch files in `names` for this release and target, newest base first. */
+export function patchFiles(names, target, version) {
+  const prefix = `Captures-${version}-${target}.from-`;
+  const order = (version) => version.split(".").map(Number);
+  return names
+    .filter((name) => name.startsWith(prefix) && name.endsWith(".patch"))
+    .map((name) => ({ name, from: name.slice(prefix.length, -".patch".length) }))
+    .filter(({ from }) => /^\d+\.\d+\.\d+$/u.test(from))
+    .sort((left, right) => {
+      const [a, b] = [order(right.from), order(left.from)];
+      return a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+    });
 }
 
 // Windows and Linux package the Win32 and GTK hosts, each its own pinned
@@ -304,9 +331,10 @@ export function manifest(directory, version, repository, tag, notes = "") {
     "linux-x86_64-deb",
     updaterArtifactName("x86_64-unknown-linux-gnu", version).replace(/\.AppImage$/u, ".deb"),
   ]);
-  for (const [platform, name] of entries) {
-    const path = join(directory, name);
-    const signature = readFileSync(`${path}.sig`, "utf8").trim();
+  const url = (name) =>
+    `https://github.com/${repository}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(name)}`;
+  const signature = (name) => {
+    const signature = readFileSync(join(directory, `${name}.sig`), "utf8").trim();
     const text = Buffer.from(signature, "base64").toString("utf8");
     if (
       !text
@@ -318,11 +346,28 @@ export function manifest(directory, version, repository, tag, notes = "") {
     ) {
       throw new Error(`Updater signature does not bind the native target/version: ${name}`);
     }
+    return signature;
+  };
+  for (const [platform, name] of entries) {
     platforms[platform] = {
-      url: `https://github.com/${repository}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(name)}`,
-      signature,
-      size: statSync(path).size,
+      url: url(name),
+      signature: signature(name),
+      size: statSync(join(directory, name)).size,
     };
+  }
+  // Patch updates written by native-preview-patches.mjs, when there are any.
+  const names = readdirSync(directory);
+  for (const [target, specification] of Object.entries(TARGETS)) {
+    const patches = patchFiles(names, target, version);
+    const rebuiltName = patchTargetName(target, version);
+    if (!patches.length || !existsSync(join(directory, `${rebuiltName}.sig`))) continue;
+    const rebuilt = signature(rebuiltName);
+    platforms[specification.platform].patches = patches.map(({ name, from }) => ({
+      from,
+      url: url(name),
+      size: statSync(join(directory, name)).size,
+      signature: rebuilt,
+    }));
   }
   return { version, notes, platforms };
 }

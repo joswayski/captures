@@ -148,3 +148,50 @@ test("the shared updater manifest requires every version-bound native artifact a
     /does not bind/u,
   );
 });
+
+test("the manifest lists patch updates newest base first, signed for the file they rebuild", () => {
+  const directory = mkdtempSync(join(tmpdir(), "captures-native-patches-"));
+  const version = "2026.11.1001";
+  const sign = (name) =>
+    writeFileSync(
+      join(directory, `${name}.sig`),
+      Buffer.from(`trusted comment: timestamp:1\tfile:${name}\n`).toString("base64"),
+    );
+  const names = [
+    ...Object.keys(TARGETS).map((target) => updaterArtifactName(target, version)),
+    "Captures-2026.11.1001-x86_64-unknown-linux-gnu.deb",
+  ];
+  for (const name of names) {
+    writeFileSync(join(directory, name), "full artifact");
+    sign(name);
+  }
+  sign("Captures-2026.11.1001-aarch64-apple-darwin.app.tar");
+  for (const name of [
+    // 902 sorts after 1001 as text but is the older build.
+    "Captures-2026.11.1001-aarch64-apple-darwin.from-2026.11.902.patch",
+    "Captures-2026.11.1001-aarch64-apple-darwin.from-2026.11.1000.patch",
+    "Captures-2026.11.1001-x86_64-unknown-linux-gnu.from-2026.11.1000.patch",
+    // Another release's patch in the same folder.
+    "Captures-2026.11.1000-aarch64-apple-darwin.from-2026.11.902.patch",
+  ])
+    writeFileSync(join(directory, name), "p");
+  const { platforms } = manifest(directory, version, "joswayski/captures", "v2026.11.10.1");
+  const mac = platforms["darwin-aarch64"].patches;
+  assert.deepEqual(
+    mac.map((patch) => patch.from),
+    ["2026.11.1000", "2026.11.902"],
+  );
+  assert.equal(
+    mac[0].url,
+    "https://github.com/joswayski/captures/releases/download/v2026.11.10.1/Captures-2026.11.1001-aarch64-apple-darwin.from-2026.11.1000.patch",
+  );
+  assert.equal(mac[0].size, 1);
+  assert.match(
+    Buffer.from(mac[0].signature, "base64").toString(),
+    /file:Captures-2026\.11\.1001-aarch64-apple-darwin\.app\.tar\n/u,
+  );
+  // The AppImage patch rebuilds the AppImage itself.
+  assert.equal(platforms["linux-x86_64"].patches[0].signature, platforms["linux-x86_64"].signature);
+  assert.equal(platforms["windows-x86_64"].patches, undefined);
+  assert.equal(platforms["linux-x86_64-deb"].patches, undefined);
+});

@@ -654,6 +654,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
+          UPDATE_PATCHES: ${{ vars.CAPTURES_UPDATE_PATCHES }}
         shell: bash
         run: |
           set -euo pipefail
@@ -661,6 +662,15 @@ jobs:
             "${{ matrix.target }}" \
             "${{ needs.prepare.outputs.app_version }}" \
             native-assets
+          # Patch updates from earlier native releases (macOS and AppImage).
+          # Never fails the release; off until the repository variable
+          # CAPTURES_UPDATE_PATCHES is true (docs/releases.md).
+          if [[ "$UPDATE_PATCHES" == true && -f scripts/native-preview-patches.mjs ]]; then
+            node scripts/native-preview-patches.mjs generate \
+              "${{ matrix.target }}" \
+              "${{ needs.prepare.outputs.app_version }}" \
+              native-assets
+          fi
           node "$GITHUB_WORKSPACE/release-tools/scripts/github-release-assets.mjs" \
             upload \
             "$RELEASE_ID" \

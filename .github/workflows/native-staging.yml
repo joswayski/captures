@@ -185,6 +185,11 @@ jobs:
           xcrun stapler validate "$dmg"
       - name: Sign the version-bound updater artifacts
         run: node scripts/native-preview-build.mjs collect "${{ matrix.target }}" "$VERSION" staging-assets
+      # Patch updates from earlier staging builds (macOS and AppImage); never fails the build.
+      - name: Make patch updates
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/native-preview-patches.mjs generate "${{ matrix.target }}" "$VERSION" staging-assets --staging
       - uses: actions/upload-artifact@v4
         with:
           name: staging-${{ matrix.target }}

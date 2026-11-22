@@ -720,7 +720,7 @@ impl<W: Write> Write for Output<'_, W> {
 // qbsdiff's size is a hint, not a bound. Validate header lengths before calling
 // it (negative lengths otherwise cast to u64), and bound control count and
 // output before decoding. A leading zero-output source seek is legitimate.
-fn validate_controls(
+pub(super) fn validate_controls(
     patch: &[u8],
     base_size: u64,
     target_size: u64,
@@ -780,7 +780,7 @@ fn validate_controls(
     Ok(())
 }
 
-fn integer(bytes: &[u8]) -> i64 {
+pub(super) fn integer(bytes: &[u8]) -> i64 {
     let raw = u64::from_le_bytes(bytes.try_into().unwrap());
     let magnitude = (raw & i64::MAX as u64) as i64;
     if raw >> 63 == 0 {
