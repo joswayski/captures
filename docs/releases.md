@@ -243,13 +243,16 @@ artifact are dropped. Failures are warnings; the release continues with full
 downloads. `manifest` lists every signed patch the release carries. Patches
 stay on their releases.
 
-The staging feed always makes patches. Public releases make them only when the
-repository variable `CAPTURES_UPDATE_PATCHES` is `true`. Prove a patch update on
-staging first: install one staging build, dispatch a higher version, and check
-that Preferences offers the patch size and the update installs. Then:
+Public and staging releases make patches. A Windows staging update from
+2026.11.2201 to .2202 downloaded the 1.4 MB patch (of 22.4 MB) and installed;
+macOS and AppImage patch installs have not had a real-hardware run yet. Prove a
+format or installer change on staging first: install one staging build,
+dispatch a higher version, and check that Preferences offers the patch size and
+the update installs. To stop making public patches, which sends every client
+back to full downloads from the next release:
 
 ```sh
-gh variable set CAPTURES_UPDATE_PATCHES --repo joswayski/captures --body true
+gh variable set CAPTURES_UPDATE_PATCHES --repo joswayski/captures --body false
 ```
 
 ### Startup recovery companion
