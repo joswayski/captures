@@ -5,6 +5,7 @@
 
 use std::sync::mpsc::{Receiver, Sender, channel};
 
+use captures_app::update_notice::{TrayUpdateItem, UpdateStatus, tray_tooltip, tray_update_item};
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, accelerator::Accelerator};
 use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
@@ -153,10 +154,27 @@ fn accelerators(settings: &captures_settings::AppSettings) -> Vec<String> {
         .collect()
 }
 
-fn menu(settings: &captures_settings::AppSettings) -> Result<Menu, String> {
+fn menu(
+    settings: &captures_settings::AppSettings,
+    update: &TrayUpdateItem,
+) -> Result<Menu, String> {
     let menu = Menu::new();
     // Check for Updates works only in a Preview build with update metadata.
     let updates = captures_app::preview_channel::version().is_some();
+    let update_row = || {
+        MenuItem::with_id(
+            "check-updates",
+            &update.label,
+            updates && update.enabled,
+            None,
+        )
+    };
+    // Shipping pins an available or installing update above New Capture.
+    if update.pin_first {
+        menu.append(&update_row())
+            .and_then(|()| menu.append(&PredefinedMenuItem::separator()))
+            .map_err(|error| error.to_string())?;
+    }
     for row in &MENU {
         let result = match *row {
             // Shipping `tray_menu_item`: a row whose accelerator the menu
@@ -171,12 +189,8 @@ fn menu(settings: &captures_settings::AppSettings) -> Result<Menu, String> {
                     || menu.append(&MenuItem::with_id(id, label, true, None)),
                     Ok,
                 ),
-            Row::Updates => menu.append(&MenuItem::with_id(
-                "check-updates",
-                "Check for Updates…",
-                updates,
-                None,
-            )),
+            Row::Updates if !update.pin_first => menu.append(&update_row()),
+            Row::Updates => Ok(()),
             Row::Separator => menu.append(&PredefinedMenuItem::separator()),
         };
         result.map_err(|error| error.to_string())?;
@@ -196,6 +210,8 @@ pub struct Tray {
     icon: TrayIcon,
     actions: Receiver<Action>,
     accelerators: Vec<String>,
+    settings: captures_settings::AppSettings,
+    update: TrayUpdateItem,
 }
 
 impl Tray {
@@ -213,7 +229,7 @@ impl Tray {
         let icon = TrayIconBuilder::new()
             .with_tooltip(captures_app::preview_channel::TRAY_NAME)
             .with_icon(icon)
-            .with_menu(Box::new(menu(settings)?))
+            .with_menu(Box::new(menu(settings, &tray_update_item(None))?))
             .with_menu_on_left_click(false)
             .build()
             .map_err(|error| format!("Tray is unavailable: {error}"))?;
@@ -244,6 +260,8 @@ impl Tray {
             icon,
             actions,
             accelerators: accelerators(settings),
+            settings: settings.clone(),
+            update: tray_update_item(None),
         })
     }
 
@@ -268,16 +286,35 @@ impl Tray {
 
     /// Refresh the menu's accelerators after the saved shortcuts change.
     pub fn update(&mut self, settings: &captures_settings::AppSettings) {
-        let accelerators = accelerators(settings);
-        if accelerators == self.accelerators {
+        if accelerators(settings) == self.accelerators {
             return;
         }
-        match menu(settings) {
+        self.settings = settings.clone();
+        self.rebuild();
+    }
+
+    /// Shipping's `refresh_tray_update_state`: the update row and tooltip
+    /// follow the update status ("Update Available — N changes", pinned
+    /// first; "Installing Update…"; "Checking for Updates…").
+    pub fn set_update(&mut self, status: Option<&UpdateStatus>) {
+        let update = tray_update_item(status);
+        if update == self.update {
+            return;
+        }
+        self.update = update;
+        if let Err(error) = self.icon.set_tooltip(Some(tray_tooltip(status))) {
+            eprintln!("Could not refresh the tray tooltip: {error}");
+        }
+        self.rebuild();
+    }
+
+    fn rebuild(&mut self) {
+        match menu(&self.settings, &self.update) {
             Ok(menu) => {
                 self.icon.set_menu(Some(Box::new(menu)));
-                self.accelerators = accelerators;
+                self.accelerators = accelerators(&self.settings);
             }
-            Err(error) => eprintln!("Could not refresh tray shortcuts: {error}"),
+            Err(error) => eprintln!("Could not refresh the tray menu: {error}"),
         }
     }
 }
@@ -306,5 +343,41 @@ mod tests {
         assert_eq!(accelerators(&settings)[1], "Ctrl+Shift+KeyR");
         assert!(accelerator("Ctrl+Shift+KeyR").is_some());
         assert!(accelerator("").is_none());
+    }
+
+    #[test]
+    fn an_available_update_moves_its_row_above_new_capture() {
+        use tray_icon::menu::MenuItemKind;
+        let settings = captures_settings::AppSettings::default();
+        let ids = |menu: &Menu| -> Vec<String> {
+            menu.items()
+                .iter()
+                .map(|item| item.id().0.clone())
+                .collect()
+        };
+        let resting = menu(&settings, &tray_update_item(None)).unwrap();
+        assert_eq!(ids(&resting)[0], "new-capture");
+        let pinned = TrayUpdateItem {
+            label: "Update Available — 2 changes".into(),
+            enabled: true,
+            pin_first: true,
+        };
+        let pinned = menu(&settings, &pinned).unwrap();
+        let items = pinned.items();
+        assert_eq!(
+            items[0].as_menuitem().map(|item| item.text()).as_deref(),
+            Some("Update Available — 2 changes")
+        );
+        assert!(matches!(items[1], MenuItemKind::Predefined(_)));
+        assert_eq!(ids(&pinned)[2], "new-capture");
+        // The row moves rather than appearing twice.
+        assert_eq!(
+            ids(&pinned)
+                .iter()
+                .filter(|id| *id == "check-updates")
+                .count(),
+            1
+        );
+        assert_eq!(items.len(), resting.items().len() + 1);
     }
 }

@@ -7681,7 +7681,12 @@ install the update: …" with Try again installing). Shipping's
 the notice once per session (forgotten after an up-to-date result), deferred
 while a capture, selector or recording runs; a failed install started from the
 notice shows even mid-capture; the tray's Check for Updates shows it while an
-update is available or downloading. Later/Close hide it except while
+update is available or downloading. The tray's update row and tooltip follow
+the same status through the shared `tray_update_item`/`tray_tooltip`
+(shipping's `refresh_tray_update_state`: the available row pinned above New
+Capture with a separator, Installing/Restarting disabled, the update tooltips);
+a unit test checks the pinned order, while a real Preview update reaching the
+tray is unverified on Windows. Later/Close hide it except while
 downloading or restarting; What's new / Hide persist `show_update_changelog`
 (through Preferences when open, moving its switch); Update now, Try again and
 Check again use the Updates card's steps; View release, pull request numbers

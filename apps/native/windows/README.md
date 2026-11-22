@@ -360,7 +360,12 @@ placed by the shared `update_notice::placement` with a caret toward the tray
 icon (caretless tray-corner fallback without one). A newly available version
 opens it once per session, deferred while a capture or recording runs; an
 install started from it reopens it on failure; the tray's Check for Updates
-shows it while an update is available. Not now/Close hide it (not while
+shows it while an update is available. The tray follows the same status
+through the shared `update_notice::tray_update_item`/`tray_tooltip`, like
+shipping: "Update Available — N changes" pinned with a separator above New
+Capture, then "Installing Update…" or "Restarting Captures…" (disabled), and
+"Checking for Updates…" in place; the tooltip reads "Captures — Update
+available" or "Captures — Installing update". Not now/Close hide it (not while
 downloading or restarting); release notes follow the Preferences
 `show_update_changelog` switch, with no toggle on the notice. Update now / Try again / Check again run the same steps as the Updates card,
 View release, pull request numbers and "download from captur.es" open the

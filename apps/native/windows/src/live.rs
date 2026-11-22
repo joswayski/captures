@@ -676,6 +676,14 @@ fn sync_update_notice(force: bool) {
             tray: tray_rect,
         })
     });
+    // The tray's update row and tooltip follow the same status.
+    RESIDENT.with(|r| {
+        if let Ok(mut r) = r.try_borrow_mut()
+            && let Some(tray) = r.as_mut().and_then(|r| r.tray.as_mut())
+        {
+            tray.set_update(live.as_ref().map(|live| &live.status));
+        }
+    });
     if let Some(live) = live {
         if force {
             crate::update_notice::show(live);
