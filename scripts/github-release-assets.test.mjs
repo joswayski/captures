@@ -51,6 +51,32 @@ test("updater URLs use the workflow CalVer tag, not GitHub draft tag_name", () =
   );
 });
 
+test("publishing never resends the release commit, which GitHub refuses after a workflow change", () => {
+  // GITHUB_TOKEN cannot hold the workflows permission. GitHub requires it for
+  // a release update naming a commit whose workflow files differ from main's,
+  // so a workflow change pushed mid-release turned the publish into a 403.
+  const workflow = readFileSync(workflowPath, "utf8");
+  const publish = workflow.slice(
+    workflow.indexOf("\n  publish:"),
+    workflow.indexOf("\n  channel:"),
+  );
+  assert.match(publish, /-F draft=false/u);
+  assert.doesNotMatch(publish, /-[fF] target_commitish=/u);
+  // The downloads page may record it, but only in a call that cannot fail the job.
+  const channel = workflow.slice(
+    workflow.indexOf("\n  channel:"),
+    workflow.indexOf("\n  cleanup:"),
+  );
+  // Each `gh api` command with its backslash-continued lines.
+  const commands = [...channel.matchAll(/gh api \\\n(?:.*\\\n)*.*\n/gu)].map((match) => match[0]);
+  const recording = commands.filter(
+    (command) => command.includes("--method PATCH") && command.includes("target_commitish"),
+  );
+  assert.equal(recording.length, 1);
+  assert.doesNotMatch(recording[0], /draft=|-f body=|-f name=/u);
+  assert.match(recording[0], /\|\| echo "::warning::/u);
+});
+
 test("the sparse helper checkout can load without the rest of the repository", async () => {
   const listed = macosHelperSparseCheckout();
   const directory = mkdtempSync(join(tmpdir(), "captures-release-tools-"));

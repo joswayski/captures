@@ -724,17 +724,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
-          RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}
           TAG: ${{ needs.prepare.outputs.tag }}
         shell: bash
         run: |
           set -euo pipefail
 
+          # Do not resend target_commitish: the draft already records it and
+          # the tag exists. GitHub refuses a release update that names a commit
+          # whose workflow files differ from main's unless the token may edit
+          # workflows, which GITHUB_TOKEN never can, so a workflow change
+          # pushed during a release failed its publish with a 403.
           gh api \
             --method PATCH \
             "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
             -f tag_name="$TAG" \
-            -f target_commitish="$RELEASE_SHA" \
             -F draft=false \
             -F prerelease=false \
             -f make_latest=false \
@@ -912,13 +915,22 @@ jobs:
             --method PATCH \
             "repos/${GITHUB_REPOSITORY}/releases/${channel_id}" \
             -f tag_name=preview \
-            -f target_commitish="$newest_target" \
             -f name="Captures — Latest" \
             -f body="$(cat "$channel_notes")" \
             -F draft=false \
             -F prerelease=false \
             -f make_latest=true \
             --silent
+          # The page's recorded commit is informational (nothing reads it and
+          # the `preview` tag does not move). GitHub refuses it with a 403
+          # when that commit's workflow files differ from main's, so it must
+          # not fail a release whose downloads are already updated.
+          gh api \
+            --method PATCH \
+            "repos/${GITHUB_REPOSITORY}/releases/${channel_id}" \
+            -f target_commitish="$newest_target" \
+            --silent \
+            || echo "::warning::Could not record ${newest_target} on the downloads page; a workflow file changed on main since that commit."
 
           expected_assets="$(
             jq -cn \

@@ -367,7 +367,11 @@ Creating the draft early is only a private staging step, and packaging starts
 before the frontend and Rust checks finish. The **Publish release** job runs
 only after those checks and **Validate staged release** succeed and `SHA256SUMS` is
 present; that marker means every required macOS, Windows, and Linux artifact was
-downloaded and validated together. The existence of a draft page by itself does
+downloaded and validated together. Publishing does not resend the release's
+commit: `GITHUB_TOKEN` cannot hold the workflows permission, and GitHub refuses
+a release update naming a commit whose workflow files differ from `main`'s, so a
+workflow change pushed during a release used to fail **Publish release** with a
+403 and discard the build. The existence of a draft page by itself does
 not mean the release is complete.
 
 The fixed `preview` release is the permanent **Captures — Latest** download page,
