@@ -77,8 +77,26 @@ struct EncoderContext {
     pointer_overlay: Option<PointerOverlay>,
 }
 
+/// Held while xcap's recorder runs. On Windows it is a Windows.Graphics.Capture
+/// session, during which Windows draws the pointer in software; stills taken
+/// meanwhile use WGC rather than GDI so they stay cursor-free.
+#[cfg(target_os = "windows")]
+use captures_capture::CaptureSession;
+#[cfg(not(target_os = "windows"))]
+struct CaptureSession;
+
+#[cfg(target_os = "windows")]
+fn capture_session() -> CaptureSession {
+    CaptureSession::begin()
+}
+
+#[cfg(not(target_os = "windows"))]
+fn capture_session() -> CaptureSession {
+    CaptureSession
+}
+
 enum CaptureRecorder {
-    Direct(VideoRecorder),
+    Direct(VideoRecorder, CaptureSession),
     /// The source and its dropped-frame count before encoding began. Frames
     /// discarded while the user selected a Region are not dropped frames.
     #[cfg(target_os = "linux")]
@@ -88,7 +106,7 @@ enum CaptureRecorder {
 impl CaptureRecorder {
     fn warning(&self) -> Option<String> {
         match self {
-            Self::Direct(_) => None,
+            Self::Direct(..) => None,
             #[cfg(target_os = "linux")]
             Self::Portal(source, _) => source.warning(),
         }
@@ -96,7 +114,7 @@ impl CaptureRecorder {
 
     fn is_portal(&self) -> bool {
         match self {
-            Self::Direct(_) => false,
+            Self::Direct(..) => false,
             #[cfg(target_os = "linux")]
             Self::Portal(..) => true,
         }
@@ -104,7 +122,7 @@ impl CaptureRecorder {
 
     fn stop(self) -> XcapRecordingResult<u64> {
         match self {
-            Self::Direct(recorder) => recorder
+            Self::Direct(recorder, _session) => recorder
                 .stop()
                 .map(|()| 0)
                 .map_err(|error| XcapRecordingError::Capture(error.to_string())),
@@ -165,6 +183,7 @@ impl XcapRecordingSegment {
         let (recorder, receiver) = monitor
             .video_recorder()
             .map_err(|error| XcapRecordingError::Capture(error.to_string()))?;
+        let session = capture_session();
         recorder
             .start()
             .map_err(|error| XcapRecordingError::Capture(error.to_string()))?;
@@ -243,7 +262,7 @@ impl XcapRecordingSegment {
             options,
             output_path,
             RecordingInput {
-                recorder: CaptureRecorder::Direct(recorder),
+                recorder: CaptureRecorder::Direct(recorder, session),
                 receiver,
                 first_image,
                 transform,

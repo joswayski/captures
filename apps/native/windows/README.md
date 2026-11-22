@@ -515,13 +515,17 @@ recording runs. Development builds simulate it with a thread message:
 `WM_APP + 20` with `wParam` `0x1057`.
 
 Display stills (the frozen snapshot and display captures) come from
-`captures-capture`'s `windows_grab`: DXGI desktop duplication on one Direct3D
-device it creates on the first grab and keeps, with GDI for rotated outputs or
-when duplication has no frame within 250 ms. xcap's Windows.Graphics.Capture
-grab left one display-sized GPU surface behind per grab (64 MB per 4K capture,
-never reclaimed). Duplication and GDI return the same pixels; WGC's differed
-only on the anti-aliased edges of the taskbar's running-app indicators (up to
-18/255). None include the cursor or a capture border.
+`captures-capture`'s `windows_grab`: a GDI `BitBlt` of the screen, about
+65 ms at 4K whether or not the desktop is changing, with no Direct3D device.
+xcap's Windows.Graphics.Capture (WGC) grab left one display-sized GPU surface
+behind per grab (64 MB per 4K capture, never reclaimed), and any per-grab WGC
+session leaks about 32 MB. DXGI desktop duplication gets no frame from a still
+desktop, so it waited 250 ms and fell back to GDI. GDI and duplication return
+the same pixels; WGC's differed only on the anti-aliased edges of the
+taskbar's running-app indicators (up to 18/255). None include the cursor or a
+capture border, except that Windows draws the pointer in software, which GDI
+then reads, while a WGC session is live. So stills taken while this process
+records (a `CaptureSession`) use a per-grab WGC session on one kept device.
 
 Each scene node (`src/scene.rs`) owns one composition surface. Hover and
 toggle transitions animate visual opacity and offsets on the compositor, and
