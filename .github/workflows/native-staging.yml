@@ -46,7 +46,7 @@ jobs:
           - name: Linux x64
             os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
-            bundles: appimage,deb
+            bundles: deb
     # Windows runs PowerShell by default, which does not expand "$VERSION".
     defaults:
       run:
@@ -185,7 +185,7 @@ jobs:
           xcrun stapler validate "$dmg"
       - name: Sign the version-bound updater artifacts
         run: node scripts/native-preview-build.mjs collect "${{ matrix.target }}" "$VERSION" staging-assets
-      # Patch updates from earlier staging builds (macOS and AppImage); never fails the build.
+      # Patch updates from earlier staging builds (macOS, Windows and AppImage); never fails the build.
       - name: Make patch updates
         env:
           GH_TOKEN: ${{ github.token }}

@@ -1,6 +1,8 @@
 //! Installed Preview acquisition using the existing Tauri-compatible manifest.
 //! Unlike development manifests, latest.json is not itself signed. Only verified
 //! artifact bytes, including their signed version/target filename, can install.
+#[cfg(target_os = "linux")]
+pub mod appimage;
 pub mod delta;
 pub mod recovery;
 
@@ -9,7 +11,7 @@ mod windows_tests;
 
 use super::*;
 use std::{
-    fs,
+    fs, io,
     process::{Command, Stdio},
 };
 
@@ -157,6 +159,7 @@ pub struct Pending {
     installation: InstallTarget,
     patch: Option<delta::Offer>,
     full_size: u64,
+    current: Version,
 }
 
 pub struct Download {
@@ -180,6 +183,10 @@ struct InstallRequest {
     capture_windows: Vec<super::RestartCaptureWindow>,
     #[serde(default)]
     recovery: Option<recovery::InstallationCheck>,
+    /// The installed version a verified `patch` in the request folder starts
+    /// from; without it, `artifact` holds the full download.
+    #[serde(default)]
+    patch: Option<String>,
 }
 
 pub fn artifact_name(target: Target, version: &str) -> String {
@@ -303,6 +310,7 @@ impl Client {
                 installation: self.installation.clone(),
                 patch,
                 full_size: size,
+                current: self.current.clone(),
             }));
         }
         Err(last_error)
@@ -332,8 +340,8 @@ impl Pending {
     ) -> Result<Download, Error> {
         let mut verifying = Some(verifying);
         if let Some(patch) = &self.patch {
-            match self.rebuild(patch, cancel, &mut progress, &mut verifying) {
-                Ok(bytes) => return self.keep(directory, &bytes, &patch.signature, cancel),
+            match self.patched(patch, directory, cancel, &mut progress, &mut verifying) {
+                Ok(download) => return Ok(download),
                 Err(Error::Cancelled) => return Err(Error::Cancelled),
                 // Any other patch failure falls back to the full artifact.
                 Err(_) => {}
@@ -356,34 +364,69 @@ impl Pending {
             self.info.target,
             &self.info.version,
         )?;
-        self.keep(directory, &bytes, &self.signature, cancel)
+        let download = self.download_folder(directory, &bytes, &self.signature, None, cancel)?;
+        let mut artifact = fs::File::options()
+            .write(true)
+            .create_new(true)
+            .open(download.directory.path().join("artifact"))?;
+        artifact.write_all(&bytes)?;
+        artifact.sync_all()?;
+        Ok(download)
     }
 
-    /// The release's signed file, rebuilt from the installed copy.
-    fn rebuild(
+    /// Download and verify the patch, and rebuild the release from the
+    /// installed package to prove it applies before the app quits. The helper
+    /// rebuilds again from the installed package (macOS, Windows) or packs this
+    /// stage, rechecking every file (AppImage, whose mount ends with the app).
+    fn patched(
         &self,
         patch: &delta::Offer,
+        directory: &Path,
         cancel: &CancelToken,
         progress: &mut impl FnMut(u64, u64),
         verifying: &mut Option<impl FnOnce()>,
-    ) -> Result<Vec<u8>, Error> {
+    ) -> Result<Download, Error> {
+        let base = delta::base(&self.installation)?;
         let bytes = self.fetch(patch.url()?, patch.size, patch.size, cancel, progress)?;
         if bytes.len() as u64 != patch.size {
             return Err(Error::Size);
         }
-        let rebuilt = delta::apply(&delta::base(&self.installation)?, &bytes, cancel)?;
+        let from = self.current.to_string();
         verify_named(
             &self.key,
             &patch.signature,
-            &rebuilt,
-            &delta::target_name(self.info.target, &self.info.version),
+            &bytes,
+            &delta::patch_name(self.info.target, &self.info.version, &from),
         )?;
+        let download =
+            self.download_folder(directory, &bytes, &patch.signature, Some(from), cancel)?;
+        let path = download.directory.path().join("patch");
+        let mut file = fs::File::options()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        let stage = download.directory.path().join("stage");
+        delta::rebuild(
+            &mut file,
+            self.info.target,
+            &self.current,
+            &self.info.version,
+            &base,
+            stage.clone(),
+            cancel,
+        )?;
+        if !matches!(self.installation, InstallTarget::AppImage { .. }) {
+            fs::remove_dir_all(stage)?;
+        }
         // Only now: a fallback's progress must still reach the UI, which stops
         // following progress once it shows Verifying.
         if let Some(verifying) = verifying.take() {
             verifying();
         }
-        Ok(rebuilt)
+        Ok(download)
     }
 
     fn fetch(
@@ -417,24 +460,20 @@ impl Pending {
         Ok(bytes)
     }
 
-    /// Persist verified bytes and the signature the helper checks again.
-    fn keep(
+    /// The private request folder for verified bytes and the signature the
+    /// helper checks again.
+    fn download_folder(
         &self,
         directory: &Path,
         bytes: &[u8],
         signature: &str,
+        patch: Option<String>,
         cancel: &CancelToken,
     ) -> Result<Download, Error> {
         check_cancel(cancel)?;
         let directory = tempfile::Builder::new()
             .prefix("captures-preview-")
             .tempdir_in(directory)?;
-        let mut artifact = fs::File::options()
-            .write(true)
-            .create_new(true)
-            .open(directory.path().join("artifact"))?;
-        artifact.write_all(bytes)?;
-        artifact.sync_all()?;
         Ok(Download {
             directory,
             sha256: format!("{:x}", Sha256::digest(bytes)),
@@ -448,6 +487,7 @@ impl Pending {
                 preview_artifact_ids: Vec::new(),
                 capture_windows: Vec::new(),
                 recovery: None,
+                patch,
             },
         })
     }
@@ -460,15 +500,7 @@ fn verify(
     target: Target,
     version: &str,
 ) -> Result<(), Error> {
-    // A macOS patch rebuilds the same release's signed `.app.tar`.
-    verify_named(key, signature, bytes, &artifact_name(target, version)).or_else(|error| {
-        match target {
-            Target::MacArm64 | Target::MacX64 => {
-                verify_named(key, signature, bytes, &delta::target_name(target, version))
-            }
-            _ => Err(error),
-        }
-    })
+    verify_named(key, signature, bytes, &artifact_name(target, version))
 }
 
 fn verify_named(
@@ -612,11 +644,19 @@ pub fn verify_package(version: &str, artifact: &Path, signature: &Path) -> Resul
     if target == Target::LinuxX64 && artifact.extension().is_some_and(|ext| ext == "deb") {
         name = name.replace(".AppImage", ".deb");
     }
-    // The bundle tar macOS patches rebuild.
-    if matches!(target, Target::MacArm64 | Target::MacX64)
-        && artifact.extension().is_some_and(|ext| ext == "tar")
+    // Patch files are named for their target, version and starting version.
+    if artifact
+        .extension()
+        .is_some_and(|ext| ext == "capturespatch")
     {
-        name = delta::target_name(target, version);
+        let file = artifact
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("");
+        if !file.starts_with(&format!("Captures-{version}-{}.from-", target.as_str())) {
+            return Err(Error::Signature);
+        }
+        name = file.to_owned();
     }
     verify_named(
         &key,
@@ -659,18 +699,53 @@ fn install_with(
         return Err(Error::Version);
     }
     let directory = request_path.parent().ok_or(Error::Package)?;
-    let artifact = directory.join("artifact");
-    if fs::metadata(&artifact)?.len() > MAX_ARTIFACT_BYTES {
-        return Err(Error::Size);
-    }
-    let payload = fs::read(&artifact)?;
-    verify(
-        key,
-        &request.signature,
-        &payload,
-        request.target,
-        &request.version,
-    )?;
+    // Either the full artifact or a patch from this installed version, each
+    // checked against its signed name before anything is replaced.
+    let read = |name: &str| -> Result<Vec<u8>, Error> {
+        let path = directory.join(name);
+        if fs::metadata(&path)?.len() > MAX_ARTIFACT_BYTES {
+            return Err(Error::Size);
+        }
+        Ok(fs::read(path)?)
+    };
+    let (payload, patch) = match &request.patch {
+        None => {
+            let payload = read("artifact")?;
+            verify(
+                key,
+                &request.signature,
+                &payload,
+                request.target,
+                &request.version,
+            )?;
+            (Some(payload), None)
+        }
+        Some(from) => {
+            let from = Version::parse(from).map_err(|_| Error::Version)?;
+            if from != Version::parse(current).map_err(|_| Error::Version)? {
+                return Err(Error::Version);
+            }
+            let bytes = read("patch")?;
+            verify_named(
+                key,
+                &request.signature,
+                &bytes,
+                &delta::patch_name(request.target, &request.version, &from.to_string()),
+            )?;
+            (None, Some(from))
+        }
+    };
+    let rebuild = |root: PathBuf, base: &Path| {
+        delta::rebuild(
+            &mut fs::File::open(directory.join("patch"))?,
+            request.target,
+            patch.as_ref().ok_or(Error::Package)?,
+            &request.version,
+            base,
+            root,
+            &CancelToken::default(),
+        )
+    };
     let lock = package_lock()?;
     let start = std::time::Instant::now();
     loop {
@@ -702,18 +777,37 @@ fn install_with(
             {
                 return Err(Error::Package);
             }
-            let installer = directory.join("verified-setup.exe");
-            let mut file = fs::File::options()
-                .create_new(true)
-                .write(true)
-                .open(&installer)?;
-            file.write_all(&payload)?;
-            file.sync_all()?;
-            drop(file);
-            // NSIS owns the installed path and update/relaunch registry identity.
-            // Release the cooperative lock before /R launches the new process.
-            drop(lock);
-            launch_and_confirm(&installer, directory, &request)?;
+            if let Some(payload) = &payload {
+                let installer = directory.join("verified-setup.exe");
+                let mut file = fs::File::options()
+                    .create_new(true)
+                    .write(true)
+                    .open(&installer)?;
+                file.write_all(payload)?;
+                file.sync_all()?;
+                drop(file);
+                // NSIS owns the installed path and update/relaunch registry identity.
+                // Release the cooperative lock before /R launches the new process.
+                drop(lock);
+                launch_and_confirm(&installer, directory, &request, true)?;
+            } else {
+                // Patch: rebuild beside the installed files, swap them in and
+                // start the new executable, without the installer.
+                let folder = executable.parent().ok_or(Error::Package)?;
+                let stage = tempfile::Builder::new()
+                    .prefix(".captures-update-")
+                    .tempdir_in(folder)?;
+                let (package, _) = rebuild(stage.path().join("package"), folder)?;
+                let replaced = replace_files(folder, &package)?;
+                set_display_version(&request.version);
+                drop(lock);
+                launch_and_confirm(executable, directory, &request, false)?;
+                for (_, previous) in replaced.into_iter() {
+                    if let Some(previous) = previous {
+                        let _ = fs::remove_file(previous);
+                    }
+                }
+            }
         }
         InstallTarget::AppImage { path } => {
             if request.target != Target::LinuxX64
@@ -723,6 +817,12 @@ fn install_with(
                 return Err(Error::Package);
             }
             let parent = path.parent().ok_or(Error::Package)?;
+            let payload = match payload {
+                Some(payload) => payload,
+                // The app rebuilt the AppDir from its own mount; pack it,
+                // rechecking every file against the signed patch.
+                None => appimage_from_stage(directory, &request, patch.as_ref())?,
+            };
             let mut replacement = tempfile::NamedTempFile::new_in(parent)?;
             replacement.write_all(&payload)?;
             replacement.as_file().sync_all()?;
@@ -744,7 +844,7 @@ fn install_with(
                 return Err(Error::Io(error.error));
             }
             drop(lock);
-            launch_and_confirm(path, directory, &request)?;
+            launch_and_confirm(path, directory, &request, false)?;
             fs::remove_file(backup)?;
         }
         InstallTarget::Mac { app } => {
@@ -761,8 +861,20 @@ fn install_with(
             let stage = tempfile::Builder::new()
                 .prefix(".captures-preview-")
                 .tempdir_in(parent)?;
-            extract_app(&payload, stage.path())?;
-            let replacement = stage.path().join(crate::preview_channel::APP_BUNDLE);
+            let replacement = match &payload {
+                Some(payload) => {
+                    extract_app(payload, stage.path())?;
+                    stage.path().join(crate::preview_channel::APP_BUNDLE)
+                }
+                None => {
+                    let (package, executables) = rebuild(stage.path().join("patched"), app)?;
+                    public_modes(&package, &executables)?;
+                    package
+                }
+            };
+            if replacement.file_name() != Some(crate::preview_channel::APP_BUNDLE.as_ref()) {
+                return Err(Error::Package);
+            }
             let info = plist::Value::from_file(replacement.join("Contents/Info.plist"))
                 .map_err(|_| Error::Package)?;
             let info = info.as_dictionary().ok_or(Error::Package)?;
@@ -794,6 +906,7 @@ fn install_with(
                     .join(crate::preview_channel::EXECUTABLE),
                 directory,
                 &request,
+                false,
             )?;
             fs::remove_dir_all(backup)?;
         }
@@ -805,13 +918,167 @@ fn install_with(
     }
     fs::write(directory.join("completed"), b"installed\n")?;
     // The copied helper/log may still be open (not removable on Windows).
-    // Remove the large payload now; the next ordinary startup prunes the rest.
-    fs::remove_file(artifact)?;
-    if directory.join("verified-setup.exe").exists() {
-        let _ = fs::remove_file(directory.join("verified-setup.exe"));
+    // Remove the large payloads now; the next ordinary startup prunes the rest.
+    for name in ["artifact", "verified-setup.exe", "patch"] {
+        let _ = fs::remove_file(directory.join(name));
     }
+    let _ = fs::remove_dir_all(directory.join("stage"));
     Ok(())
 }
+
+/// The AppImage for a patch install: the app's rebuilt stage packed with the
+/// runtime it carries, every file rechecked against the signed patch.
+#[cfg(target_os = "linux")]
+fn appimage_from_stage(
+    directory: &Path,
+    request: &InstallRequest,
+    from: Option<&Version>,
+) -> Result<Vec<u8>, Error> {
+    let (root, entries) = super::patch::entries(
+        &mut fs::File::open(directory.join("patch"))?,
+        &super::patch::Expected {
+            target: request.target,
+            base_version: from.ok_or(Error::Package)?,
+            version: &request.version,
+        },
+    )?;
+    appimage::pack(
+        &directory.join("stage").join(root),
+        &entries,
+        appimage::INSTALL_LEVEL,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+fn appimage_from_stage(
+    _: &Path,
+    _: &InstallRequest,
+    _: Option<&Version>,
+) -> Result<Vec<u8>, Error> {
+    Err(Error::Target)
+}
+
+/// A rebuilt stage is private (700/600); installed bundles are 755/644.
+fn public_modes(
+    package: &Path,
+    executables: &std::collections::HashSet<PathBuf>,
+) -> Result<(), Error> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut pending = vec![package.to_owned()];
+        while let Some(folder) = pending.pop() {
+            fs::set_permissions(&folder, fs::Permissions::from_mode(0o755))?;
+            for item in fs::read_dir(&folder)? {
+                let path = item?.path();
+                let metadata = fs::symlink_metadata(&path)?;
+                if metadata.is_dir() {
+                    pending.push(path);
+                } else if metadata.is_file() {
+                    let mode = if executables.contains(&path) {
+                        0o755
+                    } else {
+                        0o644
+                    };
+                    fs::set_permissions(&path, fs::Permissions::from_mode(mode))?;
+                }
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = (package, executables);
+    Ok(())
+}
+
+/// Move every rebuilt file over the installed one, keeping the replaced file as
+/// `<name>.captures-previous` until the new version confirms startup. A failure
+/// restores what it already moved. Files the release dropped stay; the
+/// uninstaller removes the folder.
+fn replace_files(
+    installed: &Path,
+    package: &Path,
+) -> Result<Vec<(PathBuf, Option<PathBuf>)>, Error> {
+    let mut files = Vec::new();
+    let mut pending = vec![(package.to_owned(), installed.to_owned())];
+    while let Some((from, to)) = pending.pop() {
+        for item in fs::read_dir(&from)? {
+            let item = item?;
+            let metadata = fs::symlink_metadata(item.path())?;
+            let target = to.join(item.file_name());
+            if metadata.is_dir() {
+                pending.push((item.path(), target));
+            } else if metadata.is_file() {
+                files.push((item.path(), target));
+            } else {
+                return Err(Error::Package);
+            }
+        }
+    }
+    let mut replaced: Vec<(PathBuf, Option<PathBuf>)> = Vec::new();
+    let result = (|| -> Result<(), Error> {
+        for (new, target) in &files {
+            fs::create_dir_all(target.parent().ok_or(Error::Package)?)?;
+            let previous = target.exists().then(|| {
+                let mut name = target.file_name().unwrap_or_default().to_owned();
+                name.push(".captures-previous");
+                target.with_file_name(name)
+            });
+            if let Some(previous) = &previous {
+                let _ = fs::remove_file(previous);
+                retry(|| fs::rename(target, previous))?;
+            }
+            replaced.push((target.clone(), previous));
+            retry(|| fs::rename(new, target))?;
+        }
+        Ok(())
+    })();
+    if let Err(error) = result {
+        for (target, previous) in replaced.iter().rev() {
+            let _ = fs::remove_file(target);
+            if let Some(previous) = previous {
+                let _ = fs::rename(previous, target);
+            }
+        }
+        return Err(error);
+    }
+    Ok(replaced)
+}
+
+/// Windows may hold a just-closed executable or scanner-opened file briefly.
+fn retry(mut operation: impl FnMut() -> io::Result<()>) -> Result<(), Error> {
+    let start = std::time::Instant::now();
+    loop {
+        match operation() {
+            Ok(()) => return Ok(()),
+            Err(error)
+                if cfg!(windows)
+                    && matches!(error.raw_os_error(), Some(5 | 32))
+                    && start.elapsed() < Duration::from_secs(30) =>
+            {
+                std::thread::sleep(Duration::from_millis(250))
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+}
+
+/// Keep Settings > Apps showing the installed version after a patch install;
+/// the NSIS installer records it under this per-user uninstall key.
+#[cfg(windows)]
+fn set_display_version(version: &str) {
+    let name = crate::preview_channel::APP_BUNDLE.trim_end_matches(".app");
+    if let Ok(key) = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
+        .open_subkey_with_flags(
+            format!("Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{name}"),
+            winreg::enums::KEY_SET_VALUE,
+        )
+    {
+        let _ = key.set_value("DisplayVersion", &version);
+    }
+}
+
+#[cfg(not(windows))]
+fn set_display_version(_: &str) {}
 
 fn record_backup(directory: &Path, installed: &Path, backup: &Path) -> Result<(), Error> {
     let mut file = fs::File::options()
@@ -827,10 +1094,13 @@ fn record_backup(directory: &Path, installed: &Path, backup: &Path) -> Result<()
     Ok(())
 }
 
+/// `installer`: `executable` is the verified NSIS installer, which relaunches
+/// Captures itself.
 fn launch_and_confirm(
     executable: &Path,
     directory: &Path,
     request: &InstallRequest,
+    installer: bool,
 ) -> Result<(), Error> {
     use std::io::{Seek, SeekFrom};
     let ready = directory.join("ready");
@@ -848,7 +1118,7 @@ fn launch_and_confirm(
             capture_windows: request.capture_windows.clone(),
         },
     )?;
-    let windows = matches!(request.installation, InstallTarget::Windows { .. });
+    let windows = installer;
     let mut child = if windows {
         #[cfg(windows)]
         {
@@ -956,16 +1226,9 @@ fn windows_installer_command(
     Ok(command)
 }
 
-/// Extracts the signed `.app.tar.gz`, or the uncompressed `.app.tar` a patch
-/// rebuilt (a tar starts with the bundle's name, never the gzip magic).
 fn extract_app(payload: &[u8], destination: &Path) -> Result<(), Error> {
     use std::path::Component;
-    let reader: Box<dyn Read + '_> = if payload.starts_with(&[0x1f, 0x8b]) {
-        Box::new(flate2::read::GzDecoder::new(payload))
-    } else {
-        Box::new(payload)
-    };
-    let mut archive = tar::Archive::new(reader);
+    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(payload));
     let mut size = 0u64;
     for (count, item) in archive.entries()?.enumerate() {
         if count >= staging::MAX_ENTRIES {
@@ -1147,7 +1410,7 @@ mod tests {
     }
 
     #[test]
-    fn patch_updates_rebuild_the_signed_file_or_fall_back_to_the_full_artifact() {
+    fn patch_updates_rebuild_the_installed_package_or_fall_back_to_the_full_artifact() {
         let pair = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
         let key = pair.pk.to_box().unwrap().to_string();
         let sign = |bytes: &[u8], name: &str| {
@@ -1157,150 +1420,234 @@ mod tests {
             crate::editor_layers::base64(signature.into_string().as_bytes())
         };
         let root = tempfile::tempdir().unwrap();
-        let old: Vec<u8> = (0..300_000u32).map(|n| (n % 253) as u8).collect();
+        // Incompressible, so the patch is a real saving only through bsdiff.
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        let old: Vec<u8> = (0..300_000)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                state as u8
+            })
+            .collect();
         let mut new = old.clone();
         new[4096..4105].copy_from_slice(b"new build");
-
-        // AppImage: the patch rebuilds the AppImage from $APPIMAGE. Then the
-        // same release with a changed installed copy downloads in full.
-        let appimage = root.path().join("Captures.AppImage");
-        let name = "Captures-2026.11.2110-x86_64-unknown-linux-gnu.AppImage";
-        let patch = delta::make(&old, &new).unwrap();
-        for (installed, via_patch) in [(old.clone(), true), (b"edited".to_vec(), false)] {
-            fs::write(&appimage, &installed).unwrap();
-            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-            let url = format!("http://{}", listener.local_addr().unwrap());
-            let signature = sign(&new, name);
-            let metadata = serde_json::to_vec(&serde_json::json!({
-                "version": "2026.11.2110",
-                "platforms": {"linux-x86_64": {
-                    "url": format!("{url}/full"), "signature": signature, "size": new.len(),
-                    "patches": [
-                        {"from": "2026.11.2108", "url": format!("{url}/older"), "size": 1, "signature": signature},
-                        {"from": "2026.11.2109", "url": format!("{url}/patch"), "size": patch.len(), "signature": signature},
-                    ]
-                }}
-            }))
-            .unwrap();
-            let mut responses = vec![(200, metadata), (200, patch.clone())];
-            if !via_patch {
-                responses.push((200, new.clone()));
-            }
-            let server = super::super::tests::serve(listener, responses);
-            let client = Client::new(
-                &[&format!("{url}/latest.json")],
-                &key,
+        let full = b"the full updater artifact".to_vec();
+        let write = |path: PathBuf, bytes: &[u8]| {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, bytes).unwrap();
+        };
+        // Independent of artifact_name and patch_name, the code under test.
+        for (target, renderer, platform, folder, program, full_name, patch_name) in [
+            (
+                Target::MacArm64,
+                Renderer::Appkit,
+                "darwin-aarch64",
+                "Captures.app",
+                "Contents/MacOS/captures",
+                "Captures-2026.11.2110-aarch64-apple-darwin.app.tar.gz",
+                "Captures-2026.11.2110-aarch64-apple-darwin.from-2026.11.2109.capturespatch",
+            ),
+            (
+                Target::WindowsX64,
                 Renderer::Wgpu,
-                Target::LinuxX64,
-                "2026.11.2109",
-                InstallTarget::AppImage {
-                    path: appimage.clone(),
-                },
+                "windows-x86_64",
+                "Captures",
+                "captures.exe",
+                "Captures-2026.11.2110-x86_64-pc-windows-msvc-setup.exe",
+                "Captures-2026.11.2110-x86_64-pc-windows-msvc.from-2026.11.2109.capturespatch",
+            ),
+        ] {
+            let case = root.path().join(platform);
+            let installed = case.join("installed").join(folder);
+            let released = case.join("released").join(folder);
+            for (package, binary, notice) in [
+                (&installed, &old, b"old notice".as_slice()),
+                (&released, &new, b"new notice"),
+            ] {
+                write(package.join(program), binary);
+                write(package.join("notices/LICENSE"), b"same license");
+                write(package.join("notices/ffmpeg.txt"), notice);
+            }
+            let output = case.join(patch_name);
+            let summary = delta::make(
+                target,
+                &installed,
+                &Version::parse("2026.11.2109").unwrap(),
+                &released,
+                &Version::parse("2026.11.2110").unwrap(),
+                &output,
             )
             .unwrap();
-            let cancel = CancelToken::default();
-            let pending = client.check(&cancel).unwrap().unwrap();
-            assert_eq!(pending.info.size, patch.len() as u64);
-            let totals = std::cell::RefCell::new(Vec::new());
-            let directory = tempfile::tempdir().unwrap();
-            let download = pending
-                .download_verifying(
-                    directory.path(),
-                    &cancel,
-                    |_, total| totals.borrow_mut().push(Some(total)),
-                    || totals.borrow_mut().push(None),
+            assert_eq!((summary.copied, summary.bsdiff), (1, 1), "{summary:?}");
+            let patch = fs::read(&output).unwrap();
+            assert!(patch.len() < 20_000, "{} bytes", patch.len());
+            let installation = match target {
+                Target::WindowsX64 => InstallTarget::Windows {
+                    executable: installed.join(program),
+                },
+                _ => InstallTarget::Mac {
+                    app: installed.clone(),
+                },
+            };
+            // The patch applies; the installed files changed; and a patch
+            // signed for another starting version, with a full artifact signed
+            // for another release, never installs anything.
+            for scenario in ["patch", "changed install", "wrong names"] {
+                let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+                let url = format!("http://{}", listener.local_addr().unwrap());
+                let (full_signed, patch_signed) = if scenario == "wrong names" {
+                    (
+                        full_name.replace("2110", "2111"),
+                        patch_name.replace("from-2026.11.2109", "from-2026.11.2108"),
+                    )
+                } else {
+                    (full_name.to_owned(), patch_name.to_owned())
+                };
+                let metadata = serde_json::to_vec(&serde_json::json!({
+                    "version": "2026.11.2110",
+                    "platforms": {platform: {
+                        "url": format!("{url}/full"), "signature": sign(&full, &full_signed),
+                        "size": 10 * patch.len(),
+                        "patches": [
+                            {"from": "2026.11.2108", "url": format!("{url}/older"), "size": 1, "signature": "c2ln"},
+                            {"from": "2026.11.2109", "url": format!("{url}/patch"),
+                                "size": patch.len(), "signature": sign(&patch, &patch_signed)},
+                        ]
+                    }}
+                }))
+                .unwrap();
+                // Copied unchanged, so the rebuild must read and check it.
+                let license = installed.join("notices/LICENSE");
+                if scenario == "changed install" {
+                    fs::write(&license, b"same license, edited").unwrap();
+                }
+                let mut responses = vec![(200, metadata), (200, patch.clone())];
+                if scenario != "patch" {
+                    responses.push((200, full.clone()));
+                }
+                let server = super::super::tests::serve(listener, responses);
+                let client = Client::new(
+                    &[&format!("{url}/latest.json")],
+                    &key,
+                    renderer,
+                    target,
+                    "2026.11.2109",
+                    installation.clone(),
                 )
                 .unwrap();
-            // Verifying comes once, last, also after a failed patch.
-            let totals = totals.into_inner();
-            assert_eq!(totals.iter().filter(|total| total.is_none()).count(), 1);
-            assert_eq!(totals.last(), Some(&None));
-            assert_eq!(
-                fs::read(download.directory.path().join("artifact")).unwrap(),
-                new
-            );
-            let mut expected = vec!["/latest.json", "/patch"];
-            if !via_patch {
-                expected.push("/full");
-                assert_eq!(totals[totals.len() - 2], Some(new.len() as u64));
+                let cancel = CancelToken::default();
+                let pending = client.check(&cancel).unwrap().unwrap();
+                assert_eq!(pending.info.size, patch.len() as u64);
+                let events = std::cell::RefCell::new(Vec::new());
+                let directory = tempfile::tempdir().unwrap();
+                let result = pending.download_verifying(
+                    directory.path(),
+                    &cancel,
+                    |_, total| events.borrow_mut().push(Some(total)),
+                    || events.borrow_mut().push(None),
+                );
+                // Verifying comes once, last, also after a failed patch.
+                let events = events.into_inner();
+                assert_eq!(events.iter().filter(|e| e.is_none()).count(), 1);
+                assert_eq!(events.last(), Some(&None), "{platform} {scenario}");
+                let mut expected = vec!["/latest.json", "/patch"];
+                match scenario {
+                    "patch" => {
+                        let download = result.unwrap();
+                        let folder = download.directory.path();
+                        assert_eq!(fs::read(folder.join("patch")).unwrap(), patch);
+                        assert_eq!(download.request.patch.as_deref(), Some("2026.11.2109"));
+                        assert!(!folder.join("artifact").exists());
+                        // Only an AppImage keeps the proving rebuild.
+                        assert!(!folder.join("stage").exists());
+                    }
+                    "changed install" => {
+                        let download = result.unwrap();
+                        let folder = download.directory.path();
+                        assert_eq!(fs::read(folder.join("artifact")).unwrap(), full);
+                        assert_eq!(download.request.patch, None);
+                        assert!(!folder.join("patch").exists());
+                        assert_eq!(events[events.len() - 2], Some(full.len() as u64));
+                        expected.push("/full");
+                        fs::write(&license, b"same license").unwrap();
+                    }
+                    _ => {
+                        assert!(matches!(result, Err(Error::Signature)), "{platform}");
+                        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
+                        expected.push("/full");
+                    }
+                }
+                assert_eq!(server.join().unwrap(), expected, "{platform} {scenario}");
             }
-            assert_eq!(server.join().unwrap(), expected);
+            // The installed package is only ever read.
+            assert_eq!(fs::read(installed.join(program)).unwrap(), old);
         }
+    }
 
-        // macOS: the patch rebuilds the release's signed bundle tar from the
-        // installed app, which verifies and extracts like the `.tar.gz`.
-        let installed = root.path().join("installed/Captures.app");
-        let released = root.path().join("released/Captures.app");
-        for (app, binary) in [(&installed, &old), (&released, &new)] {
-            fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
-            fs::write(app.join("Contents/MacOS/captures"), binary).unwrap();
-        }
-        let (base, target) = (
-            delta::bundle_tar(&installed).unwrap(),
-            delta::bundle_tar(&released).unwrap(),
-        );
-        let patch = delta::make(&base, &target).unwrap();
-        let tar_name = "Captures-2026.11.2110-aarch64-apple-darwin.app.tar";
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let url = format!("http://{}", listener.local_addr().unwrap());
-        let metadata = serde_json::to_vec(&serde_json::json!({
-            "version": "2026.11.2110",
-            "platforms": {"darwin-aarch64": {
-                "url": format!("{url}/full"),
-                "signature": sign(b"full", "Captures-2026.11.2110-aarch64-apple-darwin.app.tar.gz"),
-                "size": 10 * patch.len(),
-                "patches": [{"from": "2026.11.2109", "url": format!("{url}/patch"),
-                    "size": patch.len(), "signature": sign(&target, tar_name)}]
-            }}
-        }))
-        .unwrap();
-        let server = super::super::tests::serve(listener, vec![(200, metadata), (200, patch)]);
-        let client = Client::new(
-            &[&format!("{url}/latest.json")],
-            &key,
-            Renderer::Appkit,
-            Target::MacArm64,
-            "2026.11.2109",
-            InstallTarget::Mac { app: installed },
-        )
-        .unwrap();
-        let cancel = CancelToken::default();
-        let directory = tempfile::tempdir().unwrap();
-        let download = client
-            .check(&cancel)
-            .unwrap()
-            .unwrap()
-            .download(directory.path(), &cancel, |_, _| {})
-            .unwrap();
-        let artifact = fs::read(download.directory.path().join("artifact")).unwrap();
-        assert_eq!(artifact, target);
-        // What the helper checks again before installing.
-        let key = PublicKey::decode(&key).unwrap();
-        verify(
-            &key,
-            &download.request.signature,
-            &artifact,
-            Target::MacArm64,
-            "2026.11.2110",
-        )
-        .unwrap();
-        assert!(
-            verify(
-                &key,
-                &download.request.signature,
-                &artifact,
-                Target::MacArm64,
-                "2026.11.2111"
+    #[test]
+    fn replaced_files_keep_the_previous_ones_and_a_failure_restores_them() {
+        let root = tempfile::tempdir().unwrap();
+        let installed = root.path().join("Captures");
+        let package = root.path().join("package");
+        for (folder, prefix) in [(&installed, "old"), (&package, "new")] {
+            fs::create_dir_all(folder.join("notices")).unwrap();
+            fs::write(folder.join("captures.exe"), format!("{prefix} exe")).unwrap();
+            fs::write(
+                folder.join("notices/ffmpeg.txt"),
+                format!("{prefix} notice"),
             )
-            .is_err()
-        );
-        let stage = tempfile::tempdir().unwrap();
-        extract_app(&artifact, stage.path()).unwrap();
+            .unwrap();
+        }
+        fs::write(package.join("added.dll"), "added").unwrap();
+        fs::write(installed.join("dropped.dll"), "dropped").unwrap();
+        let replaced = replace_files(&installed, &package).unwrap();
         assert_eq!(
-            fs::read(stage.path().join("Captures.app/Contents/MacOS/captures")).unwrap(),
-            new
+            fs::read(installed.join("captures.exe")).unwrap(),
+            b"new exe"
         );
-        assert_eq!(server.join().unwrap(), ["/latest.json", "/patch"]);
+        assert_eq!(
+            fs::read(installed.join("notices/ffmpeg.txt")).unwrap(),
+            b"new notice"
+        );
+        assert_eq!(fs::read(installed.join("added.dll")).unwrap(), b"added");
+        assert_eq!(fs::read(installed.join("dropped.dll")).unwrap(), b"dropped");
+        assert_eq!(
+            fs::read(installed.join("captures.exe.captures-previous")).unwrap(),
+            b"old exe"
+        );
+        assert_eq!(replaced.len(), 3);
+        assert_eq!(
+            replaced
+                .iter()
+                .filter(|(_, previous)| previous.is_none())
+                .count(),
+            1
+        );
+
+        // Top-level files move before nested ones, so this fails after
+        // replacing them: `notices` is a file where the package has a folder.
+        let installed = root.path().join("failing");
+        fs::create_dir_all(&installed).unwrap();
+        fs::write(installed.join("captures.exe"), "old exe").unwrap();
+        fs::write(installed.join("notices"), "a file").unwrap();
+        let package = root.path().join("failing-package");
+        fs::create_dir_all(package.join("notices")).unwrap();
+        fs::write(package.join("captures.exe"), "new exe").unwrap();
+        fs::write(package.join("added.dll"), "added").unwrap();
+        fs::write(package.join("notices/ffmpeg.txt"), "new notice").unwrap();
+        assert!(replace_files(&installed, &package).is_err());
+        let mut left: Vec<_> = fs::read_dir(&installed)
+            .unwrap()
+            .map(|item| item.unwrap().file_name().into_string().unwrap())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["captures.exe", "notices"]);
+        assert_eq!(
+            fs::read(installed.join("captures.exe")).unwrap(),
+            b"old exe"
+        );
+        assert_eq!(fs::read(installed.join("notices")).unwrap(), b"a file");
     }
 
     #[test]

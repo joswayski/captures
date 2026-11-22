@@ -402,7 +402,7 @@ jobs:
           - name: Linux x64
             os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
-            bundles: appimage,deb
+            bundles: deb
             rust_workspaces: |
               . -> target
               apps/native/gtk -> target
@@ -662,7 +662,7 @@ jobs:
             "${{ matrix.target }}" \
             "${{ needs.prepare.outputs.app_version }}" \
             native-assets
-          # Patch updates from earlier native releases (macOS and AppImage).
+          # Patch updates from earlier native releases (macOS, Windows and AppImage).
           # Never fails the release; off until the repository variable
           # CAPTURES_UPDATE_PATCHES is true (docs/releases.md).
           if [[ "$UPDATE_PATCHES" == true && -f scripts/native-preview-patches.mjs ]]; then

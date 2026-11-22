@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 
-import { baseReleases } from "./native-preview-patches.mjs";
+import { BASES, baseReleases, installerOnly } from "./native-preview-patches.mjs";
 
 const release = (tag, names, extra = {}) => ({
   tag_name: tag,
@@ -36,11 +36,29 @@ test("patches start from the newest earlier native builds of the same feed", () 
       version: "2026.11.2105",
     },
   ]);
-  const many = Array.from({ length: 9 }, (_, index) =>
-    release(`v2026.11.1${index}.1`, [mac(`2026.11.1${index}01`), "captures-native.json"]),
+  // Clients consider at most 16 offers.
+  assert.equal(BASES, 15);
+  const many = Array.from({ length: 20 }, (_, index) =>
+    release(`v2026.11.10.${index + 1}`, [mac(`2026.11.${1001 + index}`), "captures-native.json"]),
   );
+  const chosen = baseReleases(many, "aarch64-apple-darwin", "2026.11.1100", false);
+  assert.equal(chosen.length, 15);
+  assert.deepEqual([chosen[0].version, chosen.at(-1).version], ["2026.11.1020", "2026.11.1006"]);
+  // Other targets' artifacts in the same releases are not bases.
+  assert.deepEqual(baseReleases(many, "x86_64-pc-windows-msvc", "2026.11.1100", false), []);
+});
+
+test("Windows bases keep only what the installer writes to the install folder", () => {
   assert.deepEqual(
-    baseReleases(many, "aarch64-apple-darwin", "2026.11.2001", false).map((base) => base.version),
-    ["2026.11.1801", "2026.11.1701", "2026.11.1601", "2026.11.1501", "2026.11.1401"],
+    [
+      "captures.exe",
+      "ffmpeg.exe",
+      "notices",
+      "$PLUGINSDIR",
+      "[NSIS].nsi",
+      "Uninstall.exe",
+      "native_preview_update_helper.exe",
+    ].filter((name) => !installerOnly(name)),
+    ["captures.exe", "ffmpeg.exe", "notices", "native_preview_update_helper.exe"],
   );
 });

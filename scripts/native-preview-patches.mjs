@@ -1,37 +1,44 @@
-// Patch updates for the public and staging feeds (format and client:
+// Per-file patch updates for the public and staging feeds, the way Caper
+// does them (format and client: crates/captures-app/src/updater/patch.rs and
 // crates/captures-app/src/updater/preview/delta.rs).
 //
 // `generate TARGET VERSION DIRECTORY [--staging]` runs after `collect` in a
-// package job, with the updater signing key and GH_TOKEN. For the macOS and
-// AppImage updater artifacts in DIRECTORY it writes
-// `Captures-<version>-<target>.from-<base>.patch` from each of the BASES newest
-// earlier native builds of the same feed that still carry their artifact, and
-// for macOS the signature of the bundle tar those patches rebuild. Patches not
-// smaller than half the full artifact are dropped. A failure is a warning,
-// never a failed release: clients then download the full artifact.
-// `manifest` in native-preview-build.mjs lists what it wrote.
+// package job, with the updater signing key and GH_TOKEN. It unpacks the new
+// updater artifact in DIRECTORY to the package folder users end up with
+// (`Captures.app`, the installed Windows folder, the AppImage's AppDir), does
+// the same for each of the BASES newest earlier native builds of the same feed,
+// and writes `Captures-<version>-<target>.from-<base>.capturespatch` with its
+// own signature for every base: unchanged files are copied from the installed
+// package, changed ones are bsdiff or zstd deltas of the installed file, new
+// ones are carried whole. Patches not smaller than half the full artifact are
+// dropped. A failure is a warning, never a failed release: clients then
+// download the full artifact. `manifest` in native-preview-build.mjs lists
+// what it wrote.
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdtempSync, readdirSync, rmSync, statSync, unlinkSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+  unlinkSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import {
-  TARGETS,
-  patchName,
-  patchTargetName,
-  updaterArtifactName,
-} from "./native-preview-build.mjs";
+import { TARGETS, patchName, updaterArtifactName } from "./native-preview-build.mjs";
 
 const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
-export const BASES = 5;
+// Clients consider at most 16 offers (patch::MAX_OFFERS).
+export const BASES = 15;
 const NATIVE_MARKER = "captures-native.json";
 const PUBLIC_TAG = /^v\d{4}\.\d{2}\.\d{2}\.[1-9]\d?$/u;
 const STAGING_TAG = /^native-staging-\d+\.\d+\.\d+$/u;
-
-export function patchable(target) {
-  return target === "aarch64-apple-darwin" || target === "x86_64-unknown-linux-gnu";
-}
+const PATCH = /\.capturespatch(\.sig)?$/u;
 
 function compareVersions(left, right) {
   const a = left.split(".").map(Number);
@@ -74,87 +81,115 @@ export function baseReleases(releases, target, version, staging) {
     .slice(0, BASES);
 }
 
-function run(command, args, options = {}) {
-  return execFileSync(command, args, { stdio: ["ignore", "pipe", "inherit"], ...options });
+/** Entries 7-Zip shows in an NSIS installer that never reach the install
+ * folder: plugin files, the decompiled script, and the uninstaller NSIS
+ * writes at install time (its bytes differ per install). */
+export function installerOnly(name) {
+  return name.startsWith("$") || name.startsWith("[") || name.toLowerCase() === "uninstall.exe";
 }
 
-/** The file a patch for this target starts from or rebuilds, from an artifact. */
-function patchInput(target, artifact, work, helper) {
-  if (!target.includes("apple-darwin")) return artifact;
-  const unpacked = mkdtempSync(join(work, "app-"));
-  run("tar", ["-xzf", artifact, "-C", unpacked]);
-  const [app, ...others] = readdirSync(unpacked);
-  if (!app?.endsWith(".app") || others.length) throw new Error(`${artifact} is not one app bundle`);
-  const tar = join(work, `${app}-${readdirSync(work).length}.tar`);
-  run(helper, ["--bundle-tar", join(unpacked, app), tar]);
-  rmSync(unpacked, { recursive: true, force: true });
-  return tar;
+function run(command, args, options = {}) {
+  return execFileSync(command, args, {
+    stdio: ["ignore", "pipe", "inherit"],
+    maxBuffer: 256 * 1024 * 1024,
+    ...options,
+  });
+}
+
+/** The package folder an installed copy of `artifact` holds, unpacked into the
+ * new empty folder `into`. */
+export function unpack(target, artifact, into) {
+  mkdirSync(into, { recursive: true });
+  if (target.includes("apple-darwin")) {
+    run("tar", ["-xzf", artifact, "-C", into]);
+    const [app, ...others] = readdirSync(into);
+    if (!app?.endsWith(".app") || others.length)
+      throw new Error(`${artifact} is not one app bundle`);
+    return join(into, app);
+  }
+  if (target.includes("windows")) {
+    const folder = join(into, "Captures");
+    run("7z", ["x", "-y", `-o${folder}`, artifact]);
+    for (const name of readdirSync(folder))
+      if (installerOnly(name)) rmSync(join(folder, name), { recursive: true, force: true });
+    return folder;
+  }
+  // The AppImage runtime extracts the squashfs a running AppImage mounts.
+  const image = join(into, "Captures.AppImage");
+  copyFileSync(artifact, image);
+  chmodSync(image, 0o755);
+  const env = { ...process.env };
+  delete env.APPIMAGE_EXTRACT_AND_RUN;
+  run(image, ["--appimage-extract"], { cwd: into, env, stdio: ["ignore", "ignore", "inherit"] });
+  unlinkSync(image);
+  const folder = join(into, "Captures.AppDir");
+  renameSync(join(into, "squashfs-root"), folder);
+  return folder;
 }
 
 export function generate(target, version, directory, staging) {
-  if (!patchable(target)) return;
   const suffix = target.includes("windows") ? ".exe" : "";
   const helper = join(ROOT, "target", target, "release", `native_preview_update_helper${suffix}`);
   const artifact = join(directory, updaterArtifactName(target, version));
   const fullSize = statSync(artifact).size;
   const work = mkdtempSync(join(process.env.RUNNER_TEMP ?? tmpdir(), "captures-patches-"));
   try {
-    let next = patchInput(target, artifact, work, helper);
-    if (target.includes("apple-darwin")) {
-      const named = join(work, patchTargetName(target, version));
-      copyFileSync(next, named);
-      next = named;
-      run(process.execPath, [
-        join(ROOT, "node_modules/@tauri-apps/cli/tauri.js"),
-        "signer",
-        "sign",
-        next,
-      ]);
-      run(helper, ["--verify", version, next, `${next}.sig`]);
-      copyFileSync(`${next}.sig`, join(directory, `${patchTargetName(target, version)}.sig`));
-    }
+    const next = unpack(target, artifact, join(work, "release"));
     const releases = JSON.parse(
-      run(
-        "gh",
-        [
-          "api",
-          "--paginate",
-          "--slurp",
-          `repos/${process.env.GITHUB_REPOSITORY}/releases?per_page=100`,
-        ],
-        {
-          maxBuffer: 256 * 1024 * 1024,
-        },
-      ),
+      run("gh", [
+        "api",
+        "--paginate",
+        "--slurp",
+        `repos/${process.env.GITHUB_REPOSITORY}/releases?per_page=100`,
+      ]),
     ).flat();
     const bases = baseReleases(releases, target, version, staging);
     if (!bases.length) console.log(`No earlier ${target} builds to patch from.`);
-    for (const base of bases) {
+    for (const [index, base] of bases.entries()) {
       const output = join(directory, patchName(target, version, base.version));
+      const scratch = join(work, `base-${index}`);
       try {
-        const downloads = mkdtempSync(join(work, "base-"));
+        const downloads = join(scratch, "download");
         run("gh", ["release", "download", base.tag, "--pattern", base.name, "--dir", downloads]);
-        const from = patchInput(target, join(downloads, base.name), work, helper);
-        run(helper, ["--make-patch", from, next, output]);
-        rmSync(downloads, { recursive: true, force: true });
-        if (from !== join(downloads, base.name)) rmSync(from, { force: true });
-        const size = statSync(output).size;
-        if (size * 2 >= fullSize) {
+        const from = unpack(target, join(downloads, base.name), join(scratch, "package"));
+        const summary = JSON.parse(
+          run(helper, [
+            "--make-patch",
+            target,
+            base.version,
+            from,
+            version,
+            next,
+            output,
+          ]).toString(),
+        );
+        if (summary.size * 2 >= fullSize) {
           unlinkSync(output);
-          console.log(`Dropped the ${base.version} patch: ${size} of ${fullSize} bytes.`);
-        } else {
-          console.log(`Patch from ${base.version}: ${size} of ${fullSize} bytes.`);
+          console.log(`Dropped the ${base.version} patch: ${summary.size} of ${fullSize} bytes.`);
+          continue;
         }
+        run(process.execPath, [
+          join(ROOT, "node_modules/@tauri-apps/cli/tauri.js"),
+          "signer",
+          "sign",
+          output,
+        ]);
+        run(helper, ["--verify", version, output, `${output}.sig`]);
+        console.log(
+          `Patch from ${base.version}: ${summary.size} of ${fullSize} bytes ` +
+            `(${summary.copied} copied, ${summary.bsdiff} bsdiff, ${summary.zstd} zstd, ${summary.whole} whole).`,
+        );
       } catch (error) {
         rmSync(output, { force: true });
+        rmSync(`${output}.sig`, { force: true });
         console.log(`::warning::No ${target} patch from ${base.version}: ${error.message}`);
+      } finally {
+        rmSync(scratch, { recursive: true, force: true });
       }
     }
   } catch (error) {
-    for (const name of readdirSync(directory)) {
-      if (name.endsWith(".patch") || name.endsWith(".app.tar.sig"))
-        rmSync(join(directory, name), { force: true });
-    }
+    for (const name of readdirSync(directory))
+      if (PATCH.test(name)) rmSync(join(directory, name), { force: true });
     console.log(
       `::warning::No ${target} patch updates; clients download in full: ${error.message}`,
     );

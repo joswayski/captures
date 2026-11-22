@@ -108,6 +108,7 @@ SectionEnd
             },
         ],
         recovery: None,
+        patch: None,
     };
     let request_path = directory.join("install.json");
     fs::write(&request_path, serde_json::to_vec(&request).unwrap()).unwrap();

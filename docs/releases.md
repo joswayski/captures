@@ -91,12 +91,16 @@ failed installs. A `.deb` install cannot replace itself: its card offers View
 release and the captur.es fallback, the manual package update path. No GTK
 AppImage or `.deb` has had a real update run. GTK opens the desktop entry's `%U`
 files. The `.deb` depends on `libgtk-4-1` (GTK 4.6 or
-newer) in addition to the WebKitGTK/GTK 3 entries the CLI always adds. The
-AppImage carries `libgtk-4.so.1` and its libraries (linuxdeploy follows the
-binary's dependencies), but the CLI's GTK plugin is forced to GTK 3: it also
-bundles WebKitGTK/GTK 3 (about 130 MB in all), points `GTK_PATH` at `gtk-3.0`
-and exports `GDK_BACKEND=x11`, so the AppImage runs the GTK host through X11 or
-XWayland, never its native Wayland path. Neither host is accepted for cutover.
+newer) in addition to the WebKitGTK/GTK 3 entries the CLI always adds. The Tauri
+CLI bundles only the `.deb`: `native-preview-build.mjs` packs the AppImage
+itself. It lays out the AppDir as the CLI did (`usr/bin` with the sidecars,
+notices under `usr/lib/<product>`), runs pinned linuxdeploy with its GTK plugin
+at `DEPLOY_GTK_VERSION=4`, so only GTK 4 and its libraries are bundled (no
+WebKitGTK or GTK 3, about 130 MB less unpacked), stores the pinned type2 runtime
+at `.captures-appimage-runtime`, and packs runtime plus zstd squashfs with
+`native_preview_update_helper --appimage`, the same code a patch install uses.
+The GTK plugin still exports `GDK_BACKEND=x11`, so the AppImage runs the GTK
+host through X11 or XWayland, never its native Wayland path.
 
 Previously published native releases required all three platforms, Apple signing/notarization,
 FFmpeg notices, checksums and a draft before publication. Native artifacts use
@@ -187,40 +191,57 @@ Native Preview` profile directory.
 
 ### Patch updates
 
-An update from a recent release can download a patch instead of the whole
-updater artifact (`crates/captures-app/src/updater/preview/delta.rs`), as dbm
-does. Each platform in `latest.json` may list `patches`: `{from, url, size,
-signature}`. A patch is a bzip2 bsdiff that rebuilds a signed release file
-from the installed copy, so the result faces the same version- and
-target-bound signature check as a full download:
+An update from a recent release downloads a per-file patch instead of the whole
+updater artifact, the way Caper does it (`capturespatch1`:
+`crates/captures-app/src/updater/patch.rs`, client:
+`crates/captures-app/src/updater/preview/delta.rs`). A patch lists every
+folder, file and (AppImage) link of the new package with each file's size and
+SHA-256. Each file is copied from the installed package when unchanged, rebuilt
+from the installed file with a bsdiff or a zstd `--patch-from` delta (whichever
+is smaller; zstd wins on large changes), or carried whole. Comparing the
+uncompressed installed files keeps patches small even though every full
+artifact is a compressed container, and a release that changes most files
+still only carries the bytes that changed in each file. From 2026.11.21.9 to
+.10 the patches were about 1 MB for macOS (of 32 MB), 0.7 MB for Windows (of
+21.8 MB) and 1.7 MB for the AppImage (of 113 MB, before it dropped WebKitGTK;
+the GTK 4-only AppImage with 1 MiB zstd blocks is about 51 MB).
 
-- **AppImage:** from the running `$APPIMAGE` to the new AppImage. Its squashfs
-  stays compressed, so the patch carries the changed files' compressed blocks
-  (17 MB of 113 MB from 2026.11.21.9 to .10).
-- **macOS:** the `.app.tar.gz` is compressed, so patches rebuild
-  `Captures-<version>-<target>.app.tar`, a deterministic tar of the bundle
-  (sorted entries, regular files and folders only, modes 755/644, no owners or
-  times). The client tars the installed app the same way; the helper installs
-  the rebuilt tar like the `.tar.gz`. Only that tar's `.sig` is published (1 MB
-  of 32 MB from .9 to .10). DMG and updated installs hold identical bundles.
-- **Windows and Debian:** always the full download. The NSIS installer is
-  solid-compressed (a bsdiff is as large as the installer) and leaves no copy
-  to patch from; patching Windows would need an install path that replaces
-  files without NSIS.
+Each platform in `latest.json` may list `patches`: `{from, url, size,
+signature}`. The release key signs each patch under its own name,
+`Captures-<version>-<target>.from-<base>.capturespatch`, which binds the
+target, the new version and the installed version it starts from. The client
+verifies that signature, rebuilds the package into its private stage before
+quitting (every installed file it reads is hashed first, and the stage is
+reread against the patch), then hands the patch to the helper:
 
-A missing or changed base, a failed download or a signature mismatch falls
+- **macOS:** the helper rebuilds `Captures.app` from the installed bundle,
+  checks its `Info.plist` identity and swaps the bundle like a full install.
+- **Windows:** the helper rebuilds the package beside the installed files,
+  moves each over the installed one (keeping `<name>.captures-previous` until
+  the new version confirms startup, and restoring them on failure), updates the
+  uninstall entry's `DisplayVersion` and starts the new `captures.exe`, without
+  running the NSIS installer. Installs are per user, so no elevation is needed.
+- **AppImage:** the app rebuilds the AppDir from its own mount (`$APPDIR`); the
+  helper packs it into a new AppImage with the runtime the package carries,
+  checking every file against the patch again, and replaces the AppImage.
+- **Debian:** always manual; `dpkg` owns the installed files.
+
+A missing or changed installed file, a failed download or a bad signature falls
 back to the full artifact in the same attempt, so a patch only makes an update
-smaller. Clients from before patch support ignore the field.
+smaller. Clients from before per-file patches ignore the field.
 
 `scripts/native-preview-patches.mjs generate` runs after `collect` in each
-package job. It downloads the target's artifact from the five newest earlier
-native releases of the same feed (public releases with `captures-native.json`,
-or `native-staging-*`), writes `Captures-<version>-<target>.from-<base>.patch`
-with `native_preview_update_helper --make-patch` (which checks that the patch
-rebuilds the new file exactly) and, for macOS, signs the bundle tar from
-`--bundle-tar`. Patches not smaller than half the full artifact are dropped.
-Failures are warnings; the release continues with full downloads. `manifest`
-lists whatever patches the release carries. Patches stay on their releases.
+package job. It unpacks the new artifact to the package folder users have
+(`Captures.app` from the `.app.tar.gz`, the install folder from the NSIS
+installer with 7-Zip, the AppDir with `--appimage-extract`), does the same for
+the target's artifact from each of the 15 newest earlier native releases of the
+same feed (public releases with `captures-native.json`, or
+`native-staging-*`), writes each patch with `native_preview_update_helper
+--make-patch` (which rebuilds the new package from the base exactly as a client
+does before keeping it) and signs it. Patches not smaller than half the full
+artifact are dropped. Failures are warnings; the release continues with full
+downloads. `manifest` lists every signed patch the release carries. Patches
+stay on their releases.
 
 The staging feed always makes patches. Public releases make them only when the
 repository variable `CAPTURES_UPDATE_PATCHES` is `true`. Prove a patch update on

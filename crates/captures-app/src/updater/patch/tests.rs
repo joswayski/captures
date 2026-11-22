@@ -49,9 +49,9 @@ fn encode_trees(base: &Path, target: &Path, executables: &[&str]) -> (Vec<u8>, S
         &version(TO),
         target.file_name().unwrap().to_str().unwrap().to_owned(),
         base,
-        &tree(base, &HashSet::new(), &cancel).unwrap(),
+        &tree(base, &HashSet::new(), Links::Refuse, &cancel).unwrap(),
         target,
-        &tree(target, &executables, &cancel).unwrap(),
+        &tree(target, &executables, Links::Refuse, &cancel).unwrap(),
     )
     .unwrap()
 }
@@ -138,8 +138,8 @@ fn rebuilds_an_asymmetric_tree_exactly_from_the_installed_files() {
         .map(|path| join(&target, path))
         .collect();
     assert_eq!(
-        tree(&package, &executables, &cancel).unwrap(),
-        tree(&target, &expected, &cancel).unwrap()
+        tree(&package, &executables, Links::Refuse, &cancel).unwrap(),
+        tree(&target, &expected, Links::Refuse, &cancel).unwrap()
     );
     #[cfg(unix)]
     {
@@ -347,6 +347,138 @@ fn header_paths_ranges_and_bounds_are_validated_before_writing() {
         let stage = root.path().join(format!("case-{index}"));
         assert!(rebuild_bytes(&bytes, &base, &stage).is_err(), "{name}");
     }
+}
+
+#[test]
+fn zstd_sources_rebuild_from_the_installed_file_and_need_its_exact_bytes() {
+    let root = tempfile::tempdir().unwrap();
+    let base = root.path().join("base");
+    // Larger than zstd's default window, so the frame must reach far back.
+    let old = program(3, 3 << 20);
+    let mut new = old.clone();
+    new[100_000..300_000].copy_from_slice(&program(4, 200_000));
+    new.extend_from_slice(&program(5, 50_000));
+    write_tree(&base, &[("program", &old)], &[]);
+    let data = zstd_patch(&old, &new).unwrap();
+    assert!(data.len() < 300_000, "{} bytes", data.len());
+    let entry = |base_sha256: String| {
+        json!({"type": "file", "path": "program",
+            "executable": true, "size": new.len(), "sha256": hex(&new),
+            "source": {"kind": "zstd", "base": "program", "base_size": old.len(),
+                "base_sha256": base_sha256, "offset": 0, "length": data.len()}})
+    };
+    let bytes = header_patch(|h| h["entries"][0] = entry(hex(&old)), &data);
+    let (package, executables) = rebuild_bytes(&bytes, &base, &root.path().join("ok")).unwrap();
+    assert_eq!(fs::read(package.join("program")).unwrap(), new);
+    assert_eq!(executables, HashSet::from([package.join("program")]));
+    // The frame only decodes against the base it was made from.
+    let mut edited = old.clone();
+    edited[1_000_000] ^= 1;
+    fs::write(base.join("program"), &edited).unwrap();
+    assert!(rebuild_bytes(&bytes, &base, &root.path().join("edited")).is_err());
+    let lying = header_patch(|h| h["entries"][0] = entry(hex(&edited)), &data);
+    assert!(rebuild_bytes(&lying, &base, &root.path().join("lying")).is_err());
+}
+
+#[test]
+fn linux_packages_rebuild_links_that_stay_inside_the_package() {
+    let root = tempfile::tempdir().unwrap();
+    let base = root.path().join("base");
+    fs::create_dir(&base).unwrap();
+    let mut whole = bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::best());
+    whole.write_all(b"notice").unwrap();
+    let data = whole.finish().unwrap();
+    let notice = json!({"type": "file", "path": "usr/lib/libnotice.so.1", "executable": false,
+        "size": 6, "sha256": hex(b"notice"),
+        "source": {"kind": "whole", "offset": 0, "length": data.len()}});
+    let entries = |links: Value| {
+        let mut entries = vec![notice.clone()];
+        entries.extend(links.as_array().unwrap().iter().cloned());
+        Value::Array(entries)
+    };
+    let link = |path: &str, target: &str| json!({"type": "link", "path": path, "target": target});
+    #[cfg(unix)]
+    {
+        let valid = header_patch(
+            |h| {
+                h["entries"] = entries(json!([
+                    link("usr/lib/libnotice.so", "libnotice.so.1"),
+                    link("AppRun", "usr/bin/captures"),
+                    link("usr/share/up", "../../usr/lib/libnotice.so.1"),
+                ]))
+            },
+            &data,
+        );
+        let (package, _) = rebuild_bytes(&valid, &base, &root.path().join("valid")).unwrap();
+        assert_eq!(
+            fs::read_link(package.join("usr/lib/libnotice.so")).unwrap(),
+            Path::new("libnotice.so.1")
+        );
+        assert_eq!(
+            fs::read(package.join("usr/lib/libnotice.so")).unwrap(),
+            b"notice"
+        );
+        // Dangling inside the package is allowed: it is the package's own link.
+        assert_eq!(
+            fs::read_link(package.join("AppRun")).unwrap(),
+            Path::new("usr/bin/captures")
+        );
+        assert!(package.join("usr/share/up").exists());
+    }
+    let mut refused = vec![
+        ("absolute", link("usr/lib/abs", "/etc/passwd")),
+        ("escaping", link("usr/lib/up", "../../../outside")),
+        (
+            "escaping midway",
+            link("usr/x", "../../usr/lib/libnotice.so.1"),
+        ),
+        ("empty", link("usr/lib/empty", "")),
+        ("backslash", link("usr/lib/back", "..\\..\\x")),
+    ];
+    // Nothing is written through a link, in either order.
+    refused.push((
+        "file beneath a link",
+        json!({"type": "file", "path": "usr/lib/libnotice.so/inner", "executable": false,
+            "size": 6, "sha256": hex(b"notice"),
+            "source": {"kind": "whole", "offset": 0, "length": data.len()}}),
+    ));
+    for (index, (name, extra)) in refused.into_iter().enumerate() {
+        let bytes = header_patch(
+            |h| {
+                h["entries"] = entries(json!([
+                    link("usr/lib/libnotice.so", "libnotice.so.1"),
+                    extra
+                ]))
+            },
+            &data,
+        );
+        let stage = root.path().join(format!("refused-{index}"));
+        assert!(rebuild_bytes(&bytes, &base, &stage).is_err(), "{name}");
+    }
+    // Links exist only in AppImage packages.
+    let windows = header_patch(
+        |header| {
+            header["entries"] = entries(json!([link("usr/lib/libnotice.so", "libnotice.so.1")]));
+            header["target"] = json!(Target::WindowsX64.as_str());
+        },
+        &data,
+    );
+    let mut file = tempfile::tempfile().unwrap();
+    file.write_all(&windows).unwrap();
+    assert!(
+        rebuild(
+            &mut file,
+            &Expected {
+                target: Target::WindowsX64,
+                base_version: &version(FROM),
+                version: TO,
+            },
+            &base,
+            root.path().join("windows"),
+            &CancelToken::default(),
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -630,7 +762,7 @@ fn every_target_stages_from_the_installed_package_without_requesting_the_full_ar
             .unwrap();
         let cancel = CancelToken::default();
         let modes = |package: &Path| {
-            walk(package, &cancel)
+            walk(package, Links::Refuse, &cancel)
                 .unwrap()
                 .into_iter()
                 .map(|(path, found)| {

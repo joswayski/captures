@@ -1,11 +1,17 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
+  chmodSync,
   copyFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
+  rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { basename, join, resolve } from "node:path";
@@ -33,7 +39,8 @@ export const TARGETS = {
     host: "apps/native/gtk",
     binary: "captures-gtk",
     suffix: ".AppImage",
-    bundles: "appimage,deb",
+    // The AppImage is packed by `appImage` below, without Tauri's WebKitGTK.
+    bundles: "deb",
   },
 };
 
@@ -43,25 +50,20 @@ export function updaterArtifactName(target, version) {
   return `Captures-${version}-${target}${TARGETS[target].suffix}`;
 }
 
-/** The signed file a patch update rebuilds (`delta::target_name`): macOS
- * patches rebuild the uncompressed bundle tar, AppImage patches the AppImage. */
-export function patchTargetName(target, version) {
-  return target.includes("apple-darwin")
-    ? updaterArtifactName(target, version).replace(/\.gz$/u, "")
-    : updaterArtifactName(target, version);
-}
-
+/** A per-file patch update from `base` (`delta::patch_name`); each is signed
+ * under this name, which binds the target, release and starting version. */
 export function patchName(target, version, base) {
-  return `Captures-${version}-${target}.from-${base}.patch`;
+  return `Captures-${version}-${target}.from-${base}.capturespatch`;
 }
 
 /** Patch files in `names` for this release and target, newest base first. */
 export function patchFiles(names, target, version) {
   const prefix = `Captures-${version}-${target}.from-`;
+  const suffix = ".capturespatch";
   const order = (version) => version.split(".").map(Number);
   return names
-    .filter((name) => name.startsWith(prefix) && name.endsWith(".patch"))
-    .map((name) => ({ name, from: name.slice(prefix.length, -".patch".length) }))
+    .filter((name) => name.startsWith(prefix) && name.endsWith(suffix))
+    .map((name) => ({ name, from: name.slice(prefix.length, -suffix.length) }))
     .filter(({ from }) => /^\d+\.\d+\.\d+$/u.test(from))
     .sort((left, right) => {
       const [a, b] = [order(right.from), order(left.from)];
@@ -164,6 +166,145 @@ function run(command, arguments_, options = {}) {
   return execFileSync(command, arguments_, { cwd: ROOT, stdio: "inherit", ...options });
 }
 
+// Pinned AppImage tools: linuxdeploy collects the GTK 4 libraries, the type2
+// runtime starts the image. The helper packs the squashfs itself, the same way
+// a patch install does (crates/captures-app/src/updater/preview/appimage.rs).
+export const APPIMAGE_TOOLS = {
+  "linuxdeploy-x86_64.AppImage": {
+    url: "https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-x86_64.AppImage",
+    sha256: "c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d",
+  },
+  "linuxdeploy-plugin-gtk.sh": {
+    url: "https://raw.githubusercontent.com/linuxdeploy/linuxdeploy-plugin-gtk/7a3fbc31a9e5075073ff8790f26effbac5f84453/linuxdeploy-plugin-gtk.sh",
+    sha256: "b0f4cbc684a0103a9651f0955b635eaea0096b3a66c0f5a2c2aa337960375171",
+  },
+  "runtime-x86_64": {
+    url: "https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64",
+    sha256: "2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d",
+  },
+};
+// Where the AppDir carries its runtime, for patch installs to repack with.
+export const APPIMAGE_RUNTIME = ".captures-appimage-runtime";
+
+function appImageTools() {
+  const directory = join(ROOT, "target/appimage-tools");
+  mkdirSync(directory, { recursive: true });
+  for (const [name, { url, sha256 }] of Object.entries(APPIMAGE_TOOLS)) {
+    const path = join(directory, name);
+    const digest = () => createHash("sha256").update(readFileSync(path)).digest("hex");
+    if (!existsSync(path) || digest() !== sha256) {
+      run("curl", [
+        "--fail",
+        "--location",
+        "--silent",
+        "--show-error",
+        "--retry",
+        "3",
+        "-o",
+        path,
+        url,
+      ]);
+      if (digest() !== sha256) throw new Error(`${name} does not match its pinned SHA-256`);
+    }
+    chmodSync(path, 0o755);
+  }
+  return directory;
+}
+
+/** The desktop entry Tauri's template rendered for the AppImage and `.deb`. */
+export function desktopEntry(base, productName, executable, associations) {
+  const mimeTypes = associations.map((association) => association.mimeType).join(";");
+  return [
+    "[Desktop Entry]",
+    `Categories=${base.bundle.category};`,
+    `Comment=${base.bundle.shortDescription}`,
+    `Exec=${executable} %U`,
+    `StartupWMClass=${executable}`,
+    `Icon=${executable}`,
+    `Name=${productName}`,
+    "Terminal=false",
+    "Type=Application",
+    ...(mimeTypes ? [`MimeType=${mimeTypes}`] : []),
+    "",
+  ].join("\n");
+}
+
+/** The Linux AppImage: the GTK 4 host and its sidecars in the layout Tauri used
+ * (`usr/bin`, notices in `usr/lib/<product>`), GTK 4 libraries only. */
+function appImage(target, version, mainBinary, configuration, env) {
+  const base = JSON.parse(readFileSync(join(ROOT, BUNDLE, "tauri.conf.json"), "utf8"));
+  const productName = configuration.productName ?? base.productName;
+  const release = join(ROOT, "target", target, "release");
+  const appdir = join(release, "appimage", `${productName}.AppDir`);
+  rmSync(join(release, "appimage"), { recursive: true, force: true });
+  const bin = join(appdir, "usr/bin");
+  mkdirSync(bin, { recursive: true });
+  copyFileSync(join(release, mainBinary), join(bin, mainBinary));
+  for (const sidecar of ["ffmpeg", "ffprobe", "native_preview_update_helper"])
+    copyFileSync(join(ROOT, BUNDLE, "binaries", `${sidecar}-${target}`), join(bin, sidecar));
+  for (const name of readdirSync(bin)) chmodSync(join(bin, name), 0o755);
+  for (const [source, destination] of Object.entries(configuration.bundle.resources))
+    cpSync(join(ROOT, BUNDLE, source), join(appdir, "usr/lib", productName, destination), {
+      recursive: true,
+    });
+  for (const [size, icon] of [
+    ["32x32", "32x32.png"],
+    ["128x128", "128x128.png"],
+    ["256x256", "128x128@2x.png"],
+  ]) {
+    const folder = join(appdir, "usr/share/icons/hicolor", size, "apps");
+    mkdirSync(folder, { recursive: true });
+    copyFileSync(join(ROOT, BUNDLE, "icons", icon), join(folder, `${mainBinary}.png`));
+  }
+  const desktop = join(release, "appimage", `${mainBinary}.desktop`);
+  writeFileSync(
+    desktop,
+    desktopEntry(
+      base,
+      productName,
+      mainBinary,
+      configuration.bundle.fileAssociations ?? base.bundle.fileAssociations,
+    ),
+  );
+  const tools = appImageTools();
+  run(
+    join(tools, "linuxdeploy-x86_64.AppImage"),
+    [
+      "--appdir",
+      appdir,
+      "--executable",
+      join(bin, mainBinary),
+      "--desktop-file",
+      desktop,
+      "--icon-file",
+      join(appdir, "usr/share/icons/hicolor/256x256/apps", `${mainBinary}.png`),
+      "--plugin",
+      "gtk",
+    ],
+    {
+      env: {
+        ...env,
+        PATH: `${tools}:${env.PATH}`,
+        ARCH: "x86_64",
+        APPIMAGE_EXTRACT_AND_RUN: "1",
+        DEPLOY_GTK_VERSION: "4",
+        // Ship the binaries exactly as built and checked.
+        NO_STRIP: "1",
+      },
+    },
+  );
+  // appimagetool used to add this; file managers show it as the image's icon.
+  symlinkSync(`${mainBinary}.png`, join(appdir, ".DirIcon"));
+  copyFileSync(join(tools, "runtime-x86_64"), join(appdir, APPIMAGE_RUNTIME));
+  chmodSync(join(appdir, APPIMAGE_RUNTIME), 0o644);
+  const output = join(release, "bundle/appimage");
+  mkdirSync(output, { recursive: true });
+  const image = join(output, `${productName}_${version}_amd64.AppImage`);
+  rmSync(image, { force: true });
+  run(join(release, "native_preview_update_helper"), ["--appimage", appdir, `${image}.partial`]);
+  renameSync(`${image}.partial`, image);
+}
+
 export function build(target, version, unsigned = false, sideBySide = false, staging = false) {
   if (staging && unsigned) throw new Error("Staging builds publish signed updater artifacts");
   sideBySide ||= staging;
@@ -254,10 +395,11 @@ export function build(target, version, unsigned = false, sideBySide = false, sta
   copyFileSync(nativeBinary, join(release, `${mainBinary}${exe}`));
   const config = join(ROOT, "target/native-preview-bundle.json");
   const configuration = bundleConfiguration(target, version, ROOT, sideBySide);
-  if (unsigned || (sideBySide && !staging)) configuration.bundle.createUpdaterArtifacts = false;
+  if (unsigned || (sideBySide && !staging) || specification.renderer === "gtk")
+    configuration.bundle.createUpdaterArtifacts = false;
   writeFileSync(config, `${JSON.stringify(configuration, null, 2)}\n`);
-  // The Tauri CLI is ONLY a build-time installer bundler (DMG, NSIS, AppImage,
-  // deb). No Tauri code, frontend or WebView runtime enters the executable.
+  // The Tauri CLI is ONLY a build-time installer bundler (DMG, NSIS, deb). No
+  // Tauri code, frontend or WebView runtime enters the executable.
   run(
     process.execPath,
     [
@@ -273,6 +415,7 @@ export function build(target, version, unsigned = false, sideBySide = false, sta
     ],
     { cwd: join(ROOT, BUNDLE), env },
   );
+  if (specification.renderer === "gtk") appImage(target, version, mainBinary, configuration, env);
 }
 
 export function collect(target, version, output) {
@@ -355,18 +498,19 @@ export function manifest(directory, version, repository, tag, notes = "") {
       size: statSync(join(directory, name)).size,
     };
   }
-  // Patch updates written by native-preview-patches.mjs, when there are any.
+  // Patch updates written by native-preview-patches.mjs, each signed under its
+  // own name. A patch without its signature is left out.
   const names = readdirSync(directory);
   for (const [target, specification] of Object.entries(TARGETS)) {
-    const patches = patchFiles(names, target, version);
-    const rebuiltName = patchTargetName(target, version);
-    if (!patches.length || !existsSync(join(directory, `${rebuiltName}.sig`))) continue;
-    const rebuilt = signature(rebuiltName);
+    const patches = patchFiles(names, target, version).filter(({ name }) =>
+      existsSync(join(directory, `${name}.sig`)),
+    );
+    if (!patches.length) continue;
     platforms[specification.platform].patches = patches.map(({ name, from }) => ({
       from,
       url: url(name),
       size: statSync(join(directory, name)).size,
-      signature: rebuilt,
+      signature: signature(name),
     }));
   }
   return { version, notes, platforms };

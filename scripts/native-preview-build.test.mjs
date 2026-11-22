@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "vitest";
 
 import {
   bundleConfiguration,
+  desktopEntry,
   manifest,
   nativeHostBuild,
   TARGETS,
@@ -149,7 +150,7 @@ test("the shared updater manifest requires every version-bound native artifact a
   );
 });
 
-test("the manifest lists patch updates newest base first, signed for the file they rebuild", () => {
+test("the manifest lists patch updates newest base first, each signed under its own name", () => {
   const directory = mkdtempSync(join(tmpdir(), "captures-native-patches-"));
   const version = "2026.11.1001";
   const sign = (name) =>
@@ -165,16 +166,24 @@ test("the manifest lists patch updates newest base first, signed for the file th
     writeFileSync(join(directory, name), "full artifact");
     sign(name);
   }
-  sign("Captures-2026.11.1001-aarch64-apple-darwin.app.tar");
-  for (const name of [
+  const signed = [
     // 902 sorts after 1001 as text but is the older build.
-    "Captures-2026.11.1001-aarch64-apple-darwin.from-2026.11.902.patch",
-    "Captures-2026.11.1001-aarch64-apple-darwin.from-2026.11.1000.patch",
-    "Captures-2026.11.1001-x86_64-unknown-linux-gnu.from-2026.11.1000.patch",
+    "Captures-2026.11.1001-aarch64-apple-darwin.from-2026.11.902.capturespatch",
+    "Captures-2026.11.1001-aarch64-apple-darwin.from-2026.11.1000.capturespatch",
+    "Captures-2026.11.1001-x86_64-pc-windows-msvc.from-2026.11.1000.capturespatch",
+    "Captures-2026.11.1001-x86_64-unknown-linux-gnu.from-2026.11.1000.capturespatch",
     // Another release's patch in the same folder.
-    "Captures-2026.11.1000-aarch64-apple-darwin.from-2026.11.902.patch",
-  ])
+    "Captures-2026.11.1000-aarch64-apple-darwin.from-2026.11.902.capturespatch",
+  ];
+  for (const name of signed) {
     writeFileSync(join(directory, name), "p");
+    sign(name);
+  }
+  // A patch whose signing failed is never offered.
+  writeFileSync(
+    join(directory, "Captures-2026.11.1001-aarch64-apple-darwin.from-2026.11.901.capturespatch"),
+    "p",
+  );
   const { platforms } = manifest(directory, version, "joswayski/captures", "v2026.11.10.1");
   const mac = platforms["darwin-aarch64"].patches;
   assert.deepEqual(
@@ -183,15 +192,43 @@ test("the manifest lists patch updates newest base first, signed for the file th
   );
   assert.equal(
     mac[0].url,
-    "https://github.com/joswayski/captures/releases/download/v2026.11.10.1/Captures-2026.11.1001-aarch64-apple-darwin.from-2026.11.1000.patch",
+    "https://github.com/joswayski/captures/releases/download/v2026.11.10.1/Captures-2026.11.1001-aarch64-apple-darwin.from-2026.11.1000.capturespatch",
   );
   assert.equal(mac[0].size, 1);
   assert.match(
     Buffer.from(mac[0].signature, "base64").toString(),
-    /file:Captures-2026\.11\.1001-aarch64-apple-darwin\.app\.tar\n/u,
+    /file:Captures-2026\.11\.1001-aarch64-apple-darwin\.from-2026\.11\.1000\.capturespatch\n/u,
   );
-  // The AppImage patch rebuilds the AppImage itself.
-  assert.equal(platforms["linux-x86_64"].patches[0].signature, platforms["linux-x86_64"].signature);
-  assert.equal(platforms["windows-x86_64"].patches, undefined);
+  for (const platform of ["windows-x86_64", "linux-x86_64"]) {
+    const [patch] = platforms[platform].patches;
+    assert.equal(patch.from, "2026.11.1000");
+    assert.notEqual(patch.signature, platforms[platform].signature);
+  }
   assert.equal(platforms["linux-x86_64-deb"].patches, undefined);
+});
+
+test("the AppImage desktop entry is the one Tauri's template rendered", () => {
+  const base = JSON.parse(readFileSync("apps/native/bundle/tauri.conf.json", "utf8"));
+  // From the 2026.11.2110 AppImage, the last one Tauri packed.
+  assert.equal(
+    desktopEntry(base, "Captures", "captures", base.bundle.fileAssociations),
+    [
+      "[Desktop Entry]",
+      "Categories=Utility;",
+      "Comment=A lightweight screen capture utility",
+      "Exec=captures %U",
+      "StartupWMClass=captures",
+      "Icon=captures",
+      "Name=Captures",
+      "Terminal=false",
+      "Type=Application",
+      "MimeType=image/png;image/jpeg;image/webp;image/gif;video/mp4;video/webm",
+      "",
+    ].join("\n"),
+  );
+  // Side-by-side test installs claim no file types.
+  assert.doesNotMatch(
+    desktopEntry(base, "Captures Native Test", "captures-native-test", []),
+    /MimeType/u,
+  );
 });

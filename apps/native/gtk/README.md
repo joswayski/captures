@@ -230,9 +230,9 @@ package-use lock and opens `%U` paths or `file:` URIs from its desktop entry.
 It starts the startup recovery companion before importing the profile and
 acknowledges readiness once settings, the display and the packaged
 FFmpeg/FFprobe are ready. The `.deb` needs `libgtk-4-1`
-(GTK 4.6 or newer) installed. The AppImage carries its GTK 4 libraries, but
-the Tauri CLI's GTK hook exports `GDK_BACKEND=x11`, so it runs on X11 or
-XWayland only.
+(GTK 4.6 or newer) installed. The AppImage carries its GTK 4 libraries (and
+no WebKitGTK or GTK 3), but linuxdeploy's GTK hook exports `GDK_BACKEND=x11`,
+so it runs on X11 or XWayland only.
 
 The host uses GTK's default renderer. On a machine whose GL is software-only
 or broken, `GSK_RENDERER=cairo` is a manual override; the host never switches

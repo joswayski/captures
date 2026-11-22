@@ -5,16 +5,21 @@
 //! stages (relative to the single package folder), with each file's size,
 //! SHA-256 and execute bit. Each file is
 //! - copied from an installed file whose bytes did not change (any path),
-//! - rebuilt with a bzip2 BSDIFF40 patch of the installed file at a path, or
+//! - rebuilt with a bzip2 BSDIFF40 patch of the installed file at a path,
+//! - rebuilt from a zstd frame that uses the installed file as its reference
+//!   prefix (`zstd --patch-from`), whichever of the two is smaller, or
 //! - carried whole, bzip2-compressed.
+//!
+//! AppImage packages may also hold relative links inside the package.
 //!
 //! The signed manifest pins the patch's own size and SHA-256, so its contents
 //! are as trusted as the full archive. Clients hash every installed file they
 //! read, rebuild into the private stage under the same path/entry/size rules as
 //! full extraction, then reread the stage and require exactly the listed entries
 //! and bytes before normal package validation. Any failure except cancellation
-//! falls back to the full archive in the same attempt. Native packages hold no
-//! links, so neither patches nor installed bases may use them.
+//! falls back to the full archive in the same attempt. Only Linux packages
+//! (AppDirs) may hold links, and only relative ones that stay inside the package;
+//! patches never read an installed file through a link.
 //!
 //! Layout: `CAPTURESPATCH1\n`, the JSON header length (u32, little endian), the
 //! JSON [`Header`], then the data that file sources point into.
@@ -38,6 +43,8 @@ const SCHEMA: u32 = 1;
 /// The manifest `delta.format` for per-file patches.
 pub const FORMAT: &str = "capturespatch1";
 const MAX_HEADER_BYTES: u32 = 4 * 1024 * 1024;
+/// zstd's 64-bit maximum: a prefix-relative window covers base plus target.
+const ZSTD_WINDOW_LOG_MAX: u32 = 31;
 /// Patches per artifact a client considers. Release tooling keeps six; each
 /// offer adds about 250 bytes to the signed manifest.
 pub const MAX_OFFERS: usize = 16;
@@ -67,6 +74,11 @@ enum Entry {
         sha256: String,
         source: FileSource,
     },
+    /// A relative link inside a Linux package.
+    Link {
+        path: String,
+        target: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,6 +96,15 @@ enum FileSource {
     },
     /// The whole file, bzip2-compressed.
     Whole { offset: u64, length: u64 },
+    /// A zstd frame compressed with the installed file at `base` as its
+    /// reference prefix.
+    Zstd {
+        base: String,
+        base_size: u64,
+        base_sha256: String,
+        offset: u64,
+        length: u64,
+    },
 }
 
 #[derive(Deserialize)]
@@ -285,26 +306,29 @@ impl Retained {
 }
 
 /// What the signed manifest says the patch must turn into.
-struct Expected<'a> {
-    target: Target,
-    base_version: &'a Version,
-    version: &'a str,
+pub(super) struct Expected<'a> {
+    pub target: Target,
+    pub base_version: &'a Version,
+    pub version: &'a str,
 }
 
 /// A directory or file as staged, without where its bytes come from.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Node {
+pub(super) enum Node {
     Dir,
     File {
         size: u64,
         sha256: [u8; 32],
         executable: bool,
     },
+    Link {
+        target: String,
+    },
 }
 
 /// Rebuild the package described by `patch` from `base` under `root` (which
 /// must not exist) and return the package folder and its executable files.
-fn rebuild(
+pub(super) fn rebuild(
     patch: &mut File,
     expected: &Expected,
     base: &Path,
@@ -333,6 +357,17 @@ fn rebuild(
         check_cancel(cancel)?;
         let (path, node) = match entry {
             Entry::Dir { path } => (path, Node::Dir),
+            Entry::Link { path, target } => {
+                if header.target != Target::LinuxX64 || !safe_link(path, target) {
+                    return Err(Error::ArchivePath);
+                }
+                (
+                    path,
+                    Node::Link {
+                        target: target.clone(),
+                    },
+                )
+            }
             Entry::File {
                 path,
                 executable,
@@ -349,6 +384,13 @@ fn rebuild(
                 let source_ok = match source {
                     FileSource::Copy { base } => safe_path(base),
                     FileSource::Bsdiff {
+                        base,
+                        base_size,
+                        base_sha256,
+                        offset,
+                        length,
+                    }
+                    | FileSource::Zstd {
                         base,
                         base_size,
                         base_sha256,
@@ -379,7 +421,7 @@ fn rebuild(
         let directory = node == Node::Dir;
         let size = match node {
             Node::File { size, .. } => size,
-            Node::Dir => 0,
+            Node::Dir | Node::Link { .. } => 0,
         };
         targets.push(extraction.reserve(&format!("{}/{path}", header.root), directory, size)?);
         // Folders that paths only imply are created and must exist too.
@@ -397,6 +439,16 @@ fn rebuild(
         check_cancel(cancel)?;
         match entry {
             Entry::Dir { .. } => fs::create_dir_all(target)?,
+            Entry::Link { target: link, .. } => {
+                fs::create_dir_all(target.parent().ok_or(Error::ArchivePath)?)?;
+                #[cfg(unix)]
+                std::os::unix::fs::symlink(link, target)?;
+                #[cfg(not(unix))]
+                {
+                    let _ = link;
+                    return Err(Error::Target);
+                }
+            }
             Entry::File {
                 executable,
                 size,
@@ -422,6 +474,63 @@ fn rebuild(
     }
     verify_tree(&package, &wanted, cancel)?;
     Ok((package, executables))
+}
+
+/// The package a patch describes, for installers that pack an already rebuilt
+/// and verified stage: its folder name and every entry by path, including the
+/// folders its paths imply. Checks the expected release and every path.
+#[cfg(target_os = "linux")]
+pub(super) fn entries(
+    patch: &mut File,
+    expected: &Expected,
+) -> Result<(String, BTreeMap<String, Node>), Error> {
+    let (header, _) = read_header(patch)?;
+    let release = Version::parse(expected.version).map_err(|_| Error::Version)?;
+    if header.target != expected.target
+        || Version::parse(&header.base_version).ok().as_ref() != Some(expected.base_version)
+        || Version::parse(&header.version).ok() != Some(release)
+    {
+        return Err(Error::Manifest);
+    }
+    if !safe_path(&header.root) || header.root.contains('/') {
+        return Err(Error::ArchivePath);
+    }
+    let mut wanted = BTreeMap::new();
+    for entry in header.entries {
+        let (path, node) = match entry {
+            Entry::Dir { path } => (path, Node::Dir),
+            Entry::Link { path, target } => {
+                if !safe_link(&path, &target) {
+                    return Err(Error::ArchivePath);
+                }
+                (path, Node::Link { target })
+            }
+            Entry::File {
+                path,
+                executable,
+                size,
+                sha256,
+                ..
+            } => (
+                path,
+                Node::File {
+                    size,
+                    sha256: decode_hash(&sha256)?,
+                    executable,
+                },
+            ),
+        };
+        if !safe_path(&path) {
+            return Err(Error::ArchivePath);
+        }
+        let mut parent = path.as_str();
+        while let Some((folder, _)) = parent.rsplit_once('/') {
+            wanted.entry(folder.to_owned()).or_insert(Node::Dir);
+            parent = folder;
+        }
+        wanted.insert(path, node);
+    }
+    Ok((header.root, wanted))
 }
 
 fn write_file(
@@ -464,6 +573,25 @@ fn write_file(
             qbsdiff::Bspatch::new(&delta)
                 .and_then(|patcher| patcher.apply(&source, &mut output))
                 .map_err(|_| Error::Archive)?;
+        }
+        FileSource::Zstd {
+            base: path,
+            base_size,
+            base_sha256,
+            offset,
+            length,
+        } => {
+            let source = read_verified(
+                open_base(base, path)?,
+                *base_size,
+                decode_hash(base_sha256)?,
+                cancel,
+            )?;
+            let compressed = read_data(patch, data_start, *offset, *length)?;
+            let mut decoder =
+                zstd::stream::read::Decoder::with_ref_prefix(&compressed[..], &source)?;
+            decoder.window_log_max(ZSTD_WINDOW_LOG_MAX)?;
+            io::copy(&mut decoder.take(size + 1), &mut output).map_err(|_| Error::Archive)?;
         }
         FileSource::Whole { offset, length } => {
             let compressed = read_data(patch, data_start, *offset, *length)?;
@@ -517,6 +645,27 @@ fn safe_path(path: &str) -> bool {
         })
 }
 
+/// A relative link whose target, resolved from the link's folder, stays inside
+/// the package.
+fn safe_link(path: &str, target: &str) -> bool {
+    if !safe_path(path) || target.is_empty() || target.len() > 1024 || target.starts_with('/') {
+        return false;
+    }
+    let mut depth = path.matches('/').count() as i64;
+    for part in target.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => depth -= 1,
+            part if part.contains(['\\', ':', '\0']) => return false,
+            _ => depth += 1,
+        }
+        if depth < 0 {
+            return false;
+        }
+    }
+    true
+}
+
 fn join(root: &Path, path: &str) -> PathBuf {
     path.split('/')
         .fold(root.to_owned(), |path, part| path.join(part))
@@ -563,7 +712,7 @@ fn read_verified(
     Ok(bytes)
 }
 
-fn hash_file(path: &Path, cancel: &CancelToken) -> Result<[u8; 32], Error> {
+pub(super) fn hash_file(path: &Path, cancel: &CancelToken) -> Result<[u8; 32], Error> {
     let mut file = File::open(path)?;
     let mut hasher = Sha256::new();
     let mut buffer = [0; 64 * 1024];
@@ -578,19 +727,29 @@ fn hash_file(path: &Path, cancel: &CancelToken) -> Result<[u8; 32], Error> {
     Ok(hasher.finalize().into())
 }
 
-/// A directory or file found on disk, relative to the package folder.
+/// What [`walk`] does with links: fail, leave them out, or record them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Links {
+    Refuse,
+    Skip,
+    Keep,
+}
+
+/// A directory, file or (with [`Links::Keep`]) link found on disk, relative to
+/// the package folder.
 #[derive(Debug)]
 struct Found {
     directory: bool,
+    link: Option<String>,
     size: u64,
     path: PathBuf,
     #[cfg_attr(not(unix), allow(dead_code))]
     mode: u32,
 }
 
-/// Every entry beneath `root`, refusing links, other file types and non-UTF-8
-/// names, bounded like extraction.
-fn walk(root: &Path, cancel: &CancelToken) -> Result<BTreeMap<String, Found>, Error> {
+/// Every entry beneath `root`, refusing other file types and non-UTF-8 names,
+/// bounded like extraction. Links are never followed.
+fn walk(root: &Path, links: Links, cancel: &CancelToken) -> Result<BTreeMap<String, Found>, Error> {
     let mut found = BTreeMap::new();
     let mut pending = vec![(root.to_owned(), String::new())];
     while let Some((folder, prefix)) = pending.pop() {
@@ -607,9 +766,22 @@ fn walk(root: &Path, cancel: &CancelToken) -> Result<BTreeMap<String, Found>, Er
                 format!("{prefix}/{name}")
             };
             let metadata = fs::symlink_metadata(item.path())?;
-            if metadata.file_type().is_symlink() || !(metadata.is_file() || metadata.is_dir()) {
+            let link = if metadata.file_type().is_symlink() {
+                match links {
+                    Links::Refuse => return Err(Error::ArchivePath),
+                    Links::Skip => continue,
+                    Links::Keep => Some(
+                        fs::read_link(item.path())?
+                            .into_os_string()
+                            .into_string()
+                            .map_err(|_| Error::ArchivePath)?,
+                    ),
+                }
+            } else if metadata.is_file() || metadata.is_dir() {
+                None
+            } else {
                 return Err(Error::ArchivePath);
-            }
+            };
             if found.len() >= staging::MAX_ENTRIES {
                 return Err(Error::Archive);
             }
@@ -627,6 +799,7 @@ fn walk(root: &Path, cancel: &CancelToken) -> Result<BTreeMap<String, Found>, Er
                 relative,
                 Found {
                     directory: metadata.is_dir(),
+                    link,
                     size: metadata.len(),
                     path: item.path(),
                     mode,
@@ -644,7 +817,7 @@ fn verify_tree(
     wanted: &BTreeMap<String, Node>,
     cancel: &CancelToken,
 ) -> Result<(), Error> {
-    let found = walk(package, cancel)?;
+    let found = walk(package, Links::Keep, cancel)?;
     if found.len() != wanted.len() {
         return Err(Error::Package);
     }
@@ -652,12 +825,14 @@ fn verify_tree(
         let actual = found.get(path).ok_or(Error::Package)?;
         let matches = match node {
             Node::Dir => actual.directory,
+            Node::Link { target } => actual.link.as_ref() == Some(target),
             Node::File {
                 size,
                 sha256,
                 executable,
             } => {
                 !actual.directory
+                    && actual.link.is_none()
                     && actual.size == *size
                     && (!cfg!(unix) || actual.mode == if *executable { 0o700 } else { 0o600 })
                     && hash_file(&actual.path, cancel)? == *sha256
@@ -799,7 +974,25 @@ pub struct Summary {
     pub sha256: String,
     pub copied: usize,
     pub bsdiff: usize,
+    pub zstd: usize,
     pub whole: usize,
+}
+
+/// Below this, a bsdiff is kept without also trying zstd.
+const ZSTD_ATTEMPT_BYTES: usize = 256 * 1024;
+
+/// `zstd --patch-from`: level 19 with long-distance matching and a window that
+/// reaches from the end of `target` back to the start of the `base` prefix.
+fn zstd_patch(base: &[u8], target: &[u8]) -> Result<Vec<u8>, Error> {
+    let span = (base.len() + target.len()).max(1 << 10) as u64;
+    let window = (64 - (span - 1).leading_zeros()).clamp(10, ZSTD_WINDOW_LOG_MAX);
+    let mut encoder = zstd::stream::write::Encoder::with_ref_prefix(Vec::new(), 19, base)?;
+    encoder.long_distance_matching(true)?;
+    encoder.window_log(window)?;
+    encoder.include_contentsize(true)?;
+    encoder.set_pledged_src_size(Some(target.len() as u64))?;
+    encoder.write_all(target)?;
+    Ok(encoder.finish()?)
 }
 
 /// Writes a new patch file at `output` from `base` (a full archive of
@@ -837,8 +1030,99 @@ pub fn generate(
         &cancel,
     )?;
     staging::validate_package(&target_root, target, &executables, &cancel)?;
-    let base_tree = tree(&base_root, &HashSet::new(), &cancel)?;
-    let target_tree = tree(&target_root, &executables, &cancel)?;
+    write_proven(
+        target,
+        base_version,
+        version,
+        &base_root,
+        &target_root,
+        &executables,
+        Links::Refuse,
+        work.path(),
+        output,
+        |package, executables| {
+            staging::validate_package(package, target, executables, &cancel).map(|_| ())
+        },
+    )
+}
+
+/// Release tooling for the public feed: [`generate`] from unpacked package
+/// folders (an `.app`, an installed Windows folder or an AppDir). Execute bits
+/// come from file modes; links are kept for Linux and the base's are skipped,
+/// since patches only read regular installed files.
+pub fn generate_folders(
+    target: Target,
+    base_root: &Path,
+    base_version: &Version,
+    target_root: &Path,
+    version: &Version,
+    output: &Path,
+) -> Result<Summary, Error> {
+    if version.cmp_precedence(base_version).is_le() {
+        return Err(Error::Version);
+    }
+    let parent = output.parent().ok_or(Error::Configuration(
+        "patch output needs a parent directory",
+    ))?;
+    let work = tempfile::Builder::new()
+        .prefix(".captures-native-patch-")
+        .tempdir_in(parent)?;
+    let links = if target == Target::LinuxX64 {
+        Links::Keep
+    } else {
+        Links::Refuse
+    };
+    let executables = executables(target_root, links, &CancelToken::default())?;
+    write_proven(
+        target,
+        base_version,
+        version,
+        base_root,
+        target_root,
+        &executables,
+        links,
+        work.path(),
+        output,
+        |_, _| Ok(()),
+    )
+}
+
+/// Files beneath `root` whose mode has an execute bit (none off Unix).
+pub(super) fn executables(
+    root: &Path,
+    links: Links,
+    cancel: &CancelToken,
+) -> Result<HashSet<PathBuf>, Error> {
+    Ok(walk(root, links, cancel)?
+        .into_values()
+        .filter(|found| found.link.is_none() && !found.directory && found.mode & 0o111 != 0)
+        .map(|found| found.path)
+        .collect())
+}
+
+/// Encode the patch, rebuild `target_root` from `base_root` with it exactly as a
+/// client does, and persist it at `output` only when the rebuild matches.
+#[allow(clippy::too_many_arguments)]
+fn write_proven(
+    target: Target,
+    base_version: &Version,
+    version: &Version,
+    base_root: &Path,
+    target_root: &Path,
+    executables: &HashSet<PathBuf>,
+    links: Links,
+    work: &Path,
+    output: &Path,
+    validate: impl Fn(&Path, &HashSet<PathBuf>) -> Result<(), Error>,
+) -> Result<Summary, Error> {
+    let cancel = CancelToken::default();
+    let base_links = if links == Links::Keep {
+        Links::Skip
+    } else {
+        Links::Refuse
+    };
+    let base_tree = tree(base_root, &HashSet::new(), base_links, &cancel)?;
+    let target_tree = tree(target_root, executables, links, &cancel)?;
     let root = target_root
         .file_name()
         .and_then(|name| name.to_str())
@@ -849,12 +1133,15 @@ pub fn generate(
         base_version,
         version,
         root,
-        &base_root,
+        base_root,
         &base_tree,
-        &target_root,
+        target_root,
         &target_tree,
     )?;
 
+    let parent = output.parent().ok_or(Error::Configuration(
+        "patch output needs a parent directory",
+    ))?;
     let mut file = tempfile::NamedTempFile::new_in(parent)?;
     file.write_all(&bytes)?;
     file.as_file().sync_all()?;
@@ -866,13 +1153,13 @@ pub fn generate(
             base_version,
             version: &version.to_string(),
         },
-        &base_root,
-        work.path().join("stage"),
+        base_root,
+        work.join("stage"),
         &cancel,
     )?;
-    staging::validate_package(&rebuilt, target, &rebuilt_executables, &cancel)?;
+    validate(&rebuilt, &rebuilt_executables)?;
     if rebuilt.file_name() != target_root.file_name()
-        || tree(&rebuilt, &rebuilt_executables, &cancel)? != target_tree
+        || tree(&rebuilt, &rebuilt_executables, links, &cancel)? != target_tree
     {
         return Err(Error::Package);
     }
@@ -887,15 +1174,18 @@ pub fn generate(
 
 /// Every directory and file beneath a package folder with sizes and hashes;
 /// execute bits come from `executables` (as extraction recorded them).
-fn tree(
+pub(super) fn tree(
     root: &Path,
     executables: &HashSet<PathBuf>,
+    links: Links,
     cancel: &CancelToken,
 ) -> Result<BTreeMap<String, Node>, Error> {
-    walk(root, cancel)?
+    walk(root, links, cancel)?
         .into_iter()
         .map(|(path, found)| {
-            let node = if found.directory {
+            let node = if let Some(target) = found.link {
+                Node::Link { target }
+            } else if found.directory {
                 Node::Dir
             } else {
                 if found.size > staging::MAX_FILE_BYTES {
@@ -927,7 +1217,7 @@ fn encode(
         .iter()
         .filter_map(|(path, node)| match node {
             Node::File { sha256, .. } => Some((*sha256, path.as_str())),
-            Node::Dir => None,
+            Node::Dir | Node::Link { .. } => None,
         })
         .collect();
     let hex = |hash: &[u8; 32]| hash.iter().map(|b| format!("{b:02x}")).collect::<String>();
@@ -938,17 +1228,27 @@ fn encode(
         sha256: String::new(),
         copied: 0,
         bsdiff: 0,
+        zstd: 0,
         whole: 0,
     };
     for (path, node) in target_tree {
-        let Node::File {
-            size,
-            sha256,
-            executable,
-        } = node
-        else {
-            entries.push(Entry::Dir { path: path.clone() });
-            continue;
+        let (size, sha256, executable) = match node {
+            Node::File {
+                size,
+                sha256,
+                executable,
+            } => (size, sha256, executable),
+            Node::Dir => {
+                entries.push(Entry::Dir { path: path.clone() });
+                continue;
+            }
+            Node::Link { target } => {
+                entries.push(Entry::Link {
+                    path: path.clone(),
+                    target: target.clone(),
+                });
+                continue;
+            }
         };
         let same_path =
             matches!(base_tree.get(path), Some(Node::File { sha256: base, .. }) if base == sha256);
@@ -977,21 +1277,44 @@ fn encode(
                 qbsdiff::Bsdiff::new(&source, &bytes)
                     .compression_level(9)
                     .compare(&mut delta)?;
+                // zstd wins on large changes, bsdiff on small ones; skip the
+                // slower zstd pass when bsdiff is already tiny.
+                let zstd = if delta.len() > ZSTD_ATTEMPT_BYTES {
+                    Some(zstd_patch(&source, &bytes)?)
+                } else {
+                    None
+                };
+                let (delta, zstd) = match zstd {
+                    Some(zstd) if zstd.len() < delta.len() => (zstd, true),
+                    _ => (delta, false),
+                };
                 if delta.len() < whole.len() {
-                    diff = Some((delta, *base_size, hex(base_sha256)));
+                    diff = Some((delta, zstd, *base_size, hex(base_sha256)));
                 }
             }
             let offset = data.len() as u64;
             match diff {
-                Some((delta, base_size, base_sha256)) => {
-                    summary.bsdiff += 1;
+                Some((delta, zstd, base_size, base_sha256)) => {
                     data.extend_from_slice(&delta);
-                    FileSource::Bsdiff {
-                        base: path.clone(),
-                        base_size,
-                        base_sha256,
-                        offset,
-                        length: delta.len() as u64,
+                    let (base, length) = (path.clone(), delta.len() as u64);
+                    if zstd {
+                        summary.zstd += 1;
+                        FileSource::Zstd {
+                            base,
+                            base_size,
+                            base_sha256,
+                            offset,
+                            length,
+                        }
+                    } else {
+                        summary.bsdiff += 1;
+                        FileSource::Bsdiff {
+                            base,
+                            base_size,
+                            base_sha256,
+                            offset,
+                            length,
+                        }
                     }
                 }
                 None => {
