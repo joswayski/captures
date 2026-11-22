@@ -523,9 +523,9 @@ session leaks about 32 MB. DXGI desktop duplication gets no frame from a still
 desktop, so it waited 250 ms and fell back to GDI. GDI and duplication return
 the same pixels; WGC's differed only on the anti-aliased edges of the
 taskbar's running-app indicators (up to 18/255). None include the cursor or a
-capture border, except that Windows draws the pointer in software, which GDI
-then reads, while a WGC session is live. So stills taken while this process
-records (a `CaptureSession`) use a per-grab WGC session on one kept device.
+capture border. No still is taken while a recording runs (the capture
+shortcut brings its controls back), and xcap's recorder does not make GDI
+read the pointer, though some WGC sessions do while they are live.
 
 Each scene node (`src/scene.rs`) owns one composition surface. Hover and
 toggle transitions animate visual opacity and offsets on the compositor, and
