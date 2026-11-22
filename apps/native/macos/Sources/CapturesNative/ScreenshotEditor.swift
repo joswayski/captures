@@ -5810,7 +5810,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     private func drawingRequestStyle(shape: EditorDrawOverlay.Shape, reportErrors: Bool) -> [String: Any]? {
-        guard let color = PreferencesController.normalizeHex(drawingStrokeColor?.selectedHex ?? "") else {
+        guard let color = EditorColors.normalized(drawingStrokeColor?.selectedHex ?? "") else {
             if reportErrors { showError("Choose a drawing color.") }
             return nil
         }
@@ -5819,7 +5819,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let closed = [.rectangle, .ellipse, .triangle, .diamond, .star].contains(shape)
         var fill: Any = NSNull()
         if closed && drawingFill.state == .on {
-            guard let color = PreferencesController.normalizeHex(drawingFillColor?.selectedHex ?? "") else {
+            guard let color = EditorColors.normalized(drawingFillColor?.selectedHex ?? "") else {
                 if reportErrors { showError("Choose a drawing fill color.") }
                 return nil
             }
@@ -6275,7 +6275,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         guard let size = Double(textSize.stringValue), size.isFinite,
               size == style.fontSize || (8...512).contains(size) else { return nil }
         let color = textColor?.selectedHex ?? style.color
-        guard PreferencesController.normalizeHex(color) != nil || color == style.color else { return nil }
+        guard EditorColors.normalized(color) != nil || color == style.color else { return nil }
         var patch: [String: Any] = [:]
         if textEditor.string != style.text { patch["text"] = textEditor.string }
         if size != style.fontSize { patch["fontSize"] = size }
@@ -6289,7 +6289,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let plateColor = textPlateColor?.selectedHex ?? style.background ?? "#ffffff"
         let background = textBackground.state == .off ? nil : plateColor
         if background != nil {
-            guard PreferencesController.normalizeHex(plateColor) != nil
+            guard EditorColors.normalized(plateColor) != nil
                     || plateColor == style.background else { return nil }
         }
         if background != style.background {

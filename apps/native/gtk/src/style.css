@@ -897,6 +897,11 @@ popover.captures-menu > contents {
   background: var(--surface-overlay);
   box-shadow: var(--shadow-lg);
 }
+/* The custom-color picker draws its own padding (`colors::picker`). */
+popover.captures-menu.color-picker > contents {
+  min-width: 0;
+  padding: 0;
+}
 popover.captures-menu button.menu-item {
   all: unset;
   min-height: 16px;

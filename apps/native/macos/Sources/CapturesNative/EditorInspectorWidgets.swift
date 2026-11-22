@@ -633,7 +633,8 @@ final class EditorDropShadowFields: NSView, NSTextFieldDelegate {
     init(tokens: Tokens, formatter: NumberFormatter, name: String = "") {
         self.tokens = tokens; self.formatter = formatter
         func accessible(_ base: String) -> String { name.isEmpty ? base : "\(name) \(base.lowercased())" }
-        swatches = ColorSwatchRow(tokens: tokens, label: accessible("Shadow color"), compact: false)
+        swatches = ColorSwatchRow(tokens: tokens, label: accessible("Shadow color"), compact: false,
+                                  allowsAlpha: false)
         opacitySlider = EditorMarkedSlider(tokens: tokens, title: "Opacity",
             accessibilityLabel: accessible("Shadow opacity"), range: 0...100, value: 35, marks: []) {
             "\(Int($0))%"

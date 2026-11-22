@@ -464,6 +464,163 @@ pub mod colors {
             },
         }
     }
+
+    /// The custom-color popover every host opens from the custom tile and the
+    /// Preferences color wells: a hue/saturation wheel, a brightness slider
+    /// and, for colors that keep alpha, an opacity slider. Values are
+    /// `#rrggbb`, or `#rrggbbaa` when translucent, which the renderer reads.
+    pub mod picker {
+        pub const HUE: &str = "Hue";
+        pub const SATURATION: &str = "Saturation";
+        pub const BRIGHTNESS: &str = "Brightness";
+        pub const OPACITY: &str = "Opacity";
+        /// Card padding (`--s-3`) and the gap between its rows.
+        pub const PADDING: f64 = 12.;
+        pub const GAP: f64 = 12.;
+        /// Wheel diameter; the card is this plus padding wide.
+        pub const WHEEL: f64 = 184.;
+        /// Slider row height (the thumb) and its track height.
+        pub const SLIDER: f64 = 16.;
+        pub const TRACK: f64 = 10.;
+        /// The wheel's selection ring diameter.
+        pub const MARKER: f64 = 12.;
+        /// Keyboard step for every channel, as a fraction of its range.
+        pub const STEP: f64 = 0.01;
+
+        #[must_use]
+        pub fn width() -> f64 {
+            WHEEL + 2. * PADDING
+        }
+
+        #[must_use]
+        pub fn height(alpha: bool) -> f64 {
+            let sliders = if alpha { 2. } else { 1. };
+            2. * PADDING + WHEEL + sliders * (GAP + SLIDER)
+        }
+
+        /// Top edge of slider `index` (0 brightness, 1 opacity) in the card.
+        #[must_use]
+        pub fn slider_top(index: usize) -> f64 {
+            PADDING + WHEEL + GAP + index as f64 * (SLIDER + GAP)
+        }
+
+        /// Hue, saturation and brightness in `0..=1` (hue in turns) plus alpha.
+        #[derive(Clone, Copy, Debug, PartialEq)]
+        pub struct Hsva {
+            pub h: f64,
+            pub s: f64,
+            pub v: f64,
+            pub a: f64,
+        }
+
+        impl Hsva {
+            /// `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa`, as the renderer reads.
+            #[must_use]
+            pub fn parse(value: &str) -> Option<Self> {
+                let hex = value.trim().strip_prefix('#')?;
+                if !hex.is_ascii() {
+                    return None;
+                }
+                let expanded: String = match hex.len() {
+                    3 | 4 => hex.chars().flat_map(|c| [c, c]).collect(),
+                    6 | 8 => hex.to_owned(),
+                    _ => return None,
+                };
+                let channel = |i: usize| {
+                    u8::from_str_radix(&expanded[i..i + 2], 16).map(|v| f64::from(v) / 255.)
+                };
+                let (r, g, b) = (channel(0).ok()?, channel(2).ok()?, channel(4).ok()?);
+                let a = if expanded.len() == 8 {
+                    channel(6).ok()?
+                } else {
+                    1.
+                };
+                Some(Self::from_rgb(r, g, b, a))
+            }
+
+            #[must_use]
+            pub fn from_rgb(r: f64, g: f64, b: f64, a: f64) -> Self {
+                let max = r.max(g).max(b);
+                let delta = max - r.min(g).min(b);
+                let h = if delta == 0. {
+                    0.
+                } else if max == r {
+                    ((g - b) / delta).rem_euclid(6.) / 6.
+                } else if max == g {
+                    ((b - r) / delta + 2.) / 6.
+                } else {
+                    ((r - g) / delta + 4.) / 6.
+                };
+                let s = if max == 0. { 0. } else { delta / max };
+                Self { h, s, v: max, a }
+            }
+
+            /// sRGB channels in `0..=1`.
+            #[must_use]
+            pub fn rgb(&self) -> (f64, f64, f64) {
+                let h = self.h.rem_euclid(1.) * 6.;
+                let c = self.v * self.s;
+                let x = c * (1. - (h % 2. - 1.).abs());
+                let (r, g, b) = match h as u8 {
+                    0 => (c, x, 0.),
+                    1 => (x, c, 0.),
+                    2 => (0., c, x),
+                    3 => (0., x, c),
+                    4 => (x, 0., c),
+                    _ => (c, 0., x),
+                };
+                let m = self.v - c;
+                (r + m, g + m, b + m)
+            }
+
+            /// Lowercase `#rrggbb`, with an alpha byte only when `alpha` is
+            /// allowed and the color is translucent.
+            #[must_use]
+            pub fn hex(&self, alpha: bool) -> String {
+                let byte = |v: f64| (v.clamp(0., 1.) * 255.).round() as u8;
+                let (r, g, b) = self.rgb();
+                let mut hex = format!("#{:02x}{:02x}{:02x}", byte(r), byte(g), byte(b));
+                if alpha && byte(self.a) < 255 {
+                    hex.push_str(&format!("{:02x}", byte(self.a)));
+                }
+                hex
+            }
+
+            /// Pick hue and saturation from a point `(dx, dy)` relative to the
+            /// wheel's center, y down: red at 3 o'clock, hue turning
+            /// counterclockwise, white at the center (the macOS color wheel).
+            pub fn pick_wheel(&mut self, dx: f64, dy: f64, radius: f64) {
+                if radius <= 0. {
+                    return;
+                }
+                let distance = dx.hypot(dy);
+                if distance > 0. {
+                    self.h = ((-dy).atan2(dx) / std::f64::consts::TAU).rem_euclid(1.);
+                }
+                self.s = (distance / radius).min(1.);
+            }
+
+            /// The selection's offset from the wheel's center, y down.
+            #[must_use]
+            pub fn wheel_offset(&self, radius: f64) -> (f64, f64) {
+                let angle = self.h * std::f64::consts::TAU;
+                (
+                    angle.cos() * self.s * radius,
+                    -angle.sin() * self.s * radius,
+                )
+            }
+
+            /// A slider position in `0..=1` from `x` across a track.
+            #[must_use]
+            pub fn track_value(x: f64, left: f64, width: f64) -> f64 {
+                if width <= 0. {
+                    0.
+                } else {
+                    ((x - left) / width).clamp(0., 1.)
+                }
+            }
+        }
+    }
 }
 
 /// Shipping Eraser properties (`ScreenshotEditor.tsx`, the `remove-bg`
@@ -877,6 +1034,44 @@ mod tests {
         assert!(!swatch_active("é#ff3b5c", "#ff3b5c"));
         assert_eq!(custom_seed("#AABBCC80"), "#aabbcc");
         assert_eq!(custom_seed("#abc"), "#abc");
+    }
+
+    #[test]
+    fn picker_keeps_alpha_only_where_allowed_and_maps_the_wheel_like_macos() {
+        use colors::picker::*;
+        let color = Hsva::parse("#33669980").unwrap();
+        assert!((color.a - 128. / 255.).abs() < 1e-9);
+        assert_eq!(color.hex(true), "#33669980");
+        assert_eq!(color.hex(false), "#336699", "opaque fields drop alpha");
+        assert_eq!(Hsva::parse("#336699FF").unwrap().hex(true), "#336699");
+        assert_eq!(Hsva::parse("#abc").unwrap().hex(true), "#aabbcc");
+        assert_eq!(Hsva::parse("#f008").unwrap().hex(true), "#ff000088");
+        for bad in ["336699", "#33669", "#3366999", "#gggggg", "#ééé"] {
+            assert_eq!(Hsva::parse(bad), None, "{bad}");
+        }
+        // Black keeps a hue the wheel can still move from.
+        let mut picked = Hsva::parse("#000000").unwrap();
+        picked.v = 1.;
+        picked.pick_wheel(0., -50., 100.);
+        assert_eq!(
+            picked.hex(true),
+            "#bfff80",
+            "12 o'clock is hue 90°, half way out"
+        );
+        picked.pick_wheel(-100., 0., 100.);
+        assert_eq!(picked.hex(true), "#00ffff", "9 o'clock is cyan at the rim");
+        picked.pick_wheel(300., 0., 100.);
+        assert_eq!(picked.hex(true), "#ff0000", "outside the rim clamps to it");
+        picked.h = 2. / 3.;
+        picked.s = 0.5;
+        let (dx, dy) = picked.wheel_offset(100.);
+        assert!((dx + 25.).abs() < 1e-9 && (dy - 43.301_270_189).abs() < 1e-6);
+        assert_eq!(Hsva::track_value(-4., 10., 200.), 0.);
+        assert_eq!(Hsva::track_value(60., 10., 200.), 0.25);
+        assert_eq!(width(), 208.);
+        assert_eq!(height(false), 236.);
+        assert_eq!(height(true), 264.);
+        assert_eq!(slider_top(1), 236.);
     }
 
     #[test]

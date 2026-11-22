@@ -40,6 +40,7 @@ use crate::widgets::{Icon, MaxWidth, SnapshotArea, WidthWatch, icon_button};
 
 mod canvas_bar;
 mod canvas_chrome;
+pub(crate) mod color_picker;
 pub(crate) mod compare;
 pub(crate) mod controls;
 mod export_bar;

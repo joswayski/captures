@@ -123,10 +123,13 @@ extension NSColor {
     /// border such as `--border-strong` stays translucent.
     func faded(_ opacity: CGFloat) -> NSColor { withAlphaComponent(alphaComponent * opacity) }
 
+    /// `#RRGGBB`, `#RGB`, or editor `#RRGGBBAA` with the picker's opacity.
     convenience init?(hex: String) {
-        guard let value = PreferencesController.normalizeHex(hex), let rgb = Int(value.dropFirst(), radix: 16) else { return nil }
+        guard let value = EditorColors.normalized(hex),
+              let rgb = Int(value.dropFirst().prefix(6), radix: 16) else { return nil }
+        let alpha = value.utf8.count == 9 ? Int(value.suffix(2), radix: 16).map { CGFloat($0) / 255 } ?? 1 : 1
         self.init(srgbRed: CGFloat((rgb >> 16) & 255) / 255, green: CGFloat((rgb >> 8) & 255) / 255,
-                  blue: CGFloat(rgb & 255) / 255, alpha: 1)
+                  blue: CGFloat(rgb & 255) / 255, alpha: alpha)
     }
 
     var rgbHex: String? {

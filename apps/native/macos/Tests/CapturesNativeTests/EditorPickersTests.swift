@@ -122,6 +122,78 @@ final class EditorPickersTests: XCTestCase {
         }
     }
 
+    func testCustomPickerKeepsOpacityOnlyWhereAllowedAndNeverOpensTheSystemPanel() throws {
+        _ = NSApplication.shared
+        func key(_ code: UInt16, _ characters: String) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                           windowNumber: 0, context: nil, characters: characters,
+                                           charactersIgnoringModifiers: characters, isARepeat: false,
+                                           keyCode: code))
+        }
+        for appearance in ["light", "dark"] {
+            let tokens = try XCTUnwrap(Tokens.variants["\(appearance)-mustard"])
+            let window = NSWindow(contentRect: NSRect(x: 200, y: 400, width: 300, height: 220),
+                                  styleMask: [.titled], backing: .buffered, defer: false)
+            window.appearance = NSAppearance(named: appearance == "dark" ? .darkAqua : .aqua)
+            let row = ColorSwatchRow(tokens: tokens, label: "Stroke color", compact: false)
+            let shadow = ColorSwatchRow(tokens: tokens, label: "Shadow color", compact: false, allowsAlpha: false)
+            row.setFrameSize(NSSize(width: 272, height: 76)); shadow.setFrameSize(NSSize(width: 272, height: 76))
+            shadow.setFrameOrigin(NSPoint(x: 0, y: 100))
+            window.contentView?.addSubview(row); window.contentView?.addSubview(shadow)
+            var chosen: [String] = [], shadowChosen: [String] = []
+            row.changed = { chosen.append($0) }; shadow.changed = { shadowChosen.append($0) }
+            row.selectedHex = "#336699"; shadow.selectedHex = "#336699"
+
+            row.customWell.activate(true)
+            let picker = try XCTUnwrap(row.customWell.picker)
+            XCTAssertTrue(row.customWell.isActive)
+            XCTAssertNotNil(picker.window?.parent, "the picker floats in a child panel")
+            XCTAssertEqual(picker.frame.size, NSSize(width: 208, height: 264), "picker::width() × height(true)")
+            XCTAssertEqual(picker.hue, 210.0 / 360, accuracy: 0.002, "seeded from the selected color")
+            XCTAssertEqual(picker.brightness, 0.6, accuracy: 0.002)
+            XCTAssertEqual((picker.accessibilityChildren() as? [NSAccessibilityElement])?
+                .map { $0.accessibilityLabel() ?? "" }, ["Hue", "Saturation", "Brightness", "Opacity"])
+            picker.adjust(.opacity, by: -50)
+            XCTAssertEqual(chosen.last, "#33669980", "opacity commits as #rrggbbaa")
+            XCTAssertFalse(row.swatchButtons.contains(where: \.active))
+            picker.adjust(.brightness, by: 100)
+            // `pick_wheel`: 12 o'clock half way out is hue 90°, saturation 0.5.
+            let wheel = picker.wheelRect
+            let point = picker.convert(NSPoint(x: wheel.midX, y: wheel.midY - wheel.width / 4), to: nil)
+            picker.mouseDown(with: try XCTUnwrap(NSEvent.mouseEvent(
+                with: .leftMouseDown, location: point, modifierFlags: [], timestamp: 0,
+                windowNumber: picker.window?.windowNumber ?? 0, context: nil, eventNumber: 0,
+                clickCount: 1, pressure: 1)))
+            XCTAssertEqual(chosen.last, "#bfff8080")
+            XCTAssertTrue(picker.handleKey(try key(48, "\t")), "Tab moves to the next channel")
+            XCTAssertTrue(picker.handleKey(try key(124, "")))
+            XCTAssertEqual(picker.saturation, 0.51, accuracy: 0.001, "arrows step the focused channel")
+            XCTAssertFalse(picker.handleKey(try key(0, "a")), "other keys pass through")
+            if let directory = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"],
+               let surface = picker.superview, let bitmap = surface.bitmapImageRepForCachingDisplay(in: surface.bounds) {
+                surface.cacheDisplay(in: surface.bounds, to: bitmap)
+                let url = URL(fileURLWithPath: directory).appendingPathComponent("color-picker-\(appearance).png")
+                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                        withIntermediateDirectories: true)
+                try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: url)
+            }
+            XCTAssertTrue(picker.handleKey(try key(53, "\u{1b}")))
+            XCTAssertFalse(row.customWell.isActive, "Escape closes the picker")
+            XCTAssertNil(window.childWindows?.first { $0.contentView?.subviews.first is ColorPickerView })
+
+            shadow.customWell.activate(true)
+            let opaque = try XCTUnwrap(shadow.customWell.picker)
+            XCTAssertEqual(opaque.frame.height, 236, "no opacity row: picker::height(false)")
+            XCTAssertFalse(opaque.channels.contains(.opacity))
+            opaque.adjust(.opacity, by: -50); opaque.adjust(.hue, by: 1)
+            XCTAssertEqual(shadowChosen.last?.count, 7, "shadow colors stay #rrggbb")
+            shadow.deactivate()
+            XCTAssertFalse(shadow.customWell.isActive)
+            window.orderOut(nil)
+        }
+        XCTAssertFalse(NSColorPanel.sharedColorPanelExists, "the system Colors panel is never built")
+    }
+
     func testCustomTileConicStopsMatchShipping() {
         func rgb(_ color: NSColor) -> [Int] {
             let value = color.usingColorSpace(.sRGB)!

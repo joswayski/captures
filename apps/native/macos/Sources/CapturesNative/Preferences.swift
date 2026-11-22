@@ -48,7 +48,7 @@ final class NativeLoginItemService: LoginItemServicing {
     }
 }
 
-final class ClosureColorWell: WheelColorWell {
+final class ClosureColorWell: PickerColorWell {
     var change: ((NSColor) -> Void)?
     @objc func selectedColor() { change?(color) }
 }
@@ -2144,6 +2144,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     private func colorField(_ label: String, value: String, key: String, frame: NSRect, parent: NSView) {
         let well = ClosureColorWell(frame: NSRect(x: frame.minX, y: frame.minY, width: 36, height: frame.height))
         well.color = NSColor(hex: value) ?? .white
+        well.pickerTokens = tokens // Theme colors stay opaque: no opacity slider.
         well.setAccessibilityLabel("\(label) color picker")
         let field = NSTextField(string: value.uppercased())
         field.frame = NSRect(x: frame.minX + 36 + tokens.number("s-3"), y: frame.minY,

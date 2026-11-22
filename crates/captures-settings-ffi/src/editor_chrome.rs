@@ -131,6 +131,13 @@ fn copy() -> Value {
             "custom_color": c::CUSTOM_COLOR, "stroke_color": c::STROKE_COLOR,
             "fill_color": c::FILL_COLOR, "shadow_color": c::SHADOW_COLOR,
             "text_color": c::TEXT_COLOR, "color": c::COLOR,
+            "picker": {
+                "hue": c::picker::HUE, "saturation": c::picker::SATURATION,
+                "brightness": c::picker::BRIGHTNESS, "opacity": c::picker::OPACITY,
+                "padding": c::picker::PADDING, "gap": c::picker::GAP, "wheel": c::picker::WHEEL,
+                "slider": c::picker::SLIDER, "track": c::picker::TRACK,
+                "marker": c::picker::MARKER, "step": c::picker::STEP,
+            },
         },
         "eraser": eraser(),
         "brush_cursor": brush_cursor(),
@@ -454,6 +461,8 @@ mod tests {
         assert_eq!(colors["menu_width"], 248.);
         assert_eq!(colors["text_color"], "Text color");
         assert_eq!(colors["color"], "Color");
+        assert_eq!(colors["picker"]["opacity"], "Opacity");
+        assert_eq!(colors["picker"]["wheel"], 184.);
     }
 
     #[test]

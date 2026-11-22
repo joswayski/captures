@@ -51,16 +51,6 @@ pub(crate) fn pair(a: &impl IsA<gtk::Widget>, b: &impl IsA<gtk::Widget>) -> gtk:
     row
 }
 
-pub(crate) fn hex(rgba: &gdk::RGBA) -> String {
-    let byte = |v: f32| (v.clamp(0., 1.) * 255.).round() as u8;
-    format!(
-        "#{:02x}{:02x}{:02x}",
-        byte(rgba.red()),
-        byte(rgba.green()),
-        byte(rgba.blue())
-    )
-}
-
 fn parse(value: &str) -> gdk::RGBA {
     gdk::RGBA::parse(value).unwrap_or(gdk::RGBA::BLACK)
 }
@@ -72,6 +62,8 @@ pub(crate) struct ColorField {
     grid: gtk::FlowBox,
     tiles: Vec<(&'static str, gtk::Button)>,
     value: Rc<RefCell<String>>,
+    /// Whether the custom picker offers opacity (`#rrggbbaa`).
+    alpha: Rc<Cell<bool>>,
 }
 
 impl ColorField {
@@ -160,24 +152,23 @@ impl ColorField {
         let side = colors::TILE as i32 - 2;
         wheel.set_size_request(side, side);
         custom.set_child(Some(&wheel));
+        let alpha = Rc::new(Cell::new(true));
         {
             let value = value.clone();
             let changed = changed.clone();
+            let alpha = alpha.clone();
+            let tokens = tokens.clone();
             custom.connect_clicked(move |button| {
-                let parent = button.root().and_downcast::<gtk::Window>();
-                let dialog =
-                    gtk::ColorChooserDialog::new(Some(colors::CUSTOM_COLOR), parent.as_ref());
-                dialog.set_modal(true);
-                dialog.set_use_alpha(false);
-                dialog.set_rgba(&parse(&colors::custom_seed(&value.borrow())));
                 let changed = changed.clone();
-                dialog.connect_response(move |dialog, response| {
-                    if response == gtk::ResponseType::Ok {
-                        changed(hex(&dialog.rgba()));
-                    }
-                    dialog.close();
-                });
-                dialog.present();
+                let seed = value.borrow().clone();
+                super::color_picker::open(
+                    button,
+                    &tokens,
+                    colors::CUSTOM_COLOR,
+                    &seed,
+                    alpha.get(),
+                    move |hex| changed(hex),
+                );
             });
         }
         cell(&custom);
@@ -188,6 +179,7 @@ impl ColorField {
             grid,
             tiles,
             value,
+            alpha,
         });
         field.set_label(label);
         field
@@ -205,6 +197,12 @@ impl ColorField {
             slot.set_size_request(colors::COMPACT_CELL as i32, -1);
             child = slot.next_sibling();
         }
+    }
+
+    /// Keep custom colors opaque, as shadow colors (which have their own
+    /// opacity) need.
+    pub(crate) fn opaque(&self) {
+        self.alpha.set(false);
     }
 
     pub(crate) fn set_label(&self, label: &str) {
@@ -674,6 +672,7 @@ impl DropShadow {
                 ));
             })
         };
+        color.opaque();
         settings.append(&color.root);
         let opacity = RangeSlider::new("Opacity", "Shadow opacity", (0., 100.), 45., &[], |v| {
             format!("{}%", v.round())

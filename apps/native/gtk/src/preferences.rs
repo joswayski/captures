@@ -1251,26 +1251,20 @@ fn custom_theme_editor(prefs: &Rc<Prefs>) -> gtk::Box {
             }
         });
         let entry = entry.clone();
+        let weak = Rc::downgrade(prefs);
         picker.connect_clicked(move |picker| {
-            let window = picker.root().and_downcast::<gtk::Window>();
-            #[allow(deprecated)] // `GtkColorDialog` needs GTK 4.10.
-            let dialog = gtk::ColorChooserDialog::new(Some(name), window.as_ref());
-            #[allow(deprecated)]
-            {
-                dialog.set_use_alpha(false);
-                if let Some(color) = rgba(entry.text().as_str()) {
-                    dialog.set_rgba(&color);
-                }
-                let entry = entry.clone();
-                dialog.connect_response(move |dialog, response| {
-                    if response == gtk::ResponseType::Ok {
-                        entry
-                            .set_text(&crate::editor::controls::hex(&dialog.rgba()).to_uppercase());
-                    }
-                    dialog.destroy();
-                });
-                dialog.present();
-            }
+            let Some(prefs) = weak.upgrade() else { return };
+            let tokens = crate::tokens::LiveTokens::new(prefs.tokens.borrow().clone());
+            let entry = entry.clone();
+            // Theme colors stay opaque: no opacity track.
+            crate::editor::color_picker::open(
+                picker,
+                &tokens,
+                name,
+                entry.text().as_str(),
+                false,
+                move |hex| entry.set_text(&hex.to_uppercase()),
+            );
         });
     }
     editor.append(&fields);
