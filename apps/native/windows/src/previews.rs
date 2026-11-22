@@ -31,7 +31,10 @@
 //! assistive tech can focus a button over UI Automation; Tab walks the
 //! buttons, Enter and Space press one and Escape collapses the stack (GTK).
 //!
-//! Not ported yet: the capture highlight and the editor-presence pill.
+//! A new card holds shipping's accent capture highlight for 1 s, then fades
+//! it (`thumbnail-capture-highlight`).
+//!
+//! Not ported yet: the editor-presence pill.
 
 use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;
@@ -63,7 +66,7 @@ use windows_numerics::Matrix3x2;
 
 use crate::gfx::{self, Gfx, rect};
 use crate::panel_uia::{self, Item, Role};
-use crate::tokens::Tokens;
+use crate::tokens::{Shadow, Tokens};
 use crate::tooltip::Fade as Tip;
 use captures_app::tray_notice::LogicalRect;
 
@@ -177,6 +180,8 @@ pub struct Stack {
     pub card_motion: Option<CardMotion>,
     /// Arrival start per card id.
     arrivals: HashMap<String, f64>,
+    /// When each card's capture highlight began, by card id.
+    highlights: HashMap<String, f64>,
     /// `cards` is the display list: live cards plus exiting ones, which keep
     /// their slot here until their exit ends. `stack` holds only live ones.
     exits: StackExits,
@@ -263,6 +268,9 @@ pub struct CardMotion {
     arrive: Animation,
     dismiss: Animation,
     fallback: Animation,
+    /// `thumbnail-capture-highlight`: the accent outline a new card holds for
+    /// 1 s, then fades over 3.5 s.
+    highlight: Animation,
 }
 
 impl CardMotion {
@@ -271,6 +279,7 @@ impl CardMotion {
             arrive: Motion::PreviewCardArrive.resolve(tokens)?,
             dismiss: Motion::PreviewDismiss.resolve(tokens)?,
             fallback: Motion::PreviewDeleteFallback.resolve(tokens)?,
+            highlight: Motion::PreviewCaptureHighlight.resolve(tokens)?,
         })
     }
 }
@@ -361,6 +370,7 @@ impl Stack {
             fan: StackFan::default(),
             card_motion: None,
             arrivals: HashMap::new(),
+            highlights: HashMap::new(),
             exits: StackExits::default(),
             dust: HashMap::new(),
             scroll: 0.,
@@ -585,6 +595,10 @@ impl Stack {
             self.arrivals
                 .values()
                 .any(|start| m.arrive.running(now - start, self.reduced))
+                || self
+                    .highlights
+                    .values()
+                    .any(|start| m.highlight.running(now - start, self.reduced))
         });
         let scrolling = self
             .scroll_from
@@ -798,6 +812,7 @@ impl Stack {
         }
         self.stack.remove(id);
         self.arrivals.remove(id);
+        self.highlights.remove(id);
         self.hovered = None;
         self.hot = None;
         self.pressed = None;
@@ -890,6 +905,10 @@ impl Stack {
         let image = image.and_then(|image| crate::capture::bitmap(g, image).ok());
         if self.card_motion.is_some() && !self.reduced {
             self.arrivals.insert(entry.id.clone(), now_ms());
+            // Shipping highlights a card once its image is ready.
+            if image.is_some() {
+                self.highlights.insert(entry.id.clone(), now_ms());
+            }
         }
         self.cards.push(Card {
             entry,
@@ -912,6 +931,7 @@ impl Stack {
             let id = &card.entry.id;
             self.stack.remove(id);
             self.arrivals.remove(id);
+            self.highlights.remove(id);
             self.dust.remove(id);
             self.exits.release(id, false);
             self.exits.sync(self.stack.ids());
@@ -1764,12 +1784,55 @@ impl Stack {
             Ok(())
         })?;
         faded(dc, fade.frame, || {
-            gfx::ring(dc, r, radius, 0., 1., white(0.08))
+            gfx::ring(dc, r, radius, 0., 1., white(0.08))?;
+            self.paint_highlight(dc, t, index, (r, radius))
         })?;
         faded(dc, fade.chrome, || {
             self.paint_chrome(dc, g, t, index, r, (hovered, controls))?;
             paint_message(dc, g, t, card.error.as_deref(), r)
         })
+    }
+
+    /// `.thumbnail-capture-highlight::after`: a 1 px ring of 85 % accent and
+    /// an 18 px glow of 24 % accent around a new card, held, then faded
+    /// (`thumbnail-capture-highlight`). A Delete fades it with the frame.
+    fn paint_highlight(
+        &self,
+        dc: &ID2D1DeviceContext,
+        t: &Tokens,
+        index: usize,
+        (r, radius): (Rect, f32),
+    ) -> Result<()> {
+        let (Some(m), Some(start)) = (
+            &self.card_motion,
+            self.highlights.get(&self.cards[index].entry.id),
+        ) else {
+            return Ok(());
+        };
+        let opacity = m.highlight.pose_at(now_ms() - start, self.reduced).opacity as f32;
+        if opacity <= 0. {
+            return Ok(());
+        }
+        let accent = t.color("theme-accent");
+        let glow = Shadow {
+            x: 0.,
+            y: 0.,
+            blur: 18.,
+            spread: 0.,
+            color: [accent.r, accent.g, accent.b, 0.24 * opacity],
+        };
+        outside(dc, (r, radius), || gfx::shadow(dc, r, radius, &[glow]))?;
+        gfx::ring(
+            dc,
+            r,
+            radius,
+            0.,
+            1.,
+            D2D1_COLOR_F {
+                a: 0.85 * opacity,
+                ..accent
+            },
+        )
     }
 
     /// The bottom bar's chips and, while `controls`, the hover controls.
@@ -2074,6 +2137,12 @@ pub fn fixture(g: &Gfx, image: &image::RgbaImage, select: Option<&str>) -> Stack
             };
             stack.pointer(Some((at.left + 4., at.top + 4.)));
             stack.tips = stack.tip_targets().map(Tip::settled);
+        }
+        // The newest card inside its capture highlight's 1 s hold.
+        Some("highlight") => {
+            stack.card_motion = CardMotion::resolve(&Tokens::variant("dark", "mustard"));
+            let newest = stack.cards[last].entry.id.clone();
+            stack.highlights.insert(newest, now_ms());
         }
         // Keyboard focus on the first card's Edit, with no pointer: the card
         // shows its controls, the focus ring and Edit's tooltip.
@@ -3857,6 +3926,23 @@ mod tests {
         assert_eq!((label, above), ("Delete", true));
         assert_eq!(anchor, controls[1].1);
         assert!(!stack(P::TopRight, &[true]).tip(Hit::Close(0)).unwrap().2);
+    }
+
+    #[test]
+    fn the_capture_highlight_holds_then_fades_and_keeps_the_frame_timer() {
+        use captures_settings::MiniPreviewPlacement as P;
+        let mut s = stack(P::BottomLeft, &[true]);
+        s.card_motion = CardMotion::resolve(&Tokens::variant("light", "mustard"));
+        let m = s.card_motion.unwrap();
+        // Held through 1 s, half gone at the fade's midpoint, gone at 4.5 s.
+        assert_eq!(m.highlight.pose_at(900., false).opacity, 1.);
+        let mid = m.highlight.pose_at(2_750., false).opacity;
+        assert!((mid - 0.5).abs() < 0.01, "{mid}");
+        assert_eq!(m.highlight.pose_at(4_500., false).opacity, 0.);
+        s.highlights.insert("a0".into(), now_ms() - 4_000.);
+        assert!(s.animating(), "still fading");
+        s.highlights.insert("a0".into(), now_ms() - 4_600.);
+        assert!(!s.animating());
     }
 
     #[test]

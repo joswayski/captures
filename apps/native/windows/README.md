@@ -302,7 +302,9 @@ expanded stack as on GTK. The focused control shows shipping's
 tooltip shows (`--select focus|pile-focus`; unit- and render-checked, and
 UIA reports the buttons focusable; SetFocus and keys were not exercised live
 because they take focus from the desktop's user). Cards arrive and leave with
-the shared preview motion. `--scene capture --screenshot PATH`
+the shared preview motion, and a new card holds shipping's capture highlight
+(a 1 px accent ring with an 18 px accent glow) for 1 s, then fades it over
+3.5 s, skipped under reduced motion (`--select highlight`). `--scene capture --screenshot PATH`
 renders the bar offscreen (`--tool display` for Full screen, `--tool window`
 for Window, `--select x` for a sample selection or hovered window, `--select
 desktop` for the hovered display, `--select picked` for a picked window with
