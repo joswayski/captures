@@ -1781,6 +1781,9 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                 }, showPreferenceSetting: { [weak self] setting in
                     self?.showPreferences(revealing: setting)
                 })
+            liveController?.editorClosed = { [weak self] in
+                DispatchQueue.main.async { self?.rebuildRenderedLiveWorkspaceIfNeeded() }
+            }
             renderedLiveStyleRevision = liveStyleRevision
             // Built while History is hidden (launch, a style rebuild): tile no
             // cards until it is shown, or their layers stay resident.
@@ -1850,6 +1853,9 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                 let chosen = appearance == "system" ? nil : NSAppearance(named: appearance == "dark" ? .darkAqua : .aqua)
                 self.window.appearance = chosen
                 self.appWindows.window(.preferences)?.appearance = chosen
+                // Shipping re-themes every window on `settings-changed`;
+                // History, the capture bar and HUD rebuild from the new tokens.
+                if changed { self.rebuildRenderedLiveWorkspaceIfNeeded() }
             }, settingsChanged: { [weak self] settings in
                 self?.options.nativeUpdateChecks?.setShowChangelog(settings.bool("show_update_changelog", true))
                 if let include = settings["include_recording_controls_in_captures"] as? Bool {
@@ -2358,7 +2364,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     }
 
     @discardableResult private func discardLiveWorkspaceForStyleChange() -> Bool {
-        guard scene == "live", !captureBusy,
+        guard scene == "live", !captureBusy, liveController?.hasOpenEditor != true,
               renderedLiveStyleRevision != liveStyleRevision else { return false }
         guard liveController?.prepareEditorForTermination() != false else { return false }
         liveController?.finishCapture()

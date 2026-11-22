@@ -3559,6 +3559,7 @@ final class LiveCaptureController: NSObject {
                             })
                         self.recordingEditor?.didClose = { [weak self] artifactID in
                             self?.recordingEditorClosed(artifactID)
+                            self?.editorClosed()
                         }
                     }
                     self.recordingEditor?.present(artifact: artifact,
@@ -3590,7 +3591,10 @@ final class LiveCaptureController: NSObject {
                     }
                     // A closed editor is released and rebuilt on the next open,
                     // so its window and graphics memory are not kept idle.
-                    self.screenshotEditor?.didClose = { [weak self] in self?.screenshotEditor = nil }
+                    self.screenshotEditor?.didClose = { [weak self] in
+                        self?.screenshotEditor = nil
+                        self?.editorClosed()
+                    }
                 }
                 self.screenshotEditor?.present(artifact: artifact, historyRoot: self.historyRoot,
                     outputDirectory: outputDirectory, sourceArtifactID: sourceArtifactID, completion: completion.map { finished in
@@ -3812,6 +3816,13 @@ final class LiveCaptureController: NSObject {
     }
 
     // One process-wide queue also drains operations from a closed workspace view.
+    /// A style rebuild waits while an editor window is open, so a theme change
+    /// never closes or interrupts edits; it runs once the editor closes.
+    var hasOpenEditor: Bool {
+        screenshotEditor?.window.isVisible == true || recordingEditor?.window.isVisible == true
+    }
+    var editorClosed: () -> Void = {}
+
     func prepareEditorForTermination() -> Bool {
         guard !editorTerminationPending, canPrepareEditorsForTermination() else { return false }
         guard screenshotEditor?.prepareForTermination() ?? true else { return false }
