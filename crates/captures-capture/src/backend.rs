@@ -104,11 +104,17 @@ impl XcapBackend {
         }
 
         #[cfg(target_os = "linux")]
-        let monitors = Monitor::all().map_err(|error| CaptureError::Backend(error.to_string()))?;
+        let monitors: Vec<crate::x11::MonitorRecord> = Monitor::all()
+            .map_err(|error| CaptureError::Backend(error.to_string()))?
+            .iter()
+            .filter_map(crate::x11::MonitorRecord::read)
+            .collect();
 
         #[cfg(target_os = "macos")]
         let native_windows = crate::macos::windows();
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "linux")]
+        let native_windows = crate::x11::windows().map_err(CaptureError::Backend)?;
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         let native_windows =
             Window::all().map_err(|error| CaptureError::Backend(error.to_string()))?;
         let fallback_front = i32::try_from(native_windows.len()).unwrap_or(i32::MAX);
@@ -250,7 +256,7 @@ fn wayland_without_x11() -> bool {
 
 #[cfg(target_os = "linux")]
 fn linux_window_geometry(
-    monitors: &[Monitor],
+    monitors: &[crate::x11::MonitorRecord],
     x: i32,
     y: i32,
     width: u32,
@@ -264,23 +270,23 @@ fn linux_window_geometry(
     if linux_window_monitor_overlap(monitor, x, y, width, height) <= 0.0 {
         return None;
     }
-    let scale = f64::from(monitor.scale_factor().ok()?).max(1.0);
-    let display_id = monitor.id().ok()?.to_string();
+    let scale = f64::from(monitor.scale_factor).max(1.0);
+    let display_id = monitor.id.clone();
     let (x, y, width, height) = logical_window_rect(x, y, width, height, scale);
     Some((x, y, width, height, display_id))
 }
 
 #[cfg(target_os = "linux")]
-fn linux_window_monitor_overlap(monitor: &Monitor, x: i32, y: i32, width: u32, height: u32) -> f64 {
-    let Ok(scale_factor) = monitor.scale_factor() else {
-        return 0.0;
-    };
-    let scale = f64::from(scale_factor).max(1.0);
-    let (Ok(monitor_x), Ok(monitor_y), Ok(monitor_width), Ok(monitor_height)) =
-        (monitor.x(), monitor.y(), monitor.width(), monitor.height())
-    else {
-        return 0.0;
-    };
+fn linux_window_monitor_overlap(
+    monitor: &crate::x11::MonitorRecord,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+) -> f64 {
+    let scale = f64::from(monitor.scale_factor).max(1.0);
+    let (monitor_x, monitor_y, monitor_width, monitor_height) =
+        (monitor.x, monitor.y, monitor.width, monitor.height);
     let left = f64::from(x).max(f64::from(monitor_x) * scale);
     let top = f64::from(y).max(f64::from(monitor_y) * scale);
     let right = (f64::from(x) + f64::from(width))
