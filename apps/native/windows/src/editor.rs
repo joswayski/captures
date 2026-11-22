@@ -255,6 +255,8 @@ pub enum Target {
     LayerAct(layer_menu::Act),
     /// A control of the compression comparison over the canvas.
     Compare(compare::Part),
+    /// `.screenshot-canvas-expand-action` beside a layer past the canvas.
+    Expand,
 }
 
 /// Accessibility notifications, raised after the frame.
@@ -461,6 +463,8 @@ pub struct Presented {
     pub can_trim: bool,
     /// What Trim edges would cut, for its hover preview.
     pub trim_preview: Option<captures_app::editor_canvas::CanvasTrimPreview>,
+    /// Each layer hanging past the canvas, for Expand canvas.
+    pub canvas_expand: BTreeMap<String, captures_app::editor_canvas::CanvasExpandPreview>,
     /// The layer card's Merge down, Merge visible and Flatten states.
     pub merge_down_ids: Vec<String>,
     pub can_merge_visible: bool,
@@ -802,6 +806,8 @@ pub struct Editor {
     overlay_rest_dirty: bool,
     /// Whether the overlay last drew the Trim edges preview.
     trim_shown: bool,
+    /// The Expand canvas preview and armed state the overlay last drew.
+    expand_shown: Option<(captures_app::editor_canvas::CanvasExpandPreview, bool)>,
     motions: Vec<Motion>,
     dcomp: Option<IDCompositionDesktopDevice>,
     _target: Option<IDCompositionTarget>,
@@ -1056,6 +1062,11 @@ fn present(session: &mut EditorSession, artifact_id: &str, published: &mut Publi
         has_draft: snapshot.has_draft,
         can_trim: snapshot.can_trim,
         trim_preview: snapshot.trim_preview.clone(),
+        canvas_expand: snapshot
+            .canvas_expand
+            .iter()
+            .map(|(id, preview)| ((*id).to_owned(), preview.clone()))
+            .collect(),
         merge_down_ids: snapshot
             .merge_down_ids
             .iter()
@@ -1440,6 +1451,7 @@ impl Editor {
             overlay_fresh: true,
             overlay_rest_dirty: true,
             trim_shown: false,
+            expand_shown: None,
             motions: Vec::new(),
             dcomp: None,
             _target: None,
@@ -1499,6 +1511,7 @@ impl Editor {
         self.page = self.add(Some(self.well), Kind::Page, PAGE_BLEED);
         self.image_node = self.add(Some(self.well), Kind::Image, 0.);
         self.overlay = self.add(Some(self.well), Kind::Overlay, 0.);
+        self.control(self.well, Target::Expand, 0.);
         self.compare_node = self.add(Some(self.well), Kind::Compare, 0.);
         self.nodes[self.compare_node].visible = false;
         for part in compare::PARTS {
@@ -1694,6 +1707,7 @@ impl Editor {
             }
             Target::LayerAct(act) => self.card_act_exists(act),
             Target::Compare(part) => self.compare_part_exists(part),
+            Target::Expand => self.expand_target().is_some(),
             // Shipping hides the toggle when the format can only save a copy.
             Target::SaveAsNew => self.export_view().is_some_and(|v| !v.format_requires_copy),
             Target::Prop(prop) => self.prop_exists(prop),
@@ -1796,6 +1810,7 @@ impl Editor {
                 .unwrap_or_default(),
             Target::LayerAct(act) => act.name().into(),
             Target::Compare(part) => Self::compare_part_name(part).into(),
+            Target::Expand => captures_app::editor_canvas::EXPAND_CANVAS.into(),
         }
     }
 
@@ -2111,7 +2126,10 @@ impl Editor {
         if let Some(id) = options.select.as_ref().filter(|s| {
             !s.starts_with("drop")
                 && !s.starts_with("export")
-                && !matches!(s.as_str(), "layer-menu" | "rotate" | "trim")
+                && !matches!(
+                    s.as_str(),
+                    "layer-menu" | "rotate" | "trim" | "expand" | "expand-armed"
+                )
         }) {
             if self.layer_count() > 0
                 && (0..self.layer_count()).any(|i| self.layer(i).is_some_and(|l| l.id == *id))
@@ -2188,6 +2206,7 @@ impl Editor {
             Target::More(i) => self.toggle_layer_card(i),
             Target::LayerAct(act) => self.layer_action(act),
             Target::Compare(part) => self.activate_compare(part),
+            Target::Expand => self.expand_canvas(),
             Target::Change => self.pick_folder = true,
             Target::Undo => {
                 self.set_crop(None);
@@ -3271,6 +3290,7 @@ impl Editor {
                 }
                 Target::LayerAct(act) => self.card_act_rect(act).unwrap_or_default(),
                 Target::Compare(part) => self.compare_part_rect(part),
+                Target::Expand => self.expand_rect().unwrap_or_default(),
                 Target::Shape(i) => {
                     let (s2, s3) = (self.t.n("s-2"), self.t.n("s-3"));
                     let cell = editor_chrome::SHAPE_FLYOUT_BUTTON as f32;
@@ -3641,7 +3661,9 @@ impl Editor {
             Target::AddImages,
         ]);
         list.extend((0..RAIL_TOOLS.len()).map(Target::Tool));
-        // `.compression-preview-frame` follows the canvas in the viewport.
+        // The canvas stage's Expand canvas action, then
+        // `.compression-preview-frame`, follow the canvas in the viewport.
+        list.push(Target::Expand);
         list.extend(compare::PARTS.map(Target::Compare));
         list.push(Target::Divider);
         list.push(Target::AddLayer);
@@ -4347,6 +4369,7 @@ impl Editor {
         let accent = t.color("theme-accent");
         let offset = self.move_offset();
         self.draw_trim_hint(dc)?;
+        self.draw_expand_hint(dc)?;
         self.draw_guides(dc)?;
         if let Some(outline) = self.selection_outline() {
             let screen: Vec<(f32, f32)> = outline
@@ -4535,6 +4558,9 @@ impl Editor {
         }
         if let Target::Compare(part) = target {
             return self.draw_compare_part(dc, part, layer, (w, h));
+        }
+        if target == Target::Expand {
+            return self.draw_expand_action(dc, layer, (w, h));
         }
         let t = &self.t;
         let g = &self.g;
@@ -4988,7 +5014,7 @@ impl Editor {
                 gfx::text(dc, &text, x + 15. + s3, (h - text.height) / 2., ink)?;
                 let _ = s5;
             }
-            Target::Prop(_) | Target::LayerAct(_) | Target::Compare(_) => {}
+            Target::Prop(_) | Target::LayerAct(_) | Target::Compare(_) | Target::Expand => {}
         }
         Ok(())
     }
@@ -5110,6 +5136,7 @@ impl Editor {
             }
             self.refresh(false);
         }
+        self.place_expand();
         Ok(())
     }
 
@@ -6117,6 +6144,7 @@ fn button_slot(target: Target) -> usize {
         | Target::More(_)
         | Target::LayerAct(_)
         | Target::Compare(_)
+        | Target::Expand
         | Target::Prop(_) => SLOTS - 1,
     }
 }
@@ -6717,14 +6745,30 @@ pub fn render_offscreen(
     // `--select rotate`: an image layer placed in memory and selected, with
     // its grips and rotate handle (the fixture's background is locked).
     // `trim`: the same layer over a hidden background, with Trim edges
-    // hovered.
+    // hovered. `expand`: the layer moved past the left and bottom edges,
+    // with its Expand canvas action (`expand-armed`: hovered).
     let select = options.select.as_deref();
-    let placed = matches!(select, Some("rotate" | "trim"))
+    let expanding = matches!(select, Some("expand" | "expand-armed"));
+    let placed = (matches!(select, Some("rotate" | "trim")) || expanding)
         .then(|| {
             let image = RgbaImage::from_pixel(420, 240, image::Rgba([232, 96, 64, 255]));
             session.import_images([("rotate.png".to_owned(), image)], None, None)
         })
         .and_then(std::result::Result::ok);
+    if let (true, Some(layer)) = (expanding, &placed) {
+        let bounds = session.snapshot().document.elements[1]
+            .painted_bounds()
+            .map_err(fail)?;
+        session
+            .execute(Request::Layer {
+                id: layer.clone(),
+                edit: LayerEdit::Translate {
+                    delta_x: -bounds.x - 100.,
+                    delta_y: 60.,
+                },
+            })
+            .map_err(fail)?;
+    }
     if select == Some("trim") {
         let background = session.snapshot().document.elements[0].base().id.clone();
         session
@@ -6800,6 +6844,14 @@ pub fn render_offscreen(
         }
         Some("trim") => {
             editor.hover = Some(Target::Trim);
+            editor.refresh(false);
+        }
+        // Zoomed out so the overflow and the action fit in the well.
+        Some("expand") => editor.zoom_by(0.7),
+        Some("expand-armed") => {
+            editor.zoom_by(0.7);
+            editor.prepare()?;
+            editor.hover = Some(Target::Expand);
             editor.refresh(false);
         }
         Some("drop") => editor.drag_enter(None),
@@ -7628,6 +7680,80 @@ mod tests {
                 .try_iter()
                 .any(|job| matches!(job, Job::Apply(Request::TrimCanvas)))
         );
+        drop(e);
+        let _ = std::fs::remove_dir_all(data);
+        unsafe { CoUninitialize() };
+    }
+    /// Shipping's Expand canvas action: shown beside the selected layer
+    /// while it hangs past the canvas, armed by hover, and one layer edit.
+    #[test]
+    fn expand_canvas_action_follows_the_hanging_selection() {
+        use windows::Win32::System::Com::*;
+        unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok().unwrap() };
+        let data = std::env::temp_dir().join(format!("captures-expand-{}", std::process::id()));
+        let capture = captures_app::persist_screenshot(
+            &data.join("history"),
+            &RgbaImage::from_pixel(640, 360, Rgba([20, 50, 80, 255])),
+            CaptureMode::Region,
+        )
+        .unwrap();
+        let options = crate::parse(
+            [
+                "test".into(),
+                "--profile".into(),
+                data.to_string_lossy().into_owned(),
+                "--scene".into(),
+                "editor".into(),
+                "--artifact".into(),
+                capture.entry.id,
+                "--select".into(),
+                "expand".into(),
+            ]
+            .into_iter(),
+        )
+        .unwrap();
+        let tokens = crate::appearance::tokens(Some("light"), &Default::default());
+        let mut e = render_offscreen(
+            &options,
+            Gfx::new(&tokens, false).unwrap(),
+            tokens,
+            (1280., 840.),
+        )
+        .unwrap();
+        let (jobs, inbox) = channel();
+        e.jobs = jobs;
+        let id = e.selected.clone().expect("the placed layer");
+        assert!(e.exists(Target::Expand) && e.focusable().contains(&Target::Expand));
+        // Past the left edge by 100 and the bottom by 60: the action sits
+        // below the canvas, centred on the wider bottom gap.
+        let (_, preview) = e.expand_target().unwrap();
+        assert_eq!(preview.edges.len(), 2);
+        let action = e.target_rect(Target::Expand);
+        let canvas = e.image_rect().unwrap();
+        assert!(f64::from(action.y) > canvas.y + canvas.height - 1. + f64::from(e.l.well.y));
+        assert!(!e.expand_armed());
+        let (x, y) = (
+            ((action.x + action.w / 2.) * e.scale) as u32,
+            ((action.y + action.h / 2.) * e.scale) as u32,
+        );
+        let at = LPARAM((x | (y << 16)) as isize);
+        e.handle(WM_MOUSEMOVE, WPARAM(0), at);
+        assert_eq!(e.hover, Some(Target::Expand));
+        e.prepare().unwrap();
+        assert!(e.expand_armed() && e.expand_shown.as_ref().is_some_and(|(_, armed)| *armed));
+        // A click on it is the action's, not a canvas gesture.
+        e.handle(WM_LBUTTONDOWN, WPARAM(0), at);
+        assert!(e.gesture.is_none());
+        e.handle(WM_LBUTTONUP, WPARAM(0), at);
+        assert!(inbox.try_iter().any(|job| matches!(
+            job,
+            Job::Apply(Request::Layer { id: layer, edit: LayerEdit::ExpandCanvas }) if layer == id
+        )));
+        // The background fits the canvas: no action.
+        let background = e.layer(1).unwrap().id.clone();
+        e.set_selected(Some(background));
+        e.prepare().unwrap();
+        assert!(!e.exists(Target::Expand) && e.expand_shown.is_none());
         drop(e);
         let _ = std::fs::remove_dir_all(data);
         unsafe { CoUninitialize() };

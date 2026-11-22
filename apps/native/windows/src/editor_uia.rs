@@ -226,6 +226,7 @@ fn children(e: &Editor, id: Id) -> Vec<Id> {
             list
         }
         Id::Canvas if e.text_active() => vec![Id::InlineText],
+        Id::Canvas if e.exists(Target::Expand) => vec![c(Target::Expand)],
         Id::ShapePicker | Id::ColorField(_) | Id::ModeGroup => e
             .prop_order()
             .into_iter()
@@ -263,7 +264,7 @@ fn parent(e: &Editor, id: Id) -> Option<Id> {
         Id::LayersTitle | Id::Control(Target::AddLayer) | Id::List => Id::Layers,
         Id::Row(_) => Id::List,
         Id::ShapePicker | Id::ColorField(_) | Id::ModeGroup => Id::Properties,
-        Id::InlineText => Id::Canvas,
+        Id::InlineText | Id::Control(Target::Expand) => Id::Canvas,
         Id::Rename => Id::Row(e.renaming()?),
         Id::MenuItem(_) => Id::Menu,
         Id::Control(Target::Prop(prop)) => prop_parent(prop),
@@ -455,6 +456,7 @@ fn runtime_id(id: Id) -> [i32; 4] {
             Target::LayerAct(act) => (40, act as i32),
             Target::Prop(Prop::Blend) => (41, 0),
             Target::Compare(part) => (42, part as i32),
+            Target::Expand => (43, 0),
             Target::Prop(Prop::Export(ex)) => (37, ex as i32),
             Target::Prop(Prop::Filename) => (38, 0),
             Target::Prop(Prop::Shape(i)) => (16, i as i32),

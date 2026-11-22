@@ -20,7 +20,7 @@ use crate::gfx;
 impl Editor {
     /// `toolShowsTransformChrome`: Select, or a shape tool still editing the
     /// shape it placed.
-    fn transform_tool(&self) -> bool {
+    pub(super) fn transform_tool(&self) -> bool {
         self.tool == "v" || self.tool == "a" || SHAPE_TOOLS.iter().any(|s| s.key == self.tool)
     }
 

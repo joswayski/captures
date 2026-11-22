@@ -982,6 +982,26 @@ in-memory layer with the background hidden; a test checks that hover and
 focus show it, leaving hides it, the cut edges match the margins and Trim
 still submits `TrimCanvas`. A real pointer hover is unverified.
 
+Windows Expand canvas: with Select or a shape tool, a selected, visible
+layer hanging past the canvas (the session's `canvas_expand`) shows
+shipping's `.screenshot-canvas-expand-action` (accent, `r-sm`,
+`shadow-md`, semibold `text-xs` in `theme-accent-ink`, 8 % brighter on
+hover or keyboard focus) centred `EXPAND_ACTION_INSET` screen pixels outside
+the largest overflow gap, and the overlay tints each off-canvas gap in the
+accent, as GTK and AppKit do (shipping repaints the layer's off-canvas pixels
+at 42 %; no native host does). Hovering the action arms the dashed ghost of
+the grown canvas (1.5 px at 42 %, 2 px at 82 % on the crossed sides) with the
+5 px accent pill and 96 px bloom on each crossed edge. Clicking it applies
+`LayerEdit::ExpandCanvas` as one undo step. Like the other native hosts it
+follows the selected layer, not a merely hovered one; breathing and particles
+are omitted. UIA: an `Expand canvas` button inside the canvas. Windows:
+`--select expand` and `expand-armed` render it in light and dark; a test
+checks its place below the canvas, hover arming, the click's edit and that
+a layer inside the canvas shows none; a live window driven through UIA (and
+the file dialog by window messages) added an image layer, set Layer X to
+-100, found the button under the canvas and invoked it: the canvas grew from
+1440 to 1540 and the button went away. A real pointer hover is unverified.
+
 Hardware pass 16 verified crop dragging/dashes/apply/undo, field commits,
 Properties scroll, rename selection and reorder, compositor pulse idle,
 and final-window shutdown. Follow-up fixes keep the dragged row's 0.42
