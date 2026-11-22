@@ -587,14 +587,14 @@ final class MiniPreviewButton: NSButton {
         let pressed = mainPointerPressed || cell?.isHighlighted == true
         chromeBackground.setFill()
         path.fill()
-        if isEnabled {
+        if popsIcon && isEnabled {
             drawTactileSurface(in: path, radius: radius, tokens: tokens,
                                primary: primary, hovered: hovered, pressed: pressed,
                                isFlipped: isFlipped)
         }
         let borderColor = primary
-            ? NSColor.black.withAlphaComponent(0.24)
-            : tokens.color(hovered ? "glass-border-strong" : "glass-border")
+            ? (popsIcon ? NSColor.black.withAlphaComponent(0.24) : NSColor.clear)
+            : tokens.color(hovered && popsIcon ? "glass-border-strong" : "glass-border")
         mainActionColor(borderColor).setStroke(); path.stroke()
         let color = chromeForeground
         color.setStroke(); color.setFill()
@@ -627,13 +627,8 @@ final class MiniPreviewButton: NSButton {
                                 xRadius: radius - 0.5, yRadius: radius - 0.5)
         let accent = tokens.color("theme-accent")
         (offersAction ? accent : tokens.color("glass-strong")).setFill(); pill.fill()
-        drawTactileSurface(in: pill, radius: radius - 0.5, tokens: tokens,
-                           primary: offersAction, hovered: hovered, pressed: cell?.isHighlighted == true,
-                           isFlipped: isFlipped)
         if !offersAction {
             accent.withAlphaComponent(0.72).setStroke(); pill.lineWidth = 1; pill.stroke()
-        } else {
-            NSColor.black.withAlphaComponent(0.24).setStroke(); pill.lineWidth = 1; pill.stroke()
         }
         let color = tokens.color(offersAction ? "theme-accent-ink" : "theme-accent-text")
         color.setStroke(); color.setFill()
