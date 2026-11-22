@@ -239,7 +239,14 @@ fn capture_monitor(monitor: &Monitor) -> CaptureResult<DisplayFrame> {
             .id()
             .map_err(|error| CaptureError::Backend(error.to_string()))?,
     )?;
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    let image = crate::windows_grab::capture_display(
+        descriptor.x,
+        descriptor.y,
+        descriptor.width,
+        descriptor.height,
+    )?;
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let image = monitor
         .capture_image()
         .map_err(|error| CaptureError::Backend(error.to_string()))?;

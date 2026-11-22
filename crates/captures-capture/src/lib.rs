@@ -14,6 +14,9 @@ mod window;
 #[cfg(any(target_os = "windows", test))]
 #[allow(unsafe_code)]
 mod windows_cursor;
+#[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
+mod windows_grab;
 #[cfg(target_os = "linux")]
 mod x11;
 

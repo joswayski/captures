@@ -513,6 +513,15 @@ the resident app closes Preferences, History, the mini previews and editors
 recording runs. Development builds simulate it with a thread message:
 `WM_APP + 20` with `wParam` `0x1057`.
 
+Display stills (the frozen snapshot and display captures) come from
+`captures-capture`'s `windows_grab`: DXGI desktop duplication on one Direct3D
+device it creates on the first grab and keeps, with GDI for rotated outputs or
+when duplication has no frame within 250 ms. xcap's Windows.Graphics.Capture
+grab left one display-sized GPU surface behind per grab (64 MB per 4K capture,
+never reclaimed). Duplication and GDI return the same pixels; WGC's differed
+only on the anti-aliased edges of the taskbar's running-app indicators (up to
+18/255). None include the cursor or a capture border.
+
 Each scene node (`src/scene.rs`) owns one composition surface. Hover and
 toggle transitions animate visual opacity and offsets on the compositor, and
 scrolling moves the card column's visual, so a frame redraws only nodes whose
