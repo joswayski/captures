@@ -106,6 +106,9 @@ impl XcapBackend {
         #[cfg(target_os = "linux")]
         let monitors = Monitor::all().map_err(|error| CaptureError::Backend(error.to_string()))?;
 
+        #[cfg(target_os = "macos")]
+        let native_windows = crate::macos::windows();
+        #[cfg(not(target_os = "macos"))]
         let native_windows =
             Window::all().map_err(|error| CaptureError::Backend(error.to_string()))?;
         let fallback_front = i32::try_from(native_windows.len()).unwrap_or(i32::MAX);

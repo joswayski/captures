@@ -1,14 +1,26 @@
-use core_foundation::{base::TCFType, string::CFString};
+use core_foundation::{
+    base::{CFType, TCFType},
+    boolean::CFBoolean,
+    dictionary::{CFDictionary, CFDictionaryRef},
+    number::CFNumber,
+    string::{CFString, CFStringRef},
+};
 use core_graphics::{
     base::{kCGBitmapByteOrder32Big, kCGImageAlphaPremultipliedLast},
     color_space::CGColorSpace,
     display::CGDisplay,
+    geometry::{CGPoint, CGRect},
     image::CGImage,
-    window::{kCGWindowImageDefault, kCGWindowListOptionAll},
+    window::{
+        copy_window_info, kCGNullWindowID, kCGWindowBounds, kCGWindowImageDefault,
+        kCGWindowIsOnscreen, kCGWindowListExcludeDesktopElements, kCGWindowListOptionAll,
+        kCGWindowListOptionOnScreenOnly, kCGWindowName, kCGWindowNumber, kCGWindowOwnerName,
+        kCGWindowSharingState,
+    },
 };
 use foreign_types::ForeignType;
 use image::RgbaImage;
-use std::{ffi::c_void, ptr};
+use std::{convert::Infallible, ffi::c_void, ptr};
 
 use crate::{CaptureError, CaptureResult};
 
@@ -122,6 +134,128 @@ fn image_to_srgb(source: &CGImage) -> CaptureResult<RgbaImage> {
     }
     RgbaImage::from_raw(width as u32, height as u32, pixels)
         .ok_or_else(|| CaptureError::Image("invalid sRGB capture dimensions".into()))
+}
+
+/// One on-screen window as xcap 0.9's `Window` reports it, read from a single
+/// `CGWindowListCopyWindowInfo` snapshot. xcap copies the whole window list
+/// again in every accessor, so listing 58 windows made about 500 copies and
+/// took 0.3–1.6 s before each window selection appeared.
+pub(crate) struct WindowRecord {
+    id: u32,
+    title: String,
+    app_name: String,
+    bounds: CGRect,
+    z: i32,
+    minimized: bool,
+}
+
+/// The accessors return `Result` like xcap's, so callers stay unchanged.
+impl WindowRecord {
+    pub(crate) fn id(&self) -> Result<u32, Infallible> {
+        Ok(self.id)
+    }
+    pub(crate) fn title(&self) -> Result<String, Infallible> {
+        Ok(self.title.clone())
+    }
+    pub(crate) fn app_name(&self) -> Result<String, Infallible> {
+        Ok(self.app_name.clone())
+    }
+    pub(crate) fn x(&self) -> Result<i32, Infallible> {
+        Ok(self.bounds.origin.x as i32)
+    }
+    pub(crate) fn y(&self) -> Result<i32, Infallible> {
+        Ok(self.bounds.origin.y as i32)
+    }
+    pub(crate) fn width(&self) -> Result<u32, Infallible> {
+        Ok(self.bounds.size.width as u32)
+    }
+    pub(crate) fn height(&self) -> Result<u32, Infallible> {
+        Ok(self.bounds.size.height as u32)
+    }
+    pub(crate) fn z(&self) -> Result<i32, Infallible> {
+        Ok(self.z)
+    }
+    pub(crate) fn is_minimized(&self) -> Result<bool, Infallible> {
+        Ok(self.minimized)
+    }
+}
+
+/// xcap 0.9.8's `Window::all()` and accessors, applied to one snapshot:
+/// the same list options, the same skipped entries (no name or owner name,
+/// the Window Server's StatusIndicator, sharing state 0, no on-screen flag or
+/// bounds), z counted from the bottom of the unfiltered list, and "minimized"
+/// meaning off screen and smaller than the display holding its centre.
+pub(crate) fn windows() -> Vec<WindowRecord> {
+    let Some(list) = copy_window_info(
+        kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
+        kCGNullWindowID,
+    ) else {
+        return Vec::new();
+    };
+    // xcap drops every window when the display list fails.
+    let Ok(displays) = CGDisplay::active_displays() else {
+        return Vec::new();
+    };
+    let displays: Vec<CGRect> = displays
+        .into_iter()
+        .map(|id| CGDisplay::new(id).bounds())
+        .collect();
+    let main = CGDisplay::main().bounds();
+    let entries = list.get_all_values();
+    let count = entries.len();
+    entries
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, entry)| {
+            if entry.is_null() {
+                return None;
+            }
+            // SAFETY: CGWindowListCopyWindowInfo returns an array of
+            // dictionaries that `list` keeps alive for this closure.
+            let entry: CFDictionary<CFString, CFType> =
+                unsafe { CFDictionary::wrap_under_get_rule(entry as CFDictionaryRef) };
+            // SAFETY: the window info keys are immutable CFString constants.
+            let value =
+                |key: CFStringRef| entry.find(unsafe { CFString::wrap_under_get_rule(key) });
+            let text = |key| {
+                value(key)?
+                    .downcast::<CFString>()
+                    .map(|text| text.to_string())
+            };
+            let number = |key| value(key)?.downcast::<CFNumber>()?.to_i32();
+            let title = text(unsafe { kCGWindowName })?;
+            let app_name = text(unsafe { kCGWindowOwnerName })?;
+            if title == "StatusIndicator" && app_name == "Window Server" {
+                return None;
+            }
+            if number(unsafe { kCGWindowSharingState })? == 0 {
+                return None;
+            }
+            let id = number(unsafe { kCGWindowNumber })? as u32;
+            let on_screen =
+                bool::from(value(unsafe { kCGWindowIsOnscreen })?.downcast::<CFBoolean>()?);
+            let bounds = value(unsafe { kCGWindowBounds })?.downcast::<CFDictionary>()?;
+            let bounds = CGRect::from_dict_representation(&bounds)?;
+            let center = CGPoint::new(
+                bounds.origin.x + bounds.size.width / 2.,
+                bounds.origin.y + bounds.size.height / 2.,
+            );
+            let display = displays
+                .iter()
+                .find(|display| display.contains(&center) || display.is_intersects(&bounds))
+                .unwrap_or(&main);
+            let maximized = bounds.size.width as u32 >= display.size.width as u32
+                && bounds.size.height as u32 >= display.size.height as u32;
+            Some(WindowRecord {
+                id,
+                title,
+                app_name,
+                bounds,
+                z: (count - 1 - index) as i32,
+                minimized: !on_screen && !maximized,
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
