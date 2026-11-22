@@ -132,6 +132,15 @@ pub fn render(options: &Options, path: &std::path::Path) -> Result<()> {
                 menu.switching = true;
             }
         }
+        // `--select direct` draws the bar-less Screenshot Region or Window
+        // selector; `direct-feedback` the Region one after an empty click.
+        if let Some(select @ ("direct" | "direct-feedback")) = options.select.as_deref() {
+            menu.direct = true;
+            menu.selection = None;
+            if select == "direct-feedback" {
+                menu.selection_feedback();
+            }
+        }
         // The fixture window below; `--select` hovers it, `--select desktop`
         // the display.
         menu.windows = vec![(

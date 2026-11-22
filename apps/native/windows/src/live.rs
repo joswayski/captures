@@ -13,8 +13,9 @@ use std::sync::mpsc::{Receiver, channel};
 use std::time::{Duration, Instant, SystemTime};
 
 use captures_app::app_windows::{self, AppWindow, InteractiveLaunch, PrimaryWindow, Reactivation};
+use captures_app::capture_error::{self, Action::Record, Action::Screenshot, Target};
 use captures_app::instance::{Instance, Launch, OpenRequest};
-use captures_app::shortcuts::{CaptureShortcut, CaptureShortcuts};
+use captures_app::shortcuts::CaptureShortcuts;
 use captures_app::tray_notice;
 use captures_app::updater::checks::{CheckStatus, CheckWorker};
 use captures_app::updater::{HealthAcknowledgement, RestartCaptureWindow, RestartIntent};
@@ -401,19 +402,8 @@ pub fn service() {
     while let Some(shortcut) =
         RESIDENT.with(|r| r.borrow().as_ref()?.shortcuts.as_ref()?.next_action())
     {
-        // As the tray rows: each opens the bar on its mode and target.
-        use crate::capture::Target;
-        let (target, mode) = match shortcut {
-            CaptureShortcut::NewCapture | CaptureShortcut::Region => {
-                (Target::Region, MenuMode::Screenshot)
-            }
-            CaptureShortcut::Window => (Target::Window, MenuMode::Screenshot),
-            CaptureShortcut::Display => (Target::Display, MenuMode::Screenshot),
-            CaptureShortcut::RecordRegion => (Target::Region, MenuMode::Recording),
-            CaptureShortcut::RecordWindow => (Target::Window, MenuMode::Recording),
-            CaptureShortcut::RecordDisplay => (Target::Display, MenuMode::Recording),
-        };
-        new_capture(&options, target, mode, false);
+        // As the tray rows.
+        new_capture(&options, shortcut.action(), false);
     }
     for _ in 0..32 {
         let next = RESIDENT.with(|r| r.borrow().as_ref().map(|r| r.instance.next_request()));
@@ -804,47 +794,13 @@ fn run(options: &Options, action: Action) {
             }
         }
         Action::Quit => unsafe { PostQuitMessage(0) },
-        // Like shipping, Screenshot Display opens the bar on Full screen.
-        // Shipping's Screenshot Region and Window open their selector without
-        // the bar; those direct overlays are not ported, so the bar opens on
-        // that target instead.
-        Action::NewCapture | Action::CaptureRegion => new_capture(
-            options,
-            crate::capture::Target::Region,
-            MenuMode::Screenshot,
-            true,
-        ),
-        Action::CaptureWindow => new_capture(
-            options,
-            crate::capture::Target::Window,
-            MenuMode::Screenshot,
-            true,
-        ),
-        Action::CaptureDisplay => new_capture(
-            options,
-            crate::capture::Target::Display,
-            MenuMode::Screenshot,
-            true,
-        ),
-        // The Record rows open the bar in Record on their target.
-        Action::RecordRegion => new_capture(
-            options,
-            crate::capture::Target::Region,
-            MenuMode::Recording,
-            true,
-        ),
-        Action::RecordWindow => new_capture(
-            options,
-            crate::capture::Target::Window,
-            MenuMode::Recording,
-            true,
-        ),
-        Action::RecordDisplay => new_capture(
-            options,
-            crate::capture::Target::Display,
-            MenuMode::Recording,
-            true,
-        ),
+        Action::NewCapture => new_capture(options, capture_error::Action::NewCapture, true),
+        Action::CaptureRegion => new_capture(options, Screenshot(Target::Region), true),
+        Action::CaptureWindow => new_capture(options, Screenshot(Target::Window), true),
+        Action::CaptureDisplay => new_capture(options, Screenshot(Target::Display), true),
+        Action::RecordRegion => new_capture(options, Record(Target::Region), true),
+        Action::RecordWindow => new_capture(options, Record(Target::Window), true),
+        Action::RecordDisplay => new_capture(options, Record(Target::Display), true),
         Action::SendFeedback => {
             if let Err(error) = crate::feedback::open(options) {
                 eprintln!("couldn't open Send Feedback: {error}");
@@ -968,8 +924,12 @@ fn reactivate(options: &Options) {
     }
 }
 
-/// Open New Capture, or first-run setup while it is unfinished.
-fn new_capture(options: &Options, target: crate::capture::Target, mode: MenuMode, from_menu: bool) {
+/// A capture shortcut or tray row: first-run setup while it is unfinished,
+/// else like shipping New Capture opens the bar on Region, Screenshot Region
+/// and Window their bar-less selector, Screenshot Display the bar on Full
+/// screen and the Record rows the bar in Record on their target.
+fn new_capture(options: &Options, action: capture_error::Action, from_menu: bool) {
+    use crate::capture::Target as T;
     let settings = captures_settings::load(&options.settings_file).unwrap_or_default();
     if !settings.onboarding_completed {
         return open_setup(options);
@@ -978,20 +938,22 @@ fn new_capture(options: &Options, target: crate::capture::Target, mode: MenuMode
     if crate::recorder::active() {
         return crate::recorder::restore();
     }
-    // An open bar switches in place or recaptures itself, like shipping.
-    let action = match mode {
-        MenuMode::Screenshot => captures_app::capture_error::Action::Screenshot,
-        MenuMode::Recording => captures_app::capture_error::Action::Record,
-    };
-    let action = action(match target {
-        crate::capture::Target::Region => captures_app::capture_error::Target::Region,
-        crate::capture::Target::Window => captures_app::capture_error::Target::Window,
-        crate::capture::Target::Display => captures_app::capture_error::Target::Display,
-    });
+    // An open bar or selector switches in place or recaptures itself.
     if crate::capture::shortcut(action) {
         return;
     }
-    open_capture(options, target, mode, from_menu);
+    let target = |target| match target {
+        Target::Region => T::Region,
+        Target::Window => T::Window,
+        Target::Display => T::Display,
+    };
+    let (target, mode, direct) = match action {
+        capture_error::Action::NewCapture => (T::Region, MenuMode::Screenshot, false),
+        Screenshot(Target::Display) => (T::Display, MenuMode::Screenshot, false),
+        Screenshot(t) => (target(t), MenuMode::Screenshot, true),
+        Record(t) => (target(t), MenuMode::Recording, false),
+    };
+    open_capture(options, target, mode, direct, from_menu);
 }
 
 /// The recording controls' Screenshot: the bar on Region, where the running
@@ -1003,6 +965,7 @@ pub fn recording_screenshot() {
             crate::capture::Target::Region,
             MenuMode::Screenshot,
             false,
+            false,
         );
     }
 }
@@ -1011,6 +974,7 @@ fn open_capture(
     options: &Options,
     target: crate::capture::Target,
     mode: MenuMode,
+    direct: bool,
     from_menu: bool,
 ) {
     let Some(thread) = RESIDENT.with(|r| r.borrow().as_ref().map(|r| r.thread)) else {
@@ -1018,7 +982,8 @@ fn open_capture(
     };
     // Shipping hides the mini previews before the snapshot.
     crate::previews::set_suppressed(true);
-    if let Err(error) = crate::capture::open(options, target, mode, from_menu, wake_on(thread)) {
+    let wake = wake_on(thread);
+    if let Err(error) = crate::capture::open(options, target, mode, direct, from_menu, wake) {
         show_error(&error);
     }
 }

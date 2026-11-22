@@ -141,16 +141,20 @@ offscreen and unit-tested; the live motion was not watched). A physical Windows 
 Region and Full screen captures, the clipboard and History; a second New
 Capture now refocuses the open bar instead of an error, and the snapshot waits
 for the tray menu and overflow flyout to close (a recheck passed both; the
-wait adds about 0.5 s before the overlay appears). Screenshot Region and
-Window open the bar on that target (shipping's bar-less selectors are not
-ported). After setup, `--live` registers the saved capture shortcuts with the
+wait adds about 0.5 s before the overlay appears). Like shipping, Screenshot
+Region and Window open a bar-less selector with the guidance chip: Region
+commits on release (a click without a drag nudges the chip, which reads
+"Click and drag to select a region" with an accent border for 1.8 s) and
+Window on click (`--select direct|direct-feedback` renders them; unit-tested,
+not physically clicked). After setup, `--live` registers the saved capture shortcuts with the
 shared `CaptureShortcuts` owner, which takes over Print Screen and Win+Shift+S
 from Snipping Tool like shipping: New Capture and the screenshot shortcuts open
 the bar on their target, the recording shortcuts open it in Record, and while
 the bar is up every chord and tray row routes to it through the shared
 `busy_route`: another mode or target switches it in place, and the same
-screenshot target again freezes the screen with the bar in it and reopens the
-bar on that snapshot (no countdown; Full screen saves that snapshot). Unit-tested;
+screenshot target again (or any chord over a bar-less selector) freezes the
+screen with the open UI in it and opens the bar or selector the route names
+on that snapshot (no countdown; Full screen saves that snapshot). Unit-tested;
 no chord was pressed physically while the bar was up.
 An active Preferences shortcut recorder releases the registrations. A key
 press skips the tray menu's 200 ms fade wait. A physical Windows 11 check

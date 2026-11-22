@@ -17,7 +17,8 @@
 //! its ratio (the shared `selection` geometry). Full screen's Display select
 //! prepares another display and reopens the bar there. The guidance chip,
 //! options-row arrive, ready ping and list pop-in run on a frame timer only
-//! while they move. Keyboard focus
+//! while they move. Screenshot Region and Window open the same overlay as
+//! shipping's bar-less selector (`Menu::direct`). Keyboard focus
 //! through the bar and UI Automation are not ported yet.
 
 use std::cell::RefCell;
@@ -544,6 +545,14 @@ pub struct Menu {
     record_since: Option<f64>,
     /// The open listbox's field and when it popped in.
     open_since: Option<(Field, f64)>,
+    /// Shipping's bar-less Screenshot Region and Window selectors
+    /// (`CaptureOverlay`): no bar, a region commits on release and a window
+    /// on click.
+    pub direct: bool,
+    /// `showSelectionFeedback`: the empty click's attempt (it re-keys the
+    /// chip), when its feedback ends, and a click waiting for the clock.
+    feedback: (u32, Option<f64>),
+    feedback_pending: bool,
 }
 
 /// The chip's frame with its title and hint lines.
@@ -559,8 +568,21 @@ enum ShortcutEffect {
     Ignored,
     /// Switched mode and target in place.
     Switched,
-    /// Freeze the screen with the bar in it and reopen the bar there.
-    Recapture,
+    /// Freeze the screen with the capture UI in it and open, on that
+    /// snapshot, the bar (or a direct selector) on this target and mode.
+    Recapture {
+        target: Target,
+        mode: MenuMode,
+        direct: bool,
+    },
+}
+
+fn menu_target(target: capture_error::Target) -> Target {
+    match target {
+        capture_error::Target::Region => Target::Region,
+        capture_error::Target::Window => Target::Window,
+        capture_error::Target::Display => Target::Display,
+    }
 }
 
 fn route_target(target: Target) -> capture_error::Target {
@@ -615,6 +637,9 @@ impl Menu {
             guidance_over: false,
             record_since: None,
             open_since: None,
+            direct: false,
+            feedback: (0, None),
+            feedback_pending: false,
         }
     }
 
@@ -651,6 +676,17 @@ impl Menu {
         let creating = self
             .drag
             .is_some_and(|drag| matches!(drag.mode, DragMode::Create));
+        // An empty click's feedback lasts `GUIDANCE_FEEDBACK`; each attempt
+        // and its end re-key the chip, replaying its entrance.
+        let (mut attempt, mut until) = self.feedback;
+        if std::mem::take(&mut self.feedback_pending) {
+            attempt += 1;
+            until = Some(now + capture_menu::GUIDANCE_FEEDBACK.as_secs_f64() * 1000.);
+        } else if until.is_some_and(|until| now >= until) {
+            (attempt, until) = (0, None);
+        }
+        let rekeyed = (attempt, until) != self.feedback;
+        self.feedback = (attempt, until);
         let Some(target) = self.guidance_target() else {
             self.guidance = None;
             return;
@@ -658,11 +694,26 @@ impl Menu {
         let region = target == GuidanceTarget::Region;
         let shown = !(self.guidance_over || region && creating);
         match &mut self.guidance {
-            Some((r, chip)) if *r == region => chip.set_shown(shown, now),
+            Some((r, chip)) if *r == region && !rekeyed => chip.set_shown(shown, now),
             _ => {
-                self.guidance = GuidanceChip::new(t, self.reduced, now, shown, false)
+                let feedback = region && attempt > 0;
+                self.guidance = GuidanceChip::new(t, self.reduced, now, shown, feedback)
                     .map(|chip| (region, chip));
             }
+        }
+    }
+
+    /// Shipping `showSelectionFeedback` after a region click without a drag.
+    pub fn selection_feedback(&mut self) {
+        self.feedback_pending = true;
+    }
+
+    /// Shipping `clearSelectionFeedback` when a new drag starts.
+    fn clear_selection_feedback(&mut self) {
+        self.feedback_pending = false;
+        if self.feedback != (0, None) {
+            // Re-key at the next sync, like the attempt dropping to 0.
+            self.feedback.1 = Some(f64::NEG_INFINITY);
         }
     }
 
@@ -717,6 +768,9 @@ impl Menu {
             || running(self.record_since, Motion::CaptureMenuOptionsArrive)
             || running(self.open_since.map(|(_, at)| at), Motion::PopoverIn)
             || pinging
+            // The feedback's end re-keys the chip.
+            || self.feedback.1.is_some()
+            || self.feedback_pending
     }
 
     /// A capture shortcut with the bar up (shared `busy_route`, shipping's
@@ -730,22 +784,25 @@ impl Menu {
         }
         let screenshot_target =
             (self.mode == MenuMode::Screenshot).then_some(route_target(self.target));
-        let activity = capture_error::Activity::Menu { screenshot_target };
+        let activity = if self.direct {
+            capture_error::Activity::Selector
+        } else {
+            capture_error::Activity::Menu { screenshot_target }
+        };
+        let mode = |record| {
+            if record {
+                MenuMode::Recording
+            } else {
+                MenuMode::Screenshot
+            }
+        };
         match capture_error::busy_route(action, activity, None, false) {
             capture_error::BusyRoute::SwitchMenu { record, target } => {
                 if record && self.recording_locked {
                     return ShortcutEffect::Ignored;
                 }
-                self.mode = if record {
-                    MenuMode::Recording
-                } else {
-                    MenuMode::Screenshot
-                };
-                self.target = match target {
-                    capture_error::Target::Region => Target::Region,
-                    capture_error::Target::Window => Target::Window,
-                    capture_error::Target::Display => Target::Display,
-                };
+                self.mode = mode(record);
+                self.target = menu_target(target);
                 self.hovered = None;
                 self.hover = None;
                 self.open = None;
@@ -755,8 +812,18 @@ impl Menu {
                 }
                 ShortcutEffect::Switched
             }
-            capture_error::BusyRoute::RecaptureMenu { .. }
-            | capture_error::BusyRoute::RecaptureSelector(_) => ShortcutEffect::Recapture,
+            capture_error::BusyRoute::RecaptureMenu { record, target } => {
+                ShortcutEffect::Recapture {
+                    target: menu_target(target),
+                    mode: mode(record),
+                    direct: false,
+                }
+            }
+            capture_error::BusyRoute::RecaptureSelector(target) => ShortcutEffect::Recapture {
+                target: menu_target(target),
+                mode: MenuMode::Screenshot,
+                direct: true,
+            },
             _ => ShortcutEffect::Ignored,
         }
     }
@@ -1151,7 +1218,7 @@ impl Menu {
         // title over a `--text-xs` medium hint, 2 px apart.
         let guidance = match self.guidance_target() {
             Some(target) => {
-                let copy = capture_menu::guidance(target, false);
+                let copy = capture_menu::guidance(target, self.feedback.0 > 0);
                 let title = g.text_sized(
                     t,
                     copy.title,
@@ -1348,6 +1415,9 @@ impl Menu {
     }
 
     fn hit(&self, x: f32, y: f32) -> Option<Hit> {
+        if self.direct {
+            return None;
+        }
         let layout = self.layout.as_ref()?;
         if let Some(listbox) = &layout.listbox
             && contains(&listbox.rect, x, y)
@@ -1382,9 +1452,11 @@ impl Menu {
 
     /// Over the bar or its open listbox.
     fn over_panel(&self, x: f32, y: f32) -> bool {
-        self.layout.as_ref().is_some_and(|l| {
-            contains(&l.panel, x, y) || l.listbox.as_ref().is_some_and(|b| contains(&b.rect, x, y))
-        })
+        !self.direct
+            && self.layout.as_ref().is_some_and(|l| {
+                contains(&l.panel, x, y)
+                    || l.listbox.as_ref().is_some_and(|b| contains(&b.rect, x, y))
+            })
     }
 
     pub fn paint(
@@ -1493,6 +1565,11 @@ impl Menu {
         }
         if let (Some(guide), Some((_, chip))) = (&layout.guidance, &self.guidance) {
             self.paint_guidance(dc, t, guide, chip.pose(self.clock))?;
+        }
+        // The direct selectors have no bar.
+        if self.direct {
+            self.layout = Some(layout);
+            return Ok(());
         }
         // `.recording-selector-panel`
         gfx::shadow(dc, layout.panel, 18., t.shadow("glass-shadow"))?;
@@ -1836,6 +1913,10 @@ impl Menu {
         gfx::shadow(dc, label, 6., t.shadow("shadow-sm"))?;
         gfx::fill_round(dc, label, 6., accent)?;
         gfx::text(dc, &text, x + 8., y + 4., t.color("theme-accent-ink"))?;
+        // The direct selector's `.selection-box` has no handles.
+        if self.direct {
+            return Ok(());
+        }
         let handle_shadow = [Shadow {
             x: 0.,
             y: 1.,
@@ -1994,6 +2075,9 @@ impl Menu {
             // Shipping `onPointerDown`: a handle resizes, the frame moves and
             // anywhere else draws a new region from this point.
             let mode = self.region_mode(x, y);
+            if self.direct {
+                self.clear_selection_feedback();
+            }
             let origin = rect(x, y, x, y);
             self.pointer = (x, y);
             self.drag = Some(RegionDrag {
@@ -2053,7 +2137,8 @@ impl Menu {
     fn pick(&mut self) -> Option<Hit> {
         let hovered = self.hovered?;
         self.picked = Some(hovered);
-        self.auto_start.then_some(Hit::Primary)
+        // The direct selector commits on click.
+        (self.auto_start || self.direct).then_some(Hit::Primary)
     }
 
     /// Release; returns the action to run.
@@ -2064,6 +2149,14 @@ impl Menu {
             self.drag = None;
             if !self.can_start() {
                 self.selection = None;
+                // The direct selector commits on release; a click without a
+                // drag nudges the guidance instead.
+                if self.direct {
+                    self.selection_feedback();
+                }
+            }
+            if self.direct {
+                return self.can_start().then_some(Hit::Primary);
             }
             // Only a finished create auto-starts; move and resize adjust.
             let created = matches!(drag.mode, DragMode::Create);
@@ -2160,14 +2253,23 @@ struct Capture {
     root: std::path::PathBuf,
     wake: std::sync::Arc<dyn Fn() + Send + Sync>,
     phase: Phase,
+    /// Open as a bar-less direct selector (Screenshot Region and Window).
+    direct: bool,
     /// The display the Display select is switching to, or a recapture of the
-    /// bar's own display (true), preparing while the bar stays up.
-    switching: Option<(Receiver<Prepared>, bool)>,
+    /// open UI's own display with where it lands, preparing while the open
+    /// UI stays up.
+    switching: Option<(Receiver<Prepared>, Option<Landing>)>,
     /// The bar shows a snapshot of the capture UI itself: Full screen saves
     /// that snapshot, and no countdown runs (shipping
     /// `screenshot_countdown_seconds_for_capture_ui`).
     recaptured: bool,
+    /// Where a finished recapture lands, for `show`.
+    arrive_as: Option<Landing>,
 }
+
+/// Where a recapture opens: the target, the mode, and whether it is a
+/// bar-less direct selector.
+type Landing = (Target, MenuMode, bool);
 
 struct Overlay {
     hwnd: HWND,
@@ -2245,6 +2347,7 @@ pub fn open(
     options: &crate::Options,
     target: Target,
     mode: MenuMode,
+    direct: bool,
     from_menu: bool,
     wake: impl Fn() + Send + Sync + Clone + 'static,
 ) -> std::result::Result<(), String> {
@@ -2274,8 +2377,10 @@ pub fn open(
             root,
             wake,
             phase: Phase::Preparing(prepared),
+            direct,
             switching: None,
             recaptured: false,
+            arrive_as: None,
         })
     });
     Ok(())
@@ -2520,7 +2625,7 @@ impl Capture {
         let _ = overlay.render(&self.tokens);
         let generation = self.flow.generation();
         let prepared = prepare(generation, &self.settings, Some(id), false, &self.wake);
-        self.switching = Some((prepared, false));
+        self.switching = Some((prepared, None));
     }
 
     /// A capture shortcut while the bar is up.
@@ -2534,10 +2639,13 @@ impl Capture {
                 load_microphones(overlay, &self.wake);
                 let _ = overlay.render(&self.tokens);
             }
-            // Shipping freezes the screen with the open bar in it and opens
-            // the bar on that snapshot (its region and window selectors
-            // without the bar are not ported, so the bar reopens for them).
-            ShortcutEffect::Recapture if self.switching.is_none() => {
+            // Shipping freezes the screen with the open capture UI in it and
+            // opens the bar or a direct selector on that snapshot.
+            ShortcutEffect::Recapture {
+                target,
+                mode,
+                direct,
+            } if self.switching.is_none() => {
                 let id = session.display().id.clone();
                 overlay.menu.starting = true;
                 let _ = overlay.render(&self.tokens);
@@ -2545,9 +2653,9 @@ impl Capture {
                 settings.freeze_screen = true;
                 let generation = self.flow.generation();
                 let prepared = prepare(generation, &settings, Some(id), false, &self.wake);
-                self.switching = Some((prepared, true));
+                self.switching = Some((prepared, Some((target, mode, direct))));
             }
-            ShortcutEffect::Recapture => {}
+            ShortcutEffect::Recapture { .. } => {}
         }
     }
 
@@ -2566,7 +2674,8 @@ impl Capture {
         self.switching = None;
         match prepared {
             Ok(Some((session, displays))) => {
-                self.recaptured = recapture;
+                self.recaptured = recapture.is_some();
+                self.arrive_as = recapture;
                 self.show(session, displays)?;
             }
             Ok(None) => {}
@@ -2627,15 +2736,23 @@ impl Capture {
                 menu.displays = display_options(std::slice::from_ref(&display));
             }
             // A display switch keeps the bar's target, mode, aspect and this
-            // capture's Record options; the region and window pick reset.
+            // capture's Record options; the region and window pick reset. A
+            // recapture lands where its shortcut routed.
+            menu.direct = self.direct;
             let mut microphones = None;
             if let Phase::Selecting(previous, _) = &mut self.phase {
                 let old = &mut previous.menu;
                 menu.target = old.target;
                 menu.mode = old.mode;
+                menu.direct = old.direct;
                 menu.aspect = old.aspect;
                 std::mem::swap(&mut menu.record, &mut old.record);
                 microphones = previous.microphones.take();
+            }
+            if let Some((target, mode, direct)) = self.arrive_as.take() {
+                menu.target = target;
+                menu.mode = mode;
+                menu.direct = direct;
             }
             let mut overlay = Overlay {
                 hwnd,
@@ -3437,12 +3554,19 @@ mod tests {
         let mut m = menu(Target::Window, false);
         m.picked = Some(Some(0));
         m.hovered = Some(Some(0));
-        // Another target in Screenshot switches in place; Window keeps its
-        // pick, others drop it and the hover.
+        let recapture = |target, mode, direct| ShortcutEffect::Recapture {
+            target,
+            mode,
+            direct,
+        };
+        // The same screenshot target again freezes the bar into that
+        // target's bar-less selector.
         assert_eq!(
             m.shortcut(Action::Screenshot(T::Window)),
-            ShortcutEffect::Recapture
+            recapture(Target::Window, MenuMode::Screenshot, true)
         );
+        // Another mode or target switches in place; Window keeps its pick,
+        // others drop it and the hover.
         assert_eq!(
             m.shortcut(Action::Record(T::Window)),
             ShortcutEffect::Switched
@@ -3459,7 +3583,22 @@ mod tests {
         // New Capture switches Full screen to Region, then recaptures it.
         assert_eq!(m.shortcut(Action::NewCapture), ShortcutEffect::Switched);
         assert_eq!(m.target, Target::Region);
-        assert_eq!(m.shortcut(Action::NewCapture), ShortcutEffect::Recapture);
+        assert_eq!(
+            m.shortcut(Action::NewCapture),
+            recapture(Target::Region, MenuMode::Screenshot, false)
+        );
+        // On a direct selector every chord recaptures (shipping's selector
+        // routes): Record into the bar in Record, Region into a selector.
+        m.direct = true;
+        assert_eq!(
+            m.shortcut(Action::Record(T::Display)),
+            recapture(Target::Display, MenuMode::Recording, false)
+        );
+        assert_eq!(
+            m.shortcut(Action::Screenshot(T::Region)),
+            recapture(Target::Region, MenuMode::Screenshot, true)
+        );
+        m.direct = false;
         // A running take's bar keeps Record disabled; nothing routes while
         // it recaptures or switches displays.
         m.recording_locked = true;
@@ -3474,6 +3613,39 @@ mod tests {
             ShortcutEffect::Ignored
         );
         assert_eq!(m.target, Target::Region);
+    }
+
+    #[test]
+    fn direct_selectors_commit_at_once_and_nudge_an_empty_click() {
+        let t = Tokens::variant("dark", "mustard");
+        let mut m = menu(Target::Region, false);
+        m.direct = true;
+        m.reduced = false;
+        m.sync_motion(&t);
+        // No bar to hit.
+        assert_eq!(m.hit(640., 760.), None);
+        assert!(!m.over_panel(640., 760.));
+        // A click without a drag commits nothing and nudges the chip with
+        // the feedback copy for 1.8 s.
+        m.pressed(200., 200.);
+        assert_eq!(m.released(201., 200.), None);
+        assert_eq!(m.selection, None);
+        m.clock = 100.;
+        m.sync_motion(&t);
+        let chip = |m: &Menu| m.guidance.as_ref().unwrap().1;
+        assert!(chip(&m).feedback() && m.feedback.0 == 1);
+        assert!(chip(&m).pose(150.).translate_x != 0.);
+        m.clock = 1_950.;
+        m.sync_motion(&t);
+        assert!(!chip(&m).feedback() && m.feedback == (0, None));
+        // A drag commits on release even without auto-start.
+        m.pressed(100., 100.);
+        assert_eq!(m.released(300., 250.), Some(Hit::Primary));
+        // The Window selector commits on click.
+        let mut m = menu(Target::Window, false);
+        m.direct = true;
+        m.hover_window(Some(Some(0)));
+        assert_eq!(m.pick(), Some(Hit::Primary));
     }
 
     #[test]
