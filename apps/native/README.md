@@ -62,7 +62,7 @@ AppKit anchors at the real status item; wgpu uses the existing no-tray fallback,
 not a fabricated tray location. The simulated workbench scenes below remain separate.
 
 Add `--native-update-staging-directory /absolute/existing-scratch-directory` to
-that same explicit launch to enable **Download and verify** in Preferences and
+that same explicit launch to enable **Download** in Preferences and
 the live notice. Without this optional flag, even an available update remains
 check-only. Choose a trusted scratch directory outside app/profile trees; relative,
 missing, file and symbolic-link paths are rejected. No request or scratch file is
@@ -112,7 +112,7 @@ enrolls arbitrary or installed data. Choose a trusted output parent outside the
 profile, exports and package, and a file that does not exist. Validation reads
 bounded metadata only; there is no startup request or file creation.
 
-After **Download and verify** succeeds, normal Quit snapshots the staged full-target
+After **Download** succeeds, normal Quit snapshots the staged full-target
 digest/version/size/renderer/target and the actual Preferences visibility, after
 the editor accepts shutdown and before window teardown. Focus and the update
 action's origin do not affect it. Once accepted work, settings and owned scratch
@@ -156,7 +156,7 @@ target/debug/native_update_helper \
 
 The supervisor owns private per-launch scratch, a UUID and the shutdown record;
 `--restore-preferences` and `--shutdown-intent-file` overrides are rejected.
-It reports `gui_running` and a startup-log path. Check and **Download and verify**
+It reports `gui_running` and a startup-log path. Check and **Download**
 remain explicit GUI actions. Only a successfully staged package enables
 **Restart and install** in Preferences and the real update notice. The accepted
 action preserves editor shutdown vetoes, snapshots actual Preferences visibility

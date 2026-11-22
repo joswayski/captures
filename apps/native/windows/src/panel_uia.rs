@@ -32,6 +32,8 @@ pub enum Role {
     /// A labelled group, such as `role="radiogroup"`; one choice is selected.
     Group,
     Button,
+    /// `<a href>`: invoked like a button, read as a link.
+    Link,
     Radio,
     /// `<input>` (single line) or `<textarea>` (multiline).
     Edit,
@@ -144,7 +146,7 @@ fn item(window: Window, key: u32) -> Result<Item> {
 }
 
 fn interactive(role: Role) -> bool {
-    matches!(role, Role::Button | Role::Radio | Role::Edit)
+    matches!(role, Role::Button | Role::Link | Role::Radio | Role::Edit)
 }
 
 fn runtime_id(window: Window, key: Option<u32>) -> [i32; 4] {
@@ -237,7 +239,7 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
         let role = item(self.window, key)?.role;
         let supported = matches!(
             (role, pattern),
-            (Role::Button, UIA_InvokePatternId)
+            (Role::Button | Role::Link, UIA_InvokePatternId)
                 | (Role::Group, UIA_SelectionPatternId)
                 | (Role::Radio, UIA_SelectionItemPatternId)
                 | (Role::Edit, UIA_ValuePatternId)
@@ -284,6 +286,7 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                 }
                 Role::Group => UIA_GroupControlTypeId.0,
                 Role::Button => UIA_ButtonControlTypeId.0,
+                Role::Link => UIA_HyperlinkControlTypeId.0,
                 Role::Radio => UIA_RadioButtonControlTypeId.0,
                 Role::Edit => UIA_EditControlTypeId.0,
             }),

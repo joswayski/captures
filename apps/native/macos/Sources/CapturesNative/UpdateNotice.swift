@@ -25,6 +25,8 @@ struct UpdateNoticeBridge: UpdateNoticeTransport {
 enum UpdateNoticeAction: Equatable {
     case dismiss, install, check, downloadVerify, cancelDownload, openDownloadPage
     case openPullRequest(String)
+    /// The header's version link to its GitHub release; host-only, never sent by the presenter.
+    case openRelease(String)
 
     init?(_ value: Any?) {
         guard let value = value as? [String: Any], let name = value["action"] as? String else { return nil }
@@ -51,6 +53,7 @@ enum UpdateNoticeAction: Equatable {
         case .cancelDownload: return "cancel_download"
         case .openDownloadPage: return "open_download_page"
         case .openPullRequest: return "open_pull_request"
+        case .openRelease: return "open_release"
         }
     }
 }
@@ -70,6 +73,8 @@ struct UpdateNoticeButton: Equatable {
 }
 
 struct UpdateNoticeNoteItem: Equatable {
+    /// A highlight's bold title; `text` is then its description.
+    let title: String?
     let text: String
     let pullNumber: Int?
     let pullURL: String?
@@ -121,6 +126,8 @@ struct UpdateNoticePresentation: Equatable {
     let primary: UpdateNoticeButton?
     let hasFooter: Bool
     let dismissBlocked: Bool
+    /// The version inside `description`, linked to its GitHub release.
+    let versionLink: UpdateNoticeVersionLink?
     let cardWidth: CGFloat
     let cardHeight: CGFloat
 
@@ -138,7 +145,7 @@ struct UpdateNoticePresentation: Equatable {
                 UpdateNoticeNoteGroup(displayVersion: group.string("display_version"),
                     items: (group["items"] as? [[String: Any]] ?? []).map { item in
                         let pull = item["pull_request"] as? [String: Any]
-                        return UpdateNoticeNoteItem(text: item.string("text"),
+                        return UpdateNoticeNoteItem(title: item["title"] as? String, text: item.string("text"),
                             pullNumber: pull?["number"] as? Int, pullURL: pull?["url"] as? String)
                     })
             }
@@ -172,7 +179,18 @@ struct UpdateNoticePresentation: Equatable {
         dismiss = UpdateNoticeButton(footer?["dismiss"])
         primary = UpdateNoticeButton(footer?["primary"])
         dismissBlocked = value["dismiss_blocked"] as? Bool ?? false
+        if let link = value["version_link"] as? [String: Any], let text = link["text"] as? String,
+           let url = link["url"] as? String, !text.isEmpty, description.contains(text) {
+            versionLink = UpdateNoticeVersionLink(text: text, url: url)
+        } else {
+            versionLink = nil
+        }
     }
+}
+
+struct UpdateNoticeVersionLink: Equatable {
+    let text: String
+    let url: String
 }
 
 /// Top-left logical desktop placement from `captures_app::tray_notice`.
@@ -210,7 +228,7 @@ struct UpdateNoticePlacement: Equatable {
 /// Only opt-in live acquisition downloads; neither source installs or relaunches.
 final class UpdateNoticeModel {
     /// Matches `captures_app::update_notice::FIXTURES`.
-    static let fixtures = ["available", "single", "closing", "manual", "downloading",
+    static let fixtures = ["available", "highlights", "single", "closing", "manual", "downloading",
                            "restarting", "error", "checking", "up-to-date"]
     private let transport: UpdateNoticeTransport
     private var checkedPresentation: [String: Any]?
@@ -314,6 +332,9 @@ final class UpdateNoticeModel {
             let url = "https://captur.es/#download"
             let opened = checkedPresentation != nil && openPullRequest(url)
             event("update-notice-open-url", ["kind": "download", "url": url, "opened": opened])
+        case .openRelease(let url):
+            let opened = checkedPresentation != nil && openPullRequest(url)
+            event("update-notice-open-url", ["kind": "release", "url": url, "opened": opened])
         }
         changed()
     }
@@ -408,6 +429,36 @@ final class UpdateNoticeLinkText: NSTextView, NSTextViewDelegate {
         linkAction((link as? URL)?.absoluteString ?? (link as? String) ?? "")
         return true
     }
+}
+
+/// The clickable, accessible link area over the version in the description;
+/// the description label draws the text and restyles on `hoverChanged`.
+final class UpdateNoticeLinkHotspot: NSView {
+    var hoverChanged: (Bool) -> Void = { _ in }
+    var press: () -> Void = {}
+    private var tracking: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                  owner: self, userInfo: nil)
+        addTrackingArea(area); tracking = area
+    }
+    // The notice panel is rarely key, so cursor rects alone never apply;
+    // the always-active tracking area sets the cursor itself.
+    override func mouseEntered(with event: NSEvent) { hoverChanged(true); NSCursor.pointingHand.set() }
+    override func mouseExited(with event: NSEvent) { hoverChanged(false); NSCursor.arrow.set() }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    // Claims the press so the matching mouseUp arrives here.
+    override func mouseDown(with event: NSEvent) {}
+    override func mouseUp(with event: NSEvent) {
+        if bounds.contains(convert(event.locationInWindow, from: nil)) { press() }
+    }
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .link }
+    override func accessibilityPerformPress() -> Bool { press(); return true }
 }
 
 /// Solid `--surface-raised` card with a tray caret in a transparent window.
@@ -528,6 +579,67 @@ final class UpdateNoticeView: NSView {
         description.frame = NSRect(x: copyX, y: s6 + 20, width: copyWidth, height: 17)
         description.lineBreakMode = .byTruncatingTail
         card.addSubview(description)
+        if let link = p.versionLink, let range = p.description.range(of: link.text) {
+            // A plain external link like Caper's: muted with its external-link
+            // icon (12 pt, 4 pt after the text) at rest, the text colour and
+            // underlined on hover.
+            let truncating = NSMutableParagraphStyle()
+            truncating.lineBreakMode = .byTruncatingTail
+            let plain: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: tokens.number("text-sm")),
+                .foregroundColor: tokens.color("text-subtle"), .paragraphStyle: truncating,
+            ]
+            let prefix = String(p.description[..<range.lowerBound])
+            let suffix = String(p.description[range.upperBound...])
+            let linkText = link.text
+            let font = NSFont.systemFont(ofSize: tokens.number("text-sm"))
+            let icon: (NSColor) -> NSAttributedString = { color in
+                let attachment = NSTextAttachment()
+                attachment.image = NSImage(size: NSSize(width: 16, height: 12), flipped: true) { _ in
+                    color.setStroke()
+                    ShippingIcons.stroke("release-link", in: NSRect(x: 4, y: 0, width: 12, height: 12), width: 2)
+                    return true
+                }
+                attachment.bounds = NSRect(x: 0, y: (font.capHeight - 12) / 2, width: 16, height: 12)
+                return NSAttributedString(attachment: attachment)
+            }
+            let styled: (Bool) -> NSAttributedString = { [tokens] hovered in
+                var linked = plain
+                if hovered {
+                    linked[.foregroundColor] = tokens.color("text")
+                    linked[.underlineStyle] = NSUnderlineStyle.single.rawValue
+                }
+                let text = NSMutableAttributedString(string: prefix, attributes: plain)
+                text.append(NSAttributedString(string: linkText, attributes: linked))
+                text.append(icon(tokens.color(hovered ? "text" : "text-subtle")))
+                text.append(NSAttributedString(string: suffix, attributes: plain))
+                return text
+            }
+            description.attributedStringValue = styled(false)
+            // NSTextField labels draw their text 2 pt in.
+            let linkX = 2 + ceil(NSAttributedString(string: prefix, attributes: plain).size().width)
+            let linkWidth = ceil(NSAttributedString(string: linkText, attributes: plain).size().width) + 16
+            let hotspot = UpdateNoticeLinkHotspot(frame: NSRect(x: description.frame.minX + linkX,
+                y: description.frame.minY, width: max(0, min(linkWidth, description.frame.width - linkX)),
+                height: description.frame.height))
+            hotspot.setAccessibilityLabel(link.text)
+            hotspot.setAccessibilityHelp("Opens this release on GitHub")
+            hotspot.toolTip = "View this release on GitHub"
+            hotspot.hoverChanged = { [weak description, tokens] hovered in
+                guard let description else { return }
+                if !NativeMotion.reduceMotion {
+                    description.wantsLayer = true
+                    let fade = CATransition()
+                    fade.type = .fade
+                    fade.duration = Double(tokens.number("dur-3")) / 1000
+                    fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                    description.layer?.add(fade, forKey: "hover")
+                }
+                description.attributedStringValue = styled(hovered)
+            }
+            hotspot.press = { [weak self] in self?.onAction(.openRelease(link.url)) }
+            card.addSubview(hotspot)
+        }
         let headerBottom = s6 + 36 + s5 + 3
 
         // Footer and warning anchored to the bottom.
@@ -606,6 +718,21 @@ final class UpdateNoticeView: NSView {
                 .font: NSFont.systemFont(ofSize: tokens.number("text-sm")),
                 .foregroundColor: tokens.color("text-muted"), .paragraphStyle: paragraph,
             ]
+            // Highlights: a bullet and bold title, s-1 over the description
+            // (kept at the bullet indent), then s-4 before the next item.
+            let titleStyle = NSMutableParagraphStyle()
+            titleStyle.headIndent = s5; titleStyle.firstLineHeadIndent = 0
+            titleStyle.paragraphSpacing = tokens.number("s-1")
+            titleStyle.tabStops = paragraph.tabStops
+            let highlightStyle = NSMutableParagraphStyle()
+            highlightStyle.headIndent = s5; highlightStyle.firstLineHeadIndent = s5
+            highlightStyle.paragraphSpacing = s4
+            var highlightBody = body
+            highlightBody[.paragraphStyle] = highlightStyle
+            let highlightTitle: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: tokens.number("text-sm"), weight: .semibold),
+                .foregroundColor: tokens.color("text"), .paragraphStyle: titleStyle,
+            ]
             if let empty = notes.empty {
                 text.append(NSAttributedString(string: empty, attributes: [
                     .font: NSFont.systemFont(ofSize: tokens.number("text-sm")),
@@ -624,14 +751,23 @@ final class UpdateNoticeView: NSView {
                     if text.length > 0, !text.string.hasSuffix("\n") { text.append(NSAttributedString(string: "\n", attributes: body)) }
                     var bullet = body
                     bullet[.foregroundColor] = tokens.color("text-faint")
-                    text.append(NSAttributedString(string: "•\t", attributes: bullet))
-                    text.append(NSAttributedString(string: item.text, attributes: body))
+                    let itemBody: [NSAttributedString.Key: Any]
+                    if let title = item.title {
+                        bullet[.paragraphStyle] = titleStyle
+                        text.append(NSAttributedString(string: "•\t", attributes: bullet))
+                        text.append(NSAttributedString(string: title + "\n", attributes: highlightTitle))
+                        itemBody = highlightBody
+                    } else {
+                        text.append(NSAttributedString(string: "•\t", attributes: bullet))
+                        itemBody = body
+                    }
+                    text.append(NSAttributedString(string: item.text, attributes: itemBody))
                     if let number = item.pullNumber, let url = item.pullURL {
-                        var link = body
+                        var link = itemBody
                         link[.link] = url
                         link[.foregroundColor] = tokens.color("text")
                         link[.underlineStyle] = NSUnderlineStyle.single.rawValue
-                        text.append(NSAttributedString(string: " ", attributes: body))
+                        text.append(NSAttributedString(string: " ", attributes: itemBody))
                         text.append(NSAttributedString(string: "#\(number)", attributes: link))
                     }
                 }
@@ -712,8 +848,8 @@ final class UpdateNoticeView: NSView {
             y = text.frame.maxY + s3
         }
         if let message = p.statusMessage {
-            let text = label(message, size: "text-sm", color: "text-subtle")
-            text.frame = NSRect(x: s6, y: y, width: bodyWidth, height: 17)
+            let text = label(message, size: "text-sm", color: "text-subtle", wraps: true)
+            text.frame = NSRect(x: s6, y: y, width: bodyWidth, height: height(text, width: bodyWidth))
             text.setAccessibilityRole(.staticText)
             card.addSubview(text)
         }

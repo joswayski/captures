@@ -196,6 +196,7 @@ pub fn fixture(name: &str) -> Option<Card> {
         version: "2026.11.1302".into(),
         notes: None,
         size: 104_000_000,
+        changelog: Vec::new(),
     };
     let (status, installing, installable, will_close) = match name {
         "idle" => (CheckStatus::Idle, false, true, false),
@@ -315,7 +316,7 @@ pub fn notice_status(
             .notes
             .clone()
             .filter(|notes| !notes.trim().is_empty()),
-        changelog: Vec::new(),
+        changelog: release.changelog.clone(),
         installable,
         manual_download_url: (!installable).then(|| RELEASES_URL.to_owned()),
         download_size: (release.size > 0).then_some(release.size),
@@ -623,6 +624,7 @@ impl Fake {
                 "## What's Changed\n* Open the update notice from live checks by @joswayski in https://github.com/joswayski/captures/pull/612\n* Keep the notice in place while it downloads by @joswayski in https://github.com/joswayski/captures/pull/613".into(),
             ),
             size: 104_000_000,
+            changelog: Vec::new(),
         }
     }
 
@@ -1304,6 +1306,7 @@ mod tests {
             version: "2026.11.1302".into(),
             notes: None,
             size: 104_000_000,
+            changelog: Vec::new(),
         }
     }
 

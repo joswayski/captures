@@ -197,6 +197,10 @@ pub struct ReleaseInfo {
     pub version: String,
     pub notes: Option<String>,
     pub size: u64,
+    /// Every release newer than the running one, newest first, when the
+    /// manifest lists them (the stacked What's new).
+    #[serde(default)]
+    pub changelog: Vec<crate::update_notice::ChangelogEntry>,
 }
 
 pub struct UpdateClient {
@@ -391,6 +395,7 @@ impl UpdateClient {
                 version: manifest.version,
                 notes: manifest.notes,
                 size: artifact.size,
+                changelog: Vec::new(),
             },
             url,
             hash,

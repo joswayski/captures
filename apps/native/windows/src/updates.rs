@@ -145,6 +145,7 @@ pub fn fixture(select: &str) -> Option<Card> {
         version: "2026.11.1302".into(),
         notes: None,
         size: 104_000_000,
+        changelog: Vec::new(),
     };
     let (status, installing) = match select.strip_prefix("update-")? {
         "idle" => (CheckStatus::Idle, false),
@@ -188,6 +189,7 @@ mod tests {
             version: "2026.11.1302".into(),
             notes: None,
             size: 104_000_000,
+            changelog: Vec::new(),
         }
     }
 

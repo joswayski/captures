@@ -112,6 +112,26 @@ final class UpdateNoticeTests: XCTestCase {
         XCTAssertEqual(p.notes?.groups.first?.items.first?.pullURL, "https://github.com/joswayski/captures/pull/265")
         XCTAssertEqual(p.dismiss?.label, "Not now")
         XCTAssertEqual(p.primary?.label, "Update now")
+        XCTAssertEqual(p.versionLink, UpdateNoticeVersionLink(text: "2026.08.27.5",
+            url: "https://github.com/joswayski/captures/releases/tag/v2026.08.27.5"))
+        XCTAssertNil(p.notes?.groups.first?.items.first?.title)
+
+        try model.load(fixture: "highlights")
+        p = try model.presentation()
+        XCTAssertEqual(p.description, "Version 2026.11.22.3 · 12.6 MB")
+        XCTAssertEqual(p.versionLink?.url, "https://github.com/joswayski/captures/releases/tag/v2026.11.22.3")
+        let highlight = try XCTUnwrap(p.notes?.groups.first?.items.first)
+        XCTAssertEqual(highlight.title, "Shortcuts survive a taken chord")
+        XCTAssertEqual(highlight.text,
+            "When another app already owns one of your shortcuts, the rest keep working instead of all going quiet.")
+        var raw: [String: Any] = ["visual_state": "available", "icon": "app", "icon_tone": "accent",
+            "title": "Update available", "description": "Version 2026.11.22.3", "card_width": 400.0,
+            "card_height": 168.0, "version_link": ["text": "2026.11.22.3", "url": "https://example.com/v"]]
+        XCTAssertEqual(try UpdateNoticePresentation(raw).versionLink?.url, "https://example.com/v")
+        raw["version_link"] = ["text": "not in the description", "url": "https://example.com"]
+        XCTAssertNil(try UpdateNoticePresentation(raw).versionLink, "the link text must appear in the description")
+        raw["version_link"] = NSNull()
+        XCTAssertNil(try UpdateNoticePresentation(raw).versionLink)
 
         model.showChangelog = false
         p = try model.presentation()
@@ -208,6 +228,14 @@ final class UpdateNoticeTests: XCTestCase {
                               "close warnings use custom shipping paths, not SF Symbols")
                 XCTAssertEqual(image.size, NSSize(width: 16, height: 16))
                 XCTAssertFalse(glyph.isAccessibilityElement(), "the warning text names the whole row")
+            }
+            let links = view.subviews.flatMap(\.subviews).compactMap { $0 as? UpdateNoticeLinkHotspot }
+            XCTAssertEqual(links.count, p.versionLink == nil ? 0 : 1, name)
+            if let link = links.first, let version = p.versionLink {
+                XCTAssertEqual(link.accessibilityRole(), .link)
+                XCTAssertEqual(link.accessibilityLabel(), version.text)
+                XCTAssertTrue(link.accessibilityPerformPress())
+                XCTAssertEqual(actions.last, .openRelease(version.url), name)
             }
             let buttons = view.subviews.flatMap(\.subviews).compactMap { $0 as? CaptureButton }
             XCTAssertEqual(buttons.map(\.title), [p.dismiss?.label, p.primary?.label].compactMap { $0 }, name)

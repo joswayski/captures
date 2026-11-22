@@ -82,6 +82,13 @@ pub fn paths(name: &str) -> Option<&'static [&'static str]> {
             "M6.5 3H4a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V9.5",
             "M9 3h4v4M8.5 7.5 13 3",
         ],
+        // The update notice's version link: Caper's (Lucide's) external-link,
+        // drawn 12 units wide with a 2-unit stroke on every host.
+        "release-link" => &[
+            "M15 3h6v6",
+            "M10 14 21 3",
+            "M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6",
+        ],
         "preview-stack" => &[
             "m3 5.5 5-2.75 5 2.75-5 2.75L3 5.5Z",
             "m3.5 8.5 4.5 2.5 4.5-2.5",

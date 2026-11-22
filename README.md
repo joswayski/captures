@@ -620,7 +620,7 @@ download progress, restart countdown and errors) from a simulated status source.
 An [explicit development launch](apps/native/README.md#native-preferences-update-checks)
 can connect Preferences and tray **Check for Updates** to a pinned, signed endpoint.
 Checks also drive a real native notice with signed release notes, up-to-date results
-and retryable errors. An explicit scratch-directory option adds **Download and verify**
+and retryable errors. An explicit scratch-directory option adds **Download**
 for temporary package validation, with progress, cancellation and retry. An explicit
 retained base archive enables authenticated incremental downloads with signed full
 package fallback; this is development-only, not the release updater. Dismissing a

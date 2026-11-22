@@ -94,6 +94,48 @@ struct Manifest {
     version: String,
     notes: Option<String>,
     platforms: BTreeMap<String, Asset>,
+    #[serde(default)]
+    changelog: Vec<ChangelogEntry>,
+}
+
+/// One release in `latest.json`'s `changelog`, newest first.
+#[derive(Deserialize)]
+struct ChangelogEntry {
+    version: String,
+    #[serde(default)]
+    display_version: Option<String>,
+    #[serde(default)]
+    notes: Option<String>,
+}
+
+/// Shipping `stacked_changelog`: the releases after `current` through
+/// `latest`, newest first. Entries that fail to parse are skipped.
+fn stacked_changelog(
+    entries: Vec<ChangelogEntry>,
+    current: &Version,
+    latest: &Version,
+) -> Vec<crate::update_notice::ChangelogEntry> {
+    let mut stacked: Vec<_> = entries
+        .into_iter()
+        .filter_map(|entry| {
+            let version = Version::parse(entry.version.trim()).ok()?;
+            (version > *current && version <= *latest).then(|| {
+                (
+                    version,
+                    crate::update_notice::ChangelogEntry {
+                        display_version: entry
+                            .display_version
+                            .filter(|value| !value.trim().is_empty())
+                            .unwrap_or_else(|| super::display_version(&entry.version)),
+                        version: entry.version,
+                        notes: entry.notes.filter(|notes| !notes.trim().is_empty()),
+                    },
+                )
+            })
+        })
+        .collect();
+    stacked.sort_by(|a, b| b.0.cmp(&a.0));
+    stacked.into_iter().map(|(_, entry)| entry).collect()
 }
 
 #[derive(Deserialize)]
@@ -252,6 +294,7 @@ impl Client {
                     notes: manifest.notes,
                     // What this update downloads, the patch when one applies.
                     size: patch.as_ref().map_or(size, |patch| patch.size),
+                    changelog: stacked_changelog(manifest.changelog, &self.current, &version),
                 },
                 http: self.http.clone(),
                 url,
@@ -959,6 +1002,38 @@ fn extract_app(payload: &[u8], destination: &Path) -> Result<(), Error> {
 mod tests {
     use super::*;
     use std::{io::Cursor, net::TcpListener};
+
+    #[test]
+    fn changelog_keeps_releases_after_the_current_one_newest_first() {
+        let entry = |version: &str, display: Option<&str>| ChangelogEntry {
+            version: version.into(),
+            display_version: display.map(Into::into),
+            notes: Some(format!("* {version}")),
+        };
+        let stacked = stacked_changelog(
+            vec![
+                entry("2026.11.2201", None),
+                entry("2026.11.2203", Some("2026.11.22.3")),
+                entry("2026.11.2110", None),
+                entry("2026.11.2204", None),
+                entry("not a version", None),
+                entry("2026.11.2202", None),
+            ],
+            &Version::parse("2026.11.2110").unwrap(),
+            &Version::parse("2026.11.2203").unwrap(),
+        );
+        assert_eq!(
+            stacked
+                .iter()
+                .map(|e| (e.version.as_str(), e.display_version.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("2026.11.2203", "2026.11.22.3"),
+                ("2026.11.2202", "2026.11.22.2"),
+                ("2026.11.2201", "2026.11.22.1"),
+            ]
+        );
+    }
 
     #[test]
     fn preview_http_download_authenticates_bytes_version_and_platform() {

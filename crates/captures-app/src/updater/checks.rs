@@ -536,9 +536,9 @@ impl CheckWorker {
                 current_version,
                 current_display_version,
                 version: release.version.clone(),
-                display_version: release.version.clone(),
+                display_version: super::display_version(&release.version),
                 notes: release.notes.clone(),
-                changelog: vec![],
+                changelog: release.changelog.clone(),
                 installable: false,
                 manual_download_url: None,
                 download_size: Some(release.size),
@@ -661,6 +661,8 @@ impl CheckWorker {
                 p.close_warning = Some(notice::open_captures_warning(true).into());
             }
         }
+        // Development descriptions name raw versions without a release page.
+        p.version_link = None;
         if self.preview {
             p.title = match self.status {
                 CheckStatus::Checking => "Checking for updates",
@@ -672,14 +674,21 @@ impl CheckWorker {
             }
             .into();
             p.description = self.presentation().status;
-            p.status_message = if matches!(self.status, CheckStatus::Staged { .. }) {
-                Some(
-                    "Restart installs the signed update after capture work and drafts finish."
-                        .into(),
-                )
-            } else {
-                None
+            p.version_link = match &self.status {
+                CheckStatus::Available { release } | CheckStatus::Staged { release, .. } => {
+                    notice::version_link(&super::display_version(&release.version))
+                }
+                _ => None,
             };
+            // A staged update says what Restart does in its close warning;
+            // a second line saying the same thing was redundant.
+            p.status_message = None;
+            if p.close_warning.is_some() && matches!(self.status, CheckStatus::Staged { .. }) {
+                // Room for the two-line warning in place of the status line.
+                p.card_height = notice::card_height(None, false) - notice::STATUS_HEIGHT
+                    + notice::WARNING_HEIGHT
+                    + 16.0;
+            }
             if let Some(error) = &mut p.error {
                 error.fallback_prefix = "Try again, or ".into();
                 error.fallback_link = "download from captur.es".into();
@@ -705,7 +714,7 @@ impl CheckWorker {
             return None;
         }
         let (label, enabled, action) = match self.status {
-            CheckStatus::Available { .. } => ("Download and verify", true, Action::DownloadVerify),
+            CheckStatus::Available { .. } => ("Download", true, Action::DownloadVerify),
             CheckStatus::DownloadError { .. } => ("Retry download", true, Action::DownloadVerify),
             CheckStatus::Downloading { .. } | CheckStatus::Verifying { .. } => {
                 ("Cancel download", true, Action::CancelDownload)
@@ -780,10 +789,16 @@ impl CheckWorker {
             presentation.status = match &self.status {
                 CheckStatus::UpToDate => "You have the latest version".into(),
                 CheckStatus::Available { release } => {
-                    format!("Version {} available", release.version)
+                    format!(
+                        "Version {} available",
+                        super::display_version(&release.version)
+                    )
                 }
                 CheckStatus::Staged { release, .. } => {
-                    format!("Version {} verified", release.version)
+                    format!(
+                        "Version {} verified",
+                        super::display_version(&release.version)
+                    )
                 }
                 CheckStatus::Checking => "Checking for updates…".into(),
                 _ => presentation.status,
@@ -937,6 +952,7 @@ mod tests {
                 version: "2026.10.50".into(),
                 notes: None,
                 size: 10_000,
+                changelog: Vec::new(),
             },
             downloaded: 0,
             total: 10_000,
@@ -1270,6 +1286,7 @@ mod tests {
                 version: "2026.10.50".into(),
                 notes: Some("* Fix native selection (#321)".into()),
                 size: 913,
+                changelog: Vec::new(),
             },
         };
         let expanded = worker.notice(true).unwrap();

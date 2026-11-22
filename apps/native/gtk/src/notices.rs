@@ -595,6 +595,18 @@ impl UpdateNotice {
         }
     }
 
+    /// The version link's GitHub release; the fixture never opens a browser.
+    fn open_release(&self, url: &str) {
+        if self.live_source {
+            open_url("release", url);
+        } else {
+            crate::emit(
+                "update-notice-open-url",
+                serde_json::json!({"kind": "release", "url": url, "opened": false}),
+            );
+        }
+    }
+
     /// Move to `next` (`None` closes: the stub restart finished) and
     /// schedule the stub's next tick.
     fn advance(self: &Rc<Self>, next: Option<UpdateStatus>) {
@@ -732,7 +744,7 @@ impl UpdateNotice {
         copy.set_valign(gtk::Align::Center);
         let title = label(&p.title, "update-notice-title");
         title.set_accessible_role(gtk::AccessibleRole::Heading);
-        let subtitle = description(&p.description, "update-notice-description");
+        let subtitle = version_description(self, p);
         copy.append(&title);
         copy.append(&subtitle);
         header.append(&copy);
@@ -1015,8 +1027,71 @@ fn note_item(notice: &Rc<UpdateNotice>, item: &notice::NoteItem) -> gtk::Box {
         }
         None => inline(&item.text, None, "", "update-notes-text"),
     };
-    row.append(&text);
+    // A highlight: its semibold title over the description, as the
+    // retired Tauri UI's `<strong>` and `<span>` lines.
+    if let Some(title) = &item.title {
+        row.add_css_class("update-notes-highlight");
+        let copy = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        copy.set_hexpand(true);
+        copy.append(&description(title, "update-notes-highlight-title"));
+        text.add_css_class("update-notes-highlight-text");
+        copy.append(&text);
+        row.append(&copy);
+    } else {
+        row.append(&text);
+    }
     row
+}
+
+/// The notice description with the version as a plain external link
+/// (muted with its icon, brightening and underlined on hover), or plain
+/// wrapping copy when the version is absent or has no release page.
+fn version_description(notice: &Rc<UpdateNotice>, p: &Presentation) -> gtk::Widget {
+    let class = "update-notice-description";
+    let Some((link, (before, after))) = p.version_link.as_ref().and_then(|link| {
+        p.description
+            .split_once(link.text.as_str())
+            .map(|parts| (link, parts))
+    }) else {
+        return description(&p.description, class).upcast();
+    };
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    row.add_css_class(class);
+    // The card is described by this row: give it the whole sentence.
+    row.update_property(&[gtk::accessible::Property::Label(&p.description)]);
+    if !before.is_empty() {
+        row.append(&label(before, "update-notice-description-text"));
+    }
+    let content = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    content.append(&label(&link.text, "update-version-link-text"));
+    // Caper's external-link icon: 12 px, 4 px after the version.
+    let arrow = crate::widgets::Icon::new("release-link", 12).with_stroke(2.);
+    arrow.add_css_class("update-version-link-icon");
+    arrow.set_margin_start(4);
+    arrow.set_valign(gtk::Align::Center);
+    arrow.set_accessible_role(gtk::AccessibleRole::Presentation);
+    content.append(&arrow);
+    let button = gtk::Button::builder()
+        .child(&content)
+        .accessible_role(gtk::AccessibleRole::Link)
+        .css_classes(["update-version-link"])
+        .build();
+    button.set_cursor_from_name(Some("pointer"));
+    button.update_property(&[
+        gtk::accessible::Property::Label(&link.text),
+        gtk::accessible::Property::Description(&link.url),
+    ]);
+    let (weak, url) = (Rc::downgrade(notice), link.url.clone());
+    button.connect_clicked(move |_| {
+        if let Some(notice) = weak.upgrade() {
+            notice.open_release(&url);
+        }
+    });
+    row.append(&button);
+    if !after.is_empty() {
+        row.append(&label(after, "update-notice-description-text"));
+    }
+    row.upcast()
 }
 
 pub(crate) type InlineButton<'a> = (&'a str, &'a str, Box<dyn Fn()>);

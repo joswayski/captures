@@ -13,11 +13,20 @@ use serde::{Deserialize, Serialize};
 
 pub const CARD_WIDTH: f64 = 400.0;
 const COMPACT_HEIGHT: f64 = 168.0;
-const NOTES_HEIGHT: f64 = 122.0;
-const MAX_HEIGHT: f64 = 480.0;
-const STACK_HEIGHT: f64 = 72.0;
-const WARNING_HEIGHT: f64 = 56.0;
-const STATUS_HEIGHT: f64 = 56.0;
+/// The What's new box's padding, heading and gap before the list.
+const NOTES_CHROME: f64 = 66.0;
+/// A plain bullet (about two lines) and its gap.
+const NOTE_HEIGHT: f64 = 44.0;
+/// A highlight: its bold title over a two-line description, and its gap.
+const HIGHLIGHT_HEIGHT: f64 = 66.0;
+/// A stacked version heading.
+const GROUP_HEIGHT: f64 = 28.0;
+/// The stacked intro line.
+const INTRO_HEIGHT: f64 = 30.0;
+/// Past this the notes scroll inside the box.
+const MAX_HEIGHT: f64 = 560.0;
+pub const WARNING_HEIGHT: f64 = 56.0;
+pub const STATUS_HEIGHT: f64 = 56.0;
 const ERROR_HEIGHT: f64 = 96.0;
 
 /// Shipping `openCapturesUpdateWarning`, shown when the update closes open
@@ -99,6 +108,10 @@ pub struct PullRequest {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NoteItem {
+    /// A highlight's bold title, from notes written as `Title — description`;
+    /// `text` is then the description shown under it.
+    #[serde(default)]
+    pub title: Option<String>,
     pub text: String,
     pub pull_request: Option<PullRequest>,
 }
@@ -428,7 +441,19 @@ pub fn release_note_items(markdown: &str) -> Vec<NoteItem> {
         {
             continue;
         }
+        // ai-release-notes.mjs writes each highlight as `Title — description`.
+        let (title, text) = match text.split_once(" — ") {
+            Some((title, description))
+                if !title.trim().is_empty()
+                    && !description.trim().is_empty()
+                    && title.trim().chars().count() <= 100 =>
+            {
+                (Some(title.trim().to_owned()), description.trim().to_owned())
+            }
+            _ => (None, text),
+        };
         items.push(NoteItem {
+            title,
             text,
             pull_request: pull_request_from_line(body),
         });
@@ -613,8 +638,33 @@ pub struct Presentation {
     pub footer: Option<Footer>,
     /// Escape and the window close button do nothing while busy.
     pub dismiss_blocked: bool,
+    /// The version in `description`, which opens its GitHub release.
+    pub version_link: Option<VersionLink>,
     pub card_width: f64,
     pub card_height: f64,
+}
+
+/// `text` appears once in the description; hosts render it as an external
+/// link to `url`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct VersionLink {
+    pub text: String,
+    pub url: String,
+}
+
+/// The GitHub release page for a dated display version such as
+/// `2026.11.22.2` (tag `v2026.11.22.2`); development versions have none.
+pub fn version_link(display_version: &str) -> Option<VersionLink> {
+    let parts: Vec<_> = display_version.split('.').collect();
+    let dated = parts.len() == 4
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+        && parts[0].len() == 4;
+    dated.then(|| VersionLink {
+        text: display_version.to_owned(),
+        url: format!("https://github.com/joswayski/captures/releases/tag/v{display_version}"),
+    })
 }
 
 /// Host-local view state that is not part of the status source.
@@ -635,8 +685,28 @@ fn default_true() -> bool {
 /// Card height for the transparent notice window, as shipping sizes it.
 pub fn card_height(status: Option<&UpdateStatus>, show_changelog: bool) -> f64 {
     let notes = match status {
-        Some(UpdateStatus::Available { changelog, .. }) if show_changelog => {
-            NOTES_HEIGHT + changelog.len().saturating_sub(1) as f64 * STACK_HEIGHT
+        Some(UpdateStatus::Available {
+            changelog,
+            notes,
+            display_version,
+            ..
+        }) if show_changelog => {
+            let groups = stacked_release_notes(changelog, notes.as_deref(), display_version);
+            let stacked = groups.len() > 1;
+            let items: f64 = groups
+                .iter()
+                .flat_map(|group| &group.items)
+                .map(|item| match item.title {
+                    Some(_) => HIGHLIGHT_HEIGHT,
+                    None => NOTE_HEIGHT,
+                })
+                .sum();
+            let headings = if stacked {
+                INTRO_HEIGHT + groups.len() as f64 * GROUP_HEIGHT
+            } else {
+                0.0
+            };
+            NOTES_CHROME + items.max(NOTE_HEIGHT) + headings
         }
         _ => 0.0,
     };
@@ -897,6 +967,23 @@ pub fn present(status: Option<&UpdateStatus>, view: &ViewState) -> Presentation 
         close_warning,
         footer,
         dismiss_blocked: downloading || restarting || view.installing,
+        version_link: match status {
+            _ if error.is_some() => None,
+            Some(S::Available {
+                display_version, ..
+            })
+            | Some(S::Downloading {
+                display_version, ..
+            })
+            | Some(S::Restarting {
+                display_version, ..
+            }) => version_link(display_version),
+            Some(S::UpToDate {
+                current_display_version,
+                ..
+            }) => version_link(current_display_version),
+            _ => None,
+        },
         card_width: CARD_WIDTH,
         card_height: card_height(status, view.show_changelog),
     }
@@ -911,8 +998,9 @@ const FIXTURE_STEPS: u64 = 6;
 const RESTART_COUNTDOWN_SECONDS: u8 = 3;
 
 /// Workbench fixture names accepted by [`fixture`].
-pub const FIXTURES: [&str; 9] = [
+pub const FIXTURES: [&str; 10] = [
     "available",
+    "highlights",
     "single",
     "closing",
     "manual",
@@ -980,12 +1068,65 @@ fn available_fixture(stacked: bool, closing: bool, installable: bool) -> UpdateS
     }
 }
 
+/// Three releases written as AI highlights (`Title — description`).
+fn highlights_fixture() -> UpdateStatus {
+    let entry = |version: &str, display: &str, notes: &[&str]| ChangelogEntry {
+        version: version.into(),
+        display_version: display.into(),
+        notes: Some(format!(
+            "## What's Changed\n{}",
+            notes
+                .iter()
+                .map(|note| format!("* {note}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )),
+    };
+    let changelog = vec![
+        entry(
+            "2026.11.2203",
+            "2026.11.22.3",
+            &[
+                "Shortcuts survive a taken chord — When another app already owns one of your shortcuts, the rest keep working instead of all going quiet.",
+            ],
+        ),
+        entry(
+            "2026.11.2202",
+            "2026.11.22.2",
+            &[
+                "Mini previews finally get the theme memo — On macOS and Windows, mini previews now update right away when you change your theme or accent color.",
+            ],
+        ),
+        entry(
+            "2026.11.2201",
+            "2026.11.22.1",
+            &[
+                "Screenshots keep working after macOS updates — In-app updates on macOS now relaunch Captures properly so Screen Recording keeps working.",
+                "Captures goes lighter on macOS memory — Screenshots no longer hoard extra full-display copies in memory until you quit.",
+            ],
+        ),
+    ];
+    UpdateStatus::Available {
+        current_version: "2026.11.2110".into(),
+        current_display_version: "2026.11.21.10".into(),
+        version: "2026.11.2203".into(),
+        display_version: "2026.11.22.3".into(),
+        notes: changelog[0].notes.clone(),
+        changelog,
+        installable: true,
+        manual_download_url: None,
+        download_size: Some(FIXTURE_SIZE),
+        will_close_open_captures: false,
+    }
+}
+
 /// Synthetic statuses matching the Tauri dev harness (`?view=update&update=…`).
 pub fn fixture(name: &str) -> Option<UpdateStatus> {
     let current_version = FIXTURE_CURRENT.0.to_owned();
     let current_display_version = FIXTURE_CURRENT.1.to_owned();
     Some(match name {
         "available" => available_fixture(true, false, true),
+        "highlights" => highlights_fixture(),
         "single" => available_fixture(false, false, true),
         "closing" => available_fixture(true, true, true),
         "manual" => available_fixture(false, false, false),
@@ -1210,6 +1351,7 @@ mod tests {
 
     fn item(text: &str, pr: Option<u64>) -> NoteItem {
         NoteItem {
+            title: None,
             text: text.into(),
             pull_request: pr.map(|n| pull_request("joswayski", "captures", n)),
         }
@@ -1257,6 +1399,7 @@ mod tests {
             ),
             vec![
                 NoteItem {
+                    title: None,
                     text:
                         "Try https://example.com in https://www.GitHub.com/other/repo.rs/pull/7 now"
                             .into(),
@@ -1271,6 +1414,41 @@ mod tests {
             release_note_items("* See [the docs](https://example.com \"Docs\") and [x](y) now"),
             vec![item("See the docs and x now", None)]
         );
+    }
+
+    #[test]
+    fn highlights_split_into_a_bold_title_and_grow_the_card() {
+        let notes = "## What's Changed\n* Mini previews get the memo — They follow your theme now.\n* Plain fix — \n* Fix a crash (#12)";
+        assert_eq!(
+            release_note_items(notes),
+            vec![
+                NoteItem {
+                    title: Some("Mini previews get the memo".into()),
+                    text: "They follow your theme now.".into(),
+                    pull_request: None,
+                },
+                item("Plain fix —", None),
+                item("Fix a crash", Some(12)),
+            ]
+        );
+        let status = UpdateStatus::Available {
+            current_version: "2026.11.2201".into(),
+            current_display_version: "2026.11.22.1".into(),
+            version: "2026.11.2202".into(),
+            display_version: "2026.11.22.2".into(),
+            notes: Some(notes.into()),
+            changelog: Vec::new(),
+            installable: true,
+            manual_download_url: None,
+            download_size: None,
+            will_close_open_captures: false,
+        };
+        assert_eq!(
+            card_height(Some(&status), true),
+            168.0 + 66.0 + 66.0 + 2.0 * 44.0
+        );
+        assert_eq!(version_link("0.1.0"), None);
+        assert_eq!(version_link("2026.11.2202"), None);
     }
 
     #[test]
@@ -1351,7 +1529,17 @@ mod tests {
         assert_eq!(footer.primary.unwrap().label, "Update now");
         assert!(p.close_warning.is_none());
         assert!(!p.dismiss_blocked);
-        assert_eq!(p.card_height, 168.0 + 122.0 + 2.0 * 72.0);
+        // Card, notes chrome, two bullets, the intro and two version headings.
+        assert_eq!(p.card_height, 168.0 + 66.0 + 2.0 * 44.0 + 30.0 + 2.0 * 28.0);
+        let link = p.version_link.unwrap();
+        assert!(p.description.contains(&link.text));
+        assert_eq!(
+            link.url,
+            format!(
+                "https://github.com/joswayski/captures/releases/tag/v{}",
+                link.text
+            )
+        );
     }
 
     #[test]
@@ -1367,11 +1555,11 @@ mod tests {
         );
         assert_eq!(p.card_height, 168.0 + 56.0);
         let shown = present(Some(&status), &view(true));
-        assert_eq!(shown.card_height, 480.0);
+        assert_eq!(shown.card_height, 168.0 + 66.0 + 88.0 + 30.0 + 56.0 + 56.0);
         let single = present(fixture("single").as_ref(), &view(true));
         assert!(!single.notes.as_ref().unwrap().stacked);
         assert!(single.notes.unwrap().intro.is_none());
-        assert_eq!(single.card_height, 168.0 + 122.0);
+        assert_eq!(single.card_height, 168.0 + 66.0 + 44.0);
         let manual = present(fixture("manual").as_ref(), &view(true));
         assert_eq!(manual.description, "Version 2026.08.27.5");
         assert_eq!(

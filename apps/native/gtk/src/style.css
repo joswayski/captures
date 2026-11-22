@@ -3111,6 +3111,36 @@ window.captures.notice-window {
   font-size: var(--text-sm);
   font-feature-settings: "tnum";
 }
+.captures .update-notice-description label {
+  color: var(--text-subtle);
+  font-size: var(--text-sm);
+  font-feature-settings: "tnum";
+}
+/* The version opens its GitHub release: a plain external link, muted with
+   its external-link icon at rest, fading to `--text` and underlined on hover, with no fill.
+   GTK drops the transition when animations are off. */
+.captures button.update-version-link {
+  all: unset;
+}
+.captures button.update-version-link label,
+.captures button.update-version-link .update-version-link-icon {
+  color: var(--text-subtle);
+  transition: color var(--dur-3) var(--ease-in-out);
+}
+.captures button.update-version-link:hover label,
+.captures button.update-version-link:active label,
+.captures button.update-version-link:hover .update-version-link-icon,
+.captures button.update-version-link:active .update-version-link-icon {
+  color: var(--text);
+}
+.captures button.update-version-link:hover label.update-version-link-text,
+.captures button.update-version-link:active label.update-version-link-text {
+  text-decoration-line: underline;
+}
+.captures button.update-version-link:focus-visible {
+  border-radius: var(--r-sm);
+  box-shadow: var(--focus-ring);
+}
 .captures .update-notice-body {
   padding: 0 var(--s-6) var(--s-4);
 }
@@ -3152,6 +3182,20 @@ window.captures.notice-window {
 }
 .captures .update-notes-item + .update-notes-item {
   margin-top: var(--s-3);
+}
+/* A highlight: semibold title over its muted description. */
+.captures .update-notes-highlight + .update-notes-item,
+.captures .update-notes-item + .update-notes-highlight {
+  margin-top: var(--s-4);
+}
+.captures .update-notes-highlight-title {
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  line-height: var(--lh-snug-sm);
+}
+.captures .update-notes-highlight-text {
+  margin-top: var(--s-1);
 }
 /* The 5 px `li::before` dot at 0.5em; the text starts at `--s-5`. */
 .captures .update-notes-bullet {

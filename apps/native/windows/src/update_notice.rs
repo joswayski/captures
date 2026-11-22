@@ -17,10 +17,12 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::time::Instant;
 
+use captures_app::motion::CubicBezier;
 use captures_app::tray_notice::{self, Caret, LogicalRect, Placement};
 use captures_app::update_notice::{
     self as notice, Action, Icon, IconTone, Presentation, UpdateStatus, ViewState,
 };
+use captures_app::updater::ReleaseInfo;
 use captures_app::updater::checks::CheckStatus;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::*;
@@ -84,16 +86,16 @@ pub fn status(
     use crate::updates::display_version;
     let current_version = current.to_owned();
     let current_display_version = display_version(current);
-    let available = |version: &str, notes: Option<String>, size: u64| UpdateStatus::Available {
+    let available = |release: &ReleaseInfo| UpdateStatus::Available {
         current_version: current_version.clone(),
         current_display_version: current_display_version.clone(),
-        version: version.to_owned(),
-        display_version: display_version(version),
-        notes,
-        changelog: Vec::new(),
+        version: release.version.clone(),
+        display_version: display_version(&release.version),
+        notes: release.notes.clone(),
+        changelog: release.changelog.clone(),
         installable,
         manual_download_url: (!installable).then(|| RELEASES_URL.to_owned()),
-        download_size: (size > 0).then_some(size),
+        download_size: (release.size > 0).then_some(release.size),
         will_close_open_captures: will_close,
     };
     let downloading = |version: &str, downloaded: u64, total: u64| UpdateStatus::Downloading {
@@ -117,9 +119,7 @@ pub fn status(
             current_version,
             current_display_version,
         },
-        CheckStatus::Available { release } => {
-            available(&release.version, release.notes.clone(), release.size)
-        }
+        CheckStatus::Available { release } => available(release),
         CheckStatus::Downloading {
             release,
             downloaded,
@@ -137,9 +137,7 @@ pub fn status(
             seconds_remaining: RESTART_SECONDS as u8,
         },
         // Verified, but the install was held (a capture was running).
-        CheckStatus::Staged { release, .. } => {
-            available(&release.version, release.notes.clone(), release.size)
-        }
+        CheckStatus::Staged { release, .. } => available(release),
         CheckStatus::Error { message } => UpdateStatus::Error {
             current_version,
             current_display_version,
@@ -411,6 +409,11 @@ struct Notice {
     scroll: f32,
     scroll_max: f32,
     notes: Option<D2D_RECT_F>,
+    /// The version link's part, when the description has one.
+    link: Option<u32>,
+    /// The version link's hover: how far it has come (0 to 1, before
+    /// easing), toward which end, and when it last stepped.
+    glow: (f32, bool, Instant),
     started: Instant,
     restart_at: Option<Instant>,
     animating: bool,
@@ -486,6 +489,8 @@ fn open(live: Live) -> Result<()> {
                 scroll: 0.,
                 scroll_max: 0.,
                 notes: None,
+                link: None,
+                glow: (0., false, Instant::now()),
                 started: Instant::now(),
                 restart_at: None,
                 animating: false,
@@ -760,11 +765,13 @@ impl Notice {
         } else {
             self.started.elapsed().as_secs_f32()
         };
+        let link = self.glow_step(reduced);
         let ui = Ui {
             hover: self.hover,
             scroll: self.scroll,
             time: elapsed,
             restart: restart.clamp(0., 1.),
+            link,
         };
         let mut painted = None;
         gfx::draw_surface(&surface, px, (self.scale, self.scale), 0., |dc| {
@@ -775,11 +782,15 @@ impl Notice {
             self.parts = painted.parts;
             self.scroll_max = painted.scroll_max;
             self.notes = painted.notes;
+            self.link = painted.link;
             self.scroll = self.scroll.min(self.scroll_max);
         }
-        // The spinner, an indeterminate bar and the restart bar move.
+        let (glow, on, _) = self.glow;
+        // The spinner, an indeterminate bar, the restart bar and the version
+        // link's hover fade move.
         let animating = !reduced
-            && (self.presentation.icon == Icon::Spinner
+            && (glow != if on { 1. } else { 0. }
+                || self.presentation.icon == Icon::Spinner
                 || self
                     .presentation
                     .download
@@ -797,6 +808,31 @@ impl Notice {
             }
         }
         unsafe { dcomp.Commit() }
+    }
+
+    /// Step the version link's hover and return it eased: 0 at rest, 1
+    /// hovered. It moves over `--dur-3` with `--ease-in-out`, at once under
+    /// reduced motion; a new direction starts from where it is.
+    fn glow_step(&mut self, reduced: bool) -> f32 {
+        let on = self.link.is_some() && self.hover == self.link;
+        let (mut progress, was, last) = self.glow;
+        let now = Instant::now();
+        let target = if on { 1. } else { 0. };
+        if reduced {
+            progress = target;
+        } else if on == was {
+            let step = now.duration_since(last).as_secs_f32() * 1000. / self.t.n("dur-3");
+            progress = if on {
+                (progress + step).min(1.)
+            } else {
+                (progress - step).max(0.)
+            };
+        }
+        self.glow = (progress, on, now);
+        let [x1, y1, x2, y2] = self.t.easing("ease-in-out");
+        CubicBezier::new(x1, y1, x2, y2)
+            .unwrap_or(CubicBezier::LINEAR)
+            .ease(f64::from(progress)) as f32
     }
 
     fn part_at(&self, x: f32, y: f32) -> Option<&Part> {
@@ -931,6 +967,8 @@ pub struct Ui {
     pub time: f32,
     /// The restart bar's remaining fraction.
     pub restart: f32,
+    /// The version link's hover, eased: 0 at rest, 1 hovered.
+    pub link: f32,
 }
 
 pub struct Painted {
@@ -938,6 +976,8 @@ pub struct Painted {
     pub scroll_max: f32,
     /// The notes scroller, for the wheel.
     pub notes: Option<D2D_RECT_F>,
+    /// The version link's part.
+    pub link: Option<u32>,
 }
 
 /// Wrapped text at `size`/`weight`, with a CSS `line-height` multiplier.
@@ -1033,6 +1073,35 @@ fn link_text(
     gfx::text(dc, text, x, y, color)
 }
 
+/// The first line's baseline, from the layout's top.
+fn first_baseline(text: &Text) -> f32 {
+    let mut count = 0;
+    unsafe {
+        let _ = text.layout.GetLineMetrics(None, &mut count);
+        let mut lines = vec![DWRITE_LINE_METRICS::default(); count.max(1) as usize];
+        if text
+            .layout
+            .GetLineMetrics(Some(&mut lines), &mut count)
+            .is_err()
+        {
+            return text.height;
+        }
+        lines[0].baseline
+    }
+}
+
+/// The bounding box of `boxes`.
+fn union(boxes: impl Iterator<Item = D2D_RECT_F>) -> Option<D2D_RECT_F> {
+    boxes.reduce(|a, b| {
+        rect(
+            a.left.min(b.left),
+            a.top.min(b.top),
+            a.right.max(b.right),
+            a.bottom.max(b.bottom),
+        )
+    })
+}
+
 fn mix(a: D2D1_COLOR_F, b: D2D1_COLOR_F, amount: f32) -> D2D1_COLOR_F {
     D2D1_COLOR_F {
         r: a.r + (b.r - a.r) * amount,
@@ -1123,9 +1192,10 @@ fn progress(
     Ok(())
 }
 
-/// A laid-out release note: its text (with the pull request appended) and
-/// the link's range.
+/// A laid-out release note: a highlight's title, its text (with the pull
+/// request appended) and the link's range.
 struct NoteLine {
+    title: Option<Text>,
     text: Text,
     link: Option<(DWRITE_TEXT_RANGE, u64, String)>,
 }
@@ -1150,6 +1220,17 @@ pub fn paint(
     let c = |name: &str| t.color(name);
     let (s3, s4, s5, s6) = (n("s-3"), n("s-4"), n("s-5"), n("s-6"));
     let (sm, xxs) = (n("text-sm"), n("text-2xs"));
+    let s1 = n("s-1");
+    // A highlight: its title, `s-1`, then its description. Highlights sit
+    // `s-4` from their neighbours, plain bullets `s-3`.
+    let item_height = |item: &NoteLine| {
+        item.title.as_ref().map_or(0., |title| title.height + s1) + item.text.height
+    };
+    let item_gap = |items: &[NoteLine], i: usize| match i {
+        0 => 0.,
+        _ if items[i - 1].title.is_some() || items[i].title.is_some() => s4,
+        _ => s3,
+    };
     let (snug, tight) = (n("leading-snug"), n("leading-tight"));
     let mut parts: Vec<Part> = Vec::new();
     let mut part = |role: Role, name: &str, r: D2D_RECT_F, action: Option<Action>, enabled| {
@@ -1208,15 +1289,46 @@ pub fn paint(
         Some(tight),
         copy_width,
     )?;
-    let description = para(
+    // The version link: its text, then a ↗ widened to 16 DIPs holding the
+    // place of Caper's external-link icon (`release-link`): a 4-DIP gap and
+    // the 12-DIP icon drawn over it.
+    let link = p.version_link.as_ref().and_then(|link| {
+        let at = p.description.find(&link.text)?;
+        Some((at, at + link.text.len(), link))
+    });
+    let description_copy = match link {
+        Some((_, end, _)) => format!("{}\u{2197}{}", &p.description[..end], &p.description[end..]),
+        None => p.description.clone(),
+    };
+    let mut description = para(
         g,
         t,
-        &p.description,
+        &description_copy,
         (sm, "weight-regular"),
         None,
         None,
         copy_width,
     )?;
+    // (the link's text, the text with its arrow, the arrow, the link)
+    let link = link.map(|(at, end, link)| {
+        let arrow = '\u{2197}'.len_utf8();
+        (
+            utf16_range(&description_copy, at, end - at),
+            utf16_range(&description_copy, at, end + arrow - at),
+            utf16_range(&description_copy, end, arrow),
+            link,
+        )
+    });
+    if let Some((_, _, arrow, _)) = &link {
+        unsafe {
+            let layout: IDWriteTextLayout1 = description.layout.cast()?;
+            // Exactly the gap and icon, whatever the font's ↗ measures.
+            layout.SetCharacterSpacing(0., 0., 16., *arrow)?;
+            let mut metrics = DWRITE_TEXT_METRICS::default();
+            description.layout.GetMetrics(&mut metrics)?;
+            (description.width, description.height) = (metrics.width, metrics.height);
+        }
+    }
     let copy_height = title.height + 2. + description.height;
     let header_content = copy_height.max(36.);
     let header = s6 + header_content + s5;
@@ -1295,7 +1407,19 @@ pub fn paint(
                         Some(snug),
                         list - s5,
                     )?;
-                    items.push(NoteLine { text, link });
+                    let title = match &item.title {
+                        Some(title) => Some(para(
+                            g,
+                            t,
+                            title,
+                            (sm, "weight-semibold"),
+                            None,
+                            Some(snug),
+                            list - s5,
+                        )?),
+                        None => None,
+                    };
+                    items.push(NoteLine { title, text, link });
                 }
                 let empty = if group.items.is_empty() {
                     Some(para(
@@ -1518,6 +1642,40 @@ pub fn paint(
     let copy_y = mid - copy_height / 2.;
     gfx::text(dc, &title, copy_x, copy_y, c("text"))?;
     let desc_y = copy_y + title.height + 2.;
+    let mut version_link = None;
+    if let Some((text_range, range, arrow, _)) = &link {
+        // A plain external link: the description's colour at rest, fading
+        // to the text colour with an underline on hover.
+        let color = mix(c("text-subtle"), c("text"), ui.link);
+        unsafe {
+            let brush: IUnknown = gfx::brush(dc, color)?.cast()?;
+            description.layout.SetDrawingEffect(&brush, *text_range)?;
+            let clear: IUnknown = gfx::brush(dc, D2D1_COLOR_F::default())?.cast()?;
+            description.layout.SetDrawingEffect(&clear, *arrow)?;
+        }
+        // Caper's 12-DIP icon, 4 DIPs after the version's last line.
+        if let Some(b) = range_rects(&description, *text_range).last() {
+            let b = offset(*b, copy_x, desc_y);
+            let side = 12f32.min(b.bottom - b.top);
+            let (x, y) = (b.right + 4., (b.top + b.bottom - side) / 2.);
+            gfx::icon(dc, &g.factory, "release-link", &[], (x, y, side), 2., color)?;
+        }
+        if ui.link > 0. {
+            let baseline = first_baseline(&description);
+            let mut line = c("text");
+            line.a *= ui.link;
+            for b in range_rects(&description, *text_range) {
+                let b = offset(b, copy_x, desc_y);
+                let y = b.top + baseline + 1.;
+                gfx::fill(dc, rect(b.left, y, b.right, y + 1.), line)?;
+            }
+        }
+        version_link = union(
+            range_rects(&description, *range)
+                .into_iter()
+                .map(|b| offset(b, copy_x, desc_y)),
+        );
+    }
     gfx::text(dc, &description, copy_x, desc_y, c("text-subtle"))?;
     // `role="dialog"` with `aria-labelledby`/`aria-describedby`.
     part(
@@ -1539,6 +1697,19 @@ pub fn paint(
         None,
         true,
     );
+    let version_link = match (version_link, &link) {
+        (Some(hit), Some((_, _, _, link))) => Some(part(
+            Role::Link,
+            &format!("Open release {}", link.text),
+            hit,
+            // Any external page: the same `open_url` as a pull request.
+            Some(Action::OpenPullRequest {
+                url: link.url.clone(),
+            }),
+            true,
+        )),
+        _ => None,
+    };
 
     // ---- body ----
     let body_top = y0 + header_h;
@@ -1600,7 +1771,7 @@ pub fn paint(
                     natural += h3.height + s3;
                 }
                 for (i, item) in group.items.iter().enumerate() {
-                    natural += item.text.height + if i > 0 { s3 } else { 0. };
+                    natural += item_gap(&group.items, i) + item_height(item);
                 }
                 if let Some(empty) = &group.empty {
                     natural += empty.height;
@@ -1632,9 +1803,7 @@ pub fn paint(
                     gy += h3.height + s3;
                 }
                 for (i, (item, note)) in group.items.iter().zip(&source.items).enumerate() {
-                    if i > 0 {
-                        gy += s3;
-                    }
+                    gy += item_gap(&group.items, i);
                     // `li::before`: a 5 px dot at 0.5em.
                     let dot = gy + sm / 2. + 2.5;
                     result = result.and(gfx::fill_round(
@@ -1644,6 +1813,14 @@ pub fn paint(
                         c("text-faint"),
                     ));
                     let x = view.left + s5;
+                    if let (Some(title), Some(copy)) = (&item.title, &note.title) {
+                        result = result.and(gfx::text(dc, title, x, gy, c("text")));
+                        let r = rect(x, gy, x + title.width, gy + title.height);
+                        if visible(r) {
+                            part(Role::Text, copy, r, None, true);
+                        }
+                        gy += title.height + s1;
+                    }
                     let r = rect(x, gy, x + item.text.width, gy + item.text.height);
                     if visible(r) {
                         part(Role::Text, &note.text, r, None, true);
@@ -1898,6 +2075,7 @@ pub fn paint(
         parts,
         scroll_max,
         notes: notes_view,
+        link: version_link,
     })
 }
 
@@ -2059,6 +2237,7 @@ pub fn render_offscreen(
             scroll: 0.,
             time: 0.,
             restart: 1.,
+            link: 0.,
         };
         let result = paint(dc, &g, &t, &presentation, &placement, &ui).map(|_| ());
         unsafe { dc.SetTransform(&base) };
@@ -2069,7 +2248,7 @@ pub fn render_offscreen(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use captures_app::updater::{ReleaseInfo, Renderer, Target};
+    use captures_app::updater::{Renderer, Target};
 
     fn release(version: &str) -> ReleaseInfo {
         ReleaseInfo {
@@ -2078,6 +2257,7 @@ mod tests {
             version: version.into(),
             notes: Some("* Fix the tray caret (#600)".into()),
             size: 104_000_000,
+            changelog: Vec::new(),
         }
     }
 
