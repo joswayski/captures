@@ -3070,12 +3070,21 @@ export function ScreenshotEditor() {
 
   const canvasEditingTextId = editingText?.id ?? null;
 
+  // The three viewport effects below depend on the canvas size, not on the
+  // document: a drag replaces the document on every pointer move, and
+  // rebuilding their observers and listeners each frame forced layout, and
+  // dropped a pinch in progress.
+  const documentWidth = editorDocument?.width;
+  const documentHeight = editorDocument?.height;
+
   useLayoutEffect(() => {
-    if (!editorDocument || !viewportRef.current) return;
+    if (documentWidth === undefined || documentHeight === undefined || !viewportRef.current) {
+      return;
+    }
     const viewport = viewportRef.current;
     const update = () => {
-      const widthScale = Math.max(0.02, (viewport.clientWidth - 56) / editorDocument.width);
-      const heightScale = Math.max(0.02, (viewport.clientHeight - 56) / editorDocument.height);
+      const widthScale = Math.max(0.02, (viewport.clientWidth - 56) / documentWidth);
+      const heightScale = Math.max(0.02, (viewport.clientHeight - 56) / documentHeight);
       setFitScale(Math.min(1, widthScale, heightScale));
     };
     update();
@@ -3083,7 +3092,7 @@ export function ScreenshotEditor() {
     const observer = new ResizeObserver(update);
     observer.observe(viewport);
     return () => observer.disconnect();
-  }, [editorDocument]);
+  }, [documentWidth, documentHeight]);
 
   const paintEditorCanvas = useCallback(() => {
     if (!editorDocument || !canvasRef.current) return;
@@ -3569,7 +3578,7 @@ export function ScreenshotEditor() {
 
   useEffect(() => {
     const viewport = viewportRef.current;
-    if (!editorDocument || !viewport) return;
+    if (!editorReady || !viewport) return;
 
     const eventPoint = (event: MagnifyGestureEvent) => {
       const bounds = viewport.getBoundingClientRect();
@@ -3637,7 +3646,7 @@ export function ScreenshotEditor() {
       viewport.removeEventListener("gesturecancel", onGestureEnd);
       magnifyGestureRef.current = null;
     };
-  }, [editorDocument, setManualZoom, zoomBy]);
+  }, [editorReady, setManualZoom, zoomBy]);
 
   const startPanPointer = (event: React.PointerEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement | null;
@@ -3707,7 +3716,7 @@ export function ScreenshotEditor() {
   useEffect(() => {
     const viewport = viewportRef.current;
     const surface = surfaceRef.current;
-    if (!viewport || !surface || !editorDocument) {
+    if (!viewport || !surface || documentWidth === undefined || documentHeight === undefined) {
       setCanvasOffscreen(false);
       return undefined;
     }
@@ -3732,7 +3741,7 @@ export function ScreenshotEditor() {
       window.removeEventListener("resize", update);
       observer?.disconnect();
     };
-  }, [editorDocument, displayScale, viewPan]);
+  }, [documentWidth, documentHeight, displayScale, viewPan]);
 
   /** Map client coordinates into document space (may be outside the canvas). */
   const clientToDocumentPoint = (clientX: number, clientY: number): EditorPoint => {
