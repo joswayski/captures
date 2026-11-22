@@ -97,9 +97,12 @@ pub enum Style {
     NoteStrong,
     /// `.onboarding-lede`: `--text-md`, `--leading-normal`, wrapping.
     SetupLede,
+    /// `.feedback-review-summary`: wrapping mono `--text-sm`.
+    MonoBlock,
 }
 
-const STYLES: [Style; 37] = [
+const STYLES: [Style; 38] = [
+    Style::MonoBlock,
     Style::SetupLede,
     Style::NoteStrong,
     Style::Action,
@@ -324,6 +327,16 @@ fn spec(style: Style) -> Spec {
                 None,
                 Some("leading-snug"),
                 false,
+            )
+        },
+        Style::MonoBlock => Spec {
+            mono: true,
+            ..spec(
+                "text-sm",
+                "weight-regular",
+                None,
+                Some("leading-snug"),
+                true,
             )
         },
         Style::MonoSmall => Spec {

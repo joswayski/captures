@@ -152,8 +152,17 @@ the shared `captures-feedback` client on a worker; other launches are a fixture
 whose Send stays off. Tab moves through the categories, fields and Send.
 `--scene feedback [--select typed|live|sent|error|idea]` renders it offscreen
 (compared with the Tauri harness; Wine's DirectWrite stubs caret hit-testing,
-so caret placement needs a real PC). Not ported: the textarea resize grip, line-based Home/End and the native hosts' optional
-crash-diagnostics card.
+so caret placement needs a real PC). Not ported: the textarea resize grip and line-based Home/End.
+
+Crash diagnostics: the resident app starts the shared
+`captures_app::crash::Session` (session marker, panic hook and the hidden
+window that marks a `WM_QUERYENDSESSION`/`WM_ENDSESSION` logoff clean and
+restores the marker when shutdown is cancelled) and marks a clean exit on Quit
+before releasing the profile. A visible launch after an unclean exit opens Send
+Feedback with the native hosts' previous-session review card (as GTK: title,
+explanation, a 128 px mono summary that scrolls, Copy summary, Add to message
+and Dismiss diagnostics); nothing is sent or added unasked. `--scene feedback
+--select crash` renders it.
 
 Record (`recorder.rs`) switches the bar to Record ("Start recording"; its
 note follows Include recording controls in captures), and the Record Region,

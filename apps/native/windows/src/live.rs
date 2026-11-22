@@ -81,6 +81,16 @@ struct Health {
 
 thread_local! {
     static RESIDENT: RefCell<Option<Resident>> = const { RefCell::new(None) };
+    /// The elected primary's local crash diagnostics (`captures_app::crash`:
+    /// session marker, panic hook and `WM_QUERYENDSESSION` handling), as
+    /// the GTK and wgpu hosts. Kept outside `RESIDENT` so Feedback can read
+    /// it from any window borrow.
+    static CRASH: RefCell<Option<Arc<captures_app::crash::Session>>> = const { RefCell::new(None) };
+}
+
+/// The live app's crash diagnostics, for Send Feedback's review card.
+pub fn crash() -> Option<Arc<captures_app::crash::Session>> {
+    CRASH.with(|c| c.borrow().clone())
 }
 
 /// Run before any window opens. `None` means another process owns this
@@ -130,6 +140,15 @@ pub fn start(options: &Options, instance: Instance) {
     let thread = unsafe { GetCurrentThreadId() };
     let wake = wake_on(thread);
     instance.set_wake(wake.clone());
+    // Diagnostics belong to the elected primary only.
+    let root = options
+        .history_root
+        .clone()
+        .unwrap_or_else(captures_app::default_history_root);
+    match captures_app::crash::Session::start(&root) {
+        Ok(session) => CRASH.with(|c| *c.borrow_mut() = Some(Arc::new(session))),
+        Err(error) => eprintln!("{error} Capture remains available."),
+    }
     let settings = captures_settings::load(&options.settings_file).unwrap_or_default();
     let tray = match Tray::new(&settings, wake) {
         Ok(tray) => Some(tray),
@@ -140,10 +159,6 @@ pub fn start(options: &Options, instance: Instance) {
     };
     let tray_missing = tray.is_none();
     // Drag exports from the last session are disposable (`crate::drag`).
-    let root = options
-        .history_root
-        .clone()
-        .unwrap_or_else(captures_app::default_history_root);
     std::thread::spawn(move || crate::drag::clear_previous_exports(&root));
     // An installed Preview checks for updates at launch and every five
     // minutes after, as shipping; development builds make no request.
@@ -239,6 +254,16 @@ pub fn start(options: &Options, instance: Instance) {
         restore(options, restart);
     }
     open_media(options.open.clone());
+    // A visible launch after an unclean exit opens Send Feedback with the
+    // local review, as the GTK and wgpu hosts; nothing is sent or added
+    // unasked.
+    if !options.quiet
+        && launch.is_some_and(|launch| launch != InteractiveLaunch::Setup)
+        && crash().is_some_and(|session| session.preview().is_some())
+        && let Err(error) = crate::feedback::open(options)
+    {
+        eprintln!("couldn't open Send Feedback: {error}");
+    }
     match launch {
         // A quiet launch stays in the notification area with the launch
         // notice for 5 s.
@@ -258,6 +283,12 @@ pub fn start(options: &Options, instance: Instance) {
 /// Release the tray and the profile election.
 pub fn stop() {
     crate::recorder::shutdown();
+    // Mark a clean exit before the election is released.
+    if let Some(session) = CRASH.with(|c| c.borrow_mut().take())
+        && let Err(error) = session.clean_exit()
+    {
+        eprintln!("{error}");
+    }
     RESIDENT.with(|r| r.borrow_mut().take());
 }
 

@@ -5802,6 +5802,7 @@ startup upload is added. OS report discovery is **not implemented** in this slic
 | --- | --- |
 | macOS | AppKit startup/review/Quit/restart and Unix shutdown implemented; transport-driven XCTest added, not executed in the Linux orb; physical logoff/restart unverified |
 | Windows | Shared wgpu review and Windows shutdown watcher implemented; classifier/cancellation/ownership unit tests run on Linux, actual Windows compilation/session-end delivery unverified locally |
+| Windows (Win32) | `live.rs` starts the session in the elected primary and cleans it in `stop()` before releasing election; a visible non-setup launch with evidence opens Send Feedback, whose review card (`feedback.rs`, GTK's title, `.help-text`, 128 px mono summary scroller, Copy summary / Add to message / Dismiss diagnostics, refusal alert) is in UI Automation. Verified on Windows 11 with a disposable profile under UIA: forced kill then relaunch opens the review, Add and Dismiss work, clean Quit and `WM_QUERYENDSESSION` before a kill leave no review, cancelled `WM_ENDSESSION` restores it; a real logoff is unverified |
 | Linux X11 | Verified on private X11/software GL: both appearances/default and minimum size, redaction, secondary ownership, copy/add without network, retained evidence, dismiss, accepted Quit and SIGTERM; Rust subprocess panic/TERM/HUP/INT/KILL and disarmed replacement tests pass |
 | Linux Wayland | Shared review/session/Unix shutdown implemented, live-host review/input/shutdown unverified; existing capture and hidden-startup gates remain |
 

@@ -5,9 +5,10 @@
 //! sends, to the shared endpoint and only when Send is pressed; other launches
 //! are a fixture whose Send stays off, like the GTK host without an endpoint.
 use std::cell::RefCell;
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 
 use captures_app::app_windows;
+use captures_app::crash::Review;
 use captures_app::feedback as copy;
 use captures_feedback::{FeedbackContext, FeedbackDraft};
 use windows::Win32::Foundation::*;
@@ -51,13 +52,27 @@ fn with_feedback<R>(f: impl FnOnce(&mut Feedback) -> R) -> Option<R> {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Target {
+    /// The previous-session review's Copy summary, Add to message and
+    /// Dismiss diagnostics.
+    Review(usize),
     Category(usize),
     Message,
     Contact,
     Send,
 }
 
-const ORDER: [Target; 6] = [
+/// The native hosts' previous-session review buttons (not in Tauri).
+const REVIEW_BUTTONS: [&str; 3] = ["Copy summary", "Add to message", "Dismiss diagnostics"];
+/// GTK's and wgpu's refusal when the summary cannot be added.
+const REVIEW_ADD_ERROR: &str =
+    "Wait for the current send to finish, or shorten the message below 8,000 characters.";
+/// The summary scroller's `max_content_height`.
+const SUMMARY_MAX: f32 = 128.;
+
+const ORDER: [Target; 9] = [
+    Target::Review(0),
+    Target::Review(1),
+    Target::Review(2),
     Target::Category(0),
     Target::Category(1),
     Target::Category(2),
@@ -88,6 +103,7 @@ struct Lay {
     meta_card: D2D_RECT_F,
     meta_title: (Text, f32),
     meta: Vec<(Text, Text, f32)>,
+    review: Option<ReviewLay>,
     /// `.settings-card > * + *` rules, as `(left, right, y)`.
     dividers: Vec<(f32, f32, f32)>,
     form_card: D2D_RECT_F,
@@ -105,6 +121,18 @@ struct Lay {
     send_label: Text,
     send: D2D_RECT_F,
     height: f32,
+}
+
+/// The previous-session review card, as GTK's `.feedback-review`.
+struct ReviewLay {
+    card: D2D_RECT_F,
+    title: (Text, f32),
+    explanation: (Text, f32),
+    summary: Text,
+    /// The summary's scroller, at most `SUMMARY_MAX` tall.
+    summary_box: D2D_RECT_F,
+    buttons: Vec<(Text, D2D_RECT_F)>,
+    error: Option<(Text, D2D_RECT_F)>,
 }
 
 pub struct Feedback {
@@ -126,6 +154,13 @@ pub struct Feedback {
     contact: TextField,
     context: Option<FeedbackContext>,
     status: Status,
+    /// The live app's local diagnostics (`captures_app::crash`): a previous
+    /// session that did not close normally shows the review card. Nothing is
+    /// sent or added to the message unasked.
+    diagnostics: Option<Arc<captures_app::crash::Session>>,
+    review: Option<Review>,
+    review_error: Option<String>,
+    summary_scroll: f32,
     focus: Option<Target>,
     /// Keyboard focus: buttons draw `:focus-visible` rings.
     focus_visible: bool,
@@ -193,7 +228,15 @@ fn hit_point(text: &Text, x: f32, y: f32) -> usize {
 }
 
 impl Feedback {
-    fn new(hwnd: HWND, options: &Options, g: Gfx, t: Tokens, live: bool) -> Self {
+    fn new(
+        hwnd: HWND,
+        options: &Options,
+        g: Gfx,
+        t: Tokens,
+        live: bool,
+        diagnostics: Option<Arc<captures_app::crash::Session>>,
+    ) -> Self {
+        let review = diagnostics.as_ref().and_then(|session| session.preview());
         let mut message = Editor::default();
         message.multiline = true;
         message.max_len = Some(copy::MESSAGE_LIMIT);
@@ -213,6 +256,10 @@ impl Feedback {
             contact,
             context: None,
             status: Status::Idle,
+            diagnostics,
+            review,
+            review_error: None,
+            summary_scroll: 0.,
             focus: None,
             focus_visible: false,
             hover: None,
@@ -249,9 +296,53 @@ impl Feedback {
 
     fn enabled(&self, target: Target) -> bool {
         match target {
+            Target::Review(_) => self.review.is_some(),
             Target::Category(_) => true,
             Target::Message | Target::Contact => !self.sending(),
             Target::Send => self.can_send(),
+        }
+    }
+
+    /// Add `text` after the draft, as the review's Add to message: never
+    /// while sending, and never past the message limit.
+    fn append_to_message(&mut self, text: &str) -> bool {
+        if self.sending() {
+            return false;
+        }
+        let current = self.message_text().chars().count();
+        let separator = if current == 0 { "" } else { "\n\n" };
+        if current + separator.len() + text.chars().count() > copy::MESSAGE_LIMIT {
+            return false;
+        }
+        self.message.move_to(self.message.len(), false);
+        let change = self.message.insert(&format!("{separator}{text}"));
+        self.edited(Target::Message, change);
+        true
+    }
+
+    fn review_action(&mut self, index: usize) {
+        let Some(review) = &self.review else { return };
+        match index {
+            0 => {
+                if !self.hwnd.is_invalid() {
+                    textfield::copy(self.hwnd, &review.summary);
+                }
+            }
+            1 => {
+                let summary = review.summary.clone();
+                self.review_error =
+                    (!self.append_to_message(&summary)).then(|| REVIEW_ADD_ERROR.into());
+            }
+            _ => match self.diagnostics.as_ref().map_or(Ok(()), |s| s.dismiss()) {
+                Ok(()) => {
+                    self.review = None;
+                    self.review_error = None;
+                    if matches!(self.focus, Some(Target::Review(_))) {
+                        self.set_focus(None, false);
+                    }
+                }
+                Err(error) => self.review_error = Some(error),
+            },
         }
     }
 
@@ -318,6 +409,7 @@ impl Feedback {
 
     fn activate(&mut self, target: Target) {
         match target {
+            Target::Review(i) => self.review_action(i),
             Target::Category(i) => self.category = i,
             Target::Send => self.submit(),
             _ => {}
@@ -409,6 +501,64 @@ impl Feedback {
         }
         let meta_card = rect(left, meta_top, left + shell, cy + pad + 1.);
         y = meta_card.bottom + n("s-6");
+
+        // The native hosts' `.feedback-review`: title, `.help-text`, the
+        // summary scroller, the buttons and any refusal, `--s-4` apart.
+        let review = match &self.review {
+            Some(review) => {
+                let top = y;
+                let mut cy = y + 1. + pad;
+                let title = g.text(t, Style::RowTitle, review.title, inner)?;
+                let title_y = cy;
+                cy += title.height + n("s-3");
+                let explanation = g.text(t, Style::CardDescription, review.explanation, inner)?;
+                let explanation_y = cy;
+                cy += explanation.height + n("s-4");
+                let summary = g.text(t, Style::MonoBlock, &review.summary, inner)?;
+                let summary_box = rect(x, cy, x + inner, cy + summary.height.min(SUMMARY_MAX));
+                self.summary_scroll = self
+                    .summary_scroll
+                    .clamp(0., (summary.height - SUMMARY_MAX).max(0.));
+                cy = summary_box.bottom + n("s-4");
+                // `.ui-btn`s in a wrapping row, `--s-3` apart.
+                let mut buttons = Vec::new();
+                let (mut bx, bh) = (x, n("h-md"));
+                for label in REVIEW_BUTTONS {
+                    let text = g.text(t, Style::Control, label, 1e4)?;
+                    let bw = (text.width + 2. * n("s-5") + 2.).ceil();
+                    if bx > x && bx + bw > x + inner {
+                        bx = x;
+                        cy += bh + n("s-3");
+                    }
+                    buttons.push((text, rect(bx, cy, bx + bw, cy + bh)));
+                    bx += bw + n("s-3");
+                }
+                cy += bh;
+                let error = match &self.review_error {
+                    Some(error) => {
+                        cy += n("s-4");
+                        let text =
+                            g.text(t, Style::CardDescription, error, inner - 2. * n("s-4"))?;
+                        let r = rect(x, cy, x + inner, cy + text.height + 2. * n("s-3"));
+                        cy = r.bottom;
+                        Some((text, r))
+                    }
+                    None => None,
+                };
+                let card = rect(left, top, left + shell, cy + pad + 1.);
+                y = card.bottom + n("s-6");
+                Some(ReviewLay {
+                    card,
+                    title: (title, title_y),
+                    explanation: (explanation, explanation_y),
+                    summary,
+                    summary_box,
+                    buttons,
+                    error,
+                })
+            }
+            None => None,
+        };
 
         // The form card: Category, Message and Contact.
         let form_top = y;
@@ -557,6 +707,7 @@ impl Feedback {
             meta_card,
             meta_title: (meta_title, meta_title_y),
             meta,
+            review,
             dividers,
             form_card,
             category_label: (category_label, category_label_y),
@@ -590,6 +741,10 @@ impl Feedback {
 
     fn rect_of(lay: &Lay, target: Target) -> D2D_RECT_F {
         match target {
+            Target::Review(i) => lay
+                .review
+                .as_ref()
+                .map_or(rect(0., 0., 0., 0.), |review| review.buttons[i].1),
             Target::Category(i) => lay.categories[i].2,
             Target::Message => lay.message_box,
             Target::Contact => lay.contact_box,
@@ -658,6 +813,7 @@ impl Feedback {
     /// The automation key of a target.
     fn uia_key(target: Target) -> u32 {
         match target {
+            Target::Review(i) => 50 + i as u32,
             Target::Category(i) => 10 + i as u32,
             Target::Message => 20,
             Target::Contact => 21,
@@ -727,6 +883,43 @@ impl Feedback {
                 format!("{label}: {value}"),
                 r,
             ));
+        }
+        if let Some(review) = &lay.review {
+            items.push(Item::new(
+                45,
+                Role::Heading(2),
+                self.review.as_ref().map_or("", |r| r.title),
+                at(x, &review.title),
+            ));
+            items.push(Item::new(
+                46,
+                Role::Text,
+                self.review.as_ref().map_or("", |r| r.explanation),
+                at(x, &review.explanation),
+            ));
+            // GTK's "Diagnostic summary" label; the text is its value.
+            let mut summary = Item::new(
+                47,
+                Role::Text,
+                "Diagnostic summary",
+                page(review.summary_box),
+            );
+            summary.value = self.review.as_ref().map(|r| r.summary.clone());
+            items.push(summary);
+            for (i, (_, r)) in review.buttons.iter().enumerate() {
+                let target = Target::Review(i);
+                let mut button = Item::new(
+                    Self::uia_key(target),
+                    Role::Button,
+                    REVIEW_BUTTONS[i],
+                    page(*r),
+                );
+                button.focused = self.focus == Some(target);
+                items.push(button);
+            }
+            if let (Some((_, r)), Some(error)) = (&review.error, &self.review_error) {
+                items.push(Item::new(53, Role::Alert, error.clone(), page(*r)));
+            }
         }
         let group = lay
             .categories
@@ -904,12 +1097,19 @@ impl Feedback {
         gfx::text(dc, &lay.title.0, left, lay.title.1, c("text"))?;
         gfx::text(dc, &lay.intro.0, left, lay.intro.1, c("text-subtle"))?;
 
-        for card in [lay.meta_card, lay.form_card] {
+        let review_card = lay.review.as_ref().map(|review| review.card);
+        for card in [Some(lay.meta_card), review_card, Some(lay.form_card)]
+            .into_iter()
+            .flatten()
+        {
             gfx::shadow(dc, card, n("r-xl"), t.shadow("shadow-sm"))?;
             gfx::fill_round(dc, card, n("r-xl"), c("surface-raised"))?;
             gfx::border(dc, card, n("r-xl"), 1., c("border-subtle"))?;
         }
         let x = left + 1. + n("s-6");
+        if let Some(review) = &lay.review {
+            self.paint_review(dc, review, x)?;
+        }
         for &(a, b, y) in &lay.dividers {
             gfx::fill(dc, rect(a, y, b, y + 1.), c("border-subtle"))?;
         }
@@ -1067,6 +1267,59 @@ impl Feedback {
         Ok(())
     }
 
+    /// The previous-session review card's contents, in page coordinates.
+    fn paint_review(&self, dc: &ID2D1DeviceContext, review: &ReviewLay, x: f32) -> Result<()> {
+        let t = &self.t;
+        let c = |name: &str| t.color(name);
+        let radius = t.n("r-md");
+        gfx::text(dc, &review.title.0, x, review.title.1, c("text"))?;
+        let (explanation, ey) = &review.explanation;
+        gfx::text(dc, explanation, x, *ey, c("text-subtle"))?;
+        let r = review.summary_box;
+        unsafe { dc.PushAxisAlignedClip(&r, D2D1_ANTIALIAS_MODE_ALIASED) };
+        let drawn = gfx::text(
+            dc,
+            &review.summary,
+            r.left,
+            r.top - self.summary_scroll,
+            c("text"),
+        );
+        unsafe { dc.PopAxisAlignedClip() };
+        drawn?;
+        // `.ui-btn`: control fill and border, lit on hover.
+        for (i, (label, r)) in review.buttons.iter().enumerate() {
+            let target = Target::Review(i);
+            let lit = self.hover == Some(target);
+            let (bg, edge) = if lit {
+                ("control-hover", "border-strong")
+            } else {
+                ("control", "control-border")
+            };
+            if !lit {
+                gfx::shadow(dc, *r, radius, t.shadow("shadow-xs"))?;
+            }
+            gfx::fill_round(dc, *r, radius, c(bg))?;
+            gfx::border(dc, *r, radius, 1., c(edge))?;
+            gfx::text(
+                dc,
+                label,
+                r.left + (r.right - r.left - label.width) / 2.,
+                r.top + (r.bottom - r.top - label.height) / 2.,
+                c("text"),
+            )?;
+            if self.focus_visible && self.focus == Some(target) {
+                self.ring(dc, *r, radius, true)?;
+            }
+        }
+        // `.feedback-status.feedback-status-error`
+        if let Some((text, r)) = &review.error {
+            gfx::fill_round(dc, *r, radius, c("danger-surface"))?;
+            let (tx, ty) = (r.left + t.n("s-4"), r.top + t.n("s-3"));
+            gfx::text(dc, text, tx, ty, c("danger-text"))?;
+        }
+        Ok(())
+    }
+
     fn paint_message(&self, dc: &ID2D1DeviceContext, lay: &Lay) -> Result<()> {
         let c = |name: &str| self.t.color(name);
         let (ox, oy) = self.message_origin(lay);
@@ -1134,7 +1387,10 @@ impl Feedback {
             return;
         }
         let Some(focus) = self.focus else { return };
-        if matches!(focus, Target::Category(_) | Target::Send) {
+        if matches!(
+            focus,
+            Target::Review(_) | Target::Category(_) | Target::Send
+        ) {
             if key == VK_RETURN || key == VK_SPACE {
                 self.focus_visible = true;
                 self.activate(focus);
@@ -1280,6 +1536,16 @@ impl Feedback {
     }
 
     fn wheel(&mut self, delta: f32, x: f32, y: f32) {
+        if let Some(review) = self.lay.as_ref().and_then(|lay| lay.review.as_ref())
+            && contains(&review.summary_box, x, y + self.scroll)
+        {
+            let max = (review.summary.height - SUMMARY_MAX).max(0.);
+            let next = (self.summary_scroll - delta).clamp(0., max);
+            if next != self.summary_scroll {
+                self.summary_scroll = next;
+                return;
+            }
+        }
         if self.hit(x, y) == Some(Target::Message)
             && let Some(lay) = &self.lay
         {
@@ -1452,7 +1718,8 @@ pub fn open(options: &Options) -> Result<()> {
             Some(instance.into()),
             None,
         )?;
-        let mut feedback = Feedback::new(hwnd, options, g, tokens, options.live);
+        let diagnostics = options.live.then(crate::live::crash).flatten();
+        let mut feedback = Feedback::new(hwnd, options, g, tokens, options.live, diagnostics);
         feedback.scale = GetDpiForWindow(hwnd).max(96) as f32 / 96.;
         appearance::title_bar(hwnd, &feedback.t);
         textfield::ime_enable(hwnd, false);
@@ -1476,7 +1743,8 @@ pub fn open(options: &Options) -> Result<()> {
 
 /// `--scene feedback --screenshot`: the fixture form; `--select` takes
 /// `typed` (a message and contact, the message focused), `live` (typed with
-/// Send enabled), `sent`, `error` and `idea`.
+/// Send enabled), `sent`, `error`, `idea` and `crash` (the previous-session
+/// review after a panic).
 pub fn render_offscreen(
     options: &Options,
     g: Gfx,
@@ -1484,7 +1752,7 @@ pub fn render_offscreen(
     size: (f32, f32),
 ) -> Result<Feedback> {
     let select = options.select.as_deref().unwrap_or_default();
-    let mut feedback = Feedback::new(HWND::default(), options, g, t, select == "live");
+    let mut feedback = Feedback::new(HWND::default(), options, g, t, select == "live", None);
     feedback.size = size;
     feedback.context = Some(captures_feedback::native::context());
     if matches!(select, "typed" | "live" | "error") {
@@ -1492,6 +1760,18 @@ pub fn render_offscreen(
             "The capture bar opened on the wrong display after I unplugged my monitor.\n\nIt happens every time.",
         );
         feedback.contact.editor.set_text("@jose");
+    }
+    if select == "crash" {
+        feedback.review = Review::from_preview(
+            captures_feedback::crash_diagnostics::DiagnosticPreview {
+                previous_session_started_at: None,
+                unclean_exit: true,
+                rust_panic: Some(
+                    "panicked at apps/native/windows/src/history.rs:3452:17:\ncalled `Option::unwrap()` on a `None` value".into(),
+                ),
+                os_report: None,
+            },
+        );
     }
     match select {
         "typed" => feedback.focus = Some(Target::Message),
