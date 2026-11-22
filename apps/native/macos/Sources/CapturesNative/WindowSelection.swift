@@ -297,7 +297,7 @@ final class WindowSelectionView: NSView {
         else if event.keyCode == 36 || event.keyCode == 76 { confirmSelection() }
         else { super.keyDown(with: event) }
     }
-    override func resetCursorRects() { addCursorRect(bounds, cursor: .crosshair) }
+    override func resetCursorRects() { addCursorRect(bounds, cursor: CaptureCursors.window) }
 
     private func update() {
         targetName.stringValue = choiceName

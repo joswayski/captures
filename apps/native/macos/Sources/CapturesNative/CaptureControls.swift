@@ -1488,19 +1488,84 @@ private final class UnifiedCaptureCanvas: NSView {
     override func mouseMoved(with event: NSEvent) { selector?.mouseMoved(with: event) }
     override func resetCursorRects() {
         guard let selector else { return }
-        let cursor: NSCursor = selector.target == .region ? .crosshair : .pointingHand
-        // Overlapping cursor rects resolve arbitrarily, so the capture menu,
-        // which sets its own cursors, is cut out of the target cursor.
+        // Overlapping cursor rects resolve arbitrarily, so each area is cut
+        // out of the ones below it: the capture menu (its own cursors), the
+        // corner handles, the drawn region, then the target cursor.
         let menu = convert(selector.controls.frame, from: selector).intersection(bounds)
-        guard !menu.isEmpty else { return addCursorRect(bounds, cursor: cursor) }
-        for rect in [
-            NSRect(x: bounds.minX, y: bounds.minY, width: bounds.width, height: menu.minY - bounds.minY),
-            NSRect(x: bounds.minX, y: menu.maxY, width: bounds.width, height: bounds.maxY - menu.maxY),
-            NSRect(x: bounds.minX, y: menu.minY, width: menu.minX - bounds.minX, height: menu.height),
-            NSRect(x: menu.maxX, y: menu.minY, width: bounds.maxX - menu.maxX, height: menu.height),
-        ] where rect.width > 0 && rect.height > 0 {
-            addCursorRect(rect, cursor: cursor)
+        var holes = menu.isEmpty ? [] : [menu]
+        if selector.target == .region {
+            CaptureCursors.addRegionRects(to: self, selection: selector.region,
+                radius: selector.handleRadius, from: selector, holes: &holes)
         }
+        let cursor: NSCursor = switch selector.target {
+        case .region: .crosshair
+        case .window: CaptureCursors.window
+        case .display: .arrow
+        }
+        for rect in CaptureCursors.carve(bounds, minus: holes) { addCursorRect(rect, cursor: cursor) }
+    }
+}
+
+/// Shipping capture cursors (`capture.css`): crosshair to draw a region, move
+/// over a drawn one, diagonal resize on its corners, and
+/// `--capture-action-cursor` over windows.
+enum CaptureCursors {
+    /// `--capture-action-cursor` (`base.css`): a 32 pt dark rounded tile with a
+    /// white hairline and the capture glyph, hot spot at its centre.
+    static let window: NSCursor = {
+        let image = NSImage(size: NSSize(width: 32, height: 32), flipped: true) { _ in
+            let tile = NSBezierPath(roundedRect: NSRect(x: 3, y: 3, width: 26, height: 26),
+                                    xRadius: 8, yRadius: 8)
+            NSColor(srgbRed: 0x10 / 255, green: 0x15 / 255, blue: 0x1d / 255, alpha: 1).setFill()
+            tile.fill()
+            tile.lineWidth = 1.5; NSColor.white.setStroke(); tile.stroke()
+            NSColor(srgbRed: 0xf4 / 255, green: 0xf4 / 255, blue: 0xf2 / 255, alpha: 1).setFill()
+            // The cursor draws the 24-unit glyph's 16-unit viewfinder at 14 pt
+            // (x 9–23) with 1.8 pt strokes.
+            ShippingIcons.stroke("capture", in: NSRect(x: 5.5, y: 5.5, width: 21, height: 21),
+                                 width: 1.8 * 24 / 21)
+            return true
+        }
+        return NSCursor(image: image, hotSpot: NSPoint(x: 16, y: 16))
+    }()
+
+    /// `nwse-resize` on the top-left/bottom-right handles, `nesw-resize` on
+    /// the others, in `RegionSelection.corners` order.
+    static func resize(corner: Int) -> NSCursor {
+        guard #available(macOS 15.0, *) else { return .crosshair }
+        let positions: [NSCursor.FrameResizePosition] = [.topLeft, .topRight, .bottomLeft, .bottomRight]
+        return .frameResize(position: positions[corner], directions: .all)
+    }
+
+    /// Resize cursors on a drawn region's corner handles (the same radius a
+    /// press resizes from) and move inside it, cut out of `holes`, which then
+    /// gains both so the caller's crosshair goes around them.
+    static func addRegionRects(to view: NSView, selection: RegionSelection, radius: CGFloat,
+                               from source: NSView, holes: inout [NSRect]) {
+        guard selection.capturable else { return }
+        for (corner, point) in selection.corners.enumerated() {
+            let center = view.convert(point, from: source)
+            let handle = NSRect(x: center.x - radius, y: center.y - radius,
+                                width: radius * 2, height: radius * 2).intersection(view.bounds)
+            for rect in carve(handle, minus: holes) { view.addCursorRect(rect, cursor: resize(corner: corner)) }
+            holes.append(handle)
+        }
+        let region = view.convert(selection.nsRect, from: source).intersection(view.bounds)
+        for rect in carve(region, minus: holes) { view.addCursorRect(rect, cursor: .openHand) }
+        holes.append(region)
+    }
+
+    /// `rect` minus every hole, as non-overlapping rectangles.
+    static func carve(_ rect: NSRect, minus holes: [NSRect]) -> [NSRect] {
+        guard rect.width > 0, rect.height > 0 else { return [] }
+        guard let hole = holes.first(where: { $0.intersects(rect) }) else { return [rect] }
+        let cut = hole.intersection(rect)
+        return [
+            NSRect(x: rect.minX, y: rect.minY, width: rect.width, height: cut.minY - rect.minY),
+            NSRect(x: rect.minX, y: cut.maxY, width: rect.width, height: rect.maxY - cut.maxY),
+            NSRect(x: rect.minX, y: cut.minY, width: cut.minX - rect.minX, height: cut.height),
+            NSRect(x: cut.maxX, y: cut.minY, width: rect.maxX - cut.maxX, height: cut.height),
+        ].flatMap { carve($0, minus: holes) }
     }
 }
 
@@ -1774,9 +1839,12 @@ final class UnifiedCaptureSelectionView: NSView {
         }
     }
 
+    /// How near a corner a press resizes instead of moving or redrawing.
+    var handleRadius: CGFloat { tokens.number("s-4") }
+
     func beginRegion(_ point: NSPoint, shift: Bool = false) {
         guard target == .region else { return }
-        region.begin(point, handleRadius: tokens.number("s-4"), shift: shift); update()
+        region.begin(point, handleRadius: handleRadius, shift: shift); update()
     }
     func dragRegion(_ point: NSPoint, shift: Bool = false) {
         guard target == .region else { return }

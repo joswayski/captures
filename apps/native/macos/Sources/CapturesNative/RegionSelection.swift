@@ -304,9 +304,15 @@ final class RegionSelectionView: NSView {
         else if event.keyCode == 36 || event.keyCode == 76 { confirmSelection() }
         else { super.keyDown(with: event) }
     }
-    override func resetCursorRects() { addCursorRect(bounds, cursor: .crosshair) }
+    override func resetCursorRects() {
+        var holes = toolbar.isHidden ? [] : [toolbar.frame]
+        CaptureCursors.addRegionRects(to: self, selection: selection, radius: tokens.number("s-4"),
+                                      from: self, holes: &holes)
+        for rect in CaptureCursors.carve(bounds, minus: holes) { addCursorRect(rect, cursor: .crosshair) }
+    }
 
     private func update() {
+        window?.invalidateCursorRects(for: self)
         canvas.needsDisplay = true; shade.update()
         guidance.setSuppressed(selection.mode != nil)
         captureButton.isEnabled = selection.capturable && selection.mode == nil
