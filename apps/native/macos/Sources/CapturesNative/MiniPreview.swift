@@ -1,3 +1,4 @@
+import Accelerate
 import AppKit
 import CoreImage
 import ImageIO
@@ -3773,22 +3774,19 @@ final class MiniPreviewChipLabel: NSTextField {
 /// which still draw for hidden layers on macOS. Nothing samples the desktop,
 /// so the panel's capture exclusion is unaffected.
 enum MiniPreviewBackdrop {
-    /// Unmanaged colour, as browsers filter encoded sRGB values. Each card
-    /// renders its few backdrops once and caches them, so the context keeps
-    /// no intermediates between renders (see Dust's per-Delete context).
-    private static let context = CIContext(options: [.workingColorSpace: NSNull(), .outputColorSpace: NSNull(),
-                                                     .cacheIntermediates: false])
-
+    /// Rendered on the CPU with vImage: a Core Image context here started a
+    /// GPU context that held about 80 MB for the rest of the session. Colour
+    /// stays in encoded sRGB, as browsers filter it.
     static func render(image: NSImage, mediaFrame: NSRect, cardSize: NSSize, radius: CGFloat,
                        hovered: Bool, scale: CGFloat) -> NSImage? {
         let width = Int(ceil(cardSize.width * scale)), height = Int(ceil(cardSize.height * scale))
         guard width > 0, height > 0, image.size.width > 0, image.size.height > 0,
-              let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height,
-                                         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-                                         colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)?
-                .retagging(with: .sRGB),
-              let graphics = NSGraphicsContext(bitmapImageRep: rep) else { return nil }
-        rep.size = cardSize
+              let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+                                      bytesPerRow: width * 4, space: space,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        context.scaleBy(x: scale, y: scale)
         let hover = captures_preview_hover_media_v1()
         // The media's aspect fill (MiniPreviewImageView), scaled on hover about
         // its centre; `mediaFrame` is in the card's flipped coordinates.
@@ -3798,31 +3796,37 @@ enum MiniPreviewBackdrop {
         let flip = { (rect: NSRect) in NSRect(x: rect.minX, y: cardSize.height - rect.maxY,
                                               width: rect.width, height: rect.height) }
         NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current = graphics
-        graphics.imageInterpolation = .high
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
+        NSGraphicsContext.current?.imageInterpolation = .high
         NSBezierPath(rect: flip(mediaFrame)).addClip()
         image.draw(in: flip(NSRect(x: mediaFrame.midX - size.width / 2, y: mediaFrame.midY - size.height / 2,
                                    width: size.width, height: size.height)),
                    from: .zero, operation: .copy, fraction: 1)
-        NSGraphicsContext.restoreGraphicsState()
-        guard let presented = rep.cgImage else { return nil }
-        var media = CIImage(cgImage: presented)
-        let extent = media.extent
         if hovered {
-            // `filter: brightness(0.5)` on the hovered media.
-            let b = CGFloat(hover.brightness)
-            media = media.applyingFilter("CIColorMatrix", parameters: [
-                "inputRVector": CIVector(x: b, y: 0, z: 0, w: 0),
-                "inputGVector": CIVector(x: 0, y: b, z: 0, w: 0),
-                "inputBVector": CIVector(x: 0, y: 0, z: b, w: 0),
-            ])
+            // `filter: brightness(0.5)`: black at half alpha halves opaque colour.
+            NSColor.black.withAlphaComponent(CGFloat(1 - hover.brightness)).setFill()
+            flip(mediaFrame).fill(using: .sourceAtop)
         }
-        // The media's own hover blur and this blur compose as Gaussians.
-        let sigma = hovered ? (radius * radius + CGFloat(hover.blur * hover.blur)).squareRoot() : radius
-        let blurred = media.clampedToExtent().applyingGaussianBlur(sigma: Double(sigma * scale)).cropped(to: extent)
-        guard let output = context.createCGImage(blurred, from: extent, format: .RGBA8,
-                                                 colorSpace: CGColorSpace(name: CGColorSpace.sRGB))
-        else { return nil }
+        NSGraphicsContext.restoreGraphicsState()
+        guard let data = context.data else { return nil }
+        // The media's own hover blur and this blur compose as Gaussians; three
+        // box passes approximate one (each adds variance (w² − 1) / 12).
+        let sigma = (hovered ? (radius * radius + CGFloat(hover.blur * hover.blur)).squareRoot() : radius) * scale
+        let box = UInt32(max(1, Int((4 * sigma * sigma + 1).squareRoot().rounded()) | 1))
+        var source = vImage_Buffer(data: data, height: vImagePixelCount(height), width: vImagePixelCount(width),
+                                   rowBytes: width * 4)
+        guard let scratch = malloc(width * height * 4) else { return nil }
+        defer { free(scratch) }
+        var other = vImage_Buffer(data: scratch, height: source.height, width: source.width, rowBytes: width * 4)
+        for pass in 0..<3 {
+            let error = pass % 2 == 0
+                ? vImageBoxConvolve_ARGB8888(&source, &other, nil, 0, 0, box, box, nil, vImage_Flags(kvImageEdgeExtend))
+                : vImageBoxConvolve_ARGB8888(&other, &source, nil, 0, 0, box, box, nil, vImage_Flags(kvImageEdgeExtend))
+            guard error == kvImageNoError else { return nil }
+        }
+        // Three passes end in `other`; copy back into the context's bitmap.
+        memcpy(data, scratch, width * height * 4)
+        guard let output = context.makeImage() else { return nil }
         return NSImage(cgImage: output, size: cardSize)
     }
 }
