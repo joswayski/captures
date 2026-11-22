@@ -1478,10 +1478,10 @@ final class CaptureControlsView: NSView {
     }
 }
 
+/// Takes the overlay's input; the selection frame is shape layers on its layer.
 private final class UnifiedCaptureCanvas: NSView {
     weak var selector: UnifiedCaptureSelectionView?
     override var isFlipped: Bool { true }
-    override func draw(_ dirtyRect: NSRect) { selector?.drawSelection() }
     override func mouseDown(with event: NSEvent) { selector?.mouseDown(with: event) }
     override func mouseDragged(with event: NSEvent) { selector?.mouseDragged(with: event) }
     override func mouseUp(with event: NSEvent) { selector?.mouseUp(with: event) }
@@ -1648,6 +1648,10 @@ final class UnifiedCaptureSelectionView: NSView {
     private let targets: [WindowSelectionTarget]
     private let hitTest: HitTest
     private let canvas = UnifiedCaptureCanvas()
+    private var marquee: MarqueeLayers!
+    /// The window and Full screen targets' accent border, and the region's handles.
+    private let border = CAShapeLayer()
+    private let handles = (0..<4).map { _ in CAShapeLayer() }
     private let shade: CaptureShadeView
     private(set) var region: RegionSelection
     private(set) var selectedWindowIndex: Int64?
@@ -1721,6 +1725,13 @@ final class UnifiedCaptureSelectionView: NSView {
         shade.fadeInOnReveal()
         canvas.frame = bounds; canvas.selector = self; canvas.setAccessibilityElement(false)
         addSubview(canvas)
+        canvas.wantsLayer = true
+        marquee = MarqueeLayers(in: canvas.layer!)
+        for shape in [border] + handles {
+            shape.actions = ["path": NSNull(), "fillColor": NSNull(), "strokeColor": NSNull(),
+                "lineWidth": NSNull(), "bounds": NSNull(), "position": NSNull(), "hidden": NSNull()]
+            canvas.layer?.addSublayer(shape)
+        }
         addSubview(guidance)
         addSubview(identityIcon)
         // Shipping `recording-display-identity`: the icon tile, then shadowed text.
@@ -2013,7 +2024,7 @@ final class UnifiedCaptureSelectionView: NSView {
                 width: width, height: height)
         }
         selectionLabel.setAccessibilityLabel(label)
-        canvas.needsDisplay = true; shade.update()
+        updateSelectionLayers(); shade.update()
         canvas.discardCursorRects(); canvas.resetCursorRects()
     }
 
@@ -2068,24 +2079,32 @@ final class UnifiedCaptureSelectionView: NSView {
     /// The reveal fade of the dim, for tests.
     var isShadeFading: Bool { shade.isFading }
 
-    fileprivate func drawSelection() {
+    /// `.recording-selection-frame` for the region (2 pt corners, hairlines
+    /// and four handles); a 1.5 pt accent border for a window or Full screen.
+    private func updateSelectionLayers() {
         let (selectedRect, radius) = selectionShape
-        guard let selectedRect else { return }
-        if target == .region {
-            // `.recording-selection-frame`: 2 pt corners, hairlines and four handles.
-            RegionSelectionView.drawMarquee(selectedRect, tokens: tokens, radius: 2)
-            for corner in region.corners {
-                let handle = NSBezierPath(ovalIn: NSRect(x: corner.x - 5, y: corner.y - 5,
-                    width: 10, height: 10))
-                tokens.color("theme-accent").setFill(); handle.fill()
-                handle.lineWidth = tokens.number("s-1")
-                tokens.color("theme-accent-ink").setStroke(); handle.stroke()
-            }
-            return
+        let region = target == .region ? selectedRect : nil
+        marquee.update(region, radius: 2, tokens: tokens, in: canvas.bounds)
+        let corners = region == nil ? [] : self.region.corners
+        for (index, handle) in handles.enumerated() {
+            handle.frame = canvas.bounds
+            handle.isHidden = index >= corners.count
+            guard index < corners.count else { continue }
+            let corner = corners[index]
+            handle.path = CGPath(ellipseIn: CGRect(x: corner.x - 5, y: corner.y - 5, width: 10, height: 10),
+                                 transform: nil)
+            handle.fillColor = tokens.color("theme-accent").cgColor
+            handle.lineWidth = tokens.number("s-1")
+            handle.strokeColor = tokens.color("theme-accent-ink").cgColor
         }
-        tokens.color("theme-accent").setStroke()
-        let border = NSBezierPath(roundedRect: selectedRect, xRadius: radius, yRadius: radius)
-        border.lineWidth = 1.5; border.stroke()
+        border.frame = canvas.bounds
+        border.isHidden = selectedRect == nil || target == .region
+        if let selectedRect, target != .region {
+            let corner = max(0, min(radius, selectedRect.width / 2, selectedRect.height / 2))
+            border.path = CGPath(roundedRect: selectedRect, cornerWidth: corner, cornerHeight: corner, transform: nil)
+            border.fillColor = nil; border.lineWidth = 1.5
+            border.strokeColor = tokens.color("theme-accent").cgColor
+        }
     }
 }
 

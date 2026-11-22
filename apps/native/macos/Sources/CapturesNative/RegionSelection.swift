@@ -157,10 +157,10 @@ final class SelectionChromeView: NSView {
     }
 }
 
+/// Takes the overlay's input; the marquee is shape layers on its layer.
 private final class RegionCanvas: NSView {
     weak var selector: RegionSelectionView?
     override var isFlipped: Bool { true }
-    override func draw(_ dirtyRect: NSRect) { selector?.drawSelection() }
     override func mouseDown(with event: NSEvent) { selector?.mouseDown(with: event) }
     override func mouseDragged(with event: NSEvent) { selector?.mouseDragged(with: event) }
     override func mouseUp(with event: NSEvent) { selector?.mouseUp(with: event) }
@@ -175,6 +175,7 @@ final class RegionSelectionView: NSView {
     private let autoStart: Bool
     private(set) var selection: RegionSelection
     private let canvas = RegionCanvas()
+    private var marquee: MarqueeLayers!
     private let shade: CaptureShadeView
     private let toolbar = NSView()
     private let guidance: CaptureGuidanceChip
@@ -207,6 +208,7 @@ final class RegionSelectionView: NSView {
         shade.fadeInOnReveal()
         canvas.frame = bounds; canvas.wantsLayer = true; canvas.selector = self
         canvas.setAccessibilityElement(false); addSubview(canvas)
+        marquee = MarqueeLayers(in: canvas.layer!)
         let gap = tokens.number("s-4"), height = tokens.number("h-lg")
         let buttonWidth = tokens.number("s-12")
         toolbar.wantsLayer = true; toolbar.layer?.backgroundColor = tokens.color("glass-strong").cgColor
@@ -313,7 +315,9 @@ final class RegionSelectionView: NSView {
 
     private func update() {
         window?.invalidateCursorRects(for: self)
-        canvas.needsDisplay = true; shade.update()
+        marquee.update(selection.capturable ? selection.nsRect : nil, radius: 0, tokens: tokens,
+            in: canvas.bounds)
+        shade.update()
         guidance.setSuppressed(selection.mode != nil)
         captureButton.isEnabled = selection.capturable && selection.mode == nil
         for (index, button) in aspectButtons.enumerated() {
@@ -342,22 +346,38 @@ final class RegionSelectionView: NSView {
 
     /// The reveal fade of the dim, for tests.
     var isShadeFading: Bool { shade.isFading }
+}
 
-    fileprivate func drawSelection() {
-        guard selection.capturable else { return }
-        RegionSelectionView.drawMarquee(selection.nsRect, tokens: tokens, radius: 0)
+/// Shipping marquee: a 1.5 pt accent border between a 1 pt dark outer
+/// hairline and a 1 pt light inner hairline. The direct `.selection-box` is
+/// square and has no handles; New Capture rounds it by 2 pt. Stroked shape
+/// layers, so a drag only changes their paths: no backing store is redrawn
+/// or reallocated as the selection grows.
+final class MarqueeLayers {
+    private let lines = (0..<3).map { _ in CAShapeLayer() }
+    private static let specs: [(inset: CGFloat, width: CGFloat, color: String, extra: CGFloat)] = [
+        (-0.5, 1.0, "selection-hairline-outer", 0.5),
+        (0.75, 1.5, "theme-accent", -0.75),
+        (2.0, 1.0, "selection-hairline-inner", -2.0)]
+
+    init(in host: CALayer) {
+        for line in lines {
+            line.fillColor = nil
+            line.actions = ["path": NSNull(), "strokeColor": NSNull(), "lineWidth": NSNull(),
+                "bounds": NSNull(), "position": NSNull(), "hidden": NSNull()]
+            host.addSublayer(line)
+        }
     }
 
-    /// Shipping marquee: a 1.5 pt accent border between a 1 pt dark outer
-    /// hairline and a 1 pt light inner hairline. The direct `.selection-box`
-    /// is square and has no handles; New Capture rounds it by 2 pt.
-    static func drawMarquee(_ rect: NSRect, tokens: Tokens, radius: CGFloat) {
-        for (inset, width, color, extra) in [(-0.5, 1.0, "selection-hairline-outer", 0.5),
-                                             (0.75, 1.5, "theme-accent", -0.75),
-                                             (2.0, 1.0, "selection-hairline-inner", -2.0)] as [(CGFloat, CGFloat, String, CGFloat)] {
-            let corner = max(0, radius + extra)
-            let line = NSBezierPath(roundedRect: rect.insetBy(dx: inset, dy: inset), xRadius: corner, yRadius: corner)
-            line.lineWidth = width; tokens.color(color).setStroke(); line.stroke()
+    func update(_ rect: NSRect?, radius: CGFloat, tokens: Tokens, in bounds: NSRect) {
+        for (line, spec) in zip(lines, Self.specs) {
+            line.frame = bounds
+            guard let rect else { line.isHidden = true; continue }
+            line.isHidden = false
+            let box = rect.insetBy(dx: spec.inset, dy: spec.inset)
+            let corner = max(0, min(radius + spec.extra, box.width / 2, box.height / 2))
+            line.path = CGPath(roundedRect: box, cornerWidth: corner, cornerHeight: corner, transform: nil)
+            line.lineWidth = spec.width; line.strokeColor = tokens.color(spec.color).cgColor
         }
     }
 }
