@@ -245,7 +245,8 @@ options (SelectionItem; the active option is the focused element), recorders
 as toggle buttons with a read-only Value and a notification for new errors,
 and Open as Invoke. Not in shipping: Delete or Backspace on a focused recorder
 restores its default. Global hotkey registration and the GIF export, Updates
-and About cards are not ported yet. Windows: cross-compiled only
+and About cards were not ported yet in this slice (later slices added all of
+them). Windows: cross-compiled only
 (`x86_64-pc-windows-gnu`) and rendered offscreen under Wine with substitute
 fonts. Resize, the seam fix, key recording, the listbox, microphones and
 Narrator need a real Windows run. macOS, Linux: unchanged.
@@ -258,8 +259,8 @@ same development state as the AppKit and wgpu hosts: the build version and
 with "Updates unavailable" below it, then the "Show what's new on update
 notices" switch. It has no update worker, release channel or download;
 shipping's update states (available, installing, errors) are not drawn.
-About is shipping's Send feedback row. Its Open is a no-op until the
-Feedback window is ported. Tauri's About has no version, links or licences,
+About is shipping's Send feedback row. Its Open was a no-op until the
+Feedback window was ported; it now opens Feedback, like the tray. Tauri's About has no version, links or licences,
 so neither does this one. UI Automation exposes the version and status as
 text, Check Now as a disabled button and both Open buttons as Invoke, named
 with their row titles. Not yet ported: Preferences Find (it needs a
@@ -474,9 +475,9 @@ the worker and commits once on release; the `brush_cursor` ring (dashed for
 Restore) follows the pointer in the overlay and hides the system cursor,
 which shows not-allowed off an image. Trim edges is a working button
 (`TrimCanvas`, enabled by the session's `can_trim`), and the restored-draft
-banner's text ellipsizes before Dismiss. Missing so far: the brush preview
-tile, Trim's hover preview, the canvas W/H fields, Background color, the
-zoom preset select, layer thumbnails, rename and reorder, the eraser paragraphs as UI Automation text, shadow X/Y offsets, the line and arrow Curve
+banner's text ellipsizes before Dismiss. Missing in this slice: the brush
+preview tile, Trim's hover preview, the canvas W/H fields and Background
+color (both since ported, below), the zoom preset select, layer thumbnails, rename and reorder, the eraser paragraphs as UI Automation text, shadow X/Y offsets, the line and arrow Curve
 control, and the text (style picker, size, format), image and crop
 sections; outlined labels draw without their outline while open.
 Windows: cross-compiled only; Wine renders of Rectangle, Arrow, Freehand

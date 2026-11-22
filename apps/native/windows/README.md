@@ -216,8 +216,8 @@ keeps its expanded height until a collapse lands. The pose is drawn as its
 flattened affine (no keystone or rear-card blur), and the pile cannot be
 carried yet.
 `--tool previews --select pile|pile-hover` renders it (compared with the
-Tauri harness; not yet physically checked). Arrive/exit motion, file drags,
-keyboard focus and tooltips are not ported. `--scene capture --screenshot PATH`
+Tauri harness; not yet physically checked). Cards arrive and leave with the
+shared preview motion; file drags, keyboard focus and tooltips are not ported. `--scene capture --screenshot PATH`
 renders the bar offscreen (`--tool display` for Full screen, `--tool window`
 for Window, `--select x` for a sample selection or hovered window, `--select
 desktop` for the hovered display, `--select picked` for a picked window with
