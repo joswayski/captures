@@ -5,6 +5,30 @@ import CCapturesSettings
 // Shared shipping UI primitives drawn from design tokens (`styles/base.css`,
 // `styles/primitives.css`), used by every AppKit surface.
 
+/// Captures is an accessory app whose floating surfaces (mini previews, the
+/// recording HUD, notices) are nonactivating panels, so it is usually not the
+/// active app while the pointer is over them. WindowServer ignores
+/// `NSCursor.set()` and cursor rects from inactive apps unless the connection
+/// sets the private `SetsCursorInBackground` property, so without it shipping
+/// `button { cursor: pointer }` never shows a pointing hand there.
+enum BackgroundCursor {
+    private typealias SetProperty = @convention(c) (Int32, Int32, CFString, CFTypeRef) -> Int32
+    private typealias MainConnection = @convention(c) () -> Int32
+
+    /// Returns a failure to log; controls still work with the arrow.
+    static func enable() -> String? {
+        // RTLD_DEFAULT is `(void *)-2` on Darwin; Swift cannot import that macro.
+        let handle = UnsafeMutableRawPointer(bitPattern: -2)
+        guard let main = dlsym(handle, "CGSMainConnectionID"),
+              let set = dlsym(handle, "CGSSetConnectionProperty")
+        else { return "CGSSetConnectionProperty is unavailable" }
+        let connection = unsafeBitCast(main, to: MainConnection.self)()
+        let status = unsafeBitCast(set, to: SetProperty.self)(
+            connection, connection, "SetsCursorInBackground" as CFString, kCFBooleanTrue)
+        return status == 0 ? nil : "SetsCursorInBackground returned \(status)"
+    }
+}
+
 /// Shipping `--focus-ring-tight`, a 2 pt translucent accent ring, drawn just
 /// inside `rect` because AppKit clips a view's drawing to its bounds. Every
 /// token-drawn control (buttons, selects, fields, sliders) shares it.

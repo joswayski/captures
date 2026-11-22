@@ -1144,6 +1144,9 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if let failure = BackgroundCursor.enable() {
+            FileHandle.standardError.write(Data("Captures pointer cursors: \(failure)\n".utf8))
+        }
         if nativeInstance != nil {
             instanceWakeObserver = NotificationCenter.default.addObserver(
                 forName: NativeInstance.wakeNotification, object: nil, queue: .main

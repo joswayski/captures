@@ -2341,7 +2341,8 @@ final class MiniPreviewView: NSView {
     /// Shipping `button { cursor: pointer }` and the minimized pile's pointer.
     /// The nonactivating panel is rarely key, and AppKit applies cursor rects
     /// only in the key window, so set the cursor on every pointer sample as
-    /// the Tauri host does.
+    /// the Tauri host does. `BackgroundCursor` lets that take effect while
+    /// Captures is not the active app.
     private func updateCursor(at point: NSPoint?) {
         if let point, pointerTarget(at: point) {
             NSCursor.pointingHand.set(); showsHandCursor = true
