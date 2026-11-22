@@ -840,7 +840,8 @@ final class CaptureControlsView: NSView {
 
         let narrow = frame.width < 820
         let close = control("Close", x: 8, width: 32) { [weak self] in self?.cancel() }
-        close.frame = NSRect(x: 8, y: 14, width: 32, height: 32)
+        // Every top-row control is centered on the 36 pt switches (y 10…46).
+        close.frame = NSRect(x: 8, y: 12, width: 32, height: 32)
         close.icon = .shipping("close"); close.iconOnly = true; close.iconSide = 15
         // Shipping `.capture-selector-close`: a borderless ghost that only
         // fills with `--glass-hover` under the pointer.
@@ -935,7 +936,7 @@ final class CaptureControlsView: NSView {
         displayMenu.bindChange { [weak self] index in self?.changeDisplay(index) }
         addSubview(displayMenu)
 
-        captureButton.frame = NSRect(x: frame.width - 122, y: 10, width: 112, height: 40)
+        captureButton.frame = NSRect(x: frame.width - 122, y: 8, width: 112, height: 40)
         captureButton.icon = .capture
         captureButton.primary = true; captureButton.actionBlock = { [weak self] in self?.confirm() }
         captureButton.enterActionBlock = { [weak self] in self?.confirm() }
@@ -1332,7 +1333,7 @@ final class CaptureControlsView: NSView {
                 : superview.bounds.height - height - 26
             frame = NSRect(x: x, y: y, width: width, height: height)
             captureButton.frame = NSRect(x: min(rowEnd + 12, width - primaryWidth - trailing),
-                y: 10, width: primaryWidth, height: 40)
+                y: 8, width: primaryWidth, height: 40)
             microphoneMenu.frame.size.width = max(116, width - microphoneMenu.frame.minX - 16)
             if let label = fieldLabels.last { label.frame.size.width = microphoneMenu.frame.width }
         } else if let inlineError {

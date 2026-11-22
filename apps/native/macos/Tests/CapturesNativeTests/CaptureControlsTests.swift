@@ -719,6 +719,12 @@ final class CaptureControlsTests: XCTestCase {
             try render(empty, window: window, name: "capture-controls-\(appearance)-empty")
             XCTAssertEqual(topRowInsets(empty.controls).trailing, topRowInsets(empty.controls).leading,
                 accuracy: 1, "the panel ends as far after Capture as the close button sits from the start")
+            // Shipping `align-items: center`: the 40 pt Capture button, 32 pt
+            // close button and 36 pt switches and select share one center line.
+            for view in empty.controls.subviews where !view.isHidden && view.frame.maxY <= 52
+                && view.frame.height > 0 {
+                XCTAssertEqual(view.frame.midY, 28, accuracy: 0.5, "\(view) is off the row's center")
+            }
 
             empty.beginRegion(NSPoint(x: 114, y: 78))
             empty.dragRegion(NSPoint(x: 478, y: 283)); empty.endRegion()
