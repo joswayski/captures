@@ -1648,8 +1648,8 @@ final class ScreenshotEditorTests: XCTestCase {
                 XCTAssertEqual(input.bounds.height, 435)
                 XCTAssertEqual(undo.isHidden, width <= 1040)
                 // 92pt/72pt slider cells minus their 8pt/6pt padding and 1pt
-                // divider; at 860pt the overflowing header shrinks the cell to 60.8pt.
-                XCTAssertEqual(zoom.frame.width, width > 1040 ? 75 : width == 860 ? 47.8 : 59, accuracy: 0.1)
+                // divider; at 860pt the overflowing header shrinks the slider to 50.2pt.
+                XCTAssertEqual(zoom.frame.width, width > 1040 ? 75 : width == 860 ? 50.2 : 59, accuracy: 0.1)
                 XCTAssertLessThanOrEqual(canvasToolbar.frame.maxX, zoomGroup.frame.minX - 12)
                 XCTAssertFalse(trim.isHiddenOrHasHiddenAncestor)
                 XCTAssertTrue(controller.root.bounds.contains(trim.convert(trim.bounds, to: controller.root)))
@@ -1657,13 +1657,14 @@ final class ScreenshotEditorTests: XCTestCase {
             // Shipping's header flex row as WebKit lays it out on macOS: past the
             // natural width both sides shrink in proportion, the zoom group
             // through its buttons and slider, and the Canvas toolbar keeps its
-            // label while Background color clips.
+            // label while Background color clips. Widths follow the bundled
+            // Figtree labels; the 16pt and 8pt gaps between the groups are the rule.
             let addImages = try button("Add images", in: controller.root)
             let canvasLabel = try XCTUnwrap(canvasToolbar.subviews
                 .first { ($0 as? NSTextField)?.stringValue == "Canvas" })
-            for (width, toolbar, zoomX, zoomWidth) in [(CGFloat(860), 487.9, 515.9, 208.3),
-                                                       (900, 511.6, 539.6, 224.7),
-                                                       (1040, 528.1, 668.2, 236), (1400, 528.1, 1004.2, 260)] {
+            for (width, toolbar, zoomX, zoomWidth) in [(CGFloat(860), 485.7, 513.7, 214.3),
+                                                       (900, 509.2, 537.2, 230.8),
+                                                       (1040, 516.8, 672, 236), (1400, 516.8, 1008, 260)] {
                 controller.window.setContentSize(NSSize(width: width, height: 600))
                 controller.root.layoutSubtreeIfNeeded()
                 waitUntil { abs(addImages.frame.maxX - (width - 12)) < 0.01 }
@@ -1671,7 +1672,7 @@ final class ScreenshotEditorTests: XCTestCase {
                 XCTAssertEqual(canvasToolbar.frame.width, toolbar, accuracy: 0.6, "toolbar at \(width)")
                 XCTAssertEqual(zoomGroup.frame.minX, zoomX, accuracy: 0.6, "zoom group at \(width)")
                 XCTAssertEqual(zoomGroup.frame.width, zoomWidth, accuracy: 0.6, "zoom group at \(width)")
-                XCTAssertEqual(addImages.frame.width, 115.8, accuracy: 0.6)
+                XCTAssertEqual(addImages.frame.width, 112, accuracy: 0.6)
                 XCTAssertFalse(canvasLabel.isHiddenOrHasHiddenAncestor)
             }
             controller.window.setContentSize(NSSize(width: 860, height: 600))

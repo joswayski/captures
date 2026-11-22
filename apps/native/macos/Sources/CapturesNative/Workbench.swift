@@ -874,39 +874,17 @@ enum BusyCaptureOutcome: Equatable {
     case inProgress(message: String)
 }
 
-/// Use the shipping product asset and macos_tray_icon's foreground selection.
-/// Core Graphics resamples the PNG; no system-symbol substitution or separate artwork.
-func statusItemTemplate(source: NSImage) -> NSImage? {
-    let size = NSSize(width: 22, height: 22)
-    guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 22, pixelsHigh: 22,
-        bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-        colorSpaceName: .deviceRGB, bitmapFormat: .alphaNonpremultiplied,
-        bytesPerRow: 22 * 4, bitsPerPixel: 32),
-        let pixels = bitmap.bitmapData,
-        let image = source.cgImage(forProposedRect: nil, context: nil, hints: nil),
-        let context = CGContext(data: pixels, width: 22, height: 22, bitsPerComponent: 8,
-            bytesPerRow: bitmap.bytesPerRow, space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue)
-        else { return nil }
-    context.interpolationQuality = .high
-    context.draw(image, in: CGRect(origin: .zero, size: size))
-    // CGContext writes premultiplied RGBA. Classify straight RGB, not RGB *
-    // alpha, or a translucent white edge is mistaken for dark background.
-    // Then write straight-alpha white/clear pixels for the NSBitmapImageRep.
-    for y in 0..<22 {
-        for x in 0..<22 {
-            let offset = y * bitmap.bytesPerRow + x * 4
-            let alpha = Int(pixels[offset + 3])
-            let rgb = (0..<3).map { alpha == 0 ? 0 : Int(pixels[offset + $0]) * 255 / alpha }
-            let minimum = min(rgb[0], rgb[1], rgb[2])
-            let maximum = max(rgb[0], rgb[1], rgb[2])
-            let foreground = alpha > 0 && minimum >= 180 && maximum - minimum <= 55
-            for channel in 0..<3 { pixels[offset + channel] = foreground ? 255 : 0 }
-            if !foreground { pixels[offset + 3] = 0 }
-        }
+/// The brand's monochrome capture mark (the shared `capture` icon: viewfinder
+/// brackets, lens ring and filled shutter dot) as the menu bar template. The
+/// app icon has no single-color mark to lift out at 22 pt since the FunSaver
+/// Shutter refresh, so the menu bar draws the mark the rest of the UI uses.
+func statusItemTemplate() -> NSImage? {
+    guard !ShippingIcons.polylines("capture").isEmpty else { return nil }
+    let template = NSImage(size: NSSize(width: 22, height: 22), flipped: true) { rect in
+        NSColor.black.set()
+        ShippingIcons.stroke("capture", in: rect)
+        return true
     }
-    let template = NSImage(size: size)
-    template.addRepresentation(bitmap)
     template.isTemplate = true
     template.accessibilityDescription = statusItemName
     return template
@@ -918,8 +896,7 @@ let statusItemName = Bundle.main.bundleIdentifier == "io.github.joswayski.captur
     ? "Captures Native Test" : "Captures"
 
 func configureStatusItemButton(_ button: NSStatusBarButton) {
-    if let url = NativeResources.bundle.url(forResource: "tray-source", withExtension: "png"),
-       let source = NSImage(contentsOf: url), let image = statusItemTemplate(source: source) {
+    if let image = statusItemTemplate() {
         button.image = image
     } else {
         button.title = "C"
