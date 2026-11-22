@@ -36,6 +36,8 @@ pub struct Actions {
     pub open_preferences: Box<dyn Fn()>,
     pub edit: Box<dyn Fn(&HistoryEntry)>,
     pub restore: Box<dyn Fn(&HistoryEntry)>,
+    /// The Captures folder from settings, where Save file publishes.
+    pub output_directory: Box<dyn Fn() -> PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1352,7 +1354,10 @@ impl CardView {
         let drag = gtk::DragSource::new();
         drag.set_actions(gdk::DragAction::COPY);
         let source = with.clone();
-        drag.connect_prepare(move |_, _, _| {
+        let grab = Rc::new(Cell::new((0., 0.)));
+        let at = grab.clone();
+        drag.connect_prepare(move |_, x, y| {
+            at.set((x, y));
             let file = RefCell::new(None);
             source(&|state, card, entry| {
                 if card.action_kinds.borrow().is_empty() {
@@ -1366,6 +1371,28 @@ impl CardView {
                 "text/uri-list",
                 &glib::Bytes::from_owned(format!("{uri}\r\n").into_bytes()),
             ))
+        });
+        // Shipping drags the capture's own image (its 284 × 160 drag
+        // preview), not a generic file icon.
+        let weak_card = Rc::downgrade(self);
+        drag.connect_drag_begin(move |source, _| {
+            let Some(card) = weak_card.upgrade() else {
+                return;
+            };
+            if !card.thumbnail.has_texture() {
+                return;
+            }
+            let still = gtk::WidgetPaintable::new(Some(&card.thumbnail)).current_image();
+            let (width, height) = (
+                f64::from(still.intrinsic_width().max(1)),
+                f64::from(still.intrinsic_height().max(1)),
+            );
+            let scale = (284. / width).min(160. / height).min(1.);
+            let snapshot = gtk::Snapshot::new();
+            still.snapshot(&snapshot, width * scale, height * scale);
+            let icon = snapshot.to_paintable(None);
+            let (x, y) = grab.get();
+            source.set_icon(icon.as_ref(), (x * scale) as i32, (y * scale) as i32);
         });
         self.open.add_controller(drag);
     }
@@ -1566,7 +1593,45 @@ fn run_action(state: &Rc<State>, card: &Rc<CardView>, entry: &HistoryEntry, acti
                 }
             });
         }
-        CardAction::SaveImage | CardAction::SaveFile => {
+        // Shipping `save_recording_artifact`: publish into the Captures
+        // folder, after which the card offers Show in Folder.
+        CardAction::SaveFile => {
+            let request = captures_app::Request::SaveRecording {
+                root: state.root.clone(),
+                id: entry.id.clone(),
+                directory: (state.actions.output_directory)(),
+            };
+            let slot = card.action_kinds.borrow().iter().position(|a| *a == action);
+            let busy = slot.map(|slot| card.actions[slot].clone());
+            if let Some((button, _, text)) = &busy {
+                button.set_sensitive(false);
+                text.set_label(action.busy_label());
+            }
+            let weak = Rc::downgrade(card);
+            let weak_state = Rc::downgrade(state);
+            glib::spawn_future_local(async move {
+                let result = gio::spawn_blocking(move || captures_app::execute(request))
+                    .await
+                    .map_err(|_| "the save worker stopped".to_owned())
+                    .and_then(|result| result.map_err(|error| error.to_string()));
+                if let Some((button, _, text)) = &busy {
+                    button.set_sensitive(true);
+                    text.set_label(action.label());
+                }
+                let Some(state) = weak_state.upgrade() else {
+                    return;
+                };
+                match result {
+                    Ok(_) => state.reload(),
+                    Err(error) => {
+                        if let Some(card) = weak.upgrade() {
+                            card.fail(&state, format!("Couldn’t save: {error}"));
+                        }
+                    }
+                }
+            });
+        }
+        CardAction::SaveImage => {
             let window = card.root.root().and_downcast::<gtk::Window>();
             let weak = Rc::downgrade(card);
             let weak_state = Rc::downgrade(state);

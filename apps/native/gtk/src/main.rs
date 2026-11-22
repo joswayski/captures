@@ -602,6 +602,15 @@ impl Host {
                         }
                     }
                 }),
+                output_directory: Box::new({
+                    let settings_file = self.settings_file.clone();
+                    move || {
+                        captures_settings::load(&settings_file)
+                            .unwrap_or_default()
+                            .output_directory
+                            .into()
+                    }
+                }),
             },
         ));
         let host = Rc::downgrade(self);
