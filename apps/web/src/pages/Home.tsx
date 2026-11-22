@@ -95,7 +95,7 @@ export default function Home({
           </div>
 
           <p className="mt-5 max-w-xl text-sm leading-relaxed text-ink-muted sm:text-[0.9375rem]">
-            Fast, lightweight screenshots, screen recordings, and GIFs with built-in editing—by{" "}
+            A cross-platform screen capture utility by{" "}
             <a
               href={AUTHOR_URL}
               target="_blank"
@@ -125,26 +125,12 @@ export default function Home({
                   )}
                   <GitHubSourceButton />
                 </div>
-                <p className="mt-3 text-xs text-ink-soft">
-                  {detectedDownload.family === "linux"
-                    ? "Linux · x64"
-                    : `${detectedDownload.platform} · ${detectedDownload.arch}`}
-                  <span aria-hidden="true"> · </span>
-                  <a
-                    href={`${REPO_URL}/releases/latest`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-ink-muted no-underline underline-offset-2 transition-colors duration-200 ease-out hover:text-ink hover:underline"
-                  >
-                    All platforms
-                  </a>
-                </p>
                 <FeedbackList appMenu={detectedDownload.family === "macos" ? "menu bar" : "tray"} />
               </>
             ) : (
               <>
                 <p className="max-w-xl text-sm leading-relaxed text-ink-muted">
-                  Captures runs on macOS, Windows, and Linux. Open this page on your computer to
+                  Available for macOS, Windows, and Linux. Open this page on your computer to
                   download it.
                 </p>
                 <div className="mt-8">
@@ -371,7 +357,7 @@ function CopyEmailRow({ email }: { email: string }) {
         {status === "copied"
           ? "Email address copied to clipboard."
           : status === "failed"
-            ? `Couldn’t copy. Email ${email}.`
+            ? `Couldn’t copy. Email ${email}`
             : ""}
       </span>
     </>

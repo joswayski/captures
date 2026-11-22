@@ -9,8 +9,9 @@ view), a
 View source link to [the repo](https://github.com/joswayski/captures), and
 recent changes from `main`.
 Phones, tablets, Chrome OS, and other systems without a matching installer see a
-desktop-app note and View on GitHub. Desktop visitors also see their platform
-and architecture beside an All platforms link to GitHub Releases.
+desktop-app note and View on GitHub — not download copy or a GitHub Releases
+link. Other desktop platforms are mentioned with a link to GitHub Releases rather
+than listed as installers.
 
 Public installers and the updater feed automatically track the newest validated
 release selected by `scripts/preview-release.mjs`. Main-branch activity is labelled **Development

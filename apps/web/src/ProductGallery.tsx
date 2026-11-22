@@ -241,7 +241,7 @@ export default function ProductGallery() {
         </div>
         <p id={hintId} className="sr-only">
           Pinch or use a trackpad pinch to zoom this screenshot. Swipe or use Previous and Next to
-          change shots. Click or tap to open a larger view.
+          change shots. Tap to open a larger view.
         </p>
         <p className="sr-only" aria-live="polite">
           Screenshot {index + 1} of {PRODUCT_SHOTS.length}: {shot.title}

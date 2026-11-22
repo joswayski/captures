@@ -1,11 +1,9 @@
 # Captures
 
-Fast, lightweight screenshots, screen recordings, and GIFs with built-in editing for macOS, Windows, and Linux.
+Captures is a cross-platform screen capture utility built for quick captures and a lightweight workflow.
 
-**[captur.es](https://captur.es)**
-
-> [!NOTE]
-> Captures is under active development. See [Platform status](#platform-status) below for current OS support and known limitations.
+> [!WARNING]
+> Under active development. The native app is new and still has regressions that are being fixed forward. See platform status below.
 
 ## A quick look
 
@@ -14,38 +12,39 @@ Fast, lightweight screenshots, screen recordings, and GIFs with built-in editing
     <td width="50%">
       <img src="docs/images/capture-selection.jpg" alt="Captures region recording over an aerial satellite view of the Ever Given in the Suez Canal, with a highlighted box and the full Record menu showing Start recording" width="100%">
       <br>
-      <sub><strong>Capture what you need</strong> · A region, a window, or a full display—screenshot or record from the same menu.</sub>
+      <sub><strong>Capture what you need</strong>. A region, a window, or the full display. Screenshot and record from the same menu.</sub>
     </td>
     <td width="50%">
       <img src="docs/images/screenshot-editor.jpg" alt="Captures screenshot editor with the Suez Canal, a Choke point label, a tiger on the left bank, and an Evergreen ship hanging off the right edge with an Expand canvas button" width="100%">
       <br>
-      <sub><strong>Edit right away</strong> · Annotate screenshots with text, arrows, shapes, and crops.</sub>
+      <sub><strong>Built-in editor</strong>. Add text, arrows, and shapes right after you capture.</sub>
     </td>
   </tr>
   <tr>
     <td width="50%">
       <img src="docs/images/collapsed-mini-previews.jpg" alt="Captures mini preview cards naturally layered into a compact stack over a photo" width="100%">
       <br>
-      <sub><strong>Keep captures handy</strong> · Collapse recent captures into a compact corner stack until you need them.</sub>
+      <sub><strong>Keep captures handy</strong>. Collapse recent captures into a compact corner pile until you need them.</sub>
     </td>
     <td width="50%">
       <img src="docs/images/video-editor.jpg" alt="Captures video editor trimming a total solar eclipse to a few seconds of totality, with crop handles and save controls" width="100%">
       <br>
-      <sub><strong>Trim and export</strong> · Preview, trim, crop, and export MP4 or GIF with quality and audio controls.</sub>
+      <sub><strong>Polish recordings</strong>. Preview, trim, crop, and export video with quality and audio controls.</sub>
     </td>
   </tr>
   <tr>
-    <td colspan="2">
-      <img src="docs/images/preferences.jpg" alt="Captures Preferences showing the appearance, accent color, and capture settings" width="50%">
+    <td width="50%">
+      <img src="docs/images/preferences.jpg" alt="Captures Preferences showing the appearance, accent color, and capture settings" width="100%">
       <br>
-      <sub><strong>Make it yours</strong> · Light or dark appearance, accent colors, shortcuts, and capture defaults.</sub>
+      <sub><strong>Fully customizable</strong>. Light or dark appearance, accent colors, shortcuts, and capture defaults.</sub>
     </td>
+    <td width="50%"></td>
   </tr>
 </table>
 
-## Download
+## Download Captures
 
-Native apps for macOS (AppKit), Windows (Win32), and Linux (GTK4):
+These links download the **latest validated release**, which is the native app (AppKit on macOS, Win32 on Windows, GTK4 on Linux).
 
 | Platform | Download |
 | --- | --- |
@@ -54,26 +53,59 @@ Native apps for macOS (AppKit), Windows (Win32), and Linux (GTK4):
 | Ubuntu / Debian (x64) | [Captures-Linux-x64.deb](https://github.com/joswayski/captures/releases/download/preview/Captures-Linux-x64.deb) |
 | Other Linux (x64 AppImage) | [Captures-Linux-x64.AppImage](https://github.com/joswayski/captures/releases/download/preview/Captures-Linux-x64.AppImage) |
 
-- **Automatic updates:** Installed apps check for signed updates on launch and every few minutes, or manually from Preferences and the menu bar / tray. If Captures will not open or cannot install an update, reinstall using the links above. Older dated releases live in the [release archive](https://github.com/joswayski/captures/releases).
-- **Windows:** The installer is not Authenticode-signed yet, so SmartScreen may warn on first install.
-- **AppImage:** Replace your existing copy (normally `~/.local/bin/Captures.AppImage`) and mark it executable (`chmod +x`).
-- **Release notes:** Highlights are generated during the release build from source changes only; the desktop app never sends captures or app data to generate them.
-- **Upgrading from older builds:** Earlier installs update automatically and import existing settings read-only. See [docs/releases.md](docs/releases.md) for backup and recovery details.
+Desktop changes merged to `main` automatically build, publish and update the website downloads and public updater channel after all three platforms pass release checks. Installed Tauri apps update to the native app once through their normal updater; the native app imports the Tauri profile read-only into its own profile, leaving the original untouched. Over-the-air updates, including Tauri to native, were verified on a Mac and a Windows PC; Linux has not been verified on physical hardware, and the Windows installer is not Authenticode-signed, so Windows may report an unknown publisher. Updating cannot return to the Tauri app; older Tauri builds remain in the build archive.
+
+Installed copies check captur.es at launch and about every five minutes. Preferences and the tray also offer **Check for Updates**. Each update downloads the full package from GitHub and verifies its signature before installation (smaller patch updates for macOS and AppImage are being tested and are not yet on for public releases); screenshot draft-save failure cancels restart. Version numbers in the update notice open that release on GitHub. If Captures will not open or cannot install an update, use the installer links above. For an AppImage, replace your existing AppImage (normally `~/.local/bin/Captures.AppImage`) and make it executable (`chmod +x`) rather than running a second copy from Downloads. Dated builds, including experimental native builds, remain in the [build archive](https://github.com/joswayski/captures/releases).
+
+New desktop release notes use AI-written highlights, with commit-based notes as a fallback. Generation runs in the release workflow using source changes, not your captures or app data; the desktop app does not contact Google.
+
+To go back to Tauri, quit Captures and install a Tauri build from the archive manually. Native migration preserves the original Tauri profile; native-only captures and edits stay in the separate native profile and are not imported back. Do not delete either profile. See [native update recovery](docs/releases.md#native-packaging-and-recovery) for retained backups and limitations.
+
+After a Tauri in-app update, Captures restores open screenshot previews, screenshot and recording editors, the screenshot mini-preview stack and Preferences visibility. Screenshot edits are retained as drafts. Recording editors do not restore unsaved trim/crop/export settings; active recordings block updates. This applies to updates between Tauri versions with restoration support, not the native cutover or a manual reinstall.
+
+On macOS, update and launch notices follow the menu-bar icon as it moves. If the icon is hidden behind a MacBook’s camera notch, the notice appears below the safe menu-bar area without a pointing arrow. When the tray icon's position is unavailable, including on Linux, the launch notice uses a compact, unpointed card.
 
 ## Features
 
-- **Flexible capture:** Regions (with aspect-ratio presets or `Shift` for a square), windows, or full displays—screenshot or record from the same menu, with optional countdowns and auto-start.
-- **Freeze screen:** Freeze the desktop while choosing a region or window so hover states, tooltips, and menus stay put (toggleable in Preferences), with optional cursor capture preserving the active system cursor shape.
-- **Screen recording & GIFs:** Record H.264 MP4 with desktop audio and microphone, pause/resume/restart/mute mid-recording, take screenshots while recording, keep the capture region highlighted, and export as MP4 or GIF (WebM export is not supported).
-- **Built-in screenshot editor:** Annotate with bold or regular text labels, arrows, shapes, freehand drawings, drop shadows, rotation, crop, canvas expansion, eraser, clipboard image paste (`Cmd`/`Ctrl`+`V`), and PNG/JPEG/WebP export with live before/after compression previews. Unsaved edits restore if you reopen.
-- **Built-in recording editor:** Trim, crop, resize, adjust audio, estimate output file size, and compare compression quality before saving.
-- **Open existing files:** Open PNG, JPEG, WebP, GIF, MP4, and WebM files directly with Captures from Finder, File Explorer, or your file manager.
-- **Mini previews & 30-day history:** Copy, save, or drag recent captures straight into other apps, collapse previews into a movable corner stack, and browse or drag directly from 30-day history filtered by screenshots, video, or GIF.
-- **Customizable & private:** Light, dark, or system appearance, accent colors, customizable shortcuts, searchable Preferences (`Cmd`/`Ctrl`+`F`), optional launch on login, and optional in-app feedback (never includes your captures). After an unexpected quit, Captures may send a redacted crash diagnostic (app version, OS, and crash summary—never captures or home-directory paths).
+- Capture regions, windows, or full displays. Window mode treats the menu bar, taskbar, and desktop backdrop as a full-display capture instead of a window.
+- Draw a region from an empty screen (no pre-sized outline); lock to common aspect ratios, or hold Shift for a square
+- Press Enter in the capture menu to confirm a screenshot or recording once a target is ready
+- Optional auto-start after selecting a region, window, or full display (Preferences). Draw a region, click a window, or click the desktop in Full screen mode to start; with auto-start off, confirm with Enter or the capture button
+- Optional freeze while choosing a region or window, so hover states, tooltips, menus, and motion stay put (on by default; turn off in Preferences to select from the live desktop)
+- On macOS, frozen display previews and region/display screenshots convert the display color profile to sRGB; colors outside the sRGB gamut remain limited by the current capture pipeline.
+- Optional cursor in screenshots (on by default; freeze screen does not include the pointer by itself)
+- Screenshots keep the cursor the pointer was showing, such as a text, resize, or app-specific cursor, using the system cursor image on macOS, Windows, and Linux X11. On Windows, the frozen selector also shows the captured cursor at its original position
+- Optional countdown before screenshots and recordings
+- Region recordings keep the selected area highlighted on screen while recording
+- Record as H.264 MP4, with desktop audio and microphone. Save or export as MP4 or GIF; WebM export is not supported
+- Pause, resume, restart, and mute while recording
+- On macOS and Windows, recording controls stay out of screenshots and recordings by default (Preferences). On Linux, use Hide controls during a recording to keep the bar off-screen
+- Cursor and click highlights in recordings (where supported)
+- Built-in screenshot editor — closed shapes start filled, with an optional stroke; text, shapes, images, and drawings can rotate from a shared handle (hold Shift to use a configurable snap increment), and resize cursors follow the rotated layer's edges; text and drawings with optional drop shadows (color, opacity, blur, and offset; the whole label, including a background plate), crop (drag from outside the canvas to reach an edge; hold Shift to lock aspect), layers that hang off the canvas stay clipped until you expand, erase to transparent; unsaved edits restore when you reopen
+- Text labels start in bold Nunito, white on a pink rounded background; turn off Bold for regular weight. Nunito is bundled offline. Existing Tauri labels using the former platform-dependent Rounded font now use Nunito too; other font selections, colors and weights stay unchanged. New labels grow horizontally as you type; Enter adds a line. The editing box follows the text size and canvas zoom instead of forcing a taller minimum-height field. After finishing text entry, drag a corner or top/bottom handle to scale the whole label (type, width and background together, so lines keep their breaks), or a side handle to set a wrapping width at the same type size that never gets narrower than the longest word. These source changes also apply to the opt-in native editors.
+  Current source uses measured font wrapping for text selection, picking, resize handles, snapping and canvas trim/expansion. Existing rotated labels keep their saved paint position; rotating or resizing a label keeps its visible center or opposite handle anchored.
+- Drag the left edge of the screenshot editor's Layers/Properties panel to resize it. Its width stays local to the editor window, without changing the image or Undo history. Focus the divider with Tab and use Left/Right to resize (Shift for larger steps), Home/End for its limits, or double-click it (Enter on the keyboard) to reset. Current source supports these controls in Tauri and the opt-in native editors; pointer resizing keeps an active text field focused.
+- The screenshot editor also accepts image pixels or image files from the clipboard with `Cmd`/`Ctrl`+`V` in the screenshot editor, alongside Add images and file drops. Pasted images become editable layers below the selected image (or canvas), with one Undo per paste. Text fields keep normal paste. Layer copy/paste keeps an editable snapshot within that editor and claims the clipboard, so copying an image elsewhere takes precedence on the next paste; **Copy image** still copies the full canvas for other apps. This requires a release newer than 2026.10.1104. Image overlays in the video/GIF editor are not supported
+- Open PNG, JPEG, WebP, GIF, MP4, and WebM files with Captures from Finder, File Explorer, or your file manager. Captures appears in Open With and does not become the default app for those types. Installed macOS, Windows, and Debian packages register this; an AppImage needs a desktop entry with `%U`. Save can overwrite the file you opened
+- Trim, crop, resize, and adjust audio in recordings, with an estimated saved size and an in-editor before/after compression comparison (Hide on the overlay, or switch back to Preserve quality)
+- Default screenshot save format PNG, JPEG, or WebP (Capture History stays lossless PNG until you save); export with Tiny through Highest quality presets and an in-editor before/after comparison while Export settings are open. Hide the comparison or close Export settings to edit without the slider; save quality stays Compress or Maximum until you change it
+- Mini previews for quick copy, save, and drag into other apps. Minimize the stack into a corner pile when it covers the desktop; click the pile to expand it, drag the pile to move it out of the way, and a new capture shows the pile again if capture hid it. Choose a default screen corner in Preferences (bottom left unless you change it). Near the top of the screen the pile fans and opens downward, with Show less on that edge; near the bottom it fans and opens up. On the right, Show less sits on the right of the stack so it stays on the screen edge. With two or more expanded previews, Clear all dismisses the stack; saved files and Capture History stay
+- Screenshots during an active recording
+- 30-day capture history, filtered by screenshots, video, or GIF. Drag a capture's thumbnail directly into an editor or any app that accepts its file type, without restoring a mini preview. Dragging copies the saved file when available, otherwise the original retained capture; History stays intact
+- Light, dark, or system appearance across every Captures window
+- Customizable shortcuts and accent colors. Find a setting in Preferences with `Cmd`+`F` on macOS or `Ctrl`+`F` on Windows and Linux
+- Capture shortcuts work from Preferences, except while assigning a shortcut. Preferences → General offers **Start Captures on login** on macOS, Windows, and Linux, starting in the background when you sign in. Current source enables it by default for new installs; saved Off choices stay off. Tauri releases 2026.10.1104 and earlier default to off
+- Capture UI and capture actions stay disabled while the desktop session is locked or inactive
+- Optional in-app feedback (never includes your captures)
+- After an unexpected quit, Captures may send a crash diagnostic (app version, OS, and a redacted panic or OS crash summary) through the same feedback channel; it never includes captures or home-directory paths. An in-app update restart, normal logoff, or shutdown is not a crash.
 
 ## Optional cloud accounts — in development
 
-Screenshots, GIFs, and recordings work completely offline and never require an account. Accounts, hosted uploads, and link sharing are not available yet.
+Local screenshots, GIFs, and recordings never require an account. The website
+shows an unavailable notice at `/account`; sign-in and account creation are not
+available. A provider-independent users table is retained in PostgreSQL for
+future development. Hosted uploads, sharing, and browser or desktop sign-in are
+not implemented yet.
 
 ## Wishlist
 
@@ -82,21 +114,27 @@ Screenshots, GIFs, and recordings work completely offline and never require an a
 - Repeat the previous capture area
 - Pinned captures that stay above other windows
 - Editable click highlights and keystroke overlays after recording
-- Hosted sharing with `captur.es/<id>` links
+- Hosted sharing with shareable `captur.es/<id>` links
 - Faster recording on Windows and Linux
 
 ## Platform status
 
 | Platform | Status |
 | --- | --- |
-| macOS 13+ | Supported (primary development target) |
-| Windows 11 | Supported (active native parity work) |
-| Linux X11 | Supported (hide recording controls manually during recording; physical-hardware verification pending) |
-| Linux Wayland | Partial support (no window targeting, cursor capture, or click highlights; mini-preview stack cannot poll the pointer and may cover apps underneath) |
+| macOS 13+ | Supported; primary development target |
+| Windows 11 | Supported; experimental |
+| Linux X11 | Supported; hide recording controls manually when needed |
+| Linux Wayland | Experimental; no window targeting, cursor capture, or click highlights. Mini previews cannot poll the pointer, so the stack stays interactive and may cover apps underneath |
+
+These statuses were measured on the Tauri app, which the native app replaces from November 2026 with the same intended behavior. Physical Linux acceptance of the native app is still pending; automated or headless tests do not replace it.
 
 ## Shortcuts
 
-Defaults match each platform’s built-in screenshot keys. `Esc` cancels an active capture or countdown and returns to other apps as soon as the capture flow closes. Global shortcuts can be changed in Preferences.
+Defaults follow each platform’s built-in screenshot keys. Captures-only actions keep extra shortcuts.
+
+Escape belongs to Captures only while preparing or selecting a capture, or during
+a capture countdown. Closing or cancelling that flow returns Escape to other apps;
+an ongoing recording does not reserve it.
 
 ### macOS
 
@@ -109,7 +147,7 @@ Defaults match each platform’s built-in screenshot keys. `Esc` cancels an acti
 | `Cmd`+`Shift`+`5` | Record a region |
 | `Cmd`+`Shift`+`Option`+`W` | Record a window |
 | `Cmd`+`Shift`+`Option`+`3` | Choose a display to record full screen |
-| `Esc` | Cancel an active capture or countdown |
+| `Esc` | Cancel an active capture, screenshot countdown, or recording countdown |
 
 ### Windows
 
@@ -122,7 +160,7 @@ Defaults match each platform’s built-in screenshot keys. `Esc` cancels an acti
 | `Win`+`Alt`+`R` | Record a region |
 | `Ctrl`+`Shift`+`Alt`+`W` | Record a window |
 | `Ctrl`+`Shift`+`Alt`+`3` | Choose a display to record full screen |
-| `Esc` | Cancel an active capture or countdown |
+| `Esc` | Cancel an active capture, screenshot countdown, or recording countdown |
 
 ### Linux (GNOME / Ubuntu)
 
@@ -135,13 +173,980 @@ Defaults match each platform’s built-in screenshot keys. `Esc` cancels an acti
 | `Ctrl`+`Shift`+`Alt`+`R` | Record a region |
 | `Ctrl`+`Shift`+`Alt`+`W` | Record a window |
 | `Ctrl`+`Shift`+`Alt`+`3` | Choose a display to record full screen |
-| `Esc` | Cancel an active capture or countdown |
+| `Esc` | Cancel an active capture, screenshot countdown, or recording countdown |
 
-**System shortcuts & editor keys:** Captures clears overlapping system screenshot shortcuts on macOS, GNOME, KDE, and Windows when configured to use them. While an overlay is open, capture shortcuts switch modes in place—or press the same shortcut again to capture the overlay itself. In the screenshot editor: `Cmd`/`Ctrl`+`S` saves, `Cmd`/`Ctrl`+`Shift`+`C` copies, `Cmd`/`Ctrl`+`D` duplicates layers, `Cmd`/`Ctrl`+`V` pastes images, and `Enter` applies a crop. In the recording editor: `Space` plays/pauses, `Left`/`Right` steps frames (`Shift` for 1 second), `I`/`O` sets trim in/out, `Home`/`End` jumps to trim bounds, and `Cmd`/`Ctrl`+`S` saves.
+Global capture shortcuts can be changed in Preferences. In Preferences, `Cmd`+`F` on macOS or `Ctrl`+`F` on Windows and Linux finds a setting; `Enter`, `F3`, or `Cmd`/`Ctrl`+`G` moves to the next match. Installations still on earlier factory defaults (`Ctrl`+`Shift` or the shared macOS-style number keys) are updated automatically; custom shortcuts stay as they are.
+
+On macOS, overlapping Screenshot app shortcuts (`Cmd`+`Shift`+`3` / `4` / `5`) are unbound immediately so those keys reach Captures instead of the system overlay; restore them in System Settings → Keyboard → Keyboard Shortcuts → Screenshots if you want both. On GNOME, overlapping screenshot keybindings are cleared when `gsettings` is available; on KDE, Spectacle’s rectangular-region shortcut is cleared when `kwriteconfig` is available. On Windows, Print Screen is turned off for Snipping Tool when Captures uses that key, and `Win`+`Shift`+`S` is intercepted so Snipping Tool does not open. If another screenshot tool still opens on the same shortcut, `Esc` always cancels Captures — even when that other overlay has keyboard focus or the freeze-frame has not finished painting. Captures lives in the menu bar or tray after setup (on Windows, look in the taskbar overflow if the icon is hidden). Open Captures from Start, Search, or the app icon to show Preferences, including Capture History. Capture from a shortcut, the tray **New Capture** item, or a tray capture action. If a capture starts while Start or Search is still open, Captures waits for those flyouts to close so they are not frozen into the screenshot.
+
+While New Capture is open, the region, window, and display screenshot or recording shortcuts switch that overlay in place. They do not dismiss the menu or bring Preferences and other windows forward. Press the same screenshot shortcut again to freeze the capture menu into the next snapshot. An already-open region or window overlay does the same: the shortcut freezes that overlay instead of tearing it down, so you can capture Captures with Captures.
+
+While selecting a capture region, pick an aspect ratio in the capture menu or hold
+`Shift` for a square. In the screenshot editor, zoom with the header slider and
+`+`/`-` controls, pinch or `Ctrl`/`Cmd`+scroll, pan with `Ctrl`/`Cmd`-drag or
+middle-click, hold `Shift` while dragging a corner handle to scale
+proportionally, and duplicate layers with `Ctrl`/`Cmd`+`D`. Header W×H resizes
+the canvas. Hover a layer that hangs off an edge to preview the clipped part
+and expand. Locked layers keep size and position until unlocked; layer width
+and height stay proportional.
+
+Current source adds editor keys on macOS, Windows, and Linux. In the screenshot
+editor, `Ctrl`/`Cmd`+`S` saves, `Ctrl`/`Cmd`+`Shift`+`C` copies the image,
+`Ctrl`/`Cmd`+`Y` redoes (as `Ctrl`/`Cmd`+`Shift`+`Z` already does), and `Enter`
+applies a drawn crop. Holding an arrow key to nudge a layer is one Undo step,
+`Esc` that closes a dropdown or layer menu keeps the layer selected, and
+shortcuts keep working after you click a slider or checkbox. In the
+recording editor, `Space` plays or pauses, `Left`/`Right` step the playhead by
+about a frame (`Shift` for one second), `Home`/`End` jump to the trim start or
+end, `I`/`O` set the trim start or end at the playhead, and `Ctrl`/`Cmd`+`S`
+saves. A focused text field, button, slider, or menu keeps its own keys.
 
 ## Development
 
-See [DEVELOPMENT.md](DEVELOPMENT.md) for local setup, validation, and packaging, [docs/releases.md](docs/releases.md) for release and updater operations, and [docs/native-rewrite.md](docs/native-rewrite.md) for native host architecture and parity tracking.
+See [DEVELOPMENT.md](DEVELOPMENT.md) for local setup, validation, and packaging.
+The public release pipeline builds the native app (since November 2026; earlier
+releases used the Tauri/React app, whose source was removed from the repository
+in November 2026). It uses AppKit
+on macOS. Windows and Linux are moving from the Rust/wgpu workbench
+to the OS toolkits (Win32 with DirectComposition, Direct2D and DirectWrite on
+Windows; GTK4 on Linux) with Captures' own styling, sharing the Rust engines and
+platform-specific capture integrations. The wgpu workbench stays until each
+replacement passes its parity gates. Its development workbenches keep separate
+data and do not join the public update channel. The detailed native development
+notes below describe implemented slices; physical Linux acceptance is still
+pending.
+
+The opt-in GTK host's **New Capture** supports Screenshot mode with Region,
+Window and Full screen controls. Screenshot Display opens these controls for
+confirmation; repeating the active target shortcut freezes the visible controls
+into a new selection on X11. On Wayland, Full screen saves the already-approved
+portal still without asking again; Window uses the compositor's picker.
+Delayed screenshots show the remaining seconds with Escape cancellation and
+reduced-motion support. Already-approved portal stills and explicit frozen-controls
+captures skip the countdown rather than recapturing.
+On X11, Record mode selects Region, Window or Full screen with per-capture FPS,
+resolution, cursor/click, desktop audio and microphone options. Recording tray
+actions and shortcuts open the same controls. The HUD supports countdown,
+Pause/Resume, Stop/save, Restart/Delete confirmation, microphone mute and Hide;
+New Capture restores hidden controls. On Wayland the same Record mode, tray rows
+and shortcuts record through the desktop's ScreenCast portal: its picker chooses
+the screen or window for each segment, Region applies the area drawn over the
+portal still, Captures' windows stay hidden for the take, cursor and click
+options are unavailable, and desktops without the ScreenCast portal get an
+explanation instead of a recording.
+Physical Linux desktop, GPU, accessibility and mixed-DPI acceptance remain open.
+
+The Win32 workbench can open recordings from History, preview video and GIFs,
+switch between Fit and 100%, scrub and trim a thumbnail timeline, and save copies
+or replace the original with cancellation and Show in Folder. The timeline supports
+pointer/keyboard input and accessibility ranges.
+Output controls include original/1080p/720p/custom dimensions, GIF frame rate,
+maximum width and quality-based palette limits, and separate source-audio volumes,
+mute and mono. Crop supports source-pixel numeric fields, aspect locking, eight
+resize handles and interior dragging over the full source preview, with keyboard
+and accessibility ranges. Compression comparison adds a draggable before/after split,
+Hide/Show, and MP4 Preserve/Compress presets. Maximum file size for MP4/GIF uses
+decimal KB/MB/GB, a 100 KB minimum and a 10 MB default. Invalid drafts remain
+visible and block Save; a successful replacement resets output to source defaults
+and clears the cap. Unit changes preserve exact whole bytes rather than Tauri's
+eight-significant-digit display rounding. The filename's Format menu switches
+between MP4 and GIF, saving conversions as new files; WebM is listed but not saved.
+These slices are not recording-editor parity. With `--live`, the Win32 host runs as
+a single resident app with the shipping tray menu, forwarding relaunches to the
+running copy. Its New Capture and Screenshot Region, Window and Display items and
+the matching global shortcuts open the Screenshot capture bar on that target, taking
+over Print Screen and Win+Shift+S like shipping. The Record rows and shortcuts open
+the bar in Record, whose options row (FPS, resolution, cursor, clicks, desktop audio
+and microphone) applies to that recording only. It starts an experimental recording
+with floating Stop, Pause, Restart, Screenshot, Mute, Delete and Hide controls (Screenshot
+opens the bar on Region with Record locked while the take runs), and History lists interrupted recordings to recover or
+discard; Send Feedback stays disabled. Saved
+screenshots appear in an experimental mini-preview stack with Close, Delete, Edit,
+Copy and Save file / Show in Folder, and History's Restore brings a screenshot back
+there; its pile, motion and file drags are not ported.
+Output controls and source-preview correction passed physical Windows testing;
+comparison and maximum-size controls still await physical acceptance. Crop passed
+its separate hardware check with observations, not full editor acceptance.
+Like Tauri, the preview keeps the original source's
+size and picture while output settings affect the saved file, not the page layout.
+
+The native capture workspace connects full-display
+PNG capture, local screenshot history, copy, export, and deletion to
+shared Rust engines. Its History uses the shipping card grid, header, filters,
+Restore to a floating preview and empty states; Delete all asks for a second click, removes all capture types
+regardless of the selected filter, and keeps exported files and recovery drafts.
+It uses separate development data. On Wayland, **Take screenshot…** in native
+History uses the desktop portal without X11, unmaps Captures' windows before the
+request, and restores them afterward. Captures return to History, without floating
+previews or guessed monitor geometry. **Edit** opens the screenshot editor directly;
+floating-preview **Restore** is disabled. **Record display…** and **Record window…**
+open a native countdown, request portal consent, and connect MP4 recording to the normal
+pause/resume, restart, Stop and Delete controls. Cancelling consent removes the
+empty take; losing the stream retains partial media for History recovery.
+Display recordings include the controls; Hide requires a working tray restore path.
+Window recording requires a ScreenCast portal v3+ advertising window sources;
+only the chosen window is shared, and every new/resumed segment asks again.
+Unsupported backends report an error without falling back to display capture.
+Portal video frames honor per-buffer crop metadata before output rotation and
+reflection, including same-size orientation changes during a take. Physical
+rotated-display and mixed-DPI acceptance remain open.
+While a take runs or is paused, the controls' Screenshot action requests a separate
+desktop-portal still without stopping the take. Captures' windows and HUD are
+hidden for the still; cancellation or failure preserves the recording. Screenshot
+commands honor the configured countdown in a compact, compositor-placed window;
+focused Escape or closing it cancels before consent. The countdown is excluded
+from the still, but can appear in an ongoing Wayland display recording, like the HUD.
+Window screenshot shortcuts and **Screenshot Window** in the tray request a
+window-only ScreenCast grant, capture one bounded frame, and close the stream
+before adding it to History. This requires portal v3+ with window-sharing support;
+unsupported backends fail without substituting a display. Window capture through
+the resident native GNOME/KDE UI and physical acceptance remain unverified;
+see [verification limits](apps/native/gnome-window-verification.md).
+**Screenshot Region** takes one portal still of the desktop, shows it in a
+fullscreen, compositor-placed selector, and saves the selected area from that
+still. With several monitors the still is letterboxed into the selector's
+output. **Record Region** (tray or shortcut) asks for one display-sharing grant,
+shows the stream's first frame in the same selector, runs the configured
+countdown after you confirm, and records only the selected area of that stream.
+Pause/resume and restart reuse the selection without selecting again; each new
+segment still asks the portal. Escape or closing the selector or countdown
+cancels without saving. The selector and countdown leave the screen before
+recording starts, but the controls can appear in the video if they overlap
+the region. Click highlights and keystrokes remain unavailable on Wayland.
+Portal policy controls consent; window screenshots require the configured cursor
+mode, while display stills keep backend-controlled cursor inclusion. Separate no-window diagnostics
+also exercise GIF sessions. Restored window positions are compositor-controlled.
+Native Wayland global shortcuts use the desktop's GlobalShortcuts portal. The
+desktop chooses the available actions and keys; Preferences shows its returned
+bindings with Configure (portal v2+) or explicit Retry after failure. There is no
+X11 fallback or takeover of system screenshot keys. A granted action does not add
+an unsupported capture mode. Hidden windows remap after a capture on older
+wlroots compositors too, such as Sway 1.7 (Debian 12, Ubuntu 22.04).
+Like the shipping app, the native workbenches open Capture History, Preferences and first-run setup as
+separate, resizable windows that reflow down to their minimum sizes. Native Preferences saves
+appearance, custom colors, and capture/media defaults through shared Rust logic
+in a separate development settings file. Capture-folder typing autosaves without
+leaving the field. Find retains its query and current match
+when closed; `Cmd`/`Ctrl`+`F` reopens it and selects the query for replacement.
+Escape in a custom-color field cancels the draft and leaves Find open on both native hosts.
+Fresh native profiles show the shipping setup screen before capture or opening
+queued media. macOS offers explicit Screen
+Recording and optional Microphone access, Settings links, and a permission restart;
+Windows/X11 show screen capture as ready and do not require upfront screen access.
+Wayland screenshot permission is handled by the desktop portal at capture time.
+Private, software-rendered Sway 1.9 checks exercise compositor-delivered native
+Preferences Find, multiline Text selection/Undo/Redo and modified recording trim
+keys in both appearances at normal/minimum sizes, preserving source, settings and
+History artifact bytes. These checks are not physical keyboard, IME or screen-reader acceptance.
+Finishing setup, or a hidden launch into the menu bar or tray, briefly shows a
+"Captures is ready to use" notice with the New Capture shortcut on direct hosts;
+Wayland names the tray without advertising ungranted keys. Without a tray icon's
+screen position, it uses a compact, left-aligned, unpointed card that grows to fit
+long shortcuts. On Wayland the compositor places it. Real tray/menu-bar anchors
+keep the centered pill and triangle.
+The native workspace now applies
+automatic copy, output folder, PNG/JPEG/WebP save-format, screenshot countdown,
+and cursor inclusion preferences. Cursor rendering matches the shipping app:
+system cursor pixels on macOS, Windows, and X11. Escape cancels
+a pending capture even with another app focused. Both the macOS workspace and
+Windows/X11 candidate connect region draw/move/resize, aspect constraints, freeze,
+and auto-start to shared Rust capture logic. The Windows/Linux candidate settles
+a region at pointer release even if New Capture has switched to another target;
+returning to Region retains that choice without auto-capturing the other target.
+Window selection uses the same Rust
+targeting and pixel-source policy, with window/desktop confirmation, freeze/live
+selection, countdown and cancellation. Real desktop, mixed-DPI and accessibility
+acceptance is still open; private-X11 tests check saved region/window pixels and
+simulated session cancellation. Both native hosts connect screenshot mini previews
+with Copy, Save/Reveal, Edit and nondestructive Dismiss, respecting the four
+corner placements and capture-inclusion preference. Multiple captures remain in
+a stack with expand/collapse, scrolling with Show older/newer edge cues and Clear
+all; dismissing previews leaves
+history and exports intact. Expanded cards now use the Tauri layout: full-bleed
+images and idle dimensions, hover-only corner icons and centered Copy/Save actions,
+with controls mirrored for right-side placement. Hover blurs and dims the image;
+cards show byte sizes, clipboard confirmation and editor-presence pills. Delete
+uses a white icon on the signal-colored hover background. Native previews also
+lift and grow Close/Delete/Edit (including the editor-presence pill) on hover while keeping their click targets fixed, and
+animate arrival, dismissal, pile expansion and settling, respecting reduced motion.
+Clear all retains each screenshot card's current appearance while it streaks out,
+without forcing idle cards into hover dimming; later captures and retained files stay.
+After export, Show in Folder selects the saved file in the file manager (on Linux
+through the desktop's FileManager1 service, or by opening its folder when none
+answers) instead of saving another copy; a missing export leaves the capture available.
+Edit opens that screenshot directly without reopening a hidden workspace or
+changing the selected History item; opening it again preserves its pending edits.
+Trash moves only the saved export to the OS trash, then dismisses its preview;
+an unsaved preview is only dismissed. Private History stays intact. Failed Trash
+keeps the preview available for retry. macOS may request Finder automation permission;
+physical Finder/Recycle Bin acceptance remains open.
+Drag a collapsed pile within its capture display;
+its session position survives expansion and new captures without activating the
+workspace. Hovering the collapsed front card fans the rear cards outward; pressing
+and dragging keeps the fan open. macOS follows Reduce Motion; the Windows/Linux
+candidate reads the desktop animation preference at startup and when the workspace
+regains focus, and follows change notifications while it runs (Windows setting
+broadcasts, the Linux Settings portal's change signal). Linux requires a portal
+exposing the reduced-motion setting; `--reduced-motion` can force it when that
+setting is unavailable.
+Expanded native screenshot previews can offer the original file to another app
+as a COPY. An accepted external drop dismisses only its source card; cancellation
+and in-app drops retain it. A self-drop briefly shakes the card unless reduced
+motion is enabled. Unsaved captures use retained temporary files cleaned on the
+next startup; saved exports are never removed by drag cleanup. X11 transfers and
+the isolated Wayland protocol are tested on disposable desktops. Physical macOS,
+Windows OLE, mixed-DPI and full Wayland capture-host acceptance remain open.
+Both native History grids also offer direct screenshot, GIF and video file drags
+through those same COPY adapters, without Restore or preview dismissal. Missing
+recordings cannot be dragged. AppKit and Windows/Wayland History-drag presentation
+and physical file-transfer acceptance remain unverified.
+The pile includes 3D tilt, depth blur, shadows and staggered fan motion.
+Cross-display movement, automatic top/bottom anchor changes, backdrop blur and
+remaining control-transition details still need parity work and platform acceptance.
+Rear cards use fixed-glass depth shading; front and idle expanded images stay unshaded.
+Live native hosts expose menu-bar/tray New Capture,
+screenshot, History, Preferences, output-folder and Quit actions, plus configured
+New Capture and region/window/display screenshot and recording global shortcuts. New Capture opens shared
+Screenshot and Record controls for Region, Window and Full screen, retaining selections when
+switching targets with the toolbar. While these controls are open, the configured
+region/window/display shortcuts and New Capture switch mode and target in the same session; keyboard
+Full screen does not auto-start capture. As in the shipping app, pressing the shortcut of
+the screenshot target the controls opened on or a shortcut last selected (New Capture for
+Region) freezes the controls into a new capture instead. Any capture shortcut or tray item over an open region or window
+selector does the same, opening its selector or these controls on a snapshot that shows the
+old one; that selection never counts down. Over a screenshot selector beside a recording,
+the region and window shortcuts do this too, and Screenshot Display saves the display with
+the selector in it at once. As in the shipping app, the display
+screenshot shortcut and tray Screenshot Display open these controls on Full screen
+with its display picker, and a failed capture shows a "Captures" error dialog
+instead of a History error. During a running or paused recording the region, window
+and display screenshot shortcuts and tray items take that screenshot beside the take,
+as the shipping app does: region and window open their selector on the display under
+the pointer, display captures that display directly, and each uses the screenshot
+countdown and leaves out the recording controls unless they are included in captures.
+The recording keeps running untouched. Only an active focused shortcut recorder
+in Preferences suppresses those shortcuts on direct hosts.
+While a screenshot outside a recording is preparing, counting down or capturing, New Capture
+and Screenshot Display report that a capture is already in progress and the other shortcuts and tray
+items do nothing. An active recording ignores the recording shortcuts and tray items, and
+New Capture reports that a capture is already in progress. While recording controls are
+hidden, or left out of a screenshot beside the take, New Capture brings them back, and
+the screenshot shortcuts and tray items still take a screenshot. On macOS, Windows
+and X11, native Preferences can edit all seven capture and recording shortcuts;
+Wayland uses the desktop chooser described above. Recording keys on direct hosts
+open the selector without starting a take. Native Windows shortcuts keep their
+release-triggered behavior; ordering rapid shortcuts against selection input is
+still an acceptance gap. Linux requires
+a StatusNotifier tray host; without one,
+closing the window quits instead of leaving an unreachable background process.
+Native Record creates H.264 MP4 using the stored recording defaults and supported
+audio options. Its compact controls support pause/resume, confirmed restart with
+the stored countdown, microphone mute/unmute, stop/save to development History,
+and discard. Running mute changes durably complete the current segment before
+continuing with the same target and options; paused changes do not resume. Restart
+replaces only the current take and resets its elapsed time. Both native HUDs show
+live microphone level while visible, running, and unmuted, clearing it when paused,
+muted, hidden, or changing the take. Physical microphone and device acceptance
+remain open. Hide removes only the controls, shows a temporary
+noninteractive notice, and preserves the session, timer, pause and microphone state. New Capture
+(its shortcut and the menu bar/tray item) and app reactivation restore the controls; Linux disables Hide without a
+usable tray and restores the controls and workspace if its tray host disappears.
+Unsigned native development packages can include FFmpeg and FFprobe with their
+corresponding source and licenses; unpackaged workbenches can use prepared checkout
+tools, explicit executable paths or system commands. Signed distribution remains open.
+Started recordings are saved on session loss instead of being
+discarded; failed finalization retains recovery data. Linux cannot exclude the
+controls from captured pixels, so Hide is the native workaround on X11. Shared
+native recovery can identify, assemble, or explicitly discard interrupted takes
+in isolated development History. Both native workbenches list interrupted recordings
+separately in History, with cancellable recovery and an inline **Discard permanently?** confirmation.
+Unavailable bundles remain read-only for manual inspection; failures allow retry,
+and cancellation cannot undo a recording already published to History. This is
+interrupted capture recovery, not persistent recording-editor drafts or an
+installed-data migration.
+Region recordings keep a click-through boundary and dimming outside the recorded
+area during countdown, recording, pause, and hidden controls. The guide leaves
+the recorded pixels transparent and disappears when the take ends or is cancelled.
+The recording HUD can open a region screenshot selector without pausing or replacing
+the accepted take. Escape cancels only that selector or its screenshot countdown;
+successful screenshots use the normal native History, preview and auto-copy paths.
+AppKit and Windows can exclude native capture UI. X11 temporarily hides the HUD and
+guide from the screenshot, but cannot keep the selector out of the ongoing recording.
+As in the Tauri app, a take that cannot start keeps the HUD open with the error and
+offers **Retry recording** or Delete. A resume that cannot reopen the microphone
+leaves the take paused so it can still be saved.
+The Windows/Linux candidate's **Edit recording** opens a decoded frame preview
+with source-relative scrubbing, draggable trim handles, numeric trim/crop controls, custom output dimensions
+and MP4/GIF saving. Crop dimensions start aspect-locked; unlock to change
+width and height independently. As in shipping, edits take effect as they are made:
+the edited preview updates once a drag ends or a typed value is committed, and
+failed updates leave the last accepted frame intact.
+Both native editors follow the shipping layout (**Edit GIF** for GIF sources). The save
+footer starts with the original's name and folder, with **Change…** and the
+.mp4/.gif/.webm format; after a successful save, **Show in Folder** reveals it.
+WebM is offered as in shipping but, like shipping's bundled media tools, cannot
+encode it, so saving WebM shows shipping's error.
+The shared recording editor now also supports same-format replacement of an
+existing permanent MP4/GIF when History retains identical recovery media.
+As in shipping, **Save** with **Save as new file** off uses the chosen filename
+and folder under the same History item, without a confirmation. The original
+path is replaced; a different path must be unused, and the previous saved file
+stays intact. The new path becomes the editor's original for later saves.
+Turning the switch on suggests an `-edited` copy beside it. Replacement is
+unavailable for recovery-only or reference-only recordings (the switch then stays on),
+pending edits or a different output format; the backend
+also rejects missing or divergent recovery files. Success rebases the editor and
+updates the existing History item. Cancellation stops preparation but cannot undo
+publication once it begins. Ordinary failure keeps accepted edits; an uncertain
+result requires closing and reopening. This is not crash-atomic across the saved
+file and History. Saving with **Save as new file** on remains non-destructive.
+Trim handles preview their edge while held, with one active decode and only the
+latest waiting range and position. Focused handles also accept arrow keys and
+Page Up/Page Down; modifiers keep the same trim step, unlike Shift on crop handles.
+During playback, changing a handle stops the old decoder,
+accepts the latest trim and resumes without ending the gesture. The end grip
+pauses with Loop off and wraps to the selected start with Loop on.
+Dragging the trim track continuously seeks on both native hosts, paused or playing.
+Decoding keeps only the latest waiting position. A playing seek stops the old
+decoder, then resumes at the latest accepted frame without another Play press;
+release does not restart it. Pause, focus loss, Close, Quit or failure cancel that
+resume intent. A failed seek retains the accepted frame and ends the gesture.
+Numeric seek and other edit/export controls remain gated during playback or decoding.
+**Reset trim** restores the full range.
+**Adjust crop** shows an uncropped source frame with draggable edges/corners and
+interior move. Crop handles follow the aspect lock; arrows move one source pixel,
+or ten with Shift. Crop changes apply when each gesture ends, and **Done cropping**
+shows the edited preview. Loading this source frame can be canceled or retried.
+Both native hosts expose crop-handle values and reachable bounds in source pixels,
+with assistive increment/decrement actions using the same aspect-constrained geometry.
+The wgpu host also accepts standard assistive numeric value changes and exposes
+secondary-window controls through its platform accessibility provider.
+Corners announce their horizontal edge; top/bottom handles announce their vertical edge.
+The existing numeric crop fields remain available. Physical screen-reader acceptance
+is still unverified on all platforms.
+Both native recording editors provide **Fit / 100%**, which changes only the
+displayed scale. At 100%, one decoded image pixel occupies one screen point; larger
+previews scroll within the preview area. Playback
+still uses its bounded decoded size, not full-source resolution.
+The trim track shows retained full-source thumbnails, independent of the edited
+preview. Thumbnail generation can be canceled or retried without losing edits;
+it does not change the source recording. **Play/Pause** offers motion within
+the accepted trim, with a preview capped at 30 fps and 1280 × 720. Pause retains
+the last displayed frame; reaching the trim end makes Play restart that range.
+Other editing and export controls wait for playback to stop. Losing focus or minimizing
+pauses playback. **Loop preview**, off by default, repeats the accepted trim until
+paused. It can be switched on or off during playback and never changes the export.
+**Sound**, on by default like the shipping preview and changeable while stopped,
+plays the accepted MP4 audio mix on the default output device. GIF and mixes with no audible tracks stay
+silent without opening a device. Device failures are visible; turn Sound off to
+retry silently. Loop continues from the trim end to the trim start without a
+gap, keeping the same sound output. Physical audio routing and A/V synchronization acceptance remain open.
+The preview identifies its accepted format/quality, and saving uses those settings.
+**Save quality** offers Preserve quality (MP4 only; choosing GIF switches to Compress),
+Compress with Tiny, Smaller, Balanced, High or Highest, or Maximum file size.
+GIF palettes follow the preset: Tiny 64 colors, Smaller 96, Balanced 128, and
+High/Highest/Preserve 256. Maximum mode keeps that palette while saving at Preserve
+quality to fit the size cap; MP4 does not use it.
+As in shipping, **Est. size** updates automatically shortly after edits settle,
+without publishing an export; newer edits cancel an estimate in progress.
+Copied or fully encoded short ranges show exact sizes; sampled longer ranges and
+audio-only Preserve changes show approximate sizes. WebM and failed estimates show "—".
+Both native recording editors show nonzero percentage changes versus the original
+recording beside estimates; pending estimates and Maximum mode hide the delta.
+Both native recording editors, like shipping, automatically encode a read-only
+before/after sample at the accepted frame while Compress or Maximum is accepted and
+playback is paused, drawn as a split with size badges, "% smaller" and Hide (**Show
+before / after** restores it). It does not follow paused playback time or publish a
+file or History entry; staged edits hide it. The screenshot editor shows the same
+comparison while Compress or Maximum is chosen and Export settings are open. Maximum mode shows the first encoded attempt, not
+necessarily the final capped save; output cadence may select neighboring frames.
+Both native recording editors offer **Maximum file size** for MP4/GIF, using
+decimal KB/MB/GB with a 100 KB minimum. The size label shows the cap instead of an
+estimate. Save may reduce resolution, frame rate or
+audio quality to fit, so its first-attempt preview is not a promise of final output.
+An unattainable limit fails without publishing a copy.
+Available system and microphone tracks each have an include checkbox and 0–200%
+volume, plus **Convert to mono**. Accepted settings apply to MP4 exports and Sound
+preview. GIF output shows that GIFs have no audio, without discarding the MP4 settings.
+Both native recording editors offer 8, 10, 12, 15 (default), 20, 24 or 30 FPS for
+GIF exports. The frame rate applies with the other edits; switching to MP4
+keeps the GIF choice without changing MP4 cadence.
+Both native recording editors offer GIF **Maximum width** choices of 320, 480, 640,
+800 (default) or 1200 px, applied after crop and output sizing without upscaling.
+Changing the cap recomputes from that base; switching to MP4 restores base sizing
+and remembers the GIF choice.
+Original, 1080p maximum and 720p maximum output presets preserve the current crop's
+aspect ratio and never upscale. Custom dimensions override the preset.
+Custom dimensions are independent (no aspect lock); the shared media engine rounds
+sizes to even pixels.
+Re-encoded Windows/Linux MP4 fits within 3840 × 2160 (2160 × 3840 for portrait);
+its preview reflects that cap, while GIF previews retain their requested dimensions.
+**Save new copy** reports progress, supports cancellation, never replaces an existing
+file, and adds a distinct History item. A History failure retains the saved path.
+Recording edits are not drafts: save or explicitly discard them before closing or
+quitting. AppKit connects a separate History editor with decoded source-relative
+frames, numeric trim and source-relative crop, Original/1080p/720p or independent
+custom output dimensions, MP4/GIF/WebM settings, automatic size estimation and
+cancellable **Save** with the same shipping save semantics as Windows/Linux. Available system and microphone tracks have independent 0–200%
+volume and mute controls plus mono output; audio applies to MP4 while GIF disables
+the controls without losing their MP4 values. Its graphical trim handles overlay an
+immutable 12-frame source-relative thumbnail strip and preview the edge live with
+the same playback, coalescing and failure policy as Windows/Linux. Loading can be
+canceled or retried without disabling editing. Play/Pause presents bounded accepted-edit motion frames and
+a source-relative playhead without changing the accepted preview, edits, History or
+source. Like the shipping preview it plays the accepted MP4 mix with Sound on by
+default, on the default device; GIF and inaudible mixes stay silent without opening a device.
+Optional Loop preview repeats the accepted trim gaplessly without changing
+exports or dirty state.
+**Adjust crop** loads one immutable full-source frame at the accepted position, then
+stages source-pixel crop changes with eight resize handles or interior movement without
+decoding on each pointer event. Crop changes apply when each gesture ends while the
+source frame stays shown; **Done cropping** shows the edited preview. Loading is
+cancellable and retryable.
+Fit or 100% applies to the accepted, paused/playback or crop-source frame without
+decoding again or changing edits, estimates, exports or History; each item defaults to Fit.
+Windows/X11 provide the same full-source graphical adjustment alongside numeric crop
+and output sizing. This is not Tauri editor parity; physical audio routing, A/V sync,
+macOS, Windows and Wayland acceptance remain open.
+History displays recording posters and metadata; **Save file**
+copies the original media to the output folder without re-encoding, and
+**Show in Folder** reveals that saved copy. Both native
+hosts offer counted All, Screenshots, Video and GIF history filters; filtering
+does not delete captures or exports. After finalization, a temporary **Recording ready**
+notice offers Save file, then Show in Folder after saving a permanent copy. Dismissing
+or letting it expire preserves History and exports; failed saves can be retried.
+Both native workbenches also render the update notice (release notes,
+download progress, restart countdown and errors) from a simulated status source.
+An [explicit development launch](apps/native/README.md#native-preferences-update-checks)
+can connect Preferences and tray **Check for Updates** to a pinned, signed endpoint.
+Checks also drive a real native notice with signed release notes, up-to-date results
+and retryable errors. An explicit scratch-directory option adds **Download**
+for temporary package validation, with progress, cancellation and retry. An explicit
+retained base archive enables authenticated incremental downloads with signed full
+package fallback; this is development-only, not the release updater. Dismissing a
+pending operation keeps its result hidden until another explicit check or download.
+Ordinary development check-only launches never fetch packages or enable installation;
+only the explicitly versioned release build enables the installed channel. A separate opt-in
+[development diagnostic](apps/native/README.md#native-update-acquisition-diagnostic)
+checks signed native manifests, verifies downloads and can validate unpacked native
+packages in temporary storage. It never installs or replaces an app, and no native
+update channel is enabled. An explicit [development helper](apps/native/README.md#opt-in-development-helper-and-startup-health)
+can replace a stopped development package and test startup with a new empty
+profile, an explicitly imported isolated copy, or an existing enrolled development
+profile with a retained pre-update data snapshot. It can also recover a failed
+package replacement after all app processes stop; package recovery does not restore
+profile data. It does not update installed copies or reuse their profiles.
+The native development helper and macOS/AppImage/Windows update handoffs retain Preferences
+visibility, open screenshot and recording editors, and the ordered screenshot
+preview stack. Windows forwards the one-shot session through NSIS and waits for
+application startup acknowledgement before marking the update complete; installer
+exit alone is not success. Elevated installed-upgrade acceptance remains unverified.
+Screenshot drafts keep their
+original owner when the editor has adopted a saved copy. Unsaved recording edits
+still block restart; window geometry and undo history are not restored. Missing
+captures do not prevent the other windows from reopening. Wayland restores editors
+without floating previews. This does not apply to manual reinstalls or authorize
+native promotion; physical cross-platform update acceptance remains open.
+An opt-in development GUI shutdown record carries this session and the verified
+target digest to the external helper. An explicit
+[supervised development launch](apps/native/README.md#supervised-development-gui-installation)
+also enables **Restart and install** after verification: the external parent waits
+for an accepted, drained shutdown, authenticates/reacquires the exact package,
+snapshots development data and confirms replacement startup. Ordinary Quit does
+not install. Other app/data writers and launches must remain excluded; this does
+not update installed copies or establish OS signing/permission identity. Fresh
+profiles still require setup; automatic installed Settings restoration is not
+connected. The [offline development-profile importer](apps/native/README.md#explicit-offline-development-profile-import),
+also available separately, copies explicitly selected shipping settings, retained
+History and drafts with an original-data snapshot. Shipping data and exports stay
+unchanged, copied profiles survive failed startup and package recovery, and the
+development identity requires fresh setup. Installed apps instead use the
+one-time copy described above; the development importer does not enroll a profile
+in that channel.
+A screenshot History card's **Edit** opens the AppKit screenshot editor. Its first
+native editor slice restores and saves isolated drafts, previews shared-Rust crop
+and canvas-resize operations, and supports Undo, Redo and confirmed draft discard.
+Its Layers panel connects shared visibility, lock, opacity, movement, image rename,
+duplicate, delete and adjacent ordering commands while preserving locked barriers;
+both native hosts also provide **Merge down**, **Merge visible**, and **Flatten image**
+with undo/redo and saved-draft restoration. Merge down requires adjacent unlocked
+layers; Merge visible retains hidden layers; Flatten removes hidden layers and
+bakes the canvas background into one locked image.
+The original History image and its exports remain unchanged until explicit replacement. Recording completion
+still presents its notice immediately; opening the recording editor is a separate History action. Real macOS and
+Windows recording, audio devices, multi-display and hardware acceptance remain open;
+Wayland display recording is exercised on disposable Sway, not accepted on physical GNOME/KDE desktops.
+Both native development hosts accept repeatable `--open-media PATH` arguments
+only with `--live`; `--open-image` remains an alias in the same ordered queue.
+AppKit also handles macOS file-open requests while running. PNG, JPEG and WebP
+become local History-backed screenshot editor sessions. GIF, MP4 and WebM open
+in the recording editor as external references, without copying or changing the
+source. Unsupported files report an error without stopping later paths.
+Reopening an already-open source focuses its editor without replacing unsaved
+edits. Closed sources reload under the same History ID; screenshot sources with
+a saved draft must first be restored or explicitly discarded from History.
+AppKit switches its editor between sources only after opening settles and without
+dropping pending text or unsaved edits; a refused source remains in History.
+The shared backend validates the actual recording container, editor preview and
+poster before publication. WebM is an input format, not a WebM export;
+Preserve-to-MP4 transcodes it rather than copying WebM bytes into an MP4 file.
+External recording references cannot replace an original; that requires a private
+recovery copy and a separate permanent save. **Save as new file** stays locked on.
+Live development hosts now forward subsequent launches to the process using the
+same History directory, preserving file order and sender-relative paths; a launch
+without files restores hidden recording controls or focuses the open setup, editor,
+History or Preferences window in that order, else opens Preferences. A visible
+native launch opens Preferences (setup on first run), as the shipping app does.
+Native Preferences → General offers opt-in **Start Captures on login**
+for macOS, Windows and Linux development profiles. It starts that profile hidden;
+relaunch or the tray/menu bar restores it. This uses a separate user-owned login
+entry, not Tauri's setting or registration. Disable it before moving/removing the
+development binary. On Wayland, quiet startup keeps History unmapped when a tray
+exists; Preferences, Feedback and media open independently. Missing or lost trays
+expose History so the process remains reachable. Physical compositor/sign-in
+acceptance remains open; [development setup/removal](DEVELOPMENT.md#native-development-login-items)
+documents the platform entries and conflict recovery.
+Native capture shortcuts remain available while Preferences is focused, except
+while a shortcut recorder is active. Updates keep the version and **Native
+development** identity visible; signed checks require explicit development
+configuration, and app installation remains unavailable.
+Fixture launches remain independent. Optional unsigned development packages provide
+Open With metadata for these six formats on macOS, Windows and Linux, under a separate
+**Captures Native Development** identity. Staging does not install them or change
+default handlers; [local opt-in instructions](DEVELOPMENT.md#native-development-open-with)
+include removal. Signing, distribution and physical file-manager acceptance remain
+open; these are not replacement downloads. TIFF is supported by in-editor import,
+not this external-open path.
+Nightly native CI also provides isolated exploratory test archives with
+media tools and a [testing guide](apps/native/TESTING.md); see
+[download and platform limits](DEVELOPMENT.md#native-exploratory-test-archives).
+They are not public installers, trusted signed releases or a shipping replacement.
+Native Preferences (and the tray/menu bar Send Feedback…) opens an optional
+feedback form in its own window, matching the shipping layout. Sending shares only
+the message, optional contact, category, and displayed app/system details with
+captur.es; it never attaches captures or files. Live native profiles retain a local,
+bounded, home-path-redacted Rust panic or unclean-session notice for review.
+Copy stays local; adding the summary to the editable message is explicit, and
+nothing sends until **Send**. A forced stop alone is not a confirmed crash.
+Normal Quit/restart and supported OS termination paths clean the current marker;
+OS exception-report discovery and physical shutdown acceptance remain open.
+Fixture mode cannot collect diagnostics or send feedback, and failed requests
+preserve the draft for retry.
+Shared Rust now defines the screenshot editor's layered document, crop/translation/
+orientation geometry, canvas sizing and bounded snapshot history, checked against
+the shipping TypeScript behavior. A shared renderer now flattens real image layers
+and editor shapes, including closed annotations, curved lines, tapered arrows and
+freehand paths with crop geometry, rotation, opacity, blending and enabled shape/path
+drop shadows, without host I/O.
+A separate shared text prerequisite shapes and rasterizes single lines from explicit
+font bytes, including ligatures, combining marks and right-to-left text. Shared
+paragraph helpers now provide measured wrapping, alignment, auto-width boxes and
+background-plate geometry. An opt-in document renderer composites filled/outlined text and
+square/rounded plates from those fonts, with rotation, opacity and blending. Shared
+text selection, movement and resizing follow the shipping editor's interaction rules.
+Outlines use scalable monochrome glyph contours; color/bitmap glyphs return an error
+in outline mode. Text shadows follow the glyphs, or the plate
+when one is enabled. Editor workers can own explicit
+fonts and preserve their exact bytes in local draft sidecars, so text edits, undo,
+export and reopening use the same fonts. Typed commands create plain or preset text and edit
+content, type, alignment, color and plates transactionally. Both native hosts now
+connect a basic **Text** tool. Selected text's properties, including its style and
+shadow color, opacity, blur and offsets, apply as you edit, as in the shipping
+editor; typing in one field is one undo step. Before placement, choose a
+named style and size; boxed styles center on the click. As in the shipping editor,
+new text starts bold; boxed text uses white letters and the drawing Color for its background
+(pink until you change it); unboxed text uses that Color for its letters. These
+defaults last only for that editor. Both hosts start at Rounded Box when its
+font is offered, otherwise Standard, then Plain, with an initial size scaled to the
+original capture (24–72). The bundle includes
+Nunito and Liberation Sans, Serif and Mono (OFL 1.1); exact font
+bytes and license notices stay with the draft. As in the shipping editor, every
+draft offers all four families: an older draft saved with fewer fonts adds a
+bundled family's files the first time its text uses that family.
+Like the shipping editor's browser fallback, a character the chosen font lacks
+(Nunito has no Greek λ, for example) is drawn from another bundled font, then from
+the fonts installed on the computer, rather than failing; installed fonts are
+never copied into drafts.
+Selected-text named styles use those fonts, including Rounded and Rounded Box.
+Choosing a non-rounded font clears the box's rounded corners; choosing Nunito
+afterward keeps those corners square until you explicitly choose Rounded Box.
+In both native editors, explicitly choosing a named style for selected text also makes that
+style the next new-text choice for this editor. Undo or a failed edit does not
+undo that future choice; size, color and manual font edits do not carry forward.
+The Windows/Linux candidate and AppKit host separately connect an on-canvas native
+multiline text box to the same shared transaction, drawn like Tauri's inline editor
+in the layer's own bundled face, size, colour, plate and position. Typing previews text
+without saving or adding undo steps; clicking away or Escape commits one edit, Return
+inserts a line, and clearing the box discards it. One tool-rail click finishes the latest
+text and chooses that tool, including while a preview is pending. A failed finish keeps
+the text editable without switching tools. AppKit rotates the box with the
+layer; the Windows/Linux box rotates its glyphs, plate, selection highlights and
+caret. Pointer presses target the rotated text; primary drags select it. Its IME placement
+bounds follow that rotation; the operating system controls the candidate window.
+Both draw outlined labels approximately. The Linux on-canvas box accepts middle-click
+PRIMARY text on X11 and Wayland compositors with data-control support. Reads are
+limited to 64 KiB and two seconds; changing input or focus cancels delayed pastes.
+Unavailable PRIMARY never substitutes the ordinary clipboard. Physical macOS,
+Windows, Wayland, IME and accessibility acceptance remain unverified.
+Nunito uses the same bundled faces in Tauri and native. The other three native
+families use Liberation rather than Tauri's system fonts; installed fonts only
+fill in missing characters, and fonts are never imported or downloaded.
+Worker-owned editor sessions add draft restore/save/discard, transactional crop/
+resize/lossless image transforms/undo, single decoded-RGBA image import, and retained
+pixel frames for native hosts. Typed rectangle/ellipse/triangle/diamond/star, straight-line/arrow and
+completed freehand-path creation are also available; native hosts still own pointer
+sampling, drawing gestures and cancellation.
+Shared annotation-style patches can update existing
+shape/path colors, closed-shape fill/stroke controls, widths and shadow settings
+without replacing documents.
+The shared C boundary accepts one borrowed decoded RGBA
+buffer into session-owned storage; hosts own file decoding and interaction.
+Full-canvas photos rotate their canvas; layered overhang stays clipped and fully
+off-canvas transformed images expand the canvas so they are not lost. Shared
+interactive crop geometry also matches shipping bounds, aspect presets and Shift
+locking; physical input acceptance remains separate work.
+The Windows/Linux candidate opens screenshots from History in a native crop,
+canvas-size and draft editor with undo/redo. Both native hosts place their scrolling
+inspector to the right of the canvas and center the image in Fit mode without
+upscaling small captures. Both use the shipping header and tool rail, and the
+shipping sidebar: Layers always sits above the current tool's properties. Both editor windows resize
+down to 760×540, with scrollable inspector controls. A shipping-style export bar spans
+the bottom of both editors in every section: an **Export settings** disclosure whose
+summary reads like `PNG · 1920 × 1080 · ≈ 240 KB`, the filename with a format suffix
+menu, **Saving to** with **Change…**, **Copy image** (briefly **Copied**), a
+**Save as new file** switch and **Save**. Save stays available while Copy runs;
+repeated clicks queue one Save after Copy finishes, even if Copy fails. Copy stays
+blocked during Save. Both native workbenches limit screenshot-window close's
+visible wait to 400 ms while accepted work and draft saving continue in the
+background. Reopening waits behind that work; normal Quit still drains accepted
+outputs and reports final draft failures. A blocked worker can delay reopening or
+Quit. AppKit permission restarts refuse pending editor work. The **Crop** tool selects directly on the
+preview with free or preset aspect ratios and Shift ratio locking, then shows the
+selection's size with **Clear** and **Apply crop**. Apply commits the selection;
+Clear leaves the document unchanged. Outside text fields and menus, Escape also
+clears the selected layer and staged crop without changing tools or adding an Undo
+step. Inline text keeps its existing Escape-to-finish behavior. Layer rows show a grip,
+a live preview, the name and kind, and eye, lock and ⋯ actions. Drag a row to
+reorder it (one undo step) and double-click an image row to rename it. The ⋯ menu
+holds blend mode, opacity, image transforms, Bring to front and Send to back, Merge
+down, Merge visible, Flatten image, Duplicate and Delete. Selected images show
+Width, Height, X and Y fields that apply as you type.
+**Draw** adds rectangles, ellipses, triangles, diamonds, stars, straight lines, tapered arrows and freehand Pen strokes in the default
+annotation color, one undoable layer per gesture. Escape cancels unfinished work;
+short arrow gestures are discarded and drafts retain completed shapes and strokes.
+Both hosts use shared polygon geometry for transient previews and committed layers.
+Pen smooths sampled points and retains click-only dots.
+**Layers → Annotation style** edits fill, stroke and shadow color (the shipping
+eight swatches plus a custom color), width, layer opacity and shadow opacity, blur and
+offsets. Changes apply as you make them; a burst in one field is one undo step and
+each toggle is its own. Hidden and locked annotations remain editable.
+Image layers also expose lossless left/right rotations and horizontal/vertical
+flips, including when hidden or locked; each action supports undo and draft restore.
+**Add images** imports one or more PNG, JPEG, WebP, TIFF, GIF, BMP or SVG files: the first lands below
+the selected visible image, each later one below the previous, expanding the canvas
+when needed. File drops retain the chosen edge or stacked placement for the whole
+batch. One Undo/Redo covers each picker selection or drop; a decode or render failure
+adds nothing and preserves existing Undo/Redo. Imports respect EXIF orientation
+and keep their own draft pixels so reopening does not require the source files.
+GIF imports use only the first frame; **Open** still treats GIFs as recordings.
+Supported ICC profiles and PNG gamma/chromaticity/CICP metadata convert to sRGB.
+The shared decoder rejects calibrated or externally linked BMP color descriptions
+with a conversion message; embedded BMP RGB profiles are supported. Legacy 32-bit
+BMPs without a declared alpha mask import as opaque.
+SVG imports rasterize self-contained vectors/text with Captures' bundled fonts
+(other faces may substitute), with absolute width/height or one absolute dimension
+and a `viewBox` aspect ratio, up to 4 MiB and 4,194,304 pixels. Percentage dimensions,
+`viewBox`-only sizes and missing dimensions with `preserveAspectRatio="none"`
+require conversion to PNG first. Nested document-local `<use>` references are
+supported within the 32,768-node and 32-level limits, including copied content.
+SVGs containing images, HTML, external/unresolved references or cyclic reuse
+require conversion to PNG first; no external files, network resources or system
+fonts are loaded. Broader SVG parity remains open.
+Export settings hold output size, save quality (Preserve, Compress or a maximum
+file size) and **Est. size**, which re-encodes automatically a moment after edits
+or option changes and shows the % change from the original; an encoded-output
+toggle previews the result on the canvas without saving. As in the shipping app,
+**Save** overwrites a screenshot's saved file by default, atomically replacing it and
+updating the same History item (its date is kept) after re-checking that file and
+entry. Turning on **Save as new file**, editing the filename or choosing another
+folder saves a new file instead, and a format that differs from the original always
+does; new files never replace an existing file and add a distinct History entry.
+A capture without a saved file writes its first Save to the output folder. The saved
+file then becomes what Save overwrites. As in the shipping app, every Save then
+shows the saved file in its folder, and **Show in Folder** appears. If History
+cannot be updated, the saved file's path remains available for recovery. The status
+line under the filename explains what Save will do and warns when JPEG will fill in
+transparent areas. The editable document, draft, undo and output preview are
+retained; Undo affects the editor, not the saved file.
+Closing can save or keep the previous draft; explicit Discard edits restores the
+current History image. Failed draft saves keep edits open and cancel normal quit. Private-X11 checks
+cover both appearances, persisted drafts, real preview pixels and error recovery.
+AppKit now connects the same crop, canvas-resize and draft operations in its own
+window. Its **Crop** tool also uses the shared aspect presets and Shift ratio locking;
+the selection stays separate from the document until **Apply crop**, and **Clear**
+or Escape drops it.
+It includes native image-layer controls, lossless rotate/flip actions, and
+PNG/JPEG/WebP output previews without saving. Both native export settings offer
+only **Tiny, Smaller, Balanced, High and Highest** compression presets, starting
+at Highest, with no numeric quality field. Highest PNG preserves pixels with
+lossless packing; JPEG/WebP presets are lossy.
+Both hosts also offer **Original, 75%, 50% and Custom** output dimensions, with an
+aspect lock for custom sizes. Preview/save resize only the exported pixels and the
+published History image; the editable document, draft and full-resolution clipboard are unchanged.
+Its export bar uses the same shared save model and status copy as the
+Windows/Linux candidate, and preserves the draft. AppKit
+also imports still images, one per new image layer, using its color-managed
+system decoder. It normalizes imported pixels to straight-alpha sRGB RGBA8 and retains
+them in the draft without depending on the source file. ImageIO-supported sources use
+their first image; files without a usable color description are rejected rather than
+silently relabeled.
+Its **Draw** view maps Rectangle, Ellipse, Line, Arrow and Pen gestures from the fitted
+edited preview into shared document coordinates, including reverse and off-canvas
+gestures. Release creates one undoable layer; Escape, focus loss, close, or leaving Draw
+cancels transient geometry without editing the document. Arrow outlines and Pen
+smoothing come from shared Rust; Pen supports click-only dots and round caps.
+In both native hosts, newly placed shapes keep their move, resize, rotation and
+curve grips live without switching to Select. The active shape tool moves the body
+of its own selected shape; dragging empty space starts another shape.
+Both native editors offer stroke/fill colors, stroke width and opacity before
+drawing. These choices stay local to the editor; drawing creates one undoable
+layer. Pre-placement drop-shadow controls include color, opacity, blur and X/Y
+offsets. While dragging an annotation, both hosts update its pixels and shadow
+through the shared renderer in the background; Escape restores the unchanged image.
+An approximate vector guide appears until the first pixel frame is ready.
+The Windows/Linux native candidate also accepts exact `#rrggbb` colors from the
+keyboard in its custom-color chooser; incomplete input keeps the accepted color.
+Its shared range controls expose bounds and adjustment actions to accessibility
+APIs. Arrow adjustments retain keyboard focus immediately after Tab; tabbing
+away stops subsequent keys from changing the previous slider.
+Physical screen-reader acceptance remains open; AppKit keeps its native
+sliders and system color panel.
+Windows/Linux custom selects retain focus on the first arrow after Tab and
+process rapid navigation, selection and cancellation keys in order, including
+repeated arrows. Tab still closes the listbox and moves to the next control.
+The Windows screenshot editor's Font, Aspect and zoom selects follow Windows
+Chromium instead: keyboard choices apply once on close; pointer hover alone
+does not commit on Escape. Tab accepts the highlighted choice and closes the
+popup before a second Tab moves focus.
+The native Windows host ignores lone Alt/F10 menu activation so scrolling remains
+available; Alt+Space and Alt+F4 retain their standard Windows behavior.
+Native Windows/Linux numeric fields also apply rapid Up/Down steps in order at
+their limits and retain focus on the first arrow after Tab; stepping stops when
+Tab or Enter leaves the field.
+Its Layers panel also edits annotation fill, stroke, opacity and shadow settings live,
+as shipping does; shared Rust owns style defaults, rendering, undo folding and draft
+persistence.
+Both native hosts keep the Properties title visible while its fields scroll,
+including at the minimum window size; the title does not cover the controls.
+Editor errors share the export footer rather than shrinking the inspector;
+the full explanation remains available when the footer text is truncated.
+In both native hosts, **Layers** supports clicking the edited preview to select an
+unlocked visible layer, or empty space to clear selection. Move, rotate, resize and
+curve-dot drags show edited pixels while held, with selection guides over them.
+The background renderer keeps only the newest pending position; a large image can
+lag behind the pointer. Held previews do not change the document or saved draft;
+release commits one undoable edit. Escape, focus loss, preview resizing or leaving
+Layers cancels the drag and restores the unchanged pixels.
+The selected layer also exposes a **rotation grip** when it fits inside the image.
+Drag it to rotate; hold Shift for stops configured under **Properties → Shift rotation snap**
+(1–180°, initially 15°). The increment is per-editor UI state, not a document edit
+or saved preference. Rotation uses the same live-pixel
+preview, cancellation, undo and draft behavior. Hidden or locked layers have no
+grip.
+Eight border grips resize images, text, shapes and drawings. Shift keeps corner drags
+proportional; edge grips remain single-axis. Unrotated resizes snap to canvas and
+visible-layer edges with guide lines; rotated resizes retain the opposite anchor.
+Resizing previews pixels without growing the canvas; fully outside content can
+expand the canvas when the edit commits on release.
+Selected lines and arrows show curve dots: drag a dot to bend the stroke, double-click
+the path to add a point and double-click a point to remove it. Layers offers a Curve
+slider for straight or single-bend strokes and Straighten for multi-point ones. Curves
+survive saves and drafts. Like shipping, Curve and Straighten remain available in
+Properties on locked or hidden layers; locked layers still reject canvas-dot edits.
+Curve slider drags update the canvas while held and form one undo step per gesture;
+only the newest pending drag value waits for the worker. Controls keep keyboard
+focus while edits run. Keyboard steps apply in order with their own undo steps,
+and Straighten remains a separate action.
+A selected layer that hangs past the canvas shows an
+**Expand canvas** action; hovering previews the grown canvas and one click grows it as
+a single undo step. Dropping PNG, JPEG, WebP, TIFF, GIF, BMP or SVG files on the canvas adds image
+layers where the placement guide shows (Place above/left/right/below, or stacked);
+each file is one undo step. As in shipping, the snapped edge and the hovered Expand
+canvas preview breathe with an accent bloom and streaming particles; with reduced
+motion they hold still and show no particles.
+Canvas moves now snap painted bounds to canvas and visible-layer edges, including
+locked layers, with alignment guides. The snap range stays constant on screen;
+numeric X/Y edits remain exact and do not snap. Clicks and small pointer movements
+do not trigger snapping or change the document.
+Both hosts connect view-only zoom and pan: Fit, 100%, zoom steps, Recenter,
+Cmd/Ctrl-wheel zoom and Cmd/Ctrl-drag or middle-button pan. AppKit also connects
+native magnification. Zoom stays anchored under the pointer and shares the image's
+coordinate mapping with editing tools. These controls do not change drafts or undo.
+Fit does not enlarge small screenshots; manual zoom still can.
+Cmd/Ctrl +/− zoom in 1.25× steps; Cmd/Ctrl 0 shows 100% (not Fit), including while
+an editor field has focus. Zoom shortcuts cancel unfinished canvas gestures.
+Cmd/Ctrl Z undoes and Cmd/Ctrl Shift Z redoes document edits outside text entry
+and open dialogs. Typing retains its own Undo; Undo/Redo do not queue while the
+editor is busy. These are editor-local shortcuts, not global capture shortcuts.
+Successful Undo/Redo clears layer and staged crop selections, matching Tauri;
+the current tool stays active. Reselect a layer before further layer edits.
+Cmd/Ctrl D duplicates the selected layer; Delete/Backspace removes an unlocked
+selection. Locked and hidden layers can still be duplicated, and typing fields
+keep their own deletion keys. Arrow keys nudge an unlocked selection by one image
+pixel, or ten with Shift, without snapping or expanding the canvas. Hidden layers
+can be nudged too. Focused fields and zoom controls retain their arrow keys.
+Cmd/Ctrl C retains the selected editable layer and claims the OS clipboard with
+a private marker, not visible text. Cmd/Ctrl V reuses that snapshot only while
+the marker still belongs to this editor; repeated layer pastes offset by 24 pixels.
+External clipboard images or local image files instead import through Add images
+placement, with owned draft pixels, canvas expansion, last-image selection and
+one undo/redo step for the entire paste, matching Tauri. If any image cannot be
+decoded or the resulting canvas cannot be rendered, nothing is added and existing
+Undo/Redo remains available. Add images and file drops use the same atomic batch
+contract. Text fields retain normal paste; URL/HTML-only images are not fetched.
+AppKit queues repeated external image pastes, file drops and picker selections
+in arrival order, applying each batch to the latest document. A failed batch does
+not block later imports; closing or replacing the document cancels waiting batches.
+Windows/Linux queue completed picker selections alongside file drops even while
+an edit is running, so later drops cannot overtake an already completed selection.
+Both native hosts retain accepted copied-layer pastes while an edit is running:
+each keeps its copied contents and insertion target, even if another Copy or an
+external clipboard replacement occurs before it runs. Each successful paste has
+its own Undo step; closing or resetting the editor cancels waiting pastes.
+Windows/Linux also retain external-image Paste acquisitions at native input,
+before a busy editor can defer mutation. Decoding starts independently; accepted
+external batches keep their insertion target and queue alongside file imports,
+even when a later acquisition finishes first. Each successful batch has its own
+Undo, and close/reset cancels waiting imports. Wayland captures the key event's
+seat offer before later selection events; X11 starts watched transfers immediately.
+Outside text fields, an empty or text/HTML-only clipboard is ignored; unreadable
+image data still reports an error without changing the document.
+Windows acquires file paths and fallback PNG/DIBV5 bytes under one clipboard lock,
+then unlocks before checking files or decoding. Usable files take precedence;
+otherwise PNG takes precedence over DIBV5. Image transfers are limited to 256 MiB
+and use the shared dimension, pixel and color-management checks. Windows physical
+clipboard and rapid-paste ordering acceptance remain open.
+X11 file-list paste accepts incremental clipboard transfers within the existing
+1 MiB/two-second transfer limits; incomplete or invalid transfers import nothing.
+X11 PNG paste retains color metadata for the shared decoder, matching Windows
+and Wayland color management while preserving alpha. Direct and incremental PNG
+transfers use the 256 MiB encoded-image limit and a two-second transfer deadline.
+X11 paste uses XFixes selection notifications to reject clipboard replacement
+during a transfer, including replacement by the same owner, instead of importing
+a newer PNG accidentally. Paste again to explicitly use the new selection.
+On Wayland, PNG paste, local-file paste and editable layer ownership use the
+focused window's core selection protocol. PNG fallback stays with the same offer
+if the clipboard changes during a file-list transfer; the next paste uses the new
+selection. Transfers are bounded to two seconds per format, 1 MiB for file lists
+and 256 MiB for encoded PNGs, with the shared image dimension and pixel limits.
+Copying canvas pixels to other apps still requires compositor data-control support.
+External Wayland file drops also use the core protocol, accepting COPY-only local
+file lists without blocking input. Each completed offer retains its release position
+and its own Undo step; cancelled, malformed or incomplete transfers import nothing.
+Disposable Sway/GTK checks cover this path; physical GNOME/KDE acceptance remains open.
+**Copy image** remains the separate pixel-copy action. These are opt-in native
+source features, not a change to the public Tauri app or video editor.
+Closing the editor or discarding its draft clears the internal layer clipboard.
+Right-click a layer for Copy layer, Paste layer, Duplicate, Delete and Merge down.
+These actions target that row; Merge visible and Flatten image affect the document.
+Empty list space offers Paste and the document-wide combine actions.
+Locked layers cannot be deleted or merged down.
+With canvas focus, V selects layers, C starts Crop, T selects Text, R Rectangle,
+O Ellipse, L Line, D Diamond, S Star, A Arrow, P Pen, and B the last-used
+Wand/Erase/Restore mode (initially Wand). Switching tools cancels unfinished
+gestures without applying them; selecting the same tool again preserves them.
+Focused native controls retain typing and letter navigation.
+Both hosts also keep a left tool rail visible beside the canvas, with the shipping
+labels and hover tips: Select & move, Crop, Text, Shapes, Arrow, Freehand and Eraser.
+Shapes opens Rectangle, Ellipse, Line, Triangle, Diamond and Star, recalling the last
+choice. Its keyboard focus starts on that shape; arrows wrap through the
+three-column grid, Home/End reach its first/last item, and Enter/Space choose.
+Escape or Tab closes the flyout and returns focus to Shapes without choosing.
+The rail chooses the tool (there are no section tabs); pending work
+disables it. Drawing selects the new layer and shows its Properties while keeping
+the drawing tool active. Choosing Crop or a drawing tool clears selection and
+restores that tool's controls. Like shipping, the header holds the canvas W × H
+fields, Trim edges and the canvas background, then Undo/Redo (hidden at 1040 points
+and narrower), the zoom group and Add images. Like shipping, both hosts autosave
+the edit draft 700 ms after each change and flush it when the editor closes,
+without a save prompt. Reopening a draft shows a restored-edits notice with only
+Dismiss in both native hosts and shipping Tauri; dismissing it preserves the
+restored document and saved edits. Recenter
+appears only while the canvas is panned mostly off screen.
+The zoom menu offers Fit, 50%, 100% and 200% and displays the current custom zoom.
+The Windows/Linux preset menu supports keyboard navigation, Escape cancellation,
+and accessible option selection; choosing Fit again also clears pan.
+Both hosts also provide a logarithmic 5–800% zoom slider. It tracks the actual Fit
+scale and preserves the viewport-center image point when dragged.
+Both native sliders also accept arrow keys, Page Up/Down and Home/End
+while focused, and expose zoom percentages and value actions to accessibility
+tools. These view-only changes do not alter the screenshot or its Undo history.
+Fit retains each workbench's existing placement.
+Windows, Wayland and physical AppKit presentation remain unverified.
+Mini-preview controls, History actions and screenshot-editor tools use shared shipping
+icon paths on both native hosts, rather than platform-specific approximations.
+The inspector follows the shipping sections, controls, labels and spacing in the
+shipping 320 px sidebar column on both hosts.
+Native mini previews and History use the shipping Tauri action set, without
+Share controls. Experimental account/upload code and disabled sharing fixtures
+remain separate from the live app; the account service is unavailable.
+See the [sharing integration slice](docs/native-rewrite.md#mini-preview-sharing-integration--acceptance-open).
+Both hosts can copy the full-resolution edited image without saving a file or draft;
+copy ignores export format and quality settings.
+The **Background color** card offers a Solid background toggle, the shipping eight
+swatches and a custom color; each change applies immediately as one undo step and
+survives draft restore. It changes the canvas fill, not backgrounds within image layers.
+**Trim edges** fits the canvas to visible layer geometry, preserving off-canvas
+content and moving hidden layers with the document. It does not scan image alpha
+to remove transparent borders. Trimming supports undo/redo and draft restore.
+The button is disabled when there is nothing to trim; hovering or focusing it
+previews the cut: the discarded margins turn red, a dashed outline marks the
+kept area and the cut edges pulse (static under reduced motion).
+Both hosts also connect **Draw → Wand**: click an image to remove similar colors,
+using a color tolerance and either a contiguous region or all matching pixels.
+The frontmost visible image is editable even when locked; transparent pixels do
+not let clicks reach images underneath. While the Wand hovers an image, a colour
+loupe beside the crosshair magnifies the image pixels and shows the sampled hex. Each edit clears the canvas fill, keeps
+the original image pixels, and supports undo/redo and draft restore. The original
+History capture remains unchanged. The Tolerance slider runs from 0 to 120 like
+Tauri's. **Erase** and **Restore** use brush Size and Softness sliders; Restore
+paints from the retained original image. As in the shipping editor, a ring
+the brush's size replaces the pointer over an image (dashed for Restore; elsewhere
+the pointer shows not-allowed) while shared-renderer pixels preview the stroke during dragging.
+Release commits one undo step; Escape, focus loss or changing tools cancels the
+preview without editing. Properties shows a stroke or brush preview for drawing
+tools and Erase/Restore, and Apply crop pulses while a crop is staged. Physical-platform
+input acceptance remains parity work.
+Text controls support a style picker, multiline content, font families (listed
+as Sans serif, Serif, Monospace and Nunito), size, bold/italic and alignment buttons,
+swatch-row text and background colors, a Text background plate and a Drop shadow
+toggle; outlined and rounded plates come from the Outlined and Rounded Box styles.
+Drawing default colors use the same swatch rows.
+Changes apply as you make them; a typing burst in one field is one undo step.
+Custom shadows and pinned-font named styles are connected, including style/size
+choices for new text; new text also takes the drawing defaults' Drop shadow, as in
+the shipping editor. Font import and physical input/IME/accessibility acceptance
+remain open.
+Native Capture History shows its header, filters and grid. **Back to Preferences**
+opens or restores Preferences without closing History, including when History is
+empty. Captures start from the tray, shortcuts and New Capture menu. Wayland additionally
+offers **Take screenshot…**, **Record display…** and **Record window…** because a tray or global shortcuts may be unavailable. A
+denied capture opens the native permission recovery: Restart & Retry on macOS, or a
+**Capture permissions** dialog that reuses the setup permission cards. Check or refresh without prompting; request macOS
+screen or optional microphone access explicitly. Done returns to the workspace
+even after denial or a check failure, without restarting or closing editors.
+Windows/X11 need no upfront screen grant; microphone status is not reported there.
+Wayland window screenshots require a window-sharing portal. Physical
+permission-revocation/retry acceptance is still open.
+Post-save source adoption, remaining editor layout/interaction parity,
+physical setup/login and installed-update acceptance remain open. Shared editor support is prerequisite work,
+not native editor acceptance. Resident shortcuts and single-instance relaunch are
+connected, but physical cross-platform acceptance and full feature/design parity
+remain open. The
+[migration checklist](docs/native-rewrite.md) tracks the plan and parity gates;
+older Tauri releases remain in the build archive. The wgpu host
+supports hidden Wayland startup, but physical resource acceptance remains open; see its
+[evaluation limits](apps/native/wgpu/README.md).
 
 ## License and trademarks
 
