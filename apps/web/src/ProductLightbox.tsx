@@ -332,7 +332,7 @@ export default function ProductLightbox({
       <p className="product-lightbox-hint">
         {shot.title}
         <span aria-hidden="true"> · </span>
-        {zoomed ? "Drag to pan" : "Click image or + to zoom"}
+        {zoomed ? "Drag to pan" : "Tap image or + to zoom"}
       </p>
     </dialog>
   );

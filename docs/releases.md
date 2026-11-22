@@ -46,12 +46,15 @@ updater changes on the native staging feed (below) before they reach main.
 
 ## Native packaging and recovery
 
-`scripts/native-preview-build.mjs` builds the native executable and updater
-helper, verifies their build identity, then uses the pinned Tauri CLI only to
-bundle installers. It does not build or embed the removed Tauri app, frontend,
-or WebView2 installer. `CI` can be manually dispatched on a branch to build
-unsigned installers without release secrets, and builds them nightly; nothing is
-uploaded to a release.
+The native public rollout has been withdrawn pending parity. Earlier native
+archives used AppKit (macOS Apple Silicon) and Rust/wgpu (Windows/Linux x64)
+and remain experimental; physical acceptance is incomplete. Native builds are no
+longer published by `release.yml`. `scripts/native-preview-build.mjs`
+builds the native executable and updater helper, verifies their build identity,
+then uses the existing pinned Tauri CLI only to bundle installers. It does not
+build or embed the Tauri app, frontend or WebView2 installer. `CI` can be manually
+dispatched on a branch to build unsigned installers without release secrets, and
+builds them nightly; nothing is uploaded to a release.
 
 The builder now packages the replacement hosts, not the maintenance-only wgpu
 workbench: AppKit for `aarch64-apple-darwin` (`.app` and `.dmg`, unchanged),
@@ -356,13 +359,13 @@ Dated releases are full GitHub releases (not pre-releases) with CalVer versions 
 `YYYY.MM.DD.N` form, using the
 `America/New_York` date of the main-branch commit and a same-day revision from 1
 through 99. A release named `Captures 2026.07.19.1` uses tag
-`v2026.07.19.1`. The installer bundler receives the SemVer-compatible internal version
+`v2026.07.19.1`. Tauri receives the SemVer-compatible internal version
 `2026.7.1901`; source manifests remain at the development version. The updater
 channel and fixed Git tag are both named `preview`; refreshing them always uses
-the newest published release carrying a valid runtime marker (`captures-native.json`
-or legacy Tauri markers). The **Update public downloads** job also retitles older
-dated releases to the same `Captures <version>` form, strips their former warning,
-and clears their pre-release flag.
+the newest published Tauri version, ignoring native archives. The
+**Update public downloads** job also retitles older dated releases to the same
+`Captures <version>` form, strips their former experimental warning and clears
+their pre-release flag.
 
 The workflow stages a draft release at the exact commit under test. Each platform
 builds and validates its pinned LGPL FFmpeg sidecars, then uploads its installer,
@@ -451,12 +454,13 @@ The fixed `preview` release is the permanent **Captures — Latest** download pa
 marked as GitHub's Latest release, not a historical build. Its tag stays `preview`
 because installed apps fetch `releases/download/preview/latest.json`. It holds the
 macOS, Windows, Debian, and AppImage installers plus the `latest.json` updater
-manifest for the newest validated public CalVer version. That manifest includes
-the `changelog` through that version, excluding unmarked historical archives.
+manifest for the newest
+public Tauri CalVer version. That manifest includes a Tauri-only `changelog`
+through that version, never notes from experimental native archives.
 Installed apps ask `https://captur.es/api/updates/preview` for that
 manifest about every five minutes (and again shortly after launch). The website
-caches GitHub's `latest.json` for one minute and serves it unchanged; installed
-apps still fall back to the GitHub download URL if captur.es is unreachable.
+caches GitHub's `latest.json` for one minute and serves it unchanged; Tauri
+still falls back to the GitHub download URL if captur.es is unreachable.
 Platform download URLs in `latest.json` are rewritten from GitHub API asset
 endpoints to public `releases/download/<CalVer-tag>/…` links so the archive
 download itself does not consume the unauthenticated API rate limit (HTTP 403)
