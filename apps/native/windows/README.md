@@ -268,8 +268,12 @@ on the card.
 renders it (compared with the Tauri harness). Scrolling, the cues, Minimize
 and Expand were checked live through UI Automation with History's Restore on
 Windows 11 at 150%; the carry, the wheel and file drags are unit- and
-render-checked only (not physically dragged). Cards arrive and leave with the
-shared preview motion; keyboard focus and tooltips are not ported. `--scene capture --screenshot PATH`
+render-checked only (not physically dragged). Close, Delete, Edit and Clear
+all show shipping's preview tooltips (a glass chip 6 DIPs above the control
+in bottom stacks, below it in top ones, fading in 120 ms, Clear all over
+`--dur-1`) on the host's shared `tooltip::Fade` (`--select
+tooltip|clear-tip`; unit- and render-checked). Cards arrive and leave with
+the shared preview motion; keyboard focus is not ported. `--scene capture --screenshot PATH`
 renders the bar offscreen (`--tool display` for Full screen, `--tool window`
 for Window, `--select x` for a sample selection or hovered window, `--select
 desktop` for the hovered display, `--select picked` for a picked window with

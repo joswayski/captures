@@ -24,7 +24,10 @@
 //! an accepted drop elsewhere dismisses the card and a drop back on the
 //! stack shakes it (shipping `finishFileDrag`).
 //!
-//! Not ported yet: keyboard focus, tooltips, the capture highlight and the
+//! Close, Delete, Edit and Clear all show shipping's preview tooltips on the
+//! host's shared `tooltip::Fade`.
+//!
+//! Not ported yet: keyboard focus, the capture highlight and the
 //! editor-presence pill.
 
 use std::cell::{OnceCell, RefCell};
@@ -57,6 +60,8 @@ use windows_numerics::Matrix3x2;
 use crate::gfx::{self, Gfx, rect};
 use crate::panel_uia::{self, Item, Role};
 use crate::tokens::Tokens;
+use crate::tooltip::Fade as Tip;
+use captures_app::tray_notice::LogicalRect;
 
 /// Not exported by the `windows` crate's `WindowsAndMessaging`.
 const WM_MOUSELEAVE: u32 = 0x02A3;
@@ -190,6 +195,9 @@ pub struct Stack {
     /// When each card dropped back on the stack began its refusal shake
     /// (`thumbnail-drop-reject`), by card id.
     rejects: HashMap<String, f64>,
+    /// The card corner tooltips (Close, Delete, Edit: 120 ms `ease`) and the
+    /// toolbar's Clear all tooltip (`--dur-1` `--ease-out`).
+    pub tips: [Tip<Hit>; 2],
 }
 
 /// A dissolving card's chips: how each moves, and their filtered pixels,
@@ -354,7 +362,72 @@ impl Stack {
             gravity: if placement.is_top() { -1. } else { 1. },
             sway: None,
             rejects: HashMap::new(),
+            tips: [
+                Tip::timed(Transition::PreviewIconTooltip),
+                Tip::timed(Transition::PreviewStackTooltip),
+            ],
         }
+    }
+
+    /// The tooltip the control under the pointer shows (`data-tooltip`):
+    /// Close, Delete or Edit on a card showing its controls, or Clear all.
+    /// Copy, Save file and Minimize carry their own text.
+    fn tip_targets(&self) -> [Option<Hit>; 2] {
+        match self.hot {
+            Some(hit @ (Hit::Close(i) | Hit::Delete(i) | Hit::Edit(i)))
+                if self.hovered == Some(i) && !self.exiting(i) =>
+            {
+                [Some(hit), None]
+            }
+            Some(Hit::ClearAll) if self.toolbar() => [None, Some(Hit::ClearAll)],
+            _ => [None, None],
+        }
+    }
+
+    /// Fade the tooltips toward the control under the pointer.
+    pub fn sync_tips(&mut self, t: &Tokens, now: f64) {
+        let targets = self.tip_targets();
+        for (fade, key) in self.tips.iter_mut().zip(targets) {
+            fade.set(key, t, now);
+        }
+    }
+
+    pub fn tips_animating(&self, t: &Tokens, now: f64) -> bool {
+        self.tips.iter().any(|fade| fade.animating(t, now))
+    }
+
+    /// A tooltip's copy, its control and whether it opens above it.
+    fn tip(&self, hit: Hit) -> Option<(&'static str, Rect, bool)> {
+        let above = preview_chrome::icon_tooltip_above(self.top);
+        match hit {
+            Hit::Close(i) | Hit::Delete(i) | Hit::Edit(i) => {
+                let card = self.card_rect(i)?;
+                let (_, r) = self
+                    .top_controls(i, card)
+                    .into_iter()
+                    .find(|(h, _)| *h == hit)?;
+                let label = match hit {
+                    Hit::Close(_) => "Close",
+                    Hit::Delete(_) => "Delete",
+                    _ => preview_chrome::EDIT_LABEL,
+                };
+                Some((label, r, above))
+            }
+            Hit::ClearAll => Some(("Clear all", self.clear_rect(), above)),
+            _ => None,
+        }
+    }
+
+    fn paint_tips(&self, dc: &ID2D1DeviceContext, g: &Gfx, t: &Tokens) -> Result<()> {
+        let now = crate::tooltip::now_ms();
+        for fade in &self.tips {
+            for (hit, progress) in fade.frames(t, now) {
+                if let Some((label, anchor, above)) = self.tip(hit) {
+                    paint_tip(dc, g, t, label, anchor, above, progress)?;
+                }
+            }
+        }
+        Ok(())
     }
 
     /// A card's file was dropped back on this stack: refuse it with a
@@ -1164,7 +1237,8 @@ impl Stack {
                 )?;
             }
         }
-        self.paint_cues(dc, g, t)
+        self.paint_cues(dc, g, t)?;
+        self.paint_tips(dc, g, t)
     }
 
     /// `.thumbnail-overflow-cue`: a glass tab flush with its window edge,
@@ -1869,6 +1943,25 @@ pub fn fixture(g: &Gfx, image: &image::RgbaImage, select: Option<&str>) -> Stack
             stack.height = 560.;
             stack.scroll = preview::THUMBNAIL_CARD_SLOT as f32;
         }
+        // The pointer on the hovered card's Delete, or on Clear all: their
+        // tooltips at rest.
+        Some(select @ ("tooltip" | "clear-tip")) => {
+            stack.pointer(Some((150., 90.)));
+            let at = if select == "tooltip" {
+                let hovered = stack.hovered.expect("a hovered card");
+                let card = stack.card_rect(hovered).expect("card");
+                stack
+                    .top_controls(hovered, card)
+                    .into_iter()
+                    .find(|(hit, _)| matches!(hit, Hit::Delete(_)))
+                    .map(|(_, r)| r)
+                    .expect("Delete")
+            } else {
+                stack.clear_rect()
+            };
+            stack.pointer(Some((at.left + 4., at.top + 4.)));
+            stack.tips = stack.tip_targets().map(Tip::settled);
+        }
         // The hovered card's file is being dragged out: its image hides.
         Some("file-drag") => {
             stack.pointer(Some((150., 90.)));
@@ -1882,6 +1975,52 @@ pub fn fixture(g: &Gfx, image: &image::RgbaImage, select: Option<&str>) -> Stack
     }
     stack.sync_cues();
     stack
+}
+
+/// `.icon-button::after` and `.thumbnail-stack-control[data-tooltip]::after`:
+/// a `--glass-strong` chip with `--shadow-sm`, `--r-xs` corners and 4 × 7
+/// padding around `--text-2xs` medium copy, 6 DIPs from its control, sliding
+/// 2 DIPs toward it as it fades in (`preview_chrome::icon_tooltip_frame`).
+fn paint_tip(
+    dc: &ID2D1DeviceContext,
+    g: &Gfx,
+    t: &Tokens,
+    label: &str,
+    anchor: Rect,
+    above: bool,
+    progress: f32,
+) -> Result<()> {
+    let text = g.text_sized(t, label, t.n("text-2xs"), "weight-medium", None)?;
+    let f = preview_chrome::icon_tooltip_frame(
+        LogicalRect::new(
+            anchor.left.into(),
+            anchor.top.into(),
+            (anchor.right - anchor.left).into(),
+            (anchor.bottom - anchor.top).into(),
+        ),
+        text.width.into(),
+        text.height.into(),
+        above,
+        progress.into(),
+    );
+    let r = rect(
+        f.x as f32,
+        f.y as f32,
+        (f.x + f.width) as f32,
+        (f.y + f.height) as f32,
+    );
+    let radius = t.n("r-xs");
+    faded(dc, progress, || {
+        gfx::shadow(dc, r, radius, t.shadow("shadow-sm"))?;
+        gfx::fill_round(dc, r, radius, t.color("glass-strong"))?;
+        gfx::text(
+            dc,
+            &text,
+            r.left + preview_chrome::ICON_TOOLTIP_PADDING_X as f32,
+            r.top + preview_chrome::ICON_TOOLTIP_PADDING_Y as f32,
+            t.color("glass-text"),
+        )
+    })
 }
 
 /// Run `paint` masked to outside the rounded `r`, so a hollow card's shadow
@@ -2501,6 +2640,7 @@ impl Previews {
             return Ok(());
         };
         self.stack.sync_cues();
+        self.stack.sync_tips(&self.tokens, crate::tooltip::now_ms());
         let (stack, g, t) = (&self.stack, &self.g, &self.tokens);
         gfx::draw_surface(surface, self.px, (self.scale, self.scale), 0., |dc| {
             stack.paint(dc, g, t)
@@ -2712,9 +2852,17 @@ impl Previews {
         }
     }
 
+    /// The stack's motion or a tooltip fade still runs.
+    fn moving(&self) -> bool {
+        self.stack.animating()
+            || self
+                .stack
+                .tips_animating(&self.tokens, crate::tooltip::now_ms())
+    }
+
     /// Tick the frame timer while the fly or fan runs.
     fn animate(&self) {
-        if self.stack.animating() {
+        if self.moving() {
             unsafe {
                 SetTimer(Some(self.hwnd), MOTION_TIMER, 16, None);
             }
@@ -2818,7 +2966,7 @@ impl Previews {
         }
         self.stack.prune_rejects();
         let _ = self.render();
-        if self.stack.animating() {
+        if self.moving() {
             return;
         }
         unsafe {
@@ -3490,6 +3638,37 @@ mod tests {
         s.reject("a0");
         assert!(s.rejects.is_empty());
         assert!(!s.animating());
+    }
+
+    #[test]
+    fn only_icon_controls_and_clear_all_show_tooltips() {
+        use captures_settings::MiniPreviewPlacement as P;
+        let mut s = stack(P::BottomLeft, &[true, false]);
+        let card = s.card_rect(0).unwrap();
+        s.pointer(Some((card.left + 40., card.top + 60.)));
+        let controls = s.top_controls(0, card);
+        let at = |r: Rect| Some((r.left + 4., r.top + 4.));
+        // Close, Delete and Edit name themselves; the card body, Copy and
+        // Save file carry no tooltip.
+        for (hit, r) in &controls {
+            s.pointer(at(*r));
+            assert_eq!(s.tip_targets(), [Some(*hit), None], "{hit:?}");
+        }
+        let (copy, _) = s.main_actions(0, card)[0];
+        assert_eq!(copy, Hit::Copy(0));
+        s.pointer(at(s.main_actions(0, card)[0].1));
+        assert_eq!(s.tip_targets(), [None, None]);
+        s.pointer(at(s.clear_rect()));
+        assert_eq!(s.tip_targets(), [None, Some(Hit::ClearAll)]);
+        assert_eq!(
+            s.tip(Hit::ClearAll).map(|(label, ..)| label),
+            Some("Clear all")
+        );
+        // Bottom stacks open tips above their control, top stacks below.
+        let (label, anchor, above) = s.tip(controls[1].0).unwrap();
+        assert_eq!((label, above), ("Delete", true));
+        assert_eq!(anchor, controls[1].1);
+        assert!(!stack(P::TopRight, &[true]).tip(Hit::Close(0)).unwrap().2);
     }
 
     #[test]

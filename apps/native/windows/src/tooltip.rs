@@ -12,7 +12,8 @@
 //! [`Fade::frames`] with [`paint`], and keeps repainting while
 //! [`Fade::animating`]. [`Fade::settled`] is the resting state for offscreen
 //! renders. The recording controls (`hud.rs`) and the capture bar
-//! (`capture.rs`) use it.
+//! (`capture.rs`) use it; mini preview cards (`previews.rs`) keep its fade
+//! with their own timings ([`Fade::timed`]) and draw their own chip.
 
 use captures_app::motion::{Transition, Tween};
 use captures_app::recording_hud as hud;
@@ -41,9 +42,10 @@ pub fn now_ms() -> f64 {
         * 1000.
 }
 
-/// `Transition::Tooltip` from the tokens, or shipping's 90 ms standard curve.
-fn tween(t: &Tokens) -> Tween {
-    Transition::Tooltip.resolve(t).unwrap_or(Tween {
+/// `transition` (`Transition::Tooltip` unless [`Fade::timed`]) from the
+/// tokens, or shipping's 90 ms standard curve.
+fn tween(transition: Transition, t: &Tokens) -> Tween {
+    transition.resolve(t).unwrap_or(Tween {
         duration_ms: 90.,
         easing: captures_app::motion::CubicBezier::LINEAR,
     })
@@ -61,6 +63,8 @@ pub struct Fade<K> {
     from: f64,
     /// The previous tooltip and its progress at `at`.
     leaving: Option<(K, f64)>,
+    /// How it fades: `Transition::Tooltip` unless [`Self::timed`].
+    transition: Transition,
 }
 
 impl<K: Copy + PartialEq> Default for Fade<K> {
@@ -77,6 +81,16 @@ impl<K: Copy + PartialEq> Fade<K> {
             at: f64::NEG_INFINITY,
             from: 1.,
             leaving: None,
+            transition: Transition::Tooltip,
+        }
+    }
+
+    /// Hidden, fading with `transition` instead (the mini previews' own
+    /// tooltip timings).
+    pub const fn timed(transition: Transition) -> Self {
+        Self {
+            transition,
+            ..Self::settled(None)
         }
     }
 
@@ -85,7 +99,10 @@ impl<K: Copy + PartialEq> Fade<K> {
         if key == self.shown {
             return false;
         }
-        let (tween, reduced) = (tween(t), crate::appearance::reduced_motion());
+        let (tween, reduced) = (
+            tween(self.transition, t),
+            crate::appearance::reduced_motion(),
+        );
         let p = tween.progress(now - self.at, reduced);
         let shown = self
             .shown
@@ -114,7 +131,8 @@ impl<K: Copy + PartialEq> Fade<K> {
     /// The tooltips to draw now with their fade progress (0 hidden, 1 at
     /// rest), the leaving one first.
     pub fn frames(&self, t: &Tokens, now: f64) -> Vec<(K, f32)> {
-        let p = tween(t).progress(now - self.at, crate::appearance::reduced_motion());
+        let p =
+            tween(self.transition, t).progress(now - self.at, crate::appearance::reduced_motion());
         let mut frames = Vec::new();
         if let Some((key, from)) = self.leaving {
             frames.push((key, (from * (1. - p)) as f32));
@@ -129,7 +147,7 @@ impl<K: Copy + PartialEq> Fade<K> {
     /// True while a fade runs and the surface must keep painting.
     pub fn animating(&self, t: &Tokens, now: f64) -> bool {
         (self.shown.is_some() || self.leaving.is_some())
-            && tween(t).running(now - self.at, crate::appearance::reduced_motion())
+            && tween(self.transition, t).running(now - self.at, crate::appearance::reduced_motion())
     }
 }
 
@@ -241,7 +259,7 @@ mod tests {
             return;
         }
         let t = tokens();
-        let d = tween(&t).duration_ms;
+        let d = tween(Transition::Tooltip, &t).duration_ms;
         let mut fade = Fade::default();
         assert!(fade.frames(&t, 0.).is_empty());
         assert!(fade.set(Some(1), &t, 0.));
