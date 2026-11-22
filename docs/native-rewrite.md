@@ -1,12 +1,12 @@
 # Browser-free desktop migration
 
-Status: **native is the public Preview by owner decision: parity gaps are fixed forward on every platform; the gates below remain open follow-up work**.
+Status: **native is the public app by owner decision: parity gaps are fixed forward on every platform; the gates below remain open follow-up work**.
 This rewrite covers macOS, Windows, and Linux, feature by feature rather than one
 complete OS at a time. The replacement hosts use AppKit on macOS, Win32 with
 DirectComposition/Direct2D on Windows, and GTK4 on Linux. The older egui/wgpu
 workbench remains a performance comparator and receives CI-maintenance fixes only.
-Public downloads and installed updates now select validated native Previews
-(see docs/releases.md); this is not a stable release. No WebView, JavaScript
+Public downloads and installed updates now select validated native releases
+(see docs/releases.md). No WebView, JavaScript
 runtime, localhost server or Tauri runtime belongs in the replacement; the Tauri
 CLI only bundles its installers. Tauri/React remains the behavior and visual
 baseline.
@@ -27,7 +27,7 @@ features, automated checks and physical acceptance are separate milestones.
 | Platform | Implemented development app | Acceptance still needed before cutover |
 | --- | --- | --- |
 | macOS / AppKit | Capture, Preferences, History, previews, screenshot and recording editors | Recording-editor baseline audit recorded (95/95 tests, 96 renders; the End field clipping (2000 shown as 200) is fixed: both trim fields now fit the recording's longest value, verified on the Mac with 633/634 Swift tests passing (1 window-server skip) and inspected 960×760 and 760×540 light/dark renders of a 2 s fixture showing the full 2000; longer durations not rendered) and the trim-end comparison preview fixed (stays inside the exclusive trim end, verified on the Mac before and after); physical keyboard/VoiceOver review, live shipping comparison, full feature, hardware performance and accessibility gates remain open |
-| Windows / Win32 | Preferences, History, screenshot and recording editors, including recording crop/comparison, maximum-file-size exports and MP4/GIF format switching | A resident `--live` mode with single-instance forwarding and the shipping tray menu exists; New Capture and Screenshot Display open the Screenshot capture bar for Region and Full screen (physically checked on Windows 11 at 150%, including the tray-flyout and repeat-request fixes) and Window (physically checked on Windows 11 at 150%, including the picked-highlight and off-screen-origin fixes; an unobstructed window partly off the display saves only its on-screen part from the snapshot), with the screenshot countdown scrim (physically checked on Windows 11 at 150%: timing, fresh pixels, Esc and global Esc, reduced motion); Screenshot Region/Window rows and the global capture shortcuts with Print Screen and Win+Shift+S takeover open the bar on their target (physically checked on Windows 11 at 150% with injected input: every registered chord, tray rows, recorder release and Quit, about 380 ms key-to-bar in release; Win+Shift+S and Print Screen takeover still need a real key press; switching an open bar in place and recording shortcuts are not ported); saved screenshots join an expanded floating preview stack with the card actions and Clear all (physically checked on Windows 11 at 150%: placement in both corners, the Tauri look, every card action, focus never taken, hidden during New Capture, Restore; the cursor now follows the pointer's current position; Narrator in mouse mode reads every card's buttons, size line and Clear all; Minimize collapses into shipping's pile with the shared poses and an Expand button (rendered against shipping offscreen; fly and staggered fan motion on the shared tweens; no keystone, rear blur or carry; physically checked on Windows 11 at 150%: fly about 520 ms with no blank frames, Expand by click and UIA; that pass found the hover fan never started its frame timer and empty areas swallowed clicks, both fixed after it with shipping's pointer-polled click-through, not yet physically rechecked; Narrator's Insert+Enter on the never-focused pile does not expand it; the 8ce4447b recheck found the hovered pile lacked shipping's accent glow, now drawn from `theme-accent` with the fan (rendered offscreen, not physically rechecked)); motion and drags not ported); Record mode with the Record rows and shortcuts starts a take through the shared recording worker, using the bar's options row (FPS, Max resolution, Show cursor, Show clicks, Desktop audio and Microphone for that take only; physically checked on Windows 11 at 150%: lists by mouse and keyboard, microphone enumeration, reset per take; Esc with an open list closes the whole bar because the shared global Escape owns the key, as in Tauri) with the "RECORDING STARTS IN" countdown and floating controls (Stop, Pause/Resume, Restart and Delete with confirmation, Mute and level, Hide; excluded from captures by default; physically checked on Windows 11 at 150%: all three targets, countdown/Esc, Pause/Restart/Delete, mute, focus/drag, included controls, save-on-Quit; the hidden-controls chord and include hint were fixed after it; frame rates well below the setting (4–30 fps) come from the shared single-threaded openh264 encoder that Tauri also uses (measured in the orb: about 76 ms per 3840×2160 frame, about 18 ms at 1080p; colour conversion about 4.5 ms; openh264 threads/slices gave about 16% on 2 cores and doubled the bitrate), so it is a shared limit rather than a native regression, and Max resolution 1080p is the current workaround; hardware encoding is the likely fix; the HUD's Screenshot opens the bar on Region with Record locked and included controls kept out of the snapshot (the physical pass found it refused with "A capture is already in progress"; it now runs as a child of the take's flow like the GTK host, not yet physically rechecked); hover tooltips use the shared copy and placement (physically checked; the disabled Microphone's tooltip was missing because that button dragged the card, fixed after the pass, not yet rechecked; no fade); UI Automation exposes and invokes the controls with shipping names, announcing name flips and errors (Narrator in mouse mode speaks every control in shipping order; name flips are raised but not spoken because the controls never take focus); Hide shows the "Recording controls hidden" notice with the New Capture keys, click-through and excluded from captures for 6.2 s (physically checked: centred on the controls, click-through, closes after 6.27 s or on New Capture; no fade); no Tab focus by owner decision (a click never takes keyboard focus from the recorded app, unlike Tauri's Windows webview; UIA still invokes every button); History now lists interrupted recordings with Recover and two-step Discard through the shared recovery, physically checked by mouse, keyboard and Narrator; following Tauri a18afc62 the armed Discard is now signal red, disarms after 4 s and reads "Discarding…" while busy, a Recover/Discard error shows under its own row and is announced, and row dates use the History card format (rendered offscreen); the 8ce4447b recheck (Windows 11, 150%, Narrator, UIA inspection) found only Recover and Discard in the UIA tree, so the section's heading and help, each row's title, date line, warning and error are now exposed (heading level 2, text, the error as an assertive alert announced under its row), and Recover/Discard carry the row's title and date as help text (Tauri's buttons have no aria-label, so their names stay "Recover"/"Discard"; Wine test, not physically rechecked); the same pass saw discarding row 2 clear row 1's error, which matches Tauri a18afc62 (one error state, cleared when any row acts), so it is unchanged; a take whose app was force-killed leaves only an unfinished segment that the shared recovery skips, as Tauri does); first-run setup opens shipping's setup window on launch, relaunch and New Capture until it is finished (Ready row and Start capturing through the shared onboarding session; physically checked with keyboard and Narrator; no pulse yet), and finishing it or a quiet launch shows the tray-anchored launch notice (15 s / 5 s, Close and tray left-click dismiss; physically checked; no arrive motion; Narrator stayed silent: the 8ce4447b recheck again saw no UIA event on a quiet launch because the announcement was raised as the window opened, while it was still hidden waiting for the tray icon's rect; it is now raised from the shown window (WindowOpened, a structure change and an `ImportantAll` notification, 400 ms after showing so the setup window or tray menu handing focus back does not flush it), which is also the likely cause of the unspoken after-setup notification; neither is physically rechecked); Send Feedback opens shipping's form and sends from the resident app through the shared client (physically checked on Windows 11 including the error alert and Narrator; emoji now draw in colour; the sent state still needs a real send); setup, the launch notice and Send Feedback expose UI Automation with shipping's roles and names (checked with Narrator on Windows 11); the floating update notice opens from live Preview checks (see the Win32 update notice slice; the 8ce4447b recheck found its caret lost after Hide, no caret from tray Check for Updates, no UIA event on opening and no live `--scene update`, all fixed and not physically rechecked); the rest of the floating previews still need migration from the older host. Format switching still needs physical interaction acceptance; scoped physical editor checks do not establish whole-app parity, performance or accessibility |
+| Windows / Win32 | Preferences, History, screenshot and recording editors, including recording crop/comparison, maximum-file-size exports and MP4/GIF format switching | A resident `--live` mode with single-instance forwarding and the shipping tray menu exists; New Capture and Screenshot Display open the Screenshot capture bar for Region and Full screen (physically checked on Windows 11 at 150%, including the tray-flyout and repeat-request fixes) and Window (physically checked on Windows 11 at 150%, including the picked-highlight and off-screen-origin fixes; an unobstructed window partly off the display saves only its on-screen part from the snapshot), with the screenshot countdown scrim (physically checked on Windows 11 at 150%: timing, fresh pixels, Esc and global Esc, reduced motion); Screenshot Region/Window rows and the global capture shortcuts with Print Screen and Win+Shift+S takeover open the bar on their target (physically checked on Windows 11 at 150% with injected input: every registered chord, tray rows, recorder release and Quit, about 380 ms key-to-bar in release; Win+Shift+S and Print Screen takeover still need a real key press; switching an open bar in place and recording shortcuts are not ported); saved screenshots join an expanded floating preview stack with the card actions and Clear all (physically checked on Windows 11 at 150%: placement in both corners, the Tauri look, every card action, focus never taken, hidden during New Capture, Restore; the cursor now follows the pointer's current position; Narrator in mouse mode reads every card's buttons, size line and Clear all; Minimize collapses into shipping's pile with the shared poses and an Expand button (rendered against shipping offscreen; fly and staggered fan motion on the shared tweens; no keystone, rear blur or carry; physically checked on Windows 11 at 150%: fly about 520 ms with no blank frames, Expand by click and UIA; that pass found the hover fan never started its frame timer and empty areas swallowed clicks, both fixed after it with shipping's pointer-polled click-through, not yet physically rechecked; Narrator's Insert+Enter on the never-focused pile does not expand it; the 8ce4447b recheck found the hovered pile lacked shipping's accent glow, now drawn from `theme-accent` with the fan (rendered offscreen, not physically rechecked)); motion and drags not ported); Record mode with the Record rows and shortcuts starts a take through the shared recording worker, using the bar's options row (FPS, Max resolution, Show cursor, Show clicks, Desktop audio and Microphone for that take only; physically checked on Windows 11 at 150%: lists by mouse and keyboard, microphone enumeration, reset per take; Esc with an open list closes the whole bar because the shared global Escape owns the key, as in Tauri) with the "RECORDING STARTS IN" countdown and floating controls (Stop, Pause/Resume, Restart and Delete with confirmation, Mute and level, Hide; excluded from captures by default; physically checked on Windows 11 at 150%: all three targets, countdown/Esc, Pause/Restart/Delete, mute, focus/drag, included controls, save-on-Quit; the hidden-controls chord and include hint were fixed after it; frame rates well below the setting (4–30 fps) come from the shared single-threaded openh264 encoder that Tauri also uses (measured in the orb: about 76 ms per 3840×2160 frame, about 18 ms at 1080p; colour conversion about 4.5 ms; openh264 threads/slices gave about 16% on 2 cores and doubled the bitrate), so it is a shared limit rather than a native regression, and Max resolution 1080p is the current workaround; hardware encoding is the likely fix; the HUD's Screenshot opens the bar on Region with Record locked and included controls kept out of the snapshot (the physical pass found it refused with "A capture is already in progress"; it now runs as a child of the take's flow like the GTK host, not yet physically rechecked); hover tooltips use the shared copy and placement (physically checked; the disabled Microphone's tooltip was missing because that button dragged the card, fixed after the pass, not yet rechecked; no fade); UI Automation exposes and invokes the controls with shipping names, announcing name flips and errors (Narrator in mouse mode speaks every control in shipping order; name flips are raised but not spoken because the controls never take focus); Hide shows the "Recording controls hidden" notice with the New Capture keys, click-through and excluded from captures for 6.2 s (physically checked: centred on the controls, click-through, closes after 6.27 s or on New Capture; no fade); no Tab focus by owner decision (a click never takes keyboard focus from the recorded app, unlike Tauri's Windows webview; UIA still invokes every button); History now lists interrupted recordings with Recover and two-step Discard through the shared recovery, physically checked by mouse, keyboard and Narrator; following Tauri a18afc62 the armed Discard is now signal red, disarms after 4 s and reads "Discarding…" while busy, a Recover/Discard error shows under its own row and is announced, and row dates use the History card format (rendered offscreen); the 8ce4447b recheck (Windows 11, 150%, Narrator, UIA inspection) found only Recover and Discard in the UIA tree, so the section's heading and help, each row's title, date line, warning and error are now exposed (heading level 2, text, the error as an assertive alert announced under its row), and Recover/Discard carry the row's title and date as help text (Tauri's buttons have no aria-label, so their names stay "Recover"/"Discard"; Wine test, not physically rechecked); the same pass saw discarding row 2 clear row 1's error, which matches Tauri a18afc62 (one error state, cleared when any row acts), so it is unchanged; a take whose app was force-killed leaves only an unfinished segment that the shared recovery skips, as Tauri does); first-run setup opens shipping's setup window on launch, relaunch and New Capture until it is finished (Ready row and Start capturing through the shared onboarding session; physically checked with keyboard and Narrator; no pulse yet), and finishing it or a quiet launch shows the tray-anchored launch notice (15 s / 5 s, Close and tray left-click dismiss; physically checked; no arrive motion; Narrator stayed silent: the 8ce4447b recheck again saw no UIA event on a quiet launch because the announcement was raised as the window opened, while it was still hidden waiting for the tray icon's rect; it is now raised from the shown window (WindowOpened, a structure change and an `ImportantAll` notification, 400 ms after showing so the setup window or tray menu handing focus back does not flush it), which is also the likely cause of the unspoken after-setup notification; neither is physically rechecked); Send Feedback opens shipping's form and sends from the resident app through the shared client (physically checked on Windows 11 including the error alert and Narrator; emoji now draw in colour; the sent state still needs a real send); setup, the launch notice and Send Feedback expose UI Automation with shipping's roles and names (checked with Narrator on Windows 11); the floating update notice opens from live update checks (see the Win32 update notice slice; the 8ce4447b recheck found its caret lost after Hide, no caret from tray Check for Updates, no UIA event on opening and no live `--scene update`, all fixed and not physically rechecked); the rest of the floating previews still need migration from the older host. Format switching still needs physical interaction acceptance; scoped physical editor checks do not establish whole-app parity, performance or accessibility |
 | Linux / GTK4 on X11 | Screenshot and recording targets/options, countdown, recording controls, previews, Preferences, History and editors | Virtual-X11 input, accessibility-tree and decoded-media checks are not physical GPU, audio-device, Orca or mixed-DPI acceptance |
 | Linux / GTK4 on Wayland | Portal-mediated screenshots, ScreenCast portal recording (Full screen, Window, Region) with the X11 HUD/worker/History flow, and development UI | Headless-Sway portal/PipeWire checks with decoded media are not physical GNOME/KDE, real PipeWire device, Orca or mixed-DPI acceptance; the hidden notice now names the GlobalShortcuts portal's New Capture trigger (or only the tray before one is bound), unit-tested but not checked on a real portal |
 
@@ -49,7 +49,7 @@ session via `/ARGS` and waits for the application's matching readiness token bef
 marking installation complete. Its pinned NSIS transport fixture exercises real
 argument parsing and asynchronous launch without modifying an installed app;
 physical elevated-upgrade acceptance remains open. This does not restore windows across a Tauri/native cutover or manual
-reinstall. See [release recovery](releases.md#native-preview-packaging-and-recovery).
+reinstall. See [release recovery](releases.md#native-packaging-and-recovery).
 
 ### Unsigned installers package the Win32 and GTK hosts
 
@@ -58,18 +58,18 @@ reinstall. See [release recovery](releases.md#native-preview-packaging-and-recov
 (AppImage and `.deb`) instead of the egui/wgpu workbench; macOS still packages
 AppKit. Nothing is published: CI builds these unsigned installers only on
 dispatch and nightly. Each host answers `--preview-build-info` (`win32`, `gtk`)
-with the compiled Preview version, which the builder checks before bundling it
-as `captures`/`captures.exe`, the names the Preview installer updater requires.
-A Preview build starts as the resident app on the imported Preview profile and
+with the compiled release version, which the builder checks before bundling it
+as `captures`/`captures.exe`, the names the installed app's updater requires.
+A release build starts as the resident app on the imported native profile and
 holds the package-use lock. Both hosts now have the floating update notice
 window (see the Win32 update notice and GTK live update notice slices).
 Win32 and GTK now have the startup recovery
-companion, readiness handoff and Preview check/download/install, and Win32 Open
-With; see the Win32 and GTK Preview updates slices below. GTK finds the packaged FFmpeg/FFprobe
+companion, readiness handoff and update check/download/install, and Win32 Open
+With; see the Win32 and GTK updates slices below. GTK finds the packaged FFmpeg/FFprobe
 beside its executable. The AppImage runs GTK with `GDK_BACKEND=x11` (the Tauri
 CLI's GTK hook), so Wayland sessions get XWayland. Status: the Linux AppImage and
 `.deb` built in an orb; the AppImage launched under Xvfb with an isolated HOME
-into first-run setup and created the Preview profile. Windows MSVC packaging,
+into first-run setup and created the native profile. Windows MSVC packaging,
 Wayland, macOS (unchanged) and every physical install are unverified. This closes
 no parity gate.
 
@@ -257,7 +257,7 @@ same development state as the AppKit and wgpu hosts: the build version and
 "Native development" channel, a disabled Check Now at the shared action width
 with "Updates unavailable" below it, then the "Show what's new on update
 notices" switch. It has no update worker, release channel or download;
-shipping's Preview states (available, installing, errors) are not drawn.
+shipping's update states (available, installing, errors) are not drawn.
 About is shipping's Send feedback row. Its Open is a no-op until the
 Feedback window is ported. Tauri's About has no version, links or licences,
 so neither does this one. UI Automation exposes the version and status as
@@ -1600,12 +1600,12 @@ after its text. The rows now use a label child, so both versions expose
 GTK 4.8 and 4.14 only; Wayland, Orca and real hardware remain open.
 Windows, macOS: unchanged.
 
-The GTK Updates card runs the shared update worker on the native Preview
-channel only. (Superseded by "GTK Preview updates and startup recovery" below:
-the card now installs and no longer shows the Package verification row.) An installed Preview build (`CAPTURES_NATIVE_PREVIEW_VERSION`
+The GTK Updates card runs the shared update worker on the native release
+channel only. (Superseded by "GTK updates and startup recovery" below:
+the card now installs and no longer shows the Package verification row.) An installed release build (`CAPTURES_NATIVE_PREVIEW_VERSION`
 and its public key, as `scripts/native-preview-build.mjs` sets) starts
 `CheckWorker::preview` and checks automatically. The card then follows the
-worker's `Presentation`: "Captures <version> · Preview · Experimental",
+worker's `Presentation`: the version and channel line,
 Check Now, the status (danger text on failure) and, for an AppImage, a
 Package verification row with Download and verify, live progress, Cancel
 download and Retry download. The worker keeps the existing full and delta
@@ -1613,25 +1613,25 @@ acquisition and download format unchanged. It wakes the GTK main loop
 through `MainContext::invoke`, and closing Preferences joins it off the UI
 thread. Development builds make no request and keep "Updates unavailable"
 with Check Now off. There is no development endpoint, stable or production
-channel. "Restart and install" shows disabled, with the note "Installing is
-not available in this native build. Download the latest Preview from
-captur.es.": the Linux Preview package is still the wgpu build
+channel. "Restart and install" shows disabled, with a note that installing is
+not available in this native build and a captur.es download pointer: the
+public Linux package is still the wgpu build
 (`ReleaseInfo` labels it `Renderer::Wgpu`), and swapping its host would
 promote a native client, which waits for the four gates and the owner. That
 staged-and-installable state needs a published native Linux package, so it
-was not reached here. Checked against the live channel with a test Preview
+was not reached here. Checked against the live channel with a test release
 build (2026.1.1, shipping key, isolated HOME): the automatic check showed
-"Preview 2026.11.605 available". With `APPIMAGE` set, Download and verify
+2026.11.605 as available. With `APPIMAGE` set, Download and verify
 fetched 102,668,792 bytes with progress; Cancel returned to available and
 left the staging directory empty. A full download ended in "Native update
 signature verification failed." That refusal is correct: the channel's
 Linux asset is the Tauri AppImage, whose signed file name is not the native
 `Captures-<version>-linux-x86_64.AppImage`. That run also showed
 "Downloading N of N" for minutes while the debug build verified 103 MB:
-the shared Preview path never reported Verifying. It now does, for every
+the shared release update path never reported Verifying. It now does, for every
 host: `preview::Pending::download_verifying` signals once every byte has
 arrived, before the signature and hash checks, and `CheckWorker` passes its
-Verifying event through. The existing Preview download test asserts it
+Verifying event through. The existing release download test asserts it
 arrives exactly once, after the last progress, for valid and refused
 packages. `smoke.py` checks that a development
 build's Check Now stays off. X11 (Xvfb) only; Wayland and real hardware
@@ -1790,7 +1790,7 @@ GTK live-app mode, step 3: tray and global shortcuts. The tray is shipping's
 (the wgpu host's choice; no GTK 3 joins the GTK 4 process), with shipping's
 `tray_accelerator` labels. Rows for captures the GTK host cannot run yet
 (New Capture, Region, Window and the three recordings) keep shipping's order
-but are disabled; Check for Updates… follows Preview update metadata and
+but are disabled; Check for Updates… follows release update metadata and
 opens Preferences. Without a StatusNotifier watcher and host the app opens
 Preferences and quits with its last window, as the wgpu host. Global
 shortcuts use the shared `CaptureShortcuts` once setup is finished: the
@@ -1854,7 +1854,7 @@ height, the notes take it otherwise), notes with pull requests as real
 buttons inline after the text, progress, restart, error with its download
 fallback, the close warning and footer. `--scene update --update NAME`
 drives it from the shared fixtures and stub; Hide/What's new persist
-`show_update_changelog`. Live Preview checks now open it too; see the GTK live
+`show_update_changelog`. Live update checks now open it too; see the GTK live
 update notice slice. Compared with the Tauri harness
 (`?view=update&mock=1`, `?view=startup&mock=1&platform=linux`) at 2x in
 light and dark over the same page colour: card sizes match every state; the
@@ -3392,7 +3392,7 @@ accessibility and installed-update lifecycle remain unverified. No parity gate
 closes from this development registration slice.
 
 Launch-at-login defaults to On in shared settings for new installs or a missing
-field; existing `false` values remain Off. Installed AppKit/wgpu Preview startup
+field; existing `false` values remain Off. Installed AppKit/wgpu release startup
 registers the first profile only, preserving an imported Off value. Subsequent
 native launches keep the OS-authoritative Off choice; development imports and
 fixtures remain opt-in and do not replace Tauri's login entry. The installed
@@ -4918,7 +4918,7 @@ installer and updater, not an optimisation. Status against it:
   `package.py` archives and, given `CAPTURES_NATIVE_DELTA_PROBE` and
   `CAPTURES_NATIVE_DELTA_SIGNING_TEST`, stages the newest patch through
   `native_delta_smoke.py`. Nothing runs it in `release.yml` while native
-  publication is withdrawn ([releases](releases.md#native-preview-packaging-and-recovery));
+  publication is withdrawn ([releases](releases.md#native-packaging-and-recovery));
   wiring it in waits for that cutover, which also needs Win32 and GTK packages
   built and published per target.
 - Done in the format: the signed manifest keeps each full archive and lists
@@ -4930,8 +4930,8 @@ installer and updater, not an optimisation. Status against it:
 - Open: Win32 and GTK get the same updater. Today only the wgpu and AppKit
   hosts expose acquisition; both get per-file patches through the shared code.
 
-The Tauri Preview's updater cannot apply patches, and the installed native
-Preview channel (`updater/preview.rs`, which reads the Tauri-compatible
+The Tauri app's updater cannot apply patches, and the installed native
+release channel (`updater/preview.rs`, which reads the Tauri-compatible
 `latest.json`) does not read them yet, so this applies to the native development
 channel today. No native build is published yet, so release patches start with
 the first native publication that runs the tooling above.
@@ -5702,7 +5702,7 @@ identical component implementations or a common UI framework.
    editing, then recording playback/export. Differential fixtures, crash recovery
    and real media outputs gate each slice, not a mock editor shell.
 6. **Cross-platform release cutover.** Packaging, updater, accessibility, energy
-   and long-run tests, storage rollback, signed Preview testing. Only after parity
+   and long-run tests, storage rollback, signed release testing. Only after parity
    is accepted remove Tauri/React desktop dependencies and the legacy frontend.
    No automatic stable release or installer replacement; the website may use React.
 
@@ -5863,7 +5863,7 @@ Windows microphones, accessibility and Wayland acceptance remain open.
 The opt-in `--live` workspace now connects full-display PNG capture and local
 screenshot history on both native hosts through `captures-app`. It includes
 explicit copy, export, reveal and history deletion while keeping exports and the
-installed Preview's data separate. Image decode and capture/file operations run
+installed app's data separate. Image decode and capture/file operations run
 off the UI thread. It preserves permission/session checks and hides its window
 before capture. Wayland capture remains gated by the candidate's missing window
 visibility support. Automatic copy and output folder/format preferences are now
@@ -7599,10 +7599,10 @@ fallback if it cannot meet the deadline. These are targets, not measured claims.
 Preserve physical-footprint/process-tree measurement from #529 for comparisons;
 the initial runner's `ps` RSS is only a diagnostic, never a substitute.
 
-### Win32 Preview updates, Open With and startup recovery
+### Win32 updates, Open With and startup recovery
 
-The Win32 host now ports the packaged wgpu host's remaining Preview behavior
-through shared code. Open With: an installed Preview accepts plain path and
+The Win32 host now ports the packaged wgpu host's remaining installed-app behavior
+through shared code. Open With: an installed release accepts plain path and
 `file:` URI arguments (`preview_channel::local_media_path`), development builds
 `--open-media PATH` or `-- FILE...` with `--live`; files forward through the
 existing `captures_app::instance` election and import one at a time through
@@ -7621,14 +7621,14 @@ import, readiness is acknowledged after settings, a Direct2D device and the
 bundled media tools check out, forwarding and normal Quit finish it, and only
 the elected primary consumes the restart intent.
 
-Renderer: Win32 keeps reporting `updater::Renderer::Wgpu`. The Preview path
+Renderer: Win32 keeps reporting `updater::Renderer::Wgpu`. The release update path
 (`preview::Client`) reads the Tauri-compatible `latest.json`, which has no
 renderer field; `ReleaseInfo.renderer` only labels the release and is compared
 in shutdown intents, and the recovery helper hard-codes `Wgpu` for non-macOS
 hosts. Only the signed development manifest (`UpdateClient`) matches
 `renderer`, and its published Windows/Linux manifests say `wgpu`. A new `Win32`
 or `Gtk` value would break the recovery helper's matching and every existing
-`wgpu` development manifest without changing what the Preview channel installs,
+`wgpu` development manifest without changing what the release channel installs,
 so it waits until native publication resumes with per-host manifests.
 
 Verified only under Wine (x86_64-pc-windows-gnu): clippy, 54 tests (argument
@@ -7737,9 +7737,9 @@ every fixture in light and dark compared with the Tauri harness
 icon, focus behavior, Narrator and a real update are unverified. macOS, X11,
 Wayland: unchanged.
 
-### GTK Preview updates and startup recovery
+### GTK updates and startup recovery
 
-The GTK host now installs Preview updates through the same shared code as
+The GTK host now installs release updates through the same shared code as
 Win32 (`apps/native/gtk/src/updates.rs`). The resident app, not Preferences,
 owns `CheckWorker::preview` (still `Renderer::Wgpu`, for the reason in the
 Win32 slice): it checks at launch and every five minutes, and Preferences'
@@ -7761,7 +7761,7 @@ and relaunches with the readiness pair. A `.deb` install is
 shipping's View release (the GitHub releases page), without a size, with the
 wgpu host's Debian copy as its description, and the fallback paragraph says
 Debian packages replace the app. The tray's Check for Updates now follows
-shipping's `handle_tray_action` (see the GTK live update notice slice). `recovery::Startup` arms before the Preview
+shipping's `handle_tray_action` (see the GTK live update notice slice). `recovery::Startup` arms before the native
 profile import; `--native-update-ready-file`/`--native-update-ready-token`
 parse as on Win32; only the elected primary takes the restart intent, which
 reopens previews, editors and Preferences instead of the launch window; the
@@ -7783,9 +7783,9 @@ Wayland are unverified. Windows, macOS: unchanged.
 
 ### GTK live update notice
 
-Live Preview checks now open the GTK floating update notice, following
+Live update checks now open the GTK floating update notice, following
 shipping's `apps/desktop/src-tauri/src/updates.rs`. `updates::notice_status`
-maps the resident worker's `CheckStatus` to a Preview `UpdateStatus` for the
+maps the resident worker's `CheckStatus` to an `UpdateStatus` for the
 shared `update_notice::present`: Available carries the display version, the
 release notes, the download size, the open-captures warning and, for a `.deb`,
 `installable: false` with the GitHub releases page; Downloading keeps its
@@ -7825,6 +7825,6 @@ show/defer/dedupe/tray decisions, the smoke's `update_card`, `notices`,
 `live`, `tray` and `update_notice_live` steps, and light and dark
 `--update-live` renders compared with the fixture renders and shipping's
 `.update-*` CSS. Wayland: `notices` and `update_notice_live` passed on
-headless Sway 1.9. A real Preview check, download and AppImage install from
+headless Sway 1.9. A real release check, download and AppImage install from
 the notice, a real `.deb`, focus behaviour under a real window manager and
 Orca are unverified. Windows, macOS: unchanged.

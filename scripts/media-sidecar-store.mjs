@@ -2,7 +2,7 @@
 // .github/actions/prepare-media caches: one archive per cache key on a draft
 // GitHub release. GitHub evicts the least recently used Actions caches once a
 // repository holds 10 GB, and a cache only release packaging reads is always
-// the least recently used, so every Preview recompiled FFmpeg (3 to 7 minutes
+// the least recently used, so every release recompiled FFmpeg (3 to 7 minutes
 // per platform). Release assets are never evicted.
 //
 //   media-sidecar-store.mjs ensure
@@ -34,7 +34,7 @@ import {
 export const STORE_NAME = "Build cache (not a release)";
 const STORE_TAG = "build-cache";
 const STORE_BODY =
-  "Unsigned FFmpeg sidecar builds reused by release packaging (scripts/media-sidecar-store.mjs). Not a Captures release; deleting it only makes the next Preview rebuild FFmpeg.";
+  "Unsigned FFmpeg sidecar builds reused by release packaging (scripts/media-sidecar-store.mjs). Not a Captures release; deleting it only makes the next release rebuild FFmpeg.";
 
 // The files prepare-media caches; a test keeps this equal to the action's list.
 export const SIDECAR_PATTERNS = [

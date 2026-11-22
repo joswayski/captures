@@ -337,7 +337,7 @@ cargo +1.95.0 build --manifest-path apps/native/wgpu/Cargo.toml --locked --relea
 Run `apps/native/wgpu/target/release/captures-wgpu-workbench` (add `.exe` on
 Windows). Resources are embedded; no separate resource directory is needed at
 runtime. CI also uploads unsigned experimental binaries and viewport screenshots;
-these are not Preview installers. Its Linux binary targets Ubuntu 24.04, not every
+these are not public installers. Its Linux binary targets Ubuntu 24.04, not every
 supported production distro.
 
 ```sh

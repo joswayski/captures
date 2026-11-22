@@ -11,7 +11,7 @@ recording.
 
 The macOS, Windows, and Linux sidecars are built from the source version and
 SHA-256 pinned in `scripts/build-ffmpeg-sidecars.sh`. Cold builds download that
-tarball from ffmpeg.org, or from a previously published Captures Preview when
+tarball from ffmpeg.org, or from a previously published Captures release when
 ffmpeg.org is unreachable. The SHA-256 pin is the authenticity check in either
 case. Every platform configuration intentionally disables GPL, nonfree,
 version-3-only, network, and autodetected external components. The system zlib is

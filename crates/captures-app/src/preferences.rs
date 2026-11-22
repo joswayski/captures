@@ -54,9 +54,9 @@ pub const SECTIONS: [Section; 8] = [
         id: "updates",
         title: "Updates",
         description: if crate::preview_channel::version().is_some() {
-            "Experimental Preview builds. Check for the latest signed update."
+            "Check for the latest signed update."
         } else {
-            "Signed Preview updates are not available to native development builds yet."
+            "Signed updates are not available to native development builds yet."
         },
     },
     Section {
@@ -251,7 +251,7 @@ pub const ROWS: [Row; 27] = [
     Row {
         key: "show_update_changelog",
         title: "Show what’s new on update notices",
-        description: "Lists every Preview since the version you have. Turn this off for a compact Update now prompt.",
+        description: "Lists every release since the version you have. Turn this off for a compact Update now prompt.",
     },
 ];
 
@@ -593,7 +593,7 @@ pub const UPDATES_ACTION_WIDTH: f32 = 160.;
 /// Default copy for development hosts without an update worker.
 pub const UPDATES_TITLE: &str = "Updates unavailable";
 pub const UPDATES_DETAIL: &str =
-    "Signed Preview updates are not available to native development builds yet.";
+    "Signed updates are not available to native development builds yet.";
 pub const UPDATES_ACTION: &str = "Check Now";
 
 pub const FEEDBACK_TITLE: &str = "Send feedback";

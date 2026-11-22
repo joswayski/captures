@@ -6,7 +6,7 @@ const PREVIEW_TAG = /^v(\d{4})\.(\d{2})\.(\d{2})\.([1-9]\d?)$/u;
 
 export function publicPreviewRelease(releases) {
   const release = latestPreviewRelease(releases.filter(isPublicPreview));
-  if (!release) throw new Error("no published public Preview is available");
+  if (!release) throw new Error("no published public release is available");
   return release;
 }
 
@@ -40,7 +40,7 @@ export function latestPreviewRelease(releases) {
   return (
     releases
       .flatMap((release) => {
-        if (release.draft || !release.prerelease) return [];
+        if (release.draft) return [];
         const version = previewVersion(release.tag_name);
         return version ? [{ release, version }] : [];
       })

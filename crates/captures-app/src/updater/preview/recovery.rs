@@ -250,7 +250,7 @@ pub fn watch(request_path: &Path) -> Result<(), Error> {
             Some(&error.to_string()),
         )?;
         notice(
-            "Captures could not repair this startup.\n\nDownload the latest Preview from https://captur.es\nand replace the app.\n\nKeep your settings and capture history; do not delete them.",
+            "Captures could not repair this startup.\n\nDownload the latest version from https://captur.es\nand replace the app.\n\nKeep your settings and capture history; do not delete them.",
         );
     }
     result

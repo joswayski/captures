@@ -1,10 +1,10 @@
 # Native desktop workbenches
 
 These are implementation stages of the [native rewrite](../../docs/native-rewrite.md),
-**not replacement downloads**. Public downloads and updates have returned to the
-approved Tauri Preview after the native rollout; native builds stay opt-in until
-behavior, visual and platform parity are accepted. See the
-[public-channel pin](../../docs/releases.md#public-channel-is-pinned-to-tauri).
+**not replacement downloads**. Public downloads and updates come from the native
+release pipeline; development builds described here stay isolated from installed
+copies. See the
+[public channel](../../docs/releases.md#public-channel-automatically-tracks-native).
 macOS is Swift/AppKit + Core Animation with Core Image explicitly backed by Metal.
 No WebView, React, JavaScript runtime or Rust sidecar is used. Local capture
 does not require a network service; optional sharing uses the account API.
@@ -316,7 +316,7 @@ Copy `delta` into the matching artifact (merging offers from several bases into 
 offer only when the emitted `listable` is true; clients ignore the rest anyway.
 Each offer adds about 250 bytes, so six offers for each of four targets add about
 6 KiB. Keep the signed manifest at most 128 KiB, as `scripts/preview-changelog.mjs`
-keeps the Preview manifest; the API and `preview.rs` reject manifests over 256 KiB.
+keeps the public updater manifest; the API and `preview.rs` reject manifests over 256 KiB.
 The diagnostic accepts `--installed-package ABSOLUTE_PACKAGE_FOLDER` and
 `--base-archive ABSOLUTE_PATH`; the stopped-development helper uses the stopped
 package as its base and accepts `--base-archive`; the GUI flag additionally
@@ -327,7 +327,7 @@ withdrawn: `scripts/native-update-patches.mjs` generates patches from the six
 newest retained builds of each target, kept in a draft `native-update-bases`
 release by `scripts/native-update-retain.sh`, drops patches that save too little,
 and never fails a release over a patch (see
-[releases](../../docs/releases.md#native-preview-packaging-and-recovery)). No
+[releases](../../docs/releases.md#native-packaging-and-recovery)). No
 retention policy, production channel or installed Preferences snapshot is enabled.
 
 `native_delta_smoke.py` tests actual explicitly supplied `package.py` archives with
@@ -386,7 +386,7 @@ distribution or real-machine acceptance.
 ### Development-package replacement and interruption recovery
 
 `StagedUpdate::replace` explicitly replaces an existing **development package
-root**, not an `.app` bundle, Preview installation or profile. It validates the
+root**, not an `.app` bundle, installed app or profile. It validates the
 old package, re-extracts signed bytes on the destination filesystem, and retains
 the entire old package until `PendingInstallation::confirm`. `rollback` or
 `recover_installation` restores unconfirmed replacements, including the gap
@@ -676,7 +676,7 @@ minimum-size renders through `CAPTURES_TEST_ARTIFACTS`. All seven AppKit sharing
 regressions passed in macOS CI; the light/dark minimum-size states were inspected.
 Physical macOS/Windows/X11/Wayland vault/object-store acceptance remains open.
 The account service is still disabled and undeployed; these controls
-do not activate it or change the shipping Preview.
+do not activate it or change the shipping app.
 
 ## Persisted native Preferences
 
@@ -686,7 +686,7 @@ adapter. AppKit calls a versioned in-process C ABI; Windows/Linux calls Rust
 directly. Preferences stores appearance and capture/media defaults in a separate
 **Captures Native** development identity. `--settings-file PATH` selects an
 explicit test file. Malformed/newer files report an error instead of resetting
-them. `--exercise` uses disposable data. No installed Preview settings are imported.
+them. `--exercise` uses disposable data. No installed-app settings are imported.
 
 Without `--live`, capture, recording, history, and editor scenes use fixtures. Saving a
 default is not an engine integration: fixture login items, feedback submission and
@@ -1070,8 +1070,8 @@ before opening the editor, like shipping; a failed restore opens nothing.
 
 Launch with `--live [--history-root PATH]` on either native host. This is an
 explicit opt-in to real desktop capture, not a synthetic benchmark. The default
-history is beside the separate Captures Native settings file, never installed
-Preview history. Capture from the tray, the shortcuts or New Capture, on the display
+history is beside the separate Captures Native settings file, never the installed
+app's history. Capture from the tray, the shortcuts or New Capture, on the display
 under the pointer; History reloads itself and has no capture controls, as in shipping.
 The host hides its History and Preferences windows before capture and restores
 their prior visibility afterward. Capture History, Captures Preferences and first-run

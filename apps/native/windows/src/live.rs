@@ -150,7 +150,7 @@ pub fn start(options: &Options, instance: Instance) {
                 Some(worker)
             }
             Err(error) => {
-                eprintln!("Preview updates unavailable: {error}");
+                eprintln!("Updates unavailable: {error}");
                 None
             }
         }
@@ -682,10 +682,7 @@ fn install_update() {
     let result = RESIDENT.with(|r| {
         let mut r = r.borrow_mut();
         let r = r.as_mut().ok_or("Captures is closing")?;
-        let worker = r
-            .updates
-            .as_mut()
-            .ok_or("Preview updates are unavailable")?;
+        let worker = r.updates.as_mut().ok_or("Updates are unavailable")?;
         let result = worker
             .launch_preview_install(restart)
             .map_err(|error| error.to_string());

@@ -42,7 +42,7 @@ pub struct Card {
 
 /// Shipping's Preferences fallback under the row.
 pub const FALLBACK: &str = "If this copy cannot update itself, download from captur.es and install over it. Settings and captures stay.";
-pub const CHANNEL: &str = "Preview channel";
+pub const CHANNEL: &str = "Release channel";
 
 pub use captures_app::updater::display_version;
 
@@ -204,7 +204,7 @@ mod tests {
     fn idle_and_checking_offer_check_now() {
         let idle = card("2026.11.1201", &CheckStatus::Idle, false);
         assert_eq!(idle.version, "Version 2026.11.12.1");
-        assert_eq!(idle.channel, "Preview channel");
+        assert_eq!(idle.channel, "Release channel");
         assert_eq!((idle.action, idle.step), ("Check Now", Some(Step::Check)));
         assert!(idle.heading.is_empty() && idle.error.is_none());
         let checking = card("2026.11.1201", &CheckStatus::Checking, false);

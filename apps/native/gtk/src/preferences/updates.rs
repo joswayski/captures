@@ -16,7 +16,7 @@ use crate::updates::{Card, Step};
 
 /// Shipping's Updates header, once the card can update (a Preview build).
 pub const HEADER: &str =
-    "Preview builds check for a new version automatically. Update now installs it in place.";
+    "Captures checks for a new version automatically. Update now installs it in place.";
 
 thread_local! {
     /// The open card, refreshed by the resident app.

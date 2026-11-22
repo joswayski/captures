@@ -4,7 +4,7 @@ The Linux replacement for the egui/wgpu workbench: GTK4 for windows, text,
 input and AT-SPI, with Captures' own token-drawn styling and controls. See
 [native-rewrite.md](../../../docs/native-rewrite.md#host-direction) for the
 direction and the gates it must pass. Preferences (every card, Find, the
-compact layout, the microphone list and Preview updates),
+compact layout, the microphone list and installed-app updates),
 Capture History, the screenshot and recording editors, Send Feedback and the
 floating previews (History's Restore) exist so far.
 
@@ -31,7 +31,7 @@ the shared reason in a "Captures" error dialog.
 
 `--live` runs Captures as the resident app instead of one fixture window.
 Before GTK starts, it takes the shared `captures_app::instance` election for
-its History root (`--history-root`, else the native Preview profile, else the
+its History root (`--history-root`, else the installed native profile, else the
 default): a second launch for the same profile hands its files (or a bare
 relaunch) to the running one and exits without touching settings or opening
 a window. The resident process keeps running when its last window closes and
@@ -45,7 +45,7 @@ New Capture…, Screenshot Display, Screenshot Region, Screenshot Window,
 Capture History…, Open Save Location, Preferences, Send Feedback… and Quit
 work; the recording rows stay in shipping's order but are disabled until the
 recording selection/options menu is connected, and Check for Updates…
-is enabled only in a Preview build with update metadata (it shows the update notice
+is enabled only in a release build with update metadata (it shows the update notice
 or checks, as shipping). Without a StatusNotifier host the app opens Preferences and
 quits when its last window closes. Once setup is finished, the saved global
 shortcuts are live through the shared `CaptureShortcuts`: X11 keys, or on
@@ -184,10 +184,10 @@ builds the pinned 1.3.0 into a private prefix and prints its pkg-config
 directory, so `PKG_CONFIG_PATH=$(apps/native/gtk/build_layer_shell.sh) cargo
 +1.95.0 build --manifest-path apps/native/gtk/Cargo.toml --features
 layer-shell`, then run with `LD_LIBRARY_PATH` set to that prefix's `lib`.
-Preview updates run only in a build with `CAPTURES_NATIVE_PREVIEW_VERSION` and
+Updates run only in a build with `CAPTURES_NATIVE_PREVIEW_VERSION` and
 `CAPTURES_NATIVE_PREVIEW_PUBLIC_KEY` set; development builds never make an
 update request and keep "Updates unavailable". In such a build the resident
-app checks the native Preview channel at launch and every five minutes
+app checks the native release channel at launch and every five minutes
 (`src/updates.rs`, the shared `CheckWorker::preview`), and Preferences'
 Updates card shows shipping's states: Check Now, Checking now…, the available
 version with its size and Update now, Installing… with progress, Up to date,
@@ -217,15 +217,15 @@ network or install; installing only quits) for the smoke's
 
 `node scripts/native-preview-build.mjs build x86_64-unknown-linux-gnu VERSION
 --unsigned` packages this host (release, default `x11` feature, built in
-`apps/native/gtk/target`) as the unpublished, experimental Linux AppImage and
+`apps/native/gtk/target`) as the Linux AppImage and
 `.deb`, with the target-suffixed FFmpeg/FFprobe sidecars and
 `native_preview_update_helper`; see
-[releases.md](../../../docs/releases.md#native-preview-packaging-and-recovery).
+[releases.md](../../../docs/releases.md#native-packaging-and-recovery).
 Building needs `libgtk-4-dev` plus the shared capture stack's development
 packages (`libpipewire-0.3-dev`, `libclang-dev`, `libdbus-1-dev`,
 `libxkbcommon-dev`, X11/XCB/Wayland, ALSA, EGL/GBM). The packaged binary is
 `captures` and answers `--preview-build-info` with renderer `gtk`. Such a build
-starts `--live` without flags, uses the imported Preview profile, holds the
+starts `--live` without flags, uses the imported native profile, holds the
 package-use lock and opens `%U` paths or `file:` URIs from its desktop entry.
 It starts the startup recovery companion before importing the profile and
 acknowledges readiness once settings, the display and the packaged

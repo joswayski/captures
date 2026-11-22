@@ -540,15 +540,15 @@ function installAppImage(assetPath, launch) {
 }
 
 function printHelp() {
-  console.log(`Usage: npm run install:preview -- [options]
+  console.log(`Usage: npm run install:latest -- [options]
 
-Downloads, verifies, and installs the approved public Preview for this system.
+Downloads, verifies, and installs the approved public release for this system.
 The command verifies the release checksum before changing the installed app.
 
 Options:
-  --dry-run    Report the public Preview's status without downloading or installing
+  --dry-run    Report the public release's status without downloading or installing
   --no-launch  Do not open Captures after installation
-  --no-wait    Fail immediately if the public Preview is incomplete
+  --no-wait    Fail immediately if the public release is incomplete
   --help       Show this help`);
 }
 
@@ -566,7 +566,7 @@ export async function main(args = process.argv.slice(2)) {
     commandExists("apt-get", ["--version"]);
   const spec = platformSpec(process.platform, process.arch, preferDebian);
   const release = fetchLatestRelease();
-  log(`Public Preview: ${release.name} (${release.tag_name}).`);
+  log(`Public release: ${release.name} (${release.tag_name}).`);
 
   const initialReadiness = releaseReadiness(release, spec);
   if (options.dryRun) {
@@ -598,7 +598,7 @@ export async function main(args = process.argv.slice(2)) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((error) => {
-    console.error(`Could not install the latest Captures Preview: ${error.message}`);
+    console.error(`Could not install the latest Captures release: ${error.message}`);
     process.exitCode = 1;
   });
 }

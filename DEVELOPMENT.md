@@ -2,12 +2,10 @@
 
 This guide covers local setup, validation, and packaging. Maintainer release procedures live in [docs/releases.md](docs/releases.md), and bundled media details live in [docs/media-sidecars.md](docs/media-sidecars.md).
 
-## Native Preview packages
+## Native packages
 
-Public downloads automatically track validated Tauri Previews from `main`.
-Native installers remain separate, opt-in local/CI packaging experiments;
-they neither publish nor advance the public channel on main pushes.
-The native packaging pipeline selects AppKit on macOS and Rust/wgpu on Windows/Linux.
+Public downloads automatically track validated native releases from `main`.
+The native packaging pipeline selects AppKit on macOS, Win32 on Windows and GTK4 on Linux.
 Ordinary `apps/native` development commands still use isolated development profiles;
 building with `--release` alone does not join the installed channel. Root `npm run build`
 builds the Tauri app, which remains the behavior and visual parity reference.
@@ -15,7 +13,7 @@ builds the Tauri app, which remains the behavior and visual parity reference.
 New settings default **Start Captures on login** to On; a missing field also
 defaults to On, but saved `false` values are never migrated to On. Release Tauri
 launches register when this setting is On; debug startup does not register.
-Installed native Previews register once when creating their first profile,
+Installed native apps register once when creating their first profile,
 respecting imported Tauri settings (including Off). Later native launches leave
 the OS-authoritative Preferences choice alone. Registration failure does not
 block launch; enable again in Preferences to retry. Native development builds
@@ -36,7 +34,7 @@ using the real signing public key and profile identity: do not launch it against
 valuable data as a test. The `--preview-build-info` flag prints renderer/version
 without loading a profile or GUI. The unsigned option is for packaging verification,
 not publication. Release signing, native profile handoff and recovery are documented
-in [release procedures](docs/releases.md#native-preview-packaging-and-recovery).
+in [release procedures](docs/releases.md#native-packaging-and-recovery).
 
 ## Requirements
 
@@ -133,7 +131,7 @@ npm run prepare:media
 npm run dev
 ```
 
-`npm run prepare:media` is required on the first run for each operating system and whenever the pinned media build changes. It downloads the pinned FFmpeg source from ffmpeg.org, or from a previously published Preview if that host is unreachable.
+`npm run prepare:media` is required on the first run for each operating system and whenever the pinned media build changes. It downloads the pinned FFmpeg source from ffmpeg.org, or from a previously published release if that host is unreachable.
 
 ## Design harness
 
@@ -306,7 +304,7 @@ development settings file; pass `--settings-file PATH` for disposable tests.
 cold/warm effects, resource collection and known gaps. The
 [`docs/native-rewrite.md`](docs/native-rewrite.md) checklist defines the staged
 cutover and Windows/Linux prototype gates. Do not remove the existing frontend
-or change Preview packaging before those gates pass.
+or change release packaging before those gates pass.
 
 The [Windows/Linux wgpu candidate](apps/native/wgpu/README.md) is an isolated
 Rust 1.95 workspace; the shipping app remains on Rust 1.94. From the root, generate
@@ -385,7 +383,7 @@ package archive inside it. Read the included [TESTING.md](apps/native/TESTING.md
 before launching; use a new output folder and quit shipping Captures first.
 Check the full run's results: an archive alone does not prove all GUI smokes passed.
 
-These are isolated development packages, not Preview installers or updates.
+These are isolated development packages, not public installers or updates.
 They include pinned FFmpeg/FFprobe, corresponding source/licenses, and
 `BUILD_INFO.json` with the CI source commit and final executable SHA-256.
 macOS CI uses Apple Silicon/macOS 26 and ad-hoc signing, not notarization;
@@ -505,7 +503,7 @@ refocus, unchanged drafts and relaunch from a minimized root in both appearances
 ### Native development Open With
 
 `python3 apps/native/package.py` stages **unsigned development packages**, not
-Preview installers. It never installs, registers, changes defaults, downloads
+public installers. It never installs, registers, changes defaults, downloads
 dependencies or modifies shipping data. Build the native host first, then choose
 a new final output directory; staging refuses to overwrite one. Windows/Linux
 registration contains absolute paths, so unregister before moving the package.
@@ -880,7 +878,7 @@ CAPTURES_OPEN_AFTER_INSTALL=0 npm run build
 CAPTURES_RESET_PERMISSIONS=1 npm run build
 ```
 
-macOS `npm run build` uses an installed Apple Development signing identity when available and otherwise uses an ad-hoc signature. Those builds omit updater artifacts unless `TAURI_SIGNING_PRIVATE_KEY` is provided. They also skip Apple notarization and strip quarantine on install, so they are a different Screen Recording identity and a different Gatekeeper path than a downloaded Preview. The bundle includes the Hardened Runtime `audio-input` entitlement so macOS can list Captures in Microphone settings after the app asks.
+macOS `npm run build` uses an installed Apple Development signing identity when available and otherwise uses an ad-hoc signature. Those builds omit updater artifacts unless `TAURI_SIGNING_PRIVATE_KEY` is provided. They also skip Apple notarization and strip quarantine on install, so they are a different Screen Recording identity and a different Gatekeeper path than a downloaded release. The bundle includes the Hardened Runtime `audio-input` entitlement so macOS can list Captures in Microphone settings after the app asks.
 
 To iterate on first-run setup against the same Developer ID signature, notarized DMG, and Gatekeeper quarantine a user gets, use the local signed build:
 
@@ -894,7 +892,7 @@ npm run build:signed
 
 The Developer ID Application identity name (`Developer ID Application: Your Name (TEAMID)`) is not a secret. `codesign` prints it on every shipped app. The `.p12` private key, its password, and the App Store Connect `.p8` are secrets; `--setup` stores the API key in `~/.captures` and a `captures-notary` keychain profile. GitHub will not give the `release` environment secrets back.
 
-`npm run build:signed` requires macOS and that Developer ID identity in the login keychain. It resets the onboarding flag and Screen Recording / Microphone grants unless you pass `--keep-onboarding` or `--keep-permissions`. Notarization talks to Apple and usually takes a few minutes. It still does not publish a Preview, produce Windows or Linux installers, or exercise the in-app updater.
+`npm run build:signed` requires macOS and that Developer ID identity in the login keychain. It resets the onboarding flag and Screen Recording / Microphone grants unless you pass `--keep-onboarding` or `--keep-permissions`. Notarization talks to Apple and usually takes a few minutes. It still does not publish a release, produce Windows or Linux installers, or exercise the in-app updater.
 
 Useful options:
 
@@ -918,7 +916,7 @@ Installed packages register **Open With** for PNG, JPEG, WebP, GIF, MP4, and Web
 ## Feedback API
 
 Early user feedback is posted to Discord with no database. Public feedback and
-Preview updater requests are handled by the Rust `captures-api` service.
+updater requests are handled by the Rust `captures-api` service.
 
 Set the API process environment before starting it:
 

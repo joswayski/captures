@@ -1,6 +1,6 @@
 # Captures website
 
-Minimal work-in-progress page with a Preview download for the visitor's OS
+Minimal work-in-progress page with a download for the visitor's OS
 (same stable `preview` release assets as the root README), a short product
 screenshot gallery (the stills in `docs/images/`, shared with the README; each
 shot shows in full; swipe or use Previous/Next to change stills — those buttons
@@ -14,9 +14,9 @@ link. Other desktop platforms are mentioned with a link to GitHub Releases rathe
 than listed as installers.
 
 Public installers and the updater feed automatically track the newest validated
-Tauri Preview selected by `scripts/preview-release.mjs`. Main-branch activity is labelled **Development
-updates**, not promised as part of that download; native parity work stays separate.
-See [channel operations](../../docs/releases.md#public-channel-automatically-tracks-tauri).
+release selected by `scripts/preview-release.mjs`. Main-branch activity is labelled **Development
+updates**, not promised as part of that download.
+See [channel operations](../../docs/releases.md#public-channel-automatically-tracks-native).
 
 ## Stack
 
@@ -26,7 +26,7 @@ See [channel operations](../../docs/releases.md#public-channel-automatically-tra
 - Tailwind CSS v4
 
 The homepage is server-rendered so the first HTML already includes the matching
-Preview download and any "still cooking" Preview status. Latest changes are
+download and any "still cooking" release status. Latest changes are
 still baked in at build time.
 
 ## Develop
@@ -47,8 +47,8 @@ npm run build:web
 Nitro emits a standalone Node server in `apps/web/.output`. The build fetches
 recent `main` commits from the GitHub API, drops dependency bumps, and
 embeds the latest ten product changes in the homepage payload. The server picks
-the Preview installer from the request `User-Agent` and `Sec-CH-UA-*` headers,
-and looks up Preview publishing status from the GitHub API (cached in memory for
+the installer from the request `User-Agent` and `Sec-CH-UA-*` headers,
+and looks up release publishing status from the GitHub API (cached in memory for
 one hour) so "still cooking" is in the first HTML. Client-side JavaScript still
 handles clipboard feedback and relative times.
 

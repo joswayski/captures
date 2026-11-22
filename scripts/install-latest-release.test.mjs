@@ -26,18 +26,18 @@ test("public downloads advance to the newest marked release, never unmarked nati
   assert.equal(publicPreviewRelease([native, tauri]), tauri);
   assert.equal(publicPreviewRelease([native, tauri, next]), next);
   assert.equal(publicPreviewRelease([next, { ...native, tag_name: "v2026.10.19.1" }]), next);
+  // Full releases replace the former pre-release channel; both count.
+  assert.equal(
+    publicPreviewRelease([tauri, { ...next, prerelease: false }]).tag_name,
+    next.tag_name,
+  );
   for (const unfinished of [
     { ...next, draft: true },
-    { ...next, prerelease: false },
     { ...next, assets: [{ name: "captures-tauri.json", state: "starter" }] },
   ])
     assert.equal(publicPreviewRelease([tauri, unfinished]), tauri);
-  for (const releases of [
-    [native],
-    [native, { ...tauri, draft: true }],
-    [native, { ...tauri, prerelease: false }],
-  ]) {
-    assert.throws(() => publicPreviewRelease(releases), /no published public Preview/u);
+  for (const releases of [[native], [native, { ...tauri, draft: true }]]) {
+    assert.throws(() => publicPreviewRelease(releases), /no published public release/u);
   }
   // Since November 2026 the validated public release job marks native builds.
   const nativePublic = {
@@ -73,7 +73,7 @@ test("selects the greatest published Preview version instead of the last one pub
     },
     {
       id: 5,
-      draft: false,
+      draft: true,
       prerelease: false,
       tag_name: "v2026.08.01.1",
       published_at: "2026-08-01T18:00:00Z",

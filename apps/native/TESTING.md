@@ -1,6 +1,6 @@
 # Captures Native Development: exploratory testing
 
-This is an experimental native build, **not the shipping Captures Preview**.
+This is an experimental native build, **not the shipping Captures app**.
 Do not replace the installed app or point this build at its settings or History.
 Signed updates, installed-data migration/rollback and full platform acceptance
 are not ready. Wayland supports desktop-portal screenshots returning to History

@@ -6,18 +6,17 @@ Native (AppKit, Win32, GTK4) is the public application since November 2026. The
 maintainer approved the switch after staging over-the-air updates passed on his
 Mac and Windows PC, both native to native (1501 → 1502) and Tauri to native
 (Tauri 1505 → native 1506). Main pushes with unpublished native/shared desktop
-changes build and promote a Preview after all platform, signing, notarization and
-complete-package checks pass. The egui/wgpu workbench never ships. This remains
-the experimental Preview channel, not a stable-channel launch.
+changes build and promote a release after all platform, signing, notarization and
+complete-package checks pass. The egui/wgpu workbench never ships.
 
 `release.yml` builds each target with `native-preview-build.mjs build`, signs the
 version- and target-bound updater artifacts with `collect`, and writes
 `latest.json` with `manifest` (including the `linux-x86_64-deb` entry that
-existing Tauri `.deb` installs select). Installed Tauri Previews update to native
+existing Tauri `.deb` installs select). Installed Tauri apps update to native
 once through their normal updater, using the same identity and signing key; the
 native app then imports the Tauri profile read-only into its own profile.
 
-Public downloads, `npm run install:preview`, and both updater endpoints use the
+Public downloads, `npm run install:latest`, and both updater endpoints use the
 highest published CalVer that `scripts/preview-release.mjs` accepts: releases
 carrying the `captures-native.json` runtime marker, uploaded only after the native
 packaging job passes validation, plus Tauri releases (`captures-tauri.json`, and
@@ -45,7 +44,7 @@ the workflow dispatch. For a broken release, fix or revert on main and publish a
 higher version; an older version will not downgrade installed apps. Prove
 updater changes on the native staging feed (below) before they reach main.
 
-## Native Preview packaging and recovery
+## Native packaging and recovery
 
 The native public rollout has been withdrawn pending parity. Earlier native
 archives used AppKit (macOS Apple Silicon) and Rust/wgpu (Windows/Linux x64)
@@ -68,17 +67,17 @@ icons are compiled in). The host must answer `--preview-build-info` with
 renderer `win32` or `gtk` and the requested version before it is copied to the
 bundler's main binary, so installed executables keep the Tauri names
 (`captures.exe`, `/usr/bin/captures`, `Captures.app/Contents/MacOS/captures`)
-that the Preview installer updater requires. `Target::package_executable`
+that the installed app's updater requires. `Target::package_executable`
 (`CapturesNative.exe`, `captures-native`) names development archives, not these
 installers. Packages also carry the target-suffixed FFmpeg/FFprobe sidecars,
 their notices and `native_preview_update_helper`.
 
 A host built with `CAPTURES_NATIVE_PREVIEW_VERSION` starts as the resident app
-(`--live`) on the imported Preview profile and holds the package-use lock, as the
+(`--live`) on the imported native profile and holds the package-use lock, as the
 wgpu host did. The Win32 host now also starts the startup recovery companion
 described below, acknowledges readiness (settings, Direct2D device, bundled
 FFmpeg/FFprobe) for both the companion and the NSIS `/ARGS` relaunch, checks the
-Preview channel at launch and every five minutes, and installs from its
+release channel at launch and every five minutes, and installs from its
 Preferences Updates card (Update now downloads and verifies, then starts the
 copied helper and quits), and shows the floating update notice for new versions
 and failed installs. Win32 opens
@@ -107,7 +106,7 @@ FFmpeg notices, checksums and a draft before publication. Native artifacts use
 version/target-bound filenames in their signed Minisign trusted comments; the
 compiled helper authenticates the collected bytes before upload. `latest.json`
 keeps the existing Tauri-compatible platform keys and public signing key, so
-the earlier native rollout could update installed Tauri Previews. That promotion
+the earlier native rollout could update installed Tauri apps. That promotion
 is now blocked by the public runtime filter and Tauri-only release workflow.
 The manifest retains a separately signed `linux-x86_64-deb` artifact for existing
 Tauri Debian installs: their updater cannot install an AppImage fallback. Once on
@@ -151,13 +150,14 @@ beside it, kept rather than deleted, and imports again. Do not launch another ol
 during this first import. The process check is a best-effort guard, not a lock
 honored by old Tauri versions. Development workbenches remain separate.
 
-Preview migration retains History's saved-file references, including reference-only
+Native migration retains History's saved-file references, including reference-only
 recordings created by Open With. It neither reads nor copies external media; missing
 files remain missing History entries. Development imports still reject reference-only
 recordings and clear saved-file links so test workbenches cannot modify installed exports.
-If an earlier Preview exits with `Reference-only recordings must be reconciled before
-import`, install a fixed Preview over the app and retry. That failed import publishes
-no native profile; do not delete or edit the original History to work around it.
+If an earlier native release exits with `Reference-only recordings must be reconciled
+before import`, install a fixed release over the app and retry. That failed import
+publishes no native profile; do not delete or edit the original History to work
+around it.
 
 macOS/AppImage native updates keep `.Captures-previous-<uuid>.app` / `.AppImage`
 next to the installed app until the replacement acknowledges renderer, settings
@@ -208,7 +208,7 @@ The existing renderer/settings/bundled-media readiness gate ends monitoring;
 successful secondary forwarding and normal Quit explicitly cancel it. Healthy
 launches perform no recovery HTTP requests. Ordinary in-app updates still require
 user confirmation; failed-startup recovery automatically installs a signed newer
-Preview using the same pinned key and version/target binding.
+release using the same pinned key and version/target binding.
 
 The helper reads only its private request/health files and installed executable,
 never settings, History, migration markers or exports. Its scratch directories are
@@ -257,7 +257,7 @@ remain unavailable. Automated checks must not be reported as physical acceptance
 ## Release queue
 
 `.github/workflows/release.yml` runs on every push to `main`, including merges.
-Its inexpensive scope check compares with the last published dated Tauri Preview and
+Its inexpensive scope check compares with the last published dated Tauri release and
 skips app builds when there are no unpublished desktop changes. Native-app-only and website/API-only
 pushes do not rebuild an already-published desktop; a later push can still collect
 desktop changes left unpublished by a failed or superseded request.
@@ -270,10 +270,10 @@ request. Channel-only dispatches share this lock and skip all app builds.
 
 Tauri builds run the frontend and Rust quality gates while the macOS
 Apple Silicon, Windows x64, and Linux x64 packages build in parallel, so the
-checks add no time to a Preview. The Rust checks run on GitHub-hosted runners
-and restore the same cache as CI's Rust checks. A Preview is published only when
-every job succeeds: **Publish Preview** needs the checks and the validated draft. Notes compare with the nearest published
-dated Tauri Preview in the requested commit's history, ignoring native releases,
+checks add no time to a release. The Rust checks run on GitHub-hosted runners
+and restore the same cache as CI's Rust checks. A release is published only when
+every job succeeds: **Publish release** needs the checks and the validated draft. Notes compare with the nearest published
+dated Tauri release in the requested commit's history, ignoring native releases,
 drafts and orphan tags. Successful publication advances the public channel.
 
 PR and release packaging reuse an exact-key cache of unsigned FFmpeg/ffprobe
@@ -285,7 +285,7 @@ checksum, recreate compliance files, and validate both binaries. Cache saves
 happen immediately after validation, before packaging can sign binaries; app
 signing, notarization, updater signatures, and complete-release validation still
 run for every release. GitHub evicts the least recently used caches once the
-repository holds 10 GB, which removed this cache between Previews, so release
+repository holds 10 GB, which removed this cache between releases, so release
 packaging also keeps each platform's newest build as `<key>.tar.gz` on the draft
 release **Build cache (not a release)** (`scripts/media-sidecar-store.mjs`). A
 cache miss restores from it before compiling, and a restored build is validated
@@ -294,19 +294,22 @@ Delete the relevant GitHub Actions `ffmpeg-v1-*` cache and that draft's asset to
 force a cold rebuild; the first build after a key change is also cold. Cold
 cache misses download the pinned FFmpeg source. GitHub-hosted runners try a
 previously published copy of that tarball from this repository first, then
-ffmpeg.org, so a timeout talking to ffmpeg.org cannot stall a Preview.
+ffmpeg.org, so a timeout talking to ffmpeg.org cannot stall a release.
 Checksum verification is unchanged.
 
-Previews are GitHub pre-releases with CalVer versions in `YYYY.MM.DD.N` form,
-using the
+Dated releases are full GitHub releases (not pre-releases) with CalVer versions in
+`YYYY.MM.DD.N` form, using the
 `America/New_York` date of the main-branch commit and a same-day revision from 1
-through 99. A Preview named `Captures Preview 2026.07.19.1` uses tag
+through 99. A release named `Captures 2026.07.19.1` uses tag
 `v2026.07.19.1`. Tauri receives the SemVer-compatible internal version
 `2026.7.1901`; source manifests remain at the development version. The updater
 channel and fixed Git tag are both named `preview`; refreshing them always uses
-the newest published Tauri version, ignoring native archives.
+the newest published Tauri version, ignoring native archives. The
+**Update public downloads** job also retitles older dated releases to the same
+`Captures <version>` form, strips their former experimental warning and clears
+their pre-release flag.
 
-The workflow stages a draft Preview at the exact commit under test. Each platform
+The workflow stages a draft release at the exact commit under test. Each platform
 builds and validates its pinned LGPL FFmpeg sidecars, then uploads its installer,
 updater archive, and updater signature. The macOS job also verifies the sidecars
 inside `Captures.app` and uploads the shared FFmpeg source archive, detached
@@ -316,8 +319,8 @@ older `target_sha`, that job overlays `scripts/github-release-assets.mjs` and
 uses the current helper, including its local import. The final job requires
 those files plus a DMG, NSIS installer, AppImage, Debian package, complete
 `latest.json`, and `SHA256SUMS`, confirms the release is still staged, and then
-publishes it as a pre-release. A failed build removes its draft and tag, leaving
-published Previews untouched. If draft creation itself is interrupted, the next run
+publishes it as a full release. A failed build removes its draft and tag, leaving
+published releases untouched. If draft creation itself is interrupted, the next run
 removes only stale drafts with its generated tag before retrying.
 
 Release notes are generated from only the commits in the release range that
@@ -327,8 +330,7 @@ changes from appearing later in the next real desktop update message.
 During draft preparation, `scripts/ai-release-notes.mjs` asks Gemini for up to
 five short, user-facing highlights. It follows Caper's casual, lightly witty editorial
 prompt and Gemini request configuration, but writes the existing release body,
-not a separate highlights feed. Packaging and the updater reuse that body;
-the Preview warning remains unchanged.
+not a separate highlights feed. Packaging and the updater reuse that body.
 
 Set the repository Actions secret `GEMINI_API_KEY`: a Gemini API key from
 Google AI Studio whose project uses the paid tier. Optional repository
@@ -339,7 +341,7 @@ override `gemini-4-neon` and `medium`. Generation uses structured JSON output,
 It sends filtered source diffs and commit messages to Google, never capture
 files or installed-app data. There is no AI request from the desktop app.
 
-Evidence uses the exact previous-Tauri-Preview-to-target first-parent range. Only
+Evidence uses the exact previous-Tauri-release-to-target first-parent range. Only
 Tauri and shared source paths supply evidence; native-app source, website, tests,
 dependency bots and secret-looking paths are excluded. Native-only code inside
 shared crates is also excluded: `captures-settings-ffi` and `captures-app` except
@@ -368,7 +370,7 @@ Preferences → Updates always shows the same installer link, not only after a
 failure. Users can also download the `.dmg`, Windows setup, or `.deb` from
 captur.es or the README and install over the current copy. The AppImage does not
 replace an existing launch by itself: copy it over `~/.local/bin/Captures.AppImage`
-and `chmod +x`, matching `npm run install:preview`. Running it from Downloads
+and `chmod +x`, matching `npm run install:latest`. Running it from Downloads
 starts a second copy. That recovery path does not depend on the in-app updater
 working; settings and capture history stay.
 `scripts/updater-recovery.test.mjs` fails `npm run check` if updater artifacts,
@@ -376,41 +378,41 @@ endpoints, the signing public key, stable installer filenames, or that download
 page URL are removed.
 
 Creating the draft early is only a private staging step, and packaging starts
-before the frontend and Rust checks finish. The **Publish Preview** job runs
+before the frontend and Rust checks finish. The **Publish release** job runs
 only after those checks and **Validate staged release** succeed and `SHA256SUMS` is
 present; that marker means every required macOS, Windows, and Linux artifact was
 downloaded and validated together. The existence of a draft page by itself does
 not mean the release is complete.
 
-The fixed `preview` pre-release is the permanent **Captures Preview — Latest**
-download page, not a historical build. It holds the macOS, Windows, Debian, and
-AppImage installers plus the `latest.json` updater manifest for the newest
+The fixed `preview` release is the permanent **Captures — Latest** download page,
+marked as GitHub's Latest release, not a historical build. Its tag stays `preview`
+because installed apps fetch `releases/download/preview/latest.json`. It holds the
+macOS, Windows, Debian, and AppImage installers plus the `latest.json` updater
+manifest for the newest
 public Tauri CalVer version. That manifest includes a Tauri-only `changelog`
 through that version, never notes from experimental native archives.
-Installed Preview builds ask `https://captur.es/api/updates/preview` for that
+Installed apps ask `https://captur.es/api/updates/preview` for that
 manifest about every five minutes (and again shortly after launch). The website
 caches GitHub's `latest.json` for one minute and serves it unchanged; Tauri
 still falls back to the GitHub download URL if captur.es is unreachable.
 Platform download URLs in `latest.json` are rewritten from GitHub API asset
 endpoints to public `releases/download/<CalVer-tag>/…` links so the archive
 download itself does not consume the unauthenticated API rate limit (HTTP 403)
-and does not keep draft `untagged-*` paths that 404 after the Preview is
+and does not keep draft `untagged-*` paths that 404 after the release is
 published. Validation passes the workflow’s
 CalVer tag into that rewrite because GitHub draft releases keep reporting
 `tag_name` as `untagged-*` until they are published, even when the git tag
 already exists. Installers on this channel use **stable filenames**
 (`Captures-macOS-Apple-Silicon.dmg`, `Captures-Windows-x64-setup.exe`,
 `Captures-Linux-x64.deb`, `Captures-Linux-x64.AppImage`) so the root README can
-link directly without updating URLs on every merge. Dated immutable Previews keep
+link directly without updating URLs on every merge. Dated immutable releases keep
 versioned package names. The channel page links to the corresponding immutable
-Preview, while the Releases page remains the dated build archive. Selection uses
+release, while the Releases page remains the dated build archive. Selection uses
 the explicit public pin, not the highest version or publication time.
-Future stable releases can use normal GitHub release
-metadata and their own updater endpoint without replacing the Preview archive.
 
-The first successful Preview publication removes the obsolete `nightly` rolling
+The first successful publication removes the obsolete `nightly` rolling
 release and tag after the new `preview` page and its installer set are verified.
-No compatibility redirect is retained during this pre-release phase.
+No compatibility redirect is retained.
 
 For a historical backfill, dispatch the workflow from `main` with `target_sha`
 set to a commit that is already on `main`. The workflow checks out and rebuilds
@@ -423,32 +425,32 @@ without `target_sha` snapshots the latest `main` when it starts.
 
 When switching from the old preserve-every-push workflow, pending runs created
 with the old workflow may still exist. Inspect Actions after merging; if needed,
-cancel only obsolete pending Preview runs, keep the active run, and dispatch
+cancel only obsolete pending release runs, keep the active run, and dispatch
 the new workflow from `main`. Do not rerun old workflow runs to enable batching:
 they retain their old workflow definition. For an urgent fix, a maintainer can
 explicitly cancel an obsolete active build and request the latest `main`; check
 that any staged draft was cleaned up before retrying. Normal pushes never
 cancel the active release.
 
-## Install the latest Preview
+## Install the latest release
 
 Use a local signed macOS build when iterating on first-run setup. See
 [DEVELOPMENT.md](../DEVELOPMENT.md#packaging) for `npm run build:signed`. That
 command signs with the Developer ID identity, notarizes and staples a DMG, and
-installs it with Gatekeeper quarantine. It does not publish a Preview or build
+installs it with Gatekeeper quarantine. It does not publish a release or build
 the Windows and Linux installers.
 
-Use the CI-produced Preview when you need the published multi-platform
+Use the CI-produced release when you need the published multi-platform
 installer set, updater channel, or `SHA256SUMS` completion marker:
 
 ```sh
-npm run install:preview
+npm run install:latest
 ```
 
 The command requires Node.js 24 and an authenticated GitHub CLI. It always
-selects the greatest published Preview CalVer and requires both the current
+selects the greatest published release CalVer and requires both the current
 system's installer and `SHA256SUMS`. The checksum file is the completion marker
-uploaded only after the entire staged Preview passes validation.
+uploaded only after the entire staged release passes validation.
 
 After downloading and verifying the installer, the command quits Captures,
 removes the installed app package, installs the macOS Apple Silicon DMG, Windows
@@ -463,21 +465,20 @@ Windows x64, and Ubuntu x64 GitHub-hosted runners.
 Useful options:
 
 ```sh
-# Show whether the newest Preview is ready without changing the installed app
-npm run install:preview -- --dry-run
+# Show whether the newest release is ready without changing the installed app
+npm run install:latest -- --dry-run
 
-# Fail instead of waiting when the newest Preview is incomplete
-npm run install:preview -- --no-wait
+# Fail instead of waiting when the newest release is incomplete
+npm run install:latest -- --no-wait
 
 # Install without launching Captures afterward
-npm run install:preview -- --no-launch
+npm run install:latest -- --no-launch
 ```
 
 ## Stable-release gates
 
-Previews are intentionally experimental. Creating an installer and signing a
-Tauri updater archive do not by themselves make a stable release. Do not publish
-the stable channel until every gate below is enforced and passes:
+Public releases ship while the gates below remain open. Creating an installer and
+signing a Tauri updater archive do not by themselves close them:
 
 | Platform or concern | Required before production publishing                                                                                                               | Current implementation                                                                                                |
 | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
@@ -496,7 +497,7 @@ These signatures have separate trust boundaries:
 ## GitHub release environment
 
 The `release` environment protects signing and notarization credentials; it is
-not a release channel. Preview and stable builds can share this environment
+not a release channel. Public and staging builds can share this environment
 while using different release metadata and updater endpoints.
 
 Create a GitHub environment named `release`, restrict its deployment branches to `main`, and add these environment secrets:
@@ -625,8 +626,8 @@ If Captures later operates an APT repository, that repository must publish signe
 
 ## Bootstrap and acceptance
 
-The first updater-enabled Preview must be downloaded and installed manually.
-Subsequent validated Previews appear in the rolling updater channel
+The first updater-enabled release must be downloaded and installed manually.
+Subsequent validated releases appear in the rolling updater channel
 automatically. Before relying on automatic updates, test this sequence on clean
 machines:
 

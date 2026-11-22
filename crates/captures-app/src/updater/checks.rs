@@ -209,7 +209,7 @@ impl CheckWorker {
         let client = super::preview::Client::installed(renderer)?;
         let installable = client.installable();
         let directory = crate::preview_channel::profile_path()
-            .map_err(|_| Error::Configuration("Preview profile is unavailable"))?
+            .map_err(|_| Error::Configuration("Captures profile is unavailable"))?
             .join("updates");
         std::fs::create_dir_all(&directory)?;
         let mut worker = Self::with_source(
@@ -357,9 +357,7 @@ impl CheckWorker {
             || !self.install_request_enabled
             || !matches!(self.status, CheckStatus::Staged { .. })
         {
-            return Err(Error::Installation(
-                "a verified Preview update is not available",
-            ));
+            return Err(Error::Installation("a verified update is not available"));
         }
         let (sender, receiver) = mpsc::channel();
         self.jobs
@@ -369,7 +367,7 @@ impl CheckWorker {
             .recv()
             .map_err(|_| Error::Installation("update worker stopped"))?
             .ok_or(Error::Installation(
-                "verified Preview package is no longer available",
+                "verified update package is no longer available",
             ))?;
         if let Err(error) = package.launch(restart) {
             if let CheckStatus::Staged { release, .. } = &self.status {
@@ -667,15 +665,18 @@ impl CheckWorker {
             p.title = match self.status {
                 CheckStatus::Checking => "Checking for updates",
                 CheckStatus::UpToDate => "Captures is up to date",
-                CheckStatus::Downloading { .. } => "Downloading Preview",
-                CheckStatus::Staged { .. } => "Preview ready to install",
+                CheckStatus::Downloading { .. } => "Downloading update",
+                CheckStatus::Staged { .. } => "Update ready to install",
                 CheckStatus::Error { .. } | CheckStatus::DownloadError { .. } => "Update failed",
-                _ => "Captures Preview update",
+                _ => "Captures update",
             }
             .into();
             p.description = self.presentation().status;
             p.status_message = if matches!(self.status, CheckStatus::Staged { .. }) {
-                Some("Restart installs the signed native Preview after capture work and drafts finish.".into())
+                Some(
+                    "Restart installs the signed update after capture work and drafts finish."
+                        .into(),
+                )
             } else {
                 None
             };
@@ -689,7 +690,7 @@ impl CheckWorker {
                 && let Some(footer) = &mut p.footer
             {
                 footer.primary = Some(Button {
-                    label: "Download Preview".into(),
+                    label: "Download update".into(),
                     enabled: true,
                     action: Action::OpenDownloadPage,
                 });
@@ -763,7 +764,7 @@ impl CheckWorker {
                 CheckStatus::Error { .. } | CheckStatus::DownloadError { .. }
             ),
             detail: if self.install_request_enabled {
-                "Only Restart and install requests replacement of the selected development package. Ordinary Quit does not install. Installed Previews and release channels are unchanged."
+                "Only Restart and install requests replacement of the selected development package. Ordinary Quit does not install. Installed apps and release channels are unchanged."
             } else if self.staging_enabled {
                 "Explicit downloads validate a temporary package. No installation, execution or update channel is enabled."
             } else {
@@ -775,22 +776,22 @@ impl CheckWorker {
             // Shipping's Preferences identity, like the Win32/GTK cards.
             presentation.version =
                 format!("Version {}", super::display_version(&self.current_version));
-            presentation.channel = "Preview channel";
+            presentation.channel = "Release channel";
             presentation.status = match &self.status {
-                CheckStatus::UpToDate => "You have the latest Preview".into(),
+                CheckStatus::UpToDate => "You have the latest version".into(),
                 CheckStatus::Available { release } => {
-                    format!("Preview {} available", release.version)
+                    format!("Version {} available", release.version)
                 }
                 CheckStatus::Staged { release, .. } => {
-                    format!("Preview {} verified", release.version)
+                    format!("Version {} verified", release.version)
                 }
                 CheckStatus::Checking => "Checking for updates…".into(),
                 _ => presentation.status,
             };
             presentation.detail = if self.staging_enabled {
-                "Signed native Preview updates. Restart and install closes open captures after preserving drafts. Ordinary Quit does not install."
+                "Signed updates. Restart and install closes open captures after preserving drafts. Ordinary Quit does not install."
             } else {
-                "Debian packages use manual updates. Download the latest native Preview from captur.es."
+                "Debian packages use manual updates. Download the latest version from captur.es."
             };
         }
         presentation

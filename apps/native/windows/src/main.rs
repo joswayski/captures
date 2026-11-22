@@ -306,7 +306,7 @@ fn parse_args(args: impl Iterator<Item = String>, preview: bool) -> Result<Optio
                 || !options.open.is_empty()
                 || !paths
             {
-                return Err("Update readiness needs a plain --live launch on the installed Preview profile or explicit absolute --history-root and --settings-file".into());
+                return Err("Update readiness needs a plain --live launch on the installed Captures profile or explicit absolute --history-root and --settings-file".into());
             }
             options.health = Some(
                 captures_app::updater::HealthAcknowledgement::new(file, token)

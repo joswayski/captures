@@ -14,7 +14,6 @@ const FAILURE_RETRY_MS = 60_000;
 
 type GitHubRelease = {
   draft: boolean;
-  prerelease: boolean;
   tag_name: string;
   target_commitish: string;
   assets?: { name: string; state?: string }[];
@@ -69,7 +68,7 @@ async function latestPublishedPreviewCommit(): Promise<string | null> {
   let best: { version: number[]; tag: string; commitish: string } | null = null;
 
   for (const release of releases) {
-    if (release.draft || !release.prerelease || !isPublicPreview(release)) continue;
+    if (release.draft || !isPublicPreview(release)) continue;
     const version = previewVersion(release.tag_name);
     if (!version) continue;
     if (!best || comparePreviewVersions(version, best.version) > 0) {

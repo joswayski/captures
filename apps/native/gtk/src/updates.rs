@@ -35,14 +35,14 @@ const INTERVAL: Duration = Duration::from_secs(5 * 60);
 pub const RELEASES_URL: &str = "https://github.com/joswayski/captures/releases";
 /// The download page behind "download from captur.es".
 pub use captures_app::update_notice::DOWNLOAD_PAGE_URL;
-pub const CHANNEL: &str = "Preview channel";
+pub const CHANNEL: &str = "Release channel";
 /// Shipping's Linux Preferences fallback, split around its link.
 pub const FALLBACK_BEFORE: &str = "If this copy cannot update itself,";
 pub const FALLBACK_LINK: &str = "download from captur.es";
 pub const FALLBACK_AFTER: &str = "Debian packages replace this app; AppImage users should replace ~/.local/bin/Captures.AppImage. Settings and captures stay.";
 /// The wgpu host's Debian copy, on View release's tooltip and description.
 pub const MANUAL_DETAIL: &str =
-    "Debian packages use manual updates. Download the latest native Preview from captur.es.";
+    "Debian packages use manual updates. Download the latest version from captur.es.";
 
 /// What the card's button does.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -842,7 +842,7 @@ pub fn start(host: &Rc<Host>) {
         match CheckWorker::preview(Renderer::Wgpu, wake) {
             Ok(worker) => Source::Preview(worker),
             Err(error) => {
-                eprintln!("Preview updates unavailable: {error}");
+                eprintln!("Updates unavailable: {error}");
                 return;
             }
         }
@@ -1324,7 +1324,7 @@ mod tests {
     fn idle_and_checking_offer_check_now() {
         let idle = live(&CheckStatus::Idle, false);
         assert_eq!(idle.version, "Version 2026.11.12.1");
-        assert_eq!(idle.channel, "Preview channel");
+        assert_eq!(idle.channel, "Release channel");
         assert_eq!((idle.action, idle.step), ("Check Now", Some(Step::Check)));
         assert!(idle.heading.is_empty() && idle.error.is_none() && idle.warning.is_none());
         let checking = live(&CheckStatus::Checking, false);

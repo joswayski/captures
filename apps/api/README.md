@@ -214,7 +214,7 @@ which rolls the API and then the website forward to the newest published images
 on `main`, never backwards. Publication does not configure secrets.
 
 - `captur.es/api/*` and `api.captur.es/api/*` route to `captures-api`, including
-  feedback, Preview updater manifests, and the unavailable account endpoint.
+  feedback, updater manifests, and the unavailable account endpoint.
 - Other `captur.es` requests route to `captures-web`.
 - Keep Rust `/health` internal. No native login or token storage is implemented or
   claimed tested on macOS, Windows, or Linux.

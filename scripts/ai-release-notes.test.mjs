@@ -136,7 +136,7 @@ test("oversized diffs retain every commit and mark truncation within the request
     [first, after],
   );
   assert.ok(source.commits.every(({ diff, diffTruncated }) => diff.length > 0 && diffTruncated));
-  assert.equal(notes, "## What's Changed\nNo user-facing desktop changes in this Preview.\n");
+  assert.equal(notes, "## What's Changed\nNo user-facing desktop changes in this release.\n");
 });
 
 test("invalid or unavailable editorial output preserves exact fallback without leaking errors", async () => {
@@ -193,7 +193,7 @@ test("the egui/wgpu workbench stays out of AI and fallback notes while native ho
   };
   assert.equal(
     await aiReleaseNotes(f.base, native, fallback, options),
-    "## What's Changed\nNo user-facing desktop changes in this Preview.\n",
+    "## What's Changed\nNo user-facing desktop changes in this release.\n",
   );
   const shipped = f.commit(
     {
@@ -247,7 +247,7 @@ test("quiet ranges skip the API; missing key, missing baseline and excessive met
   };
   assert.equal(
     await aiReleaseNotes(f.base, after, fallback, options),
-    "## What's Changed\nNo user-facing desktop changes in this Preview.\n",
+    "## What's Changed\nNo user-facing desktop changes in this release.\n",
   );
   assert.equal(await aiReleaseNotes("", after, fallback, options), fallback);
   assert.equal(await aiReleaseNotes(f.base, after, fallback, { ...options, env: {} }), fallback);

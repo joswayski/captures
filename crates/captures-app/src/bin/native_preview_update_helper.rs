@@ -22,7 +22,7 @@ fn main() {
         )),
     };
     if let Err(error) = result {
-        eprintln!("Captures Preview update failed: {error}");
+        eprintln!("Captures update failed: {error}");
         std::process::exit(1);
     }
 }

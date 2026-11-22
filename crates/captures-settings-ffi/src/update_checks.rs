@@ -239,9 +239,9 @@ pub unsafe extern "C" fn captures_update_checks_request_v1(
                 Request::CancelDownload { .. } => worker.cancel_download(),
                 Request::Poll { .. } => false,
                 Request::InstallPreview { restart, .. } => {
-                    worker.launch_preview_install(restart).map_err(
-                        |_| "Could not start the verified Preview installer; check again.",
-                    )?;
+                    worker
+                        .launch_preview_install(restart)
+                        .map_err(|_| "Could not start the verified installer; check again.")?;
                     true
                 }
             };

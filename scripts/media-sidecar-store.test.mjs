@@ -165,7 +165,7 @@ test("duplicate stores resolve to the oldest, whatever order GitHub lists them i
     { id: 9, draft: true, name: STORE_NAME },
     { id: 4, draft: true, name: STORE_NAME },
     { id: 2, draft: false, name: STORE_NAME },
-    { id: 1, draft: true, name: "Captures Preview 2026.11.22.1" },
+    { id: 1, draft: true, name: "Captures 2026.11.22.1" },
   );
   assert.equal(await ensureStore(), 4);
   github.releases.reverse();

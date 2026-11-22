@@ -812,7 +812,7 @@ fn restart_marker_path() -> std::path::PathBuf {
 
 async fn check_for_updates_inner(app: &AppHandle, manual: bool) -> Result<UpdateStatus, String> {
     if !preview_release_build() {
-        let message = "Update checks are available only in Captures Preview builds.".to_owned();
+        let message = "Update checks are available only in installed Captures releases.".to_owned();
         let (current_version, current_display_version) = current_versions(app);
         if let Some(status) = check_error_status(
             manual,

@@ -1,4 +1,4 @@
-name: Captures Preview
+name: Captures Release
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       channel_only:
-        description: Refresh public downloads from the newest public Preview without rebuilding
+        description: Refresh public downloads from the newest public release without rebuilding
         required: false
         type: boolean
         default: false
@@ -15,7 +15,7 @@ on:
         required: false
         type: string
 
-# Main pushes build and promote native Previews when unpublished desktop changes
+# Main pushes build and promote native releases when unpublished desktop changes
 # exist. The egui/wgpu workbench and unsigned packages never enter this channel.
 # Omitting queue uses GitHub's default single pending slot.
 concurrency:
@@ -27,7 +27,7 @@ permissions:
 
 jobs:
   queue:
-    name: Select the next Preview batch
+    name: Select the next release batch
     if: ${{ !inputs.channel_only }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -43,7 +43,7 @@ jobs:
         shell: bash
         run: |
           if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
-            echo "Preview builds can only run from main." >&2
+            echo "Release builds can only run from main." >&2
             exit 1
           fi
       - uses: actions/checkout@v4
@@ -73,7 +73,7 @@ jobs:
             echo "release_sha=$release_sha"
             echo "release_timestamp=$release_timestamp"
           } >> "$GITHUB_OUTPUT"
-      - name: Find the last published Preview in this commit's history
+      - name: Find the last published release in this commit's history
         id: baseline
         env:
           GH_TOKEN: ${{ github.token }}
@@ -94,12 +94,12 @@ jobs:
         run: |
           if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
             echo "should_release=true" >> "$GITHUB_OUTPUT"
-            echo "Manual Preview builds always run."
+            echo "Manual release builds always run."
           else
             node scripts/desktop-release.mjs changed "$BEFORE_SHA" "$RELEASE_SHA"
           fi
   version:
-    name: Choose Preview version
+    name: Choose release version
     needs: queue
     if: needs.queue.outputs.should_release == 'true'
     runs-on: ubuntu-24.04
@@ -149,7 +149,7 @@ jobs:
     if: needs.queue.outputs.should_release == 'true'
     # GitHub-hosted like CI's job of the same name, so both restore one Rust
     # cache that every push keeps warm. The self-hosted machines start from a
-    # clean checkout and their own cache key was evicted between Previews, so
+    # clean checkout and their own cache key was evicted between releases, so
     # they compiled everything each time (10 to 11 minutes against 5 to 7).
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -208,7 +208,7 @@ jobs:
   # Staging and packaging run beside the checks instead of after them; nothing
   # is public until `publish`, which needs the checks and the validated draft.
   prepare:
-    name: Stage Preview
+    name: Stage release
     needs: [queue, version]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -332,7 +332,7 @@ jobs:
             "repos/${GITHUB_REPOSITORY}/releases" \
             -f tag_name="$TAG" \
             -f target_commitish="$RELEASE_SHA" \
-            -f name="Captures Preview $DISPLAY_VERSION" \
+            -f name="Captures $DISPLAY_VERSION" \
             -F draft=true \
             > "$release_file"
           release_id="$(jq -er .id "$release_file")"
@@ -347,9 +347,6 @@ jobs:
           node "$GITHUB_WORKSPACE/release-tools/scripts/ai-release-notes.mjs" \
             "$PREVIOUS_TAG" "$RELEASE_SHA" "$generated_notes"
           {
-            echo "> [!WARNING]"
-            echo "> This Preview is functional, but experimental. Expect bugs and incomplete features; macOS is the primary development target, while Windows and Linux may be less polished."
-            echo
             if [[ -s "$generated_notes" ]]; then
               cat "$generated_notes"
             else
@@ -577,7 +574,7 @@ jobs:
       # The Tauri CLI only bundles installers; existing Tauri installs update
       # to it through the same identity, signing key and latest.json format.
       # Rebuilding a commit from before the switch is unsupported.
-      - name: Build and bundle the public native Preview
+      - name: Build and bundle the public native release
         shell: bash
         run: >-
           node scripts/native-preview-build.mjs build
@@ -716,14 +713,14 @@ jobs:
           fi
 
   publish:
-    name: Publish Preview
+    name: Publish release
     needs: [prepare, validate_draft, frontend, rust]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
     steps:
-      - name: Publish the fully validated Preview
+      - name: Publish the fully validated release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
@@ -739,7 +736,7 @@ jobs:
             -f tag_name="$TAG" \
             -f target_commitish="$RELEASE_SHA" \
             -F draft=false \
-            -F prerelease=true \
+            -F prerelease=false \
             -f make_latest=false \
             --silent
           published="$(
@@ -747,13 +744,13 @@ jobs:
               "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
               --jq '[.draft, .prerelease, .tag_name] | @tsv'
           )"
-          if [[ "$published" != $'false\ttrue\t'"$TAG" ]]; then
-            echo "Preview ${TAG} was not published as expected." >&2
+          if [[ "$published" != $'false\tfalse\t'"$TAG" ]]; then
+            echo "Release ${TAG} was not published as expected." >&2
             exit 1
           fi
 
   channel:
-    name: Update public Preview
+    name: Update public downloads
     needs: publish
     if: ${{ always() && !cancelled() && github.ref == 'refs/heads/main' && (needs.publish.result == 'success' || inputs.channel_only) }}
     runs-on: ubuntu-24.04
@@ -767,7 +764,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - name: Publish the newest public Preview on the permanent download page
+      - name: Publish the newest public release on the permanent download page
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -780,25 +777,34 @@ jobs:
             "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
             | jq -s add \
             > "$releases_file"
+          # Earlier dated releases were published as experimental pre-releases
+          # ("Captures Preview", before that "Captures Nightly"). Give each a
+          # plain title and body and publish it as a full release.
           while IFS= read -r release; do
             release_id="$(jq -er .id <<< "$release")"
             release_tag="$(jq -er .tag_name <<< "$release")"
             current_name="$(jq -r '.name // ""' <<< "$release")"
             current_body="$(jq -r '.body // ""' <<< "$release")"
-            preview_name="Captures Preview ${release_tag#v}"
-            preview_body="${current_body//This Nightly/This Preview}"
-            preview_body="${preview_body//Captures Nightly/Captures Preview}"
-            if [[ "$current_name" != "$preview_name" || "$current_body" != "$preview_body" ]]; then
+            current_prerelease="$(jq -r .prerelease <<< "$release")"
+            release_name="Captures ${release_tag#v}"
+            release_body="$(
+              jq -r '.body // "" | sub("^> \\[!WARNING\\]\r?\n(> [^\n]*\n)*\r?\n*"; "")' <<< "$release"
+            )"
+            release_body="${release_body//No user-facing desktop changes in this Preview./No user-facing desktop changes in this release.}"
+            if [[ "$current_name" != "$release_name" || "$current_body" != "$release_body" || "$current_prerelease" != "false" ]]; then
               gh api \
                 --method PATCH \
                 "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
-                -f name="$preview_name" \
-                -f body="$preview_body" \
-                --silent
+                -f name="$release_name" \
+                -f body="$release_body" \
+                -F prerelease=false \
+                -f make_latest=false \
+                --silent \
+                || echo "::warning::Could not retitle ${release_tag}; the next release retries it."
             fi
           done < <(
             jq -c \
-              '.[] | select(.draft == false and .prerelease == true and (.tag_name | test("^v[0-9]{4}\\.[0-9]{2}\\.[0-9]{2}\\.[1-9][0-9]?$")))' \
+              '.[] | select(.draft == false and (.tag_name | test("^v[0-9]{4}\\.[0-9]{2}\\.[0-9]{2}\\.[1-9][0-9]?$")))' \
               "$releases_file"
           )
 
@@ -821,7 +827,7 @@ jobs:
             --pattern latest.json \
             --dir "$channel_assets"
           # Rename versioned packages to stable channel names so README and
-          # release-page download links point at the approved public Preview.
+          # release-page download links point at the approved public release.
           preview_assets="$(
             node scripts/preview-release-assets.mjs prepare "$channel_assets"
           )"
@@ -849,10 +855,7 @@ jobs:
 
           channel_notes="$RUNNER_TEMP/preview-channel-notes.md"
           {
-            echo "> [!WARNING]"
-            echo "> Captures Preview is functional, but experimental. Expect bugs and incomplete features; macOS is the primary development target, while Windows and Linux may be less polished."
-            echo
-            echo "These downloads track the newest validated Preview automatically."
+            echo "These downloads track the newest validated release automatically."
             echo
             echo "- [macOS 13+ — Apple silicon (.dmg)]($(asset_url "$macos_asset"))"
             echo "- [Windows 11 — x64 installer (.exe)]($(asset_url "$windows_asset"))"
@@ -883,7 +886,7 @@ jobs:
               fi
             done < <(
               jq -r \
-                '.[] | select(.draft and (.tag_name == "preview" or .name == "Captures Preview — Latest")) | .id' \
+                '.[] | select(.draft and (.tag_name == "preview" or .name == "Captures — Latest" or .name == "Captures Preview — Latest")) | .id' \
                 "$releases_file"
             )
             gh api \
@@ -898,7 +901,7 @@ jobs:
                 "repos/${GITHUB_REPOSITORY}/releases" \
                 -f tag_name=preview \
                 -f target_commitish="$newest_target" \
-                -f name="Captures Preview — Latest" \
+                -f name="Captures — Latest" \
                 -F draft=true \
                 -f make_latest=false
             )"
@@ -910,11 +913,11 @@ jobs:
             "repos/${GITHUB_REPOSITORY}/releases/${channel_id}" \
             -f tag_name=preview \
             -f target_commitish="$newest_target" \
-            -f name="Captures Preview — Latest" \
+            -f name="Captures — Latest" \
             -f body="$(cat "$channel_notes")" \
             -F draft=false \
-            -F prerelease=true \
-            -f make_latest=false \
+            -F prerelease=false \
+            -f make_latest=true \
             --silent
 
           expected_assets="$(
@@ -931,13 +934,13 @@ jobs:
           )"
           actual_assets="$(jq -c '[.assets[].name] | sort' <<< "$channel_release")"
           if [[ "$actual_assets" != "$expected_assets" ]]; then
-            echo "The permanent Preview page does not contain exactly the expected downloads." >&2
+            echo "The permanent download page does not contain exactly the expected downloads." >&2
             echo "Expected: $expected_assets" >&2
             echo "Actual:   $actual_assets" >&2
             exit 1
           fi
-          if [[ "$(jq -r '[.draft, .prerelease, .tag_name, .name] | @tsv' <<< "$channel_release")" != $'false\ttrue\tpreview\tCaptures Preview — Latest' ]]; then
-            echo "The permanent Preview page metadata is incorrect." >&2
+          if [[ "$(jq -r '[.draft, .prerelease, .tag_name, .name] | @tsv' <<< "$channel_release")" != $'false\tfalse\tpreview\tCaptures — Latest' ]]; then
+            echo "The permanent download page metadata is incorrect." >&2
             exit 1
           fi
 
@@ -964,7 +967,7 @@ jobs:
             || true
 
   cleanup:
-    name: Remove incomplete Preview
+    name: Remove incomplete release
     if: ${{ always() && needs.prepare.result == 'success' && needs.publish.result != 'success' }}
     needs: [prepare, package, validate_draft, publish]
     runs-on: ubuntu-24.04

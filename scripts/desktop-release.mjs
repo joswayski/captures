@@ -206,7 +206,7 @@ export function releaseNotes(commits, repository, fallbackCommit = "") {
 /** Nearest published public Preview on main's history, never an unmarked native or draft tag. */
 export function previousPreviewTag(head, releases) {
   const tags = releases
-    .filter((release) => !release.draft && release.prerelease && isPublicPreview(release))
+    .filter((release) => !release.draft && isPublicPreview(release))
     .map((release) => release.tag_name);
   if (tags.length === 0) return "";
   try {

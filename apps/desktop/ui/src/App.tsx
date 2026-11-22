@@ -996,7 +996,7 @@ export function UpdateNotice() {
                           </ul>
                         ) : (
                           <p className="update-notes-empty">
-                            Release notes aren’t available for this Preview.
+                            Release notes aren’t available for this release.
                           </p>
                         )}
                       </section>
@@ -1201,14 +1201,12 @@ function UpdatePreferences({
     >
       <header className="settings-card-header">
         <h2 id="updates-heading">Updates</h2>
-        <p>
-          Preview builds check for a new version automatically. Update now installs it in place.
-        </p>
+        <p>Captures checks for a new version automatically. Update now installs it in place.</p>
       </header>
       <div className="settings-utility-row update-settings-row">
         <div className="settings-utility-copy">
           <strong>Version {currentVersion}</strong>
-          <small>Preview channel</small>
+          <small>Release channel</small>
         </div>
         <div className="update-settings-actions">
           <button
@@ -1279,7 +1277,7 @@ function UpdatePreferences({
         <span>
           Show what’s new on update notices
           <small>
-            Lists every Preview since the version you have. Turn this off for a compact Update now
+            Lists every release since the version you have. Turn this off for a compact Update now
             prompt.
           </small>
         </span>

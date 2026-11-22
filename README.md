@@ -3,7 +3,7 @@
 Captures is a cross-platform screen capture utility built for quick captures and a lightweight workflow.
 
 > [!WARNING]
-> Experimental and under active development. See platform status below.
+> Under active development. The native app is new and still has regressions that are being fixed forward. See platform status below.
 
 ## A quick look
 
@@ -42,9 +42,9 @@ Captures is a cross-platform screen capture utility built for quick captures and
   </tr>
 </table>
 
-## Download Captures Preview
+## Download Captures
 
-These links download the **latest validated Preview**, which is the native app (AppKit on macOS, Win32 on Windows, GTK4 on Linux). This remains an experimental Preview, not a stable release.
+These links download the **latest validated release**, which is the native app (AppKit on macOS, Win32 on Windows, GTK4 on Linux).
 
 | Platform | Download |
 | --- | --- |
@@ -53,13 +53,13 @@ These links download the **latest validated Preview**, which is the native app (
 | Ubuntu / Debian (x64) | [Captures-Linux-x64.deb](https://github.com/joswayski/captures/releases/download/preview/Captures-Linux-x64.deb) |
 | Other Linux (x64 AppImage) | [Captures-Linux-x64.AppImage](https://github.com/joswayski/captures/releases/download/preview/Captures-Linux-x64.AppImage) |
 
-Desktop changes merged to `main` automatically build, publish and update the website downloads and public updater channel after all three platforms pass release checks. Installed Tauri Previews update to the native app once through their normal updater; the native app imports the Tauri profile read-only into its own profile, leaving the original untouched. Over-the-air updates, including Tauri to native, were verified on a Mac and a Windows PC; Linux has not been verified on physical hardware, and the Windows installer is not Authenticode-signed, so Windows may report an unknown publisher. Updating cannot return to the Tauri app; older Tauri builds remain in the build archive.
+Desktop changes merged to `main` automatically build, publish and update the website downloads and public updater channel after all three platforms pass release checks. Installed Tauri apps update to the native app once through their normal updater; the native app imports the Tauri profile read-only into its own profile, leaving the original untouched. Over-the-air updates, including Tauri to native, were verified on a Mac and a Windows PC; Linux has not been verified on physical hardware, and the Windows installer is not Authenticode-signed, so Windows may report an unknown publisher. Updating cannot return to the Tauri app; older Tauri builds remain in the build archive.
 
 Installed copies check captur.es at launch and about every five minutes. Preferences and the tray also offer **Check for Updates**. Each update downloads the full package from GitHub (there are no incremental updates) and verifies its signature before installation; screenshot draft-save failure cancels restart. Version numbers in the update notice open that release on GitHub. If Captures will not open or cannot install an update, use the installer links above. For an AppImage, replace your existing AppImage (normally `~/.local/bin/Captures.AppImage`) and make it executable (`chmod +x`) rather than running a second copy from Downloads. Dated builds, including experimental native builds, remain in the [build archive](https://github.com/joswayski/captures/releases).
 
-New desktop Preview release notes use AI-written highlights, with commit-based notes as a fallback. Generation runs in the release workflow using source changes, not your captures or app data; the desktop app does not contact Google.
+New desktop release notes use AI-written highlights, with commit-based notes as a fallback. Generation runs in the release workflow using source changes, not your captures or app data; the desktop app does not contact Google.
 
-To go back to Tauri, quit Captures and install a Tauri build from the archive manually. Native migration preserves the original Tauri profile; native-only captures and edits stay in the separate native profile and are not imported back. Do not delete either profile. See [native update recovery](docs/releases.md#native-preview-packaging-and-recovery) for retained backups and limitations.
+To go back to Tauri, quit Captures and install a Tauri build from the archive manually. Native migration preserves the original Tauri profile; native-only captures and edits stay in the separate native profile and are not imported back. Do not delete either profile. See [native update recovery](docs/releases.md#native-packaging-and-recovery) for retained backups and limitations.
 
 After a Tauri in-app update, Captures restores open screenshot previews, screenshot and recording editors, the screenshot mini-preview stack and Preferences visibility. Screenshot edits are retained as drafts. Recording editors do not restore unsaved trim/crop/export settings; active recordings block updates. This applies to updates between Tauri versions with restoration support, not the native cutover or a manual reinstall.
 
@@ -85,7 +85,7 @@ On macOS, update and launch notices follow the menu-bar icon as it moves. If the
 - Text labels start in bold Nunito, white on a pink rounded background; turn off Bold for regular weight. Nunito is bundled offline in Tauri and the opt-in native editors. Existing Tauri labels using the former platform-dependent Rounded font now use Nunito too; other font selections, colors and weights stay unchanged. New labels grow horizontally as you type; Enter adds a line. The editing box follows the text size and canvas zoom instead of forcing a taller minimum-height field. After finishing text entry, drag a corner or top/bottom handle to scale the whole label (type, width and background together, so lines keep their breaks), or a side handle to set a wrapping width at the same type size that never gets narrower than the longest word. These source changes also apply to the opt-in native editors.
   Current source uses measured font wrapping for text selection, picking, resize handles, snapping and canvas trim/expansion in Tauri and the opt-in native editors. Existing rotated labels keep their saved paint position; rotating or resizing a label keeps its visible center or opposite handle anchored.
 - Drag the left edge of the screenshot editor's Layers/Properties panel to resize it. Its width stays local to the editor window, without changing the image or Undo history. Focus the divider with Tab and use Left/Right to resize (Shift for larger steps), Home/End for its limits, or double-click it (Enter on the keyboard) to reset. Current source supports these controls in Tauri and the opt-in native editors; pointer resizing keeps an active text field focused.
-- Current Tauri source also accepts image pixels or image files from the clipboard with `Cmd`/`Ctrl`+`V` in the screenshot editor, alongside Add images and file drops. Pasted images become editable layers below the selected image (or canvas), with one Undo per paste. Text fields keep normal paste. Layer copy/paste keeps an editable snapshot within that editor and claims the clipboard, so copying an image elsewhere takes precedence on the next paste; **Copy image** still copies the full canvas for other apps. This requires a Preview newer than 2026.10.1104. Image overlays in the video/GIF editor are not supported
+- Current Tauri source also accepts image pixels or image files from the clipboard with `Cmd`/`Ctrl`+`V` in the screenshot editor, alongside Add images and file drops. Pasted images become editable layers below the selected image (or canvas), with one Undo per paste. Text fields keep normal paste. Layer copy/paste keeps an editable snapshot within that editor and claims the clipboard, so copying an image elsewhere takes precedence on the next paste; **Copy image** still copies the full canvas for other apps. This requires a release newer than 2026.10.1104. Image overlays in the video/GIF editor are not supported
 - Open PNG, JPEG, WebP, GIF, MP4, and WebM files with Captures from Finder, File Explorer, or your file manager. Captures appears in Open With and does not become the default app for those types. Installed macOS, Windows, and Debian packages register this; an AppImage needs a desktop entry with `%U`. Save can overwrite the file you opened
 - Trim, crop, resize, and adjust audio in recordings, with an estimated saved size and an in-editor before/after compression comparison (Hide on the overlay, or switch back to Preserve quality)
 - Default screenshot save format PNG, JPEG, or WebP (Capture History stays lossless PNG until you save); export with Tiny through Highest quality presets and an in-editor before/after comparison while Export settings are open. Hide the comparison or close Export settings to edit without the slider; save quality stays Compress or Maximum until you change it
@@ -94,10 +94,10 @@ On macOS, update and launch notices follow the menu-bar icon as it moves. If the
 - 30-day capture history, filtered by screenshots, video, or GIF. Drag a capture's thumbnail directly into an editor or any app that accepts its file type, without restoring a mini preview. Dragging copies the saved file when available, otherwise the original retained capture; History stays intact
 - Light, dark, or system appearance across every Captures window
 - Customizable shortcuts and accent colors. Find a setting in Preferences with `Cmd`+`F` on macOS or `Ctrl`+`F` on Windows and Linux
-- Capture shortcuts work from Preferences, except while assigning a shortcut. Preferences → General offers **Start Captures on login** on macOS, Windows, and Linux, starting in the background when you sign in. Current source enables it by default for new installs; saved Off choices stay off. Tauri Preview 2026.10.1104 and earlier default to off
+- Capture shortcuts work from Preferences, except while assigning a shortcut. Preferences → General offers **Start Captures on login** on macOS, Windows, and Linux, starting in the background when you sign in. Current source enables it by default for new installs; saved Off choices stay off. Tauri releases 2026.10.1104 and earlier default to off
 - Capture UI and capture actions stay disabled while the desktop session is locked or inactive
 - Optional in-app feedback (never includes your captures)
-- After an unexpected quit, Preview may send a crash diagnostic (app version, OS, and a redacted panic or OS crash summary) through the same feedback channel; it never includes captures or home-directory paths. An in-app update restart, normal logoff, or shutdown is not a crash.
+- After an unexpected quit, Captures may send a crash diagnostic (app version, OS, and a redacted panic or OS crash summary) through the same feedback channel; it never includes captures or home-directory paths. An in-app update restart, normal logoff, or shutdown is not a crash.
 
 ## Optional cloud accounts — in development
 
@@ -126,7 +126,7 @@ not implemented yet.
 | Linux X11 | Supported; hide recording controls manually when needed |
 | Linux Wayland | Experimental; no window targeting, cursor capture, or click highlights. Mini previews cannot poll the pointer, so the stack stays interactive and may cover apps underneath |
 
-These statuses were measured on the Tauri Preview, which the native app replaces from November 2026 with the same intended behavior. Physical Linux acceptance of the native app is still pending; automated or headless tests do not replace it.
+These statuses were measured on the Tauri app, which the native app replaces from November 2026 with the same intended behavior. Physical Linux acceptance of the native app is still pending; automated or headless tests do not replace it.
 
 ## Shortcuts
 
@@ -204,8 +204,8 @@ saves. A focused text field, button, slider, or menu keeps its own keys.
 ## Development
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for local setup, validation, and packaging.
-The public Preview pipeline builds the native app (since November 2026; earlier
-Previews used the Tauri/React app, which stays in `apps/desktop`). It uses AppKit
+The public release pipeline builds the native app (since November 2026; earlier
+releases used the Tauri/React app, which stays in `apps/desktop`). It uses AppKit
 on macOS. Windows and Linux are moving from the Rust/wgpu workbench
 to the OS toolkits (Win32 with DirectComposition, Direct2D and DirectWrite on
 Windows; GTK4 on Linux) with Captures' own styling, sharing the Rust engines and
@@ -471,7 +471,7 @@ the accepted take. Escape cancels only that selector or its screenshot countdown
 successful screenshots use the normal native History, preview and auto-copy paths.
 AppKit and Windows can exclude native capture UI. X11 temporarily hides the HUD and
 guide from the screenshot, but cannot keep the selector out of the ongoing recording.
-As in the Preview, a take that cannot start keeps the HUD open with the error and
+As in the Tauri app, a take that cannot start keeps the HUD open with the error and
 offers **Retry recording** or Delete. A resume that cannot reopen the microphone
 leaves the take paused so it can still be saved.
 The Windows/Linux candidate's **Edit recording** opens a decoded frame preview
@@ -614,7 +614,7 @@ hosts offer counted All, Screenshots, Video and GIF history filters; filtering
 does not delete captures or exports. After finalization, a temporary **Recording ready**
 notice offers Save file, then Show in Folder after saving a permanent copy. Dismissing
 or letting it expire preserves History and exports; failed saves can be retried.
-Both native workbenches also render the Preview update notice (release notes,
+Both native workbenches also render the update notice (release notes,
 download progress, restart countdown and errors) from a simulated status source.
 An [explicit development launch](apps/native/README.md#native-preferences-update-checks)
 can connect Preferences and tray **Check for Updates** to a pinned, signed endpoint.
@@ -622,10 +622,10 @@ Checks also drive a real native notice with signed release notes, up-to-date res
 and retryable errors. An explicit scratch-directory option adds **Download and verify**
 for temporary package validation, with progress, cancellation and retry. An explicit
 retained base archive enables authenticated incremental downloads with signed full
-package fallback; this is development-only, not the Preview updater. Dismissing a
+package fallback; this is development-only, not the release updater. Dismissing a
 pending operation keeps its result hidden until another explicit check or download.
 Ordinary development check-only launches never fetch packages or enable installation;
-only the explicitly versioned Preview build enables the installed channel. A separate opt-in
+only the explicitly versioned release build enables the installed channel. A separate opt-in
 [development diagnostic](apps/native/README.md#native-update-acquisition-diagnostic)
 checks signed native manifests, verifies downloads and can validate unpacked native
 packages in temporary storage. It never installs or replaces an app, and no native
@@ -659,7 +659,7 @@ connected. The [offline development-profile importer](apps/native/README.md#expl
 also available separately, copies explicitly selected shipping settings, retained
 History and drafts with an original-data snapshot. Shipping data and exports stay
 unchanged, copied profiles survive failed startup and package recovery, and the
-development identity requires fresh setup. Installed Previews instead use the
+development identity requires fresh setup. Installed apps instead use the
 one-time copy described above; the development importer does not enroll a profile
 in that channel.
 A screenshot History card's **Edit** opens the AppKit screenshot editor. Its first
@@ -719,7 +719,7 @@ not this external-open path.
 Nightly native CI also provides isolated exploratory test archives with
 media tools and a [testing guide](apps/native/TESTING.md); see
 [download and platform limits](DEVELOPMENT.md#native-exploratory-test-archives).
-They are not Preview installers, trusted signed releases or a shipping replacement.
+They are not public installers, trusted signed releases or a shipping replacement.
 Native Preferences (and the tray/menu bar Send Feedback…) opens an optional
 feedback form in its own window, matching the shipping layout. Sending shares only
 the message, optional contact, category, and displayed app/system details with
@@ -1082,7 +1082,7 @@ while focused, and expose zoom percentages and value actions to accessibility
 tools. These view-only changes do not alter the screenshot or its Undo history.
 Fit retains each workbench's existing placement.
 Windows, Wayland and physical AppKit presentation remain unverified.
-Preview controls, History actions and screenshot-editor tools use shared shipping
+Mini-preview controls, History actions and screenshot-editor tools use shared shipping
 icon paths on both native hosts, rather than platform-specific approximations.
 The inspector follows the shipping sections, controls, labels and spacing in the
 shipping 320 px sidebar column on both hosts.
@@ -1143,7 +1143,7 @@ not native editor acceptance. Resident shortcuts and single-instance relaunch ar
 connected, but physical cross-platform acceptance and full feature/design parity
 remain open. The
 [migration checklist](docs/native-rewrite.md) tracks the plan and parity gates;
-older Tauri Previews remain in the build archive. The wgpu host
+older Tauri releases remain in the build archive. The wgpu host
 supports hidden Wayland startup, but physical resource acceptance remains open; see its
 [evaluation limits](apps/native/wgpu/README.md).
 

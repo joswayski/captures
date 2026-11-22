@@ -755,7 +755,7 @@ pub fn present(status: Option<&UpdateStatus>, view: &ViewState) -> Presentation 
                 empty: groups
                     .is_empty()
                     .then(|| "Release notes aren’t available for this update.".to_owned()),
-                group_empty: "Release notes aren’t available for this Preview.".into(),
+                group_empty: "Release notes aren’t available for this release.".into(),
                 groups,
             })
         }

@@ -38,7 +38,7 @@ export const TARGETS = {
 
 export function updaterArtifactName(target, version) {
   if (!TARGETS[target] || !/^\d+\.\d+\.\d+$/u.test(version))
-    throw new Error("Invalid native Preview target/version");
+    throw new Error("Invalid native release target/version");
   return `Captures-${version}-${target}${TARGETS[target].suffix}`;
 }
 
@@ -162,7 +162,7 @@ export function build(target, version, unsigned = false, sideBySide = false, sta
   };
   // Cargo creates this directory. Creating `target/<triple>` first stops Cargo
   // marking it with CACHEDIR.TAG, and CI's Rust cache then deletes its
-  // `release` directory before every save, so each Preview recompiled everything.
+  // `release` directory before every save, so each release recompiled everything.
   const release = join(ROOT, "target", target, "release");
   const exe = target.includes("windows") ? ".exe" : "";
   run(
@@ -223,7 +223,7 @@ export function build(target, version, unsigned = false, sideBySide = false, sta
     execFileSync(nativeBinary, ["--preview-build-info"], { env, encoding: "utf8" }),
   );
   if (info.renderer !== specification.renderer || info.version !== version)
-    throw new Error("Native Preview binary identity/version mismatch");
+    throw new Error("Native release binary identity/version mismatch");
   const mainBinary = sideBySide ? SIDE_BY_SIDE.mainBinaryName : "captures";
   copyFileSync(nativeBinary, join(release, `${mainBinary}${exe}`));
   const config = join(ROOT, "target/native-preview-bundle.json");

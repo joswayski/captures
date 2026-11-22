@@ -249,25 +249,25 @@ as `ffmpeg.exe` and `ffprobe.exe`. No tools are downloaded by the host.
 `node scripts/native-preview-build.mjs build x86_64-pc-windows-msvc VERSION
 --unsigned` (MSVC, Rust 1.95 and the FFmpeg sidecars from
 `scripts/build-ffmpeg-sidecars.sh`) packages this host, built in release in
-`apps/native/windows/target`, as the unpublished, experimental NSIS installer
+`apps/native/windows/target`, as the NSIS installer
 with the sidecars and `native_preview_update_helper`; see
-[releases.md](../../../docs/releases.md#native-preview-packaging-and-recovery).
+[releases.md](../../../docs/releases.md#native-packaging-and-recovery).
 Add `--side-by-side` for a test installer that installs next to an existing
 Captures: it is named "Captures Native Test" with identifier
 `io.github.joswayski.captures.nativetest` (its own install folder, uninstall
 entry and shortcuts), runs as `captures-native-test.exe` so the installer never
 closes the real `captures.exe`, registers no file associations and makes no
 updater artifacts. It is compiled with `CAPTURES_NATIVE_PREVIEW_TEST`, so it
-never checks the Preview feed, downloads or installs an update, or runs the
+never checks the public update feed, downloads or installs an update, or runs the
 startup-recovery repair (an earlier test build's recovery companion tried to
-download the real Preview after a failed first launch). Its first launch still imports the installed Captures
+download the real release after a failed first launch). Its first launch still imports the installed Captures
 profile (quit Captures first). It never enrolls in launch at login on that
 import, and its Preferences toggle uses its own `CapturesNativeTest` login
 item (Run value, LaunchAgent or autostart entry), so the installed Captures
 login item is left alone. Its tray icon is named "Captures Native Test".
 The installed executable is `captures.exe`, which answers
 `--preview-build-info` with renderer `win32`. Such a build starts `--live`
-without flags on the imported Preview profile (unless `--profile` or explicit
+without flags on the imported native profile (unless `--profile` or explicit
 paths are given) and holds the package-use lock. Before profile import it arms the shared startup
 recovery companion (`updater::preview::recovery::Startup`) and acknowledges its
 readiness file (or the installer's `--native-update-ready-file`/`-token`) once
@@ -318,7 +318,7 @@ ignores unregistered files there, and every layout test then fails with
 with `WINEDLLOVERRIDES=bcryptprimitives=n,b`. Build with
 `cargo +1.95.0 test --target x86_64-pc-windows-gnu --no-run`, then run the test
 executable under `wine` with `--test-threads=1`, an Xvfb `DISPLAY`, and
-`CAPTURES_FFMPEG`/`CAPTURES_FFPROBE` pointing at Windows FFmpeg from a Preview
+`CAPTURES_FFMPEG`/`CAPTURES_FFPROBE` pointing at Windows FFmpeg from a release
 installer (`7z x`). In a 4 GB orb, run clippy with `-j1` and not alongside other
 builds. These shims are test-only; never package them.
 

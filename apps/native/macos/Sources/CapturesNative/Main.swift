@@ -233,7 +233,7 @@ final class CapturesApplication: NSApplication {
                     options.nativeUpdateChecks = try UpdateCheckModel(transport: NativeUpdateCheckTransport(
                         configuration: ["preview": true, "renderer": "appkit"]))
                 } catch {
-                    FileHandle.standardError.write(Data("Preview updates unavailable: \(error.localizedDescription)\n".utf8))
+                    FileHandle.standardError.write(Data("Updates unavailable: \(error.localizedDescription)\n".utf8))
                 }
             }
             if bundled {

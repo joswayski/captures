@@ -4,8 +4,8 @@
 
 - Captures is a work-in-progress, cross-platform screen capture utility. Keep public wording broad enough to cover screenshots, GIFs, and video.
 - Clearly separate current features from roadmap ideas. Do not present tentative work as shipped or promise release dates unless the repository already commits to them.
-- Treat dated Preview builds as experimental. Do not publish a stable release until the maintainer explicitly starts that channel.
-- Native (AppKit, Win32, GTK4) is the public app since November 2026, approved by the maintainer after over-the-air updates (including Tauri to native) passed on macOS and Windows: `release.yml` builds and promotes validated native Previews on main pushes. Public release selection requires a runtime marker (`captures-native.json`, or `captures-tauri.json` and legacy Tauri history); never infer the runtime from tooling, and unmarked October 2026 native archives stay excluded. Keep matching the Tauri app's behavior and visuals (`apps/desktop` stays as the reference), without adding unrequested controls such as Share. A Tauri-only change no longer reaches users: implement every desktop fix or feature in the native hosts (AppKit, Win32, GTK4), and fix native regressions forward rather than switching back.
+- Since November 2026 the dated native releases are simply Captures, the live public app, not a Preview or beta. Do not call them Preview, experimental or pre-release in UI, docs, release pages or the website. The GitHub tag `preview` and other `preview` identifiers stay only because installed apps fetch `releases/download/preview/latest.json`.
+- Native (AppKit, Win32, GTK4) is the public app since November 2026, approved by the maintainer after over-the-air updates (including Tauri to native) passed on macOS and Windows: `release.yml` builds and promotes validated native releases on main pushes. Public release selection requires a runtime marker (`captures-native.json`, or `captures-tauri.json` and legacy Tauri history); never infer the runtime from tooling, and unmarked October 2026 native archives stay excluded. Keep matching the Tauri app's behavior and visuals (`apps/desktop` stays as the reference), without adding unrequested controls such as Share. A Tauri-only change no longer reaches users: implement every desktop fix or feature in the native hosts (AppKit, Win32, GTK4), and fix native regressions forward rather than switching back.
 
 ## Repository map
 
@@ -117,9 +117,9 @@ Push and deploy:
   Don't run `deploy-captures*.yml` for routine changes.
 - Infrastructure or secrets the change needs go to `joswayski/infrastructure`
   first, following that repository's guidance.
-- Desktop apps: `release.yml` (Captures Preview) runs on main pushes, skips builds
+- Desktop apps: `release.yml` (Captures Release) runs on main pushes, skips builds
   without unpublished native/shared desktop changes, and publishes dated native
-  Previews after its quality, signing and complete-package gates. It pins the triggering
+  releases after its quality, signing and complete-package gates. It pins the triggering
   commit; the newest pending request replaces older pending requests. Manual
   dispatch remains for rebuilds and channel refreshes. Successful releases advance
   public downloads and updater metadata automatically. The egui/wgpu workbench and

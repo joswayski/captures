@@ -51,7 +51,7 @@ impl InstallTarget {
                 .and_then(Path::parent)
                 .filter(|app| app.extension().is_some_and(|ext| ext == "app"))
                 .ok_or(Error::Configuration(
-                    "Preview updates require an installed app bundle",
+                    "updates require an installed app bundle",
                 ))?;
             Ok(Self::Mac {
                 app: app.to_owned(),
@@ -145,13 +145,13 @@ pub fn artifact_name(target: Target, version: &str) -> String {
 
 impl Client {
     pub fn installed(renderer: Renderer) -> Result<Self, Error> {
-        let current =
-            crate::preview_channel::version().ok_or(Error::Configuration("not a Preview build"))?;
+        let current = crate::preview_channel::version()
+            .ok_or(Error::Configuration("not an installed release build"))?;
         if !crate::preview_channel::updates_enabled() {
             return Err(Error::Configuration("updates are off in test installs"));
         }
         let key = crate::preview_channel::public_key()
-            .ok_or(Error::Configuration("Preview public key is missing"))?;
+            .ok_or(Error::Configuration("updater public key is missing"))?;
         Self::new(
             endpoints(),
             key,
@@ -182,7 +182,7 @@ impl Client {
             if attempt.previous().len() >= 5
                 || validate_url(attempt.url(), cfg!(test) && is_loopback(attempt.url())).is_err()
             {
-                attempt.error("unsafe Preview redirect")
+                attempt.error("unsafe update redirect")
             } else {
                 attempt.follow()
             }
@@ -500,8 +500,8 @@ pub fn verify_package(version: &str, artifact: &Path, signature: &Path) -> Resul
 
 /// Entry point for the separately copied helper. Never called by a GUI process.
 pub fn install(request_path: &Path) -> Result<(), Error> {
-    let current =
-        crate::preview_channel::version().ok_or(Error::Configuration("not a Preview helper"))?;
+    let current = crate::preview_channel::version()
+        .ok_or(Error::Configuration("not a release update helper"))?;
     let key = PublicKey::decode(crate::preview_channel::public_key().ok_or(Error::Signature)?)
         .map_err(|_| Error::Signature)?;
     install_with(request_path, current, &key, || {
@@ -770,7 +770,7 @@ fn launch_and_confirm(
             return Err(Error::Installation(if windows {
                 "Windows installation finished but startup was not confirmed; recovery files retained"
             } else {
-                "new Preview did not confirm startup; previous package retained (see backup.json)"
+                "new version did not confirm startup; previous package retained (see backup.json)"
             }));
         }
         std::thread::sleep(Duration::from_millis(100));

@@ -741,7 +741,7 @@ impl Preferences {
     ) -> Result<(), String> {
         self.update_checks
             .as_mut()
-            .ok_or("Preview updater is unavailable")?
+            .ok_or("Updater is unavailable")?
             .launch_preview_install(restart)
             .map_err(|e| e.to_string())
     }
@@ -2730,7 +2730,7 @@ impl Preferences {
                     t,
                     "Package verification",
                     if this.has_preview_updates() {
-                        "Install the signed native Preview after capture work and drafts finish."
+                        "Install the signed update after capture work and drafts finish."
                     } else if button.action == captures_app::update_notice::Action::Install {
                         "Restart after capture work and drafts finish; update this development package only."
                     } else {

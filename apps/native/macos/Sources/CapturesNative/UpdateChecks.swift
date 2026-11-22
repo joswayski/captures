@@ -143,7 +143,7 @@ final class UpdateCheckModel {
     func launchPreviewInstall(restart: [String: Any]) throws {
         let reply = try transport.request(["operation": "install_preview", "restart": restart])
         guard reply["accepted"] as? Bool == true else {
-            throw AppBridgeError.backend("The Preview installer could not start.")
+            throw AppBridgeError.backend("The update installer could not start.")
         }
     }
 

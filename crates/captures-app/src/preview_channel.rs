@@ -108,9 +108,7 @@ pub fn package_use() -> Result<Option<File>, String> {
 
 pub fn package_lock() -> Result<File, String> {
     let profile = profile_path()?;
-    let parent = profile
-        .parent()
-        .ok_or("Native Preview profile has no parent")?;
+    let parent = profile.parent().ok_or("Captures profile has no parent")?;
     fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     let path = parent.join("package-use.lock");
     regular_or_absent(&path)?;
@@ -133,7 +131,7 @@ pub fn startup() -> Result<Option<Startup>, String> {
     let Some(version) = version() else {
         return Ok(None);
     };
-    semver::Version::parse(version).map_err(|_| "Invalid installed Preview version")?;
+    semver::Version::parse(version).map_err(|_| "Invalid installed version")?;
     let destination = profile_path()?;
     let settings = std::path::absolute(captures_settings::shipping_settings_path())
         .map_err(|e| e.to_string())?;
@@ -166,7 +164,7 @@ fn regular_or_absent(path: &Path) -> Result<(), String> {
         Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error.to_string()),
-        Ok(_) => Err("Native Preview metadata must be a regular file, not a link".into()),
+        Ok(_) => Err("Captures profile metadata must be a regular file, not a link".into()),
     }
 }
 
@@ -178,7 +176,7 @@ fn prepare_profile(
 ) -> Result<bool, String> {
     let parent = destination
         .parent()
-        .ok_or("Preview profile has no parent")?;
+        .ok_or("Captures profile has no parent")?;
     fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     let lock_path = parent.join("first-launch.lock");
     regular_or_absent(&lock_path)?;
@@ -210,7 +208,7 @@ fn prepare_profile(
             )
             .map_err(|e| e.to_string())?;
         }
-        Ok(_) => return Err("Native Preview profile is not a real directory".into()),
+        Ok(_) => return Err("Captures profile is not a real directory".into()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.to_string()),
     }
@@ -312,18 +310,18 @@ fn validate_profile(root: &Path) -> Result<(), String> {
     regular_or_absent(&marker_path)?;
     let bytes = fs::read(&marker_path).map_err(|e| e.to_string())?;
     if bytes.len() > 16 * 1024 {
-        return Err("Preview profile marker is too large".into());
+        return Err("Captures profile marker is too large".into());
     }
     let marker: Marker = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
     if marker.schema_version != 1
         || marker.identity != IDENTITY
         || marker.root != root.canonicalize().map_err(|e| e.to_string())?
     {
-        return Err("Preview profile belongs to a different location or application".into());
+        return Err("Captures profile belongs to a different location or application".into());
     }
     regular_or_absent(&root.join("settings.json"))?;
     if !root.join("settings.json").is_file() {
-        return Err("Preview settings are missing".into());
+        return Err("Captures settings are missing".into());
     }
     Ok(())
 }

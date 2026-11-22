@@ -446,7 +446,7 @@ impl Options {
                     || options.update_tray.is_some()
                     || options.screenshot.is_some()
                 {
-                    return Err("Native update readiness requires plain --live with the installed Preview profile or explicit absolute --history-root and --settings-file".into());
+                    return Err("Native update readiness requires plain --live with the installed Captures profile or explicit absolute --history-root and --settings-file".into());
                 }
                 options.native_update_health = Some(
                     captures_app::updater::HealthAcknowledgement::new(file, token)

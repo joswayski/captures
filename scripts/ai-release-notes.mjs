@@ -250,7 +250,7 @@ function render(response, source) {
       throw new Error("unsupported highlight");
   }
   const lines = result.highlights.map(({ title, body }) => `* ${title} — ${body}`);
-  return `## What's Changed\n${lines.join("\n") || "No user-facing desktop changes in this Preview."}\n`;
+  return `## What's Changed\n${lines.join("\n") || "No user-facing desktop changes in this release."}\n`;
 }
 
 /** Editorial failures must leave the existing deterministic notes intact. */
@@ -272,7 +272,7 @@ export async function aiReleaseNotes(
     if (!/^[a-z0-9][a-z0-9.-]{0,63}$/u.test(model)) throw new Error("invalid model");
     const source = evidence(before, after, cwd);
     if (!source.commits.length)
-      return "## What's Changed\nNo user-facing desktop changes in this Preview.\n";
+      return "## What's Changed\nNo user-facing desktop changes in this release.\n";
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
     const response = await fetch(url, {
       method: "POST",

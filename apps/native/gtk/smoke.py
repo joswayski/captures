@@ -581,7 +581,7 @@ def update_card(binary, scratch):
         finally:
             process.terminate()
             process.wait(timeout=10)
-    print(f"update_card: {len(cases)} Preview card states over AT-SPI")
+    print(f"update_card: {len(cases)} update card states over AT-SPI")
 
 
 def editor(binary, scratch):

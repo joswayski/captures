@@ -5061,9 +5061,10 @@ fn hex_color(value: &str) -> windows::Win32::Graphics::Direct2D::Common::D2D1_CO
 /// A card's header copy; Shortcuts appends the platform intro like shipping.
 pub fn card_description(section: usize) -> String {
     let description = SECTIONS[section].description;
-    // Shipping's Updates copy, where the Preview channel can install.
+    // Shipping's Updates copy, where the release channel can install.
     if section == UPDATES_SECTION && captures_app::preview_channel::version().is_some() {
-        return "Preview builds check for a new version automatically. Update now installs it in place.".into();
+        return "Captures checks for a new version automatically. Update now installs it in place."
+            .into();
     }
     if SECTIONS[section].title == "Shortcuts" {
         format!(
