@@ -329,7 +329,14 @@ expanded stack as on GTK. The focused control shows shipping's
 tooltip shows (`--select focus|pile-focus`; unit- and render-checked, and
 UIA reports the buttons focusable; SetFocus and keys were not exercised live
 because they take focus from the desktop's user). Cards arrive and leave with
-the shared preview motion, and a new card holds shipping's capture highlight
+the shared preview motion, rising out of shipping's 3 px arrive blur (`--select
+arrive`; a Gaussian on the card through a Direct2D command list, sharp where
+the effect is missing). Clear all and Minimize enter with shipping's
+`thumbnail-stack-toolbar-in` as the stack expands, dissolve through its 8 px
+blur as it collapses, hold and fade when a Close or Delete leaves one card,
+and leave with the first streak of Clear all, taking no pointer while they
+move and showing or hiding at once under reduced motion (`--select
+toolbar-in|toolbar-out`). A new card holds shipping's capture highlight
 (a 1 px accent ring with an 18 px accent glow) for 1 s, then fades it over
 3.5 s, skipped under reduced motion (`--select highlight`). Hovering eases
 the card's look like shipping's transitions: the image's blur and dim over

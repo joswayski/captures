@@ -17,8 +17,9 @@
 //! out, Delete dissolves it into dust from the trash control and Clear all
 //! streaks every card out bottom first, each holding its slot
 //! (`preview_motion::StackExits`) while older cards settle into the hole, as
-//! on GTK. The Close streak's horizontal blur and the arrive blur are not
-//! drawn.
+//! on GTK. Arriving cards rise out of shipping's 3 px blur (`blurred`);
+//! the Close streak's horizontal blur is not drawn. Clear all and Minimize
+//! enter, dissolve and leave with the shared `StackToolbar` motions.
 //!
 //! Dragging an expanded card's image drags its file out (`crate::drag`);
 //! an accepted drop elsewhere dismisses the card and a drop back on the
@@ -41,10 +42,12 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
-use captures_app::motion::{Animation, Motion, Transition, Tween};
+use captures_app::motion::{Animation, Motion, Pose, Transition, Tween};
 use captures_app::preview::{self, CollapsedCardPose, PreviewStack};
 use captures_app::preview_chrome;
-use captures_app::preview_motion::{self, DragSway, DustParticle, ExitKind, StackExits, StackFan};
+use captures_app::preview_motion::{
+    self, DragSway, DustParticle, ExitKind, StackExits, StackFan, StackToolbar, ToolbarCause,
+};
 use captures_history::HistoryEntry;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::*;
@@ -214,6 +217,12 @@ pub struct Stack {
     /// The control with keyboard focus (`:focus-visible`), while the window
     /// has it.
     pub focus: Option<Hit>,
+    /// Clear all and Minimize: shown or not, and the motion they enter or
+    /// leave with.
+    toolbar: StackToolbar,
+    /// The tokens [`Self::toolbar`]'s motions resolve against; `None`
+    /// (offscreen fixtures) shows and hides it at once.
+    pub toolbar_tokens: Option<Tokens>,
 }
 
 /// A card's hover look easing toward `on` since `at`, from where each
@@ -366,6 +375,64 @@ fn faded(dc: &ID2D1DeviceContext, opacity: f32, draw: impl FnOnce() -> Result<()
     result
 }
 
+/// Paint `draw` through CSS `filter: blur(radius)`: a Gaussian of standard
+/// deviation `radius`, scaled with the current transform as the filter is
+/// with its element. It records on a context of our own, since the window's
+/// is mid-draw with clips pushed. Without the effect (Wine) it draws sharp.
+fn blurred(
+    dc: &ID2D1DeviceContext,
+    radius: f32,
+    draw: impl Fn(&ID2D1DeviceContext) -> Result<()>,
+) -> Result<()> {
+    if radius < 0.05 {
+        return draw(dc);
+    }
+    let mut transform = Matrix3x2::identity();
+    unsafe { dc.GetTransform(&mut transform) };
+    let image = || -> Result<ID2D1Image> {
+        unsafe {
+            let ctx = dc
+                .GetDevice()?
+                .CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE)?;
+            let list = ctx.CreateCommandList()?;
+            ctx.SetTarget(&list);
+            ctx.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+            ctx.BeginDraw();
+            ctx.SetTransform(&transform);
+            let drawn = draw(&ctx);
+            let ended = ctx.EndDraw(None, None);
+            ctx.SetTarget(None);
+            drawn?;
+            ended?;
+            list.Close()?;
+            let effect = dc.CreateEffect(&CLSID_D2D1GaussianBlur)?;
+            effect.SetInput(0, &list, true);
+            let deviation = radius * transform.M11.hypot(transform.M12);
+            effect.SetValue(
+                D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION.0 as u32,
+                D2D1_PROPERTY_TYPE_FLOAT,
+                &deviation.to_le_bytes(),
+            )?;
+            effect.GetOutput()
+        }
+    };
+    match image() {
+        Ok(image) => unsafe {
+            dc.SetTransform(&Matrix3x2::identity());
+            dc.DrawImage(
+                &image,
+                None,
+                None,
+                D2D1_INTERPOLATION_MODE_LINEAR,
+                D2D1_COMPOSITE_MODE_SOURCE_OVER,
+            );
+            dc.SetTransform(&transform);
+            Ok(())
+        },
+        Err(_) => draw(dc),
+    }
+}
+
 /// Milliseconds on a monotonic clock shared by every preview motion.
 fn now_ms() -> f64 {
     static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
@@ -426,7 +493,31 @@ impl Stack {
                 Tip::timed(Transition::PreviewStackTooltip),
             ],
             focus: None,
+            toolbar: StackToolbar::default(),
+            toolbar_tokens: None,
         }
+    }
+
+    /// Shipping shows the toolbar (Clear all and Minimize) only for two or
+    /// more cards, and never on the pile. `cause` picks how it enters or
+    /// leaves when that changes.
+    fn sync_toolbar(&mut self, cause: ToolbarCause) {
+        let shown = !self.collapsed() && self.stack.ids().len() >= 2;
+        self.toolbar.set(shown, cause, now_ms());
+    }
+
+    /// How the toolbar draws now, or `None` once it is gone.
+    fn toolbar_pose(&self) -> Option<Pose> {
+        match &self.toolbar_tokens {
+            Some(tokens) => self.toolbar.pose(tokens, now_ms(), self.reduced),
+            None => self.toolbar.shown().then_some(Pose::REST),
+        }
+    }
+
+    fn toolbar_moving(&self) -> bool {
+        self.toolbar_tokens
+            .as_ref()
+            .is_some_and(|tokens| self.toolbar.running(tokens, now_ms(), self.reduced))
     }
 
     /// The card shows its controls: hovered, or holding keyboard focus
@@ -684,6 +775,7 @@ impl Stack {
             || self.sparkling()
             || (!self.instant() && self.hover_fades.values().any(|fade| fade.running(now)));
         pile || arriving
+            || self.toolbar_moving()
             || !self.exits.is_empty()
             || scrolling
             || cues
@@ -888,6 +980,11 @@ impl Stack {
         self.stack.remove(id);
         self.arrivals.remove(id);
         self.highlights.remove(id);
+        // A Close or Delete that leaves one card takes the toolbar with the
+        // card's exit; Clear all takes it once every card has gone.
+        if settles {
+            self.sync_toolbar(ToolbarCause::Exit);
+        }
         self.hovered = None;
         self.hot = None;
         self.pressed = None;
@@ -901,6 +998,7 @@ impl Stack {
             let delay = preview_motion::clear_delay_ms(ids.len(), index, self.top);
             self.leave(id, ExitKind::Dismiss, delay, false);
         }
+        self.sync_toolbar(ToolbarCause::Clear);
     }
 
     /// Drop the cards whose exit has ended; true when any left, so the
@@ -944,6 +1042,11 @@ impl Stack {
         self.hot = None;
         self.pile_hovered = false;
         self.set_fan(false);
+        self.sync_toolbar(if collapsed {
+            ToolbarCause::Collapse
+        } else {
+            ToolbarCause::Expand
+        });
     }
 
     fn set_fan(&mut self, open: bool) {
@@ -995,6 +1098,7 @@ impl Stack {
             dragging: false,
         });
         self.exits.sync(self.stack.ids());
+        self.sync_toolbar(ToolbarCause::Other);
         // A new capture brings the newest card back into view.
         self.scroll = 0.;
         self.scroll_from = None;
@@ -1011,6 +1115,7 @@ impl Stack {
             self.exits.release(id, false);
             self.exits.sync(self.stack.ids());
         }
+        self.sync_toolbar(ToolbarCause::Other);
         self.hovered = None;
         self.hot = None;
         self.pressed = None;
@@ -1059,10 +1164,11 @@ impl Stack {
         self.stack.is_collapsed()
     }
 
-    /// Shipping shows the toolbar (Clear all and Minimize) only for two or
-    /// more cards, and never on the pile.
+    /// The toolbar takes the pointer, focus and automation: shown, at rest
+    /// and over a list that has landed (shipping's `pointer-events: none`
+    /// while it enters or leaves).
     fn toolbar(&self) -> bool {
-        !self.collapsed() && self.stack.ids().len() >= 2 && self.progress() <= 0.
+        self.toolbar.shown() && !self.toolbar_moving() && self.progress() <= 0.
     }
 
     /// The front card of the collapsed pile, the pile's hit target.
@@ -1400,6 +1506,9 @@ impl Stack {
     fn paint_stack(&self, dc: &ID2D1DeviceContext, g: &Gfx, t: &Tokens) -> Result<()> {
         if self.collapsed() || self.progress() > 0. {
             self.paint_pile(dc, g, t)?;
+            // The toolbar enters while the pile fans out and dissolves while
+            // it gathers.
+            self.paint_toolbar(dc, g, t)?;
             self.paint_sparkles(dc, t)?;
             return self.paint_focus(dc, t);
         }
@@ -1408,48 +1517,88 @@ impl Stack {
                 self.paint_listed(dc, g, t, index, card)?;
             }
         }
-        if self.toolbar() {
-            for (hit, icon, side) in [
-                (Hit::ClearAll, "close", 16.),
-                (Hit::Minimize, "preview-stack", 24.),
-            ] {
-                let r = if hit == Hit::ClearAll {
-                    self.clear_rect()
-                } else {
-                    self.minimize_rect()
-                };
-                let hot = self.hot == Some(hit);
-                // `.thumbnail-stack-control`
-                gfx::shadow(dc, r, t.n("r-md"), t.shadow("thumbnail-card-shadow"))?;
-                let fill = if hot {
-                    "glass-raised-solid"
-                } else {
-                    "glass-strong-solid"
-                };
-                gfx::fill_round(dc, r, t.n("r-md"), t.color(fill))?;
-                let edge = if hot {
-                    "glass-border-strong"
-                } else {
-                    "glass-border"
-                };
-                gfx::border(dc, r, t.n("r-md"), 1., t.color(edge))?;
-                // `close` is a 24-unit icon at 16 px; `preview-stack` a
-                // 16-unit one, so 24 here draws it at 16 px too.
-                let inset = (CONTROL - 16.) / 2.;
-                gfx::icon(
-                    dc,
-                    &g.factory,
-                    icon,
-                    &[],
-                    (r.left + inset, r.top + inset, side),
-                    if side > 16. { 1.4 * 1.5 } else { 1.8 },
-                    t.color("glass-text"),
-                )?;
-            }
-        }
+        self.paint_toolbar(dc, g, t)?;
         self.paint_cues(dc, g, t)?;
         self.paint_focus(dc, t)?;
         self.paint_tips(dc, g, t)
+    }
+
+    /// `.thumbnail-stack-toolbar` under its enter or leave pose: faded,
+    /// lowered and shrunk about its centre (`translateY(6px) scale(0.9)`),
+    /// or dissolving through `blur(var(--blur-dissolve))` as the stack
+    /// collapses.
+    fn paint_toolbar(&self, dc: &ID2D1DeviceContext, g: &Gfx, t: &Tokens) -> Result<()> {
+        let Some(pose) = self.toolbar_pose() else {
+            return Ok(());
+        };
+        let (clear, minimize) = (self.clear_rect(), self.minimize_rect());
+        let cx = (clear.left.min(minimize.left) + clear.right.max(minimize.right)) / 2.;
+        let cy = (clear.top + clear.bottom) / 2.;
+        let s = pose.scale as f32;
+        let mut base = Matrix3x2::identity();
+        unsafe { dc.GetTransform(&mut base) };
+        let posed = Matrix3x2 {
+            M11: s,
+            M12: 0.,
+            M21: 0.,
+            M22: s,
+            M31: cx - s * cx + pose.translate_x as f32,
+            M32: cy - s * cy + pose.translate_y as f32,
+        } * base;
+        unsafe { dc.SetTransform(&posed) };
+        let result = faded(dc, pose.opacity as f32, || {
+            blurred(dc, pose.blur as f32, |dc| {
+                for (hit, r) in [(Hit::ClearAll, clear), (Hit::Minimize, minimize)] {
+                    self.paint_toolbar_control(dc, g, t, hit, r)?;
+                }
+                Ok(())
+            })
+        });
+        unsafe { dc.SetTransform(&base) };
+        result
+    }
+
+    /// `.thumbnail-stack-control`: Clear all's `close` or Minimize's
+    /// `preview-stack` on a glass chip.
+    fn paint_toolbar_control(
+        &self,
+        dc: &ID2D1DeviceContext,
+        g: &Gfx,
+        t: &Tokens,
+        hit: Hit,
+        r: Rect,
+    ) -> Result<()> {
+        let hot = self.hot == Some(hit);
+        gfx::shadow(dc, r, t.n("r-md"), t.shadow("thumbnail-card-shadow"))?;
+        let fill = if hot {
+            "glass-raised-solid"
+        } else {
+            "glass-strong-solid"
+        };
+        gfx::fill_round(dc, r, t.n("r-md"), t.color(fill))?;
+        let edge = if hot {
+            "glass-border-strong"
+        } else {
+            "glass-border"
+        };
+        gfx::border(dc, r, t.n("r-md"), 1., t.color(edge))?;
+        // `close` is a 24-unit icon at 16 px; `preview-stack` a 16-unit one,
+        // so 24 here draws it at 16 px too.
+        let (icon, side) = if hit == Hit::ClearAll {
+            ("close", 16.)
+        } else {
+            ("preview-stack", 24.)
+        };
+        let inset = (CONTROL - 16.) / 2.;
+        gfx::icon(
+            dc,
+            &g.factory,
+            icon,
+            &[],
+            (r.left + inset, r.top + inset, side),
+            if side > 16. { 1.4 * 1.5 } else { 1.8 },
+            t.color("glass-text"),
+        )
     }
 
     /// The sparkles run: the pile is hovered, at rest and not being carried
@@ -1734,6 +1883,7 @@ impl Stack {
         let id = &self.cards[index].entry.id;
         let now = now_ms();
         let (mut opacity, mut dx, mut dy, mut scale) = (1., 0., 0., 1.);
+        let mut blur = 0.;
         let mut fade = Fade::NONE;
         let mut dust = None;
         if let Some(m) = &self.card_motion {
@@ -1742,6 +1892,8 @@ impl Stack {
                 opacity *= pose.opacity;
                 dy += pose.translate_y;
                 scale *= pose.scale;
+                // `thumbnail-arrive` rises in from `blur(3px)`.
+                blur = pose.blur as f32;
             }
             match self.exits.exiting(id) {
                 Some(exit) if exit.kind == ExitKind::Dust => {
@@ -1789,7 +1941,7 @@ impl Stack {
         } * base;
         unsafe { dc.SetTransform(&posed) };
         let result = faded(dc, opacity as f32, || {
-            self.paint_card(dc, g, t, index, r, fade)
+            blurred(dc, blur, |dc| self.paint_card(dc, g, t, index, r, fade))
         });
         unsafe { dc.SetTransform(&base) };
         result?;
@@ -2293,8 +2445,21 @@ pub fn fixture(g: &Gfx, image: &image::RgbaImage, select: Option<&str>) -> Stack
     let last = stack.cards.len() - 1;
     stack.cards[last - 1].clipboard = !pile;
     stack.stack.set_collapsed(pile);
+    stack.sync_toolbar(ToolbarCause::Other);
     stack.height = stack.content_height();
     match select {
+        // The toolbar 400 ms into entering with an expanding stack, or 90 ms
+        // into dissolving (on the list, to show its blur).
+        Some(select @ ("toolbar-in" | "toolbar-out")) => {
+            stack.toolbar_tokens = Some(Tokens::variant("dark", "mustard"));
+            let now = now_ms();
+            if select == "toolbar-in" {
+                stack.toolbar = StackToolbar::default();
+                stack.toolbar.set(true, ToolbarCause::Expand, now - 400.);
+            } else {
+                stack.toolbar.set(false, ToolbarCause::Collapse, now - 90.);
+            }
+        }
         Some("pile-hover") => {
             let front = stack.front_rect().expect("front card");
             stack.pointer(Some((front.left + 40., front.top + 40.)));
@@ -2338,6 +2503,13 @@ pub fn fixture(g: &Gfx, image: &image::RgbaImage, select: Option<&str>) -> Stack
             };
             stack.pointer(Some((at.left + 4., at.top + 4.)));
             stack.tips = stack.tip_targets().map(Tip::settled);
+        }
+        // The newest card 90 ms into `thumbnail-arrive`: faded, lowered and
+        // blurred.
+        Some("arrive") => {
+            stack.card_motion = CardMotion::resolve(&Tokens::variant("dark", "mustard"));
+            let newest = stack.cards[last].entry.id.clone();
+            stack.arrivals.insert(newest, now_ms() - 90.);
         }
         // The newest card inside its capture highlight's 1 s hold.
         Some("highlight") => {
@@ -2970,6 +3142,7 @@ impl Previews {
                     .resolve(&tokens)
                     .zip(Transition::PreviewStackFan.resolve(&tokens));
                 stack.card_motion = CardMotion::resolve(&tokens);
+                stack.toolbar_tokens = Some(tokens.clone());
                 stack.reduced = crate::appearance::reduced_motion();
                 stack
             },
@@ -3878,8 +4051,58 @@ mod tests {
                 dragging: false,
             });
         }
+        stack.sync_toolbar(ToolbarCause::Other);
         stack.height = stack.content_height();
         stack
+    }
+
+    #[test]
+    fn the_toolbar_enters_and_leaves_without_taking_the_pointer() {
+        use captures_settings::MiniPreviewPlacement as P;
+        let mut s = stack(P::BottomLeft, &[true, false, false]);
+        s.toolbar_tokens = Some(Tokens::variant("light", "mustard"));
+        let clear = s.clear_rect();
+        let (x, y) = (clear.left + 4., clear.top + 4.);
+        // A stack that appears with two cards shows it at rest.
+        assert_eq!(s.toolbar_pose(), Some(Pose::REST));
+        assert_eq!(s.hit(x, y), Some(Hit::ClearAll));
+        // Collapsing dissolves it through a blur, untouchable.
+        s.set_collapsed(true);
+        let out = s.toolbar_pose().expect("still drawn while it leaves");
+        assert!(out.opacity > 0.9 && out.blur < 1., "{out:?}");
+        assert!(!s.toolbar() && s.animating());
+        // Expanding brings it back faded, lowered and smaller for its first
+        // 35 %, and it only takes the pointer once at rest.
+        s.set_collapsed(false);
+        let entering = s.toolbar_pose().expect("entering");
+        assert_eq!(
+            (entering.opacity, entering.translate_y, entering.scale),
+            (0., 6., 0.9)
+        );
+        assert_eq!(s.hit(x, y), None);
+        // Closing down to one card holds it, then lets it go; Clear all
+        // leaves at once. Neither plays under reduced motion.
+        s.toolbar = StackToolbar::default();
+        s.sync_toolbar(ToolbarCause::Other);
+        s.card_motion = CardMotion::resolve(&Tokens::variant("light", "mustard"));
+        s.leave("a2", ExitKind::Dismiss, 0., true);
+        assert_eq!(s.toolbar_pose(), Some(Pose::REST));
+        s.leave("a1", ExitKind::Dismiss, 0., true);
+        assert_eq!(
+            s.toolbar.motion().map(|(m, _)| m),
+            Some(Motion::PreviewToolbarExit)
+        );
+        assert!(s.toolbar_pose().is_some() && !s.toolbar());
+        let mut c = stack(P::BottomLeft, &[false, false]);
+        c.toolbar_tokens = Some(Tokens::variant("light", "mustard"));
+        c.card_motion = CardMotion::resolve(&Tokens::variant("light", "mustard"));
+        c.clear_all();
+        assert_eq!(
+            c.toolbar.motion().map(|(m, _)| m),
+            Some(Motion::PreviewToolbarClear)
+        );
+        c.reduced = true;
+        assert_eq!(c.toolbar_pose(), None);
     }
 
     #[test]
