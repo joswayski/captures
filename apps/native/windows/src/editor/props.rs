@@ -28,6 +28,7 @@ use windows::Win32::Graphics::DirectWrite::DWRITE_TEXT_ALIGNMENT_TRAILING;
 use windows::core::*;
 use windows_numerics::Vector2;
 
+use super::export::Ex;
 use super::menu::MenuKind;
 use super::{Editor, Event, Layer, Target, closed_kind, hex_color, polyline};
 use crate::gfx::{self, Style, rect};
@@ -63,6 +64,10 @@ pub enum Prop {
     Preset,
     /// A multi-point line's or arrow's Straighten button.
     Straighten,
+    /// An export panel control or the filename's format select, in the bar.
+    Export(super::export::Ex),
+    /// The save row's filename input.
+    Filename,
 }
 
 /// A `NumberInput` in Tool properties.
@@ -88,6 +93,11 @@ pub enum Num {
     ShadowY,
     /// The transform section's Shift rotation snap.
     RotationSnap,
+    /// The export panel's custom output width and height and its maximum
+    /// file size, in the bar.
+    OutputWidth,
+    OutputHeight,
+    MaxSize,
 }
 
 impl Num {
@@ -115,6 +125,9 @@ impl Num {
             Num::CanvasWidth | Num::CanvasHeight => (1., geometry::MAX_SIZE),
             Num::ShadowX | Num::ShadowY => (-SHADOW_OFFSET_MAX, SHADOW_OFFSET_MAX),
             Num::RotationSnap => (1., 180.),
+            Num::OutputWidth | Num::OutputHeight => (1., super::export::MAX_DIMENSION),
+            // The unit's minimum applies (`Editor::num_bounds`).
+            Num::MaxSize => (0., 1_000_000.),
         }
     }
 
@@ -132,6 +145,9 @@ impl Num {
             Num::ShadowX => "X offset",
             Num::ShadowY => "Y offset",
             Num::RotationSnap => ROTATION_SNAP,
+            Num::OutputWidth => "Width",
+            Num::OutputHeight => "Height",
+            Num::MaxSize => "Maximum file size",
         }
     }
 
@@ -150,6 +166,9 @@ impl Num {
             Num::ShadowX => "Shadow X offset",
             Num::ShadowY => "Shadow Y offset",
             Num::RotationSnap => ROTATION_SNAP,
+            Num::OutputWidth => "Custom output width",
+            Num::OutputHeight => "Custom output height",
+            Num::MaxSize => "Maximum file size",
         })
     }
 
@@ -168,6 +187,11 @@ impl Num {
             self,
             Num::LayerWidth | Num::LayerHeight | Num::LayerX | Num::LayerY
         )
+    }
+
+    /// The export panel's fields, in the bar.
+    pub fn in_bar(self) -> bool {
+        matches!(self, Num::OutputWidth | Num::OutputHeight | Num::MaxSize)
     }
 
     /// The header's Canvas W and H: compact fields that only commit once
@@ -376,6 +400,23 @@ const INDENT: f32 = CHECK_BOX + 8.;
 const TILE: f32 = colors::TILE as f32;
 
 /// Every Properties control, in build order.
+/// The bar's property-style controls, in DOM order.
+pub fn bar_props() -> [Prop; 10] {
+    use super::export::Ex;
+    [
+        Prop::Export(Ex::Size),
+        Prop::Number(Num::OutputWidth),
+        Prop::Number(Num::OutputHeight),
+        Prop::Export(Ex::Lock),
+        Prop::Export(Ex::Quality),
+        Prop::Export(Ex::Compress),
+        Prop::Number(Num::MaxSize),
+        Prop::Export(Ex::Unit),
+        Prop::Filename,
+        Prop::Export(Ex::Format),
+    ]
+}
+
 pub fn all() -> Vec<Prop> {
     let mut list: Vec<Prop> = (0..SHAPE_TOOLS.len()).map(Prop::Shape).collect();
     list.extend(CHECKS.map(Prop::Check));
@@ -894,6 +935,9 @@ impl Editor {
         if Self::in_bg_menu(prop) {
             return self.bg_prop_rect(prop);
         }
+        if Self::in_bar(prop) {
+            return self.export_prop_rect(prop);
+        }
         match prop {
             // In the zoom group, group-relative.
             Prop::Preset => {
@@ -977,6 +1021,7 @@ impl Editor {
                 let r = self.laid(Row::Aspect)?;
                 Some(Rect::new(r.x, r.y + r.h - SELECT_H, r.w, SELECT_H))
             }
+            Prop::Export(_) | Prop::Filename => None,
             Prop::Straighten => {
                 let r = self.laid(Row::Straighten)?;
                 let half = (r.w - self.t.n("s-3")) / 2.;
@@ -1208,7 +1253,7 @@ impl Editor {
     /// Scroll a focused control into the visible band.
     pub(super) fn reveal_prop(&mut self, prop: Prop) {
         if matches!(prop, Prop::Number(num) | Prop::Step(num, _) if num.is_canvas())
-            || prop == Prop::Preset
+            || Self::outside_props(prop)
         {
             return;
         }
@@ -1241,6 +1286,23 @@ impl Editor {
         self.need = true;
     }
 
+    /// A control in the export bar rather than Tool properties.
+    pub fn in_bar(prop: Prop) -> bool {
+        match prop {
+            Prop::Export(_) | Prop::Filename => true,
+            Prop::Number(num) => num.in_bar(),
+            _ => false,
+        }
+    }
+
+    /// A property-style control outside the Properties body.
+    pub fn outside_props(prop: Prop) -> bool {
+        prop == Prop::Preset
+            || Self::in_bg_menu(prop)
+            || Self::in_bar(prop)
+            || matches!(prop, Prop::Step(num, _) if num.in_bar())
+    }
+
     pub fn prop_exists(&self, prop: Prop) -> bool {
         self.prop_rect(prop).is_some()
     }
@@ -1261,7 +1323,10 @@ impl Editor {
             | Prop::Textarea
             | Prop::Aspect
             | Prop::CropAction(_)
-            | Prop::Straighten => return None,
+            | Prop::Straighten
+            | Prop::Filename => return None,
+            Prop::Export(Ex::Lock) => self.export.locked,
+            Prop::Export(_) => return None,
         })
     }
 
@@ -1302,6 +1367,16 @@ impl Editor {
                 .into(),
             Prop::Textarea => "Text".into(),
             Prop::Format(i) => Editor::format_name(i).into(),
+            Prop::Filename => "Saved filename".into(),
+            Prop::Export(ex) => match ex {
+                Ex::Size => "Output size",
+                Ex::Quality => "Save quality",
+                Ex::Compress => "Compression quality",
+                Ex::Unit => "Screenshot file size unit",
+                Ex::Format => "Format",
+                Ex::Lock => "Lock output aspect ratio",
+            }
+            .into(),
         }
     }
 
@@ -1310,6 +1385,12 @@ impl Editor {
             Prop::Shape(i) => SHAPE_TOOLS[i].name(),
             Prop::Swatch(_, CUSTOM) => colors::CUSTOM_COLOR.into(),
             Prop::Preset => header::ZOOM_PRESET_TOOLTIP.into(),
+            Prop::Export(Ex::Lock) => "Lock output aspect ratio".into(),
+            // The Maximum file size control's `title`.
+            Prop::Number(Num::MaxSize) | Prop::Export(Ex::Unit) => self
+                .export_view()
+                .map(|v| v.maximum_help)
+                .unwrap_or_default(),
             // `title="Canvas width"`.
             Prop::Number(num) if num.is_canvas() => num.label().into(),
             _ => String::new(),
@@ -1385,12 +1466,14 @@ impl Editor {
             Prop::Font => self.toggle_menu(MenuKind::Font),
             Prop::Aspect => self.toggle_menu(MenuKind::Aspect),
             Prop::Preset => self.toggle_menu(MenuKind::Preset),
+            Prop::Export(Ex::Lock) => self.toggle_lock(),
+            Prop::Export(ex) => self.toggle_menu(MenuKind::Export(ex)),
             Prop::CropAction(false) => self.set_crop(None),
             Prop::CropAction(true) => self.apply_crop(),
             Prop::Straighten => self.straighten(),
             Prop::Step(num, up) => self.nudge(num, up),
             Prop::Format(i) => self.activate_format(i),
-            Prop::Range(_) | Prop::Number(_) | Prop::Textarea => {}
+            Prop::Range(_) | Prop::Number(_) | Prop::Textarea | Prop::Filename => {}
         }
     }
 
@@ -1817,9 +1900,20 @@ impl Editor {
                     let r = rect(x, y, x + THUMB, y + THUMB);
                     gfx::ring(dc, r, THUMB / 2., 0., 2., c("theme-accent"))
                 }
-                Prop::StyleTrigger | Prop::Format(_) => {
+                Prop::StyleTrigger | Prop::Format(_) | Prop::Export(Ex::Lock) => {
                     gfx::ring(dc, all, t.n("r-md"), 2., 4., c("theme-accent"))
                 }
+                // The filename's frame turns accent instead (`outline: none`),
+                // and its format select lights up.
+                Prop::Filename | Prop::Export(Ex::Format) => Ok(()),
+                Prop::Export(_) => gfx::ring(
+                    dc,
+                    all,
+                    t.n("r-md"),
+                    0.,
+                    2.,
+                    t.color_alpha("theme-accent", 0.55),
+                ),
                 // Inputs and the select show `--focus-ring-tight` with their
                 // accent border.
                 Prop::CropAction(_) | Prop::Straighten => {
@@ -1856,6 +1950,14 @@ impl Editor {
                 self.draw_action(dc, &label, false, lit, (w, h))?
             }
             Prop::Format(i) => self.draw_format(dc, i, layer, (w, h))?,
+            Prop::Export(Ex::Lock) => self.draw_lock(dc, layer, (w, h))?,
+            Prop::Export(Ex::Format) => self.draw_format_select(dc, layer, (w, h))?,
+            Prop::Export(ex) => self.draw_select(dc, MenuKind::Export(ex), layer, (w, h))?,
+            Prop::Filename => {
+                if !lit {
+                    self.draw_filename(dc, (w, h))?;
+                }
+            }
             Prop::Number(num) => self.draw_number(dc, num, lit, (w, h))?,
             Prop::Step(num, up) => self.draw_step(dc, num, up, lit, (w, h))?,
             Prop::Textarea => self.draw_textarea(dc, lit, (w, h))?,

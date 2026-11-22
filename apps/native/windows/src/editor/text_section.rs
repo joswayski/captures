@@ -80,6 +80,7 @@ impl Editor {
             Num::CanvasWidth | Num::CanvasHeight => self
                 .document_size()
                 .map_or(0., |(w, h)| if num == Num::CanvasWidth { w } else { h }),
+            num if num.in_bar() => self.export_number(num),
             num => self.geometry_value(num),
         }
     }
@@ -106,6 +107,7 @@ impl Editor {
                     self.apply(super::props::Change::Offset(num == Num::ShadowX, value));
                 }
             }
+            num if num.in_bar() => self.set_export_number(num, value),
             num => self.set_geometry(num, value),
         }
     }

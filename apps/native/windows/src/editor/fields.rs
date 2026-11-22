@@ -57,7 +57,7 @@ impl FieldEdit {
 impl Editor {
     /// The props control is a text input.
     pub fn is_field(prop: Prop) -> bool {
-        matches!(prop, Prop::Number(_) | Prop::Textarea)
+        matches!(prop, Prop::Number(_) | Prop::Textarea | Prop::Filename)
     }
 
     /// The shown text of a field, focused or not.
@@ -90,8 +90,9 @@ impl Editor {
         let source = self.field_text(prop);
         field.set_text(&source);
         // Chromium selects an `<input>`'s text when Tab focuses it; a
-        // textarea keeps the caret at its start.
-        if keyboard && prop != Prop::Textarea {
+        // textarea keeps the caret at its start. The filename selects all
+        // on any focus (its `onFocus`).
+        if (keyboard && prop != Prop::Textarea) || prop == Prop::Filename {
             field.select_all();
         } else {
             field.move_to(0, false);
@@ -120,7 +121,9 @@ impl Editor {
                     .map(|t| t.text.clone())
                     .unwrap_or_default(),
             },
+            Prop::Number(Num::MaxSize) => self.export.limit.clone(),
             Prop::Number(num) => js_number(self.number_value(num)),
+            Prop::Filename => self.filename(),
             _ => String::new(),
         }
     }
@@ -188,7 +191,7 @@ impl Editor {
     /// is the committed one before the reply arrives.
     fn commit_number(&mut self, num: Num, text: &str) -> String {
         let parsed = text.trim().parse::<f64>().ok().filter(|v| v.is_finite());
-        let (min, max) = num.bounds();
+        let (min, max) = self.num_bounds(num);
         let committed = parsed.map(|value| {
             let value = if num.commits_once() {
                 value.round()
@@ -331,6 +334,7 @@ impl Editor {
     pub(super) fn field_caret_node(&self) -> usize {
         match self.field.as_ref().map(|e| e.prop) {
             Some(Prop::Number(num)) if num.is_canvas() => self.header_caret,
+            Some(prop) if Self::in_bar(prop) => self.bar_caret,
             _ => self.field_caret,
         }
     }
@@ -338,6 +342,7 @@ impl Editor {
     pub(super) fn hide_field_carets(&mut self) {
         self.set_visible(self.field_caret, false);
         self.set_visible(self.header_caret, false);
+        self.set_visible(self.bar_caret, false);
     }
 
     /// `.is-compact input { text-align: center }`: the text's x offset in
@@ -392,12 +397,11 @@ impl Editor {
         let inside = cy + line > bx.y && cy < bx.y + bx.h;
         let r = Rect::new(control.x + cx, control.y + cy, 1., line.max(4.));
         let node = self.field_caret_node();
-        let other = if node == self.field_caret {
-            self.header_caret
-        } else {
-            self.field_caret
-        };
-        self.set_visible(other, false);
+        for other in [self.field_caret, self.header_caret, self.bar_caret] {
+            if other != node {
+                self.set_visible(other, false);
+            }
+        }
         let moved = self.nodes[node].rect != r || !self.nodes[node].visible;
         self.set_rect(node, r);
         self.set_visible(node, inside);
@@ -413,7 +417,9 @@ impl Editor {
         match prop {
             // `.is-compact input { font-size: var(--text-xs) }`.
             Prop::Number(num) if num.is_canvas() => Style::MonoSmall,
-            Prop::Number(num) if !num.read_only() => Style::Mono,
+            Prop::Number(num) if !num.read_only() && !num.in_bar() => Style::Mono,
+            // `.recording-filename-input input`.
+            Prop::Filename => Style::Button,
             _ => Style::Option,
         }
     }
@@ -460,6 +466,7 @@ impl Editor {
     fn field_changed(&mut self, prop: Prop, text: String) {
         match prop {
             Prop::Textarea => self.apply_text(super::props::TextChange::Content(text)),
+            Prop::Filename => self.set_filename(text),
             // `onTextChange`: Canvas W and H only hold a draft until Enter,
             // blur or a stepper commits it.
             Prop::Number(num) if num.commits_once() => {}
@@ -469,7 +476,7 @@ impl Editor {
                 } else {
                     text.trim().parse::<f64>().ok()
                 };
-                let (min, max) = num.bounds();
+                let (min, max) = self.num_bounds(num);
                 if let Some(value) = parsed.filter(|v| v.is_finite() && (min..=max).contains(v)) {
                     self.set_number(num, value);
                 }
@@ -496,8 +503,8 @@ impl Editor {
         } else {
             text
         };
-        let (min, max) = num.bounds();
-        let next = number::step_from(&shown, 1., up, Some(min), Some(max));
+        let (min, max) = self.num_bounds(num);
+        let next = number::step_from(&shown, self.num_step(num), up, Some(min), Some(max));
         self.set_number(num, next);
         self.own_source(Prop::Number(num));
         if let Some(edit) = self.field.as_mut().filter(|e| e.prop == Prop::Number(num)) {
@@ -512,7 +519,7 @@ impl Editor {
 
     /// Whether a stepper is disabled at its bound.
     pub fn step_disabled(&self, num: Num, up: bool) -> bool {
-        let (min, max) = num.bounds();
+        let (min, max) = self.num_bounds(num);
         let value = self.number_value(num);
         if up { value >= max } else { value <= min }
     }
@@ -891,7 +898,7 @@ impl Editor {
 
     /// The text of a field, its selection and IME underline, clipped to
     /// the text box.
-    fn draw_field_text(
+    pub(super) fn draw_field_text(
         &self,
         dc: &ID2D1DeviceContext,
         prop: Prop,

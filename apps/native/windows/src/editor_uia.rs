@@ -21,7 +21,7 @@ use windows::Win32::UI::Accessibility::*;
 use windows::core::*;
 
 use crate::editor::{
-    CUSTOM, Check, Editor, Event, Field, MenuKind, Num, Prop, Stub, Target, with_editor,
+    CUSTOM, Check, Editor, Event, Ex, Field, MenuKind, Num, Prop, Stub, Target, with_editor,
 };
 use crate::scene::Rect;
 
@@ -60,8 +60,6 @@ pub enum Id {
     ModeGroup,
     /// `output aria-label="Save location"`.
     Location,
-    /// `input aria-label="Saved filename"`.
-    Filename,
     /// `.screenshot-export-notice` and `.screenshot-export-hint`.
     Notice,
     Hint,
@@ -114,16 +112,15 @@ fn children(e: &Editor, id: Id) -> Vec<Id> {
             if e.flyout {
                 list.push(Id::Flyout);
             }
+            list.extend([Id::Canvas, c(Target::Divider), Id::Layers, Id::Properties]);
+            // `.screenshot-export-options` precedes the save row.
+            list.extend(e.export_props().into_iter().map(|p| c(Target::Prop(p))));
             list.extend([
-                Id::Canvas,
-                c(Target::Divider),
-                Id::Layers,
-                Id::Properties,
-                Id::Stub(Stub::ExportSettings),
+                c(Target::ExportSettings),
                 Id::Location,
-                Id::Stub(Stub::Change),
-                Id::Filename,
-                Id::Stub(Stub::Format),
+                c(Target::Change),
+                c(Target::Prop(Prop::Filename)),
+                c(Target::Prop(Prop::Export(Ex::Format))),
                 c(Target::Copy),
             ]);
             if e.notice_text().is_some() {
@@ -224,6 +221,7 @@ fn prop_parent(prop: Prop) -> Id {
         Prop::Mode(_) => Id::ModeGroup,
         Prop::Swatch(field, _) => Id::ColorField(field),
         Prop::Step(num, _) => Id::Control(Target::Prop(Prop::Number(num))),
+        _ if Editor::in_bar(prop) => Id::Root,
         _ => Id::Properties,
     }
 }
@@ -283,7 +281,6 @@ fn rect(e: &Editor, id: Id) -> Rect {
         Id::ModeGroup => e.modes_rect(),
         Id::ColorField(field) => e.color_field_rect(field),
         Id::Location => l.folder,
-        Id::Filename => l.filename,
         Id::Notice => l.notice_line,
         Id::Hint => l.hint_line,
         Id::Control(target) => e.target_rect(target),
@@ -312,7 +309,6 @@ fn name(e: &Editor, id: Id) -> String {
         Id::ModeGroup => "Eraser mode".into(),
         Id::ColorField(field) => e.field_label(field),
         Id::Location => "Save location".into(),
-        Id::Filename => "Saved filename".into(),
         Id::Notice => e.notice_text().map(|(text, _)| text).unwrap_or_default(),
         Id::Hint => e.hint_text(),
         Id::Control(target) => e.name(target),
@@ -323,6 +319,7 @@ fn name(e: &Editor, id: Id) -> String {
             Some((MenuKind::Font, _)) => "Font".into(),
             Some((MenuKind::Aspect, _)) => crate::editor::ASPECT_LABEL.into(),
             Some((MenuKind::Preset, _)) => editor_chrome::header::ZOOM_PRESET.into(),
+            Some((MenuKind::Export(ex), _)) => e.prop_name(Prop::Export(ex)),
             None => String::new(),
         },
         Id::MenuItem(i) => e
@@ -344,6 +341,7 @@ fn trigger_kind(id: Id) -> Option<MenuKind> {
         Id::Control(Target::Prop(Prop::Font)) => Some(MenuKind::Font),
         Id::Control(Target::Prop(Prop::Aspect)) => Some(MenuKind::Aspect),
         Id::Control(Target::Prop(Prop::Preset)) => Some(MenuKind::Preset),
+        Id::Control(Target::Prop(Prop::Export(ex))) if ex.is_select() => Some(MenuKind::Export(ex)),
         _ => None,
     }
 }
@@ -361,7 +359,10 @@ fn control_type(e: &Editor, id: Id) -> UIA_CONTROLTYPE_ID {
         Id::Control(Target::Prop(Prop::Font | Prop::Aspect | Prop::Preset)) => {
             UIA_ComboBoxControlTypeId
         }
-        Id::Control(Target::Prop(Prop::Number(_) | Prop::Textarea)) => UIA_EditControlTypeId,
+        Id::Control(Target::Prop(Prop::Export(ex))) if ex.is_select() => UIA_ComboBoxControlTypeId,
+        Id::Control(Target::Prop(Prop::Number(_) | Prop::Textarea | Prop::Filename)) => {
+            UIA_EditControlTypeId
+        }
         Id::Root => UIA_WindowControlTypeId,
         Id::Banner
         | Id::CanvasGroup
@@ -376,8 +377,7 @@ fn control_type(e: &Editor, id: Id) -> UIA_CONTROLTYPE_ID {
         Id::Flyout => UIA_MenuControlTypeId,
         Id::List => UIA_ListControlTypeId,
         Id::Row(_) => UIA_ListItemControlTypeId,
-        Id::Filename | Id::InlineText | Id::Rename => UIA_EditControlTypeId,
-        Id::Stub(Stub::Format) => UIA_ComboBoxControlTypeId,
+        Id::InlineText | Id::Rename => UIA_EditControlTypeId,
         Id::Stub(_) => UIA_ButtonControlTypeId,
         Id::Control(Target::Shape(_)) => UIA_MenuItemControlTypeId,
         Id::Control(Target::Slider) => UIA_SliderControlTypeId,
@@ -414,6 +414,10 @@ fn runtime_id(id: Id) -> [i32; 4] {
             Target::Background => (30, 0),
             Target::AddImages => (33, 0),
             Target::AddLayer => (34, 0),
+            Target::ExportSettings => (35, 0),
+            Target::Change => (36, 0),
+            Target::Prop(Prop::Export(ex)) => (37, ex as i32),
+            Target::Prop(Prop::Filename) => (38, 0),
             Target::Prop(Prop::Shape(i)) => (16, i as i32),
             Target::Prop(Prop::Check(check)) => (17, check as i32),
             Target::Prop(Prop::Swatch(field, i)) => (18, field as i32 * 16 + i as i32),
@@ -434,9 +438,6 @@ fn runtime_id(id: Id) -> [i32; 4] {
     let stub = |s: Stub| -> (i32, i32) {
         match s {
             Stub::LayerMenu(i) => (7, i as i32),
-            Stub::ExportSettings => (8, 0),
-            Stub::Change => (9, 0),
-            Stub::Format => (10, 0),
         }
     };
     let (kind, a) = match id {
@@ -454,7 +455,6 @@ fn runtime_id(id: Id) -> [i32; 4] {
         Id::Row(i) => (11, i as i32),
         Id::Properties => (12, 0),
         Id::Location => (13, 0),
-        Id::Filename => (14, 0),
         Id::Notice => (15, 0),
         Id::Hint => (16, 0),
         Id::ShapePicker => (17, 0),
@@ -597,11 +597,17 @@ fn value(e: &Editor, id: Id) -> Option<String> {
         Id::Control(Target::Prop(Prop::Range(range))) => {
             crate::editor::range_text(range, e.range_value(range))
         }
-        Id::Filename => e.filename(),
         Id::InlineText => e.text_value(),
         Id::Rename => e.rename_text(),
-        Id::Control(Target::Prop(prop @ (Prop::Number(_) | Prop::Textarea))) => e.field_text(prop),
-        Id::Control(Target::Prop(prop @ (Prop::Font | Prop::Aspect | Prop::Preset))) => {
+        Id::Control(Target::Prop(prop @ (Prop::Number(_) | Prop::Textarea | Prop::Filename))) => {
+            e.field_text(prop)
+        }
+        Id::Control(Target::Prop(
+            prop @ (Prop::Font
+            | Prop::Aspect
+            | Prop::Preset
+            | Prop::Export(Ex::Size | Ex::Quality | Ex::Compress | Ex::Unit | Ex::Format)),
+        )) => {
             let kind = trigger_kind(Id::Control(Target::Prop(prop)))?;
             e.menu_displayed(kind)
                 .and_then(|i| e.menu_items(kind).into_iter().nth(i))
@@ -675,7 +681,13 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                 Id::Control(Target::Prop(Prop::Font | Prop::Aspect | Prop::Preset)) => {
                     pattern == UIA_ExpandCollapsePatternId || pattern == UIA_ValuePatternId
                 }
-                Id::Control(Target::Prop(Prop::Number(_) | Prop::Textarea)) => {
+                Id::Control(Target::Prop(Prop::Export(ex))) if ex.is_select() => {
+                    pattern == UIA_ExpandCollapsePatternId || pattern == UIA_ValuePatternId
+                }
+                Id::Control(Target::ExportSettings) => {
+                    pattern == UIA_ExpandCollapsePatternId || pattern == UIA_InvokePatternId
+                }
+                Id::Control(Target::Prop(Prop::Number(_) | Prop::Textarea | Prop::Filename)) => {
                     pattern == UIA_ValuePatternId
                 }
                 Id::MenuItem(_) => {
@@ -688,9 +700,7 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                 }
                 Id::Control(_) if toggle_state(e, id).is_some() => pattern == UIA_TogglePatternId,
                 Id::Control(_) => pattern == UIA_InvokePatternId,
-                Id::Filename | Id::Location | Id::InlineText | Id::Rename => {
-                    pattern == UIA_ValuePatternId
-                }
+                Id::Location | Id::InlineText | Id::Rename => pattern == UIA_ValuePatternId,
                 Id::Stub(_) => pattern == UIA_InvokePatternId,
                 _ => false,
             })
@@ -804,6 +814,7 @@ fn expand_state(e: &Editor, id: Id) -> ExpandCollapseState {
     let open = match trigger_kind(id) {
         Some(kind) => e.menu_open(kind),
         None if id == Id::Control(Target::Background) => e.bg_open(),
+        None if id == Id::Control(Target::ExportSettings) => e.export_open(),
         None => e.flyout,
     };
     if open {
@@ -818,7 +829,9 @@ fn writable(id: Id) -> bool {
     match id {
         // The crop's Width and Height are `readOnly`.
         Id::Control(Target::Prop(Prop::Number(num))) => !num.read_only(),
-        Id::InlineText | Id::Rename | Id::Control(Target::Prop(Prop::Textarea)) => true,
+        Id::InlineText
+        | Id::Rename
+        | Id::Control(Target::Prop(Prop::Textarea | Prop::Filename)) => true,
         _ => false,
     }
 }
@@ -992,6 +1005,11 @@ impl Node_Impl {
                         return Err(not_enabled());
                     }
                     e.set_bg_menu(open);
+                }
+                None if id == Id::Control(Target::ExportSettings) => {
+                    if e.export_open() != open {
+                        e.activate(Target::ExportSettings);
+                    }
                 }
                 None => e.set_flyout(open),
             }
@@ -1332,6 +1350,7 @@ pub fn describe(e: &Editor, events: Vec<Event>) -> Vec<(Event, String)> {
                 Event::Expanded(target) => {
                     let open = match target {
                         Target::Background => e.bg_open(),
+                        Target::ExportSettings => e.export_open(),
                         _ => trigger_kind(Id::Control(target)).is_some_and(|k| e.menu_open(k)),
                     };
                     if open { "open" } else { "closed" }.into()

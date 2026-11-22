@@ -878,6 +878,28 @@ drive the keys and a real worker import; a live window's UIA tree shows both
 buttons enabled with Invoke. Real drags, key presses and the picker were not
 exercised on the desktop. macOS, Linux: unchanged.
 
+The Windows screenshot editor's save row now works like shipping's. The
+Export settings disclosure opens `.screenshot-export-settings` above the
+save row (the footer grows and the canvas shrinks), with Output size
+(Original, 75%, 50%, Custom with width × height and the aspect lock),
+Save quality, the Compress preset, Maximum file size with its KB/MB/GB unit,
+and Est. size with its change versus the original. The filename is an
+editable input that selects all on focus. Editing it, or picking a folder
+with Change…, turns Save as new file on, as `ExportTarget` does for every
+host. The suffix is the PNG/JPEG/WebP format select. The selects are
+shipping's `CustomSelect` listboxes, descriptions included. `editor_export`
+owns the labels, rules, plan and estimate. The host keeps only the UI
+values GTK's `export_bar.rs` keeps (custom size, lock, limit text and
+unit). The estimate encodes on a thread the worker starts, one at a time
+with the newest options next, so edits keep flowing. UIA: the disclosure has
+ExpandCollapse, the selects are combo boxes with Value and ExpandCollapse,
+and the filename and number fields take Value. Deviations: the panel opens
+without shipping's 3 px rise, and the before/after comparison is a separate
+change. Windows: `--select export|export-custom|export-compress|export-maximum|export-menu`
+renders it offscreen in light and dark. A test drives the size, lock, unit,
+format and filename through the editor. A live window, driven only through
+UIA, expanded the panel, chose Maximum file size from the Save quality list
+and renamed the file. Physical pointer and keyboard use is unverified.
 Apply crop pulse: shipping's `screenshot-cta-pulse` (2.4 s ease-in-out,
 infinite, a 0 → 5 px accent `box-shadow` at 22 % and back) is a ring visual
 under Apply crop, drawn once at its 50 % frame, whose opacity a repeating

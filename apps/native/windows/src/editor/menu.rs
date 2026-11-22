@@ -15,6 +15,7 @@ use windows::Win32::Graphics::Direct2D::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::core::*;
 
+use super::export::Ex;
 use super::props::{Prop, TextChange};
 use super::{Editor, Event, Target};
 use crate::gfx::{self, Style, rect};
@@ -30,6 +31,8 @@ pub enum MenuKind {
     Aspect,
     /// The header's Canvas zoom preset select.
     Preset,
+    /// An export bar `CustomSelect`.
+    Export(Ex),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -56,7 +59,10 @@ pub const MENU_BLEED: f32 = 36.;
 impl MenuKind {
     /// A `.custom-select-listbox` (`role="listbox"`), not a menu.
     pub fn is_select(self) -> bool {
-        matches!(self, MenuKind::Font | MenuKind::Aspect | MenuKind::Preset)
+        matches!(
+            self,
+            MenuKind::Font | MenuKind::Aspect | MenuKind::Preset | MenuKind::Export(_)
+        )
     }
 
     /// The trigger that owns the popup.
@@ -66,6 +72,7 @@ impl MenuKind {
             MenuKind::Font => Prop::Font,
             MenuKind::Aspect => Prop::Aspect,
             MenuKind::Preset => Prop::Preset,
+            MenuKind::Export(ex) => Prop::Export(ex),
         }
     }
 }
@@ -92,6 +99,24 @@ impl Editor {
                 .into_iter()
                 .map(|(_, label)| label)
                 .collect(),
+            MenuKind::Export(ex) => self
+                .export_options(ex)
+                .into_iter()
+                .map(|(_, label, _)| label)
+                .collect(),
+        }
+    }
+
+    /// A row's `<small>` description (export selects only).
+    fn menu_description(&self, kind: MenuKind, index: usize) -> String {
+        match kind {
+            MenuKind::Export(ex) => self
+                .export_options(ex)
+                .into_iter()
+                .nth(index)
+                .map(|(_, _, d)| d)
+                .unwrap_or_default(),
+            _ => String::new(),
         }
     }
 
@@ -137,6 +162,7 @@ impl Editor {
                 let value = (!self.fit_mode()).then_some(self.viewport.zoom_percent);
                 self.preset_options().iter().position(|(v, _)| *v == value)
             }
+            MenuKind::Export(ex) => self.export_selected(ex),
         }
     }
 
@@ -239,11 +265,46 @@ impl Editor {
                 width - 2. - 2. * s2,
                 STYLE_ROW,
             ),
-            MenuKind::Font | MenuKind::Aspect | MenuKind::Preset => {
-                let h = self.option_h();
-                Rect::new(1. + s2, 1. + s2 + index as f32 * h, width - 2. - 2. * s2, h)
+            MenuKind::Font | MenuKind::Aspect | MenuKind::Preset | MenuKind::Export(_) => {
+                let y: f32 = (0..index).map(|i| self.row_h(kind, i, width)).sum();
+                Rect::new(
+                    1. + s2,
+                    1. + s2 + y,
+                    width - 2. - 2. * s2,
+                    self.row_h(kind, index, width),
+                )
             }
         }
+    }
+
+    /// A select row in a panel `width` wide: a description wraps under
+    /// its label (`.custom-select-option-copy`, `gap: 2px`).
+    fn row_h(&self, kind: MenuKind, index: usize, width: f32) -> f32 {
+        let description = self.menu_description(kind, index);
+        if description.is_empty() {
+            return self.option_h();
+        }
+        let n = |name: &str| self.t.n(name);
+        let room = self.description_w(width);
+        let label = self
+            .g
+            .text(&self.t, Style::Option, "Ag", 1e4)
+            .map_or(18., |t| t.height);
+        let small = self
+            .g
+            .text(&self.t, Style::Note, &description, room)
+            .map_or(16., |t| t.height);
+        (2. * n("s-3") + label + 2. + 2. + small).max(n("h-sm"))
+    }
+
+    /// The wrap width of a row's description.
+    fn description_w(&self, width: f32) -> f32 {
+        let n = |name: &str| self.t.n(name);
+        let check = self
+            .g
+            .text(&self.t, Style::Option, "✓", 1e4)
+            .map_or(10., |t| t.width);
+        (width - 2. - 2. * n("s-2") - 2. * n("s-4") - n("s-6") - check).max(40.)
     }
 
     /// `.custom-select-option`: `--h-sm` tall at least.
@@ -293,7 +354,7 @@ impl Editor {
                     .min((self.w - trigger.w - VIEWPORT_PADDING).max(VIEWPORT_PADDING));
                 Rect::new(left, top, trigger.w, h)
             }
-            MenuKind::Font | MenuKind::Aspect | MenuKind::Preset => {
+            MenuKind::Font | MenuKind::Aspect | MenuKind::Preset | MenuKind::Export(_) => {
                 let (s4, s6) = (self.t.n("s-4"), self.t.n("s-6"));
                 let label_w = self
                     .menu_items(menu.kind)
@@ -305,8 +366,20 @@ impl Editor {
                     .g
                     .text(&self.t, Style::Option, "✓", 1e4)
                     .map_or(10., |t| t.width);
-                let content_w = (label_w + s6 + check_w + 2. * s4 + 2. * s2 + 2.).ceil();
-                let content_h = count as f32 * self.option_h() + 2. * s2;
+                // `width: max-content; max-width: min(360px, 100vw - 16px)`.
+                let small_w = (0..count)
+                    .map(|i| self.menu_description(menu.kind, i))
+                    .filter(|d| !d.is_empty())
+                    .filter_map(|d| self.g.text(&self.t, Style::Note, &d, 1e4).ok())
+                    .map(|t| t.width)
+                    .fold(0., f32::max);
+                let content_w = ((label_w.max(small_w)) + s6 + check_w + 2. * s4 + 2. * s2 + 2.)
+                    .ceil()
+                    .min(360f32.min(self.w - 16.));
+                let rows_h = |width: f32| -> f32 {
+                    (0..count).map(|i| self.row_h(menu.kind, i, width)).sum()
+                };
+                let content_h = rows_h(content_w.max(trigger.w)) + 2. * s2;
                 let layout = select::layout(
                     select::Rect {
                         left: f64::from(trigger.x),
@@ -426,6 +499,7 @@ impl Editor {
                 Some(&(Some(percent), _)) => self.zoom_to(percent, None),
                 None => {}
             },
+            MenuKind::Export(ex) => self.apply_export_choice(ex, index),
         }
         self.events.push(Event::Value(Target::Prop(kind.trigger())));
     }
@@ -460,6 +534,7 @@ impl Editor {
             Prop::Font => MenuKind::Font,
             Prop::Aspect => MenuKind::Aspect,
             Prop::Preset => MenuKind::Preset,
+            Prop::Export(ex) if ex.is_select() => MenuKind::Export(ex),
             _ => return false,
         };
         let key = match vk {
@@ -591,7 +666,9 @@ impl Editor {
         // `.screenshot-text-style-menu` (`--r-xl`) and the listbox (`--r-lg`).
         let radius = match menu.kind {
             MenuKind::Style => t.n("r-xl"),
-            MenuKind::Font | MenuKind::Aspect | MenuKind::Preset => t.n("r-lg"),
+            MenuKind::Font | MenuKind::Aspect | MenuKind::Preset | MenuKind::Export(_) => {
+                t.n("r-lg")
+            }
         };
         gfx::shadow(dc, all, radius, t.shadow("shadow-lg"))?;
         gfx::fill_round(dc, all, radius, t.color("surface-overlay"))?;
@@ -660,7 +737,7 @@ impl Editor {
                     ink,
                 )?;
             }
-            MenuKind::Font | MenuKind::Aspect | MenuKind::Preset => {
+            MenuKind::Font | MenuKind::Aspect | MenuKind::Preset | MenuKind::Export(_) => {
                 if lit {
                     gfx::fill_round(dc, b, t.n("r-sm"), c("surface-hover"))?;
                 }
@@ -676,7 +753,22 @@ impl Editor {
                 };
                 let pad = t.n("s-4");
                 let text = self.g.text(t, style, label, 1e4)?;
-                gfx::text(dc, &text, r.x + pad, r.y + (r.h - text.height) / 2., ink)?;
+                let description = self.menu_description(kind, index);
+                if description.is_empty() {
+                    gfx::text(dc, &text, r.x + pad, r.y + (r.h - text.height) / 2., ink)?;
+                } else {
+                    let top = r.y + t.n("s-3") + 1.;
+                    gfx::text(dc, &text, r.x + pad, top, ink)?;
+                    let room = self.description_w(r.w + 2. + 2. * t.n("s-2"));
+                    let small = self.g.text(t, Style::Note, &description, room)?;
+                    gfx::text(
+                        dc,
+                        &small,
+                        r.x + pad,
+                        top + text.height + 1. + 2.,
+                        c("text-faint"),
+                    )?;
+                }
                 if selected {
                     let check = self.g.text(t, Style::Option, "✓", 1e4)?;
                     let mark = if t.appearance == "dark" {

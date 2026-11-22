@@ -33,7 +33,7 @@ use captures_app::editor::{
     Rect as DocRect, ResizeHandle,
 };
 use captures_app::editor_chrome::{self, RAIL_TOOLS, SHAPE_TOOLS, header};
-use captures_app::editor_export::{self, EstimateState, ExportSource, ExportTarget, SavePlan};
+use captures_app::editor_export::{self, ExportSource, ExportTarget, SavePlan};
 use captures_app::editor_output::SavedExport;
 use captures_app::editor_session::{
     DraftAutosave, EditorSession, ExportFormat, ExportOptions, ExportQuality, ExportSize,
@@ -66,6 +66,7 @@ mod background;
 mod crop;
 pub use crop::ASPECT_LABEL;
 mod eraser;
+mod export;
 mod fields;
 mod import;
 mod menu;
@@ -73,6 +74,7 @@ mod props;
 mod rows;
 mod text;
 mod text_section;
+pub use export::Ex;
 pub use menu::MenuKind;
 pub use props::{CUSTOM, Check, Field, Num, Prop, Range, bounds as range_bounds, range_text};
 
@@ -238,6 +240,9 @@ pub enum Target {
     /// The header's Add images and the Layers heading's Add image layer.
     AddImages,
     AddLayer,
+    /// The save row's Export settings disclosure and Change save location.
+    ExportSettings,
+    Change,
 }
 
 /// Shipping controls this host does not implement yet: drawn disabled and
@@ -245,9 +250,6 @@ pub enum Target {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Stub {
     LayerMenu(usize),
-    ExportSettings,
-    Change,
-    Format,
 }
 
 /// Accessibility notifications, raised after the frame.
@@ -480,6 +482,10 @@ enum Job {
         selected: Option<String>,
         point: Option<Point>,
     },
+    /// Encode the document as Save would, for Est. size.
+    Estimate {
+        options: ExportOptions,
+    },
 }
 
 /// A preview's changed pixels and selection outlines.
@@ -499,6 +505,8 @@ enum Outcome {
     Flushed,
     /// `Job::Import` added layers; the last one's ID.
     Imported(Box<Presented>, String),
+    /// `Job::Estimate`'s encode.
+    Estimated(std::result::Result<editor_export::ExportEstimate, String>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -558,6 +566,9 @@ pub struct Layout {
     pub add_layer: Rect,
     pub flyout: Rect,
     pub export_settings: Rect,
+    /// The open .screenshot-export-settings panel and its items, in`n    /// `export::ITEMS` order (empty when hidden).
+    pub panel: Rect,
+    pub items: [Rect; export::ITEMS.len()],
     pub filename: Rect,
     pub suffix: Rect,
     pub change: Rect,
@@ -601,6 +612,9 @@ pub struct Editor {
     gesture: Option<Gesture>,
     target: Option<ExportTarget>,
     options: ExportOptions,
+    export: export::ExportUi,
+    /// Change…'s folder picker, opened once the window is released.
+    pick_folder: bool,
     pub notice: Option<(String, bool)>,
     busy: bool,
     pub banner: bool,
@@ -668,6 +682,8 @@ pub struct Editor {
     field_caret: usize,
     /// The caret of a focused Canvas W or H, in the header.
     header_caret: usize,
+    /// The caret of the focused filename or export field, in the bar.
+    bar_caret: usize,
     /// Shipping `defaultTextStyle` and `defaultFontSize`: window-local; the
     /// size starts at the session's `text_size`.
     text_preset: &'static str,
@@ -1079,6 +1095,8 @@ fn spawn_worker(
             // its label and writing the draft this session restores.
             join_until(previous, Instant::now() + WORKER_EXIT_WAIT);
             let mut published = Published::default();
+            // The History entry's size: Preserve's Est. size baseline.
+            let original_bytes = editor_export::original_size_bytes(&root, &id);
             let send = |outcome| {
                 let sent = results.send(outcome).is_ok();
                 post(hwnd, WM_APP_OUTCOME);
@@ -1144,6 +1162,20 @@ fn spawn_worker(
                         ),
                         Err(error) => Outcome::Failed(error),
                     },
+                    // Encoded beside the session so edits keep going.
+                    Job::Estimate { options } => {
+                        let pixels = session.pixels();
+                        let results = results.clone();
+                        let original = original_bytes;
+                        std::thread::spawn(move || {
+                            let estimate =
+                                editor_export::estimate_export(&pixels, options, original);
+                            if results.send(Outcome::Estimated(estimate)).is_ok() {
+                                post(hwnd, WM_APP_OUTCOME);
+                            }
+                        });
+                        continue;
+                    }
                     Job::Copy => {
                         let pixels = session.pixels();
                         Outcome::Copied(
@@ -1272,6 +1304,8 @@ impl Editor {
             edit_seq: 0,
             pick_color: None,
             pick_images: false,
+            pick_folder: false,
+            export: export::ExportUi::default(),
             eraser: props::Eraser::default(),
             crop: None,
             crop_aspect: 0,
@@ -1289,6 +1323,7 @@ impl Editor {
             row_follow: None,
             field_caret: 0,
             header_caret: 0,
+            bar_caret: 0,
             text_preset: text::NEW_TEXT_PRESET,
             text_size: None,
             input_counter: 0,
@@ -1484,6 +1519,20 @@ impl Editor {
         for target in [Target::Copy, Target::SaveAsNew, Target::Save] {
             self.control(self.bar, target, 0.);
         }
+        // The export panel's controls and the save row's, in DOM order.
+        for prop in props::bar_props() {
+            let base = self.control(self.bar, Target::Prop(prop), 0.).base;
+            if let Prop::Number(num) = prop {
+                for up in [true, false] {
+                    self.control(base, Target::Prop(Prop::Step(num, up)), 0.);
+                }
+            }
+        }
+        for target in [Target::ExportSettings, Target::Change] {
+            self.control(self.bar, target, 0.);
+        }
+        self.bar_caret = self.add(Some(self.bar), Kind::FieldCaret, 0.);
+        self.nodes[self.bar_caret].visible = false;
         // The flyout floats above the canvas and the sidebar.
         self.flyout_node = self.add(Some(root), Kind::Flyout, 16.);
         self.nodes[self.flyout_node].visible = false;
@@ -1578,6 +1627,9 @@ impl Editor {
             }
             Target::SaveAsNew => self.exists(target) && !self.busy,
             Target::Copy => self.image.is_some(),
+            Target::Change | Target::Prop(Prop::Filename | Prop::Export(export::Ex::Format)) => {
+                self.presented.is_some() && !self.busy
+            }
             Target::Prop(Prop::Step(num, up)) => {
                 self.exists(target) && !self.step_disabled(num, up)
             }
@@ -1641,6 +1693,8 @@ impl Editor {
             Target::Background => self.background_label(),
             Target::AddImages => header::ADD_IMAGES.into(),
             Target::AddLayer => editor_chrome::layers::ADD.into(),
+            Target::ExportSettings => "Export settings".into(),
+            Target::Change => "Change save location".into(),
         }
     }
 
@@ -1658,6 +1712,9 @@ impl Editor {
             Target::Divider => "Drag to resize · Double-click to reset".into(),
             Target::SaveAsNew => "Save as a new file and leave the original untouched".into(),
             Target::Save => self.export_view().map(|v| v.hint).unwrap_or_default(),
+            Target::Copy => "Copy the edited image to the clipboard. Does not save a file.".into(),
+            Target::ExportSettings => self.export_view().map(|v| v.summary).unwrap_or_default(),
+            Target::Change => self.save_location(),
             Target::Prop(prop) => self.prop_help(prop),
             _ => String::new(),
         }
@@ -1669,23 +1726,16 @@ impl Editor {
                 .layer(i)
                 .map(|l| l.menu_label.clone())
                 .unwrap_or_default(),
-            Stub::ExportSettings => "Export settings".into(),
-            Stub::Change => "Change save location".into(),
-            Stub::Format => "Format".into(),
         }
     }
 
     pub fn stub_rect(&self, stub: Stub) -> Rect {
-        let l = &self.l;
         match stub {
             Stub::LayerMenu(i) => {
                 let row = self.target_rect(Target::Layer(i));
                 let lock = self.target_rect(Target::Lock(i));
                 Rect::new(lock.x + QUICK.0 + 2., lock.y, QUICK.0, QUICK.1.min(row.h))
             }
-            Stub::ExportSettings => l.export_settings,
-            Stub::Change => l.change,
-            Stub::Format => l.suffix,
         }
     }
 
@@ -1699,7 +1749,7 @@ impl Editor {
                 p.document.height.round() as u32,
             ),
             p.document.background.is_none(),
-            EstimateState::default(),
+            self.export.estimate,
         ))
     }
 
@@ -1974,7 +2024,11 @@ impl Editor {
 
     /// `--tool KEY`: start with a rail tool or a grouped shape.
     fn start_tool(&mut self, options: &Options) {
-        if let Some(id) = options.select.as_ref().filter(|s| !s.starts_with("drop")) {
+        if let Some(id) = options
+            .select
+            .as_ref()
+            .filter(|s| !s.starts_with("drop") && !s.starts_with("export"))
+        {
             if self.layer_count() > 0
                 && (0..self.layer_count()).any(|i| self.layer(i).is_some_and(|l| l.id == *id))
             {
@@ -2046,6 +2100,8 @@ impl Editor {
             }
             Target::Background => self.set_bg_menu(!self.bg_open),
             Target::AddImages | Target::AddLayer => self.pick_images = true,
+            Target::ExportSettings => self.toggle_export_settings(),
+            Target::Change => self.pick_folder = true,
             Target::Undo => {
                 self.set_crop(None);
                 self.submit(Request::Undo)
@@ -2237,6 +2293,7 @@ impl Editor {
                 // redraws the panel, as after an undo or redo.
                 let shown_layer = self.selected_element();
                 let old_count = self.layer_count();
+                let repainted = presented.pixels.is_some();
                 if let Some(pixels) = presented.pixels.take() {
                     self.take_pixels(pixels);
                 }
@@ -2334,7 +2391,11 @@ impl Editor {
                 self.sync_rename();
                 self.follow_row();
                 self.received_text();
+                if repainted || first {
+                    self.schedule_estimate();
+                }
             }
+            Outcome::Estimated(result) => self.receive_estimate(result),
             Outcome::Preview(result) => {
                 self.preview_busy = false;
                 let now = Instant::now();
@@ -2807,8 +2868,25 @@ impl Editor {
             notice_h + g.text(&t, Style::Note, &hint, status_w)?.height + 2. * n("s-1")
         };
         let row_h = if l.compact { 60. } else { status_h.max(60.) };
-        let bar_h = BAR_H + row_h - 60. + if l.compact { s4 + status_h } else { 0. };
+        // `.screenshot-export-options.is-open` stacks above the save row.
+        let (panel_h, items) = if self.export.open {
+            self.export_panel(w, l.compact)?
+        } else {
+            (0., Vec::new())
+        };
+        let panel_extra = if self.export.open { panel_h + s4 } else { 0. };
+        let bar_h =
+            BAR_H + row_h + panel_extra + if l.compact { s4 + status_h - 60. } else { -60. };
         l.bar = Rect::new(0., (h - bar_h).max(body), w, bar_h);
+        if self.export.open {
+            let panel = Rect::new(s5, l.bar.y + 1. + s4, w - 2. * s5, panel_h);
+            l.panel = panel;
+            for (item, r) in items {
+                if let Some(i) = export::ITEMS.iter().position(|x| *x == item) {
+                    l.items[i] = Rect::new(panel.x + r.x, panel.y + r.y, r.w, r.h);
+                }
+            }
+        }
         let body_h = (l.bar.y - body).max(0.);
         l.rail = Rect::new(0., body, RAIL_W, body_h);
         l.sidebar = Rect::new(w - sidebar_w, body, sidebar_w, body_h);
@@ -2930,8 +3008,9 @@ impl Editor {
         );
 
         // Export bar: `.screenshot-export-main`.
-        let top = l.bar.y + 1. + s4 + row_h - 60.;
+        let top = l.bar.y + 1. + s4 + panel_extra + row_h - 60.;
         l.export_settings = Rect::new(s5, top + 16., settings_w, 44.);
+        set(Target::ExportSettings, l.export_settings);
         l.filename = Rect::new(fx, top + 24., filename_w, 36.);
         l.suffix = Rect::new(fx + filename_w - 62., top + 25., 61., 34.);
         let change = g.text(&t, Style::Tiny, "Change…", 1e4)?;
@@ -2942,6 +3021,7 @@ impl Editor {
             20.,
         );
         l.folder = Rect::new(fx, top, filename_w, 20.);
+        set(Target::Change, l.change);
         set(
             Target::Copy,
             Rect::new(fx + filename_w + gap, top + 24., copy_w, 36.),
@@ -2958,7 +3038,7 @@ impl Editor {
         l.hint = if l.compact {
             Rect::new(s5, top + 60. + s4, status_w, status_h)
         } else {
-            Rect::new(copy_end, l.bar.y + 1. + s4, status_w, row_h)
+            Rect::new(copy_end, l.bar.y + 1. + s4 + panel_extra, status_w, row_h)
         };
 
         // Painting and UIA use each text line's own bounds, not the entire
@@ -3342,8 +3422,8 @@ impl Editor {
         }
         let in_props = self.props_view().contains(x, y);
         let header_prop = |t: Target| match t {
-            Target::Prop(Prop::Number(n) | Prop::Step(n, _)) => n.is_canvas(),
-            Target::Prop(prop) => prop == Prop::Preset || Self::in_bg_menu(prop),
+            Target::Prop(Prop::Number(n) | Prop::Step(n, _)) => n.is_canvas() || n.in_bar(),
+            Target::Prop(prop) => Self::outside_props(prop),
             _ => false,
         };
         // Steppers sit inside their number field.
@@ -3409,7 +3489,16 @@ impl Editor {
             list.extend([Target::Eye(i), Target::Lock(i)]);
         }
         list.extend(self.prop_order().into_iter().map(Target::Prop));
-        list.extend([Target::Copy, Target::SaveAsNew, Target::Save]);
+        list.extend(self.export_props().into_iter().map(Target::Prop));
+        list.extend([
+            Target::ExportSettings,
+            Target::Change,
+            Target::Prop(Prop::Filename),
+            Target::Prop(Prop::Export(export::Ex::Format)),
+            Target::Copy,
+            Target::SaveAsNew,
+            Target::Save,
+        ]);
         // Shipping portals the open card to the end of `body`.
         if self.bg_open {
             list.extend(Self::bg_menu_props().map(Target::Prop));
@@ -3430,10 +3519,18 @@ impl Editor {
         // Inputs and the select draw their focus as an accent border.
         for target in [self.focus, focus].into_iter().flatten() {
             if let Target::Prop(
-                prop @ (Prop::Font | Prop::Aspect | Prop::Number(_) | Prop::Textarea),
+                prop @ (Prop::Font
+                | Prop::Aspect
+                | Prop::Number(_)
+                | Prop::Textarea
+                | Prop::Export(_)
+                | Prop::Filename),
             ) = target
             {
                 self.prop_dirty(prop);
+            }
+            if target == Target::Prop(Prop::Filename) {
+                self.nodes[self.bar].dirty = true;
             }
         }
         self.focus = focus;
@@ -4108,57 +4205,22 @@ impl Editor {
         let t = &self.t;
         let g = &self.g;
         let c = |name: &str| t.color(name);
-        let (s3, s4, s5) = (t.n("s-3"), t.n("s-4"), t.n("s-5"));
+        let (s3, s5) = (t.n("s-3"), t.n("s-5"));
         gfx::fill(dc, rect(0., 0., w, h), c("surface-raised"))?;
         gfx::fill(dc, rect(0., 0., w, 1.), c("border-subtle"))?;
         let l = &self.l;
         let y0 = l.bar.y;
         let local = |r: Rect| rect(r.x, r.y - y0, r.x + r.w, r.y - y0 + r.h);
-        let view = self.export_view();
         let radius = t.n("r-md");
         let dim = |name: &str| t.color_alpha(name, 0.45);
 
-        // Export settings: not in this host yet (disabled).
-        let es = local(l.export_settings);
-        gfx::fill_round(dc, es, radius, dim("control"))?;
-        gfx::border(dc, es, radius, 1., dim("control-border"))?;
-        let title = g.text(t, Style::Button, "Export settings", 1e4)?;
-        gfx::text(dc, &title, es.left + 13., es.top + 5., dim("text"))?;
-        let summary = view
-            .as_ref()
-            .map_or_else(String::new, |v| v.summary.clone());
-        let summary = g.text(t, Style::MonoTiny, &summary, 1e4)?;
-        g.ellipsis(&summary, es.right - es.left - 45.)?;
-        gfx::text(
-            dc,
-            &summary,
-            es.left + 13.,
-            es.top + 23.,
-            dim("text-subtle"),
-        )?;
-        gfx::icon(
-            dc,
-            &g.factory,
-            "chevron-down",
-            &[],
-            (es.right - 22., (es.top + es.bottom - 12.) / 2., 12.),
-            1.8,
-            dim("text-subtle"),
-        )?;
+        self.draw_export_panel(dc)?;
 
         // Filename and its folder line.
         let folder = local(l.folder);
         let label = g.text(t, Style::Status, "Filename", 1e4)?;
         gfx::text(dc, &label, folder.left, folder.top + 2., c("text-muted"))?;
         let change = local(l.change);
-        let change_text = g.text(t, Style::Tiny, "Change…", 1e4)?;
-        gfx::text(
-            dc,
-            &change_text,
-            change.left + s3,
-            change.top + 3.,
-            dim("text"),
-        )?;
         let directory = self.save_location();
         let path = g.text(t, Style::MonoTiny, &directory, 1e4)?;
         let saving = g.text(t, Style::Tiny, "Saving to", 1e4)?;
@@ -4178,10 +4240,22 @@ impl Editor {
             c("text-subtle"),
         )?;
 
-        // The filename field (read-only here) and its format suffix.
+        // The filename field's frame; its input and format select are
+        // controls over it. `:focus-within` shows the accent border.
         let field = local(l.filename);
         gfx::fill_round(dc, field, radius, c("surface-field"))?;
-        gfx::border(dc, field, radius, 1., c("control-border"))?;
+        let focused = self.focus == Some(Target::Prop(Prop::Filename));
+        gfx::border(
+            dc,
+            field,
+            radius,
+            1.,
+            c(if focused {
+                "theme-accent"
+            } else {
+                "control-border"
+            }),
+        )?;
         let suffix = local(l.suffix);
         gfx::fill(
             dc,
@@ -4192,39 +4266,6 @@ impl Editor {
                 field.bottom - 1.,
             ),
             c("border-subtle"),
-        )?;
-        let stem = g.text(t, Style::Button, &self.filename(), 1e4)?;
-        g.ellipsis(&stem, suffix.left - field.left - 2. * s4)?;
-        gfx::text(
-            dc,
-            &stem,
-            field.left + s4,
-            ((field.top + field.bottom - stem.height) / 2.).round(),
-            c("text"),
-        )?;
-        let ext = view
-            .as_ref()
-            .map_or_else(|| ".png".into(), |v| v.suffix.clone());
-        let ext = g.text(t, Style::Option, &ext, 1e4)?;
-        gfx::text(
-            dc,
-            &ext,
-            suffix.left + s4,
-            ((suffix.top + suffix.bottom - ext.height) / 2.).round(),
-            dim("text-subtle"),
-        )?;
-        gfx::icon(
-            dc,
-            &g.factory,
-            "chevron-down",
-            &[],
-            (
-                suffix.right - 18.,
-                (suffix.top + suffix.bottom - 11.) / 2.,
-                11.,
-            ),
-            1.8,
-            dim("text-subtle"),
         )?;
 
         // Compact status spans the second row; wide status precedes the switch.
@@ -4406,6 +4447,59 @@ impl Editor {
                     ((h - text.height) / 2.).round(),
                     c("text"),
                 )?;
+            }
+            // `.screenshot-export-disclosure`: title, summary and a chevron
+            // that turns over while the panel is open.
+            Target::ExportSettings => {
+                let (bg, edge, ink) = if lit {
+                    ("control-hover", "border-strong", "text")
+                } else {
+                    ("control", "control-border", "text-muted")
+                };
+                gfx::fill_round(dc, all, r_md, c(bg))?;
+                gfx::border(dc, all, r_md, 1., c(edge))?;
+                let title = g.text(t, Style::Button, "Export settings", 1e4)?;
+                let summary = self.export_view().map(|v| v.summary).unwrap_or_default();
+                let summary = g.text(t, Style::MonoTiny, &summary, 1e4)?;
+                let room = (w - 1. - s5 - 15. - 2. * s4).max(1.);
+                g.ellipsis(&title, room)?;
+                g.ellipsis(&summary, room)?;
+                let top = ((h - title.height - 2. - summary.height - 2.) / 2.).round();
+                gfx::text(dc, &title, 1. + s5, top, c(ink))?;
+                gfx::text(
+                    dc,
+                    &summary,
+                    1. + s5,
+                    top + title.height + 3.,
+                    c("text-subtle"),
+                )?;
+                let chevron = if self.export.open {
+                    "chevron-up"
+                } else {
+                    "chevron-down"
+                };
+                gfx::icon(
+                    dc,
+                    &g.factory,
+                    chevron,
+                    &[],
+                    (w - 1. - s4 - 15., (h - 15.) / 2., 15.),
+                    1.8,
+                    c(ink),
+                )?;
+            }
+            // `.recording-destination button`.
+            Target::Change => {
+                let enabled = self.enabled(target);
+                let ink = if !enabled {
+                    t.color_alpha("text-muted", 0.45)
+                } else if lit {
+                    c("text")
+                } else {
+                    c("text-muted")
+                };
+                let text = g.text(t, Style::Tiny, "Change…", 1e4)?;
+                gfx::text(dc, &text, s3, ((h - text.height) / 2.).round(), ink)?;
             }
             // `.screenshot-layers-heading button`.
             Target::AddLayer => {
@@ -5460,8 +5554,13 @@ impl Editor {
                     Some(target @ Target::Prop(prop))
                         if Self::is_field(prop) && self.enabled(target) =>
                     {
+                        // The filename's first press keeps its select-all
+                        // (shipping's `onMouseDown`).
+                        let first = prop == Prop::Filename && self.focus != Some(target);
                         self.set_focus(Some(target), false);
-                        self.field_point(x, y, msg == WM_LBUTTONDBLCLK, key_down(VK_SHIFT));
+                        if !first {
+                            self.field_point(x, y, msg == WM_LBUTTONDBLCLK, key_down(VK_SHIFT));
+                        }
                     }
                     // Double-clicking an image layer's row renames it.
                     Some(Target::Layer(i)) if msg == WM_LBUTTONDBLCLK && self.can_rename(i) => {
@@ -5715,7 +5814,7 @@ impl Editor {
 }
 
 /// `Layout::buttons`: twelve fixed controls, the rail, and a spare.
-const SLOTS: usize = 15 + RAIL_TOOLS.len() + 1;
+const SLOTS: usize = 17 + RAIL_TOOLS.len() + 1;
 
 /// Where each button's rect lives in `Layout::buttons`.
 fn button_slot(target: Target) -> usize {
@@ -5737,6 +5836,8 @@ fn button_slot(target: Target) -> usize {
         Target::Background => 12 + RAIL_TOOLS.len(),
         Target::AddImages => 13 + RAIL_TOOLS.len(),
         Target::AddLayer => 14 + RAIL_TOOLS.len(),
+        Target::ExportSettings => 15 + RAIL_TOOLS.len(),
+        Target::Change => 16 + RAIL_TOOLS.len(),
         // Laid out from their own rects, never through `Layout::buttons`.
         Target::Shape(_)
         | Target::Layer(_)
@@ -6283,6 +6384,21 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 }
             }
         }
+        // And Change…'s folder picker.
+        if let Some(Some(current)) = with_editor(hwnd, |e| {
+            std::mem::take(&mut e.pick_folder).then(|| e.save_location())
+        }) {
+            match crate::dialog::pick_folder(hwnd, "Choose save location", &current) {
+                Ok(Some(folder)) => {
+                    with_editor(hwnd, |e| e.set_save_directory(folder.into()));
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    let text = format!("Couldn’t choose a folder: {}", error.message());
+                    with_editor(hwnd, |e| e.set_notice(Some((text, true))));
+                }
+            }
+        }
         // Destroyed outside `with_editor`, so `WM_DESTROY` can remove it.
         // Taken, not read: DestroyWindow sends messages back into this
         // wndproc (WM_UAHDESTROYWINDOW), which must not destroy again or the
@@ -6339,11 +6455,39 @@ pub fn render_offscreen(
     editor.w = w;
     editor.h = h;
     editor.receive(Outcome::Presented(Box::new(presented)));
+    // `--select export`: the Export settings panel open, with the
+    // estimate a window would get from its worker.
+    // `export-custom` and `export-maximum` also pick that size or mode.
+    if let Some(select) = options
+        .select
+        .as_deref()
+        .filter(|s| s.starts_with("export"))
+    {
+        editor.export.open = true;
+        match select {
+            "export-custom" => editor.apply_export_choice(export::Ex::Size, 3),
+            "export-maximum" => editor.apply_export_choice(export::Ex::Quality, 2),
+            "export-compress" => editor.apply_export_choice(export::Ex::Quality, 1),
+            _ => {}
+        }
+    }
+    editor.export.estimating = false;
+    editor.export.estimate_dirty = false;
+    editor.receive_estimate(editor_export::estimate_export(
+        &session.pixels(),
+        editor.options,
+        editor_export::original_size_bytes(&root, &editor.artifact_id),
+    ));
     editor.start_tool(options);
     editor.layout(w, h)?;
     // `--select drop`: files dragged in with the default guide;
     // `drop-stack`: the pointer over the middle of the image.
     match options.select.as_deref() {
+        // The Save quality list, with its descriptions.
+        Some("export-menu") => {
+            editor.place();
+            editor.open_menu(menu::MenuKind::Export(export::Ex::Quality), Some(1));
+        }
         Some("drop") => editor.drag_enter(None),
         Some("drop-stack") => {
             let w = editor.l.well;
@@ -6876,6 +7020,104 @@ mod tests {
             show(publish(session.pixels(), None, &mut published), &mut ui);
             check(&session, &ui, &format!("undo {u}"));
         }
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn export_settings_choose_size_quality_format_and_filename() {
+        use captures_app::editor_session::ExportSize;
+        use windows::Win32::System::Com::*;
+        unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok().unwrap() };
+        let data = std::env::temp_dir().join(format!("captures-export-{}", std::process::id()));
+        let capture = captures_app::persist_screenshot(
+            &data.join("history"),
+            &RgbaImage::from_pixel(640, 360, Rgba([20, 50, 80, 255])),
+            CaptureMode::Region,
+        )
+        .unwrap();
+        let options = crate::parse(
+            [
+                "test".into(),
+                "--profile".into(),
+                data.to_string_lossy().into_owned(),
+                "--scene".into(),
+                "editor".into(),
+                "--artifact".into(),
+                capture.entry.id,
+            ]
+            .into_iter(),
+        )
+        .unwrap();
+        let tokens = crate::appearance::tokens(Some("light"), &Default::default());
+        let mut e = render_offscreen(
+            &options,
+            Gfx::new(&tokens, false).unwrap(),
+            tokens,
+            (1280., 840.),
+        )
+        .unwrap();
+        let size = Target::Prop(Prop::Export(Ex::Size));
+        assert!(!e.exists(size) && !e.focusable().contains(&size));
+        e.activate(Target::ExportSettings);
+        e.layout(1280., 840.).unwrap();
+        assert!(e.exists(size) && e.focusable().contains(&size));
+        assert!(
+            e.l.panel.y + e.l.panel.h < e.l.export_settings.y,
+            "panel above the save row"
+        );
+        // Custom starts from the document and the lock keeps its aspect.
+        e.open_menu(menu::MenuKind::Export(Ex::Size), None);
+        e.choose_menu(3);
+        assert_eq!(
+            e.options.size,
+            ExportSize::Custom {
+                width: 640,
+                height: 360
+            }
+        );
+        e.set_field_value(Prop::Number(Num::OutputWidth), "320");
+        assert_eq!(
+            e.options.size,
+            ExportSize::Custom {
+                width: 320,
+                height: 180
+            }
+        );
+        e.toggle_lock();
+        e.set_field_value(Prop::Number(Num::OutputHeight), "100");
+        assert_eq!(
+            e.options.size,
+            ExportSize::Custom {
+                width: 320,
+                height: 100
+            }
+        );
+        // Maximum file size: switching the unit keeps the byte limit.
+        e.apply_export_choice(Ex::Quality, 2);
+        assert_eq!(e.options.max_size_bytes, Some(10_000_000));
+        e.apply_export_choice(Ex::Unit, 0);
+        assert_eq!(e.field_text(Prop::Number(Num::MaxSize)), "10000");
+        assert_eq!(e.options.max_size_bytes, Some(10_000_000));
+        e.nudge(Num::MaxSize, true);
+        assert_eq!(e.options.max_size_bytes, Some(10_001_000));
+        // Format and filename.
+        e.open_menu(menu::MenuKind::Export(Ex::Format), None);
+        e.choose_menu(1);
+        assert_eq!(e.export_view().unwrap().suffix, ".jpg");
+        e.set_field_value(Prop::Filename, "renamed shot");
+        assert_eq!(e.filename(), "renamed shot");
+        assert!(
+            e.export_view()
+                .unwrap()
+                .plan
+                .unwrap()
+                .path()
+                .ends_with("renamed shot.jpg")
+        );
+        // Closing the panel moves focus off its controls.
+        e.set_focus(Some(size), true);
+        e.activate(Target::ExportSettings);
+        assert_eq!(e.focus, Some(Target::ExportSettings));
         let _ = std::fs::remove_dir_all(&data);
     }
 }
