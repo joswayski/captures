@@ -222,7 +222,7 @@ private final class EditorLayerCell: NSTableCellView {
     let visibilityButton: CaptureButton
     let lockButton: CaptureButton
     let menuButton: CaptureButton
-    private let tokens: Tokens
+    private var tokens: Tokens { didSet { needsDisplay = true } }
 
     init(title: NSTextField, detail: NSTextField, rename: NSTextField, iconName: String,
          thumbnail: NSImage?, coversPreview: Bool, locked: Bool, visible: Bool, tokens: Tokens,
@@ -4023,6 +4023,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     /// with a grip, live preview, name and kind and eye/lock/⋯ quick actions.
     /// Rows drag to reorder and image rows rename on double-click. The
     /// selected layer's properties live in their own panel below.
+    private var layersTitle: NSTextField?
     private func buildLayersPanel() {
         let headingHeight = Self.layersHeadingHeight
         let title = NSTextField(labelWithString: EditorChrome.text("layers", "title"))
@@ -4030,7 +4031,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         title.frame = NSRect(x: 0, y: 6, width: 56, height: 18)
         title.textColor = tokens.color("text")
         title.sizeToFit(); title.frame.origin.y = (headingHeight - title.frame.height) / 2
-        layersPanel.addSubview(title)
+        layersPanel.addSubview(title); layersTitle = title
         layerCount.font = .capturesMono(ofSize: tokens.number("text-2xs"), weight: .regular)
         layerCount.alignment = .center
         layerCount.sizeToFit()
@@ -4203,6 +4204,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             let label = NSTextField(labelWithString: EditorChrome.layerMenu(key).uppercased())
             label.font = .capturesUI(ofSize: tokens.number("text-2xs"), weight: .semibold)
             label.textColor = tokens.color("text-subtle")
+            label.identifier = NSUserInterfaceItemIdentifier("editor-subtle")
             layerMenuCard.addSubview(label)
             return label
         }
@@ -4210,6 +4212,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             let label = NSTextField(labelWithString: EditorChrome.layerMenu(key))
             label.font = .capturesUI(ofSize: tokens.number("text-sm"), weight: .medium)
             label.textColor = tokens.color("text-muted")
+            label.identifier = NSUserInterfaceItemIdentifier("editor-muted")
             layerMenuCard.addSubview(label)
             return label
         }
@@ -4235,6 +4238,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         layerOpacityValue.font = .capturesMonoDigits(ofSize: tokens.number("text-xs"), weight: .regular)
         layerOpacityValue.alignment = .right
         layerOpacityValue.textColor = tokens.color("text-muted")
+        layerOpacityValue.identifier = NSUserInterfaceItemIdentifier("editor-muted")
         layerMenuCard.addSubview(layerOpacityValue)
         layerOpacity.tokens = tokens
         layerOpacity.isContinuous = true
@@ -7851,16 +7855,29 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                      preferredSelection: id)
     }
 
-    private func restyle(_ tokens: Tokens) {
+    func restyle(_ tokens: Tokens) {
         self.tokens = tokens; root.wantsLayer = true
+        root.restyleTokenSubtree(tokens)
         restyleTokenScrollers(in: root, tokens)
         root.layer?.backgroundColor = tokens.color("surface-canvas").cgColor
         let dark = tokens.color("text").brightnessComponent > 0.5
         window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
-        for case let label as NSTextField in root.subviews {
-            label.textColor = tokens.color(label.identifier?.rawValue == "editor-muted"
-                ? "text-muted" : "text")
+        // Inspector labels carry their ink as an identifier; plain labels
+        // directly in the window are body text.
+        func restyleLabels(in view: NSView) {
+            for subview in view.subviews {
+                if let label = subview as? NSTextField, !label.isEditable {
+                    switch label.identifier?.rawValue {
+                    case "editor-muted": label.textColor = tokens.color("text-muted")
+                    case "editor-text": label.textColor = tokens.color("text")
+                    case "editor-subtle": label.textColor = tokens.color("text-subtle")
+                    default: if view === root { label.textColor = tokens.color("text") }
+                    }
+                }
+                restyleLabels(in: subview)
+            }
         }
+        restyleLabels(in: root)
         restyleChrome()
         exportBar.layer?.backgroundColor = tokens.color("surface-raised").cgColor
         exportBarRule.layer?.backgroundColor = tokens.color("border-subtle").cgColor
@@ -7955,6 +7972,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         layerPropertiesRule.layer?.backgroundColor = border
         layerSectionRule.layer?.backgroundColor = border
         layerPropertiesHeading.textColor = tokens.color("text")
+        layersTitle?.textColor = tokens.color("text")
         layerMenuCard.layer?.backgroundColor = tokens.color("surface-overlay").cgColor
         layerMenuCard.layer?.borderColor = tokens.color("border").cgColor
         layerMenuFooter.layer?.backgroundColor = tokens.color("surface-sunken").cgColor
@@ -8053,7 +8071,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let label = NSTextField(wrappingLabelWithString: text); label.frame = frame
         label.font = .capturesUI(ofSize: size, weight: weight)
         label.textColor = tokens.color(muted ? "text-muted" : "text")
-        if muted { label.identifier = NSUserInterfaceItemIdentifier("editor-muted") }
+        label.identifier = NSUserInterfaceItemIdentifier(muted ? "editor-muted" : "editor-text")
         parent.addSubview(label); return label
     }
 
@@ -8064,3 +8082,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         (parent ?? root).addSubview(button); return button
     }
 }
+
+extension EditorCropOverlay: TokenRestyling { func restyle(tokens: Tokens) { self.tokens = tokens } }
+extension EditorMakeCopySwitch: TokenRestyling { func restyle(tokens: Tokens) { self.tokens = tokens } }
+extension EditorFilenameBox: TokenRestyling { func restyle(tokens: Tokens) { self.tokens = tokens } }
+
+
+extension EditorLayerCell: TokenRestyling { func restyle(tokens: Tokens) { self.tokens = tokens } }

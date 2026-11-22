@@ -111,7 +111,7 @@ enum CompressionCompareCopy {
 /// Before underneath; only the handle, the bottom strip and Hide take the
 /// pointer, so canvas gestures pass through everywhere else.
 final class CompressionCompareView: NSView {
-    private let tokens: Tokens
+    private var tokens: Tokens { didSet { needsDisplay = true } }
     /// The media box in this view's coordinates; the split is measured on it.
     var mediaRect: NSRect = .zero { didSet { needsDisplay = true } }
     var afterImage: CGImage? { didSet { needsDisplay = true } }
@@ -412,3 +412,6 @@ final class CompressionCompareView: NSView {
                        y: area.minY + min(area.height - height - edge, max(edge, y)))
     }
 }
+
+
+extension CompressionCompareView: TokenRestyling { func restyle(tokens: Tokens) { self.tokens = tokens } }

@@ -754,3 +754,10 @@ final class EditorDropShadowFields: NSView, NSTextFieldDelegate {
     }
 
 }
+
+extension EditorMarkedSlider: TokenRestyling { func restyle(tokens: Tokens) { self.tokens = tokens } }
+extension EditorFormatButton: TokenRestyling { func restyle(tokens: Tokens) { self.tokens = tokens } }
+extension EditorTextFormatButtons: TokenRestyling { func restyle(tokens: Tokens) { self.tokens = tokens } }
+extension EditorInlineTextFrame: TokenRestyling { func restyle(tokens: Tokens) { self.tokens = tokens } }
+extension EditorShapePicker: TokenRestyling { func restyle(tokens: Tokens) { self.tokens = tokens } }
+extension EditorDropShadowFields: TokenRestyling { func restyle(tokens: Tokens) { self.tokens = tokens } }

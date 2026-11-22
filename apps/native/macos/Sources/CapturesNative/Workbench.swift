@@ -99,8 +99,9 @@ enum ShippingIcons {
 
 // NSButton keeps keyboard activation, target/action and accessibility behavior;
 // only the visual treatment is custom. No stock Aqua bezel in the content UI.
-final class CaptureButton: NSButton {
-    var tokens: Tokens!
+final class CaptureButton: NSButton, TokenRestyling {
+    var tokens: Tokens! { didSet { needsDisplay = true } }
+    func restyle(tokens: Tokens) { self.tokens = tokens }
     var selected = false
     var glass = false
     var primary = false
@@ -1347,6 +1348,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         sharingController?.restyle(tokens)
         updateNotice?.restyle(tokens)
         miniPreviews?.restyle(tokens)
+        liveController?.restyleEditors(tokens)
         renderPermissionSheet()
         liveStyleRevision += 1
         rebuildRenderedLiveWorkspaceIfNeeded()
@@ -1845,6 +1847,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                     self.sharingController?.restyle(self.tokens)
                     self.updateNotice?.restyle(self.tokens)
                     self.miniPreviews?.restyle(self.tokens)
+                    self.liveController?.restyleEditors(self.tokens)
                 }
                 let chosen = appearance == "system" ? nil : NSAppearance(named: appearance == "dark" ? .darkAqua : .aqua)
                 self.window.appearance = chosen

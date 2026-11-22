@@ -1090,3 +1090,9 @@ final class TokenSlider: NSSlider {
         let accepted = super.resignFirstResponder(); needsDisplay = true; return accepted
     }
 }
+
+extension TokenScroller: TokenRestyling { func restyle(tokens: Tokens) { self.tokens = tokens } }
+extension ClosurePopUpButton: TokenRestyling { func restyle(tokens: Tokens) { self.tokens = tokens } }
+extension TokenStepperHalf: TokenRestyling { func restyle(tokens: Tokens) { self.tokens = tokens } }
+extension TokenNumberField: TokenRestyling { func restyle(tokens: Tokens) { self.tokens = tokens } }
+extension TokenSlider: TokenRestyling { func restyle(tokens: Tokens) { self.tokens = tokens } }

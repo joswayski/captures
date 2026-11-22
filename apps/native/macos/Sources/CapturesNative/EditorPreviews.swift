@@ -566,7 +566,7 @@ final class EditorTrimPreviewView: NSView {
     var imageRect: () -> NSRect = { .zero }
     var canvasSize = NSSize.zero
     var reducedMotion: () -> Bool = { NativeMotion.reduceMotion }
-    private let tokens: Tokens
+    private var tokens: Tokens { didSet { needsDisplay = true } }
     private var trimStarted: CFTimeInterval?
     private var trimTimer: Timer?
     /// Non-nil while the preview shows.
@@ -692,7 +692,7 @@ final class EditorTrimPreviewView: NSView {
 /// crosshair with a swatch and hex pill below. Never takes pointer events.
 final class EditorWandLoupeView: NSView {
     override var isFlipped: Bool { true }
-    private let tokens: Tokens
+    private var tokens: Tokens { didSet { needsDisplay = true } }
     private(set) var loupe: NativeWandLoupe?
     static var diameter: CGFloat { NativeEditorPreviewPaint.wandLoupe("size", 84) }
     /// Room around the circle for the drop shadow and the pill below.
@@ -848,7 +848,7 @@ final class EditorWandLoupeView: NSView {
 /// opacity.
 final class EditorDrawToolPreviewView: NSView {
     override var isFlipped: Bool { true }
-    private let tokens: Tokens
+    private var tokens: Tokens { didSet { needsDisplay = true } }
     private(set) var sample: NativeDrawToolPreview?
     private(set) var sampleStroke = NSColor.black
     private(set) var sampleFill: NSColor?
@@ -952,7 +952,7 @@ final class EditorDrawToolPreviewView: NSView {
 /// the same superview and never takes pointer events.
 final class EditorCtaHalo: NSView {
     override var isFlipped: Bool { true }
-    private let tokens: Tokens
+    private var tokens: Tokens { didSet { needsDisplay = true } }
     private var haloStarted: CFTimeInterval?
     private var haloTimer: Timer?
     var reducedMotion: () -> Bool = { NativeMotion.reduceMotion }
@@ -1038,3 +1038,9 @@ final class EditorCtaHalo: NSView {
         path.stroke()
     }
 }
+
+
+extension EditorTrimPreviewView: TokenRestyling { func restyle(tokens: Tokens) { self.tokens = tokens } }
+extension EditorWandLoupeView: TokenRestyling { func restyle(tokens: Tokens) { self.tokens = tokens } }
+extension EditorDrawToolPreviewView: TokenRestyling { func restyle(tokens: Tokens) { self.tokens = tokens } }
+extension EditorCtaHalo: TokenRestyling { func restyle(tokens: Tokens) { self.tokens = tokens } }

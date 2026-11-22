@@ -21,7 +21,7 @@ final class EditorAnnotationControls: NSView {
     private static let gap: CGFloat = 12
     private static let label: CGFloat = 22
     private static let checkHeight: CGFloat = 24
-    private let tokens: Tokens
+    private var tokens: Tokens { didSet { needsDisplay = true } }
     private var original: NativeAnnotationStyle?
     private var draft: NativeAnnotationStyle?
     private var ready = false
@@ -208,5 +208,12 @@ final class EditorAnnotationControls: NSView {
         draft = edited
         refresh()
         emit(field: nil)
+    }
+}
+
+extension EditorAnnotationControls: TokenRestyling {
+    func restyle(tokens: Tokens) {
+        self.tokens = tokens
+        for legend in [strokeLegend, fillLegend] { legend.textColor = tokens.color("text-muted") }
     }
 }

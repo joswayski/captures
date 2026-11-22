@@ -3857,6 +3857,13 @@ final class LiveCaptureController: NSObject {
     }
     var editorClosed: () -> Void = {}
 
+    /// Shipping re-themes every window on `settings-changed`: open editors
+    /// take the new tokens in place, keeping their sessions and edits.
+    func restyleEditors(_ tokens: Tokens) {
+        screenshotEditor?.restyle(tokens)
+        recordingEditor?.restyle(tokens)
+    }
+
     func prepareEditorForTermination() -> Bool {
         guard !editorTerminationPending, canPrepareEditorsForTermination() else { return false }
         guard screenshotEditor?.prepareForTermination() ?? true else { return false }

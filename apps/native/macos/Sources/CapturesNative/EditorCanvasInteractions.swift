@@ -294,7 +294,7 @@ final class EditorCurveControls: NSView {
     override var isFlipped: Bool { true }
     var apply: ([String: Any], UInt64?) -> Void = { _, _ in }
     var resized: (CGFloat) -> Void = { _ in }
-    private let tokens: Tokens
+    private var tokens: Tokens { didSet { needsDisplay = true } }
     private let heading = NSTextField(labelWithString: NativeEditorCanvas.curveLabel)
     /// Shipping `RangeSlider` (#841 primitive) with Left/Straight/Right marks.
     let bendSlider = TokenSlider(value: 0, minValue: -100, maxValue: 100, target: nil, action: nil)
@@ -403,5 +403,15 @@ final class EditorCurveControls: NSView {
         stagedBend = percent
         apply(["kind": "bend", "bend": percent / 100],
               bendSlider.isPointerTracking ? bendSlider.pointerGesture : nil)
+    }
+}
+
+extension EditorCurveControls: TokenRestyling {
+    func restyle(tokens: Tokens) {
+        self.tokens = tokens
+        heading.textColor = tokens.color("text")
+        bendValue.textColor = tokens.color("text-muted")
+        marks.forEach { $0.textColor = tokens.color("text-subtle") }
+        help.textColor = tokens.color("text-muted")
     }
 }

@@ -219,6 +219,37 @@ final class ScreenshotEditorTests: XCTestCase {
         }
     }
 
+    func testOpenEditorTakesANewThemeInPlace() throws {
+        _ = NSApplication.shared
+        // Shipping re-themes every open window on `settings-changed`: an editor
+        // restyled in place draws exactly like one opened in the new theme.
+        func open(_ theme: String) throws -> ScreenshotEditorController {
+            let base = layer(id: "base", name: "Base", x: 0, y: 0, visible: true, locked: false, opacity: 100)
+            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true, layers: [
+                base, shapeLayer(id: "shape", x: 30, y: 30), textLayer(id: "text", text: "Hello")]))
+            let controller = ScreenshotEditorController(tokens: Tokens.variants[theme]!, worker: worker,
+                                                        writeClipboard: { _ in true })
+            controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
+            controller.window.setContentSize(NSSize(width: 1200, height: 760))
+            controller.windowDidResize(Notification(name: NSWindow.didResizeNotification))
+            try table("Screenshot layers", in: controller.root)
+                .selectRowIndexes(IndexSet(integer: 1), byExtendingSelection: false)
+            controller.toggleLayerMenu(id: "shape")
+            RunLoop.current.run(until: Date().addingTimeInterval(0.6))
+            return controller
+        }
+        let restyled = try open("light-mustard")
+        defer { restyled.window.orderOut(nil) }
+        restyled.restyle(Tokens.variants["dark-cobalt"]!)
+        let fresh = try open("dark-cobalt")
+        defer { fresh.window.orderOut(nil) }
+        // The filename carries the second each editor opened.
+        let filename = try XCTUnwrap(descendants(in: fresh.root).first { $0 is EditorFilenameBox })
+        XCTAssertEqual(try differingPixels(restyled.root, fresh.root,
+                                           excluding: filename.convert(filename.bounds, to: fresh.root)), 0)
+        try render(restyled.root, name: "screenshot-editor-restyled-dark-cobalt")
+    }
+
     func testToolRailSelectionMenuFocusBusyGatesAndMinimumLayout() throws {
         _ = NSApplication.shared
         for appearance in ["light", "dark"] {
@@ -10910,4 +10941,34 @@ extension ScreenshotEditorTests {
         XCTAssertFalse(halo.pulsing, "clearing the crop stops the pulse")
         XCTAssertFalse(halo.isAnimating)
     }
+}
+
+/// Pixels whose color differs between two renders of same-size views,
+/// outside `excluding` (in `a`'s coordinates).
+func differingPixels(_ a: NSView, _ b: NSView, excluding: NSRect = .null) throws -> Int {
+    func bitmap(_ view: NSView) throws -> NSBitmapImageRep {
+        view.window?.display(); view.layoutSubtreeIfNeeded()
+        let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        return bitmap
+    }
+    let left = try bitmap(a), right = try bitmap(b)
+    XCTAssertEqual(left.pixelsWide, right.pixelsWide); XCTAssertEqual(left.pixelsHigh, right.pixelsHigh)
+    let scale = CGFloat(left.pixelsWide) / a.bounds.width
+    let hole = excluding.isNull ? NSRect.null : NSRect(x: excluding.minX * scale,
+        y: (a.isFlipped ? excluding.minY : a.bounds.height - excluding.maxY) * scale,
+        width: excluding.width * scale, height: excluding.height * scale)
+    XCTAssertEqual(left.bitsPerSample, 8); XCTAssertEqual(left.bitmapFormat, right.bitmapFormat)
+    let leftBytes = try XCTUnwrap(left.bitmapData), rightBytes = try XCTUnwrap(right.bitmapData)
+    var count = 0
+    for y in 0..<min(left.pixelsHigh, right.pixelsHigh) {
+        for x in 0..<min(left.pixelsWide, right.pixelsWide) where !hole.contains(NSPoint(x: x, y: y)) {
+            let l = y * left.bytesPerRow + x * left.samplesPerPixel
+            let r = y * right.bytesPerRow + x * right.samplesPerPixel
+            if (0..<3).contains(where: { abs(Int(leftBytes[l + $0]) - Int(rightBytes[r + $0])) > 20 }) {
+                count += 1
+            }
+        }
+    }
+    return count
 }

@@ -135,3 +135,18 @@ extension NSColor {
                       Int((color.greenComponent * 255).rounded()), Int((color.blueComponent * 255).rounded()))
     }
 }
+
+/// A token-drawn view that takes a new theme in place, so an open window
+/// re-themes without being rebuilt (shipping `useAppearanceSync` re-applies
+/// appearance and accent in every window on `settings-changed`).
+protocol TokenRestyling: AnyObject {
+    func restyle(tokens: Tokens)
+}
+
+extension NSView {
+    /// Hand `tokens` to every token-drawn view in this subtree.
+    func restyleTokenSubtree(_ tokens: Tokens) {
+        (self as? TokenRestyling)?.restyle(tokens: tokens)
+        subviews.forEach { $0.restyleTokenSubtree(tokens) }
+    }
+}

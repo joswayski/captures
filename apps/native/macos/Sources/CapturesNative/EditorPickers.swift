@@ -344,3 +344,7 @@ enum TextStyleChip {
         return image
     }
 }
+
+extension ColorSwatchButton: TokenRestyling { func restyle(tokens: Tokens) { self.tokens = tokens } }
+extension CustomColorWell: TokenRestyling { func restyle(tokens: Tokens) { self.tokens = tokens } }
+extension ColorSwatchRow: TokenRestyling { func restyle(tokens: Tokens) { self.tokens = tokens } }

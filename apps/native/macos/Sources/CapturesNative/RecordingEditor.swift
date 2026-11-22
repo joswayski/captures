@@ -146,7 +146,9 @@ final class RecordingProgressBar: NSView {
 }
 
 final class RecordingTrimTimeline: NSView {
-    fileprivate let tokens: Tokens
+    fileprivate var tokens: Tokens {
+        didSet { needsDisplay = true; startHandle.needsDisplay = true; endHandle.needsDisplay = true }
+    }
     fileprivate(set) var durationMilliseconds: UInt64 = 1
     fileprivate(set) var startMilliseconds: UInt64 = 0
     fileprivate(set) var endMilliseconds: UInt64 = 1
@@ -1408,6 +1410,45 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         updateControls()
     }
 
+    /// Views drawn from tokens when built, re-themed by `restyle`.
+    private var cards: [Surface] = []
+    private var labelInks: [(NSTextField, String)] = []
+
+    /// Shipping `useAppearanceSync`: a theme or accent change re-themes the
+    /// open editor in place, keeping the session, trim, crop and edits.
+    func restyle(_ tokens: Tokens) {
+        let previous = self.tokens
+        self.tokens = tokens
+        window.appearance = NSAppearance(named: tokens.color("text").brightnessComponent > 0.5
+            ? .darkAqua : .aqua)
+        root.restyleTokenSubtree(tokens)
+        applySurfaceColors()
+        for card in cards {
+            card.layer?.backgroundColor = tokens.color("surface-raised").cgColor
+            card.layer?.borderColor = tokens.color("border-subtle").cgColor
+        }
+        for (field, ink) in labelInks { field.textColor = tokens.color(ink) }
+        filenameField.textColor = tokens.color("text")
+        saveAsNewLabel.textColor = tokens.color("text")
+        // The status line keeps its meaning (error, progress or detail).
+        if let ink = ["danger-text", "text-muted", "text-subtle"].first(where: {
+            status.textColor == previous.color($0)
+        }) { status.textColor = tokens.color(ink) }
+        updateControls()
+    }
+
+    private func applySurfaceColors() {
+        root.layer?.backgroundColor = tokens.color("surface-canvas").cgColor
+        footer.layer?.backgroundColor = tokens.color("surface-raised").cgColor
+        footerDivider.layer?.backgroundColor = tokens.color("border-subtle").cgColor
+        droppedFramesBand.layer?.backgroundColor = tokens.color("caution-surface").cgColor
+        previewViewport.layer?.backgroundColor = tokens.color("surface-sunken").cgColor
+        previewToolbar.layer?.backgroundColor = tokens.color("surface-raised").cgColor
+        previewDivider.layer?.backgroundColor = tokens.color("border-subtle").cgColor
+        previewSizeTrack.layer?.backgroundColor = tokens.color("surface-sunken").cgColor
+        previewSizeTrack.layer?.borderColor = tokens.color("border-subtle").cgColor
+    }
+
     private func buildUI() {
         root.layer?.backgroundColor = tokens.color("surface-canvas").cgColor
         pageScroll.drawsBackground = false; pageScroll.borderType = .noBorder
@@ -1774,6 +1815,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
 
     /// A shipping `.editor-card`: raised, hairline border, large radius.
     private func card(_ view: Surface, parent: NSView) {
+        cards.append(view)
         view.wantsLayer = true
         view.layer?.backgroundColor = tokens.color("surface-raised").cgColor
         view.layer?.borderColor = tokens.color("border-subtle").cgColor
@@ -1786,6 +1828,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                        weight: NSFont.Weight = .regular, parent: NSView) {
         field.font = .capturesUI(ofSize: tokens.number(size), weight: weight)
         field.textColor = tokens.color(color)
+        labelInks.append((field, color))
         parent.addSubview(field)
     }
 
@@ -4311,3 +4354,9 @@ final class RecordingPreviewToggle: NSButton {
 extension RecordingTrimHandle: KeyViewParticipant {}
 extension RecordingCropHandle: KeyViewParticipant {}
 extension RecordingCropOverlay: KeyViewParticipant {}
+
+extension RecordingProgressBar: TokenRestyling { func restyle(tokens: Tokens) { self.tokens = tokens } }
+extension RecordingPreviewToggle: TokenRestyling { func restyle(tokens: Tokens) { self.tokens = tokens } }
+
+extension RecordingTrimTimeline: TokenRestyling { func restyle(tokens: Tokens) { self.tokens = tokens } }
+extension RecordingCropOverlay: TokenRestyling { func restyle(tokens: Tokens) { self.tokens = tokens; needsDisplay = true } }

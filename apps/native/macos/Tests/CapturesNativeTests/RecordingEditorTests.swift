@@ -156,6 +156,33 @@ final class RecordingEditorTests: XCTestCase {
         }
     }
 
+    func testOpenEditorTakesANewThemeInPlace() throws {
+        _ = NSApplication.shared
+        // Shipping re-themes every open window on `settings-changed`: the
+        // restyled editor's whole page draws like one opened in the new theme.
+        func open(_ theme: String) throws -> RecordingEditorController {
+            let worker = FakeRecordingEditorWorker(presentation: try presentation(originalSavePath: "/Exports/a.mp4"))
+            let controller = RecordingEditorController(tokens: Tokens.variants[theme]!, worker: worker)
+            controller.present(artifact: recordingArtifact(savedPath: "/Exports/a.mp4"), historyRoot: "/History",
+                               outputDirectory: "/Exports")
+            controller.window.setContentSize(NSSize(width: 960, height: 760))
+            RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+            return controller
+        }
+        func page(_ controller: RecordingEditorController) throws -> NSView {
+            try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? NSScrollView }
+                .first { $0.accessibilityLabel() == "Recording editor page" }?.documentView)
+        }
+        let restyled = try open("dark-rose")
+        defer { restyled.window.orderOut(nil) }
+        restyled.restyle(Tokens.variants["light-mint"]!)
+        let fresh = try open("light-mint")
+        defer { fresh.window.orderOut(nil) }
+        XCTAssertEqual(try differingPixels(restyled.root, fresh.root), 0)
+        XCTAssertEqual(try differingPixels(page(restyled), page(fresh)), 0)
+        try render(page(restyled), name: "recording-editor-restyled-light-mint")
+    }
+
     func testReplaceOriginalSavesWithoutConfirmationCancelFailureAndRebase() throws {
         _ = NSApplication.shared
         let path = "/Exports/original.mp4"
