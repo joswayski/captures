@@ -737,6 +737,59 @@ mod tests {
     }
 
     #[test]
+    fn editor_wide_keys_follow_tauris_recording_editor() {
+        let (mut w, profile) = fixture();
+        let none = (false, false, false);
+        let shift = (false, false, true);
+        w.set_focus(None, false);
+        w.seek_timeline(1000);
+        // One frame at 30 fps, not the trim handle's 1 ms step.
+        assert!(w.editor_key(VK_RIGHT, none, false));
+        assert_eq!(w.preview.position_ms, 1033);
+        assert!(w.editor_key(VK_RIGHT, shift, false));
+        assert_eq!(w.preview.position_ms, 2033);
+        // I/O move the trim to the playhead; Home/End seek to the edges.
+        assert!(w.editor_key(VK_I, none, false));
+        assert_eq!(w.timeline.start, 2033);
+        w.seek_timeline(4500);
+        assert!(w.editor_key(VK_O, none, false));
+        assert_eq!((w.timeline.start, w.timeline.end), (2033, 4500));
+        assert!(w.editor_key(VK_HOME, none, false));
+        assert_eq!(w.preview.position_ms, 2033);
+        assert!(w.editor_key(VK_END, none, false));
+        assert_eq!(w.preview.position_ms, 4499, "the trim end is exclusive");
+        w.seek_timeline(10);
+        assert!(w.editor_key(VK_LEFT, shift, false));
+        assert_eq!(w.preview.position_ms, 0);
+
+        // Space goes through Play: refused while a seek is pending, and a
+        // held key doesn't toggle again.
+        assert!(w.editor_key(VK_SPACE, none, false));
+        assert!(
+            !w.preview.playing,
+            "Play is disabled while a seek is pending"
+        );
+        w.timeline.pending = false;
+        assert!(w.editor_key(VK_SPACE, none, false));
+        assert!(w.preview.playing);
+        assert!(w.editor_key(VK_SPACE, none, true));
+        assert!(w.preview.playing);
+        assert!(w.editor_key(VK_SPACE, none, false));
+        assert!(!w.preview.playing);
+
+        // A focused control keeps its own keys; only Ctrl+S still applies.
+        w.set_focus(Some(Target::TrimStart), true);
+        assert!(!w.editor_key(VK_RIGHT, none, false));
+        assert!(!w.editor_key(VK_I, none, false));
+        assert!(!w.editor_key(VK_SPACE, none, false));
+        assert!(w.editor_key(VK_S, (true, false, false), false));
+        assert!(!w.editor_key(VK_S, (true, false, true), false));
+        assert!(!w.editor_key(VK_S, none, false));
+        drop(w);
+        std::fs::remove_dir_all(profile).unwrap();
+    }
+
+    #[test]
     fn timeline_keeps_source_time_and_only_accepts_the_latest_preview() {
         let (mut w, profile) = fixture();
         (w.width, w.height) = (640., 480.);

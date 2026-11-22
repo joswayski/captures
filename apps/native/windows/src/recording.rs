@@ -1602,6 +1602,62 @@ impl Recording {
         )
     }
 
+    /// Tauri's editor-wide keys (`recordingEditorKeyCommand`): Ctrl+S saves
+    /// from anywhere; with no control focused and no menu open, Space plays
+    /// or pauses, Home/End seek to the trim edges, I/O set the trim start or
+    /// end to the playhead, and ←/→ seek one frame at 30 fps (Shift: 1 s).
+    /// Save and Play go through their buttons, so a key never does what its
+    /// button refuses, and a held key doesn't repeat them.
+    fn editor_key(
+        &mut self,
+        key: VIRTUAL_KEY,
+        (ctrl, alt, shift): (bool, bool, bool),
+        repeat: bool,
+    ) -> bool {
+        if ctrl {
+            if key != VK_S || alt || shift {
+                return false;
+            }
+            if !repeat {
+                self.activate(Target::Save);
+            }
+            return true;
+        }
+        if alt || self.focus.is_some() || self.menu.is_some() {
+            return false;
+        }
+        let playhead = self.preview.position_ms;
+        let seekable = self.enabled(Target::TrimStart);
+        match key {
+            VK_SPACE => {
+                if !repeat {
+                    self.activate(Target::Play);
+                }
+            }
+            VK_HOME | VK_END | VK_LEFT | VK_RIGHT if seekable => {
+                let to = match key {
+                    VK_HOME => self.timeline.start,
+                    // The export end is exclusive, as for the trim handle.
+                    VK_END => self.timeline.end.saturating_sub(1),
+                    _ => {
+                        let step = if shift { 1_000 } else { 33 };
+                        if key == VK_LEFT {
+                            playhead.saturating_sub(step)
+                        } else {
+                            playhead + step
+                        }
+                    }
+                };
+                self.seek_timeline(to);
+            }
+            VK_I => self.set_trim(Target::TrimStart, playhead as f64),
+            VK_O => self.set_trim(Target::TrimEnd, playhead as f64),
+            VK_HOME | VK_END | VK_LEFT | VK_RIGHT => {}
+            _ => return false,
+        }
+        true
+    }
+
     fn key(&mut self, key: VIRTUAL_KEY) {
         let down = |key: VIRTUAL_KEY| unsafe { GetKeyState(i32::from(key.0)) < 0 };
         let (ctrl, shift) = (down(VK_CONTROL), down(VK_SHIFT));
@@ -1900,7 +1956,16 @@ impl Recording {
                     self.scroll_page(-delta);
                 }
             }
-            WM_KEYDOWN => self.key(VIRTUAL_KEY(wp.0 as u16)),
+            WM_KEYDOWN => {
+                let key = VIRTUAL_KEY(wp.0 as u16);
+                let down = |key: VIRTUAL_KEY| unsafe { GetKeyState(i32::from(key.0)) < 0 };
+                let modifiers = (down(VK_CONTROL), down(VK_MENU), down(VK_SHIFT));
+                // Bit 30: the key was already down (auto-repeat).
+                let repeat = lp.0 & (1 << 30) != 0;
+                if !self.editor_key(key, modifiers, repeat) {
+                    self.key(key);
+                }
+            }
             WM_CHAR if self.output_char(wp.0 as u16) => {}
             WM_CHAR if self.focus == Some(Target::Filename) && self.enabled(Target::Filename) => {
                 let unit = wp.0 as u16;

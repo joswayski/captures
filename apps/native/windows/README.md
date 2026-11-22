@@ -23,7 +23,11 @@ image (PNG and `CF_DIB`), Save image (the Captures folder in the screenshot
 format, like macOS) and Show in Folder for screenshots; Edit and Save file or Show
 in Folder for recordings.
 
-Recordings open from History's Edit or `--scene recording --artifact ID`.
+Recordings open from History's Edit or thumbnail or `--scene recording --artifact ID`.
+Tauri's editor-wide keys apply: Ctrl+S saves from anywhere; with no control
+focused and no menu open, Space plays or pauses, I and O set the trim start or
+end to the playhead, Home/End seek to the trim edges and ←/→ step one 30 fps
+frame (Shift+←/→ one second). Save and Play keep their buttons' rules.
 The first slice (`src/recording.rs`) contains the header, dropped-frame warning
 and save footer: filename editing, Change save location, Save as new file with
 the `-edited` suggestion, replacement, progress, Cancel and Show in Folder.
