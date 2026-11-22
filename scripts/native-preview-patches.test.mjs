@@ -38,14 +38,29 @@ test("patches start from the newest earlier native builds of the same feed", () 
   ]);
   // Clients consider at most 16 offers.
   assert.equal(BASES, 15);
-  const many = Array.from({ length: 20 }, (_, index) =>
-    release(`v2026.11.10.${index + 1}`, [mac(`2026.11.${1001 + index}`), "captures-native.json"]),
-  );
-  const chosen = baseReleases(many, "aarch64-apple-darwin", "2026.11.1100", false);
-  assert.equal(chosen.length, 15);
-  assert.deepEqual([chosen[0].version, chosen.at(-1).version], ["2026.11.1020", "2026.11.1006"]);
+  // The newest builds, then the last build of each earlier day.
+  const published = (builds) =>
+    builds.map((build) =>
+      release(`v2026.11.${Math.floor(build / 100)}.${build % 100}`, [
+        mac(`2026.11.${build}`),
+        "captures-native.json",
+      ]),
+    );
+  const range = (first, count, step = 1) =>
+    Array.from({ length: count }, (_, index) => first + index * step);
+  const many = published([...range(2101, 10), ...range(2001, 12), ...range(1001, 10, 100)]);
+  const versions = (releases) =>
+    baseReleases(releases, "aarch64-apple-darwin", "2026.11.2199", false).map((base) =>
+      Number(base.version.split(".")[2]),
+    );
+  assert.deepEqual(versions(many), [
+    ...range(2110, 8, -1),
+    ...[2012, 1901, 1801, 1701, 1601, 1501, 1401],
+  ]);
+  // Without enough earlier days, the next newest builds fill the rest.
+  assert.deepEqual(versions(published([...range(2101, 20), 2001])), [...range(2120, 14, -1), 2001]);
   // Other targets' artifacts in the same releases are not bases.
-  assert.deepEqual(baseReleases(many, "x86_64-pc-windows-msvc", "2026.11.1100", false), []);
+  assert.deepEqual(baseReleases(many, "x86_64-pc-windows-msvc", "2026.11.2199", false), []);
 });
 
 test("Windows bases keep only what the installer writes to the install folder", () => {

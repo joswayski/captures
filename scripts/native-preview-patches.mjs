@@ -6,7 +6,8 @@
 // package job, with the updater signing key and GH_TOKEN. It unpacks the new
 // updater artifact in DIRECTORY to the package folder users end up with
 // (`Captures.app`, the installed Windows folder, the AppImage's AppDir), does
-// the same for each of the BASES newest earlier native builds of the same feed,
+// the same for up to BASES earlier native builds of the same feed (the newest,
+// then the last of each earlier day; see baseReleases),
 // and writes `Captures-<version>-<target>.from-<base>.capturespatch` with its
 // own signature for every base: unchanged files are copied from the installed
 // package, changed ones are bsdiff or zstd deltas of the installed file, new
@@ -33,8 +34,12 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { TARGETS, patchName, updaterArtifactName } from "./native-preview-build.mjs";
 
 const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
-// Clients consider at most 16 offers (patch::MAX_OFFERS).
+// Clients consider at most 16 offers (patch::MAX_OFFERS), and a patch applies
+// only to the exact version it starts from. A busy day ships dozens of
+// releases, so the newest RECENT builds cover apps that update often and the
+// last build of each earlier day covers apps that update about once a day.
 export const BASES = 15;
+export const RECENT = 8;
 const NATIVE_MARKER = "captures-native.json";
 const PUBLIC_TAG = /^v\d{4}\.\d{2}\.\d{2}\.[1-9]\d?$/u;
 const STAGING_TAG = /^native-staging-\d+\.\d+\.\d+$/u;
@@ -47,10 +52,17 @@ function compareVersions(left, right) {
   return 0;
 }
 
+// CalVer `YYYY.MM.DDNN`: the day a build was released.
+const day = (version) => {
+  const [year, month, build] = version.split(".");
+  return `${year}.${month}.${Math.floor(Number(build) / 100)}`;
+};
+
 /**
  * Earlier native builds of one feed that installed apps may run, newest first:
  * staging prereleases, or public releases carrying the native runtime marker
- * (Tauri installs cannot apply patches).
+ * (Tauri installs cannot apply patches). Up to BASES of them: the RECENT
+ * newest, then the last build of each earlier day.
  */
 export function baseReleases(releases, target, version, staging) {
   const suffix = TARGETS[target].suffix;
@@ -60,7 +72,7 @@ export function baseReleases(releases, target, version, staging) {
   );
   const uploaded = (release, name) =>
     release.assets?.some((asset) => asset.name === name && asset.state === "uploaded");
-  return releases
+  const candidates = releases
     .filter((release) => !release.draft)
     .filter((release) =>
       staging
@@ -77,8 +89,17 @@ export function baseReleases(releases, target, version, staging) {
     )
     .filter((base) => compareVersions(base.version, version) < 0)
     .sort((left, right) => compareVersions(right.version, left.version))
-    .filter((base, index, all) => index === 0 || all[index - 1].version !== base.version)
-    .slice(0, BASES);
+    .filter((base, index, all) => index === 0 || all[index - 1].version !== base.version);
+  const chosen = new Set(candidates.slice(0, RECENT));
+  const days = new Set([...chosen].map((base) => day(base.version)));
+  for (const base of candidates)
+    if (chosen.size < BASES && !days.has(day(base.version))) {
+      chosen.add(base);
+      days.add(day(base.version));
+    }
+  // Without enough earlier days, the next newest builds fill the rest.
+  for (const base of candidates) if (chosen.size < BASES) chosen.add(base);
+  return candidates.filter((base) => chosen.has(base));
 }
 
 /** Entries 7-Zip shows in an NSIS installer that never reach the install

@@ -234,14 +234,15 @@ smaller. Clients from before per-file patches ignore the field.
 package job. It unpacks the new artifact to the package folder users have
 (`Captures.app` from the `.app.tar.gz`, the install folder from the NSIS
 installer with 7-Zip, the AppDir with `--appimage-extract`), does the same for
-the target's artifact from each of the 15 newest earlier native releases of the
-same feed (public releases with `captures-native.json`, or
-`native-staging-*`), writes each patch with `native_preview_update_helper
---make-patch` (which rebuilds the new package from the base exactly as a client
-does before keeping it) and signs it. Patches not smaller than half the full
-artifact are dropped. Failures are warnings; the release continues with full
-downloads. `manifest` lists every signed patch the release carries. Patches
-stay on their releases.
+the target's artifact from up to 15 earlier native releases of the same feed
+(public releases with `captures-native.json`, or `native-staging-*`): the 8
+newest, then the last build of each earlier day, because a patch applies only
+to the exact version it starts from and a busy day ships dozens of releases.
+It writes each patch with `native_preview_update_helper --make-patch` (which
+rebuilds the new package from the base exactly as a client does before keeping
+it) and signs it. Patches not smaller than half the full artifact are dropped.
+Failures are warnings; the release continues with full downloads. `manifest`
+lists every signed patch the release carries. Patches stay on their releases.
 
 Public and staging releases make patches. A Windows staging update from
 2026.11.2201 to .2202 downloaded the 1.4 MB patch (of 22.4 MB) and installed;
