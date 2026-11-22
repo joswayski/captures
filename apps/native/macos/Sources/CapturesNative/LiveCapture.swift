@@ -1393,12 +1393,14 @@ final class LiveCaptureController: NSObject {
             emptyState.show(title: copy.loading, body: nil); emptyState.isHidden = false
         } else if artifacts.isEmpty && recoveryPanel.isHidden {
             emptyState.show(title: copy.emptyTitle, body: copy.emptyBody); emptyState.isHidden = false
+        } else if !artifacts.isEmpty && historyRows.isEmpty {
+            // Shipping's filtered empty state: the History icon, a title and the way back.
+            emptyState.show(title: "No captures in this filter", body: "Choose All to see your other captures.")
+            emptyState.isHidden = false
         } else {
             emptyState.isHidden = true
         }
-        let filteredEmpty = historyLoaded && !artifacts.isEmpty && historyRows.isEmpty
-        filteredEmptyLabel.stringValue = filteredEmpty ? copy.filteredEmpty : ""
-        filteredEmptyLabel.isHidden = !filteredEmpty
+        filteredEmptyLabel.isHidden = true
     }
 
     private func thumbnailKey(_ artifact: CaptureArtifact) -> String {
@@ -3642,7 +3644,7 @@ final class LiveCaptureController: NSObject {
                 }
             case .failure(let error):
                 self.showError("Couldn’t save \(noun)", error)
-                self.miniPreviews?.setStatus("Save failed", for: artifact.id)
+                self.miniPreviews?.setStatus("Save failed", detail: error.localizedDescription, for: artifact.id)
                 completion?(.failure(error))
             }; self.updateActions()
         }

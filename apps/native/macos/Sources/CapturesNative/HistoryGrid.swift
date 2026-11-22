@@ -620,6 +620,7 @@ final class HistoryCardView: NSView {
                                        openable: idle && item.card?.openLabel != nil,
                                        draggable: idle && item.card?.missing != true && item.image != nil)
         thumbnail.setAccessibilityLabel(item.card?.openLabel ?? item.card?.imageLabel)
+        thumbnail.toolTip = thumbnail.draggable ? "Drag this capture into an editor or another app" : nil
         thumbnail.setAccessibilityEnabled(thumbnail.openable)
         missingLabel.stringValue = copy.missing
         missingLabel.isHidden = item.card?.missing != true

@@ -3470,12 +3470,22 @@ final class MiniPreviewActions {
 
     func prepareDrag(_ artifact: CaptureArtifact, completion: @escaping (String?) -> Void) {
         guard let historyRoot, !artifact.id.isEmpty else { completion(nil); return }
-        LiveCaptureController.queue.async { [transport] in
-            let response = try? transport.request(["operation": "prepare_preview_drag",
-                                                   "root": historyRoot, "id": artifact.id])
+        LiveCaptureController.queue.async { [weak self, transport] in
+            let result = Result { try transport.request(["operation": "prepare_preview_drag",
+                                                         "root": historyRoot, "id": artifact.id]) }
+            let response = try? result.get()
             let path = response?["id"] as? String == artifact.id
                 ? response?["path"] as? String : nil
-            DispatchQueue.main.async { completion(path) }
+            DispatchQueue.main.async {
+                // Shipping shows a failed drag preparation on the card.
+                if path == nil {
+                    let detail: String
+                    if case .failure(let error) = result { detail = error.localizedDescription }
+                    else { detail = "The capture file could not be prepared for dragging." }
+                    self?.previews?.setStatus("Drag unavailable", detail: detail, for: artifact.id)
+                }
+                completion(path)
+            }
         }
     }
 
@@ -3499,9 +3509,9 @@ final class MiniPreviewActions {
                     if copied {
                         self.previews?.recordClipboardCopy(artifactID: artifact.id, pasteboard: pasteboard)
                     }
-                case .failure:
+                case .failure(let error):
                     guard current else { return }
-                    self.previews?.setStatus("Copy failed", for: artifact.id)
+                    self.previews?.setStatus("Copy failed", detail: error.localizedDescription, for: artifact.id)
                     self.previews?.recordCopyResult(artifactID: artifact.id, succeeded: false)
                 }
             }
@@ -3561,7 +3571,8 @@ final class MiniPreviewActions {
                             || self.previews?.updateSavedPath(path, for: artifact) == true else { return }
                     self.previews?.setStatus("", for: artifact.id)
                     self.previews?.showSavedFeedback(for: artifact.id)
-                case .failure: self.previews?.setStatus("Save failed", for: artifact.id)
+                case .failure(let error):
+                    self.previews?.setStatus("Save failed", detail: error.localizedDescription, for: artifact.id)
                 }
             }
         }

@@ -212,14 +212,26 @@ final class HistoryClearTests: XCTestCase {
             }
             transport.remove(kind: "gif")
             controller.refreshHistory()
-            // The filtered-empty copy lives in the grid area.
-            try waitUntil { grid.numberOfRows == 0 && labels().contains("No captures match this filter.") }
+            // Shipping's filtered-empty state lives in the grid area.
+            func descendants(in view: NSView) -> [NSView] {
+                view.subviews + view.subviews.flatMap { descendants(in: $0) }
+            }
+            func filteredEmpty() -> Bool {
+                descendants(in: root).contains { view in
+                    (view as? NSTextField)?.stringValue == "No captures in this filter"
+                        && !view.isHiddenOrHasHiddenAncestor
+                }
+            }
+            try waitUntil { grid.numberOfRows == 0 && filteredEmpty() }
+            if let output = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"] {
+                try capture(root, to: URL(fileURLWithPath: output).appendingPathComponent("history-filtered-empty-\(appearance).png"))
+            }
             XCTAssertEqual(grid.selectedRow, -1)
             XCTAssertFalse(try button("GIF 0").isEnabled)
             XCTAssertEqual(try button("GIF 0").state, .on)
             try button("All 4").performClick(nil)
             try waitUntil { grid.numberOfRows == 4 }
-            XCTAssertFalse(labels().contains("No captures match this filter."))
+            XCTAssertFalse(filteredEmpty())
             XCTAssertEqual(transport.clearCount, 0, "filtering never deletes files")
         }
     }
