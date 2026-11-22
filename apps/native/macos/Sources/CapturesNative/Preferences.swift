@@ -1842,8 +1842,12 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     private func fillMicrophoneMenu(_ menu: ClosurePopUpButton) {
         let saved = (settings["recording"] as? [String: Any])?["microphone_device_id"] as? String
         var options: [(id: String?, title: String)] = [(nil, PreferencesPolicy.text("microphone_off"))]
-        options += (microphones ?? []).map { (id: Optional($0.id), title: $0.name) }
-        if let saved, !options.contains(where: { $0.id == saved }) { options.append((id: saved, title: saved)) }
+        let devices = (microphones ?? []).map { (id: Optional($0.id), title: $0.name) }
+        // Shipping keeps a saved microphone selected while the list loads or it is unplugged.
+        if let saved, !devices.contains(where: { $0.id == saved }) {
+            options.append((id: saved, title: "Selected microphone"))
+        }
+        options += devices
         menu.menu?.removeAllItems()
         // Add items individually: devices can share a display name.
         for option in options { menu.menu?.addItem(NSMenuItem(title: option.title, action: nil, keyEquivalent: "")) }
