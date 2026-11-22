@@ -209,7 +209,7 @@ final class PreviewView: NSView {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             card.opacity = 0
-            survivor.transform = CATransform3DMakeTranslation(0, 184, 0)
+            survivor.transform = CATransform3DMakeTranslation(0, 176, 0)
             CATransaction.commit()
             Metrics.emit("reduced-motion", milliseconds: 0)
             return
@@ -275,9 +275,9 @@ final class PreviewView: NSView {
             return NSNumber(value: linear <= 0.2 ? 1
                 : 1 - cubicBezierProgress(0.22, 0.1, 0.25, 1, (linear - 0.2) / 0.8))
         }, duration: duration)
-        survivor.transform = CATransform3DMakeTranslation(0, 184, 0)
+        survivor.transform = CATransform3DMakeTranslation(0, 176, 0)
         animate(survivor, key: "transform.translation.y", values: times.map { time in
-            NSNumber(value: 184 * cubicBezierProgress(0.4, 0, 0.2, 1, min(1, max(0, (time - 1.8) / 0.58))))
+            NSNumber(value: 176 * cubicBezierProgress(0.4, 0, 0.2, 1, min(1, max(0, (time - 1.8) / 0.58))))
         }, duration: duration)
         CATransaction.commit()
         Metrics.emit("layers-and-animation-submission", milliseconds: (CACurrentMediaTime() - construction) * 1000)

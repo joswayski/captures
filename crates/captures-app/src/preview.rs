@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 pub const THUMBNAIL_WIDTH: f64 = 340.0;
 pub const THUMBNAIL_CARD_HEIGHT: f64 = 160.0;
-pub const THUMBNAIL_GAP: f64 = 24.0;
+pub const THUMBNAIL_GAP: f64 = 16.0;
 pub const THUMBNAIL_PADDING: f64 = 28.0;
 pub const THUMBNAIL_CONTROL_GUTTER: f64 = 52.0;
 
@@ -1068,7 +1068,7 @@ mod tests {
             stack_overflow(f64::NAN, 1_000.0, 600.0),
             StackOverflow::default()
         );
-        assert_eq!(stack_scroll_target(400.0, 1_000.0, 600.0, -1), 216.0);
+        assert_eq!(stack_scroll_target(400.0, 1_000.0, 600.0, -1), 224.0);
         assert_eq!(stack_scroll_target(100.0, 1_000.0, 600.0, -1), 0.0);
         assert_eq!(stack_scroll_target(300.0, 1_000.0, 600.0, 1), 400.0);
         assert_eq!(stack_scroll_target(0.0, 500.0, 600.0, 1), 0.0);
@@ -1144,10 +1144,10 @@ mod tests {
         for id in ["A", "B", "C"] {
             stack.insert(id.into());
         }
-        assert_eq!(stack.content_height(), 608.);
+        assert_eq!(stack.content_height(), 592.);
         assert_eq!(stack.card_layout(0, false).unwrap().y, 28.);
-        assert_eq!(stack.card_layout(2, false).unwrap().y, 396.);
-        assert_eq!(stack.card_layout(0, true).unwrap().y, 420.);
+        assert_eq!(stack.card_layout(2, false).unwrap().y, 380.);
+        assert_eq!(stack.card_layout(0, true).unwrap().y, 404.);
         assert_eq!(stack.card_layout(2, true).unwrap().y, 52.);
         assert!(stack.card_layout(0, true).unwrap().interactive);
         assert!(stack.card_layout(3, true).is_none());
@@ -1695,7 +1695,7 @@ mod tests {
                 false,
                 None,
             ),
-            (-1_920.0, 588.0, 424.0)
+            (-1_920.0, 596.0, 416.0)
         );
         assert_eq!(
             stack_xyh(

@@ -1460,7 +1460,7 @@ final class MiniPreviewTests: XCTestCase {
             RunLoop.current.run(until: Date().addingTimeInterval(0.05))
             // A valid rendered zero while the model already targets one slot.
             XCTAssertEqual((layer.presentation() ?? layer).position.y, original, accuracy: 0.1)
-            XCTAssertEqual(abs(layer.position.y - original), 184, accuracy: 0.1)
+            XCTAssertEqual(abs(layer.position.y - original), 176, accuracy: 0.1)
             XCTAssertNotNil(view.playExit(for: "middle", kind: .dust))
             XCTAssertEqual(middle.frame.minY, middleOrigin, accuracy: 0.1,
                            "the exiting card must freeze its presentation too")
@@ -1781,8 +1781,8 @@ final class MiniPreviewTests: XCTestCase {
             XCTAssertEqual(clear.frame.minY, top ? 16 : view.bounds.height - 44)
             let older = try XCTUnwrap(view.card(for: "older"))
             let latest = try XCTUnwrap(view.card(for: "latest"))
-            XCTAssertEqual(latest.frame.minY, top ? 52 : 212)
-            XCTAssertEqual(older.frame.minY, top ? 236 : 28)
+            XCTAssertEqual(latest.frame.minY, top ? 52 : 204)
+            XCTAssertEqual(older.frame.minY, top ? 228 : 28)
             let panel = try XCTUnwrap(view.window as? MiniPreviewPanel)
             try write(render(panel), name: top ? "mini-preview-moved-expanded-top-right.png"
                                               : "mini-preview-moved-expanded-bottom-left.png")
@@ -2023,7 +2023,7 @@ final class MiniPreviewTests: XCTestCase {
         let older = try XCTUnwrap(view.subviewsRecursive.compactMap { $0 as? MiniPreviewOverflowCue }
             .first { $0.above })
         older.performClick(nil)
-        try waitUntil { abs(view.scrollOffsetY - (start - 184)) < 0.5 }
+        try waitUntil { abs(view.scrollOffsetY - (start - 176)) < 0.5 }
         try waitUntil { view.visibleOverflowCueLabels == ["Show older captures", "Show newer captures"] }
         try write(render(bottom), name: "mini-preview-stack-overflow-cues.png")
         view.scrollStack(bySlots: -20)
@@ -2041,7 +2041,7 @@ final class MiniPreviewTests: XCTestCase {
             preview.scrollStack(bySlots: 1)
             preview.playToolbar("preview_toolbar_clear", holdEnd: true)
             XCTAssertEqual(preview.visibleOverflowCueLabels, [])
-            try waitUntil { abs(preview.scrollOffsetY - 184) < 0.5 }
+            try waitUntil { abs(preview.scrollOffsetY - 176) < 0.5 }
             preview.updateOverflowCues()
             XCTAssertEqual(preview.visibleOverflowCueLabels, [])
         }

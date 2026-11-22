@@ -1364,13 +1364,16 @@ mod tests {
             let direction = if top_anchor { -1. } else { 1. };
             let screen_y = |exits: &StackExits, now: f64| {
                 let later = exits.display_count() - 1; // "top" is the oldest.
-                -(later as f64) * 184. * direction
+                -(later as f64) * THUMBNAIL_CARD_SLOT * direction
                     + exits.shift_px("top", now, false, &settle, top_anchor)
             };
             assert!(exits.begin(&live, "bottom", ExitKind::Dust, 0., 0., true, &settle));
             live.pop();
             exits.sync(&live);
-            assert_eq!(screen_y(&exits, 1_400.), -368. * direction);
+            assert_eq!(
+                screen_y(&exits, 1_400.),
+                -2. * THUMBNAIL_CARD_SLOT * direction
+            );
 
             // Re-entrant Delete must neither discard the first held slot nor
             // replace its unfinished trajectory with the smaller live layout.
@@ -1378,10 +1381,22 @@ mod tests {
             live.pop();
             exits.sync(&live);
             assert_eq!(exits.display_ids(), ["top", "middle", "bottom"]);
-            assert_eq!(screen_y(&exits, 1_400.), -368. * direction);
-            assert_eq!(screen_y(&exits, 1_799.), -368. * direction);
-            assert_eq!(screen_y(&exits, 2_090.), -368. * direction);
-            assert_eq!(screen_y(&exits, 2_380.), -368. * direction);
+            assert_eq!(
+                screen_y(&exits, 1_400.),
+                -2. * THUMBNAIL_CARD_SLOT * direction
+            );
+            assert_eq!(
+                screen_y(&exits, 1_799.),
+                -2. * THUMBNAIL_CARD_SLOT * direction
+            );
+            assert_eq!(
+                screen_y(&exits, 2_090.),
+                -2. * THUMBNAIL_CARD_SLOT * direction
+            );
+            assert_eq!(
+                screen_y(&exits, 2_380.),
+                -2. * THUMBNAIL_CARD_SLOT * direction
+            );
 
             let before = screen_y(&exits, 2_900.);
             assert!(!exits.prune(2_900., false, &settle));
@@ -1392,8 +1407,11 @@ mod tests {
                 0.,
                 "the survivor remains inside the held viewport, not at a negative shift"
             );
-            assert_eq!(screen_y(&exits, 3_199.), -368. * direction);
-            assert!((screen_y(&exits, 3_490.) + 184. * direction).abs() < 1e-6);
+            assert_eq!(
+                screen_y(&exits, 3_199.),
+                -2. * THUMBNAIL_CARD_SLOT * direction
+            );
+            assert!((screen_y(&exits, 3_490.) + THUMBNAIL_CARD_SLOT * direction).abs() < 1e-6);
             assert!(!exits.prune(3_489., false, &settle));
             assert!(exits.prune(3_490., false, &settle));
             assert_eq!(exits.display_ids(), ["top", "middle"]);
@@ -1417,7 +1435,7 @@ mod tests {
                 let mut live = ids(&["top", "middle", "bottom"]);
                 let direction = if top_anchor { -1. } else { 1. };
                 let screen_y = |exits: &StackExits, now: f64| {
-                    -((exits.display_count() - 1) as f64) * 184. * direction
+                    -((exits.display_count() - 1) as f64) * THUMBNAIL_CARD_SLOT * direction
                         + exits.shift_px("top", now, false, &settle, top_anchor)
                 };
                 assert!(exits.begin(&live, "bottom", ExitKind::Dust, 0., 0., true, &settle));
@@ -1425,7 +1443,13 @@ mod tests {
                 exits.prune(second_at, false, &settle);
                 let before = screen_y(&exits, second_at);
                 let first_progress = ((second_at - 1_800.) / 580.).clamp(0., 1.);
-                assert!((before - (-368. + 184. * first_progress) * direction).abs() < 1e-6);
+                assert!(
+                    (before
+                        - (-2. * THUMBNAIL_CARD_SLOT + THUMBNAIL_CARD_SLOT * first_progress)
+                            * direction)
+                        .abs()
+                        < 1e-6
+                );
                 let middle_shift = exits.shift_slots("middle", second_at, false, &settle);
                 assert!(exits.begin(
                     &live,
@@ -1492,7 +1516,7 @@ mod tests {
                         .unwrap();
                     let later = exits.display_count() - index - 1;
                     let direction = if top_anchor { -1. } else { 1. };
-                    -(later as f64) * 184. * direction
+                    -(later as f64) * THUMBNAIL_CARD_SLOT * direction
                         + exits.shift_px(id, now, false, &settle, top_anchor)
                 };
                 let before = ["a", "b", "d"].map(|id| screen_y(&exits, id, 2_900.));

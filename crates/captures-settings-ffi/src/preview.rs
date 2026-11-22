@@ -1420,7 +1420,7 @@ mod tests {
         );
         assert_eq!(
             captures_preview_scroll_target_v1(400., 1_000., 600., -1),
-            216.
+            224.
         );
         // SAFETY: The export returns static NUL-terminated UTF-8.
         unsafe {
@@ -1612,7 +1612,7 @@ mod tests {
             ));
             assert!(!captures_preview_stack_restore_v1(stack, null(), 0));
             assert_eq!(captures_preview_stack_count_v1(stack), 2);
-            assert_eq!(captures_preview_stack_height_v1(stack), 424.);
+            assert_eq!(captures_preview_stack_height_v1(stack), 416.);
             let mut id = CapturesPreviewID {
                 data: null(),
                 length: 0,
@@ -1628,7 +1628,7 @@ mod tests {
             assert_eq!(
                 card,
                 CapturesPreviewCardLayout {
-                    y: 236.,
+                    y: 228.,
                     depth: 1,
                     interactive: true
                 }
@@ -1743,7 +1743,7 @@ mod tests {
         // SAFETY: Both pointers refer to valid local values.
         assert!(unsafe { captures_preview_geometry_v1(monitor(), 1, false, &origin, 2, &mut out) });
         assert_eq!((out.x, out.y, out.anchor), (-700., 240., 0));
-        for (collapsed, height, anchor) in [(false, 424., 1), (true, 264., 0)] {
+        for (collapsed, height, anchor) in [(false, 416., 1), (true, 264., 0)] {
             // SAFETY: Output is valid, origin is null. Two cards distinguish
             // count forwarding; a collapsed frame has its own bottom anchor.
             assert!(unsafe {

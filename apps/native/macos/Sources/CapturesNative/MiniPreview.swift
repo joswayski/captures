@@ -2618,7 +2618,7 @@ final class MiniPreviewPanel: NSPanel {
         super.init(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel],
                    backing: .buffered, defer: false)
         isReleasedWhenClosed = false; isOpaque = false; backgroundColor = .clear
-        hasShadow = true; level = .floating
+        hasShadow = false; level = .floating
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         hidesOnDeactivate = false; isMovable = false; contentView = previewView
         becomesKeyOnlyIfNeeded = true

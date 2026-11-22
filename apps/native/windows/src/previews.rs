@@ -1752,12 +1752,12 @@ mod tests {
     #[test]
     fn bottom_left_stack_matches_the_shipping_layout() {
         use captures_settings::MiniPreviewPlacement as P;
-        // Measured from `?view=thumbnail&mock=1&stage=1`: cards at y 28 and
-        // 212 in a 424 DIP window, Clear all 8 DIPs under the last card.
+        // Shipping layout with the tighter 16 DIP stack gap: cards at y 28 and
+        // 204 in a 416 DIP window, Clear all 8 DIPs under the last card.
         let mut s = stack(P::BottomLeft, &[true, false]);
         assert_eq!(s.card_rect(0).map(|r| (r.left, r.top)), Some((28., 28.)));
-        assert_eq!(s.card_rect(1).map(|r| (r.left, r.top)), Some((28., 212.)));
-        assert_eq!((s.clear_rect().left, s.clear_rect().top), (28., 380.));
+        assert_eq!(s.card_rect(1).map(|r| (r.left, r.top)), Some((28., 204.)));
+        assert_eq!((s.clear_rect().left, s.clear_rect().top), (28., 372.));
         // Controls exist only on the hovered card: a saved card offers
         // Close and Delete, an unsaved one Delete (dismiss) only.
         assert_eq!(s.hit(50., 50.), Some(Hit::Card(0)));
@@ -1767,14 +1767,14 @@ mod tests {
         assert_eq!(s.hit(290., 50.), Some(Hit::Edit(0)));
         // Saved: Copy above Show in Folder, centred like shipping (100,63).
         assert_eq!(s.hit(110., 75.), Some(Hit::Copy(0)));
-        assert!(s.pointer(Some((50., 234.))));
-        assert_eq!(s.hit(50., 234.), Some(Hit::Delete(1)));
-        assert_eq!(s.hit(84., 234.), Some(Hit::Card(1)));
-        assert_eq!(s.hit(40., 390.), Some(Hit::ClearAll));
+        assert!(s.pointer(Some((50., 226.))));
+        assert_eq!(s.hit(50., 226.), Some(Hit::Delete(1)));
+        assert_eq!(s.hit(84., 226.), Some(Hit::Card(1)));
+        assert_eq!(s.hit(40., 382.), Some(Hit::ClearAll));
         // Clicks reach the window underneath everywhere else: above the top
         // card, in the side margin, between cards and beside the toolbar.
-        assert!(s.solid(50., 50.) && s.solid(40., 390.));
-        for (x, y) in [(50., 10.), (10., 100.), (50., 208.), (300., 390.)] {
+        assert!(s.solid(50., 50.) && s.solid(40., 382.));
+        for (x, y) in [(50., 10.), (10., 100.), (50., 196.), (300., 382.)] {
             assert!(!s.solid(x, y), "({x}, {y}) should pass through");
         }
     }
@@ -1833,8 +1833,8 @@ mod tests {
         // Two cards: Minimize sits 2 DIPs beside Clear all, inside it on
         // the right (`row-reverse`).
         let mut s = stack(P::BottomLeft, &[true, false]);
-        assert_eq!((s.minimize_rect().left, s.minimize_rect().top), (58., 380.));
-        assert_eq!(s.hit(70., 390.), Some(Hit::Minimize));
+        assert_eq!((s.minimize_rect().left, s.minimize_rect().top), (58., 372.));
+        assert_eq!(s.hit(70., 382.), Some(Hit::Minimize));
         let right = stack(P::BottomRight, &[true, false]);
         assert_eq!(right.minimize_rect().right, right.clear_rect().left - 2.);
         // Collapsed: only the front card answers, as Expand, and the tree is
