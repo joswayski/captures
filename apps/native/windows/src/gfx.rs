@@ -377,6 +377,8 @@ pub struct Text {
     pub layout: IDWriteTextLayout,
     pub width: f32,
     pub height: f32,
+    /// The laid-out string, for selection and copy.
+    pub units: Vec<u16>,
 }
 
 #[derive(Clone)]
@@ -554,6 +556,7 @@ impl Gfx {
                 layout,
                 width: metrics.width,
                 height: metrics.height,
+                units: wide,
             })
         }
     }
@@ -617,6 +620,7 @@ impl Gfx {
                 layout,
                 width: metrics.width,
                 height: metrics.height,
+                units: wide,
             })
         }
     }
@@ -935,6 +939,69 @@ pub fn glow(
         d += band;
     }
     Ok(())
+}
+
+/// The text position nearest `(x, y)` in `text`'s layout coordinates, and
+/// whether the point is over the text itself.
+pub fn hit_text(text: &Text, x: f32, y: f32) -> (usize, bool) {
+    let (mut trailing, mut inside) = (BOOL(0), BOOL(0));
+    let mut metrics = DWRITE_HIT_TEST_METRICS::default();
+    if unsafe {
+        text.layout
+            .HitTestPoint(x, y, &mut trailing, &mut inside, &mut metrics)
+    }
+    .is_err()
+    {
+        return (0, false);
+    }
+    let position = metrics.textPosition as usize
+        + if trailing.as_bool() {
+            metrics.length as usize
+        } else {
+            0
+        };
+    (position.min(text.units.len()), inside.as_bool())
+}
+
+/// Line boxes covering the range `a..b` of `text`, in its layout coordinates.
+pub fn range_boxes(text: &Text, a: usize, b: usize) -> Vec<D2D_RECT_F> {
+    let mut buffer = vec![DWRITE_HIT_TEST_METRICS::default(); 8];
+    let mut count = 0;
+    let (start, length) = (a as u32, b.saturating_sub(a) as u32);
+    let hit = |buffer: &mut [DWRITE_HIT_TEST_METRICS], count: &mut u32| unsafe {
+        text.layout
+            .HitTestTextRange(start, length, 0., 0., Some(buffer), count)
+    };
+    if hit(&mut buffer, &mut count).is_err() {
+        if count as usize <= buffer.len() {
+            return Vec::new();
+        }
+        buffer.resize(count as usize, DWRITE_HIT_TEST_METRICS::default());
+        if hit(&mut buffer, &mut count).is_err() {
+            return Vec::new();
+        }
+    }
+    buffer[..(count as usize).min(buffer.len())]
+        .iter()
+        .map(|m| rect(m.left, m.top, m.left + m.width, m.top + m.height))
+        .collect()
+}
+
+/// `::selection` over `r`: the accent fill, with `text` (drawn at `(x, y)`)
+/// in accent ink inside it.
+pub fn selected(
+    dc: &ID2D1DeviceContext,
+    text: &Text,
+    r: D2D_RECT_F,
+    (x, y): (f32, f32),
+    fill: D2D1_COLOR_F,
+    ink: D2D1_COLOR_F,
+) -> Result<()> {
+    self::fill(dc, r, fill)?;
+    unsafe { dc.PushAxisAlignedClip(&r, D2D1_ANTIALIAS_MODE_ALIASED) };
+    let drawn = self::text(dc, text, x, y, ink);
+    unsafe { dc.PopAxisAlignedClip() };
+    drawn
 }
 
 pub fn text(

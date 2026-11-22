@@ -468,7 +468,6 @@ pub use view::*;
 #[cfg(windows)]
 mod view {
     use windows::Win32::Foundation::*;
-    use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
     use windows::Win32::Graphics::Direct2D::{D2D1_ANTIALIAS_MODE_ALIASED, ID2D1DeviceContext};
     use windows::Win32::Graphics::DirectWrite::*;
     use windows::Win32::System::DataExchange::*;
@@ -695,7 +694,7 @@ mod view {
                 // `::selection`: accent fill, accent ink over it.
                 for (left, width) in self.range_rects(a, b) {
                     let r = rect(x + left, y, x + left + width, y + self.line_height);
-                    selected(
+                    gfx::selected(
                         dc,
                         text,
                         r,
@@ -732,21 +731,6 @@ mod view {
             Ok(scrolled
                 || (before != selection && (before.0 != before.1 || selection.0 != selection.1)))
         }
-    }
-
-    fn selected(
-        dc: &ID2D1DeviceContext,
-        text: &Text,
-        r: windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F,
-        (x, y): (f32, f32),
-        fill: D2D1_COLOR_F,
-        ink: D2D1_COLOR_F,
-    ) -> Result<()> {
-        gfx::fill(dc, r, fill)?;
-        unsafe { dc.PushAxisAlignedClip(&r, D2D1_ANTIALIAS_MODE_ALIASED) };
-        let drawn = gfx::text(dc, text, x, y, ink);
-        unsafe { dc.PopAxisAlignedClip() };
-        drawn
     }
 
     /// Put `text` on the clipboard as `CF_UNICODETEXT`.

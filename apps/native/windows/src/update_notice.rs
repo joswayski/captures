@@ -1012,6 +1012,7 @@ fn para(
             layout: text.layout,
             width: metrics.width,
             height: metrics.height,
+            units: text.units,
         })
     }
 }

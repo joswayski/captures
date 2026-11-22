@@ -767,6 +767,29 @@ pub struct Find {
     count_dirty: bool,
 }
 
+/// Page copy a node draws, in its local DIPs: what Preferences lets you
+/// select and copy (titles, descriptions, notes), not control labels.
+struct Spot<'a> {
+    text: &'a Text,
+    x: f32,
+    y: f32,
+    color: &'static str,
+}
+
+impl<'a> Spot<'a> {
+    fn new(text: Option<&'a Text>, x: f32, y: f32, color: &'static str) -> Option<Self> {
+        text.map(|text| Self { text, x, y, color })
+    }
+}
+
+/// Selected page copy: the `index`th [`Spot`] of `node`, and the selection
+/// in its text.
+struct TextSelection {
+    node: usize,
+    index: usize,
+    editor: Editor,
+}
+
 struct CopyText {
     item: Item,
     title: Text,
@@ -898,6 +921,8 @@ pub struct Scene {
     sub_boxes: Vec<Rect>,
     /// The window has keyboard focus; the caret shows only then.
     window_focused: bool,
+    /// Selected page copy, like shipping's selectable page text.
+    text_selection: Option<TextSelection>,
     /// The custom colors' hex inputs, Accent then Recording signal.
     hex_fields: [TextField; 2],
     custom: CustomNodes,
@@ -1044,6 +1069,7 @@ impl Scene {
             find_targets: Vec::new(),
             sub_boxes: Vec::new(),
             window_focused: true,
+            text_selection: None,
             hex_fields: [
                 TextField::new(Style::Hex, ""),
                 TextField::new(Style::Hex, ""),
@@ -4419,12 +4445,7 @@ impl Scene {
             Kind::HeaderBg => {
                 gfx::fill(dc, all, c("surface-canvas"))?;
                 gfx::fill(dc, rect(0., h - 1., w, h), c("border-subtle"))?;
-                let x = t.n("s-8");
-                if let (Some(title), Some(sub)) = (&self.texts.title, &self.texts.subtitle) {
-                    gfx::text(dc, title, x, self.title_y, c("text"))?;
-                    let y = self.title_y + title.height + 2.;
-                    gfx::text(dc, sub, x, y, c("text-subtle"))?;
-                }
+                self.draw_spots(dc, node)?;
             }
             Kind::History { lit } => {
                 let radius = t.n("r-md");
@@ -4445,29 +4466,15 @@ impl Scene {
                 gfx::fill_round(dc, all, radius, c("surface-raised"))?;
                 gfx::border(dc, all, radius, 1., c("border-subtle"))?;
                 let inset = t.n("s-6") + 1.;
-                let title = &self.texts.card_titles[card];
-                gfx::text(dc, title, inset, inset, c("text"))?;
-                let y = inset + title.height + t.n("s-2");
-                gfx::text(
-                    dc,
-                    &self.texts.card_descriptions[card],
-                    inset,
-                    y,
-                    c("text-subtle"),
-                )?;
+                self.draw_spots(dc, node)?;
                 for &y in &self.separators[card] {
                     gfx::fill(dc, rect(inset, y, w - inset, y + 1.), c("border-subtle"))?;
                 }
             }
-            Kind::Copy(item) => {
-                if let Some(copy) = self.texts.copies.iter().find(|copy| copy.item == item) {
-                    gfx::text(dc, &copy.title, 0., 0., c("text"))?;
-                    if let Some(detail) = &copy.detail {
-                        let y = copy.title.height + copy.gap;
-                        gfx::text(dc, detail, 0., y, c("text-subtle"))?;
-                    }
-                }
-            }
+            Kind::Copy(_)
+            | Kind::UpdateStatus
+            | Kind::ShortcutLabel(_)
+            | Kind::ShortcutError(_) => self.draw_spots(dc, node)?,
             Kind::TrackOff(row) => {
                 let state = &self.rows[row];
                 let hovered = state.enabled && self.hover == Some(Target::Row(row));
@@ -4589,21 +4596,6 @@ impl Scene {
                     gfx::text(dc, label, x, y, c("text"))?;
                 }
             }
-            Kind::UpdateStatus => {
-                let current = self.update.as_ref().is_some_and(|card| card.current);
-                let color = c(if current {
-                    "positive-text"
-                } else {
-                    "text-subtle"
-                });
-                if let Some(status) = &self.texts.update_status {
-                    gfx::text(dc, status, 0., 0., color)?;
-                    if let Some(detail) = &self.texts.update_detail {
-                        let y = status.height + t.n("s-1");
-                        gfx::text(dc, detail, 0., y, c("text-subtle"))?;
-                    }
-                }
-            }
             Kind::UpdateProgress => {
                 // `.update-settings-progress`: a sunken pill with the accent
                 // fill; an unknown total shows a third of it.
@@ -4619,20 +4611,10 @@ impl Scene {
             }
             Kind::UpdateNotes => {
                 // Each paragraph is a card child: a rule, then its text.
-                for (top, text, color) in &self.texts.update_notes {
+                for (top, ..) in &self.texts.update_notes {
                     gfx::fill(dc, rect(0., *top, w, top + 1.), c("border-subtle"))?;
-                    gfx::text(dc, text, 0., top + 1. + t.n("s-5"), c(color))?;
                 }
-            }
-            Kind::ShortcutLabel(index) => {
-                if let Some(label) = self.texts.shortcut_labels.get(index) {
-                    gfx::text(dc, label, 0., 0., c("text"))?;
-                }
-            }
-            Kind::ShortcutError(index) => {
-                if let Some(Some(error)) = self.texts.shortcut_errors.get(index) {
-                    gfx::text(dc, error, 0., 0., c("danger-text"))?;
-                }
+                self.draw_spots(dc, node)?;
             }
             Kind::Recorder(index) => {
                 let radius = t.n("r-md");
@@ -4777,10 +4759,7 @@ impl Scene {
                     let x = left + (SAVE_MARK - mark.width) / 2.;
                     gfx::text(dc, mark, x, top + (SAVE_MARK - mark.height) / 2., c(ink))?;
                 }
-                if let Some(text) = &self.save_text {
-                    let x = left + SAVE_MARK + t.n("s-3");
-                    gfx::text(dc, text, x, (h - text.height) / 2., c(ink))?;
-                }
+                self.draw_spots(dc, node)?;
             }
             Kind::FindField => {
                 let radius = t.n("r-md");
@@ -4819,25 +4798,12 @@ impl Scene {
                 let line = rect(-30., -30., w + 30., h + 30.);
                 gfx::gradient_over(dc, (all, radius), line, 115., &mixed, 1.)?;
                 gfx::border(dc, all, radius, 1., c("border"))?;
-                let pad = 1. + t.n("s-5");
-                if let (Some(title), Some(description)) = (&layout.title, &layout.description) {
-                    gfx::text(dc, title, pad, pad, c("text"))?;
-                    let y = pad + title.height + 3.;
-                    gfx::text(dc, description, pad, y, c("text-subtle"))?;
-                }
-                let inset = 1. + t.n("s-4");
-                for (i, f) in layout.fields.iter().enumerate() {
+                for f in &layout.fields {
                     let r = rect(f.x, f.y, f.x + f.w, f.y + f.h);
                     gfx::fill_round(dc, r, t.n("r-md"), c("surface-raised"))?;
                     gfx::border(dc, r, t.n("r-md"), 1., c("border-subtle"))?;
-                    if let Some(label) = layout.labels.get(i) {
-                        gfx::text(dc, label, f.x + inset, f.y + inset, c("text"))?;
-                    }
-                    if let Some(note) = layout.notes.get(i) {
-                        let y = f.y + layout.note_y;
-                        gfx::text(dc, note, f.x + inset, y, c("text-subtle"))?;
-                    }
                 }
+                self.draw_spots(dc, node)?;
             }
             Kind::Well(i) => {
                 // `padding: 3px` inside the 1 px border; a 3 px-round swatch.
@@ -4891,6 +4857,251 @@ impl Scene {
             }
         }
         Ok(())
+    }
+
+    /// The page copy `node` draws (see [`Spot`]), in drawing order.
+    fn spots(&self, node: usize) -> Vec<Spot<'_>> {
+        let t = &self.t;
+        let spot = Spot::new;
+        let height = |text: Option<&Text>| text.map_or(0., |text| text.height);
+        let spots = match self.nodes[node].kind {
+            Kind::HeaderBg => {
+                let (title, sub) = (self.texts.title.as_ref(), self.texts.subtitle.as_ref());
+                let (x, y) = (t.n("s-8"), self.title_y);
+                vec![
+                    spot(title, x, y, "text"),
+                    spot(sub, x, y + height(title) + 2., "text-subtle"),
+                ]
+            }
+            Kind::Card(card) => {
+                let inset = t.n("s-6") + 1.;
+                let title = self.texts.card_titles.get(card);
+                let y = inset + height(title) + t.n("s-2");
+                let description = self.texts.card_descriptions.get(card);
+                vec![
+                    spot(title, inset, inset, "text"),
+                    spot(description, inset, y, "text-subtle"),
+                ]
+            }
+            Kind::Copy(item) => match self.texts.copies.iter().find(|copy| copy.item == item) {
+                Some(copy) => vec![
+                    spot(Some(&copy.title), 0., 0., "text"),
+                    spot(
+                        copy.detail.as_ref(),
+                        0.,
+                        copy.title.height + copy.gap,
+                        "text-subtle",
+                    ),
+                ],
+                None => Vec::new(),
+            },
+            Kind::UpdateStatus => {
+                let status = self.texts.update_status.as_ref();
+                let current = self.update.as_ref().is_some_and(|card| card.current);
+                let color = if current {
+                    "positive-text"
+                } else {
+                    "text-subtle"
+                };
+                let y = height(status) + t.n("s-1");
+                vec![
+                    spot(status, 0., 0., color),
+                    spot(self.texts.update_detail.as_ref(), 0., y, "text-subtle"),
+                ]
+            }
+            Kind::UpdateNotes => self
+                .texts
+                .update_notes
+                .iter()
+                .map(|(top, text, color)| spot(Some(text), 0., top + 1. + t.n("s-5"), color))
+                .collect(),
+            Kind::ShortcutLabel(index) => {
+                vec![spot(self.texts.shortcut_labels.get(index), 0., 0., "text")]
+            }
+            Kind::ShortcutError(index) => {
+                let error = self
+                    .texts
+                    .shortcut_errors
+                    .get(index)
+                    .and_then(Option::as_ref);
+                vec![spot(error, 0., 0., "danger-text")]
+            }
+            Kind::CustomEditor => {
+                let layout = &self.custom_layout;
+                let pad = 1. + t.n("s-5");
+                let inset = 1. + t.n("s-4");
+                let title = layout.title.as_ref();
+                let mut spots = vec![
+                    spot(title, pad, pad, "text"),
+                    spot(
+                        layout.description.as_ref(),
+                        pad,
+                        pad + height(title) + 3.,
+                        "text-subtle",
+                    ),
+                ];
+                for (i, f) in layout.fields.iter().enumerate() {
+                    let (x, y) = (f.x + inset, f.y + layout.note_y);
+                    spots.push(spot(layout.labels.get(i), x, f.y + inset, "text"));
+                    spots.push(spot(layout.notes.get(i), x, y, "text-subtle"));
+                }
+                spots
+            }
+            Kind::SaveStatus if self.save_status != SaveStatus::Idle => {
+                let text = self.save_text.as_ref();
+                let x = 1. + t.n("s-4") + SAVE_MARK + t.n("s-3");
+                let y = (self.nodes[node].rect.h - height(text)) / 2.;
+                vec![spot(text, x, y, "danger-text")]
+            }
+            _ => Vec::new(),
+        };
+        spots.into_iter().flatten().collect()
+    }
+
+    /// Draw `node`'s page copy with its part of the text selection.
+    fn draw_spots(&self, dc: &ID2D1DeviceContext, node: usize) -> Result<()> {
+        let c = |name: &str| self.t.color(name);
+        for (index, spot) in self.spots(node).into_iter().enumerate() {
+            let (text, x, y) = (spot.text, spot.x, spot.y);
+            gfx::text(dc, text, x, y, c(spot.color))?;
+            let Some(selection) = self
+                .text_selection
+                .as_ref()
+                .filter(|s| (s.node, s.index) == (node, index) && s.editor.units() == text.units)
+            else {
+                continue;
+            };
+            let (a, b) = selection.editor.selection();
+            if a == b {
+                continue;
+            }
+            for r in gfx::range_boxes(text, a, b) {
+                let r = rect(x + r.left, y + r.top, x + r.right, y + r.bottom);
+                let (fill, ink) = (c("theme-accent"), c("theme-accent-ink"));
+                gfx::selected(dc, text, r, (x, y), fill, ink)?;
+            }
+        }
+        Ok(())
+    }
+
+    // ---- text selection ----
+
+    /// Where `node`'s `index`th page copy sits in client DIPs, while it is
+    /// shown and `(x, y)` is not clipped away from it.
+    fn spot_origin(&self, node: usize, index: usize, x: f32, y: f32) -> Option<(&Text, f32, f32)> {
+        let mut parent = Some(node);
+        while let Some(p) = parent {
+            let n = &self.nodes[p];
+            if !n.visible || n.opacity <= 0. {
+                return None;
+            }
+            if p == self.viewport && !self.viewport_rect().contains(x, y) {
+                return None;
+            }
+            parent = n.parent;
+        }
+        let spot = self.spots(node).into_iter().nth(index)?;
+        let r = self.absolute(node);
+        Some((spot.text, r.x + spot.x, r.y + spot.y))
+    }
+
+    /// The page copy under `(x, y)`: its node, index and text position.
+    pub fn text_at(&self, x: f32, y: f32) -> Option<(usize, usize, usize)> {
+        if self.open.is_some() && self.list_contains(x, y) {
+            return None;
+        }
+        (0..self.nodes.len()).find_map(|node| {
+            (0..self.spots(node).len()).find_map(|index| {
+                let (text, left, top) = self.spot_origin(node, index, x, y)?;
+                let (lx, ly) = (x - left, y - top);
+                if ly < 0. || ly > text.height {
+                    return None;
+                }
+                let (position, inside) = gfx::hit_text(text, lx, ly);
+                inside.then_some((node, index, position))
+            })
+        })
+    }
+
+    /// The text position nearest `(x, y)` in `node`'s `index`th page copy,
+    /// for a drag that started in it.
+    pub fn text_hit(&self, node: usize, index: usize, x: f32, y: f32) -> usize {
+        let Some(spot) = self.spots(node).into_iter().nth(index) else {
+            return 0;
+        };
+        let r = self.absolute(node);
+        gfx::hit_text(spot.text, x - r.x - spot.x, y - r.y - spot.y).0
+    }
+
+    /// Select `anchor..caret` of `node`'s `index`th page copy, dropping any
+    /// other selection.
+    pub fn select_text(&mut self, node: usize, index: usize, anchor: usize, caret: usize) {
+        self.edit_text_selection(node, index, |editor| editor.select(anchor, caret));
+    }
+
+    /// Double-click: the word at `position`.
+    pub fn select_text_word(&mut self, node: usize, index: usize, position: usize) {
+        self.edit_text_selection(node, index, |editor| {
+            let (start, end) = editor.word_at(position);
+            editor.select(start, end)
+        });
+    }
+
+    /// Triple-click: the whole paragraph.
+    pub fn select_text_all(&mut self, node: usize, index: usize) {
+        self.edit_text_selection(node, index, Editor::select_all);
+    }
+
+    fn edit_text_selection(
+        &mut self,
+        node: usize,
+        index: usize,
+        edit: impl FnOnce(&mut Editor) -> Change,
+    ) {
+        let Some(units) = self
+            .spots(node)
+            .get(index)
+            .map(|spot| spot.text.units.clone())
+        else {
+            return self.clear_text_selection();
+        };
+        let same = self
+            .text_selection
+            .as_ref()
+            .is_some_and(|s| (s.node, s.index) == (node, index) && s.editor.units() == units);
+        if !same {
+            self.clear_text_selection();
+            let mut editor = Editor::default();
+            editor.multiline = true;
+            editor.set_text(&String::from_utf16_lossy(&units));
+            editor.move_to(0, false);
+            self.text_selection = Some(TextSelection {
+                node,
+                index,
+                editor,
+            });
+        }
+        if let Some(selection) = &mut self.text_selection
+            && edit(&mut selection.editor).any()
+        {
+            self.nodes[node].dirty = true;
+        }
+    }
+
+    pub fn clear_text_selection(&mut self) {
+        if let Some(selection) = self.text_selection.take() {
+            self.nodes[selection.node].dirty = true;
+        }
+    }
+
+    /// The selected page copy, for Ctrl+C.
+    pub fn selected_text(&self) -> Option<String> {
+        let selection = self.text_selection.as_ref()?;
+        let spots = self.spots(selection.node);
+        let spot = spots.get(selection.index)?;
+        (spot.text.units == selection.editor.units())
+            .then(|| selection.editor.selected_text())
+            .filter(|text| !text.is_empty())
     }
 
     /// One option row at `(x, y)` across `width`: label (medium when

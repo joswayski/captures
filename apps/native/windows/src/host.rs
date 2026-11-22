@@ -107,8 +107,21 @@ pub struct Host {
     dragging: bool,
     /// A `WM_CHAR` high surrogate waiting for its low half.
     high_surrogate: Option<u16>,
-    /// The last double-click in a text field, for triple-click select all.
+    /// The last double-click in a text field or page copy, for triple-click
+    /// select all.
     double_click: Option<(std::time::Instant, f32, f32)>,
+    /// The left button went down on page copy.
+    text_press: Option<TextPress>,
+}
+
+/// A press on page copy (`Scene::text_at`): moving past a few DIPs turns it
+/// into a selection drag instead of a click.
+struct TextPress {
+    node: usize,
+    index: usize,
+    anchor: usize,
+    from: (f32, f32),
+    dragging: bool,
 }
 
 impl Host {
@@ -219,6 +232,7 @@ impl Host {
                 dragging: false,
                 high_surrogate: None,
                 double_click: None,
+                text_press: None,
             })
         }
     }
@@ -795,6 +809,7 @@ impl Host {
             WM_KILLFOCUS => {
                 self.scene.blur();
                 self.dragging = false;
+                self.text_press = None;
                 self.need = true;
                 return None;
             }
@@ -838,6 +853,7 @@ impl Host {
                     self.scene
                         .field_edit(&self.g, |editor| editor.move_to(position, true));
                 }
+                self.text_drag(x, y);
                 self.set_pointer(Some((x, y)));
             }
             WM_MOUSELEAVE => {
@@ -863,6 +879,7 @@ impl Host {
                 if self.scene.field_of(hit).is_some() {
                     self.field_click(msg == WM_LBUTTONDBLCLK, x, y, shift);
                 }
+                self.text_click(hit, msg == WM_LBUTTONDBLCLK, x, y);
                 self.need = true;
             }
             WM_LBUTTONUP => {
@@ -870,6 +887,7 @@ impl Host {
                     let _ = ReleaseCapture();
                 }
                 self.dragging = false;
+                self.text_press = None;
                 let hit = self.scene.hit(x, y);
                 if let Some(pressed) = self.scene.pressed.take()
                     && hit == Some(pressed)
@@ -911,7 +929,15 @@ impl Host {
                     Target::Find(part) => self.scene.find_enabled(part),
                     _ => true,
                 });
-                let cursor = if self.scene.field_of(hit).is_some() {
+                let over_text = || {
+                    hit.is_none()
+                        && self
+                            .pointer
+                            .and_then(|(x, y)| self.scene.text_at(x, y))
+                            .is_some()
+                };
+                let selecting = self.text_press.as_ref().is_some_and(|press| press.dragging);
+                let cursor = if self.scene.field_of(hit).is_some() || selecting || over_text() {
                     IDC_IBEAM
                 } else if hand {
                     IDC_HAND
@@ -988,6 +1014,17 @@ impl Host {
                 }
                 let ctrl = unsafe { GetKeyState(VK_CONTROL.0 as i32) } < 0;
                 let alt = unsafe { GetKeyState(VK_MENU.0 as i32) } < 0;
+                // Ctrl+C (Ctrl+Insert) copies selected page copy.
+                if ctrl
+                    && !alt
+                    && !shift
+                    && matches!(vk, VK_C | VK_INSERT)
+                    && !self.scene.text_focused()
+                    && let Some(text) = self.scene.selected_text()
+                {
+                    textfield::copy(self.hwnd, &text);
+                    return Some(LRESULT(0));
+                }
                 if (self.scene.text_focused() && self.text_key(vk, ctrl, shift, alt))
                     || self.find_key(vk, wp, lp)
                 {
@@ -1061,21 +1098,75 @@ impl Host {
             textfield::ime_complete(self.hwnd);
         }
         let position = self.scene.field_hit(x);
-        let near = |(at, px, py): (std::time::Instant, f32, f32)| {
-            let time = std::time::Duration::from_millis(u64::from(unsafe { GetDoubleClickTime() }));
-            at.elapsed() < time && (px - x).abs() < 4. && (py - y).abs() < 4.
-        };
         if double {
             let (start, end) = self.scene.field(id).editor.word_at(position);
             self.scene
                 .field_edit(&self.g, |editor| editor.select(start, end));
             self.double_click = Some((std::time::Instant::now(), x, y));
-        } else if self.double_click.take().is_some_and(near) {
+        } else if self.third_click(x, y) {
             self.scene.field_edit(&self.g, |editor| editor.select_all());
         } else {
             self.scene
                 .field_edit(&self.g, |editor| editor.move_to(position, shift));
             self.dragging = true;
+        }
+    }
+
+    /// This press follows the last double-click closely enough to be a
+    /// third click.
+    fn third_click(&mut self, x: f32, y: f32) -> bool {
+        let time = std::time::Duration::from_millis(u64::from(unsafe { GetDoubleClickTime() }));
+        self.double_click.take().is_some_and(|(at, px, py)| {
+            at.elapsed() < time && (px - x).abs() < 4. && (py - y).abs() < 4.
+        })
+    }
+
+    /// A press on page copy, as in shipping's selectable page text: a
+    /// double-click selects a word, a third click the paragraph, and a plain
+    /// press drops the selection and may start a drag. Switch rows still
+    /// toggle on a click; only a drag selects their copy. A press anywhere
+    /// else drops the selection.
+    fn text_click(&mut self, hit: Option<Target>, double: bool, x: f32, y: f32) {
+        self.text_press = None;
+        let at = matches!(hit, None | Some(Target::Row(_)))
+            .then(|| self.scene.text_at(x, y))
+            .flatten();
+        let Some((node, index, position)) = at else {
+            self.scene.clear_text_selection();
+            return;
+        };
+        if double {
+            self.scene.select_text_word(node, index, position);
+            self.double_click = Some((std::time::Instant::now(), x, y));
+        } else if self.third_click(x, y) {
+            self.scene.select_text_all(node, index);
+        } else {
+            self.scene.clear_text_selection();
+            self.text_press = Some(TextPress {
+                node,
+                index,
+                anchor: position,
+                from: (x, y),
+                dragging: false,
+            });
+        }
+    }
+
+    /// The pointer moved with a press on page copy: past 3 DIPs it selects
+    /// from the press to the pointer, and the press no longer clicks.
+    fn text_drag(&mut self, x: f32, y: f32) {
+        let Some(press) = &mut self.text_press else {
+            return;
+        };
+        if !press.dragging && ((x - press.from.0).abs() > 3. || (y - press.from.1).abs() > 3.) {
+            press.dragging = true;
+            self.scene.pressed = None;
+        }
+        if press.dragging {
+            let (node, index, anchor) = (press.node, press.index, press.anchor);
+            let caret = self.scene.text_hit(node, index, x, y);
+            self.scene.select_text(node, index, anchor, caret);
+            self.need = true;
         }
     }
 
