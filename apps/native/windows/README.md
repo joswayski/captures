@@ -352,7 +352,16 @@ toolbar-in|toolbar-out`). Hovered or focused, Minimize grows inward into
 shipping's 92 DIP "Show less" pill (width over 240 ms, the icon trading
 places with the label over 180 ms, both `--ease-out`), keeps it while the
 stack collapses and shows its icon while the toolbar enters or leaves
-otherwise (`--select show-less`). A new card holds shipping's capture highlight
+otherwise (`--select show-less`). While a screenshot editor shows a card's
+capture, the card's Edit control grows into shipping's "In editor" pill (an
+accent outline and accent type, filled with accent and reading "Show in
+editor" on hover or focus, which brings that editor forward) and the card
+wears the 2 px accent ring; when the editor closes the pill shrinks back, the
+ring eases out over 0.55 s and the plain Edit stays visible for 3 s
+(`preview_chrome::EditorPresence`; the stack checks `editor::ids` every
+250 ms, and right away after its own Edit). Automation names the pill "Show in
+editor" (`--select in-editor|show-in-editor`; unit- and render-checked, and
+checked live through UI Automation). A new card holds shipping's capture highlight
 (a 1 px accent ring with an 18 px accent glow) for 1 s, then fades it over
 3.5 s, skipped under reduced motion (`--select highlight`). Hovering eases
 the card's look like shipping's transitions: the image's blur and dim over

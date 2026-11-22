@@ -37,7 +37,10 @@
 //! A new card holds shipping's accent capture highlight for 1 s, then fades
 //! it (`thumbnail-capture-highlight`).
 //!
-//! Not ported yet: the editor-presence pill.
+//! While a screenshot editor shows a card's capture, its Edit control is
+//! shipping's "In editor" pill with the accent card ring
+//! (`preview_chrome::EditorPresence`, polled from `editor::ids`); once the
+//! editor closes the pill shrinks back and the Edit icon lingers for 3 s.
 
 use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;
@@ -46,7 +49,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 
 use captures_app::motion::{Animation, Motion, Pose, Transition, Tween};
 use captures_app::preview::{self, CollapsedCardPose, PreviewStack};
-use captures_app::preview_chrome;
+use captures_app::preview_chrome::{self, EditorPhase, EditorPresence};
 use captures_app::preview_motion::{
     self, DragSway, DustParticle, ExitKind, StackExits, StackFan, StackToolbar, ToolbarCause,
 };
@@ -81,6 +84,10 @@ const WM_MOUSELEAVE: u32 = 0x02A3;
 const MOTION_TIMER: usize = 7;
 /// Polls the pointer while empty areas let clicks through.
 const POLL_TIMER: usize = 8;
+/// Checks which captures open editors show, for the "In editor" pills, and
+/// ends their leave and linger (editors do not notify the stack).
+const PRESENCE_TIMER: usize = 9;
+const PRESENCE_INTERVAL_MS: u32 = 250;
 /// Posted when a worker finished a Save or Delete.
 const WM_APP_PREVIEW_DONE: u32 = WM_APP + 31;
 /// A card's file is ready: run the drag loop outside the borrow.
@@ -149,6 +156,9 @@ pub struct Card {
     /// A file drag of this card is running (`.thumbnail-file-dragging`): its
     /// image hides so the drag image never recaptures it.
     dragging: bool,
+    /// Whether an editor shows this capture, and how its Edit control and
+    /// ring follow (`.thumbnail-editor-active`, `-leaving`, `-lingering`).
+    presence: EditorPresence,
 }
 
 impl Card {
@@ -222,11 +232,19 @@ pub struct Stack {
     /// Clear all and Minimize: shown or not, and the motion they enter or
     /// leave with.
     toolbar: StackToolbar,
-    /// The tokens [`Self::toolbar`]'s motions resolve against; `None`
-    /// (offscreen fixtures) shows and hides it at once.
-    pub toolbar_tokens: Option<Tokens>,
+    /// The tokens the toolbar's motions, Minimize's morph and the editor
+    /// control's eases resolve against; `None` (offscreen fixtures) lands
+    /// them at once.
+    pub motion_tokens: Option<Tokens>,
     /// Minimize growing into "Show less" while hovered or focused.
     minimize: Morph,
+    /// The card whose Edit just opened its editor: its pill reads "In
+    /// editor" until the pointer and focus leave it
+    /// (`data-editor-just-opened`).
+    just_opened: Option<String>,
+    /// The "In editor" pill's width, as wide as its wider label
+    /// (`preview_chrome::editor_pill_width`).
+    pub pill_width: f32,
 }
 
 /// A card's hover look easing toward `on` since `at`, from where each
@@ -270,6 +288,11 @@ struct Morph {
 }
 
 const MORPH_MS: [f64; 2] = [240., 180.];
+
+/// The Edit control growing into or out of the "In editor" pill:
+/// `max-width 0.28s var(--editor-control-ease)`.
+const EDITOR_GROW_MS: f64 = 280.;
+const EDITOR_EASE: [f64; 4] = [0.2, 0.8, 0.2, 1.];
 
 impl Morph {
     fn values(&self, now: f64, ease: captures_app::motion::CubicBezier) -> [f32; 2] {
@@ -528,8 +551,81 @@ impl Stack {
             ],
             focus: None,
             toolbar: StackToolbar::default(),
-            toolbar_tokens: None,
+            motion_tokens: None,
             minimize: Morph::default(),
+            just_opened: None,
+            pill_width: preview_chrome::EDITOR_PILL_MAX_WIDTH as f32,
+        }
+    }
+
+    /// Size the "In editor" pill to its labels in this host's type.
+    pub fn measure_pill(&mut self, g: &Gfx, t: &Tokens) {
+        let width = |label| {
+            g.text_sized(t, label, t.n("text-2xs"), "weight-semibold", None)
+                .map_or(0., |text| f64::from(text.width))
+        };
+        self.pill_width = preview_chrome::editor_pill_width(
+            width(preview_chrome::EDITOR_PRESENT_LABEL),
+            width(preview_chrome::EDITOR_SHOW_LABEL),
+        ) as f32;
+    }
+
+    /// Report the captures open editors show; true when a card's editor
+    /// control changed phase (shipping `editorPresence`).
+    pub fn sync_presence(&mut self, open: &[String], now: f64) -> bool {
+        let reduced = self.reduced;
+        let mut changed = false;
+        for card in &mut self.cards {
+            changed |= card
+                .presence
+                .set_active(open.contains(&card.entry.id), now, reduced);
+        }
+        if let Some(id) = &self.just_opened {
+            let on = |hit: Option<Hit>| matches!(hit, Some(Hit::Edit(i)) if self.cards.get(i).is_some_and(|c| &c.entry.id == id));
+            if !on(self.hot) && !on(self.focus) {
+                self.just_opened = None;
+            }
+        }
+        changed
+    }
+
+    /// How far a card's Edit control has grown into the "In editor" pill (0
+    /// the compact icon; `max-width 0.28s`), and its card's accent ring,
+    /// which eases out over 0.55 s `--ease-standard` once the editor closes.
+    fn editor_look(&self, index: usize) -> (f32, f32) {
+        let presence = self.cards[index].presence;
+        let elapsed = presence.phase_elapsed_ms(now_ms());
+        let eased = |ms: f64, curve: Option<[f64; 4]>| -> f32 {
+            match curve
+                .and_then(|[x1, y1, x2, y2]| captures_app::motion::CubicBezier::new(x1, y1, x2, y2))
+            {
+                Some(curve) if !self.instant() => curve.ease((elapsed / ms).clamp(0., 1.)) as f32,
+                _ => 1.,
+            }
+        };
+        let standard = self
+            .motion_tokens
+            .as_ref()
+            .and_then(|t| captures_app::motion::MotionTokens::easing(t, "ease-standard"));
+        match presence.phase() {
+            EditorPhase::Present => (eased(EDITOR_GROW_MS, Some(EDITOR_EASE)), 1.),
+            EditorPhase::Leaving => (
+                1. - eased(EDITOR_GROW_MS, Some(EDITOR_EASE)),
+                1. - eased(preview_chrome::EDITOR_PRESENCE_LEAVE_MS, standard),
+            ),
+            EditorPhase::Idle | EditorPhase::Lingering => (0., 0.),
+        }
+    }
+
+    /// The Edit control in the card's far corner, growing inward into the
+    /// "In editor" pill.
+    fn edit_rect(&self, index: usize, card: Rect) -> Rect {
+        let w = CONTROL + (self.pill_width - CONTROL) * self.editor_look(index).0;
+        let y = card.top + 8.;
+        if self.right {
+            rect(card.left + 8., y, card.left + 8. + w, y + CONTROL)
+        } else {
+            rect(card.right - 8. - w, y, card.right - 8., y + CONTROL)
         }
     }
 
@@ -550,7 +646,7 @@ impl Stack {
 
     fn morph_values(&self, now: f64) -> [f32; 2] {
         let ease = self
-            .toolbar_tokens
+            .motion_tokens
             .as_ref()
             .and_then(|t| captures_app::motion::MotionTokens::easing(t, "ease-out"))
             .and_then(|[x1, y1, x2, y2]| captures_app::motion::CubicBezier::new(x1, y1, x2, y2));
@@ -566,7 +662,7 @@ impl Stack {
     fn minimize_look(&self) -> [f32; 2] {
         let now = now_ms();
         let forced = self
-            .toolbar_tokens
+            .motion_tokens
             .as_ref()
             .and_then(|t| self.toolbar.minimize_override(t, now, self.reduced));
         match forced {
@@ -585,14 +681,14 @@ impl Stack {
 
     /// How the toolbar draws now, or `None` once it is gone.
     fn toolbar_pose(&self) -> Option<Pose> {
-        match &self.toolbar_tokens {
+        match &self.motion_tokens {
             Some(tokens) => self.toolbar.pose(tokens, now_ms(), self.reduced),
             None => self.toolbar.shown().then_some(Pose::REST),
         }
     }
 
     fn toolbar_moving(&self) -> bool {
-        self.toolbar_tokens
+        self.motion_tokens
             .as_ref()
             .is_some_and(|tokens| self.toolbar.running(tokens, now_ms(), self.reduced))
     }
@@ -736,6 +832,10 @@ impl Stack {
             )
         };
         match self.hot.filter(tipped).or(self.focus.filter(tipped)) {
+            // The pill and its leave carry no tooltip.
+            Some(Hit::Edit(i)) if self.cards[i].presence.phase().tooltip().is_none() => {
+                [None, None]
+            }
             Some(hit @ (Hit::Close(i) | Hit::Delete(i) | Hit::Edit(i)))
                 if self.shows_controls(i) && !self.exiting(i) =>
             {
@@ -851,7 +951,15 @@ impl Stack {
         let easing = self.rejects.values().any(|start| now - start < REJECT_MS)
             || self.sparkling()
             || (!self.instant() && self.hover_fades.values().any(|fade| fade.running(now)));
+        let presence = !self.instant()
+            && self.cards.iter().any(|card| {
+                matches!(
+                    card.presence.phase(),
+                    EditorPhase::Present | EditorPhase::Leaving
+                ) && card.presence.phase_elapsed_ms(now) < preview_chrome::EDITOR_PRESENCE_LEAVE_MS
+            });
         pile || arriving
+            || presence
             || self.toolbar_moving()
             || (!self.instant() && self.minimize.running(now))
             || !self.exits.is_empty()
@@ -1174,6 +1282,7 @@ impl Stack {
             saved: false,
             error: None,
             dragging: false,
+            presence: EditorPresence::default(),
         });
         self.exits.sync(self.stack.ids());
         self.sync_toolbar(ToolbarCause::Other);
@@ -1312,12 +1421,7 @@ impl Stack {
         if self.cards[index].recording() {
             return controls;
         }
-        let edit = if self.right {
-            card.left + 8.
-        } else {
-            card.right - 8. - CONTROL
-        };
-        controls.push((Hit::Edit(index), at(edit)));
+        controls.push((Hit::Edit(index), self.edit_rect(index, card)));
         controls
     }
 
@@ -1382,15 +1486,18 @@ impl Stack {
                 continue;
             }
             // Controls are only targets while the card shows them.
-            if self.hovered == Some(index) {
-                for (hit, r) in self
-                    .top_controls(index, card)
-                    .into_iter()
-                    .chain(self.main_actions(index, card))
-                {
-                    if inside(&r) {
-                        return Some(hit);
-                    }
+            // An editor's pill and the lingering Edit stay without hover;
+            // a leaving one takes no pointer.
+            let phase = self.cards[index].presence.phase();
+            for (hit, r) in self
+                .top_controls(index, card)
+                .into_iter()
+                .chain(self.main_actions(index, card))
+            {
+                let edit = matches!(hit, Hit::Edit(_));
+                let shown = self.hovered == Some(index) || (edit && phase.pinned());
+                if shown && (!edit || phase.interactive()) && inside(&r) {
+                    return Some(hit);
                 }
             }
             return Some(Hit::Card(index));
@@ -1530,7 +1637,7 @@ impl Stack {
                 let name = match hit {
                     Hit::Close(_) => "Close",
                     Hit::Delete(_) => "Delete",
-                    Hit::Edit(_) => preview_chrome::EDIT_LABEL,
+                    Hit::Edit(_) => card.presence.phase().accessible_label(),
                     Hit::Copy(_) => "Copy",
                     _ if card.saved => "Saved",
                     _ if card.entry.saved_path.is_some() => "Show in Folder",
@@ -2254,6 +2361,7 @@ impl Stack {
         })?;
         faded(dc, fade.frame, || {
             gfx::ring(dc, r, radius, 0., 1., white(0.08))?;
+            self.paint_editor_ring(dc, t, index, (r, radius))?;
             self.paint_highlight(dc, t, index, (r, radius))
         })?;
         faded(dc, fade.chrome, || {
@@ -2395,12 +2503,144 @@ impl Stack {
                 },
             )?;
         }
+        // An editor's pill and the lingering Edit show without hover.
+        if card.presence.phase().pinned() && !card.recording() {
+            self.paint_edit(dc, g, t, index, self.edit_rect(index, r))?;
+        }
         if controls <= 0. {
             return Ok(());
         }
         faded(dc, controls, || {
             self.paint_controls(dc, g, t, index, r, controls)
         })
+    }
+
+    /// `.thumbnail-editor-control` pinned by an editor: the compact Edit
+    /// icon, or as it grows the `.is-present` pill, an accent-outlined
+    /// `--r-pill` chip reading "In editor" in accent type, filled with
+    /// accent and reading "Show in editor" while hovered or focused (not
+    /// right after its own click opened the editor).
+    fn paint_edit(
+        &self,
+        dc: &ID2D1DeviceContext,
+        g: &Gfx,
+        t: &Tokens,
+        index: usize,
+        b: Rect,
+    ) -> Result<()> {
+        let card = &self.cards[index];
+        let (grown, _) = self.editor_look(index);
+        let phase = card.presence.phase();
+        let pointed = phase.interactive()
+            && (self.hot == Some(Hit::Edit(index)) || self.focus == Some(Hit::Edit(index)));
+        let just_opened = self.just_opened.as_deref() == Some(card.entry.id.as_str());
+        let filled = phase.present() && pointed && !just_opened;
+        let lerp = |a: D2D1_COLOR_F, b: D2D1_COLOR_F| D2D1_COLOR_F {
+            r: a.r + (b.r - a.r) * grown,
+            g: a.g + (b.g - a.g) * grown,
+            b: a.b + (b.b - a.b) * grown,
+            a: a.a + (b.a - a.a) * grown,
+        };
+        let accent = t.color("theme-accent");
+        // `.thumbnail-editor-control:hover` lifts the compact face 1 DIP.
+        let lift = if pointed && grown <= 0. { -1. } else { 0. };
+        let b = rect(b.left, b.top + lift, b.right, b.bottom + lift);
+        let radius = t.n("r-md") + (CONTROL / 2. - t.n("r-md")) * grown;
+        gfx::shadow(dc, b, radius, t.shadow("shadow-sm"))?;
+        let glow = Shadow {
+            x: 0.,
+            y: 0.,
+            blur: 14.,
+            spread: 0.,
+            color: [accent.r, accent.g, accent.b, 0.2 * grown],
+        };
+        gfx::shadow(dc, b, radius, &[glow])?;
+        let fill = if filled {
+            accent
+        } else if pointed {
+            t.color("glass-raised")
+        } else {
+            t.color("glass-strong")
+        };
+        gfx::fill_round(dc, b, radius, fill)?;
+        if !filled {
+            let edge = lerp(t.color("glass-border"), D2D1_COLOR_F { a: 0.72, ..accent });
+            gfx::border(dc, b, radius, 1., edge)?;
+        }
+        let ink = if filled {
+            t.color("theme-accent-ink")
+        } else {
+            lerp(t.color("glass-text"), t.color("theme-accent-text"))
+        };
+        // The 16 px icon shrinks to 11 px (stroke 2.2) at the pill's
+        // 7 px padding inside its 1 px border.
+        let side = 16. - 5. * grown;
+        let x = b.left + 6. + 2. * grown;
+        let cy = (b.top + b.bottom) / 2.;
+        unsafe { dc.PushAxisAlignedClip(&b, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE) };
+        let result = gfx::icon(
+            dc,
+            &g.factory,
+            "edit",
+            &[],
+            (x, cy - side / 2., side),
+            1.8 + 0.4 * grown,
+            ink,
+        )
+        .and_then(|()| {
+            if grown <= 0. {
+                return Ok(());
+            }
+            let label = preview_chrome::editor_pill_label(pointed, just_opened);
+            let text = g.text_sized(t, label, t.n("text-2xs"), "weight-semibold", None)?;
+            faded(dc, grown, || {
+                gfx::text(
+                    dc,
+                    &text,
+                    x + side + preview_chrome::EDITOR_PILL_GAP as f32,
+                    cy - text.height / 2.,
+                    ink,
+                )
+            })
+        });
+        unsafe { dc.PopAxisAlignedClip() };
+        result
+    }
+
+    /// `.thumbnail-editor-active`: a 2 px ring of 90 % accent and a 14 px
+    /// glow of 28 % accent around a card its editor shows, eased out as the
+    /// editor closes.
+    fn paint_editor_ring(
+        &self,
+        dc: &ID2D1DeviceContext,
+        t: &Tokens,
+        index: usize,
+        (r, radius): (Rect, f32),
+    ) -> Result<()> {
+        let (_, strength) = self.editor_look(index);
+        if strength <= 0. {
+            return Ok(());
+        }
+        let accent = t.color("theme-accent");
+        let glow = Shadow {
+            x: 0.,
+            y: 0.,
+            blur: 14.,
+            spread: 0.,
+            color: [accent.r, accent.g, accent.b, 0.28 * strength],
+        };
+        outside(dc, (r, radius), || gfx::shadow(dc, r, radius, &[glow]))?;
+        gfx::ring(
+            dc,
+            r,
+            radius,
+            0.,
+            2.,
+            D2D1_COLOR_F {
+                a: 0.9 * strength,
+                ..accent
+            },
+        )
     }
 
     /// The hover controls at fade `progress`: the top row slides down 3 DIPs
@@ -2423,6 +2663,10 @@ impl Stack {
         };
         let slide = -3. * (1. - progress);
         for (hit, b) in self.top_controls(index, r) {
+            // A pinned Edit draws on its own, at full strength.
+            if matches!(hit, Hit::Edit(_)) && card.presence.phase().pinned() {
+                continue;
+            }
             let hot = self.hot == Some(hit) && !card.busy;
             let lift = slide + if hot { -1. } else { 0. };
             let b = rect(b.left, b.top + lift, b.right, b.bottom + lift);
@@ -2597,7 +2841,7 @@ pub fn fixture(g: &Gfx, image: &image::RgbaImage, select: Option<&str>) -> Stack
         // The toolbar 400 ms into entering with an expanding stack, or 90 ms
         // into dissolving (on the list, to show its blur).
         Some(select @ ("toolbar-in" | "toolbar-out")) => {
-            stack.toolbar_tokens = Some(Tokens::variant("dark", "mustard"));
+            stack.motion_tokens = Some(Tokens::variant("dark", "mustard"));
             let now = now_ms();
             if select == "toolbar-in" {
                 stack.toolbar = StackToolbar::default();
@@ -2649,6 +2893,17 @@ pub fn fixture(g: &Gfx, image: &image::RgbaImage, select: Option<&str>) -> Stack
             };
             stack.pointer(Some((at.left + 4., at.top + 4.)));
             stack.tips = stack.tip_targets().map(Tip::settled);
+        }
+        // An editor shows the saved card: its "In editor" pill and ring, or
+        // with the pointer on the pill, "Show in editor".
+        Some(select @ ("in-editor" | "show-in-editor")) => {
+            stack.measure_pill(g, &Tokens::variant("dark", "mustard"));
+            stack.cards[0].presence = EditorPresence::new(true, now_ms());
+            if select == "show-in-editor" {
+                let card = stack.card_rect(0).expect("card");
+                let pill = stack.edit_rect(0, card);
+                stack.pointer(Some((pill.left + 20., pill.top + 10.)));
+            }
         }
         // The pointer on Minimize, which reads "Show less".
         Some("show-less") => {
@@ -3328,6 +3583,7 @@ impl Previews {
             None => Gfx::new(&tokens, true)?,
         };
         let hwnd = unsafe { window()? };
+        unsafe { SetTimer(Some(hwnd), PRESENCE_TIMER, PRESENCE_INTERVAL_MS, None) };
         let (sender, results) = channel();
         Ok(Self {
             hwnd,
@@ -3337,7 +3593,8 @@ impl Previews {
                     .resolve(&tokens)
                     .zip(Transition::PreviewStackFan.resolve(&tokens));
                 stack.card_motion = CardMotion::resolve(&tokens);
-                stack.toolbar_tokens = Some(tokens.clone());
+                stack.motion_tokens = Some(tokens.clone());
+                stack.measure_pill(&g, &tokens);
                 stack.reduced = crate::appearance::reduced_motion();
                 stack
             },
@@ -3582,11 +3839,17 @@ impl Previews {
                 });
             }
             // Recordings have no Edit or Copy control.
-            Hit::Edit(_) if !recording => {
-                if let Err(error) = crate::editor::open(&self.options, &id) {
-                    self.stack.cards[index].error = Some(error.message());
+            // While present, the pill brings that editor forward.
+            Hit::Edit(_) if !recording => match crate::editor::open(&self.options, &id) {
+                Ok(()) => {
+                    if !self.stack.cards[index].presence.phase().present() {
+                        self.stack.just_opened = Some(id.clone());
+                    }
+                    self.stack.sync_presence(&crate::editor::ids(), now_ms());
+                    self.animate();
                 }
-            }
+                Err(error) => self.stack.cards[index].error = Some(error.message()),
+            },
             Hit::Copy(_) if !recording => {
                 let path = self
                     .root
@@ -3700,6 +3963,19 @@ impl Previews {
                     self.animate();
                 }
             }
+        }
+    }
+
+    /// Follow the open editors: a card's pill grows when one shows it and
+    /// shrinks, then lingers as the Edit icon, when it closes.
+    fn sync_presence(&mut self) {
+        if self.stack.cards.is_empty() {
+            return;
+        }
+        self.stack.reduced = crate::appearance::reduced_motion();
+        if self.stack.sync_presence(&crate::editor::ids(), now_ms()) {
+            let _ = self.render();
+            self.animate();
         }
     }
 
@@ -4125,6 +4401,7 @@ impl Previews {
             WM_APP_PREVIEW_DONE => self.finish(),
             WM_TIMER if _wp.0 == MOTION_TIMER => self.motion_tick(),
             WM_TIMER if _wp.0 == POLL_TIMER => self.poll(),
+            WM_TIMER if _wp.0 == PRESENCE_TIMER => self.sync_presence(),
             _ => return None,
         }
         Some(LRESULT(0))
@@ -4245,11 +4522,61 @@ mod tests {
                 saved: false,
                 error: None,
                 dragging: false,
+                presence: EditorPresence::default(),
             });
         }
         stack.sync_toolbar(ToolbarCause::Other);
         stack.height = stack.content_height();
         stack
+    }
+
+    #[test]
+    fn an_open_editor_pins_the_in_editor_pill_then_lingers_as_edit() {
+        use captures_settings::MiniPreviewPlacement as P;
+        let mut s = stack(P::BottomLeft, &[true, false]);
+        s.pill_width = 100.;
+        let card = s.card_rect(0).unwrap();
+        let compact = s.edit_rect(0, card);
+        assert_eq!(compact.right - compact.left, CONTROL);
+        // No editor: Edit is only a target on a hovered card.
+        assert_eq!(
+            s.hit(compact.left + 4., compact.top + 4.),
+            Some(Hit::Card(0))
+        );
+        let open = ["a0".to_owned()];
+        assert!(s.sync_presence(&open, 0.));
+        // The pill grows inward from the card's far corner and takes the
+        // pointer without hover, with no tooltip and the action as its name.
+        let pill = s.edit_rect(0, card);
+        assert_eq!((pill.right, pill.right - pill.left), (compact.right, 100.));
+        assert_eq!(s.hit(pill.left + 4., pill.top + 4.), Some(Hit::Edit(0)));
+        assert!(s.pointer(Some((pill.left + 4., pill.top + 4.))));
+        assert_eq!(s.tip_targets(), [None, None]);
+        let name = |s: &Stack| {
+            s.uia_items()
+                .into_iter()
+                .find(|i| Stack::uia_hit(i.key) == Some(Hit::Edit(0)))
+                .map(|i| i.name)
+        };
+        assert_eq!(name(&s).as_deref(), Some("Show in editor"));
+        // The editor closes: under reduced motion the leave is instant and
+        // the plain Edit lingers, a target without hover, for 3 s.
+        s.pointer(None);
+        s.reduced = true;
+        assert!(s.sync_presence(&[], 10.));
+        assert_eq!(s.cards[0].presence.phase(), EditorPhase::Lingering);
+        assert_eq!(s.edit_rect(0, card), compact);
+        assert_eq!(
+            s.hit(compact.left + 4., compact.top + 4.),
+            Some(Hit::Edit(0))
+        );
+        assert_eq!(name(&s).as_deref(), Some("Edit"));
+        assert!(s.sync_presence(&[], 3_010.));
+        assert_eq!(s.cards[0].presence.phase(), EditorPhase::Idle);
+        assert_eq!(
+            s.hit(compact.left + 4., compact.top + 4.),
+            Some(Hit::Card(0))
+        );
     }
 
     #[test]
@@ -4284,7 +4611,7 @@ mod tests {
         }
         // While the toolbar enters it keeps its icon.
         let mut s = stack(P::BottomLeft, &[false, false]);
-        s.toolbar_tokens = Some(Tokens::variant("light", "mustard"));
+        s.motion_tokens = Some(Tokens::variant("light", "mustard"));
         s.focus = Some(Hit::Minimize);
         s.sync_minimize(now_ms());
         s.toolbar = StackToolbar::default();
@@ -4314,7 +4641,7 @@ mod tests {
     fn the_toolbar_enters_and_leaves_without_taking_the_pointer() {
         use captures_settings::MiniPreviewPlacement as P;
         let mut s = stack(P::BottomLeft, &[true, false, false]);
-        s.toolbar_tokens = Some(Tokens::variant("light", "mustard"));
+        s.motion_tokens = Some(Tokens::variant("light", "mustard"));
         let clear = s.clear_rect();
         let (x, y) = (clear.left + 4., clear.top + 4.);
         // A stack that appears with two cards shows it at rest.
@@ -4348,7 +4675,7 @@ mod tests {
         );
         assert!(s.toolbar_pose().is_some() && !s.toolbar());
         let mut c = stack(P::BottomLeft, &[false, false]);
-        c.toolbar_tokens = Some(Tokens::variant("light", "mustard"));
+        c.motion_tokens = Some(Tokens::variant("light", "mustard"));
         c.card_motion = CardMotion::resolve(&Tokens::variant("light", "mustard"));
         c.clear_all();
         assert_eq!(
