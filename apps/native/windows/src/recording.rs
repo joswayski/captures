@@ -1715,9 +1715,12 @@ impl Recording {
             WM_SETTINGCHANGE | WM_THEMECHANGED => {
                 let settings =
                     captures_settings::load(&self.options.settings_file).unwrap_or_default();
-                self.t = appearance::tokens(self.options.appearance.as_deref(), &settings);
-                appearance::title_bar(self.hwnd, &self.t);
-                let _ = self.layout();
+                let t = appearance::tokens(self.options.appearance.as_deref(), &settings);
+                if msg == WM_THEMECHANGED || !t.same_look(&self.t) {
+                    self.t = t;
+                    appearance::title_bar(self.hwnd, &self.t);
+                    let _ = self.layout();
+                }
             }
             WM_GETMINMAXINFO => unsafe {
                 let (x, y) = crate::host::window_size(self.hwnd, 640., 480.);

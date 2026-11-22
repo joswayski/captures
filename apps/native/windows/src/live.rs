@@ -22,11 +22,11 @@ use captures_history::HistoryEntry;
 use windows::Win32::Foundation::{HWND, LPARAM, RECT, WPARAM};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, HWND_MESSAGE, MB_ICONERROR, MB_OK, MessageBoxW, PostQuitMessage,
-    PostThreadMessageW, SW_SHOWNORMAL, SetForegroundWindow, ShowWindow, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WM_APP,
+    CreateWindowExW, EnumThreadWindows, GetClassNameW, HWND_MESSAGE, MB_ICONERROR, MB_OK,
+    MessageBoxW, PostQuitMessage, PostThreadMessageW, SW_SHOWNORMAL, SendMessageW,
+    SetForegroundWindow, ShowWindow, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_SETTINGCHANGE,
 };
-use windows::core::{HSTRING, w};
+use windows::core::{BOOL, HSTRING, w};
 
 use crate::Options;
 use crate::capture::Outcome;
@@ -336,6 +336,7 @@ pub fn service() {
         crate::update_notice::settings_changed(&settings);
         crate::previews::settings_changed(&settings);
         sync_shortcuts(&settings);
+        retheme_windows();
     }
     let recorder = crate::host::with_host(|h| h.scene.recording.is_some()).unwrap_or(false);
     suspend_shortcuts(recorder);
@@ -803,6 +804,26 @@ fn run(options: &Options, action: Action) {
                 eprintln!("couldn't open Send Feedback: {error}");
             }
         }
+    }
+}
+
+/// Saved settings changed: every Captures window on this thread hears it as a
+/// settings change, so History, the editors, Feedback and setup re-theme when
+/// the appearance or accent changed in Preferences, as shipping's windows did
+/// through the shared settings event. Each window compares its own look.
+/// `WM_SETTINGCHANGE` cannot be posted, so it is sent; this runs outside every
+/// window borrow.
+fn retheme_windows() {
+    unsafe extern "system" fn send(hwnd: HWND, _: LPARAM) -> BOOL {
+        let mut class = [0u16; 32];
+        let n = unsafe { GetClassNameW(hwnd, &mut class) }.max(0) as usize;
+        if String::from_utf16_lossy(&class[..n]).starts_with("Captures") {
+            unsafe { SendMessageW(hwnd, WM_SETTINGCHANGE, Some(WPARAM(0)), Some(LPARAM(0))) };
+        }
+        true.into()
+    }
+    unsafe {
+        let _ = EnumThreadWindows(GetCurrentThreadId(), Some(send), LPARAM(0));
     }
 }
 

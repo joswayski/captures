@@ -5234,7 +5234,7 @@ impl Editor {
     fn retheme(&mut self) {
         let settings = captures_settings::load(&self.settings_file).unwrap_or_default();
         let tokens = appearance::tokens(self.appearance.as_deref(), &settings);
-        if tokens.appearance != self.t.appearance {
+        if !tokens.same_look(&self.t) {
             appearance::title_bar(self.hwnd, &tokens);
             self.t = tokens;
             for node in &mut self.nodes {

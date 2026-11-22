@@ -3560,7 +3560,7 @@ impl History {
                 self.reduced_motion = appearance::reduced_motion();
                 let settings = captures_settings::load(&self.settings_file).unwrap_or_default();
                 let tokens = appearance::tokens(self.appearance.as_deref(), &settings);
-                if tokens.appearance != self.t.appearance {
+                if !tokens.same_look(&self.t) {
                     self.retheme();
                 }
             }

@@ -73,6 +73,11 @@ impl Tokens {
         self
     }
 
+    /// The same appearance and palette (accent and custom colors included).
+    pub fn same_look(&self, other: &Tokens) -> bool {
+        self.appearance == other.appearance && self.colors == other.colors
+    }
+
     pub fn n(&self, name: &str) -> f32 {
         self.numbers[name]
     }
