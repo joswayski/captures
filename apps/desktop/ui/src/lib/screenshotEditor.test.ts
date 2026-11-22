@@ -48,6 +48,7 @@ import {
   hitTestElementRotationHandle,
   hitTestArrowHandle,
   hitTestResizeHandle,
+  resizeCursor,
   hitTestShapeRotationHandle,
   imageDropGuideAtPoint,
   imageDropPlacementAtPoint,
@@ -1625,6 +1626,22 @@ describe("screenshot editor geometry", () => {
       dropShadow: true,
     });
     expect(placed.dropShadow).toBe(true);
+  });
+
+  it("orients resize cursors along the rotated element's drag axis", () => {
+    expect(resizeCursor("e")).toBe("ew-resize");
+    expect(resizeCursor("ne")).toBe("nesw-resize");
+    // A right-edge grip on an element turned a quarter clockwise drags vertically.
+    expect(resizeCursor("e", Math.PI / 2)).toBe("ns-resize");
+    expect(resizeCursor("n", -Math.PI / 2)).toBe("ew-resize");
+    expect(resizeCursor("se", Math.PI / 4)).toBe("ns-resize");
+    // Off-axis angles draw a double arrow at the exact clockwise angle.
+    const cursor = resizeCursor("nw", (60 * Math.PI) / 180);
+    expect(cursor).toMatch(/^url\("data:image\/svg\+xml,.+"\) 16 16, ns-resize$/);
+    expect(decodeURIComponent(cursor)).toContain("rotate(105 16 16)");
+    expect(decodeURIComponent(resizeCursor("w", (-200 * Math.PI) / 180))).toContain(
+      "rotate(160 16 16)",
+    );
   });
 
   it("hit-tests corner and edge resize handles and resizes from the opposite side", () => {

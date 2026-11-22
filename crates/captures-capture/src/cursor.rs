@@ -119,8 +119,9 @@ pub fn frozen_capture_preview<'a>(
     }
 }
 
-/// Snapshot before changing the host's cursor or opening a selector. macOS and
-/// Windows keep system cursor pixels; X11 retains the shipping synthetic arrow.
+/// Snapshot before changing the host's cursor or opening a selector so the
+/// result keeps whatever cursor the pointer showed, such as a resize or text
+/// cursor. Without native pixels (Wayland), the synthetic arrow is drawn.
 #[cfg(not(target_os = "windows"))]
 pub fn pointer_cursor() -> Option<PointerCursor> {
     Some(PointerCursor {
@@ -180,9 +181,59 @@ fn native_cursor_image() -> Option<CursorImage> {
     })
 }
 
+/// XFixes reports the displayed cursor in physical root pixels, the same space
+/// as `pointer_position`, as premultiplied ARGB.
 #[cfg(target_os = "linux")]
-const fn native_cursor_image() -> Option<CursorImage> {
-    None
+fn native_cursor_image() -> Option<CursorImage> {
+    use x11rb::protocol::xfixes::ConnectionExt;
+    std::env::var_os("DISPLAY")?;
+    let (connection, _) = x11rb::connect(None).ok()?;
+    connection.xfixes_query_version(4, 0).ok()?.reply().ok()?;
+    let reply = connection.xfixes_get_cursor_image().ok()?.reply().ok()?;
+    cursor_from_premultiplied_argb(
+        u32::from(reply.width),
+        u32::from(reply.height),
+        &reply.cursor_image,
+        (reply.xhot, reply.yhot),
+    )
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn cursor_from_premultiplied_argb(
+    width: u32,
+    height: u32,
+    argb: &[u32],
+    hot_spot: (u16, u16),
+) -> Option<CursorImage> {
+    if width == 0 || height == 0 || argb.len() != (width * height) as usize {
+        return None;
+    }
+    let mut pixels = RgbaImage::new(width, height);
+    for (pixel, &value) in pixels.pixels_mut().zip(argb) {
+        let [alpha, red, green, blue] = value.to_be_bytes();
+        let unpremultiply = |channel: u8| {
+            if alpha == 0 {
+                0
+            } else {
+                u8::try_from((u32::from(channel) * 255 + u32::from(alpha) / 2) / u32::from(alpha))
+                    .unwrap_or(u8::MAX)
+            }
+        };
+        *pixel = image::Rgba([
+            unpremultiply(red),
+            unpremultiply(green),
+            unpremultiply(blue),
+            alpha,
+        ]);
+    }
+    Some(CursorImage {
+        pixels,
+        and_mask: None,
+        logical_width: f64::from(width),
+        logical_height: f64::from(height),
+        hot_spot_x: f64::from(hot_spot.0),
+        hot_spot_y: f64::from(hot_spot.1),
+    })
 }
 
 const CURSOR_OUTLINE: [(i32, i32); 7] = [
@@ -289,6 +340,7 @@ pub fn overlay_pointer_cursor_in_crop(
         f64::from(source_width) / f64::from(display.width.max(1)),
         f64::from(source_height) / f64::from(display.height.max(1)),
         source_height,
+        pointer_scale,
     );
 }
 
@@ -318,6 +370,7 @@ pub fn overlay_pointer_cursor_on_window(
         f64::from(image.width()) / f64::from(window.width.max(1)),
         f64::from(image.height()) / f64::from(window.height.max(1)),
         image.height(),
+        pointer_scale,
     );
 }
 
@@ -352,9 +405,17 @@ fn draw_cursor(
     scale_x: f64,
     scale_y: f64,
     source_height: u32,
+    pointer_scale: f64,
 ) {
     if let Some(cursor) = cursor {
-        cursor.overlay(image, position, scale_x, scale_y);
+        // Cursor pixels share the pointer sample's space; map them to display units first.
+        let pointer_scale = pointer_scale.max(1.0);
+        cursor.overlay(
+            image,
+            position,
+            scale_x / pointer_scale,
+            scale_y / pointer_scale,
+        );
         return;
     }
 
@@ -464,8 +525,8 @@ mod tests {
         let cursor = super::pointer_cursor().unwrap();
         assert_eq!(cursor.position, (423, 317));
         assert!(
-            cursor.image.is_none(),
-            "X11 retains the shipping synthetic arrow"
+            cursor.image.is_some(),
+            "XFixes supplies the displayed cursor"
         );
     }
 
@@ -631,6 +692,40 @@ mod tests {
 
         assert_eq!(image.get_pixel(0, 0).0, [112, 39, 89, 255]);
         assert_eq!(image.get_pixel(1, 0).0, [201, 19, 73, 128]);
+    }
+
+    #[test]
+    fn xfixes_premultiplied_argb_becomes_straight_rgba() {
+        let cursor =
+            super::cursor_from_premultiplied_argb(2, 1, &[0x8040_2000, 0x0000_0000], (1, 0))
+                .unwrap();
+        assert_eq!(cursor.pixels.get_pixel(0, 0).0, [128, 64, 0, 128]);
+        assert_eq!(cursor.pixels.get_pixel(1, 0).0, [0, 0, 0, 0]);
+        assert!((cursor.hot_spot_x - 1.).abs() < f64::EPSILON);
+        assert!(super::cursor_from_premultiplied_argb(2, 2, &[0; 3], (0, 0)).is_none());
+    }
+
+    #[test]
+    fn physical_cursor_pixels_stay_physical_on_a_scaled_logical_display() {
+        // Linux X11: 100x80 logical display at 2x, physical buffer and pointer.
+        let display = display(0, 0, 100, 80, 2.);
+        let cursor = PointerCursor {
+            position: (40, 40),
+            image: Some(CursorImage {
+                pixels: image::RgbaImage::from_pixel(4, 2, image::Rgba([203, 47, 89, 255])),
+                and_mask: None,
+                logical_width: 4.,
+                logical_height: 2.,
+                hot_spot_x: 0.,
+                hot_spot_y: 0.,
+            }),
+        };
+        let mut image = image::RgbaImage::new(200, 160);
+        overlay_pointer_cursor(&mut image, &display, &cursor, 2.);
+        assert_eq!(image.get_pixel(40, 40).0, [203, 47, 89, 255]);
+        assert_eq!(image.get_pixel(43, 41).0, [203, 47, 89, 255]);
+        assert_eq!(image.get_pixel(44, 40).0, [0; 4]);
+        assert_eq!(image.get_pixel(40, 42).0, [0; 4]);
     }
 
     #[test]

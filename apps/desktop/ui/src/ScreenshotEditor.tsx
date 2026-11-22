@@ -4006,7 +4006,7 @@ export function ScreenshotEditor() {
             initialDocument: current,
           });
           setResizePreviewBounds(annotationHit.bounds);
-          setCanvasCursor(resizeCursor(annotationHit.handle));
+          setCanvasCursor(resizeCursor(annotationHit.handle, elementRotation(selectedElement)));
           capturePointerTarget(event.currentTarget, event.pointerId);
           return;
         }
@@ -4151,7 +4151,7 @@ export function ScreenshotEditor() {
             initialDocument: current,
           });
           setResizePreviewBounds(annotationHit.bounds);
-          setCanvasCursor(resizeCursor(annotationHit.handle));
+          setCanvasCursor(resizeCursor(annotationHit.handle, elementRotation(selectedElement)));
           capturePointerTarget(event.currentTarget, event.pointerId);
           return;
         }
@@ -4320,7 +4320,7 @@ export function ScreenshotEditor() {
             setCurveHoverTip(null);
           }
           if (annotationHit?.kind === "resize") {
-            setCanvasCursor(resizeCursor(annotationHit.handle));
+            setCanvasCursor(resizeCursor(annotationHit.handle, elementRotation(selectedElement)));
             return;
           }
           if (
@@ -4515,7 +4515,7 @@ export function ScreenshotEditor() {
     }
 
     if (gesture.kind === "resize") {
-      setCanvasCursor(resizeCursor(gesture.handle));
+      setCanvasCursor(resizeCursor(gesture.handle, elementRotation(gesture.element)));
       const minSize = 8 / Math.max(0.01, displayScale);
       const snapThreshold = ALIGNMENT_SNAP_SCREEN_PX / Math.max(0.01, displayScale);
       // Hold Shift while dragging a corner to keep the original aspect ratio.

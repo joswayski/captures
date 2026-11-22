@@ -74,14 +74,14 @@ On macOS, update and launch notices follow the menu-bar icon as it moves. If the
 - Optional freeze while choosing a region or window, so hover states, tooltips, menus, and motion stay put (on by default; turn off in Preferences to select from the live desktop)
 - On macOS, frozen display previews and region/display screenshots convert the display color profile to sRGB; colors outside the sRGB gamut remain limited by the current capture pipeline.
 - Optional cursor in screenshots (on by default; freeze screen does not include the pointer by itself)
-- Windows captures use the system cursor image. With screenshot cursor capture enabled, the frozen selector also shows the captured cursor at its original position
+- Screenshots keep the cursor the pointer was showing, such as a text, resize, or app-specific cursor, using the system cursor image on macOS, Windows, and Linux X11. On Windows, the frozen selector also shows the captured cursor at its original position
 - Optional countdown before screenshots and recordings
 - Region recordings keep the selected area highlighted on screen while recording
 - Record as H.264 MP4, with desktop audio and microphone. Save or export as MP4 or GIF; WebM export is not supported
 - Pause, resume, restart, and mute while recording
 - On macOS and Windows, recording controls stay out of screenshots and recordings by default (Preferences). On Linux, use Hide controls during a recording to keep the bar off-screen
 - Cursor and click highlights in recordings (where supported)
-- Built-in screenshot editor — closed shapes start filled, with an optional stroke; text, shapes, images, and drawings can rotate from a shared handle (hold Shift to use a configurable snap increment); text and drawings with optional drop shadows (color, opacity, blur, and offset; the whole label, including a background plate), crop (drag from outside the canvas to reach an edge; hold Shift to lock aspect), layers that hang off the canvas stay clipped until you expand, erase to transparent; unsaved edits restore when you reopen
+- Built-in screenshot editor — closed shapes start filled, with an optional stroke; text, shapes, images, and drawings can rotate from a shared handle (hold Shift to use a configurable snap increment), and resize cursors follow the rotated layer's edges; text and drawings with optional drop shadows (color, opacity, blur, and offset; the whole label, including a background plate), crop (drag from outside the canvas to reach an edge; hold Shift to lock aspect), layers that hang off the canvas stay clipped until you expand, erase to transparent; unsaved edits restore when you reopen
 - Text labels start in bold Nunito, white on a pink rounded background; turn off Bold for regular weight. Nunito is bundled offline in Tauri and the opt-in native editors. Existing Tauri labels using the former platform-dependent Rounded font now use Nunito too; other font selections, colors and weights stay unchanged. New labels grow horizontally as you type; Enter adds a line. The editing box follows the text size and canvas zoom instead of forcing a taller minimum-height field. After finishing text entry, drag a corner or top/bottom handle to scale the whole label (type, width and background together, so lines keep their breaks), or a side handle to set a wrapping width at the same type size that never gets narrower than the longest word. These source changes also apply to the opt-in native editors.
   Current source uses measured font wrapping for text selection, picking, resize handles, snapping and canvas trim/expansion in Tauri and the opt-in native editors. Existing rotated labels keep their saved paint position; rotating or resizing a label keeps its visible center or opposite handle anchored.
 - Drag the left edge of the screenshot editor's Layers/Properties panel to resize it. Its width stays local to the editor window, without changing the image or Undo history. Focus the divider with Tab and use Left/Right to resize (Shift for larger steps), Home/End for its limits, or double-click it (Enter on the keyboard) to reset. Current source supports these controls in Tauri and the opt-in native editors; pointer resizing keeps an active text field focused.
@@ -345,7 +345,7 @@ keep the centered pill and triangle.
 The native workspace now applies
 automatic copy, output folder, PNG/JPEG/WebP save-format, screenshot countdown,
 and cursor inclusion preferences. Cursor rendering matches the shipping app:
-system cursor pixels on macOS, a synthetic arrow on Windows/X11. Escape cancels
+system cursor pixels on macOS, Windows, and X11. Escape cancels
 a pending capture even with another app focused. Both the macOS workspace and
 Windows/X11 candidate connect region draw/move/resize, aspect constraints, freeze,
 and auto-start to shared Rust capture logic. The Windows/Linux candidate settles

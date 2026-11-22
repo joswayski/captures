@@ -3703,11 +3703,37 @@ export function resizeElementLocal(
   };
 }
 
-export function resizeCursor(handle: ResizeHandle): string {
-  if (handle === "n" || handle === "s") return "ns-resize";
-  if (handle === "e" || handle === "w") return "ew-resize";
-  if (handle === "nw" || handle === "se") return "nwse-resize";
-  return "nesw-resize";
+/** Screen angle of each grip's drag axis, in degrees clockwise from +x (y points down). */
+const RESIZE_HANDLE_AXIS_DEGREES: Record<ResizeHandle, number> = {
+  e: 0,
+  w: 0,
+  se: 45,
+  nw: 45,
+  s: 90,
+  n: 90,
+  sw: 135,
+  ne: 135,
+};
+
+const RESIZE_AXIS_KEYWORDS = ["ew-resize", "nwse-resize", "ns-resize", "nesw-resize"];
+
+/**
+ * Cursor for a resize grip on an element rotated by `rotation` radians.
+ * The four CSS resize keywords cover only 45° steps, so other angles use a
+ * double arrow rotated to the grip's drag axis, keeping the nearest keyword as
+ * the fallback for engines that reject image cursors.
+ */
+export function resizeCursor(handle: ResizeHandle, rotation = 0): string {
+  // Whole degrees keep the cursor string stable for small pointer moves.
+  const raw = Math.round(RESIZE_HANDLE_AXIS_DEGREES[handle] + (rotation * 180) / Math.PI);
+  const degrees = ((raw % 180) + 180) % 180;
+  const keyword = RESIZE_AXIS_KEYWORDS[Math.round(degrees / 45) % 4]!;
+  if (degrees % 45 === 0) return keyword;
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">` +
+    `<path transform="rotate(${degrees} 16 16)" d="M5 16 10 10.5V14H22V10.5L27 16 22 21.5V18H10V21.5Z" ` +
+    `fill="#000" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
+  return `url("data:image/svg+xml,${encodeURIComponent(svg)}") 16 16, ${keyword}`;
 }
 
 /** Unrotated selection/content bounds used for local-space interaction. */

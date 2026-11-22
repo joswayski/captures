@@ -24,7 +24,7 @@ mouse_position = "0.1.4"
 dbus = "0.9"
 url = "2"
 uuid.workspace = true
-x11rb = "0.13"
+x11rb = { version = "0.13", features = ["xfixes"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.61", features = [
