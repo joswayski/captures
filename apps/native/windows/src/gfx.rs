@@ -487,10 +487,13 @@ fn load_ui_fonts(dwrite: &IDWriteFactory) -> Result<IDWriteFontCollection> {
 
 impl Gfx {
     /// The UI thread's one composition renderer, shared by every window.
-    /// A D3D device whose composition surfaces were ever committed keeps
-    /// about 54 driver threads and their memory after its last reference is
-    /// released (measured on NVIDIA), so a device per window grew the
-    /// resident app by ~70 MB private and ~170 MB GPU memory per capture.
+    /// A device carries about 54 NVIDIA driver threads once a surface is
+    /// committed, and a closed window does not release its device: its
+    /// composition objects stay referenced until that device's next commit
+    /// and its Direct2D resources stay cached on it. A device per window
+    /// therefore grew the resident app by ~70 MB private and ~170 MB GPU
+    /// memory per capture. The driver itself frees all of it once every
+    /// reference is gone.
     /// Text formats depend only on token numbers, which every theme and
     /// appearance shares, so the first window's `tokens` serve them all.
     /// A lost device is replaced here; [`renderer_lost`] stays true so the
