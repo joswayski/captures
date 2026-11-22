@@ -110,7 +110,18 @@ export function bundleConfiguration(target, version, root = ROOT, sideBySide = f
     configuration.bundle.linux = { deb: { depends: ["libgtk-4-1"] } };
   }
   if (TARGETS[target].renderer === "appkit") {
-    configuration.bundle.macOS = { infoPlist: join(root, "target/native-preview/Info.plist") };
+    configuration.bundle.macOS = {
+      infoPlist: join(root, "target/native-preview/Info.plist"),
+      // Drag-to-Applications window. The icon centers match the slots drawn in
+      // apps/desktop/src-tauri/dmg/background.svg. The 32 pt over the picture's
+      // 400 pt height is Finder's title bar.
+      dmg: {
+        background: join(root, "target/native-preview/dmg-background.tiff"),
+        windowSize: { width: 660, height: 432 },
+        appPosition: { x: 170, y: 200 },
+        applicationFolderPosition: { x: 490, y: 200 },
+      },
+    };
     configuration.bundle.resources[
       join(root, "apps/native/macos/.build/release/CapturesNative_CapturesNative.bundle")
     ] = "CapturesNative_CapturesNative.bundle";
@@ -142,6 +153,9 @@ export function build(target, version, unsigned = false, sideBySide = false, sta
     ...(sideBySide ? { CAPTURES_NATIVE_PREVIEW_TEST: "1" } : {}),
     // Staging builds update from the staging feed only.
     ...(staging ? { CAPTURES_NATIVE_PREVIEW_FEED: STAGING_FEED } : {}),
+    // With CI=true the DMG bundler skips the Finder script that applies the
+    // window layout, leaving an unarranged window with no install hint.
+    TAURI_BUNDLER_DMG_IGNORE_CI: "true",
   };
   const release = join(ROOT, "target", target, "release");
   mkdirSync(release, { recursive: true });
@@ -183,6 +197,15 @@ export function build(target, version, unsigned = false, sideBySide = false, sta
       "import plistlib,sys; p=plistlib.load(open(sys.argv[1],'rb')); p['CapturesNativeLive']=True; plistlib.dump(p,open(sys.argv[2],'wb'))",
       "apps/desktop/src-tauri/Info.plist",
       "target/native-preview/Info.plist",
+    ]);
+    // One TIFF with 1x and 2x pictures at exactly 72 and 144 DPI, so Finder
+    // shows a sharp 660x400 pt background on Retina displays.
+    run("tiffutil", [
+      "-cathidpicheck",
+      "apps/desktop/src-tauri/dmg/background.png",
+      "apps/desktop/src-tauri/dmg/background@2x.png",
+      "-out",
+      "target/native-preview/dmg-background.tiff",
     ]);
   } else {
     const host = nativeHostBuild(target);

@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="660" height="400" viewBox="0 0 660 400">
+  <!--
+    macOS DMG window background, drawn under Finder's real icons.
+    Finder places Captures.app at (170, 200) and the Applications link at
+    (490, 200) as 128 pt icons with black labels below them (a background
+    picture keeps the window in light rendering, even in Dark Mode), so keep
+    this art light and never draw the icons here. The bottom edge stays white
+    because Finder fills any extra window height below the picture with white.
+    Render background.png at 660x400 and background@2x.png at 1320x800 with
+    Inter installed (for example headless Chromium at 1x and 2x scale).
+  -->
+  <rect width="660" height="400" fill="#ffffff"/>
+  <g fill="#f5f5f7" stroke="rgba(19, 19, 24, 0.07)">
+    <rect x="78.5" y="116.5" width="183" height="191" rx="24"/>
+    <rect x="398.5" y="116.5" width="183" height="191" rx="24"/>
+  </g>
+  <g font-family="Inter, -apple-system, BlinkMacSystemFont, sans-serif" text-anchor="middle">
+    <text x="330" y="66" font-size="22" font-weight="600" letter-spacing="-0.48" fill="#131318">Install Captures</text>
+    <text x="330" y="92" font-size="13" fill="#5c5c69">Drag Captures onto the Applications folder.</text>
+    <text x="330" y="356" font-size="12" fill="#7d7d8c">Then open Captures from Applications.</text>
+  </g>
+  <g fill="none" stroke="#7d7d8c" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M286 200H372"/>
+    <path d="M360 188L374 200L360 212"/>
+  </g>
+</svg>
