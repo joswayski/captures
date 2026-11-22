@@ -1,19 +1,24 @@
 //! Shipping's selection chrome over the screenshot canvas
 //! (`ScreenshotEditor.tsx` `drawEditorOverlays`, `hitTestSelectedAnnotation`):
 //! the dashed bounds with resize grips, the rotation handle, line/arrow curve
-//! dots, and the Expand canvas overflow tint, ghost and edge bloom. Geometry
-//! comes from `captures_app::editor` / `editor_canvas`; this module only hit
-//! tests in document space and paints small Cairo nodes in screen space.
+//! dots, the Expand canvas overflow tint, ghost and edge bloom, and the Trim
+//! edges hover preview. Geometry comes from `captures_app::editor` /
+//! `editor_canvas`; this module only hit tests in document space and paints
+//! small Cairo nodes in screen space.
 use std::f64::consts::{PI, TAU};
 
 use captures_app::editor::{
     Element, Point, ResizeHandle, TextMeasurer, rotation_angle, rotation_handle,
 };
 use captures_app::editor_canvas::{
-    self, CanvasEdge, CanvasExpandPreview, CurveHandle, SNAP_BLOOM, SNAP_BLOOM_STOPS, SNAP_EDGE_BAR,
+    self, CanvasEdge, CanvasExpandPreview, CanvasTrimPreview, CurveHandle, SNAP_BLOOM,
+    SNAP_BLOOM_OVERHANG, SNAP_BLOOM_STOPS, SNAP_EDGE_BAR, TRIM_BLOOM, TRIM_BLOOM_STOPS,
+    TRIM_EDGE_BAR, TRIM_KEEP_ALPHA, TRIM_KEEP_GLOW_ALPHA, TRIM_KEEP_RADIUS, TRIM_KEEP_WIDTH,
+    TRIM_REGION_ALPHA, TRIM_RGB,
 };
+use captures_app::editor_session::{ImageDropGuide, ImportPlacement};
 use gtk::prelude::*;
-use gtk::{cairo, gdk, graphene};
+use gtk::{cairo, gdk, graphene, gsk};
 
 /// Shipping's pointer slop for grips: 10 screen pixels.
 pub(super) const HIT_PX: f64 = 10.;
@@ -340,8 +345,16 @@ pub(super) fn expand(
         return;
     };
     let crossed = |edge| preview.edges.contains(&edge);
+    let glow = Glow {
+        color: accent,
+        stops: SNAP_BLOOM_STOPS,
+        depth: SNAP_BLOOM,
+        overhang: 0.,
+        bar: SNAP_EDGE_BAR,
+        halo: SNAP_HALO,
+    };
     for edge in &preview.edges {
-        bloom(snapshot, (x, y, w, h), *edge, accent);
+        bloom(snapshot, (x, y, w, h), *edge, &glow);
     }
     let Some(cr) = cairo_for(snapshot, &[(x, y), (x + w, y + h)], 4.) else {
         return;
@@ -362,34 +375,70 @@ pub(super) fn expand(
     }
 }
 
-/// `.screenshot-canvas-expand-edge`: the accent bar on the ghost's edge and
-/// its outward bloom, faded at both ends.
+/// An edge glow: shipping's `.screenshot-canvas-expand-edge` (accent) and
+/// `.screenshot-canvas-trim-edge` (red) share this shape.
+struct Glow {
+    color: gdk::RGBA,
+    stops: [(f64, f64); 4],
+    /// The bloom's depth, and how far it overhangs each end of the edge as a
+    /// fraction of its length.
+    depth: f64,
+    overhang: f64,
+    /// The pill's thickness, straddling the edge.
+    bar: f64,
+    /// The pill's `box-shadow` glows: blur radius and alpha.
+    halo: &'static [(f32, f32)],
+}
+
+/// `.screenshot-drop-snap-guide::after` / `.screenshot-canvas-expand-edge::after`
+/// glows.
+const SNAP_HALO: &[(f32, f32)] = &[(8., 0.95), (20., 0.65), (36., 0.4)];
+
+/// The pill on a rectangle's `edge` and its outward bloom, faded at both ends.
 fn bloom(
     snapshot: &gtk::Snapshot,
     (x, y, w, h): (f64, f64, f64, f64),
     edge: CanvasEdge,
-    accent: gdk::RGBA,
+    glow: &Glow,
 ) {
-    let depth = SNAP_BLOOM;
+    let depth = glow.depth;
+    let (ox, oy) = (w * glow.overhang, h * glow.overhang);
     let (area, from, to) = match edge {
-        CanvasEdge::Top => ((x, y - depth, w, depth), (x, y), (x, y - depth)),
-        CanvasEdge::Bottom => ((x, y + h, w, depth), (x, y + h), (x, y + h + depth)),
-        CanvasEdge::Left => ((x - depth, y, depth, h), (x, y), (x - depth, y)),
-        CanvasEdge::Right => ((x + w, y, depth, h), (x + w, y), (x + w + depth, y)),
+        CanvasEdge::Top => (
+            (x - ox, y - depth, w + 2. * ox, depth),
+            (x, y),
+            (x, y - depth),
+        ),
+        CanvasEdge::Bottom => (
+            (x - ox, y + h, w + 2. * ox, depth),
+            (x, y + h),
+            (x, y + h + depth),
+        ),
+        CanvasEdge::Left => (
+            (x - depth, y - oy, depth, h + 2. * oy),
+            (x, y),
+            (x - depth, y),
+        ),
+        CanvasEdge::Right => (
+            (x + w, y - oy, depth, h + 2. * oy),
+            (x + w, y),
+            (x + w + depth, y),
+        ),
     };
+    let color = glow.color;
     let cr = snapshot.append_cairo(&graphene::Rect::new(
-        (area.0 - SNAP_EDGE_BAR) as f32,
-        (area.1 - SNAP_EDGE_BAR) as f32,
-        (area.2 + 2. * SNAP_EDGE_BAR) as f32,
-        (area.3 + 2. * SNAP_EDGE_BAR) as f32,
+        area.0 as f32,
+        area.1 as f32,
+        area.2 as f32,
+        area.3 as f32,
     ));
     let gradient = cairo::LinearGradient::new(from.0, from.1, to.0, to.1);
-    for (offset, alpha) in SNAP_BLOOM_STOPS {
+    for (offset, alpha) in glow.stops {
         gradient.add_color_stop_rgba(
             offset,
-            accent.red().into(),
-            accent.green().into(),
-            accent.blue().into(),
+            color.red().into(),
+            color.green().into(),
+            color.blue().into(),
             alpha,
         );
     }
@@ -403,30 +452,224 @@ fn bloom(
     for (offset, alpha) in [(0., 0.), (0.12, 1.), (0.88, 1.), (1., 0.)] {
         mask.add_color_stop_rgba(offset, 0., 0., 0., alpha);
     }
-    cr.rectangle(area.0, area.1, area.2, area.3);
-    cr.clip();
     let _ = cr.set_source(&gradient);
     let _ = cr.mask(&mask);
-    cr.reset_clip();
-    // The pill-shaped bar straddling the edge.
-    let bar = SNAP_EDGE_BAR;
+    drop(cr);
+    // The pill straddling the edge, 1 px past each end, with its glows.
+    let bar = glow.bar;
     let (bx, by, bw, bh) = if horizontal {
         (x - 1., from.1 - bar / 2., w + 2., bar)
     } else {
         (from.0 - bar / 2., y - 1., bar, h + 2.)
     };
-    let r = bar / 2.;
-    cr.new_sub_path();
-    cr.arc(bx + bw - r, by + r, r, -PI / 2., PI / 2.);
-    cr.arc(bx + r, by + bh - r, r, PI / 2., 3. * PI / 2.);
-    cr.close_path();
-    if !horizontal {
-        cr.new_path();
-        cr.new_sub_path();
-        cr.arc(bx + r, by + r, r, PI, 0.);
-        cr.arc(bx + r, by + bh - r, r, 0., PI);
-        cr.close_path();
+    let radius = (bar / 2.) as f32;
+    let pill = gsk::RoundedRect::from_rect(
+        graphene::Rect::new(bx as f32, by as f32, bw as f32, bh as f32),
+        radius,
+    );
+    for (blur, alpha) in glow.halo {
+        let mut shadow = color;
+        shadow.set_alpha(*alpha);
+        snapshot.append_outset_shadow(&pill, &shadow, 0., 0., 0., *blur);
     }
-    source(&cr, accent, 1.);
-    let _ = cr.fill();
+    snapshot.push_rounded_clip(&pill);
+    snapshot.append_color(&color, pill.bounds());
+    snapshot.pop();
+}
+
+/// Shipping's Trim edges hover preview (`.screenshot-canvas-trim-hint`), in
+/// screen pixels: the discarded margins tinted red, the dashed rectangle that
+/// stays, and a red pill with an outward bloom on each cut edge.
+pub(super) fn trim(
+    snapshot: &gtk::Snapshot,
+    preview: &CanvasTrimPreview,
+    to_screen: &dyn Fn(Point) -> Option<(f64, f64)>,
+) {
+    let rect = |r: captures_app::editor::Rect| {
+        let a = to_screen(Point { x: r.x, y: r.y })?;
+        let b = to_screen(Point {
+            x: r.x + r.width,
+            y: r.y + r.height,
+        })?;
+        Some((a.0, a.1, b.0 - a.0, b.1 - a.1))
+    };
+    let [r, g, b] = TRIM_RGB.map(|c| f32::from(c) / 255.);
+    let red = |alpha: f64| gdk::RGBA::new(r, g, b, alpha as f32);
+    for (_, region) in &preview.regions {
+        let Some((x, y, w, h)) = rect(*region) else {
+            continue;
+        };
+        let bounds = graphene::Rect::new(x as f32, y as f32, w as f32, h as f32);
+        snapshot.append_color(&red(TRIM_REGION_ALPHA), &bounds);
+        // `box-shadow: inset 0 0 24px rgba(trim, .12)`.
+        snapshot.append_inset_shadow(
+            &gsk::RoundedRect::from_rect(bounds, 0.),
+            &red(0.12),
+            0.,
+            0.,
+            0.,
+            24.,
+        );
+    }
+    let Some((x, y, w, h)) = rect(preview.keep) else {
+        return;
+    };
+    // `.screenshot-canvas-trim-keep`: `0 0 0 1px .1, 0 0 22px .18` glows
+    // and a 1.5 px dashed border with a 3 px radius.
+    let keep = gsk::RoundedRect::from_rect(
+        graphene::Rect::new(x as f32, y as f32, w as f32, h as f32),
+        TRIM_KEEP_RADIUS as f32,
+    );
+    snapshot.append_outset_shadow(&keep, &red(0.1), 0., 0., 1., 0.);
+    snapshot.append_outset_shadow(&keep, &red(TRIM_KEEP_GLOW_ALPHA), 0., 0., 0., 22.);
+    if let Some(cr) = cairo_for(snapshot, &[(x, y), (x + w, y + h)], 2.) {
+        let inset = TRIM_KEEP_WIDTH / 2.;
+        let (x, y, w, h) = (x + inset, y + inset, w - 2. * inset, h - 2. * inset);
+        let radius = (TRIM_KEEP_RADIUS - inset).max(0.);
+        cr.new_sub_path();
+        cr.arc(x + w - radius, y + radius, radius, -PI / 2., 0.);
+        cr.arc(x + w - radius, y + h - radius, radius, 0., PI / 2.);
+        cr.arc(x + radius, y + h - radius, radius, PI / 2., PI);
+        cr.arc(x + radius, y + radius, radius, PI, 3. * PI / 2.);
+        cr.close_path();
+        source(&cr, red(TRIM_KEEP_ALPHA), 1.);
+        cr.set_line_width(TRIM_KEEP_WIDTH);
+        // A CSS dashed border's dashes are about three widths long.
+        cr.set_dash(&[3. * TRIM_KEEP_WIDTH, 3. * TRIM_KEEP_WIDTH], 0.);
+        let _ = cr.stroke();
+    }
+    let glow = Glow {
+        color: red(1.),
+        stops: TRIM_BLOOM_STOPS,
+        depth: TRIM_BLOOM,
+        overhang: 0.,
+        bar: TRIM_EDGE_BAR,
+        halo: &[(8., 0.95), (20., 0.55), (32., 0.32)],
+    };
+    for edge in &preview.edges {
+        bloom(snapshot, (x, y, w, h), *edge, &glow);
+    }
+}
+
+/// Shipping's image drop guide (`.screenshot-drop-snap-guide`), in screen
+/// pixels: the accent target an edge drop joins, with a glowing pill and
+/// bloom on that edge, or the stack light where a stacked image lands.
+pub(super) fn drop_guide(
+    snapshot: &gtk::Snapshot,
+    guide: &ImageDropGuide,
+    to_screen: &dyn Fn(Point) -> Option<(f64, f64)>,
+    accent: gdk::RGBA,
+    radius: f32,
+) {
+    let rect = |r: captures_app::editor::Rect| {
+        let a = to_screen(Point { x: r.x, y: r.y })?;
+        let b = to_screen(Point {
+            x: r.x + r.width,
+            y: r.y + r.height,
+        })?;
+        Some(graphene::Rect::new(
+            a.0 as f32,
+            a.1 as f32,
+            (b.0 - a.0) as f32,
+            (b.1 - a.1) as f32,
+        ))
+    };
+    let tint = |alpha: f32| {
+        let mut color = accent;
+        color.set_alpha(alpha);
+        color
+    };
+    let edge = match guide.placement {
+        ImportPlacement::Top => CanvasEdge::Top,
+        ImportPlacement::Right => CanvasEdge::Right,
+        ImportPlacement::Bottom => CanvasEdge::Bottom,
+        ImportPlacement::Left => CanvasEdge::Left,
+        ImportPlacement::Stack => {
+            if let Some(focus) = rect(guide.focus) {
+                stack_light(snapshot, focus, radius);
+            }
+            return;
+        }
+    };
+    let Some(target) = rect(guide.target) else {
+        return;
+    };
+    // `border: 1px .78; background: .1; box-shadow: 0 0 0 1px rgba(0,0,0,.35),
+    // 0 0 22px .28, inset 0 0 28px .08`, with a 3 px radius.
+    let outline = gsk::RoundedRect::from_rect(target, 3.);
+    snapshot.append_outset_shadow(&outline, &gdk::RGBA::new(0., 0., 0., 0.35), 0., 0., 1., 0.);
+    snapshot.append_outset_shadow(&outline, &tint(0.28), 0., 0., 0., 22.);
+    snapshot.push_rounded_clip(&outline);
+    snapshot.append_color(&tint(0.1), &target);
+    snapshot.pop();
+    snapshot.append_inset_shadow(&outline, &tint(0.08), 0., 0., 0., 28.);
+    snapshot.append_border(&outline, &[1.; 4], &[tint(0.78); 4]);
+    let across = match edge {
+        CanvasEdge::Top | CanvasEdge::Bottom => target.height(),
+        CanvasEdge::Left | CanvasEdge::Right => target.width(),
+    };
+    let glow = Glow {
+        color: accent,
+        stops: SNAP_BLOOM_STOPS,
+        depth: editor_canvas::drop_bloom_depth(f64::from(across)),
+        overhang: SNAP_BLOOM_OVERHANG,
+        bar: SNAP_EDGE_BAR,
+        halo: SNAP_HALO,
+    };
+    bloom(
+        snapshot,
+        (
+            f64::from(target.x()),
+            f64::from(target.y()),
+            f64::from(target.width()),
+            f64::from(target.height()),
+        ),
+        edge,
+        &glow,
+    );
+}
+
+/// `StackDropLight`: a warm pool, a contact shadow and a thin white rim on
+/// the footprint a stacked image will cover.
+fn stack_light(snapshot: &gtk::Snapshot, focus: graphene::Rect, radius: f32) {
+    let (w, h) = (focus.width(), focus.height());
+    // `.screenshot-drop-snap-stack-pool`: inset -48% -62% -72% -62%, an
+    // ellipse at 50% 40% at .86 opacity.
+    let pool = graphene::Rect::new(
+        focus.x() - 0.62 * w,
+        focus.y() - 0.48 * h,
+        2.24 * w,
+        2.2 * h,
+    );
+    let warm = |alpha: f32| gdk::RGBA::new(1., 0.957, 0.894, alpha * 0.86);
+    snapshot.append_radial_gradient(
+        &pool,
+        &graphene::Point::new(pool.x() + pool.width() / 2., pool.y() + pool.height() * 0.4),
+        pool.width() / 2. * std::f32::consts::SQRT_2,
+        pool.height() / 2. * std::f32::consts::SQRT_2,
+        0.,
+        1.,
+        &[
+            gsk::ColorStop::new(0., gdk::RGBA::new(1., 0.98, 0.941, 0.3 * 0.86)),
+            gsk::ColorStop::new(0.34, warm(0.14)),
+            gsk::ColorStop::new(0.56, warm(0.05)),
+            gsk::ColorStop::new(0.74, warm(0.)),
+        ],
+    );
+    let plate = gsk::RoundedRect::from_rect(focus, radius);
+    // `.screenshot-drop-snap-stack-shadow` at .94 opacity.
+    for (y, blur, alpha) in [
+        (2., 4., 0.2),
+        (8., 18., 0.3),
+        (18., 40., 0.24),
+        (28., 56., 0.12),
+    ] {
+        let shadow = gdk::RGBA::new(0., 0., 0., alpha * 0.94);
+        snapshot.append_outset_shadow(&plate, &shadow, 0., y, 0., blur);
+    }
+    // `.screenshot-drop-snap-stack-rim` at .9 opacity.
+    let white = |alpha: f32| gdk::RGBA::new(1., 1., 1., alpha * 0.9);
+    snapshot.append_outset_shadow(&plate, &white(0.1), 0., 0., 0., 10.);
+    snapshot.append_outset_shadow(&plate, &white(0.36), 0., 0., 1., 0.);
+    snapshot.append_inset_shadow(&plate, &white(0.08), 0., 0., 1., 0.);
 }

@@ -3933,3 +3933,21 @@ window.captures.recording-controls-window {
 .captures button.editor-expand-action:focus-visible {
   background: var(--theme-accent-hover);
 }
+/* `.screenshot-drop-overlay`: the glass drop toast with an accent rim; the
+ * icon sits 13 px in and the label starts 44 px in. */
+.captures .editor-drop-toast {
+  padding: var(--s-4) var(--s-5) var(--s-4) 13px;
+  border: 1px solid alpha(var(--theme-accent), 0.72);
+  border-radius: var(--r-lg);
+  color: var(--glass-text);
+  background: var(--glass-strong);
+  box-shadow: var(--shadow-lg);
+}
+.captures .editor-drop-toast > :first-child {
+  color: var(--theme-accent);
+}
+.captures .editor-drop-toast label {
+  margin-left: 9px;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+}

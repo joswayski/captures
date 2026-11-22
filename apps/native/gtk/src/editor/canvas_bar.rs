@@ -24,7 +24,8 @@ pub(super) struct CanvasBar {
     pub(super) root: gtk::Box,
     width: NumberField,
     height: NumberField,
-    trim: gtk::Button,
+    /// Trim edges; the editor previews the cut while it is hovered or focused.
+    pub(super) trim: gtk::Button,
     background: gtk::Button,
     /// The document background (`None` is transparent) and the last solid
     /// color, which Solid background restores.

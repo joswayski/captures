@@ -20,13 +20,13 @@ use captures_app::editor::{
     FreehandPathCreate, GuideOrientation, LayerEdit, LayerPlacement, OpenShapeCreate,
     OpenShapeKind, Point, Rect, ResizeHandle, TextBounds,
 };
-use captures_app::editor_canvas::{CanvasExpandPreview, CurveEdit, CurveHandle};
+use captures_app::editor_canvas::{CanvasExpandPreview, CanvasTrimPreview, CurveEdit, CurveHandle};
 use captures_app::editor_chrome::{self, RAIL_TOOLS, SHAPE_TOOLS, brush_cursor, header};
 use captures_app::editor_export::{self, EstimateState, ExportSource, ExportTarget};
 use captures_app::editor_image_background::BrushMode;
 use captures_app::editor_session::{
-    EditorSession, ExportFormat, ExportOptions, ExportQuality, ExportSize, OpenRequest, PngOptions,
-    Request,
+    EditorSession, ExportFormat, ExportOptions, ExportQuality, ExportSize, ImageDropGuide,
+    OpenRequest, PngOptions, Request,
 };
 use captures_app::editor_viewport::{self, Viewport};
 use gtk::prelude::*;
@@ -88,6 +88,8 @@ struct Presented {
     text_bounds: TextBounds,
     /// Overflow preview per visible layer hanging past the canvas.
     canvas_expand: BTreeMap<String, CanvasExpandPreview>,
+    /// What Trim edges would cut, for its hover preview.
+    trim_preview: Option<CanvasTrimPreview>,
 }
 
 /// A layer gesture's uncommitted frame: pixels, outlines and snap guides.
@@ -217,6 +219,7 @@ fn present(session: &mut EditorSession, artifact_id: &str) -> Presented {
             .iter()
             .map(|(id, preview)| ((*id).to_owned(), preview.clone()))
             .collect(),
+        trim_preview: snapshot.trim_preview.clone(),
         source: snapshot.original_export_path.map(|path| ExportSource {
             artifact_id: snapshot
                 .source_artifact_id
@@ -357,6 +360,16 @@ struct State {
     expand_action: gtk::Button,
     expand_for: RefCell<Option<String>>,
     expand_armed: Cell<bool>,
+    /// The live drop guide while image files are dragged over the window,
+    /// and the toast that names it.
+    drop_guide: RefCell<Option<ImageDropGuide>>,
+    drop_toast: gtk::Box,
+    drop_label: gtk::Label,
+    /// Shipping `trimEdgesHover`: Trim edges is hovered or focused.
+    trim_hover: Cell<bool>,
+    /// Shipping `panReady`: Ctrl is held outside a control, so a drag pans
+    /// with any tool.
+    pan_ready: Cell<bool>,
     widgets: Widgets,
 }
 
@@ -813,9 +826,36 @@ pub fn build(
     let body_overlay = gtk::Overlay::new();
     body_overlay.set_child(Some(&body));
     body_overlay.add_overlay(&resize.handle);
+    // `.screenshot-drop-overlay`: the glass toast naming where a dragged
+    // image will land, 72 px from the window top and centred on it.
+    let drop_toast = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    drop_toast.add_css_class("editor-drop-toast");
+    drop_toast.set_can_target(false);
+    drop_toast.set_visible(false);
+    let drop_icon = Icon::new("image", 22).with_stroke(1.7);
+    drop_icon.set_valign(gtk::Align::Center);
+    drop_toast.append(&drop_icon);
+    let drop_label = gtk::Label::new(Some(captures_app::editor_session::DROP_IMAGE));
+    drop_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    drop_label.set_max_width_chars(28);
+    drop_toast.append(&drop_label);
+    body_overlay.add_overlay(&drop_toast);
     {
         let sidebar = sidebar.clone();
-        body_overlay.connect_get_child_position(move |overlay, _| {
+        let handle = resize.handle.clone();
+        body_overlay.connect_get_child_position(move |overlay, child| {
+            if child != handle.upcast_ref::<gtk::Widget>() {
+                let window = overlay.root()?;
+                let (_, natural) = child.preferred_size();
+                let top = graphene::Point::new(window.width() as f32 / 2., 72.);
+                let at = window.compute_point(overlay, &top)?;
+                return Some(gdk::Rectangle::new(
+                    at.x().round() as i32 - natural.width() / 2,
+                    at.y().round() as i32,
+                    natural.width(),
+                    natural.height(),
+                ));
+            }
             let at = sidebar.compute_point(overlay, &graphene::Point::new(0., 0.))?;
             Some(gdk::Rectangle::new(
                 at.x().round() as i32 - sidebar_resize::HANDLE / 2,
@@ -1035,6 +1075,11 @@ pub fn build(
         expand_action,
         expand_for: RefCell::default(),
         expand_armed: Cell::default(),
+        drop_guide: RefCell::default(),
+        drop_toast,
+        drop_label,
+        trim_hover: Cell::default(),
+        pan_ready: Cell::default(),
         properties,
         pointer: Cell::default(),
         preview_busy: Cell::default(),
@@ -1548,6 +1593,43 @@ impl State {
     }
 
     /// Import image files as one edit, below the selection or at `point`.
+    /// A drag point over the window, in document coordinates (outside the
+    /// canvas too, as shipping's guide extrapolates).
+    fn drop_point(&self, target: &gtk::DropTarget, x: f64, y: f64) -> Option<Point> {
+        let window = target.widget()?;
+        let at = window.compute_point(&self.canvas, &graphene::Point::new(x as f32, y as f32))?;
+        self.to_document(at.x().into(), at.y().into())
+    }
+
+    /// Follow a file drag with shipping's drop guide and toast.
+    fn drag_over(&self, target: &gtk::DropTarget, x: f64, y: f64) {
+        let point = self.drop_point(target, x, y);
+        let guide = self.presented.borrow().as_ref().map(|presented| {
+            captures_app::editor_session::image_drop_guide(
+                &presented.document,
+                self.selected.borrow().as_deref(),
+                point,
+            )
+        });
+        let label = guide
+            .as_ref()
+            .map_or(captures_app::editor_session::DROP_IMAGE, |guide| {
+                guide.label
+            });
+        if self.drop_label.label() != label {
+            self.drop_label.set_label(label);
+        }
+        self.drop_toast.set_visible(true);
+        *self.drop_guide.borrow_mut() = guide;
+        self.canvas.queue_draw();
+    }
+
+    fn end_drag_over(&self) {
+        self.drop_toast.set_visible(false);
+        self.drop_guide.borrow_mut().take();
+        self.canvas.queue_draw();
+    }
+
     fn import_files(&self, paths: Vec<PathBuf>, point: Option<Point>) {
         if !paths.is_empty() {
             self.import(ImportSource::Files(paths), point);
@@ -1627,7 +1709,53 @@ impl State {
         }
     }
 
+    /// A drag that moves the view, from the middle button or Ctrl.
+    fn begin_pan(&self) {
+        if self.text_active() {
+            self.finish_text();
+        }
+        *self.gesture.borrow_mut() = Some(Gesture::Pan {
+            from: self.viewport.get(),
+            dx: 0.,
+            dy: 0.,
+        });
+        self.sync_cursor();
+        self.canvas.queue_draw();
+    }
+
+    fn set_pan_ready(&self, ready: bool) {
+        if self.pan_ready.replace(ready) != ready {
+            self.sync_cursor();
+            self.canvas.queue_draw();
+        }
+    }
+
+    /// Shipping's `interactiveTarget`: a field, button or slider has focus.
+    fn control_focused(&self) -> bool {
+        let mut widget = self.canvas.root().and_then(|root| root.focus());
+        while let Some(current) = widget {
+            if current.is::<gtk::Text>()
+                || current.is::<gtk::TextView>()
+                || current.is::<gtk::Button>()
+                || current.is::<gtk::Range>()
+                || current.is::<gtk::SpinButton>()
+            {
+                return true;
+            }
+            widget = current.parent();
+        }
+        false
+    }
+
     fn sync_cursor(&self) {
+        if matches!(*self.gesture.borrow(), Some(Gesture::Pan { .. })) {
+            self.canvas.set_cursor_from_name(Some("grabbing"));
+            return;
+        }
+        if self.pan_ready.get() {
+            self.canvas.set_cursor_from_name(Some("grab"));
+            return;
+        }
         let key = self.tool.borrow().clone();
         let ring = self.brush_mode().is_some() && self.brush_hover() == brush_cursor::Hover::Ring;
         self.canvas.set_cursor_from_name(Some(match key.as_str() {
@@ -1651,7 +1779,8 @@ impl State {
                 })
             });
         let stroking = matches!(*self.gesture.borrow(), Some(Gesture::Brush(_)));
-        let panning = matches!(*self.gesture.borrow(), Some(Gesture::Pan { .. }));
+        let panning =
+            matches!(*self.gesture.borrow(), Some(Gesture::Pan { .. })) || self.pan_ready.get();
         brush_cursor::hover(over_image, stroking, panning)
     }
 
@@ -2841,7 +2970,15 @@ impl State {
         drag.connect_drag_begin(move |gesture, x, y| {
             if let Some(state) = weak.upgrade() {
                 state.canvas.grab_focus();
-                state.begin(x, y, shift(gesture));
+                // Shipping: Ctrl-drag pans from anywhere, whatever the tool.
+                let control = gesture
+                    .current_event_state()
+                    .contains(gdk::ModifierType::CONTROL_MASK);
+                if control || state.pan_ready.get() {
+                    state.begin_pan();
+                } else {
+                    state.begin(x, y, shift(gesture));
+                }
             }
         });
         let weak = Rc::downgrade(self);
@@ -2855,6 +2992,7 @@ impl State {
         drag.connect_drag_end(move |_, _, _| {
             if let Some(state) = weak.upgrade() {
                 state.finish();
+                state.sync_cursor();
             }
         });
         self.canvas.add_controller(drag);
@@ -2971,11 +3109,7 @@ impl State {
         let weak = Rc::downgrade(self);
         pan.connect_drag_begin(move |_, _, _| {
             if let Some(state) = weak.upgrade() {
-                *state.gesture.borrow_mut() = Some(Gesture::Pan {
-                    from: state.viewport.get(),
-                    dx: 0.,
-                    dy: 0.,
-                });
+                state.begin_pan();
             }
         });
         let weak = Rc::downgrade(self);
@@ -2988,6 +3122,7 @@ impl State {
         pan.connect_drag_end(move |_, _, _| {
             if let Some(state) = weak.upgrade() {
                 state.gesture.borrow_mut().take();
+                state.sync_cursor();
             }
         });
         self.canvas.add_controller(pan);
@@ -2995,9 +3130,17 @@ impl State {
         // Pointer position anchors wheel zoom.
         let motion = gtk::EventControllerMotion::new();
         let weak = Rc::downgrade(self);
-        motion.connect_motion(move |_, x, y| {
+        motion.connect_motion(move |controller, x, y| {
             let Some(state) = weak.upgrade() else { return };
             state.pointer.set(Some((x, y)));
+            // Ctrl was released while the window lacked keyboard focus.
+            if state.pan_ready.get()
+                && !controller
+                    .current_event_state()
+                    .contains(gdk::ModifierType::CONTROL_MASK)
+            {
+                state.set_pan_ready(false);
+            }
             state.hover_grips(x, y);
             // Only the brush ring follows the pointer; nothing else redraws.
             if state.brush_mode().is_some() {
@@ -3054,19 +3197,74 @@ impl State {
             }
         });
         self.expand_action.add_controller(hover);
-        // Dropped files import at the drop point, as shipping's drop guide.
+        // Shipping previews Trim edges while its button is hovered or focused.
+        let trim = &self.widgets.canvas_bar.trim;
+        let set_trim_hover = {
+            let weak = Rc::downgrade(self);
+            move |on: bool| {
+                if let Some(state) = weak.upgrade() {
+                    state.trim_hover.set(on);
+                    state.canvas.queue_draw();
+                }
+            }
+        };
+        let hover = gtk::EventControllerMotion::new();
+        let set = set_trim_hover.clone();
+        hover.connect_enter(move |_, _, _| set(true));
+        let set = set_trim_hover.clone();
+        hover.connect_leave(move |_| set(false));
+        trim.add_controller(hover);
+        let focus = gtk::EventControllerFocus::new();
+        let set = set_trim_hover.clone();
+        focus.connect_enter(move |_| set(true));
+        focus.connect_leave(move |_| set_trim_hover(false));
+        trim.add_controller(focus);
+        // Shipping takes image drops anywhere in the editor: the guide shows
+        // where they will land, and they import at the drop point.
         let drop = gtk::DropTarget::new(gdk::FileList::static_type(), gdk::DragAction::COPY);
         let weak = Rc::downgrade(self);
-        drop.connect_drop(move |_, value, x, y| {
+        drop.connect_enter(move |target, x, y| {
+            if let Some(state) = weak.upgrade() {
+                state.drag_over(target, x, y);
+            }
+            gdk::DragAction::COPY
+        });
+        let weak = Rc::downgrade(self);
+        drop.connect_motion(move |target, x, y| {
+            if let Some(state) = weak.upgrade() {
+                state.drag_over(target, x, y);
+            }
+            gdk::DragAction::COPY
+        });
+        let weak = Rc::downgrade(self);
+        drop.connect_leave(move |_| {
+            if let Some(state) = weak.upgrade() {
+                state.end_drag_over();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        drop.connect_drop(move |target, value, x, y| {
             let (Some(state), Ok(files)) = (weak.upgrade(), value.get::<gdk::FileList>()) else {
                 return false;
             };
-            let paths: Vec<_> = files.files().iter().filter_map(|f| f.path()).collect();
-            let point = state.to_document(x, y);
+            let point = state.drop_point(target, x, y);
+            state.end_drag_over();
+            let paths: Vec<_> = files
+                .files()
+                .iter()
+                .filter_map(|f| f.path())
+                .filter(|path| captures_app::editor_session::is_supported_image_path(path))
+                .collect();
+            if paths.is_empty() {
+                *state.notice.borrow_mut() =
+                    Some((captures_app::editor_session::DROP_UNSUPPORTED.into(), true));
+                state.update_export();
+                return false;
+            }
             state.import_files(paths, point);
             true
         });
-        self.canvas.add_controller(drop);
+        window.add_controller(drop);
         let weak = Rc::downgrade(self);
         self.properties.inspector.defaults.connect_pick(move |key| {
             if let Some(state) = weak.upgrade() {
@@ -3130,13 +3328,35 @@ impl State {
             let Some(state) = weak.upgrade() else {
                 return glib::Propagation::Proceed;
             };
+            if matches!(key, gdk::Key::Control_L | gdk::Key::Control_R) {
+                // Shipping `isPanModifierKey`: hold Ctrl to pan, unless a
+                // control has focus.
+                state.set_pan_ready(!state.control_focused());
+                return glib::Propagation::Proceed;
+            }
             if state.key(key, modifiers) {
                 glib::Propagation::Stop
             } else {
                 glib::Propagation::Proceed
             }
         });
+        let weak = Rc::downgrade(self);
+        keys.connect_key_released(move |_, key, _, _| {
+            if matches!(key, gdk::Key::Control_L | gdk::Key::Control_R)
+                && let Some(state) = weak.upgrade()
+            {
+                state.set_pan_ready(false);
+            }
+        });
         window.add_controller(keys);
+        let weak = Rc::downgrade(self);
+        window.connect_is_active_notify(move |window| {
+            if !window.is_active()
+                && let Some(state) = weak.upgrade()
+            {
+                state.set_pan_ready(false);
+            }
+        });
     }
 
     fn key(self: &Rc<Self>, key: gdk::Key, modifiers: gdk::ModifierType) -> bool {
@@ -3613,7 +3833,7 @@ impl State {
 
     /// Grip cursors and shipping's hover tips over the selected layer.
     fn hover_grips(&self, x: f64, y: f64) {
-        if self.gesture.borrow().is_some() || self.brush_mode().is_some() {
+        if self.gesture.borrow().is_some() || self.brush_mode().is_some() || self.pan_ready.get() {
             return;
         }
         let point = self.to_document(x, y).filter(|_| self.transform_tool());
@@ -3960,6 +4180,28 @@ impl State {
                 self.expand_armed.get(),
                 accent,
             );
+        }
+        // A file drag: where the image will land.
+        if let Some(guide) = self.drop_guide.borrow().as_ref() {
+            canvas_chrome::drop_guide(
+                snapshot,
+                guide,
+                &|point| self.to_screen(point),
+                accent,
+                t.number("r-md"),
+            );
+        }
+        // Trim edges: the margins it would cut, while its button is hovered.
+        if self.trim_hover.get() {
+            let preview = self
+                .presented
+                .borrow()
+                .as_ref()
+                .filter(|presented| presented.can_trim)
+                .and_then(|presented| presented.trim_preview.clone());
+            if let Some(preview) = preview {
+                canvas_chrome::trim(snapshot, &preview, &|point| self.to_screen(point));
+            }
         }
         snapshot.pop();
         let wanted = expand.and(self.selected.borrow().clone());
