@@ -30,7 +30,7 @@ use std::time::{Duration, Instant};
 use captures_app::capture_error;
 use captures_app::capture_flow::CaptureFlow;
 use captures_app::capture_menu::{
-    self, GuidanceChip, GuidanceTarget, MenuMode, PrimaryState, RecordingToggle,
+    self, GuidanceChip, GuidanceTarget, MenuMode, PreferenceTarget, PrimaryState, RecordingToggle,
 };
 use captures_app::controls::select;
 use captures_app::motion::{Motion, Pose};
@@ -83,6 +83,8 @@ enum Hit {
     /// A `.recording-window-target` button, activated by keyboard or UI
     /// Automation (pointer clicks hit-test the surface instead).
     Pick(usize),
+    /// A `.capture-selector-preferences-link` in the note.
+    Preferences(PreferenceTarget),
 }
 
 /// The bar's selects, in their UI Automation key order.
@@ -111,6 +113,8 @@ fn uia_key(hit: Hit) -> u32 {
         Hit::Target(Target::Window) => 5,
         Hit::Target(Target::Display) => 6,
         Hit::Primary => 7,
+        Hit::Preferences(PreferenceTarget::IncludeRecordingControlsInCaptures) => 8,
+        Hit::Preferences(PreferenceTarget::AutoStartOnSelection) => 9,
         Hit::Toggle(toggle) => {
             10 + RecordingToggle::ALL
                 .iter()
@@ -132,6 +136,8 @@ fn uia_hit(key: u32) -> Option<Hit> {
         5 => Hit::Target(Target::Window),
         6 => Hit::Target(Target::Display),
         7 => Hit::Primary,
+        8 => Hit::Preferences(PreferenceTarget::IncludeRecordingControlsInCaptures),
+        9 => Hit::Preferences(PreferenceTarget::AutoStartOnSelection),
         10..=12 => Hit::Toggle(RecordingToggle::ALL[(key - 10) as usize]),
         20..=24 => Hit::Select(FIELDS[(key - 20) as usize]),
         100..=999 => Hit::Option((key - 100) as usize),
@@ -541,8 +547,12 @@ struct Layout {
     /// The first row's select (Aspect), its caption to its left.
     pickers: Vec<FieldBox>,
     primary: Option<(Rect, gfx::Text, bool)>,
-    note: Vec<(gfx::Text, f32, bool)>,
+    /// The note's runs: text, x, bold, and the link it belongs to.
+    note: Vec<(gfx::Text, f32, bool, Option<Hit>)>,
     note_y: f32,
+    /// `.capture-selector-preferences-link` buttons: their box, where the
+    /// external icon sits, and their action.
+    links: Vec<(Rect, f32, Hit)>,
     /// `.capture-guidance` at rest, 16% down the display.
     guidance: Option<GuidanceBox>,
 }
@@ -745,6 +755,7 @@ impl Menu {
         if let Some((_, fields)) = &layout.options {
             order.extend(fields.iter().filter(|f| f.enabled).map(|f| f.hit));
         }
+        order.extend(layout.links.iter().map(|(.., hit)| *hit));
         order
     }
 
@@ -786,7 +797,7 @@ impl Menu {
             self.focus_visible = true;
         }
         match (self.focus, enter) {
-            (Some(hit @ (Hit::Close | Hit::Pick(_))), _) => Some(hit),
+            (Some(hit @ (Hit::Close | Hit::Pick(_) | Hit::Preferences(_))), _) => Some(hit),
             (Some(Hit::Toggle(_)), true) => None,
             (_, true) => Some(Hit::Primary),
             (Some(hit), false) if self.focus_order().contains(&hit) => Some(hit),
@@ -912,20 +923,35 @@ impl Menu {
         if let Some((_, fields)) = &layout.options {
             items.extend(fields.iter().map(field));
         }
+        // The note: its Preferences links are buttons named by their text;
+        // the `·` is `aria-hidden`.
         let excluded = self.mode == MenuMode::Screenshot || self.controls_excluded;
-        let note = format!(
-            "{} {} {}",
-            capture_menu::visibility_note(self.mode, true, excluded).text(),
-            capture_menu::NOTE_SEPARATOR,
-            capture_menu::confirm_note(self.auto_start).text
-        );
-        let note_rect = rect(
-            layout.panel.left,
-            layout.note_y,
-            layout.panel.right,
-            layout.panel.bottom,
-        );
-        items.push(Item::new(UIA_NOTE, Role::Text, note, note_rect));
+        let visibility = capture_menu::visibility_note(self.mode, true, excluded).text();
+        let confirm = capture_menu::confirm_note(self.auto_start);
+        let link = |hit| {
+            layout
+                .links
+                .iter()
+                .find(|(.., h)| *h == hit)
+                .map(|(r, ..)| *r)
+        };
+        for (text, target) in [
+            (
+                visibility,
+                Some(PreferenceTarget::IncludeRecordingControlsInCaptures),
+            ),
+            (confirm.text.to_string(), confirm.target),
+        ] {
+            let hit = target.map(Hit::Preferences);
+            if let Some((hit, r)) = hit.and_then(|hit| Some((hit, link(hit)?))) {
+                items.push(control(hit, Role::Button, &text, r, true));
+            } else if let Some((run, x, ..)) = layout.note.last() {
+                // "Press Enter to confirm", the note's last run.
+                let y = layout.note_y;
+                let r = rect(*x, y, x + run.width, y + run.height);
+                items.push(Item::new(UIA_NOTE, Role::Text, text, r));
+            }
+        }
         if let (Some((field, state)), Some(listbox)) = (self.open, &layout.listbox) {
             items.push(Item::new(
                 UIA_LISTBOX,
@@ -960,6 +986,7 @@ impl Menu {
             "select" => Hit::Select(Field::Aspect),
             "toggle" => Hit::Toggle(RecordingToggle::ShowCursor),
             "window" => Hit::Pick(0),
+            "link" => Hit::Preferences(PreferenceTarget::IncludeRecordingControlsInCaptures),
             _ => Hit::Target(self.target),
         };
         self.set_focus(hit, true);
@@ -1490,22 +1517,49 @@ impl Menu {
         };
         // DirectWrite widths drop trailing spaces; add the space back.
         let space = note_text("a a", false)?.width - 2. * note_text("a", false)?.width;
-        let pieces = [
-            (visibility.lead.trim_end(), false, space),
-            (visibility.emphasis, true, 0.),
-            (visibility.trail.as_str(), false, 4.),
-            (capture_menu::NOTE_SEPARATOR, false, 4.),
-            (confirm.text, false, 0.),
+        // The note's flex items, `--s-2` apart; a note with a Preferences
+        // target is a link (`padding: 2px 5px`, then a 5 px gap and the 10 px
+        // external icon).
+        let groups = [
+            (
+                vec![
+                    (visibility.lead.trim_end(), false, space),
+                    (visibility.emphasis, true, 0.),
+                    (visibility.trail.as_str(), false, 0.),
+                ],
+                visibility.target.map(Hit::Preferences),
+            ),
+            (vec![(capture_menu::NOTE_SEPARATOR, false, 0.)], None),
+            (
+                vec![(confirm.text, false, 0.)],
+                confirm.target.map(Hit::Preferences),
+            ),
         ];
         let mut note = Vec::new();
+        let mut note_links = Vec::new();
         let mut x = 0.;
-        for (text, strong, after) in pieces {
-            let laid = note_text(text, strong)?;
-            let w = laid.width;
-            note.push((laid, x, strong));
-            x += w + after;
+        for (index, (runs, link)) in groups.into_iter().enumerate() {
+            if index > 0 {
+                x += 4.;
+            }
+            let start = x;
+            if link.is_some() {
+                x += 5.;
+            }
+            for (text, strong, after) in runs {
+                let laid = note_text(text, strong)?;
+                let w = laid.width;
+                note.push((laid, x, strong, link));
+                x += w + after;
+            }
+            if let Some(hit) = link {
+                let icon = x + 5.;
+                x = icon + 10. + 5.;
+                note_links.push((start, x, icon, hit));
+            }
         }
         let note_w = x;
+        let note_h = note.first().map_or(0., |(text, ..)| text.height);
         let record = self.mode == MenuMode::Recording;
         // `.recording-options-row`: 74 px min height, `--s-5` padding, top border.
         let options_h = if record { 78. } else { 0. };
@@ -1620,6 +1674,7 @@ impl Menu {
             }
             None => None,
         };
+        let note_y = top + 1. + 56. + options_h + 10.;
         Ok(Layout {
             guidance,
             panel,
@@ -1633,9 +1688,19 @@ impl Menu {
             primary,
             note: note
                 .into_iter()
-                .map(|(text, nx, strong)| (text, left + (pw - note_w) / 2. + nx, strong))
+                .map(|(text, nx, strong, link)| {
+                    (text, left + (pw - note_w) / 2. + nx, strong, link)
+                })
                 .collect(),
-            note_y: top + 1. + 56. + options_h + 10.,
+            note_y,
+            links: note_links
+                .into_iter()
+                .map(|(from, to, icon, hit)| {
+                    let x = left + (pw - note_w) / 2.;
+                    let r = rect(x + from, note_y - 2., x + to, note_y + note_h + 2.);
+                    (r, x + icon, hit)
+                })
+                .collect(),
         })
     }
 
@@ -1816,6 +1881,9 @@ impl Menu {
         }
         if contains(&layout.close, x, y) {
             return Some(Hit::Close);
+        }
+        if let Some((.., hit)) = layout.links.iter().find(|(r, ..)| contains(r, x, y)) {
+            return Some(*hit);
         }
         if let Some((r, _, enabled)) = &layout.primary
             && *enabled
@@ -2071,9 +2139,35 @@ impl Menu {
             })?;
         }
         self.paint_focus(dc, t, &layout)?;
-        // `.capture-selector-note`
-        for (text, x, strong) in &layout.note {
-            let color = if *strong {
+        // `.capture-selector-note`; a hovered or focused Preferences link
+        // lights `--glass-hover` with `--theme-accent-text-strong` ink and a
+        // fully opaque icon.
+        let lit =
+            |hit: Hit| self.hover == Some(hit) || (self.focus_visible && self.focus == Some(hit));
+        let link_ink = t.color("theme-accent-text-strong");
+        for (r, icon_x, hit) in &layout.links {
+            let icon = if lit(*hit) {
+                gfx::fill_round(dc, *r, t.n("r-sm"), t.color("glass-hover"))?;
+                link_ink
+            } else {
+                alpha(t.color("glass-text-subtle"), 0.72)
+            };
+            // The 16-unit shipping icon drawn 10 DIPs wide, 1.6 units thick.
+            let y = (r.top + r.bottom) / 2. - 5.;
+            gfx::icon(
+                dc,
+                &g.factory,
+                "external-link",
+                &[],
+                (*icon_x, y, 15.),
+                1.6,
+                icon,
+            )?;
+        }
+        for (text, x, strong, link) in &layout.note {
+            let color = if link.is_some_and(lit) {
+                link_ink
+            } else if *strong {
                 glass_text
             } else {
                 t.color("glass-text-subtle")
@@ -2153,6 +2247,10 @@ impl Menu {
                 gfx::ring(dc, switch, 9., 0., 2., t.color("surface-canvas"))?;
                 gfx::ring(dc, switch, 9., 2., 4., tight)
             }
+            Hit::Preferences(_) => match layout.links.iter().find(|(.., h)| *h == hit) {
+                Some((r, ..)) => gfx::ring(dc, *r, t.n("r-sm"), 2., 4., accent),
+                None => Ok(()),
+            },
             Hit::Option(_) | Hit::Pick(_) => Ok(()),
         }
     }
@@ -2667,6 +2765,8 @@ pub enum Outcome {
     Captured(Box<CaptureResult>),
     /// Record was confirmed: the recorder takes over the flow and its Escape.
     Record(Box<Handoff>),
+    /// A note link closed the bar to open Preferences at this row.
+    Preferences(PreferenceTarget),
 }
 
 pub struct Handoff {
@@ -2711,6 +2811,8 @@ struct Capture {
     recaptured: bool,
     /// Where a finished recapture lands, for `show`.
     arrive_as: Option<Landing>,
+    /// A note link cancelled the bar to open Preferences at this row.
+    preferences: Option<PreferenceTarget>,
 }
 
 /// Where a recapture opens: the target, the mode, and whether it is a
@@ -2827,6 +2929,7 @@ pub fn open(
             switching: None,
             recaptured: false,
             arrive_as: None,
+            preferences: None,
         })
     });
     Ok(())
@@ -3046,8 +3149,12 @@ pub fn service() -> Option<Outcome> {
             Phase::Done(result) => Some(std::mem::replace(&mut **result, Ok(None))),
             Phase::Record(_) => None,
         };
+        let preferences = capture.preferences;
         if finished.is_some() {
             *slot = None;
+        }
+        if let (Some(target), Some(_)) = (preferences, &finished) {
+            return Some(Outcome::Preferences(target));
         }
         finished.map(|result| Outcome::Captured(Box::new(result)))
     })
@@ -3574,6 +3681,11 @@ impl Capture {
         match action {
             Hit::Close => self.cancel(),
             Hit::Primary => self.confirm(),
+            // Shipping `openCapturePreference`: open Preferences, then cancel.
+            Hit::Preferences(target) => {
+                self.preferences = Some(target);
+                self.cancel();
+            }
             // Shipping's window target `onClick`: pick it, then auto-start.
             Hit::Pick(index) => {
                 if overlay.menu.starting
@@ -3940,11 +4052,14 @@ mod tests {
             Hit::Target(Target::Display),
             Hit::Select(Field::Aspect),
             Hit::Primary,
+            Hit::Preferences(PreferenceTarget::IncludeRecordingControlsInCaptures),
         ];
         assert_eq!(m.focus_order(), order);
-        // Shift+Tab from nothing lands on the last control; Tab wraps.
+        // Shift+Tab from nothing lands on the last control, the note's
+        // Preferences link, which Enter follows; Tab wraps.
         assert!(m.focus_step(true));
-        assert_eq!((m.focus, m.focus_visible), (Some(Hit::Primary), true));
+        assert_eq!((m.focus, m.focus_visible), (Some(order[7]), true));
+        assert_eq!(m.focus_key(true), Some(order[7]));
         m.focus_step(false);
         assert_eq!(m.focus, Some(Hit::Close));
         // Enter on Close closes; on a segment it confirms (shipping's
@@ -3971,6 +4086,31 @@ mod tests {
         m.released(close.left + 4., close.top + 4.);
         m.pressed(5., 5.);
         assert_eq!(m.focus, None);
+        m.released(5., 5.);
+        // Clicking the note's link follows it.
+        let (link, ..) = m.layout.as_ref().unwrap().links[0];
+        let (x, y) = (link.right - 3., (link.top + link.bottom) / 2.);
+        m.pressed(x, y);
+        assert_eq!(m.released(x, y), Some(order[7]));
+        // With auto-start the confirm note is a second link.
+        m.auto_start = true;
+        lay_out(&mut m);
+        let links: Vec<Hit> = m
+            .layout
+            .as_ref()
+            .unwrap()
+            .links
+            .iter()
+            .map(|l| l.2)
+            .collect();
+        assert_eq!(
+            links,
+            [
+                order[7],
+                Hit::Preferences(PreferenceTarget::AutoStartOnSelection)
+            ]
+        );
+        m.auto_start = false;
 
         // Record: Space flips a switch, Enter on it does nothing.
         m.mode = MenuMode::Recording;
@@ -4019,10 +4159,8 @@ mod tests {
                 (Role::Check, "Show clicks"),
                 (Role::Check, "Record desktop audio"),
                 (Role::ComboBox, "Microphone"),
-                (
-                    Role::Text,
-                    "These controls won’t show in recordings · Press Enter to confirm"
-                ),
+                (Role::Button, "These controls won’t show in recordings"),
+                (Role::Text, "Press Enter to confirm"),
             ]
         );
         let find = |items: &[crate::panel_uia::Item], name: &str| {

@@ -221,7 +221,11 @@ capture-phase handler does. The bar exposes UI Automation through
 capture controls", the pressed segments in "Capture type" and "Capture
 target", the comboboxes and their listbox, the primary's label, the Record
 checkboxes and the note); unit- and render-checked (`--select focus-segment`
-and friends), not exercised live. Confirming hands the capture flow
+and friends), not exercised live. The note's "These controls won't show…"
+and, with Auto-capture on, its auto-capture copy are shipping's Preferences
+links (external icon, `--glass-hover` when lit); following one closes the bar
+and opens Preferences, which cannot yet scroll to and highlight the row as
+shipping does. Confirming hands the capture flow
 to the shared recording worker, which verifies FFmpeg, prepares the session,
 then shows the "RECORDING STARTS IN" countdown (Esc cancels the take) and starts.
 The controls (`hud.rs`, shipping `.recording-hud` at 430×102) float centered
