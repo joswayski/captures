@@ -1016,6 +1016,27 @@ erase` renders the card in light and dark; a test checks the rows, the
 order and that the preview takes no focus; a live window under UIA listed
 the Wand, Erase and Restore sections with their paragraphs and the image.
 
+Windows screenshot-editor tooltips: every editor control with a shipping
+`title` now shows it on hover (`editor/tips.rs`) through the host's shared
+glass tooltip (`src/tooltip.rs`), below its control or above it on the save
+row: Undo, Redo, Fit, the zoom buttons and slider, Trim edges, Background
+color, Add layer, the layer row's drag handle (`Drag to reorder`/`Layer is
+locked`), image names (`Double-click to rename`), eye and lock, ⋯ and its
+card's actions, the Shapes flyout, the Properties fields (Apply crop
+(Enter), the image W/H/X/Y and their locked copy, canvas size, Lock output
+aspect ratio, Maximum file size), the size estimate, the save folder, Copy
+image, Save as new file and Save. Like a `title` it waits the system hover
+delay, switches at once between controls while one shows and hides on a
+press or a key until the pointer leaves; it fades over `--dur-1` on the
+compositor (instant under reduced motion). The rail shows shipping's own
+glass label (`.screenshot-tool-rail span`) 10 px right of a tool at once on
+hover or keyboard focus, hidden while the Shapes flyout is open. Change… and
+Export settings have no `title` in shipping, so they show none. Windows:
+`--select tip-undo`, `tip-rail`, `tip-grip`, `tip-save` and `export-tip`
+render in light and dark; a test checks the delay, switching, press
+dismissal, the rail label on hover and focus. A real pointer hover is
+unverified (no synthesized input on the shared desktop).
+
 Hardware pass 16 verified crop dragging/dashes/apply/undo, field commits,
 Properties scroll, rename selection and reorder, compositor pulse idle,
 and final-window shutdown. Follow-up fixes keep the dragged row's 0.42

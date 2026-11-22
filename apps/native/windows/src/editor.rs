@@ -78,6 +78,7 @@ mod rotate;
 mod rows;
 mod text;
 mod text_section;
+mod tips;
 pub use compare::Part as ComparePart;
 pub use export::Ex;
 pub use layer_menu::Act;
@@ -350,6 +351,8 @@ enum Kind {
     /// Apply crop's `screenshot-cta-pulse` ring, grown and faded on the
     /// compositor.
     Pulse,
+    /// The tooltip or rail label above everything, faded on the compositor.
+    Tip,
     Ctl(Target, Layer),
 }
 
@@ -771,6 +774,9 @@ pub struct Editor {
     /// Apply crop's pulse ring, and whether its new visual needs the animation.
     pulse: usize,
     pulse_fresh: bool,
+    /// The tooltip's node and state.
+    tip_node: usize,
+    tips: tips::Tips,
     properties: usize,
     bar: usize,
     header: usize,
@@ -1453,6 +1459,8 @@ impl Editor {
             overlay_fresh: true,
             overlay_rest_dirty: true,
             trim_shown: false,
+            tip_node: 0,
+            tips: tips::Tips::default(),
             expand_shown: None,
             motions: Vec::new(),
             dcomp: None,
@@ -1658,6 +1666,9 @@ impl Editor {
         self.nodes[self.menu_node].visible = false;
         self.menu_lit = self.add(Some(self.menu_node), Kind::MenuLit, 0.);
         self.nodes[self.menu_lit].visible = false;
+        self.tip_node = self.add(Some(root), Kind::Tip, tips::TIP_BLEED);
+        self.nodes[self.tip_node].visible = false;
+        self.nodes[self.tip_node].opacity = 0.;
     }
 
     /// Rows for `count` layers.
@@ -1821,6 +1832,21 @@ impl Editor {
         match target {
             Target::Fit => header::FIT_TOOLTIP.into(),
             Target::Trim => header::TRIM_TOOLTIP.into(),
+            Target::Undo => "Undo (Command/Ctrl+Z)".into(),
+            Target::Redo => "Redo (Command/Ctrl+Shift+Z or Ctrl+Y)".into(),
+            Target::ZoomOut => "Zoom out (Command/Ctrl+\u{2212})".into(),
+            Target::ZoomIn => "Zoom in (Command/Ctrl++)".into(),
+            Target::Shape(i) => SHAPE_TOOLS[i].name(),
+            Target::Eye(i) => match self.layer(i) {
+                Some(l) if l.visible => "Hide layer".into(),
+                Some(_) => "Show layer".into(),
+                None => String::new(),
+            },
+            Target::Lock(i) => match self.layer(i) {
+                Some(l) if l.locked => "Unlock layer".into(),
+                Some(_) => "Lock layer".into(),
+                None => String::new(),
+            },
             Target::Background => editor_chrome::colors::BACKGROUND_TOOLTIP.into(),
             Target::Slider => header::ZOOM_SLIDER_TOOLTIP.into(),
             Target::Tool(i) if RAIL_TOOLS[i].key == editor_chrome::SHAPES_KEY => {
@@ -2128,6 +2154,7 @@ impl Editor {
         if let Some(id) = options.select.as_ref().filter(|s| {
             !s.starts_with("drop")
                 && !s.starts_with("export")
+                && !s.starts_with("tip")
                 && !matches!(
                     s.as_str(),
                     "layer-menu"
@@ -2167,6 +2194,9 @@ impl Editor {
             return;
         }
         self.flyout = open;
+        if open {
+            self.dismiss_tip();
+        }
         self.nodes[self.flyout_node].visible = open;
         self.nodes[self.flyout_node].props = true;
         if !open && matches!(self.focus, Some(Target::Shape(_))) {
@@ -3461,6 +3491,10 @@ impl Editor {
     }
 
     fn fade(&mut self, node: usize, to: f32) {
+        self.fade_over(node, to, self.t.n("dur-2") / 1000.);
+    }
+
+    fn fade_over(&mut self, node: usize, to: f32, seconds: f32) {
         let now = Instant::now();
         let from = self
             .motions
@@ -3473,7 +3507,6 @@ impl Editor {
         if self.reduced_motion || (from - to).abs() < 1e-4 || self.hwnd.is_invalid() {
             return;
         }
-        let seconds = self.t.n("dur-2") / 1000.;
         let curve = self.curve();
         self.motions.push(Motion {
             node,
@@ -3642,6 +3675,11 @@ impl Editor {
             self.refresh(true);
             self.need = true;
         }
+        let dragging = self.gesture.is_some() || self.pressed.is_some() || self.row_drag.is_some();
+        let tip = pointer
+            .filter(|_| !dragging)
+            .and_then(|(x, y)| self.tip_at(x, y));
+        self.hover_tip(tip);
     }
 
     /// Tab order, in DOM order, skipping disabled controls.
@@ -3750,6 +3788,7 @@ impl Editor {
         if changed && let Some(target) = focus {
             self.events.push(Event::Focus(target));
         }
+        self.focus_tip();
         self.refresh(true);
         self.need = true;
     }
@@ -4122,6 +4161,7 @@ impl Editor {
             Kind::BgMenu => self.draw_bg_menu(dc, (w, h))?,
             Kind::LayerCard => self.draw_layer_card(dc, (w, h))?,
             Kind::Compare => self.draw_compare(dc, (w, h))?,
+            Kind::Tip => self.draw_tip(dc, (w, h))?,
             Kind::LayerScroll => self.draw_layer_scroll(dc, (w, h))?,
         }
         Ok(())
@@ -5145,6 +5185,7 @@ impl Editor {
             self.refresh(false);
         }
         self.place_expand();
+        self.place_tip();
         Ok(())
     }
 
@@ -5656,6 +5697,7 @@ impl Editor {
                     self.preview_gesture();
                 }
             }
+            WM_TIMER if wp.0 == tips::TIP_TIMER => self.tip_due(),
             WM_TIMER if wp.0 == TIMER_MOTION => {
                 let now = Instant::now();
                 self.motions.retain(|m| m.progress(now) < 1.);
@@ -5746,6 +5788,7 @@ impl Editor {
                 }
             }
             WM_LBUTTONDOWN | WM_LBUTTONDBLCLK | WM_MBUTTONDOWN => {
+                self.dismiss_tip();
                 unsafe { SetCapture(self.hwnd) };
                 let hit = self.hit(x, y);
                 if self.flyout
@@ -6025,6 +6068,7 @@ impl Editor {
                 return Some(LRESULT(1));
             }
             WM_KEYDOWN => {
+                self.dismiss_tip();
                 let vk = VIRTUAL_KEY(wp.0 as u16);
                 let (ctrl, shift) = (key_down(VK_CONTROL), key_down(VK_SHIFT));
                 if (vk == VK_ESCAPE && self.cancel_row_drag()) || self.rename_key(vk, ctrl, shift) {
@@ -6854,6 +6898,19 @@ pub fn render_offscreen(
         Some("export-menu") => {
             editor.place();
             editor.open_menu(menu::MenuKind::Export(export::Ex::Quality), Some(1));
+        }
+        // Tooltips at rest: Undo's, the first rail tool's label, the bottom
+        // layer's drag handle, the save row's folder and (with Export
+        // settings open) the size estimate.
+        Some(tip @ ("tip-undo" | "tip-rail" | "tip-grip" | "tip-save" | "export-tip")) => {
+            editor.place();
+            editor.settle_tip(match tip {
+                "tip-undo" => tips::Tip::Control(Target::Undo),
+                "tip-rail" => tips::Tip::Rail(0),
+                "tip-grip" => tips::Tip::Grip(0),
+                "tip-save" => tips::Tip::Location,
+                _ => tips::Tip::Estimate,
+            });
         }
         // The bottom layer's ⋯ card.
         Some("layer-menu") => {
@@ -7702,6 +7759,95 @@ mod tests {
         let _ = std::fs::remove_dir_all(data);
         unsafe { CoUninitialize() };
     }
+    /// Shipping `title` tooltips wait the hover delay, switch at once while
+    /// one shows and hide on a press until the pointer leaves; the rail's
+    /// label shows at once on hover and on keyboard focus.
+    #[test]
+    fn tooltips_wait_switch_dismiss_and_label_the_rail() {
+        use tips::Tip;
+        use windows::Win32::System::Com::*;
+        unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok().unwrap() };
+        let data = std::env::temp_dir().join(format!("captures-tips-{}", std::process::id()));
+        let capture = captures_app::persist_screenshot(
+            &data.join("history"),
+            &RgbaImage::from_pixel(640, 360, Rgba([20, 50, 80, 255])),
+            CaptureMode::Region,
+        )
+        .unwrap();
+        let options = crate::parse(
+            [
+                "test".into(),
+                "--profile".into(),
+                data.to_string_lossy().into_owned(),
+                "--scene".into(),
+                "editor".into(),
+                "--artifact".into(),
+                capture.entry.id,
+            ]
+            .into_iter(),
+        )
+        .unwrap();
+        let tokens = crate::appearance::tokens(Some("light"), &Default::default());
+        let mut e = render_offscreen(
+            &options,
+            Gfx::new(&tokens, false).unwrap(),
+            tokens,
+            (1280., 840.),
+        )
+        .unwrap();
+        let at = |e: &Editor, target: Target| {
+            let r = e.target_rect(target);
+            let (x, y) = (r.x + r.w / 2., r.y + r.h / 2.);
+            LPARAM((((x * e.scale) as u32) | (((y * e.scale) as u32) << 16)) as isize)
+        };
+        let shown = |e: &Editor| (e.tips.shown, e.nodes[e.tip_node].opacity);
+        let fit = at(&e, Target::Fit);
+        e.handle(WM_MOUSEMOVE, WPARAM(0), fit);
+        assert_eq!(shown(&e), (None, 0.), "waits the hover delay");
+        e.handle(WM_TIMER, WPARAM(tips::TIP_TIMER), LPARAM(0));
+        assert_eq!(shown(&e), (Some(Tip::Control(Target::Fit)), 1.));
+        assert_eq!(
+            e.tip_text(Tip::Control(Target::Fit)).as_deref(),
+            Some(header::FIT_TOOLTIP)
+        );
+        let zoom_in = at(&e, Target::ZoomIn);
+        e.handle(WM_MOUSEMOVE, WPARAM(0), zoom_in);
+        assert_eq!(shown(&e).0, Some(Tip::Control(Target::ZoomIn)));
+        assert_eq!(
+            e.tip_text(Tip::Control(Target::ZoomIn)).as_deref(),
+            Some("Zoom in (Command/Ctrl++)")
+        );
+        e.handle(WM_LBUTTONDOWN, WPARAM(0), zoom_in);
+        e.handle(WM_LBUTTONUP, WPARAM(0), zoom_in);
+        e.handle(WM_MOUSEMOVE, WPARAM(0), zoom_in);
+        e.handle(WM_TIMER, WPARAM(tips::TIP_TIMER), LPARAM(0));
+        assert_eq!(
+            shown(&e),
+            (None, 0.),
+            "a press hides it until the pointer leaves"
+        );
+        let rail = at(&e, Target::Tool(1));
+        e.handle(WM_MOUSEMOVE, WPARAM(0), rail);
+        assert_eq!(
+            shown(&e),
+            (Some(Tip::Rail(1)), 1.),
+            "the rail label shows at once"
+        );
+        e.handle(WM_MOUSELEAVE, WPARAM(0), LPARAM(0));
+        assert_eq!(shown(&e), (None, 0.));
+        e.set_focus(Some(Target::Tool(2)), true);
+        assert_eq!(
+            shown(&e).0,
+            Some(Tip::Rail(2)),
+            "focus-visible shows the label"
+        );
+        e.set_focus(Some(Target::Fit), true);
+        assert_eq!(shown(&e).0, None);
+        drop(e);
+        let _ = std::fs::remove_dir_all(data);
+        unsafe { CoUninitialize() };
+    }
+
     /// Shipping's Eraser section: the help paragraphs around Wand's controls,
     /// and Erase and Restore's brush preview above Size, which takes no focus.
     #[test]

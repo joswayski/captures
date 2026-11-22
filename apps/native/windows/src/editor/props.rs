@@ -1443,6 +1443,14 @@ impl Editor {
                 .unwrap_or_default(),
             // `title="Canvas width"`.
             Prop::Number(num) if num.is_canvas() => num.label().into(),
+            Prop::CropAction(true) => "Apply crop (Enter)".into(),
+            // The image section's fields: locked copy without its period.
+            Prop::Number(Num::LayerWidth | Num::LayerHeight | Num::LayerX | Num::LayerY)
+                if self.selected_image().is_some_and(|i| i.base.locked) =>
+            {
+                geometry::LOCKED.trim_end_matches('.').into()
+            }
+            Prop::Number(Num::LayerWidth | Num::LayerHeight) => geometry::KEEPS_ASPECT.into(),
             _ => String::new(),
         }
     }

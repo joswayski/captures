@@ -596,6 +596,12 @@ impl Editor {
             .map_or_else(|_| "—".into(), |(w, h)| format!("{w} × {h}"))
     }
 
+    /// `.screenshot-output-estimate`'s control while Export settings is open.
+    pub(super) fn estimate_rect(&self) -> Option<Rect> {
+        self.export_item(Item::Estimate)
+            .filter(|_| self.export.open)
+    }
+
     fn export_item(&self, item: Item) -> Option<Rect> {
         self.l
             .items
