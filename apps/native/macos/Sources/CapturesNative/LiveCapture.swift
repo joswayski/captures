@@ -1834,7 +1834,7 @@ final class LiveCaptureController: NSObject {
         preparingUnified = true
         status.stringValue = "Preparing capture controls…"
         let request = unifiedPreparation.begin()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+        afterCaptureWindowsLeave { [weak self] in
             guard let self, self.flowGeneration == generation,
                   self.unifiedPreparation.accepts(request) else { return }
             self.run({
@@ -2082,6 +2082,38 @@ final class LiveCaptureController: NSObject {
         }
     }
 
+    /// A selector's frozen frame is grabbed only once every window Captures
+    /// ordered out for it (mini previews, a closing menu) has left the
+    /// screen, and at most `limit` seconds after the request, the fixed
+    /// settle time this replaces.
+    private func afterCaptureWindowsLeave(limit: TimeInterval = 0.3, _ body: @escaping () -> Void) {
+        let started = CACurrentMediaTime()
+        func check() {
+            let waited = CACurrentMediaTime() - started
+            guard waited < limit, Self.captureWindowsLeaving() else {
+                Metrics.emit("capture-windows-left", milliseconds: waited * 1000, detail: waited < limit ? "left" : "limit")
+                body(); return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.008, execute: check)
+        }
+        // A turn of the run loop first, so windows ordered out in this one
+        // have reached the window server.
+        DispatchQueue.main.async(execute: check)
+    }
+
+    /// Whether the window server still shows a Captures window that AppKit
+    /// no longer reports visible (ordered out, or a menu fading away).
+    static func captureWindowsLeaving() -> Bool {
+        let visible = Set(NSApp.windows.filter(\.isVisible).map(\.windowNumber))
+        let pid = Int(ProcessInfo.processInfo.processIdentifier)
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]]
+        else { return false }
+        return list.contains {
+            ($0[kCGWindowOwnerPID as String] as? Int) == pid
+                && !visible.contains($0[kCGWindowNumber as String] as? Int ?? -1)
+        }
+    }
+
     private func screen(for display: DisplayItem) -> NSScreen? {
         NSScreen.screens.first {
             ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.stringValue
@@ -2090,7 +2122,7 @@ final class LiveCaptureController: NSObject {
     }
 
     private func prepareRegion(display: DisplayItem, screen: NSScreen, preferences: CapturePreferences, generation: UInt64) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+        afterCaptureWindowsLeave { [weak self] in
             guard let self, self.flowGeneration == generation else { return }
             self.run({
                 let session = try NativeRegionSession.prepare(display: display.id, generation: generation, preferences: preferences)
@@ -2136,7 +2168,7 @@ final class LiveCaptureController: NSObject {
 
     private func prepareWindow(display: DisplayItem, screen: NSScreen,
                                preferences: CapturePreferences, generation: UInt64) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+        afterCaptureWindowsLeave { [weak self] in
             guard let self, self.flowGeneration == generation else { return }
             self.run({
                 let session = try NativeWindowSession.prepare(display: display.id,
