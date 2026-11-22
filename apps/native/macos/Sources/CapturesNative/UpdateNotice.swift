@@ -389,7 +389,8 @@ final class UpdateNoticeIconView: NSView {
             let rotation = CABasicAnimation(keyPath: "transform.rotation.z")
             rotation.fromValue = 0; rotation.toValue = 2 * Double.pi
             rotation.duration = 0.72; rotation.repeatCount = .infinity
-            spinner.add(rotation, forKey: "update-spin")
+            // Shipping's reduced-motion rule stops looping animations.
+            if !NativeMotion.reduceMotion { spinner.add(rotation, forKey: "update-spin") }
             layer?.addSublayer(spinner)
         }
     }
@@ -518,7 +519,7 @@ final class UpdateNoticeView: NSView {
         let width = frame.width * min(max(fraction ?? 0.34, 0), 1)
         fill.frame = CGRect(x: 0, y: 0, width: width, height: frame.height)
         track.layer?.addSublayer(fill)
-        if fraction == nil {
+        if fraction == nil, !NativeMotion.reduceMotion {
             let slide = CABasicAnimation(keyPath: "position.x")
             slide.fromValue = -width / 2; slide.toValue = frame.width + width / 2
             slide.duration = 1.25; slide.repeatCount = .infinity

@@ -978,7 +978,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
             guard let self, self.highlightGeneration == generation else { return }
             self.highlightedSetting = nil
             NSAnimationContext.runAnimationGroup({ context in
-                context.duration = Double(self.tokens.number("dur-3")) / 1000
+                context.duration = NativeMotion.reduceMotion ? 0 : Double(self.tokens.number("dur-3")) / 1000
                 self.highlightView?.animator().alphaValue = 0
             }, completionHandler: { [weak self] in
                 guard let self, self.highlightedSetting == nil else { return }
