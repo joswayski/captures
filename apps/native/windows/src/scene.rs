@@ -846,6 +846,9 @@ pub struct Scene {
     pub events: Vec<Event>,
     pub rows: Vec<RowState>,
     pub active: usize,
+    /// A clicked sidebar entry stays active while its scroll runs and after
+    /// it lands (shipping's pinned nav), until the user scrolls themselves.
+    pub pinned: bool,
     pub hover: Option<Target>,
     pub pressed: Option<Target>,
     pub focus: Option<Target>,
@@ -1001,6 +1004,7 @@ impl Scene {
             events: Vec::new(),
             rows,
             active: 0,
+            pinned: false,
             hover: None,
             pressed: None,
             focus: None,
@@ -2431,6 +2435,9 @@ impl Scene {
 
     /// The sidebar entry follows the card under the probe line.
     pub fn follow(&mut self) {
+        if self.pinned {
+            return;
+        }
         let scroll = self.scroll_now();
         let margin = self.t.n("s-6");
         let tops: Vec<f32> = self.card_rects.iter().map(|r| r.y).collect();
@@ -2691,6 +2698,11 @@ impl Scene {
     pub fn activate(&mut self, target: Target) -> Option<Action> {
         match target {
             Target::Nav(index) => {
+                // The clicked entry lights at once and stays lit: neither the
+                // cards passing during the smooth scroll nor a page end that
+                // cannot bring the card to the top move the highlight.
+                self.pinned = true;
+                self.set_active(index);
                 // Shipping scrolls the card to `scroll-margin-top: var(--s-6)`.
                 if let Some(card) = CARDS.iter().position(|(section, _)| *section == index) {
                     let y = self.card_rects[card].y - self.t.n("s-6");

@@ -200,6 +200,14 @@ final class LoginItemTests: XCTestCase {
         scroll.reflectScrolledClipView(scroll.contentView)
         drainMainQueue()
         XCTAssertEqual(controller.activeSection, "about", "the end of the page highlights the last section")
+        func navButtons(_ view: NSView) -> [PreferenceNavButton] {
+            view.subviews.flatMap { ($0 as? PreferenceNavButton).map { [$0] } ?? navButtons($0) }
+        }
+        let updates = try XCTUnwrap(navButtons(root).first { $0.title == "Updates" })
+        updates.actionBlock?()
+        drainMainQueue()
+        XCTAssertEqual(controller.activeSection, "updates",
+            "a clicked section stays active where the page end cannot bring its card to the top")
         withExtendedLifetime(controller) {}
     }
 

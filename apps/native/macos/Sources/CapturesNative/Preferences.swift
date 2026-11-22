@@ -680,6 +680,11 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     /// Nav entries, highlighted for the section in view (shipping scroll-spy).
     private var navButtons: [String: PreferenceNavButton] = [:]
     private(set) var activeSection = "general"
+    /// A revealed section stays active, even where the page end cannot bring
+    /// its card to the top (shipping's pinned nav), until the user scrolls,
+    /// clicks the page or presses a key.
+    private var pinnedSection: String?
+    private var pinMonitor: Any?
     private var scrollObserver: NSObjectProtocol?
     /// Find targets: a hidden wash behind each row and the row's text.
     private var searchable: [(NSView, String)] = []
@@ -848,6 +853,17 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         scrollObserver = NotificationCenter.default.addObserver(
             forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: .main
         ) { [weak self] _ in self?.updateActiveSection() }
+        if pinMonitor == nil {
+            pinMonitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .leftMouseDown, .keyDown]) {
+                [weak self] event in
+                guard let self, self.pinnedSection != nil, event.window === self.root.window else { return event }
+                if event.type == .keyDown
+                    || self.scroll.bounds.contains(self.scroll.convert(event.locationInWindow, from: nil)) {
+                    self.pinnedSection = nil
+                }
+                return event
+            }
+        }
         layoutHeaderActions()
         updateActiveSection()
         installKeyViewLoop()
@@ -896,9 +912,9 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     func updateActiveSection() {
         let visible = scroll.contentView.bounds
         let atEnd = visible.minY > 0 && visible.maxY >= document.frame.height - 1
-        let active = atEnd ? sections.last?.0 : sections.last(where: {
+        let active = pinnedSection ?? (atEnd ? sections.last?.0 : sections.last(where: {
             (sectionViews[$0.0]?.frame.minY ?? .infinity) <= visible.minY + 80
-        })?.0
+        })?.0)
         activeSection = active ?? sections[0].0
         for (id, button) in navButtons { button.active = id == activeSection }
     }
@@ -1743,6 +1759,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
 
     deinit {
         if let monitor = shortcutEventMonitor { NSEvent.removeMonitor(monitor) }
+        if let pinMonitor { NSEvent.removeMonitor(pinMonitor) }
         if let observer = shortcutFocusObserver { NotificationCenter.default.removeObserver(observer) }
         if let scrollObserver { NotificationCenter.default.removeObserver(scrollObserver) }
     }
@@ -2071,10 +2088,12 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     }
     private func reveal(_ id: String) {
         guard let view = sectionViews[id] else { return }
+        pinnedSection = id
         // Shipping `scroll-margin-top: var(--s-6)`.
         let maxY = max(0, document.frame.height - scroll.contentSize.height)
         scroll.contentView.scroll(to: NSPoint(x: 0, y: min(maxY, max(0, view.frame.minY - tokens.number("s-6")))))
         scroll.reflectScrolledClipView(scroll.contentView)
+        updateActiveSection()
     }
 
     // MARK: Find

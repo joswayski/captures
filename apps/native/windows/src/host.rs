@@ -864,6 +864,11 @@ impl Host {
                 unsafe { SetCapture(self.hwnd) };
                 let hit = self.scene.hit(x, y);
                 self.scene.pressed = hit;
+                // Shipping unpins the clicked nav entry on pointerdown in the
+                // page, wheel and keys.
+                if self.scene.viewport().contains(x, y) {
+                    self.scene.pinned = false;
+                }
                 // Options keep focus on their trigger; a click anywhere else
                 // closes the listbox (shipping's outside `pointerdown`).
                 if !matches!(hit, Some(Target::Option(..))) {
@@ -910,6 +915,7 @@ impl Host {
                         .scroll_list(-delta * appearance::wheel_lines() * 100. / 3.);
                     self.set_pointer(Some((px, py)));
                 } else if self.scene.viewport().contains(px, py) {
+                    self.scene.pinned = false;
                     // Chromium's 100 px per notch at the default three lines.
                     self.scene
                         .scroll_by(-delta * appearance::wheel_lines() * 100. / 3.);
@@ -995,6 +1001,7 @@ impl Host {
                 self.need = true;
             }
             WM_KEYDOWN => {
+                self.scene.pinned = false;
                 let vk = VIRTUAL_KEY(wp.0 as u16);
                 let select_key = match vk {
                     VK_DOWN => Some(select::Key::ArrowDown),
