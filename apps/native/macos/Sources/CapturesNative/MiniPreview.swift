@@ -2288,6 +2288,18 @@ final class MiniPreviewView: NSView {
 
     func showSavedFeedback(for artifactID: String) { cards[artifactID]?.showSavedFeedback() }
 
+    /// Shipping `shouldScrollThumbnailStackToEnd`: only a new card (or expanding
+    /// the pile) lands on the newest capture; any other rebuild keeps the
+    /// reader where they had scrolled, clamped to the new content.
+    func continueScroll(from previous: MiniPreviewView) {
+        guard !stackCollapsed, !previous.stackCollapsed,
+              Set(artifactIDs).isSubset(of: previous.artifactIDs) else { return }
+        let maxY = max(0, document.bounds.height - scroll.contentView.bounds.height)
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: min(maxY, previous.scrollOffsetY)))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        updateOverflowCues()
+    }
+
     func continueFeedback(from previous: MiniPreviewView) {
         for (id, card) in cards {
             guard let old = previous.cards[id], !old.isExiting else { continue }
@@ -3277,7 +3289,10 @@ final class MiniPreviewController {
             next.previewView.continueExits(from: view, retaining: exits)
             scheduleRebuild(after: max(0, (exitDeadlines.values.max() ?? 0) - CACurrentMediaTime()))
         }
-        if let view = previous?.previewView { next.previewView.continueFeedback(from: view) }
+        if let view = previous?.previewView {
+            next.previewView.continueFeedback(from: view)
+            next.previewView.continueScroll(from: view)
+        }
         previous?.close()
         next.sharingType = settings.includeInCaptures ? .readOnly : .none
         for id in liveIDs {

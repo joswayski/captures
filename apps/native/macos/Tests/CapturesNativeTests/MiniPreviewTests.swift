@@ -2052,6 +2052,19 @@ final class MiniPreviewTests: XCTestCase {
         try waitUntil { view.scrollOffsetY < 0.5 }
         try waitUntil { view.visibleOverflowCueLabels == ["Show newer captures"] }
 
+        // Closing a card rebuilds the stack but keeps the reader among older
+        // captures; only a new capture jumps back to the newest card.
+        let closed = fixturePanel(ids: Array(ids.dropLast()), images: images)
+        defer { closed.close() }
+        closed.previewView.continueScroll(from: view)
+        XCTAssertEqual(closed.previewView.scrollOffsetY, 0, accuracy: 0.5)
+        let arrived = fixturePanel(ids: ids + ["capture-8"],
+            images: images.merging(["capture-8": solidImage(.systemPurple)]) { $1 })
+        defer { arrived.close() }
+        arrived.previewView.continueScroll(from: view)
+        XCTAssertEqual(arrived.previewView.scrollOffsetY,
+            arrived.previewView.documentHeight - arrived.previewView.viewportHeight, accuracy: 0.5)
+
         let top = fixturePanel(ids: ids, images: images, topAnchor: true)
         defer { top.close() }
         XCTAssertEqual(top.previewView.visibleOverflowCueLabels, ["Show older captures"],
