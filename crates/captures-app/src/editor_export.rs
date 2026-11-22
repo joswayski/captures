@@ -334,8 +334,13 @@ pub struct ExportBarView {
     pub summary: String,
     pub estimate_label: String,
     pub delta: Option<SizeDelta>,
+    /// Save's tooltip: what this save writes and whether it overwrites.
     pub hint: String,
     pub hint_warning: bool,
+    /// The footer line under the notice: only a warning (a deleted original
+    /// or JPEG losing transparency), else empty, so routine save copy does
+    /// not crowd the footer.
+    pub status_hint: String,
     pub format_requires_copy: bool,
     pub saving_copy: bool,
     pub plan: Option<SavePlan>,
@@ -382,6 +387,7 @@ pub fn present(
     };
     let jpeg_drops_transparency = format == ExportFormat::Jpeg && transparent_background;
     let plan = target.plan(format);
+    let hint = save_hint(target, options, jpeg_drops_transparency);
     let dimensions_label = dimensions.map_or_else(
         || "invalid size".to_owned(),
         |(width, height)| format!("{width} × {height}"),
@@ -396,8 +402,13 @@ pub fn present(
         ),
         estimate_label,
         delta,
-        hint: save_hint(target, options, jpeg_drops_transparency),
+        hint: hint.clone(),
         hint_warning: jpeg_drops_transparency,
+        status_hint: if target.source_missing || jpeg_drops_transparency {
+            hint
+        } else {
+            String::new()
+        },
         format_requires_copy: target.format_requires_copy(format),
         saving_copy: target.saving_copy(format),
         error: validated.err().or_else(|| plan.as_ref().err().cloned()),
@@ -969,6 +980,14 @@ mod tests {
             hint,
             "The original was deleted. You can still copy or save this edit."
         );
+        let view = present(
+            &target,
+            options(ExportFormat::Png, ExportQuality::Preserve),
+            (10, 10),
+            false,
+            EstimateState::default(),
+        );
+        assert_eq!(view.status_hint, hint);
 
         for stem in ["", " padded", "a/b", "trailing.", "CON", "lpt3", "x:y"] {
             let mut target = sourced(dir.path(), "Shot.png");
@@ -1058,6 +1077,9 @@ mod tests {
         assert_eq!(view.suffix, ".png");
         assert_eq!(view.delta.unwrap().label, "−20%");
         assert!(view.error.is_none() && view.plan.is_some());
+        // Routine save copy stays on Save's tooltip, out of the footer.
+        assert_eq!(view.hint, "Save writes a PNG at original quality.");
+        assert_eq!(view.status_hint, "");
 
         png.size = ExportSize::Percent { percent: 50 };
         let pending = present(
@@ -1089,6 +1111,10 @@ mod tests {
         );
         assert_eq!(capped.estimate_label, "≤ 50.0 KB");
         assert!(capped.delta.is_none() && capped.hint_warning);
+        assert_eq!(
+            capped.status_hint,
+            "JPEG will fill in transparent areas. Use PNG or WebP to keep them."
+        );
         jpeg.max_size_bytes = Some(9_999);
         assert_eq!(
             present(&target, jpeg, (100, 100), false, EstimateState::default())

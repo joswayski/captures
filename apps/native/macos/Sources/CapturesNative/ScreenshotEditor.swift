@@ -2706,9 +2706,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         return CGFloat(lines) * Self.exportStatusLine
     }
 
-    /// The save row's height and its status block: the notice line (17 pt,
-    /// reserved while idle; up to two lines for a failure), a 2 pt gap and
-    /// the hint, which a failure replaces.
+    /// The save row's height and its status block: the notice line (17 pt;
+    /// up to two lines for a failure), a 2 pt gap and the warning hint, which
+    /// a failure replaces. The routine "Save writes…" copy only rides on
+    /// Save's tooltip. At 1040 pt and narrower the notice takes one line in
+    /// the free space above Copy image and Save, so only a warning adds a row
+    /// and a notice never moves the canvas under the pointer.
     private func exportRowMetrics() -> (height: CGFloat, status: CGFloat, notice: CGFloat, hint: CGFloat,
                                         layout: ExportRowLayout) {
         let auto = exportAutoWidths
@@ -2718,17 +2721,19 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             ? 2 + exportStatusTextHeight(exportStatus.stringValue, width: layout.status, weight: .medium,
                                          maximumLines: 2)
             : 2 + Self.exportStatusLine
-        let hint = exportStatusTextHeight(exportHint.stringValue, width: layout.status,
-                                          weight: .regular, maximumLines: 6)
-        // A failure hides the hint but keeps its room, so an error never
+        let warns = !exportHint.stringValue.isEmpty
+        let hint = warns ? exportStatusTextHeight(exportHint.stringValue, width: layout.status,
+                                                  weight: .regular, maximumLines: 6) : 0
+        // A failure hides a warning but keeps its room, so an error never
         // moves the canvas under the pointer.
-        let content = max(notice, 2 + Self.exportStatusLine + 2 + hint)
+        let content = max(notice, warns ? 2 + Self.exportStatusLine + 2 + hint : 0)
         let field: CGFloat = 60 // 20 pt heading, 4 pt gap, 36 pt filename box.
         if layout.wide {
             let status = max(tokens.number("h-lg"), content)
             return (max(field, status), status, notice, hint, layout)
         }
-        let status = max(20, content)
+        guard warns else { return (field, 0, notice, hint, layout) }
+        let status = max(20, 2 + hint)
         return (field + tokens.number("s-4") + status, status, notice, hint, layout)
     }
 
@@ -2794,7 +2799,9 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let pathRoom = changeOutputDirectoryButton.frame.minX - small - (groupLeft + savingWidth + small)
         let pathText = ceil((outputLocation.stringValue as NSString).size(withAttributes:
             [.font: outputLocation.font as Any]).width) + 4
-        let pathWidth = max(24, min(170, pathText, pathRoom))
+        // The whole folder when it fits (shipping capped it at 170 pt, which
+        // hid where files go); a long path keeps both ends.
+        let pathWidth = max(24, min(pathText, pathRoom))
         outputLocation.frame = NSRect(x: changeOutputDirectoryButton.frame.minX - small - pathWidth,
                                       y: headingY + 2, width: pathWidth, height: 16)
         exportSavingToCaption.frame = NSRect(x: outputLocation.frame.minX - small - savingWidth,
@@ -2816,28 +2823,36 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         // `.screenshot-export-status`: the notice over the hint, centred in a
         // 36 pt column right-aligned before the actions, or a left-aligned
         // full-width row below the field row at 1040 pt and narrower.
-        let statusX: CGFloat, statusTop: CGFloat
-        let content = metrics.notice + (exportHint.isHidden ? 0 : 2 + metrics.hint)
-        if row.wide {
-            statusX = copyImageButton.frame.maxX + gap
-            statusTop = bottom - metrics.status + (metrics.status - content) / 2
-        } else {
-            statusX = inset
-            statusTop = top + 60 + padding
-        }
-        let alignment: NSTextAlignment = row.wide ? .right : .left
+        // Narrower, the notice is one truncated line (its tooltip keeps the
+        // full text) over Copy image and Save, and a warning gets its own
+        // left-aligned row below the field row.
+        let hintAlignment: NSTextAlignment = row.wide ? .right : .left
         // The text's own paragraph style decides its alignment, so restyle it
         // when the row switches between the wide column and the full-width row.
-        for label in [exportStatus, exportHint] where label.alignment != alignment {
+        for (label, alignment) in [(exportStatus, NSTextAlignment.right), (exportHint, hintAlignment)]
+            where label.alignment != alignment {
             label.alignment = alignment
             let text = NSMutableAttributedString(attributedString: label.attributedStringValue)
             text.addAttribute(.paragraphStyle, value: exportStatusParagraph(alignment: alignment),
                               range: NSRange(location: 0, length: text.length))
             label.attributedStringValue = text
         }
-        exportStatus.frame = NSRect(x: statusX, y: statusTop + 1, width: row.status, height: metrics.notice - 2)
-        exportHint.frame = NSRect(x: statusX, y: statusTop + metrics.notice + 2, width: row.status,
-                                  height: metrics.hint)
+        exportStatus.maximumNumberOfLines = row.wide ? 0 : 1
+        if row.wide {
+            let statusX = copyImageButton.frame.maxX + gap
+            let content = metrics.notice + (exportHint.isHidden ? 0 : 2 + metrics.hint)
+            let statusTop = bottom - metrics.status + (metrics.status - content) / 2
+            exportStatus.frame = NSRect(x: statusX, y: statusTop + 1, width: row.status,
+                                        height: metrics.notice - 2)
+            exportHint.frame = NSRect(x: statusX, y: statusTop + metrics.notice + 2, width: row.status,
+                                      height: metrics.hint)
+        } else {
+            let slotX = exportFilenameBox.frame.maxX + gap
+            exportStatus.frame = NSRect(x: slotX, y: headingY + 2, width: max(0, width - inset - slotX),
+                                        height: Self.exportStatusLine + 1)
+            exportHint.frame = NSRect(x: inset, y: top + 60 + padding + 2, width: row.status,
+                                      height: metrics.hint)
+        }
     }
 
     /// The same row plan sizes the card and places its visible controls.
@@ -3898,7 +3913,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         exportFilenameCaption.font = .systemFont(ofSize: tokens.number("text-xs"), weight: .medium)
         exportSavingToCaption.font = .systemFont(ofSize: tokens.number("text-2xs"), weight: .medium)
         outputLocation.font = .monospacedSystemFont(ofSize: tokens.number("text-2xs"), weight: .medium)
-        outputLocation.lineBreakMode = .byTruncatingTail
+        outputLocation.lineBreakMode = .byTruncatingMiddle
         outputLocation.setAccessibilityLabel("Save location")
         [exportFilenameCaption, exportSavingToCaption, outputLocation].forEach { exportBar.addSubview($0) }
         changeOutputDirectoryButton = button("Change…", frame: .zero, parent: exportBar) {
@@ -3947,6 +3962,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             label.maximumNumberOfLines = 0
             exportBar.addSubview(label)
         }
+        exportStatus.cell?.truncatesLastVisibleLine = true
         saveAsNewSwitch.tokens = tokens
         saveAsNewSwitch.toolTip = "Save as a new file and leave the original untouched"
         saveAsNewSwitch.target = self; saveAsNewSwitch.action = #selector(saveAsNewChanged)
@@ -5244,7 +5260,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         comparisonOutput = nil; comparisonPending = false; comparisonFailure = nil
         self.originalBytes = originalBytes > 0 ? originalBytes : nil
         outputFilename.stringValue = ""
-        outputLocation.stringValue = outputDirectory; outputLocation.toolTip = outputDirectory
+        showOutputLocation(outputDirectory)
         publishExportBar()
     }
 
@@ -5308,7 +5324,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         // Typing sends set_stem with the typed text, so an edited field already matches.
         if let bar, outputFilename.stringValue != bar.stem { outputFilename.stringValue = bar.stem }
         let directory = bar?.directory ?? outputDirectory
-        outputLocation.stringValue = directory; outputLocation.toolTip = directory
+        showOutputLocation(directory)
         if let bar {
             let jpeg = bar.sourcePath.map { URL(fileURLWithPath: $0).pathExtension.lowercased() == "jpeg" } == true
             outputFormat.item(at: 1)?.title = jpeg ? ".jpeg" : ".jpg"
@@ -5346,11 +5362,19 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         setExportStatusText(exportStatus, notice, color: failure != nil ? "danger-text" : "positive-text",
                             weight: .medium)
         exportStatus.toolTip = notice.isEmpty ? nil : notice
-        exportHint.isHidden = failure != nil
-        setExportStatusText(exportHint, bar?.hint ?? "",
-                            color: bar?.hintWarning == true ? "caution-text" : "text-subtle", weight: .regular)
+        let warning = bar?.statusHint ?? ""
+        exportHint.isHidden = failure != nil || warning.isEmpty
+        setExportStatusText(exportHint, warning, color: "caution-text", weight: .regular)
         updateExportLayout()
         publishComparison()
+    }
+
+    /// The save folder with the home folder as `~`; the tooltip and
+    /// accessibility value keep the full path.
+    private func showOutputLocation(_ directory: String) {
+        let shown = (directory as NSString).abbreviatingWithTildeInPath
+        if outputLocation.stringValue != shown { outputLocation.stringValue = shown }
+        outputLocation.toolTip = directory; outputLocation.setAccessibilityValue(directory)
     }
 
     private func setExportStatusText(_ label: NSTextField, _ text: String, color: String, weight: NSFont.Weight) {

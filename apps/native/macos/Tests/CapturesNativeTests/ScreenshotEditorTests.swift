@@ -1008,8 +1008,8 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(try field("Save location", in: controller.root).stringValue, folder.path)
             let newFile = try saveAsNewSwitch(in: controller.root)
             XCTAssertFalse(newFile.isHidden); XCTAssertEqual(newFile.state, .off)
-            XCTAssertTrue(labels(in: controller.root).contains(
-                "Save keeps original quality as PNG and overwrites the original."))
+            XCTAssertEqual(try button("Save", in: controller.root).toolTip,
+                "Save keeps original quality as PNG and overwrites the original.")
             XCTAssertEqual(try popup("Format", in: controller.root).titleOfSelectedItem, ".png")
             try render(controller.root, name: "screenshot-editor-save-overwrite-\(appearance)")
             try button("Save", in: controller.root).performClick(nil)
@@ -1056,8 +1056,8 @@ final class ScreenshotEditorTests: XCTestCase {
         let newFile = try saveAsNewSwitch(in: controller.root)
         newFile.state = .on; _ = newFile.sendAction(newFile.action, to: newFile.target)
         XCTAssertEqual(filename.stringValue, "Shot-edited", "the switch suggests a name beside the source")
-        XCTAssertTrue(labels(in: controller.root).contains(
-            "Save writes a new PNG at original quality and leaves the original untouched."))
+        XCTAssertEqual(try button("Save", in: controller.root).toolTip,
+            "Save writes a new PNG at original quality and leaves the original untouched.")
         // The published copy exists before the shared model adopts it as the next target.
         try Data([2]).write(to: copyURL)
         worker.exportSaveResult = .success(EditorExportSaved(path: copyURL.path, artifactID: "copy-id",
@@ -1314,10 +1314,10 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertTrue(undo.isHidden, "shipping hides Undo/Redo at or below 1040pt")
             let bar = try XCTUnwrap(descendants(in: controller.root).first { $0.accessibilityLabel() == "Export bar" })
             XCTAssertEqual(bar.frame.maxY, controller.root.bounds.height)
-            XCTAssertEqual(bar.frame.height, 119)
+            XCTAssertEqual(bar.frame.height, 77, "an idle narrow footer has no status row")
             // Exercise both axes without exceeding the CI display's height.
             controller.window.setContentSize(NSSize(width: 860, height: 600))
-            waitUntil { input.bounds.size == NSSize(width: 488, height: 393) }
+            waitUntil { input.bounds.size == NSSize(width: 488, height: 435) }
             controller.window.setContentSize(NSSize(width: 1200, height: 600))
             controller.root.layoutSubtreeIfNeeded()
             // An unset inspector width follows the window (320pt above 1040pt),
@@ -1349,12 +1349,12 @@ final class ScreenshotEditorTests: XCTestCase {
             controller.root.layoutSubtreeIfNeeded()
             // Fit leaves 10pt a side: 468 of the 488pt viewport at the 860pt minimum.
             waitUntil { abs(controller.presentedImageRect.width - 468) < 0.001 }
-            XCTAssertEqual(input.bounds.size, NSSize(width: 488, height: 393))
+            XCTAssertEqual(input.bounds.size, NSSize(width: 488, height: 435))
             XCTAssertEqual(layersSection.frame, NSRect(x: 592, y: 64, width: 268, height: 188))
-            XCTAssertEqual(inspector.frame, NSRect(x: 592, y: 252, width: 268, height: 229))
+            XCTAssertEqual(inspector.frame, NSRect(x: 592, y: 252, width: 268, height: 271))
             XCTAssertTrue(undo.isHidden)
             let fit = controller.presentedImageRect
-            for (actual, expected) in [(fit.minX, 10.0), (fit.minY, 64.875), (fit.width, 468), (fit.height, 263.25)] {
+            for (actual, expected) in [(fit.minX, 10.0), (fit.minY, 85.875), (fit.width, 468), (fit.height, 263.25)] {
                 XCTAssertEqual(actual, expected, accuracy: 0.001)
             }
             try render(controller.root, name: "screenshot-editor-resized-minimum-\(appearance)")
@@ -1389,12 +1389,12 @@ final class ScreenshotEditorTests: XCTestCase {
                 controller.window.setContentSize(size)
                 controller.root.layoutSubtreeIfNeeded()
                 // Shipping `.screenshot-save-row`: 12 pt insets, the 44 pt
-                // disclosure and 36 pt controls on one bottom edge; at 1040
-                // and narrower the one-line hint takes a row below (77 / 119).
+                // disclosure and 36 pt controls on one bottom edge. Without a
+                // warning the footer stays 77 pt at every width.
                 let row = ScreenshotEditorController.exportRow(width: size.width, secondary: copy.frame.width,
                                                                actions: save.frame.width)
                 let gap: CGFloat = row.wide ? 12 : 8
-                let height: CGFloat = row.wide ? 77 : 119
+                let height: CGFloat = 77
                 XCTAssertEqual(bar.frame, NSRect(x: 0, y: size.height - height, width: size.width, height: height))
                 XCTAssertEqual(disclosure.frame, NSRect(x: 12, y: 25, width: row.disclosure, height: 44))
                 XCTAssertEqual(copy.frame, NSRect(x: 12 + row.disclosure + gap + row.filename + gap,
@@ -1473,7 +1473,7 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertFalse(panel.isHidden)
             XCTAssertTrue(controller.exportSettingsOpen)
             XCTAssertEqual(chevron.glyph, "editor-chevron-up")
-            XCTAssertEqual(controller.exportBarHeight, 189)
+            XCTAssertEqual(controller.exportBarHeight, 147)
             XCTAssertTrue(labels(in: controller.root).contains("≈ 240 KB"))
             XCTAssertTrue(labels(in: controller.root).contains("−20%"))
             XCTAssertTrue(labels(in: controller.root).contains("1,920 × 1,080")
@@ -1486,7 +1486,7 @@ final class ScreenshotEditorTests: XCTestCase {
             waitUntil { summary.stringValue == "PNG · 960 × 540 · ≈ 240 KB" }
             try exportDisclosure(in: controller.root).performClick(nil)
             XCTAssertTrue(panel.isHidden)
-            XCTAssertEqual(controller.exportBarHeight, 119)
+            XCTAssertEqual(controller.exportBarHeight, 77)
             XCTAssertTrue(worker.requests.isEmpty && worker.exportSaves.isEmpty)
         }
     }
@@ -1519,40 +1519,40 @@ final class ScreenshotEditorTests: XCTestCase {
                                bottomPadding, accuracy: 0.1, "no blank row below the controls")
                 for action in [save, copy] {
                     let rect = controller.root.convert(action.bounds, from: action)
-                    // Below them: 8 pt, the 34 pt notice/hint row, then 8 pt padding.
-                    XCTAssertEqual(controller.root.bounds.maxY - rect.maxY, 50, accuracy: 0.1,
+                    // Below them: only the 8 pt padding while no notice or warning shows.
+                    XCTAssertEqual(controller.root.bounds.maxY - rect.maxY, 8, accuracy: 0.1,
                                    "actions remain pinned when the settings height changes")
                 }
                 XCTAssertGreaterThan(viewport.bounds.height, 140)
             }
 
             quality.selectItem(withTitle: "Compress"); _ = quality.sendAction(quality.action, to: quality.target)
-            checkPanel(height: 189)
+            checkPanel(height: 147)
             try render(controller.root, name: "screenshot-editor-export-compact-\(appearance)")
             controller.window.setContentSize(NSSize(width: 860, height: 600))
             waitUntil { controller.root.bounds.width == 860 }
-            checkPanel(height: 189)
+            checkPanel(height: 147)
             let singleRowViewport = viewport.bounds.height
             quality.selectItem(withTitle: "Maximum file size")
             _ = quality.sendAction(quality.action, to: quality.target)
-            checkPanel(height: 189) // Size, quality, maximum and estimate still fit at 860pt.
+            checkPanel(height: 147) // Size, quality, maximum and estimate still fit at 860pt.
             size.selectItem(withTitle: "Custom"); _ = size.sendAction(size.action, to: size.target)
-            checkPanel(height: 241)
+            checkPanel(height: 199)
             XCTAssertEqual(singleRowViewport - viewport.bounds.height, 52, accuracy: 0.1,
                            "wrapping also updates the canvas, not just the export card")
             XCTAssertFalse(try field("Custom output width", in: controller.root).isHidden)
             try render(controller.root, name: "screenshot-editor-export-wrapped-custom-\(appearance)")
             size.selectItem(withTitle: "Original"); _ = size.sendAction(size.action, to: size.target)
             quality.selectItem(withTitle: "Compress"); _ = quality.sendAction(quality.action, to: quality.target)
-            checkPanel(height: 189)
+            checkPanel(height: 147)
             controller.compareView.onDismiss?()
-            checkPanel(height: 241)
+            checkPanel(height: 199)
             XCTAssertFalse(try button("Show before / after", in: controller.root).isHiddenOrHasHiddenAncestor)
             try render(controller.root, name: "screenshot-editor-export-wrapped-comparison-\(appearance)")
             try button("Show before / after", in: controller.root).performClick(nil)
-            checkPanel(height: 189)
+            checkPanel(height: 147)
             try exportDisclosure(in: controller.root).performClick(nil)
-            XCTAssertEqual(controller.exportBarHeight, 119)
+            XCTAssertEqual(controller.exportBarHeight, 77)
             XCTAssertTrue(panel.isHidden)
             XCTAssertTrue(worker.requests.isEmpty && worker.exportSaves.isEmpty && worker.encodes.isEmpty,
                           "layout changes neither edit nor export the document")
@@ -1644,8 +1644,8 @@ final class ScreenshotEditorTests: XCTestCase {
                 // The unset inspector width is 320pt above 1040pt, else 280pt. The
                 // canvas fills its column like `.screenshot-canvas-viewport`.
                 waitUntil { input.bounds.width == width - (width > 1040 ? 412 : 372) }
-                // Shipping's footer is 77pt, or 119pt with the hint row at 1040pt and below.
-                XCTAssertEqual(input.bounds.height, width > 1040 ? 435 : 393)
+                // The idle footer is 77pt at every width; routine save copy is Save's tooltip.
+                XCTAssertEqual(input.bounds.height, 435)
                 XCTAssertEqual(undo.isHidden, width <= 1040)
                 // 92pt/72pt slider cells minus their 8pt/6pt padding and 1pt
                 // divider; at 860pt the overflowing header shrinks the cell to 60.8pt.
@@ -1678,7 +1678,7 @@ final class ScreenshotEditorTests: XCTestCase {
             // Fit leaves 10pt a side: 468 of the 488pt viewport at the 860pt minimum.
             waitUntil { abs(controller.presentedImageRect.width - 468) < 0.001 }
             let fit = controller.presentedImageRect
-            for (actual, expected) in [(fit.minX, 10.0), (fit.minY, 64.875), (fit.width, 468), (fit.height, 263.25)] {
+            for (actual, expected) in [(fit.minX, 10.0), (fit.minY, 85.875), (fit.width, 468), (fit.height, 263.25)] {
                 XCTAssertEqual(actual, expected, accuracy: 0.001)
             }
             XCTAssertFalse(trim.iconOnly, "like shipping, the 860pt minimum header still labels Trim edges")
@@ -3320,7 +3320,12 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertTrue(filename.stringValue.hasPrefix("Captures_") && filename.stringValue.hasSuffix("_edited"))
         XCTAssertEqual(try field("Save location", in: controller.root).stringValue, "/exports")
         XCTAssertTrue(try saveAsNewSwitch(in: controller.root).isHidden, "a first save always writes a new file")
-        XCTAssertTrue(labels(in: controller.root).contains("Save writes a PNG at original quality."))
+        // Routine save copy rides on Save's tooltip; the footer keeps no
+        // status row for it in the default narrow window.
+        XCTAssertEqual(try button("Save", in: controller.root).toolTip, "Save writes a PNG at original quality.")
+        XCTAssertFalse(labels(in: controller.root).contains("Save writes a PNG at original quality."))
+        XCTAssertLessThan(controller.root.bounds.width, 1041)
+        XCTAssertEqual(controller.exportBarHeight, 1 + 8 + 60 + 8)
 
         let format = try popup("Format", in: controller.root)
         format.selectItem(withTitle: ".jpg")
@@ -3414,6 +3419,18 @@ final class ScreenshotEditorTests: XCTestCase {
         RunLoop.current.run(until: Date().addingTimeInterval(0.05))
         XCTAssertEqual((try field("Save location", in: controller.root)).stringValue,
                        "/selected folder", "a retired editor ignores the folder reply")
+
+        // A longer home folder reads whole, as ~, instead of a 170 pt stub.
+        let home = NSHomeDirectory() + "/Pictures/Captures Screenshots/2026"
+        let shown = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                               worker: FakeEditorWorker(snapshot: snapshot(id: "home")))
+        defer { shown.window.orderOut(nil) }
+        shown.present(artifact: artifact(id: "home"), historyRoot: "/native/History", outputDirectory: home)
+        let location = try field("Save location", in: shown.root)
+        XCTAssertEqual(location.stringValue, "~/Pictures/Captures Screenshots/2026")
+        XCTAssertEqual(location.toolTip, home)
+        XCTAssertGreaterThanOrEqual(location.frame.width, ceil((location.stringValue as NSString)
+            .size(withAttributes: [.font: location.font as Any]).width))
 
         let panel = ScreenshotEditorController.outputDirectoryPanel(
             current: URL(fileURLWithPath: "/first folder", isDirectory: true))
@@ -3777,10 +3794,10 @@ final class ScreenshotEditorTests: XCTestCase {
 
         controller.selectDrawTool(.ellipse)
         let overlay = controller.drawOverlay
-        // The 280pt inspector and 119pt export bar leave a 628×393 viewport. Fit keeps shipping's
+        // The 280pt inspector and 77pt export bar leave a 628×435 viewport. Fit keeps shipping's
         // 28pt a side, scaling the 1280×640 canvas by 608/1280 = 0.475.
         XCTAssertEqual(overlay.presentedImageRect,
-                       NSRect(x: 10, y: 44.5, width: 608, height: 304))
+                       NSRect(x: 10, y: 65.5, width: 608, height: 304))
         overlay.begin(at: NSPoint(x: 500, y: 275))
         overlay.drag(to: NSPoint(x: 60, y: 5))
         XCTAssertTrue(worker.requests.isEmpty, "transient drawing never mutates the document")
@@ -3792,9 +3809,9 @@ final class ScreenshotEditorTests: XCTestCase {
         let start = try XCTUnwrap(request["start"] as? [String: CGFloat])
         let end = try XCTUnwrap(request["end"] as? [String: CGFloat])
         XCTAssertEqual(try XCTUnwrap(start["x"]), 1_031.579, accuracy: 0.001)
-        XCTAssertEqual(try XCTUnwrap(start["y"]), 485.263, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(start["y"]), 441.053, accuracy: 0.001)
         XCTAssertEqual(try XCTUnwrap(end["x"]), 105.263, accuracy: 0.001)
-        XCTAssertEqual(try XCTUnwrap(end["y"]), -83.158, accuracy: 0.001,
+        XCTAssertEqual(try XCTUnwrap(end["y"]), -127.368, accuracy: 0.001,
                        "preview whitespace maps to off-canvas document coordinates")
         XCTAssertEqual((request["style"] as? [String: Any])?["color"] as? String, "#FF3B5C")
         XCTAssertEqual(request["opacity"] as? Double, 100)
@@ -3891,7 +3908,7 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(request["operation"] as? String, "create_closed_shape")
             XCTAssertEqual(request["shape"] as? String, title.lowercased())
             let end = try XCTUnwrap(request["end"] as? [String: CGFloat])
-            XCTAssertEqual(try XCTUnwrap(end["y"]), -83.158, accuracy: 0.001)
+            XCTAssertEqual(try XCTUnwrap(end["y"]), -127.368, accuracy: 0.001)
             overlay.begin(at: NSPoint(x: 300, y: 200)); overlay.end(at: NSPoint(x: 300, y: 350))
             overlay.begin(at: NSPoint(x: 300, y: 200)); overlay.end(at: NSPoint(x: 400, y: 200))
             overlay.begin(at: NSPoint(x: 200, y: 200)); overlay.drag(to: NSPoint(x: 260, y: 260))
@@ -8075,6 +8092,9 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertFalse(footer.isHiddenOrHasHiddenAncestor)
             XCTAssertTrue(footer.stringValue.contains(worker.failureMessage))
             XCTAssertEqual(footer.toolTip, footer.stringValue, "a truncated failure keeps its full explanation")
+            // Narrow windows put the notice over Copy image, inside the idle footer.
+            XCTAssertLessThanOrEqual(footer.frame.maxY, try copyButton(in: controller.root).frame.minY)
+            XCTAssertEqual(bar.frame.height, 77, "a notice never grows the narrow footer")
             XCTAssertEqual(properties.frame.maxY, bar.frame.minY, "failures must not shrink Properties")
             try render(controller.root, name: "screenshot-editor-text-error-minimum-\(appearance)")
             worker.failOperation = nil

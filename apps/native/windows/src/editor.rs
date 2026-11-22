@@ -1676,8 +1676,11 @@ impl Editor {
         )
     }
 
+    /// The footer's warning line; routine save copy stays on Save's tooltip.
     pub fn hint_text(&self) -> String {
-        self.export_view().map(|v| v.hint).unwrap_or_default()
+        self.export_view()
+            .map(|v| v.status_hint)
+            .unwrap_or_default()
     }
 
     /// The notice line: export problems first, then the last action's.
@@ -2728,18 +2731,22 @@ impl Editor {
         let copy_end = fx + filename_w + gap + copy_w + gap;
 
         // Shipping moves status below the controls at the same breakpoint
-        // as the compact header. Reserve the idle notice line too.
+        // as the compact header. Reserve the idle notice line too, so a
+        // notice never moves the canvas under the pointer.
         let status_w = if l.compact {
             w - 2. * s5
         } else {
             sx - gap - copy_end
         };
+        let hint = self.hint_text();
         let (notice, error) = self.notice_text().unwrap_or_else(|| (" ".into(), false));
         let notice_h = g.text(&t, Style::Note, &notice, status_w)?.height;
         let status_h = if error {
             (notice_h + n("s-1")).max(20.)
+        } else if hint.is_empty() {
+            notice_h + 2. * n("s-1")
         } else {
-            notice_h + g.text(&t, Style::Note, &self.hint_text(), status_w)?.height + 2. * n("s-1")
+            notice_h + g.text(&t, Style::Note, &hint, status_w)?.height + 2. * n("s-1")
         };
         let row_h = if l.compact { 60. } else { status_h.max(60.) };
         let bar_h = BAR_H + row_h - 60. + if l.compact { s4 + status_h } else { 0. };
@@ -2901,10 +2908,10 @@ impl Editor {
         } else {
             0.
         };
-        let hint_h = if error || self.hint_text().is_empty() {
+        let hint_h = if error || hint.is_empty() {
             0.
         } else {
-            g.text(&t, Style::Note, &self.hint_text(), status_w)?.height
+            g.text(&t, Style::Note, &hint, status_w)?.height
         };
         let total = notice_h + hint_h;
         let y = if l.compact {
@@ -4179,14 +4186,9 @@ impl Editor {
         }
         let hint_text = self.hint_text();
         if !hint_text.is_empty() && !has_error {
-            let warning = view.as_ref().is_some_and(|v| v.hint_warning);
             lines.push((
                 g.text(t, Style::Note, &hint_text, width)?,
-                c(if warning {
-                    "caution-text"
-                } else {
-                    "text-subtle"
-                }),
+                c("caution-text"),
                 l.hint_line,
             ));
         }
@@ -6322,7 +6324,9 @@ mod tests {
                 let hint_line = editor.l.hint_line;
                 assert!(notice.y + notice.h <= hint_line.y);
                 assert!(hint_line.y + hint_line.h <= hint.y + hint.h);
-                let hint_height = if editor.notice_text().is_some_and(|(_, error)| error) {
+                let hint_height = if editor.notice_text().is_some_and(|(_, error)| error)
+                    || editor.hint_text().is_empty()
+                {
                     0.
                 } else {
                     editor

@@ -2240,7 +2240,14 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         muted: Bool = false, parent: NSView, centered: Bool = false, color: String? = nil) -> NSTextField {
         let label = NSTextField(labelWithString: text); label.frame = frame; label.font = .systemFont(ofSize: size, weight: weight)
         label.textColor = tokens.color(color ?? (muted ? "text-subtle" : "text")); label.alignment = centered ? .center : .left
+        makeSelectable(label)
         parent.addSubview(label); return label
+    }
+
+    /// Like the shipping web page, Preferences copy can be selected and copied.
+    /// Keeping text attributes stops a click from dropping rich emphasis.
+    private func makeSelectable(_ label: NSTextField) {
+        label.isSelectable = true; label.allowsEditingTextAttributes = true
     }
 
     /// A wrapping `--text-subtle` description label.
@@ -2250,6 +2257,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         label.frame = frame; label.font = .systemFont(ofSize: size)
         label.textColor = tokens.color(color); label.preferredMaxLayoutWidth = frame.width
         label.maximumNumberOfLines = 0
+        makeSelectable(label)
         parent.addSubview(label); return label
     }
 

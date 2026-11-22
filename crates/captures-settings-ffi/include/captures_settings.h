@@ -865,7 +865,7 @@ char *captures_editor_save_original_v1(const CapturesEditorSession *session,
  * Exactly one of target/init. Owned response {ok:true,result:{target,view}}
  * where target is opaque JSON to send back unchanged and view carries
  * format_label, suffix, dimensions, summary, estimate_label, delta{percent,label},
- * hint, hint_warning, format_requires_copy, saving_copy, plan
+ * hint, hint_warning, status_hint, format_requires_copy, saving_copy, plan
  * ({kind:"overwrite",artifact_id,path}|{kind:"new_file",path}) and error.
  * Free with captures_settings_free_v1. NULL/invalid input returns an error. */
 char *captures_editor_export_bar_v1(const char *request_json);

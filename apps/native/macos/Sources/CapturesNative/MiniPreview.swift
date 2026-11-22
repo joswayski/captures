@@ -1990,6 +1990,11 @@ final class MiniPreviewView: NSView {
     func playToolbar(_ name: String, holdEnd: Bool) {
         toolbarToken &+= 1
         let token = toolbarToken
+        // Shipping's tip is part of its button and leaves with the toolbar;
+        // this tip is a sibling view, so drop it before the toolbar animates.
+        if name != "preview_toolbar_in", let owner = tooltipOwner, stackToolbarButtons.contains(owner) {
+            setTooltip(for: owner, visible: false)
+        }
         if name == "preview_toolbar_clear" {
             stackClearing = true
             updateOverflowCues()
@@ -2120,7 +2125,10 @@ final class MiniPreviewView: NSView {
         let spec = NativeMotion.transition(button.kind == .clear ? "preview_stack_tooltip"
                                            : "preview_icon_tooltip", tokens: tokens)
         let duration = window?.isVisible == true ? spec.duration : 0
-        guard visible, let text = button.tooltipText, !button.isHidden,
+        // A stack toolbar button is disabled while its toolbar animates, and
+        // stays put under the pointer while Clear all streaks the cards out.
+        let toolbarLeaving = stackToolbarButtons.contains(button) && (stackClearing || !button.isEnabled)
+        guard visible, let text = button.tooltipText, !button.isHidden, !toolbarLeaving,
               (button.superview as? MiniPreviewCardView)?.isExiting != true else {
             guard tooltipOwner === button else { return }
             tooltipOwner = nil

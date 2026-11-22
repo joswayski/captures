@@ -2118,6 +2118,14 @@ final class MiniPreviewTests: XCTestCase {
             XCTAssertEqual(view.visibleTooltip, "Close")
             card.mouseExited(with: hover)
             XCTAssertNil(view.visibleTooltip)
+            // Clear all takes its tip with the leaving toolbar, even while
+            // the pointer stays on the button's fixed hit target.
+            clear.mouseEntered(with: hover)
+            XCTAssertEqual(view.visibleTooltip, "Clear all")
+            view.playToolbar("preview_toolbar_clear", holdEnd: true)
+            try waitUntil { view.visibleTooltip == nil }
+            clear.mouseEntered(with: hover)
+            XCTAssertNil(view.visibleTooltip)
         }
         let pile = fixturePanel(ids: ["a", "b"],
             images: ["a": solidImage(.systemBlue), "b": solidImage(.systemRed)], collapsed: true)

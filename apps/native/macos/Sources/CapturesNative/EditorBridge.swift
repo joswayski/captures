@@ -840,6 +840,8 @@ struct NativeExportBar {
     let deltaPercent: Int?
     let hint: String
     let hintWarning: Bool
+    /// The footer's warning line; empty unless something needs attention.
+    let statusHint: String
     let formatRequiresCopy: Bool
     let savingCopy: Bool
     let plan: [String: Any]?
@@ -868,6 +870,7 @@ struct NativeExportBar {
               let estimateLabel = view["estimate_label"] as? String,
               let hint = view["hint"] as? String,
               let hintWarning = view["hint_warning"] as? Bool,
+              let statusHint = view["status_hint"] as? String,
               let formatRequiresCopy = view["format_requires_copy"] as? Bool,
               let savingCopy = view["saving_copy"] as? Bool else { return nil }
         self.target = target
@@ -876,7 +879,7 @@ struct NativeExportBar {
         let delta = view["delta"] as? [String: Any]
         deltaLabel = delta?["label"] as? String
         deltaPercent = (delta?["percent"] as? NSNumber)?.intValue
-        self.hint = hint; self.hintWarning = hintWarning
+        self.hint = hint; self.hintWarning = hintWarning; self.statusHint = statusHint
         self.formatRequiresCopy = formatRequiresCopy; self.savingCopy = savingCopy
         plan = view["plan"] as? [String: Any]
         error = view["error"] as? String

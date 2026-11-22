@@ -333,6 +333,22 @@ struct Widgets {
     add_layer: gtk::Button,
 }
 
+/// Hide empty status lines. The status box itself stays, so a compact
+/// footer keeps its 20 px row and a notice never moves the canvas.
+fn show_status(notice: &gtk::Label, hint: &gtk::Label) {
+    notice.set_visible(!notice.label().is_empty());
+    hint.set_visible(!hint.label().is_empty());
+}
+
+/// A folder under the home folder reads as `~/…`.
+fn home_relative(directory: &std::path::Path) -> String {
+    match directory.strip_prefix(glib::home_dir()) {
+        Ok(rest) if rest.as_os_str().is_empty() => "~".into(),
+        Ok(rest) => format!("~/{}", rest.display()),
+        Err(_) => directory.display().to_string(),
+    }
+}
+
 fn label(text: &str, class: &str) -> gtk::Label {
     let label = gtk::Label::new(Some(text));
     label.add_css_class(class);
@@ -742,9 +758,10 @@ pub fn build(
     let folder = label("", "editor-folder");
     folder.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
     // `.recording-destination`: flex 1, packed to the end.
+    // The whole folder when it fits (shipping's 190 px cap hid where files
+    // go); a long one keeps both ends.
     folder.set_hexpand(true);
     folder.set_xalign(1.);
-    folder.set_max_width_chars(28);
     file_heading.append(&folder);
     // Shipping `aria-label="Change save location"` over "Change…". GTK 4.14
     // names a button after its label child, so the text is presentational.
@@ -781,7 +798,9 @@ pub fn build(
     notice.set_xalign(1.);
     notice.set_ellipsize(gtk::pango::EllipsizeMode::Start);
     notice.set_accessible_role(gtk::AccessibleRole::Status);
+    // Only warnings reach this line (`status_hint`).
     let hint = label("", "editor-hint");
+    hint.add_css_class("warning");
     hint.set_xalign(1.);
     hint.set_wrap(true);
     hint.set_justify(gtk::Justification::Right);
@@ -854,6 +873,7 @@ pub fn build(
                 }
             }
             status.set_size_request(-1, if compact { 20 } else { -1 });
+            show_status(&notice, &hint);
         }
     }));
     // Also decide from the requested width before the first layout: the
@@ -2233,11 +2253,13 @@ impl State {
             .set_show_compare(compresses && self.compare.dismissed.get());
         self.refresh_compare();
         w.folder
-            .set_label(&format!("Saving to {}", target.directory.display()));
+            .set_label(&format!("Saving to {}", home_relative(&target.directory)));
         w.folder
             .set_tooltip_text(Some(&target.directory.display().to_string()));
-        w.hint.set_label(&view.hint);
-        set_class(&w.hint, "warning", view.hint_warning);
+        // Routine save copy rides on Save's tooltip; the footer line only
+        // carries a warning.
+        w.save.set_tooltip_text(Some(&view.hint));
+        w.hint.set_label(&view.status_hint);
         let notice = self.notice.borrow();
         let (text, error) = match (&view.error, notice.as_ref()) {
             (Some(error), _) => (error.clone(), true),
@@ -2247,6 +2269,7 @@ impl State {
         w.notice.set_label(&text);
         set_class(&w.notice, "error", error);
         set_class(&w.notice, "success", !error && !text.is_empty());
+        show_status(&w.notice, &w.hint);
         w.save
             .set_sensitive(view.plan.is_some() && view.error.is_none() && !self.busy.get());
         w.copy.set_sensitive(self.texture.borrow().is_some());
