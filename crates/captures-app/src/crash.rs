@@ -79,7 +79,11 @@ impl Session {
     }
 
     pub fn preview(&self) -> Option<Review> {
-        Review::from_preview(self.evidence.preview())
+        let mut preview = self.evidence.preview();
+        if preview.unclean_exit && preview.os_report.is_none() {
+            preview.os_report = latest_os_report(preview.previous_session_started_at);
+        }
+        Review::from_preview(preview)
     }
 
     pub fn dismiss(&self) -> Result<(), String> {
@@ -104,9 +108,79 @@ impl Session {
     }
 }
 
+/// Shipping `latest_macos_crash_snippet`: a Swift or AppKit crash leaves no
+/// Rust panic, so the newest matching DiagnosticReports file from the prior
+/// session is summarized after the report's own process name is checked.
+#[cfg(target_os = "macos")]
+fn latest_os_report(started: Option<std::time::SystemTime>) -> Option<String> {
+    use captures_feedback::crash_diagnostics::{ReportIdentity, summarize_report_path};
+    let executable = std::env::current_exe().ok()?;
+    let name = executable.file_name()?.to_str()?.to_owned();
+    let reports =
+        std::path::PathBuf::from(std::env::var_os("HOME")?).join("Library/Logs/DiagnosticReports");
+    newest_report(&reports, &name).and_then(|(modified, path)| {
+        summarize_report_path(
+            &path,
+            modified,
+            started,
+            &ReportIdentity {
+                executable_name: &name,
+                bundle_id: None,
+                executable_path: None,
+            },
+        )
+        .ok()
+        .flatten()
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn latest_os_report(_started: Option<std::time::SystemTime>) -> Option<String> {
+    None
+}
+
+/// The newest `<process>-*.ips` or `.crash` report in `directory`.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn newest_report(
+    directory: &Path,
+    process: &str,
+) -> Option<(std::time::SystemTime, std::path::PathBuf)> {
+    let prefix = format!("{process}-");
+    std::fs::read_dir(directory)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name();
+            let name = name.to_str()?;
+            (name.starts_with(&prefix) && (name.ends_with(".ips") || name.ends_with(".crash")))
+                .then_some(())?;
+            Some((entry.metadata().ok()?.modified().ok()?, entry.path()))
+        })
+        .max_by_key(|(modified, _)| *modified)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn newest_report_picks_this_process_latest_crash_only() {
+        let directory = tempfile::tempdir().unwrap();
+        let write = |name: &str, age: u64| {
+            let path = directory.path().join(name);
+            std::fs::write(&path, "{}").unwrap();
+            let file = std::fs::File::options().write(true).open(&path).unwrap();
+            file.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(age))
+                .unwrap();
+        };
+        write("CapturesNative-2026-11-20-old.ips", 600);
+        write("CapturesNative-2026-11-22-new.ips", 60);
+        write("CapturesNativeHelper-2026-11-22-newer.ips", 1);
+        write("CapturesNative-2026-11-22-newest.diag", 0);
+        let (_, path) = newest_report(directory.path(), "CapturesNative").unwrap();
+        assert!(path.ends_with("CapturesNative-2026-11-22-new.ips"));
+        assert!(newest_report(directory.path(), "Other").is_none());
+    }
 
     #[test]
     fn unclean_exit_is_not_exception_evidence_and_clean_exit_has_no_review() {
