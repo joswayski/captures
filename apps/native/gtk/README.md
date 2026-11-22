@@ -42,15 +42,19 @@ open editor, then History, then Preferences, or opens Preferences.
 The live app shows shipping's tray menu as a StatusNotifierItem
 (`tray-icon` with `ksni`, as the wgpu host, so no GTK 3 in the process):
 New Capture…, Screenshot Display, Screenshot Region, Screenshot Window,
-Capture History…, Open Save Location, Preferences, Send Feedback… and Quit
-work; the recording rows stay in shipping's order but are disabled until the
-recording selection/options menu is connected, and Check for Updates…
+Record Region, Record Window, Record Display, Capture History…, Open Save
+Location, Preferences, Send Feedback… and Quit work, and Check for Updates…
 is enabled only in a release build with update metadata (it shows the update notice
-or checks, as shipping). Without a StatusNotifier host the app opens Preferences and
+or checks, as shipping). As shipping's `tray_update_item`, an available update
+moves that row above New Capture as "Update Available — N changes", then
+"Installing Update…", and the tray tooltip follows. Shortcuts and tray rows
+pressed while a capture is open follow shipping's `capture_error::busy_route`:
+they switch or recapture the open bar or selector, Display beside a running
+take captures at once, and a countdown ignores them. Without a StatusNotifier host the app opens Preferences and
 quits when its last window closes. Once setup is finished, the saved global
 shortcuts are live through the shared `CaptureShortcuts`: X11 keys, or on
 Wayland the GlobalShortcuts portal (no X11 fallback); New Capture, Screenshot
-Display and the Region and Window screenshots run; recording waits. The tray accelerators and
+Display, the Region and Window screenshots and the Record shortcuts run. The tray accelerators and
 the shortcuts follow the saved settings file. GTK Preferences does not yet
 show the portal's returned bindings or its Configure/Retry controls.
 `--capture display` opens New Capture on Full screen once the live app is ready
@@ -198,6 +202,12 @@ AppImage and relaunches it, which reopens those windows. A `.deb` install
 updates manually: its card offers View release. A newly available version also
 opens shipping's floating update notice once (after any capture or recording),
 which refreshes in place and runs the same check, download, install and links.
+Closing a recording editor shows shipping's "Recording ready" notice in the
+top-right corner for 15 s (`--scene recording-ready --artifact ID` renders it):
+Save file keeps a copy in the Captures folder, then it reads "Recording saved"
+with Show in Folder. A still on X11 leaves out the launch and Recording ready
+notices and steps a visible update notice aside until it is taken; turning
+mini previews off or changing their placement applies to an open stack at once.
 The tray's Check for Updates shows the notice for an update in hand; otherwise
 it checks and shows the notice, or says up to date or why the check failed. `--update-card NAME` (`idle`, `checking`,
 `current`, `available`, `closing`, `manual`, `downloading`, `verifying`,

@@ -19,6 +19,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use captures_app::capture_error;
 use captures_app::capture_flow::{self, CaptureFlow};
 use captures_app::capture_menu::{self, GuidanceTarget, MenuMode};
 use captures_app::region::RegionSession;
@@ -131,6 +132,105 @@ struct Overlay {
     /// one "Select <window>" per window for the keyboard and AT-SPI. The
     /// layer is click-through; pointer input stays with the hit test.
     window_targets: gtk::Fixed,
+}
+
+impl Host {
+    /// A capture shortcut or tray item, routed as shipping: with nothing open
+    /// it starts; while a capture is open or in flight it follows
+    /// `capture_error::busy_route` (switch or recapture the open UI, restore
+    /// the take's controls, report the busy capture, or refuse silently).
+    pub fn capture_action(self: &Rc<Self>, action: capture_error::Action) {
+        use capture_error::{Action, Activity, BusyRoute, DisplayRoute, Target as Named};
+        let menu_target = |target| match target {
+            Named::Region => MenuTarget::Region,
+            Named::Window => MenuTarget::Window,
+            Named::Display => MenuTarget::Display,
+        };
+        let overlay = self
+            .selector
+            .borrow()
+            .as_ref()
+            .map(|handle| handle.0.clone());
+        let activity = match &overlay {
+            Some(overlay) if overlay.kind == Kind::Menu => Activity::Menu {
+                screenshot_target: (overlay.capture_mode.get() == MenuMode::Screenshot).then(
+                    || match overlay.target.get() {
+                        MenuTarget::Region => Named::Region,
+                        MenuTarget::Window => Named::Window,
+                        MenuTarget::Display => Named::Display,
+                    },
+                ),
+            },
+            Some(_) => Activity::Selector,
+            None if self.capture.borrow().is_some() => Activity::Busy,
+            None => Activity::Idle,
+        };
+        let recorder = self.recorder.borrow().clone();
+        let recording = recorder.as_ref().map(|controls| controls.route_state());
+        let on_screen = recorder
+            .as_ref()
+            .is_some_and(|controls| controls.window.is_visible());
+        let route = capture_error::busy_route(action, activity, recording, on_screen);
+        emit(
+            "capture-route",
+            serde_json::json!({"route": format!("{route:?}")}),
+        );
+        let start = |this: &Rc<Self>| match action {
+            Action::NewCapture => this.new_capture(),
+            Action::Screenshot(Named::Region) => this.capture_region(),
+            Action::Screenshot(Named::Window) => this.capture_window(),
+            Action::Screenshot(Named::Display) => this.capture_display(),
+            Action::Record(target) => this.record_menu(menu_target(target)),
+        };
+        match (route, overlay) {
+            (BusyRoute::Idle, _) => match action {
+                Action::Screenshot(Named::Display) => {
+                    match capture_error::display_route(recording) {
+                        DisplayRoute::CaptureMenu => self.capture_display(),
+                        DisplayRoute::CaptureDisplay => self.capture_now(CaptureMode::Display),
+                        DisplayRoute::Ignore => {}
+                    }
+                }
+                _ => start(self),
+            },
+            // The open capture bar already switches or recaptures in place
+            // the way `busy_route` says (`retarget_new_capture`,
+            // `record_menu`), with its own done/starting guards.
+            (
+                BusyRoute::SwitchMenu { .. }
+                | BusyRoute::RecaptureMenu { .. }
+                | BusyRoute::RecaptureSelector(_),
+                Some(overlay),
+            ) if overlay.kind == Kind::Menu => start(self),
+            (BusyRoute::RecaptureSelector(target), Some(overlay)) => {
+                overlay.recapture(if target == Named::Window {
+                    Kind::Window
+                } else {
+                    Kind::Region
+                })
+            }
+            (BusyRoute::RecaptureMenu { record, target }, Some(overlay)) => overlay.recapture_as(
+                Kind::Menu,
+                menu_target(target),
+                if record {
+                    MenuMode::Recording
+                } else {
+                    MenuMode::Screenshot
+                },
+            ),
+            // Beside a running take: the display under the pointer, at once,
+            // in place of the open selector.
+            (BusyRoute::RecaptureDisplay, Some(overlay)) => {
+                overlay.cancel(self);
+                self.capture_now(CaptureMode::Display);
+            }
+            (BusyRoute::RestoreControls, _) => {
+                self.restore_recording_controls();
+            }
+            (BusyRoute::InProgress, _) => self.capture_failed("A capture is already in progress"),
+            _ => {}
+        }
+    }
 }
 
 impl Host {
@@ -291,21 +391,8 @@ impl Host {
         };
         let generation = flow.generation();
         *self.capture.borrow_mut() = Some(flow);
-        // As Screenshot Display: the stack leaves the screen unless it is
-        // included in captures; the portal path unmaps every window.
-        let hidden: Vec<gtk::Window> = self
-            .app
-            .windows()
-            .into_iter()
-            .filter(|window| window.is_visible())
-            .filter(|window| {
-                portal
-                    || (!settings.include_mini_previews_in_captures
-                        && self.previews.borrow().as_ref().is_some_and(|previews| {
-                            previews.window.upcast_ref::<gtk::Window>() == window
-                        }))
-            })
-            .collect();
+        // As Screenshot Display.
+        let hidden = self.conceal_for_snapshot(&settings, portal);
         for window in &hidden {
             window.set_visible(false);
         }
@@ -1274,6 +1361,12 @@ impl Overlay {
     /// Repeat a target chord: read the visible controls before replacing the
     /// overlay. Keep the same cancellation owner and never publish during prep.
     fn recapture(self: &Rc<Self>, kind: Kind) {
+        self.recapture_as(kind, self.target.get(), MenuMode::Screenshot);
+    }
+
+    /// Freeze the screen with this UI in it and open `kind` on that still,
+    /// for New Capture on `target` in `mode`.
+    fn recapture_as(self: &Rc<Self>, kind: Kind, target: MenuTarget, mode: MenuMode) {
         let Some(host) = self.host.upgrade() else {
             return;
         };
@@ -1318,9 +1411,9 @@ impl Overlay {
                         settings,
                         old.started,
                         generation,
-                        old.target.get(),
-                        MenuMode::Screenshot,
-                        old.recordable,
+                        target,
+                        mode,
+                        old.recordable || !portal,
                     );
                 }
                 result => {

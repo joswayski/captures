@@ -98,6 +98,45 @@ pub fn wayland(host: &Host) -> bool {
 }
 
 impl Host {
+    /// Shipping's `conceal_capture_chrome_for_snapshot`: the windows to hide
+    /// (and show again afterwards) before a still is taken. The portal path
+    /// unmaps every Captures window, as the wgpu host, so consent and the
+    /// still never include them. Elsewhere the preview stack leaves unless
+    /// it belongs in captures, a visible update notice steps aside until the
+    /// capture ends, and the launch and Recording ready notices close for
+    /// good. Linux cannot keep
+    /// the recording controls out (shipping `canExcludeRecordingControls`),
+    /// so they stay.
+    pub(crate) fn conceal_for_snapshot(
+        &self,
+        settings: &captures_settings::AppSettings,
+        portal: bool,
+    ) -> Vec<gtk::Window> {
+        if !portal {
+            let launch = self.startup_notice.borrow_mut().take();
+            let ready = self.recording_ready.borrow_mut().take();
+            for notice in launch.into_iter().chain(ready) {
+                notice.close();
+            }
+        }
+        let update = crate::updates::notice_window();
+        self.app
+            .windows()
+            .into_iter()
+            .filter(|window| window.is_visible())
+            .filter(|window| {
+                portal
+                    || update.as_ref() == Some(window)
+                    || (!settings.include_mini_previews_in_captures
+                        && self.previews.borrow().as_ref().is_some_and(|previews| {
+                            previews.window.upcast_ref::<gtk::Window>() == window
+                        }))
+            })
+            .collect()
+    }
+}
+
+impl Host {
     /// Display on X11 or through the Screenshot portal; on Wayland also
     /// Window, through a window-only ScreenCast grant (the portal's own
     /// picker replaces the window overlay there).
@@ -112,6 +151,13 @@ impl Host {
         let portal = wayland(self);
         let flow = if portal {
             begin_portal(self).map(Flow::Portal)
+        } else if let Some(recorder) = self.recorder.borrow().as_ref() {
+            // Shipping's Screenshot Display beside a running take.
+            recorder
+                .flow
+                .borrow()
+                .begin_recording_screenshot(seconds)
+                .map(Flow::X11)
         } else {
             CaptureFlow::begin(seconds).map(Flow::X11)
         };
@@ -121,22 +167,7 @@ impl Host {
         };
         let generation = flow.generation();
         *self.capture.borrow_mut() = Some(flow);
-        // Hide the stack unless it belongs in captures; the portal path
-        // unmaps every Captures window, as the wgpu host, so consent and
-        // the still never include them.
-        let hidden: Vec<gtk::Window> = self
-            .app
-            .windows()
-            .into_iter()
-            .filter(|window| window.is_visible())
-            .filter(|window| {
-                portal
-                    || (!settings.include_mini_previews_in_captures
-                        && self.previews.borrow().as_ref().is_some_and(|previews| {
-                            previews.window.upcast_ref::<gtk::Window>() == window
-                        }))
-            })
-            .collect();
+        let hidden = self.conceal_for_snapshot(&settings, portal);
         for window in &hidden {
             window.set_visible(false);
         }

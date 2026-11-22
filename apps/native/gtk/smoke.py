@@ -2333,6 +2333,38 @@ def recording(binary, scratch):
         process.wait(timeout=10)
 
 
+def recording_ready(binary, scratch):
+    """Shipping's Recording ready notice over AT-SPI: Save file keeps a copy
+    of the take in the configured folder, records it in History, and the
+    notice then reads Recording saved with Show in Folder."""
+    root = scratch / "ready-history"
+    exports = scratch / "ready-exports"
+    exports.mkdir()
+    artifact = write_video_entry(root, seconds=1)
+    # A fresh take: kept in History only, not yet saved anywhere.
+    metadata = root / artifact / "metadata.json"
+    metadata.write_text(json.dumps(dict(json.loads(metadata.read_text()), saved_path=None)))
+    settings = scratch / "ready-settings.json"
+    settings.write_text(json.dumps(dict(LiveCaptures.SETTINGS, output_directory=str(exports))))
+    process = launch(binary, "--scene", "recording-ready", "--artifact", artifact,
+                     "--history-root", str(root), "--settings-file", str(settings))
+    try:
+        app = wait(lambda: application(process.pid), "the app on the accessibility bus")
+        wait(lambda: find(app, "label", "Recording ready"), "the Recording ready notice")
+        assert find(app, "push button", "Dismiss"), "no Dismiss button"
+        press(wait(lambda: find(app, "push button", "Save file"), "Save file")[0])
+        wait(lambda: find(app, "label", "Recording saved"), "the saved notice")
+        wait(lambda: find(app, "push button", "Show in Folder"), "Show in Folder")
+        saved = list(exports.glob("*.mp4"))
+        assert len(saved) == 1, saved
+        recorded = json.loads(metadata.read_text())["saved_path"]
+        assert recorded == str(saved[0]), recorded
+        print("recording_ready: Save file kept the take in the Captures folder and offered "
+              "Show in Folder")
+    finally:
+        process.kill()
+
+
 def notices(binary, scratch):
     """The update notice on shipping's fixtures over AT-SPI: the notes have no
     Hide or What's new toggle (Preferences owns that setting); Update now
@@ -2419,17 +2451,23 @@ def update_notice_live(binary, scratch):
         press(find(dialog, "push button", "Not now")[0])
         wait(lambda: events("update-notice-dismissed"), "Not now")
         wait(lambda: not find(app, "dialog", "Update available"), "the notice to close")
-        # The tray shows the update in hand again; it does not recheck.
+        # The tray pins the update in hand above New Capture, as shipping's
+        # `tray_update_item`, and reopens the notice without rechecking.
         service = wait(lambda: [json.loads(line) for line in FIXTURE_LOG.read_text().splitlines()
                                 if json.loads(line).get("event") == "item"
                                 and json.loads(line)["sender"]], "the tray item")[-1]["service"]
         rows, click = wait(lambda: tray_menu(service), "the tray menu")
-        assert ("Check for Updates…", True) in [(label, on) for _, label, on in rows], rows
-        click("Check for Updates…")
+        labels = [(label, on) for _, label, on in rows]
+        assert labels[:3] == [("Update Available — 2 changes", True), ("-", True),
+                              ("New Capture…", True)], rows
+        assert "Check for Updates…" not in [label for label, _ in labels], rows
+        click("Update Available — 2 changes")
         dialog = wait(lambda: find(app, "dialog", "Update available"), "the tray's notice")[0]
         assert not [e for e in events("update-action") if e["step"] == "Check"], "the tray rechecked"
         press(find(dialog, "push button", "Update now")[0])
         wait(lambda: find(app, "dialog", "Updating Captures"), "the download in place")
+        wait(lambda: ("Installing Update…", False) in
+             [(label, on) for _, label, on in tray_menu(service)[0]], "the tray's installing row")
         assert len(events("update-notice-dismissed")) == 1
         failed = wait(lambda: find(app, "dialog", "Update failed"), "the failed verification")[0]
         assert [n for n, (role, _) in nodes(failed) if role == "alert"], "no error alert"
@@ -3275,7 +3313,8 @@ def wayland_recording(binary, scratch):
 
 STEPS = [history, preferences, update_card, editor, editor_close_keeps_open_text, recording, recording_controls, recording_menu,
          recording_output, previews, preview_overflow, feedback, open_with, live, capture, selectors,
-         new_capture, tray, shortcuts, setup, crash_review, notices, update_notice_live,
+         new_capture, tray, shortcuts, setup, crash_review, notices, recording_ready,
+         update_notice_live,
          wayland_recording]
 FIXTURE_LOG = None
 

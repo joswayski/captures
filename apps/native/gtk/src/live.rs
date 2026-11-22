@@ -107,6 +107,10 @@ pub fn start(
                         tray.update(&settings);
                     }
                     sync_shortcuts(&host, &settings);
+                    let previews = host.previews.borrow().clone();
+                    if let Some(previews) = previews {
+                        previews.apply_settings(&settings);
+                    }
                 }
             });
         });
@@ -265,15 +269,16 @@ fn drain_shortcuts() {
     };
     while let Some(action) = SHORTCUTS.with(|cell| cell.borrow().as_ref()?.next_action()) {
         emit("shortcut", serde_json::json!({"action": action.id()}));
-        match action {
-            CaptureShortcut::Display => host.capture_display(),
-            CaptureShortcut::Region => host.capture_region(),
-            CaptureShortcut::Window => host.capture_window(),
-            CaptureShortcut::NewCapture => host.new_capture(),
-            CaptureShortcut::RecordRegion => host.record_menu(crate::capture_bar::Target::Region),
-            CaptureShortcut::RecordWindow => host.record_menu(crate::capture_bar::Target::Window),
-            CaptureShortcut::RecordDisplay => host.record_menu(crate::capture_bar::Target::Display),
-        }
+        use captures_app::capture_error::{Action, Target};
+        host.capture_action(match action {
+            CaptureShortcut::Display => Action::Screenshot(Target::Display),
+            CaptureShortcut::Region => Action::Screenshot(Target::Region),
+            CaptureShortcut::Window => Action::Screenshot(Target::Window),
+            CaptureShortcut::NewCapture => Action::NewCapture,
+            CaptureShortcut::RecordRegion => Action::Record(Target::Region),
+            CaptureShortcut::RecordWindow => Action::Record(Target::Window),
+            CaptureShortcut::RecordDisplay => Action::Record(Target::Display),
+        });
     }
 }
 

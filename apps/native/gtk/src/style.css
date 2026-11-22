@@ -3818,6 +3818,85 @@ window.captures.recording-controls-window {
   font-weight: var(--weight-semibold);
   line-height: 13px;
 }
+/* Shipping `.recording-saved-notice` (the Recording ready notice). */
+.captures .recording-saved-notice {
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-xl);
+  color: var(--glass-text);
+  background: var(--glass-strong);
+  box-shadow: var(--glass-shadow);
+}
+.captures .recording-saved-notice.animated {
+  animation: recording-saved-lifecycle 15s var(--ease-standard) forwards;
+}
+.captures .recording-saved-row {
+  padding: var(--s-5) 38px var(--s-5) var(--s-5);
+}
+.captures .recording-saved-icon {
+  min-width: 38px;
+  min-height: 38px;
+  border-radius: var(--r-lg);
+  color: var(--positive-ink);
+  background: var(--positive);
+}
+.captures .recording-saved-title {
+  color: var(--glass-text);
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+}
+.captures .recording-saved-text {
+  color: var(--glass-text-muted);
+  font-size: var(--text-xs);
+  line-height: var(--lh-snug-xs);
+}
+.captures .recording-saved-reveal {
+  min-height: var(--h-md);
+  padding: 0 var(--s-4);
+  border: 1px solid var(--glass-border-strong);
+  border-radius: var(--r-md);
+  color: var(--glass-text);
+  background: var(--glass-hover);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+}
+.captures .recording-saved-reveal:hover {
+  background: var(--glass-active);
+}
+.captures .recording-saved-reveal:disabled {
+  opacity: 0.5;
+}
+.captures .recording-saved-dismiss {
+  min-width: 24px;
+  min-height: 24px;
+  margin: 10px 10px 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  color: var(--glass-text-subtle);
+  background: transparent;
+}
+.captures .recording-saved-dismiss:hover {
+  color: var(--glass-text);
+  background: var(--glass-hover);
+}
+@keyframes recording-saved-lifecycle {
+  0% {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.97);
+  }
+  2.5% {
+    opacity: 1;
+    transform: none;
+  }
+  86% {
+    opacity: 1;
+    transform: none;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-5px) scale(0.985);
+  }
+}
 @keyframes recording-hidden-lifecycle {
   0% {
     opacity: 0;

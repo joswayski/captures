@@ -58,6 +58,8 @@ enum Scene {
     Update,
     /// The launch notice.
     Startup,
+    /// The Recording ready notice for `--artifact`.
+    RecordingReady,
 }
 
 impl Scene {
@@ -72,6 +74,7 @@ impl Scene {
             Scene::Setup => "setup",
             Scene::Update => "update",
             Scene::Startup => "startup",
+            Scene::RecordingReady => "recording-ready",
         }
     }
 }
@@ -167,6 +170,7 @@ fn parse_args(args: impl Iterator<Item = String>, preview: bool) -> Result<Optio
                     "setup" => Scene::Setup,
                     "update" => Scene::Update,
                     "startup" => Scene::Startup,
+                    "recording-ready" => Scene::RecordingReady,
                     other => return Err(format!("unsupported scene {other}")),
                 }
             }
@@ -285,7 +289,11 @@ fn parse_args(args: impl Iterator<Item = String>, preview: bool) -> Result<Optio
     if (options.quiet || options.capture.is_some()) && !options.live {
         return Err("--captures-autostart and --capture need --live".into());
     }
-    if matches!(options.scene, Scene::Editor | Scene::Recording) && options.artifact.is_none() {
+    if matches!(
+        options.scene,
+        Scene::Editor | Scene::Recording | Scene::RecordingReady
+    ) && options.artifact.is_none()
+    {
         return Err(format!(
             "--scene {} needs --artifact ID",
             options.scene.name()
@@ -381,6 +389,8 @@ struct Host {
     crash: RefCell<Option<std::sync::Arc<captures_app::crash::Session>>>,
     /// The launch notice, while shown.
     startup_notice: RefCell<Option<gtk::ApplicationWindow>>,
+    /// The "Recording ready" notice, while shown.
+    recording_ready: RefCell<Option<gtk::ApplicationWindow>>,
     /// The Region or Window overlay, while open (`selector.rs`).
     selector: RefCell<Option<selector::Handle>>,
     /// An accepted or starting take, independent of a screenshot beside it.
@@ -500,6 +510,35 @@ impl Host {
         *self.setup.borrow_mut() = Some(window.clone());
         window.present();
         window
+    }
+
+    /// Shipping shows "Recording ready" as a recording editor closes, when
+    /// the take is still in History; a later one replaces it. Only the
+    /// resident app has it, as shipping.
+    fn show_recording_ready(&self, id: &str) {
+        if self.instance.borrow().is_none() {
+            return;
+        }
+        let entries =
+            captures_history::load(&self.history_root, chrono::Utc::now()).unwrap_or_default();
+        let Some(entry) = entries
+            .into_iter()
+            .find(|entry| entry.id == id && entry.kind.is_recording())
+        else {
+            return;
+        };
+        if let Some(previous) = self.recording_ready.borrow_mut().take() {
+            previous.close();
+        }
+        let window = notices::recording_ready(
+            &self.app,
+            self.history_root.clone(),
+            self.settings_file.clone(),
+            &entry,
+        );
+        window.set_visible(true);
+        emit("recording-ready", serde_json::json!({"artifact": id}));
+        *self.recording_ready.borrow_mut() = Some(window);
     }
 
     /// Shipping's launch notice for `visible_for`; a later one replaces it.
@@ -799,6 +838,7 @@ impl Host {
             if let Some(host) = host.upgrade() {
                 host.recordings.borrow_mut().retain(|(open, _)| *open != id);
                 host.sync_preview_editing();
+                host.show_recording_ready(&id);
             }
             glib::Propagation::Proceed
         });
@@ -1011,6 +1051,7 @@ fn main() -> glib::ExitCode {
             tray: RefCell::default(),
             crash: RefCell::default(),
             startup_notice: RefCell::default(),
+            recording_ready: RefCell::default(),
             selector: RefCell::default(),
             recorder: RefCell::default(),
         });
@@ -1121,6 +1162,25 @@ fn main() -> glib::ExitCode {
             Scene::Recording => {
                 let id = options.artifact.clone().expect("checked in parse");
                 host.show_recording(&id).window.clone()
+            }
+            Scene::RecordingReady => {
+                let id = options.artifact.clone().expect("checked in parse");
+                let entry = captures_history::load(&host.history_root, chrono::Utc::now())
+                    .ok()
+                    .and_then(|entries| entries.into_iter().find(|e| e.id == id));
+                let Some(entry) = entry else {
+                    eprintln!("no History entry {id}");
+                    app.quit();
+                    return;
+                };
+                let window = notices::recording_ready(
+                    &host.app,
+                    host.history_root.clone(),
+                    host.settings_file.clone(),
+                    &entry,
+                );
+                window.set_visible(true);
+                window
             }
             // `--artifact ID` restores one entry; otherwise the `--count` newest.
             Scene::Preview => {
@@ -1253,7 +1313,11 @@ fn exercise(host: &Rc<Host>, scene: Scene, started: Instant) {
                     }
                 }
                 // Static forms: nothing to exercise.
-                Scene::Feedback | Scene::Setup | Scene::Update | Scene::Startup => {}
+                Scene::Feedback
+                | Scene::Setup
+                | Scene::Update
+                | Scene::Startup
+                | Scene::RecordingReady => {}
             }
             emit(
                 "scripted-action",

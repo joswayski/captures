@@ -22,7 +22,7 @@ use captures_app::update_notice::{
     self as notice, Action, Presentation, StubEvent, UpdateStatus, ViewState,
 };
 use gtk::prelude::*;
-use gtk::{glib, graphene};
+use gtk::{gio, glib, graphene};
 
 use crate::preferences::{description, label};
 use crate::widgets::{Icon, MaxWidth, SnapshotArea};
@@ -431,6 +431,230 @@ pub fn startup(
         }
     });
     window
+}
+
+// --------------------------------------------------- recording ready ----
+
+/// Shipping `RECORDING_SAVED_NOTICE_CARD_WIDTH` × `_HEIGHT`.
+pub const RECORDING_READY_WIDTH: f64 = 440.;
+const RECORDING_READY_HEIGHT: f64 = 116.;
+/// Shipping `RECORDING_SAVED_NOTICE_VISIBLE_FOR`: the 15 s lifecycle
+/// animation, then 200 ms before the window closes.
+const RECORDING_READY_VISIBLE_FOR: Duration = Duration::from_millis(15_200);
+
+/// Shipping's "Recording ready" notice (`RecordingSavedNotice`), shown when
+/// a recording editor closes: Save file keeps a copy in the Captures folder
+/// (then "Recording saved" with Show in Folder), Dismiss or 15 s closes it.
+/// It floats over the desktop on the glass palette, in the top-right corner,
+/// without taking focus.
+pub fn recording_ready(
+    app: &gtk::Application,
+    history_root: PathBuf,
+    settings_file: PathBuf,
+    entry: &captures_history::HistoryEntry,
+) -> gtk::ApplicationWindow {
+    let card = gtk::Overlay::builder()
+        .accessible_role(gtk::AccessibleRole::Status)
+        .build();
+    card.add_css_class("recording-saved-notice");
+    if card.settings().is_gtk_enable_animations() {
+        card.add_css_class("animated");
+    }
+    card.set_size_request(RECORDING_READY_WIDTH as i32, RECORDING_READY_HEIGHT as i32);
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    row.add_css_class("recording-saved-row");
+    let tile = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    tile.add_css_class("recording-saved-icon");
+    tile.set_valign(gtk::Align::Center);
+    tile.set_accessible_role(gtk::AccessibleRole::Presentation);
+    let check = Icon::new("check", 20).with_stroke(2.2);
+    check.set_halign(gtk::Align::Center);
+    check.set_valign(gtk::Align::Center);
+    check.set_vexpand(true);
+    tile.append(&check);
+    row.append(&tile);
+    let copy = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    copy.set_valign(gtk::Align::Center);
+    copy.set_hexpand(true);
+    let title = label("", "recording-saved-title");
+    let detail = label("", "recording-saved-text");
+    detail.set_wrap(true);
+    detail.set_xalign(0.);
+    copy.append(&title);
+    copy.append(&detail);
+    row.append(&copy);
+    let action = gtk::Button::new();
+    action.add_css_class("recording-saved-reveal");
+    action.set_valign(gtk::Align::Center);
+    action.set_cursor_from_name(Some("pointer"));
+    row.append(&action);
+    card.set_child(Some(&row));
+    let dismiss = gtk::Button::new();
+    dismiss.add_css_class("recording-saved-dismiss");
+    dismiss.set_child(Some(&Icon::new("close", 14).with_stroke(2.)));
+    dismiss.update_property(&[gtk::accessible::Property::Label("Dismiss")]);
+    dismiss.set_halign(gtk::Align::End);
+    dismiss.set_valign(gtk::Align::Start);
+    card.add_overlay(&dismiss);
+
+    // Shipping's `permanentlySaved`, `busy` and `error`.
+    let saved = Rc::new(RefCell::new(entry.saved_path.clone().map(PathBuf::from)));
+    let busy = Rc::new(Cell::new(false));
+    let error = Rc::new(RefCell::new(None::<String>));
+    let render = {
+        let (saved, busy, error) = (saved.clone(), busy.clone(), error.clone());
+        let (card, title, detail, action) =
+            (card.clone(), title.clone(), detail.clone(), action.clone());
+        Rc::new(move || {
+            let saved = saved.borrow().is_some();
+            let heading = if saved {
+                "Recording saved"
+            } else {
+                "Recording ready"
+            };
+            title.set_label(heading);
+            let line = error.borrow().clone().unwrap_or_else(|| {
+                if saved {
+                    "Saved to your Captures folder.".into()
+                } else {
+                    "Kept in Capture History for 30 days. Save a copy anytime.".into()
+                }
+            });
+            detail.set_label(&line);
+            let (text, icon) = match (saved, busy.get()) {
+                (true, true) => ("Opening…", "folder"),
+                (true, false) => ("Show in Folder", "folder"),
+                (false, true) => ("Saving…", "save"),
+                (false, false) => ("Save file", "save"),
+            };
+            let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+            content.append(&Icon::new(icon, 14).with_stroke(1.8));
+            content.append(&gtk::Label::new(Some(text)));
+            action.set_child(Some(&content));
+            action.update_property(&[gtk::accessible::Property::Label(text)]);
+            action.set_sensitive(!busy.get());
+            card.update_property(&[
+                gtk::accessible::Property::Label(heading),
+                gtk::accessible::Property::Description(&line),
+            ]);
+        })
+    };
+    render();
+
+    let window = window(app, "Recording saved", &card, RECORDING_READY_WIDTH);
+    window.add_css_class("recording-saved-window");
+    window.set_focusable(false);
+    place_top_right(&window);
+    let weak = window.downgrade();
+    dismiss.connect_clicked(move |_| {
+        if let Some(window) = weak.upgrade() {
+            window.close();
+        }
+    });
+    let id = entry.id.clone();
+    let weak = window.downgrade();
+    action.connect_clicked(move |_| {
+        if busy.get() {
+            return;
+        }
+        if let Some(path) = saved.borrow().clone() {
+            // Shipping's Reveal dismisses the notice once the folder opens.
+            crate::history::reveal(&path);
+            if let Some(window) = weak.upgrade() {
+                window.close();
+            }
+            return;
+        }
+        busy.set(true);
+        error.borrow_mut().take();
+        render();
+        let settings = captures_settings::load(&settings_file).unwrap_or_default();
+        let request = captures_app::Request::SaveRecording {
+            root: history_root.clone(),
+            id: id.clone(),
+            directory: PathBuf::from(settings.output_directory),
+        };
+        let (saved, busy, error, render) =
+            (saved.clone(), busy.clone(), error.clone(), render.clone());
+        glib::spawn_future_local(async move {
+            let result = gio::spawn_blocking(move || match captures_app::execute(request) {
+                Ok(captures_app::Response::Saved { path, .. }) => Ok(path),
+                Ok(_) => Err("unexpected response".to_owned()),
+                Err(error) => Err(error.to_string()),
+            })
+            .await
+            .unwrap_or_else(|_| Err("the save worker stopped".into()));
+            busy.set(false);
+            match result {
+                Ok(path) => *saved.borrow_mut() = Some(path),
+                Err(message) => {
+                    *error.borrow_mut() = Some(format!("Could not save the recording: {message}"))
+                }
+            }
+            render();
+            crate::emit(
+                "recording-ready-saved",
+                serde_json::json!({"ok": saved.borrow().is_some()}),
+            );
+        });
+    });
+    let weak = window.downgrade();
+    glib::timeout_add_local_once(RECORDING_READY_VISIBLE_FOR, move || {
+        if let Some(window) = weak.upgrade() {
+            window.close();
+        }
+    });
+    window
+}
+
+/// Shipping's `top_right_notice_position`: 18 px from the monitor's right
+/// edge and 30 px below its top, kept above every workspace.
+fn place_top_right(window: &gtk::ApplicationWindow) {
+    #[cfg(feature = "layer-shell")]
+    let layered = crate::previews::layer_shell::notice(window, true, (18, 30));
+    #[cfg(not(feature = "layer-shell"))]
+    let layered = false;
+    #[cfg(feature = "x11")]
+    if !layered {
+        use crate::previews::x11::Placer;
+        use gdk4_x11::X11Surface;
+        let Some(placer) = Placer::new(&WidgetExt::display(window)).map(Rc::new) else {
+            return;
+        };
+        window.connect_realize(move |window| {
+            let Some(surface) = window.surface().and_downcast::<X11Surface>() else {
+                return;
+            };
+            surface.set_skip_taskbar_hint(true);
+            surface.set_skip_pager_hint(true);
+            let corner = {
+                let (placer, window) = (placer.clone(), window.downgrade());
+                Rc::new(move |surface: &X11Surface| {
+                    let (Some(window), Some((monitor, _))) =
+                        (window.upgrade(), placer.areas(surface))
+                    else {
+                        return;
+                    };
+                    let (_, natural) = window.preferred_size();
+                    placer.move_to(
+                        surface,
+                        monitor.x + monitor.width - f64::from(natural.width()) - 18.,
+                        monitor.y + 30.,
+                    );
+                })
+            };
+            corner(&surface);
+            let (pinned, placer_ref) = (surface.downgrade(), Rc::downgrade(&placer));
+            placer.watch_managed(&surface, move || {
+                if let (Some(surface), Some(placer)) = (pinned.upgrade(), placer_ref.upgrade()) {
+                    placer.pin(&surface);
+                    corner(&surface);
+                }
+            });
+        });
+    }
+    #[cfg(not(feature = "x11"))]
+    let _ = (window, layered);
 }
 
 // ------------------------------------------------------------ update ----

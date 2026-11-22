@@ -461,6 +461,65 @@ pub fn release_note_items(markdown: &str) -> Vec<NoteItem> {
     items
 }
 
+/// The tray (menu bar) update row for an update status: shipping's
+/// `tray_update_item`. An available, installing or restarting update is
+/// pinned above New Capture; otherwise the row stays "Check for Updates…".
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TrayUpdateItem {
+    pub label: String,
+    pub enabled: bool,
+    pub pin_first: bool,
+}
+
+pub fn tray_update_item(status: Option<&UpdateStatus>) -> TrayUpdateItem {
+    let item = |label: String, enabled, pin_first| TrayUpdateItem {
+        label,
+        enabled,
+        pin_first,
+    };
+    match status {
+        Some(UpdateStatus::Available {
+            changelog, notes, ..
+        }) => {
+            let label = match change_count(changelog, notes.as_deref()) {
+                0 => "Update Available".to_owned(),
+                1 => "Update Available — 1 change".to_owned(),
+                count => format!("Update Available — {count} changes"),
+            };
+            item(label, true, true)
+        }
+        Some(UpdateStatus::Downloading { .. }) => item("Installing Update…".into(), false, true),
+        Some(UpdateStatus::Restarting { .. }) => item("Restarting Captures…".into(), false, true),
+        Some(UpdateStatus::Checking { .. }) => item("Checking for Updates…".into(), false, false),
+        _ => item("Check for Updates…".into(), true, false),
+    }
+}
+
+/// Shipping's tray tooltip for an update status.
+pub fn tray_tooltip(status: Option<&UpdateStatus>) -> &'static str {
+    match status {
+        Some(UpdateStatus::Available { .. }) => "Captures — Update available",
+        Some(UpdateStatus::Downloading { .. } | UpdateStatus::Restarting { .. }) => {
+            "Captures — Installing update"
+        }
+        _ => crate::preview_channel::TRAY_NAME,
+    }
+}
+
+/// Counts the changes the notice lists, so the tray and the notice agree.
+fn change_count(changelog: &[ChangelogEntry], notes: Option<&str>) -> usize {
+    let from_changelog: usize = changelog
+        .iter()
+        .filter_map(|entry| entry.notes.as_deref())
+        .map(|notes| release_note_items(notes).len())
+        .sum();
+    if from_changelog > 0 {
+        from_changelog
+    } else {
+        notes.map_or(0, |notes| release_note_items(notes).len())
+    }
+}
+
 /// One group per skipped Preview with product-facing notes, newest first.
 pub fn stacked_release_notes(
     changelog: &[ChangelogEntry],
@@ -1345,6 +1404,67 @@ pub fn placement(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tray_update_item_counts_listed_changes_and_pins_active_updates() {
+        use super::*;
+        let notes = "> [!WARNING]\n> Experimental.\n\n## What's Changed\n* First fix by @a in https://example.com/1\n* Second fix by @b in https://example.com/2\n* @bot made their first contribution in https://example.com/3\n\n**Full Changelog**: https://example.com";
+        let available =
+            |changelog: Vec<ChangelogEntry>, notes: Option<&str>| UpdateStatus::Available {
+                current_version: "2026.11.2201".into(),
+                current_display_version: "2026.11.22.1".into(),
+                version: "2026.11.2203".into(),
+                display_version: "2026.11.22.3".into(),
+                notes: notes.map(str::to_owned),
+                changelog,
+                installable: true,
+                manual_download_url: None,
+                download_size: None,
+                will_close_open_captures: false,
+            };
+        let changelog = vec![
+            ChangelogEntry {
+                version: "2026.11.2203".into(),
+                display_version: "2026.11.22.3".into(),
+                notes: Some(notes.into()),
+            },
+            ChangelogEntry {
+                version: "2026.11.2202".into(),
+                display_version: "2026.11.22.2".into(),
+                notes: Some("* Third fix by @c in https://example.com/4".into()),
+            },
+        ];
+        let item = tray_update_item(Some(&available(changelog, Some(notes))));
+        assert_eq!(item.label, "Update Available — 3 changes");
+        assert!(item.enabled && item.pin_first);
+        assert_eq!(
+            tray_update_item(Some(&available(vec![], Some("* One fix")))).label,
+            "Update Available — 1 change"
+        );
+        assert_eq!(
+            tray_update_item(Some(&available(vec![], None))).label,
+            "Update Available"
+        );
+        let downloading = UpdateStatus::Downloading {
+            current_version: "a".into(),
+            current_display_version: "a".into(),
+            version: "b".into(),
+            display_version: "b".into(),
+            downloaded: 1,
+            total: None,
+        };
+        let item = tray_update_item(Some(&downloading));
+        assert_eq!(item.label, "Installing Update…");
+        assert!(!item.enabled && item.pin_first);
+        assert_eq!(
+            tray_tooltip(Some(&downloading)),
+            "Captures — Installing update"
+        );
+        let idle = tray_update_item(None);
+        assert_eq!(idle.label, "Check for Updates…");
+        assert!(idle.enabled && !idle.pin_first);
+        assert_eq!(tray_tooltip(None), crate::preview_channel::TRAY_NAME);
+    }
+
     use super::*;
 
     const SAMPLE: &str = "> [!WARNING]\n> This Preview is functional, but experimental.\n\n## What's Changed\n* Improve capture parity by @joswayski in https://github.com/joswayski/captures/pull/249\n* **Fix** the `[region](https://example.com)` selector\n* @devin-ai-integration[bot] made their first contribution in https://github.com/joswayski/captures/pull/297\n\n## New Contributors\n* @someone made their first contribution in https://github.com/joswayski/captures/pull/1\n\n**Full Changelog**: https://github.com/joswayski/captures/compare/old...new";

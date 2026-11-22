@@ -79,7 +79,7 @@ struct State {
     actions: Actions,
     /// The current file drag landed on this stack (shipping rejects it).
     self_drop: Cell<bool>,
-    placement: captures_settings::MiniPreviewPlacement,
+    placement: Cell<captures_settings::MiniPreviewPlacement>,
     /// A carried pile's origin and the corner it now expands from, until
     /// the stack empties (shipping's session-only dragged origin).
     dragged: Cell<
@@ -160,7 +160,7 @@ pub fn build(
         minimize: minimize.clone(),
         actions,
         self_drop: Cell::new(false),
-        placement,
+        placement: Cell::new(placement),
         dragged: Cell::new(None),
         #[cfg(feature = "x11")]
         placer: x11::Placer::new(&gtk::prelude::WidgetExt::display(&window)).map(Rc::new),
@@ -338,6 +338,39 @@ impl Previews {
         self.state.toggle_collapsed();
     }
 
+    /// Shipping's `save_settings` for the stack: turning previews off hides
+    /// it (its cards stay for when they come back) and forgets a carried
+    /// origin; a new placement moves it to that corner now.
+    pub fn apply_settings(&self, settings: &captures_settings::AppSettings) {
+        let state = &self.state;
+        let show = settings.show_mini_previews;
+        let moved = state.placement.replace(settings.mini_preview_placement)
+            != settings.mini_preview_placement;
+        if moved || !show {
+            state.forget_carry();
+        }
+        if !show {
+            state.window.set_visible(false);
+            return;
+        }
+        if state.stack.borrow().ids().is_empty() {
+            return;
+        }
+        state.relayout();
+        if !state.window.is_visible() {
+            state.window.set_visible(true);
+        } else if moved {
+            #[cfg(feature = "x11")]
+            if let Some(surface) = state
+                .window
+                .surface()
+                .and_downcast::<gdk4_x11::X11Surface>()
+            {
+                state.place(&surface, false);
+            }
+        }
+    }
+
     /// The cards' History artifacts in stack order, for an update restart.
     pub fn ids(&self) -> Vec<String> {
         self.state.stack.borrow().ids().to_vec()
@@ -382,7 +415,13 @@ impl State {
         // A restore always shows the whole stack.
         self.stack.borrow_mut().set_collapsed(false);
         self.relayout();
-        self.window.present();
+        // Shipping's stack is `focusable(false).focused(false)`: show it
+        // without `present()`, which asks the window manager (or
+        // xdg-activation) to activate it and takes focus from the app the
+        // user is working in.
+        if !self.window.is_visible() {
+            self.window.set_visible(true);
+        }
     }
 
     fn sync_editing(&self) {
@@ -452,7 +491,7 @@ impl State {
                 stack.ids().len(),
                 stack.is_collapsed(),
                 (
-                    dragged.map_or(self.placement, |(_, placement)| placement),
+                    dragged.map_or(self.placement.get(), |(_, placement)| placement),
                     dragged.map(|(origin, _)| origin),
                 ),
                 follow_pointer,
@@ -514,7 +553,7 @@ impl State {
             stack.ids().len(),
             stack.is_collapsed(),
             (
-                dragged.map_or(self.placement, |(_, placement)| placement),
+                dragged.map_or(self.placement.get(), |(_, placement)| placement),
                 dragged.map(|(origin, _)| origin),
             ),
         );
@@ -590,7 +629,7 @@ impl State {
             let current = self
                 .dragged
                 .get()
-                .map_or(self.placement, |(_, placement)| placement);
+                .map_or(self.placement.get(), |(_, placement)| placement);
             let (origin, next) =
                 preview::move_collapsed_stack(bounds, count, x - press_x, y - press_y, current);
             self.dragged.set(Some((origin, next)));
@@ -603,6 +642,15 @@ impl State {
                 next,
             )));
         }
+    }
+
+    /// Back to the configured corner: shipping's `reset_session_placement`.
+    fn forget_carry(&self) {
+        let placement = self.placement.get();
+        self.dragged.set(None);
+        self.pile.set_top_anchor(placement.is_top());
+        self.pile.set_right_anchor(placement.is_right());
+        self.pile.set_gravity(None);
     }
 
     fn toggle_collapsed(&self) {
@@ -619,10 +667,7 @@ impl State {
             // Exiting cards finish first; an empty stack forgets its carry.
             if self.pile.is_empty() {
                 self.window.set_visible(false);
-                self.dragged.set(None);
-                self.pile.set_top_anchor(self.placement.is_top());
-                self.pile.set_right_anchor(self.placement.is_right());
-                self.pile.set_gravity(None);
+                self.forget_carry();
             }
             return;
         }

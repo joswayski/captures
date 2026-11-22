@@ -1144,6 +1144,12 @@ impl Controls {
         dialog.present();
     }
 
+    /// The take's state for shipping's capture routing
+    /// (`capture_error::busy_route`).
+    pub fn route_state(&self) -> RecordingState {
+        self.input().state
+    }
+
     pub fn restore(&self) {
         self.notice
             .borrow_mut()

@@ -1050,6 +1050,9 @@ fn sync_notice() {
     }) else {
         return;
     };
+    if let Some(tray) = host.tray.borrow_mut().as_mut() {
+        tray.set_update(status.as_ref());
+    }
     if let (Some(notice), Some(status)) = (&notice, &status) {
         notice.set_live(status.clone(), installing);
     }
@@ -1086,6 +1089,17 @@ fn sync_notice() {
             gtk::MessageType::Error,
         ),
     }
+}
+
+/// The update notice's window while it is open, so a capture can move it
+/// out of the still and back.
+pub fn notice_window() -> Option<gtk::Window> {
+    NOTICE.with(|notice| {
+        notice
+            .borrow()
+            .as_ref()
+            .map(|notice| notice.window.clone().upcast())
+    })
 }
 
 /// Open the floating notice without taking focus, as shipping's

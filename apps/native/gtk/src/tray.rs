@@ -5,6 +5,7 @@
 
 use std::rc::Rc;
 
+use captures_app::update_notice::{TrayUpdateItem, UpdateStatus, tray_tooltip, tray_update_item};
 use gtk::prelude::*;
 use gtk::{gio, glib};
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, accelerator::Accelerator};
@@ -46,8 +47,8 @@ enum Row {
     Separator,
 }
 
-/// Shipping order (`build_tray_menu`), without the update row that only
-/// appears while an update is available.
+/// Shipping order (`build_tray_menu`); an available or installing update
+/// moves the update row above New Capture.
 const MENU: [Row; 15] = [
     Row::Item(
         "new-capture",
@@ -163,29 +164,43 @@ fn accelerators(settings: &captures_settings::AppSettings) -> Vec<String> {
     .to_vec()
 }
 
-fn menu(settings: &captures_settings::AppSettings) -> Result<Menu, String> {
+fn menu(
+    settings: &captures_settings::AppSettings,
+    update: &TrayUpdateItem,
+) -> Result<Menu, String> {
     let menu = Menu::new();
     // Check for Updates works only in a Preview build with update metadata.
     let updates = crate::updates::enabled();
+    let update_row = || {
+        MenuItem::with_id(
+            "check-updates",
+            &update.label,
+            updates && update.enabled,
+            None,
+        )
+    };
+    let append = |item: &dyn tray_icon::menu::IsMenuItem| {
+        menu.append(item).map_err(|error| error.to_string())
+    };
+    // Shipping pins an available or installing update above New Capture.
+    if update.pin_first {
+        append(&update_row())?;
+        append(&PredefinedMenuItem::separator())?;
+    }
     for row in &MENU {
-        let result = match *row {
-            Row::Item(id, label, _, keys) => menu.append(&MenuItem::with_id(
+        match *row {
+            Row::Item(id, label, _, keys) => append(&MenuItem::with_id(
                 id,
                 label,
                 // Every row runs on X11 and Wayland; Wayland recording
                 // refuses at start where there is no ScreenCast portal.
                 true,
                 keys.and_then(|keys| accelerator(shortcut(settings, keys))),
-            )),
-            Row::Updates => menu.append(&MenuItem::with_id(
-                "check-updates",
-                "Check for Updates…",
-                updates,
-                None,
-            )),
-            Row::Separator => menu.append(&PredefinedMenuItem::separator()),
-        };
-        result.map_err(|error| error.to_string())?;
+            ))?,
+            Row::Updates if !update.pin_first => append(&update_row())?,
+            Row::Updates => {}
+            Row::Separator => append(&PredefinedMenuItem::separator())?,
+        }
     }
     Ok(menu)
 }
@@ -193,6 +208,8 @@ fn menu(settings: &captures_settings::AppSettings) -> Result<Menu, String> {
 pub struct Tray {
     icon: TrayIcon,
     accelerators: Vec<String>,
+    settings: captures_settings::AppSettings,
+    update: TrayUpdateItem,
 }
 
 impl Tray {
@@ -202,12 +219,32 @@ impl Tray {
         if accelerators == self.accelerators {
             return;
         }
-        match menu(settings) {
+        self.settings = settings.clone();
+        self.rebuild();
+    }
+
+    /// Shipping's `refresh_tray_update_state`: the update row and tooltip
+    /// follow the update status ("Update Available — N changes", pinned
+    /// first; "Installing Update…"; "Checking for Updates…").
+    pub fn set_update(&mut self, status: Option<&UpdateStatus>) {
+        let update = tray_update_item(status);
+        if update == self.update {
+            return;
+        }
+        self.update = update;
+        if let Err(error) = self.icon.set_tooltip(Some(tray_tooltip(status))) {
+            eprintln!("Could not refresh the tray tooltip: {error}");
+        }
+        self.rebuild();
+    }
+
+    fn rebuild(&mut self) {
+        match menu(&self.settings, &self.update) {
             Ok(menu) => {
                 self.icon.set_menu(Some(Box::new(menu)));
-                self.accelerators = accelerators;
+                self.accelerators = accelerators(&self.settings);
             }
-            Err(error) => eprintln!("Could not refresh tray shortcuts: {error}"),
+            Err(error) => eprintln!("Could not refresh the tray menu: {error}"),
         }
     }
 }
@@ -235,7 +272,7 @@ pub fn start(settings: &captures_settings::AppSettings) -> Option<Tray> {
         TrayIconBuilder::new()
             .with_tooltip(captures_app::preview_channel::TRAY_NAME)
             .with_icon(icon)
-            .with_menu(Box::new(menu(settings)?))
+            .with_menu(Box::new(menu(settings, &tray_update_item(None))?))
             .build()
             .map_err(|error| format!("Tray is unavailable: {error}"))
     })();
@@ -260,6 +297,8 @@ pub fn start(settings: &captures_settings::AppSettings) -> Option<Tray> {
     Some(Tray {
         icon,
         accelerators: accelerators(settings),
+        settings: settings.clone(),
+        update: tray_update_item(None),
     })
 }
 
@@ -291,15 +330,16 @@ fn host_available() -> Result<(), String> {
 
 /// Run one tray action on the main loop.
 pub fn run(host: &Rc<Host>, action: Action) {
+    use captures_app::capture_error::{Action as Route, Target};
     emit(
         "tray-action",
         serde_json::json!({"action": format!("{action:?}")}),
     );
     match action {
-        Action::CaptureDisplay => host.capture_display(),
-        Action::CaptureRegion => host.capture_region(),
-        Action::CaptureWindow => host.capture_window(),
-        Action::NewCapture => host.new_capture(),
+        Action::CaptureDisplay => host.capture_action(Route::Screenshot(Target::Display)),
+        Action::CaptureRegion => host.capture_action(Route::Screenshot(Target::Region)),
+        Action::CaptureWindow => host.capture_action(Route::Screenshot(Target::Window)),
+        Action::NewCapture => host.capture_action(Route::NewCapture),
         Action::History => {
             host.show_history();
         }
@@ -330,8 +370,8 @@ pub fn run(host: &Rc<Host>, action: Action) {
             }
         }
         Action::Quit => host.app.quit(),
-        Action::RecordRegion => host.record_menu(crate::capture_bar::Target::Region),
-        Action::RecordWindow => host.record_menu(crate::capture_bar::Target::Window),
-        Action::RecordDisplay => host.record_menu(crate::capture_bar::Target::Display),
+        Action::RecordRegion => host.capture_action(Route::Record(Target::Region)),
+        Action::RecordWindow => host.capture_action(Route::Record(Target::Window)),
+        Action::RecordDisplay => host.capture_action(Route::Record(Target::Display)),
     }
 }
