@@ -175,14 +175,16 @@ pub struct Item {
 }
 
 impl Item {
-    /// Edit opens the matching editor and Restore brings a screenshot back
-    /// as a floating preview; Copy image and Save image are not ported.
+    /// Every card and context-menu command waits while the card is busy;
+    /// a missing recording keeps only Delete.
     pub fn action_enabled(&self, action: CardAction) -> bool {
         self.busy.is_none()
             && match action {
                 CardAction::SaveFile | CardAction::ShowInFolder => true,
-                CardAction::Edit | CardAction::Restore => !self.card.missing,
-                _ => false,
+                CardAction::Edit
+                | CardAction::Restore
+                | CardAction::Copy
+                | CardAction::SaveImage => !self.card.missing,
             }
     }
 
@@ -308,6 +310,8 @@ enum Done {
     /// A recovery finished: its draft serial and any warning.
     Recovered(u32, std::result::Result<Option<String>, String>),
     Discarded(u32, std::result::Result<(), String>),
+    /// Copy image read and encoded the capture (PNG and `CF_DIB`).
+    Copied(u32, std::result::Result<(Vec<u8>, Vec<u8>), String>),
     /// A thumbnail drag's file and image are ready.
     DragReady(u32, std::result::Result<crate::drag::Payload, String>),
 }
@@ -435,6 +439,10 @@ struct Thumb {
 
 /// A thumbnail request: card serial, entry id, grayscale, pixel size.
 type ThumbRequest = (u32, String, bool, (u32, u32));
+
+/// A card's context menu: its serial, each command with whether it is
+/// enabled, and the screen point to open at.
+pub(crate) type ContextMenu = (u32, Vec<(CardAction, bool)>, POINT);
 
 type ThumbResult = (u32, (u32, u32), std::result::Result<Thumb, String>);
 
@@ -1210,18 +1218,24 @@ impl History {
             self.need = true;
             return;
         }
+        let saving = matches!(action, CardAction::SaveFile | CardAction::SaveImage);
         // A settings file that exists but can't be read must not send Save
         // file to the default Captures folder; only a missing file means
         // defaults.
-        let directory = captures_settings::load(&self.settings_file)
-            .map(|settings| PathBuf::from(settings.output_directory))
+        let destination = captures_settings::load(&self.settings_file)
+            .map(|settings| {
+                (
+                    PathBuf::from(settings.output_directory),
+                    settings.screenshot_format,
+                )
+            })
             .map_err(|error| format!("Couldn’t read settings: {error}"));
         let Some(item) = self.item_mut(serial) else {
             return;
         };
-        let directory = match directory {
-            Ok(directory) => directory,
-            Err(error) if action == CardAction::SaveFile => {
+        let (directory, format) = match destination {
+            Ok(destination) => destination,
+            Err(error) if saving => {
                 item.error = Some(error);
                 // As a failed save: an error grows the card's row.
                 self.relayout = true;
@@ -1230,7 +1244,7 @@ impl History {
                 self.events.push(Event::Alert(Some(serial)));
                 return;
             }
-            Err(_) => PathBuf::new(),
+            Err(_) => (PathBuf::new(), Default::default()),
         };
         item.busy = Some(Busy::Action(action));
         item.error = None;
@@ -1263,6 +1277,29 @@ impl History {
                         },
                     )
                 }
+                // macOS and mini previews' Save file for a screenshot: the
+                // Captures folder, in the screenshot format setting.
+                CardAction::SaveImage => {
+                    let request = captures_app::Request::SaveScreenshot {
+                        root,
+                        id,
+                        directory,
+                        format,
+                    };
+                    Done::Saved(
+                        serial,
+                        match captures_app::execute(request) {
+                            Ok(captures_app::Response::Saved { path, .. }) => {
+                                Ok(path.to_string_lossy().into_owned())
+                            }
+                            Ok(_) => Err("unexpected response".into()),
+                            Err(error) => Err(format!("Couldn’t save image: {error}")),
+                        },
+                    )
+                }
+                // The full-size capture as PNG and `CF_DIB`, like the mini
+                // preview's Copy; the UI thread owns the clipboard.
+                CardAction::Copy => Done::Copied(serial, clipboard_image(&root, &id)),
                 _ => Done::Shown(
                     serial,
                     match saved {
@@ -1274,6 +1311,59 @@ impl History {
             let _ = sender.send(done);
             post(hwnd, WM_APP_DONE);
         });
+    }
+
+    /// A card's secondary-click commands (`Card::menu`, as GTK's popover and
+    /// macOS's `NSMenu`) for `WM_CONTEXTMENU` at `lp`, with where to show
+    /// them. From the keyboard (Shift+F10, the Menu key) it is the focused
+    /// card's menu, under its thumbnail.
+    pub(crate) fn context_menu(&mut self, lp: LPARAM) -> Option<ContextMenu> {
+        use windows::Win32::Graphics::Gdi::{ClientToScreen, ScreenToClient};
+        let s = self.scale;
+        let (serial, point) = if lp.0 == -1 {
+            let serial = self.focus.and_then(Target::serial)?;
+            let r = self.target_rect(Target::Open(serial));
+            let mut point = POINT {
+                x: ((r.x + r.w / 2.) * s) as i32,
+                y: ((r.y + r.h / 2.) * s) as i32,
+            };
+            unsafe {
+                let _ = ClientToScreen(self.hwnd, &mut point);
+            }
+            (serial, point)
+        } else {
+            let point = POINT {
+                x: (lp.0 & 0xffff) as i16 as i32,
+                y: ((lp.0 >> 16) & 0xffff) as i16 as i32,
+            };
+            let mut client = point;
+            unsafe {
+                let _ = ScreenToClient(self.hwnd, &mut client);
+            }
+            let (_, card) = self.hit(client.x as f32 / s, client.y as f32 / s);
+            (card?, point)
+        };
+        let item = self.item(serial)?;
+        let busy = self.dragging == Some(serial);
+        let commands: Vec<_> = item
+            .card
+            .menu
+            .iter()
+            .map(|&action| (action, !busy && item.action_enabled(action)))
+            .collect();
+        (!commands.is_empty()).then_some((serial, commands, point))
+    }
+
+    /// A context-menu command was chosen.
+    pub(crate) fn menu_action(&mut self, serial: u32, action: CardAction) {
+        let enabled = self.dragging != Some(serial)
+            && self.item(serial).is_some_and(|item| {
+                item.card.menu.contains(&action) && item.action_enabled(action)
+            });
+        if enabled {
+            self.run_action(serial, action);
+            self.need = true;
+        }
     }
 
     /// Shipping `beginFileDrag`: the press on a thumbnail moved far enough.
@@ -1381,6 +1471,24 @@ impl History {
             }
             Done::Recovered(serial, result) => self.recovery_done(serial, result),
             Done::Discarded(serial, result) => self.recovery_done(serial, result.map(|()| None)),
+            Done::Copied(serial, result) => {
+                let copied = result.and_then(|(png, dib)| {
+                    crate::editor::set_clipboard(self.hwnd, &png, &dib)
+                        .map_err(|e| format!("Couldn’t copy the image: {}", e.message()))
+                });
+                let error = copied.err();
+                let failed = error.is_some();
+                if let Some(item) = self.item_mut(serial) {
+                    item.busy = None;
+                    item.error = error;
+                }
+                if failed {
+                    self.relayout = true;
+                    self.events.push(Event::Structure);
+                    self.events.push(Event::Alert(Some(serial)));
+                }
+                self.restyle(serial);
+            }
             Done::DragReady(serial, result) => {
                 // Shipping drops a drag released before its file was ready.
                 if self.dragging != Some(serial) {
@@ -3592,6 +3700,25 @@ fn post(hwnd: isize, msg: u32) {
     }
 }
 
+/// A screenshot's full-size PNG and its `CF_DIB` (off the UI thread).
+fn clipboard_image(
+    root: &std::path::Path,
+    id: &str,
+) -> std::result::Result<(Vec<u8>, Vec<u8>), String> {
+    let png = captures_history::entry_directory(root, id)
+        .and_then(|dir| {
+            Ok(std::fs::read(
+                dir.join(captures_history::HISTORY_IMAGE_FILE),
+            )?)
+        })
+        .map_err(|error| format!("Couldn’t copy the image: {error}"))?;
+    let image = image::load_from_memory(&png)
+        .map_err(|error| format!("Couldn’t copy the image: {error}"))?
+        .into_rgba8();
+    let dib = crate::editor::dib(&image);
+    Ok((png, dib))
+}
+
 /// Entries with whether their media is missing (I/O, off the UI thread).
 fn load(root: &std::path::Path) -> std::result::Result<Vec<(HistoryEntry, bool)>, String> {
     let entries = captures_history::load(root, chrono::Utc::now()).map_err(|e| e.to_string())?;
@@ -3861,6 +3988,37 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                         None
                     };
                     with_history(|h| h.end_drag(serial, error));
+                }
+                return LRESULT(0);
+            }
+            // The native popup menu runs its own loop, outside the borrow.
+            WM_CONTEXTMENU => {
+                if let Some(Some((serial, commands, point))) = with_history(|h| h.context_menu(lp))
+                    && let Ok(menu) = CreatePopupMenu()
+                {
+                    for (i, (action, enabled)) in commands.iter().enumerate() {
+                        let flags = if *enabled {
+                            MF_STRING
+                        } else {
+                            MF_STRING | MF_GRAYED
+                        };
+                        let _ = AppendMenuW(menu, flags, i + 1, &HSTRING::from(action.label()));
+                    }
+                    let chosen = TrackPopupMenuEx(
+                        menu,
+                        (TPM_RETURNCMD | TPM_RIGHTBUTTON).0,
+                        point.x,
+                        point.y,
+                        hwnd,
+                        None,
+                    );
+                    let _ = DestroyMenu(menu);
+                    if let Some(&(action, _)) = (chosen.0 as usize)
+                        .checked_sub(1)
+                        .and_then(|i| commands.get(i))
+                    {
+                        with_history(|h| h.menu_action(serial, action));
+                    }
                 }
                 return LRESULT(0);
             }

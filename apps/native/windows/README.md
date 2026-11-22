@@ -16,7 +16,12 @@ Edit or thumbnail or `--scene editor --artifact ID` (`src/editor.rs`). Dragging 
 History thumbnail carries the capture's file into another app like shipping's
 `tauri-plugin-drag`: an OLE `DoDragDrop` of the shell data object (`CF_HDROP`),
 copy only, with the 284 × 160 preview as the drag image (`src/drag.rs`, shared
-with mini previews; the file comes from the shared `PreparePreviewDrag` export).
+with mini previews; the file comes from the shared `PreparePreviewDrag` export). A right-click
+(or Shift+F10 / the Menu key on a focused card) opens the card's native menu
+from the shared `history_view` list, as GTK and macOS do: Edit, Restore, Copy
+image (PNG and `CF_DIB`), Save image (the Captures folder in the screenshot
+format, like macOS) and Show in Folder for screenshots; Edit and Save file or Show
+in Folder for recordings.
 
 Recordings open from History's Edit or `--scene recording --artifact ID`.
 The first slice (`src/recording.rs`) contains the header, dropped-frame warning
