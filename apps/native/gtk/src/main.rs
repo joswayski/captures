@@ -912,7 +912,26 @@ impl Host {
     }
 }
 
+/// Freed display frames go back to the OS. glibc raises its mmap threshold
+/// past each freed 8 MB frame buffer, so later frames, made on GTK's worker
+/// threads, land in heap arenas it keeps: the resident app grew by about 8 MB
+/// per capture while its live heap stayed flat. A fixed threshold also turns
+/// that adjustment off.
+#[cfg(target_env = "gnu")]
+fn return_large_buffers_to_os() {
+    unsafe extern "C" {
+        fn mallopt(param: i32, value: i32) -> i32;
+    }
+    const M_MMAP_THRESHOLD: i32 = -3;
+    // SAFETY: mallopt only adjusts allocator tuning; called before any thread starts.
+    unsafe {
+        mallopt(M_MMAP_THRESHOLD, 1024 * 1024);
+    }
+}
+
 fn main() -> glib::ExitCode {
+    #[cfg(target_env = "gnu")]
+    return_large_buffers_to_os();
     // The installer builder refuses a package whose host is not this one.
     if std::env::args().nth(1).as_deref() == Some("--preview-build-info") {
         let version = captures_app::preview_channel::version();
