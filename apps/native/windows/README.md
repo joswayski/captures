@@ -243,13 +243,20 @@ newest card in view and scrolls with the wheel (100 DIPs a notch) or
 shipping's overflow cues, glass chevron tabs at the window edges that ease
 one card slot (380 ms, instant under reduced motion) and are named "Show
 older captures" / "Show newer captures"; a new capture or Expand returns to
-the newest card.
-`--tool previews --select pile|pile-hover|pile-top|overflow` renders it
-(compared with the Tauri harness). Scrolling, the cues, Minimize and Expand
-were checked live through UI Automation with History's Restore on Windows 11
-at 150%; the carry and the wheel are unit- and render-checked only. Cards
-arrive and leave with the shared preview motion; file drags, keyboard focus
-and tooltips are not ported. `--scene capture --screenshot PATH`
+the newest card. Dragging an expanded card's image past the system drag
+threshold drags its file into other apps through the shared `drag.rs` (the
+shared `PreparePreviewDrag` export, a copy with the 284 × 160 drag image);
+the card goes hollow while it runs (`.thumbnail-file-dragging`). An accepted
+drop outside Captures dismisses the card, a drop back on the stack shakes it
+(`thumbnail-drop-reject`, skipped under reduced motion), and any other end,
+including a drop on another Captures window, keeps it; a failed export shows
+on the card.
+`--tool previews --select pile|pile-hover|pile-top|overflow|file-drag`
+renders it (compared with the Tauri harness). Scrolling, the cues, Minimize
+and Expand were checked live through UI Automation with History's Restore on
+Windows 11 at 150%; the carry, the wheel and file drags are unit- and
+render-checked only (not physically dragged). Cards arrive and leave with the
+shared preview motion; keyboard focus and tooltips are not ported. `--scene capture --screenshot PATH`
 renders the bar offscreen (`--tool display` for Full screen, `--tool window`
 for Window, `--select x` for a sample selection or hovered window, `--select
 desktop` for the hovered display, `--select picked` for a picked window with

@@ -20,8 +20,12 @@
 //! on GTK. The Close streak's horizontal blur and the arrive blur are not
 //! drawn.
 //!
-//! Not ported yet: file drags, keyboard focus, tooltips, the capture
-//! highlight and the editor-presence pill.
+//! Dragging an expanded card's image drags its file out (`crate::drag`);
+//! an accepted drop elsewhere dismisses the card and a drop back on the
+//! stack shakes it (shipping `finishFileDrag`).
+//!
+//! Not ported yet: keyboard focus, tooltips, the capture highlight and the
+//! editor-presence pill.
 
 use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;
@@ -62,6 +66,8 @@ const MOTION_TIMER: usize = 7;
 const POLL_TIMER: usize = 8;
 /// Posted when a worker finished a Save or Delete.
 const WM_APP_PREVIEW_DONE: u32 = WM_APP + 31;
+/// A card's file is ready: run the drag loop outside the borrow.
+const WM_APP_PREVIEW_DRAG: u32 = WM_APP + 32;
 
 type Rect = D2D_RECT_F;
 
@@ -123,6 +129,9 @@ pub struct Card {
     /// The last action's failure (shipping `.thumbnail-message`), cleared
     /// when the next action starts.
     error: Option<String>,
+    /// A file drag of this card is running (`.thumbnail-file-dragging`): its
+    /// image hides so the drag image never recaptures it.
+    dragging: bool,
 }
 
 impl Card {
@@ -178,6 +187,9 @@ pub struct Stack {
     /// The carried pile's rear-card lean (`DragSway`), while it is carried
     /// and until it settles after.
     pub sway: Option<DragSway>,
+    /// When each card dropped back on the stack began its refusal shake
+    /// (`thumbnail-drop-reject`), by card id.
+    rejects: HashMap<String, f64>,
 }
 
 /// A dissolving card's chips: how each moves, and their filtered pixels,
@@ -193,6 +205,30 @@ const DUST_CHIP_PAD: f32 = 8.;
 const DUST_CHIP_GUTTER: f32 = 16.;
 /// `.thumbnail-dust { filter: blur(2px) }`.
 const DUST_CHIP_BLUR: f32 = 2.;
+
+/// `--thumbnail-drop-reject-duration` (`--dur-5`).
+const REJECT_MS: f64 = preview::PREVIEW_DROP_REJECT_MS as f64;
+
+/// `thumbnail-drop-reject`'s horizontal offset `elapsed_ms` in, linear
+/// (`--thumbnail-drop-reject-ease`) between its keyframes; `x` holds
+/// `--thumbnail-drop-reject-x-1` … `-x-4`.
+fn reject_offset([a, b, c, d]: [f32; 4], elapsed_ms: f64) -> f32 {
+    let t = (elapsed_ms / REJECT_MS).clamp(0., 1.) as f32;
+    let stops = [
+        (0., 0.),
+        (0.1, -a),
+        (0.3, a),
+        (0.5, -b),
+        (0.65, c),
+        (0.8, -d),
+        (0.9, d),
+        (1., 0.),
+    ];
+    stops.windows(2).find(|w| t <= w[1].0).map_or(0., |w| {
+        let ((t0, x0), (t1, x1)) = (w[0], w[1]);
+        x0 + (x1 - x0) * (t - t0) / (t1 - t0)
+    })
+}
 
 /// `THUMBNAIL_STACK_SCROLL_DURATION_MS`: a cue's one-slot ease-out scroll.
 const SCROLL_MS: f64 = 380.;
@@ -317,7 +353,24 @@ impl Stack {
             cues_shown: (None, None),
             gravity: if placement.is_top() { -1. } else { 1. },
             sway: None,
+            rejects: HashMap::new(),
         }
+    }
+
+    /// A card's file was dropped back on this stack: refuse it with a
+    /// shake instead of dismissing it (shipping `playDropReject`). Reduced
+    /// motion skips the shake, as GTK does.
+    fn reject(&mut self, id: &str) {
+        if !self.reduced && self.card_motion.is_some() {
+            self.rejects.insert(id.to_owned(), now_ms());
+        }
+    }
+
+    /// Forget finished shakes; true while one still runs.
+    fn prune_rejects(&mut self) -> bool {
+        let now = now_ms();
+        self.rejects.retain(|_, start| now - *start < REJECT_MS);
+        !self.rejects.is_empty()
     }
 
     /// Whether changes land at once.
@@ -356,7 +409,13 @@ impl Stack {
             .into_iter()
             .flatten()
             .any(|start| !self.reduced && now - start < CUE_IN_MS);
-        pile || arriving || !self.exits.is_empty() || scrolling || cues || self.sway.is_some()
+        let rejecting = self.rejects.values().any(|start| now - start < REJECT_MS);
+        pile || arriving
+            || !self.exits.is_empty()
+            || scrolling
+            || cues
+            || self.sway.is_some()
+            || rejecting
     }
 
     /// The largest [`Self::scroll`]: how much of the content the window
@@ -655,6 +714,7 @@ impl Stack {
             busy: false,
             saved: false,
             error: None,
+            dragging: false,
         });
         self.exits.sync(self.stack.ids());
         // A new capture brings the newest card back into view.
@@ -1339,6 +1399,10 @@ impl Stack {
                 None => {}
             }
         }
+        if let Some(start) = self.rejects.get(id) {
+            let x = [1, 2, 3, 4].map(|n| t.n(&format!("thumbnail-drop-reject-x-{n}")));
+            dx += f64::from(reject_offset(x, now - start));
+        }
         let mut base = Matrix3x2::identity();
         unsafe { dc.GetTransform(&mut base) };
         // Scale about the card's centre, then move it.
@@ -1466,12 +1530,19 @@ impl Stack {
         let card = &self.cards[index];
         // A leaving card keeps the dimmed hover look it had when it went; a
         // dissolving one also keeps its controls while they fade.
-        let hovered = self.hovered == Some(index) || self.exiting(index);
+        // A shaking card shows its image undimmed (`.thumbnail-drop-rejected img`).
+        let hovered = (self.hovered == Some(index) && !self.rejects.contains_key(&card.entry.id))
+            || self.exiting(index);
         let controls = self.hovered == Some(index) || self.dust.contains_key(&card.entry.id);
         let radius = t.n("thumbnail-card-radius");
         // `--thumbnail-card-shadow` and the 1 px white ring.
         faded(dc, fade.frame, || {
-            gfx::shadow(dc, r, radius, t.shadow("thumbnail-card-shadow"))
+            let shadow = || gfx::shadow(dc, r, radius, t.shadow("thumbnail-card-shadow"));
+            if card.dragging {
+                outside(dc, (r, radius), shadow)
+            } else {
+                shadow()
+            }
         })?;
         let white = |a: f32| D2D1_COLOR_F {
             r: 1.,
@@ -1480,6 +1551,11 @@ impl Stack {
             a,
         };
         faded(dc, fade.source, || {
+            // A dragged card's media hides and leaves it hollow
+            // (`.thumbnail-file-dragging`; macOS clears its background).
+            if card.dragging {
+                return Ok(());
+            }
             gfx::fill_round(dc, r, radius, t.color("glass-strong-solid"))?;
             if let Some(image) = &card.image {
                 cover(dc, image, (r, radius), hovered)?;
@@ -1793,6 +1869,12 @@ pub fn fixture(g: &Gfx, image: &image::RgbaImage, select: Option<&str>) -> Stack
             stack.height = 560.;
             stack.scroll = preview::THUMBNAIL_CARD_SLOT as f32;
         }
+        // The hovered card's file is being dragged out: its image hides.
+        Some("file-drag") => {
+            stack.pointer(Some((150., 90.)));
+            let hovered = stack.hovered.expect("a hovered card");
+            stack.cards[hovered].dragging = true;
+        }
         Some("pile" | "pile-top") | None => {}
         Some(_) => {
             stack.pointer(Some((150., 90.)));
@@ -1800,6 +1882,44 @@ pub fn fixture(g: &Gfx, image: &image::RgbaImage, select: Option<&str>) -> Stack
     }
     stack.sync_cues();
     stack
+}
+
+/// Run `paint` masked to outside the rounded `r`, so a hollow card's shadow
+/// only shows around it, as a CSS `box-shadow` does.
+fn outside(
+    dc: &ID2D1DeviceContext,
+    (r, radius): (Rect, f32),
+    paint: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    let pad = 64.;
+    let bounds = rect(r.left - pad, r.top - pad, r.right + pad, r.bottom + pad);
+    unsafe {
+        let factory = dc.GetFactory()?;
+        let frame: ID2D1Geometry = factory.CreateRectangleGeometry(&bounds)?.cast()?;
+        let card: ID2D1Geometry = factory
+            .CreateRoundedRectangleGeometry(&D2D1_ROUNDED_RECT {
+                rect: r,
+                radiusX: radius,
+                radiusY: radius,
+            })?
+            .cast()?;
+        let hole =
+            factory.CreateGeometryGroup(D2D1_FILL_MODE_ALTERNATE, &[Some(frame), Some(card)])?;
+        let mut layer = D2D1_LAYER_PARAMETERS1 {
+            contentBounds: bounds,
+            geometricMask: std::mem::ManuallyDrop::new(Some(hole.cast()?)),
+            maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+            maskTransform: Matrix3x2::identity(),
+            opacity: 1.,
+            ..Default::default()
+        };
+        dc.PushLayer(&layer, None::<&ID2D1Layer>);
+        let result = paint();
+        dc.PopLayer();
+        // Release the mask reference the parameters own.
+        std::mem::ManuallyDrop::drop(&mut layer.geometricMask);
+        result
+    }
 }
 
 /// `object-fit: cover` into the rounded `r`; hovered cards scale by 1.015
@@ -2031,6 +2151,7 @@ fn dust_chips(
 enum Done {
     Saved(String, std::result::Result<String, String>),
     Deleted(String, std::result::Result<(), String>),
+    DragReady(String, std::result::Result<crate::drag::Payload, String>),
 }
 
 struct Previews {
@@ -2068,6 +2189,13 @@ struct Previews {
     /// A press on the pile: where in the window (DIPs) and on the screen
     /// (px), and whether it moved far enough to carry instead of expand.
     carry: Option<Carry>,
+    /// A press on an expanded card's image: its id and where on the screen
+    /// (px), until it moves far enough to drag the file or lets go.
+    drag_press: Option<(String, POINT)>,
+    /// The card whose file drag is preparing or running.
+    dragging: Option<String>,
+    /// The prepared file, waiting for the drag loop outside the borrow.
+    drag_ready: Option<crate::drag::Payload>,
 }
 
 #[derive(Clone, Copy)]
@@ -2245,6 +2373,9 @@ impl Previews {
             bounds: None,
             dragged: None,
             carry: None,
+            drag_press: None,
+            dragging: None,
+            drag_ready: None,
         })
     }
 
@@ -2685,6 +2816,7 @@ impl Previews {
             let _ = self.relayout();
             self.stack.pointer(self.cursor());
         }
+        self.stack.prune_rejects();
         let _ = self.render();
         if self.stack.animating() {
             return;
@@ -2726,9 +2858,92 @@ impl Previews {
                     }
                     crate::history::with_history(|h| h.reload());
                 }
+                Done::DragReady(id, result) => {
+                    // Shipping drops a drag released before its file was ready.
+                    if self.dragging.as_deref() != Some(id.as_str()) {
+                        continue;
+                    }
+                    match result {
+                        Ok(payload) if crate::drag::button_down() => {
+                            self.drag_ready = Some(payload);
+                            unsafe {
+                                let _ = PostMessageW(
+                                    Some(self.hwnd),
+                                    WM_APP_PREVIEW_DRAG,
+                                    WPARAM(0),
+                                    LPARAM(0),
+                                );
+                            }
+                        }
+                        Ok(_) => self.end_drag(None),
+                        Err(error) => self.end_drag(Some(Err(error))),
+                    }
+                }
             }
         }
         let _ = self.relayout();
+        self.animate();
+    }
+
+    /// The press on a card's image moved past the drag threshold: hide the
+    /// image and export the file off the UI thread (shipping
+    /// `beginFileDrag`).
+    fn begin_drag(&mut self, id: String) {
+        self.drag_press = None;
+        self.stack.pressed = None;
+        // The OLE drag loop takes the mouse itself.
+        let _ = unsafe { ReleaseCapture() };
+        let Some(card) = self.stack.cards.iter_mut().find(|c| c.entry.id == id) else {
+            return;
+        };
+        card.dragging = true;
+        card.error = None;
+        self.dragging = Some(id.clone());
+        let _ = self.render();
+        let (root, sender, hwnd) = (self.root.clone(), self.sender.clone(), self.hwnd.0 as isize);
+        std::thread::spawn(move || {
+            let _ = sender.send(Done::DragReady(
+                id.clone(),
+                crate::drag::prepare(&root, &id),
+            ));
+            post(hwnd);
+        });
+    }
+
+    /// The file drag ended (`Some(Ok)`), failed (`Some(Err)`) or was let
+    /// go before it began (`None`). An accepted drop outside Captures
+    /// dismisses the card, a drop back on this stack shakes it, and any
+    /// other end keeps it (shipping `finishFileDrag`). Hover and
+    /// click-through re-arm either way.
+    fn end_drag(&mut self, result: Option<std::result::Result<crate::drag::Outcome, String>>) {
+        let Some(id) = self.dragging.take() else {
+            return;
+        };
+        self.drag_ready = None;
+        if let Some(card) = self.stack.cards.iter_mut().find(|c| c.entry.id == id) {
+            card.dragging = false;
+            if let Some(Err(error)) = &result {
+                card.error = Some(error.clone());
+            }
+        }
+        // A card already leaving keeps its exit.
+        let live = self.stack.stack.ids().contains(&id);
+        if let Some(Ok(outcome)) = result.filter(|_| live) {
+            self.stack.reduced = crate::appearance::reduced_motion();
+            let landing = crate::drag::landing(outcome.point, Some(self.hwnd));
+            match preview::preview_drag_outcome(outcome.accepted, landing) {
+                preview::PreviewDragOutcome::Dismiss => {
+                    self.stack.leave(&id, ExitKind::Dismiss, 0., true);
+                    let _ = self.relayout();
+                }
+                preview::PreviewDragOutcome::Reject => self.stack.reject(&id),
+                preview::PreviewDragOutcome::Retain => {}
+            }
+        }
+        let at = self.cursor();
+        self.stack.pointer(at);
+        self.set_passthrough(!at.is_some_and(|(x, y)| self.stack.solid(x, y)));
+        let _ = self.render();
         self.animate();
     }
 
@@ -2755,6 +2970,16 @@ impl Previews {
                         dwHoverTime: 0,
                     };
                     self.tracking = unsafe { TrackMouseEvent(&mut track) }.is_ok();
+                }
+                if let Some((id, press)) = self.drag_press.clone() {
+                    let mut now = POINT::default();
+                    unsafe {
+                        let _ = GetCursorPos(&mut now);
+                    }
+                    if crate::drag::beyond_threshold(press, now) {
+                        self.begin_drag(id);
+                        return Some(LRESULT(0));
+                    }
                 }
                 if self.carry.is_some() {
                     self.carry_move();
@@ -2785,6 +3010,7 @@ impl Previews {
             // Another window took the mouse mid-press (a carry ends where
             // it is).
             WM_CAPTURECHANGED => {
+                self.drag_press = None;
                 if self.carry_end() {
                     self.stack.pressed = None;
                     let _ = self.render();
@@ -2822,11 +3048,19 @@ impl Previews {
             WM_LBUTTONDOWN => {
                 let (x, y) = point(lp, self.scale);
                 self.stack.pressed = self.stack.hit(x, y);
+                let mut screen = POINT::default();
+                unsafe {
+                    let _ = GetCursorPos(&mut screen);
+                }
+                // An expanded card's image is the file drag source.
+                if let Some(Hit::Card(index)) = self.stack.pressed
+                    && let Some(card) = self.stack.cards.get(index)
+                    && !card.busy
+                    && self.dragging.is_none()
+                {
+                    self.drag_press = Some((card.entry.id.clone(), screen));
+                }
                 if self.stack.pressed == Some(Hit::Expand) {
-                    let mut screen = POINT::default();
-                    unsafe {
-                        let _ = GetCursorPos(&mut screen);
-                    }
                     self.carry = Some(Carry {
                         press: (f64::from(x), f64::from(y)),
                         screen,
@@ -2839,6 +3073,7 @@ impl Previews {
             }
             WM_LBUTTONUP => {
                 let (x, y) = point(lp, self.scale);
+                self.drag_press = None;
                 // Clear the carry before releasing capture, whose
                 // WM_CAPTURECHANGED would otherwise end it too.
                 let carried = self.carry_end();
@@ -2887,6 +3122,28 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
         };
     }
     let before = panel_uia::watch(panel_uia::Window::Previews);
+    // The OLE drag loop dispatches this window's messages, so it runs
+    // without the borrow.
+    if msg == WM_APP_PREVIEW_DRAG {
+        let with = |f: &mut dyn FnMut(&mut Previews)| {
+            PREVIEWS.with(|p| {
+                if let Ok(mut p) = p.try_borrow_mut()
+                    && let Some(previews) = p.as_mut()
+                {
+                    f(previews);
+                }
+            })
+        };
+        let mut ready = None;
+        with(&mut |p| ready = p.drag_ready.take());
+        if let Some(payload) = ready {
+            let mut result = crate::drag::button_down()
+                .then(|| crate::drag::run(&payload).map_err(|e| e.message().to_string()));
+            with(&mut |p| p.end_drag(result.take()));
+        }
+        panel_uia::raise(panel_uia::Window::Previews, before);
+        return LRESULT(0);
+    }
     let handled = PREVIEWS.with(|p| {
         let mut p = p.try_borrow_mut().ok()?;
         let previews = p.as_mut()?;
@@ -2955,6 +3212,7 @@ mod tests {
                 busy: false,
                 saved: false,
                 error: None,
+                dragging: false,
             });
         }
         stack.height = stack.content_height();
@@ -3194,6 +3452,44 @@ mod tests {
         s.leave("a0", ExitKind::Dust, 0., true);
         assert!(s.stack.ids().is_empty());
         assert!(s.cards.iter().all(|c| c.entry.id != "a0"));
+    }
+
+    #[test]
+    fn a_drop_back_on_the_stack_shakes_the_card_in_place() {
+        use captures_settings::MiniPreviewPlacement as P;
+        // `thumbnail-drop-reject`'s keyframes, linear between them.
+        let x = [20., 16., 12., 8.];
+        for (ms, want) in [
+            (0., 0.),
+            (42., -20.),
+            (84., 0.),
+            (126., 20.),
+            (210., -16.),
+            (273., 12.),
+            (336., -8.),
+            (378., 8.),
+            (420., 0.),
+            (900., 0.),
+        ] {
+            let got = reject_offset(x, ms);
+            assert!((got - want).abs() < 1e-3, "{ms} ms: {got}");
+        }
+        let tokens = Tokens::variant("light", "mustard");
+        let amounts = [1, 2, 3, 4].map(|n| tokens.n(&format!("thumbnail-drop-reject-x-{n}")));
+        assert_eq!(amounts, [12., 8., 6., 4.]);
+        let mut s = stack(P::BottomLeft, &[true, false]);
+        s.card_motion = CardMotion::resolve(&tokens);
+        s.reject("a1");
+        // The card stays live and in its slot while it shakes.
+        assert_eq!(s.stack.ids(), ["a0", "a1"]);
+        assert!(s.animating());
+        assert!(s.prune_rejects());
+        // Reduced motion refuses the drop without the shake.
+        s.rejects.clear();
+        s.reduced = true;
+        s.reject("a0");
+        assert!(s.rejects.is_empty());
+        assert!(!s.animating());
     }
 
     #[test]

@@ -47,7 +47,6 @@ pub struct Payload {
 
 /// How a drag ended. Mini previews read both fields (shipping dismisses a
 /// card only for an accepted drop outside Captures); History ignores them.
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
 pub struct Outcome {
     /// A target accepted the copy (`DRAGDROP_S_DROP` with an effect).
@@ -132,7 +131,6 @@ pub fn button_down() -> bool {
 }
 
 /// The top-level Captures window under a screen point, if any.
-#[allow(dead_code)] // Mini preview drags (landing).
 pub fn own_window_at(point: POINT) -> Option<HWND> {
     unsafe {
         let hwnd = WindowFromPoint(point);
@@ -148,7 +146,6 @@ pub fn own_window_at(point: POINT) -> Option<HWND> {
 
 /// Shipping `preview_file_drop_landing`: the mini preview stack (`stack`),
 /// another Captures window, or anywhere else.
-#[allow(dead_code)] // Mini preview drags.
 pub fn landing(point: POINT, stack: Option<HWND>) -> PreviewDropLanding {
     match own_window_at(point) {
         Some(hwnd) if Some(hwnd) == stack => PreviewDropLanding::PreviewStack,
