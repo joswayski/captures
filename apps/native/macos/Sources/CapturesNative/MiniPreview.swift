@@ -529,7 +529,23 @@ final class MiniPreviewButton: NSButton {
             focus.lineWidth = 2; focus.stroke()
         }
     }
+    /// Shipping `backdrop-filter: blur(12px)`: the blurred card media behind
+    /// a card control, sized to the card. The stack toolbar sits over the
+    /// transparent window, where the webview had nothing to blur.
+    var backdrop: (() -> NSImage?)? { didSet { needsDisplay = true } }
+
+    private func drawBackdrop() {
+        guard let card = superview, let image = backdrop?() else { return }
+        let radius = kind == .edit && editorPresent ? bounds.height / 2 : tokens.number("r-md")
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(roundedRect: bounds, xRadius: radius, yRadius: radius).addClip()
+        image.draw(in: convert(card.bounds, from: card), from: .zero, operation: .sourceOver,
+                   fraction: 1, respectFlipped: true, hints: nil)
+        NSGraphicsContext.restoreGraphicsState()
+    }
+
     override func draw(_ dirtyRect: NSRect) {
+        drawBackdrop()
         if kind == .edit && editorPresent { drawEditorPill(); return }
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
                                 xRadius: tokens.number("r-md"), yRadius: tokens.number("r-md"))
@@ -663,9 +679,9 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     var pileGlowOpacity: Float { pileGlow.opacity }
     /// `thumbnail-capture-highlight`: the accent outline a new card fades out.
     private let highlightRing = CALayer()
-    private let sizeLabel: NSTextField
+    private let sizeLabel: MiniPreviewChipLabel
     /// `.thumbnail-meta .warning` beside the metadata.
-    private let warningLabel = NSTextField(labelWithString: "")
+    private let warningLabel = MiniPreviewChipLabel(labelWithString: "")
     private let status = NSTextField(labelWithString: "")
     private var actionButtons: [MiniPreviewButton] = []
     private var saveButton: MiniPreviewButton?
@@ -698,6 +714,7 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     /// Shared editor presence phase (`CAPTURES_EDITOR_PHASE_*`).
     private(set) var editorPhase = UInt32(CAPTURES_EDITOR_PHASE_IDLE)
     private var editorPinned: Bool { editorPhase != UInt32(CAPTURES_EDITOR_PHASE_IDLE) }
+    private var backdrops: [String: NSImage] = [:]
     /// The stack's stale-pointer lock: hover waits for real pointer movement.
     var isHoverLocked: () -> Bool = { false }
     /// Shipping hover media treatment is applied (blur, brightness, scale).
@@ -728,7 +745,7 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         self.mirrored = rightAnchor
         self.saved = saved
         imageView = MiniPreviewImageView(frame: frame, image: image)
-        sizeLabel = NSTextField(labelWithString: Self.metadata(sizeBytes: sizeBytes))
+        sizeLabel = MiniPreviewChipLabel(labelWithString: Self.metadata(sizeBytes: sizeBytes))
         clipboardChip = MiniPreviewClipboardChip(tokens: tokens)
         super.init(frame: frame)
         wantsLayer = true
@@ -768,6 +785,10 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         sizeLabel.frame = NSRect(x: inset, y: bounds.height - inset - Self.chipHeight,
                                   width: min(metadataWidth, bounds.width - inset * 2), height: Self.chipHeight)
         styleLabelBacking(sizeLabel); addSubview(sizeLabel)
+        // `.thumbnail-meta > span`: `backdrop-filter: blur(8px)` under the fill.
+        for chip in [sizeLabel, warningLabel] {
+            chip.backdrop = { [weak self] in self?.mediaBackdrop(radius: 8) }
+        }
         warningLabel.font = .capturesUI(ofSize: tokens.number("text-2xs"))
         warningLabel.textColor = tokens.color("theme-accent-text")
         warningLabel.alignment = .center
@@ -1020,6 +1041,20 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         layer.add(fade, forKey: "preview-dust-source")
     }
 
+    /// Shipping `backdrop-filter: blur(radius)` behind this card's chrome: the
+    /// media as presented now, blurred again, sized to the card. Cached per
+    /// radius, hover state and backing scale.
+    func mediaBackdrop(radius: CGFloat) -> NSImage? {
+        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        let key = "\(radius) \(mediaHovered) \(scale)"
+        if let cached = backdrops[key] { return cached }
+        let image = MiniPreviewBackdrop.render(image: imageView.image,
+            mediaFrame: convert(imageView.bounds, from: imageView), cardSize: bounds.size,
+            radius: radius, hovered: mediaHovered, scale: scale)
+        backdrops[key] = image
+        return image
+    }
+
     /// Shipping `.thumbnail-stack-minimized .thumbnail-media { filter: blur() }`
     /// on a compact card, through the media's Core Image Gaussian.
     func setDepthBlur(_ radius: Double, from start: Double? = nil, duration: Double = 0,
@@ -1111,6 +1146,8 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         let hovered = requested && (dropRejectedAt == nil || isExiting)
         guard hovered != mediaHovered else { return }
         mediaHovered = hovered
+        // Chrome backdrops show the media as presented.
+        actionButtons.forEach { $0.needsDisplay = true }
         let media = captures_preview_hover_media_v1()
         let live = animated && window?.isVisible == true
         let filter = NativeMotion.transition("preview_media_filter", tokens: tokens)
@@ -1281,6 +1318,7 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         y: CGFloat, width: CGFloat = 28, primary: Bool = false, action: @escaping () -> Void) -> MiniPreviewButton {
         let button = MiniPreviewButton(title, kind: kind, frame: NSRect(x: x, y: y, width: width, height: kind == .copy || kind == .save || kind == .folder ? 32 : 28), tokens: tokens, primary: primary, action: action)
         button.boxShadowToken = kind == .copy || kind == .save || kind == .folder ? "shadow-md" : "shadow-sm"
+        button.backdrop = { [weak self] in self?.mediaBackdrop(radius: 12) }
         addSubview(button); actionButtons.append(button); return button
     }
 
@@ -1363,7 +1401,9 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     private func styleLabelBacking(_ label: NSTextField) {
         label.wantsLayer = true
         // Shipping's translucent `rgba(10, 10, 14, 0.66)` chip fill, not opaque glass.
-        label.layer?.backgroundColor = NSColor(srgbRed: 10 / 255, green: 10 / 255, blue: 14 / 255, alpha: 0.66).cgColor
+        let fill = NSColor(srgbRed: 10 / 255, green: 10 / 255, blue: 14 / 255, alpha: 0.66)
+        // Chips draw the fill over their blurred backdrop.
+        if let chip = label as? MiniPreviewChipLabel { chip.fill = fill } else { label.layer?.backgroundColor = fill.cgColor }
         label.layer?.cornerRadius = tokens.number("r-xs")
         label.layer?.masksToBounds = true
     }
@@ -1556,6 +1596,11 @@ final class MiniPreviewOverflowCue: NSButton {
     override func mouseEntered(with event: NSEvent) { hovered = true; needsDisplay = true }
     override func mouseExited(with event: NSEvent) { hovered = false; needsDisplay = true }
 
+    /// Shipping `backdrop-filter: blur(14px)`: the blurred media of each card
+    /// under the cue, sized to that card, with its frame in cue coordinates
+    /// and its corner radius.
+    var backdrop: (() -> [(image: NSImage, frame: NSRect, radius: CGFloat)])? { didSet { needsDisplay = true } }
+
     override func draw(_ dirtyRect: NSRect) {
         // Only the edge facing the cards is rounded; the other sits on the window edge.
         let b = bounds.insetBy(dx: 0.5, dy: 0.5)
@@ -1575,6 +1620,18 @@ final class MiniPreviewOverflowCue: NSButton {
             path.line(to: NSPoint(x: b.maxX, y: b.maxY))
         }
         path.close()
+        if let layers = backdrop?(), !layers.isEmpty {
+            NSGraphicsContext.saveGraphicsState()
+            path.addClip()
+            for layer in layers {
+                NSGraphicsContext.saveGraphicsState()
+                NSBezierPath(roundedRect: layer.frame, xRadius: layer.radius, yRadius: layer.radius).addClip()
+                layer.image.draw(in: layer.frame, from: .zero, operation: .sourceOver, fraction: 1,
+                                 respectFlipped: true, hints: nil)
+                NSGraphicsContext.restoreGraphicsState()
+            }
+            NSGraphicsContext.restoreGraphicsState()
+        }
         tokens.color(hovered || cell?.isHighlighted == true ? "glass-raised" : "glass-strong").setFill(); path.fill()
         tokens.color("glass-border").setStroke(); path.lineWidth = 1; path.stroke()
         // Shipping 16-unit chevron (`M3.5 10 8 5.5 12.5 10` / `M3.5 6 8 10.5 12.5 6`).
@@ -1778,6 +1835,16 @@ final class MiniPreviewView: NSView {
                                   width: size.width, height: size.height),
                     tokens: tokens) { [weak self] in self?.scrollStack(bySlots: above ? -1 : 1) }
                 cue.isHidden = true
+                cue.backdrop = { [weak self, weak cue] in
+                    guard let self, let cue else { return [] }
+                    let radius = self.tokens.number("thumbnail-card-radius")
+                    return self.cards.values.compactMap { card in
+                        let frame = cue.convert(card.bounds, from: card)
+                        guard !card.isHidden, frame.intersects(cue.bounds),
+                              let image = card.mediaBackdrop(radius: 14) else { return nil }
+                        return (image, frame, radius)
+                    }
+                }
                 addSubview(cue); overflowCues.append(cue)
             }
             scroll.contentView.postsBoundsChangedNotifications = true
@@ -2271,7 +2338,11 @@ final class MiniPreviewView: NSView {
         if wasLocked != hoverLock.locked { cards.values.forEach { $0.hoverLockChanged() } }
     }
 
-    @objc private func scrollBoundsChanged(_ notification: Notification) { updateOverflowCues() }
+    @objc private func scrollBoundsChanged(_ notification: Notification) {
+        updateOverflowCues()
+        // Cards scroll under the cues' backdrops.
+        overflowCues.forEach { $0.needsDisplay = true }
+    }
 
     /// Show a cue only on an edge that hides cards (shared 1 px tolerance).
     func updateOverflowCues() {
@@ -3646,5 +3717,80 @@ final class MiniPreviewActions {
                 }
             }
         }
+    }
+}
+
+/// Shipping `.thumbnail-meta > span`: a metadata chip that draws its
+/// `backdrop-filter: blur(8px)` and translucent fill under its text.
+final class MiniPreviewChipLabel: NSTextField {
+    /// The blurred card media behind the chip, sized to the card.
+    var backdrop: (() -> NSImage?)?
+    var fill: NSColor? { didSet { needsDisplay = true } }
+    override func draw(_ dirtyRect: NSRect) {
+        // The layer's rounded `masksToBounds` clips both to the chip.
+        if let card = superview, let image = backdrop?() {
+            image.draw(in: convert(card.bounds, from: card), from: .zero, operation: .sourceOver,
+                       fraction: 1, respectFlipped: true, hints: nil)
+        }
+        if let fill { fill.setFill(); bounds.fill(using: .sourceOver) }
+        super.draw(dirtyRect)
+    }
+}
+
+/// Shipping `backdrop-filter: blur()` over a mini preview card. A webview
+/// blurs only its own page, so behind card chrome that is the card media as
+/// presented (resting, or hover-blurred, darkened and scaled); it is drawn
+/// here, blurred again, rather than through Core Animation background filters,
+/// which still draw for hidden layers on macOS. Nothing samples the desktop,
+/// so the panel's capture exclusion is unaffected.
+enum MiniPreviewBackdrop {
+    /// Unmanaged colour, as browsers filter encoded sRGB values.
+    private static let context = CIContext(options: [.workingColorSpace: NSNull(), .outputColorSpace: NSNull()])
+
+    static func render(image: NSImage, mediaFrame: NSRect, cardSize: NSSize, radius: CGFloat,
+                       hovered: Bool, scale: CGFloat) -> NSImage? {
+        let width = Int(ceil(cardSize.width * scale)), height = Int(ceil(cardSize.height * scale))
+        guard width > 0, height > 0, image.size.width > 0, image.size.height > 0,
+              let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height,
+                                         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                         colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)?
+                .retagging(with: .sRGB),
+              let graphics = NSGraphicsContext(bitmapImageRep: rep) else { return nil }
+        rep.size = cardSize
+        let hover = captures_preview_hover_media_v1()
+        // The media's aspect fill (MiniPreviewImageView), scaled on hover about
+        // its centre; `mediaFrame` is in the card's flipped coordinates.
+        let fit = max(mediaFrame.width / image.size.width, mediaFrame.height / image.size.height)
+            * (hovered ? CGFloat(hover.scale) : 1)
+        let size = NSSize(width: image.size.width * fit, height: image.size.height * fit)
+        let flip = { (rect: NSRect) in NSRect(x: rect.minX, y: cardSize.height - rect.maxY,
+                                              width: rect.width, height: rect.height) }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = graphics
+        graphics.imageInterpolation = .high
+        NSBezierPath(rect: flip(mediaFrame)).addClip()
+        image.draw(in: flip(NSRect(x: mediaFrame.midX - size.width / 2, y: mediaFrame.midY - size.height / 2,
+                                   width: size.width, height: size.height)),
+                   from: .zero, operation: .copy, fraction: 1)
+        NSGraphicsContext.restoreGraphicsState()
+        guard let presented = rep.cgImage else { return nil }
+        var media = CIImage(cgImage: presented)
+        let extent = media.extent
+        if hovered {
+            // `filter: brightness(0.5)` on the hovered media.
+            let b = CGFloat(hover.brightness)
+            media = media.applyingFilter("CIColorMatrix", parameters: [
+                "inputRVector": CIVector(x: b, y: 0, z: 0, w: 0),
+                "inputGVector": CIVector(x: 0, y: b, z: 0, w: 0),
+                "inputBVector": CIVector(x: 0, y: 0, z: b, w: 0),
+            ])
+        }
+        // The media's own hover blur and this blur compose as Gaussians.
+        let sigma = hovered ? (radius * radius + CGFloat(hover.blur * hover.blur)).squareRoot() : radius
+        let blurred = media.clampedToExtent().applyingGaussianBlur(sigma: Double(sigma * scale)).cropped(to: extent)
+        guard let output = context.createCGImage(blurred, from: extent, format: .RGBA8,
+                                                 colorSpace: CGColorSpace(name: CGColorSpace.sRGB))
+        else { return nil }
+        return NSImage(cgImage: output, size: cardSize)
     }
 }

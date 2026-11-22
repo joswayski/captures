@@ -251,6 +251,39 @@ final class MiniPreviewTests: XCTestCase {
         }
     }
 
+    func testChipsAndControlsDrawABlurredMediaBackdrop() throws {
+        _ = NSApplication.shared
+        // 3 pt black and white stripes: crisp media alternates, a blurred
+        // backdrop evens out across one stripe.
+        let stripes = NSImage(size: NSSize(width: 284, height: 160), flipped: true) { rect in
+            for x in stride(from: 0, to: Int(rect.width), by: 3) {
+                (x / 3 % 2 == 0 ? NSColor.black : NSColor.white).setFill()
+                NSRect(x: CGFloat(x), y: 0, width: 3, height: rect.height).fill()
+            }
+            return true
+        }
+        let panel = fixturePanel(ids: ["card"], images: ["card": stripes])
+        defer { panel.close() }
+        let card = try XCTUnwrap(panel.previewView.card(for: "card"))
+        let size = try XCTUnwrap(card.subviews.compactMap { $0 as? NSTextField }
+            .first { $0.stringValue == card.metadataText })
+        func spread(_ rect: NSRect, y: CGFloat, in bitmap: NSBitmapImageRep) throws -> CGFloat {
+            let samples = try stride(from: rect.minX + 1, through: rect.minX + 4, by: 0.5).map { x in
+                try XCTUnwrap(pixelColor(in: bitmap, of: panel, x: x, y: y)?.usingColorSpace(.sRGB)).redComponent
+            }
+            return samples.max()! - samples.min()!
+        }
+        // The chip's left padding, clear of its text.
+        let chip = size.convert(size.bounds, to: panel.previewView)
+        let rest = try render(panel)
+        XCTAssertLessThan(try spread(chip, y: chip.midY, in: rest), 0.03,
+                          "`backdrop-filter: blur(8px)` evens the stripes under the size chip")
+        let beside = NSRect(x: chip.maxX + 30, y: chip.minY, width: 8, height: chip.height)
+        XCTAssertGreaterThan(try spread(beside, y: chip.midY, in: rest), 0.5, "the media itself stays crisp")
+        XCTAssertNotNil(card.mediaBackdrop(radius: 12))
+        XCTAssertTrue(card.mediaBackdrop(radius: 12) === card.mediaBackdrop(radius: 12), "backdrops are cached")
+    }
+
     func testHoverChromeMirrorsAndSaveUpdatesWithoutMovingCenterActions() throws {
         _ = NSApplication.shared
         for right in [false, true] {
