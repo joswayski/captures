@@ -18,7 +18,7 @@ function configuration() {
   return { repository, token };
 }
 
-async function githubRequest(url, options = {}) {
+export async function githubRequest(url, options = {}) {
   const { token } = configuration();
   const response = await fetch(url, {
     ...options,
@@ -36,7 +36,7 @@ async function githubRequest(url, options = {}) {
   return response;
 }
 
-function apiUrl(path) {
+export function apiUrl(path) {
   const { repository } = configuration();
   return `https://api.github.com/repos/${repository}/${path}`;
 }
@@ -46,12 +46,12 @@ async function release(releaseId) {
   return response.json();
 }
 
-async function releaseAssets(releaseId) {
+export async function releaseAssets(releaseId) {
   const response = await githubRequest(apiUrl(`releases/${releaseId}/assets?per_page=100`));
   return response.json();
 }
 
-async function deleteAsset(assetId) {
+export async function deleteAsset(assetId) {
   await githubRequest(apiUrl(`releases/assets/${assetId}`), { method: "DELETE" });
 }
 

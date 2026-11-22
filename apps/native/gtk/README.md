@@ -217,7 +217,7 @@ network or install; installing only quits) for the smoke's
 
 `node scripts/native-preview-build.mjs build x86_64-unknown-linux-gnu VERSION
 --unsigned` packages this host (release, default `x11` feature, built in
-`target/native-gtk-preview`) as the unpublished, experimental Linux AppImage and
+`apps/native/gtk/target`) as the unpublished, experimental Linux AppImage and
 `.deb`, with the target-suffixed FFmpeg/FFprobe sidecars and
 `native_preview_update_helper`; see
 [releases.md](../../../docs/releases.md#native-preview-packaging-and-recovery).

@@ -1,5 +1,13 @@
 name: Prepare cached media sidecars
 description: Restore or build pinned unsigned FFmpeg binaries, then validate before caching.
+inputs:
+  store-release-id:
+    description: >-
+      Draft release from `scripts/media-sidecar-store.mjs ensure`. When set, a
+      build GitHub evicted from the Actions cache is restored from that release,
+      and new builds are stored there too. Needs `contents: write`.
+    required: false
+    default: ''
 runs:
   using: composite
   steps:
@@ -36,6 +44,21 @@ runs:
           target/ffmpeg-build/*.tar.xz
           target/ffmpeg-build/*.tar.xz.asc
           target/ffmpeg-dist
+    # GitHub evicts the least recently used caches above 10 GB, which is always
+    # this one for release packaging. Historical package jobs overlay the store
+    # script from the workflow commit, like the downloader below.
+    - name: Restore from the release store after a cache eviction
+      if: inputs.store-release-id != '' && steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        STORE_RELEASE_ID: ${{ inputs.store-release-id }}
+        KEY: ${{ steps.cache.outputs.cache-primary-key }}
+      run: |
+        set -euo pipefail
+        store=scripts/media-sidecar-store.mjs
+        if [[ -f "release-tools/$store" ]]; then store="release-tools/$store"; fi
+        node "$store" restore "$STORE_RELEASE_ID" "$KEY"
     # Always runs: download verifies the pinned checksum even on a cache hit.
     # Historical package jobs overlay this helper from the workflow commit.
     - name: Download pinned FFmpeg source
@@ -69,3 +92,15 @@ runs:
           target/ffmpeg-build/*.tar.xz
           target/ffmpeg-build/*.tar.xz.asc
           target/ffmpeg-dist
+    - name: Keep a copy that cache eviction cannot remove
+      if: inputs.store-release-id != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        STORE_RELEASE_ID: ${{ inputs.store-release-id }}
+        KEY: ${{ steps.cache.outputs.cache-primary-key }}
+      run: |
+        set -euo pipefail
+        store=scripts/media-sidecar-store.mjs
+        if [[ -f "release-tools/$store" ]]; then store="release-tools/$store"; fi
+        node "$store" save "$STORE_RELEASE_ID" "$KEY"

@@ -49,7 +49,15 @@ test("media cache is exact-key, always validated, and saved before signing", () 
   const save = action.indexOf("uses: actions/cache/save@v4");
   assert.ok(restore > 0 && restore < validate && validate < save);
   assert.doesNotMatch(action, /restore-keys:|uses: actions\/cache@/u);
-  assert.doesNotMatch(action.slice(restore, validate), /\n\s+if:/u);
+  // Only the release-store fallback between them is conditional: the checksum
+  // download and the validation run for cached, restored and fresh builds alike.
+  const download = action.indexOf("- name: Download pinned FFmpeg source");
+  assert.ok(restore < download && download < validate);
+  assert.doesNotMatch(
+    action.slice(restore, download),
+    /\n\s+if:(?! inputs\.store-release-id != '')/u,
+  );
+  assert.doesNotMatch(action.slice(download, validate), /\n\s+if:/u);
   for (const input of [
     "runner.os",
     "runner.arch",

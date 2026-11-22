@@ -268,9 +268,11 @@ the dispatch commit, or an explicitly supplied `target_sha` on main's history.
 One request runs at a time and a newer pending request replaces the older pending
 request. Channel-only dispatches share this lock and skip all app builds.
 
-Tauri builds run the frontend and Rust quality gates, then build macOS
-Apple Silicon, Windows x64, and Linux x64 packages in parallel. A Preview is
-published only when every job succeeds. Notes compare with the nearest published
+Tauri builds run the frontend and Rust quality gates while the macOS
+Apple Silicon, Windows x64, and Linux x64 packages build in parallel, so the
+checks add no time to a Preview. The Rust checks run on GitHub-hosted runners
+and restore the same cache as CI's Rust checks. A Preview is published only when
+every job succeeds: **Publish Preview** needs the checks and the validated draft. Notes compare with the nearest published
 dated Tauri Preview in the requested commit's history, ignoring native releases,
 drafts and orphan tags. Successful publication advances the public channel.
 
@@ -282,7 +284,13 @@ notice. There are no fallback restore keys. Cache hits still verify the source
 checksum, recreate compliance files, and validate both binaries. Cache saves
 happen immediately after validation, before packaging can sign binaries; app
 signing, notarization, updater signatures, and complete-release validation still
-run for every release. Delete the relevant GitHub Actions `ffmpeg-v1-*` cache to
+run for every release. GitHub evicts the least recently used caches once the
+repository holds 10 GB, which removed this cache between Previews, so release
+packaging also keeps each platform's newest build as `<key>.tar.gz` on the draft
+release **Build cache (not a release)** (`scripts/media-sidecar-store.mjs`). A
+cache miss restores from it before compiling, and a restored build is validated
+like a cached one. Store failures are warnings and fall back to compiling.
+Delete the relevant GitHub Actions `ffmpeg-v1-*` cache and that draft's asset to
 force a cold rebuild; the first build after a key change is also cold. Cold
 cache misses download the pinned FFmpeg source. GitHub-hosted runners try a
 previously published copy of that tarball from this repository first, then
@@ -298,7 +306,7 @@ through 99. A Preview named `Captures Preview 2026.07.19.1` uses tag
 channel and fixed Git tag are both named `preview`; refreshing them always uses
 the newest published Tauri version, ignoring native archives.
 
-The workflow stages a draft Preview at the exact tested commit. Each platform
+The workflow stages a draft Preview at the exact commit under test. Each platform
 builds and validates its pinned LGPL FFmpeg sidecars, then uploads its installer,
 updater archive, and updater signature. The macOS job also verifies the sidecars
 inside `Captures.app` and uploads the shared FFmpeg source archive, detached
@@ -367,8 +375,9 @@ working; settings and capture history stay.
 endpoints, the signing public key, stable installer filenames, or that download
 page URL are removed.
 
-Creating the draft early is only a private staging step. The **Publish Preview**
-job runs only after **Validate staged release** succeeds and `SHA256SUMS` is
+Creating the draft early is only a private staging step, and packaging starts
+before the frontend and Rust checks finish. The **Publish Preview** job runs
+only after those checks and **Validate staged release** succeed and `SHA256SUMS` is
 present; that marker means every required macOS, Windows, and Linux artifact was
 downloaded and validated together. The existence of a draft page by itself does
 not mean the release is complete.

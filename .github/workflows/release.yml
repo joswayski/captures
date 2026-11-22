@@ -26,11 +26,6 @@ permissions:
   contents: read
 
 jobs:
-  route:
-    if: ${{ !inputs.channel_only }}
-    uses: ./.github/workflows/mac-route.yml
-    secrets: inherit
-
   queue:
     name: Select the next Preview batch
     if: ${{ !inputs.channel_only }}
@@ -150,9 +145,13 @@ jobs:
 
   rust:
     name: Rust checks (${{ matrix.os }})
-    needs: [queue, route]
+    needs: queue
     if: needs.queue.outputs.should_release == 'true'
-    runs-on: ${{ needs.route.outputs.mac == 'true' && matrix.os == 'macos-26' && fromJSON('["self-hosted","josemac"]') || needs.route.outputs.windows == 'true' && startsWith(matrix.os, 'windows') && fromJSON('["self-hosted","josewin"]') || needs.route.outputs.linux == 'true' && startsWith(matrix.os, 'ubuntu') && fromJSON('["self-hosted","joselinux"]') || matrix.os }}
+    # GitHub-hosted like CI's job of the same name, so both restore one Rust
+    # cache that every push keeps warm. The self-hosted machines start from a
+    # clean checkout and their own cache key was evicted between Previews, so
+    # they compiled everything each time (10 to 11 minutes against 5 to 7).
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -206,9 +205,11 @@ jobs:
           cargo test -p captures-app --test escape_hotkey -- --ignored
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
+  # Staging and packaging run beside the checks instead of after them; nothing
+  # is public until `publish`, which needs the checks and the validated draft.
   prepare:
     name: Stage Preview
-    needs: [queue, version, frontend, rust]
+    needs: [queue, version]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -219,6 +220,7 @@ jobs:
       release_sha: ${{ needs.queue.outputs.release_sha }}
       release_id: ${{ steps.draft.outputs.release_id }}
       release_notes: ${{ steps.draft.outputs.release_notes }}
+      media_store_release_id: ${{ steps.media_store.outputs.release_id }}
       tag: ${{ needs.version.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
@@ -235,11 +237,21 @@ jobs:
           sparse-checkout: |
             scripts/desktop-release.mjs
             scripts/ai-release-notes.mjs
+            scripts/media-sidecar-store.mjs
+            scripts/github-release-assets.mjs
+            scripts/release-assets.mjs
             shared/preview-runtime.ts
           sparse-checkout-cone-mode: false
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+      # One job finds or creates the store, so the three package jobs cannot
+      # each create one. Without an ID they build FFmpeg as on a cache miss.
+      - name: Find the FFmpeg sidecar store
+        id: media_store
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node release-tools/scripts/media-sidecar-store.mjs ensure
       - name: Create the draft at the tested commit
         id: draft
         env:
@@ -372,18 +384,28 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # rust_workspaces: every Cargo workspace the job builds, for the
+          # Rust cache. It keeps only dependencies of the workspaces it is
+          # told about, each in its own target directory.
           - name: macOS Apple Silicon
             os: macos-26
             target: aarch64-apple-darwin
             bundles: app,dmg
+            rust_workspaces: . -> target
           - name: Windows x64
             os: windows-2025
             target: x86_64-pc-windows-msvc
             bundles: nsis
+            rust_workspaces: |
+              . -> target
+              apps/native/windows -> target
           - name: Linux x64
             os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             bundles: appimage,deb
+            rust_workspaces: |
+              . -> target
+              apps/native/gtk -> target
     env:
       CAPTURES_RELEASE_CHANNEL: preview
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -404,6 +426,7 @@ jobs:
             scripts/github-release-assets.mjs
             scripts/release-assets.mjs
             scripts/download-ffmpeg-source.mjs
+            scripts/media-sidecar-store.mjs
             .github/actions/prepare-media/action.yml
           sparse-checkout-cone-mode: false
           path: release-tools
@@ -446,11 +469,18 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      # The Win32 and GTK hosts are their own workspaces pinned to 1.95. Install
+      # it first: the Rust cache reads each workspace's metadata with its toolchain.
+      - run: rustup toolchain install 1.95.0 --profile minimal
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: 1.94.0
-      # The Win32 and GTK hosts are their own workspaces pinned to 1.95.
-      - run: rustup toolchain install 1.95.0 --profile minimal
+          cache-workspaces: ${{ matrix.rust_workspaces }}
+          # Caches saved under the previous key held no release artifacts.
+          cache-key: release-artifacts
+          # A job that fails before compiling would save an empty cache under
+          # this key, and a restored exact key is never saved again.
+          cache-on-failure: false
       - uses: msys2/setup-msys2@v2
         if: runner.os == 'Windows'
         with:
@@ -468,6 +498,8 @@ jobs:
       - run: npm ci
       - name: Prepare cached LGPL media sidecars
         uses: ./release-tools/.github/actions/prepare-media
+        with:
+          store-release-id: ${{ needs.prepare.outputs.media_store_release_id }}
       - name: Prepare the release-only version
         if: runner.os != 'macOS'
         run: node scripts/prepare-release-build.mjs "${{ needs.prepare.outputs.app_version }}"
@@ -685,7 +717,7 @@ jobs:
 
   publish:
     name: Publish Preview
-    needs: [prepare, validate_draft]
+    needs: [prepare, validate_draft, frontend, rust]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:

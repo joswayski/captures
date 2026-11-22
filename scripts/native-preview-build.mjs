@@ -43,11 +43,14 @@ export function updaterArtifactName(target, version) {
 }
 
 // Windows and Linux package the Win32 and GTK hosts, each its own pinned
-// 1.95 workspace, never the maintenance-only egui/wgpu workbench.
+// 1.95 workspace, never the maintenance-only egui/wgpu workbench. They build
+// in the host workspace's own target directory, not under the root `target`:
+// CI's Rust cache keeps one dependency set per target directory, and pruned
+// the host's dependencies from a directory nested in the root workspace's.
 export function nativeHostBuild(target) {
   const { host, binary } = TARGETS[target] ?? {};
   if (!host) throw new Error(`No Win32/GTK native host for ${target}`);
-  const targetDirectory = `target/native-${TARGETS[target].renderer}-preview`;
+  const targetDirectory = `${host}/target`;
   const exe = target.includes("windows") ? ".exe" : "";
   return {
     prepare: ["apps/native/prepare.mjs", "--output", `${host}/resources`],
@@ -157,8 +160,10 @@ export function build(target, version, unsigned = false, sideBySide = false, sta
     // window layout, leaving an unarranged window with no install hint.
     TAURI_BUNDLER_DMG_IGNORE_CI: "true",
   };
+  // Cargo creates this directory. Creating `target/<triple>` first stops Cargo
+  // marking it with CACHEDIR.TAG, and CI's Rust cache then deletes its
+  // `release` directory before every save, so each Preview recompiled everything.
   const release = join(ROOT, "target", target, "release");
-  mkdirSync(release, { recursive: true });
   const exe = target.includes("windows") ? ".exe" : "";
   run(
     "cargo",

@@ -81,13 +81,13 @@ test("Windows and Linux package the Win32 and GTK hosts, never the wgpu workbenc
     "--bin",
     "captures-windows",
     "--target-dir",
-    "target/native-win32-preview",
+    "apps/native/windows/target",
     "--target",
     "x86_64-pc-windows-msvc",
   ]);
   assert.equal(
     windows.binary,
-    "target/native-win32-preview/x86_64-pc-windows-msvc/release/captures-windows.exe",
+    "apps/native/windows/target/x86_64-pc-windows-msvc/release/captures-windows.exe",
   );
   const linux = nativeHostBuild("x86_64-unknown-linux-gnu");
   assert.deepEqual(linux.prepare, [
@@ -99,7 +99,7 @@ test("Windows and Linux package the Win32 and GTK hosts, never the wgpu workbenc
   assert.ok(!linux.cargo.some((argument) => argument.includes("wgpu")));
   assert.equal(
     linux.binary,
-    "target/native-gtk-preview/x86_64-unknown-linux-gnu/release/captures-gtk",
+    "apps/native/gtk/target/x86_64-unknown-linux-gnu/release/captures-gtk",
   );
   assert.throws(() => nativeHostBuild("aarch64-apple-darwin"), /No Win32\/GTK/u);
 });

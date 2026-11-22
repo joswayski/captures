@@ -249,7 +249,7 @@ as `ffmpeg.exe` and `ffprobe.exe`. No tools are downloaded by the host.
 `node scripts/native-preview-build.mjs build x86_64-pc-windows-msvc VERSION
 --unsigned` (MSVC, Rust 1.95 and the FFmpeg sidecars from
 `scripts/build-ffmpeg-sidecars.sh`) packages this host, built in release in
-`target/native-win32-preview`, as the unpublished, experimental NSIS installer
+`apps/native/windows/target`, as the unpublished, experimental NSIS installer
 with the sidecars and `native_preview_update_helper`; see
 [releases.md](../../../docs/releases.md#native-preview-packaging-and-recovery).
 Add `--side-by-side` for a test installer that installs next to an existing
