@@ -673,11 +673,18 @@ impl ImageSection {
             field.set(value, force);
             field.set_sensitive(!image.base.locked);
         }
-        self.hint.set_label(if image.base.locked {
+        let hint = if image.base.locked {
             "Unlock this layer to change size and position."
         } else {
             "Width and height stay proportional to the image."
-        });
+        };
+        self.hint.set_label(hint);
+        // Screen readers read the hint with each field.
+        for field in &self.fields {
+            field
+                .spin
+                .update_property(&[gtk::accessible::Property::Description(hint)]);
+        }
     }
 }
 

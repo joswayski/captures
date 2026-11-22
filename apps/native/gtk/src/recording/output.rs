@@ -984,6 +984,10 @@ impl Output {
         self.mode.set_described(described(menus.quality_modes));
         self.mode.set(&id_of(mode));
         self.help.set_label(mode.description());
+        // The help ("Set a hard size limit…") describes the limit field.
+        self.limit
+            .spin
+            .update_property(&[gtk::accessible::Property::Description(mode.description())]);
         self.preset_field.set_visible(mode == QualityMode::Compress);
         self.preset.set(&id_of(model.quality.get()));
         self.maximum_field.set_visible(mode == QualityMode::Maximum);

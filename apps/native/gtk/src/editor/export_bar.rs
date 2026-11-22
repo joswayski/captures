@@ -37,6 +37,8 @@ pub(super) struct ExportBar {
     preset_box: gtk::Box,
     preset: Rc<Choice>,
     maximum_box: gtk::Box,
+    /// Maximum file size's field, described by the format's size-limit help.
+    maximum: gtk::SpinButton,
     estimate: gtk::Label,
     delta: gtk::Label,
     /// Shipping's Comparison · Show before / after, while it is hidden.
@@ -429,6 +431,7 @@ impl ExportBar {
             preset_box,
             preset,
             maximum_box,
+            maximum: maximum.spin.clone(),
             estimate,
             delta,
             show_box,
@@ -508,6 +511,8 @@ impl ExportBar {
         self.maximum_box
             .set_visible(options.quality == ExportQuality::Maximum);
         self.maximum_box.set_tooltip_text(Some(&view.maximum_help));
+        self.maximum
+            .update_property(&[gtk::accessible::Property::Description(&view.maximum_help)]);
         self.estimate.set_label(&view.estimate_label);
         set_class(&self.estimate, "pending", pending);
         match &view.delta {
