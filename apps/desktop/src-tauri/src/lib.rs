@@ -3531,8 +3531,24 @@ fn reveal_artifact(
         .map_err(|error| error.to_string())
 }
 
+/// Moves a file to the system trash without blocking the caller. On macOS
+/// `trash` asks Finder through `osascript` and waits for the answer, which
+/// stalled every window, the tray and shortcuts while it ran on the main
+/// thread. The move gets its own thread because on Windows `trash` initializes
+/// COM as a single-threaded apartment on the calling thread and panics if that
+/// thread, such as a shared pool thread, already uses another mode.
+pub(crate) async fn move_to_trash(path: PathBuf) -> CommandResult<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        std::thread::spawn(move || trash::delete(path).map_err(|error| error.to_string()))
+            .join()
+            .unwrap_or_else(|_| Err("the file could not be moved to the trash".to_owned()))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 #[tauri::command]
-fn trash_artifact(
+async fn trash_artifact(
     app: AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
     artifact_id: String,
@@ -3549,7 +3565,7 @@ fn trash_artifact(
     if let Some(path) = saved_path
         && Path::new(&path).exists()
     {
-        trash::delete(path).map_err(|error| error.to_string())?;
+        move_to_trash(PathBuf::from(path)).await?;
     }
     remove_artifact(&app, state.inner(), &artifact_id)?;
     Ok(())

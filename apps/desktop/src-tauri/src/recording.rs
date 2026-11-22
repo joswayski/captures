@@ -2824,7 +2824,7 @@ fn ensure_recording_artifact_loaded(state: &AppState, artifact_id: &str) -> Resu
 }
 
 #[tauri::command]
-pub fn trash_recording_artifact(
+pub async fn trash_recording_artifact(
     app: AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
     artifact_id: String,
@@ -2840,7 +2840,7 @@ pub fn trash_recording_artifact(
     // history recovery media stays available for HISTORY_RETENTION_DAYS.
     if let Some(saved_path) = artifact.saved_path.as_ref() {
         if Path::new(saved_path).exists() {
-            trash::delete(saved_path).map_err(|error| error.to_string())?;
+            crate::move_to_trash(PathBuf::from(saved_path)).await?;
         }
         if let Some(entry) = state
             .history
