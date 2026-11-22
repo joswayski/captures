@@ -134,6 +134,11 @@ final class AppWindows: NSObject, NSWindowDelegate {
         made.title = kind.title
         made.contentMinSize = kind.minimumSize
         made.isReleasedWhenClosed = false
+        // History stays ordered out between opens, and the window server
+        // keeps its backing store while hidden: sRGB halves that store from
+        // the extended-range surface an XDR display otherwise gets (like the
+        // capture overlays). Its content is sRGB tokens and thumbnails.
+        if kind == .history { made.colorSpace = .sRGB }
         made.center()
         return made
     }
