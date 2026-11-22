@@ -331,7 +331,11 @@ UIA reports the buttons focusable; SetFocus and keys were not exercised live
 because they take focus from the desktop's user). Cards arrive and leave with
 the shared preview motion, rising out of shipping's 3 px arrive blur (`--select
 arrive`; a Gaussian on the card through a Direct2D command list, sharp where
-the effect is missing). Clear all and Minimize enter with shipping's
+the effect is missing). A closing card's image stretches out under shipping's
+`thumbnail-dismiss-streak`: the hover dim drops at its first step and a
+horizontal blur steps through 3.5, 8 and 14 (a Direct2D directional blur),
+while Clear all streaks each card from the look it had (`--select streak`).
+Clear all and Minimize enter with shipping's
 `thumbnail-stack-toolbar-in` as the stack expands, dissolve through its 8 px
 blur as it collapses, hold and fade when a Close or Delete leaves one card,
 and leave with the first streak of Clear all, taking no pointer while they

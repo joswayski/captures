@@ -18,7 +18,8 @@
 //! streaks every card out bottom first, each holding its slot
 //! (`preview_motion::StackExits`) while older cards settle into the hole, as
 //! on GTK. Arriving cards rise out of shipping's 3 px blur (`blurred`);
-//! the Close streak's horizontal blur is not drawn. Clear all and Minimize
+//! a closing card's image stretches under the streak's stepped horizontal
+//! blur, and Clear all keeps each card's own look. Clear all and Minimize
 //! enter, dissolve and leave with the shared `StackToolbar` motions.
 //!
 //! Dragging an expanded card's image drags its file out (`crate::drag`);
@@ -309,6 +310,8 @@ const CUE_IN_MS: f64 = 200.;
 pub struct CardMotion {
     arrive: Animation,
     dismiss: Animation,
+    /// `thumbnail-dismiss-streak` on a closing card's image.
+    streak: Animation,
     fallback: Animation,
     /// `thumbnail-capture-highlight`: the accent outline a new card holds for
     /// 1 s, then fades over 3.5 s.
@@ -323,6 +326,7 @@ impl CardMotion {
         Some(Self {
             arrive: Motion::PreviewCardArrive.resolve(tokens)?,
             dismiss: Motion::PreviewDismiss.resolve(tokens)?,
+            streak: Motion::PreviewDismissStreak.resolve(tokens)?,
             fallback: Motion::PreviewDeleteFallback.resolve(tokens)?,
             highlight: Motion::PreviewCaptureHighlight.resolve(tokens)?,
             sparkles: [
@@ -2058,8 +2062,27 @@ impl Stack {
         if self.rejects.contains_key(&card.entry.id) {
             (filter, zoom) = (0., 0.);
         }
-        if self.exiting(index) {
+        // A Close locks the hover look it was pressed in; Clear all keeps
+        // each card's own (`--thumbnail-clear-image-filter`).
+        let exit = self.exits.exiting(&card.entry.id);
+        if exit.is_some_and(|exit| exit.settles) {
             (filter, zoom, meta) = (1., 1., 1.);
+        }
+        let mut streak = (1., 0.);
+        if let (Some(exit), Some(m)) = (exit, &self.card_motion)
+            && exit.kind == ExitKind::Dismiss
+        {
+            let pose = m
+                .streak
+                .pose_at(exit.elapsed_ms(now_ms()).max(0.), self.reduced);
+            // The uniform hover zoom eases into the horizontal stretch.
+            zoom *=
+                ((pose.scale - 1.) / (preview_chrome::HOVER_MEDIA_SCALE - 1.)).clamp(0., 1.) as f32;
+            let sigma = streak_blur(pose.blur);
+            if sigma > 0. && exit.settles {
+                filter = 0.;
+            }
+            streak = (pose.scale_x as f32, sigma);
         }
         if self.dust.contains_key(&card.entry.id) {
             controls = 1.;
@@ -2088,7 +2111,7 @@ impl Stack {
             }
             gfx::fill_round(dc, r, radius, t.color("glass-strong-solid"))?;
             if let Some(image) = &card.image {
-                cover(dc, image, (r, radius), (filter, zoom))?;
+                cover(dc, image, (r, radius), (filter, zoom), streak)?;
             }
             if filter > 0. {
                 // `brightness(.5)` on the opaque image.
@@ -2504,6 +2527,15 @@ pub fn fixture(g: &Gfx, image: &image::RgbaImage, select: Option<&str>) -> Stack
             stack.pointer(Some((at.left + 4., at.top + 4.)));
             stack.tips = stack.tip_targets().map(Tip::settled);
         }
+        // The hovered newest card 160 ms into its Close: sliding and fading
+        // out while its image streaks.
+        Some("streak") => {
+            stack.card_motion = CardMotion::resolve(&Tokens::variant("dark", "mustard"));
+            let newest = stack.cards[last].entry.id.clone();
+            stack.leave(&newest, ExitKind::Dismiss, 0., true);
+            // Exits cannot start in the past.
+            std::thread::sleep(std::time::Duration::from_millis(160));
+        }
         // The newest card 90 ms into `thumbnail-arrive`: faded, lowered and
         // blurred.
         Some("arrive") => {
@@ -2684,14 +2716,34 @@ fn outside(
     }
 }
 
+/// The horizontal blur a Close streak shows for its pose's `blur`: shipping
+/// steps through `#thumbnail-motion-blur-a/b/c` (`stdDeviation` 3.5, 8 and
+/// 14 on x), each swapping in at its keyframe's midpoint as CSS does for
+/// filters it cannot interpolate (GTK's `streak_step`). 0 before the first.
+fn streak_blur(blur: f64) -> f32 {
+    let mut previous = preview_chrome::HOVER_MEDIA_BLUR;
+    let mut shown = 0.;
+    for sigma in [3.5, 8., 14.] {
+        if blur >= (previous + sigma) / 2. {
+            shown = sigma;
+        }
+        previous = sigma;
+    }
+    shown as f32
+}
+
 /// `object-fit: cover` into the rounded `r`; hovered cards scale by 1.015
 /// and blur by 2 px (`.thumbnail-card:hover img`), `filter` and `zoom` of
-/// the way there. Without the blur effect (Wine) the image is drawn sharp.
+/// the way there. A Close streak stretches it by `stretch` about its centre
+/// under a horizontal blur of standard deviation `streak` (shipping's
+/// `feGaussianBlur stdDeviation="N 0"`), in place of the hover blur.
+/// Without the blur effects (Wine) the image is drawn sharp.
 fn cover(
     dc: &ID2D1DeviceContext,
     image: &ID2D1Bitmap1,
     (r, radius): (Rect, f32),
     (filter, zoom): (f32, f32),
+    (stretch, streak): (f32, f32),
 ) -> Result<()> {
     let size = unsafe { image.GetSize() };
     if size.width <= 0. || size.height <= 0. {
@@ -2700,13 +2752,14 @@ fn cover(
     let (w, h) = (r.right - r.left, r.bottom - r.top);
     let mut k = (w / size.width).max(h / size.height);
     k *= 1. + (preview_chrome::HOVER_MEDIA_SCALE as f32 - 1.) * zoom;
-    let hovered = filter > 0.;
+    let kx = k * stretch;
+    let hovered = filter > 0. || streak > 0.;
     let placed = Matrix3x2 {
-        M11: k,
+        M11: kx,
         M12: 0.,
         M21: 0.,
         M22: k,
-        M31: r.left + (w - size.width * k) / 2.,
+        M31: r.left + (w - size.width * kx) / 2.,
         M32: r.top + (h - size.height * k) / 2.,
     };
     let shape = D2D1_ROUNDED_RECT {
@@ -2716,16 +2769,29 @@ fn cover(
     };
     unsafe {
         let blurred = hovered.then(|| -> Result<ID2D1Brush> {
-            let effect = dc.CreateEffect(&CLSID_D2D1GaussianBlur)?;
+            // Image pixels: the brush scales the effect's output.
+            let (effect, deviation, border) = if streak > 0. {
+                (
+                    dc.CreateEffect(&CLSID_D2D1DirectionalBlur)?,
+                    streak / kx,
+                    D2D1_DIRECTIONALBLUR_PROP_BORDER_MODE.0,
+                )
+            } else {
+                (
+                    dc.CreateEffect(&CLSID_D2D1GaussianBlur)?,
+                    preview_chrome::HOVER_MEDIA_BLUR as f32 * filter / k,
+                    D2D1_GAUSSIANBLUR_PROP_BORDER_MODE.0,
+                )
+            };
             effect.SetInput(0, image, true);
-            let deviation = preview_chrome::HOVER_MEDIA_BLUR as f32 * filter / k;
+            // Both effects' standard deviation is property 0.
             effect.SetValue(
                 D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION.0 as u32,
                 D2D1_PROPERTY_TYPE_FLOAT,
                 &deviation.to_le_bytes(),
             )?;
             effect.SetValue(
-                D2D1_GAUSSIANBLUR_PROP_BORDER_MODE.0 as u32,
+                border as u32,
                 D2D1_PROPERTY_TYPE_ENUM,
                 &(D2D1_BORDER_MODE_HARD.0 as u32).to_le_bytes(),
             )?;
@@ -4054,6 +4120,24 @@ mod tests {
         stack.sync_toolbar(ToolbarCause::Other);
         stack.height = stack.content_height();
         stack
+    }
+
+    #[test]
+    fn the_close_streak_swaps_blurs_at_keyframe_midpoints() {
+        // From the 2 px hover blur to 3.5, 8 and 14 on x, each swapping in
+        // halfway to it, as CSS does with `url()` filters.
+        for (blur, want) in [
+            (2., 0.),
+            (2.74, 0.),
+            (2.75, 3.5),
+            (5.74, 3.5),
+            (5.75, 8.),
+            (10.99, 8.),
+            (11., 14.),
+            (14., 14.),
+        ] {
+            assert_eq!(streak_blur(blur), want, "{blur}");
+        }
     }
 
     #[test]
