@@ -220,6 +220,13 @@ final class MiniPreviewTests: XCTestCase {
             let saveFrame = try button("Save file").frame
             XCTAssertEqual(saveFrame, NSRect(x: 72, y: 83, width: 140, height: 32))
             XCTAssertFalse(card.hasVisibleLabels)
+            let view = panel.previewView
+            func pointerTarget(_ x: CGFloat, _ y: CGFloat) -> Bool {
+                view.pointerTarget(at: view.convert(NSPoint(x: x, y: y), from: card))
+            }
+            XCTAssertTrue(pointerTarget(saveFrame.midX, saveFrame.midY), "Save file shows the pointing hand")
+            XCTAssertTrue(pointerTarget(right ? 262 : 22, 22), "Delete shows the pointing hand")
+            XCTAssertFalse(pointerTarget(140, 22), "the card body between controls keeps the arrow")
             try write(render(panel), name: "mini-preview-hover-\(right ? "right" : "left")")
             card.updateSaveButton(saved: true)
             XCTAssertEqual(try button("Show in Folder").frame, saveFrame)

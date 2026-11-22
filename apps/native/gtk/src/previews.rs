@@ -97,6 +97,8 @@ struct State {
 
 fn icon_control(icon: &str, label: &str, classes: &[&str]) -> gtk::Button {
     let button = gtk::Button::new();
+    // Shipping `button { cursor: pointer }`.
+    button.set_cursor_from_name(Some("pointer"));
     for class in classes {
         button.add_css_class(class);
     }
@@ -726,6 +728,7 @@ impl State {
         main.set_valign(gtk::Align::Center);
         let copy = (!recording).then(|| {
             let (copy, _, _) = icon_button("copy", "Copy", &["preview-main-button"]);
+            copy.set_cursor_from_name(Some("pointer"));
             main.append(&copy);
             controls.push(copy.clone());
             copy
@@ -1062,6 +1065,7 @@ fn primary_button(saved: bool) -> gtk::Button {
     } else {
         icon_button("save", "Save file", &["preview-main-button", "primary"])
     };
+    button.set_cursor_from_name(Some("pointer"));
     button
 }
 

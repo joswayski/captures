@@ -891,13 +891,13 @@ mod tests {
         assert_eq!(cards["ok"], true);
         let cards = cards["cards"].as_array().unwrap();
         assert_eq!(cards.len(), 3);
-        assert_eq!(cards[0]["details"], "640 × 480 · 2.0 KB");
+        assert_eq!(cards[0]["details"], "640 × 480 · 2 KB");
         assert_eq!(cards[0]["actions"], json!(["edit", "restore"]));
         assert_eq!(cards[0]["warning"], Value::Null);
         assert_eq!(cards[1]["missing"], true);
         assert_eq!(cards[1]["actions"], json!([]));
         assert_eq!(cards[1]["delete_label"], "Remove missing entry");
-        assert_eq!(cards[2]["details"], "640 × 480 · 2.0 KB · 1:05");
+        assert_eq!(cards[2]["details"], "640 × 480 · 2 KB · 1:05");
         assert_eq!(cards[2]["warning"], "2 frames dropped while recording");
         assert_eq!(cards[2]["actions"], json!(["edit", "save_file"]));
 

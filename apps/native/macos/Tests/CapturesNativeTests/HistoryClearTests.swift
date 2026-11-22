@@ -90,7 +90,7 @@ final class HistoryClearTests: XCTestCase {
         let cards = try HistoryCard.cards(for: [["entry": entry, "missing": false],
                                                 ["entry": entry, "missing": true], ["entry": [String: Any]()]])
         XCTAssertEqual(cards.count, 3)
-        XCTAssertEqual(cards[0]?.details, "640 × 480 · 2.0 KB · 1:05")
+        XCTAssertEqual(cards[0]?.details, "640 × 480 · 2 KB · 1:05")
         XCTAssertEqual(cards[0]?.warning, "2 frames dropped while recording")
         XCTAssertEqual(cards[0]?.actions, [.edit, .saveFile])
         XCTAssertEqual(cards[1]?.missing, true)
@@ -163,7 +163,7 @@ final class HistoryClearTests: XCTestCase {
             XCTAssertEqual(try button("Delete all").accessibilityLabel(), "Delete all captures")
             let first = try XCTUnwrap(grid.card(at: 0))
             XCTAssertFalse(first.dateLabel.stringValue.isEmpty)
-            XCTAssertTrue(first.detailsLabel.stringValue.hasPrefix("\(image.width) × \(image.height) · 2.0 KB"))
+            XCTAssertTrue(first.detailsLabel.stringValue.hasPrefix("\(image.width) × \(image.height) · 2 KB"))
             XCTAssertEqual(actions(0), ["Edit", "Save file"])
             XCTAssertEqual(first.deleteButton.accessibilityLabel(), "Delete from History")
             try waitUntil { grid.visibleCards.allSatisfy { $0.thumbnail.image != nil } }

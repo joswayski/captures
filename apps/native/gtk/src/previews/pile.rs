@@ -266,6 +266,7 @@ impl Pile {
         // Overflow cues paint over the cards and under the stack toolbar.
         for (older, icon) in [(true, "chevron-up"), (false, "chevron-down")] {
             let cue = gtk::Button::new();
+            cue.set_cursor_from_name(Some("pointer"));
             cue.add_css_class("preview-overflow-cue");
             cue.add_css_class(if older { "older" } else { "newer" });
             cue.set_child(Some(&Icon::new(icon, 16).with_stroke(2.)));
@@ -299,6 +300,7 @@ impl Pile {
         pile.add_controller(wheel);
 
         let expand = gtk::Button::new();
+        expand.set_cursor_from_name(Some("pointer"));
         expand.add_css_class("preview-pile-expand");
         expand.set_visible(false);
         expand.set_parent(&pile);

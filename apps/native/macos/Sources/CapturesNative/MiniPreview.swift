@@ -1468,7 +1468,6 @@ private final class MiniPreviewExpandButton: NSButton {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     @objc private func activate() { actionBlock() }
     override func draw(_ dirtyRect: NSRect) {}
-    override func resetCursorRects() { addCursorRect(bounds, cursor: .openHand) }
     override func updateTrackingAreas() {
         if let tracking { removeTrackingArea(tracking) }
         let next = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways],
@@ -2176,7 +2175,9 @@ final class MiniPreviewView: NSView {
     }
 
     override func mouseMoved(with event: NSEvent) {
-        samplePointer(convert(event.locationInWindow, from: nil))
+        let point = convert(event.locationInWindow, from: nil)
+        samplePointer(point)
+        updateCursor(at: point)
     }
 
     override func mouseExited(with event: NSEvent) {
@@ -2184,6 +2185,36 @@ final class MiniPreviewView: NSView {
         // views forward their exits up the responder chain.
         guard event.type == .mouseExited, event.trackingArea === pointerTracking else { return }
         samplePointer(nil)
+        updateCursor(at: nil)
+    }
+
+    /// True while this stack shows a hand, so leaving it restores the arrow
+    /// once instead of overriding cursors elsewhere on screen.
+    private var showsHandCursor = false
+
+    /// Shipping `button { cursor: pointer }` and the minimized pile's pointer.
+    /// The nonactivating panel is rarely key, and AppKit applies cursor rects
+    /// only in the key window, so set the cursor on every pointer sample as
+    /// the Tauri host does.
+    private func updateCursor(at point: NSPoint?) {
+        if let point, pointerTarget(at: point) {
+            NSCursor.pointingHand.set(); showsHandCursor = true
+        } else if showsHandCursor {
+            NSCursor.arrow.set(); showsHandCursor = false
+        }
+    }
+
+    /// Whether `point` (this view's coordinates) is over an enabled preview control.
+    func pointerTarget(at point: NSPoint) -> Bool {
+        var view = hitTest(superview.map { convert(point, to: $0) } ?? point)
+        while let current = view, current !== self {
+            if let button = current as? NSButton {
+                return button.isEnabled && (button is MiniPreviewButton
+                    || button is MiniPreviewOverflowCue || button is MiniPreviewExpandButton)
+            }
+            view = current.superview
+        }
+        return false
     }
 
     /// Hold card hover off after an expand or a new capture until the pointer

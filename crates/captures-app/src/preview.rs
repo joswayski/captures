@@ -914,7 +914,8 @@ pub fn thumbnail_geometry(
     }
 }
 
-/// Compact decimal file size, matching the shipping `formatFileSize`.
+/// Compact decimal file size, like the shipping `formatFileSize` except that a
+/// whole value drops its ".0" ("21 KB", not "21.0 KB").
 pub fn format_file_size(bytes: u64) -> String {
     const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
     if bytes == 0 {
@@ -932,7 +933,12 @@ pub fn format_file_size(bytes: u64) -> String {
     } else if value >= 99.95 {
         format!("{value:.0} {}", UNITS[unit])
     } else {
-        format!("{value:.1} {}", UNITS[unit])
+        let value = format!("{value:.1}");
+        format!(
+            "{} {}",
+            value.strip_suffix(".0").unwrap_or(&value),
+            UNITS[unit]
+        )
     }
 }
 
@@ -1017,7 +1023,12 @@ mod tests {
         assert_eq!(format_file_size(5_000_000_000_000), "5000 GB");
         // Just under a unit boundary moves up instead of reading "1000 KB".
         assert_eq!(format_file_size(999_400), "999 KB");
-        assert_eq!(format_file_size(999_600), "1.0 MB");
+        assert_eq!(format_file_size(999_600), "1 MB");
+        // Whole values drop ".0", including ones that round to whole.
+        assert_eq!(format_file_size(21_000), "21 KB");
+        assert_eq!(format_file_size(20_960), "21 KB");
+        assert_eq!(format_file_size(21_060), "21.1 KB");
+        assert_eq!(format_file_size(10_000_000), "10 MB");
         assert_eq!(format_file_size(99_960), "100 KB");
         assert_eq!(card_metadata(245_760), "246 KB");
     }
