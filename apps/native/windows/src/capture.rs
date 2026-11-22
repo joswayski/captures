@@ -18,7 +18,9 @@
 //! prepares another display and reopens the bar there. The guidance chip,
 //! options-row arrive, ready ping and list pop-in run on a frame timer only
 //! while they move. Screenshot Region and Window open the same overlay as
-//! shipping's bar-less selector (`Menu::direct`). Keyboard focus
+//! shipping's bar-less selector (`Menu::direct`). A disabled Window target
+//! and unavailable Record switches show their reason in the shared glass
+//! tooltip. Keyboard focus
 //! through the bar and UI Automation are not ported yet.
 
 use std::cell::RefCell;
@@ -553,6 +555,9 @@ pub struct Menu {
     /// chip), when its feedback ends, and a click waiting for the clock.
     feedback: (u32, Option<f64>),
     feedback_pending: bool,
+    /// The glass tooltip under the pointer and its fade (shared `tooltip`).
+    tooltip: crate::tooltip::Fade<Hit>,
+    tooltip_target: Option<Hit>,
 }
 
 /// The chip's frame with its title and hint lines.
@@ -640,7 +645,64 @@ impl Menu {
             direct: false,
             feedback: (0, None),
             feedback_pending: false,
+            tooltip: crate::tooltip::Fade::default(),
+            tooltip_target: None,
         }
+    }
+
+    /// Shipping disables Window when the listed display has no windows.
+    fn window_available(&self) -> bool {
+        !self.windows.is_empty()
+    }
+
+    /// Offscreen fixtures: no windows listed, so Window is disabled, with
+    /// its tooltip at rest.
+    pub fn without_windows_tooltip(&mut self) {
+        let hit = Some(Hit::Target(Target::Window));
+        self.windows.clear();
+        self.tooltip = crate::tooltip::Fade::settled(hit);
+        self.tooltip_target = hit;
+    }
+
+    /// The tooltip under the pointer: shipping's `title` on a disabled
+    /// Window target or an unavailable Record switch.
+    fn tooltip_at(&self, x: f32, y: f32) -> Option<(Hit, &'static str, Rect)> {
+        let layout = self.layout.as_ref().filter(|_| !self.direct)?;
+        if layout
+            .listbox
+            .as_ref()
+            .is_some_and(|b| contains(&b.rect, x, y))
+        {
+            return None;
+        }
+        let segment = layout.segments.iter().find_map(|s| match s.hit {
+            Hit::Target(Target::Window) if !s.enabled && contains(&s.rect, x, y) => Some((
+                s.hit,
+                "Window capture is not available in this desktop session",
+                s.rect,
+            )),
+            _ => None,
+        });
+        segment.or_else(|| {
+            layout.fields().find_map(|f| match f.hit {
+                Hit::Toggle(toggle) if !f.enabled && contains(&f.control, x, y) => {
+                    Some((f.hit, toggle.unavailable_reason(), f.control))
+                }
+                _ => None,
+            })
+        })
+    }
+
+    /// A tooltip key's copy and anchor in the current layout.
+    fn tooltip_anchor(&self, hit: Hit) -> Option<(&'static str, Rect)> {
+        let layout = self.layout.as_ref()?;
+        let rect = match hit {
+            Hit::Target(_) => layout.segments.iter().find(|s| s.hit == hit)?.rect,
+            _ => layout.fields().find(|f| f.hit == hit)?.control,
+        };
+        let (cx, cy) = ((rect.left + rect.right) / 2., (rect.top + rect.bottom) / 2.);
+        let (_, label, _) = self.tooltip_at(cx, cy).filter(|(h, ..)| *h == hit)?;
+        Some((label, rect))
     }
 
     /// Which guidance chip shows, if any: Region's, or Window's until a
@@ -664,6 +726,7 @@ impl Menu {
     /// whenever they mount.
     fn sync_motion(&mut self, t: &Tokens) {
         let now = self.clock;
+        self.tooltip.set(self.tooltip_target, t, now);
         match (self.mode, self.record_since) {
             (MenuMode::Recording, None) => self.record_since = Some(now),
             (MenuMode::Screenshot, Some(_)) => self.record_since = None,
@@ -771,6 +834,7 @@ impl Menu {
             // The feedback's end re-keys the chip.
             || self.feedback.1.is_some()
             || self.feedback_pending
+            || self.tooltip.animating(t, now)
     }
 
     /// A capture shortcut with the bar up (shared `busy_route`, shipping's
@@ -798,7 +862,8 @@ impl Menu {
         };
         match capture_error::busy_route(action, activity, None, false) {
             capture_error::BusyRoute::SwitchMenu { record, target } => {
-                if record && self.recording_locked {
+                let window = target == capture_error::Target::Window;
+                if (record && self.recording_locked) || (window && !self.window_available()) {
                     return ShortcutEffect::Ignored;
                 }
                 self.mode = mode(record);
@@ -1036,7 +1101,7 @@ impl Menu {
                 label(text)?,
                 Some(icon),
                 Hit::Target(target),
-                true,
+                target != Target::Window || self.window_available(),
                 target == self.target,
             ));
         }
@@ -1708,6 +1773,16 @@ impl Menu {
             })?;
         }
         self.layout = Some(layout);
+        for (hit, progress) in self.tooltip.frames(t, self.clock) {
+            // The anchor is laid out from this paint; a key whose control
+            // left the bar draws nothing.
+            let anchor = self.tooltip_anchor(hit);
+            if let Some((label, anchor)) = anchor {
+                use crate::tooltip::{self, Align};
+                let gap = tooltip::GAP;
+                tooltip::paint(dc, g, t, label, anchor, Align::Center, gap, full, progress)?;
+            }
+        }
         Ok(())
     }
 
@@ -2021,7 +2096,8 @@ impl Menu {
             return true;
         }
         let hover = self.hit(x, y);
-        let mut changed = false;
+        let tip = self.tooltip_at(x, y).map(|(hit, ..)| hit);
+        let mut changed = std::mem::replace(&mut self.tooltip_target, tip) != tip;
         // The chip fades away from a pointer near it (shipping
         // `isPointerOverCaptureGuidance`, with hysteresis).
         if let Some(r) = self
@@ -3552,6 +3628,7 @@ mod tests {
     fn shortcuts_switch_the_open_bar_or_recapture_it() {
         use capture_error::{Action, Target as T};
         let mut m = menu(Target::Window, false);
+        m.windows = vec![(rect(0., 0., 100., 100.), "Notes".into())];
         m.picked = Some(Some(0));
         m.hovered = Some(Some(0));
         let recapture = |target, mode, direct| ShortcutEffect::Recapture {
@@ -3607,6 +3684,12 @@ mod tests {
             ShortcutEffect::Ignored
         );
         m.recording_locked = false;
+        // With no windows listed, Window is disabled for shortcuts too.
+        m.windows.clear();
+        assert_eq!(
+            m.shortcut(Action::Record(T::Window)),
+            ShortcutEffect::Ignored
+        );
         m.starting = true;
         assert_eq!(
             m.shortcut(Action::Screenshot(T::Window)),

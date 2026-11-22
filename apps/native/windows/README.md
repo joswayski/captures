@@ -140,7 +140,11 @@ display (Region's "Drag to select a region", hidden while drawing; Window's
 window is picked) and fades it away from a nearby pointer; Record's options
 row slides in, Start recording's dot pings while it is enabled, and lists pop
 in, all on the shared motion specs and at rest under reduced motion (rendered
-offscreen and unit-tested; the live motion was not watched). A physical Windows 11 check (4K, 150%) confirmed pixel-exact
+offscreen and unit-tested; the live motion was not watched). Like shipping,
+Window is disabled (for shortcuts too) when the display lists no windows, and
+it and unavailable Record switches show shipping's `title` copy in the host's
+glass tooltip (`--select window-unavailable` renders it; hover not exercised
+live). A physical Windows 11 check (4K, 150%) confirmed pixel-exact
 Region and Full screen captures, the clipboard and History; a second New
 Capture now refocuses the open bar instead of an error, and the snapshot waits
 for the tray menu and overflow flyout to close (a recheck passed both; the

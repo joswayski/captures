@@ -147,6 +147,12 @@ pub fn render(options: &Options, path: &std::path::Path) -> Result<()> {
             crate::gfx::rect(280., 140., 900., 540.),
             "Notes — Meeting agenda".into(),
         )];
+        // `--select window-unavailable` draws Region with no windows listed:
+        // Window disabled under its glass tooltip.
+        if options.select.as_deref() == Some("window-unavailable") {
+            menu.selection = None;
+            menu.without_windows_tooltip();
+        }
         if target == crate::capture::Target::Window {
             menu.hovered = match options.select.as_deref() {
                 Some("desktop" | "picked") => Some(None),

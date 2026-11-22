@@ -31,7 +31,6 @@ type Rect = D2D_RECT_F;
 
 /// Shipping's default `top: calc(100% + 8px)`; the recording controls'
 /// actions use [`hud::TOOLTIP_GAP`] (6 px).
-#[allow(dead_code)] // The capture bar is the first user; it lands next.
 pub const GAP: f32 = 8.;
 
 /// Milliseconds on one monotonic clock shared by every tooltip.
