@@ -23,7 +23,7 @@
 //! Not ported yet: file drags, keyboard focus, tooltips, the capture
 //! highlight and the editor-presence pill.
 
-use std::cell::RefCell;
+use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -159,8 +159,22 @@ pub struct Stack {
     /// their slot here until their exit ends. `stack` holds only live ones.
     exits: StackExits,
     /// A Delete's dust chips, by card id.
-    dust: HashMap<String, Vec<DustParticle>>,
+    dust: HashMap<String, Dust>,
 }
+
+/// A dissolving card's chips: how each moves, and their filtered pixels,
+/// rendered on the first frame that paints them.
+struct Dust {
+    particles: Vec<DustParticle>,
+    chips: OnceCell<Option<ID2D1Bitmap1>>,
+}
+
+/// Transparent fringe around each chip for its blur, and the gap between
+/// neighbouring chips' fringes in the atlas (macOS `DustTextures`).
+const DUST_CHIP_PAD: f32 = 8.;
+const DUST_CHIP_GUTTER: f32 = 16.;
+/// `.thumbnail-dust { filter: blur(2px) }`.
+const DUST_CHIP_BLUR: f32 = 2.;
 
 /// `thumbnail-arrive`, the Close exit (`thumbnail-dismiss`) and the Delete
 /// fallback for a card without an image.
@@ -360,7 +374,13 @@ impl Stack {
                 (origin, preview_motion::DELETE_ORIGIN_Y),
                 seed,
             );
-            self.dust.insert(id.to_owned(), particles);
+            self.dust.insert(
+                id.to_owned(),
+                Dust {
+                    particles,
+                    chips: OnceCell::new(),
+                },
+            );
         }
         self.stack.remove(id);
         self.arrivals.remove(id);
@@ -1025,66 +1045,64 @@ impl Stack {
         unsafe { dc.SetTransform(&base) };
         result?;
         match dust {
-            Some((elapsed, frame)) => self.paint_dust(dc, index, r, elapsed, frame),
+            Some((elapsed, frame)) => self.paint_dust(dc, t, index, r, elapsed, frame),
             None => Ok(()),
         }
     }
 
-    /// A dissolving card's chips (`thumbnail-dust-layer`): each a piece of
-    /// its dimmed hover image that rises, turns and fades from the trash
-    /// control while the layer's clip opens past the card. The image's
-    /// hover blur is not drawn into them.
+    /// A dissolving card's chips (`thumbnail-dust-layer`): each a blurred,
+    /// dimmed piece of its rounded image (`.thumbnail-dust`) that rises,
+    /// turns and fades from the trash control, under a clip that opens from
+    /// the card's rounded rect past the card (`thumbnail-dust-clip`).
     fn paint_dust(
         &self,
         dc: &ID2D1DeviceContext,
+        t: &Tokens,
         index: usize,
         r: Rect,
         elapsed: f64,
         frame: preview_motion::DustFrame,
     ) -> Result<()> {
         let card = &self.cards[index];
-        let (Some(particles), Some(image)) = (self.dust.get(&card.entry.id), &card.image) else {
+        let (Some(dust), Some(image)) = (self.dust.get(&card.entry.id), &card.image) else {
             return Ok(());
         };
-        let size = unsafe { image.GetSize() };
-        if frame.layer_opacity <= 0. || size.width <= 0. || size.height <= 0. {
+        if frame.layer_opacity <= 0. {
             return Ok(());
         }
-        // The card's `object-fit: cover` placement, in card coordinates.
-        let k = (CARD_W / size.width).max(CARD_H / size.height);
-        let cover = (
-            (CARD_W - size.width * k) / 2.,
-            (CARD_H - size.height * k) / 2.,
-        );
+        let radius = t.n("thumbnail-card-radius");
+        let mut base = Matrix3x2::identity();
+        unsafe { dc.GetTransform(&mut base) };
+        let Some(chips) = dust.chips.get_or_init(|| {
+            let scale = base.M11.hypot(base.M12).max(1.);
+            dust_chips(dc, image, &dust.particles, radius, scale).ok()
+        }) else {
+            return Ok(());
+        };
+        let columns = dust_columns(dust.particles.len());
+        let cell = dust_cell(&dust.particles);
         let pad = preview_motion::DUST_LAYER_PAD as f32;
         let open = pad * frame.clip_open as f32;
-        let mut base = Matrix3x2::identity();
+        let corner = radius * (1. - frame.clip_open as f32);
+        let clip = rect(r.left - open, r.top - open, r.right + open, r.bottom + open);
         unsafe {
-            dc.GetTransform(&mut base);
-            let brush = dc.CreateBitmapBrush(
-                image,
-                Some(&D2D1_BITMAP_BRUSH_PROPERTIES1 {
-                    extendModeX: D2D1_EXTEND_MODE_CLAMP,
-                    extendModeY: D2D1_EXTEND_MODE_CLAMP,
-                    interpolationMode: D2D1_INTERPOLATION_MODE_LINEAR,
-                }),
-                None,
-            )?;
-            // The hover look's `brightness(.5)`, as `paint_card` draws it.
-            let shade = dc.CreateSolidColorBrush(
-                &D2D1_COLOR_F {
-                    r: 0.,
-                    g: 0.,
-                    b: 0.,
-                    a: preview_chrome::HOVER_MEDIA_BRIGHTNESS as f32,
-                },
-                None,
-            )?;
-            dc.PushAxisAlignedClip(
-                &rect(r.left - open, r.top - open, r.right + open, r.bottom + open),
-                D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
-            );
-            for particle in particles {
+            let mask = dc
+                .GetFactory()?
+                .CreateRoundedRectangleGeometry(&D2D1_ROUNDED_RECT {
+                    rect: clip,
+                    radiusX: corner,
+                    radiusY: corner,
+                })?;
+            let mut layer = D2D1_LAYER_PARAMETERS1 {
+                contentBounds: clip,
+                geometricMask: std::mem::ManuallyDrop::new(Some(mask.cast()?)),
+                maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                maskTransform: Matrix3x2::identity(),
+                opacity: 1.,
+                ..Default::default()
+            };
+            dc.PushLayer(&layer, None::<&ID2D1Layer>);
+            for (i, particle) in dust.particles.iter().enumerate() {
                 let visual = preview_motion::dust_visual_at(particle, elapsed);
                 let alpha = (visual.opacity * frame.layer_opacity) as f32;
                 if alpha <= 0. {
@@ -1103,23 +1121,21 @@ impl Stack {
                     M32: r.top + (particle.top + visual.dy) as f32 - pad + h / 2.,
                 } * base;
                 dc.SetTransform(&m);
-                // The chip shows the image under its source rect.
-                brush.SetTransform(&Matrix3x2 {
-                    M11: k,
-                    M12: 0.,
-                    M21: 0.,
-                    M22: k,
-                    M31: cover.0 - particle.source_left as f32 - w / 2.,
-                    M32: cover.1 - particle.source_top as f32 - h / 2.,
-                });
-                brush.SetOpacity(alpha);
-                shade.SetOpacity(alpha);
-                let chip = rect(-w / 2., -h / 2., w / 2., h / 2.);
-                dc.FillRectangle(&chip, &brush);
-                dc.FillRectangle(&chip, &shade);
+                let (x, y) = dust_chip_origin(i, columns, cell);
+                let (fw, fh) = (w + 2. * DUST_CHIP_PAD, h + 2. * DUST_CHIP_PAD);
+                dc.DrawBitmap(
+                    chips,
+                    Some(&rect(-fw / 2., -fh / 2., fw / 2., fh / 2.)),
+                    alpha,
+                    D2D1_INTERPOLATION_MODE_LINEAR,
+                    Some(&rect(x, y, x + fw, y + fh)),
+                    None,
+                );
             }
             dc.SetTransform(&base);
-            dc.PopAxisAlignedClip();
+            dc.PopLayer();
+            // Release the mask reference the parameters own.
+            std::mem::ManuallyDrop::drop(&mut layer.geometricMask);
         }
         Ok(())
     }
@@ -1535,6 +1551,150 @@ fn cover(
         dc.FillRoundedRectangle(&shape, &brush);
     }
     Ok(())
+}
+
+/// Columns of the square-ish chip atlas.
+fn dust_columns(count: usize) -> usize {
+    ((count as f64).sqrt().ceil() as usize).max(1)
+}
+
+/// One atlas cell: the largest chip, its blur fringe and the gutter.
+fn dust_cell(particles: &[DustParticle]) -> (f32, f32) {
+    let largest =
+        |side: fn(&DustParticle) -> f64| particles.iter().map(side).fold(0., f64::max) as f32;
+    let extra = 2. * DUST_CHIP_PAD + DUST_CHIP_GUTTER;
+    (largest(|p| p.width) + extra, largest(|p| p.height) + extra)
+}
+
+/// The top left of chip `index`'s fringe in the atlas, in DIPs.
+fn dust_chip_origin(index: usize, columns: usize, (w, h): (f32, f32)) -> (f32, f32) {
+    let half = DUST_CHIP_GUTTER / 2.;
+    (
+        (index % columns) as f32 * w + half,
+        (index / columns) as f32 * h + half,
+    )
+}
+
+/// Every chip of a dissolving card, filtered once into one bitmap at
+/// `scale` (macOS `DustTextures`): its slice of the card's `object-fit:
+/// cover`, `radius`-rounded image at `brightness(.5)`, then `blur(2px)`
+/// into a transparent fringe. Slices are cut before the blur, so each chip
+/// gets soft edges of its own. Without the blur effect (Wine) the chips
+/// stay sharp.
+fn dust_chips(
+    dc: &ID2D1DeviceContext,
+    image: &ID2D1Bitmap1,
+    particles: &[DustParticle],
+    radius: f32,
+    scale: f32,
+) -> Result<ID2D1Bitmap1> {
+    let size = unsafe { image.GetSize() };
+    if particles.is_empty() || size.width <= 0. || size.height <= 0. {
+        return Err(Error::empty());
+    }
+    let columns = dust_columns(particles.len());
+    let cell = dust_cell(particles);
+    let rows = particles.len().div_ceil(columns);
+    let px = D2D_SIZE_U {
+        width: (columns as f32 * cell.0 * scale).ceil() as u32,
+        height: (rows as f32 * cell.1 * scale).ceil() as u32,
+    };
+    let props = D2D1_BITMAP_PROPERTIES1 {
+        pixelFormat: D2D1_PIXEL_FORMAT {
+            format: windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM,
+            alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+        },
+        dpiX: 96. * scale,
+        dpiY: 96. * scale,
+        bitmapOptions: D2D1_BITMAP_OPTIONS_TARGET,
+        colorContext: std::mem::ManuallyDrop::new(None),
+    };
+    let k = (CARD_W / size.width).max(CARD_H / size.height);
+    let placed = Matrix3x2 {
+        M11: k,
+        M12: 0.,
+        M21: 0.,
+        M22: k,
+        M31: (CARD_W - size.width * k) / 2.,
+        M32: (CARD_H - size.height * k) / 2.,
+    };
+    let card = D2D1_ROUNDED_RECT {
+        rect: rect(0., 0., CARD_W, CARD_H),
+        radiusX: radius,
+        radiusY: radius,
+    };
+    unsafe {
+        // A context of our own: the window's is mid-draw on its surface.
+        let ctx = dc
+            .GetDevice()?
+            .CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE)?;
+        let slices = ctx.CreateBitmap(px, None, 0, &props)?;
+        ctx.SetTarget(&slices);
+        ctx.SetDpi(96. * scale, 96. * scale);
+        let brush = ctx.CreateBitmapBrush(
+            image,
+            Some(&D2D1_BITMAP_BRUSH_PROPERTIES1 {
+                extendModeX: D2D1_EXTEND_MODE_CLAMP,
+                extendModeY: D2D1_EXTEND_MODE_CLAMP,
+                interpolationMode: D2D1_INTERPOLATION_MODE_LINEAR,
+            }),
+            None,
+        )?;
+        brush.SetTransform(&placed);
+        let shade = ctx.CreateSolidColorBrush(
+            &D2D1_COLOR_F {
+                r: 0.,
+                g: 0.,
+                b: 0.,
+                a: preview_chrome::HOVER_MEDIA_BRIGHTNESS as f32,
+            },
+            None,
+        )?;
+        ctx.BeginDraw();
+        ctx.Clear(Some(&D2D1_COLOR_F::default()));
+        for (i, p) in particles.iter().enumerate() {
+            let (x, y) = dust_chip_origin(i, columns, cell);
+            let (left, top) = (p.source_left as f32, p.source_top as f32);
+            // Card coordinates, moved so this slice lands inside its fringe.
+            ctx.SetTransform(&Matrix3x2::translation(
+                x + DUST_CHIP_PAD - left,
+                y + DUST_CHIP_PAD - top,
+            ));
+            ctx.PushAxisAlignedClip(
+                &rect(left, top, left + p.width as f32, top + p.height as f32),
+                D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+            );
+            ctx.FillRoundedRectangle(&card, &brush);
+            ctx.FillRoundedRectangle(&card, &shade);
+            ctx.PopAxisAlignedClip();
+        }
+        ctx.EndDraw(None, None)?;
+        let blurred = (|| -> Result<ID2D1Bitmap1> {
+            let effect = ctx.CreateEffect(&CLSID_D2D1GaussianBlur)?;
+            effect.SetInput(0, &slices, true);
+            effect.SetValue(
+                D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION.0 as u32,
+                D2D1_PROPERTY_TYPE_FLOAT,
+                &DUST_CHIP_BLUR.to_le_bytes(),
+            )?;
+            let chips = ctx.CreateBitmap(px, None, 0, &props)?;
+            ctx.SetTarget(&chips);
+            ctx.BeginDraw();
+            ctx.Clear(Some(&D2D1_COLOR_F::default()));
+            ctx.SetTransform(&Matrix3x2::identity());
+            ctx.DrawImage(
+                &effect.cast::<ID2D1Image>()?,
+                None,
+                None,
+                D2D1_INTERPOLATION_MODE_LINEAR,
+                D2D1_COMPOSITE_MODE_SOURCE_OVER,
+            );
+            ctx.EndDraw(None, None)?;
+            Ok(chips)
+        })();
+        ctx.SetTarget(None);
+        Ok(blurred.unwrap_or(slices))
+    }
 }
 
 enum Done {
