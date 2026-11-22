@@ -90,7 +90,11 @@ final class UpdateNoticeTests: XCTestCase {
         XCTAssertEqual(ring.frame, NSRect(x: 11, y: 11, width: 14, height: 14))
         XCTAssertEqual(ring.lineWidth, 2)
         XCTAssertEqual(ring.strokeEnd, 0.75)
-        XCTAssertEqual(try XCTUnwrap(ring.animation(forKey: "update-spin")).duration, 0.72)
+        if NativeMotion.reduceMotion {
+            XCTAssertNil(ring.animation(forKey: "update-spin"), "Reduce Motion keeps the spinner still")
+        } else {
+            XCTAssertEqual(try XCTUnwrap(ring.animation(forKey: "update-spin")).duration, 0.72)
+        }
     }
 
     func testSharedPresentationCopyForEveryFixture() throws {
