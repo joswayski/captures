@@ -48,6 +48,8 @@ mod recorder;
 #[cfg(windows)]
 mod recording;
 #[cfg(windows)]
+mod recording_ready;
+#[cfg(windows)]
 mod recording_uia;
 #[cfg(windows)]
 mod scene;

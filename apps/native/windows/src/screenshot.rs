@@ -257,6 +257,53 @@ pub fn render(options: &Options, path: &std::path::Path) -> Result<()> {
                 };
                 crate::hud::paint_hidden_notice(dc, &g, &tokens, &copy)
             })
+        } else if options.tool.as_deref() == Some("recording-ready") {
+            // The Recording ready notice in the top-right corner; `--select
+            // saved|saving|error|hover|dismiss-hover|arriving`.
+            use crate::recording_ready::{self as ready, Part, State};
+            let select = options.select.as_deref().unwrap_or("");
+            let state = State {
+                saved: matches!(select, "saved" | "opening")
+                    .then(|| r"C:\Users\you\Videos\Captures\Recording.mp4".into()),
+                busy: matches!(select, "saving" | "opening"),
+                error: (select == "error").then(|| {
+                    "Could not save the recording: the Captures folder is not writable".into()
+                }),
+            };
+            let hover = match select {
+                "hover" => Some(Part::Action),
+                "dismiss-hover" => Some(Part::Dismiss),
+                _ => None,
+            };
+            // `arriving`: 120 ms into `recording-saved-lifecycle`.
+            let pose = if select == "arriving" {
+                captures_app::motion::Motion::RecordingSavedLifecycle
+                    .resolve(&tokens)
+                    .map_or(captures_app::motion::Pose::REST, |a| {
+                        a.lifecycle_pose(120., Some(14_680.), false)
+                    })
+            } else {
+                captures_app::motion::Pose::REST
+            };
+            let size = (w as f32, h as f32);
+            Box::new(move |dc| unsafe {
+                dc.DrawBitmap(
+                    &frozen,
+                    Some(&crate::gfx::rect(0., 0., size.0, size.1)),
+                    1.,
+                    windows::Win32::Graphics::Direct2D::D2D1_INTERPOLATION_MODE_LINEAR,
+                    None,
+                    None,
+                );
+                let mut base = windows_numerics::Matrix3x2::identity();
+                dc.GetTransform(&mut base);
+                let at =
+                    windows_numerics::Matrix3x2::translation(size.0 - ready::SIZE.0 - 18., 30.);
+                dc.SetTransform(&(at * base));
+                let result = ready::paint(dc, &g, &tokens, &state, hover, pose).map(|_| ());
+                dc.SetTransform(&base);
+                result
+            })
         } else if options.tool.as_deref() == Some("startup-notice") {
             // The launch notice over the desktop: anchored above a tray icon
             // at the bottom right, or `--select fallback` without one.

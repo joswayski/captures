@@ -2173,13 +2173,19 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             }
             WM_DESTROY => {
                 let _ = UiaReturnRawElementProvider(hwnd, WPARAM(0), LPARAM(0), None);
-                WINDOWS.with(|windows| {
-                    if let Ok(mut windows) = windows.try_borrow_mut()
-                        && let Some(i) = windows.iter().position(|w| w.hwnd == hwnd)
-                    {
-                        windows.remove(i);
-                    }
+                let closed = WINDOWS.with(|windows| {
+                    let mut windows = windows.try_borrow_mut().ok()?;
+                    let i = windows.iter().position(|w| w.hwnd == hwnd)?;
+                    let w = windows.remove(i);
+                    Some((w.options.clone(), w.id.clone()))
                 });
+                // Shipping's resident app shows "Recording ready" as an
+                // editor closes (`show_recording_saved_notice`).
+                if let Some((options, id)) = closed
+                    && crate::live::resident()
+                {
+                    crate::recording_ready::show(&options, &id);
+                }
                 if !exists()
                     && !crate::host::exists()
                     && !crate::history::exists()

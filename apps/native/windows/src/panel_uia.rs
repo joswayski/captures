@@ -1,6 +1,6 @@
 #![allow(non_upper_case_globals)]
 //! UI Automation for the small windows that draw themselves as one surface:
-//! first-run setup, Send Feedback, the launch and update notices and the mini previews. Each window
+//! first-run setup, Send Feedback, the launch, update and Recording ready notices and the mini previews. Each window
 //! describes its parts as a list of [`Item`]s in shipping's DOM order and
 //! roles (`<h1>`, `role="radio"` in a `radiogroup`, `<textarea>`/`<input>`,
 //! `<button>`, `role="status"`/`role="alert"`), and applies [`Act`]s through
@@ -22,6 +22,7 @@ pub enum Window {
     Notice,
     Previews,
     Update,
+    RecordingReady,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -114,6 +115,7 @@ fn snapshot(window: Window) -> Result<Snapshot> {
         Window::Notice => crate::startup_notice::uia_snapshot(),
         Window::Previews => crate::previews::uia_snapshot(),
         Window::Update => crate::update_notice::uia_snapshot(),
+        Window::RecordingReady => crate::recording_ready::uia_snapshot(),
     }
     .ok_or_else(unavailable)
 }
@@ -131,6 +133,7 @@ fn act(window: Window, key: u32, act: Act) -> Result<()> {
         Window::Notice => crate::startup_notice::uia_act(key, act),
         Window::Previews => crate::previews::uia_act(key, act),
         Window::Update => crate::update_notice::uia_act(key, act),
+        Window::RecordingReady => crate::recording_ready::uia_act(key, act),
     }
     .ok_or_else(unavailable)?;
     raise(window, before);
@@ -156,6 +159,7 @@ fn runtime_id(window: Window, key: Option<u32>) -> [i32; 4] {
         Window::Notice => 2,
         Window::Previews => 3,
         Window::Update => 4,
+        Window::RecordingReady => 5,
     };
     // A distinct first part keeps these apart from the other windows' ids.
     [
@@ -263,7 +267,10 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                 UIA_FrameworkIdPropertyId => VARIANT::from(BSTR::from("Captures")),
                 // Shipping's setup, feedback and preview pages are `<main>`.
                 UIA_LandmarkTypePropertyId
-                    if !matches!(self.window, Window::Notice | Window::Update) =>
+                    if !matches!(
+                        self.window,
+                        Window::Notice | Window::Update | Window::RecordingReady
+                    ) =>
                 {
                     VARIANT::from(UIA_MainLandmarkTypeId.0)
                 }

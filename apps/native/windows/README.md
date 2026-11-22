@@ -34,6 +34,20 @@ delay through the shared glass tooltip (`src/recording/tips.rs`; longer copy
 wraps at 180 px, Save's sits above the footer); a press or key hides it until
 the pointer leaves. `--select tip-play|tip-trim-start|tip-trim-end|tip-estimate|tip-destination|tip-copy|tip-save`
 renders one at rest.
+When an editor closes in the resident app and the take is still in History,
+shipping's "Recording ready" notice (`src/recording_ready.rs`) appears 18 px
+from the primary display's right edge and 30 px below its top on the fixed
+glass palette: Save file keeps a copy in the Captures folder through the
+shared `SaveRecording` and turns it into "Recording saved" with Show in
+Folder (an already-saved take opens that way; Show in Folder dismisses it
+once Explorer opens), errors replace its line, and × or a new capture closes
+it. It never takes focus, is excluded from captures, exposes a status, the
+action and Dismiss to UI Automation, and plays `recording-saved-lifecycle`
+over its 15.2 s life (held still under reduced motion). `--scene capture
+--tool recording-ready --select saved|saving|error|hover|dismiss-hover|arriving`
+renders it. Checked live on Windows 11 at 150% through UIA and posted
+messages (placement, capture exclusion, Save file, Dismiss, the × click and
+the timeout); Show in Folder and the motion were not watched.
 The first slice (`src/recording.rs`) contains the header, dropped-frame warning
 and save footer: filename editing, Change save location, Save as new file with
 the `-edited` suggestion, replacement, progress, Cancel and Show in Folder.

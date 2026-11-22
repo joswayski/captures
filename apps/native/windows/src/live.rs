@@ -980,8 +980,10 @@ fn open_capture(
     let Some(thread) = RESIDENT.with(|r| r.borrow().as_ref().map(|r| r.thread)) else {
         return;
     };
-    // Shipping hides the mini previews before the snapshot.
+    // Shipping hides the mini previews before the snapshot, and closes the
+    // Recording ready notice.
     crate::previews::set_suppressed(true);
+    crate::recording_ready::hide();
     let wake = wake_on(thread);
     if let Err(error) = crate::capture::open(options, target, mode, direct, from_menu, wake) {
         show_error(&error);
