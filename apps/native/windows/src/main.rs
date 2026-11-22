@@ -58,6 +58,8 @@ mod textfield;
 #[cfg(windows)]
 mod tokens;
 #[cfg(windows)]
+mod tooltip;
+#[cfg(windows)]
 mod tray;
 #[cfg(windows)]
 mod uia;

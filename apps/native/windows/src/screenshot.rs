@@ -166,11 +166,12 @@ pub fn render(options: &Options, path: &std::path::Path) -> Result<()> {
             }
             if options.select.as_deref() == Some("hover") {
                 hud.hover = Some(captures_app::recording_hud::Control::Stop);
-                hud.tooltip = hud.hover;
+                hud.tooltip = crate::tooltip::Fade::settled(hud.hover);
             }
             // `--select tooltip-hide` shows a right-aligned tooltip.
             if options.select.as_deref() == Some("tooltip-hide") {
-                hud.tooltip = Some(captures_app::recording_hud::Control::Hide);
+                hud.tooltip =
+                    crate::tooltip::Fade::settled(Some(captures_app::recording_hud::Control::Hide));
             }
             let size = (w as f32, h as f32);
             Box::new(move |dc| {

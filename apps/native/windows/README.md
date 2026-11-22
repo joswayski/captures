@@ -152,7 +152,8 @@ back. The HUD's Screenshot opens the capture bar on Region with Record
 disabled while the take runs; included controls are kept out of its snapshot
 (`WDA_EXCLUDEFROMCAPTURE` while it prepares). Hovering any button, enabled
 or not, shows its shipping tooltip under it (the last three right-aligned),
-without the fade. UI Automation exposes the controls in shipping order with
+fading in and out over `--dur-1` through the host's shared glass tooltip
+(`src/tooltip.rs`, instant under reduced motion). UI Automation exposes the controls in shipping order with
 their `aria-label` names (privacy line, time, state, each button with
 Invoke, microphone level, the error line as an assertive alert) and
 announces name flips such as Pause/Resume. Hide shows shipping's

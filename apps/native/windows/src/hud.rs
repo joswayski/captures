@@ -7,8 +7,8 @@
 //! Coordinates are DIPs from the 430×102 window's corner.
 //!
 //! Tooltips follow the pointer over any button, enabled or not, like
-//! shipping's hovered `.recording-tooltip` wrapper; they appear without the
-//! `--dur-1` fade. [`Hud::parts`] lists what UI Automation exposes
+//! shipping's hovered `.recording-tooltip` wrapper, and fade through the
+//! shared `tooltip` module. [`Hud::parts`] lists what UI Automation exposes
 //! (`hud_uia`). The window never activates over the app being recorded, so
 //! the controls have no Tab focus. Shipping's Windows webview activates on a
 //! click and then takes Tab; the owner chose to keep the native behaviour so
@@ -64,8 +64,9 @@ pub struct Hud {
     pub excluded: bool,
     pub hover: Option<Control>,
     pub pressed: Option<Control>,
-    /// The button under the pointer, enabled or not, whose tooltip shows.
-    pub tooltip: Option<Control>,
+    /// The button under the pointer, enabled or not, whose tooltip shows,
+    /// and the one fading out.
+    pub tooltip: crate::tooltip::Fade<Control>,
 }
 
 impl Hud {
@@ -84,7 +85,7 @@ impl Hud {
             excluded,
             hover: None,
             pressed: None,
-            tooltip: None,
+            tooltip: crate::tooltip::Fade::default(),
         }
     }
 
@@ -395,7 +396,7 @@ impl Hud {
     }
 
     /// Shipping `.recording-tooltip > [role="tooltip"]` under the hovered
-    /// button, placed by the shared `tooltip_frame` inside the window.
+    /// button (and the one fading out), 6 px below it inside the window.
     fn paint_tooltip(
         &self,
         dc: &ID2D1DeviceContext,
@@ -403,54 +404,30 @@ impl Hud {
         t: &Tokens,
         view: &hud::View,
     ) -> Result<()> {
-        let Some(control) = self.tooltip else {
-            return Ok(());
-        };
-        let Some(anchor) = self
-            .layout()
-            .0
-            .into_iter()
-            .find(|(c, _)| *c == control)
-            .map(|(_, r)| r)
-        else {
-            return Ok(());
-        };
-        let copy = view.control(control);
-        let pad = (hud::TOOLTIP_PADDING_X as f32, hud::TOOLTIP_PADDING_Y as f32);
-        let text = g.text_sized(t, copy.tooltip, t.n("text-xs"), "weight-medium", None)?;
-        let inner = hud::TOOLTIP_MAX_WIDTH as f32 - pad.0 * 2. - 2.;
-        if text.width > inner {
-            g.ellipsis(&text, inner)?;
+        let buttons = self.layout().0;
+        for (control, progress) in self.tooltip.frames(t, crate::tooltip::now_ms()) {
+            let Some(&(_, anchor)) = buttons.iter().find(|(c, _)| *c == control) else {
+                continue;
+            };
+            let copy = view.control(control);
+            let align = if copy.tooltip_right_aligned {
+                crate::tooltip::Align::Right
+            } else {
+                crate::tooltip::Align::Center
+            };
+            crate::tooltip::paint(
+                dc,
+                g,
+                t,
+                copy.tooltip,
+                anchor,
+                align,
+                hud::TOOLTIP_GAP as f32,
+                rect(0., 0., SIZE.0, SIZE.1),
+                progress,
+            )?;
         }
-        let frame = hud::tooltip_frame(
-            captures_app::tray_notice::LogicalRect::new(
-                anchor.left.into(),
-                anchor.top.into(),
-                (anchor.right - anchor.left).into(),
-                (anchor.bottom - anchor.top).into(),
-            ),
-            text.width.min(inner).into(),
-            text.height.into(),
-            copy.tooltip_right_aligned,
-            1.,
-            captures_app::tray_notice::LogicalRect::new(0., 0., SIZE.0.into(), SIZE.1.into()),
-        );
-        let r = rect(
-            frame.x as f32,
-            frame.y as f32,
-            (frame.x + frame.width) as f32,
-            (frame.y + frame.height) as f32,
-        );
-        let radius = t.n("r-sm");
-        gfx::fill_round(dc, r, radius, t.color("glass-strong"))?;
-        gfx::border(dc, r, radius, 1., t.color("glass-border"))?;
-        gfx::text(
-            dc,
-            &text,
-            r.left + 1. + pad.0,
-            r.top + 1. + pad.1,
-            t.color("glass-text"),
-        )
+        Ok(())
     }
 }
 

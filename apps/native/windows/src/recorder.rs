@@ -48,6 +48,8 @@ const START_TIMER: usize = 2;
 /// Shipping destroys the hidden-controls notice 6.2 s after it opens.
 const NOTICE_TIMER: usize = 3;
 const NOTICE_MS: u32 = 6_200;
+/// Repaints a tooltip fade at display rate (the clock ticks every 50 ms).
+const TOOLTIP_TIMER: usize = 4;
 const WM_MOUSELEAVE: u32 = 0x02A3;
 /// `wparam` 1 asks "Restart recording?", 0 "Delete recording?".
 const WM_APP_CONFIRM: u32 = WM_APP + 41;
@@ -406,6 +408,17 @@ impl Recorder {
         unsafe { g.dcomp.as_ref().ok_or_else(Error::empty)?.Commit() }
     }
 
+    /// Fade to `control`'s tooltip; true when it changed (the caller
+    /// repaints, and a timer carries the fade).
+    fn set_tooltip(&mut self, control: Option<Control>) -> bool {
+        let now = crate::tooltip::now_ms();
+        let changed = self.hud.tooltip.set(control, &self.tokens, now);
+        if changed && self.hud.tooltip.animating(&self.tokens, now) {
+            unsafe { SetTimer(Some(self.hwnd), TOOLTIP_TIMER, 16, None) };
+        }
+        changed
+    }
+
     /// Show the controls once the take is accepted or failed.
     fn restore(&mut self) {
         if !(self.accepted || self.input().state == RecordingState::Failed) {
@@ -454,7 +467,7 @@ impl Recorder {
         crate::live::recording_hidden(self.accepted);
         self.hud.hover = None;
         self.hud.pressed = None;
-        self.hud.tooltip = None;
+        self.hud.tooltip.clear();
         unsafe {
             // NVIDIA Instant Replay treats an excluded HWND as protected
             // content even while hidden, as the shipping host notes.
@@ -925,6 +938,18 @@ impl Recorder {
         match msg {
             WM_TIMER if wp.0 == START_TIMER => self.begin(),
             WM_TIMER if wp.0 == NOTICE_TIMER => self.close_notice(),
+            WM_TIMER if wp.0 == TOOLTIP_TIMER => {
+                let _ = self.render();
+                if !self
+                    .hud
+                    .tooltip
+                    .animating(&self.tokens, crate::tooltip::now_ms())
+                {
+                    unsafe {
+                        let _ = KillTimer(Some(self.hwnd), TOOLTIP_TIMER);
+                    }
+                }
+            }
             WM_TIMER => {
                 if self.shown {
                     self.refresh();
@@ -961,15 +986,14 @@ impl Recorder {
                 }
                 let (x, y) = self.point(lp);
                 let hover = self.hud.hit(x, y);
-                let tooltip = self.hud.under(x, y);
-                let tooltip_changed = std::mem::replace(&mut self.hud.tooltip, tooltip) != tooltip;
+                let tooltip_changed = self.set_tooltip(self.hud.under(x, y));
                 if std::mem::replace(&mut self.hud.hover, hover) != hover || tooltip_changed {
                     let _ = self.render();
                 }
             }
             WM_MOUSELEAVE => {
                 self.tracking = false;
-                let tooltip = self.hud.tooltip.take().is_some();
+                let tooltip = self.set_tooltip(None);
                 if self.hud.hover.take().is_some() || tooltip {
                     let _ = self.render();
                 }
