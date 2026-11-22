@@ -130,6 +130,7 @@ import {
   resizeHandlePoint,
   hitTestElementRotationHandle,
   isResizeCornerHandle,
+  sameScreenshotDocument,
   scaleArrowStrokeForLength,
   shapeLocalPoint,
   SHAPE_ROTATION_SNAP_DEGREES,
@@ -1916,7 +1917,7 @@ function shouldUseOriginalFileSizeEstimate(
   if (editorDocument.width !== artifact.width || editorDocument.height !== artifact.height) {
     return false;
   }
-  if (JSON.stringify(editorDocument) !== JSON.stringify(baselineDocument)) {
+  if (!sameScreenshotDocument(editorDocument, baselineDocument)) {
     return false;
   }
   if (artifact.path) {
@@ -2389,7 +2390,7 @@ export function ScreenshotEditor() {
   const commitDocument = useCallback(
     (next: ScreenshotDocument, coalesceKey?: string) => {
       const current = documentRef.current;
-      if (!current || JSON.stringify(current) === JSON.stringify(next)) return;
+      if (!current || sameScreenshotDocument(current, next)) return;
       // Typing and slider or colour-picker drags commit on every event. Fold a
       // burst on one property into the entry that started it, so one undo
       // reverts the whole edit instead of one character or one percent.
@@ -2401,7 +2402,7 @@ export function ScreenshotEditor() {
       if (merge) {
         // A burst that ends where it started (a toggle flipped back) leaves nothing to undo.
         setUndoStack((stack) =>
-          JSON.stringify(stack.at(-1)) === JSON.stringify(next) ? stack.slice(0, -1) : stack,
+          sameScreenshotDocument(stack.at(-1), next) ? stack.slice(0, -1) : stack,
         );
       } else {
         setUndoStack((stack) => [...stack.slice(-99), current]);
@@ -4850,7 +4851,7 @@ export function ScreenshotEditor() {
       }
     }
 
-    if (JSON.stringify(current) === JSON.stringify(gesture.initialDocument)) return;
+    if (sameScreenshotDocument(current, gesture.initialDocument)) return;
     undoCoalesceRef.current = null;
     setUndoStack((stack) => [...stack.slice(-99), gesture.initialDocument]);
     setRedoStack([]);

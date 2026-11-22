@@ -1,3 +1,4 @@
+import { sameScreenshotDocument } from "./screenshotEditor";
 import type { ScreenshotDocument, ScreenshotElement } from "./screenshotEditor";
 
 /** Prefix for image `src` values stored inside a draft manifest. */
@@ -56,7 +57,7 @@ export function isScreenshotDocumentDirty(
   baseline: ScreenshotDocument | null,
 ): boolean {
   if (!baseline) return true;
-  return JSON.stringify(document) !== JSON.stringify(baseline);
+  return !sameScreenshotDocument(document, baseline);
 }
 
 export function draftAssetRef(assetId: string): string {

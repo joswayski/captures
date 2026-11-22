@@ -131,6 +131,7 @@ import {
   type EditorTextElement,
   type ResizeHandle,
   type ScreenshotElement,
+  sameScreenshotDocument,
 } from "./screenshotEditor";
 
 const editableLayer = {
@@ -381,6 +382,39 @@ describe("screenshot editor geometry", () => {
       background: null,
     };
     expect(document.background).toBeNull();
+  });
+
+  it("compares documents by value without depending on key order or shared layers", () => {
+    const document = createScreenshotDocument("capture.png", 800, 600);
+    const [layer] = document.elements;
+    const copy = JSON.parse(JSON.stringify(document)) as typeof document;
+    expect(sameScreenshotDocument(document, copy)).toBe(true);
+    const reordered = Object.fromEntries(Object.entries(layer).reverse()) as typeof layer;
+    expect(Object.keys(reordered)).not.toEqual(Object.keys(layer));
+    expect(
+      sameScreenshotDocument(document, {
+        elements: [Object.assign(reordered, { unset: undefined })],
+        background: document.background,
+        height: 600,
+        width: 800,
+      }),
+    ).toBe(true);
+
+    expect(sameScreenshotDocument(document, { ...document, background: null })).toBe(false);
+    expect(sameScreenshotDocument(document, { ...document, width: 801 })).toBe(false);
+    expect(
+      sameScreenshotDocument(document, { ...document, elements: [{ ...layer, opacity: 99 }] }),
+    ).toBe(false);
+    expect(
+      sameScreenshotDocument(document, {
+        ...document,
+        elements: [{ ...layer, id: "other-layer" }],
+      }),
+    ).toBe(false);
+    expect(sameScreenshotDocument(document, { ...document, elements: [layer, layer] })).toBe(false);
+    expect(sameScreenshotDocument(document, { ...document, elements: [] })).toBe(false);
+    expect(sameScreenshotDocument(document, null)).toBe(false);
+    expect(sameScreenshotDocument(null, undefined)).toBe(true);
   });
 
   it("constrains a crop to the canvas and requested aspect ratio", () => {

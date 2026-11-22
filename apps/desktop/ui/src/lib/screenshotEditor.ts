@@ -1141,6 +1141,43 @@ export const SUPPORTED_IMAGE_EXTENSIONS = new Set([
   "webp",
 ]);
 
+function sameJsonValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return (
+      Array.isArray(a) &&
+      Array.isArray(b) &&
+      a.length === b.length &&
+      a.every((item, index) => sameJsonValue(item, b[index]))
+    );
+  }
+  const left = a as Record<string, unknown>;
+  const right = b as Record<string, unknown>;
+  // An absent key and an `undefined` one are the same value once serialized.
+  for (const key of Object.keys(left)) {
+    if (!sameJsonValue(left[key], right[key])) return false;
+  }
+  for (const key of Object.keys(right)) {
+    if (!(key in left) && right[key] !== undefined) return false;
+  }
+  return true;
+}
+
+/**
+ * Whether two documents hold the same layers and canvas. Layers and values
+ * shared by reference are not walked, so an edit costs what it changed: an
+ * erased or merged image layer carries its pixels as a multi-megabyte data
+ * URL, and serializing both documents to compare them stalled every slider
+ * tick and keystroke that followed.
+ */
+export function sameScreenshotDocument(
+  a: ScreenshotDocument | null | undefined,
+  b: ScreenshotDocument | null | undefined,
+): boolean {
+  return sameJsonValue(a ?? null, b ?? null);
+}
+
 export function createScreenshotDocument(
   src: string,
   width: number,
