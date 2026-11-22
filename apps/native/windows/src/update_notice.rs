@@ -1401,16 +1401,21 @@ pub fn paint(
                 )?),
                 None => None,
             };
+            // "No highlights for Windows. See all changes on GitHub", the
+            // link inline like the error's download fallback.
             let empty = match &notes.empty {
-                Some(empty) => Some(para(
-                    g,
-                    t,
-                    empty,
-                    (sm, "weight-regular"),
-                    None,
-                    Some(snug),
-                    boxed,
-                )?),
+                Some(empty) => {
+                    let copy = match &notes.empty_link {
+                        Some(link) => format!("{empty} {}", link.text),
+                        None => empty.clone(),
+                    };
+                    let text = para(g, t, &copy, (sm, "weight-regular"), None, Some(snug), boxed)?;
+                    let range = notes
+                        .empty_link
+                        .as_ref()
+                        .map(|link| utf16_range(&copy, empty.len() + 1, link.text.len()));
+                    Some((text, range))
+                }
                 None => None,
             };
             // `.update-notes-scroll { padding-right: var(--s-1) }`.
@@ -1793,8 +1798,7 @@ pub fn paint(
             );
             iy += intro.height + s4;
         }
-        if let Some(empty) = empty {
-            gfx::text(dc, empty, ix, iy, c("text-subtle"))?;
+        if let Some((empty, range)) = empty {
             part(
                 Role::Text,
                 notes.empty.as_deref().unwrap_or_default(),
@@ -1802,6 +1806,33 @@ pub fn paint(
                 None,
                 true,
             );
+            match (range, &notes.empty_link) {
+                (Some(range), Some(link)) => {
+                    let mut color = "text";
+                    let hit = union(
+                        range_rects(empty, *range)
+                            .into_iter()
+                            .map(|b| offset(b, ix, iy)),
+                    );
+                    if let Some(hit) = hit {
+                        let key = part(
+                            Role::Link,
+                            &link.text,
+                            hit,
+                            // Any external page: the same `open_url` as a pull request.
+                            Some(Action::OpenPullRequest {
+                                url: link.url.clone(),
+                            }),
+                            true,
+                        );
+                        if hovered(key) {
+                            color = "text-muted";
+                        }
+                    }
+                    link_text(dc, empty, *range, (ix, iy), (c("text-subtle"), c(color)))?;
+                }
+                _ => gfx::text(dc, empty, ix, iy, c("text-subtle"))?,
+            }
         } else {
             // The scroller: the rest of the section, clipped.
             let view = rect(ix, iy, bx1 - 1. - s5, section.bottom - 1. - s5);

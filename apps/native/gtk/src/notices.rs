@@ -1023,7 +1023,25 @@ impl UpdateNotice {
                 groups.append(&block);
             }
             if let Some(empty) = &notes.empty {
-                section.append(&description(empty, "update-notes-empty"));
+                // "No highlights for Linux. See all changes on GitHub" inline.
+                let link = notes.empty_link.as_ref().map(|link| -> InlineButton {
+                    let (weak, url) = (Rc::downgrade(self), link.url.clone());
+                    (
+                        &link.text,
+                        &link.text,
+                        Box::new(move || {
+                            if let Some(notice) = weak.upgrade() {
+                                notice.open_release(&url);
+                            }
+                        }),
+                    )
+                });
+                section.append(&inline(
+                    &format!("{empty} "),
+                    link,
+                    "",
+                    "update-notes-empty",
+                ));
             } else {
                 // Long notes scroll inside the card's fixed height.
                 let scroller = gtk::ScrolledWindow::builder()

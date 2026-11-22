@@ -90,6 +90,8 @@ struct UpdateNoticeNotes: Equatable {
     let stacked: Bool
     let intro: String?
     let empty: String?
+    /// Follows `empty` inline: the release page when every highlight is for another OS.
+    var emptyLink: UpdateNoticeVersionLink? = nil
     let groups: [UpdateNoticeNoteGroup]
 }
 
@@ -149,9 +151,13 @@ struct UpdateNoticePresentation: Equatable {
                             pullNumber: pull?["number"] as? Int, pullURL: pull?["url"] as? String)
                     })
             }
+            let emptyLink = (notes["empty_link"] as? [String: Any]).flatMap { link -> UpdateNoticeVersionLink? in
+                guard let text = link["text"] as? String, let url = link["url"] as? String else { return nil }
+                return UpdateNoticeVersionLink(text: text, url: url)
+            }
             self.notes = UpdateNoticeNotes(heading: notes.string("heading"),
                 stacked: notes.bool("stacked"), intro: notes["intro"] as? String,
-                empty: notes["empty"] as? String, groups: groups)
+                empty: notes["empty"] as? String, emptyLink: emptyLink, groups: groups)
         } else {
             notes = nil
         }
@@ -742,10 +748,19 @@ final class UpdateNoticeView: NSView {
                 .foregroundColor: tokens.color("text"), .paragraphStyle: titleStyle,
             ]
             if let empty = notes.empty {
-                text.append(NSAttributedString(string: empty, attributes: [
+                let plain: [NSAttributedString.Key: Any] = [
                     .font: NSFont.systemFont(ofSize: tokens.number("text-sm")),
                     .foregroundColor: tokens.color("text-subtle"),
-                ]))
+                ]
+                text.append(NSAttributedString(string: empty, attributes: plain))
+                if let emptyLink = notes.emptyLink {
+                    var link = plain
+                    link[.link] = emptyLink.url
+                    link[.foregroundColor] = tokens.color("text")
+                    link[.underlineStyle] = NSUnderlineStyle.single.rawValue
+                    text.append(NSAttributedString(string: " ", attributes: plain))
+                    text.append(NSAttributedString(string: emptyLink.text, attributes: link))
+                }
             }
             for (index, group) in notes.groups.enumerated() {
                 if notes.stacked {
@@ -790,7 +805,10 @@ final class UpdateNoticeView: NSView {
                                        .cursor: NSCursor.pointingHand]
             list.frame.size.height = max(list.fittingHeight(), scroll.frame.height)
             list.setAccessibilityLabel(notes.heading)
-            list.linkAction = { [weak self] url in self?.onAction(.openPullRequest(url)) }
+            let releaseURL = notes.emptyLink?.url
+            list.linkAction = { [weak self] url in
+                self?.onAction(url == releaseURL ? .openRelease(url) : .openPullRequest(url))
+            }
             scroll.documentView = list
             box.addSubview(scroll)
         }

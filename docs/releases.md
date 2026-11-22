@@ -393,7 +393,9 @@ Each highlight lists the platforms it applies to, limited to the native hosts it
 commits touch (shared crates reach all three). Platform-specific highlights get
 a bold `**Windows:**` or `**macOS, Linux:**` label, and the app's update notice
 shows only the unlabelled highlights and those labelled for its own OS, without
-the label. Older installed apps show every highlight with its label.
+the label. When every highlight is for another OS, the notice says so and links
+"See all changes on GitHub" to the release page. Older installed apps show
+every highlight with its label.
 
 Set the repository Actions secret `GEMINI_API_KEY`: a Gemini API key from
 Google AI Studio whose project uses the paid tier. Optional repository

@@ -715,6 +715,10 @@ pub struct Notes {
     pub groups: Vec<NoteGroup>,
     /// Shown instead of groups when none have product-facing notes.
     pub empty: Option<String>,
+    /// Follows `empty` inline when every highlight is for another OS, so the
+    /// curious can read them all on the release page.
+    #[serde(default)]
+    pub empty_link: Option<VersionLink>,
     /// Shown inside a stacked group without items (never produced by
     /// [`stacked_release_notes`], kept for parity with the shipping markup).
     pub group_empty: String,
@@ -948,23 +952,31 @@ pub fn present(status: Option<&UpdateStatus>, view: &ViewState) -> Presentation 
         }) if notes_visible => {
             let groups = stacked_release_notes(changelog, notes.as_deref(), display_version);
             let stacked = groups.len() > 1;
+            let other_platforms_only = groups.is_empty()
+                && !stacked_platform_notes(changelog, notes.as_deref(), display_version, None)
+                    .is_empty();
             Some(Notes {
                 heading: "What’s new".into(),
                 stacked,
                 intro: stacked
                     .then(|| "This update includes all of the following changes:".to_owned()),
                 empty: groups.is_empty().then(|| {
-                    if stacked_platform_notes(changelog, notes.as_deref(), display_version, None)
-                        .is_empty()
-                    {
-                        "Release notes aren’t available for this update.".to_owned()
-                    } else {
+                    if other_platforms_only {
                         format!(
                             "This update has no highlights for {}.",
                             NotePlatform::CURRENT.label()
                         )
+                    } else {
+                        "Release notes aren’t available for this update.".to_owned()
                     }
                 }),
+                empty_link: other_platforms_only
+                    .then(|| version_link(display_version))
+                    .flatten()
+                    .map(|link| VersionLink {
+                        text: "See all changes on GitHub".into(),
+                        url: link.url,
+                    }),
                 group_empty: "Release notes aren’t available for this release.".into(),
                 groups,
             })
@@ -1704,6 +1716,13 @@ mod tests {
                 "This update has no highlights for {}.",
                 NotePlatform::CURRENT.label()
             )
+        );
+        assert_eq!(
+            notes.empty_link,
+            Some(VersionLink {
+                text: "See all changes on GitHub".into(),
+                url: "https://github.com/joswayski/captures/releases/tag/v2026.11.22.2".into(),
+            })
         );
     }
 
