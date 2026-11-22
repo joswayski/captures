@@ -21,7 +21,7 @@ use windows::Win32::UI::Accessibility::*;
 use windows::core::*;
 
 use crate::editor::{
-    CUSTOM, Check, Editor, Event, Ex, Field, MenuKind, Num, Prop, Stub, Target, with_editor,
+    CUSTOM, Check, Editor, Event, Ex, Field, MenuKind, Num, Prop, Target, with_editor,
 };
 use crate::scene::Rect;
 
@@ -64,7 +64,8 @@ pub enum Id {
     Notice,
     Hint,
     Control(Target),
-    Stub(Stub),
+    /// The open layer ⋯ card (`role="dialog"`).
+    LayerCard,
     /// The open Background color card (`role="dialog"`).
     BgMenu,
     /// The open Text style menu (`role="menu"` of `menuitemradio`) or Font
@@ -137,6 +138,9 @@ fn children(e: &Editor, id: Id) -> Vec<Id> {
             if e.bg_open() {
                 list.push(Id::BgMenu);
             }
+            if e.card_row().is_some() {
+                list.push(Id::LayerCard);
+            }
             if e.open_menu_state().is_some() {
                 list.push(Id::Menu);
             }
@@ -146,6 +150,12 @@ fn children(e: &Editor, id: Id) -> Vec<Id> {
             c(Target::Prop(Prop::Check(Check::Solid))),
             Id::ColorField(Field::Canvas),
         ],
+        Id::LayerCard if e.card_row().is_some() => e
+            .card_targets()
+            .into_iter()
+            .filter(|&t| e.exists(t))
+            .map(c)
+            .collect(),
         Id::ColorField(Field::Canvas) if e.bg_open() => (0..=CUSTOM)
             .map(|i| c(Target::Prop(Prop::Swatch(Field::Canvas, i))))
             .collect(),
@@ -186,7 +196,7 @@ fn children(e: &Editor, id: Id) -> Vec<Id> {
             },
             c(Target::Eye(i)),
             c(Target::Lock(i)),
-            Id::Stub(Stub::LayerMenu(i)),
+            c(Target::More(i)),
         ],
         Id::Properties => {
             let mut list = Vec::new();
@@ -222,6 +232,7 @@ fn prop_parent(prop: Prop) -> Id {
         Prop::Swatch(field, _) => Id::ColorField(field),
         Prop::Step(num, _) => Id::Control(Target::Prop(Prop::Number(num))),
         _ if Editor::in_bar(prop) => Id::Root,
+        _ if Editor::in_layer_card(prop) => Id::LayerCard,
         _ => Id::Properties,
     }
 }
@@ -244,8 +255,10 @@ fn parent(e: &Editor, id: Id) -> Option<Id> {
         Id::Rename => Id::Row(e.renaming()?),
         Id::MenuItem(_) => Id::Menu,
         Id::Control(Target::Prop(prop)) => prop_parent(prop),
-        Id::Control(Target::Layer(i) | Target::Eye(i) | Target::Lock(i))
-        | Id::Stub(Stub::LayerMenu(i)) => Id::Row(i),
+        Id::Control(Target::Layer(i) | Target::Eye(i) | Target::Lock(i) | Target::More(i)) => {
+            Id::Row(i)
+        }
+        Id::Control(Target::LayerAct(_)) => Id::LayerCard,
         _ => Id::Root,
     })
 }
@@ -284,7 +297,7 @@ fn rect(e: &Editor, id: Id) -> Rect {
         Id::Notice => l.notice_line,
         Id::Hint => l.hint_line,
         Id::Control(target) => e.target_rect(target),
-        Id::Stub(stub) => e.stub_rect(stub),
+        Id::LayerCard => e.card_geom().map(|g| g.rect).unwrap_or_default(),
         Id::BgMenu => e.bg_menu_rect(),
         Id::Menu => e.menu_rect().unwrap_or_default(),
         Id::MenuItem(i) => e.menu_item_rect(i),
@@ -312,7 +325,11 @@ fn name(e: &Editor, id: Id) -> String {
         Id::Notice => e.notice_text().map(|(text, _)| text).unwrap_or_default(),
         Id::Hint => e.hint_text(),
         Id::Control(target) => e.name(target),
-        Id::Stub(stub) => e.stub_name(stub),
+        Id::LayerCard => e
+            .card_row()
+            .and_then(|i| e.layer(i))
+            .map(|l| captures_app::editor_layers::menu::settings_label(&l.name))
+            .unwrap_or_default(),
         Id::BgMenu => editor_chrome::colors::CANVAS_BACKGROUND.into(),
         Id::Menu => match e.open_menu_state() {
             Some((MenuKind::Style, _)) => e.style_label().into(),
@@ -320,6 +337,7 @@ fn name(e: &Editor, id: Id) -> String {
             Some((MenuKind::Aspect, _)) => crate::editor::ASPECT_LABEL.into(),
             Some((MenuKind::Preset, _)) => editor_chrome::header::ZOOM_PRESET.into(),
             Some((MenuKind::Export(ex), _)) => e.prop_name(Prop::Export(ex)),
+            Some((MenuKind::Blend, _)) => e.prop_name(Prop::Blend),
             None => String::new(),
         },
         Id::MenuItem(i) => e
@@ -342,6 +360,7 @@ fn trigger_kind(id: Id) -> Option<MenuKind> {
         Id::Control(Target::Prop(Prop::Aspect)) => Some(MenuKind::Aspect),
         Id::Control(Target::Prop(Prop::Preset)) => Some(MenuKind::Preset),
         Id::Control(Target::Prop(Prop::Export(ex))) if ex.is_select() => Some(MenuKind::Export(ex)),
+        Id::Control(Target::Prop(Prop::Blend)) => Some(MenuKind::Blend),
         _ => None,
     }
 }
@@ -351,12 +370,12 @@ fn control_type(e: &Editor, id: Id) -> UIA_CONTROLTYPE_ID {
         Id::Menu if menu_kind(e).is_some_and(MenuKind::is_select) => UIA_ListControlTypeId,
         Id::Menu => UIA_MenuControlTypeId,
         // Chromium maps `role="dialog"` to a pane.
-        Id::BgMenu => UIA_PaneControlTypeId,
+        Id::BgMenu | Id::LayerCard => UIA_PaneControlTypeId,
         Id::MenuItem(_) if menu_kind(e).is_some_and(MenuKind::is_select) => {
             UIA_ListItemControlTypeId
         }
         Id::MenuItem(_) => UIA_MenuItemControlTypeId,
-        Id::Control(Target::Prop(Prop::Font | Prop::Aspect | Prop::Preset)) => {
+        Id::Control(Target::Prop(Prop::Font | Prop::Aspect | Prop::Preset | Prop::Blend)) => {
             UIA_ComboBoxControlTypeId
         }
         Id::Control(Target::Prop(Prop::Export(ex))) if ex.is_select() => UIA_ComboBoxControlTypeId,
@@ -378,7 +397,6 @@ fn control_type(e: &Editor, id: Id) -> UIA_CONTROLTYPE_ID {
         Id::List => UIA_ListControlTypeId,
         Id::Row(_) => UIA_ListItemControlTypeId,
         Id::InlineText | Id::Rename => UIA_EditControlTypeId,
-        Id::Stub(_) => UIA_ButtonControlTypeId,
         Id::Control(Target::Shape(_)) => UIA_MenuItemControlTypeId,
         Id::Control(Target::Slider) => UIA_SliderControlTypeId,
         Id::Control(Target::Divider) => UIA_SeparatorControlTypeId,
@@ -416,6 +434,9 @@ fn runtime_id(id: Id) -> [i32; 4] {
             Target::AddLayer => (34, 0),
             Target::ExportSettings => (35, 0),
             Target::Change => (36, 0),
+            Target::More(i) => (39, i as i32),
+            Target::LayerAct(act) => (40, act as i32),
+            Target::Prop(Prop::Blend) => (41, 0),
             Target::Prop(Prop::Export(ex)) => (37, ex as i32),
             Target::Prop(Prop::Filename) => (38, 0),
             Target::Prop(Prop::Shape(i)) => (16, i as i32),
@@ -433,11 +454,6 @@ fn runtime_id(id: Id) -> [i32; 4] {
             Target::Prop(Prop::CropAction(apply)) => (29, i32::from(apply)),
             Target::Prop(Prop::Preset) => (31, 0),
             Target::Prop(Prop::Straighten) => (32, 0),
-        }
-    };
-    let stub = |s: Stub| -> (i32, i32) {
-        match s {
-            Stub::LayerMenu(i) => (7, i as i32),
         }
     };
     let (kind, a) = match id {
@@ -469,10 +485,7 @@ fn runtime_id(id: Id) -> [i32; 4] {
             let (k, a) = target(t);
             (100 + k, a)
         }
-        Id::Stub(s) => {
-            let (k, a) = stub(s);
-            (200 + k, a)
-        }
+        Id::LayerCard => (25, 0),
     };
     // A distinct second part keeps these apart from Preferences' and
     // History's ids; the host provider's prefix keeps windows apart.
@@ -498,8 +511,7 @@ fn offscreen(e: &Editor, id: Id) -> bool {
         // Rows scrolled out of the list.
         Id::Row(_)
         | Id::Rename
-        | Id::Control(Target::Layer(_) | Target::Eye(_) | Target::Lock(_))
-        | Id::Stub(Stub::LayerMenu(_)) => {
+        | Id::Control(Target::Layer(_) | Target::Eye(_) | Target::Lock(_) | Target::More(_)) => {
             let (r, list) = (rect(e, id), e.l.list);
             r.y + r.h <= list.y || r.y >= list.y + list.h
         }
@@ -647,8 +659,6 @@ fn fragment(hwnd: HWND, id: Id) -> IRawElementProviderFragment {
 fn enabled(e: &Editor, id: Id) -> bool {
     match id {
         Id::Control(target) => e.enabled(target),
-        // Drawn disabled: not in this host yet.
-        Id::Stub(_) => false,
         _ => true,
     }
 }
@@ -678,13 +688,13 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                 Id::Control(Target::Prop(Prop::StyleTrigger) | Target::Background) => {
                     pattern == UIA_ExpandCollapsePatternId || pattern == UIA_InvokePatternId
                 }
-                Id::Control(Target::Prop(Prop::Font | Prop::Aspect | Prop::Preset)) => {
-                    pattern == UIA_ExpandCollapsePatternId || pattern == UIA_ValuePatternId
-                }
+                Id::Control(Target::Prop(
+                    Prop::Font | Prop::Aspect | Prop::Preset | Prop::Blend,
+                )) => pattern == UIA_ExpandCollapsePatternId || pattern == UIA_ValuePatternId,
                 Id::Control(Target::Prop(Prop::Export(ex))) if ex.is_select() => {
                     pattern == UIA_ExpandCollapsePatternId || pattern == UIA_ValuePatternId
                 }
-                Id::Control(Target::ExportSettings) => {
+                Id::Control(Target::ExportSettings | Target::More(_)) => {
                     pattern == UIA_ExpandCollapsePatternId || pattern == UIA_InvokePatternId
                 }
                 Id::Control(Target::Prop(Prop::Number(_) | Prop::Textarea | Prop::Filename)) => {
@@ -701,7 +711,6 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                 Id::Control(_) if toggle_state(e, id).is_some() => pattern == UIA_TogglePatternId,
                 Id::Control(_) => pattern == UIA_InvokePatternId,
                 Id::Location | Id::InlineText | Id::Rename => pattern == UIA_ValuePatternId,
-                Id::Stub(_) => pattern == UIA_InvokePatternId,
                 _ => false,
             })
         })?;
@@ -815,7 +824,10 @@ fn expand_state(e: &Editor, id: Id) -> ExpandCollapseState {
         Some(kind) => e.menu_open(kind),
         None if id == Id::Control(Target::Background) => e.bg_open(),
         None if id == Id::Control(Target::ExportSettings) => e.export_open(),
-        None => e.flyout,
+        None => match id {
+            Id::Control(Target::More(i)) => e.card_row() == Some(i),
+            _ => e.flyout,
+        },
     };
     if open {
         ExpandCollapseState_Expanded
@@ -1009,6 +1021,14 @@ impl Node_Impl {
                 None if id == Id::Control(Target::ExportSettings) => {
                     if e.export_open() != open {
                         e.activate(Target::ExportSettings);
+                    }
+                }
+                None if matches!(id, Id::Control(Target::More(_))) => {
+                    let Id::Control(Target::More(i)) = id else {
+                        unreachable!()
+                    };
+                    if (e.card_row() == Some(i)) != open {
+                        e.toggle_layer_card(i);
                     }
                 }
                 None => e.set_flyout(open),
@@ -1351,6 +1371,7 @@ pub fn describe(e: &Editor, events: Vec<Event>) -> Vec<(Event, String)> {
                     let open = match target {
                         Target::Background => e.bg_open(),
                         Target::ExportSettings => e.export_open(),
+                        Target::More(i) => e.card_row() == Some(i),
                         _ => trigger_kind(Id::Control(target)).is_some_and(|k| e.menu_open(k)),
                     };
                     if open { "open" } else { "closed" }.into()

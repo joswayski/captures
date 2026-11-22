@@ -120,7 +120,7 @@ with that layer selected (`--select drop` or `drop-stack` with image files
 dragged over the canvas: the default guide, or the pointer over the image;
 `--select export` with Export settings open, `export-custom`, `export-compress`
 or `export-maximum` with that size or quality, `export-menu` with the Save
-quality list open), and
+quality list open, `layer-menu` with the bottom layer's ⋯ card open), and
 `--crop X,Y,W,H` with that crop staged. On other platforms the binary is a stub, so `cargo check` and
 `clippy` still run; cross-check with `--target x86_64-pc-windows-gnu`.
 

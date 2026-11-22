@@ -68,6 +68,8 @@ pub enum Prop {
     Export(super::export::Ex),
     /// The save row's filename input.
     Filename,
+    /// The layer card's Blend mode select.
+    Blend,
 }
 
 /// A `NumberInput` in Tool properties.
@@ -282,6 +284,8 @@ pub enum Range {
     Softness,
     /// A line's or arrow's Curve (−100…100).
     Curve,
+    /// The layer card's Opacity.
+    LayerOpacity,
 }
 
 /// Shipping `RemoveBackgroundMode`.
@@ -551,7 +555,7 @@ impl Values {
             Range::ShadowOpacity => self.shadow_opacity,
             Range::ShadowBlur => self.shadow_blur,
             Range::Curve => self.curve.map_or(0., |c| c.bend),
-            Range::Tolerance | Range::BrushSize | Range::Softness => 0.,
+            Range::Tolerance | Range::BrushSize | Range::Softness | Range::LayerOpacity => 0.,
         }
     }
 }
@@ -578,7 +582,7 @@ pub enum Change {
 pub fn bounds(range: Range) -> (f64, f64) {
     match range {
         Range::Width => (2., 40.),
-        Range::Opacity | Range::ShadowOpacity => (0., 100.),
+        Range::Opacity | Range::ShadowOpacity | Range::LayerOpacity => (0., 100.),
         // `DROP_SHADOW_BLUR_MAX` (captures-image), which
         // `resolved_drop_shadow_style` also clamps to.
         Range::ShadowBlur => (0., 100.),
@@ -600,6 +604,7 @@ pub fn range_label(range: Range) -> &'static str {
         Range::BrushSize => eraser::SIZE_LABEL,
         Range::Softness => eraser::SOFTNESS_LABEL,
         Range::Curve => "Curve",
+        Range::LayerOpacity => captures_app::editor_layers::menu::OPACITY_LABEL,
     }
 }
 
@@ -607,7 +612,9 @@ pub fn range_label(range: Range) -> &'static str {
 pub fn range_text(range: Range, value: f64) -> String {
     match range {
         Range::Width | Range::ShadowBlur => format!("{} px", value.round()),
-        Range::Opacity | Range::ShadowOpacity => format!("{}%", value.round()),
+        Range::Opacity | Range::ShadowOpacity | Range::LayerOpacity => {
+            format!("{}%", value.round())
+        }
         Range::Tolerance => eraser::tolerance_text(value),
         Range::BrushSize => eraser::size_text(value),
         Range::Softness => eraser::softness_text(value),
@@ -938,6 +945,9 @@ impl Editor {
         if Self::in_bar(prop) {
             return self.export_prop_rect(prop);
         }
+        if Self::in_layer_card(prop) {
+            return self.card_prop_rect(prop);
+        }
         match prop {
             // In the zoom group, group-relative.
             Prop::Preset => {
@@ -1021,7 +1031,7 @@ impl Editor {
                 let r = self.laid(Row::Aspect)?;
                 Some(Rect::new(r.x, r.y + r.h - SELECT_H, r.w, SELECT_H))
             }
-            Prop::Export(_) | Prop::Filename => None,
+            Prop::Export(_) | Prop::Filename | Prop::Blend => None,
             Prop::Straighten => {
                 let r = self.laid(Row::Straighten)?;
                 let half = (r.w - self.t.n("s-3")) / 2.;
@@ -1299,8 +1309,14 @@ impl Editor {
     pub fn outside_props(prop: Prop) -> bool {
         prop == Prop::Preset
             || Self::in_bg_menu(prop)
+            || Self::in_layer_card(prop)
             || Self::in_bar(prop)
             || matches!(prop, Prop::Step(num, _) if num.in_bar())
+    }
+
+    /// A `RangeSlider` row: its caption, gap and slider.
+    pub(super) fn range_row_h(&self) -> f32 {
+        CAPTION_H + self.t.n("s-3") + SLIDER_H
     }
 
     pub fn prop_exists(&self, prop: Prop) -> bool {
@@ -1324,6 +1340,7 @@ impl Editor {
             | Prop::Aspect
             | Prop::CropAction(_)
             | Prop::Straighten
+            | Prop::Blend
             | Prop::Filename => return None,
             Prop::Export(Ex::Lock) => self.export.locked,
             Prop::Export(_) => return None,
@@ -1368,6 +1385,7 @@ impl Editor {
             Prop::Textarea => "Text".into(),
             Prop::Format(i) => Editor::format_name(i).into(),
             Prop::Filename => "Saved filename".into(),
+            Prop::Blend => captures_app::editor_layers::menu::BLEND_MODE.into(),
             Prop::Export(ex) => match ex {
                 Ex::Size => "Output size",
                 Ex::Quality => "Save quality",
@@ -1426,6 +1444,7 @@ impl Editor {
             Range::BrushSize => eraser::SIZE,
             Range::Softness => eraser::SOFTNESS,
             Range::Curve => "Curve",
+            Range::LayerOpacity => captures_app::editor_layers::menu::OPACITY,
         }
     }
 
@@ -1436,6 +1455,7 @@ impl Editor {
             (_, Range::Tolerance) => self.eraser.tolerance,
             (_, Range::BrushSize) => self.eraser.size,
             (_, Range::Softness) => self.eraser.softness,
+            (_, Range::LayerOpacity) => self.card_opacity(),
             _ => self.values().map_or(0., |v| v.range(range)).round(),
         }
     }
@@ -1466,6 +1486,7 @@ impl Editor {
             Prop::Font => self.toggle_menu(MenuKind::Font),
             Prop::Aspect => self.toggle_menu(MenuKind::Aspect),
             Prop::Preset => self.toggle_menu(MenuKind::Preset),
+            Prop::Blend => self.toggle_menu(MenuKind::Blend),
             Prop::Export(Ex::Lock) => self.toggle_lock(),
             Prop::Export(ex) => self.toggle_menu(MenuKind::Export(ex)),
             Prop::CropAction(false) => self.set_crop(None),
@@ -1506,6 +1527,9 @@ impl Editor {
             return;
         }
         self.range_drag = live.then_some((range, value));
+        if range == Range::LayerOpacity {
+            return self.set_layer_opacity(value);
+        }
         self.apply(Change::Range(range, value));
     }
 
@@ -1927,14 +1951,16 @@ impl Editor {
                     2.,
                     t.color_alpha("theme-accent", 0.55),
                 ),
-                Prop::Font | Prop::Aspect | Prop::Number(_) | Prop::Textarea => gfx::ring(
-                    dc,
-                    all,
-                    t.n("r-md"),
-                    0.,
-                    2.,
-                    t.color_alpha("theme-accent", 0.55),
-                ),
+                Prop::Font | Prop::Aspect | Prop::Blend | Prop::Number(_) | Prop::Textarea => {
+                    gfx::ring(
+                        dc,
+                        all,
+                        t.n("r-md"),
+                        0.,
+                        2.,
+                        t.color_alpha("theme-accent", 0.55),
+                    )
+                }
                 // `.screenshot-editor-zoom-presets { outline: none }`.
                 Prop::Step(..) | Prop::Preset => Ok(()),
             };
@@ -1943,6 +1969,7 @@ impl Editor {
             Prop::StyleTrigger => self.draw_style_trigger(dc, layer, (w, h))?,
             Prop::Font => self.draw_select(dc, MenuKind::Font, layer, (w, h))?,
             Prop::Aspect => self.draw_select(dc, MenuKind::Aspect, layer, (w, h))?,
+            Prop::Blend => self.draw_select(dc, MenuKind::Blend, layer, (w, h))?,
             Prop::Preset => self.draw_preset(dc, lit, (w, h))?,
             Prop::CropAction(apply) => self.draw_crop_action(dc, apply, lit, (w, h))?,
             Prop::Straighten => {
@@ -2355,6 +2382,8 @@ fn preview(v: &mut Values, change: &Change) {
         Change::Check(Check::Shadow, on) => v.shadow = on,
         Change::Range(Range::Width, value) => v.width = value,
         Change::Range(Range::Opacity, value) => v.opacity = value,
+        // The card's opacity previews through the snapshot's layer list.
+        Change::Range(Range::LayerOpacity, _) => {}
         Change::Range(Range::ShadowOpacity, value) => {
             v.shadow = true;
             v.shadow_opacity = value;

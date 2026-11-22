@@ -849,7 +849,7 @@ below the row under the pointer, by pointer half; release reorders with
 to 0.985; Tauri has no keyboard reorder, so Alt+Up and Alt+Down on a focused
 row move its layer one place (locked layers and their neighbours stay put,
 as in the shared reorder) and focus follows it; the layer menu (Bring to
-front, Send to back) is still a stub. Windows: cross-compiled only, Wine
+front, Send to back) was then a stub; see the layer card paragraph below. Windows: cross-compiled only, Wine
 renders of the open rename (light, dark) and the drop line through a
 temporary, removed hook; Wine's DirectWrite stubs `HitTestTextRange`, so the
 selected name draws without its highlight there (as in Preferences Find).
@@ -900,6 +900,26 @@ renders it offscreen in light and dark. A test drives the size, lock, unit,
 format and filename through the editor. A live window, driven only through
 UIA, expanded the panel, chose Maximum file size from the Save quality list
 and renamed the file. Physical pointer and keyboard use is unverified.
+
+Each Windows layer row's ⋯ now opens shipping's layer settings card
+(`.screenshot-layer-menu-panel`): 280 px wide, left of the trigger with a
+10 px gap, held 8 px inside the window and at most 560 px tall, with the
+Appearance section (Blend mode select and Opacity slider, one undo step per
+drag), Transform tiles for image layers (rotate left/right, flip
+horizontal/vertical), Arrange (front, back), Combine (merge down, merge
+visible, flatten) in a scrolling body, and the Duplicate and Delete footer.
+Enablement follows the session snapshot (`merge_down_ids`,
+`can_merge_visible`, `can_flatten`) and the layer's lock, as GTK's
+`layer_menu.rs` does; labels, names and tips come from
+`editor_layers::menu`. Opening it selects the layer under Select; an action,
+Escape, an outside press or the layer going away closes it, and focus inside
+it returns to its ⋯. UIA: ⋯ is a button with ExpandCollapse, and the card is
+a pane named `Layer settings for <layer>` portalled at the end of the root
+with the combo box, slider and buttons. Windows: `--select layer-menu`
+renders it offscreen in light and dark; a test checks the enabled actions,
+the live opacity edit and Duplicate; a live window driven only through UIA
+expanded and collapsed it, listed its controls with their enabled states and
+opened the Blend list. Physical pointer use is unverified.
 Apply crop pulse: shipping's `screenshot-cta-pulse` (2.4 s ease-in-out,
 infinite, a 0 → 5 px accent `box-shadow` at 22 % and back) is a ring visual
 under Apply crop, drawn once at its 50 % frame, whose opacity a repeating

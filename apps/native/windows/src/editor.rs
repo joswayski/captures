@@ -69,12 +69,14 @@ mod eraser;
 mod export;
 mod fields;
 mod import;
+mod layer_menu;
 mod menu;
 mod props;
 mod rows;
 mod text;
 mod text_section;
 pub use export::Ex;
+pub use layer_menu::Act;
 pub use menu::MenuKind;
 pub use props::{CUSTOM, Check, Field, Num, Prop, Range, bounds as range_bounds, range_text};
 
@@ -243,13 +245,10 @@ pub enum Target {
     /// The save row's Export settings disclosure and Change save location.
     ExportSettings,
     Change,
-}
-
-/// Shipping controls this host does not implement yet: drawn disabled and
-/// exposed to UI Automation as disabled.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Stub {
-    LayerMenu(usize),
+    /// A Layers row's ⋯, which opens its settings card.
+    More(usize),
+    /// A button of the open layer settings card.
+    LayerAct(layer_menu::Act),
 }
 
 /// Accessibility notifications, raised after the frame.
@@ -323,6 +322,9 @@ enum Kind {
     Flyout,
     /// `.screenshot-canvas-bg-menu`.
     BgMenu,
+    /// `.screenshot-layer-menu-panel` and its scrolling sections.
+    LayerCard,
+    LayerScroll,
     /// The Text style menu or the Font list, and its highlighted row.
     Menu,
     MenuLit,
@@ -448,6 +450,10 @@ pub struct Presented {
     pub has_draft: bool,
     /// Shipping `canTrimEdges`.
     pub can_trim: bool,
+    /// The layer card's Merge down, Merge visible and Flatten states.
+    pub merge_down_ids: Vec<String>,
+    pub can_merge_visible: bool,
+    pub can_flatten: bool,
     /// The session's active inline text input.
     pub active_input: Option<text::ActiveInput>,
     /// Font family keys to the bundled family names.
@@ -744,6 +750,13 @@ pub struct Editor {
     /// `lastSolid`.
     bg_menu: usize,
     bg_open: bool,
+    /// The open layer settings card's layer and its scroll, and its frame,
+    /// scroll clip and scrolling body.
+    layer_card: Option<String>,
+    card_scroll: f32,
+    card_node: usize,
+    card_clip: usize,
+    card_body: usize,
     last_solid: String,
     controls: Vec<(Target, Layered)>,
     /// Layer rows built so far; rows past the layer count are hidden.
@@ -1011,6 +1024,13 @@ fn present(session: &mut EditorSession, artifact_id: &str, published: &mut Publi
         style: snapshot.initial_annotation_style.clone(),
         has_draft: snapshot.has_draft,
         can_trim: snapshot.can_trim,
+        merge_down_ids: snapshot
+            .merge_down_ids
+            .iter()
+            .map(|id| (*id).to_owned())
+            .collect(),
+        can_merge_visible: snapshot.can_merge_visible,
+        can_flatten: snapshot.can_flatten,
         active_input: snapshot
             .active_text_input
             .as_ref()
@@ -1370,6 +1390,11 @@ impl Editor {
             flyout_node: 0,
             bg_menu: 0,
             bg_open: false,
+            layer_card: None,
+            card_scroll: 0.,
+            card_node: 0,
+            card_clip: 0,
+            card_body: 0,
             last_solid: editor_chrome::colors::DEFAULT_CANVAS_BACKGROUND.into(),
             controls: Vec::new(),
             rows: 0,
@@ -1550,6 +1575,26 @@ impl Editor {
             };
             self.control(self.bg_menu, Target::Prop(prop), bleed);
         }
+        // The layer settings card, portalled after the page content.
+        self.card_node = self.add(Some(root), Kind::LayerCard, menu::MENU_BLEED);
+        self.nodes[self.card_node].visible = false;
+        self.control(self.card_node, Target::Prop(Prop::Blend), 0.);
+        self.control(
+            self.card_node,
+            Target::Prop(Prop::Range(props::Range::LayerOpacity)),
+            0.,
+        );
+        self.card_clip = self.add(Some(self.card_node), Kind::Group, 0.);
+        self.nodes[self.card_clip].clip = true;
+        self.card_body = self.add(Some(self.card_clip), Kind::LayerScroll, 0.);
+        for act in layer_menu::ACTS {
+            let parent = if matches!(act, Act::Duplicate | Act::Delete) {
+                self.card_node
+            } else {
+                self.card_body
+            };
+            self.control(parent, Target::LayerAct(act), 0.);
+        }
         // Property popups float above everything.
         self.menu_node = self.add(Some(root), Kind::Menu, menu::MENU_BLEED);
         self.nodes[self.menu_node].visible = false;
@@ -1564,6 +1609,7 @@ impl Editor {
             let row = self.control(self.list, Target::Layer(i), 0.);
             self.control(row.base, Target::Eye(i), 0.);
             self.control(row.base, Target::Lock(i), 0.);
+            self.control(row.base, Target::More(i), 0.);
             self.rows += 1;
         }
     }
@@ -1600,7 +1646,10 @@ impl Editor {
             Target::Dismiss => self.banner,
             Target::Undo | Target::Redo => !self.l.compact,
             Target::Shape(_) => self.flyout,
-            Target::Layer(i) | Target::Eye(i) | Target::Lock(i) => i < self.layer_count(),
+            Target::Layer(i) | Target::Eye(i) | Target::Lock(i) | Target::More(i) => {
+                i < self.layer_count()
+            }
+            Target::LayerAct(act) => self.card_act_exists(act),
             // Shipping hides the toggle when the format can only save a copy.
             Target::SaveAsNew => self.export_view().is_some_and(|v| !v.format_requires_copy),
             Target::Prop(prop) => self.prop_exists(prop),
@@ -1619,6 +1668,7 @@ impl Editor {
             Target::ZoomIn => p.is_some() && percent < ZOOM_MAX - 0.05,
             Target::Fit | Target::Slider | Target::Background => p.is_some(),
             Target::AddImages | Target::AddLayer => p.is_some(),
+            Target::LayerAct(act) => self.card_act_enabled(act),
             Target::Tool(_) => true,
             Target::Save => {
                 self.export_view()
@@ -1695,6 +1745,11 @@ impl Editor {
             Target::AddLayer => editor_chrome::layers::ADD.into(),
             Target::ExportSettings => "Export settings".into(),
             Target::Change => "Change save location".into(),
+            Target::More(i) => self
+                .layer(i)
+                .map(|l| l.menu_label.clone())
+                .unwrap_or_default(),
+            Target::LayerAct(act) => act.name().into(),
         }
     }
 
@@ -1715,27 +1770,10 @@ impl Editor {
             Target::Copy => "Copy the edited image to the clipboard. Does not save a file.".into(),
             Target::ExportSettings => self.export_view().map(|v| v.summary).unwrap_or_default(),
             Target::Change => self.save_location(),
+            Target::More(_) => "Layer settings and actions".into(),
+            Target::LayerAct(act) => act.tip().into(),
             Target::Prop(prop) => self.prop_help(prop),
             _ => String::new(),
-        }
-    }
-
-    pub fn stub_name(&self, stub: Stub) -> String {
-        match stub {
-            Stub::LayerMenu(i) => self
-                .layer(i)
-                .map(|l| l.menu_label.clone())
-                .unwrap_or_default(),
-        }
-    }
-
-    pub fn stub_rect(&self, stub: Stub) -> Rect {
-        match stub {
-            Stub::LayerMenu(i) => {
-                let row = self.target_rect(Target::Layer(i));
-                let lock = self.target_rect(Target::Lock(i));
-                Rect::new(lock.x + QUICK.0 + 2., lock.y, QUICK.0, QUICK.1.min(row.h))
-            }
         }
     }
 
@@ -2027,7 +2065,7 @@ impl Editor {
         if let Some(id) = options
             .select
             .as_ref()
-            .filter(|s| !s.starts_with("drop") && !s.starts_with("export"))
+            .filter(|s| !s.starts_with("drop") && !s.starts_with("export") && *s != "layer-menu")
         {
             if self.layer_count() > 0
                 && (0..self.layer_count()).any(|i| self.layer(i).is_some_and(|l| l.id == *id))
@@ -2101,6 +2139,8 @@ impl Editor {
             Target::Background => self.set_bg_menu(!self.bg_open),
             Target::AddImages | Target::AddLayer => self.pick_images = true,
             Target::ExportSettings => self.toggle_export_settings(),
+            Target::More(i) => self.toggle_layer_card(i),
+            Target::LayerAct(act) => self.layer_action(act),
             Target::Change => self.pick_folder = true,
             Target::Undo => {
                 self.set_crop(None);
@@ -2389,6 +2429,7 @@ impl Editor {
                     self.submit(next);
                 }
                 self.sync_rename();
+                self.sync_layer_card();
                 self.follow_row();
                 self.received_text();
                 if repainted || first {
@@ -3131,6 +3172,7 @@ impl Editor {
         self.set_rect(self.flyout_node, l.flyout);
         let bg_menu = self.bg_menu_rect();
         self.set_rect(self.bg_menu, bg_menu);
+        self.place_layer_card();
         for (target, layered) in self.controls.clone() {
             let parent = self.nodes[layered.base].parent.expect("parent");
             let origin = match self.nodes[parent].kind {
@@ -3139,13 +3181,16 @@ impl Editor {
                 Kind::Banner => l.banner,
                 Kind::Bar => l.bar,
                 Kind::Flyout => l.flyout,
-                Kind::BgMenu => Rect::default(),
+                Kind::BgMenu | Kind::LayerCard | Kind::LayerScroll => Rect::default(),
                 Kind::LayersHeading => l.sidebar,
                 Kind::Zoom | Kind::List | Kind::Ctl(..) => Rect::default(),
                 _ => Rect::default(),
             };
             let r = match target {
-                Target::Layer(_) | Target::Eye(_) | Target::Lock(_) => self.row_part(target),
+                Target::Layer(_) | Target::Eye(_) | Target::Lock(_) | Target::More(_) => {
+                    self.row_part(target)
+                }
+                Target::LayerAct(act) => self.card_act_rect(act).unwrap_or_default(),
                 Target::Shape(i) => {
                     let (s2, s3) = (self.t.n("s-2"), self.t.n("s-3"));
                     let cell = editor_chrome::SHAPE_FLYOUT_BUTTON as f32;
@@ -3206,6 +3251,9 @@ impl Editor {
                 QUICK.0,
                 QUICK.1,
             ),
+            Target::More(_) => {
+                Rect::new(w - s3 - QUICK.0, (ROW_H - QUICK.1) / 2., QUICK.0, QUICK.1)
+            }
             _ => Rect::default(),
         }
     }
@@ -3355,7 +3403,9 @@ impl Editor {
             // (`:focus`, `:focus-within`), other controls for keyboard focus.
             let input = matches!(
                 target,
-                Target::Prop(Prop::Font | Prop::Aspect | Prop::Number(_) | Prop::Textarea)
+                Target::Prop(
+                    Prop::Font | Prop::Aspect | Prop::Blend | Prop::Number(_) | Prop::Textarea
+                )
             );
             let ring = (self.focus_visible || input)
                 && self.focus == Some(target)
@@ -3368,7 +3418,7 @@ impl Editor {
                 Target::Undo | Target::Redo | Target::Fit | Target::ZoomOut | Target::ZoomIn => {
                     0.32
                 }
-                Target::Tool(_) => 0.4,
+                Target::Tool(_) | Target::LayerAct(_) => 0.4,
                 // A stepper draws its own disabled ink.
                 Target::Prop(Prop::Step(..)) => 1.,
                 _ => 0.45,
@@ -3403,6 +3453,10 @@ impl Editor {
                 return None;
             }
         }
+        // The open layer card takes the points over it.
+        if let Some(hit) = self.card_hit(x, y) {
+            return hit;
+        }
         // The open Background card takes the points over it.
         if self.bg_open && self.bg_menu_rect().contains(x, y) {
             return Self::bg_menu_props().map(Target::Prop).find(|&t| inside(t));
@@ -3412,7 +3466,12 @@ impl Editor {
         }
         if self.l.list.contains(x, y) {
             for i in 0..self.layer_count() {
-                for target in [Target::Eye(i), Target::Lock(i), Target::Layer(i)] {
+                for target in [
+                    Target::Eye(i),
+                    Target::Lock(i),
+                    Target::More(i),
+                    Target::Layer(i),
+                ] {
                     if inside(target) {
                         return Some(target);
                     }
@@ -3486,7 +3545,7 @@ impl Editor {
             if self.renaming() != Some(i) {
                 list.push(Target::Layer(i));
             }
-            list.extend([Target::Eye(i), Target::Lock(i)]);
+            list.extend([Target::Eye(i), Target::Lock(i), Target::More(i)]);
         }
         list.extend(self.prop_order().into_iter().map(Target::Prop));
         list.extend(self.export_props().into_iter().map(Target::Prop));
@@ -3502,6 +3561,9 @@ impl Editor {
         // Shipping portals the open card to the end of `body`.
         if self.bg_open {
             list.extend(Self::bg_menu_props().map(Target::Prop));
+        }
+        if self.layer_card.is_some() {
+            list.extend(self.card_targets());
         }
         list.retain(|&t| self.exists(t) && self.enabled(t));
         list
@@ -3521,6 +3583,7 @@ impl Editor {
             if let Target::Prop(
                 prop @ (Prop::Font
                 | Prop::Aspect
+                | Prop::Blend
                 | Prop::Number(_)
                 | Prop::Textarea
                 | Prop::Export(_)
@@ -3599,6 +3662,11 @@ impl Editor {
         // `closeOnEscape` runs before anything else sees the key.
         if self.bg_open && vk == VK_ESCAPE {
             self.set_bg_menu(false);
+            return true;
+        }
+        // The layer card's Escape, unless its Blend list is open.
+        if self.layer_card.is_some() && self.menu.is_none() && vk == VK_ESCAPE {
+            self.close_layer_card();
             return true;
         }
         if let Some(Target::Prop(Prop::Range(range))) = self.focus
@@ -3909,6 +3977,8 @@ impl Editor {
             }
             Kind::Ctl(target, layer) => self.draw_control(dc, target, layer, (w, h))?,
             Kind::BgMenu => self.draw_bg_menu(dc, (w, h))?,
+            Kind::LayerCard => self.draw_layer_card(dc, (w, h))?,
+            Kind::LayerScroll => self.draw_layer_scroll(dc, (w, h))?,
         }
         Ok(())
     }
@@ -4344,6 +4414,9 @@ impl Editor {
         if let Target::Prop(prop) = target {
             return self.draw_prop(dc, prop, layer, (w, h));
         }
+        if let Target::LayerAct(act) = target {
+            return self.draw_layer_act(dc, act, layer, (w, h));
+        }
         let t = &self.t;
         let g = &self.g;
         let c = |name: &str| t.color(name);
@@ -4355,7 +4428,7 @@ impl Editor {
             Target::Tool(_) => t.n("r-lg"),
             Target::Fit | Target::ZoomOut | Target::ZoomIn | Target::Slider => 0.,
             Target::Layer(_) => t.n("r-lg"),
-            Target::Eye(_) | Target::Lock(_) => t.n("r-sm"),
+            Target::Eye(_) | Target::Lock(_) | Target::More(_) => t.n("r-sm"),
             _ => r_md,
         };
         if layer == Layer::Ring {
@@ -4671,17 +4744,8 @@ impl Editor {
                     y + name.height + 2.
                 };
                 gfx::text(dc, &kind, cx, kind_y, t.color_alpha("text-subtle", fade))?;
-                let mx = w - s3 - QUICK.0;
-                gfx::icon(
-                    dc,
-                    &g.factory,
-                    "more",
-                    &[],
-                    (mx + (QUICK.0 - 15.) / 2., (h - 15.) / 2., 15.),
-                    1.8,
-                    t.color_alpha("text-subtle", 0.25),
-                )?;
             }
+            Target::More(i) => self.draw_more(dc, i, lit, (w, h))?,
             Target::Eye(i) | Target::Lock(i) => {
                 let Some(layer) = self.layer(i) else {
                     return Ok(());
@@ -4791,7 +4855,7 @@ impl Editor {
                 gfx::text(dc, &text, x + 15. + s3, (h - text.height) / 2., ink)?;
                 let _ = s5;
             }
-            Target::Prop(_) => {}
+            Target::Prop(_) | Target::LayerAct(_) => {}
         }
         Ok(())
     }
@@ -5490,6 +5554,15 @@ impl Editor {
                 {
                     self.set_bg_menu(false);
                 }
+                // Shipping's outside press closes the layer card; its own ⋯
+                // toggles it, and its Blend list keeps it.
+                if let Some(row) = self.card_row()
+                    && self.card_hit(x, y).is_none()
+                    && hit != Some(Target::More(row))
+                    && !self.menu.is_some_and(|m| m.rect.contains(x, y))
+                {
+                    self.close_layer_card();
+                }
                 // An open popup takes presses inside it; one outside closes
                 // it (its trigger toggles it instead).
                 if let Some(menu) = self.menu {
@@ -5638,6 +5711,10 @@ impl Editor {
                 let (px, py) = (point.x as f32 / s, point.y as f32 / s);
                 let pixels = delta * appearance::wheel_lines() * 100. / 3.;
                 if self.menu.is_some_and(|m| m.rect.contains(px, py)) {
+                    return Some(LRESULT(0));
+                }
+                if msg == WM_MOUSEWHEEL && self.wheel_card(px, py, pixels) {
+                    self.set_pointer(Some((px, py)));
                     return Some(LRESULT(0));
                 }
                 if self.l.list.contains(px, py) && msg == WM_MOUSEWHEEL {
@@ -5843,6 +5920,8 @@ fn button_slot(target: Target) -> usize {
         | Target::Layer(_)
         | Target::Eye(_)
         | Target::Lock(_)
+        | Target::More(_)
+        | Target::LayerAct(_)
         | Target::Prop(_) => SLOTS - 1,
     }
 }
@@ -6488,6 +6567,11 @@ pub fn render_offscreen(
             editor.place();
             editor.open_menu(menu::MenuKind::Export(export::Ex::Quality), Some(1));
         }
+        // The bottom layer's ⋯ card.
+        Some("layer-menu") => {
+            editor.place();
+            editor.toggle_layer_card(0);
+        }
         Some("drop") => editor.drag_enter(None),
         Some("drop-stack") => {
             let w = editor.l.well;
@@ -6835,6 +6919,41 @@ mod tests {
             "{requests:?}"
         );
         assert_eq!((e.tool, e.crop), ("v", None));
+        e.busy = false;
+
+        // The ⋯ card: the locked lone background can't move, merge or be
+        // deleted, but can be duplicated, faded and flattened.
+        e.presented.as_mut().unwrap().layers[0].locked = true;
+        e.activate(Target::More(0));
+        assert_eq!(e.card_row(), Some(0));
+        for (act, on) in [
+            (Act::Front, false),
+            (Act::MergeDown, false),
+            (Act::MergeVisible, false),
+            (Act::Delete, false),
+            (Act::Duplicate, true),
+        ] {
+            assert_eq!(e.enabled(Target::LayerAct(act)), on, "{act:?}");
+        }
+        e.set_range(Range::LayerOpacity, 40., true);
+        let requests = sent(&inbox);
+        let [Request::Live { key, request }] = requests.as_slice() else {
+            panic!("expected a live opacity edit, got {requests:?}");
+        };
+        assert_eq!(key, &format!("{id}:layer-opacity"));
+        assert!(matches!(
+            request.as_ref(),
+            Request::Layer { edit: LayerEdit::Opacity { opacity }, .. } if *opacity == 40.
+        ));
+        e.busy = false;
+        e.range_drag = None;
+        e.activate(Target::LayerAct(Act::Duplicate));
+        let requests = sent(&inbox);
+        assert!(
+            matches!(requests.as_slice(), [Request::Layer { id: from, edit: LayerEdit::Duplicate { .. } }] if *from == id),
+            "{requests:?}"
+        );
+        assert_eq!(e.card_row(), None, "an action closes the card");
         drop(e);
         let _ = std::fs::remove_dir_all(data);
         unsafe { CoUninitialize() };

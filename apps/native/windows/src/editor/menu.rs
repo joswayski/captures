@@ -33,6 +33,8 @@ pub enum MenuKind {
     Preset,
     /// An export bar `CustomSelect`.
     Export(Ex),
+    /// The layer card's Blend mode select.
+    Blend,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -61,7 +63,11 @@ impl MenuKind {
     pub fn is_select(self) -> bool {
         matches!(
             self,
-            MenuKind::Font | MenuKind::Aspect | MenuKind::Preset | MenuKind::Export(_)
+            MenuKind::Font
+                | MenuKind::Aspect
+                | MenuKind::Preset
+                | MenuKind::Export(_)
+                | MenuKind::Blend
         )
     }
 
@@ -73,6 +79,7 @@ impl MenuKind {
             MenuKind::Aspect => Prop::Aspect,
             MenuKind::Preset => Prop::Preset,
             MenuKind::Export(ex) => Prop::Export(ex),
+            MenuKind::Blend => Prop::Blend,
         }
     }
 }
@@ -104,6 +111,7 @@ impl Editor {
                 .into_iter()
                 .map(|(_, label, _)| label)
                 .collect(),
+            MenuKind::Blend => Editor::blend_items(),
         }
     }
 
@@ -163,6 +171,7 @@ impl Editor {
                 self.preset_options().iter().position(|(v, _)| *v == value)
             }
             MenuKind::Export(ex) => self.export_selected(ex),
+            MenuKind::Blend => self.blend_selected(),
         }
     }
 
@@ -265,7 +274,11 @@ impl Editor {
                 width - 2. - 2. * s2,
                 STYLE_ROW,
             ),
-            MenuKind::Font | MenuKind::Aspect | MenuKind::Preset | MenuKind::Export(_) => {
+            MenuKind::Font
+            | MenuKind::Aspect
+            | MenuKind::Preset
+            | MenuKind::Export(_)
+            | MenuKind::Blend => {
                 let y: f32 = (0..index).map(|i| self.row_h(kind, i, width)).sum();
                 Rect::new(
                     1. + s2,
@@ -354,7 +367,11 @@ impl Editor {
                     .min((self.w - trigger.w - VIEWPORT_PADDING).max(VIEWPORT_PADDING));
                 Rect::new(left, top, trigger.w, h)
             }
-            MenuKind::Font | MenuKind::Aspect | MenuKind::Preset | MenuKind::Export(_) => {
+            MenuKind::Font
+            | MenuKind::Aspect
+            | MenuKind::Preset
+            | MenuKind::Export(_)
+            | MenuKind::Blend => {
                 let (s4, s6) = (self.t.n("s-4"), self.t.n("s-6"));
                 let label_w = self
                     .menu_items(menu.kind)
@@ -500,6 +517,7 @@ impl Editor {
                 None => {}
             },
             MenuKind::Export(ex) => self.apply_export_choice(ex, index),
+            MenuKind::Blend => self.set_blend(index),
         }
         self.events.push(Event::Value(Target::Prop(kind.trigger())));
     }
@@ -508,7 +526,8 @@ impl Editor {
     /// while closing it, matching shipping's HTML selects on Windows.
     /// Preferences uses CustomSelect instead; the Text style picker is a button.
     pub(super) fn menu_alt_key(&mut self, vk: VIRTUAL_KEY) -> bool {
-        let Some(Target::Prop(prop @ (Prop::Font | Prop::Aspect | Prop::Preset))) = self.focus
+        let Some(Target::Prop(prop @ (Prop::Font | Prop::Aspect | Prop::Preset | Prop::Blend))) =
+            self.focus
         else {
             return false;
         };
@@ -535,6 +554,7 @@ impl Editor {
             Prop::Aspect => MenuKind::Aspect,
             Prop::Preset => MenuKind::Preset,
             Prop::Export(ex) if ex.is_select() => MenuKind::Export(ex),
+            Prop::Blend => MenuKind::Blend,
             _ => return false,
         };
         let key = match vk {
@@ -666,9 +686,11 @@ impl Editor {
         // `.screenshot-text-style-menu` (`--r-xl`) and the listbox (`--r-lg`).
         let radius = match menu.kind {
             MenuKind::Style => t.n("r-xl"),
-            MenuKind::Font | MenuKind::Aspect | MenuKind::Preset | MenuKind::Export(_) => {
-                t.n("r-lg")
-            }
+            MenuKind::Font
+            | MenuKind::Aspect
+            | MenuKind::Preset
+            | MenuKind::Export(_)
+            | MenuKind::Blend => t.n("r-lg"),
         };
         gfx::shadow(dc, all, radius, t.shadow("shadow-lg"))?;
         gfx::fill_round(dc, all, radius, t.color("surface-overlay"))?;
@@ -737,7 +759,11 @@ impl Editor {
                     ink,
                 )?;
             }
-            MenuKind::Font | MenuKind::Aspect | MenuKind::Preset | MenuKind::Export(_) => {
+            MenuKind::Font
+            | MenuKind::Aspect
+            | MenuKind::Preset
+            | MenuKind::Export(_)
+            | MenuKind::Blend => {
                 if lit {
                     gfx::fill_round(dc, b, t.n("r-sm"), c("surface-hover"))?;
                 }
