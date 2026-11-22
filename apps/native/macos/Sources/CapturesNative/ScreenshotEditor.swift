@@ -1445,14 +1445,27 @@ final class EditorExportChevron: NSView {
 /// Shipping `.screenshot-make-copy`: a 28×16 token switch, its 11 pt label
 /// and the divider before Save. The button's `state` is the setting.
 final class EditorMakeCopySwitch: NSButton {
-    var tokens: Tokens! { didSet { needsDisplay = true } }
+    var tokens: Tokens! {
+        didSet {
+            slideTransition = nil
+            needsDisplay = true
+        }
+    }
     static let label = "Save as new file"
+    private var slideTransition: NativeBoolTransition?
     private var hovered = false
     private var hoverTracking: NSTrackingArea?
+    var isAnimatingSlide: Bool { slideTransition?.isRunning ?? false }
 
     override var isFlipped: Bool { true }
     override var state: NSControl.StateValue {
-        didSet { setAccessibilityValue(state == .on ? 1 : 0); needsDisplay = true }
+        didSet {
+            setAccessibilityValue(state == .on ? 1 : 0)
+            if oldValue != state {
+                transition(seed: oldValue == .on)?.set(state == .on, animated: window?.isVisible == true)
+            }
+            needsDisplay = true
+        }
     }
 
     override init(frame: NSRect) {
@@ -1462,6 +1475,24 @@ final class EditorMakeCopySwitch: NSButton {
         setAccessibilityValue(0)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    private func transition(seed initial: Bool) -> NativeBoolTransition? {
+        if let slideTransition { return slideTransition }
+        guard let tokens else { return nil }
+        let t = NativeBoolTransition("segment_label", tokens: tokens, view: self)
+        t.seed(initial)
+        slideTransition = t
+        return t
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window?.isVisible == true {
+            slideTransition?.attachToWindow()
+        } else {
+            slideTransition?.seed(state == .on)
+        }
+    }
 
     private var labelAttributes: [NSAttributedString.Key: Any] {
         [.font: NSFont.capturesUI(ofSize: tokens.number("text-xs"), weight: .medium),
@@ -1492,17 +1523,14 @@ final class EditorMakeCopySwitch: NSButton {
         let alpha: CGFloat = isEnabled ? 1 : 0.55
         let on = state == .on
         let track = NSRect(x: 0, y: ((bounds.height - 16) / 2).rounded(), width: 28, height: 16)
-        let path = NSBezierPath(roundedRect: track.insetBy(dx: 0.5, dy: 0.5), xRadius: 7.5, yRadius: 7.5)
-        tokens.color(on ? (isEnabled && hovered ? "theme-accent-hover" : "theme-accent") : "surface-field")
-            .faded(alpha).setFill(); path.fill()
-        if !on {
-            tokens.color(isEnabled && hovered ? "text-faint" : "border-strong").faded(alpha).setStroke()
-            path.lineWidth = 1; path.stroke()
-        }
-        // The 10 pt knob sits 2 pt inside the 1 pt border and travels 12 pt.
-        let knob = NSRect(x: track.minX + 3 + (on ? 12 : 0), y: track.minY + 3, width: 10, height: 10)
-        tokens.color(on ? "theme-accent-ink" : "text-subtle").faded(alpha).setFill()
-        NSBezierPath(ovalIn: knob).fill()
+        let progress: CGFloat = window?.isVisible == true
+            ? CGFloat(transition(seed: on)?.progress(toward: on) ?? (on ? 1 : 0))
+            : (on ? 1 : 0)
+        drawAnimatedSwitch(track: track, knobDiameter: 10, progress: progress, tokens: tokens,
+                           hovered: hovered, pressed: cell?.isHighlighted == true,
+                           enabled: isEnabled, glass: false,
+                           offFillToken: "surface-field", offHoverBorderToken: "text-faint",
+                           isFlipped: isFlipped)
         if window?.firstResponder === self { drawFocusRing(tokens, in: track.insetBy(dx: -2, dy: -2), radius: 10) }
         var attributes = labelAttributes
         attributes[.foregroundColor] = tokens.color(isEnabled && hovered ? "text" : "text-muted").faded(alpha)

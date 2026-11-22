@@ -137,6 +137,72 @@ func applyTactileElevation(on view: NSView, tokens: Tokens, radius: CGFloat,
     }
 }
 
+/// Shared tactile animated switch: smoothly blends the track fill, fades the
+/// off-state border and on-state tactile sheen, and slides the thumb across
+/// `track` over `progress` (0 = off, 1 = on) with a subtle press stretch.
+func drawAnimatedSwitch(track: NSRect, knobDiameter: CGFloat, progress: CGFloat, tokens: Tokens,
+                        hovered: Bool, pressed: Bool, enabled: Bool, glass: Bool,
+                        offFillToken: String = "surface-sunken",
+                        offHoverBorderToken: String = "text-subtle",
+                        isFlipped: Bool) {
+    let p = min(1, max(0, progress))
+    let alpha: CGFloat = enabled ? 1 : 0.55
+    let insetRect = glass ? track : track.insetBy(dx: 0.5, dy: 0.5)
+    let radius = insetRect.height / 2
+    let path = NSBezierPath(roundedRect: insetRect, xRadius: radius, yRadius: radius)
+
+    let offFill = glass ? NSColor.black.withAlphaComponent(0.35) : tokens.color(offFillToken)
+    let onFill = tokens.color(enabled && hovered ? "theme-accent-hover" : "theme-accent")
+    let trackFill = (offFill.blended(withFraction: p, of: onFill) ?? (p >= 0.5 ? onFill : offFill))
+        .faded(alpha)
+    trackFill.setFill()
+    path.fill()
+
+    if p > 0.01 {
+        drawTactileSurface(in: path, radius: radius, tokens: tokens,
+                           primary: true, hovered: hovered, pressed: pressed,
+                           isFlipped: isFlipped, alpha: alpha * p)
+    }
+    if p < 0.99 {
+        let borderToken = glass
+            ? (enabled && hovered ? "glass-text-subtle" : "glass-border-strong")
+            : (enabled && hovered ? offHoverBorderToken : "border-strong")
+        tokens.color(borderToken).faded(alpha * (1 - p)).setStroke()
+        path.lineWidth = 1
+        path.stroke()
+    }
+
+    let stretch: CGFloat = (pressed && enabled) ? 2 : 0
+    let knobWidth = knobDiameter + stretch
+    let travel = max(0, track.width - knobDiameter - 6)
+    // While pressed, grow inward from the thumb's anchored side so it feels springy.
+    let knobX = track.minX + 3 + travel * p - stretch * p
+    let knobRect = NSRect(x: knobX, y: track.midY - knobDiameter / 2,
+                          width: knobWidth, height: knobDiameter)
+    let knobPath = NSBezierPath(roundedRect: knobRect, xRadius: knobDiameter / 2, yRadius: knobDiameter / 2)
+
+    if enabled {
+        NSGraphicsContext.saveGraphicsState()
+        let shadow = NSShadow()
+        shadow.shadowColor = NSColor.black.withAlphaComponent(0.24)
+        shadow.shadowBlurRadius = 2.0
+        shadow.shadowOffset = NSSize(width: 0, height: -1)
+        shadow.set()
+        let offKnob = tokens.color(glass ? "glass-text-subtle" : "text-subtle")
+        let onKnob = tokens.color("theme-accent-ink")
+        (offKnob.blended(withFraction: p, of: onKnob) ?? (p >= 0.5 ? onKnob : offKnob))
+            .faded(alpha).setFill()
+        knobPath.fill()
+        NSGraphicsContext.restoreGraphicsState()
+    } else {
+        let offKnob = tokens.color(glass ? "glass-text-subtle" : "text-subtle")
+        let onKnob = tokens.color("theme-accent-ink")
+        (offKnob.blended(withFraction: p, of: onKnob) ?? (p >= 0.5 ? onKnob : offKnob))
+            .faded(alpha).setFill()
+        knobPath.fill()
+    }
+}
+
 /// Shipping scroll bars: a 10 pt bar whose transparent 3 pt border leaves a
 /// 4 pt pill thumb in `--border-strong`, lifting to `--text-faint` while the
 /// pointer is over it, above a transparent track. It keeps the scroll view's

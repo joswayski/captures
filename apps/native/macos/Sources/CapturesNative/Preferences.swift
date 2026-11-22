@@ -427,19 +427,35 @@ final class PreferenceNavButton: PreferenceHoverButton {
 /// 32×19 switch at its trailing edge (accent when on).
 final class PreferenceSwitchButton: PreferenceHoverButton {
     private let tokens: Tokens
-    var isOn = false { didSet { setAccessibilityValue(isOn); needsDisplay = true } }
+    private lazy var slideTransition = NativeBoolTransition("segment_label", tokens: tokens, view: self)
+    private var pendingSlideFrom: Bool?
+    var isAnimatingSlide: Bool { slideTransition.isRunning }
+    var isOn = false {
+        didSet {
+            setAccessibilityValue(isOn)
+            title = isOn ? "On" : "Off"
+            if oldValue != isOn {
+                slideTransition.set(isOn, animated: window?.isVisible == true)
+            }
+            needsDisplay = true
+        }
+    }
 
     private let label: String
 
     init(frame: NSRect, tokens: Tokens, label: String, detail: String?, isOn: Bool,
-         onPress: @escaping () -> Void) {
+         previousOn: Bool? = nil, onPress: @escaping () -> Void) {
         self.tokens = tokens; self.label = label
+        self.isOn = isOn
+        if let previousOn, previousOn != isOn {
+            pendingSlideFrom = previousOn
+        }
         super.init(frame: frame)
         title = isOn ? "On" : "Off"; actionBlock = onPress
         configure(label: label, role: .checkBox)
         setAccessibilityHelp(detail)
-        self.isOn = isOn
         setAccessibilityValue(isOn)
+        slideTransition.seed(isOn)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
@@ -449,25 +465,32 @@ final class PreferenceSwitchButton: PreferenceHoverButton {
 
     var switchRect: NSRect { NSRect(x: bounds.maxX - 32, y: (bounds.height - 19) / 2, width: 32, height: 19) }
 
-    override func draw(_ dirtyRect: NSRect) {
-        let alpha: CGFloat = isEnabled ? 1 : 0.55
-        let track = switchRect
-        let path = NSBezierPath(roundedRect: track.insetBy(dx: 0.5, dy: 0.5), xRadius: 9, yRadius: 9)
-        if isOn {
-            tokens.color(isEnabled && hovered ? "theme-accent-hover" : "theme-accent").faded(alpha).setFill()
-            path.fill()
-            drawTactileSurface(in: path, radius: 9, tokens: tokens,
-                               primary: true, hovered: hovered, pressed: cell?.isHighlighted == true,
-                               isFlipped: isFlipped, alpha: alpha)
-        } else {
-            tokens.color("surface-sunken").faded(alpha).setFill(); path.fill()
-            tokens.color(isEnabled && hovered ? "text-subtle" : "border-strong")
-                .faded(alpha).setStroke()
-            path.lineWidth = 1; path.stroke()
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard window?.isVisible == true else {
+            pendingSlideFrom = nil
+            slideTransition.seed(isOn)
+            return
         }
-        let knob = NSRect(x: track.minX + 3 + (isOn ? 13 : 0), y: track.midY - 6.5, width: 13, height: 13)
-        tokens.color(isOn ? "theme-accent-ink" : "text-subtle").faded(alpha).setFill()
-        NSBezierPath(ovalIn: knob).fill()
+        if let from = pendingSlideFrom {
+            pendingSlideFrom = nil
+            slideTransition.start(from: from, toward: isOn)
+            needsDisplay = true
+        } else {
+            slideTransition.attachToWindow()
+        }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let track = switchRect
+        let progress: CGFloat = window?.isVisible == true
+            ? CGFloat(slideTransition.progress(toward: isOn))
+            : (isOn ? 1 : 0)
+        drawAnimatedSwitch(track: track, knobDiameter: 13, progress: progress, tokens: tokens,
+                           hovered: hovered, pressed: cell?.isHighlighted == true,
+                           enabled: isEnabled, glass: false,
+                           offFillToken: "surface-sunken", offHoverBorderToken: "text-subtle",
+                           isFlipped: isFlipped)
         if isFocused { drawFocusRing(tokens, in: track.insetBy(dx: -2, dy: -2), radius: 11) }
     }
 }
@@ -748,6 +771,9 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     /// Where the Appearance indicator last settled, in its track, so a rebuild
     /// can slide it from there (shipping `.capture-segmented-indicator`).
     private var appearanceIndicatorFrame: NSRect?
+    /// Last rendered state of each preference switch so a rebuild slides the
+    /// toggled knob from its prior side instead of snapping.
+    private var switchStates: [String: Bool] = [:]
     private weak var highlightView: NSView?
 
     private static let sidebarWidth: CGFloat = 196
@@ -1213,16 +1239,19 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     private func switchRow(_ path: [String], title: String, detail: String,
                            emphasis: PreferencesPolicy.Emphasized? = nil, y: CGFloat, card: NSView,
                            enabled: Bool = true) -> CGFloat {
+        let key = "setting.\(path.joined(separator: "."))"
+        let previousOn = switchStates[key]
         let isOn = boolSetting(path)
+        switchStates[key] = isOn
         let layout = inlineRow(title, detail: detail, emphasis: emphasis, control: NSSize(width: 32, height: 19),
             y: y, card: card, enabled: enabled, switchHint: true, highlight: path.count == 1 ? path[0] : nil)
         let button = PreferenceSwitchButton(frame: layout.row, tokens: tokens, label: title, detail: detail,
-                                            isOn: isOn) {
+                                            isOn: isOn, previousOn: previousOn) {
             [weak self] in
             guard let self else { return }
             self.setBool(!self.boolSetting(path), path: path)
         }
-        button.identifier = NSUserInterfaceItemIdentifier("setting.\(path.joined(separator: "."))")
+        button.identifier = NSUserInterfaceItemIdentifier(key)
         button.isEnabled = enabled
         card.addSubview(button)
         return layout.row.maxY
@@ -2068,8 +2097,11 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
             : PreferencesPolicy.text("login_item.detail")
         let layout = inlineRow(title, detail: detail, control: NSSize(width: 32, height: 19), y: y, card: card,
             switchHint: true)
+        let isOn = loginItemEnabled == true
+        let previousOn = loginItemEnabled != nil ? switchStates["login-item"] : nil
+        if let settled = loginItemEnabled { switchStates["login-item"] = settled }
         let button = PreferenceSwitchButton(frame: layout.row, tokens: tokens, label: title, detail: detail,
-            isOn: loginItemEnabled == true) { [weak self] in self?.toggleLoginItem() }
+            isOn: isOn, previousOn: previousOn) { [weak self] in self?.toggleLoginItem() }
         button.title = loginItemPending ? PreferencesPolicy.text("login_item.checking")
             : loginItemEnabled == true ? "On" : "Off"
         button.identifier = NSUserInterfaceItemIdentifier("login-item")

@@ -449,6 +449,46 @@ final class NativeBoolTransition {
     /// Whether a change is still easing, for tests.
     var isRunning: Bool { timer != nil }
 
+    /// Land immediately on `on` without scheduling redraws.
+    func seed(_ on: Bool) {
+        timer?.invalidate(); timer = nil
+        target = on; from = on ? 1 : 0; started = -.infinity
+    }
+
+    /// Ease from `previous` toward `on` (used when a rebuilt control mounts
+    /// after its backing value flipped).
+    func start(from previous: Bool, toward on: Bool,
+               now: CFTimeInterval = CACurrentMediaTime(),
+               reduced: Bool = NativeMotion.reduceMotion) {
+        guard previous != on, !reduced else { seed(on); return }
+        from = previous ? 1 : 0; target = on; started = now
+        startTimer(reduced: reduced)
+    }
+
+    /// Retarget to `on`, animating from the current eased progress when
+    /// `animated` is true and a prior state was seeded.
+    func set(_ on: Bool, animated: Bool = true,
+             now: CFTimeInterval = CACurrentMediaTime(),
+             reduced: Bool = NativeMotion.reduceMotion) {
+        guard animated, target != nil, !reduced else { seed(on); return }
+        guard target != on else { return }
+        from = value(at: now, reduced: reduced); target = on; started = now
+        startTimer(reduced: reduced)
+    }
+
+    /// Start or stop the display-rate timer when the owning view joins or
+    /// leaves a window.
+    func attachToWindow(reduced: Bool = NativeMotion.reduceMotion) {
+        guard view?.window != nil else {
+            timer?.invalidate(); timer = nil
+            return
+        }
+        guard target != nil else { return }
+        let duration = NativeMotion.transition(name, tokens: tokens, reduced: reduced).duration
+        guard duration > 0, CACurrentMediaTime() - started < duration else { return }
+        startTimer(reduced: reduced)
+    }
+
     /// Retarget to `on` when it changed and return the progress now.
     func progress(toward on: Bool, now: CFTimeInterval = CACurrentMediaTime(),
                   reduced: Bool = NativeMotion.reduceMotion) -> Double {

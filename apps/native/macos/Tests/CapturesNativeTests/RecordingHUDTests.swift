@@ -528,6 +528,46 @@ final class RecordingHUDTests: XCTestCase {
         }
     }
 
+    func testVisibleWindowTooltipNeverAnimatesPositionAcrossButtons() throws {
+        _ = NSApplication.shared
+        let prior = NativeMotion.motionPreference
+        NativeMotion.motionPreference = { false }
+        defer { NativeMotion.motionPreference = prior }
+        let tokens = try XCTUnwrap(Tokens.variants["dark-mustard"])
+        let hud = RecordingHUDView(frame: NSRect(x: 0, y: 0, width: 430, height: 102), tokens: tokens)
+        let window = NSWindow(contentRect: hud.bounds, styleMask: [.borderless],
+            backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = hud; window.orderFrontRegardless()
+        defer { window.close() }
+        let buttons = hud.subviews.compactMap { $0 as? CaptureButton }
+        let stop = try XCTUnwrap(buttons.first { $0.accessibilityLabel() == "Stop recording" })
+        let hide = try XCTUnwrap(buttons.first { $0.accessibilityLabel() == "Hide recording controls" })
+        let event = try hoverEvent()
+
+        // Button A -> hide -> Button B: frame lands synchronously at Button B and
+        // only vertical nudge / opacity animate (never position or bounds).
+        stop.mouseEntered(with: event)
+        let stopFrame = hud.tooltipView.frame
+        stop.mouseExited(with: event)
+        hud.tooltipView.dismiss(duration: 0, timing: nil) { true }
+        XCTAssertTrue(hud.tooltipView.isHidden)
+
+        hide.mouseEntered(with: event)
+        XCTAssertEqual(hud.visibleTooltip, "Hide controls")
+        XCTAssertNotEqual(hud.tooltipView.frame.midX, stopFrame.midX)
+        let afterHiddenKeys = Set(hud.tooltipView.layer?.animationKeys() ?? [])
+        XCTAssertFalse(afterHiddenKeys.contains("position"))
+        XCTAssertFalse(afterHiddenKeys.contains("bounds"))
+        XCTAssertTrue(afterHiddenKeys.contains("captures.tooltip.opacity"))
+
+        // Button B -> Button A directly while visible: instant jump, zero animations.
+        stop.mouseEntered(with: event)
+        XCTAssertEqual(hud.visibleTooltip, "Stop and save")
+        XCTAssertEqual(hud.tooltipView.frame, stopFrame)
+        XCTAssertTrue((hud.tooltipView.layer?.animationKeys() ?? []).isEmpty)
+    }
+
     private func hoverEvent() throws -> NSEvent {
         try XCTUnwrap(NSEvent.enterExitEvent(with: .mouseEntered, location: .zero,
             modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,

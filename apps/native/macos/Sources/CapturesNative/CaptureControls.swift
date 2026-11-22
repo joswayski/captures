@@ -518,10 +518,19 @@ struct UnifiedCaptureControlsState: Equatable {
 /// with the unavailable reason as its tooltip.
 final class RecordingSwitchButton: NSButton {
     private let tokens: Tokens
+    private lazy var slideTransition = NativeBoolTransition("segment_label", tokens: tokens, view: self)
     let key: String
-    var isOn = false { didSet { refresh() } }
+    var isOn = false {
+        didSet {
+            if oldValue != isOn {
+                slideTransition.set(isOn, animated: window?.isVisible == true)
+            }
+            refresh()
+        }
+    }
     var status = "Off" { didSet { refresh() } }
     var actionBlock: (() -> Void)?
+    var isAnimatingSlide: Bool { slideTransition.isRunning }
     private var hovered = false
     private var hoverTracking: NSTrackingArea?
 
@@ -536,6 +545,7 @@ final class RecordingSwitchButton: NSButton {
         toolTip = available ? nil : toggle.unavailableReason
         setAccessibilityRole(.checkBox); setAccessibilityLabel(toggle.accessibilityLabel)
         setAccessibilityHelp(available ? nil : toggle.unavailableReason)
+        slideTransition.seed(false)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
@@ -544,6 +554,15 @@ final class RecordingSwitchButton: NSButton {
     private func refresh() {
         setAccessibilityValue(isOn ? 1 : 0)
         needsDisplay = true
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window?.isVisible == true {
+            slideTransition.attachToWindow()
+        } else {
+            slideTransition.seed(isOn)
+        }
     }
 
     override func resetCursorRects() {
@@ -561,20 +580,12 @@ final class RecordingSwitchButton: NSButton {
 
     override func draw(_ dirtyRect: NSRect) {
         let track = NSRect(x: 1, y: (bounds.height - 18) / 2, width: 30, height: 18)
-        let path = NSBezierPath(roundedRect: track, xRadius: 9, yRadius: 9)
-        if isOn {
-            tokens.color(isEnabled && hovered ? "theme-accent-hover" : "theme-accent").setFill(); path.fill()
-            drawTactileSurface(in: path, radius: 9, tokens: tokens,
-                               primary: true, hovered: hovered, pressed: cell?.isHighlighted == true,
-                               isFlipped: isFlipped)
-        } else {
-            NSColor.black.withAlphaComponent(0.35).setFill(); path.fill()
-            tokens.color(isEnabled && hovered ? "glass-text-subtle" : "glass-border-strong").setStroke()
-            path.lineWidth = 1; path.stroke()
-        }
-        let knob = NSRect(x: track.minX + 3 + (isOn ? 12 : 0), y: track.midY - 6, width: 12, height: 12)
-        tokens.color(isOn ? "theme-accent-ink" : "glass-text-subtle").setFill()
-        NSBezierPath(ovalIn: knob).fill()
+        let progress: CGFloat = window?.isVisible == true
+            ? CGFloat(slideTransition.progress(toward: isOn))
+            : (isOn ? 1 : 0)
+        drawAnimatedSwitch(track: track, knobDiameter: 12, progress: progress, tokens: tokens,
+                           hovered: hovered, pressed: cell?.isHighlighted == true,
+                           enabled: isEnabled, glass: true, isFlipped: isFlipped)
         if window?.firstResponder === self {
             let ring = NSBezierPath(roundedRect: track.insetBy(dx: -2, dy: -2), xRadius: 11, yRadius: 11)
             tokens.color("theme-accent").setStroke(); ring.lineWidth = 1; ring.stroke()

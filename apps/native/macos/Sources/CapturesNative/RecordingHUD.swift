@@ -150,7 +150,7 @@ final class RecordingHUDView: NSView {
     private let noticeLabel = NSTextField(labelWithString: "These controls won’t show in recordings")
     /// Shipping `.recording-hud-error`: one signal line below the controls.
     private let errorLabel = NSTextField(labelWithString: "")
-    private let tooltipView: RecordingHUDTooltipView
+    let tooltipView: RecordingHUDTooltipView
     private let stopButton: CaptureButton
     private let pauseButton: CaptureButton
     private let restartButton: CaptureButton
@@ -421,50 +421,19 @@ final class RecordingHUDView: NSView {
         guard visible, let tooltip = tooltips[ObjectIdentifier(button)] else {
             guard tooltipOwner === button else { return }
             tooltipOwner = nil
-            guard duration > 0 else {
-                tooltipView.alphaValue = 0; tooltipView.isHidden = true
-                return
+            tooltipView.dismiss(duration: duration, timing: spec.timing) { [weak self] in
+                self?.tooltipOwner == nil
             }
-            NSAnimationContext.runAnimationGroup({ context in
-                context.duration = duration; context.timingFunction = spec.timing
-                tooltipView.animator().alphaValue = 0
-            }, completionHandler: { [weak self] in
-                guard let self, self.tooltipOwner == nil else { return }
-                self.tooltipView.isHidden = true
-            })
             return
         }
         tooltipOwner = button
-        tooltipView.text = tooltip.text
-        let textSize = tooltipView.textSize
+        let textSize = tooltipView.textSize(for: tooltip.text)
         guard let hidden = RecordingHUDPolicy.tooltipFrame(anchor: button.frame, textSize: textSize,
                   rightAligned: tooltip.rightAligned, progress: 0, bounds: bounds),
               let shown = RecordingHUDPolicy.tooltipFrame(anchor: button.frame, textSize: textSize,
                   rightAligned: tooltip.rightAligned, progress: 1, bounds: bounds) else { return }
-        // A chip still on screen (including one fading out from the previous
-        // button) jumps straight to its new button at full opacity instead of
-        // sliding across the HUD.
-        let wasHidden = tooltipView.isHidden
-        tooltipView.isHidden = false
-        tooltipView.needsLayout = true
-        guard duration > 0, wasHidden else {
-            tooltipView.layer?.removeAllAnimations()
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0
-                context.allowsImplicitAnimation = false
-                tooltipView.frame = shown
-                tooltipView.alphaValue = 1
-            }
-            tooltipView.needsDisplay = true
-            return
-        }
-        tooltipView.layer?.removeAllAnimations()
-        tooltipView.frame = hidden; tooltipView.alphaValue = 0
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = duration; context.timingFunction = spec.timing
-            tooltipView.animator().frame = shown
-            tooltipView.animator().alphaValue = 1
-        }
+        tooltipView.present(text: tooltip.text, frame: shown, nudgeY: hidden.minY - shown.minY,
+                            duration: duration, timing: spec.timing, wasHidden: tooltipView.isHidden)
     }
 
     /// Engine warnings (microphone or desktop audio) appear on the inline error

@@ -33,7 +33,7 @@ use captures_app::capture_menu::{
     self, GuidanceChip, GuidanceTarget, MenuMode, PreferenceTarget, PrimaryState, RecordingToggle,
 };
 use captures_app::controls::select;
-use captures_app::motion::{Motion, Pose};
+use captures_app::motion::{Motion, Pose, Transition};
 use captures_app::selection::{self, Bounds, DragMode, DragOptions, Point};
 use captures_app::window::{self as window_target, WindowSession};
 use captures_capture::{DisplayDescriptor, LogicalRect};
@@ -502,6 +502,16 @@ fn shade(a: f32) -> D2D1_COLOR_F {
     }
 }
 
+fn mix_color(a: D2D1_COLOR_F, b: D2D1_COLOR_F, t: f32) -> D2D1_COLOR_F {
+    let t = t.clamp(0., 1.);
+    D2D1_COLOR_F {
+        r: a.r + (b.r - a.r) * t,
+        g: a.g + (b.g - a.g) * t,
+        b: a.b + (b.b - a.b) * t,
+        a: a.a + (b.a - a.a) * t,
+    }
+}
+
 struct Segment {
     rect: Rect,
     label: gfx::Text,
@@ -645,6 +655,9 @@ pub struct Menu {
     /// `panelPosition`), and the pointer's offset into it while dragging.
     panel_at: Option<(f32, f32)>,
     panel_drag: Option<(f32, f32)>,
+    /// Per-toggle slide state `(target, from, since_ms)` indexed by
+    /// `RecordingToggle::ALL`, easing over `--dur-3` `--ease-standard`.
+    toggle_slides: [Option<(bool, f32, f64)>; 3],
 }
 
 /// The chip's frame with its title and hint lines.
@@ -738,6 +751,7 @@ impl Menu {
             focus_visible: false,
             panel_at: None,
             panel_drag: None,
+            toggle_slides: [None; 3],
         }
     }
 
@@ -1084,6 +1098,33 @@ impl Menu {
         if open != self.open_since.map(|(field, _)| field) {
             self.open_since = open.map(|field| (field, now));
         }
+        for (i, toggle) in RecordingToggle::ALL.into_iter().enumerate() {
+            let on = self.record.available(toggle) && self.record.on(toggle);
+            match self.toggle_slides[i] {
+                None => {
+                    self.toggle_slides[i] = Some((on, if on { 1. } else { 0. }, f64::NEG_INFINITY));
+                }
+                Some((prev, from, since)) if prev != on => {
+                    let current = if self.reduced {
+                        if on { 1. } else { 0. }
+                    } else if let Some(tween) = Transition::SegmentLabel.resolve(t) {
+                        let p = tween.progress(now - since, false) as f32;
+                        let prev_goal = if prev { 1. } else { 0. };
+                        from + (prev_goal - from) * p
+                    } else if prev {
+                        1.
+                    } else {
+                        0.
+                    };
+                    self.toggle_slides[i] = Some((
+                        on,
+                        current,
+                        if self.reduced { f64::NEG_INFINITY } else { now },
+                    ));
+                }
+                _ => {}
+            }
+        }
         let creating = self
             .drag
             .is_some_and(|drag| matches!(drag.mode, DragMode::Create));
@@ -1112,6 +1153,34 @@ impl Menu {
                     .map(|chip| (region, chip));
             }
         }
+    }
+
+    fn toggle_index(toggle: RecordingToggle) -> usize {
+        match toggle {
+            RecordingToggle::ShowCursor => 0,
+            RecordingToggle::ShowClicks => 1,
+            RecordingToggle::DesktopAudio => 2,
+        }
+    }
+
+    /// Eased 0..=1 slide progress of `toggle` at `self.clock`.
+    fn toggle_progress(&self, toggle: RecordingToggle, enabled: bool, t: &Tokens) -> f32 {
+        let on = enabled && self.record.on(toggle);
+        let goal = if on { 1. } else { 0. };
+        if self.reduced {
+            return goal;
+        }
+        let Some((target, from, since)) = self.toggle_slides[Self::toggle_index(toggle)] else {
+            return goal;
+        };
+        if target != on {
+            return goal;
+        }
+        let Some(tween) = Transition::SegmentLabel.resolve(t) else {
+            return goal;
+        };
+        let p = tween.progress(self.clock - since, false) as f32;
+        from + (goal - from) * p
     }
 
     /// Shipping `showSelectionFeedback` after a region click without a drag.
@@ -1173,12 +1242,20 @@ impl Menu {
             && !self.reduced
             && !primary.hidden
             && self.can_start();
+        let toggling = !self.reduced
+            && Transition::SegmentLabel.resolve(t).is_some_and(|tween| {
+                self.toggle_slides
+                    .iter()
+                    .flatten()
+                    .any(|&(_, _, since)| tween.running(now - since, false))
+            });
         self.guidance
             .as_ref()
             .is_some_and(|(_, chip)| chip.animating(now))
             || running(self.record_since, Motion::CaptureMenuOptionsArrive)
             || running(self.open_since.map(|(_, at)| at), Motion::PopoverIn)
             || pinging
+            || toggling
             // The feedback's end re-keys the chip.
             || self.feedback.1.is_some()
             || self.feedback_pending
@@ -2348,21 +2425,32 @@ impl Menu {
                 }
                 // `.recording-toggle`: the 30×18 `.recording-switch` and its status.
                 Hit::Toggle(toggle) => {
-                    let on = f.enabled && self.record.on(toggle);
+                    let p = self.toggle_progress(toggle, f.enabled, t);
                     let switch = rect(c.left, cy - 9., c.left + 30., cy + 9.);
-                    let knob_x = c.left + 3. + if on { 12. } else { 0. };
+                    let knob_x = c.left + 3. + 12. * p;
                     let knob = rect(knob_x, cy - 6., knob_x + 12., cy + 6.);
-                    if on {
-                        gfx::fill_round(dc, switch, 9., alpha(accent, fade))?;
-                        let ink = t.color_alpha("theme-accent-ink", fade);
-                        gfx::fill_round(dc, knob, 6., ink)?;
+                    let on_fill = if hovered {
+                        t.color_alpha("theme-accent-hover", fade)
                     } else {
-                        gfx::fill_round(dc, switch, 9., shade(0.35 * fade))?;
-                        let edge = t.color_alpha("glass-border-strong", fade);
+                        alpha(accent, fade)
+                    };
+                    let track_fill = mix_color(shade(0.35 * fade), on_fill, p);
+                    gfx::fill_round(dc, switch, 9., track_fill)?;
+                    if p < 0.99 {
+                        let edge_name = if hovered {
+                            "glass-text-subtle"
+                        } else {
+                            "glass-border-strong"
+                        };
+                        let edge = t.color_alpha(edge_name, fade * (1. - p));
                         gfx::border(dc, switch, 9., 1., edge)?;
-                        let knob_color = t.color_alpha("glass-text-subtle", fade);
-                        gfx::fill_round(dc, knob, 6., knob_color)?;
                     }
+                    let knob_color = mix_color(
+                        t.color_alpha("glass-text-subtle", fade),
+                        t.color_alpha("theme-accent-ink", fade),
+                        p,
+                    );
+                    gfx::fill_round(dc, knob, 6., knob_color)?;
                     let status = if hovered {
                         "glass-text"
                     } else {
@@ -4606,5 +4694,46 @@ mod tests {
         let mut m = menu(Target::Window, true);
         m.hover_window(Some(Some(0)));
         assert_eq!(m.pick(), Some(Hit::Primary));
+    }
+
+    #[test]
+    fn recording_switches_slide_smoothly_and_respect_reduced_motion() {
+        let t = Tokens::variant("dark", "mustard");
+        let mut m = menu(Target::Region, false);
+        m.mode = MenuMode::Recording;
+        m.reduced = false;
+        m.record.capabilities.cursor_control = true;
+        m.record.capabilities.click_highlights = true;
+        m.record.capabilities.system_audio = true;
+        m.record.show_cursor = false;
+        m.record.highlight_clicks = false;
+        m.record.system_audio = false;
+        m.clock = 1_000.;
+        m.sync_motion(&t);
+        assert_eq!(m.toggle_progress(RecordingToggle::ShowCursor, true, &t), 0.);
+        assert_eq!(m.toggle_progress(RecordingToggle::ShowClicks, true, &t), 0.);
+
+        // Turning ShowClicks on also couples ShowCursor on; both slide together.
+        m.option_action(Hit::Toggle(RecordingToggle::ShowClicks));
+        m.clock = 1_100.;
+        m.sync_motion(&t);
+        assert!(m.animating(&t));
+        m.clock = 1_200.;
+        let mid_clicks = m.toggle_progress(RecordingToggle::ShowClicks, true, &t);
+        let mid_cursor = m.toggle_progress(RecordingToggle::ShowCursor, true, &t);
+        assert!(mid_clicks > 0. && mid_clicks < 1., "mid={mid_clicks}");
+        assert!(mid_cursor > 0. && mid_cursor < 1., "mid={mid_cursor}");
+
+        m.clock = 1_400.;
+        assert_eq!(m.toggle_progress(RecordingToggle::ShowClicks, true, &t), 1.);
+        assert_eq!(m.toggle_progress(RecordingToggle::ShowCursor, true, &t), 1.);
+
+        // Reduced motion snaps immediately.
+        m.reduced = true;
+        m.option_action(Hit::Toggle(RecordingToggle::ShowCursor));
+        m.clock = 1_500.;
+        m.sync_motion(&t);
+        assert_eq!(m.toggle_progress(RecordingToggle::ShowCursor, true, &t), 0.);
+        assert!(!m.animating(&t));
     }
 }

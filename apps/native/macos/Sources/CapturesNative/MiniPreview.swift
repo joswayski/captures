@@ -1728,7 +1728,7 @@ final class MiniPreviewView: NSView {
     private var sparkles: PreviewMotionOverlay?
     private(set) var sparkling = false
     /// One shared glass tip for card icons and the stack toolbar.
-    private let tooltipView: GlassTooltipView
+    let tooltipView: GlassTooltipView
     private weak var tooltipOwner: MiniPreviewButton?
     /// The styled tooltip currently shown, for tests and accessibility checks.
     var visibleTooltip: String? { tooltipView.isHidden ? nil : tooltipView.text }
@@ -1946,7 +1946,10 @@ final class MiniPreviewView: NSView {
         guard let card = cards[id], !card.isExiting, !stackCollapsed, window?.isVisible == true,
               !NativeMotion.reduceMotion else { return nil }
         let tables = PreviewMotionTables.shared
-        if tooltipOwner?.isDescendant(of: card) == true { tooltipOwner = nil; tooltipView.isHidden = true }
+        if tooltipOwner?.isDescendant(of: card) == true {
+            tooltipOwner = nil
+            tooltipView.dismiss(duration: 0, timing: nil) { true }
+        }
         // A card can begin leaving at the first settle frame, when its model
         // frame already holds the target but its presentation is still zero.
         // Freeze the presentation before building the dust source or streak.
@@ -2259,22 +2262,13 @@ final class MiniPreviewView: NSView {
               (button.superview as? MiniPreviewCardView)?.isExiting != true else {
             guard tooltipOwner === button else { return }
             tooltipOwner = nil
-            guard duration > 0 else {
-                tooltipView.alphaValue = 0; tooltipView.isHidden = true
-                return
+            tooltipView.dismiss(duration: duration, timing: spec.timing) { [weak self] in
+                self?.tooltipOwner == nil
             }
-            NSAnimationContext.runAnimationGroup({ context in
-                context.duration = duration; context.timingFunction = spec.timing
-                tooltipView.animator().alphaValue = 0
-            }, completionHandler: { [weak self] in
-                guard let self, self.tooltipOwner == nil else { return }
-                self.tooltipView.isHidden = true
-            })
             return
         }
         tooltipOwner = button
-        tooltipView.text = text
-        let size = tooltipView.textSize
+        let size = tooltipView.textSize(for: text)
         let anchor = button.convert(button.bounds, to: self)
         // Shared rule: bottom-anchored stacks open tips above their icons.
         let above = !anchoredAtTop
@@ -2285,30 +2279,10 @@ final class MiniPreviewView: NSView {
                 Double(size.width), Double(size.height), above, progress)
             return NSRect(x: value.x, y: value.y, width: value.width, height: value.height)
         }
-        // A chip still on screen, even one fading out after the pointer left
-        // its icon, jumps straight to its new owner at full opacity instead of
-        // sliding across the card or fading in again.
-        let wasHidden = tooltipView.isHidden
-        tooltipView.isHidden = false
-        tooltipView.needsLayout = true
-        guard duration > 0, wasHidden else {
-            tooltipView.layer?.removeAllAnimations()
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0
-                context.allowsImplicitAnimation = false
-                tooltipView.frame = tipFrame(1)
-                tooltipView.alphaValue = 1
-            }
-            tooltipView.needsDisplay = true
-            return
-        }
-        tooltipView.layer?.removeAllAnimations()
-        tooltipView.frame = tipFrame(0); tooltipView.alphaValue = 0
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = duration; context.timingFunction = spec.timing
-            tooltipView.animator().frame = tipFrame(1)
-            tooltipView.animator().alphaValue = 1
-        }
+        let hidden = tipFrame(0)
+        let shown = tipFrame(1)
+        tooltipView.present(text: text, frame: shown, nudgeY: hidden.minY - shown.minY,
+                            duration: duration, timing: spec.timing, wasHidden: tooltipView.isHidden)
     }
 
     override func updateTrackingAreas() {

@@ -2256,6 +2256,47 @@ final class MiniPreviewTests: XCTestCase {
                       "the compact pile carries no expand/drag tooltip")
     }
 
+    func testVisibleWindowIconTooltipNeverSlidesBetweenButtons() throws {
+        _ = NSApplication.shared
+        let prior = NativeMotion.motionPreference
+        NativeMotion.motionPreference = { false }
+        defer { NativeMotion.motionPreference = prior }
+        let panel = fixturePanel(ids: ["latest"],
+            images: ["latest": solidImage(.systemRed)],
+            topAnchor: false, savedPaths: ["latest": "/Exports/latest.png"])
+        panel.orderFrontRegardless()
+        defer { panel.close() }
+        let view = panel.previewView
+        let card = try XCTUnwrap(view.card(for: "latest"))
+        let hover = try hoverEvent(for: panel)
+        card.mouseEntered(with: hover)
+        let controls = card.subviews.compactMap { $0 as? MiniPreviewButton }
+        let delete = try XCTUnwrap(controls.first { $0.kind == .trash })
+        let close = try XCTUnwrap(controls.first { $0.kind == .close })
+
+        // Button A -> hide -> Button B: frame lands synchronously at Button B and
+        // never attaches Core Animation position or bounds interpolation.
+        delete.mouseEntered(with: hover)
+        let deleteFrame = view.tooltipView.frame
+        delete.mouseExited(with: hover)
+        view.tooltipView.dismiss(duration: 0, timing: nil) { true }
+        XCTAssertTrue(view.tooltipView.isHidden)
+
+        close.mouseEntered(with: hover)
+        XCTAssertEqual(view.visibleTooltip, "Close")
+        XCTAssertNotEqual(view.tooltipView.frame.midX, deleteFrame.midX)
+        let afterHiddenKeys = Set(view.tooltipView.layer?.animationKeys() ?? [])
+        XCTAssertFalse(afterHiddenKeys.contains("position"))
+        XCTAssertFalse(afterHiddenKeys.contains("bounds"))
+        XCTAssertTrue(afterHiddenKeys.contains("captures.tooltip.opacity"))
+
+        // Button B -> Button A directly while visible: instant jump, zero layer animations.
+        delete.mouseEntered(with: hover)
+        XCTAssertEqual(view.visibleTooltip, "Delete")
+        XCTAssertEqual(view.tooltipView.frame, deleteFrame)
+        XCTAssertTrue((view.tooltipView.layer?.animationKeys() ?? []).isEmpty)
+    }
+
     func testHoverBlursDarkensAndScalesMediaAndStalePointerLockHoldsItOff() throws {
         _ = NSApplication.shared
         let panel = fixturePanel(ids: ["card"], images: ["card": solidImage(.white)])

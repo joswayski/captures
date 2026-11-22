@@ -209,4 +209,58 @@ final class NativeMotionTests: XCTestCase {
         controller.dismiss()
         XCTAssertNil(controller.panel)
     }
+
+    func testToggleSwitchesAnimateInVisibleWindowsAndRespectReduceMotion() throws {
+        _ = NSApplication.shared
+        let prior = NativeMotion.motionPreference
+        defer { NativeMotion.motionPreference = prior }
+        NativeMotion.motionPreference = { false }
+
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 120),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 120))
+        window.contentView = content
+        window.orderFrontRegardless()
+        defer { window.close() }
+
+        // PreferenceSwitchButton: no slide on first mount, slides when rebuilt with previousOn != isOn.
+        let initial = PreferenceSwitchButton(frame: NSRect(x: 0, y: 0, width: 240, height: 28),
+                                             tokens: tokens, label: "Freeze screen", detail: nil,
+                                             isOn: false) {}
+        content.addSubview(initial)
+        XCTAssertFalse(initial.isAnimatingSlide, "initial render lands at rest")
+
+        let rebuilt = PreferenceSwitchButton(frame: NSRect(x: 0, y: 32, width: 240, height: 28),
+                                             tokens: tokens, label: "Freeze screen", detail: nil,
+                                             isOn: true, previousOn: false) {}
+        content.addSubview(rebuilt)
+        XCTAssertTrue(rebuilt.isAnimatingSlide, "toggling on rebuild slides from the prior side")
+
+        // RecordingSwitchButton slides when flipped in a visible window.
+        let toggle = CaptureMenuPolicy.Toggle(key: "show_cursor", label: "Show cursor",
+                                              accessibilityLabel: "Show cursor", unavailableReason: "")
+        let recording = RecordingSwitchButton(frame: NSRect(x: 0, y: 64, width: 120, height: 28),
+                                              tokens: tokens, toggle: toggle, available: true)
+        content.addSubview(recording)
+        XCTAssertFalse(recording.isAnimatingSlide)
+        recording.isOn = true
+        XCTAssertTrue(recording.isAnimatingSlide)
+
+        // EditorMakeCopySwitch slides when toggled in a visible window.
+        let editorSwitch = EditorMakeCopySwitch(frame: NSRect(x: 130, y: 64, width: 160, height: 28))
+        editorSwitch.tokens = tokens
+        content.addSubview(editorSwitch)
+        XCTAssertFalse(editorSwitch.isAnimatingSlide)
+        editorSwitch.state = .on
+        XCTAssertTrue(editorSwitch.isAnimatingSlide)
+
+        // Reduce Motion lands immediately with no timer scheduled.
+        NativeMotion.motionPreference = { true }
+        let reduced = PreferenceSwitchButton(frame: NSRect(x: 0, y: 92, width: 240, height: 28),
+                                             tokens: tokens, label: "Freeze screen", detail: nil,
+                                             isOn: true, previousOn: false) {}
+        content.addSubview(reduced)
+        XCTAssertFalse(reduced.isAnimatingSlide, "Reduce Motion skips switch slides")
+    }
 }
