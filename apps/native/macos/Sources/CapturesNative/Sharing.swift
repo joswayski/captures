@@ -33,8 +33,6 @@ final class SharingController: NSObject, NSWindowDelegate, NSTextFieldDelegate {
     private let trashNote = NSTextField(wrappingLabelWithString: "Cloud file is in Trash. Restore keeps it private.")
     private var buttons: [String: CaptureButton] = [:]
     private var tokens: Tokens
-    private var captureHidden = false
-    private var restoreAfterCapture = false
     private var confirmTrash = false
     private var previewID: String?
 
@@ -139,26 +137,17 @@ final class SharingController: NSObject, NSWindowDelegate, NSTextFieldDelegate {
         let previousID = model.artifact?.id
         _ = model.open(artifact)
         if previousID != model.artifact?.id { confirmTrash = false }
-        if !captureHidden {
-            if !window.isVisible { window.center() }
-            if window.isMiniaturized { window.deminiaturize(nil) }
-            window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
-        }
+        if !window.isVisible { window.center() }
+        if window.isMiniaturized { window.deminiaturize(nil) }
+        window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         refresh()
     }
 
     func dismiss() {
-        restoreAfterCapture = false; window.orderOut(nil)
+        window.orderOut(nil)
         model.code = ""; code.stringValue = ""
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool { dismiss(); return false }
-
-    func setCaptureHidden(_ hidden: Bool) {
-        guard hidden != captureHidden else { return }
-        captureHidden = hidden
-        if hidden { restoreAfterCapture = window.isVisible; window.orderOut(nil) }
-        else if restoreAfterCapture { restoreAfterCapture = false; window.orderFront(nil) }
-    }
 
     func restyle(_ tokens: Tokens) {
         self.tokens = tokens

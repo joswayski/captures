@@ -125,10 +125,6 @@ final class SharingTests: XCTestCase {
         XCTAssertEqual(form.password.stringValue, "kept-password")
         XCTAssertEqual(form.expiry.stringValue, "2028-05-06T07:08:09Z")
         XCTAssertEqual(form.window.sharingType, .none)
-        form.setCaptureHidden(true); XCTAssertFalse(form.window.isVisible)
-        form.setCaptureHidden(false); XCTAssertTrue(form.window.isVisible)
-        form.setCaptureHidden(true); form.dismiss(); form.setCaptureHidden(false)
-        XCTAssertFalse(form.window.isVisible, "a dismissed popup must not resurrect after capture")
         XCTAssertEqual(form.model.artifact?.id, "chosen")
         XCTAssertEqual(transport.operations, ["open", "open"])
     }

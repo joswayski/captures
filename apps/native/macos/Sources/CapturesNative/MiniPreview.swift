@@ -2150,14 +2150,18 @@ final class MiniPreviewView: NSView {
                 Double(size.width), Double(size.height), above, progress)
             return NSRect(x: value.x, y: value.y, width: value.width, height: value.height)
         }
-        let wasHidden = tooltipView.isHidden || tooltipView.alphaValue == 0
+        // A chip still on screen, even one fading out after the pointer left
+        // its icon, jumps straight to its new owner at full opacity instead of
+        // sliding across the card or fading in again.
+        let wasHidden = tooltipView.isHidden
         tooltipView.isHidden = false
         tooltipView.needsLayout = true
-        guard duration > 0 else {
+        guard duration > 0, wasHidden else {
+            tooltipView.layer?.removeAllAnimations()
             tooltipView.frame = tipFrame(1); tooltipView.alphaValue = 1
             return
         }
-        if wasHidden { tooltipView.frame = tipFrame(0); tooltipView.alphaValue = 0 }
+        tooltipView.frame = tipFrame(0); tooltipView.alphaValue = 0
         NSAnimationContext.runAnimationGroup { context in
             context.duration = duration; context.timingFunction = spec.timing
             tooltipView.animator().frame = tipFrame(1)

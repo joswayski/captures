@@ -89,27 +89,6 @@ private enum Recapture {
     case display
 }
 
-enum CaptureWindowRestoreAction: Equatable {
-    case none
-    case visible
-    case key
-}
-
-struct CaptureWindowRestoration {
-    private var wasVisible = false
-    private var wasKey = false
-
-    mutating func begin(windowIsVisible: Bool, windowIsKey: Bool) {
-        wasVisible = windowIsVisible
-        wasKey = windowIsKey
-    }
-    mutating func finish(restoreRequested: Bool) -> CaptureWindowRestoreAction {
-        defer { wasVisible = false; wasKey = false }
-        guard restoreRequested, wasVisible else { return .none }
-        return wasKey ? .key : .visible
-    }
-}
-
 /// Shipping's capture activation handoff (`captures-macos-window`
 /// `remember_frontmost_app_before_activation`, `conceal_document_windows_for_capture`
 /// and `reveal_concealed_document_windows`). A capture surface has to activate
@@ -143,16 +122,15 @@ struct CaptureActivationHandoff {
     }
 
     /// Ends the handoff once the capture surface is gone: puts concealed
-    /// documents back, runs `restore` for the windows the capture hid itself,
-    /// and with another app to return to, sends them all behind it and hands
-    /// activation back.
-    mutating func finish(restore: () -> Void = {}) {
+    /// documents back and, with another app to return to, sends them all
+    /// behind it and hands activation back. Documents the capture never hid
+    /// keep their place: nothing is raised, made key or activated.
+    mutating func finish() {
         let previous = previousApp
         let windows = concealed
         previousApp = nil
         concealed = []
         for window in windows where !window.isVisible { window.orderFront(nil) }
-        restore()
         guard let previous, !previous.isTerminated else { return }
         // `orderFront` still raises a window above the user's app while Captures
         // is active. Sending each to the back, frontmost first, keeps their own
@@ -250,7 +228,6 @@ final class LiveCaptureController: NSObject {
     private var userSelectionGeneration = 0
     private var reloadingHistorySelection = false
     private var capturing = false
-    private var windowRestoration = CaptureWindowRestoration()
     private var activationHandoff = CaptureActivationHandoff()
     private var clearingHistory = false
     private var flowGeneration: UInt64?
@@ -497,9 +474,6 @@ final class LiveCaptureController: NSObject {
     /// Top of the filters row, `s-6` below the header (shipping `.history-shell` gap).
     private var contentTop: CGFloat = 136
     private var renderedRecoveryWidth: CGFloat = 0
-    /// Called with true when a capture hides this window and false when the
-    /// capture ends, so the host can hide its other windows too.
-    var workspaceHidden: ((Bool) -> Void)?
     var nativeProfileRoot: String? { historyRoot.isEmpty ? nil : historyRoot }
 
     init(root: Surface, window: NSWindow, tokens: Tokens, historyRoot: String?, settingsPath: String?,
@@ -1698,7 +1672,6 @@ final class LiveCaptureController: NSObject {
               !externalOpenPending, !permissionsVisible,
               displays.indices.contains(index), !historyRoot.isEmpty else { return false }
         captureAttemptKind = kind
-        windowRestoration.begin(windowIsVisible: window.isVisible, windowIsKey: window.isKeyWindow)
         activationHandoff.begin()
         let display = displays[index]; setBusy(true, message: "Preparing capture…")
         run({ [settingsPath] in try CapturePreferences.load(path: settingsPath) }) { [weak self] result in
@@ -1717,8 +1690,6 @@ final class LiveCaptureController: NSObject {
                     settings: preferences.miniPreviewSettings)
                 self.preparingRegion = kind == .region
                 self.preparingWindow = kind == .window
-                self.window.orderOut(nil)
-                self.workspaceHidden?(true)
                 if kind == .display && preferences.countdown > 0 {
                     let panel = ScreenshotCountdownPanel(screen: screen, tokens: self.tokens, remaining: preferences.countdown)
                     self.countdownPanel = panel; panel.orderFrontRegardless()
@@ -1759,7 +1730,6 @@ final class LiveCaptureController: NSObject {
               !externalOpenPending, !permissionsVisible,
               displays.indices.contains(index), !historyRoot.isEmpty else { return false }
         captureAttemptKind = .region
-        windowRestoration.begin(windowIsVisible: window.isVisible, windowIsKey: window.isKeyWindow)
         activationHandoff.begin()
         let display = displays[index]
         unifiedControlsState = .initial
@@ -1792,8 +1762,6 @@ final class LiveCaptureController: NSObject {
                 self.snapshotPending = false
                 self.previewCaptureGeneration = self.miniPreviews?.beginCapture(
                     settings: preferences.miniPreviewSettings)
-                self.window.orderOut(nil)
-                self.workspaceHidden?(true)
                 let tick: () -> Void = { [weak self] in
                     guard let self, let display = self.unifiedDisplay else { return }
                     self.tickCountdown(display: display, preferences: preferences,
@@ -2926,7 +2894,6 @@ final class LiveCaptureController: NSObject {
         countdownPanel?.close(); countdownPanel = nil
         unifiedSession = nil; unifiedTarget = nil; unifiedDisplay = nil; unifiedScreen = nil
         // The take records the user's app: hand activation back to it now.
-        // Preferences and History stay hidden until the recording finishes.
         activationHandoff.finish()
         // Keep the disarmed flow as the single process-wide owner until the
         // recording is finalized or discarded. Only selector shortcuts end.
@@ -3373,7 +3340,7 @@ final class LiveCaptureController: NSObject {
         }
     }
 
-    func finishCapture(restoreWindow: Bool = true, restorePreview: Bool = true) {
+    func finishCapture(restorePreview: Bool = true) {
         if recordingScreenshotGeneration != nil {
             finishRecordingScreenshot()
         }
@@ -3426,17 +3393,7 @@ final class LiveCaptureController: NSObject {
         }
         snapshotPending = false; setBusy(false)
         publishRecordingDisplayRoute()
-        activationHandoff.finish {
-            if restoreWindow { workspaceHidden?(false) }
-            switch windowRestoration.finish(restoreRequested: restoreWindow) {
-            case .none: break
-            case .visible:
-                window.orderFront(nil)
-            case .key:
-                window.makeKeyAndOrderFront(nil)
-                NSApp.activate(ignoringOtherApps: true)
-            }
-        }
+        activationHandoff.finish()
     }
 
     private func setBusy(_ busy: Bool, message: String = "") {

@@ -923,8 +923,6 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private var rootWindowCloseHandler: RootWindowCloseHandler?
     /// Preferences and setup open in their own windows beside History.
     private let appWindows = AppWindows()
-    /// Windows a capture hid alongside History, restored when it ends.
-    private var hiddenForCapture: [NSWindow] = []
     private var statusItem: NSStatusItem?
     private var statusActions: LiveStatusActions?
     private var startupNotice: StartupNoticeController?
@@ -1249,7 +1247,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         onboardingController?.flush()
         permissionController?.flush()
         performTermination(flushPreferences: { [weak self] in self?.preferencesController?.flush() },
-            cancelCapture: { [weak self] in self?.liveController?.finishCapture(restoreWindow: false) },
+            cancelCapture: { [weak self] in self?.liveController?.finishCapture() },
             closeShortcuts: { [weak self] in self?.closeCaptureShortcuts() },
             closePreviews: { [weak self] in self?.miniPreviews?.close() },
             drainActions: {
@@ -1651,7 +1649,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             updateNotice?.close(); updateNotice = nil; updateNoticeSettings = nil
         }
         if !options.live {
-            liveController?.finishCapture(restoreWindow: false)
+            liveController?.finishCapture()
             liveController = nil
             liveContent = nil
         }
@@ -1749,9 +1747,6 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                 }, showPreferenceSetting: { [weak self] setting in
                     self?.showPreferences(revealing: setting)
                 })
-            liveController?.workspaceHidden = { [weak self] hidden in
-                self?.setCompanionWindowsHidden(hidden)
-            }
             renderedLiveStyleRevision = liveStyleRevision
             drainOpenImages()
             Metrics.emit("scene-construction", milliseconds: (CACurrentMediaTime() - started) * 1000, detail: scene)
@@ -1889,32 +1884,11 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         case .preferences:
             preferencesController?.flush()
             preferencesController = nil
-            hiddenForCapture.removeAll { appWindows.kind(of: $0) == nil }
             updateShortcutState()
         case .setup:
             onboardingView = nil
         case .history:
             break
-        }
-    }
-
-    /// A capture hides History; hide Preferences with it so neither shows in
-    /// the capture, and restore both when the capture ends.
-    private func setCompanionWindowsHidden(_ hidden: Bool) {
-        sharingController?.setCaptureHidden(hidden)
-        if hidden {
-            for kind in [AppWindowKind.preferences, .setup] {
-                guard let companion = appWindows.window(kind), companion.isVisible,
-                      !hiddenForCapture.contains(where: { $0 === companion }) else { continue }
-                companion.orderOut(nil)
-                hiddenForCapture.append(companion)
-            }
-        } else {
-            let restoring = hiddenForCapture
-            hiddenForCapture.removeAll()
-            for companion in restoring where appWindows.kind(of: companion) != nil {
-                companion.orderFront(nil)
-            }
         }
     }
 
@@ -2314,7 +2288,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         guard scene == "live", !captureBusy,
               renderedLiveStyleRevision != liveStyleRevision else { return false }
         guard liveController?.prepareEditorForTermination() != false else { return false }
-        liveController?.finishCapture(restoreWindow: false)
+        liveController?.finishCapture()
         liveController = nil
         liveContent = nil
         return true

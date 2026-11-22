@@ -128,26 +128,6 @@ final class StatusItemTests: XCTestCase {
         try data.write(to: url)
     }
 
-    func testCaptureOnlyRestoresAWorkspaceThatWasPreviouslyVisible() {
-        var restoration = CaptureWindowRestoration()
-        restoration.begin(windowIsVisible: false, windowIsKey: false)
-        XCTAssertEqual(restoration.finish(restoreRequested: true), .none,
-            "background status-item captures must remain backgrounded")
-
-        restoration.begin(windowIsVisible: true, windowIsKey: false)
-        XCTAssertEqual(restoration.finish(restoreRequested: true), .visible,
-            "an unfocused visible workspace must reappear without activation")
-
-        restoration.begin(windowIsVisible: true, windowIsKey: true)
-        XCTAssertEqual(restoration.finish(restoreRequested: true), .key)
-
-        restoration.begin(windowIsVisible: true, windowIsKey: true)
-        XCTAssertEqual(restoration.finish(restoreRequested: false), .none,
-            "termination and scene teardown must override restoration")
-        XCTAssertEqual(restoration.finish(restoreRequested: true), .none,
-            "finishing consumes the prior visibility state")
-    }
-
     func testCaptureFromAnotherAppKeepsDocumentsBehindIt() throws {
         // Hand activation back to the session's frontmost app, so the test
         // leaves activation where it found it.
@@ -173,9 +153,7 @@ final class StatusItemTests: XCTestCase {
         XCTAssertFalse(editor.isVisible, "the capture surface must not raise a background editor")
         XCTAssertTrue(preview.isVisible, "floating previews are not documents")
 
-        var restored = false
-        handoff.finish { restored = true }
-        XCTAssertTrue(restored)
+        handoff.finish()
         XCTAssertTrue(editor.isVisible, "the editor comes back once the capture ends")
         XCTAssertNil(handoff.previousApp)
         XCTAssertTrue(handoff.concealed.isEmpty)
