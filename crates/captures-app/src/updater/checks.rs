@@ -102,6 +102,39 @@ pub struct Presentation {
     pub acquisition: Option<crate::update_notice::Button>,
     /// The tray or menu-bar update row.
     pub tray: TrayItem,
+    /// An installable release build's Preferences card, as shipping
+    /// `UpdatePreferences` draws it: one action button whose step checks,
+    /// downloads and installs (Update now), with progress and errors.
+    pub card: Option<PreviewCard>,
+}
+
+/// What a [`PreviewCard`]'s button does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CardStep {
+    Check,
+    /// Download and verify, then install (Update now, Try again).
+    Download,
+    /// Install the already verified package.
+    Install,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct PreviewCard {
+    pub description: &'static str,
+    pub action: &'static str,
+    /// `None` while the button is disabled.
+    pub step: Option<CardStep>,
+    /// `.update-settings-status`: the heading, then its `small` detail.
+    pub heading: String,
+    pub detail: String,
+    /// `.update-settings-status-current`: positive text.
+    pub current: bool,
+    /// The installing progress bar; `progress` is `None` while indeterminate.
+    pub progress_bar: bool,
+    pub progress: Option<f64>,
+    pub error: Option<String>,
+    pub fallback: &'static str,
 }
 
 /// Shipping `tray_update_item` and `tray_tooltip`: an available or installing
@@ -798,6 +831,89 @@ impl CheckWorker {
         }
     }
 
+    fn preview_card(&self) -> PreviewCard {
+        use crate::update_notice::format_update_size;
+        let mut card = PreviewCard {
+            description: "Captures checks for a new version automatically. Update now installs it in place.",
+            action: "Check Now",
+            step: Some(CardStep::Check),
+            heading: String::new(),
+            detail: String::new(),
+            current: false,
+            progress_bar: false,
+            progress: None,
+            error: None,
+            fallback: "If this copy cannot update itself, download from captur.es and install over it. Settings and captures stay.",
+        };
+        let version = |release: &ReleaseInfo| super::display_version(&release.version);
+        match &self.status {
+            CheckStatus::Idle => {}
+            CheckStatus::Checking => {
+                card.action = "Checking now…";
+                card.step = None;
+            }
+            CheckStatus::UpToDate => {
+                card.heading = "Up to date".into();
+                card.current = true;
+            }
+            CheckStatus::Available { release } | CheckStatus::Staged { release, .. } => {
+                card.heading = format!("Version {} is available", version(release));
+                if release.size > 0 && matches!(self.status, CheckStatus::Available { .. }) {
+                    card.detail = format!("{} download", format_update_size(release.size));
+                }
+                card.action = "Update now";
+                card.step = Some(if matches!(self.status, CheckStatus::Staged { .. }) {
+                    CardStep::Install
+                } else {
+                    CardStep::Download
+                });
+            }
+            CheckStatus::Downloading {
+                release,
+                downloaded,
+                total,
+            } => {
+                card.heading = format!("Updating to version {}", version(release));
+                card.action = "Installing…";
+                card.step = None;
+                card.progress_bar = true;
+                card.progress = (*total > 0).then(|| {
+                    ((*downloaded as f64 / *total as f64) * 100.)
+                        .round()
+                        .min(100.)
+                });
+                card.detail = match card.progress {
+                    Some(percent) => format!(
+                        "{} / {} · {percent}%",
+                        format_update_size(*downloaded),
+                        format_update_size(*total)
+                    ),
+                    None => format!("{} downloaded", format_update_size(*downloaded)),
+                };
+            }
+            CheckStatus::Verifying { release } | CheckStatus::Cancelling { release } => {
+                card.heading = format!("Updating to version {}", version(release));
+                card.action = "Installing…";
+                card.step = None;
+                card.progress_bar = true;
+            }
+            CheckStatus::Error { message } => {
+                card.heading = "Couldn’t check for updates".into();
+                card.error = Some(message.clone());
+            }
+            CheckStatus::DownloadError { message, .. } => {
+                card.heading = "Update failed".into();
+                card.action = "Try again";
+                card.step = Some(CardStep::Download);
+                card.error = Some(format!("Could not install the update: {message}"));
+            }
+        }
+        if self.thread.is_none() {
+            card.step = None;
+        }
+        card
+    }
+
     pub fn presentation(&self) -> Presentation {
         let status = match &self.status {
             CheckStatus::Idle => "Not checked".into(),
@@ -847,6 +963,7 @@ impl CheckWorker {
             },
             acquisition: self.acquisition(),
             tray: self.tray_item(),
+            card: (self.preview && self.staging_enabled).then(|| self.preview_card()),
         };
         if self.preview {
             // Shipping's Preferences identity, like the Win32/GTK cards.
@@ -1065,6 +1182,74 @@ mod tests {
         let tray = worker.presentation().tray;
         assert_eq!(tray.label, "Checking for Updates…");
         assert!(!tray.enabled && !tray.pin_first);
+        worker.shutdown();
+    }
+
+    #[test]
+    fn preview_card_offers_one_update_now_flow_like_shipping() {
+        let (key, _, _) = signed(&manifest("https://example.invalid/full"));
+        let (mut worker, _) = worker("https://example.invalid/manifest", &key, "2026.11.1201");
+        assert!(
+            worker.presentation().card.is_none(),
+            "development builds keep their card"
+        );
+        worker.preview = true;
+        worker.staging_enabled = true;
+        let release = ReleaseInfo {
+            renderer: Renderer::Wgpu,
+            target: Target::LinuxX64,
+            version: "2026.11.1302".into(),
+            notes: None,
+            size: 104_000_000,
+            changelog: Vec::new(),
+        };
+        let card = worker.presentation().card.unwrap();
+        assert_eq!(
+            (card.action, card.step),
+            ("Check Now", Some(CardStep::Check))
+        );
+        worker.status = CheckStatus::Available {
+            release: release.clone(),
+        };
+        let card = worker.presentation().card.unwrap();
+        assert_eq!(card.heading, "Version 2026.11.13.2 is available");
+        assert_eq!(card.detail, "104 MB download");
+        assert_eq!(
+            (card.action, card.step),
+            ("Update now", Some(CardStep::Download))
+        );
+        worker.status = CheckStatus::Downloading {
+            release: release.clone(),
+            downloaded: 26_000_000,
+            total: 104_000_000,
+        };
+        let card = worker.presentation().card.unwrap();
+        assert_eq!(card.heading, "Updating to version 2026.11.13.2");
+        assert_eq!(card.detail, "26.0 MB / 104 MB · 25%");
+        assert_eq!((card.action, card.step), ("Installing…", None));
+        assert!(card.progress_bar);
+        assert_eq!(card.progress, Some(25.));
+        worker.status = CheckStatus::Staged {
+            release: release.clone(),
+            sha256: String::new(),
+        };
+        assert_eq!(
+            worker.presentation().card.unwrap().step,
+            Some(CardStep::Install)
+        );
+        worker.status = CheckStatus::DownloadError {
+            release,
+            message: "bad signature".into(),
+        };
+        let card = worker.presentation().card.unwrap();
+        assert_eq!(
+            (card.heading.as_str(), card.action),
+            ("Update failed", "Try again")
+        );
+        assert_eq!(
+            card.error.as_deref(),
+            Some("Could not install the update: bad signature")
+        );
         worker.shutdown();
     }
 

@@ -12,6 +12,7 @@ final class UpdateChecksTests: XCTestCase {
         var acquisition: [String: Any]?
         var rawStatus: [String: Any] = ["state": "idle"]
         var installRestart: [String: Any]?
+        var card: [String: Any]?
         func request(_ object: [String: Any]) throws -> [String: Any] {
             let operation = object.string("operation")
             operations.append(operation)
@@ -29,7 +30,8 @@ final class UpdateChecksTests: XCTestCase {
                 "presentation": ["version": "Native development 2026.9.99",
                     "channel": "Explicit development endpoint · Check only", "status": status,
                     "action": checking ? "Checking…" : "Check Now", "enabled": !checking,
-                    "detail": "No installation or update channel is enabled.", "acquisition": acquisition ?? [:]]]
+                    "detail": "No installation or update channel is enabled.", "acquisition": acquisition ?? [:],
+                    "card": card ?? NSNull()]]
         }
         func shutdown(completion: @escaping () -> Void) { shutdowns += 1; completion() }
     }
@@ -126,6 +128,90 @@ final class UpdateChecksTests: XCTestCase {
         XCTAssertFalse(model.enabled)
         XCTAssertEqual(transport.operations.count, closedCount)
         XCTAssertEqual(transport.shutdowns, 1)
+    }
+
+    func testReleaseCardUpdateNowDownloadsThenInstallsLikeShipping() throws {
+        _ = NSApplication.shared
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transport = Transport()
+        let fallback = "If this copy cannot update itself, download from captur.es and install over it. Settings and captures stay."
+        func card(_ action: String, _ step: String?, heading: String, detail: String = "",
+                  progress: Double? = nil, bar: Bool = false, error: String? = nil) -> [String: Any] {
+            ["description": "Captures checks for a new version automatically. Update now installs it in place.",
+             "action": action, "step": step ?? NSNull(), "heading": heading, "detail": detail,
+             "current": false, "progress_bar": bar, "progress": progress ?? NSNull(),
+             "error": error ?? NSNull(), "fallback": fallback]
+        }
+        transport.card = card("Update now", "download", heading: "Version 2026.11.13.2 is available",
+                              detail: "104 MB download")
+        transport.acquisition = ["label": "Download", "enabled": true, "action": ["action": "download_verify"]]
+        let model = try UpdateCheckModel(transport: transport)
+        defer { model.shutdown {} }
+        var installs = 0
+        model.requestInstallation = { installs += 1; return true }
+        for appearance in ["light", "dark"] {
+            let root = Surface(frame: NSRect(x: 0, y: 0, width: 980, height: 720))
+            let loaded = expectation(description: "settings loaded")
+            let controller = PreferencesController(root: root,
+                store: try SettingsStore(path: directory.appendingPathComponent("\(appearance).json").path),
+                tokens: { Tokens.variants["\(appearance)-mustard"]! }, appearanceChanged: { _, _, _ in },
+                settingsPersisted: { _ in loaded.fulfill() }, showHistory: {}, updateChecks: model)
+            controller.revealUpdates()
+            wait(for: [loaded], timeout: 5)
+            XCTAssertFalse(descendants(in: root).contains { ($0 as? NSTextField)?.stringValue == "Package verification" },
+                           "release builds never show the development row")
+            try renderCard(root, "preferences-updates-available-\(appearance)")
+        }
+        let root = Surface(frame: NSRect(x: 0, y: 0, width: 980, height: 720))
+        let loaded = expectation(description: "settings loaded")
+        let controller = PreferencesController(root: root,
+            store: try SettingsStore(path: directory.appendingPathComponent("settings.json").path),
+            tokens: { Tokens.variants["dark-mustard"]! }, appearanceChanged: { _, _, _ in },
+            settingsPersisted: { _ in loaded.fulfill() }, showHistory: {}, updateChecks: model)
+        model.didChange = { [weak controller] in controller?.refreshUpdateChecks() }
+        wait(for: [loaded], timeout: 5)
+        let button = try XCTUnwrap(find("updates.check", in: root) as? CaptureButton)
+        XCTAssertEqual(button.title, "Update now")
+        button.performClick(nil)
+        XCTAssertEqual(transport.operations.filter { $0 == "download_verify" }.count, 1)
+        transport.card = card("Installing…", nil, heading: "Updating to version 2026.11.13.2",
+                              detail: "26.0 MB / 104 MB · 25%", progress: 25, bar: true)
+        model.poll()
+        let installing = try XCTUnwrap(find("updates.check", in: root) as? CaptureButton)
+        XCTAssertEqual(installing.title, "Installing…")
+        XCTAssertFalse(installing.isEnabled)
+        try renderCard(root, "preferences-updates-installing-dark")
+        // The verified package goes straight on to install, as Update now did.
+        transport.checking = false; transport.rawStatus = ["state": "staged"]
+        transport.acquisition = ["label": "Restart and install", "enabled": true, "action": ["action": "install"]]
+        transport.card = card("Update now", "install", heading: "Version 2026.11.13.2 is available")
+        model.poll()
+        XCTAssertEqual(installs, 1)
+        model.poll()
+        XCTAssertEqual(installs, 1, "one Update now installs once")
+        transport.card = card("Try again", "download", heading: "Update failed",
+                              error: "Could not install the update: Native update signature verification failed.")
+        model.setShowChangelog(false) // An idle model refreshes through an explicit poll.
+        XCTAssertEqual(try XCTUnwrap(find("updates.check", in: root) as? CaptureButton).title, "Try again")
+        try renderCard(root, "preferences-updates-failed-dark")
+        controller.flush()
+    }
+
+    private func renderCard(_ root: NSView, _ name: String) throws {
+        guard let directory = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"],
+              let card = find("preferences-card.updates", in: root) else { return }
+        root.layoutSubtreeIfNeeded()
+        let bitmap = try XCTUnwrap(card.bitmapImageRepForCachingDisplay(in: card.bounds))
+        card.cacheDisplay(in: card.bounds, to: bitmap)
+        let url = URL(fileURLWithPath: directory).appendingPathComponent("\(name).png")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: url)
+    }
+
+    private func descendants(in view: NSView) -> [NSView] {
+        view.subviews + view.subviews.flatMap { descendants(in: $0) }
     }
 
     func testPreferencesStatusRefreshPreservesARecorderAndReflowsAbout() throws {

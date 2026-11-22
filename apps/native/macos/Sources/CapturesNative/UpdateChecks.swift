@@ -118,6 +118,23 @@ final class UpdateCheckModel {
 
     var acquisition: UpdateNoticeButton? { UpdateNoticeButton(presentation["acquisition"]) }
 
+    /// An installable release build's Preferences card (shipping `UpdatePreferences`).
+    var card: [String: Any]? { presentation["card"] as? [String: Any] }
+    private var installAfterDownload = false
+
+    /// The card's single button. Shipping's Update now downloads and
+    /// installs in one step, so a verified download goes on to install.
+    @discardableResult func performCardStep() -> Bool {
+        switch card?["step"] as? String {
+        case "check": return check()
+        case "download":
+            installAfterDownload = acquire(.downloadVerify)
+            return installAfterDownload
+        case "install": return acquire(.install)
+        default: return false
+        }
+    }
+
     @discardableResult func acquire(_ action: UpdateNoticeAction) -> Bool {
         guard !closed, let button = acquisition, button.enabled, button.action == action else { return false }
         guard action != .downloadVerify || !busy else { return false }
@@ -194,6 +211,10 @@ final class UpdateCheckModel {
         notice = nextNotice; generation = nextGeneration
         if !busy { timer?.invalidate(); timer = nil }
         if changed { didChange?() }
+        if installAfterDownload, !busy {
+            installAfterDownload = false
+            if card?["step"] as? String == "install" { _ = acquire(.install) }
+        }
     }
 
     func shutdown(completion: @escaping () -> Void) {

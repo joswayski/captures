@@ -1871,7 +1871,89 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         }
     }
 
+    /// Shipping `UpdatePreferences` for installable release builds: one
+    /// button (Check Now, Update now, Installing…, Try again), the status
+    /// heading and detail, a progress bar while installing, the error and
+    /// the captur.es fallback.
+    private func releaseUpdatesCard(_ y: CGFloat, copy: [String: Any]) -> CGFloat {
+        let presentation = updateChecks?.presentation
+        let (card, top) = makeCard("updates", y: y, detail: copy.string("description"))
+        let width = CGFloat((PreferencesPolicy.copy["updates"] as? [String: Any])?["action_width"] as? Double ?? 160)
+        let heading = copy.string("heading"), detail = copy.string("detail")
+        let headingHeight = textHeight(heading.isEmpty ? " " : heading, size: tokens.number("text-sm"),
+                                       width: width)
+        let detailHeight = textHeight(detail, size: tokens.number("text-xs"), width: width)
+        let statusHeight = headingHeight + detailHeight
+        let layout = inlineRow(presentation?.string("version") ?? PreferencesPolicy.text("updates.version"),
+            detail: presentation?.string("channel") ?? PreferencesPolicy.text("updates.channel"),
+            control: NSSize(width: width, height: tokens.number("h-md") + tokens.number("s-2") + statusHeight),
+            y: top, card: card, keepInline: true)
+        let step = copy["step"] as? String
+        let button = CaptureButton(copy.string("action", "Check Now"),
+            frame: NSRect(x: layout.control.minX, y: layout.control.minY, width: width, height: tokens.number("h-md")),
+            tokens: tokens, action: { [weak self] in _ = self?.updateChecks?.performCardStep() })
+        button.isEnabled = step != nil
+        button.identifier = NSUserInterfaceItemIdentifier("updates.check")
+        card.addSubview(button)
+        let statusTop = button.frame.maxY + tokens.number("s-2")
+        let headingLabel = wrappingLabel(heading, frame: NSRect(x: layout.control.minX, y: statusTop,
+            width: width, height: headingHeight), size: tokens.number("text-sm"), parent: card,
+            color: copy["current"] as? Bool == true ? "positive-text" : "text-subtle")
+        headingLabel.alignment = .right
+        headingLabel.identifier = NSUserInterfaceItemIdentifier("updates.status")
+        headingLabel.setAccessibilityRole(.staticText)
+        if !detail.isEmpty {
+            let detailLabel = wrappingLabel(detail, frame: NSRect(x: layout.control.minX,
+                y: statusTop + headingHeight, width: width, height: detailHeight),
+                size: tokens.number("text-xs"), parent: card)
+            detailLabel.alignment = .right
+        }
+        var y = layout.row.maxY
+        if copy["progress_bar"] as? Bool == true {
+            // `.update-settings-progress`: a 4 pt accent track under the row.
+            let track = Surface(frame: NSRect(x: inset, y: y + tokens.number("s-3"), width: contentWidth, height: 4))
+            track.wantsLayer = true; track.layer?.cornerRadius = 2
+            track.layer?.backgroundColor = tokens.color("surface-sunken").cgColor
+            let percent = (copy["progress"] as? NSNumber)?.doubleValue
+            let fill = Surface(frame: NSRect(x: 0, y: 0, width: contentWidth * CGFloat((percent ?? 34) / 100), height: 4))
+            fill.wantsLayer = true; fill.layer?.cornerRadius = 2
+            fill.layer?.backgroundColor = tokens.color("theme-accent").cgColor
+            track.addSubview(fill); card.addSubview(track)
+            track.setAccessibilityElement(true); track.setAccessibilityRole(.progressIndicator)
+            track.setAccessibilityLabel("Installing update")
+            if let percent { track.setAccessibilityValue(NSNumber(value: percent)) }
+            if percent == nil, !NativeMotion.reduceMotion {
+                // `.update-settings-progress-indeterminate`: the bar slides.
+                let slide = CABasicAnimation(keyPath: "position.x")
+                slide.fromValue = -fill.frame.width / 2; slide.toValue = contentWidth + fill.frame.width / 2
+                slide.duration = 1.2; slide.repeatCount = .infinity
+                fill.layer?.add(slide, forKey: "indeterminate")
+                track.layer?.masksToBounds = true
+            }
+            y = track.frame.maxY
+        }
+        if let error = copy["error"] as? String, !error.isEmpty {
+            let height = textHeight(error, size: tokens.number("text-sm"), width: contentWidth)
+            let label = wrappingLabel(error, frame: NSRect(x: inset, y: y + tokens.number("s-3"),
+                width: contentWidth, height: height), size: tokens.number("text-sm"), parent: card, color: "danger-text")
+            label.setAccessibilityRole(.staticText)
+            NSAccessibility.post(element: label, notification: .announcementRequested,
+                                 userInfo: [.announcement: error, .priority: NSAccessibilityPriorityLevel.high.rawValue])
+            y = label.frame.maxY
+        }
+        let fallback = copy.string("fallback")
+        let fallbackHeight = textHeight(fallback, size: tokens.number("text-xs"), width: contentWidth)
+        wrappingLabel(fallback, frame: NSRect(x: inset, y: y + tokens.number("s-3"), width: contentWidth,
+            height: fallbackHeight), size: tokens.number("text-xs"), parent: card)
+        y += tokens.number("s-3") + fallbackHeight
+        y = divider(y, card)
+        let rowCopy = PreferencesPolicy.row("show_update_changelog")
+        y = switchRow(["show_update_changelog"], title: rowCopy.title, detail: rowCopy.detail, y: y, card: card)
+        return finish(card, y)
+    }
+
     private func updatesCard(_ y: CGFloat) -> CGFloat {
+        if let release = updateChecks?.card { return releaseUpdatesCard(y, copy: release) }
         let (card, top) = makeCard("updates", y: y)
         let width = CGFloat((PreferencesPolicy.copy["updates"] as? [String: Any])?["action_width"] as? Double ?? 160)
         let copy = updateChecks?.presentation
