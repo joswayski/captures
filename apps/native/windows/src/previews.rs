@@ -11,17 +11,25 @@
 //! ([`Stack::uia_items`] through `panel_uia`). Buttons are exposed whether or
 //! not the card is hovered, as they are in shipping's DOM.
 //!
-//! Not ported yet: the collapsed pile and its Minimize control, arrive/exit
-//! motion, file drags, keyboard focus, tooltips and the editor-presence pill.
+//! Cards rise in with shipping's `thumbnail-arrive`; Close streaks a card
+//! out, Delete dissolves it into dust from the trash control and Clear all
+//! streaks every card out bottom first, each holding its slot
+//! (`preview_motion::StackExits`) while older cards settle into the hole, as
+//! on GTK. The Close streak's horizontal blur and the arrive blur are not
+//! drawn.
+//!
+//! Not ported yet: file drags, keyboard focus, tooltips, the capture
+//! highlight and the editor-presence pill.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
-use captures_app::motion::{Transition, Tween};
+use captures_app::motion::{Animation, Motion, Transition, Tween};
 use captures_app::preview::{self, CollapsedCardPose, PreviewStack};
 use captures_app::preview_chrome;
-use captures_app::preview_motion::StackFan;
+use captures_app::preview_motion::{self, DustParticle, ExitKind, StackExits, StackFan};
 use captures_history::HistoryEntry;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::*;
@@ -46,7 +54,7 @@ use crate::tokens::Tokens;
 
 /// Not exported by the `windows` crate's `WindowsAndMessaging`.
 const WM_MOUSELEAVE: u32 = 0x02A3;
-/// Drives the pile's fly and fan while they run.
+/// Drives the pile's fly and fan, and card arrivals and exits, while they run.
 const MOTION_TIMER: usize = 7;
 /// Polls the pointer while empty areas let clicks through.
 const POLL_TIMER: usize = 8;
@@ -130,6 +138,77 @@ pub struct Stack {
     /// Collapse progress when the latest fly began, and when (ms).
     fly: (f64, f64),
     fan: StackFan,
+    /// Shipping's card arrive and exit animations; `None` (offscreen
+    /// fixtures) adds and removes cards at once.
+    pub card_motion: Option<CardMotion>,
+    /// Arrival start per card id.
+    arrivals: HashMap<String, f64>,
+    /// `cards` is the display list: live cards plus exiting ones, which keep
+    /// their slot here until their exit ends. `stack` holds only live ones.
+    exits: StackExits,
+    /// A Delete's dust chips, by card id.
+    dust: HashMap<String, Vec<DustParticle>>,
+}
+
+/// `thumbnail-arrive`, the Close exit (`thumbnail-dismiss`) and the Delete
+/// fallback for a card without an image.
+#[derive(Clone, Copy)]
+pub struct CardMotion {
+    arrive: Animation,
+    dismiss: Animation,
+    fallback: Animation,
+}
+
+impl CardMotion {
+    pub fn resolve(tokens: &Tokens) -> Option<Self> {
+        Some(Self {
+            arrive: Motion::PreviewCardArrive.resolve(tokens)?,
+            dismiss: Motion::PreviewDismiss.resolve(tokens)?,
+            fallback: Motion::PreviewDeleteFallback.resolve(tokens)?,
+        })
+    }
+}
+
+/// Opacities of a card's parts while it dissolves (all 1 otherwise): its
+/// shadow and outline, its surface and image, and its chips and controls.
+#[derive(Clone, Copy)]
+struct Fade {
+    frame: f32,
+    source: f32,
+    chrome: f32,
+}
+
+impl Fade {
+    const NONE: Self = Self {
+        frame: 1.,
+        source: 1.,
+        chrome: 1.,
+    };
+}
+
+/// Paint `draw` at `opacity`: nothing when invisible, through a layer when
+/// translucent.
+fn faded(dc: &ID2D1DeviceContext, opacity: f32, draw: impl FnOnce() -> Result<()>) -> Result<()> {
+    if opacity <= 0. {
+        return Ok(());
+    }
+    if opacity >= 1. {
+        return draw();
+    }
+    unsafe {
+        dc.PushLayer(
+            &D2D1_LAYER_PARAMETERS1 {
+                contentBounds: rect(-1e6, -1e6, 1e6, 1e6),
+                opacity,
+                maskTransform: Matrix3x2::identity(),
+                ..Default::default()
+            },
+            None::<&ID2D1Layer>,
+        );
+    }
+    let result = draw();
+    unsafe { dc.PopLayer() };
+    result
 }
 
 /// Milliseconds on a monotonic clock shared by every preview motion.
@@ -174,6 +253,10 @@ impl Stack {
             reduced: false,
             fly: (0., 0.),
             fan: StackFan::default(),
+            card_motion: None,
+            arrivals: HashMap::new(),
+            exits: StackExits::default(),
+            dust: HashMap::new(),
         }
     }
 
@@ -191,21 +274,128 @@ impl Stack {
         }
     }
 
-    /// The fly or the fan is still moving.
+    /// The fly, the fan, an arrival or an exit is still moving, or a finished
+    /// exit still waits for [`Self::prune_exits`].
     pub fn animating(&self) -> bool {
-        let Some((fly, fan)) = &self.motion else {
-            return false;
-        };
         let now = now_ms();
-        fly.running(now - self.fly.1, self.reduced)
-            || self
-                .fan
-                .running(self.cards.len().saturating_sub(1), now, fan, self.reduced)
+        let pile = self.motion.is_some_and(|(fly, fan)| {
+            fly.running(now - self.fly.1, self.reduced)
+                || self
+                    .fan
+                    .running(self.cards.len().saturating_sub(1), now, &fan, self.reduced)
+        });
+        let arriving = self.card_motion.is_some_and(|m| {
+            self.arrivals
+                .values()
+                .any(|start| m.arrive.running(now - start, self.reduced))
+        });
+        pile || arriving || !self.exits.is_empty()
+    }
+
+    /// The card at display `index` is playing its exit.
+    fn exiting(&self, index: usize) -> bool {
+        self.cards
+            .get(index)
+            .is_some_and(|card| self.exits.exiting(&card.entry.id).is_some())
+    }
+
+    /// Play the card's shipping exit while it keeps its slot, or drop it at
+    /// once (reduced motion, fixtures, a collapsed or flying pile). Older
+    /// cards settle into the slot when `settles`.
+    fn leave(&mut self, id: &str, kind: ExitKind, delay_ms: f64, settles: bool) {
+        let Some(index) = self.cards.iter().position(|c| c.entry.id == id) else {
+            return;
+        };
+        let progress = self.progress();
+        let playing = !self.reduced
+            && self.card_motion.is_some()
+            && !self.collapsed()
+            && progress <= 0.
+            && self.stack.ids().iter().any(|live| live == id);
+        let image = self.cards[index].image.as_ref().map(|image| {
+            let size = unsafe { image.GetSize() };
+            (f64::from(size.width), f64::from(size.height))
+        });
+        let kind = match (kind, image) {
+            (ExitKind::Dust, None) => ExitKind::DeleteFallback,
+            _ => kind,
+        };
+        let begun = playing
+            && self.exits.begin(
+                self.stack.ids(),
+                id,
+                kind,
+                now_ms(),
+                delay_ms,
+                settles,
+                &preview_motion::settle_tween(),
+            );
+        if !begun {
+            self.remove(index);
+            return;
+        }
+        if let (ExitKind::Dust, Some(size)) = (kind, image) {
+            let saved = self.cards[index].entry.saved_path.is_some();
+            let origin = preview_motion::delete_origin_x(f64::from(CARD_W), saved, self.right);
+            // FNV-1a of the id, as GTK, so a card always crumbles the same way.
+            let seed = id.bytes().fold(0x811c_9dc5_u32, |hash, byte| {
+                (hash ^ u32::from(byte)).wrapping_mul(0x0100_0193)
+            });
+            let particles = preview_motion::dust_particles(
+                f64::from(CARD_W),
+                f64::from(CARD_H),
+                size,
+                (origin, preview_motion::DELETE_ORIGIN_Y),
+                seed,
+            );
+            self.dust.insert(id.to_owned(), particles);
+        }
+        self.stack.remove(id);
+        self.arrivals.remove(id);
+        self.hovered = None;
+        self.hot = None;
+        self.pressed = None;
+    }
+
+    /// Clear all: every card streaks out as it looks now, the bottom card
+    /// first, without the survivors settling. History keeps them.
+    fn clear_all(&mut self) {
+        let ids = self.stack.ids().to_vec();
+        for (index, id) in ids.iter().enumerate() {
+            let delay = preview_motion::clear_delay_ms(ids.len(), index, self.top);
+            self.leave(id, ExitKind::Dismiss, delay, false);
+        }
+    }
+
+    /// Drop the cards whose exit has ended; true when any left, so the
+    /// window shrinks to the smaller stack where the settle ended.
+    fn prune_exits(&mut self) -> bool {
+        if !self
+            .exits
+            .prune(now_ms(), self.reduced, &preview_motion::settle_tween())
+        {
+            return false;
+        }
+        let display = self.exits.display_ids().to_vec();
+        self.cards.retain(|card| display.contains(&card.entry.id));
+        self.dust.retain(|id, _| display.contains(id));
+        // Display indices moved; the next pointer event finds the hover again.
+        self.hovered = None;
+        self.hot = None;
+        self.pressed = None;
+        true
     }
 
     /// Collapse into the pile or expand it, flying from wherever the cards
     /// are now.
     pub fn set_collapsed(&mut self, collapsed: bool) {
+        // The pile has no exits: cards still leaving go at once.
+        if !self.exits.is_empty() {
+            self.exits.clear();
+            let display = self.exits.display_ids().to_vec();
+            self.cards.retain(|card| display.contains(&card.entry.id));
+            self.dust.clear();
+        }
         let from = self.progress();
         self.stack.set_collapsed(collapsed);
         self.fly = (from, now_ms());
@@ -235,10 +425,21 @@ impl Stack {
     }
 
     pub fn push(&mut self, g: &Gfx, entry: HistoryEntry, image: Option<&image::RgbaImage>) {
+        // A card restored while it is still leaving comes back as a new one.
+        if let Some(index) = self
+            .cards
+            .iter()
+            .position(|c| c.entry.id == entry.id && self.exits.exiting(&c.entry.id).is_some())
+        {
+            self.remove(index);
+        }
         if !self.stack.insert(entry.id.clone()) {
             return;
         }
         let image = image.and_then(|image| crate::capture::bitmap(g, image).ok());
+        if self.card_motion.is_some() && !self.reduced {
+            self.arrivals.insert(entry.id.clone(), now_ms());
+        }
         self.cards.push(Card {
             entry,
             image,
@@ -246,20 +447,34 @@ impl Stack {
             busy: false,
             saved: false,
         });
+        self.exits.sync(self.stack.ids());
     }
 
     fn remove(&mut self, index: usize) {
         if index < self.cards.len() {
             let card = self.cards.remove(index);
-            self.stack.remove(&card.entry.id);
+            let id = &card.entry.id;
+            self.stack.remove(id);
+            self.arrivals.remove(id);
+            self.dust.remove(id);
+            self.exits.release(id, false);
+            self.exits.sync(self.stack.ids());
         }
         self.hovered = None;
         self.hot = None;
         self.pressed = None;
     }
 
+    /// The live and exiting cards' height: an exiting card keeps its slot.
     fn content_height(&self) -> f32 {
-        self.stack.content_height() as f32
+        let count = self.cards.len();
+        if count == 0 {
+            0.
+        } else if self.collapsed() {
+            preview::collapsed_frame_height(count) as f32
+        } else {
+            preview::stack_height(count) as f32
+        }
     }
 
     /// Content offset that keeps the anchored end visible.
@@ -271,9 +486,20 @@ impl Stack {
         }
     }
 
+    /// Display `index`'s slot, slid toward the anchor while it settles into
+    /// an exiting card's hole.
     fn card_rect(&self, index: usize) -> Option<Rect> {
-        let layout = self.stack.card_layout(index, self.top)?;
-        let y = layout.y as f32 + self.offset();
+        let id = &self.cards.get(index)?.entry.id;
+        let layout =
+            preview::card_layout_in(self.cards.len(), index, self.collapsed(), self.top, false)?;
+        let shift = self.exits.shift_px(
+            id,
+            now_ms(),
+            self.reduced,
+            &preview_motion::settle_tween(),
+            self.top,
+        );
+        let y = (layout.y + shift) as f32 + self.offset();
         Some(rect(PAD, y, PAD + CARD_W, y + CARD_H))
     }
 
@@ -284,7 +510,7 @@ impl Stack {
     /// Shipping shows the toolbar (Clear all and Minimize) only for two or
     /// more cards, and never on the pile.
     fn toolbar(&self) -> bool {
-        !self.collapsed() && self.cards.len() >= 2 && self.progress() <= 0.
+        !self.collapsed() && self.stack.ids().len() >= 2 && self.progress() <= 0.
     }
 
     /// The front card of the collapsed pile, the pile's hit target.
@@ -402,7 +628,9 @@ impl Stack {
             let Some(card) = self.card_rect(index) else {
                 continue;
             };
-            if !inside(&card) {
+            // A leaving card no longer takes the pointer (shipping's
+            // `pointer-events: none`).
+            if !inside(&card) || self.exiting(index) {
                 continue;
             }
             // Controls are only targets while the card shows them.
@@ -439,8 +667,10 @@ impl Stack {
         // Hover follows the card under the pointer, then targets its controls.
         let card = at.and_then(|(x, y)| {
             (0..self.cards.len()).find(|&i| {
-                self.card_rect(i)
-                    .is_some_and(|r| x >= r.left && x < r.right && y >= r.top && y < r.bottom)
+                !self.exiting(i)
+                    && self
+                        .card_rect(i)
+                        .is_some_and(|r| x >= r.left && x < r.right && y >= r.top && y < r.bottom)
             })
         });
         let before = (self.hovered, self.hot);
@@ -514,7 +744,8 @@ impl Stack {
             return items;
         }
         for (index, card) in self.cards.iter().enumerate() {
-            let Some(r) = self.card_rect(index) else {
+            // A leaving card has left shipping's tree.
+            let Some(r) = self.card_rect(index).filter(|_| !self.exiting(index)) else {
                 continue;
             };
             let group = Self::uia_key(Hit::Card(index));
@@ -575,7 +806,7 @@ impl Stack {
         }
         for index in 0..self.cards.len() {
             if let Some(card) = self.card_rect(index) {
-                self.paint_card(dc, g, t, index, card)?;
+                self.paint_listed(dc, g, t, index, card)?;
             }
         }
         if self.toolbar() {
@@ -681,7 +912,7 @@ impl Stack {
             } * base;
             unsafe { dc.SetTransform(&m) };
             let result = glow(dc, t, local, (fan * progress) as f32)
-                .and_then(|()| self.paint_card(dc, g, t, index, local))
+                .and_then(|()| self.paint_card(dc, g, t, index, local, Fade::NONE))
                 .and_then(|()| {
                     let dim = (preview::collapsed_dim_opacity(depth) * progress * (1. - 0.35 * fan))
                         as f32;
@@ -698,7 +929,9 @@ impl Stack {
         Ok(())
     }
 
-    fn paint_card(
+    /// A listed card under its arrival or exit pose, then a dissolving
+    /// card's dust above it.
+    fn paint_listed(
         &self,
         dc: &ID2D1DeviceContext,
         g: &Gfx,
@@ -706,37 +939,235 @@ impl Stack {
         index: usize,
         r: Rect,
     ) -> Result<()> {
+        let id = &self.cards[index].entry.id;
+        let now = now_ms();
+        let (mut opacity, mut dx, mut dy, mut scale) = (1., 0., 0., 1.);
+        let mut fade = Fade::NONE;
+        let mut dust = None;
+        if let Some(m) = &self.card_motion {
+            if let Some(start) = self.arrivals.get(id) {
+                let pose = m.arrive.pose_at(now - start, self.reduced);
+                opacity *= pose.opacity;
+                dy += pose.translate_y;
+                scale *= pose.scale;
+            }
+            match self.exits.exiting(id) {
+                Some(exit) if exit.kind == ExitKind::Dust => {
+                    let elapsed = exit.elapsed_ms(now).max(0.);
+                    let frame = preview_motion::dust_frame(elapsed, self.reduced);
+                    fade = Fade {
+                        frame: preview_motion::delete_frame_opacity(t, elapsed, self.reduced)
+                            as f32,
+                        source: frame.source_opacity as f32,
+                        chrome: frame.chrome_opacity as f32,
+                    };
+                    dust = Some((elapsed, frame));
+                }
+                Some(exit) => {
+                    let animation = if exit.kind == ExitKind::Dismiss {
+                        m.dismiss
+                    } else {
+                        m.fallback
+                    };
+                    let pose = animation.pose_at(exit.elapsed_ms(now).max(0.), self.reduced);
+                    let mirror = if self.right { -1. } else { 1. };
+                    dx += pose.translate_x * mirror;
+                    opacity *= pose.opacity;
+                    scale *= pose.scale;
+                }
+                None => {}
+            }
+        }
+        let mut base = Matrix3x2::identity();
+        unsafe { dc.GetTransform(&mut base) };
+        // Scale about the card's centre, then move it.
+        let (cx, cy) = ((r.left + r.right) / 2., (r.top + r.bottom) / 2.);
+        let s = scale as f32;
+        let posed = Matrix3x2 {
+            M11: s,
+            M12: 0.,
+            M21: 0.,
+            M22: s,
+            M31: cx + dx as f32 - s * cx,
+            M32: cy + dy as f32 - s * cy,
+        } * base;
+        unsafe { dc.SetTransform(&posed) };
+        let result = faded(dc, opacity as f32, || {
+            self.paint_card(dc, g, t, index, r, fade)
+        });
+        unsafe { dc.SetTransform(&base) };
+        result?;
+        match dust {
+            Some((elapsed, frame)) => self.paint_dust(dc, index, r, elapsed, frame),
+            None => Ok(()),
+        }
+    }
+
+    /// A dissolving card's chips (`thumbnail-dust-layer`): each a piece of
+    /// its dimmed hover image that rises, turns and fades from the trash
+    /// control while the layer's clip opens past the card. The image's
+    /// hover blur is not drawn into them.
+    fn paint_dust(
+        &self,
+        dc: &ID2D1DeviceContext,
+        index: usize,
+        r: Rect,
+        elapsed: f64,
+        frame: preview_motion::DustFrame,
+    ) -> Result<()> {
         let card = &self.cards[index];
-        let hovered = self.hovered == Some(index);
+        let (Some(particles), Some(image)) = (self.dust.get(&card.entry.id), &card.image) else {
+            return Ok(());
+        };
+        let size = unsafe { image.GetSize() };
+        if frame.layer_opacity <= 0. || size.width <= 0. || size.height <= 0. {
+            return Ok(());
+        }
+        // The card's `object-fit: cover` placement, in card coordinates.
+        let k = (CARD_W / size.width).max(CARD_H / size.height);
+        let cover = (
+            (CARD_W - size.width * k) / 2.,
+            (CARD_H - size.height * k) / 2.,
+        );
+        let pad = preview_motion::DUST_LAYER_PAD as f32;
+        let open = pad * frame.clip_open as f32;
+        let mut base = Matrix3x2::identity();
+        unsafe {
+            dc.GetTransform(&mut base);
+            let brush = dc.CreateBitmapBrush(
+                image,
+                Some(&D2D1_BITMAP_BRUSH_PROPERTIES1 {
+                    extendModeX: D2D1_EXTEND_MODE_CLAMP,
+                    extendModeY: D2D1_EXTEND_MODE_CLAMP,
+                    interpolationMode: D2D1_INTERPOLATION_MODE_LINEAR,
+                }),
+                None,
+            )?;
+            // The hover look's `brightness(.5)`, as `paint_card` draws it.
+            let shade = dc.CreateSolidColorBrush(
+                &D2D1_COLOR_F {
+                    r: 0.,
+                    g: 0.,
+                    b: 0.,
+                    a: preview_chrome::HOVER_MEDIA_BRIGHTNESS as f32,
+                },
+                None,
+            )?;
+            dc.PushAxisAlignedClip(
+                &rect(r.left - open, r.top - open, r.right + open, r.bottom + open),
+                D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+            );
+            for particle in particles {
+                let visual = preview_motion::dust_visual_at(particle, elapsed);
+                let alpha = (visual.opacity * frame.layer_opacity) as f32;
+                if alpha <= 0. {
+                    continue;
+                }
+                let (w, h) = (particle.width as f32, particle.height as f32);
+                let (sin, cos) = (visual.rotate as f32).to_radians().sin_cos();
+                let s = visual.scale as f32;
+                // Scale, rotate clockwise, then move to the chip's centre.
+                let m = Matrix3x2 {
+                    M11: s * cos,
+                    M12: s * sin,
+                    M21: -s * sin,
+                    M22: s * cos,
+                    M31: r.left + (particle.left + visual.dx) as f32 - pad + w / 2.,
+                    M32: r.top + (particle.top + visual.dy) as f32 - pad + h / 2.,
+                } * base;
+                dc.SetTransform(&m);
+                // The chip shows the image under its source rect.
+                brush.SetTransform(&Matrix3x2 {
+                    M11: k,
+                    M12: 0.,
+                    M21: 0.,
+                    M22: k,
+                    M31: cover.0 - particle.source_left as f32 - w / 2.,
+                    M32: cover.1 - particle.source_top as f32 - h / 2.,
+                });
+                brush.SetOpacity(alpha);
+                shade.SetOpacity(alpha);
+                let chip = rect(-w / 2., -h / 2., w / 2., h / 2.);
+                dc.FillRectangle(&chip, &brush);
+                dc.FillRectangle(&chip, &shade);
+            }
+            dc.SetTransform(&base);
+            dc.PopAxisAlignedClip();
+        }
+        Ok(())
+    }
+
+    fn paint_card(
+        &self,
+        dc: &ID2D1DeviceContext,
+        g: &Gfx,
+        t: &Tokens,
+        index: usize,
+        r: Rect,
+        fade: Fade,
+    ) -> Result<()> {
+        let card = &self.cards[index];
+        // A leaving card keeps the dimmed hover look it had when it went; a
+        // dissolving one also keeps its controls while they fade.
+        let hovered = self.hovered == Some(index) || self.exiting(index);
+        let controls = self.hovered == Some(index) || self.dust.contains_key(&card.entry.id);
         let radius = t.n("thumbnail-card-radius");
         // `--thumbnail-card-shadow` and the 1 px white ring.
-        gfx::shadow(dc, r, radius, t.shadow("thumbnail-card-shadow"))?;
+        faded(dc, fade.frame, || {
+            gfx::shadow(dc, r, radius, t.shadow("thumbnail-card-shadow"))
+        })?;
         let white = |a: f32| D2D1_COLOR_F {
             r: 1.,
             g: 1.,
             b: 1.,
             a,
         };
-        gfx::fill_round(dc, r, radius, t.color("glass-strong-solid"))?;
-        if let Some(image) = &card.image {
-            cover(dc, image, (r, radius), hovered)?;
-        }
-        if hovered {
-            // `brightness(.5)` on the opaque image.
-            gfx::fill_round(
-                dc,
-                r,
-                radius,
-                D2D1_COLOR_F {
-                    r: 0.,
-                    g: 0.,
-                    b: 0.,
-                    a: preview_chrome::HOVER_MEDIA_BRIGHTNESS as f32,
-                },
-            )?;
-        }
-        gfx::ring(dc, r, radius, 0., 1., white(0.08))?;
+        faded(dc, fade.source, || {
+            gfx::fill_round(dc, r, radius, t.color("glass-strong-solid"))?;
+            if let Some(image) = &card.image {
+                cover(dc, image, (r, radius), hovered)?;
+            }
+            if hovered {
+                // `brightness(.5)` on the opaque image.
+                gfx::fill_round(
+                    dc,
+                    r,
+                    radius,
+                    D2D1_COLOR_F {
+                        r: 0.,
+                        g: 0.,
+                        b: 0.,
+                        a: preview_chrome::HOVER_MEDIA_BRIGHTNESS as f32,
+                    },
+                )?;
+            }
+            Ok(())
+        })?;
+        faded(dc, fade.frame, || {
+            gfx::ring(dc, r, radius, 0., 1., white(0.08))
+        })?;
+        faded(dc, fade.chrome, || {
+            self.paint_chrome(dc, g, t, index, r, (hovered, controls))
+        })
+    }
 
+    /// The bottom bar's chips and, while `controls`, the hover controls.
+    fn paint_chrome(
+        &self,
+        dc: &ID2D1DeviceContext,
+        g: &Gfx,
+        t: &Tokens,
+        index: usize,
+        r: Rect,
+        (hovered, controls): (bool, bool),
+    ) -> Result<()> {
+        let card = &self.cards[index];
+        let white = |a: f32| D2D1_COLOR_F {
+            r: 1.,
+            g: 1.,
+            b: 1.,
+            a,
+        };
         // `.thumbnail-bottom-bar`: the meta chip (hidden on hover) and the
         // clipboard confirmation.
         let bottom = r.bottom - 8.;
@@ -814,7 +1245,7 @@ impl Stack {
                 },
             )?;
         }
-        if !hovered {
+        if !controls {
             return Ok(());
         }
 
@@ -1119,12 +1550,15 @@ pub fn show(
         let previews = p.as_mut().ok_or_else(Error::empty)?;
         let image = image::open(preview).ok().map(|image| image.into_rgba8());
         let g = previews.g.clone();
+        previews.stack.reduced = crate::appearance::reduced_motion();
         previews.stack.push(&g, entry.clone(), image.as_ref());
         if clipboard {
             previews.set_clipboard(&entry.id);
         }
         previews.place_on_pointer_monitor()?;
-        previews.render()
+        previews.render()?;
+        previews.animate();
+        Ok(())
     });
     if let Err(error) = result {
         eprintln!("Could not show the mini preview: {error}");
@@ -1208,6 +1642,7 @@ impl Previews {
                 stack.motion = Transition::PreviewStackFly
                     .resolve(&tokens)
                     .zip(Transition::PreviewStackFan.resolve(&tokens));
+                stack.card_motion = CardMotion::resolve(&tokens);
                 stack.reduced = crate::appearance::reduced_motion();
                 stack
             },
@@ -1367,13 +1802,12 @@ impl Previews {
             self.animate();
             return;
         }
+        self.stack.reduced = crate::appearance::reduced_motion();
         let Some(index) = hit.card() else {
             // Clear all: dismiss every card; History keeps them.
-            self.stack.cards.clear();
-            self.stack.stack = PreviewStack::default();
-            self.stack.hovered = None;
-            self.stack.hot = None;
+            self.stack.clear_all();
             let _ = self.relayout();
+            self.animate();
             return;
         };
         let Some(card) = self.stack.cards.get(index) else {
@@ -1385,14 +1819,17 @@ impl Previews {
         let (id, saved_path) = (card.entry.id.clone(), card.entry.saved_path.clone());
         match hit {
             Hit::Close(_) => {
-                self.stack.remove(index);
+                self.stack.leave(&id, ExitKind::Dismiss, 0., true);
                 let _ = self.relayout();
+                self.animate();
             }
-            // Unsaved captures only dismiss; a saved file goes to the
-            // Recycle Bin (shipping `trash_artifact`). History keeps both.
+            // Unsaved captures only dismiss, as dust like any Delete; a saved
+            // file goes to the Recycle Bin first (shipping `trash_artifact`).
+            // History keeps both.
             Hit::Delete(_) if saved_path.is_none() => {
-                self.stack.remove(index);
+                self.stack.leave(&id, ExitKind::Dust, 0., true);
                 let _ = self.relayout();
+                self.animate();
             }
             Hit::Delete(_) => {
                 self.stack.cards[index].busy = true;
@@ -1522,6 +1959,12 @@ impl Previews {
     }
 
     fn motion_tick(&mut self) {
+        // Finished exits leave and the window shrinks to the smaller stack;
+        // the pointer finds its card again in the new order.
+        if self.stack.prune_exits() {
+            let _ = self.relayout();
+            self.stack.pointer(self.cursor());
+        }
         let _ = self.render();
         if self.stack.animating() {
             return;
@@ -1554,7 +1997,7 @@ impl Previews {
                 Done::Deleted(id, result) => {
                     let index = self.stack.cards.iter().position(|c| c.entry.id == id);
                     match (index, result) {
-                        (Some(index), Ok(())) => self.stack.remove(index),
+                        (Some(_), Ok(())) => self.stack.leave(&id, ExitKind::Dust, 0., true),
                         (Some(index), Err(error)) => {
                             self.stack.cards[index].busy = false;
                             eprintln!("Could not delete the file: {error}");
@@ -1566,6 +2009,7 @@ impl Previews {
             }
         }
         let _ = self.relayout();
+        self.animate();
     }
 
     fn handle(&mut self, msg: u32, _wp: WPARAM, lp: LPARAM) -> Option<LRESULT> {
@@ -1893,6 +2337,32 @@ mod tests {
     }
 
     #[test]
+    fn a_closed_card_holds_its_slot_while_it_streaks_out() {
+        use captures_settings::MiniPreviewPlacement as P;
+        let tokens = Tokens::variant("light", "mustard");
+        let mut s = stack(P::BottomLeft, &[true, false]);
+        s.card_motion = CardMotion::resolve(&tokens);
+        assert!(s.card_motion.is_some(), "shipping motions resolve");
+        let newest = s.card_rect(1).unwrap();
+        s.leave("a1", ExitKind::Dismiss, 0., true);
+        // Still drawn in its slot and sizing the window, but no longer live,
+        // hit or listed; the toolbar leaves with the second live card.
+        assert_eq!(s.cards.len(), 2);
+        assert_eq!(s.stack.ids(), ["a0"]);
+        assert_eq!(s.content_height(), preview::stack_height(2) as f32);
+        assert_eq!(s.card_rect(1).map(|r| r.top), Some(newest.top));
+        assert_eq!(s.hit(newest.left + 10., newest.top + 10.), None);
+        assert!(!s.toolbar());
+        assert!(s.uia_items().iter().all(|i| i.key < 200 || i.key >= 300));
+        assert!(s.animating());
+        // Reduced motion removes the next card at once.
+        s.reduced = true;
+        s.leave("a0", ExitKind::Dust, 0., true);
+        assert!(s.stack.ids().is_empty());
+        assert!(s.cards.iter().all(|c| c.entry.id != "a0"));
+    }
+
+    #[test]
     fn right_and_top_placements_mirror_the_controls() {
         use captures_settings::MiniPreviewPlacement as P;
         // Shipping top-right: Clear all at the top edge-aligned (284, 16),
@@ -1901,7 +2371,7 @@ mod tests {
         let mut s = stack(P::TopRight, &[false, false]);
         assert_eq!((s.clear_rect().left, s.clear_rect().top), (284., 16.));
         assert_eq!(s.card_rect(1).map(|r| r.top), Some(52.));
-        assert_eq!(s.card_rect(0).map(|r| r.top), Some(236.));
+        assert_eq!(s.card_rect(0).map(|r| r.top), Some(228.));
         assert!(s.pointer(Some((100., 100.))));
         assert_eq!(s.hit(290., 70.), Some(Hit::Delete(1)));
         assert_eq!(s.hit(45., 70.), Some(Hit::Edit(1)));
