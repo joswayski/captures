@@ -268,6 +268,8 @@ final class ClosurePopUpButton: NSPopUpButton {
         surface.addSubview(scroll)
         panel.contentView = surface
         window.addChildWindow(panel, ordered: .above)
+        // Shipping `.custom-select-listbox`: ui-pop-in over --dur-2.
+        NativeMotion.play("popover_in", on: surface, tokens: tokens)
         listbox = list; listboxWindow = panel
         list.revealActive()
         needsDisplay = true

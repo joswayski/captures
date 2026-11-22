@@ -902,8 +902,17 @@ final class CaptureControlsView: NSView {
             track.wantsLayer = true
             track.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.32).cgColor
             track.layer?.cornerRadius = tokens.number("r-lg")
-            track.setAccessibilityElement(false)
             addSubview(track, positioned: .below, relativeTo: nil)
+        }
+        // Shipping's `role="group"` switches, "Capture type" and "Capture target".
+        let modeSegments: [NSView] = [screenshotButton, recordButton]
+        let targetSegments: [NSView] = UnifiedCaptureTarget.allCases.compactMap { targetButtons[$0] }
+        for (track, label, segments) in [(modeTrack, "Capture type", modeSegments),
+                                         (targetTrack, "Capture target", targetSegments)] {
+            track.setAccessibilityElement(true); track.setAccessibilityRole(.group)
+            track.setAccessibilityLabel(label)
+            track.setAccessibilityChildren(segments)
+            segments.forEach { $0.setAccessibilityParent(track) }
         }
 
         // Shipping `.recording-region-aspect-picker`: an `--s-3`-spaced 11 px
@@ -935,6 +944,7 @@ final class CaptureControlsView: NSView {
         displayMenu.setAccessibilityLabel("Display")
         displayMenu.bindChange { [weak self] index in self?.changeDisplay(index) }
         addSubview(displayMenu)
+        updateSelectAvailability()
 
         captureButton.frame = NSRect(x: frame.width - 122, y: 8, width: 112, height: 40)
         captureButton.icon = .capture
@@ -1159,6 +1169,22 @@ final class CaptureControlsView: NSView {
     /// Shows "Capturing…"/"Starting…" or "Switching…" (nil ends it) while the
     /// owner's start or display switch runs. Starting disables the primary.
     /// Like shipping, a new start or switch clears the inline error.
+    func setWindowTargetUnavailable() {
+        guard let button = targetButtons[.window], target != .window else { return }
+        button.isEnabled = false
+        button.toolTip = "Window capture is not available in this desktop session"
+        button.setAccessibilityHelp(button.toolTip)
+    }
+
+    /// The switch segments are reported inside their group tracks.
+    override func accessibilityChildren() -> [Any]? {
+        let grouped = Set(([screenshotButton, recordButton] + Array(targetButtons.values)).map(ObjectIdentifier.init))
+        return super.accessibilityChildren()?.filter { child in
+            guard let object = child as AnyObject? else { return true }
+            return !grouped.contains(ObjectIdentifier(object))
+        }
+    }
+
     func setInFlight(_ value: InFlight?) {
         guard inFlight != value else { return }
         inFlight = value
@@ -1166,7 +1192,14 @@ final class CaptureControlsView: NSView {
             inlineError = nil
             layoutPanel(keepingBottom: true)
         }
-        refreshMenu(); updatePrimary()
+        refreshMenu(); updatePrimary(); updateSelectAvailability()
+    }
+
+    /// Shipping disables Display while a switch or start runs or with one
+    /// display, and Aspect while a start runs.
+    private func updateSelectAvailability() {
+        displayMenu.isEnabled = inFlight == nil && displayMenu.numberOfItems > 1
+        aspectMenu.isEnabled = inFlight != .starting
     }
 
     /// Shipping `RecordingSelector`'s failed `start_recording` or
@@ -1608,6 +1641,8 @@ final class UnifiedCaptureSelectionView: NSView {
             microphoneDevices: microphoneDevices, microphonesLoaded: microphonesLoaded,
             visibility: visibility)
         super.init(frame: frame)
+        // Shipping disables Window when the session lists no windows.
+        if targets.isEmpty { controls.setWindowTargetUnavailable() }
         wantsLayer = true; layer?.backgroundColor = NSColor.clear.cgColor
         if let image {
             let background = NSImageView(frame: bounds)
