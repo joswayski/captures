@@ -2,13 +2,13 @@ use core_foundation::{base::TCFType, string::CFString};
 use core_graphics::{
     base::{kCGBitmapByteOrder32Big, kCGImageAlphaPremultipliedLast},
     color_space::CGColorSpace,
-    context::CGContext,
     display::CGDisplay,
-    geometry::{CGPoint, CGRect, CGSize},
     image::CGImage,
     window::{kCGWindowImageDefault, kCGWindowListOptionAll},
 };
+use foreign_types::ForeignType;
 use image::RgbaImage;
+use std::{ffi::c_void, ptr};
 
 use crate::{CaptureError, CaptureResult};
 
@@ -25,33 +25,92 @@ pub(crate) fn capture_display(id: u32) -> CaptureResult<RgbaImage> {
     image_to_srgb(&source)
 }
 
+/// `vImage_CGImageFormat` (Accelerate/vImage/vImage_Utilities.h).
+#[repr(C)]
+struct VImageCGImageFormat {
+    bits_per_component: u32,
+    bits_per_pixel: u32,
+    color_space: *const c_void,
+    bitmap_info: u32,
+    version: u32,
+    decode: *const f64,
+    rendering_intent: i32,
+}
+
+/// `vImage_Buffer` (Accelerate/vImage/vImage_Types.h).
+#[repr(C)]
+struct VImageBuffer {
+    data: *mut c_void,
+    height: usize,
+    width: usize,
+    row_bytes: usize,
+}
+
+/// `kvImageNoAllocate`: write into the caller's `vImage_Buffer` storage.
+const K_VIMAGE_NO_ALLOCATE: u32 = 512;
+
+#[link(name = "Accelerate", kind = "framework")]
+unsafe extern "C" {
+    fn vImageBuffer_InitWithCGImage(
+        buffer: *mut VImageBuffer,
+        format: *mut VImageCGImageFormat,
+        background_color: *const f64,
+        image: *const c_void,
+        flags: u32,
+    ) -> isize;
+}
+
 fn image_to_srgb(source: &CGImage) -> CaptureResult<RgbaImage> {
-    // Both the frozen preview and its final crop use sRGB-tagged PNGs. Drawing
-    // while the source profile is attached lets Core Graphics transform the
-    // pixels, rather than relabeling display-native RGB values as sRGB.
+    // Both the frozen preview and its final crop use sRGB-tagged PNGs.
+    // Converting while the source profile is attached transforms the pixels,
+    // rather than relabeling display-native RGB values as sRGB.
+    //
+    // vImage, not CGContextDrawImage: drawing a CGWindowListCreateImage frame
+    // makes Core Graphics decode a full-size copy into its process-wide image
+    // cache, which outlives the frame. That left one ~30 MB copy of a Retina
+    // display per capture resident until the process quit. vImage produces
+    // byte-identical premultiplied sRGB without that cache.
     let name = CFString::new("kCGColorSpaceSRGB");
     let srgb = CGColorSpace::create_with_name(name.as_concrete_TypeRef())
         .ok_or_else(|| CaptureError::Image("sRGB color space is unavailable".into()))?;
     let width = source.width();
     let height = source.height();
-    let mut context = CGContext::create_bitmap_context(
-        None,
-        width,
+    let mut format = VImageCGImageFormat {
+        bits_per_component: 8,
+        bits_per_pixel: 32,
+        color_space: srgb.as_ptr().cast(),
+        bitmap_info: kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big,
+        version: 0,
+        decode: ptr::null(),
+        rendering_intent: 0, // kCGRenderingIntentDefault
+    };
+    // vImage writes straight into the storage the RgbaImage keeps, so a
+    // capture holds one frame-sized buffer instead of converting and copying.
+    let row = width * 4;
+    let mut pixels = vec![0_u8; row * height];
+    let mut buffer = VImageBuffer {
+        data: pixels.as_mut_ptr().cast(),
         height,
-        8,
-        width * 4,
-        &srgb,
-        kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big,
-    );
-    context.draw_image(
-        CGRect::new(
-            &CGPoint::new(0.0, 0.0),
-            &CGSize::new(width as f64, height as f64),
-        ),
-        source,
-    );
-    let mut pixels = context.data().to_vec();
-    // image::RgbaImage uses straight alpha; Core Graphics bitmap contexts use
+        width,
+        row_bytes: row,
+    };
+    // SAFETY: `buffer` describes `pixels` (row * height writable bytes), which
+    // outlives the call, as do `format`, `source` and `srgb`.
+    let error = unsafe {
+        vImageBuffer_InitWithCGImage(
+            &mut buffer,
+            &mut format,
+            ptr::null(),
+            source.as_ptr().cast(),
+            K_VIMAGE_NO_ALLOCATE,
+        )
+    };
+    if error != 0 {
+        return Err(CaptureError::Image(format!(
+            "sRGB conversion failed (vImage error {error})"
+        )));
+    }
+    // image::RgbaImage uses straight alpha; the conversion above produces
     // premultiplied alpha. Full display composites are normally opaque.
     for pixel in pixels.chunks_exact_mut(4) {
         let alpha = u32::from(pixel[3]);

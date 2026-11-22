@@ -20,6 +20,7 @@ let package = Package(
                 .unsafeFlags(["-L", libraryPath]),
                 .linkedLibrary("captures_settings_ffi"),
                 .linkedFramework("AppKit"),
+                .linkedFramework("Accelerate"),
                 .linkedFramework("CoreGraphics"),
                 .linkedFramework("ImageIO"),
                 .linkedFramework("Security"),

@@ -562,6 +562,7 @@ dependencies = [
  "core-foundation 0.10.1",
  "core-graphics 0.25.0",
  "dbus",
+ "foreign-types 0.5.0",
  "image",
  "mouse_position",
  "objc2-app-kit",

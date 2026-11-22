@@ -5,6 +5,7 @@ mod cursor;
 mod error;
 mod geometry;
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 mod macos;
 mod model;
 #[cfg(target_os = "linux")]
