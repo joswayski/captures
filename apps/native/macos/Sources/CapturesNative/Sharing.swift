@@ -157,14 +157,14 @@ final class SharingController: NSObject, NSWindowDelegate, NSTextFieldDelegate {
         scroll.useTokenScrollers(tokens)
         for label in [heading, intro, name, authNote, emailLabel, codeLabel, linkHeading, linkHelp,
                       passwordLabel, expiryLabel, status, fixtureNote, progressLabel, sharedDate, linkLabel, trashNote] {
-            label.font = .systemFont(ofSize: tokens.number("text-sm"))
+            label.font = .capturesUI(ofSize: tokens.number("text-sm"))
             label.textColor = tokens.color("text")
             label.maximumNumberOfLines = 0
         }
-        heading.font = .systemFont(ofSize: tokens.number("text-xl"), weight: .semibold)
+        heading.font = .capturesUI(ofSize: tokens.number("text-xl"), weight: .semibold)
         for label in [intro, authNote, fixtureNote, progressLabel] { label.textColor = tokens.color("text-subtle") }
         for field in [email, code as NSTextField, password as NSTextField, expiry] {
-            field.font = .systemFont(ofSize: tokens.number("text-md")); field.textColor = tokens.color("text")
+            field.font = .capturesUI(ofSize: tokens.number("text-md")); field.textColor = tokens.color("text")
             field.layer?.backgroundColor = tokens.color("surface-field").cgColor
             field.layer?.borderWidth = 1; field.layer?.cornerRadius = tokens.number("r-md")
         }
@@ -254,7 +254,7 @@ final class SharingController: NSObject, NSWindowDelegate, NSTextFieldDelegate {
         let pad = tokens.number("s-6"), gap = tokens.number("s-3")
         let width = max(1, root.bounds.width - pad * 2)
         func height(_ label: NSTextField) -> CGFloat {
-            FeedbackController.textHeight(label.stringValue, font: label.font ?? .systemFont(ofSize: 13), width: width)
+            FeedbackController.textHeight(label.stringValue, font: label.font ?? .capturesUI(ofSize: 13), width: width)
         }
         func label(_ view: NSTextField, _ y: inout CGFloat) {
             guard !view.isHidden else { return }
@@ -264,7 +264,7 @@ final class SharingController: NSObject, NSWindowDelegate, NSTextFieldDelegate {
             var x = pad, bottom = y
             for key in keys {
                 guard let button = buttons[key], !button.isHidden else { continue }
-                let font = NSFont.systemFont(ofSize: tokens.number("text-sm"), weight: .medium)
+                let font = NSFont.capturesUI(ofSize: tokens.number("text-sm"), weight: .medium)
                 let size = min(width, ceil((button.title as NSString).size(withAttributes: [.font: font]).width) + pad * 2)
                 if x > pad && x + size > pad + width { y = bottom + gap; x = pad }
                 button.frame = NSRect(x: x, y: y, width: size, height: tokens.number("h-md"))

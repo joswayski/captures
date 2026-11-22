@@ -4782,10 +4782,11 @@ impl Editor {
                 let (bg, edge) = if lit {
                     ("control-hover", "border-strong")
                 } else {
-                    gfx::shadow(dc, all, r_md, t.shadow("shadow-xs"))?;
+                    gfx::shadow(dc, all, r_md, t.shadow("shadow-btn"))?;
                     ("control", "control-border")
                 };
                 gfx::fill_round(dc, all, r_md, c(bg))?;
+                gfx::top_highlight(dc, all, r_md, c("control-highlight"))?;
                 gfx::border(dc, all, r_md, 1., c(edge))?;
                 let text = g.text(t, Style::Button, "Copy image", 1e4)?;
                 let x = (w - 15. - s3 - text.width) / 2.;
@@ -4832,7 +4833,7 @@ impl Editor {
             }
             Target::Save => {
                 if !lit {
-                    gfx::shadow(dc, all, r_md, t.shadow("shadow-sm"))?;
+                    gfx::shadow(dc, all, r_md, t.shadow("shadow-btn"))?;
                 }
                 let bg = if lit {
                     "theme-accent-hover"
@@ -4840,6 +4841,19 @@ impl Editor {
                     "theme-accent"
                 };
                 gfx::fill_round(dc, all, r_md, c(bg))?;
+                gfx::top_highlight(dc, all, r_md, c("primary-highlight"))?;
+                gfx::border(
+                    dc,
+                    all,
+                    r_md,
+                    1.,
+                    D2D1_COLOR_F {
+                        r: 0.,
+                        g: 0.,
+                        b: 0.,
+                        a: 0.16,
+                    },
+                )?;
                 let text = g.text(t, Style::Strong, "Save", 1e4)?;
                 let x = (w - 15. - s3 - text.width) / 2.;
                 let ink = c("theme-accent-ink");

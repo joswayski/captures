@@ -11,6 +11,7 @@
 window.captures {
   background: var(--surface-canvas);
   color: var(--text);
+  font-family: var(--font-sans);
 }
 .captures label {
   all: unset;
@@ -103,16 +104,23 @@ window.captures.countdown-window {
   all: unset;
   min-height: var(--h-md);
   padding: 0 var(--s-5);
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: var(--r-md);
   color: var(--text);
-  background: var(--surface-raised);
+  background: var(--control);
+  box-shadow:
+    inset 0 1px 0 var(--control-highlight),
+    var(--shadow-btn);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
-  transition: background-color var(--dur-2);
+  transition:
+    background-color var(--dur-2),
+    border-color var(--dur-2),
+    box-shadow var(--dur-2);
 }
 .captures button.preferences-history-button:hover {
-  background: var(--surface-hover);
+  border-color: var(--border-strong);
+  background: var(--control-hover);
 }
 .captures button.preferences-history-button:focus-visible {
   box-shadow: 0 0 0 3px var(--focus);
@@ -476,8 +484,11 @@ window.captures.countdown-window {
   border: 1px solid var(--control-border);
   border-radius: var(--r-md);
   color: var(--text);
-  background: var(--control);
-  box-shadow: var(--shadow-xs);
+  background-color: var(--control);
+  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.05), rgba(0, 0, 0, 0.04));
+  box-shadow:
+    inset 0 1px 0 var(--control-highlight),
+    var(--shadow-btn);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
   letter-spacing: var(--sm-tracking);
@@ -489,7 +500,7 @@ window.captures.countdown-window {
 }
 .captures button.ui-btn:hover {
   border-color: var(--border-strong);
-  background: var(--control-hover);
+  background-color: var(--control-hover);
 }
 .captures button.ui-btn:focus-visible {
   box-shadow: var(--focus-ring);
@@ -498,14 +509,17 @@ window.captures.countdown-window {
   opacity: 0.45;
 }
 .captures button.ui-btn.primary {
-  border-color: transparent;
+  border-color: rgba(0, 0, 0, 0.16);
   color: var(--theme-accent-ink);
-  background: var(--theme-accent);
-  box-shadow: var(--shadow-sm);
+  background-color: var(--theme-accent);
+  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.16), rgba(0, 0, 0, 0.05));
+  box-shadow:
+    inset 0 1px 0 var(--primary-highlight),
+    var(--shadow-btn);
   font-weight: var(--weight-semibold);
 }
 .captures button.ui-btn.primary:hover {
-  background: var(--theme-accent-hover);
+  background-color: var(--theme-accent-hover);
 }
 .captures button.ui-btn.ghost {
   border-color: transparent;
@@ -3578,18 +3592,22 @@ popover.captures-menu.glass button.choice-option.active {
   min-height: var(--h-xl);
   margin-left: var(--s-2);
   padding: 0 var(--s-6);
-  border-radius: var(--r-lg);
+  border: 1px solid rgba(0, 0, 0, 0.16);
+  border-radius: var(--r-pill);
   color: var(--theme-accent-ink);
-  background: var(--theme-accent);
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+  background-color: var(--theme-accent);
+  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.16), rgba(0, 0, 0, 0.05));
+  box-shadow:
+    inset 0 1px 0 var(--primary-highlight),
+    0 6px 18px rgba(0, 0, 0, 0.34);
   font-size: var(--text-md);
   font-weight: var(--weight-semibold);
   transition:
-    background var(--dur-2) var(--ease-standard),
+    background-color var(--dur-2) var(--ease-standard),
     box-shadow var(--dur-2) var(--ease-standard);
 }
 .captures button.capture-bar-primary:hover {
-  background: var(--theme-accent-hover);
+  background-color: var(--theme-accent-hover);
 }
 .captures button.capture-bar-primary:disabled {
   opacity: 0.4;

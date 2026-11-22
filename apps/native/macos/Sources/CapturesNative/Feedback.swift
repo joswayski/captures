@@ -114,8 +114,8 @@ final class FeedbackCategoryButton: PreferenceHoverButton {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     private var padding: CGFloat { tokens.number("s-4") }
-    private var titleFont: NSFont { .systemFont(ofSize: tokens.number("text-md"), weight: .medium) }
-    private var detailFont: NSFont { .systemFont(ofSize: tokens.number("text-xs")) }
+    private var titleFont: NSFont { .capturesUI(ofSize: tokens.number("text-md"), weight: .medium) }
+    private var detailFont: NSFont { .capturesUI(ofSize: tokens.number("text-xs")) }
 
     /// The card height for `width`, at least shipping's 62 pt.
     func fittingHeight(width: CGFloat) -> CGFloat {
@@ -162,7 +162,7 @@ final class FeedbackSendButton: PreferenceHoverButton {
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    var labelFont: NSFont { .systemFont(ofSize: tokens.number("text-md"), weight: .semibold) }
+    var labelFont: NSFont { .capturesUI(ofSize: tokens.number("text-md"), weight: .semibold) }
 
     func fittingWidth() -> CGFloat {
         ceil((title as NSString).size(withAttributes: [.font: labelFont]).width) + tokens.number("s-6") * 2
@@ -388,12 +388,12 @@ final class FeedbackController: NSObject, NSTextViewDelegate, NSTextFieldDelegat
         restyleTokenScrollers(in: scrollView, tokens)
         document.wantsLayer = true; document.layer?.backgroundColor = tokens.color("surface-canvas").cgColor
         func style(_ label: NSTextField, size: String, color: String, weight: NSFont.Weight = .regular) {
-            label.font = .systemFont(ofSize: tokens.number(size), weight: weight)
+            label.font = .capturesUI(ofSize: tokens.number(size), weight: weight)
             label.textColor = tokens.color(color)
         }
         style(eyebrow, size: "text-2xs", color: "text-subtle", weight: .semibold)
         eyebrow.attributedStringValue = NSAttributedString(string: FeedbackCopy.text("eyebrow").uppercased(), attributes: [
-            .font: NSFont.systemFont(ofSize: tokens.number("text-2xs"), weight: .semibold),
+            .font: NSFont.capturesUI(ofSize: tokens.number("text-2xs"), weight: .semibold),
             .foregroundColor: tokens.color("text-subtle"), .kern: tokens.number("text-2xs") * 0.04,
         ])
         style(heading, size: "text-2xl", color: "text", weight: .semibold)
@@ -402,7 +402,7 @@ final class FeedbackController: NSObject, NSTextViewDelegate, NSTextFieldDelegat
         style(optionalBadge, size: "text-2xs", color: "text-subtle", weight: .medium)
         let centred = NSMutableParagraphStyle(); centred.alignment = .center
         optionalBadge.attributedStringValue = NSAttributedString(string: FeedbackCopy.text("optional_badge").uppercased(), attributes: [
-            .font: NSFont.systemFont(ofSize: tokens.number("text-2xs"), weight: .medium), .paragraphStyle: centred,
+            .font: NSFont.capturesUI(ofSize: tokens.number("text-2xs"), weight: .medium), .paragraphStyle: centred,
             .foregroundColor: tokens.color("text-subtle"), .kern: tokens.number("text-2xs") * 0.04,
         ])
         optionalBadge.layer?.backgroundColor = tokens.color("surface-sunken").cgColor
@@ -410,7 +410,7 @@ final class FeedbackController: NSObject, NSTextViewDelegate, NSTextFieldDelegat
         style(metaTitle, size: "text-md", color: "text", weight: .medium)
         for label in [versionLabel, systemLabel] { style(label, size: "text-sm", color: "text-subtle") }
         for value in [versionValue, systemValue] {
-            value.font = .monospacedSystemFont(ofSize: tokens.number("text-sm"), weight: .regular)
+            value.font = .capturesMono(ofSize: tokens.number("text-sm"), weight: .regular)
             value.textColor = tokens.color("text")
         }
         for card in [formCard, metaCard] {
@@ -425,21 +425,21 @@ final class FeedbackController: NSObject, NSTextViewDelegate, NSTextFieldDelegat
         for rule in rules { rule.layer?.backgroundColor = tokens.color("border-subtle").cgColor }
         message.textColor = tokens.color("text")
         message.insertionPointColor = tokens.color("text")
-        message.font = .systemFont(ofSize: tokens.number("text-md"))
-        messagePlaceholder.font = .systemFont(ofSize: tokens.number("text-md"))
+        message.font = .capturesUI(ofSize: tokens.number("text-md"))
+        messagePlaceholder.font = .capturesUI(ofSize: tokens.number("text-md"))
         messagePlaceholder.textColor = tokens.color("text-faint")
-        contact.font = .systemFont(ofSize: tokens.number("text-md"))
+        contact.font = .capturesUI(ofSize: tokens.number("text-md"))
         contact.textColor = tokens.color("text")
         (contact.cell as? FeedbackFieldCell)?.horizontalInset = tokens.number("s-5")
         contact.placeholderAttributedString = NSAttributedString(string: FeedbackCopy.text("contact_placeholder"), attributes: [
-            .font: NSFont.systemFont(ofSize: tokens.number("text-md")), .foregroundColor: tokens.color("text-faint"),
+            .font: NSFont.capturesUI(ofSize: tokens.number("text-md")), .foregroundColor: tokens.color("text-faint"),
         ])
         for field in [messageBox as NSView, contact] {
             field.layer?.cornerRadius = tokens.number("r-md")
             field.layer?.backgroundColor = tokens.color("surface-field").cgColor
             field.layer?.borderWidth = 1
         }
-        status.font = .systemFont(ofSize: tokens.number("text-sm"))
+        status.font = .capturesUI(ofSize: tokens.number("text-sm"))
         statusBox.layer?.cornerRadius = tokens.number("r-md")
         for button in categoryButtons { button.tokens = tokens }
         sendButton.tokens = tokens
@@ -460,7 +460,7 @@ final class FeedbackController: NSObject, NSTextViewDelegate, NSTextFieldDelegat
     }
 
     private func height(_ label: NSTextField, width: CGFloat) -> CGFloat {
-        Self.textHeight(label.stringValue, font: label.font ?? .systemFont(ofSize: 12), width: width)
+        Self.textHeight(label.stringValue, font: label.font ?? .capturesUI(ofSize: 12), width: width)
     }
 
     /// Shipping `.feedback` / `.feedback-shell`: a centered 640 pt column with
@@ -476,7 +476,7 @@ final class FeedbackController: NSObject, NSTextViewDelegate, NSTextFieldDelegat
         y = eyebrow.frame.maxY + s("s-2")
         heading.frame = NSRect(x: x, y: y, width: shell, height: height(heading, width: shell))
         y = heading.frame.maxY + s("s-4")
-        let zero = ("0" as NSString).size(withAttributes: [.font: intro.font ?? NSFont.systemFont(ofSize: s("text-sm"))]).width
+        let zero = ("0" as NSString).size(withAttributes: [.font: intro.font ?? NSFont.capturesUI(ofSize: s("text-sm"))]).width
         let introWidth = min(shell, ceil(56 * zero))
         intro.frame = NSRect(x: x, y: y, width: introWidth, height: height(intro, width: introWidth))
         y = intro.frame.maxY + s("s-6")

@@ -195,6 +195,7 @@ final class CapturesApplication: NSApplication {
         UserDefaults.standard.register(defaults: ["NSTreatUnknownArgumentsAsOpen": "NO"])
         // First, so NSApp is the subclass above.
         _ = CapturesApplication.shared
+        UIFonts.register()
         do {
             if CommandLine.arguments.dropFirst().elementsEqual(["--preview-build-info"]) {
                 var info = try AppBridge().request(["operation": "preview_build_info"])

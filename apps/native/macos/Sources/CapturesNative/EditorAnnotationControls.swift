@@ -51,12 +51,12 @@ final class EditorAnnotationControls: NSView {
         super.init(frame: NSRect(x: 0, y: 550, width: width, height: 0))
         setAccessibilityLabel("Annotation style controls")
         for legend in [strokeLegend, fillLegend] {
-            legend.font = .systemFont(ofSize: tokens.number("text-sm"))
+            legend.font = .capturesUI(ofSize: tokens.number("text-sm"))
             legend.textColor = tokens.color("text-muted")
             legend.setAccessibilityElement(false)
         }
         for (check, name) in [(strokeCheck, "Stroke"), (shadowCheck, "Drop shadow"), (fillCheck, "Filled shape")] {
-            check.font = .systemFont(ofSize: tokens.number("text-sm"))
+            check.font = .capturesUI(ofSize: tokens.number("text-sm"))
             check.setAccessibilityLabel(name)
             check.target = self; check.action = #selector(toggled(_:))
         }

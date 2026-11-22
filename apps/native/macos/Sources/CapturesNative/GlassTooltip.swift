@@ -40,7 +40,7 @@ class GlassTooltipView: NSView {
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = .center
         paragraph.lineBreakMode = .byTruncatingTail
-        textAttributes = [.font: NSFont.systemFont(ofSize: tokens.number(style.fontToken), weight: .medium),
+        textAttributes = [.font: NSFont.capturesUI(ofSize: tokens.number(style.fontToken), weight: .medium),
                           .foregroundColor: tokens.color("glass-text"), .paragraphStyle: paragraph]
         super.init(frame: .zero)
         wantsLayer = true

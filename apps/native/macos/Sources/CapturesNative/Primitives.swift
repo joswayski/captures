@@ -353,7 +353,7 @@ final class ClosurePopUpButton: NSPopUpButton {
         }
         if focused && selectStyle != .inline { drawFocusRing(tokens, in: bounds, radius: radius) }
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: tokens.number("text-sm")),
+            .font: NSFont.capturesUI(ofSize: tokens.number("text-sm")),
             .foregroundColor: ink.faded(alpha),
         ]
         let padding = tokens.number(selectStyle == .inline ? "s-3" : "s-4")
@@ -471,8 +471,8 @@ final class TokenSelectListView: NSView {
     /// The listbox's natural size: its widest option (up to shipping's
     /// 360 pt) and at least the trigger's width, and every row.
     func contentSize(minimumWidth: CGFloat) -> NSSize {
-        let label = NSFont.systemFont(ofSize: tokens.number("text-sm"), weight: .medium)
-        let small = NSFont.systemFont(ofSize: tokens.number("text-xs"))
+        let label = NSFont.capturesUI(ofSize: tokens.number("text-sm"), weight: .medium)
+        let small = NSFont.capturesUI(ofSize: tokens.number("text-xs"))
         var widest: CGFloat = 0
         for option in options {
             var width = (option.title as NSString).size(withAttributes: [.font: label]).width
@@ -569,14 +569,14 @@ final class TokenSelectListView: NSView {
             }
             let width = max(0, row.maxX - inset - 14 - tokens.number("s-6") - x)
             let label = NSAttributedString(string: option.title, attributes: [
-                .font: NSFont.systemFont(ofSize: tokens.number("text-sm"), weight: chosen ? .medium : .regular),
+                .font: NSFont.capturesUI(ofSize: tokens.number("text-sm"), weight: chosen ? .medium : .regular),
                 .foregroundColor: (chosen || highlighted ? text : muted).faded(alpha),
             ])
             let labelHeight = ceil(label.size().height)
             var top = row.midY - labelHeight / 2
             if let detail = option.detail {
                 let small = NSAttributedString(string: detail, attributes: [
-                    .font: NSFont.systemFont(ofSize: tokens.number("text-xs")),
+                    .font: NSFont.capturesUI(ofSize: tokens.number("text-xs")),
                     .foregroundColor: faint.faded(alpha),
                 ])
                 let smallHeight = ceil(small.size().height)

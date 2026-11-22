@@ -89,7 +89,7 @@ export default function Home({
         <section>
           <div className="flex items-center gap-3">
             <span className="brand-mark" aria-hidden="true">
-              <CaptureIcon className="h-4 w-4" />
+              <CaptureIcon className="h-5 w-5" />
             </span>
             <h1 className="text-2xl font-medium tracking-tight text-ink sm:text-3xl">Captures</h1>
           </div>
@@ -391,18 +391,17 @@ function CaptureIcon({ className }: { className?: string }) {
   return (
     <svg
       viewBox="0 0 24 24"
-      width="16"
-      height="16"
+      width="20"
+      height="20"
       fill="none"
       stroke="currentColor"
       aria-hidden="true"
       className={className}
     >
-      <path d="M9 4H6a2 2 0 0 0-2 2v3M15 4h3a2 2 0 0 1 2 2v3M20 15v3a2 2 0 0 1-2 2h-3M9 20H6a2 2 0 0 1-2-2v-3" />
-      <path
-        className="capture-icon-spark"
-        d="M12 8.8c.45 1.65 1.55 2.75 3.2 3.2-1.65.45-2.75 1.55-3.2 3.2-.45-1.65-1.55-2.75-3.2-3.2 1.65-.45 2.75-1.55 3.2-3.2Z"
-      />
+      <path d="M9 4H7a3 3 0 0 0-3 3v2M20 15v2a3 3 0 0 1-3 3h-2M9 20H7a3 3 0 0 1-3-3v-2" />
+      <circle className="capture-icon-lens" cx="12" cy="12" r="3.4" />
+      <circle className="capture-icon-center" cx="12" cy="12" r="1.15" />
+      <circle className="capture-icon-shutter" cx="18" cy="6" r="2.4" />
     </svg>
   );
 }

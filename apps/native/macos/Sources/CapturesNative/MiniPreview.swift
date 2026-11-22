@@ -386,7 +386,7 @@ final class MiniPreviewButton: NSButton {
         needsDisplay = true
     }
 
-    private var pillFont: NSFont { .systemFont(ofSize: tokens.number("text-2xs"), weight: .semibold) }
+    private var pillFont: NSFont { .capturesUI(ofSize: tokens.number("text-2xs"), weight: .semibold) }
 
     private func pillWidth() -> CGFloat {
         func measure(_ text: String) -> Double {
@@ -516,7 +516,7 @@ final class MiniPreviewButton: NSButton {
         }
         if swap > 0 {
             let text = NSAttributedString(string: label, attributes: [
-                .font: NSFont.systemFont(ofSize: tokens.number("text-2xs"), weight: .semibold),
+                .font: NSFont.capturesUI(ofSize: tokens.number("text-2xs"), weight: .semibold),
                 .foregroundColor: tokens.color("glass-text").withAlphaComponent(swap)])
             let size = text.size()
             text.draw(at: NSPoint(x: (bounds.width - size.width) / 2 + 4 * slide * (1 - swap),
@@ -543,7 +543,7 @@ final class MiniPreviewButton: NSButton {
         color.setStroke(); color.setFill()
         var iconX: CGFloat = 6
         if !title.isEmpty && bounds.width > 40 {
-            let text = NSAttributedString(string: title, attributes: [.font: NSFont.systemFont(ofSize: tokens.number("text-xs"), weight: .semibold), .foregroundColor: color])
+            let text = NSAttributedString(string: title, attributes: [.font: NSFont.capturesUI(ofSize: tokens.number("text-xs"), weight: .semibold), .foregroundColor: color])
             let size = text.size()
             let gap = tokens.number("s-3")
             iconX = (bounds.width - size.width - gap - 16) / 2
@@ -619,7 +619,7 @@ final class MiniPreviewClipboardChip: NSView {
 
     private var text: NSAttributedString {
         NSAttributedString(string: Self.title, attributes: [
-            .font: NSFont.systemFont(ofSize: tokens.number("text-2xs"), weight: .semibold),
+            .font: NSFont.capturesUI(ofSize: tokens.number("text-2xs"), weight: .semibold),
             .foregroundColor: NSColor(srgbRed: 0xea / 255, green: 1, blue: 0xf0 / 255, alpha: 1)])
     }
 
@@ -762,13 +762,13 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
 
         let inset: CGFloat = 8
         Self.makeChip(sizeLabel); Self.makeChip(warningLabel)
-        sizeLabel.font = .systemFont(ofSize: tokens.number("text-2xs")); sizeLabel.textColor = tokens.color("glass-text")
+        sizeLabel.font = .capturesUI(ofSize: tokens.number("text-2xs")); sizeLabel.textColor = tokens.color("glass-text")
         // Shipping `.thumbnail-meta > span`: 3 px × `--s-3` padding at 1.3 line height.
         let metadataWidth = ceil(sizeLabel.attributedStringValue.size().width) + Self.chipPadding * 2
         sizeLabel.frame = NSRect(x: inset, y: bounds.height - inset - Self.chipHeight,
                                   width: min(metadataWidth, bounds.width - inset * 2), height: Self.chipHeight)
         styleLabelBacking(sizeLabel); addSubview(sizeLabel)
-        warningLabel.font = .systemFont(ofSize: tokens.number("text-2xs"))
+        warningLabel.font = .capturesUI(ofSize: tokens.number("text-2xs"))
         warningLabel.textColor = tokens.color("theme-accent-text")
         warningLabel.alignment = .center
         styleLabelBacking(warningLabel); warningLabel.isHidden = true; addSubview(warningLabel)
@@ -779,7 +779,7 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         clipboardChip.isHidden = true; addSubview(clipboardChip)
         status.frame = NSRect(x: bounds.width - 126, y: bounds.height - 25, width: 118, height: 17)
         status.alignment = .right; status.lineBreakMode = .byTruncatingTail
-        status.font = .systemFont(ofSize: tokens.number("text-sm"))
+        status.font = .capturesUI(ofSize: tokens.number("text-sm"))
         status.textColor = tokens.color("glass-text-muted"); styleLabelBacking(status)
         status.isHidden = true; addSubview(status)
 

@@ -2969,7 +2969,7 @@ impl History {
                 let primary = action == CardAction::Edit;
                 let ink = if primary {
                     if !lit {
-                        gfx::shadow(dc, all, r_md, t.shadow("shadow-sm"))?;
+                        gfx::shadow(dc, all, r_md, t.shadow("shadow-btn"))?;
                     }
                     let bg = if lit {
                         "theme-accent-hover"
@@ -2977,10 +2977,23 @@ impl History {
                         "theme-accent"
                     };
                     gfx::fill_round(dc, all, r_md, c(bg))?;
+                    gfx::top_highlight(dc, all, r_md, c("primary-highlight"))?;
+                    gfx::border(
+                        dc,
+                        all,
+                        r_md,
+                        1.,
+                        D2D1_COLOR_F {
+                            r: 0.,
+                            g: 0.,
+                            b: 0.,
+                            a: 0.16,
+                        },
+                    )?;
                     c("theme-accent-ink")
                 } else {
                     if !lit {
-                        gfx::shadow(dc, all, r_md, t.shadow("shadow-xs"))?;
+                        gfx::shadow(dc, all, r_md, t.shadow("shadow-btn"))?;
                     }
                     let (bg, edge) = if lit {
                         ("control-hover", "border-strong")
@@ -2988,6 +3001,7 @@ impl History {
                         ("control", "control-border")
                     };
                     gfx::fill_round(dc, all, r_md, c(bg))?;
+                    gfx::top_highlight(dc, all, r_md, c("control-highlight"))?;
                     gfx::border(dc, all, r_md, 1., c(edge))?;
                     c("text")
                 };

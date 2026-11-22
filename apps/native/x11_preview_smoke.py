@@ -1246,7 +1246,7 @@ def main():
                         # Copy must preserve card_top=28. The resting pill starts
                         # at +8; sample above it and outside the scaled label.
                         return max(abs(a - b) for a, b in zip(
-                            pixel(254, card_top + 7), bytes.fromhex("ffca28"))) <= 2
+                            pixel(254, card_top + 7), bytes.fromhex("ffb800"))) <= 2
 
                     wait(lifted_editor_pill, "Show in editor lifts the accent pill above its resting border")
                     shot(preview, f"{prefix}-editor-hover")

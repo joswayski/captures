@@ -4953,9 +4953,10 @@ impl Scene {
                     ("control", "control-border")
                 };
                 if !lit {
-                    gfx::shadow(dc, all, radius, t.shadow("shadow-xs"))?;
+                    gfx::shadow(dc, all, radius, t.shadow("shadow-btn"))?;
                 }
                 gfx::fill_round(dc, all, radius, c(bg))?;
+                gfx::top_highlight(dc, all, radius, c("control-highlight"))?;
                 gfx::border(dc, all, radius, 1., c(edge))?;
                 let label = match n.kind {
                     Kind::Open { which, .. } => &self.texts.open[which.index()],
@@ -4970,8 +4971,9 @@ impl Scene {
             Kind::UpdateAction => {
                 // The resting `.settings-utility-action`; the node fades it.
                 let radius = t.n("r-md");
-                gfx::shadow(dc, all, radius, t.shadow("shadow-xs"))?;
+                gfx::shadow(dc, all, radius, t.shadow("shadow-btn"))?;
                 gfx::fill_round(dc, all, radius, c("control"))?;
+                gfx::top_highlight(dc, all, radius, c("control-highlight"))?;
                 gfx::border(dc, all, radius, 1., c("control-border"))?;
                 if let Some(label) = &self.texts.update_action {
                     let (x, y) = centered(label, (w - label.width) / 2.);

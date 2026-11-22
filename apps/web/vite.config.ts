@@ -137,6 +137,11 @@ export default defineConfig(async () => {
               "cache-control": "public, max-age=31536000, immutable",
             },
           },
+          "/fonts/**": {
+            headers: {
+              "cache-control": "public, max-age=31536000, immutable",
+            },
+          },
           "/favicon.png": {
             headers: {
               "cache-control": "public, max-age=86400",

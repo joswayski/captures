@@ -144,12 +144,12 @@ final class EditorMarkedSlider: NSView {
     }
 
     private func restyle() {
-        titleLabel.font = .systemFont(ofSize: tokens.number("text-sm"))
+        titleLabel.font = .capturesUI(ofSize: tokens.number("text-sm"))
         titleLabel.textColor = tokens.color("text-muted")
-        readout.font = .monospacedDigitSystemFont(ofSize: tokens.number("text-xs"), weight: .medium)
+        readout.font = .capturesMonoDigits(ofSize: tokens.number("text-xs"), weight: .medium)
         readout.textColor = tokens.color("text-subtle")
         for label in markLabels {
-            label.font = .systemFont(ofSize: tokens.number("text-2xs"), weight: .medium)
+            label.font = .capturesUI(ofSize: tokens.number("text-2xs"), weight: .medium)
             label.textColor = tokens.color("text-faint")
         }
         slider.tokens = tokens
@@ -244,7 +244,7 @@ final class EditorFormatButton: NSButton {
         }
         switch glyph {
         case .bold, .italic:
-            var font = NSFont.systemFont(ofSize: tokens.number("text-sm"), weight: .semibold)
+            var font = NSFont.capturesUI(ofSize: tokens.number("text-sm"), weight: .semibold)
             if glyph == .italic { font = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask) }
             let text = NSAttributedString(string: glyph == .bold ? "B" : "I",
                                           attributes: [.font: font, .foregroundColor: ink])
@@ -703,7 +703,7 @@ final class EditorDropShadowFields: NSView, NSTextFieldDelegate {
 
     private func restyle() {
         for legend in [colorLegend, offsetXLegend, offsetYLegend] {
-            legend.font = .systemFont(ofSize: tokens.number("text-sm"))
+            legend.font = .capturesUI(ofSize: tokens.number("text-sm"))
             legend.textColor = tokens.color("text-muted")
         }
         offsetXField.tokens = tokens; offsetYField.tokens = tokens

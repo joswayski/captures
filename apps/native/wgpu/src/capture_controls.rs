@@ -1461,8 +1461,8 @@ pub(crate) fn paint_icon(
         for line in captures_app::icons::flatten(d) {
             let points: Vec<egui::Pos2> = line.iter().copied().map(at).collect();
             if name == "capture" && index == 1 && points.len() > 2 {
-                // The spark is star-shaped about its centre: fan-fill it.
-                let centre = at([12., 12.]);
+                // Fan-fill the circular FunSaver shutter dot about its centre.
+                let centre = at([18., 6.]);
                 let mut mesh = egui::Mesh::default();
                 mesh.colored_vertex(centre, color);
                 for point in &points {

@@ -25,9 +25,9 @@ test("native tokens preserve light overrides, palette overrides and fixed media 
       ...declarations(palette, appearance, theme),
     });
   assert.equal(tokens("light", "cobalt")["surface-raised"], "#ffffff");
-  assert.equal(tokens("dark", "cobalt")["surface-raised"], "#16161b");
+  assert.equal(tokens("dark", "cobalt")["surface-raised"], "#1b1c1f");
   assert.equal(tokens("light", "cobalt")["theme-accent"], "#2563eb");
-  assert.equal(tokens("dark", "mustard")["theme-accent"], "#ffca28");
+  assert.equal(tokens("dark", "mustard")["theme-accent"], "#ffb800");
   for (const theme of themes) {
     const light = tokens("light", theme),
       dark = tokens("dark", theme);
@@ -42,7 +42,7 @@ test("native tokens preserve light overrides, palette overrides and fixed media 
     235 / 255,
     0.13,
   ]);
-  assert.deepEqual(color("#ffca28"), [1, 202 / 255, 40 / 255, 1]);
+  assert.deepEqual(color("#ffb800"), [1, 184 / 255, 0, 1]);
 });
 
 test("native tokens carry every ease token as cubic-bezier control points", async (t) => {
@@ -134,6 +134,15 @@ test("prepare writes portable app resources without an implicit test oracle", as
 
   assert.deepEqual((await readdir(output)).sort(), [
     "EDITOR-FONT-LICENSE.txt",
+    "Figtree-Bold.ttf",
+    "Figtree-Medium.ttf",
+    "Figtree-Regular.ttf",
+    "Figtree-SemiBold.ttf",
+    "Figtree-SemiBoldItalic.ttf",
+    "JetBrainsMono-Medium.ttf",
+    "JetBrainsMono-Regular.ttf",
+    "JetBrainsMono-SemiBold.ttf",
+    "UI-FONT-LICENSE.txt",
     "dust.json",
     "icon.svg",
     "tokens.json",
@@ -146,6 +155,10 @@ test("prepare writes portable app resources without an implicit test oracle", as
   assert.equal(
     await readFile(join(output, "EDITOR-FONT-LICENSE.txt"), "utf8"),
     `${await readFile(new URL("../crates/captures-app/fonts/liberation/LICENSE", import.meta.url), "utf8")}\n\n${await readFile(new URL("../crates/captures-app/fonts/nunito/OFL.txt", import.meta.url), "utf8")}`,
+  );
+  assert.equal(
+    await readFile(join(output, "UI-FONT-LICENSE.txt"), "utf8"),
+    `${await readFile(new URL("../crates/captures-app/fonts/figtree/OFL.txt", import.meta.url), "utf8")}\n\n${await readFile(new URL("../crates/captures-app/fonts/jetbrains-mono/OFL.txt", import.meta.url), "utf8")}`,
   );
   const tokens = JSON.parse(await readFile(join(output, "tokens.json"), "utf8"));
   const dust = JSON.parse(await readFile(join(output, "dust.json"), "utf8"));

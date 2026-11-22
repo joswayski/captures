@@ -101,7 +101,7 @@ enum CrashReview {
         text.isVerticallyResizable = true; text.isHorizontallyResizable = false
         text.autoresizingMask = [.width]
         text.textContainer?.widthTracksTextView = true
-        text.font = .monospacedSystemFont(ofSize: tokens.number("text-sm"), weight: .regular)
+        text.font = .capturesMono(ofSize: tokens.number("text-sm"), weight: .regular)
         text.textColor = tokens.color("text"); text.backgroundColor = tokens.color("surface-field")
         scroll.documentView = text; alert.accessoryView = scroll
         if let choose { return choose(alert) }

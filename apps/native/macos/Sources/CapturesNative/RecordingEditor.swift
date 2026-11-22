@@ -404,7 +404,7 @@ final class RecordingTrimTimeline: NSView {
         } else {
             tokens.color("n-5").setFill(); stripPath.fill()
             let paragraph = NSMutableParagraphStyle(); paragraph.alignment = .center
-            let font = NSFont.systemFont(ofSize: tokens.number("text-sm"))
+            let font = NSFont.capturesUI(ofSize: tokens.number("text-sm"))
             (thumbnailStateDescription as NSString).draw(
                 in: NSRect(x: strip.minX + 4, y: strip.midY - font.pointSize * 0.7,
                            width: max(1, strip.width - 8), height: font.pointSize * 1.5),
@@ -444,7 +444,7 @@ final class RecordingTrimTimeline: NSView {
             let value = active == .start ? startMilliseconds : endMilliseconds
             let label = RecordingEditorCopy.time(value, duration: durationMilliseconds) as NSString
             let attributes: [NSAttributedString.Key: Any] = [
-                .font: NSFont.monospacedDigitSystemFont(ofSize: tokens.number("text-2xs"),
+                .font: NSFont.capturesMonoDigits(ofSize: tokens.number("text-2xs"),
                                                          weight: .semibold),
                 .foregroundColor: tokens.color("theme-accent-ink"),
             ]
@@ -775,7 +775,7 @@ final class RecordingCropOverlay: NSView {
         // `.editor-crop-box > span`: the source-pixel size in an accent pill.
         let sizeText = displayedSizeLabel as NSString
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedDigitSystemFont(ofSize: tokens.number("text-2xs"),
+            .font: NSFont.capturesMonoDigits(ofSize: tokens.number("text-2xs"),
                                                      weight: .semibold),
             .foregroundColor: tokens.color("theme-accent-ink"),
         ]
@@ -1513,7 +1513,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         soundButton.setAccessibilityLabel("Mute preview"); soundButton.toolTip = "Mute preview"
         // Fixed-width digits keep the time from shifting while it changes.
         style(timeLabel, size: "text-xs", color: "text-subtle", parent: previewPanel)
-        timeLabel.font = .monospacedDigitSystemFont(ofSize: tokens.number("text-xs"), weight: .regular)
+        timeLabel.font = .capturesMonoDigits(ofSize: tokens.number("text-xs"), weight: .regular)
         timeLabel.setAccessibilityLabel("Recording playhead time")
         style(previewNote, size: "text-xs", color: "text-faint", parent: previewPanel)
         previewNote.lineBreakMode = .byTruncatingTail
@@ -1523,7 +1523,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         // `.recording-timeline`: summary, track and trim/position fields.
         card(trimPanel, parent: page)
         style(trimRangeLabel, size: "text-sm", color: "text", weight: .semibold, parent: trimPanel)
-        trimRangeLabel.font = .monospacedDigitSystemFont(ofSize: tokens.number("text-sm"), weight: .semibold)
+        trimRangeLabel.font = .capturesMonoDigits(ofSize: tokens.number("text-sm"), weight: .semibold)
         trimRangeLabel.setAccessibilityLabel("Recording trim range summary")
         style(thumbnailStatusLabel, size: "text-xs", color: "text-subtle", parent: trimPanel)
         thumbnailStatusLabel.alignment = .right
@@ -1658,7 +1658,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         }
         showComparisonButton.isHidden = true; showComparisonLabel.isHidden = true
         style(estimateLabel, size: "text-sm", color: "text", parent: qualityPanel)
-        estimateLabel.font = .monospacedDigitSystemFont(ofSize: tokens.number("text-sm"), weight: .regular)
+        estimateLabel.font = .capturesMonoDigits(ofSize: tokens.number("text-sm"), weight: .regular)
         estimateLabel.setAccessibilityLabel("Recording size estimate")
         estimateLabel.toolTip = "Estimated saved file size for the current edits and settings"
         estimateLabel.setAccessibilityHelp(estimateLabel.toolTip)
@@ -1697,7 +1697,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         style(filenameLabel, size: "text-xs", color: "text-subtle", parent: footer)
         style(savingToLabel, size: "text-2xs", color: "text-faint", parent: footer)
         style(destination, size: "text-2xs", color: "text-subtle", parent: footer)
-        destination.font = .monospacedSystemFont(ofSize: tokens.number("text-2xs"), weight: .regular)
+        destination.font = .capturesMono(ofSize: tokens.number("text-2xs"), weight: .regular)
         destination.lineBreakMode = .byTruncatingMiddle
         destination.alignment = .right
         destination.setAccessibilityLabel("Recording destination")
@@ -1720,7 +1720,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         changeButton.quiet = true; changeButton.textSize = tokens.number("text-2xs")
         filenameField.delegate = self
         filenameField.setAccessibilityLabel("Saved filename")
-        filenameField.font = .systemFont(ofSize: tokens.number("text-sm"))
+        filenameField.font = .capturesUI(ofSize: tokens.number("text-sm"))
         filenameField.textColor = tokens.color("text")
         filenameBox.addSubview(filenameField)
         // Shipping's MP4 / GIF / WebM select.
@@ -1731,7 +1731,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         format.setAccessibilityLabel("Recording export format")
         filenameBox.addSubview(format)
         status.textColor = tokens.color("text-subtle"); status.maximumNumberOfLines = 2
-        status.font = .systemFont(ofSize: tokens.number("text-xs"))
+        status.font = .capturesUI(ofSize: tokens.number("text-xs"))
         status.alignment = .right
         status.setAccessibilityLabel("Recording editor status")
         footer.addSubview(status)
@@ -1741,7 +1741,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         saveAsNewSwitch.setAccessibilityLabel("Save as new file")
         saveAsNewSwitch.target = self; saveAsNewSwitch.action = #selector(saveAsNewChanged)
         saveAsNewRow.addSubview(saveAsNewSwitch)
-        saveAsNewLabel.font = .systemFont(ofSize: tokens.number("text-sm"))
+        saveAsNewLabel.font = .capturesUI(ofSize: tokens.number("text-sm"))
         saveAsNewLabel.textColor = tokens.color("text")
         saveAsNewRow.addSubview(saveAsNewLabel)
         footer.addSubview(saveAsNewRow)
@@ -1784,7 +1784,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
 
     private func style(_ field: NSTextField, size: String, color: String,
                        weight: NSFont.Weight = .regular, parent: NSView) {
-        field.font = .systemFont(ofSize: tokens.number(size), weight: weight)
+        field.font = .capturesUI(ofSize: tokens.number(size), weight: weight)
         field.textColor = tokens.color(color)
         parent.addSubview(field)
     }
@@ -1956,7 +1956,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         // inside the 12 pt leading inset, 30 pt stepper column and the cell's
         // 2 pt padding each side, so long clips never clip the End value.
         let longestTrim = String(presentation?.snapshot.durationMilliseconds ?? 0) as NSString
-        let trimFont: NSFont = trimEnd.font ?? .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
+        let trimFont: NSFont = trimEnd.font ?? .capturesMonoDigits(ofSize: 13, weight: .regular)
         let trimDigits = ceil(longestTrim.size(withAttributes: [.font: trimFont]).width)
         let trimFieldWidth = max(72, 12 + TokenNumberField.stepperWidth + 4 + trimDigits + 4)
         place(trimStartLabel, width: 60, height: 16, dy: 6)
@@ -4140,7 +4140,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
 
     private func configureNumberField(_ field: NSTextField, label: String) {
         field.delegate = self; field.setAccessibilityLabel(label)
-        field.font = .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
+        field.font = .capturesMonoDigits(ofSize: 13, weight: .regular)
         if let number = field as? TokenNumberField {
             // Shipping `NumberInput`: token field and Increase/Decrease steppers.
             number.tokens = tokens
@@ -4288,7 +4288,7 @@ final class RecordingPreviewToggle: NSButton {
         }
         let ink = tokens.color(!isEnabled ? "text-faint" : on || lit ? "text" : "text-subtle")
         let label: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: tokens.number("text-sm"), weight: .medium), .foregroundColor: ink]
+            .font: NSFont.capturesUI(ofSize: tokens.number("text-sm"), weight: .medium), .foregroundColor: ink]
         let titleSize = (title as NSString).size(withAttributes: label)
         let iconSize: CGFloat = leadingIcon == nil ? 0 : 12
         let gap = leadingIcon == nil ? 0 : tokens.number("s-3")

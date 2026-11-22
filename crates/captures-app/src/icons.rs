@@ -13,9 +13,11 @@ pub fn paths(name: &str) -> Option<&'static [&'static str]> {
         "restart" => &["M4 11a8 8 0 1 1 2 5.3", "M4 5v6h6"],
         // Vector counterpart to shipping's font-dependent clockwise `↻`.
         "loop" => &["M20 11a8 8 0 1 0-2 5.3", "M20 5v6h-6"],
+        // FunSaver Shutter brand mark: stroked viewfinder brackets + centered
+        // lens ring (path 0), and a filled top-right shutter dot (path 1).
         "capture" => &[
-            "M9 4H7a3 3 0 0 0-3 3v2M15 4h2a3 3 0 0 1 3 3v2M20 15v2a3 3 0 0 1-3 3h-2M9 20H7a3 3 0 0 1-3-3v-2",
-            "M12 8.5c.4 1.8 1.7 3.1 3.5 3.5-1.8.4-3.1 1.7-3.5 3.5-.4-1.8-1.7-3.1-3.5-3.5 1.8-.4 3.1-1.7 3.5-3.5Z",
+            "M9 4H7a3 3 0 0 0-3 3v2M20 15v2a3 3 0 0 1-3 3h-2M9 20H7a3 3 0 0 1-3-3v-2M8.6 12a3.4 3.4 0 1 0 6.8 0a3.4 3.4 0 1 0-6.8 0Z",
+            "M15.6 6a2.4 2.4 0 1 0 4.8 0a2.4 2.4 0 1 0-4.8 0Z",
         ],
         // Capture menu targets (`CaptureTargetIcon`). Its `h.01` title-bar
         // dots are written as tiny circles so hosts without round caps still
@@ -582,9 +584,17 @@ mod tests {
             let radius = ((point[0] - 16.5).powi(2) + (point[1] - 13.5).powi(2)).sqrt();
             assert!((radius - 2.5).abs() < 1e-3, "{point:?}");
         }
-        let spark = flatten(paths("capture").unwrap()[1]);
-        assert!(close(*spark[0].last().unwrap(), [12., 8.5]));
-        assert!(spark[0].len() > 40, "cubic segments are subdivided");
+        let shutter = flatten(paths("capture").unwrap()[1]);
+        assert!(close(*shutter[0].last().unwrap(), [15.6, 6.]));
+        for point in &shutter[0] {
+            let radius = ((point[0] - 18.).powi(2) + (point[1] - 6.).powi(2)).sqrt();
+            assert!((radius - 2.4).abs() < 1e-3, "{point:?}");
+        }
+        let cubic = flatten(
+            "M12 8.5c.4 1.8 1.7 3.1 3.5 3.5-1.8.4-3.1 1.7-3.5 3.5-.4-1.8-1.7-3.1-3.5-3.5 1.8-.4 3.1-1.7 3.5-3.5Z",
+        );
+        assert!(close(*cubic[0].last().unwrap(), [12., 8.5]));
+        assert!(cubic[0].len() > 40, "cubic segments are subdivided");
     }
 
     #[test]

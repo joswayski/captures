@@ -125,7 +125,7 @@ final class ShortcutRecorderButton: NSButton {
         let gap: CGFloat = 4
         let minimumFontSize: CGFloat = 9
         func layout(_ size: CGFloat, minimumPadding: CGFloat = 4) -> (NSFont, [NSRect], CGFloat) {
-            let font = NSFont.systemFont(ofSize: size, weight: .semibold)
+            let font = NSFont.capturesUI(ofSize: size, weight: .semibold)
             let widths = values.map { ceil(($0 as NSString).size(withAttributes: [.font: font]).width) }
             let remaining = available - widths.reduce(0, +)
                 - CGFloat(max(0, values.count - 1)) * gap
@@ -173,7 +173,7 @@ final class ShortcutRecorderButton: NSButton {
         guard !keys.isEmpty else {
             let prompt = PreferencesPolicy.text("shortcuts.prompt")
             let attributes: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: tokens.number("text-sm")),
+                .font: NSFont.capturesUI(ofSize: tokens.number("text-sm")),
                 .foregroundColor: tokens.color("text-faint"),
             ]
             let size = (prompt as NSString).size(withAttributes: attributes)
@@ -383,7 +383,7 @@ final class PreferenceNavButton: PreferenceHoverButton {
         if active { tokens.color("surface-active").setFill(); path.fill() }
         else if hovered { tokens.color("surface-hover").setFill(); path.fill() }
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: tokens.number("text-md"), weight: .medium),
+            .font: NSFont.capturesUI(ofSize: tokens.number("text-md"), weight: .medium),
             .foregroundColor: tokens.color(active || hovered ? "text" : "text-subtle"),
         ]
         let size = (title as NSString).size(withAttributes: attributes)
@@ -456,7 +456,7 @@ final class PreferenceSegmentButton: PreferenceHoverButton {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     static func width(_ label: String, tokens: Tokens) -> CGFloat {
-        let font = NSFont.systemFont(ofSize: tokens.number("text-sm"), weight: .medium)
+        let font = NSFont.capturesUI(ofSize: tokens.number("text-sm"), weight: .medium)
         return ceil((label as NSString).size(withAttributes: [.font: font]).width) + tokens.number("s-5") * 2
     }
 
@@ -475,7 +475,7 @@ final class PreferenceSegmentButton: PreferenceHoverButton {
             tokens.color("border-subtle").setStroke(); path.lineWidth = 1; path.stroke()
         }
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: tokens.number("text-sm"), weight: .medium),
+            .font: NSFont.capturesUI(ofSize: tokens.number("text-sm"), weight: .medium),
             .foregroundColor: labelColor,
         ]
         let size = (title as NSString).size(withAttributes: attributes)
@@ -540,7 +540,7 @@ final class ThemeChipButton: PreferenceHoverButton {
             xRadius: swatchRadius, yRadius: swatchRadius)
         edge.lineWidth = 1; edge.stroke()
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: tokens.number("text-sm"), weight: .medium),
+            .font: NSFont.capturesUI(ofSize: tokens.number("text-sm"), weight: .medium),
             .foregroundColor: tokens.color(active ? "text" : "text-muted"),
         ]
         let size = (chipLabel as NSString).size(withAttributes: attributes)
@@ -604,7 +604,7 @@ final class PreferenceStatusMark: NSView {
         switch kind {
         case "error":
             let attributes: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 9, weight: .bold),
+                .font: NSFont.capturesUI(ofSize: 9, weight: .bold),
                 .foregroundColor: tokens.color("danger-text"),
             ]
             let size = ("!" as NSString).size(withAttributes: attributes)
@@ -836,7 +836,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
             y: (tokens.number("h-sm") - 13) / 2, width: 13, height: 13), tokens: tokens)
         statusPill.addSubview(mark13); statusMark = mark13
         status.frame = NSRect(x: mark13.frame.maxX + tokens.number("s-3"), y: 7, width: 80, height: 15)
-        status.font = .systemFont(ofSize: tokens.number("text-xs"), weight: .medium)
+        status.font = .capturesUI(ofSize: tokens.number("text-xs"), weight: .medium)
         status.lineBreakMode = .byTruncatingTail
         statusPill.addSubview(status); root.addSubview(statusPill)
         headerRule = Surface(frame: NSRect(x: width, y: Self.headerHeight, width: root.bounds.width - width, height: 1))
@@ -1043,7 +1043,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     /// Shipping `max-width: 52ch` for row and card descriptions; `ch` is the
     /// advance of "0" in the description font.
     private var descriptionWidth: CGFloat {
-        52 * ("0" as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: tokens.number("text-sm"))]).width
+        52 * ("0" as NSString).size(withAttributes: [.font: NSFont.capturesUI(ofSize: tokens.number("text-sm"))]).width
     }
 
     private func textHeight(_ text: String, size: CGFloat, width: CGFloat,
@@ -1052,7 +1052,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         let bounds = (text as NSString).boundingRect(
             with: NSSize(width: width - 4, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading],
-            attributes: [.font: NSFont.systemFont(ofSize: size, weight: weight)])
+            attributes: [.font: NSFont.capturesUI(ofSize: size, weight: weight)])
         return ceil(bounds.height) + 2
     }
 
@@ -1098,11 +1098,11 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
                 height: textHeight(text, size: tokens.number("text-sm"), width: detailWidth)),
                 size: tokens.number("text-sm"), parent: parent)
             if let emphasis, !emphasis.emphasis.isEmpty {
-                let font = NSFont.systemFont(ofSize: tokens.number("text-sm"))
+                let font = NSFont.capturesUI(ofSize: tokens.number("text-sm"))
                 let rich = NSMutableAttributedString(string: emphasis.lead,
                     attributes: [.font: font, .foregroundColor: tokens.color("text-subtle")])
                 rich.append(NSAttributedString(string: emphasis.emphasis, attributes: [
-                    .font: NSFont.systemFont(ofSize: tokens.number("text-sm"), weight: .semibold),
+                    .font: NSFont.capturesUI(ofSize: tokens.number("text-sm"), weight: .semibold),
                     .foregroundColor: tokens.color("text")]))
                 rich.append(NSAttributedString(string: emphasis.trail,
                     attributes: [.font: font, .foregroundColor: tokens.color("text-subtle")]))
@@ -1271,7 +1271,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     }
 
     private func buttonWidth(_ title: String) -> CGFloat {
-        let font = NSFont.systemFont(ofSize: tokens.number("text-md"), weight: .medium)
+        let font = NSFont.capturesUI(ofSize: tokens.number("text-md"), weight: .medium)
         return ceil((title as NSString).size(withAttributes: [.font: font]).width) + tokens.number("s-5") * 2 + 4
     }
 
@@ -2071,7 +2071,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
             width: frame.width - 36 - tokens.number("s-3"), height: frame.height)
         field.identifier = NSUserInterfaceItemIdentifier("custom.\(key)")
         field.setAccessibilityLabel("\(label) hex value")
-        styleField(field); field.font = .monospacedSystemFont(ofSize: tokens.number("text-xs"), weight: .regular)
+        styleField(field); field.font = .capturesMono(ofSize: tokens.number("text-xs"), weight: .regular)
         field.delegate = self; parent.addSubview(field)
         well.change = { [weak self, weak field] color in
             guard let self, let field, let normalized = color.rgbHex else { return }
@@ -2200,7 +2200,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         field.frame = NSRect(x: 0, y: 0, width: fieldWidth, height: side)
         field.autoresizingMask = [.width]; field.identifier = NSUserInterfaceItemIdentifier("find")
         field.setAccessibilityLabel(PreferencesPolicy.text("find.placeholder"))
-        styleField(field); field.font = .systemFont(ofSize: tokens.number("text-md"))
+        styleField(field); field.font = .capturesUI(ofSize: tokens.number("text-md"))
         field.delegate = self; bar.addSubview(field)
         let count = addLabel("", frame: NSRect(x: fieldWidth + gap, y: (side - 16) / 2, width: countWidth, height: 16),
             size: tokens.number("text-sm"), muted: true, parent: bar)
@@ -2343,7 +2343,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
 
     @discardableResult private func addLabel(_ text: String, frame: NSRect, size: CGFloat, weight: NSFont.Weight = .regular,
         muted: Bool = false, parent: NSView, centered: Bool = false, color: String? = nil) -> NSTextField {
-        let label = NSTextField(labelWithString: text); label.frame = frame; label.font = .systemFont(ofSize: size, weight: weight)
+        let label = NSTextField(labelWithString: text); label.frame = frame; label.font = .capturesUI(ofSize: size, weight: weight)
         label.textColor = tokens.color(color ?? (muted ? "text-subtle" : "text")); label.alignment = centered ? .center : .left
         makeSelectable(label)
         parent.addSubview(label); return label
@@ -2359,7 +2359,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     @discardableResult private func wrappingLabel(_ text: String, frame: NSRect, size: CGFloat, parent: NSView,
                                                   color: String = "text-subtle") -> NSTextField {
         let label = NSTextField(wrappingLabelWithString: text)
-        label.frame = frame; label.font = .systemFont(ofSize: size)
+        label.frame = frame; label.font = .capturesUI(ofSize: size)
         label.textColor = tokens.color(color); label.preferredMaxLayoutWidth = frame.width
         label.maximumNumberOfLines = 0
         makeSelectable(label)
@@ -2371,7 +2371,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     }
     private func styleField(_ field: NSTextField) {
         field.isBordered = false; field.drawsBackground = true; field.backgroundColor = tokens.color("surface-field")
-        field.textColor = tokens.color("text"); field.font = .monospacedSystemFont(ofSize: tokens.number("text-sm"), weight: .regular)
+        field.textColor = tokens.color("text"); field.font = .capturesMono(ofSize: tokens.number("text-sm"), weight: .regular)
         field.wantsLayer = true; field.layer?.cornerRadius = tokens.number("r-md"); field.layer?.borderWidth = 1; field.layer?.borderColor = tokens.color("control-border").cgColor
     }
 }

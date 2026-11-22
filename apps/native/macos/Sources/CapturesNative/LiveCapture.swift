@@ -818,7 +818,7 @@ final class LiveCaptureController: NSObject {
         emptyState.show(title: copy.loading, body: nil)
         root.addSubview(emptyState)
         filteredEmptyLabel = NSTextField(labelWithString: "")
-        filteredEmptyLabel.font = .systemFont(ofSize: tokens.number("text-md"))
+        filteredEmptyLabel.font = .capturesUI(ofSize: tokens.number("text-md"))
         filteredEmptyLabel.textColor = tokens.color("text-subtle")
         filteredEmptyLabel.lineBreakMode = .byTruncatingTail
         filteredEmptyLabel.isHidden = true
@@ -832,12 +832,12 @@ final class LiveCaptureController: NSObject {
         recoveryPanel.layer?.borderColor = tokens.color("caution-surface").cgColor
         let heading = NSTextField(labelWithString: copy.recoveryTitle)
         heading.frame = NSRect(x: 16, y: 12, width: 600, height: 20)
-        heading.font = .systemFont(ofSize: tokens.number("text-lg"), weight: .semibold)
+        heading.font = .capturesUI(ofSize: tokens.number("text-lg"), weight: .semibold)
         heading.textColor = tokens.color("text")
         recoveryPanel.addSubview(heading)
         let help = NSTextField(labelWithString: copy.recoveryHelp)
         help.frame = NSRect(x: 16, y: 36, width: 800, height: 17)
-        help.font = .systemFont(ofSize: tokens.number("text-sm"))
+        help.font = .capturesUI(ofSize: tokens.number("text-sm"))
         help.textColor = tokens.color("text-subtle")
         help.lineBreakMode = .byTruncatingTail
         help.autoresizingMask = [.width]
@@ -859,7 +859,7 @@ final class LiveCaptureController: NSObject {
         recoveryScroll.autoresizingMask = [.width]
         recoveryPanel.addSubview(recoveryScroll)
         recoveryStatus = NSTextField(wrappingLabelWithString: "")
-        recoveryStatus.font = .systemFont(ofSize: 11)
+        recoveryStatus.font = .capturesUI(ofSize: 11)
         recoveryStatus.textColor = tokens.color("text-muted")
         recoveryStatus.setAccessibilityLabel("Interrupted recording status")
         recoveryStatus.frame = NSRect(x: 16, y: 57, width: 900, height: 17)
@@ -948,7 +948,7 @@ final class LiveCaptureController: NSObject {
         deleteAllButton.isEnabled = !busy && !artifacts.isEmpty
         deleteAllCancelButton.isHidden = deleteAllButton.isHidden || !confirmDeleteAll
         deleteAllCancelButton.isEnabled = !clearingHistory
-        let font = NSFont.systemFont(ofSize: tokens.number("text-sm"), weight: .medium)
+        let font = NSFont.capturesUI(ofSize: tokens.number("text-sm"), weight: .medium)
         func width(_ text: String) -> CGFloat { ceil((text as NSString).size(withAttributes: [.font: font]).width) }
         // `.capture-history` pads `--s-8` (24 pt) on each side.
         let height = tokens.number("h-md"), left: CGFloat = 24, right = root.bounds.width - 24
@@ -1009,7 +1009,7 @@ final class LiveCaptureController: NSObject {
     @discardableResult private func title(_ text: String, frame: NSRect, size: CGFloat = 13,
                                            weight: NSFont.Weight = .regular, muted: Bool = false) -> NSTextField {
         let label = NSTextField(wrappingLabelWithString: text); label.frame = frame
-        label.font = .systemFont(ofSize: size, weight: weight); label.textColor = tokens.color(muted ? "text-muted" : "text")
+        label.font = .capturesUI(ofSize: size, weight: weight); label.textColor = tokens.color(muted ? "text-muted" : "text")
         root.addSubview(label); return label
     }
 
@@ -1162,7 +1162,7 @@ final class LiveCaptureController: NSObject {
             }
             let title = NSTextField(labelWithString: "\(draft.kind == "gif" ? "GIF" : draft.kind == "video" ? "Video" : "Unavailable") recording")
             title.frame = NSRect(x: 2, y: y + 8, width: textWidth, height: 18)
-            title.font = .systemFont(ofSize: tokens.number("text-md"), weight: .medium)
+            title.font = .capturesUI(ofSize: tokens.number("text-md"), weight: .medium)
             title.textColor = tokens.color("text")
             content.addSubview(title)
             let date = draft.createdAtMilliseconds.map {
@@ -1171,7 +1171,7 @@ final class LiveCaptureController: NSObject {
             let details = NSTextField(labelWithString:
                 "\(date) · \(formatRecordingTime(milliseconds: draft.completedDurationMilliseconds)) recovered so far")
             details.frame = NSRect(x: 2, y: y + 27, width: textWidth, height: 17)
-            details.font = .systemFont(ofSize: tokens.number("text-sm")); details.textColor = tokens.color("text-muted")
+            details.font = .capturesUI(ofSize: tokens.number("text-sm")); details.textColor = tokens.color("text-muted")
             content.addSubview(details)
             let rowError = recoveryActionError?.sessionID == draft.sessionID ? recoveryActionError?.message : nil
             let busyAction = recoveryBusy && recoveryBusyAction?.sessionID == draft.sessionID
@@ -1208,7 +1208,7 @@ final class LiveCaptureController: NSObject {
             } else {
                 let message = draft.reason ?? "This bundle cannot be recovered."
                 let reason = NSTextField(wrappingLabelWithString: message)
-                reason.font = .systemFont(ofSize: tokens.number("text-sm")); reason.textColor = tokens.color("danger-text")
+                reason.font = .capturesUI(ofSize: tokens.number("text-sm")); reason.textColor = tokens.color("danger-text")
                 reason.toolTip = message
                 reason.setAccessibilityHelp(message)
                 let height = textHeight(message, font: reason.font!, width: textWidth)
@@ -1250,7 +1250,7 @@ final class LiveCaptureController: NSObject {
     /// Shipping `.settings-error`: wrapped danger text.
     private func recoveryErrorLabel(_ message: String, width: CGFloat) -> NSTextField {
         let error = NSTextField(wrappingLabelWithString: message)
-        error.font = .systemFont(ofSize: tokens.number("text-sm")); error.textColor = tokens.color("danger-text")
+        error.font = .capturesUI(ofSize: tokens.number("text-sm")); error.textColor = tokens.color("danger-text")
         error.toolTip = message
         error.setAccessibilityHelp(message)
         error.frame.size = NSSize(width: width, height: textHeight(message, font: error.font!, width: width))

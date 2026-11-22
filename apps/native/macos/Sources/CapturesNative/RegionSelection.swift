@@ -240,7 +240,7 @@ final class RegionSelectionView: NSView {
         addSubview(guidance)
         setGuidanceCopy(feedback: false)
         guidance.setPresent(true)
-        dimensions.font = .monospacedDigitSystemFont(ofSize: tokens.number("text-xs"), weight: .semibold)
+        dimensions.font = .capturesMonoDigits(ofSize: tokens.number("text-xs"), weight: .semibold)
         dimensions.textColor = tokens.color("theme-accent-ink"); dimensions.alignment = .center
         dimensions.wantsLayer = true; dimensions.layer?.backgroundColor = tokens.color("theme-accent").cgColor
         dimensions.layer?.cornerRadius = tokens.number("r-sm"); addSubview(dimensions)

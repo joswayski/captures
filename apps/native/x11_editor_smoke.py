@@ -4453,10 +4453,10 @@ def main():
                 "sleep", ".3")
             shot(editor, "text-rotated-inline-cleared")
             # Spaces inside the two turned rows, away from the glyphs/caret.
-            # 20% mustard (#ffca28) over the fixture's #f7f7f5 plate.
+            # 20% mustard (#ffb800) over the fixture's #f7f7f5 plate.
             for x, y in ((380, 205), (310, 200)):
                 for name in ("text-rotated-inline-selected", "text-rotated-inline-selected-minimum"):
-                    document_pixel(name, x, y, (249, 238, 204), tolerance=1)
+                    document_pixel(name, x, y, (249, 234, 196), tolerance=1)
                 document_pixel("text-rotated-inline-cleared", x, y, (247, 247, 245), tolerance=1)
             x, y = document_point((310, 200))  # Second row after the quarter-turn.
             run("xdotool", "mousemove", "--window", editor, str(x), str(y), "sleep", ".2",

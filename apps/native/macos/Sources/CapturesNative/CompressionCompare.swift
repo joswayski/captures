@@ -169,7 +169,7 @@ final class CompressionCompareView: NSView {
     private var inset: CGFloat { tokens.number("s-5") }
 
     private func pillAttributes(_ color: String = "glass-text") -> [NSAttributedString.Key: Any] {
-        [.font: NSFont.monospacedDigitSystemFont(ofSize: tokens.number("text-xs"), weight: .medium),
+        [.font: NSFont.capturesMonoDigits(ofSize: tokens.number("text-xs"), weight: .medium),
          .foregroundColor: tokens.color(color)]
     }
 
@@ -307,7 +307,7 @@ final class CompressionCompareView: NSView {
             tokens.color("glass-border-strong").setStroke(); circle.lineWidth = 1; circle.stroke()
             let glyph = strings.handleGlyph as NSString
             let attributes: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: tokens.number("text-sm")),
+                .font: NSFont.capturesUI(ofSize: tokens.number("text-sm")),
                 .foregroundColor: tokens.color("glass-text"),
             ]
             let size = glyph.size(withAttributes: attributes)
@@ -322,7 +322,7 @@ final class CompressionCompareView: NSView {
             tokens.color("glass-veil").setFill(); visible.fill()
             let text = strings.processing as NSString
             let attributes: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: tokens.number("text-sm"), weight: .medium),
+                .font: NSFont.capturesUI(ofSize: tokens.number("text-sm"), weight: .medium),
                 .foregroundColor: tokens.color("glass-text"),
             ]
             let size = text.size(withAttributes: attributes)
@@ -365,7 +365,7 @@ final class CompressionCompareView: NSView {
             // `.compression-preview-error`: a strip across the top.
             let margin = tokens.number("s-4")
             let attributes: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: tokens.number("text-sm")),
+                .font: NSFont.capturesUI(ofSize: tokens.number("text-sm")),
                 .foregroundColor: tokens.color("danger-text"),
             ]
             let width = visible.width - margin * 2
@@ -382,7 +382,7 @@ final class CompressionCompareView: NSView {
         if let afterHint, afterImage != nil, !processing, let point = hoverPoint,
            visible.contains(point), point.x > dividerX {
             let attributes: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: tokens.number("text-xs"), weight: .medium),
+                .font: NSFont.capturesUI(ofSize: tokens.number("text-xs"), weight: .medium),
                 .foregroundColor: tokens.color("glass-text"),
             ]
             let text = afterHint as NSString

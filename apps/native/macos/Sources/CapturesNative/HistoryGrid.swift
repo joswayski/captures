@@ -282,7 +282,7 @@ final class HistoryButton: NSButton {
         if let fill { fill.withAlphaComponent(fill.alphaComponent * alpha).setFill(); path.fill() }
         if let border { border.withAlphaComponent(border.alphaComponent * alpha).setStroke(); path.lineWidth = 1; path.stroke() }
         let foreground = text.faded(alpha)
-        let font = NSFont.systemFont(ofSize: tokens.number("text-sm"),
+        let font = NSFont.capturesUI(ofSize: tokens.number("text-sm"),
                                      weight: style == .primary ? .semibold : .medium)
         let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: foreground]
         let size = title.isEmpty ? .zero : (title as NSString).size(withAttributes: attributes)
@@ -567,13 +567,13 @@ final class HistoryCardView: NSView {
         thumbnail.onDragError = { [weak self] error in self?.onDragError(error) }
         for (label, size, color) in [(dateLabel, "text-md", "text"), (detailsLabel, "text-sm", "text-subtle"),
                                      (warningLabel, "text-sm", "caution-text")] {
-            label.font = .systemFont(ofSize: tokens.number(size), weight: label === dateLabel ? .medium : .regular)
+            label.font = .capturesUI(ofSize: tokens.number(size), weight: label === dateLabel ? .medium : .regular)
             label.textColor = tokens.color(color)
             label.lineBreakMode = .byTruncatingTail
             label.maximumNumberOfLines = 1
             addSubview(label)
         }
-        missingLabel.font = .systemFont(ofSize: tokens.number("text-sm"), weight: .medium)
+        missingLabel.font = .capturesUI(ofSize: tokens.number("text-sm"), weight: .medium)
         missingLabel.textColor = tokens.color("text-muted")
         missingLabel.alignment = .center
         missingLabel.wantsLayer = true
@@ -717,7 +717,7 @@ final class HistoryCardView: NSView {
     static let warningExtra: CGFloat = 4 + lineHeight
 
     static func errorFont(_ tokens: Tokens) -> NSFont {
-        .systemFont(ofSize: tokens.number("text-xs"))
+        .capturesUI(ofSize: tokens.number("text-xs"))
     }
 
     /// Wrapped height of `.history-card-error` text in a card `cardWidth` wide.
@@ -1096,7 +1096,7 @@ final class HistoryFilterPill: NSButton {
         needsDisplay = true
     }
 
-    private var pillFont: NSFont { .systemFont(ofSize: tokens.number("text-sm"), weight: .medium) }
+    private var pillFont: NSFont { .capturesUI(ofSize: tokens.number("text-sm"), weight: .medium) }
     var preferredWidth: CGFloat {
         let label = (self.label as NSString).size(withAttributes: [.font: pillFont]).width
         let count = ("\(self.count)" as NSString).size(withAttributes: [.font: pillFont]).width
@@ -1154,9 +1154,9 @@ final class HistoryEmptyView: NSView {
     init(tokens: Tokens) {
         self.tokens = tokens
         super.init(frame: .zero)
-        titleLabel.font = .systemFont(ofSize: tokens.number("text-lg"), weight: .semibold)
+        titleLabel.font = .capturesUI(ofSize: tokens.number("text-lg"), weight: .semibold)
         titleLabel.textColor = tokens.color("text"); titleLabel.alignment = .center
-        bodyLabel.font = .systemFont(ofSize: tokens.number("text-md"))
+        bodyLabel.font = .capturesUI(ofSize: tokens.number("text-md"))
         bodyLabel.textColor = tokens.color("text-subtle"); bodyLabel.alignment = .center
         addSubview(titleLabel); addSubview(bodyLabel)
     }

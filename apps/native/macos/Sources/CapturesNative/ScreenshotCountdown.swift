@@ -115,9 +115,9 @@ final class ScreenshotCountdownContent: NSView {
         super.layout()
         let labelSize = min(tokens.number("countdown-label-max"), max(tokens.number("countdown-label-min"), bounds.width * 0.016))
         let numberSize = min(tokens.number("countdown-number-max"), max(tokens.number("countdown-number-min"), bounds.width * 0.26))
-        heading.font = .systemFont(ofSize: labelSize, weight: .medium)
-        number.font = .monospacedDigitSystemFont(ofSize: numberSize, weight: .bold)
-        hint.font = .systemFont(ofSize: tokens.number("text-md"))
+        heading.font = .capturesUI(ofSize: labelSize, weight: .medium)
+        number.font = .capturesMonoDigits(ofSize: numberSize, weight: .bold)
+        hint.font = .capturesUI(ofSize: tokens.number("text-md"))
         applyTracking()
         // Shipping `.countdown-number`: line-height 0.95 with 0.04em / 0.06em
         // margins, so its slot is 1.05em. Digits have no descenders, so the

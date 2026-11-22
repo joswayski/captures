@@ -1,32 +1,77 @@
 @import "tailwindcss";
 @import "../../../shared/themes.css";
 
+@font-face {
+  font-family: "Figtree";
+  src: url("/fonts/Figtree-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Figtree";
+  src: url("/fonts/Figtree-Medium.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Figtree";
+  src: url("/fonts/Figtree-SemiBold.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Figtree";
+  src: url("/fonts/Figtree-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/fonts/JetBrainsMono-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/fonts/JetBrainsMono-Medium.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
 /*
- * Marketing-site palette only. Mostly neutrals with a soft blue accent —
- * closer to Apple / Tailscale / Ente than a loud SaaS gradient layout.
+ * Marketing-site surfaces match the desktop app's matte camera graphite
+ * palette while inheriting Kodak Gold (--theme-accent) and FunSaver Red
+ * (--theme-signal) directly from shared/themes.css.
  */
 :root {
-  --theme-accent: #5b8cf0;
-  --theme-accent-hover: #7aa3f4;
-  --theme-accent-ink: #101014;
-  --theme-accent-readable: #8fb2f5;
-  --theme-accent-rgb: 91, 140, 240;
-
-  --theme-web-canvas: #101014;
-  --theme-web-surface: #16161b;
-  --theme-web-border: rgba(255, 255, 255, 0.1);
+  --theme-web-canvas: #131416;
+  --theme-web-surface: #1b1c1f;
+  --theme-web-control: #232529;
+  --theme-web-control-hover: #2b2d32;
+  --theme-web-border: rgba(255, 255, 255, 0.11);
   --theme-web-border-strong: rgba(255, 255, 255, 0.18);
-  --theme-web-ink: #f2f2f4;
-  --theme-web-ink-muted: #b9b9c4;
-  --theme-web-ink-soft: #8b8b98;
+  --theme-web-ink: #f4f4f5;
+  --theme-web-ink-muted: #b5b8c0;
+  --theme-web-ink-soft: #878b94;
 }
 
 @theme {
   --font-sans:
-    "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", Roboto,
+    "Figtree", -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", Roboto,
     sans-serif;
   --font-mono:
-    "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   --color-canvas: var(--theme-web-canvas);
   --color-surface: var(--theme-web-surface);
   --color-border: var(--theme-web-border);
@@ -37,8 +82,9 @@
   --color-accent: var(--theme-accent);
   --color-accent-hover: var(--theme-accent-hover);
   --color-accent-ink: var(--theme-accent-ink);
-  --color-accent-readable: var(--theme-accent-readable);
-  --color-accent-soft: color-mix(in srgb, var(--theme-accent) 8%, transparent);
+  --color-accent-readable: var(--theme-accent-text);
+  --color-accent-soft: color-mix(in srgb, var(--theme-accent) 10%, transparent);
+  --color-signal: var(--theme-signal);
 }
 
 @layer base {
@@ -49,25 +95,25 @@
   body {
     @apply m-0 min-h-dvh bg-canvas font-sans text-ink antialiased;
     background-image: radial-gradient(
-      ellipse 80% 45% at 50% -18%,
-      rgba(var(--theme-accent-rgb), 0.07),
-      transparent 60%
+      ellipse 72% 40% at 50% -18%,
+      rgba(var(--theme-accent-rgb), 0.085),
+      transparent 62%
     );
   }
 
   ::selection {
     color: var(--theme-web-ink);
-    background: color-mix(in srgb, var(--theme-accent) 18%, transparent);
+    background: color-mix(in srgb, var(--theme-accent) 22%, transparent);
   }
 }
 
 @layer components {
   .inline-chip {
-    @apply inline-flex translate-y-px cursor-pointer items-center gap-1.5 rounded border border-border bg-surface px-1.5 py-0.5 text-[0.8125rem] font-medium leading-none text-ink no-underline transition-colors duration-200 ease-out;
+    @apply inline-flex translate-y-px cursor-pointer items-center gap-1.5 rounded-md border border-border bg-surface px-1.5 py-0.5 text-[0.8125rem] font-medium leading-none text-ink no-underline transition-colors duration-200 ease-out;
   }
 
   .inline-chip:hover {
-    @apply border-accent/30 bg-accent-soft text-accent-readable;
+    @apply border-accent/35 bg-accent-soft text-accent-readable;
   }
 
   .inline-chip:focus-visible {
@@ -75,21 +121,29 @@
   }
 
   .download-button {
-    @apply inline-flex w-full max-w-full items-center justify-center gap-2.5 rounded-full bg-ink px-5 py-3 text-sm font-medium text-canvas no-underline duration-200 ease-out sm:w-auto;
-    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+    @apply inline-flex w-full max-w-full items-center justify-center gap-2.5 rounded-full bg-accent px-5 py-3 text-sm font-semibold text-accent-ink no-underline duration-200 ease-out sm:w-auto;
+    background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.16), rgba(0, 0, 0, 0.05));
+    border: 1px solid rgba(0, 0, 0, 0.16);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.36),
+      0 6px 18px rgba(0, 0, 0, 0.34),
+      0 1px 2px rgba(0, 0, 0, 0.24);
     transition-property: color, background-color, box-shadow, transform;
   }
 
   .download-button:hover {
-    background: var(--theme-accent-hover);
+    background-color: var(--theme-accent-hover);
     box-shadow:
-      0 12px 28px rgba(var(--theme-accent-rgb), 0.28),
-      0 8px 20px rgba(0, 0, 0, 0.35);
-    transform: translateY(-2px);
+      inset 0 1px 0 rgba(255, 255, 255, 0.44),
+      0 10px 26px rgba(var(--theme-accent-rgb), 0.22),
+      0 6px 18px rgba(0, 0, 0, 0.36);
+    transform: translateY(-1px);
   }
 
   .download-button:active {
-    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.24),
+      0 2px 8px rgba(0, 0, 0, 0.32);
     transform: translateY(0);
   }
 
@@ -109,11 +163,17 @@
   }
 
   .source-button {
-    @apply inline-flex w-full max-w-full items-center justify-center gap-2.5 rounded-full border border-border-strong bg-surface px-5 py-3 text-sm font-medium text-ink no-underline transition-colors duration-200 ease-out sm:w-auto;
+    @apply inline-flex w-full max-w-full items-center justify-center gap-2.5 rounded-full border border-border-strong px-5 py-3 text-sm font-medium text-ink no-underline transition-colors duration-200 ease-out sm:w-auto;
+    background-color: var(--theme-web-control);
+    background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.06), rgba(0, 0, 0, 0.04));
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.12),
+      0 1px 3px rgba(0, 0, 0, 0.3);
   }
 
   .source-button:hover {
-    @apply border-accent/30 bg-accent-soft text-accent-readable;
+    background-color: var(--theme-web-control-hover);
+    border-color: rgba(255, 255, 255, 0.24);
   }
 
   .source-button:focus-visible {
@@ -122,17 +182,17 @@
 
   /* Linux package choice, opened from the download button. */
   .download-picker {
-    @apply absolute top-full left-0 z-30 m-0 mt-2 w-full min-w-72 list-none overflow-hidden rounded-lg border border-border-strong bg-surface p-1;
+    @apply absolute top-full left-0 z-30 m-0 mt-2 w-full min-w-72 list-none overflow-hidden rounded-xl border border-border-strong bg-surface p-1;
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
     animation: download-picker-enter 160ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   .download-picker a {
-    @apply flex flex-col gap-0.5 rounded-md px-3 py-2.5 no-underline transition-colors duration-200 ease-out focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent;
+    @apply flex flex-col gap-0.5 rounded-lg px-3 py-2.5 no-underline transition-colors duration-200 ease-out focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent;
   }
 
   .download-picker a:hover {
-    background: color-mix(in srgb, var(--theme-accent) 16%, transparent);
+    background: color-mix(in srgb, var(--theme-accent) 14%, transparent);
   }
 
   @keyframes download-picker-enter {
@@ -150,7 +210,7 @@
 
   /* Questions or feedback: one bordered card, one row per channel. */
   .contact-list {
-    @apply m-0 list-none overflow-hidden rounded-lg border border-border bg-surface p-0;
+    @apply m-0 list-none overflow-hidden rounded-xl border border-border bg-surface p-0;
   }
 
   .contact-list li + li {
@@ -168,7 +228,7 @@
   }
 
   .contact-row:focus-visible {
-    @apply rounded-lg outline-2 -outline-offset-2 outline-accent;
+    @apply rounded-xl outline-2 -outline-offset-2 outline-accent;
   }
 
   .contact-action {
@@ -195,22 +255,35 @@
     @apply block px-3 pb-2 text-xs break-all text-ink-soft;
   }
 
-  /* Match the desktop app mark: dark tile, light glyph. Blue is only an accent. */
+  /* Match the FunSaver Shutter app icon: matte camera graphite tile, white
+     viewfinder brackets, Kodak Gold lens ring, and FunSaver Red shutter dot. */
   .brand-mark {
-    @apply grid h-8 w-8 shrink-0 place-items-center rounded-md;
-    background: #18181b;
+    @apply grid h-9 w-9 shrink-0 place-items-center rounded-[10px];
+    background: #1b1c1f;
+    border: 1px solid rgba(255, 255, 255, 0.13);
     color: #f4f4f5;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.1),
+      0 4px 12px rgba(0, 0, 0, 0.36);
   }
 
   .brand-mark svg {
     stroke-linecap: round;
     stroke-linejoin: round;
-    stroke-width: 1.7;
+    stroke-width: 1.9;
   }
 
-  .brand-mark .capture-icon-spark {
+  .brand-mark .capture-icon-lens {
+    stroke: var(--theme-accent);
+  }
+
+  .brand-mark .capture-icon-center {
     fill: currentColor;
+    stroke: none;
+  }
+
+  .brand-mark .capture-icon-shutter {
+    fill: var(--theme-signal);
     stroke: none;
   }
 

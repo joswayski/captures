@@ -353,7 +353,7 @@ final class OnboardingStatusView: NSView {
     required init?(coder: NSCoder) { nil }
 
     private var attributes: [NSAttributedString.Key: Any] {
-        [.font: NSFont.systemFont(ofSize: tokens.number("text-sm"), weight: .medium),
+        [.font: NSFont.capturesUI(ofSize: tokens.number("text-sm"), weight: .medium),
          .foregroundColor: tokens.color(status?.ready == true ? "positive-text" : "text-subtle")]
     }
     override var intrinsicContentSize: NSSize {
@@ -399,11 +399,11 @@ final class OnboardingPermissionRow: NSView {
         button = CaptureButton("", frame: .zero, tokens: tokens) {}
         super.init(frame: .zero)
         button.actionBlock = { [weak self] in self?.onAction() }
-        titleLabel.font = .systemFont(ofSize: tokens.number("text-md"), weight: .medium)
+        titleLabel.font = .capturesUI(ofSize: tokens.number("text-md"), weight: .medium)
         titleLabel.textColor = tokens.color("text")
-        optionalLabel?.font = .systemFont(ofSize: tokens.number("text-xs"), weight: .medium)
+        optionalLabel?.font = .capturesUI(ofSize: tokens.number("text-xs"), weight: .medium)
         optionalLabel?.textColor = tokens.color("text-faint")
-        detail.font = .systemFont(ofSize: tokens.number("text-sm"))
+        detail.font = .capturesUI(ofSize: tokens.number("text-sm"))
         detail.textColor = tokens.color("text-subtle")
         var views: [NSView] = [icon, titleLabel, detail, status, button]
         if let optionalLabel { views.append(optionalLabel) }
@@ -430,7 +430,7 @@ final class OnboardingPermissionRow: NSView {
     private var actionsWidth: CGFloat {
         let buttonWidth = button.isHidden ? 0
             : ceil((button.title as NSString).size(withAttributes:
-                [.font: NSFont.systemFont(ofSize: tokens.number("text-md"), weight: .medium)]).width)
+                [.font: NSFont.capturesUI(ofSize: tokens.number("text-md"), weight: .medium)]).width)
                 + 2 * tokens.number("s-5")
         return max(118, buttonWidth, status.isHidden ? 0 : status.intrinsicContentSize.width)
     }
@@ -554,22 +554,22 @@ final class OnboardingView: NSView {
         refreshButton.actionBlock = { [weak self] in self?.controller.check() }
         primaryButton.actionBlock = { [weak self] in self?.primary() }
         primaryButton.solid = true
-        eyebrow.font = .systemFont(ofSize: tokens.number("text-2xs"), weight: .semibold)
+        eyebrow.font = .capturesUI(ofSize: tokens.number("text-2xs"), weight: .semibold)
         eyebrow.textColor = tokens.color("text-subtle")
         eyebrow.attributedStringValue = NSAttributedString(string: eyebrow.stringValue, attributes: [
-            .kern: 0.6, .font: NSFont.systemFont(ofSize: tokens.number("text-2xs"), weight: .semibold),
+            .kern: 0.6, .font: NSFont.capturesUI(ofSize: tokens.number("text-2xs"), weight: .semibold),
             .foregroundColor: tokens.color("text-subtle")])
-        title.font = .systemFont(ofSize: tokens.number("text-2xl"), weight: .semibold)
+        title.font = .capturesUI(ofSize: tokens.number("text-2xl"), weight: .semibold)
         title.textColor = tokens.color("text")
         title.setAccessibilityRole(.staticText)
-        lede.font = .systemFont(ofSize: tokens.number("text-md"))
+        lede.font = .capturesUI(ofSize: tokens.number("text-md"))
         lede.textColor = tokens.color("text-subtle")
         errorBox.wantsLayer = true
         errorBox.layer?.backgroundColor = tokens.color("danger-surface").cgColor
         errorBox.layer?.borderColor = tokens.color("danger-border").cgColor
         errorBox.layer?.borderWidth = 1
         errorBox.layer?.cornerRadius = tokens.number("r-md")
-        errorLabel.font = .systemFont(ofSize: tokens.number("text-sm"))
+        errorLabel.font = .capturesUI(ofSize: tokens.number("text-sm"))
         errorLabel.textColor = tokens.color("danger-text")
         errorBox.addSubview(errorLabel)
         screenRow.onAction = { [weak self] in self?.controller.requestScreen() }
@@ -747,7 +747,7 @@ final class OnboardingView: NSView {
         screenRow.frame = NSRect(x: 0, y: 0, width: width, height: screenHeight)
         microphoneRow.frame = NSRect(x: 0, y: screenHeight, width: width, height: microphoneHeight)
         cards.needsDisplay = true
-        let font = NSFont.systemFont(ofSize: tokens.number("text-md"), weight: .semibold)
+        let font = NSFont.capturesUI(ofSize: tokens.number("text-md"), weight: .semibold)
         func buttonWidth(_ title: String, minimum: CGFloat) -> CGFloat {
             max(minimum, ceil((title as NSString).size(withAttributes: [.font: font]).width) + 2 * tokens.number("s-6"))
         }

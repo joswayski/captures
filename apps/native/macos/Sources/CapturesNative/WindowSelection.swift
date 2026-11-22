@@ -228,7 +228,7 @@ final class WindowSelectionView: NSView {
         toolbar.isHidden = autoStart
 
         targetName.frame = NSRect(x: gap, y: gap, width: toolbarWidth - 232, height: controlHeight)
-        targetName.font = .systemFont(ofSize: tokens.number("text-md"), weight: .medium)
+        targetName.font = .capturesUI(ofSize: tokens.number("text-md"), weight: .medium)
         targetName.textColor = tokens.color("glass-text"); targetName.lineBreakMode = .byTruncatingMiddle
         toolbar.addSubview(targetName)
         captureButton = CaptureButton("Capture", frame: NSRect(x: toolbarWidth - 216, y: gap,
@@ -376,7 +376,7 @@ final class WindowSelectionView: NSView {
         -> (string: NSAttributedString, frame: NSRect, textWidth: CGFloat, textHeight: CGFloat) {
         let style = NSMutableParagraphStyle(); style.lineBreakMode = .byTruncatingTail
         let string = NSAttributedString(string: text, attributes: [
-            .font: NSFont.systemFont(ofSize: tokens.number("text-xs"), weight: .medium),
+            .font: NSFont.capturesUI(ofSize: tokens.number("text-xs"), weight: .medium),
             .foregroundColor: tokens.color("glass-text"), .paragraphStyle: style,
         ])
         let padX = tokens.number("s-3"), padY = tokens.number("s-2")

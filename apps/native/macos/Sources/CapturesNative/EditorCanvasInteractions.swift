@@ -229,7 +229,7 @@ final class EditorDropGuideView: NSView {
 
     /// Toast frame at the top center of the viewport (`.screenshot-drop-overlay`).
     var toastFrame: CGRect {
-        let font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        let font = NSFont.capturesUI(ofSize: 13, weight: .semibold)
         let width = ceil((toastLabel as NSString).size(withAttributes: [.font: font]).width) + 44 + 16
         return CGRect(x: bounds.midX - width / 2, y: 16, width: width, height: 40)
     }
@@ -265,7 +265,7 @@ final class EditorDropGuideView: NSView {
         let icon = NSBezierPath(roundedRect: CGRect(x: toast.minX + 15, y: toast.midY - 8, width: 18, height: 16),
                                 xRadius: 3, yRadius: 3)
         accent.setStroke(); icon.lineWidth = 1.7; icon.stroke()
-        let font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        let font = NSFont.capturesUI(ofSize: 13, weight: .semibold)
         let text = toastLabel as NSString
         let size = text.size(withAttributes: [.font: font])
         text.draw(at: CGPoint(x: toast.minX + 44, y: toast.midY - size.height / 2),
@@ -311,12 +311,12 @@ final class EditorCurveControls: NSView {
         self.tokens = tokens
         super.init(frame: NSRect(x: 0, y: 0, width: width, height: 0))
         setAccessibilityLabel("Curve controls")
-        heading.font = .systemFont(ofSize: 13, weight: .semibold)
+        heading.font = .capturesUI(ofSize: 13, weight: .semibold)
         heading.textColor = tokens.color("text")
         heading.frame = NSRect(x: 0, y: 0, width: 200, height: 24)
         addSubview(heading)
         bendValue.alignment = .right
-        bendValue.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        bendValue.font = .capturesMonoDigits(ofSize: 12, weight: .regular)
         bendValue.textColor = tokens.color("text-muted")
         bendValue.frame = NSRect(x: width - 60, y: 2, width: 60, height: 20)
         addSubview(bendValue)
@@ -329,7 +329,7 @@ final class EditorCurveControls: NSView {
         addSubview(bendSlider)
         for (index, title) in NativeEditorCanvas.curveMarks.enumerated() {
             let mark = NSTextField(labelWithString: title)
-            mark.font = .systemFont(ofSize: 11); mark.textColor = tokens.color("text-subtle")
+            mark.font = .capturesUI(ofSize: 11); mark.textColor = tokens.color("text-subtle")
             mark.alignment = index == 0 ? .left : index == 1 ? .center : .right
             mark.frame = NSRect(x: CGFloat(index) * width / 3, y: 52, width: width / 3 - 1, height: 16)
             addSubview(mark); marks.append(mark)
@@ -340,7 +340,7 @@ final class EditorCurveControls: NSView {
             self.apply(["kind": "straighten"], nil)
         }
         addSubview(straightenButton)
-        help.font = .systemFont(ofSize: 11); help.textColor = tokens.color("text-muted")
+        help.font = .capturesUI(ofSize: 11); help.textColor = tokens.color("text-muted")
         help.frame = NSRect(x: 0, y: 74, width: width, height: 44)
         addSubview(help)
         setHandles(nil)

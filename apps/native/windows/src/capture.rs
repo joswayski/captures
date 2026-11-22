@@ -2100,20 +2100,34 @@ impl Menu {
                 0.
             };
             let r = rect(r.left, r.top + lift, r.right, r.bottom + lift);
+            let pill = (r.bottom - r.top) / 2.;
             let shadow = [Shadow {
                 x: 0.,
                 y: 6.,
                 blur: 18.,
                 spread: 0.,
-                color: [0., 0., 0., 0.3 * opacity],
+                color: [0., 0., 0., 0.34 * opacity],
             }];
-            gfx::shadow(dc, r, 10., &shadow)?;
+            gfx::shadow(dc, r, pill, &shadow)?;
             let fill = if *enabled && hovered(Hit::Primary) {
                 "theme-accent-hover"
             } else {
                 "theme-accent"
             };
-            gfx::fill_round(dc, r, 10., t.color_alpha(fill, opacity))?;
+            gfx::fill_round(dc, r, pill, t.color_alpha(fill, opacity))?;
+            gfx::top_highlight(dc, r, pill, t.color_alpha("primary-highlight", opacity))?;
+            gfx::border(
+                dc,
+                r,
+                pill,
+                1.,
+                D2D1_COLOR_F {
+                    r: 0.,
+                    g: 0.,
+                    b: 0.,
+                    a: 0.16 * opacity,
+                },
+            )?;
             let ink = t.color_alpha("theme-accent-ink", opacity);
             let content = 16. + 6. + label.width;
             let x = (r.left + r.right - content) / 2.;
@@ -2133,7 +2147,7 @@ impl Menu {
                     })?;
                 }
             } else {
-                gfx::icon(dc, &g.factory, "capture", &[], (x, cy - 8., 16.), 1.8, ink)?;
+                gfx::icon(dc, &g.factory, "capture", &[1], (x, cy - 8., 16.), 1.8, ink)?;
             }
             gfx::text(dc, label, x + 22., cy - label.height / 2., ink)?;
         }

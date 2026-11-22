@@ -2,7 +2,7 @@ export const COLOR_THEMES = [
   {
     id: "mustard",
     name: "Mustard",
-    description: "Captures mustard and signal red",
+    description: "Kodak gold and shutter red",
   },
   {
     id: "ember",

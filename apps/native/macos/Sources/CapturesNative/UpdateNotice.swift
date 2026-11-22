@@ -493,7 +493,7 @@ final class UpdateNoticeView: NSView {
     private func label(_ text: String, size: String, color: String, weight: NSFont.Weight = .regular,
                        wraps: Bool = false) -> NSTextField {
         let field = wraps ? NSTextField(wrappingLabelWithString: text) : NSTextField(labelWithString: text)
-        field.font = .systemFont(ofSize: tokens.number(size), weight: weight)
+        field.font = .capturesUI(ofSize: tokens.number(size), weight: weight)
         field.textColor = tokens.color(color)
         field.isSelectable = false
         return field
@@ -600,13 +600,13 @@ final class UpdateNoticeView: NSView {
             let truncating = NSMutableParagraphStyle()
             truncating.lineBreakMode = .byTruncatingTail
             let plain: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: tokens.number("text-sm")),
+                .font: NSFont.capturesUI(ofSize: tokens.number("text-sm")),
                 .foregroundColor: tokens.color("text-subtle"), .paragraphStyle: truncating,
             ]
             let prefix = String(p.description[..<range.lowerBound])
             let suffix = String(p.description[range.upperBound...])
             let linkText = link.text
-            let font = NSFont.systemFont(ofSize: tokens.number("text-sm"))
+            let font = NSFont.capturesUI(ofSize: tokens.number("text-sm"))
             let icon: (NSColor) -> NSAttributedString = { color in
                 let attachment = NSTextAttachment()
                 attachment.image = NSImage(size: NSSize(width: 16, height: 12), flipped: true) { _ in
@@ -662,13 +662,13 @@ final class UpdateNoticeView: NSView {
         if p.hasFooter {
             let y = footerTop + s4
             if let dismiss = p.dismiss {
-                let size = (dismiss.label as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: tokens.number("text-md"), weight: .medium)])
+                let size = (dismiss.label as NSString).size(withAttributes: [.font: NSFont.capturesUI(ofSize: tokens.number("text-md"), weight: .medium)])
                 let button = CaptureButton(dismiss.label, frame: NSRect(x: s6, y: y, width: max(72, ceil(size.width) + 32), height: hMd), tokens: tokens) { [weak self] in self?.onAction(dismiss.action) }
                 button.isEnabled = dismiss.enabled
                 card.addSubview(button)
             }
             if let primary = p.primary {
-                let size = (primary.label as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: tokens.number("text-md"), weight: .medium)])
+                let size = (primary.label as NSString).size(withAttributes: [.font: NSFont.capturesUI(ofSize: tokens.number("text-md"), weight: .medium)])
                 let buttonWidth = max(104, ceil(size.width) + 32)
                 let button = CaptureButton(primary.label, frame: NSRect(x: width - s6 - buttonWidth, y: y, width: buttonWidth, height: hMd), tokens: tokens) { [weak self] in self?.onAction(primary.action) }
                 button.primary = true
@@ -729,7 +729,7 @@ final class UpdateNoticeView: NSView {
             let groupStyle = NSMutableParagraphStyle()
             groupStyle.paragraphSpacing = s3; groupStyle.paragraphSpacingBefore = s4
             let body: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: tokens.number("text-sm")),
+                .font: NSFont.capturesUI(ofSize: tokens.number("text-sm")),
                 .foregroundColor: tokens.color("text-muted"), .paragraphStyle: paragraph,
             ]
             // Highlights: a bullet and bold title, s-1 over the description
@@ -744,12 +744,12 @@ final class UpdateNoticeView: NSView {
             var highlightBody = body
             highlightBody[.paragraphStyle] = highlightStyle
             let highlightTitle: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: tokens.number("text-sm"), weight: .semibold),
+                .font: NSFont.capturesUI(ofSize: tokens.number("text-sm"), weight: .semibold),
                 .foregroundColor: tokens.color("text"), .paragraphStyle: titleStyle,
             ]
             if let empty = notes.empty {
                 let plain: [NSAttributedString.Key: Any] = [
-                    .font: NSFont.systemFont(ofSize: tokens.number("text-sm")),
+                    .font: NSFont.capturesUI(ofSize: tokens.number("text-sm")),
                     .foregroundColor: tokens.color("text-subtle"),
                 ]
                 text.append(NSAttributedString(string: empty, attributes: plain))
@@ -766,7 +766,7 @@ final class UpdateNoticeView: NSView {
                 if notes.stacked {
                     let style: NSParagraphStyle = index == 0 ? NSParagraphStyle.default : groupStyle
                     text.append(NSAttributedString(string: (text.length > 0 ? "\n" : "") + group.displayVersion + "\n", attributes: [
-                        .font: NSFont.monospacedDigitSystemFont(ofSize: tokens.number("text-sm"), weight: .semibold),
+                        .font: NSFont.capturesMonoDigits(ofSize: tokens.number("text-sm"), weight: .semibold),
                         .foregroundColor: tokens.color("text"), .paragraphStyle: style,
                     ]))
                 }
@@ -857,7 +857,7 @@ final class UpdateNoticeView: NSView {
             box.addSubview(message)
             card.addSubview(box)
             let plain: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: tokens.number("text-sm")), .foregroundColor: tokens.color("text-subtle"),
+                .font: NSFont.capturesUI(ofSize: tokens.number("text-sm")), .foregroundColor: tokens.color("text-subtle"),
             ]
             var link = plain
             link[.link] = "https://captur.es/#download"

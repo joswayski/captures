@@ -186,15 +186,15 @@ final class StartupNoticeView: NSView {
     var accessibleHint: String { ([StartupNoticeCopy.hint] + keys).joined(separator: " ") }
 
     var titleAttributes: [NSAttributedString.Key: Any] {
-        [.font: NSFont.systemFont(ofSize: tokens.number("text-md"), weight: .semibold),
+        [.font: NSFont.capturesUI(ofSize: tokens.number("text-md"), weight: .semibold),
          .foregroundColor: tokens.color("glass-text")]
     }
     var hintAttributes: [NSAttributedString.Key: Any] {
-        [.font: NSFont.systemFont(ofSize: tokens.number("text-sm")),
+        [.font: NSFont.capturesUI(ofSize: tokens.number("text-sm")),
          .foregroundColor: tokens.color(layout.caret == .none ? "glass-text-muted" : "glass-text-subtle")]
     }
     var keyAttributes: [NSAttributedString.Key: Any] {
-        [.font: NSFont.systemFont(ofSize: tokens.number("text-sm"), weight: .semibold),
+        [.font: NSFont.capturesUI(ofSize: tokens.number("text-sm"), weight: .semibold),
          .foregroundColor: tokens.color("glass-text")]
     }
 

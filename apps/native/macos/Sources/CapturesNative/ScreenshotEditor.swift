@@ -534,7 +534,7 @@ final class EditorCropOverlay: EditorViewportGestureView {
         border.setLineDash([tokens.number("s-3"), tokens.number("s-2")], count: 2, phase: 0)
         tokens.color("glass-text").setStroke(); border.stroke()
         let label = NSAttributedString(string: String(format: "%.0f × %.0f", Double(selection.width), Double(selection.height)),
-            attributes: [.font: NSFont.systemFont(ofSize: tokens.number("text-sm")),
+            attributes: [.font: NSFont.capturesUI(ofSize: tokens.number("text-sm")),
                          .foregroundColor: tokens.color("glass-text")])
         let padding = tokens.number("s-2")
         let size = label.size()
@@ -1400,7 +1400,7 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
             [handles.start, handles.end].forEach { dot($0, radius: 4.5, filled: false) }
         }
         if let hoverHint, let hoverPoint, startPoint == nil {
-            let font = NSFont.systemFont(ofSize: 11)
+            let font = NSFont.capturesUI(ofSize: 11)
             let text = hoverHint as NSString
             let size = text.size(withAttributes: [.font: font])
             let bubble = CGRect(x: hoverPoint.x + 14, y: hoverPoint.y + 18,
@@ -1464,7 +1464,7 @@ final class EditorMakeCopySwitch: NSButton {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     private var labelAttributes: [NSAttributedString.Key: Any] {
-        [.font: NSFont.systemFont(ofSize: tokens.number("text-xs"), weight: .medium),
+        [.font: NSFont.capturesUI(ofSize: tokens.number("text-xs"), weight: .medium),
          .foregroundColor: tokens.color("text-muted")]
     }
 
@@ -2475,7 +2475,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         guard let addImagesButton, let fitButton else { return }
         let width = root.bounds.width
         let pad = tokens.number("s-5")
-        let small = NSFont.systemFont(ofSize: tokens.number("text-sm"), weight: .medium)
+        let small = NSFont.capturesUI(ofSize: tokens.number("text-sm"), weight: .medium)
         func titleWidth(_ text: String) -> CGFloat {
             ceil((text as NSString).size(withAttributes: [.font: small]).width)
         }
@@ -2573,8 +2573,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         func width(_ text: String, _ font: NSFont) -> CGFloat {
             (text as NSString).size(withAttributes: [.font: font]).width
         }
-        let small = NSFont.systemFont(ofSize: tokens.number("text-xs"), weight: .medium)
-        let tool = NSFont.systemFont(ofSize: tokens.number("text-md"))
+        let small = NSFont.capturesUI(ofSize: tokens.number("text-xs"), weight: .medium)
+        let tool = NSFont.capturesUI(ofSize: tokens.number("text-md"))
         let labels = canvasToolbarLabels.map(\.stringValue)
         let field = EditorChrome.metric("canvas_field"), gap = tokens.number("s-2")
         let toolPad = tokens.number("s-4"), iconGap = tokens.number("s-3")
@@ -2671,7 +2671,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private func exportTextWidth(_ text: String, size: String, weight: NSFont.Weight) -> CGFloat {
         ceil((text as NSString).size(withAttributes:
-            [.font: NSFont.systemFont(ofSize: tokens.number(size), weight: weight)]).width)
+            [.font: NSFont.capturesUI(ofSize: tokens.number(size), weight: weight)]).width)
     }
 
     /// Shipping `.screenshot-export-secondary` / `-actions` buttons: 12 pt
@@ -2710,7 +2710,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                                         maximumLines: Int) -> CGFloat {
         guard !text.isEmpty, width > 0 else { return Self.exportStatusLine }
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: tokens.number("text-xs"), weight: weight),
+            .font: NSFont.capturesUI(ofSize: tokens.number("text-xs"), weight: weight),
             .paragraphStyle: exportStatusParagraph(alignment: .left),
         ]
         let bounds = (text as NSString).boundingRect(with: NSSize(width: width, height: .greatestFiniteMagnitude),
@@ -3233,7 +3233,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             view.wantsLayer = true
         }
         draftBanner.setAccessibilityLabel(EditorChrome.text("header", "draft_restored"))
-        draftBannerLabel.font = .systemFont(ofSize: tokens.number("text-sm"), weight: .medium)
+        draftBannerLabel.font = .capturesUI(ofSize: tokens.number("text-sm"), weight: .medium)
         draftBannerLabel.lineBreakMode = .byTruncatingTail
         draftBanner.addSubview(draftBannerLabel)
         draftDismissButton = button(EditorChrome.text("header", "draft_dismiss"), frame: .zero,
@@ -3256,7 +3256,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         headerBar.addSubview(canvasToolbar)
         for text in [EditorChrome.text("header", "canvas"), "W", "×", "H"] {
             let label = NSTextField(labelWithString: text)
-            label.font = .systemFont(ofSize: tokens.number("text-xs"), weight: .medium)
+            label.font = .capturesUI(ofSize: tokens.number("text-xs"), weight: .medium)
             label.setAccessibilityElement(false)
             canvasToolbarLabels.append(label); canvasToolbar.addSubview(label)
         }
@@ -3266,7 +3266,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             configure(field, frame: .zero, label: EditorChrome.text("header", key), parent: canvasToolbar)
             field.tokens = tokens; field.compact = true; field.quiet = true; field.delegate = self
             field.alignment = .center
-            field.font = .monospacedSystemFont(ofSize: tokens.number("text-xs"), weight: .regular)
+            field.font = .capturesMono(ofSize: tokens.number("text-xs"), weight: .regular)
             field.toolTip = EditorChrome.text("header", key)
             field.minimum = { 1 }
             field.maximum = { Self.maximumLayerSize }
@@ -3315,7 +3315,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         backgroundCard.isHidden = true
         backgroundSolid = NSButton(checkboxWithTitle: EditorColors.text("solid_background"),
                                    target: self, action: #selector(toggleSolidBackground))
-        backgroundSolid.font = .systemFont(ofSize: tokens.number("text-sm"))
+        backgroundSolid.font = .capturesUI(ofSize: tokens.number("text-sm"))
         backgroundSolid.frame = NSRect(x: cardPadding, y: cardPadding, width: swatchWidth, height: 24)
         backgroundSolid.setAccessibilityLabel(EditorColors.text("solid_background"))
         backgroundCard.addSubview(backgroundSolid)
@@ -3364,7 +3364,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             control.cornerRadius = 0; control.iconSide = 14
         }
         zoomPreset.isBordered = false
-        zoomPreset.font = .monospacedSystemFont(ofSize: tokens.number("text-xs"), weight: .regular)
+        zoomPreset.font = .capturesMono(ofSize: tokens.number("text-xs"), weight: .regular)
         zoomPreset.setAccessibilityLabel(EditorChrome.text("header", "zoom_preset"))
         zoomPreset.toolTip = EditorChrome.text("header", "zoom_preset_tooltip")
         zoomPreset.target = self; zoomPreset.action = #selector(changeZoomPreset)
@@ -3385,7 +3385,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         root.addSubview(railPanel)
         railPanel.addSubview(railRule)
         railTip.wantsLayer = true
-        railTip.font = .systemFont(ofSize: tokens.number("text-xs"), weight: .medium)
+        railTip.font = .capturesUI(ofSize: tokens.number("text-xs"), weight: .medium)
         railTip.alignment = .center
         railTip.layer?.cornerRadius = tokens.number("r-sm")
         railTip.layer?.borderWidth = 1
@@ -3578,7 +3578,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         content.addSubview(picker); shapePicker = picker
         for check in [drawingStroke, drawingFill, drawingDropShadow] {
             check.frame = NSRect(x: 0, y: 0, width: width, height: 24)
-            check.font = .systemFont(ofSize: tokens.number("text-sm"))
+            check.font = .capturesUI(ofSize: tokens.number("text-sm"))
             check.target = self; check.action = #selector(drawingDefaultsChanged(_:))
             content.addSubview(check)
         }
@@ -3830,7 +3830,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
         func caption(_ text: String) -> NSTextField {
             let label = NSTextField(labelWithString: text)
-            label.font = .systemFont(ofSize: tokens.number("text-xs"), weight: .medium)
+            label.font = .capturesUI(ofSize: tokens.number("text-xs"), weight: .medium)
             label.identifier = NSUserInterfaceItemIdentifier("editor-muted")
             exportSettingsPanel.addSubview(label)
             return label
@@ -3851,7 +3851,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         outputSizeMode.target = self; outputSizeMode.action = #selector(outputSizeModeChanged)
         add(outputSizeMode)
         outputDimensions.setAccessibilityLabel("Output dimensions")
-        outputDimensions.font = .monospacedDigitSystemFont(ofSize: tokens.number("text-2xs"), weight: .regular)
+        outputDimensions.font = .capturesMonoDigits(ofSize: tokens.number("text-2xs"), weight: .regular)
         add(outputDimensions)
         configure(outputWidth, frame: .zero, label: "Custom output width", parent: exportSettingsPanel)
         configure(outputHeight, frame: .zero, label: "Custom output height", parent: exportSettingsPanel)
@@ -3915,11 +3915,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         outputMaximumUnit.target = self; outputMaximumUnit.action = #selector(outputMaximumUnitChanged)
         add(outputMaximumUnit)
         exportEstimateValue.setAccessibilityLabel("Estimated size")
-        exportEstimateValue.font = .systemFont(ofSize: tokens.number("text-sm"), weight: .semibold)
+        exportEstimateValue.font = .capturesUI(ofSize: tokens.number("text-sm"), weight: .semibold)
         exportEstimateValue.toolTip = "Estimated export file size for the current format, quality, and output size"
         add(exportEstimateValue)
         exportEstimateDelta.setAccessibilityLabel("Estimated size change")
-        exportEstimateDelta.font = .systemFont(ofSize: tokens.number("text-xs"), weight: .medium)
+        exportEstimateDelta.font = .capturesUI(ofSize: tokens.number("text-xs"), weight: .medium)
         exportEstimateDelta.toolTip = "Change versus the original image, before this export"
         add(exportEstimateDelta)
         // Shipping `.screenshot-show-comparison`, while a hidden comparison applies.
@@ -3945,16 +3945,16 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
         exportDisclosure.setAccessibilityLabel("Export settings")
         exportDisclosure.toolTip = "Show export settings"
-        exportDisclosureTitle.font = .systemFont(ofSize: tokens.number("text-sm"), weight: .medium)
-        exportSummary.font = .monospacedSystemFont(ofSize: tokens.number("text-2xs"), weight: .regular)
+        exportDisclosureTitle.font = .capturesUI(ofSize: tokens.number("text-sm"), weight: .medium)
+        exportSummary.font = .capturesMono(ofSize: tokens.number("text-2xs"), weight: .regular)
         exportSummary.lineBreakMode = .byTruncatingTail
         exportSummary.setAccessibilityLabel("Export summary")
         exportChevron.setAccessibilityElement(false)
         [exportDisclosureTitle as NSView, exportSummary, exportChevron].forEach { exportDisclosure.addSubview($0) }
 
-        exportFilenameCaption.font = .systemFont(ofSize: tokens.number("text-xs"), weight: .medium)
-        exportSavingToCaption.font = .systemFont(ofSize: tokens.number("text-2xs"), weight: .medium)
-        outputLocation.font = .monospacedSystemFont(ofSize: tokens.number("text-2xs"), weight: .medium)
+        exportFilenameCaption.font = .capturesUI(ofSize: tokens.number("text-xs"), weight: .medium)
+        exportSavingToCaption.font = .capturesUI(ofSize: tokens.number("text-2xs"), weight: .medium)
+        outputLocation.font = .capturesMono(ofSize: tokens.number("text-2xs"), weight: .medium)
         outputLocation.lineBreakMode = .byTruncatingMiddle
         outputLocation.setAccessibilityLabel("Save location")
         [exportFilenameCaption, exportSavingToCaption, outputLocation].forEach { exportBar.addSubview($0) }
@@ -3976,7 +3976,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         outputFilename.cell = filenameCell
         outputFilename.isBezeled = false; outputFilename.isBordered = false
         outputFilename.drawsBackground = false; outputFilename.focusRingType = .none
-        outputFilename.font = .systemFont(ofSize: tokens.number("text-sm"))
+        outputFilename.font = .capturesUI(ofSize: tokens.number("text-sm"))
         outputFilename.setAccessibilityLabel("Saved filename")
         outputFilename.placeholderString = "Filename"
         outputFilename.delegate = self
@@ -4026,12 +4026,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private func buildLayersPanel() {
         let headingHeight = Self.layersHeadingHeight
         let title = NSTextField(labelWithString: EditorChrome.text("layers", "title"))
-        title.font = .systemFont(ofSize: tokens.number("text-md"), weight: .semibold)
+        title.font = .capturesUI(ofSize: tokens.number("text-md"), weight: .semibold)
         title.frame = NSRect(x: 0, y: 6, width: 56, height: 18)
         title.textColor = tokens.color("text")
         title.sizeToFit(); title.frame.origin.y = (headingHeight - title.frame.height) / 2
         layersPanel.addSubview(title)
-        layerCount.font = .monospacedSystemFont(ofSize: tokens.number("text-2xs"), weight: .regular)
+        layerCount.font = .capturesMono(ofSize: tokens.number("text-2xs"), weight: .regular)
         layerCount.alignment = .center
         layerCount.sizeToFit()
         layerCountPill.wantsLayer = true
@@ -4089,7 +4089,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         layerContent.frame = NSRect(x: 0, y: 0, width: Self.panelWidth, height: 400)
         panelScroll.documentView = layerContent; layerPropertiesPanel.addSubview(panelScroll)
         // Shipping `.screenshot-properties-heading`: the selected layer's label.
-        layerPropertiesHeading.font = .systemFont(ofSize: tokens.number("text-md"), weight: .semibold)
+        layerPropertiesHeading.font = .capturesUI(ofSize: tokens.number("text-md"), weight: .semibold)
         layerPropertiesHeading.lineBreakMode = .byTruncatingTail
         layerPropertiesHeading.frame = NSRect(x: 0, y: 14, width: Self.contentWidth, height: 20)
         layerPropertiesHeading.setAccessibilityLabel("Properties heading")
@@ -4201,14 +4201,14 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         layerMenuCard.frame = NSRect(x: 0, y: 0, width: Self.layerMenuWidth, height: 400)
         func sectionTitle(_ key: String) -> NSTextField {
             let label = NSTextField(labelWithString: EditorChrome.layerMenu(key).uppercased())
-            label.font = .systemFont(ofSize: tokens.number("text-2xs"), weight: .semibold)
+            label.font = .capturesUI(ofSize: tokens.number("text-2xs"), weight: .semibold)
             label.textColor = tokens.color("text-subtle")
             layerMenuCard.addSubview(label)
             return label
         }
         func fieldLabel(_ key: String) -> NSTextField {
             let label = NSTextField(labelWithString: EditorChrome.layerMenu(key))
-            label.font = .systemFont(ofSize: tokens.number("text-sm"), weight: .medium)
+            label.font = .capturesUI(ofSize: tokens.number("text-sm"), weight: .medium)
             label.textColor = tokens.color("text-muted")
             layerMenuCard.addSubview(label)
             return label
@@ -4232,7 +4232,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         layerBlendMode.bindChange { [weak self] _ in self?.layerBlendModeChanged() }
         layerMenuCard.addSubview(layerBlendMode)
         let opacityLabel = fieldLabel("opacity")
-        layerOpacityValue.font = .monospacedDigitSystemFont(ofSize: tokens.number("text-xs"), weight: .regular)
+        layerOpacityValue.font = .capturesMonoDigits(ofSize: tokens.number("text-xs"), weight: .regular)
         layerOpacityValue.alignment = .right
         layerOpacityValue.textColor = tokens.color("text-muted")
         layerMenuCard.addSubview(layerOpacityValue)
@@ -5421,7 +5421,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private func setExportStatusText(_ label: NSTextField, _ text: String, color: String, weight: NSFont.Weight) {
         label.attributedStringValue = NSAttributedString(string: text, attributes: [
-            .font: NSFont.systemFont(ofSize: tokens.number("text-xs"), weight: weight),
+            .font: NSFont.capturesUI(ofSize: tokens.number("text-xs"), weight: weight),
             .foregroundColor: tokens.color(color),
             .paragraphStyle: exportStatusParagraph(alignment: label.alignment),
         ])
@@ -7777,17 +7777,17 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let title = NSTextField(labelWithString: layer.rowName)
         title.lineBreakMode = .byTruncatingTail
         title.toolTip = layer.kind == .image ? EditorChrome.text("layers", "rename") : layer.rowName
-        title.font = .systemFont(ofSize: tokens.number("text-sm"), weight: .medium)
+        title.font = .capturesUI(ofSize: tokens.number("text-sm"), weight: .medium)
         title.textColor = tokens.color("text")
         let detail = NSTextField(labelWithString: layer.rowKind)
         detail.lineBreakMode = .byTruncatingTail
-        detail.font = .systemFont(ofSize: tokens.number("text-xs"))
+        detail.font = .capturesUI(ofSize: tokens.number("text-xs"))
         detail.textColor = tokens.color("text-subtle"); detail.toolTip = layer.rowKind
         // Shipping fades hidden layers' name and preview.
         if !layer.visible { title.alphaValue = 0.42; detail.alphaValue = 0.42 }
         let rename = NSTextField(string: layer.name)
         rename.identifier = Self.layerRenameIdentifier
-        rename.font = .systemFont(ofSize: tokens.number("text-sm"), weight: .medium)
+        rename.font = .capturesUI(ofSize: tokens.number("text-sm"), weight: .medium)
         rename.setAccessibilityLabel(EditorChrome.layerMenu("rename_label"))
         rename.delegate = self
         let renaming = renamingLayerID == layer.id
@@ -7881,7 +7881,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         textEditor.backgroundColor = tokens.color("surface-sunken")
         textEditor.textColor = tokens.color("text")
         textEditor.insertionPointColor = tokens.color("text")
-        textEditor.font = .systemFont(ofSize: tokens.number("text-md"))
+        textEditor.font = .capturesUI(ofSize: tokens.number("text-md"))
         // The inline editor draws in the layer's own style; only its outline
         // and selection follow the theme.
         inlineTextFrame?.tokens = tokens
@@ -8034,7 +8034,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                                            weight: NSFont.Weight = .regular,
                                            muted: Bool = false) -> NSTextField {
         let label = NSTextField(wrappingLabelWithString: text); label.frame = frame
-        label.font = .systemFont(ofSize: size, weight: weight)
+        label.font = .capturesUI(ofSize: size, weight: weight)
         label.textColor = tokens.color(muted ? "text-muted" : "text")
         if muted { label.identifier = NSUserInterfaceItemIdentifier("editor-muted") }
         root.addSubview(label); return label
@@ -8051,7 +8051,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                                                 muted: Bool = false,
                                                 parent: NSView) -> NSTextField {
         let label = NSTextField(wrappingLabelWithString: text); label.frame = frame
-        label.font = .systemFont(ofSize: size, weight: weight)
+        label.font = .capturesUI(ofSize: size, weight: weight)
         label.textColor = tokens.color(muted ? "text-muted" : "text")
         if muted { label.identifier = NSUserInterfaceItemIdentifier("editor-muted") }
         parent.addSubview(label); return label

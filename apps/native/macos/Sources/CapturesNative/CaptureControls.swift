@@ -305,7 +305,7 @@ final class CaptureGuidanceChip: NSView {
             (hintLabel, tokens.number("text-xs"), NSFont.Weight.medium, "glass-text-muted"),
         ] {
             label.alignment = .center
-            label.font = .systemFont(ofSize: size, weight: weight)
+            label.font = .capturesUI(ofSize: size, weight: weight)
             label.textColor = tokens.color(color)
             label.setAccessibilityElement(false)
             addSubview(label)
@@ -573,7 +573,7 @@ final class RecordingSwitchButton: NSButton {
             tokens.color("theme-accent").setStroke(); ring.lineWidth = 1; ring.stroke()
         }
         let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: tokens.number("text-xs"), weight: .medium),
+            .font: NSFont.capturesUI(ofSize: tokens.number("text-xs"), weight: .medium),
             .foregroundColor: tokens.color(isEnabled && hovered ? "glass-text" : "glass-text-muted"),
         ]
         let size = (status as NSString).size(withAttributes: attributes)
@@ -615,7 +615,7 @@ final class CaptureNoteLink: NSButton {
         let result = NSMutableAttributedString()
         for (text, strong) in parts {
             result.append(NSAttributedString(string: text, attributes: [
-                .font: NSFont.systemFont(ofSize: tokens.number(fontToken),
+                .font: NSFont.capturesUI(ofSize: tokens.number(fontToken),
                     weight: strong ? .bold : .medium),
                 .foregroundColor: tokens.color(active ? "theme-accent-text-strong"
                     : strong ? "glass-text" : "glass-text-subtle"),
@@ -681,7 +681,7 @@ final class CaptureMenuErrorBand: NSView {
     init(tokens: Tokens) {
         self.tokens = tokens
         super.init(frame: .zero)
-        label.font = .systemFont(ofSize: tokens.number("text-sm"))
+        label.font = .capturesUI(ofSize: tokens.number("text-sm"))
         label.textColor = tokens.color("theme-signal-text")
         label.drawsBackground = false; label.isBordered = false
         label.setAccessibilityElement(false)
@@ -851,7 +851,7 @@ final class CaptureControlsView: NSView {
         // 36 pt track (1 pt border, 3 pt padding) of 28 pt segments sized to
         // their 12 px label, 15 px icon, `--s-3` gap and `--s-5` padding.
         // The narrow bar keeps everything on one row with `--s-3` padding.
-        let segmentFont = NSFont.systemFont(ofSize: tokens.number("text-sm"), weight: .medium)
+        let segmentFont = NSFont.capturesUI(ofSize: tokens.number("text-sm"), weight: .medium)
         let segmentPadding = tokens.number(narrow ? "s-3" : "s-5")
         func segmentWidth(_ title: String) -> CGFloat {
             ceil((title as NSString).size(withAttributes: [.font: segmentFont]).width)
@@ -920,7 +920,7 @@ final class CaptureControlsView: NSView {
         let pickerX = targetTrack.frame.maxX + 8
         // Leaves room for the primary's `--s-4` gap, `--s-2` margin and the trailing padding.
         let pickerRight = frame.width - 112 - 12 - 8
-        aspectLabel.font = .systemFont(ofSize: tokens.number("text-xs"), weight: .medium)
+        aspectLabel.font = .capturesUI(ofSize: tokens.number("text-xs"), weight: .medium)
         aspectLabel.textColor = tokens.color("glass-text-subtle")
         let labelSize = aspectLabel.intrinsicContentSize
         let selectWidth = min(150 - ceil(labelSize.width) - tokens.number("s-3"), pickerRight - pickerX)
@@ -948,6 +948,7 @@ final class CaptureControlsView: NSView {
 
         captureButton.frame = NSRect(x: frame.width - 122, y: 8, width: 112, height: 40)
         captureButton.icon = .capture
+        captureButton.cornerRadius = 20
         captureButton.primary = true; captureButton.actionBlock = { [weak self] in self?.confirm() }
         captureButton.enterActionBlock = { [weak self] in self?.confirm() }
         captureButton.setAccessibilityLabel("Take screenshot")
@@ -1081,7 +1082,7 @@ final class CaptureControlsView: NSView {
         // Shipping `.recording-field` captions render uppercase.
         let label = NSTextField(labelWithString: text.uppercased())
         label.frame = NSRect(x: column.x, y: Self.fieldLabelY, width: column.width, height: 14)
-        label.font = .systemFont(ofSize: tokens.number("text-2xs"), weight: .semibold)
+        label.font = .capturesUI(ofSize: tokens.number("text-2xs"), weight: .semibold)
         label.textColor = tokens.color("glass-text-subtle")
         label.lineBreakMode = .byTruncatingTail
         label.setAccessibilityElement(false)
@@ -1301,7 +1302,7 @@ final class CaptureControlsView: NSView {
         let text = NSMutableAttributedString()
         for (part, strong) in parts {
             text.append(NSAttributedString(string: part, attributes: [
-                .font: NSFont.systemFont(ofSize: tokens.number("text-xs"),
+                .font: NSFont.capturesUI(ofSize: tokens.number("text-xs"),
                     weight: strong ? .bold : .medium),
                 .foregroundColor: tokens.color(strong ? "glass-text" : "glass-text-subtle"),
             ]))
@@ -1740,7 +1741,7 @@ final class UnifiedCaptureSelectionView: NSView {
             (identityDetail, tokens.number("text-md"), NSFont.Weight.regular, "glass-text-muted"),
         ] {
             label.alignment = .center
-            label.font = .monospacedDigitSystemFont(ofSize: size, weight: weight)
+            label.font = .capturesMonoDigits(ofSize: size, weight: weight)
             label.textColor = tokens.color(color)
             let shadow = NSShadow()
             shadow.shadowColor = NSColor.black.withAlphaComponent(0.5)
@@ -1748,7 +1749,7 @@ final class UnifiedCaptureSelectionView: NSView {
             label.shadow = shadow
             addSubview(label)
         }
-        selectionLabel.font = .systemFont(ofSize: tokens.number("text-xs"), weight: .semibold)
+        selectionLabel.font = .capturesUI(ofSize: tokens.number("text-xs"), weight: .semibold)
         selectionLabel.textColor = tokens.color("glass-text")
         selectionLabel.alignment = .center; selectionLabel.wantsLayer = true
         selectionLabel.layer?.backgroundColor = tokens.color("glass-strong").cgColor

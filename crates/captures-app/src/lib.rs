@@ -45,6 +45,7 @@ pub mod selection;
 pub mod shortcuts;
 pub mod system_shortcuts;
 pub mod tray_notice;
+pub mod ui_fonts;
 pub mod update_notice;
 pub mod updater;
 pub mod window;

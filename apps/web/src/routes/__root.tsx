@@ -21,21 +21,12 @@ export const Route = createRootRoute({
         content: "A cross-platform screen capture utility by Jose Valerio.",
       },
       { name: "twitter:card", content: "summary" },
-      { name: "theme-color", content: "#101014" },
+      { name: "theme-color", content: "#131416" },
       { title: "Captures" },
     ],
     links: [
       { rel: "icon", type: "image/png", href: "/favicon.png" },
-      { rel: "preconnect", href: "https://fonts.googleapis.com" },
-      {
-        rel: "preconnect",
-        href: "https://fonts.gstatic.com",
-        crossOrigin: "anonymous",
-      },
-      {
-        rel: "stylesheet",
-        href: "https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap",
-      },
+      { rel: "icon", type: "image/svg+xml", href: "/icon.svg" },
     ],
   }),
   component: RootComponent,
@@ -64,11 +55,11 @@ function NotFound() {
 
 function RootDocument({ children }: Readonly<{ children: ReactNode }>) {
   return (
-    <html lang="en" style={{ colorScheme: "dark", backgroundColor: "#101014" }}>
+    <html lang="en" style={{ colorScheme: "dark", backgroundColor: "#131416" }}>
       <head>
         <HeadContent />
       </head>
-      <body style={{ backgroundColor: "#101014", color: "#f2f2f4" }}>
+      <body style={{ backgroundColor: "#131416", color: "#f4f4f5" }}>
         {children}
         <Scripts />
       </body>

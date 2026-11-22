@@ -94,7 +94,16 @@ pub fn register_fonts() {
     if std::fs::create_dir_all(&directory).is_err() {
         return;
     }
-    for (id, bytes) in captures_app::editor_fonts::bundled().files {
+    let fonts = captures_app::editor_fonts::bundled()
+        .files
+        .into_iter()
+        .map(|(id, bytes)| (id, bytes.to_vec()))
+        .chain(
+            captures_app::ui_fonts::files()
+                .iter()
+                .map(|(id, bytes)| ((*id).to_owned(), (*bytes).to_vec())),
+        );
+    for (id, bytes) in fonts {
         let path = directory.join(format!("{id}.ttf"));
         let current = std::fs::metadata(&path).is_ok_and(|m| m.len() == bytes.len() as u64);
         if !current && std::fs::write(&path, &bytes).is_err() {

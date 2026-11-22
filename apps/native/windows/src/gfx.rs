@@ -400,6 +400,8 @@ pub struct Gfx {
     pub factory: ID2D1Factory1,
     pub dcomp: Option<IDCompositionDesktopDevice>,
     dwrite: IDWriteFactory,
+    /// Bundled cross-platform UI faces (`Figtree` + `JetBrains Mono`).
+    ui_fonts: Option<IDWriteFontCollection>,
     formats: Vec<(Style, IDWriteTextFormat)>,
     /// The UI family, for sizes no fixed [`Style`] covers.
     family: HSTRING,
@@ -412,6 +414,38 @@ pub struct Gfx {
 const FAMILIES: [&str; 2] = ["Segoe UI Variable Text", "Segoe UI"];
 /// The Windows entries of shipping `--font-mono`, then a last resort.
 const MONO_FAMILIES: [&str; 4] = ["Cascadia Mono", "Segoe UI Mono", "Consolas", "Courier New"];
+
+thread_local! {
+    static UI_FONTS: RefCell<Option<Option<IDWriteFontCollection>>> = const { RefCell::new(None) };
+}
+
+fn ui_font_collection(dwrite: &IDWriteFactory) -> Option<IDWriteFontCollection> {
+    UI_FONTS.with(|cell| {
+        cell.borrow_mut()
+            .get_or_insert_with(|| load_ui_fonts(dwrite).ok())
+            .clone()
+    })
+}
+
+fn load_ui_fonts(dwrite: &IDWriteFactory) -> Result<IDWriteFontCollection> {
+    unsafe {
+        let factory: IDWriteFactory5 = dwrite.cast()?;
+        let loader = factory.CreateInMemoryFontFileLoader()?;
+        factory.RegisterFontFileLoader(&loader)?;
+        let builder: IDWriteFontSetBuilder1 = factory.CreateFontSetBuilder()?.cast()?;
+        for (_, bytes) in captures_app::ui_fonts::files() {
+            let file = loader.CreateInMemoryFontFileReference(
+                dwrite,
+                bytes.as_ptr().cast(),
+                bytes.len() as u32,
+                None::<&IUnknown>,
+            )?;
+            builder.AddFontFile(&file)?;
+        }
+        let set = builder.CreateFontSet()?;
+        factory.CreateFontCollectionFromFontSet(&set)?.cast()
+    }
+}
 
 impl Gfx {
     /// `composition` is false for the offscreen `--screenshot` renderer.
@@ -429,10 +463,11 @@ impl Gfx {
                 None
             };
             let dwrite: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
-            let mut collection = None;
-            dwrite.GetSystemFontCollection(&mut collection, false)?;
-            let collection = collection.ok_or_else(Error::empty)?;
-            let find = |families: &[&'static str]| {
+            let ui_fonts = ui_font_collection(&dwrite);
+            let mut system_collection = None;
+            dwrite.GetSystemFontCollection(&mut system_collection, false)?;
+            let system_collection = system_collection.ok_or_else(Error::empty)?;
+            let find_in = |collection: &IDWriteFontCollection, families: &[&'static str]| {
                 families.iter().find_map(|family| {
                     let (mut index, mut exists) = (0, BOOL(0));
                     collection
@@ -441,8 +476,20 @@ impl Gfx {
                     exists.as_bool().then_some((*family, index))
                 })
             };
-            let (family, index) = find(&FAMILIES).unwrap_or((FAMILIES[1], 0));
-            let mono = find(&MONO_FAMILIES).map_or(MONO_FAMILIES[2], |(family, _)| family);
+            let (collection, family, index, mono, using_bundled) = if let Some(bundled) =
+                ui_fonts.as_ref()
+                && let Some((sans, idx)) =
+                    find_in(bundled, &[captures_app::ui_fonts::UI_SANS_FAMILY])
+                && let Some((mono, _)) = find_in(bundled, &[captures_app::ui_fonts::UI_MONO_FAMILY])
+            {
+                (bundled, sans, idx, mono, true)
+            } else {
+                let (family, index) =
+                    find_in(&system_collection, &FAMILIES).unwrap_or((FAMILIES[1], 0));
+                let mono = find_in(&system_collection, &MONO_FAMILIES)
+                    .map_or(MONO_FAMILIES[2], |(family, _)| family);
+                (&system_collection, family, index, mono, false)
+            };
             let mut metrics = DWRITE_FONT_METRICS::default();
             if let Ok(font) = collection.GetFontFamily(index).and_then(|f| {
                 f.GetFirstMatchingFont(
@@ -462,9 +509,14 @@ impl Gfx {
                     f32::from(metrics.descent) / em,
                 )
             };
-            // Windows 10 1809+: weights as `wght` axis values, so 500 is a true
-            // medium on Segoe UI Variable rather than its nearest named face.
-            let axes: Option<IDWriteFactory6> = dwrite.cast().ok();
+            // Windows 10 1809+: weights as `wght` axis values for variable
+            // system faces; bundled Figtree/JetBrains Mono ship static weights.
+            let axes: Option<IDWriteFactory6> = if using_bundled {
+                None
+            } else {
+                dwrite.cast().ok()
+            };
+            let ui_collection = using_bundled.then(|| ui_fonts.clone()).flatten();
             let mut formats = Vec::new();
             for style in STYLES {
                 let spec = spec(style);
@@ -488,7 +540,7 @@ impl Gfx {
                     Some(format) => format.cast()?,
                     None => dwrite.CreateTextFormat(
                         family,
-                        None,
+                        ui_collection.as_ref(),
                         DWRITE_FONT_WEIGHT(weight as i32),
                         if spec.italic {
                             DWRITE_FONT_STYLE_ITALIC
@@ -512,6 +564,7 @@ impl Gfx {
                 factory,
                 dcomp,
                 dwrite,
+                ui_fonts: ui_collection,
                 formats,
                 family: HSTRING::from(family),
                 axes,
@@ -603,7 +656,7 @@ impl Gfx {
                 Some(format) => format.cast()?,
                 None => self.dwrite.CreateTextFormat(
                     &self.family,
-                    None,
+                    self.ui_fonts.as_ref(),
                     DWRITE_FONT_WEIGHT(weight as i32),
                     DWRITE_FONT_STYLE_NORMAL,
                     DWRITE_FONT_STRETCH_NORMAL,
@@ -794,6 +847,33 @@ pub fn border(
     color: D2D1_COLOR_F,
 ) -> Result<()> {
     ring(dc, r, radius, -width, 0., color)
+}
+
+/// Crisp 1 DIP inner top specular highlight (`inset 0 1px 0`) along a tactile
+/// button's upper edge.
+pub fn top_highlight(
+    dc: &ID2D1DeviceContext,
+    r: D2D_RECT_F,
+    radius: f32,
+    color: D2D1_COLOR_F,
+) -> Result<()> {
+    let inset = radius.min((r.right - r.left) / 2.).max(1.);
+    let x0 = r.left + inset;
+    let x1 = r.right - inset;
+    if x1 <= x0 {
+        return Ok(());
+    }
+    let y = r.top + 1.5;
+    unsafe {
+        dc.DrawLine(
+            Vector2 { X: x0, Y: y },
+            Vector2 { X: x1, Y: y },
+            &brush(dc, color)?,
+            1.,
+            None,
+        );
+    }
+    Ok(())
 }
 
 /// A band between `from` and `to` DIPs outside `r` (negative is inside), as a

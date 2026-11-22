@@ -264,6 +264,34 @@ export async function prepare(destination, testDestination) {
     resolve(destination, "EDITOR-FONT-LICENSE.txt"),
     `${liberationNotice}\n\n${nunitoNotice}`,
   );
+  const uiFontFiles = [
+    ["figtree", "Figtree-Regular.ttf"],
+    ["figtree", "Figtree-Medium.ttf"],
+    ["figtree", "Figtree-SemiBold.ttf"],
+    ["figtree", "Figtree-Bold.ttf"],
+    ["figtree", "Figtree-SemiBoldItalic.ttf"],
+    ["jetbrains-mono", "JetBrainsMono-Regular.ttf"],
+    ["jetbrains-mono", "JetBrainsMono-Medium.ttf"],
+    ["jetbrains-mono", "JetBrainsMono-SemiBold.ttf"],
+  ];
+  for (const [dir, file] of uiFontFiles) {
+    await copyFile(
+      resolve(root, "crates/captures-app/fonts", dir, file),
+      resolve(destination, file),
+    );
+  }
+  const figtreeNotice = await readFile(
+    resolve(root, "crates/captures-app/fonts/figtree/OFL.txt"),
+    "utf8",
+  );
+  const jetbrainsNotice = await readFile(
+    resolve(root, "crates/captures-app/fonts/jetbrains-mono/OFL.txt"),
+    "utf8",
+  );
+  await writeFile(
+    resolve(destination, "UI-FONT-LICENSE.txt"),
+    `${figtreeNotice}\n\n${jetbrainsNotice}`,
+  );
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

@@ -240,7 +240,7 @@ final class RecordingHUDView: NSView {
 
         noticeLabel.frame = NSRect(x: 15, y: 12, width: frame.width - 30, height: 14)
         noticeLabel.alignment = .center
-        noticeLabel.font = .systemFont(ofSize: tokens.number("text-2xs"), weight: .medium)
+        noticeLabel.font = .capturesUI(ofSize: tokens.number("text-2xs"), weight: .medium)
         noticeLabel.textColor = tokens.color(RecordingHUDColorToken.glassTextSubtle.rawValue)
         noticeLabel.lineBreakMode = .byTruncatingTail
         addSubview(noticeLabel)
@@ -257,10 +257,10 @@ final class RecordingHUDView: NSView {
         addSubview(statusDot)
         // Shipping `.recording-hud-status strong`: `--text-lg` (15 px) semibold.
         timerLabel.frame = NSRect(x: 32, y: 31, width: 68, height: 20)
-        timerLabel.font = .monospacedDigitSystemFont(ofSize: 15, weight: .semibold)
+        timerLabel.font = .capturesMonoDigits(ofSize: 15, weight: .semibold)
         timerLabel.textColor = tokens.color(RecordingHUDColorToken.glassText.rawValue); addSubview(timerLabel)
         statusLabel.frame = NSRect(x: 32, y: 49, width: 68, height: 14)
-        statusLabel.font = .systemFont(ofSize: tokens.number("text-2xs"), weight: .semibold)
+        statusLabel.font = .capturesUI(ofSize: tokens.number("text-2xs"), weight: .semibold)
         statusLabel.textColor = tokens.color(RecordingHUDColorToken.glassTextSubtle.rawValue)
         addSubview(statusLabel)
 
@@ -296,7 +296,7 @@ final class RecordingHUDView: NSView {
         meterTrack.addSubview(meterFill); addSubview(meterTrack)
         meterLabel.frame = NSRect(x: 262, y: 39, width: 42, height: 16)
         meterLabel.alignment = .center
-        meterLabel.font = .systemFont(ofSize: 9, weight: .medium)
+        meterLabel.font = .capturesUI(ofSize: 9, weight: .medium)
         meterLabel.textColor = tokens.color(RecordingHUDColorToken.glassTextSubtle.rawValue)
         meterLabel.setAccessibilityElement(false)
         meterTrack.setAccessibilityElement(true)
@@ -312,7 +312,7 @@ final class RecordingHUDView: NSView {
         // Shipping `.recording-hud-error`: 2xs signal text, one line, ellipsis.
         errorLabel.frame = NSRect(x: 16, y: 79, width: 398, height: 15)
         errorLabel.alignment = .center
-        errorLabel.font = .systemFont(ofSize: tokens.number("text-2xs"), weight: .medium)
+        errorLabel.font = .capturesUI(ofSize: tokens.number("text-2xs"), weight: .medium)
         errorLabel.textColor = tokens.color(RecordingHUDColorToken.themeSignalText.rawValue)
         errorLabel.lineBreakMode = .byTruncatingTail
         errorLabel.maximumNumberOfLines = 1
@@ -531,7 +531,7 @@ final class RecordingHUDView: NSView {
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = .center; paragraph.lineBreakMode = .byTruncatingTail
         let attributed = NSMutableAttributedString(string: text, attributes: [
-            .font: NSFont.systemFont(ofSize: size, weight: .medium),
+            .font: NSFont.capturesUI(ofSize: size, weight: .medium),
             .foregroundColor: tokens.color(RecordingHUDColorToken.glassTextSubtle.rawValue),
             .paragraphStyle: paragraph,
         ])
@@ -539,7 +539,7 @@ final class RecordingHUDView: NSView {
             .map({ (text as NSString).range(of: " \($0) ") })
             .first(where: { $0.location != NSNotFound }) {
             attributed.addAttributes([
-                .font: NSFont.systemFont(ofSize: size, weight: .bold),
+                .font: NSFont.capturesUI(ofSize: size, weight: .bold),
                 .foregroundColor: tokens.color(RecordingHUDColorToken.glassText.rawValue),
             ], range: NSRange(location: range.location + 1, length: range.length - 2))
         }
@@ -589,7 +589,7 @@ final class RecordingHUDView: NSView {
         let text = formatRecordingTime(milliseconds: elapsedMilliseconds + running)
         guard timerLabel.stringValue != text else { return }
         // h:mm:ss must fit the fixed status column beside Stop.
-        timerLabel.font = .monospacedDigitSystemFont(ofSize: text.count > 5 ? 17 : 22, weight: .semibold)
+        timerLabel.font = .capturesMonoDigits(ofSize: text.count > 5 ? 17 : 22, weight: .semibold)
         timerLabel.stringValue = text
     }
 
@@ -725,7 +725,7 @@ final class RecordingControlsHiddenNoticeView: NSView {
         setAccessibilityRole(.staticText)
         setAccessibilityLabel("\(notice.title). \(notice.detail)")
         addSubview(tile)
-        titleLabel.font = .systemFont(ofSize: tokens.number("text-sm"), weight: .semibold)
+        titleLabel.font = .capturesUI(ofSize: tokens.number("text-sm"), weight: .semibold)
         titleLabel.textColor = tokens.color(RecordingHUDColorToken.glassText.rawValue)
         titleLabel.lineBreakMode = .byTruncatingTail
         addSubview(titleLabel)
@@ -735,11 +735,11 @@ final class RecordingControlsHiddenNoticeView: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     private var textAttributes: [NSAttributedString.Key: Any] {
-        [.font: NSFont.systemFont(ofSize: tokens.number("text-xs")),
+        [.font: NSFont.capturesUI(ofSize: tokens.number("text-xs")),
          .foregroundColor: tokens.color("glass-text-muted")]
     }
     private var chipAttributes: [NSAttributedString.Key: Any] {
-        [.font: NSFont.systemFont(ofSize: tokens.number("text-2xs"), weight: .semibold),
+        [.font: NSFont.capturesUI(ofSize: tokens.number("text-2xs"), weight: .semibold),
          .foregroundColor: tokens.color(RecordingHUDColorToken.glassText.rawValue)]
     }
 

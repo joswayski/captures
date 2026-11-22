@@ -104,10 +104,10 @@ final class RecordingSavedNoticeView: NSView {
         layer?.shadowRadius = 18; layer?.shadowOffset = NSSize(width: 0, height: -6)
         setAccessibilityRole(.group); setAccessibilityLabel("Recording ready")
         addSubview(tile)
-        heading.font = .systemFont(ofSize: tokens.number("text-md"), weight: .semibold)
+        heading.font = .capturesUI(ofSize: tokens.number("text-md"), weight: .semibold)
         heading.textColor = tokens.color("glass-text"); heading.lineBreakMode = .byTruncatingTail
         addSubview(heading)
-        detail.font = .systemFont(ofSize: tokens.number("text-xs"))
+        detail.font = .capturesUI(ofSize: tokens.number("text-xs"))
         detail.textColor = tokens.color("glass-text-muted"); detail.maximumNumberOfLines = 3
         // Truncating tail forces one line; shipping wraps the detail to two.
         detail.lineBreakMode = .byWordWrapping; detail.cell?.truncatesLastVisibleLine = true
@@ -159,7 +159,7 @@ final class RecordingSavedNoticeView: NSView {
     private func layoutRow() {
         let padding = tokens.number("s-5"), gap = tokens.number("s-5")
         let labelWidth = ceil((primaryButton.title as NSString).size(withAttributes:
-            [.font: NSFont.systemFont(ofSize: tokens.number("text-xs"), weight: .medium)]).width)
+            [.font: NSFont.capturesUI(ofSize: tokens.number("text-xs"), weight: .medium)]).width)
         // `padding: 0 var(--s-4)`, the icon, `gap: var(--s-3)` and a 1 pt border.
         let buttonWidth = tokens.number("s-4") * 2 + 14 + tokens.number("s-3") + labelWidth + 2
         let height = tokens.number("h-md")

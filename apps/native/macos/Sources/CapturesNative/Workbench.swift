@@ -171,13 +171,10 @@ final class CaptureButton: NSButton {
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let hoverTracking { removeTrackingArea(hoverTracking) }
-        hoverTracking = nil
-        if hudControl || quiet || slidingSegment || icon?.isEditorTool == true {
-            let tracking = NSTrackingArea(rect: .zero,
-                options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-                owner: self, userInfo: nil)
-            addTrackingArea(tracking); hoverTracking = tracking
-        }
+        let tracking = NSTrackingArea(rect: .zero,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self, userInfo: nil)
+        addTrackingArea(tracking); hoverTracking = tracking
     }
 
     override func mouseEntered(with event: NSEvent) {
@@ -263,23 +260,45 @@ final class CaptureButton: NSButton {
         } else {
             // Shipping disables the primary with `opacity: 0.4`, keeping the accent.
             let fadedPrimary = primary && !isEnabled
+            let pressed = cell?.isHighlighted == true
             let fill = fadedPrimary ? "theme-accent" : !isEnabled ? (glass ? "glass" : "surface-sunken")
                 : signal ? "theme-signal-surface"
-                : primary ? "theme-accent"
-                : cell?.isHighlighted == true ? (glass ? "glass-active" : "surface-active")
-                : selected ? (glass ? "glass-active" : "surface-selected") : (glass ? "glass-raised" : "control")
-            tokens.color(fill).faded(fadedPrimary ? 0.4 : 1).setFill()
+                : primary ? (hovered && !pressed ? "theme-accent-hover" : "theme-accent")
+                : pressed ? (glass ? "glass-active" : "surface-active")
+                : selected ? (glass ? "glass-active" : "surface-selected")
+                : hovered ? (glass ? "glass-hover" : "control-hover")
+                : (glass ? "glass-raised" : "control")
+            let baseColor = tokens.color(fill).faded(fadedPrimary ? 0.4 : 1)
+            baseColor.setFill()
             path.fill()
+            // Tactile camera-key finish: subtle vertical lift + crisp 1 pt top highlight.
+            if isEnabled && !pressed {
+                NSGraphicsContext.saveGraphicsState()
+                path.addClip()
+                let sheenTop = NSColor.white.withAlphaComponent(primary ? 0.14 : 0.05)
+                let sheenBottom = NSColor.black.withAlphaComponent(primary ? 0.06 : 0.04)
+                NSGradient(starting: sheenTop, ending: sheenBottom)?.draw(in: path.bounds, angle: 90)
+                let highlight = tokens.color(primary ? "primary-highlight" : "control-highlight")
+                let inset = min(radius, path.bounds.width / 2)
+                let line = NSBezierPath()
+                line.move(to: NSPoint(x: path.bounds.minX + inset, y: path.bounds.minY + 1))
+                line.line(to: NSPoint(x: path.bounds.maxX - inset, y: path.bounds.minY + 1))
+                highlight.setStroke()
+                line.lineWidth = 1
+                line.stroke()
+                NSGraphicsContext.restoreGraphicsState()
+            }
             if !fadedPrimary {
-            tokens.color(signal && isEnabled ? "theme-signal"
-                : primary && isEnabled ? "theme-accent"
-                : selected && isEnabled ? "theme-accent"
-                : (glass ? "glass-border" : "control-border")).setStroke()
-            path.lineWidth = 1
-            path.stroke()
+                let borderColor = signal && isEnabled ? tokens.color("theme-signal")
+                    : primary && isEnabled ? NSColor.black.withAlphaComponent(0.18)
+                    : selected && isEnabled ? tokens.color("theme-accent")
+                    : tokens.color(glass ? "glass-border" : (hovered ? "border-strong" : "control-border"))
+                borderColor.setStroke()
+                path.lineWidth = 1
+                path.stroke()
             }
         }
-        let font = NSFont.systemFont(ofSize: textSize ?? tokens.number("text-md"),
+        let font = NSFont.capturesUI(ofSize: textSize ?? tokens.number("text-md"),
                                      weight: textWeight ?? (solid || primary ? .semibold : .medium)) // Shipping primaries are semibold.
         var foreground = solid
             ? tokens.color("solid-ink").faded(isEnabled ? 1 : 0.4)
@@ -2425,7 +2444,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         size: String = "text-md", muted: Bool = false, glass: Bool = false, parent: NSView? = nil) -> NSTextField {
         let field = NSTextField(labelWithString: text)
         field.frame = NSRect(x: x, y: y, width: width, height: 26)
-        field.font = NSFont.systemFont(ofSize: tokens.number(size), weight: size == "text-xl" ? .semibold : .regular)
+        field.font = NSFont.capturesUI(ofSize: tokens.number(size), weight: size == "text-xl" ? .semibold : .regular)
         field.textColor = tokens.color(glass ? "glass-text" : (muted ? "text-muted" : "text"))
         (parent ?? content).addSubview(field)
         return field
@@ -2498,11 +2517,11 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         view.layer!.cornerRadius = tokens.number("r-lg")
         let title = NSTextField(labelWithString: "\(row % 3 == 0 ? "Recording" : "Screenshot") \(row + 1)")
         title.frame = NSRect(x: 16, y: 32, width: 690, height: 22)
-        title.font = .systemFont(ofSize: tokens.number("text-md"), weight: .medium)
+        title.font = .capturesUI(ofSize: tokens.number("text-md"), weight: .medium)
         title.textColor = tokens.color("text")
         let subtitle = NSTextField(labelWithString: row % 3 == 0 ? "Video · 00:24 · fixture" : "1920 × 1080 · PNG · fixture")
         subtitle.frame = NSRect(x: 16, y: 10, width: 690, height: 20)
-        subtitle.font = .systemFont(ofSize: tokens.number("text-sm"))
+        subtitle.font = .capturesUI(ofSize: tokens.number("text-sm"))
         subtitle.textColor = tokens.color("text-muted")
         view.addSubview(title)
         view.addSubview(subtitle)

@@ -804,7 +804,7 @@ final class EditorWandLoupeView: NSView {
         NSColor(white: 0, alpha: 0.28).setStroke(); inset.stroke()
 
         // `.screenshot-wand-loupe-meta`: swatch and hex in a glass pill.
-        let font = NSFont.monospacedDigitSystemFont(ofSize: tokens.number("text-sm"), weight: .medium)
+        let font = NSFont.capturesMonoDigits(ofSize: tokens.number("text-sm"), weight: .medium)
         let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: tokens.color("glass-text")]
         let text = loupe.text as NSString
         let textSize = text.size(withAttributes: attributes)
