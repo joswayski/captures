@@ -348,34 +348,11 @@
   font-weight: var(--weight-bold);
 }
 
-.preferences-save-saving > span {
-  border: 2px solid var(--border-strong);
-  border-top-color: var(--theme-accent);
-  animation: preferences-status-spin 0.7s linear infinite;
-}
-
-.preferences-save-saved {
-  border-color: transparent;
-  color: var(--positive-text);
-  background: var(--positive-surface);
-}
-
-.preferences-save-saved > span {
-  color: var(--positive-ink);
-  background: var(--positive);
-}
-
 .preferences-save-error {
   max-width: 360px;
   border-color: transparent;
   color: var(--danger-text);
   background: var(--danger-surface);
-}
-
-@keyframes preferences-status-spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 .preferences-scroller {

@@ -69,22 +69,19 @@ const FIND_COUNT_REMS: f32 = 5.5;
 /// `.preference-find-current::after` glow (`0 0 20px`) and ring room.
 const MATCH_BLEED: f32 = 22.;
 
-/// `.preferences-save-status`: the header's save feedback. Saves are
-/// synchronous here, so shipping's transient "Saving changes…" state has
-/// nothing to show and is skipped.
+/// `.preferences-save-status`: the header's save feedback. Changes apply as
+/// they are made, so only a failed save shows anything.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub enum SaveStatus {
     #[default]
     Idle,
-    /// "Changes saved" with ✓, for two seconds.
-    Saved,
     /// "Couldn’t save changes: …" with !, until the next save.
     Error(String),
 }
 
 /// `.preferences-save-status > span`.
 const SAVE_MARK: f32 = 13.;
-/// `.preferences-save-error` `max-width`; others use `42vw`.
+/// `.preferences-save-error` `max-width`.
 const SAVE_ERROR_MAX: f32 = 360.;
 
 /// The parts of Preferences Find (`.preferences-find`).
@@ -890,8 +887,6 @@ pub struct Scene {
     save_dirty: bool,
     /// The status appeared: it pops in (`ui-pop-in`).
     save_pop: bool,
-    /// "Changes saved" was shown: the host (re)starts its 2 s timer.
-    pub saved_timer: bool,
     save_text: Option<Text>,
     save_mark: Option<Text>,
     /// `(top, height)` of the header's first grid row.
@@ -1043,7 +1038,6 @@ impl Scene {
             save_node: 0,
             save_dirty: false,
             save_pop: false,
-            saved_timer: false,
             save_text: None,
             save_mark: None,
             header_row: (0., 0.),
@@ -2730,7 +2724,7 @@ impl Scene {
         match captures_settings::save(&self.settings_file, &self.settings) {
             Ok(saved) => {
                 self.settings = saved;
-                self.set_save_status(SaveStatus::Saved);
+                self.set_save_status(SaveStatus::Idle);
             }
             Err(error) => {
                 self.save_failed(&error.to_string());
@@ -2767,10 +2761,6 @@ impl Scene {
     }
 
     fn set_save_status(&mut self, status: SaveStatus) {
-        if status == SaveStatus::Saved {
-            // Each save restarts the two seconds.
-            self.saved_timer = true;
-        }
         if status == self.save_status {
             return;
         }
@@ -2780,18 +2770,10 @@ impl Scene {
         self.events.push(Event::SaveStatus);
     }
 
-    /// The saved timer fired: "Changes saved" goes away; an error stays.
-    pub fn clear_saved(&mut self) {
-        if self.save_status == SaveStatus::Saved {
-            self.set_save_status(SaveStatus::Idle);
-        }
-    }
-
     /// The status text (its UIA name); empty when idle.
     pub fn save_message(&self) -> String {
         match &self.save_status {
             SaveStatus::Idle => String::new(),
-            SaveStatus::Saved => preferences::SAVED.into(),
             SaveStatus::Error(message) => message.clone(),
         }
     }
@@ -2819,21 +2801,14 @@ impl Scene {
         if shown {
             let message = self.save_message();
             let text = g.text(&self.t, Style::Status, &message, 1e4)?;
-            let max = match self.save_status {
-                SaveStatus::Error(_) => SAVE_ERROR_MAX,
-                _ => 0.42 * self.w,
-            };
+            let max = SAVE_ERROR_MAX;
             // 1 px border, `2px var(--s-4)` padding, the mark, `--s-3` gap.
             let chrome = 2. * (1. + s4) + SAVE_MARK + s3;
             let text_w = text.width.min((max - chrome).max(0.));
             if text_w < text.width {
                 g.ellipsis(&text, text_w)?;
             }
-            let mark = match self.save_status {
-                SaveStatus::Error(_) => "!",
-                _ => "✓",
-            };
-            self.save_mark = Some(g.text(&self.t, Style::Check, mark, 1e4)?);
+            self.save_mark = Some(g.text(&self.t, Style::Check, "!", 1e4)?);
             self.save_text = Some(text);
             let w = (chrome + text_w).ceil();
             let y = (row_y + (row - h_sm) / 2.).round();
@@ -3469,7 +3444,7 @@ impl Scene {
                 self.settings = saved;
                 self.caps_dirty[index] = true;
                 self.events.push(Event::Value(Target::Shortcut(index)));
-                self.set_save_status(SaveStatus::Saved);
+                self.set_save_status(SaveStatus::Idle);
             }
             Err(error) => self.save_failed(&error.to_string()),
         }
@@ -4790,33 +4765,17 @@ impl Scene {
             }
             Kind::Scrollbar => gfx::fill_round(dc, all, w / 2., c("border-strong"))?,
             Kind::SaveStatus => {
-                // `.preferences-save-saved` / `-error`: no border, tinted pill.
-                let (bg, ink, mark_bg, mark_ink) = match self.save_status {
-                    SaveStatus::Idle => return Ok(()),
-                    SaveStatus::Saved => (
-                        "positive-surface",
-                        "positive-text",
-                        Some("positive"),
-                        "positive-ink",
-                    ),
-                    SaveStatus::Error(_) => ("danger-surface", "danger-text", None, "danger-text"),
-                };
-                gfx::fill_round(dc, all, h / 2., c(bg))?;
+                // `.preferences-save-error`: no border, tinted pill.
+                if self.save_status == SaveStatus::Idle {
+                    return Ok(());
+                }
+                let ink = "danger-text";
+                gfx::fill_round(dc, all, h / 2., c("danger-surface"))?;
                 let left = 1. + t.n("s-4");
                 let top = ((h - SAVE_MARK) / 2.).round();
-                let circle = rect(left, top, left + SAVE_MARK, top + SAVE_MARK);
-                if let Some(mark_bg) = mark_bg {
-                    gfx::fill_round(dc, circle, SAVE_MARK / 2., c(mark_bg))?;
-                }
                 if let Some(mark) = &self.save_mark {
                     let x = left + (SAVE_MARK - mark.width) / 2.;
-                    gfx::text(
-                        dc,
-                        mark,
-                        x,
-                        top + (SAVE_MARK - mark.height) / 2.,
-                        c(mark_ink),
-                    )?;
+                    gfx::text(dc, mark, x, top + (SAVE_MARK - mark.height) / 2., c(ink))?;
                 }
                 if let Some(text) = &self.save_text {
                     let x = left + SAVE_MARK + t.n("s-3");

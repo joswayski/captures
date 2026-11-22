@@ -9614,11 +9614,6 @@ function RecordingRecovery({
   );
 }
 
-type PreferencesSaveStatus = {
-  kind: "idle" | "saving" | "saved" | "error";
-  message: string;
-};
-
 const PREFERENCE_SECTIONS = [
   { id: "general", label: "General" },
   { id: "appearance", label: "Appearance" },
@@ -10019,10 +10014,8 @@ export function Preferences() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [canExcludeRecordingControls, setCanExcludeRecordingControls] = useState(true);
   const [recordingDevices, setRecordingDevices] = useState<AudioDevice[]>([]);
-  const [saveStatus, setSaveStatus] = useState<PreferencesSaveStatus>({
-    kind: "idle",
-    message: "",
-  });
+  // Changes apply as they are made; only a failed save shows a status.
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [recordingShortcut, setRecordingShortcut] = useState<string | null>(null);
   const [requestedPreferenceTarget, setRequestedPreferenceTarget] = useState<string | null>(() =>
     query("target"),
@@ -10035,7 +10028,6 @@ export function Preferences() {
   const savedSettingsRef = useRef<AppSettings | null>(null);
   const pendingSettingsRef = useRef<AppSettings | null>(null);
   const saveDelayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const savedStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveInFlightRef = useRef<Promise<void> | null>(null);
   const activeRef = useRef(true);
   const preferenceHighlightTimerRef = useRef<number | null>(null);
@@ -10073,14 +10065,8 @@ export function Preferences() {
     [],
   );
 
-  const clearSavedStatusTimer = useCallback(() => {
-    if (!savedStatusTimerRef.current) return;
-    clearTimeout(savedStatusTimerRef.current);
-    savedStatusTimerRef.current = null;
-  }, []);
-
-  const updateSaveStatus = useCallback((status: PreferencesSaveStatus) => {
-    if (activeRef.current) setSaveStatus(status);
+  const updateSaveError = useCallback((error: string | null) => {
+    if (activeRef.current) setSaveError(error);
   }, []);
 
   const flushPendingSettings = useCallback(async (): Promise<void> => {
@@ -10094,7 +10080,6 @@ export function Preferences() {
       const pendingSettings = pendingSettingsRef.current;
       if (!pendingSettings) return;
       pendingSettingsRef.current = null;
-      updateSaveStatus({ kind: "saving", message: "Saving changes…" });
 
       const request = (async () => {
         try {
@@ -10104,12 +10089,7 @@ export function Preferences() {
             settingsRef.current = saved;
             if (activeRef.current) {
               setSettings(saved);
-              updateSaveStatus({ kind: "saved", message: "Changes saved" });
-              clearSavedStatusTimer();
-              savedStatusTimerRef.current = setTimeout(() => {
-                updateSaveStatus({ kind: "idle", message: "" });
-                savedStatusTimerRef.current = null;
-              }, 2_000);
+              updateSaveError(null);
             }
           }
         } catch (error) {
@@ -10128,7 +10108,7 @@ export function Preferences() {
                 );
               }
             }
-            updateSaveStatus({ kind: "error", message: `Couldn’t save changes: ${String(error)}` });
+            updateSaveError(`Couldn’t save changes: ${String(error)}`);
           }
         }
       })();
@@ -10136,12 +10116,10 @@ export function Preferences() {
       await request;
       if (saveInFlightRef.current === request) saveInFlightRef.current = null;
     }
-  }, [clearSavedStatusTimer, updateSaveStatus]);
+  }, [updateSaveError]);
 
   const scheduleSettingsSave = (nextSettings: AppSettings) => {
     pendingSettingsRef.current = nextSettings;
-    clearSavedStatusTimer();
-    updateSaveStatus({ kind: "saving", message: "Saving changes…" });
     if (saveDelayTimerRef.current) clearTimeout(saveDelayTimerRef.current);
     saveDelayTimerRef.current = setTimeout(() => {
       saveDelayTimerRef.current = null;
@@ -10165,14 +10143,13 @@ export function Preferences() {
     return () => {
       active = false;
       activeRef.current = false;
-      clearSavedStatusTimer();
       if (saveDelayTimerRef.current) {
         clearTimeout(saveDelayTimerRef.current);
         saveDelayTimerRef.current = null;
         void flushPendingSettings();
       }
     };
-  }, [clearSavedStatusTimer, flushPendingSettings]);
+  }, [flushPendingSettings]);
 
   useEffect(() => {
     let active = true;
@@ -10319,15 +10296,10 @@ export function Preferences() {
             >
               Capture History…
             </button>
-            {saveStatus.kind !== "idle" && (
-              <div
-                className={`preferences-save-status preferences-save-${saveStatus.kind}`}
-                role="status"
-              >
-                <span aria-hidden="true">
-                  {saveStatus.kind === "saved" ? "✓" : saveStatus.kind === "error" ? "!" : ""}
-                </span>
-                {saveStatus.message}
+            {saveError && (
+              <div className="preferences-save-status preferences-save-error" role="status">
+                <span aria-hidden="true">!</span>
+                {saveError}
               </div>
             )}
           </div>

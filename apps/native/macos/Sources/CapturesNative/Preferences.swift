@@ -602,10 +602,6 @@ final class PreferenceStatusMark: NSView {
     override func draw(_ dirtyRect: NSRect) {
         let circle = bounds.insetBy(dx: 1, dy: 1)
         switch kind {
-        case "saved":
-            tokens.color("positive").setFill(); NSBezierPath(ovalIn: circle).fill()
-            tokens.color("positive-ink").setStroke()
-            ShippingIcons.stroke("check", in: circle.insetBy(dx: 1.5, dy: 1.5))
         case "error":
             let attributes: [NSAttributedString.Key: Any] = [
                 .font: NSFont.systemFont(ofSize: 9, weight: .bold),
@@ -659,7 +655,6 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     private var statusPill = Surface()
     private var statusMark: PreferenceStatusMark?
     private var statusKind = "idle"
-    private var statusGeneration = 0
     private var historyButton: CaptureButton?
     private var findBar: Surface?
     private var findField: NSTextField?
@@ -2017,7 +2012,8 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
 
     private func set(_ value: Any, for key: String, rerender: Bool) { settings[key] = value; changed(rerender: rerender) }
     private func changed(rerender: Bool) {
-        setStatus(PreferencesPolicy.text("saving"), kind: "saving"); saveFailed = false
+        // Changes apply as they are made; only a failed save shows a status.
+        setStatus("", kind: "idle"); saveFailed = false
         settingsChanged(settings)
         latestRevision = store.save(settings) { [weak self] revision, result in
             guard let self, revision == self.latestRevision else { return }
@@ -2025,7 +2021,6 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
             case .success(let saved):
                 self.settings = saved; self.storedSettings = saved; self.settingsChanged(saved)
                 self.settingsPersisted(saved)
-                self.setStatus(PreferencesPolicy.text("saved"), kind: "saved")
             case .failure(let error):
                 self.saveFailed = true
                 self.setStatus(PreferencesPolicy.template("save_error_template", error: error.localizedDescription),
@@ -2044,20 +2039,18 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         }
     }
 
-    /// Shipping `.preferences-save-status`: a pill that is hidden when idle
-    /// and clears "Changes saved" after two seconds.
+    /// Shipping `.preferences-save-status`: a pill that is hidden when idle.
+    /// It shows while preferences load and when a save fails.
     private func setStatus(_ text: String, kind: String) {
         statusKind = text.isEmpty ? "idle" : kind
-        statusGeneration += 1
         let visible = statusKind != "idle"
         let appearing = visible && statusPill.isHidden
         statusPill.isHidden = !visible
         status.stringValue = text
         status.setAccessibilityLabel(text)
         statusMark?.kind = statusKind
-        let (fill, border, color): (String, String?, String) = statusKind == "saved"
-            ? ("positive-surface", nil, "positive-text")
-            : statusKind == "error" ? ("danger-surface", nil, "danger-text") : ("surface-raised", "border", "text-muted")
+        let (fill, border, color): (String, String?, String) = statusKind == "error"
+            ? ("danger-surface", nil, "danger-text") : ("surface-raised", "border", "text-muted")
         statusPill.layer?.backgroundColor = tokens.color(fill).cgColor
         statusPill.layer?.borderWidth = border == nil ? 0 : 1
         statusPill.layer?.borderColor = tokens.color(border ?? fill).cgColor
@@ -2066,13 +2059,6 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         // Shipping `.preferences-save-status`: ui-pop-in over --dur-2 when it appears.
         if appearing, root.window?.isVisible == true {
             NativeMotion.play("popover_in", on: statusPill, tokens: tokens)
-        }
-        if statusKind == "saved" {
-            let generation = statusGeneration
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
-                guard let self, self.statusGeneration == generation else { return }
-                self.setStatus("", kind: "idle")
-            }
         }
     }
 

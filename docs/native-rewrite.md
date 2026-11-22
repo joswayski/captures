@@ -303,8 +303,9 @@ Two parity fixes from the third real-hardware pass follow. Alt+Down and
 Alt+Up now open a focused select, as in shipping and in Windows combo boxes.
 They arrive as system keys, and Alt+F4 and the system menu still go to
 DefWindowProc. The header now shows shipping's save status to the right of
-Capture History…: "Changes saved" with ✓ for two seconds, or "Couldn’t save
-changes: …" with ! until the next save. It is a token-drawn pill on its own
+Capture History…: "Couldn’t save changes: …" with ! until the next save
+(November 2026: successful saves no longer show "Changes saved", on every
+host). It is a token-drawn pill on its own
 surface and pops in; History moves by offset. Every failed `captures-settings`
 save is routed through it, including duplicate or empty shortcuts. Saves are
 synchronous, so shipping's brief "Saving changes…" state is skipped. UI
@@ -1498,8 +1499,8 @@ Windows, macOS: unchanged.
 The sixth GTK4 slice finishes the Preferences cards in shipping order, built
 from the shared `captures_app::preferences` copy and option lists. Every
 control writes one setting by its persisted path and saves through
-`captures-settings`, with shipping's Changes saved pill (2 s) or save error
-beside Capture History…. Appearance has the Interface theme segments
+`captures-settings`, with a save error pill beside Capture History… (the
+Changes saved pill was dropped in November 2026). Appearance has the Interface theme segments
 (pressed state) and the accent chips as one AT-SPI radio group with
 `theme_accessibility_label` names and Cairo-drawn swatches (accent with the
 signal wedge, Custom's rainbow); Custom opens the custom colour editor (RGB

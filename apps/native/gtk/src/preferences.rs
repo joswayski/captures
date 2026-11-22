@@ -65,7 +65,6 @@ struct Prefs {
     choices: RefCell<Vec<Rc<Choice>>>,
     status: gtk::Box,
     status_label: gtk::Label,
-    status_generation: Rc<Cell<u64>>,
     /// The Updates card, while the page is open.
     updates: RefCell<Option<Rc<updates::Updates>>>,
     /// Scroll a section's card into view; false before it has a layout.
@@ -99,13 +98,13 @@ impl Prefs {
         };
         let saved = match captures_settings::save(&self.settings_file, &next) {
             Ok(saved) => {
-                self.show_status(true, preferences::SAVED);
+                self.show_error(None);
                 saved
             }
             // Like Tauri a18afc62, a refused save rolls back to the stored
             // settings; the listeners below put the rows back.
             Err(error) => {
-                self.show_status(false, &preferences::save_error(&error.to_string()));
+                self.show_error(Some(&preferences::save_error(&error.to_string())));
                 self.settings.borrow().clone()
             }
         };
@@ -144,28 +143,11 @@ impl Prefs {
         self.listeners.borrow_mut().push(Box::new(f));
     }
 
-    /// Shipping `.preferences-save-status`: Saved clears after 2 s; an error
-    /// stays until the next save.
-    fn show_status(&self, ok: bool, message: &str) {
-        let generation = self.status_generation.get() + 1;
-        self.status_generation.set(generation);
-        self.status.remove_css_class("saved");
-        self.status.remove_css_class("error");
-        self.status
-            .add_css_class(if ok { "saved" } else { "error" });
-        if let Some(mark) = self.status.first_child().and_downcast::<gtk::Label>() {
-            mark.set_label(if ok { "✓" } else { "!" });
-        }
-        self.status_label.set_label(message);
-        self.status.set_visible(true);
-        if ok {
-            let (status, current) = (self.status.clone(), self.status_generation.clone());
-            glib::timeout_add_local_once(Duration::from_millis(2000), move || {
-                if current.get() == generation {
-                    status.set_visible(false);
-                }
-            });
-        }
+    /// Shipping `.preferences-save-status`: changes apply as they are made,
+    /// so only a failed save shows, until the next save succeeds.
+    fn show_error(&self, message: Option<&str>) {
+        self.status_label.set_label(message.unwrap_or_default());
+        self.status.set_visible(message.is_some());
     }
 }
 
@@ -262,10 +244,11 @@ pub fn build(
     let settings = captures_settings::load(&options.settings_file).unwrap_or_default();
     let status = gtk::Box::new(gtk::Orientation::Horizontal, tokens.number("s-3") as i32);
     status.add_css_class("preferences-save-status");
+    status.add_css_class("error");
     status.set_valign(gtk::Align::Center);
     status.set_visible(false);
     status.set_accessible_role(gtk::AccessibleRole::Status);
-    let mark = label("", "preferences-save-mark");
+    let mark = label("!", "preferences-save-mark");
     mark.set_xalign(0.5);
     mark.set_size_request(13, 13);
     mark.set_valign(gtk::Align::Center);
@@ -294,7 +277,6 @@ pub fn build(
         choices: RefCell::default(),
         status,
         status_label,
-        status_generation: Rc::default(),
         updates: RefCell::default(),
         jump: RefCell::default(),
     });

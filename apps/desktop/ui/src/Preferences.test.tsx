@@ -115,7 +115,7 @@ describe("Preferences", () => {
     expect(screen.queryByText("Send Feedback")).not.toBeInTheDocument();
   });
 
-  it("automatically persists changes and reports that they were saved", async () => {
+  it("automatically persists changes without a saved notice", async () => {
     render(<Preferences />);
 
     const autoCopy = await screen.findByRole("checkbox", {
@@ -133,7 +133,8 @@ describe("Preferences", () => {
         settings: expect.objectContaining({ auto_copy_to_clipboard: false }),
       });
     });
-    expect(await screen.findByText("Changes saved")).toBeInTheDocument();
+    // Changes apply quietly; only a failed save shows a status.
+    expect(document.querySelector(".preferences-save-status")).toBeNull();
   });
 
   it.each(["macos", "windows", "linux"])(
@@ -420,7 +421,8 @@ describe("Preferences", () => {
     expect(invoke).toHaveBeenCalledWith("set_shortcut_capture_suppressed", {
       suppressed: false,
     });
-    expect(await screen.findByText("Changes saved")).toBeInTheDocument();
+    // Changes apply quietly; only a failed save shows a status.
+    expect(document.querySelector(".preferences-save-status")).toBeNull();
   });
 
   it("suppresses New Capture only while assigning its shortcut", async () => {
@@ -844,7 +846,11 @@ describe("Preferences", () => {
         }),
       });
     });
-    expect(await screen.findByText("Changes saved")).toBeInTheDocument();
+    // A save that works clears the earlier error instead of announcing itself.
+    await waitFor(() => {
+      expect(screen.queryByText(/Couldn’t save changes/)).not.toBeInTheDocument();
+    });
+    expect(document.querySelector(".preferences-save-status")).toBeNull();
   });
 
   it("keeps a saved microphone selected when it is not in the device list", async () => {

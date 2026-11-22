@@ -1073,8 +1073,9 @@ explicit opt-in to real desktop capture, not a synthetic benchmark. The default
 history is beside the separate Captures Native settings file, never the installed
 app's history. Capture from the tray, the shortcuts or New Capture, on the display
 under the pointer; History reloads itself and has no capture controls, as in shipping.
-The host hides its History and Preferences windows before capture and restores
-their prior visibility afterward. Capture History, Captures Preferences and first-run
+Capture leaves History, Preferences and setup where they are, so they can be
+captured (macOS only tucks them behind another app that was frontmost); the
+Wayland portal path still hides every Captures window. Capture History, Captures Preferences and first-run
 setup are separate, resizable windows, as in the shipping app; `--live
 --open-preferences` also opens Preferences at launch on Windows/Linux.
 Permission and locked/inactive session checks remain in force.

@@ -165,7 +165,7 @@ window.captures.countdown-window {
   opacity: 0.55;
 }
 
-/* `.preferences-save-status`: Saved, or a save error, beside History. */
+/* `.preferences-save-status`: a save error beside History. */
 .captures .preferences-save-status {
   min-height: 24px;
   padding: 0 var(--s-4);
@@ -176,11 +176,6 @@ window.captures.countdown-window {
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
 }
-.captures .preferences-save-status.saved {
-  border-color: transparent;
-  color: var(--positive-text);
-  background: var(--positive-surface);
-}
 .captures .preferences-save-status.error {
   border-color: transparent;
   color: var(--danger-text);
@@ -190,10 +185,6 @@ window.captures.countdown-window {
   border-radius: var(--r-pill);
   font-size: 9px;
   font-weight: var(--weight-bold);
-}
-.captures .preferences-save-status.saved .preferences-save-mark {
-  color: var(--positive-ink);
-  background: var(--positive);
 }
 
 /* `.ui-segmented`: Interface theme. */
