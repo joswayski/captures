@@ -1467,6 +1467,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         // showing either.
         appWindows.close(.setup)
         window.orderOut(nil)
+        liveController?.releaseHistoryResources()
         let launchAction = interactiveLaunch(onboardingComplete: true,
                                              launchedQuietly: !startup.showsWindow,
                                              openingFiles: !pendingOpenImages.isEmpty,
@@ -1773,6 +1774,9 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                     self?.showPreferences(revealing: setting)
                 })
             renderedLiveStyleRevision = liveStyleRevision
+            // Built while History is hidden (launch, a style rebuild): tile no
+            // cards until it is shown, or their layers stay resident.
+            if options.live, !window.isVisible { liveController?.releaseHistoryResources() }
             drainOpenImages()
             Metrics.emit("scene-construction", milliseconds: (CACurrentMediaTime() - started) * 1000, detail: scene)
             return
