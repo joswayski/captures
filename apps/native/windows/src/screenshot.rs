@@ -153,6 +153,14 @@ pub fn render(options: &Options, path: &std::path::Path) -> Result<()> {
             menu.selection = None;
             menu.without_windows_tooltip();
         }
+        // `--select focus-segment|focus-select|focus-close|focus-primary|
+        // focus-window` and `record-focus` draw that control's keyboard
+        // focus ring (Show cursor's in Record).
+        match options.select.as_deref() {
+            Some(select) if select.starts_with("focus-") => menu.show_focus(&select[6..]),
+            Some("record-focus") => menu.show_focus("toggle"),
+            _ => {}
+        }
         if target == crate::capture::Target::Window {
             menu.hovered = match options.select.as_deref() {
                 Some("desktop" | "picked") => Some(None),

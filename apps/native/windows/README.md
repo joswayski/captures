@@ -212,8 +212,16 @@ Window and Display tray rows and shortcuts open it there. Its options row
 cursor, Show clicks and Desktop audio switches, and the Microphone select,
 enumerated off the UI thread when Record first shows) starts from the saved
 recording settings and applies only to this take, like shipping; the open
-lists take the pointer and arrow keys, Enter and Esc. Keyboard focus through
-the bar's controls and UI Automation are not ported. Confirming hands the capture flow
+lists take the pointer and arrow keys, Enter and Esc. Tab and Shift+Tab walk
+the window targets and the bar's enabled controls in shipping's order with its
+`:focus-visible` rings; Space presses the focused control, arrows, Enter and
+Space open a focused select, and Enter otherwise confirms as shipping's
+capture-phase handler does. The bar exposes UI Automation through
+`panel_uia` with shipping's roles and names (the guidance status, "Close
+capture controls", the pressed segments in "Capture type" and "Capture
+target", the comboboxes and their listbox, the primary's label, the Record
+checkboxes and the note); unit- and render-checked (`--select focus-segment`
+and friends), not exercised live. Confirming hands the capture flow
 to the shared recording worker, which verifies FFmpeg, prepares the session,
 then shows the "RECORDING STARTS IN" countdown (Esc cancels the take) and starts.
 The controls (`hud.rs`, shipping `.recording-hud` at 430×102) float centered

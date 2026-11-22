@@ -1,6 +1,7 @@
 #![allow(non_upper_case_globals)]
 //! UI Automation for the small windows that draw themselves as one surface:
-//! first-run setup, Send Feedback, the launch, update and Recording ready notices and the mini previews. Each window
+//! first-run setup, Send Feedback, the launch, update and Recording ready
+//! notices, the mini previews and New Capture's bar. Each window
 //! describes its parts as a list of [`Item`]s in shipping's DOM order and
 //! roles (`<h1>`, `role="radio"` in a `radiogroup`, `<textarea>`/`<input>`,
 //! `<button>`, `role="status"`/`role="alert"`), and applies [`Act`]s through
@@ -23,6 +24,8 @@ pub enum Window {
     Previews,
     Update,
     RecordingReady,
+    /// New Capture's bar and window targets.
+    Capture,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -42,6 +45,17 @@ pub enum Role {
     Status,
     /// `role="alert"`: announced assertively.
     Alert,
+    /// `<button aria-pressed>`: `selected` is pressed.
+    Toggle,
+    /// `<input type="checkbox">`: `selected` is checked.
+    Check,
+    /// `role="combobox"` (`CustomSelect`'s trigger): `selected` is expanded
+    /// and `value` the chosen option.
+    ComboBox,
+    /// `role="listbox"`: one option is selected.
+    List,
+    /// `role="option"`; `focused` is the active descendant.
+    Option,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -116,6 +130,7 @@ fn snapshot(window: Window) -> Result<Snapshot> {
         Window::Previews => crate::previews::uia_snapshot(),
         Window::Update => crate::update_notice::uia_snapshot(),
         Window::RecordingReady => crate::recording_ready::uia_snapshot(),
+        Window::Capture => crate::capture::uia_snapshot(),
     }
     .ok_or_else(unavailable)
 }
@@ -134,6 +149,7 @@ fn act(window: Window, key: u32, act: Act) -> Result<()> {
         Window::Previews => crate::previews::uia_act(key, act),
         Window::Update => crate::update_notice::uia_act(key, act),
         Window::RecordingReady => crate::recording_ready::uia_act(key, act),
+        Window::Capture => crate::capture::uia_act(key, act),
     }
     .ok_or_else(unavailable)?;
     raise(window, before);
@@ -149,7 +165,16 @@ fn item(window: Window, key: u32) -> Result<Item> {
 }
 
 fn interactive(role: Role) -> bool {
-    matches!(role, Role::Button | Role::Link | Role::Radio | Role::Edit)
+    matches!(
+        role,
+        Role::Button
+            | Role::Link
+            | Role::Radio
+            | Role::Edit
+            | Role::Toggle
+            | Role::Check
+            | Role::ComboBox
+    )
 }
 
 fn runtime_id(window: Window, key: Option<u32>) -> [i32; 4] {
@@ -160,6 +185,7 @@ fn runtime_id(window: Window, key: Option<u32>) -> [i32; 4] {
         Window::Previews => 3,
         Window::Update => 4,
         Window::RecordingReady => 5,
+        Window::Capture => 6,
     };
     // A distinct first part keeps these apart from the other windows' ids.
     [
@@ -209,7 +235,9 @@ fn children(items: &[Item], parent: Option<u32>) -> Vec<u32> {
     IInvokeProvider,
     ISelectionProvider,
     ISelectionItemProvider,
-    IValueProvider
+    IValueProvider,
+    IToggleProvider,
+    IExpandCollapseProvider
 )]
 pub struct Node {
     window: Window,
@@ -240,14 +268,26 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
         let Some(key) = self.key else {
             return Err(Error::empty());
         };
-        let role = item(self.window, key)?.role;
-        let supported = matches!(
-            (role, pattern),
-            (Role::Button | Role::Link, UIA_InvokePatternId)
-                | (Role::Group, UIA_SelectionPatternId)
-                | (Role::Radio, UIA_SelectionItemPatternId)
-                | (Role::Edit, UIA_ValuePatternId)
-        );
+        let items = snapshot(self.window)?.items;
+        let role = items
+            .iter()
+            .find(|i| i.key == key)
+            .ok_or_else(unavailable)?
+            .role;
+        // A group of radios selects; a group of toggle buttons does not.
+        let radios = items
+            .iter()
+            .any(|i| i.parent == Some(key) && i.role == Role::Radio);
+        let supported = (role == Role::Group && pattern == UIA_SelectionPatternId && radios)
+            || matches!(
+                (role, pattern),
+                (Role::Button | Role::Link, UIA_InvokePatternId)
+                    | (Role::List, UIA_SelectionPatternId)
+                    | (Role::Radio | Role::Option, UIA_SelectionItemPatternId)
+                    | (Role::Edit | Role::ComboBox, UIA_ValuePatternId)
+                    | (Role::Toggle | Role::Check, UIA_TogglePatternId)
+                    | (Role::ComboBox, UIA_ExpandCollapsePatternId)
+            );
         if supported {
             Ok(self.to_interface::<IUnknown>())
         } else {
@@ -265,7 +305,8 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                     VARIANT::from(BSTR::from(format!("{:?}", self.window).to_lowercase()))
                 }
                 UIA_FrameworkIdPropertyId => VARIANT::from(BSTR::from("Captures")),
-                // Shipping's setup, feedback and preview pages are `<main>`.
+                // Shipping's setup, feedback, preview and capture pages are
+                // `<main>`.
                 UIA_LandmarkTypePropertyId
                     if !matches!(
                         self.window,
@@ -292,10 +333,14 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                     UIA_TextControlTypeId.0
                 }
                 Role::Group => UIA_GroupControlTypeId.0,
-                Role::Button => UIA_ButtonControlTypeId.0,
+                Role::Button | Role::Toggle => UIA_ButtonControlTypeId.0,
                 Role::Link => UIA_HyperlinkControlTypeId.0,
                 Role::Radio => UIA_RadioButtonControlTypeId.0,
                 Role::Edit => UIA_EditControlTypeId.0,
+                Role::Check => UIA_CheckBoxControlTypeId.0,
+                Role::ComboBox => UIA_ComboBoxControlTypeId.0,
+                Role::List => UIA_ListControlTypeId.0,
+                Role::Option => UIA_ListItemControlTypeId.0,
             }),
             // Chromium's `<h1>`–`<h6>`: a Text element a reader calls "heading".
             UIA_LocalizedControlTypePropertyId if matches!(i.role, Role::Heading(_)) => {
@@ -531,7 +576,51 @@ impl IValueProvider_Impl for Node_Impl {
     }
 
     fn IsReadOnly(&self) -> Result<BOOL> {
-        Ok((!self.item()?.enabled).into())
+        let item = self.item()?;
+        // A combobox's value changes through its options.
+        Ok((!item.enabled || item.role == Role::ComboBox).into())
+    }
+}
+
+impl IToggleProvider_Impl for Node_Impl {
+    fn Toggle(&self) -> Result<()> {
+        act(self.window, self.key.ok_or_else(Error::empty)?, Act::Invoke)
+    }
+
+    fn ToggleState(&self) -> Result<ToggleState> {
+        Ok(if self.item()?.selected {
+            ToggleState_On
+        } else {
+            ToggleState_Off
+        })
+    }
+}
+
+impl Node_Impl {
+    /// Open or close a combobox's listbox (Invoke toggles it).
+    fn expand(&self, open: bool) -> Result<()> {
+        if self.item()?.selected == open {
+            return Ok(());
+        }
+        act(self.window, self.key.ok_or_else(Error::empty)?, Act::Invoke)
+    }
+}
+
+impl IExpandCollapseProvider_Impl for Node_Impl {
+    fn Expand(&self) -> Result<()> {
+        self.expand(true)
+    }
+
+    fn Collapse(&self) -> Result<()> {
+        self.expand(false)
+    }
+
+    fn ExpandCollapseState(&self) -> Result<ExpandCollapseState> {
+        Ok(if self.item()?.selected {
+            ExpandCollapseState_Expanded
+        } else {
+            ExpandCollapseState_Collapsed
+        })
     }
 }
 
@@ -544,8 +633,12 @@ pub enum Event {
     Structure,
     Name(u32, String),
     Enabled(u32, bool),
-    /// A radio became the selected choice.
+    /// A radio or option became the selected choice.
     Selected(u32),
+    /// A toggle button or checkbox changed state.
+    Toggled(u32, bool),
+    /// A combobox opened or closed.
+    Expanded(u32, bool),
     Value(u32, String),
     /// A status or alert line appeared or changed.
     Announce(u32, Role, String),
@@ -579,8 +672,16 @@ pub fn diff(before: &[Item], after: &[Item]) -> Vec<Event> {
         if old.enabled != i.enabled {
             events.push(Event::Enabled(i.key, i.enabled));
         }
-        if i.selected && !old.selected {
-            events.push(Event::Selected(i.key));
+        match i.role {
+            Role::Toggle | Role::Check if old.selected != i.selected => {
+                events.push(Event::Toggled(i.key, i.selected));
+            }
+            Role::ComboBox if old.selected != i.selected => {
+                events.push(Event::Expanded(i.key, i.selected));
+            }
+            Role::Toggle | Role::Check | Role::ComboBox => {}
+            _ if i.selected && !old.selected => events.push(Event::Selected(i.key)),
+            _ => {}
         }
         if let Some(value) = &i.value
             && old.value.as_ref() != Some(value)
@@ -632,6 +733,31 @@ pub fn raise(window: Window, before: Option<Vec<Item>>) {
                     &node(window, Some(*key)),
                     UIA_SelectionItem_ElementSelectedEventId,
                 ),
+                Event::Toggled(key, on) => {
+                    let state = |on: bool| if on { ToggleState_On } else { ToggleState_Off }.0;
+                    UiaRaiseAutomationPropertyChangedEvent(
+                        &node(window, Some(*key)),
+                        UIA_ToggleToggleStatePropertyId,
+                        &VARIANT::from(state(!on)),
+                        &VARIANT::from(state(*on)),
+                    )
+                }
+                Event::Expanded(key, open) => {
+                    let state = |open: bool| {
+                        if open {
+                            ExpandCollapseState_Expanded
+                        } else {
+                            ExpandCollapseState_Collapsed
+                        }
+                        .0
+                    };
+                    UiaRaiseAutomationPropertyChangedEvent(
+                        &node(window, Some(*key)),
+                        UIA_ExpandCollapseExpandCollapseStatePropertyId,
+                        &VARIANT::from(state(!open)),
+                        &VARIANT::from(state(*open)),
+                    )
+                }
                 Event::Value(key, value) => UiaRaiseAutomationPropertyChangedEvent(
                     &node(window, Some(*key)),
                     UIA_ValueValuePropertyId,
@@ -726,6 +852,24 @@ mod tests {
                 Event::Enabled(4, true),
                 Event::Announce(5, Role::Status, "Thanks — feedback sent.".into()),
             ]
+        );
+
+        // A checkbox reports its toggle state both ways and a combobox its
+        // expansion, not a selection.
+        let switches = vec![
+            item(6, Role::Check, "Show cursor"),
+            item(7, Role::ComboBox, "Frames per second"),
+        ];
+        let mut on = switches.clone();
+        on[0].selected = true;
+        on[1].selected = true;
+        assert_eq!(
+            diff(&switches, &on),
+            vec![Event::Toggled(6, true), Event::Expanded(7, true)]
+        );
+        assert_eq!(
+            diff(&on, &switches),
+            vec![Event::Toggled(6, false), Event::Expanded(7, false)]
         );
 
         // Focus staying put and an unchanged status are not repeated.

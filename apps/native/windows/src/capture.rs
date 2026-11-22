@@ -20,8 +20,8 @@
 //! while they move. Screenshot Region and Window open the same overlay as
 //! shipping's bar-less selector (`Menu::direct`). A disabled Window target
 //! and unavailable Record switches show their reason in the shared glass
-//! tooltip. Keyboard focus
-//! through the bar and UI Automation are not ported yet.
+//! tooltip. Tab walks the bar with shipping's focus rings, and the bar
+//! exposes UI Automation through `panel_uia`.
 
 use std::cell::RefCell;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
@@ -80,6 +80,75 @@ enum Hit {
     Select(Field),
     /// A row in the open listbox.
     Option(usize),
+    /// A `.recording-window-target` button, activated by keyboard or UI
+    /// Automation (pointer clicks hit-test the surface instead).
+    Pick(usize),
+}
+
+/// The bar's selects, in their UI Automation key order.
+const FIELDS: [Field; 5] = [
+    Field::Fps,
+    Field::Resolution,
+    Field::Microphone,
+    Field::Aspect,
+    Field::Display,
+];
+
+/// UI Automation keys for the parts that are not controls.
+const UIA_TYPE_GROUP: u32 = 50;
+const UIA_TARGET_GROUP: u32 = 51;
+const UIA_LISTBOX: u32 = 60;
+const UIA_NOTE: u32 = 70;
+const UIA_GUIDANCE: u32 = 71;
+
+/// A control's UI Automation key (stable while the bar is open).
+fn uia_key(hit: Hit) -> u32 {
+    match hit {
+        Hit::Close => 1,
+        Hit::Screenshot => 2,
+        Hit::Record => 3,
+        Hit::Target(Target::Region) => 4,
+        Hit::Target(Target::Window) => 5,
+        Hit::Target(Target::Display) => 6,
+        Hit::Primary => 7,
+        Hit::Toggle(toggle) => {
+            10 + RecordingToggle::ALL
+                .iter()
+                .position(|t| *t == toggle)
+                .unwrap_or(0) as u32
+        }
+        Hit::Select(field) => 20 + FIELDS.iter().position(|f| *f == field).unwrap_or(0) as u32,
+        Hit::Option(index) => 100 + index as u32,
+        Hit::Pick(index) => 1000 + index as u32,
+    }
+}
+
+fn uia_hit(key: u32) -> Option<Hit> {
+    Some(match key {
+        1 => Hit::Close,
+        2 => Hit::Screenshot,
+        3 => Hit::Record,
+        4 => Hit::Target(Target::Region),
+        5 => Hit::Target(Target::Window),
+        6 => Hit::Target(Target::Display),
+        7 => Hit::Primary,
+        10..=12 => Hit::Toggle(RecordingToggle::ALL[(key - 10) as usize]),
+        20..=24 => Hit::Select(FIELDS[(key - 20) as usize]),
+        100..=999 => Hit::Option((key - 100) as usize),
+        1000.. => Hit::Pick((key - 1000) as usize),
+        _ => return None,
+    })
+}
+
+/// A select trigger's `aria-label`.
+fn field_label(field: Field) -> &'static str {
+    match field {
+        Field::Fps => "Frames per second",
+        Field::Resolution => "Maximum resolution",
+        Field::Microphone => "Microphone",
+        Field::Aspect => "Region aspect ratio",
+        Field::Display => "Display",
+    }
 }
 
 /// The bar's selects: the Record options row's, and Region's Aspect.
@@ -558,6 +627,10 @@ pub struct Menu {
     /// The glass tooltip under the pointer and its fade (shared `tooltip`).
     tooltip: crate::tooltip::Fade<Hit>,
     tooltip_target: Option<Hit>,
+    /// The focused control (shipping's DOM focus), and whether the keyboard
+    /// moved it there so its `:focus-visible` ring draws.
+    focus: Option<Hit>,
+    focus_visible: bool,
 }
 
 /// The chip's frame with its title and hint lines.
@@ -647,7 +720,249 @@ impl Menu {
             feedback_pending: false,
             tooltip: crate::tooltip::Fade::default(),
             tooltip_target: None,
+            focus: None,
+            focus_visible: false,
         }
+    }
+
+    /// Shipping's Tab order through the bar: the window targets, Close, the
+    /// enabled segments, the first row's select, the primary and the Record
+    /// options. Disabled controls are skipped, like disabled buttons.
+    fn focus_order(&self) -> Vec<Hit> {
+        let Some(layout) = self.layout.as_ref().filter(|_| !self.direct) else {
+            return Vec::new();
+        };
+        let mut order = Vec::new();
+        if self.target == Target::Window {
+            order.extend((0..self.windows.len()).map(Hit::Pick));
+        }
+        order.push(Hit::Close);
+        order.extend(layout.segments.iter().filter(|s| s.enabled).map(|s| s.hit));
+        order.extend(layout.pickers.iter().filter(|f| f.enabled).map(|f| f.hit));
+        if let Some((_, _, true)) = layout.primary {
+            order.push(Hit::Primary);
+        }
+        if let Some((_, fields)) = &layout.options {
+            order.extend(fields.iter().filter(|f| f.enabled).map(|f| f.hit));
+        }
+        order
+    }
+
+    /// Focus `hit`; a focused window target lights like a hovered one
+    /// (`.recording-window-target:focus-visible`).
+    fn set_focus(&mut self, hit: Hit, visible: bool) {
+        self.focus = Some(hit);
+        self.focus_visible = visible;
+        if let Hit::Pick(index) = hit {
+            self.hovered = Some(Some(index));
+        }
+    }
+
+    /// Tab or Shift+Tab: the next or previous control, wrapping. An open
+    /// listbox closes, like `CustomSelect` on Tab.
+    fn focus_step(&mut self, back: bool) -> bool {
+        let order = self.focus_order();
+        if order.is_empty() {
+            return false;
+        }
+        self.open = None;
+        let n = order.len();
+        let next = match self.focus.and_then(|f| order.iter().position(|h| *h == f)) {
+            Some(i) if back => (i + n - 1) % n,
+            Some(i) => (i + 1) % n,
+            None if back => n - 1,
+            None => 0,
+        };
+        self.set_focus(order[next], true);
+        true
+    }
+
+    /// Enter and Space on the focused control (after the select's keys).
+    /// Shipping's capture-phase Enter confirms from the primary, the
+    /// segments or nothing focused, and leaves Close and the window targets
+    /// to native activation; Space activates the focused button or switch.
+    fn focus_key(&mut self, enter: bool) -> Option<Hit> {
+        if self.focus.is_some() {
+            self.focus_visible = true;
+        }
+        match (self.focus, enter) {
+            (Some(hit @ (Hit::Close | Hit::Pick(_))), _) => Some(hit),
+            (Some(Hit::Toggle(_)), true) => None,
+            (_, true) => Some(Hit::Primary),
+            (Some(hit), false) if self.focus_order().contains(&hit) => Some(hit),
+            (_, false) => None,
+        }
+    }
+
+    /// The UI Automation root's name: the bar, or a direct selector's
+    /// overlay (the AppKit names, as shipping's `<main>` is unlabelled).
+    pub fn uia_name(&self) -> &'static str {
+        match (self.direct, self.target) {
+            (true, Target::Window) => capture_menu::WINDOW_SELECTOR_LABEL,
+            (true, _) => capture_menu::REGION_SELECTOR_LABEL,
+            (false, _) => "New Capture",
+        }
+    }
+
+    /// The bar's parts in shipping's DOM order with its roles and names:
+    /// the guidance chip (`role="status"`), the window target buttons, Close,
+    /// the `aria-pressed` segments in their labelled groups, the
+    /// `CustomSelect` comboboxes and open listbox, the primary, the Record
+    /// options' checkboxes, and the note.
+    pub fn uia_items(&self) -> Vec<crate::panel_uia::Item> {
+        use crate::panel_uia::{Item, Role};
+        let mut items = Vec::new();
+        let Some(layout) = self.layout.as_ref() else {
+            return items;
+        };
+        // The faded chip is `aria-hidden`.
+        if let (Some(guide), Some(target), false) =
+            (&layout.guidance, self.guidance_target(), self.guidance_over)
+        {
+            let copy = capture_menu::guidance(target, self.feedback.0 > 0);
+            let mut chip = Item::new(UIA_GUIDANCE, Role::Status, copy.title, guide.rect);
+            chip.help = copy.hint.into();
+            items.push(chip);
+        }
+        if self.direct {
+            return items;
+        }
+        // While a listbox is open its active option has focus
+        // (`aria-activedescendant`).
+        let control = |hit: Hit, role, name: &str, rect, enabled| {
+            let mut item = Item::new(uia_key(hit), role, name, rect);
+            item.enabled = enabled;
+            item.focused = self.open.is_none() && self.focus == Some(hit);
+            item
+        };
+        if self.target == Target::Window {
+            for (index, (r, title)) in self.windows.iter().enumerate() {
+                let title = if title.is_empty() { "window" } else { title };
+                let name = format!("Select {title}");
+                items.push(control(Hit::Pick(index), Role::Button, &name, *r, true));
+            }
+        }
+        items.push(control(
+            Hit::Close,
+            Role::Button,
+            "Close capture controls",
+            layout.close,
+            true,
+        ));
+        for (key, name, r) in [
+            (UIA_TYPE_GROUP, "Capture type", layout.switches[0]),
+            (UIA_TARGET_GROUP, "Capture target", layout.switches[1]),
+        ] {
+            items.push(Item::new(key, Role::Group, name, r));
+        }
+        for s in &layout.segments {
+            let (group, name) = match s.hit {
+                Hit::Screenshot => (UIA_TYPE_GROUP, "Screenshot"),
+                Hit::Record => (UIA_TYPE_GROUP, "Record"),
+                Hit::Target(Target::Region) => (UIA_TARGET_GROUP, "Region"),
+                Hit::Target(Target::Window) => (UIA_TARGET_GROUP, "Window"),
+                _ => (UIA_TARGET_GROUP, "Full screen"),
+            };
+            let mut item = control(s.hit, Role::Toggle, name, s.rect, s.enabled);
+            item.parent = Some(group);
+            item.selected = s.active;
+            if let Some((_, help, _)) = self
+                .tooltip_at((s.rect.left + s.rect.right) / 2., s.rect.top + 1.)
+                .filter(|(h, ..)| *h == s.hit)
+            {
+                item.help = help.into();
+            }
+            items.push(item);
+        }
+        let field = |f: &FieldBox| match f.hit {
+            Hit::Select(field) => {
+                let mut item = control(
+                    f.hit,
+                    Role::ComboBox,
+                    field_label(field),
+                    f.control,
+                    f.enabled,
+                );
+                item.selected = self.open.is_some_and(|(o, _)| o == field);
+                item.value = Some(self.value(field));
+                item
+            }
+            Hit::Toggle(toggle) => {
+                let name = toggle.accessibility_label();
+                let mut item = control(f.hit, Role::Check, name, f.control, f.enabled);
+                item.selected = f.enabled && self.record.on(toggle);
+                if !f.enabled {
+                    item.help = toggle.unavailable_reason().into();
+                }
+                item
+            }
+            _ => control(f.hit, Role::Button, "", f.control, f.enabled),
+        };
+        items.extend(layout.pickers.iter().map(field));
+        if let Some((r, _, enabled)) = &layout.primary {
+            let state = PrimaryState {
+                starting: self.starting,
+                switching_display: self.switching,
+                ..PrimaryState::default()
+            };
+            let primary = capture_menu::primary_action(self.mode, self.auto_start, state);
+            let name = primary.accessibility_label;
+            items.push(control(Hit::Primary, Role::Button, name, *r, *enabled));
+        }
+        if let Some((_, fields)) = &layout.options {
+            items.extend(fields.iter().map(field));
+        }
+        let excluded = self.mode == MenuMode::Screenshot || self.controls_excluded;
+        let note = format!(
+            "{} {} {}",
+            capture_menu::visibility_note(self.mode, true, excluded).text(),
+            capture_menu::NOTE_SEPARATOR,
+            capture_menu::confirm_note(self.auto_start).text
+        );
+        let note_rect = rect(
+            layout.panel.left,
+            layout.note_y,
+            layout.panel.right,
+            layout.panel.bottom,
+        );
+        items.push(Item::new(UIA_NOTE, Role::Text, note, note_rect));
+        if let (Some((field, state)), Some(listbox)) = (self.open, &layout.listbox) {
+            items.push(Item::new(
+                UIA_LISTBOX,
+                Role::List,
+                field_label(field),
+                listbox.rect,
+            ));
+            let (labels, disabled, selected) = self.entries(field);
+            let details = self.details(field);
+            for (index, (r, ..)) in listbox.rows.iter().enumerate() {
+                let label = labels.get(index).map_or("", String::as_str);
+                let name = match details.get(index).cloned().flatten() {
+                    Some(detail) => format!("{label} {detail}"),
+                    None => label.to_string(),
+                };
+                let mut option = Item::new(uia_key(Hit::Option(index)), Role::Option, name, *r);
+                option.parent = Some(UIA_LISTBOX);
+                option.enabled = !disabled.get(index).copied().unwrap_or(true);
+                option.selected = index == selected;
+                option.focused = index == state.active;
+                items.push(option);
+            }
+        }
+        items
+    }
+
+    /// Offscreen fixtures: draw `hit` with its keyboard focus ring.
+    pub fn show_focus(&mut self, which: &str) {
+        let hit = match which {
+            "close" => Hit::Close,
+            "primary" => Hit::Primary,
+            "select" => Hit::Select(Field::Aspect),
+            "toggle" => Hit::Toggle(RecordingToggle::ShowCursor),
+            "window" => Hit::Pick(0),
+            _ => Hit::Target(self.target),
+        };
+        self.set_focus(hit, true);
     }
 
     /// Shipping disables Window when the listed display has no windows.
@@ -1755,6 +2070,7 @@ impl Menu {
                 self.paint_options(dc, g, t, &layout.panel, *row_top, fields)
             })?;
         }
+        self.paint_focus(dc, t, &layout)?;
         // `.capture-selector-note`
         for (text, x, strong) in &layout.note {
             let color = if *strong {
@@ -1800,6 +2116,47 @@ impl Menu {
         self.paint_fields(dc, g, t, fields)
     }
 
+    /// The focused control's `:focus-visible` ring: Close and the primary's
+    /// `outline: 2px solid accent; outline-offset: 2px`, the segments' outline
+    /// over `--focus-ring-tight`, a select's `--focus-ring-tight` (its accent
+    /// border is drawn with the trigger) and a switch's `--focus-ring`. A
+    /// focused window target lights like a hovered one instead.
+    fn paint_focus(&self, dc: &ID2D1DeviceContext, t: &Tokens, layout: &Layout) -> Result<()> {
+        let Some(hit) = self.focus.filter(|_| self.focus_visible) else {
+            return Ok(());
+        };
+        let accent = t.color("theme-accent");
+        let tight = t.color_alpha("theme-accent", 0.55);
+        match hit {
+            Hit::Close => gfx::ring(dc, layout.close, 8., 2., 4., accent),
+            Hit::Primary => match &layout.primary {
+                Some((r, _, true)) => gfx::ring(dc, *r, 10., 2., 4., accent),
+                _ => Ok(()),
+            },
+            Hit::Screenshot | Hit::Record | Hit::Target(_) => {
+                let Some(s) = layout.segments.iter().find(|s| s.hit == hit && s.enabled) else {
+                    return Ok(());
+                };
+                gfx::ring(dc, s.rect, 6., 0., 2., tight)?;
+                gfx::ring(dc, s.rect, 6., 2., 4., accent)
+            }
+            Hit::Select(_) | Hit::Toggle(_) => {
+                let Some(f) = layout.fields().find(|f| f.hit == hit && f.enabled) else {
+                    return Ok(());
+                };
+                let c = f.control;
+                if matches!(hit, Hit::Select(_)) {
+                    return gfx::ring(dc, c, 8., 0., 2., tight);
+                }
+                let cy = (c.top + c.bottom) / 2.;
+                let switch = rect(c.left, cy - 9., c.left + 30., cy + 9.);
+                gfx::ring(dc, switch, 9., 0., 2., t.color("surface-canvas"))?;
+                gfx::ring(dc, switch, 9., 2., 4., tight)
+            }
+            Hit::Option(_) | Hit::Pick(_) => Ok(()),
+        }
+    }
+
     /// Selects and switches with their captions.
     fn paint_fields(
         &self,
@@ -1828,7 +2185,8 @@ impl Menu {
                 Hit::Select(field) => {
                     let open = self.open.is_some_and(|(o, _)| o == field);
                     gfx::fill_round(dc, c, 8., shade(0.3 * fade))?;
-                    let edge = if open {
+                    let focused = self.focus_visible && self.focus == Some(f.hit);
+                    let edge = if open || focused {
                         accent
                     } else if hovered {
                         t.color("glass-border-strong")
@@ -2131,6 +2489,12 @@ impl Menu {
 
     fn pressed(&mut self, x: f32, y: f32) -> bool {
         self.pressed = self.hit(x, y);
+        // A click focuses the control without its ring, or blurs it; a
+        // listbox row keeps focus on its trigger.
+        if !matches!(self.pressed, Some(Hit::Option(_))) {
+            self.focus = self.pressed;
+            self.focus_visible = false;
+        }
         // A press anywhere else closes the listbox and still acts there.
         let mut closed = false;
         if let Some((field, _)) = self.open
@@ -2194,13 +2558,19 @@ impl Menu {
         }
     }
 
-    /// Keys for the open listbox; true when consumed.
+    /// Keys for the open listbox, or a focused trigger's (arrows, Enter and
+    /// Space open it); true when consumed.
     fn listbox_key(&mut self, key: select::Key) -> bool {
-        let Some((field, state)) = self.open else {
-            return false;
+        let (field, state) = match (self.open, self.focus) {
+            (Some(open), _) => open,
+            (None, Some(Hit::Select(field))) if self.field_enabled(field) => {
+                (field, select::State::default())
+            }
+            _ => return false,
         };
         let (_, disabled, selected) = self.entries(field);
         let outcome = select::key(state, &disabled, selected, key);
+        self.focus_visible |= outcome.handled && self.focus == Some(Hit::Select(field));
         if let Some(index) = outcome.chosen {
             self.choose(field, index);
         }
@@ -3128,6 +3498,12 @@ impl Capture {
                     let _ = overlay.render(&self.tokens);
                 }
             }
+            WM_KEYDOWN if VIRTUAL_KEY(wp.0 as u16) == VK_TAB => {
+                let back = unsafe { GetKeyState(VK_SHIFT.0.into()) } < 0;
+                if overlay.menu.focus_step(back) {
+                    let _ = overlay.render(&self.tokens);
+                }
+            }
             WM_KEYDOWN => {
                 let vk = VIRTUAL_KEY(wp.0 as u16);
                 let key = match vk {
@@ -3140,9 +3516,7 @@ impl Capture {
                     VK_ESCAPE => Some(select::Key::Escape),
                     _ => None,
                 };
-                if overlay.menu.open.is_some()
-                    && key.is_some_and(|key| overlay.menu.listbox_key(key))
-                {
+                if key.is_some_and(|key| overlay.menu.listbox_key(key)) {
                     let switch = overlay.menu.switch_to.take();
                     let _ = overlay.render(&self.tokens);
                     if let Some(index) = switch {
@@ -3151,7 +3525,10 @@ impl Capture {
                     return Some(LRESULT(0));
                 }
                 match vk {
-                    VK_RETURN => action = Some(Hit::Primary),
+                    VK_RETURN | VK_SPACE => {
+                        action = overlay.menu.focus_key(vk == VK_RETURN);
+                        let _ = overlay.render(&self.tokens);
+                    }
                     VK_ESCAPE => action = Some(Hit::Close),
                     _ => {}
                 }
@@ -3183,10 +3560,37 @@ impl Capture {
             }
             _ => return None,
         }
+        if let Some(hit) = action {
+            self.run(hit);
+        }
+        Some(LRESULT(0))
+    }
+
+    /// Run a control's action: a click, a key, or UI Automation.
+    fn run(&mut self, action: Hit) {
+        let Phase::Selecting(overlay, _) = &mut self.phase else {
+            return;
+        };
         match action {
-            Some(Hit::Close) => self.cancel(),
-            Some(Hit::Primary) => self.confirm(),
-            Some(Hit::Target(target)) => {
+            Hit::Close => self.cancel(),
+            Hit::Primary => self.confirm(),
+            // Shipping's window target `onClick`: pick it, then auto-start.
+            Hit::Pick(index) => {
+                if overlay.menu.starting
+                    || overlay.menu.switching
+                    || index >= overlay.menu.windows.len()
+                {
+                    return;
+                }
+                overlay.menu.picked = Some(Some(index));
+                overlay.menu.hovered = Some(Some(index));
+                let auto = overlay.menu.auto_start;
+                let _ = overlay.render(&self.tokens);
+                if auto {
+                    self.confirm();
+                }
+            }
+            Hit::Target(target) => {
                 overlay.menu.target = target;
                 overlay.menu.open = None;
                 let auto = target == Target::Display && overlay.menu.auto_start;
@@ -3195,7 +3599,7 @@ impl Capture {
                     self.confirm();
                 }
             }
-            Some(hit @ (Hit::Screenshot | Hit::Record)) => {
+            hit @ (Hit::Screenshot | Hit::Record) => {
                 overlay.menu.mode = if hit == Hit::Record {
                     MenuMode::Recording
                 } else {
@@ -3205,7 +3609,7 @@ impl Capture {
                 load_microphones(overlay, &self.wake);
                 let _ = overlay.render(&self.tokens);
             }
-            Some(hit @ (Hit::Toggle(_) | Hit::Select(_) | Hit::Option(_))) => {
+            hit @ (Hit::Toggle(_) | Hit::Select(_) | Hit::Option(_)) => {
                 overlay.menu.option_action(hit);
                 let switch = overlay.menu.switch_to.take();
                 let _ = overlay.render(&self.tokens);
@@ -3213,10 +3617,50 @@ impl Capture {
                     self.switch_display(index);
                 }
             }
-            None => {}
         }
-        Some(LRESULT(0))
     }
+
+    /// UI Automation focus: the control takes keyboard focus with its ring.
+    fn focus(&mut self, hit: Hit) {
+        if let Phase::Selecting(overlay, _) = &mut self.phase {
+            overlay.menu.set_focus(hit, true);
+            let _ = overlay.render(&self.tokens);
+        }
+    }
+}
+
+/// The open bar's accessible state for `panel_uia`.
+pub fn uia_snapshot() -> Option<crate::panel_uia::Snapshot> {
+    CAPTURE.with(|c| {
+        let c = c.try_borrow().ok()?;
+        let Phase::Selecting(overlay, _) = &c.as_ref()?.phase else {
+            return None;
+        };
+        Some(crate::panel_uia::Snapshot {
+            hwnd: overlay.hwnd,
+            scale: overlay.scale,
+            size: overlay.menu.size,
+            name: overlay.menu.uia_name(),
+            focusable: true,
+            items: overlay.menu.uia_items(),
+        })
+    })
+}
+
+/// Apply a UI Automation request through the same paths as clicks and keys.
+pub fn uia_act(key: u32, act: crate::panel_uia::Act) -> Option<()> {
+    use crate::panel_uia::Act;
+    let hit = uia_hit(key)?;
+    CAPTURE.with(|c| {
+        let mut c = c.try_borrow_mut().ok()?;
+        let capture = c.as_mut()?;
+        match act {
+            Act::Focus => capture.focus(hit),
+            Act::Invoke | Act::Select => capture.run(hit),
+            Act::SetValue(_) => return None,
+        }
+        Some(())
+    })
 }
 
 impl Overlay {
@@ -3251,10 +3695,29 @@ impl Overlay {
 const FRAME_TIMER: usize = 1;
 
 extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    use crate::panel_uia::{self, Window};
+    use windows::Win32::UI::Accessibility::{UiaReturnRawElementProvider, UiaRootObjectId};
+    // The bar's overlay answers UI Automation (the countdown does not).
+    if msg == WM_GETOBJECT
+        && lp.0 as i32 == UiaRootObjectId
+        && uia_snapshot().is_some_and(|s| s.hwnd == hwnd)
+    {
+        let root = panel_uia::node(Window::Capture, None);
+        return unsafe { UiaReturnRawElementProvider(hwnd, wp, lp, &root) };
+    }
+    if msg == WM_DESTROY {
+        unsafe {
+            let _ = UiaReturnRawElementProvider(hwnd, WPARAM(0), LPARAM(0), None);
+        }
+    }
+    let before = panel_uia::watch(Window::Capture);
     let handled = CAPTURE.with(|c| {
         let mut c = c.try_borrow_mut().ok()?;
         c.as_mut()?.handle(hwnd, msg, wp, lp)
     });
+    if handled.is_some() {
+        panel_uia::raise(Window::Capture, before);
+    }
     handled.unwrap_or_else(|| unsafe { DefWindowProcW(hwnd, msg, wp, lp) })
 }
 
@@ -3454,6 +3917,165 @@ mod tests {
         m.moved(2000., -50.);
         let r = m.selection.expect("clamped selection");
         assert_eq!((r.left, r.top, r.right, r.bottom), (1200., 0., 1280., 700.));
+    }
+
+    /// Lay the bar out as a paint would.
+    fn lay_out(m: &mut Menu) {
+        let t = Tokens::variant("dark", "mustard");
+        let g = Gfx::new(&t, false).unwrap();
+        m.layout = Some(m.layout(&g, &t).unwrap());
+    }
+
+    #[test]
+    fn tab_walks_the_bar_and_keys_activate_like_shipping() {
+        let mut m = menu(Target::Region, false);
+        m.selection = Some(rect(100., 100., 400., 300.));
+        lay_out(&mut m);
+        // No windows listed: the disabled Window segment is skipped.
+        let order = vec![
+            Hit::Close,
+            Hit::Screenshot,
+            Hit::Record,
+            Hit::Target(Target::Region),
+            Hit::Target(Target::Display),
+            Hit::Select(Field::Aspect),
+            Hit::Primary,
+        ];
+        assert_eq!(m.focus_order(), order);
+        // Shift+Tab from nothing lands on the last control; Tab wraps.
+        assert!(m.focus_step(true));
+        assert_eq!((m.focus, m.focus_visible), (Some(Hit::Primary), true));
+        m.focus_step(false);
+        assert_eq!(m.focus, Some(Hit::Close));
+        // Enter on Close closes; on a segment it confirms (shipping's
+        // capture-phase handler) while Space switches.
+        assert_eq!(m.focus_key(true), Some(Hit::Close));
+        m.set_focus(Hit::Target(Target::Display), true);
+        assert_eq!(m.focus_key(true), Some(Hit::Primary));
+        assert_eq!(m.focus_key(false), Some(Hit::Target(Target::Display)));
+        // A focused select opens on an arrow; Tab closes it and moves on.
+        m.set_focus(Hit::Select(Field::Aspect), true);
+        assert!(m.listbox_key(select::Key::ArrowDown));
+        assert_eq!(m.open.map(|(f, _)| f), Some(Field::Aspect));
+        m.focus_step(false);
+        assert_eq!((m.open, m.focus), (None, Some(Hit::Primary)));
+        // Escape on a closed select is left for the bar (it closes).
+        m.set_focus(Hit::Select(Field::Aspect), true);
+        assert!(!m.listbox_key(select::Key::Escape));
+        // A click focuses without the ring; an empty click blurs.
+        m.layout = None;
+        lay_out(&mut m);
+        let close = m.layout.as_ref().unwrap().close;
+        m.pressed(close.left + 4., close.top + 4.);
+        assert_eq!((m.focus, m.focus_visible), (Some(Hit::Close), false));
+        m.released(close.left + 4., close.top + 4.);
+        m.pressed(5., 5.);
+        assert_eq!(m.focus, None);
+
+        // Record: Space flips a switch, Enter on it does nothing.
+        m.mode = MenuMode::Recording;
+        lay_out(&mut m);
+        let cursor = Hit::Toggle(RecordingToggle::ShowCursor);
+        assert!(m.focus_order().contains(&cursor));
+        m.set_focus(cursor, true);
+        assert_eq!(m.focus_key(false), Some(cursor));
+        assert_eq!(m.focus_key(true), None);
+
+        // Window: the targets come first and light when focused.
+        let mut m = menu(Target::Window, false);
+        m.windows = vec![(rect(0., 0., 100., 100.), "Notes".into())];
+        lay_out(&mut m);
+        assert_eq!(m.focus_order()[..2], [Hit::Pick(0), Hit::Close]);
+        m.focus_step(false);
+        assert_eq!(m.hovered, Some(Some(0)));
+        assert_eq!(m.focus_key(true), Some(Hit::Pick(0)));
+    }
+
+    #[test]
+    fn ui_automation_lists_the_bar_with_shipping_roles_and_names() {
+        use crate::panel_uia::Role;
+        let mut m = menu(Target::Region, false);
+        m.mode = MenuMode::Recording;
+        lay_out(&mut m);
+        let items = m.uia_items();
+        let names: Vec<(Role, &str)> = items.iter().map(|i| (i.role, i.name.as_str())).collect();
+        assert_eq!(
+            names,
+            vec![
+                (Role::Status, "Drag to select a region"),
+                (Role::Button, "Close capture controls"),
+                (Role::Group, "Capture type"),
+                (Role::Group, "Capture target"),
+                (Role::Toggle, "Screenshot"),
+                (Role::Toggle, "Record"),
+                (Role::Toggle, "Region"),
+                (Role::Toggle, "Window"),
+                (Role::Toggle, "Full screen"),
+                (Role::ComboBox, "Region aspect ratio"),
+                (Role::Button, "Start recording"),
+                (Role::ComboBox, "Frames per second"),
+                (Role::ComboBox, "Maximum resolution"),
+                (Role::Check, "Show cursor"),
+                (Role::Check, "Show clicks"),
+                (Role::Check, "Record desktop audio"),
+                (Role::ComboBox, "Microphone"),
+                (
+                    Role::Text,
+                    "These controls won’t show in recordings · Press Enter to confirm"
+                ),
+            ]
+        );
+        let find = |items: &[crate::panel_uia::Item], name: &str| {
+            items.iter().find(|i| i.name == name).cloned().unwrap()
+        };
+        // Pressed segments sit in their groups; Window is disabled with
+        // shipping's reason.
+        let record = find(&items, "Record");
+        assert_eq!(
+            (record.parent, record.selected),
+            (Some(UIA_TYPE_GROUP), true)
+        );
+        assert!(!find(&items, "Screenshot").selected);
+        let window = find(&items, "Window");
+        assert!(!window.enabled);
+        assert_eq!(
+            window.help,
+            "Window capture is not available in this desktop session"
+        );
+        assert_eq!(
+            find(&items, "Frames per second").value.as_deref(),
+            Some("60")
+        );
+        // Keys round-trip to the controls they act on.
+        for item in &items {
+            if let Some(hit) = uia_hit(item.key) {
+                assert_eq!(uia_key(hit), item.key, "{}", item.name);
+            }
+        }
+
+        // An open listbox: the combobox is expanded and the active option
+        // has focus.
+        m.set_focus(Hit::Select(Field::Fps), true);
+        m.listbox_key(select::Key::ArrowDown);
+        m.listbox_key(select::Key::ArrowDown);
+        lay_out(&mut m);
+        let items = m.uia_items();
+        let fps = find(&items, "Frames per second");
+        assert!(fps.selected && !fps.focused);
+        let options: Vec<_> = items.iter().filter(|i| i.role == Role::Option).collect();
+        let named: Vec<_> = options.iter().map(|o| o.name.as_str()).collect();
+        assert_eq!(named, ["60", "30", "15"]);
+        assert!(options[0].selected && !options[0].focused);
+        assert!(options[1].focused && options[1].parent == Some(UIA_LISTBOX));
+
+        // The direct selector is its chip alone, named like AppKit's.
+        let mut m = menu(Target::Window, false);
+        m.direct = true;
+        lay_out(&mut m);
+        assert_eq!(m.uia_name(), capture_menu::WINDOW_SELECTOR_LABEL);
+        let items = m.uia_items();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].name, "Select a window to continue");
     }
 
     fn edges(m: &Menu) -> (f32, f32, f32, f32) {
