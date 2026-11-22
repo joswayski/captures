@@ -105,6 +105,18 @@ impl Placer {
         let _ = self.connection.flush();
     }
 
+    /// ICCCM `WM_HINTS` input = False: the window manager never gives the
+    /// window keyboard focus when it maps (Tauri's `focused(false)`). Call
+    /// after realize, before the first map.
+    pub fn refuse_focus(&self, surface: &X11Surface) {
+        let hints = x11rb::properties::WmHints {
+            input: Some(false),
+            ..x11rb::properties::WmHints::new()
+        };
+        let _ = hints.set(&self.connection, xid(surface));
+        let _ = self.connection.flush();
+    }
+
     /// The monitor's bounds in physical pixels at the GDK scale.
     pub fn bounds(
         &self,

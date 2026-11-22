@@ -70,6 +70,8 @@ pub struct Controls {
     tooltip_hover: Cell<Option<Control>>,
     notice: RefCell<Option<gtk::ApplicationWindow>>,
     confirmation: RefCell<Option<gtk::MessageDialog>>,
+    /// Shipping's region guide for a Region take, until it ends or fails.
+    guide: RefCell<Option<gtk::ApplicationWindow>>,
 }
 
 impl Host {
@@ -156,11 +158,17 @@ impl Host {
             self,
             flow,
             Some(display),
-            Some(target),
+            Some(target.clone()),
             None,
             settings,
             hidden,
         );
+        // Before the controls first show, so they stack above it.
+        if let (Some(display), RecordingTarget::Region { rect, .. }) =
+            (controls.display.borrow().as_ref(), &target)
+        {
+            *controls.guide.borrow_mut() = region_guide(self, display, *rect);
+        }
         *self.recorder.borrow_mut() = Some(controls.clone());
         controls.watch();
         glib::spawn_future_local(async move {
@@ -406,6 +414,7 @@ impl Controls {
             tooltip_hover: Cell::new(None),
             notice: RefCell::default(),
             confirmation: RefCell::default(),
+            guide: RefCell::default(),
         });
         for (control, button, _) in &controls.buttons {
             let (control, weak) = (*control, Rc::downgrade(&controls));
@@ -721,7 +730,22 @@ impl Controls {
             "recording-state",
             serde_json::json!({"state": snapshot.state, "elapsedMs": snapshot.elapsed_ms}),
         );
+        // Shipping removes the region guide when a take fails.
+        if snapshot.state == RecordingState::Failed {
+            self.guide
+                .borrow_mut()
+                .take()
+                .inspect(|guide| guide.destroy());
+        }
         *self.snapshot.borrow_mut() = Some(snapshot);
+    }
+
+    /// The region guide window, so a screenshot beside the take hides it.
+    pub fn guide(&self) -> Option<gtk::Window> {
+        self.guide
+            .borrow()
+            .as_ref()
+            .map(|guide| guide.clone().upcast())
     }
 
     fn event(self: &Rc<Self>, event: Event) {
@@ -1223,6 +1247,10 @@ impl Controls {
         self.flow.borrow().cancel();
         self.send(Command::Retire);
         self.window.destroy();
+        self.guide
+            .borrow_mut()
+            .take()
+            .inspect(|guide| guide.destroy());
         self.notice
             .borrow_mut()
             .take()
@@ -1273,5 +1301,184 @@ impl Controls {
                 }
             }
         }
+    }
+}
+
+/// The veil and accent frame of shipping's `RecordingRegionIndicator`, as
+/// rectangles in the display's overlay points. Every one lies outside
+/// `hole`, the recorded rectangle, so none of its pixels enter the take
+/// even where the guide is captured with it.
+fn guide_rects(
+    bounds: &gtk::graphene::Rect,
+    hole: &gtk::graphene::Rect,
+    frame: f32,
+) -> (Vec<gtk::graphene::Rect>, Vec<gtk::graphene::Rect>) {
+    use gtk::graphene::Rect;
+    let Some(hole) = hole.intersection(bounds) else {
+        return (vec![*bounds], Vec::new());
+    };
+    let outside = |outer: &Rect| {
+        let (left, top) = (outer.x(), outer.y());
+        let (right, bottom) = (left + outer.width(), top + outer.height());
+        let (hl, ht) = (hole.x(), hole.y());
+        let (hr, hb) = (hl + hole.width(), ht + hole.height());
+        [
+            Rect::new(left, top, right - left, ht - top),
+            Rect::new(left, hb, right - left, bottom - hb),
+            Rect::new(left, ht, hl - left, hole.height()),
+            Rect::new(hr, ht, right - hr, hole.height()),
+        ]
+        .into_iter()
+        .filter(|rect| rect.width() > 0. && rect.height() > 0.)
+        .collect::<Vec<_>>()
+    };
+    let ring = Rect::new(
+        hole.x() - frame,
+        hole.y() - frame,
+        hole.width() + 2. * frame,
+        hole.height() + 2. * frame,
+    )
+    .intersection(bounds)
+    .unwrap_or(hole);
+    (outside(bounds), outside(&ring))
+}
+
+/// Shipping's passive region guide for the length of a Region take: a
+/// click-through, always-on-top window over the display that veils
+/// everything outside the region and rings it in the accent. X11 only (a
+/// Region take is X11-only; Wayland records a portal crop), and only with a
+/// compositor: without one a transparent window paints black over the
+/// region being recorded.
+#[cfg(feature = "x11")]
+fn region_guide(
+    host: &Rc<Host>,
+    display: &DisplayDescriptor,
+    rect: CaptureRect,
+) -> Option<gtk::ApplicationWindow> {
+    use crate::previews::x11::Placer;
+    let gdk_display = gdk::Display::default()?;
+    if !gdk_display.is_composited() || !gdk_display.is_rgba() {
+        return None;
+    }
+    let placer = Rc::new(Placer::new(&gdk_display)?);
+    let tokens = host.tokens.borrow().clone();
+    let (veil, accent, frame) = (
+        tokens.rgba("glass-veil"),
+        tokens.rgba("theme-accent"),
+        tokens.number("s-1"),
+    );
+    let hole = gtk::graphene::Rect::new(
+        rect.x as f32,
+        rect.y as f32,
+        rect.width as f32,
+        rect.height as f32,
+    );
+    let area = crate::widgets::SnapshotArea::new(move |snapshot, width, height| {
+        let bounds = gtk::graphene::Rect::new(0., 0., width, height);
+        let (shade, ring) = guide_rects(&bounds, &hole, frame);
+        for rect in &shade {
+            snapshot.append_color(&veil, rect);
+        }
+        for rect in &ring {
+            snapshot.append_color(&accent, rect);
+        }
+    });
+    area.set_can_target(false);
+    area.set_hexpand(true);
+    area.set_vexpand(true);
+    let window = gtk::ApplicationWindow::builder()
+        .application(&host.app)
+        .title("Captures Recording Region")
+        .decorated(false)
+        .resizable(false)
+        .build();
+    window.add_css_class("captures");
+    window.add_css_class("notice-window");
+    window.set_focusable(false);
+    window.set_child(Some(&area));
+    let (width, height) = display.overlay_size();
+    window.set_default_size(width as i32, height as i32);
+    let (x, y) = (display.x, display.y);
+    window.connect_realize(move |window| {
+        let Some(surface) = window.surface() else {
+            return;
+        };
+        surface.set_input_region(&gtk::cairo::Region::create());
+        let Ok(surface) = surface.downcast::<gdk4_x11::X11Surface>() else {
+            return;
+        };
+        surface.set_skip_taskbar_hint(true);
+        surface.set_skip_pager_hint(true);
+        placer.refuse_focus(&surface);
+        // The display's origin is in X device pixels.
+        let scale = f64::from(surface.scale_factor());
+        let place = {
+            let placer = placer.clone();
+            move |surface: &gdk4_x11::X11Surface| {
+                placer.move_to(surface, f64::from(x) / scale, f64::from(y) / scale);
+            }
+        };
+        place(&surface);
+        let (pinned, weak) = (surface.downgrade(), Rc::downgrade(&placer));
+        placer.watch_managed(&surface, move || {
+            if let (Some(surface), Some(placer)) = (pinned.upgrade(), weak.upgrade()) {
+                placer.pin(&surface);
+                place(&surface);
+            }
+        });
+    });
+    window.set_visible(true);
+    emit(
+        "recording-region-guide",
+        serde_json::json!({"x": rect.x, "y": rect.y, "width": rect.width, "height": rect.height}),
+    );
+    Some(window)
+}
+
+#[cfg(not(feature = "x11"))]
+fn region_guide(
+    _host: &Rc<Host>,
+    _display: &DisplayDescriptor,
+    _rect: CaptureRect,
+) -> Option<gtk::ApplicationWindow> {
+    None
+}
+
+#[cfg(test)]
+mod guide_tests {
+    use super::guide_rects;
+    use gtk::graphene::Rect;
+
+    #[test]
+    fn region_guide_never_paints_inside_the_recorded_rectangle() {
+        let bounds = Rect::new(0., 0., 1280., 800.);
+        // Inside, flush with the top-left corner, and partly off the display.
+        for hole in [
+            Rect::new(100., 200., 300., 150.),
+            Rect::new(0., 0., 640., 400.),
+            Rect::new(1200., 700., 300., 300.),
+        ] {
+            let (shade, ring) = guide_rects(&bounds, &hole, 2.);
+            let inside = hole.intersection(&bounds).unwrap();
+            for rect in shade.iter().chain(&ring) {
+                assert!(
+                    rect.intersection(&inside)
+                        .is_none_or(|overlap| overlap.width() == 0. || overlap.height() == 0.),
+                    "{rect:?} enters {inside:?}"
+                );
+                assert!(bounds.contains_rect(rect), "{rect:?} leaves the display");
+            }
+            // The veil covers everything else on the display.
+            let area: f32 = shade.iter().map(|r| r.width() * r.height()).sum();
+            let expected = bounds.width() * bounds.height() - inside.width() * inside.height();
+            assert!((area - expected).abs() < 0.5, "{area} != {expected}");
+            // The ring hugs the hole: 2 px wide where the display allows it.
+            let ring_area: f32 = ring.iter().map(|r| r.width() * r.height()).sum();
+            assert!(ring_area > 0.);
+        }
+        // The middle hole gets a full 2 px ring on all four sides.
+        let (_, ring) = guide_rects(&bounds, &Rect::new(100., 200., 300., 150.), 2.);
+        let ring_area: f32 = ring.iter().map(|r| r.width() * r.height()).sum();
+        assert_eq!(ring_area, 304. * 154. - 300. * 150.);
     }
 }

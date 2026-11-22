@@ -114,7 +114,13 @@ Controls show immediate, fixed-glass tooltips on hover or keyboard focus,
 including disabled controls; accessible names retain unavailable reasons.
 The last three tooltips align to the right. Transitions honor reduced motion.
 Hide shows a click-through notice with the saved New Capture shortcut, then
-expires without restoring the HUD.
+expires without restoring the HUD. A Region take shows shipping's region guide
+for its whole length, through countdown, pause, restart and Hide: a
+click-through veil over the rest of the display with an accent ring just
+outside the recorded rectangle, never inside it. It steps aside for a
+screenshot beside the take and closes when the take fails or ends. It needs a
+compositor; without one it is not shown, since a transparent window would
+paint black over the recording.
 Accepted takes save on Quit/SIGTERM; pre-start Escape cancels without publishing,
 and failed finalization retains recovery media. Saved takes join History and
 honor `open_editor_after_recording`. Use a disposable `--history-root` and

@@ -120,6 +120,13 @@ impl Host {
             }
         }
         let update = crate::updates::notice_window();
+        // Shipping hides the region guide while a screenshot is taken beside
+        // the take, then shows it again.
+        let guide = self
+            .recorder
+            .borrow()
+            .as_ref()
+            .and_then(|recorder| recorder.guide());
         self.app
             .windows()
             .into_iter()
@@ -127,6 +134,7 @@ impl Host {
             .filter(|window| {
                 portal
                     || update.as_ref() == Some(window)
+                    || guide.as_ref() == Some(window)
                     || (!settings.include_mini_previews_in_captures
                         && self.previews.borrow().as_ref().is_some_and(|previews| {
                             previews.window.upcast_ref::<gtk::Window>() == window
