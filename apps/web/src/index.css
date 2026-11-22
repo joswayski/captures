@@ -291,52 +291,46 @@
   }
 
   /*
-   * Screenshot strip. The track breaks out of the text column to the full
-   * viewport width but starts aligned with it (the column is 42rem with 1.5rem
-   * padding), so the first shot lines up with the copy and later ones peek in
-   * from the right. Every still keeps its own aspect ratio at one shared
-   * height: no frame, padding, or letterboxing around it.
+   * Screenshot gallery. On wide screens it grows past the 42rem text column
+   * (centered on it) so the stills read at a useful size; on narrow screens
+   * it matches the column. Rows are flex lines whose items grow by aspect
+   * ratio (set inline), so paired stills share one height uncropped.
    */
-  .product-gallery-track {
-    --shot-height: clamp(13rem, 52vw, 28rem);
-    --track-inset: max(1.5rem, calc(50vw - 19.5rem));
+  .product-gallery {
+    --gallery-width: min(64rem, calc(100vw - 3rem));
+    width: var(--gallery-width);
+    max-width: none;
+    margin-inline: calc((100% - var(--gallery-width)) / 2);
+  }
+
+  .product-gallery-row {
     display: flex;
-    gap: 1.25rem;
-    margin-top: 1.25rem;
-    margin-inline: calc(50% - 50vw);
-    padding: 0.5rem var(--track-inset) 1.5rem;
-    overflow-x: auto;
-    overscroll-behavior-x: contain;
-    scroll-snap-type: x mandatory;
-    scroll-padding-inline: var(--track-inset);
-    scrollbar-width: none;
-    -webkit-tap-highlight-color: transparent;
-  }
-
-  .product-gallery-track::-webkit-scrollbar {
-    display: none;
-  }
-
-  .product-gallery-track:focus {
-    outline: none;
-  }
-
-  .product-gallery-track:focus-visible .product-gallery-shot {
-    box-shadow:
-      0 0 0 2px var(--theme-accent),
-      0 18px 40px rgba(0, 0, 0, 0.45);
-  }
-
-  .product-gallery-slide {
-    display: flex;
-    flex: none;
     flex-direction: column;
+    gap: 1.5rem;
+  }
+
+  .product-gallery-item {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
     margin: 0;
-    scroll-snap-align: start;
+  }
+
+  @media (min-width: 40rem) {
+    .product-gallery-row {
+      flex-direction: row;
+      align-items: flex-start;
+      gap: 1.25rem;
+    }
+
+    .product-gallery-item {
+      flex-basis: 0;
+    }
   }
 
   .product-gallery-shot {
     display: block;
+    width: 100%;
     padding: 0;
     border: 0;
     border-radius: 0.75rem;
@@ -366,37 +360,16 @@
 
   .product-gallery-shot img {
     display: block;
-    width: auto;
-    height: var(--shot-height);
+    width: 100%;
+    height: auto;
     user-select: none;
   }
 
-  /* Wrap to the image width instead of widening the slide. */
   .product-gallery-caption {
-    width: 0;
-    min-width: 100%;
     margin-top: 0.875rem;
     font-size: 0.8125rem;
     line-height: 1.55;
     color: var(--theme-web-ink-muted);
-  }
-
-  .gallery-arrow {
-    @apply inline-flex h-8 w-8 items-center justify-center rounded-full border border-border bg-surface text-ink-muted transition-colors duration-200 ease-out;
-    cursor: pointer;
-  }
-
-  .gallery-arrow:hover:not(:disabled) {
-    @apply border-accent/30 bg-accent-soft text-accent-readable;
-  }
-
-  .gallery-arrow:disabled {
-    opacity: 0.35;
-    cursor: default;
-  }
-
-  .gallery-arrow:focus-visible {
-    @apply outline-2 outline-offset-2 outline-accent;
   }
 
   .product-lightbox {
