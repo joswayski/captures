@@ -309,7 +309,12 @@ UIA reports the buttons focusable; SetFocus and keys were not exercised live
 because they take focus from the desktop's user). Cards arrive and leave with
 the shared preview motion, and a new card holds shipping's capture highlight
 (a 1 px accent ring with an 18 px accent glow) for 1 s, then fades it over
-3.5 s, skipped under reduced motion (`--select highlight`). `--scene capture --screenshot PATH`
+3.5 s, skipped under reduced motion (`--select highlight`). Hovering eases
+the card's look like shipping's transitions: the image's blur and dim over
+0.18 s and its zoom over 0.22 s, the controls fading in over 0.16 s with the
+top row sliding down 3 DIPs, and the size chip fading over 0.15 s, each
+reversing from where it is (instant under reduced motion; unit-tested, the
+settled states rendered). `--scene capture --screenshot PATH`
 renders the bar offscreen (`--tool display` for Full screen, `--tool window`
 for Window, `--select x` for a sample selection or hovered window, `--select
 desktop` for the hovered display, `--select picked` for a picked window with

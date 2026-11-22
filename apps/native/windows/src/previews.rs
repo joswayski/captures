@@ -182,6 +182,8 @@ pub struct Stack {
     arrivals: HashMap<String, f64>,
     /// When each card's capture highlight began, by card id.
     highlights: HashMap<String, f64>,
+    /// Each card's hover look easing in or out, by card id.
+    hover_fades: HashMap<String, HoverFade>,
     /// `cards` is the display list: live cards plus exiting ones, which keep
     /// their slot here until their exit ends. `stack` holds only live ones.
     exits: StackExits,
@@ -210,6 +212,35 @@ pub struct Stack {
     /// The control with keyboard focus (`:focus-visible`), while the window
     /// has it.
     pub focus: Option<Hit>,
+}
+
+/// A card's hover look easing toward `on` since `at`, from where each
+/// channel was then: the image filter (`0.18s ease`), its zoom (`0.22s
+/// ease`), the controls (`0.16s ease`) and the size chip's fade (`0.15s
+/// ease`), as shipping's `.thumbnail-card:hover` transitions.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct HoverFade {
+    on: bool,
+    at: f64,
+    from: [f32; 4],
+}
+
+const HOVER_MS: [f64; 4] = [180., 220., 160., 150.];
+
+impl HoverFade {
+    fn values(&self, now: f64) -> [f32; 4] {
+        let ease = captures_app::motion::CubicBezier::new(0.25, 0.1, 0.25, 1.)
+            .unwrap_or(captures_app::motion::CubicBezier::LINEAR);
+        let target = f32::from(u8::from(self.on));
+        std::array::from_fn(|i| {
+            let p = ease.ease(((now - self.at) / HOVER_MS[i]).clamp(0., 1.)) as f32;
+            self.from[i] + (target - self.from[i]) * p
+        })
+    }
+
+    fn running(&self, now: f64) -> bool {
+        now - self.at < HOVER_MS[1]
+    }
 }
 
 /// A dissolving card's chips: how each moves, and their filtered pixels,
@@ -371,6 +402,7 @@ impl Stack {
             card_motion: None,
             arrivals: HashMap::new(),
             highlights: HashMap::new(),
+            hover_fades: HashMap::new(),
             exits: StackExits::default(),
             dust: HashMap::new(),
             scroll: 0.,
@@ -391,6 +423,37 @@ impl Stack {
     /// (`.thumbnail-card:focus-within`).
     fn shows_controls(&self, index: usize) -> bool {
         self.hovered == Some(index) || self.focus.and_then(Hit::card) == Some(index)
+    }
+
+    /// Ease each card's hover look toward whether it shows its controls now.
+    pub fn sync_hover(&mut self, now: f64) {
+        for index in 0..self.cards.len() {
+            let on = self.shows_controls(index);
+            let id = &self.cards[index].entry.id;
+            let fade = self.hover_fades.get(id).copied();
+            if fade.map_or(on, |f| f.on != on) {
+                let from = fade.map_or([0.; 4], |f| f.values(now));
+                self.hover_fades
+                    .insert(id.clone(), HoverFade { on, at: now, from });
+            }
+        }
+        let cards = &self.cards;
+        self.hover_fades.retain(|id, fade| {
+            (fade.on || fade.running(now)) && cards.iter().any(|c| &c.entry.id == id)
+        });
+    }
+
+    /// A card's hover look now (0 resting, 1 hovered): image filter, zoom,
+    /// controls and the size chip's fade. Instant under reduced motion and
+    /// offscreen.
+    fn hover_look(&self, index: usize) -> [f32; 4] {
+        let on = f32::from(u8::from(self.shows_controls(index)));
+        if self.instant() {
+            return [on; 4];
+        }
+        self.hover_fades
+            .get(&self.cards[index].entry.id)
+            .map_or([on; 4], |fade| fade.values(now_ms()))
     }
 
     /// The buttons keyboard focus visits, in automation (DOM) order.
@@ -607,13 +670,14 @@ impl Stack {
             .into_iter()
             .flatten()
             .any(|start| !self.reduced && now - start < CUE_IN_MS);
-        let rejecting = self.rejects.values().any(|start| now - start < REJECT_MS);
+        let easing = self.rejects.values().any(|start| now - start < REJECT_MS)
+            || (!self.instant() && self.hover_fades.values().any(|fade| fade.running(now)));
         pile || arriving
             || !self.exits.is_empty()
             || scrolling
             || cues
             || self.sway.is_some()
-            || rejecting
+            || easing
     }
 
     /// The largest [`Self::scroll`]: how much of the content the window
@@ -1738,9 +1802,16 @@ impl Stack {
         // A leaving card keeps the dimmed hover look it had when it went; a
         // dissolving one also keeps its controls while they fade.
         // A shaking card shows its image undimmed (`.thumbnail-drop-rejected img`).
-        let hovered = (self.shows_controls(index) && !self.rejects.contains_key(&card.entry.id))
-            || self.exiting(index);
-        let controls = self.shows_controls(index) || self.dust.contains_key(&card.entry.id);
+        let [mut filter, mut zoom, mut controls, mut meta] = self.hover_look(index);
+        if self.rejects.contains_key(&card.entry.id) {
+            (filter, zoom) = (0., 0.);
+        }
+        if self.exiting(index) {
+            (filter, zoom, meta) = (1., 1., 1.);
+        }
+        if self.dust.contains_key(&card.entry.id) {
+            controls = 1.;
+        }
         let radius = t.n("thumbnail-card-radius");
         // `--thumbnail-card-shadow` and the 1 px white ring.
         faded(dc, fade.frame, || {
@@ -1765,9 +1836,9 @@ impl Stack {
             }
             gfx::fill_round(dc, r, radius, t.color("glass-strong-solid"))?;
             if let Some(image) = &card.image {
-                cover(dc, image, (r, radius), hovered)?;
+                cover(dc, image, (r, radius), (filter, zoom))?;
             }
-            if hovered {
+            if filter > 0. {
                 // `brightness(.5)` on the opaque image.
                 gfx::fill_round(
                     dc,
@@ -1777,7 +1848,7 @@ impl Stack {
                         r: 0.,
                         g: 0.,
                         b: 0.,
-                        a: preview_chrome::HOVER_MEDIA_BRIGHTNESS as f32,
+                        a: (1. - preview_chrome::HOVER_MEDIA_BRIGHTNESS as f32) * filter,
                     },
                 )?;
             }
@@ -1788,7 +1859,7 @@ impl Stack {
             self.paint_highlight(dc, t, index, (r, radius))
         })?;
         faded(dc, fade.chrome, || {
-            self.paint_chrome(dc, g, t, index, r, (hovered, controls))?;
+            self.paint_chrome(dc, g, t, index, r, (1. - meta, controls))?;
             paint_message(dc, g, t, card.error.as_deref(), r)
         })
     }
@@ -1843,19 +1914,16 @@ impl Stack {
         t: &Tokens,
         index: usize,
         r: Rect,
-        (hovered, controls): (bool, bool),
+        (meta, controls): (f32, f32),
     ) -> Result<()> {
         let card = &self.cards[index];
-        let white = |a: f32| D2D1_COLOR_F {
-            r: 1.,
-            g: 1.,
-            b: 1.,
-            a,
-        };
-        // `.thumbnail-bottom-bar`: the meta chip (hidden on hover) and the
-        // clipboard confirmation.
+        // `.thumbnail-bottom-bar`: the meta chip (fading out on hover) and
+        // the clipboard confirmation.
         let bottom = r.bottom - 8.;
-        if !hovered {
+        faded(dc, meta, || {
+            if meta <= 0. {
+                return Ok(());
+            }
             let meta = preview::card_metadata(card.entry.size_bytes);
             let text = g.text_sized(t, &meta, t.n("text-2xs"), "weight-regular", None)?;
             let h = t.n("text-2xs") * 1.3 + 6.;
@@ -1882,8 +1950,8 @@ impl Stack {
                 chip.left + t.n("s-3"),
                 chip.top + (h - text.height) / 2.,
                 t.color("glass-text"),
-            )?;
-        }
+            )
+        })?;
         if card.clipboard {
             let label = g.text_sized(
                 t,
@@ -1929,13 +1997,36 @@ impl Stack {
                 },
             )?;
         }
-        if !controls {
+        if controls <= 0. {
             return Ok(());
         }
+        faded(dc, controls, || {
+            self.paint_controls(dc, g, t, index, r, controls)
+        })
+    }
 
+    /// The hover controls at fade `progress`: the top row slides down 3 DIPs
+    /// as it fades in (`.thumbnail-top-actions`).
+    fn paint_controls(
+        &self,
+        dc: &ID2D1DeviceContext,
+        g: &Gfx,
+        t: &Tokens,
+        index: usize,
+        r: Rect,
+        progress: f32,
+    ) -> Result<()> {
+        let card = &self.cards[index];
+        let white = |a: f32| D2D1_COLOR_F {
+            r: 1.,
+            g: 1.,
+            b: 1.,
+            a,
+        };
+        let slide = -3. * (1. - progress);
         for (hit, b) in self.top_controls(index, r) {
             let hot = self.hot == Some(hit) && !card.busy;
-            let lift = if hot { -1. } else { 0. };
+            let lift = slide + if hot { -1. } else { 0. };
             let b = rect(b.left, b.top + lift, b.right, b.bottom + lift);
             let delete = matches!(hit, Hit::Delete(_));
             let fill = if hot && delete {
@@ -2255,13 +2346,13 @@ fn outside(
 }
 
 /// `object-fit: cover` into the rounded `r`; hovered cards scale by 1.015
-/// and blur by 2 px (`.thumbnail-card:hover img`). Without the blur effect
-/// (Wine) the image is drawn sharp.
+/// and blur by 2 px (`.thumbnail-card:hover img`), `filter` and `zoom` of
+/// the way there. Without the blur effect (Wine) the image is drawn sharp.
 fn cover(
     dc: &ID2D1DeviceContext,
     image: &ID2D1Bitmap1,
     (r, radius): (Rect, f32),
-    hovered: bool,
+    (filter, zoom): (f32, f32),
 ) -> Result<()> {
     let size = unsafe { image.GetSize() };
     if size.width <= 0. || size.height <= 0. {
@@ -2269,9 +2360,8 @@ fn cover(
     }
     let (w, h) = (r.right - r.left, r.bottom - r.top);
     let mut k = (w / size.width).max(h / size.height);
-    if hovered {
-        k *= preview_chrome::HOVER_MEDIA_SCALE as f32;
-    }
+    k *= 1. + (preview_chrome::HOVER_MEDIA_SCALE as f32 - 1.) * zoom;
+    let hovered = filter > 0.;
     let placed = Matrix3x2 {
         M11: k,
         M12: 0.,
@@ -2289,7 +2379,7 @@ fn cover(
         let blurred = hovered.then(|| -> Result<ID2D1Brush> {
             let effect = dc.CreateEffect(&CLSID_D2D1GaussianBlur)?;
             effect.SetInput(0, image, true);
-            let deviation = preview_chrome::HOVER_MEDIA_BLUR as f32 / k;
+            let deviation = preview_chrome::HOVER_MEDIA_BLUR as f32 * filter / k;
             effect.SetValue(
                 D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION.0 as u32,
                 D2D1_PROPERTY_TYPE_FLOAT,
@@ -2864,6 +2954,7 @@ impl Previews {
         };
         self.stack.sync_cues();
         self.stack.sync_focus();
+        self.stack.sync_hover(now_ms());
         self.stack.sync_tips(&self.tokens, crate::tooltip::now_ms());
         let (stack, g, t) = (&self.stack, &self.g, &self.tokens);
         gfx::draw_surface(surface, self.px, (self.scale, self.scale), 0., |dc| {
@@ -3926,6 +4017,54 @@ mod tests {
         assert_eq!((label, above), ("Delete", true));
         assert_eq!(anchor, controls[1].1);
         assert!(!stack(P::TopRight, &[true]).tip(Hit::Close(0)).unwrap().2);
+    }
+
+    #[test]
+    fn the_hover_look_eases_each_channel_and_reverses_from_where_it_is() {
+        use captures_settings::MiniPreviewPlacement as P;
+        let fade = HoverFade {
+            on: true,
+            at: 0.,
+            from: [0.; 4],
+        };
+        // At 160 ms the controls (0.16 s) and chip (0.15 s) are in, the
+        // filter (0.18 s) nearly and the zoom (0.22 s) not yet.
+        let [filter, zoom, controls, chip] = fade.values(160.);
+        assert_eq!((controls, chip), (1., 1.));
+        assert!(filter > 0.95 && filter < 1., "{filter}");
+        assert!(zoom > 0.8 && zoom < filter, "{zoom}");
+        assert_eq!(fade.values(220.), [1.; 4]);
+        assert!(fade.running(200.) && !fade.running(220.));
+
+        let mut s = stack(P::BottomLeft, &[true, false]);
+        s.motion = Some((
+            Tween {
+                duration_ms: 1.,
+                easing: captures_app::motion::CubicBezier::LINEAR,
+            },
+            Tween {
+                duration_ms: 1.,
+                easing: captures_app::motion::CubicBezier::LINEAR,
+            },
+        ));
+        let card = s.card_rect(0).unwrap();
+        s.pointer(Some((card.left + 40., card.top + 60.)));
+        s.sync_hover(1_000.);
+        assert!(s.hover_fades["a0"].on);
+        // Leaving 90 ms in reverses from the partial look, not from rest.
+        s.pointer(None);
+        s.sync_hover(1_090.);
+        let leaving = s.hover_fades["a0"];
+        assert!(!leaving.on);
+        assert!(
+            leaving.from[0] > 0.3 && leaving.from[0] < 0.9,
+            "{:?}",
+            leaving.from
+        );
+        assert_eq!(leaving.values(1_090.), leaving.from);
+        // Settled out, it is forgotten.
+        s.sync_hover(1_400.);
+        assert!(s.hover_fades.is_empty());
     }
 
     #[test]
