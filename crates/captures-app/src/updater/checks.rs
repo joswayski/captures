@@ -100,6 +100,18 @@ pub struct Presentation {
     pub failed: bool,
     pub detail: &'static str,
     pub acquisition: Option<crate::update_notice::Button>,
+    /// The tray or menu-bar update row.
+    pub tray: TrayItem,
+}
+
+/// Shipping `tray_update_item` and `tray_tooltip`: an available or installing
+/// update is pinned to the top of the tray menu with its state as the label.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct TrayItem {
+    pub label: String,
+    pub enabled: bool,
+    pub pin_first: bool,
+    pub tooltip: &'static str,
 }
 
 enum Job {
@@ -732,6 +744,60 @@ impl CheckWorker {
         })
     }
 
+    fn tray_item(&self) -> TrayItem {
+        let available = |release: &ReleaseInfo| {
+            let changes: usize = release
+                .changelog
+                .iter()
+                .filter_map(|entry| entry.notes.as_deref())
+                .map(|notes| crate::update_notice::release_note_items(notes).len())
+                .sum();
+            let changes = if changes > 0 {
+                changes
+            } else {
+                release.notes.as_deref().map_or(0, |notes| {
+                    crate::update_notice::release_note_items(notes).len()
+                })
+            };
+            TrayItem {
+                label: match changes {
+                    0 => "Update Available".into(),
+                    1 => "Update Available — 1 change".into(),
+                    count => format!("Update Available — {count} changes"),
+                },
+                enabled: true,
+                pin_first: true,
+                tooltip: "Captures — Update available",
+            }
+        };
+        match &self.status {
+            // A verified package still waits for Restart and install.
+            CheckStatus::Available { release } | CheckStatus::Staged { release, .. } => {
+                available(release)
+            }
+            CheckStatus::Downloading { .. }
+            | CheckStatus::Verifying { .. }
+            | CheckStatus::Cancelling { .. } => TrayItem {
+                label: "Installing Update…".into(),
+                enabled: false,
+                pin_first: true,
+                tooltip: "Captures — Installing update",
+            },
+            CheckStatus::Checking => TrayItem {
+                label: "Checking for Updates…".into(),
+                enabled: false,
+                pin_first: false,
+                tooltip: "Captures",
+            },
+            _ => TrayItem {
+                label: "Check for Updates…".into(),
+                enabled: self.thread.is_some(),
+                pin_first: false,
+                tooltip: "Captures",
+            },
+        }
+    }
+
     pub fn presentation(&self) -> Presentation {
         let status = match &self.status {
             CheckStatus::Idle => "Not checked".into(),
@@ -780,6 +846,7 @@ impl CheckWorker {
                 "Verifies signed native development metadata. No download, installation or update channel is enabled."
             },
             acquisition: self.acquisition(),
+            tray: self.tray_item(),
         };
         if self.preview {
             // Shipping's Preferences identity, like the Win32/GTK cards.
@@ -937,6 +1004,68 @@ mod tests {
             worker.shutdown();
             server.join().unwrap();
         }
+    }
+
+    #[test]
+    fn tray_item_pins_available_and_installing_updates_with_shipping_labels() {
+        let (key, _, _) = signed(&manifest("https://example.invalid/full"));
+        let (mut worker, _) = worker("https://example.invalid/manifest", &key, "2026.9.99");
+        let release = |notes: Option<&str>, changelog: Vec<(&str, &str)>| ReleaseInfo {
+            renderer: Renderer::Wgpu,
+            target: Target::LinuxX64,
+            version: "2026.10.50".into(),
+            notes: notes.map(Into::into),
+            size: 10_000,
+            changelog: changelog
+                .into_iter()
+                .map(|(version, notes)| crate::update_notice::ChangelogEntry {
+                    version: version.into(),
+                    display_version: version.into(),
+                    notes: Some(notes.into()),
+                })
+                .collect(),
+        };
+        assert_eq!(worker.presentation().tray.label, "Check for Updates…");
+        assert!(!worker.presentation().tray.pin_first);
+        // Changelog entries win over the release notes; first-contribution
+        // lines are not product changes.
+        worker.status = CheckStatus::Available {
+            release: release(
+                Some("* one\n* two\n* three"),
+                vec![
+                    ("2026.10.50", "## What's Changed\n* Fix a\n* Fix b"),
+                    (
+                        "2026.10.49",
+                        "* Fix c\n* @x made their first contribution in https://github.com/joswayski/captures/pull/1",
+                    ),
+                ],
+            ),
+        };
+        let tray = worker.presentation().tray;
+        assert_eq!(tray.label, "Update Available — 3 changes");
+        assert!(tray.enabled && tray.pin_first);
+        assert_eq!(tray.tooltip, "Captures — Update available");
+        worker.status = CheckStatus::Available {
+            release: release(Some("* only"), Vec::new()),
+        };
+        assert_eq!(
+            worker.presentation().tray.label,
+            "Update Available — 1 change"
+        );
+        worker.status = CheckStatus::Downloading {
+            release: release(None, Vec::new()),
+            downloaded: 1,
+            total: 2,
+        };
+        let tray = worker.presentation().tray;
+        assert_eq!(tray.label, "Installing Update…");
+        assert!(!tray.enabled && tray.pin_first);
+        assert_eq!(tray.tooltip, "Captures — Installing update");
+        worker.status = CheckStatus::Checking;
+        let tray = worker.presentation().tray;
+        assert_eq!(tray.label, "Checking for Updates…");
+        assert!(!tray.enabled && !tray.pin_first);
+        worker.shutdown();
     }
 
     #[test]

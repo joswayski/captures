@@ -42,6 +42,29 @@ final class StatusItemTests: XCTestCase {
         XCTAssertEqual(actions, ["new", "history", "folder", "preferences", "feedback", "quit"])
     }
 
+    func testAvailableAndInstallingUpdatesArePinnedFirstLikeShipping() {
+        _ = NSApplication.shared
+        var checks = 0
+        let target = LiveStatusActions(newCapture: {}, capture: { _ in }, history: {}, preferences: {},
+                                       checkUpdates: { checks += 1 }, outputFolder: {}, quit: {})
+        target.updateItem = ("Update Available — 3 changes", true, true)
+        var menu = target.makeMenu()
+        XCTAssertEqual(menu.items.map(\.title), ["Update Available — 3 changes", "", "New Capture…",
+            "Screenshot Region", "Screenshot Window", "Screenshot Display", "Record Region",
+            "Record Window", "Record Display", "", "Capture History…", "Open Save Location",
+            "Preferences", "Send Feedback…", "", "Quit Captures"])
+        menu.performActionForItem(at: 0)
+        XCTAssertEqual(checks, 1)
+        target.updateItem = ("Installing Update…", false, true)
+        menu = target.makeMenu()
+        XCTAssertEqual(menu.items[0].title, "Installing Update…")
+        XCTAssertFalse(menu.items[0].isEnabled)
+        target.updateItem = ("Checking for Updates…", false, false)
+        menu = target.makeMenu()
+        XCTAssertEqual(menu.items[12].title, "Checking for Updates…", "an ordinary check stays in place")
+        XCTAssertFalse(menu.items[12].isEnabled)
+    }
+
     func testLiveRootCloseHidesWithoutClosingPreviewsOrTerminating() {
         _ = NSApplication.shared
         let root = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 400),

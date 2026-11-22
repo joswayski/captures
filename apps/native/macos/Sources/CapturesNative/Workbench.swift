@@ -529,6 +529,8 @@ final class LiveStatusActions: NSObject {
     /// `captureShortcutSignature` order: New Capture, Screenshot Region/Window/
     /// Display, Record Region/Window/Display. Shown as key equivalents.
     var shortcuts: [String] = []
+    /// Shipping `tray_update_item`: nil keeps "Check for Updates…" in place.
+    var updateItem: (label: String, enabled: Bool, pinFirst: Bool)?
 
     init(newCapture: @escaping () -> Void,
          capture: @escaping (StillCaptureKind) -> Void,
@@ -561,6 +563,13 @@ final class LiveStatusActions: NSObject {
     /// through any capture item or New Capture, as in the shipping tray.
     func makeMenu() -> NSMenu {
         let menu = NSMenu()
+        let updates = NSMenuItem(title: updateItem?.label ?? "Check for Updates…",
+                                 action: #selector(checkUpdates), keyEquivalent: "")
+        updates.target = self
+        updates.isEnabled = updateCheckAction != nil && updateItem?.enabled != false
+        // An available or installing update moves to the top, like shipping.
+        let pinned = updateItem?.pinFirst == true
+        if pinned { menu.addItem(updates); menu.addItem(.separator()) }
         add("New Capture…", action: #selector(newCapture), shortcut: 0, to: menu)
         add("Screenshot Region", action: #selector(captureRegion), shortcut: 1, to: menu)
         add("Screenshot Window", action: #selector(captureWindow), shortcut: 2, to: menu)
@@ -573,10 +582,7 @@ final class LiveStatusActions: NSObject {
         add("Open Save Location", action: #selector(openOutputFolder), to: menu)
         add("Preferences", action: #selector(showPreferences), to: menu)
         add("Send Feedback…", action: #selector(sendFeedback), to: menu)
-        let updates = NSMenuItem(title: "Check for Updates…", action: #selector(checkUpdates), keyEquivalent: "")
-        updates.target = self
-        updates.isEnabled = updateCheckAction != nil
-        menu.addItem(updates)
+        if !pinned { menu.addItem(updates) }
         menu.addItem(.separator())
         add("Quit Captures", action: #selector(quit), to: menu)
         menu.autoenablesItems = false
@@ -952,7 +958,8 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private var terminating = false
     private var terminationPending = false
     private var shutdownUpdateIntent: [String: Any]?
-    private var installUpdateRequested = false
+    private var installUpdateRequested = false { didSet { refreshStatusMenu() } }
+    private var statusMenuSignature: [String]?
     private var updateHealth: UpdateHealthCoordinator?
     private var onboardingReady = false
     private var onboardingWasPresented = false
@@ -997,6 +1004,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         options.nativeUpdateChecks?.didChange = { [weak self] in
             self?.preferencesController?.refreshUpdateChecks()
             self?.refreshLiveUpdateNotice()
+            self?.refreshStatusMenu()
         }
         options.nativeUpdateChecks?.requestInstallation = { [weak self] in
             guard let self, (self.options.previewChannel || self.options.nativeUpdateInstallSession != nil),
@@ -2020,6 +2028,12 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         }, checkUpdates: options.nativeUpdateChecks == nil ? nil : { [weak self] in
             guard let self, self.onboardingReady, !self.terminating, !self.captureBusy,
                   self.window.attachedSheet == nil else { return }
+            // Shipping `handle_tray_action`: an available update shows its notice.
+            if self.statusActions?.updateItem?.pinFirst == true {
+                self.refreshLiveUpdateNotice()
+                if self.updateNotice?.model.reveal() == true { return }
+                self.showPreferences(); self.preferencesController?.revealUpdates(); return
+            }
             self.showPreferences()
             self.options.nativeUpdateChecks?.check()
             self.preferencesController?.revealUpdates()
@@ -2030,9 +2044,33 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         })
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = item.button { configureStatusItemButton(button) }
-        item.menu = actions.makeMenu()
         statusActions = actions
         statusItem = item
+        refreshStatusMenu(force: true)
+    }
+
+    /// Rebuilds the menu-bar menu when its shortcuts or update row change;
+    /// the button's tooltip follows the update state (shipping `tray_tooltip`).
+    private func refreshStatusMenu(force: Bool = false) {
+        guard let statusActions, let statusItem else { return }
+        let tray = options.nativeUpdateChecks?.presentation["tray"] as? [String: Any]
+        let item: (label: String, enabled: Bool, pinFirst: Bool)?
+        let tooltip: String
+        if installUpdateRequested {
+            item = ("Restarting Captures…", false, true); tooltip = "Captures — Installing update"
+        } else if let tray, let label = tray["label"] as? String {
+            item = (label, tray["enabled"] as? Bool ?? true, tray["pin_first"] as? Bool ?? false)
+            tooltip = tray["tooltip"] as? String ?? "Captures"
+        } else {
+            item = nil; tooltip = "Captures"
+        }
+        let signature = statusActions.shortcuts + [item?.label ?? "", "\(item?.enabled ?? true)",
+                                                    "\(item?.pinFirst ?? false)", tooltip]
+        guard force || signature != statusMenuSignature else { return }
+        statusMenuSignature = signature
+        statusActions.updateItem = item
+        statusItem.menu = statusActions.makeMenu()
+        statusItem.button?.toolTip = tooltip
     }
 
     private func installCaptureShortcuts() {
@@ -2077,7 +2115,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             }
             shortcutSignature = signature
             statusActions?.shortcuts = signature
-            if let statusActions { statusItem?.menu = statusActions.makeMenu() }
+            refreshStatusMenu()
             updateShortcutState()
         } catch {
             reportShortcutError(error)

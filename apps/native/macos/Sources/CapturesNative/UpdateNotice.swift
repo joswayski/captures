@@ -259,6 +259,13 @@ final class UpdateNoticeModel {
         changed()
     }
 
+    /// The menu bar's Update Available item shows the latest check again,
+    /// even after it was dismissed (shipping `show_update_notice`).
+    @discardableResult func reveal() -> Bool {
+        guard checkedPresentation != nil else { return false }
+        visible = true; changed(); return true
+    }
+
     func load(fixture: String) throws {
         guard let status = try transport.request(["operation": "fixture", "name": fixture])["status"] as? [String: Any]
         else { throw AppBridgeError.invalidResponse }
