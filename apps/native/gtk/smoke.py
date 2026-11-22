@@ -2314,6 +2314,12 @@ def recording(binary, scratch):
         wait(lambda: Atspi.Value.get_current_value(end) == 3967, "Trim end at 3.967 s")
         DESKTOP.key("Tab", "Tab", "End")
         wait(lambda: Atspi.Value.get_current_value(end) == 4000, "Trim end back at 4 s")
+        # The O trim left the playhead 33 ms before the end, where playback
+        # shows one frame and ends before a poll can see it. Home from Play
+        # seeks to the trim start; Trim start taking focus from the Tab after
+        # it shows the seek was handled.
+        DESKTOP.key("shift+Tab", "shift+Tab", "Home", "Tab")
+        wait(lambda: has_state(start, Atspi.StateType.FOCUSED), "Home handled from Play")
         play = find(editor, "push button", "Play preview")[0]
         press(play)
         wait(lambda: play.get_name() == "Pause preview", "playback to start")
