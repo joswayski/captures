@@ -1091,17 +1091,6 @@ fn sync_notice() {
     }
 }
 
-/// The update notice's window while it is open, so a capture can move it
-/// out of the still and back.
-pub fn notice_window() -> Option<gtk::Window> {
-    NOTICE.with(|notice| {
-        notice
-            .borrow()
-            .as_ref()
-            .map(|notice| notice.window.clone().upcast())
-    })
-}
-
 /// Open the floating notice without taking focus, as shipping's
 /// non-focusable notice window.
 fn open_notice(host: &Host, status: UpdateStatus, installing: bool) {

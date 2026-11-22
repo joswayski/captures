@@ -216,7 +216,7 @@ Closing a recording editor shows shipping's "Recording ready" notice in the
 top-right corner for 15 s (`--scene recording-ready --artifact ID` renders it):
 Save file keeps a copy in the Captures folder, then it reads "Recording saved"
 with Show in Folder. A still on X11 leaves out the launch and Recording ready
-notices and steps a visible update notice aside until it is taken; turning
+notices but keeps a visible update notice, so it can be captured; turning
 mini previews off or changing their placement applies to an open stack at once.
 The tray's Check for Updates shows the notice for an update in hand; otherwise
 it checks and shows the notice, or says up to date or why the check failed. `--update-card NAME` (`idle`, `checking`,

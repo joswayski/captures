@@ -102,18 +102,21 @@ final class UpdateCheckModel {
 
     func startPreviewChecks() {
         guard previewTimer == nil else { return }
-        check(automatically: true)
+        check(quietly: true)
         let timer = Timer(timeInterval: 300, repeats: true) { [weak self] _ in
             guard let self, self.acquisition == nil else { return }
-            self.check(automatically: true)
+            self.check(quietly: true)
         }
         previewTimer = timer
         RunLoop.main.add(timer, forMode: .common)
     }
 
-    @discardableResult func check(automatically: Bool = false) -> Bool {
+    /// A quiet check (background, or one Preferences reports in its Updates
+    /// card) raises the notice only for an available update, as on Windows;
+    /// the notice's own Check again reports every result in the notice.
+    @discardableResult func check(quietly: Bool = false) -> Bool {
         guard enabled else { return false }
-        return command("check", automatic: automatically)
+        return command("check", automatic: quietly)
     }
 
     var acquisition: UpdateNoticeButton? { UpdateNoticeButton(presentation["acquisition"]) }
@@ -126,7 +129,7 @@ final class UpdateCheckModel {
     /// installs in one step, so a verified download goes on to install.
     @discardableResult func performCardStep() -> Bool {
         switch card?["step"] as? String {
-        case "check": return check()
+        case "check": return check(quietly: true)
         case "download":
             installAfterDownload = acquire(.downloadVerify)
             return installAfterDownload

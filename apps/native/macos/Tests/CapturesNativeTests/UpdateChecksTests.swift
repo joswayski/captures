@@ -13,9 +13,12 @@ final class UpdateChecksTests: XCTestCase {
         var rawStatus: [String: Any] = ["state": "idle"]
         var installRestart: [String: Any]?
         var card: [String: Any]?
+        /// Each check's `automatic` flag: quiet checks raise only an available notice.
+        var quietChecks: [Bool] = []
         func request(_ object: [String: Any]) throws -> [String: Any] {
             let operation = object.string("operation")
             operations.append(operation)
+            if operation == "check" { quietChecks.append(object["automatic"] as? Bool ?? false) }
             if operation == "install_preview" { installRestart = object["restart"] as? [String: Any] }
             if operation == "poll" && pollError { throw AppBridgeError.invalidResponse }
             if operation == "check" { checking = true; status = "Checking signed metadata…" }
@@ -196,6 +199,12 @@ final class UpdateChecksTests: XCTestCase {
         model.setShowChangelog(false) // An idle model refreshes through an explicit poll.
         XCTAssertEqual(try XCTUnwrap(find("updates.check", in: root) as? CaptureButton).title, "Try again")
         try renderCard(root, "preferences-updates-failed-dark")
+        // Preferences shows its own check's result; it never asks for the
+        // menu bar notice's "up to date" report.
+        transport.card = card("Check for updates", "check", heading: "Captures is up to date")
+        model.setShowChangelog(true)
+        try XCTUnwrap(find("updates.check", in: root) as? CaptureButton).performClick(nil)
+        XCTAssertEqual(transport.quietChecks, [true])
         controller.flush()
     }
 

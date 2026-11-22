@@ -2045,7 +2045,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
             y: top, card: card, keepInline: true)
         let button = CaptureButton(copy?.string("action") ?? PreferencesPolicy.text("updates.action"),
             frame: NSRect(x: layout.control.minX, y: layout.control.minY, width: width, height: tokens.number("h-md")),
-            tokens: tokens, action: { [weak self] in _ = self?.updateChecks?.check() })
+            tokens: tokens, action: { [weak self] in _ = self?.updateChecks?.check(quietly: true) })
         button.isEnabled = updateChecks?.enabled == true
         button.identifier = NSUserInterfaceItemIdentifier("updates.check")
         button.toolTip = copy?.string("detail") ?? PreferencesPolicy.text("updates.detail")

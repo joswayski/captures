@@ -2082,10 +2082,13 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
 
     private func refreshLiveUpdateNotice() {
         guard options.live, let checks = options.nativeUpdateChecks else { return }
-        let suspended = !onboardingReady || terminating || captureBusy || permissionSheet != nil
+        let suspended = !onboardingReady || terminating || permissionSheet != nil
         guard !suspended else {
             updateNotice?.setSuspended(true); return
         }
+        // A capture leaves an open notice on screen, so it can be captured
+        // like any window (as on Windows), but holds a new one until it ends.
+        if captureBusy, updateNotice?.model.visible != true { return }
         guard let presentation = checks.notice else { return }
         if updateNotice == nil {
             let controller = UpdateNoticeController(tokens: tokens, tray: "none")
@@ -2155,8 +2158,9 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                 if self.updateNotice?.model.reveal() == true { return }
                 self.showPreferences(); self.preferencesController?.revealUpdates(); return
             }
+            // Preferences' Updates card reports the result (as on Windows).
             self.showPreferences()
-            self.options.nativeUpdateChecks?.check()
+            self.options.nativeUpdateChecks?.check(quietly: true)
             self.preferencesController?.revealUpdates()
         }, outputFolder: { [weak self] in
             self?.openOutputFolder()

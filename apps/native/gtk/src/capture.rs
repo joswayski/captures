@@ -102,9 +102,9 @@ impl Host {
     /// (and show again afterwards) before a still is taken. The portal path
     /// unmaps every Captures window, as the wgpu host, so consent and the
     /// still never include them. Elsewhere the preview stack leaves unless
-    /// it belongs in captures, a visible update notice steps aside until the
-    /// capture ends, and the launch and Recording ready notices close for
-    /// good. Linux cannot keep
+    /// it belongs in captures, and the launch and Recording ready notices
+    /// close for good. A visible update notice stays, so it can be captured
+    /// like any window (as on Windows). Linux cannot keep
     /// the recording controls out (shipping `canExcludeRecordingControls`),
     /// so they stay.
     pub(crate) fn conceal_for_snapshot(
@@ -119,7 +119,6 @@ impl Host {
                 notice.close();
             }
         }
-        let update = crate::updates::notice_window();
         // Shipping hides the region guide while a screenshot is taken beside
         // the take, then shows it again.
         let guide = self
@@ -133,7 +132,6 @@ impl Host {
             .filter(|window| window.is_visible())
             .filter(|window| {
                 portal
-                    || update.as_ref() == Some(window)
                     || guide.as_ref() == Some(window)
                     || (!settings.include_mini_previews_in_captures
                         && self.previews.borrow().as_ref().is_some_and(|previews| {
