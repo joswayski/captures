@@ -157,8 +157,8 @@ enum WindowSelectionChoice: Equatable {
 
 private final class WindowSelectionCanvas: NSView {
     weak var selector: WindowSelectionView?
+    let chrome = SelectionChromeView()
     override var isFlipped: Bool { true }
-    override func draw(_ dirtyRect: NSRect) { selector?.drawSelection() }
     override func mouseMoved(with event: NSEvent) { selector?.mouseMoved(with: event) }
     override func mouseDown(with event: NSEvent) { selector?.mouseDown(with: event) }
 }
@@ -174,6 +174,7 @@ final class WindowSelectionView: NSView {
     private let displayCornerRadius: CGFloat
     private let hitTest: HitTest
     private let canvas = WindowSelectionCanvas()
+    private let shade: CaptureShadeView
     private let toolbar = NSView()
     private let targetName = NSTextField(labelWithString: "")
     private let guidance: CaptureGuidanceChip
@@ -194,6 +195,7 @@ final class WindowSelectionView: NSView {
         self.displayCornerRadius = max(0, displayCornerRadius)
         self.hitTest = hitTest; self.confirm = confirm; self.cancel = cancel
         guidance = CaptureGuidanceChip(tokens: tokens)
+        shade = CaptureShadeView(frame: NSRect(origin: .zero, size: frame.size), tokens: tokens)
         super.init(frame: frame)
         wantsLayer = true
         layer?.backgroundColor = NSColor.clear.cgColor
@@ -205,8 +207,13 @@ final class WindowSelectionView: NSView {
             background.setAccessibilityElement(false)
             addSubview(background)
         }
+        shade.shape = { [weak self] in self?.shadeShape ?? CaptureShadeView.Shape(hole: nil, radius: 0, color: .clear) }
+        addSubview(shade)
         canvas.frame = bounds; canvas.wantsLayer = true; canvas.selector = self
         canvas.setAccessibilityElement(false); addSubview(canvas)
+        canvas.chrome.wantsLayer = true
+        canvas.chrome.paint = { [weak self] in self?.drawSelection() }
+        canvas.addSubview(canvas.chrome)
 
         let gap = tokens.number("s-4"), controlHeight = tokens.number("h-lg")
         let toolbarWidth = min(frame.width - gap * 4, 620)
@@ -296,7 +303,8 @@ final class WindowSelectionView: NSView {
         targetName.stringValue = choiceName
         targetName.setAccessibilityLabel("Target: \(choiceName)")
         setAccessibilityValue(choiceName)
-        canvas.needsDisplay = true
+        canvas.chrome.cover(chip.map { chipLayout($0.text, at: $0.origin, maxWidth: $0.maxWidth).frame })
+        shade.update()
         captureButton.isEnabled = choice != nil; captureButton.needsDisplay = true
         // Shipping: the desktop and shell chrome switch to the display copy.
         var hint = CaptureGuidanceCopy.hint
@@ -323,39 +331,49 @@ final class WindowSelectionView: NSView {
         return targets[index].chipTitle
     }
 
-    fileprivate func drawSelection() {
-        guard hasHoverTarget else { return }
+    /// The chip `drawSelection` paints: inside the hovered window, clipped to
+    /// its corners, or at the display's top-left.
+    private var chip: (text: String, origin: NSPoint, maxWidth: CGFloat, clip: NSBezierPath?)? {
+        guard hasHoverTarget else { return nil }
+        if case .window(let index, _) = activeChoice {
+            let target = targets[index]
+            let radius = min(target.cornerRadius, target.rect.width / 2, target.rect.height / 2)
+            let margin = tokens.number("s-2")
+            return (target.chipTitle, NSPoint(x: target.rect.minX + margin, y: target.rect.minY + margin),
+                target.rect.width - 8, NSBezierPath(roundedRect: target.rect, xRadius: radius, yRadius: radius))
+        }
+        let inset = tokens.number("s-4")
+        return ("Entire display", NSPoint(x: inset, y: inset), min(360, bounds.width - 8), nil)
+    }
+
+    /// The veil, accent tint and outer 2 pt ring around a hovered window (so
+    /// the ring never covers the window's own edge), or the display outline,
+    /// as vector layers: only the chip is drawn into a backing store.
+    private var shadeShape: CaptureShadeView.Shape {
+        guard hasHoverTarget else { return CaptureShadeView.Shape(hole: nil, radius: 0, color: .clear) }
         let accent = tokens.color("theme-accent")
         if case .window(let index, _) = activeChoice {
             let target = targets[index]
             let radius = min(target.cornerRadius, target.rect.width / 2, target.rect.height / 2)
-            let hole = NSBezierPath(roundedRect: target.rect, xRadius: radius, yRadius: radius)
-            let veil = NSBezierPath(rect: bounds)
-            veil.append(hole)
-            veil.windingRule = .evenOdd; tokens.color("capture-shade-window").setFill(); veil.fill()
-            accent.withAlphaComponent(0.14).setFill(); hole.fill()
-            // An outer 2 pt ring, so it never covers the window's own edge.
-            let ring = NSBezierPath(roundedRect: target.rect.insetBy(dx: -1, dy: -1),
-                xRadius: radius + 1, yRadius: radius + 1)
-            ring.lineWidth = 2; accent.setStroke(); ring.stroke()
-            NSGraphicsContext.saveGraphicsState()
-            hole.addClip()
-            let margin = tokens.number("s-2")
-            drawChip(target.chipTitle, at: NSPoint(x: target.rect.minX + margin, y: target.rect.minY + margin),
-                maxWidth: target.rect.width - 8)
-            NSGraphicsContext.restoreGraphicsState()
-        } else {
-            // `.capture-display-outline`: inset 2 pt ring following the display corners.
-            let radius = max(0, displayCornerRadius - 1)
-            let outline = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: radius, yRadius: radius)
-            outline.lineWidth = 2; accent.setStroke(); outline.stroke()
-            let inset = tokens.number("s-4")
-            drawChip("Entire display", at: NSPoint(x: inset, y: inset), maxWidth: min(360, bounds.width - 8))
+            return CaptureShadeView.Shape(hole: target.rect, radius: radius,
+                color: tokens.color("capture-shade-window"), tint: accent.withAlphaComponent(0.14),
+                ring: (target.rect.insetBy(dx: -1, dy: -1), radius + 1, 2, accent))
         }
+        // `.capture-display-outline`: inset 2 pt ring following the display corners.
+        return CaptureShadeView.Shape(hole: nil, radius: 0, color: .clear,
+            ring: (bounds.insetBy(dx: 1, dy: 1), max(0, displayCornerRadius - 1), 2, accent))
     }
 
-    /// Shipping glass chip: one ellipsized `--text-xs` medium line.
-    private func drawChip(_ text: String, at origin: NSPoint, maxWidth: CGFloat) {
+    fileprivate func drawSelection() {
+        guard let chip else { return }
+        NSGraphicsContext.saveGraphicsState()
+        chip.clip?.addClip()
+        drawChip(chip.text, at: chip.origin, maxWidth: chip.maxWidth)
+        NSGraphicsContext.restoreGraphicsState()
+    }
+
+    private func chipLayout(_ text: String, at origin: NSPoint, maxWidth: CGFloat)
+        -> (string: NSAttributedString, frame: NSRect, textWidth: CGFloat, textHeight: CGFloat) {
         let style = NSMutableParagraphStyle(); style.lineBreakMode = .byTruncatingTail
         let string = NSAttributedString(string: text, attributes: [
             .font: NSFont.systemFont(ofSize: tokens.number("text-xs"), weight: .medium),
@@ -364,10 +382,17 @@ final class WindowSelectionView: NSView {
         let padX = tokens.number("s-3"), padY = tokens.number("s-2")
         let size = string.size()
         let textWidth = max(0, min(ceil(size.width), maxWidth - padX * 2))
-        let chip = NSRect(x: origin.x, y: origin.y, width: textWidth + padX * 2, height: ceil(size.height) + padY * 2)
+        return (string, NSRect(x: origin.x, y: origin.y, width: textWidth + padX * 2,
+            height: ceil(size.height) + padY * 2), textWidth, ceil(size.height))
+    }
+
+    /// Shipping glass chip: one ellipsized `--text-xs` medium line.
+    private func drawChip(_ text: String, at origin: NSPoint, maxWidth: CGFloat) {
+        let (string, chip, textWidth, textHeight) = chipLayout(text, at: origin, maxWidth: maxWidth)
+        let padX = tokens.number("s-3"), padY = tokens.number("s-2")
         tokens.color("glass-strong").setFill()
         NSBezierPath(roundedRect: chip, xRadius: tokens.number("r-sm"), yRadius: tokens.number("r-sm")).fill()
-        string.draw(with: NSRect(x: chip.minX + padX, y: chip.minY + padY, width: textWidth, height: ceil(size.height)),
+        string.draw(with: NSRect(x: chip.minX + padX, y: chip.minY + padY, width: textWidth, height: textHeight),
             options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
     }
 }

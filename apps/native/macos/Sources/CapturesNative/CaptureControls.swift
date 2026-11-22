@@ -1615,7 +1615,7 @@ final class UnifiedCaptureSelectionView: NSView {
             background.imageScaling = .scaleAxesIndependently
             background.setAccessibilityElement(false); addSubview(background)
         }
-        shade.drawShade = { [weak self] in self?.drawShade() }
+        shade.shape = { [weak self] in self?.shadeShape ?? CaptureShadeView.Shape(hole: nil, radius: 0, color: .clear) }
         shade.fadesOnReveal = { [weak self] in self?.target != .display }
         addSubview(shade)
         shade.fadeInOnReveal()
@@ -1910,7 +1910,7 @@ final class UnifiedCaptureSelectionView: NSView {
                 width: width, height: height)
         }
         selectionLabel.setAccessibilityLabel(label)
-        canvas.needsDisplay = true; shade.needsDisplay = true
+        canvas.needsDisplay = true; shade.update()
         canvas.discardCursorRects(); canvas.resetCursorRects()
     }
 
@@ -1955,15 +1955,11 @@ final class UnifiedCaptureSelectionView: NSView {
         }
     }
 
-    fileprivate func drawShade() {
+    private var shadeShape: CaptureShadeView.Shape {
         let (selectedRect, radius) = selectionShape
-        let veil = NSBezierPath(rect: bounds)
-        if let selectedRect {
-            veil.append(NSBezierPath(roundedRect: selectedRect, xRadius: radius, yRadius: radius))
-        }
         // Shipping `CaptureDim`: the window target waits under the stronger shade.
-        veil.windingRule = .evenOdd
-        tokens.color(target == .window ? "capture-shade-window" : "capture-shade").setFill(); veil.fill()
+        return CaptureShadeView.Shape(hole: selectedRect, radius: radius,
+            color: tokens.color(target == .window ? "capture-shade-window" : "capture-shade"))
     }
 
     /// The reveal fade of the dim, for tests.

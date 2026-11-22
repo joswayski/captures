@@ -47,10 +47,24 @@ struct RegionSelection {
 /// `ease-in-out`, and New Capture's region and window shades) while the frozen
 /// snapshot beneath is opaque from the first frame. The fade is
 /// presentation-only; the model opacity stays 1.
+///
+/// The dim is a vector `CAShapeLayer` rather than a `draw(_:)` fill: redrawing
+/// a full-screen backing store on every drag event made Core Animation hold
+/// several screen-sized surfaces at once, a 150 MB spike per capture.
 final class CaptureShadeView: NSView {
+    /// The clear cut-out (rounded by `radius`) in a full-view dim of `color`,
+    /// optionally tinted, and an optional stroked ring over the dim.
+    struct Shape {
+        var hole: NSRect?; var radius: CGFloat; var color: NSColor
+        var tint: NSColor? = nil
+        var ring: (rect: NSRect, radius: CGFloat, width: CGFloat, color: NSColor)? = nil
+    }
     private let tokens: Tokens
+    private let veil = CAShapeLayer()
+    private let tint = CAShapeLayer()
+    private let ring = CAShapeLayer()
     private var pendingFade = false
-    var drawShade: () -> Void = {}
+    var shape: () -> Shape = { Shape(hole: nil, radius: 0, color: .clear) }
     /// Whether the dim on screen at reveal fades (New Capture's Full screen
     /// shade does not).
     var fadesOnReveal: () -> Bool = { true }
@@ -60,11 +74,38 @@ final class CaptureShadeView: NSView {
         self.tokens = tokens
         super.init(frame: frame)
         wantsLayer = true
+        veil.fillRule = .evenOdd
+        ring.fillColor = nil
+        for shape in [veil, tint, ring] {
+            shape.actions = ["path": NSNull(), "fillColor": NSNull(), "strokeColor": NSNull(),
+                "lineWidth": NSNull(), "bounds": NSNull(), "position": NSNull(), "hidden": NSNull()]
+            layer?.addSublayer(shape)
+        }
         setAccessibilityElement(false)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    override func draw(_ dirtyRect: NSRect) { drawShade() }
+    /// Re-reads `shape`; call wherever the dim used to be marked for display.
+    func update() {
+        let current = shape()
+        func rounded(_ rect: NSRect, _ radius: CGFloat) -> CGPath {
+            let radius = max(0, min(radius, rect.width / 2, rect.height / 2))
+            return CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil)
+        }
+        let path = CGMutablePath()
+        path.addRect(bounds)
+        if let hole = current.hole { path.addPath(rounded(hole, current.radius)) }
+        veil.frame = bounds; veil.path = path; veil.fillColor = current.color.cgColor
+        tint.frame = bounds; tint.isHidden = current.tint == nil || current.hole == nil
+        if let color = current.tint, let hole = current.hole {
+            tint.path = rounded(hole, current.radius); tint.fillColor = color.cgColor
+        }
+        ring.frame = bounds; ring.isHidden = current.ring == nil
+        if let spec = current.ring {
+            ring.path = rounded(spec.rect, spec.radius); ring.lineWidth = spec.width
+            ring.strokeColor = spec.color.cgColor
+        }
+    }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     /// Fade the dim in once this view is on screen (skipped under Reduce Motion).
@@ -90,6 +131,29 @@ final class CaptureShadeView: NSView {
         fade.duration = tween.duration; fade.timingFunction = tween.timing
         fade.fillMode = .backwards
         layer.add(fade, forKey: "capture-shade-fade")
+    }
+}
+
+/// Paints selection chrome, in its superview's coordinates, from a view sized
+/// to just the area it covers (see `cover`), so hovering redraws a chip-sized
+/// backing store instead of a screen-sized one.
+final class SelectionChromeView: NSView {
+    var paint: () -> Void = {}
+    override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    /// Moves the view over `rect` (whole points, so the pixel grid matches a
+    /// full-screen paint) and repaints it.
+    func cover(_ rect: NSRect?) {
+        guard let superview, let rect else { isHidden = true; return }
+        let target = NSIntegralRect(rect.insetBy(dx: -4, dy: -4)).intersection(superview.bounds)
+        isHidden = target.isEmpty
+        if frame != target { frame = target }
+        needsDisplay = true
+    }
+    override func draw(_ dirtyRect: NSRect) {
+        let shift = NSAffineTransform()
+        shift.translateX(by: -frame.minX, yBy: -frame.minY); shift.concat()
+        paint()
     }
 }
 
@@ -138,7 +202,7 @@ final class RegionSelectionView: NSView {
             background.setAccessibilityElement(false)
             addSubview(background)
         }
-        shade.drawShade = { [weak self] in self?.drawShade() }
+        shade.shape = { [weak self] in self?.shadeShape ?? CaptureShadeView.Shape(hole: nil, radius: 0, color: .clear) }
         addSubview(shade)
         shade.fadeInOnReveal()
         canvas.frame = bounds; canvas.wantsLayer = true; canvas.selector = self
@@ -243,7 +307,7 @@ final class RegionSelectionView: NSView {
     override func resetCursorRects() { addCursorRect(bounds, cursor: .crosshair) }
 
     private func update() {
-        canvas.needsDisplay = true; shade.needsDisplay = true
+        canvas.needsDisplay = true; shade.update()
         guidance.setSuppressed(selection.mode != nil)
         captureButton.isEnabled = selection.capturable && selection.mode == nil
         for (index, button) in aspectButtons.enumerated() {
@@ -265,10 +329,9 @@ final class RegionSelectionView: NSView {
         captureButton.needsDisplay = true
     }
 
-    fileprivate func drawShade() {
-        let path = NSBezierPath(rect: bounds)
-        if selection.capturable { path.appendRect(selection.nsRect) }
-        path.windingRule = .evenOdd; tokens.color("capture-shade").setFill(); path.fill()
+    private var shadeShape: CaptureShadeView.Shape {
+        CaptureShadeView.Shape(hole: selection.capturable ? selection.nsRect : nil, radius: 0,
+            color: tokens.color("capture-shade"))
     }
 
     /// The reveal fade of the dim, for tests.
