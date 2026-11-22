@@ -2463,6 +2463,12 @@ final class ScreenshotEditorTests: XCTestCase {
         width.stringValue = "320"
         controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: width))
         XCTAssertEqual(height.stringValue, "179", "locked output dimensions use the document ratio")
+        // Shipping `NumberInput` steppers: one step up keeps the lock.
+        let stepper = try XCTUnwrap(width as? TokenNumberField)
+        stepper.step(up: true)
+        XCTAssertEqual(width.stringValue, "321"); XCTAssertEqual(height.stringValue, "180")
+        stepper.step(up: false)
+        XCTAssertEqual(width.stringValue, "320"); XCTAssertEqual(height.stringValue, "179")
         lock.performClick(nil)
         height.stringValue = "123"
         controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: height))
@@ -2489,6 +2495,13 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertTrue(labels(in: controller.root).contains("Invalid size"))
         settled()
         XCTAssertEqual(worker.compares.count, count, "invalid text must not overflow or encode")
+        let quality = try popup("Save quality", in: controller.root)
+        quality.selectItem(withTitle: "Maximum file size"); _ = quality.sendAction(quality.action, to: quality.target)
+        let maximum = try XCTUnwrap(try field("Maximum file size", in: controller.root) as? TokenNumberField)
+        maximum.step(up: true)
+        XCTAssertEqual(maximum.stringValue, "10.01", "megabytes step by 0.01 like shipping")
+        try render(controller.root, name: "screenshot-editor-output-maximum-stepper-light")
+
     }
 
     func testOutputCompressionPresetsAreTheOnlyQualityControlAndRetainTheirValue() throws {

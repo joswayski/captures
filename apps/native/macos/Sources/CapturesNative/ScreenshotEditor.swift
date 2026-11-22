@@ -1710,13 +1710,15 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var liveQueue: [(key: String, request: [String: Any])] = []
     private var liveSerial = 0
     /// Maximum file size as a decimal value in `outputMaximumUnit` (KB/MB/GB).
-    private let outputMaximumSize = NSTextField()
+    private let outputMaximumSize = TokenNumberField()
+    /// GB steps need five decimals (shipping's 0.00001 GB = 10 KB floor).
+    private let outputMaximumFormatter = NumberFormatter()
     private let outputMaximumUnit = ClosurePopUpButton()
     private var maximumUnit = RecordingFileSizeUnit.megabytes
     private var lastQualityIndex = 0
     private let outputCompressionPreset = ClosurePopUpButton()
-    private let outputWidth = NSTextField()
-    private let outputHeight = NSTextField()
+    private let outputWidth = TokenNumberField()
+    private let outputHeight = TokenNumberField()
     private let outputAspectLock = NSButton(checkboxWithTitle: "Lock aspect ratio", target: nil, action: nil)
     private let outputDimensions = NSTextField(labelWithString: "")
     private let outputFilename = NSTextField()
@@ -2004,6 +2006,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         editorNumberFormatter.maximumFractionDigits = 3
         editorNumberFormatter.minimum = -1_000_000
         editorNumberFormatter.maximum = 1_000_000
+        outputMaximumFormatter.locale = numberLocale
+        outputMaximumFormatter.numberStyle = .decimal
+        outputMaximumFormatter.usesGroupingSeparator = false
+        outputMaximumFormatter.maximumFractionDigits = 5
+        outputMaximumFormatter.minimum = 0
         outputIntegerFormatter.locale = numberLocale
         outputIntegerFormatter.numberStyle = .decimal
         outputIntegerFormatter.usesGroupingSeparator = false
@@ -3848,8 +3855,14 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         add(outputDimensions)
         configure(outputWidth, frame: .zero, label: "Custom output width", parent: exportSettingsPanel)
         configure(outputHeight, frame: .zero, label: "Custom output height", parent: exportSettingsPanel)
+        // Shipping `NumberInput`s: ▲/▼ steppers and ArrowUp/ArrowDown.
         [outputWidth, outputHeight].forEach {
             $0.formatter = outputIntegerFormatter; $0.delegate = self
+            $0.tokens = tokens; $0.compact = true
+            $0.minimum = { 1 }; $0.maximum = { 16_384 }
+            $0.stepped = { [weak self] field in
+                self?.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: field))
+            }
         }
         outputAspectLock.title = "Lock"
         outputAspectLock.state = .on
@@ -3875,6 +3888,26 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         outputMaximumSize.placeholderString = "Required"
         outputMaximumSize.stringValue = maximumUnit.value(10_000_000)
         outputMaximumSize.delegate = self
+        outputMaximumSize.tokens = tokens; outputMaximumSize.compact = true
+        // Shipping steps and floors by unit: 1/10 KB, 0.01 MB, 0.00001 GB.
+        outputMaximumSize.formatter = outputMaximumFormatter
+        outputMaximumSize.stepSize = { [weak self] in
+            switch self?.maximumUnit ?? .megabytes {
+            case .kilobytes: 1
+            case .megabytes: 0.01
+            case .gigabytes: 0.00001
+            }
+        }
+        outputMaximumSize.minimum = { [weak self] in
+            switch self?.maximumUnit ?? .megabytes {
+            case .kilobytes: 10
+            case .megabytes: 0.01
+            case .gigabytes: 0.00001
+            }
+        }
+        outputMaximumSize.stepped = { [weak self] field in
+            self?.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: field))
+        }
         outputMaximumUnit.tokens = tokens
         outputMaximumUnit.addItems(withTitles: RecordingFileSizeUnit.allCases.map { $0.label })
         outputMaximumUnit.selectItem(at: maximumUnit.rawValue)

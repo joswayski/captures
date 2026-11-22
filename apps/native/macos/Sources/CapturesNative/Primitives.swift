@@ -661,8 +661,8 @@ enum ControlsBridge {
     }
 
     /// The field text one step up or down, clamped to the bounds.
-    static func step(_ text: String, up: Bool, min: Double?, max: Double?) -> String? {
-        let result = try? request(bounded(["operation": "number_step", "text": text, "up": up],
+    static func step(_ text: String, up: Bool, min: Double?, max: Double?, step: Double = 1) -> String? {
+        let result = try? request(bounded(["operation": "number_step", "text": text, "up": up, "step": step],
                                           min: min, max: max))
         return result?["text"] as? String
     }
@@ -804,6 +804,8 @@ final class TokenNumberField: NSTextField {
     var minimum: (() -> Double?) = { nil }
     var maximum: (() -> Double?) = { nil }
     var stepped: ((TokenNumberField) -> Void)?
+    /// Shipping `NumberInput` `step` (1 unless a field sets one).
+    var stepSize: (() -> Double) = { 1 }
     /// Shipping `NumberInput`'s last committed value: what the field showed
     /// when editing began, or its latest finite in-range draft. A blank draft
     /// steps from it, and an empty or invalid commit restores it.
@@ -941,7 +943,7 @@ final class TokenNumberField: NSTextField {
     func step(up: Bool) {
         let typed = currentEditor()?.string ?? stringValue
         let text = Self.finite(typed) == nil ? committedText : typed
-        guard isEnabled, let next = ControlsBridge.step(text, up: up, min: minimum(), max: maximum())
+        guard isEnabled, let next = ControlsBridge.step(text, up: up, min: minimum(), max: maximum(), step: stepSize())
         else { return }
         stringValue = next
         currentEditor()?.string = next
