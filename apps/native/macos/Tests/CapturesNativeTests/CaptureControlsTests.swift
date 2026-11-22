@@ -634,6 +634,19 @@ final class CaptureControlsTests: XCTestCase {
             y: capture.frame.midY), from: view.controls)
         XCTAssertTrue(view.controls.hitTest(capturePoint) === capture,
             "interactive controls do not begin a panel drag")
+
+        // Shipping cursors: the region crosshair stops at the panel, whose
+        // controls point and whose blank glass grabs, then grabs while dragging.
+        let close = try XCTUnwrap(buttons(in: view.controls).first { $0.title == "Close" })
+        XCTAssertEqual(view.controls.cursor(at: NSPoint(x: close.frame.midX, y: close.frame.midY)),
+            .pointingHand)
+        let region = try XCTUnwrap(buttons(in: view.controls).first { $0.title == "Region" })
+        XCTAssertEqual(view.controls.cursor(at: NSPoint(x: region.frame.midX, y: region.frame.midY)),
+            .pointingHand)
+        XCTAssertEqual(view.controls.cursor(at: NSPoint(x: 20, y: 70)), .openHand)
+        view.controls.beginPanelDrag(at: footerPoint)
+        XCTAssertEqual(view.controls.cursor(at: NSPoint(x: 20, y: 70)), .closedHand)
+        view.controls.endPanelDrag()
     }
 
     func testNarrowMonitorKeepsPickerAndPrimaryActionVisibleWithoutOverlap() throws {
@@ -704,6 +717,8 @@ final class CaptureControlsTests: XCTestCase {
             let empty = makeView(appearance: appearance)
             window.contentView = empty
             try render(empty, window: window, name: "capture-controls-\(appearance)-empty")
+            XCTAssertEqual(topRowInsets(empty.controls).trailing, topRowInsets(empty.controls).leading,
+                accuracy: 1, "the panel ends as far after Capture as the close button sits from the start")
 
             empty.beginRegion(NSPoint(x: 114, y: 78))
             empty.dragRegion(NSPoint(x: 478, y: 283)); empty.endRegion()
@@ -723,12 +738,26 @@ final class CaptureControlsTests: XCTestCase {
             XCTAssertTrue(controls.allSatisfy { $0.accessibilityLabel() != nil })
             XCTAssertTrue(controls.first { $0.title == "Capture" }?.isHidden == true)
             XCTAssertTrue(controls.first { $0.title == "Record" }?.isEnabled == true)
-            XCTAssertEqual(automatic.controls.frame.width, 854)
+            // Shipping's content-sized panel: as much glass after the last
+            // control as before the close button, with no space held for the
+            // hidden primary.
+            XCTAssertEqual(topRowInsets(automatic.controls).trailing,
+                topRowInsets(automatic.controls).leading, accuracy: 1)
             XCTAssertEqual(automatic.controls.frame.height, 86)
             XCTAssertEqual(automatic.controls.frame.minY, frame.height - 112)
+            XCTAssertEqual(automatic.controls.frame.midX, frame.midX, accuracy: 1)
+            for note in automatic.controls.noteLinks {
+                XCTAssertTrue(automatic.controls.bounds.contains(note.frame), "the note never clips")
+            }
+            let windowWidth = automatic.controls.frame.width
+            automatic.setTarget(.region)
+            XCTAssertGreaterThan(automatic.controls.frame.width, windowWidth, "room for Aspect")
+            XCTAssertEqual(topRowInsets(automatic.controls).trailing,
+                topRowInsets(automatic.controls).leading, accuracy: 1)
+            automatic.setTarget(.window)
 
             automatic.setMode(.record)
-            XCTAssertEqual(automatic.controls.frame.width, 902)
+            XCTAssertEqual(automatic.controls.frame.width, 816, "the Record options row's width")
             XCTAssertEqual(automatic.controls.frame.height, 154)
             try render(automatic, window: window,
                 name: "capture-controls-\(appearance)-recording")
@@ -884,6 +913,13 @@ final class CaptureControlsTests: XCTestCase {
             displayTitles: ["Main display · 1000 × 720", "External · 1920 × 1080"],
             selectedDisplay: 0, confirm: confirm, cancel: cancel, changeDisplay: { _ in },
             visibility: visibility, displayIdentity: identity)
+    }
+
+    /// Glass before the first and after the last visible top-row control.
+    private func topRowInsets(_ controls: CaptureControlsView) -> (leading: CGFloat, trailing: CGFloat) {
+        let row = controls.subviews.filter { !$0.isHidden && $0.frame.width > 0 && $0.frame.maxY <= 52 }
+        return (row.map(\.frame.minX).min() ?? 0,
+                controls.bounds.width - (row.map(\.frame.maxX).max() ?? 0))
     }
 
     private func buttons(in view: NSView) -> [CaptureButton] {

@@ -773,6 +773,10 @@ final class CaptureControlsView: NSView {
     /// Whether the narrow bar has room for the "Aspect" label.
     private var aspectLabelFits = true
     private var captureEnabled = false
+    /// The top row's controls, and how far they are shifted to center them
+    /// when the note or Record row makes the panel wider than the row.
+    private var topRow: [NSView] = []
+    private var topRowShift: CGFloat = 0
     private(set) var menuState: CaptureMenuPolicy.Menu?
     var switchTarget: (UnifiedCaptureTarget) -> Void = { _ in }
     var switchMode: (UnifiedCaptureMode) -> Void = { _ in }
@@ -838,6 +842,9 @@ final class CaptureControlsView: NSView {
         let close = control("Close", x: 8, width: 32) { [weak self] in self?.cancel() }
         close.frame = NSRect(x: 8, y: 14, width: 32, height: 32)
         close.icon = .shipping("close"); close.iconOnly = true; close.iconSide = 15
+        // Shipping `.capture-selector-close`: a borderless ghost that only
+        // fills with `--glass-hover` under the pointer.
+        close.hudControl = true; close.cornerRadius = tokens.number("r-md")
         close.setAccessibilityLabel("Close capture controls")
         // Shipping `.capture-action-switch` / `.recording-target-switch`: a
         // 36 pt track (1 pt border, 3 pt padding) of 28 pt segments sized to
@@ -901,7 +908,8 @@ final class CaptureControlsView: NSView {
         // Shipping `.recording-region-aspect-picker`: an `--s-3`-spaced 11 px
         // label and a content-sized select, 150 pt together.
         let pickerX = targetTrack.frame.maxX + 8
-        let pickerRight = frame.width - 122 - 8
+        // Leaves room for the primary's `--s-4` gap, `--s-2` margin and the trailing padding.
+        let pickerRight = frame.width - 112 - 12 - 8
         aspectLabel.font = .systemFont(ofSize: tokens.number("text-xs"), weight: .medium)
         aspectLabel.textColor = tokens.color("glass-text-subtle")
         let labelSize = aspectLabel.intrinsicContentSize
@@ -920,7 +928,7 @@ final class CaptureControlsView: NSView {
         aspectMenu.bindChange { [weak self] index in self?.changeAspect(index) }
         addSubview(aspectMenu)
 
-        displayMenu.frame = NSRect(x: pickerX, y: 10, width: min(220, pickerRight - pickerX), height: 36)
+        displayMenu.frame = NSRect(x: pickerX, y: 10, width: min(190, pickerRight - pickerX), height: 36)
         displayMenu.tokens = tokens; displayMenu.addItems(withTitles: displayTitles)
         displayMenu.selectItem(at: selectedDisplay)
         displayMenu.setAccessibilityLabel("Display")
@@ -956,6 +964,7 @@ final class CaptureControlsView: NSView {
             addSubview(indicator, positioned: .below, relativeTo: below)
         }
         for button in [screenshot, record] + Array(targetButtons.values) { button.slidingSegment = true }
+        topRow = subviews.filter { $0.frame.maxY <= 52 }
         configureRecordingRow()
         addSubview(errorBand)
         selectTarget(.region, notify: false)
@@ -968,17 +977,63 @@ final class CaptureControlsView: NSView {
         return hit is NSButton ? hit : self
     }
 
+    /// The selector leaves the panel out of its crosshair cursor rects and
+    /// refreshes them when the panel moves or resizes.
+    var frameChanged: () -> Void = {}
+    override var frame: NSRect {
+        didSet { if frame != oldValue { frameChanged() } }
+    }
+
+    private var cursorTracking: NSTrackingArea?
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let cursorTracking { removeTrackingArea(cursorTracking) }
+        let tracking = NSTrackingArea(rect: .zero,
+            options: [.cursorUpdate, .mouseMoved, .activeAlways, .inVisibleRect],
+            owner: self, userInfo: nil)
+        addTrackingArea(tracking); cursorTracking = tracking
+    }
+
+    /// Shipping's panel cursors: a pointing hand over enabled controls, and
+    /// `grab` / `grabbing` on the blank glass that drags the panel.
+    func cursor(at point: NSPoint) -> NSCursor {
+        if panelDragOffset != nil { return .closedHand }
+        guard let superview else { return .openHand }
+        let hit = hitTest(convert(point, to: superview))
+        return (hit as? NSControl)?.isEnabled == true ? .pointingHand : .openHand
+    }
+
+    private func updateCursor(_ event: NSEvent) {
+        cursor(at: convert(event.locationInWindow, from: nil)).set()
+    }
+
+    override func cursorUpdate(with event: NSEvent) { updateCursor(event) }
+    override func mouseMoved(with event: NSEvent) {
+        updateCursor(event)
+        super.mouseMoved(with: event)
+    }
+
     override func mouseDown(with event: NSEvent) {
         guard let superview else { return }
         beginPanelDrag(at: superview.convert(event.locationInWindow, from: nil))
+        updateCursor(event)
     }
 
     override func mouseDragged(with event: NSEvent) {
         guard let superview else { return }
         dragPanel(to: superview.convert(event.locationInWindow, from: nil))
+        updateCursor(event)
     }
 
-    override func mouseUp(with event: NSEvent) { endPanelDrag() }
+    override func mouseUp(with event: NSEvent) {
+        endPanelDrag()
+        updateCursor(event)
+    }
+
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        if superview != nil { layoutPanel(keepingBottom: true) }
+    }
 
     func beginPanelDrag(at point: NSPoint) {
         panelDragOffset = NSPoint(x: point.x - frame.minX, y: point.y - frame.minY)
@@ -1171,8 +1226,16 @@ final class CaptureControlsView: NSView {
         captureButton.setAccessibilityLabel(menuState?.primaryAccessibilityLabel
             ?? (recording ? "Start recording" : "Take screenshot"))
         captureButton.isEnabled = captureEnabled && inFlight != .starting
-        captureButton.isHidden = menuState?.primaryHidden ?? autoStart
+        let hidden = menuState?.primaryHidden ?? autoStart
+        if captureButton.isHidden != hidden {
+            captureButton.isHidden = hidden
+            layoutPanel(keepingBottom: true)
+        }
         captureButton.needsDisplay = true
+    }
+
+    private var noteWidth: CGFloat {
+        noteViews.reduce(0) { $0 + $1.frame.width } + tokens.number("s-2") * CGFloat(max(0, noteViews.count - 1))
     }
 
     /// Shipping `capture-selector-note`, centered on the panel's last row.
@@ -1186,8 +1249,7 @@ final class CaptureControlsView: NSView {
         noteViews.append(noteView(parts: [(CaptureMenuPolicy.copy.separator, false)], setting: nil))
         noteViews.append(noteView(parts: [(menu.confirmText, false)], setting: menu.confirmSetting))
         let gap = tokens.number("s-2")
-        let total = noteViews.reduce(CGFloat(0)) { $0 + $1.frame.width } + gap * CGFloat(noteViews.count - 1)
-        var x = max(16, (bounds.width - total) / 2)
+        var x = max(16, (bounds.width - noteWidth) / 2)
         let midY = baseHeight - 15
         for view in noteViews {
             view.frame.origin = NSPoint(x: x, y: (midY - view.frame.height / 2).rounded())
@@ -1218,7 +1280,6 @@ final class CaptureControlsView: NSView {
 
     func selectMode(_ mode: UnifiedCaptureMode, notify: Bool) {
         self.mode = mode
-        layoutPanel(keepingBottom: false)
         let arriving = mode == .record && !recordButton.selected
         screenshotButton.selected = mode == .screenshot
         recordButton.selected = mode == .record
@@ -1226,6 +1287,7 @@ final class CaptureControlsView: NSView {
         recordButton.setAccessibilityValue(mode == .record ? 1 : 0)
         slideIndicator(modeIndicator, to: mode == .record ? recordButton : screenshotButton)
         updateRecordingControls()
+        layoutPanel(keepingBottom: false)
         if arriving { playRecordingRowEntrance() }
         requestMicrophonesIfNeeded()
         if notify { switchMode(mode) }
@@ -1240,7 +1302,28 @@ final class CaptureControlsView: NSView {
     private func layoutPanel(keepingBottom: Bool) {
         var bandHeight: CGFloat = 0
         if let superview {
-            let width = min(superview.bounds.width - 32, mode == .record ? 902 : 854)
+            // Shipping's `max-content` panel: the top row's last control plus
+            // the same 8 pt the close button sits from the leading edge, and
+            // at least the note (16 pt each side) and Record options row (816 pt).
+            var rowEnd: CGFloat
+            switch target {
+            case .region: rowEnd = aspectMenu.frame.maxX
+            case .window: rowEnd = targetTrack.frame.maxX
+            case .display: rowEnd = displayMenu.frame.maxX
+            }
+            rowEnd -= topRowShift
+            let primaryWidth: CGFloat = mode == .record ? 152 : 112
+            let trailing: CGFloat = 8
+            let rowWidth = captureButton.isHidden ? rowEnd + trailing : rowEnd + 12 + primaryWidth + trailing
+            var width = max(rowWidth, noteWidth + 32)
+            if mode == .record { width = max(width, 816) }
+            width = min(superview.bounds.width - 32, width)
+            // Unlike shipping's start-aligned row, center it so the glass
+            // after the last control matches the glass before the close button.
+            let shift = max(0, ((width - rowWidth) / 2).rounded(.down))
+            for view in topRow { view.frame.origin.x += shift - topRowShift }
+            topRowShift = shift
+            rowEnd += shift
             if let inlineError { bandHeight = errorBand.setMessage(inlineError, width: width) }
             let height = baseHeight + bandHeight
             let x = min(max(16, frame.midX - width / 2), superview.bounds.width - width - 16)
@@ -1248,9 +1331,8 @@ final class CaptureControlsView: NSView {
                 ? max(8, frame.maxY - height)
                 : superview.bounds.height - height - 26
             frame = NSRect(x: x, y: y, width: width, height: height)
-            captureButton.frame = mode == .record
-                ? NSRect(x: width - 162, y: 10, width: 152, height: 40)
-                : NSRect(x: width - 122, y: 10, width: 112, height: 40)
+            captureButton.frame = NSRect(x: min(rowEnd + 12, width - primaryWidth - trailing),
+                y: 10, width: primaryWidth, height: 40)
             microphoneMenu.frame.size.width = max(116, width - microphoneMenu.frame.minX - 16)
             if let label = fieldLabels.last { label.frame.size.width = microphoneMenu.frame.width }
         } else if let inlineError {
@@ -1302,6 +1384,7 @@ final class CaptureControlsView: NSView {
         aspectLabel.isHidden = target != .region || !aspectLabelFits
         aspectMenu.isHidden = target != .region
         displayMenu.isHidden = target != .display
+        layoutPanel(keepingBottom: true)
         if notify { switchTarget(target) }
     }
 
@@ -1370,7 +1453,20 @@ private final class UnifiedCaptureCanvas: NSView {
     override func mouseUp(with event: NSEvent) { selector?.mouseUp(with: event) }
     override func mouseMoved(with event: NSEvent) { selector?.mouseMoved(with: event) }
     override func resetCursorRects() {
-        addCursorRect(bounds, cursor: selector?.target == .region ? .crosshair : .pointingHand)
+        guard let selector else { return }
+        let cursor: NSCursor = selector.target == .region ? .crosshair : .pointingHand
+        // Overlapping cursor rects resolve arbitrarily, so the capture menu,
+        // which sets its own cursors, is cut out of the target cursor.
+        let menu = convert(selector.controls.frame, from: selector).intersection(bounds)
+        guard !menu.isEmpty else { return addCursorRect(bounds, cursor: cursor) }
+        for rect in [
+            NSRect(x: bounds.minX, y: bounds.minY, width: bounds.width, height: menu.minY - bounds.minY),
+            NSRect(x: bounds.minX, y: menu.maxY, width: bounds.width, height: bounds.maxY - menu.maxY),
+            NSRect(x: bounds.minX, y: menu.minY, width: menu.minX - bounds.minX, height: menu.height),
+            NSRect(x: menu.maxX, y: menu.minY, width: bounds.maxX - menu.maxX, height: menu.height),
+        ] where rect.width > 0 && rect.height > 0 {
+            addCursorRect(rect, cursor: cursor)
+        }
     }
 }
 
@@ -1554,6 +1650,10 @@ final class UnifiedCaptureSelectionView: NSView {
             self.changeDisplay(index)
         }
         controls.openPreference = { [weak self] setting in self?.openPreference(setting) }
+        controls.frameChanged = { [weak self] in
+            guard let self else { return }
+            self.window?.invalidateCursorRects(for: self.canvas)
+        }
         controls.stateChanged = { [weak self] in self?.update() }
         controls.confirm = { [weak self] in self?.confirmSelection() }
         controls.cancel = { [weak self] in self?.cancel() }

@@ -59,6 +59,20 @@ pub struct Bar {
     note: gtk::Box,
 }
 
+/// Shipping `.recording-selector-panel button { cursor: pointer }`: the bar
+/// sits over the selector's crosshair, so its controls show a pointing hand
+/// and its blank glass the default arrow.
+fn point_at_buttons(widget: &gtk::Widget) {
+    if widget.is::<gtk::Button>() {
+        widget.set_cursor_from_name(Some("pointer"));
+    }
+    let mut child = widget.first_child();
+    while let Some(current) = child {
+        point_at_buttons(&current);
+        child = current.next_sibling();
+    }
+}
+
 fn segment(icon: Option<&str>, label: &str) -> gtk::ToggleButton {
     // Shipping's `aria-pressed` buttons (a toggle button from GTK 4.10;
     // 4.8 reports a push button with the pressed state).
@@ -232,6 +246,7 @@ impl Bar {
         let auto_start_label = text(capture_menu::AUTO_START_NOTE, None);
         note.append(&auto_start_label);
         root.append(&note);
+        point_at_buttons(root.upcast_ref());
 
         let bar = Self {
             root,
