@@ -176,7 +176,7 @@ struct RecordingLifecycleGate {
 
 final class LiveCaptureController: NSObject {
     private let root: Surface
-    private let window: NSWindow
+    private var window: NSWindow
     private let tokens: Tokens
     private let transport: AppTransport
     private let recoveryWorker: RecordingRecoveryWorking
@@ -1472,6 +1472,10 @@ final class LiveCaptureController: NSObject {
     }
 
     func historyDidShow() { grid?.suspended = false }
+
+    /// The host moved History's content into a fresh window (see
+    /// `recycleHistoryWindow`).
+    func historyWindowReplaced(_ fresh: NSWindow) { window = fresh }
 
     private func gridSelectionChanged() {
         if !reloadingHistorySelection { userSelectionGeneration += 1 }

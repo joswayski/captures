@@ -1026,6 +1026,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private var miniPreviews: MiniPreviewController?
     private var miniPreviewActions: MiniPreviewActions?
     private var rootWindowCloseHandler: RootWindowCloseHandler?
+    private var historyWindowRecycle: DispatchWorkItem?
     /// Preferences and setup open in their own windows beside History.
     private let appWindows = AppWindows()
     private var statusItem: NSStatusItem?
@@ -1157,6 +1158,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             terminate: { requestApplicationTermination() }, hidesRootWindow: options.live)
         rootWindowCloseHandler.rootWindowHidden = { [weak self] in
             self?.liveController?.releaseHistoryResources()
+            self?.scheduleHistoryWindowRecycle()
         }
         rootWindowCloseHandler.rootWindowShown = { [weak self] in
             self?.liveController?.historyDidShow()
@@ -2351,6 +2353,40 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                 message: "The capture workspace is still loading or another capture is already active.")
             return
         }
+    }
+
+    /// The window server keeps a hidden window's last frame, with the surfaces
+    /// of every card it showed (about 13 MB at 1020 by 720), for as long as the
+    /// window exists, and draws nothing new into it while it is hidden. Once
+    /// History has faded out, move its content into a fresh window and let the
+    /// old one go; the next show draws into the new one as before.
+    private func scheduleHistoryWindowRecycle() {
+        historyWindowRecycle?.cancel()
+        let recycle = DispatchWorkItem { [weak self] in self?.recycleHistoryWindow() }
+        historyWindowRecycle = recycle
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: recycle)
+    }
+
+    private func recycleHistoryWindow() {
+        guard options.live, let old = window, !old.isVisible, !old.isMiniaturized,
+              !old.styleMask.contains(.fullScreen), old.attachedSheet == nil,
+              let handler = rootWindowCloseHandler, let content = old.contentView else { return }
+        let fresh = AppWindows.makeWindow(.history)
+        fresh.setFrame(old.frame, display: false)
+        fresh.appearance = old.appearance
+        fresh.autorecalculatesKeyViewLoop = old.autorecalculatesKeyViewLoop
+        let initial = old.initialFirstResponder
+        let focused = old.firstResponder as? NSView
+        old.delegate = nil
+        old.contentView = NSView()
+        fresh.contentView = content
+        fresh.initialFirstResponder = initial
+        if let focused, focused.window === fresh { fresh.makeFirstResponder(focused) }
+        fresh.delegate = handler
+        handler.rootWindow = fresh
+        appWindows.adopt(fresh, as: .history)
+        window = fresh
+        liveController?.historyWindowReplaced(fresh)
     }
 
     /// Shipping `show_capture_history`: show, restore and focus the History
