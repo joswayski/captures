@@ -76,7 +76,6 @@ export default function Home({
 }: HomeProps) {
   const [now, setNow] = useState(initialNow);
   const detectedDownload = previewDownloadById(previewDownloadId);
-  const linuxAlternative = detectedDownload ? linuxAlternativeDownload(detectedDownload) : null;
 
   useEffect(() => {
     setNow(Date.now());
@@ -111,8 +110,10 @@ export default function Home({
           <div className="mt-8" id="download">
             {detectedDownload ? (
               <>
-                <div>
-                  <div className="flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:items-center">
+                <div className="flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:items-center">
+                  {detectedDownload.family === "linux" ? (
+                    <LinuxDownloadPicker />
+                  ) : (
                     <a href={detectedDownload.href} className="download-button">
                       <OsIcon
                         family={detectedDownload.family}
@@ -121,25 +122,8 @@ export default function Home({
                       {detectedDownload.label}
                       <span className="sr-only"> {detectedDownload.fileName}</span>
                     </a>
-                    <GitHubSourceButton />
-                  </div>
-                  {linuxAlternative ? (
-                    <p className="mt-3 text-xs text-ink-soft">
-                      <a
-                        href={linuxAlternative.href}
-                        className="font-medium text-ink-muted no-underline underline-offset-2 transition-colors duration-200 ease-out hover:text-accent-readable hover:underline"
-                      >
-                        or {linuxAlternativeLabel(linuxAlternative)}
-                      </a>
-                    </p>
-                  ) : null}
-                  {detectedDownload.family === "linux" ? (
-                    <p className="mt-3 max-w-xl text-xs leading-relaxed text-ink-soft">
-                      Updating an AppImage by hand? Replace{" "}
-                      <code className="text-ink-muted">~/.local/bin/Captures.AppImage</code> and
-                      make it executable instead of running a second copy from Downloads.
-                    </p>
-                  ) : null}
+                  )}
+                  <GitHubSourceButton />
                 </div>
                 <FeedbackList appMenu={detectedDownload.family === "macos" ? "menu bar" : "tray"} />
               </>
@@ -223,15 +207,73 @@ function previewDownloadById(id: PreviewDownloadId | null) {
   return PREVIEW_DOWNLOADS.find((download) => download.id === id) ?? null;
 }
 
-function linuxAlternativeDownload(download: PreviewDownload) {
-  if (download.family !== "linux") return null;
-  return (
-    PREVIEW_DOWNLOADS.find((item) => item.family === "linux" && item.id !== download.id) ?? null
-  );
-}
+// Browsers report Linux but rarely the distribution, so Linux visitors pick
+// the package themselves, as on caper.chat.
+const LINUX_DOWNLOADS = [
+  { id: "linux-deb", name: "Ubuntu / Debian", detail: ".deb · x64" },
+  {
+    id: "linux-appimage",
+    name: "Other Linux",
+    detail: "AppImage · x64 · runs on most distributions",
+  },
+] as const;
 
-function linuxAlternativeLabel(download: PreviewDownload) {
-  return download.id === "linux-deb" ? ".deb for Ubuntu / Debian" : "AppImage";
+function LinuxDownloadPicker() {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onPointerDown(event: PointerEvent) {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      setOpen(false);
+      buttonRef.current?.focus();
+    }
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  return (
+    <div ref={rootRef} className="relative">
+      <button
+        ref={buttonRef}
+        type="button"
+        className="download-button"
+        aria-expanded={open}
+        aria-controls="linux-downloads"
+        onClick={() => setOpen((value) => !value)}
+      >
+        <LinuxIcon className="h-[1.15rem] w-[1.15rem]" />
+        Download for Linux
+        <ChevronDownIcon className="h-4 w-4 opacity-70" />
+      </button>
+      {open ? (
+        <ul id="linux-downloads" className="download-picker" aria-label="Download for Linux">
+          {LINUX_DOWNLOADS.map((option) => {
+            const download = previewDownloadById(option.id);
+            if (!download) return null;
+            return (
+              <li key={option.id}>
+                <a href={download.href} onClick={() => setOpen(false)}>
+                  <span className="text-sm font-medium text-ink">{option.name}</span>
+                  <span className="text-xs text-ink-soft">{option.detail}</span>
+                  <span className="sr-only"> {download.fileName}</span>
+                </a>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+    </div>
+  );
 }
 
 function FeedbackList({ appMenu }: { appMenu?: "menu bar" | "tray" }) {
@@ -511,6 +553,23 @@ function CheckIcon({ className }: { className?: string }) {
       className={className}
     >
       <path d="M20 6 9 17l-5-5" />
+    </svg>
+  );
+}
+
+function ChevronDownIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className={className}
+    >
+      <path d="m6 9 6 6 6-6" />
     </svg>
   );
 }
