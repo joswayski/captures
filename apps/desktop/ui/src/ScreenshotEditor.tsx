@@ -4262,6 +4262,14 @@ export function ScreenshotEditor() {
     const gesture = gestureRef.current;
     const point = canvasPoint(event);
     if (!gesture || gesture.pointerId !== event.pointerId) {
+      // The comparison's split handle, range and Hide button own the pointer;
+      // their moves bubble here but must not hover the layers underneath.
+      if (event.target instanceof Element && event.target.closest(".compression-preview-frame")) {
+        setOverflowHoverId(null);
+        setCurveHoverTip(null);
+        setCanvasCursor(undefined);
+        return;
+      }
       syncOverflowHover(point);
       if (tool === "remove-bg") {
         syncRemoveBgHoverCursor(event, point);

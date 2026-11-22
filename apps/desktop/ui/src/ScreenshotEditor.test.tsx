@@ -4038,6 +4038,58 @@ describe("ScreenshotEditor", () => {
     }
   });
 
+  it("does not hover layers under the compression handle while dragging it", async () => {
+    const restoreCanvas = installExportableCanvas();
+    try {
+      render(<ScreenshotEditor />);
+      await screen.findByLabelText("Canvas width");
+
+      setCanvasZoomPercent(100);
+      fireEvent.click(screen.getByRole("button", { name: "Arrow (A)" }));
+      const viewport = screen.getByLabelText("Screenshot editing canvas");
+      const canvas = viewport.querySelector("canvas")!;
+      vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({
+        x: 100,
+        y: 80,
+        top: 80,
+        left: 100,
+        right: 100 + 1_440,
+        bottom: 80 + 900,
+        width: 1_440,
+        height: 900,
+        toJSON: () => ({}),
+      });
+      viewport.setPointerCapture = vi.fn();
+      viewport.hasPointerCapture = vi.fn(() => true);
+      viewport.releasePointerCapture = vi.fn();
+      // An arrow hanging past the left edge offers Expand canvas on hover.
+      fireEvent.pointerDown(viewport, { button: 0, pointerId: 50, clientX: 60, clientY: 200 });
+      fireEvent.pointerMove(viewport, { pointerId: 50, clientX: 280, clientY: 260 });
+      fireEvent.pointerUp(viewport, { button: 0, pointerId: 50, clientX: 280, clientY: 260 });
+
+      openExportSettings();
+      fireEvent.click(screen.getByRole("combobox", { name: "Save quality" }));
+      fireEvent.click(screen.getByRole("option", { name: /Compress/ }));
+      await waitFor(() => {
+        expect(screen.getByAltText("After compression")).toBeInTheDocument();
+      });
+
+      fireEvent.pointerMove(canvas, { pointerId: 1, clientX: 200, clientY: 230 });
+      expect(await screen.findByRole("button", { name: "Expand canvas" })).toBeInTheDocument();
+
+      const handle = screen.getByRole("button", { name: "Drag to compare before and after" });
+      handle.setPointerCapture = vi.fn();
+      fireEvent.pointerDown(handle, { button: 0, pointerId: 92, clientX: 200, clientY: 230 });
+      fireEvent.pointerMove(handle, { pointerId: 92, clientX: 210, clientY: 232 });
+
+      expect(screen.queryByRole("button", { name: "Expand canvas" })).not.toBeInTheDocument();
+      expect(canvas.style.cursor).not.toBe("move");
+      fireEvent.pointerUp(handle, { pointerId: 92, clientX: 210, clientY: 232 });
+    } finally {
+      restoreCanvas();
+    }
+  });
+
   it("drags the compression handle instead of placing a shape while a draw tool is selected", async () => {
     const restoreCanvas = installExportableCanvas();
     try {
