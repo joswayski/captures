@@ -112,12 +112,10 @@ final class UpdateNoticeTests: XCTestCase {
         XCTAssertEqual(p.notes?.groups.first?.items.first?.pullURL, "https://github.com/joswayski/captures/pull/265")
         XCTAssertEqual(p.dismiss?.label, "Not now")
         XCTAssertEqual(p.primary?.label, "Update now")
-        XCTAssertNil(p.revealNotes)
 
         model.showChangelog = false
         p = try model.presentation()
-        XCTAssertNil(p.notes)
-        XCTAssertEqual(p.revealNotes?.label, "What’s new")
+        XCTAssertNil(p.notes, "Preferences can still turn release notes off")
         XCTAssertEqual(p.cardHeight, 168)
 
         try model.load(fixture: "closing")
@@ -142,13 +140,8 @@ final class UpdateNoticeTests: XCTestCase {
     func testStubSourceSimulatesInstallWithoutSideEffectsAndBlocksEscape() throws {
         let model = UpdateNoticeModel()
         var events: [String] = []
-        var persisted: [Bool] = []
         model.event = { name, _ in events.append(name) }
-        model.persistShowChangelog = { persisted.append($0) }
         try model.load(fixture: "available")
-        model.perform(.hideNotes)
-        model.perform(.showNotes)
-        XCTAssertEqual(persisted, [false, true])
         model.perform(.openPullRequest("https://github.com/joswayski/captures/pull/265"))
         XCTAssertTrue(events.contains("update-notice-open-url"))
 

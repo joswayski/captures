@@ -621,13 +621,6 @@ impl Preferences {
         true
     }
 
-    /// The update notice's Hide / What's new toggle persists like shipping.
-    pub fn set_show_update_changelog(&mut self, show: bool) {
-        if !self.value.is_null() {
-            self.set(&["show_update_changelog"], json!(show));
-        }
-    }
-
     /// Capture-menu note links: reveal `target`'s row and highlight it briefly,
     /// like the shipping `preferences-target` event.
     pub fn open_target(&mut self, target: PreferenceTarget) {

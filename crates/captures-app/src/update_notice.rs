@@ -538,9 +538,6 @@ pub enum Action {
     DownloadVerify,
     /// Cancel temporary acquisition, waiting for I/O and cleanup acknowledgement.
     CancelDownload,
-    /// Persist `show_update_changelog`.
-    ShowNotes,
-    HideNotes,
     OpenPullRequest {
         url: String,
     },
@@ -557,7 +554,6 @@ pub struct Button {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Notes {
     pub heading: String,
-    pub hide: Button,
     pub stacked: bool,
     pub intro: Option<String>,
     pub groups: Vec<NoteGroup>,
@@ -608,8 +604,6 @@ pub struct Presentation {
     pub icon_tone: IconTone,
     pub title: String,
     pub description: String,
-    /// Header "What's new" button while notes are hidden.
-    pub reveal_notes: Option<Button>,
     pub notes: Option<Notes>,
     pub download: Option<Download>,
     pub restart: Option<Restart>,
@@ -742,9 +736,8 @@ pub fn present(status: Option<&UpdateStatus>, view: &ViewState) -> Presentation 
         ),
     };
 
+    // Preferences (`show_update_changelog`) is the only way to hide notes.
     let notes_visible = available && error.is_none() && view.show_changelog;
-    let reveal_notes = (available && error.is_none() && !notes_visible)
-        .then(|| button("What’s new", true, Action::ShowNotes));
     let notes = match status {
         Some(S::Available {
             changelog,
@@ -756,7 +749,6 @@ pub fn present(status: Option<&UpdateStatus>, view: &ViewState) -> Presentation 
             let stacked = groups.len() > 1;
             Some(Notes {
                 heading: "What’s new".into(),
-                hide: button("Hide", true, Action::HideNotes),
                 stacked,
                 intro: stacked
                     .then(|| "This update includes all of the following changes:".to_owned()),
@@ -897,7 +889,6 @@ pub fn present(status: Option<&UpdateStatus>, view: &ViewState) -> Presentation 
         icon_tone,
         title,
         description,
-        reveal_notes,
         notes,
         download,
         restart,
@@ -1341,7 +1332,6 @@ mod tests {
         assert_eq!(p.description, "Version 2026.08.27.5 · 12.6 MB");
         assert_eq!(p.icon, Icon::App);
         assert_eq!(p.icon_tone, IconTone::Accent);
-        assert!(p.reveal_notes.is_none());
         let notes = p.notes.unwrap();
         assert!(notes.stacked);
         assert_eq!(
@@ -1356,7 +1346,6 @@ mod tests {
                 Some(265)
             )]
         );
-        assert_eq!(notes.hide.action, Action::HideNotes);
         let footer = p.footer.unwrap();
         assert_eq!(footer.dismiss.label, "Not now");
         assert_eq!(footer.primary.unwrap().label, "Update now");
@@ -1366,11 +1355,10 @@ mod tests {
     }
 
     #[test]
-    fn hidden_notes_leave_a_compact_card_with_whats_new() {
+    fn notes_turned_off_in_preferences_leave_a_compact_card() {
         let status = fixture("closing").unwrap();
         let p = present(Some(&status), &view(false));
         assert!(p.notes.is_none());
-        assert_eq!(p.reveal_notes.unwrap().action, Action::ShowNotes);
         assert_eq!(
             p.close_warning.as_deref(),
             Some(
@@ -1488,7 +1476,7 @@ mod tests {
             },
         );
         assert_eq!(p.visual_state, "error");
-        assert!(p.notes.is_none() && p.reveal_notes.is_none());
+        assert!(p.notes.is_none());
         let footer = p.footer.unwrap();
         assert_eq!(footer.dismiss.label, "Not now");
         assert_eq!(footer.primary.unwrap().label, "Try again");

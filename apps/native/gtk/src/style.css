@@ -3120,28 +3120,6 @@ window.captures.notice-window {
   font-size: var(--text-sm);
   font-feature-settings: "tnum";
 }
-.captures button.update-notes-reveal,
-.captures button.update-notes-toggle {
-  all: unset;
-  color: var(--text-subtle);
-  font-size: var(--text-xs);
-  font-weight: var(--weight-semibold);
-  letter-spacing: var(--xs-wide-tracking);
-}
-.captures button.update-notes-reveal {
-  margin-left: var(--s-4);
-  padding: var(--s-2) var(--s-3);
-  border-radius: var(--r-sm);
-}
-.captures button.update-notes-reveal:hover,
-.captures button.update-notes-toggle:hover {
-  color: var(--text);
-}
-.captures button.update-notes-reveal:focus-visible,
-.captures button.update-notes-toggle:focus-visible {
-  border-radius: var(--r-sm);
-  box-shadow: var(--focus-ring);
-}
 .captures .update-notice-body {
   padding: 0 var(--s-6) var(--s-4);
 }

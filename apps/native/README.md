@@ -54,7 +54,8 @@ input cannot queue overlapping requests; there is no idle polling timer. Quit
 cancels/joins pending HTTP; a currently blocked request can take up to 60 seconds.
 These actions never download, install, replace an app or activate a channel.
 Checks also drive the native update notice, with authenticated release notes and
-Check again/Try again actions. Hide/What's new uses the existing changelog setting.
+Check again/Try again actions. Release notes follow the existing Preferences
+changelog setting; the notice has no Hide or What's new toggle.
 Dismissing while checking keeps its eventual result hidden; only a new explicit
 check reveals it again. Capture/setup/permission UI suspends notice presentation.
 AppKit anchors at the real status item; wgpu uses the existing no-tray fallback,
@@ -1345,8 +1346,9 @@ simulated menu-bar icon. `--update-state` accepts `available`, `single`, `closin
 `manual`, `downloading`, `restarting`, `error`, `checking` or `up-to-date`.
 Buttons in the window switch states. Update now and Try again run the shared stub
 through download progress and the restart countdown. Nothing is downloaded,
-installed or relaunched, and links are logged rather than opened. Hide / What’s
-new persists only to an explicit `--settings-file`.
+installed or relaunched, and links are logged rather than opened. Release notes
+follow `show_update_changelog` from `--settings-file`; there is no toggle on the
+notice.
 
 These screens are **not full pixel or functional parity**. Native Preferences
 includes Find, custom colors, persisted defaults and live system appearance.

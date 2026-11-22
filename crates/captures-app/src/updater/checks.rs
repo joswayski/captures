@@ -1298,7 +1298,7 @@ mod tests {
                 && expanded.restart.is_none()
         );
         let collapsed = worker.notice(false).unwrap();
-        assert!(collapsed.notes.is_none() && collapsed.reveal_notes.is_some());
+        assert!(collapsed.notes.is_none());
         for status in [
             CheckStatus::Checking,
             CheckStatus::UpToDate,

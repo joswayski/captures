@@ -23,7 +23,7 @@ struct UpdateNoticeBridge: UpdateNoticeTransport {
 }
 
 enum UpdateNoticeAction: Equatable {
-    case dismiss, install, check, downloadVerify, cancelDownload, showNotes, hideNotes, openDownloadPage
+    case dismiss, install, check, downloadVerify, cancelDownload, openDownloadPage
     case openPullRequest(String)
 
     init?(_ value: Any?) {
@@ -34,8 +34,6 @@ enum UpdateNoticeAction: Equatable {
         case "check": self = .check
         case "download_verify": self = .downloadVerify
         case "cancel_download": self = .cancelDownload
-        case "show_notes": self = .showNotes
-        case "hide_notes": self = .hideNotes
         case "open_download_page": self = .openDownloadPage
         case "open_pull_request":
             guard let url = value["url"] as? String else { return nil }
@@ -51,8 +49,6 @@ enum UpdateNoticeAction: Equatable {
         case .check: return "check"
         case .downloadVerify: return "download_verify"
         case .cancelDownload: return "cancel_download"
-        case .showNotes: return "show_notes"
-        case .hideNotes: return "hide_notes"
         case .openDownloadPage: return "open_download_page"
         case .openPullRequest: return "open_pull_request"
         }
@@ -86,7 +82,6 @@ struct UpdateNoticeNoteGroup: Equatable {
 
 struct UpdateNoticeNotes: Equatable {
     let heading: String
-    let hide: UpdateNoticeButton
     let stacked: Bool
     let intro: String?
     let empty: String?
@@ -115,7 +110,6 @@ struct UpdateNoticePresentation: Equatable {
     let iconTone: String
     let title: String
     let description: String
-    let revealNotes: UpdateNoticeButton?
     let notes: UpdateNoticeNotes?
     let download: UpdateNoticeDownload?
     let restartMessage: String?
@@ -139,8 +133,7 @@ struct UpdateNoticePresentation: Equatable {
         self.visualState = visualState; self.icon = icon; self.iconTone = iconTone
         self.title = title; self.description = description
         self.cardWidth = CGFloat(cardWidth); self.cardHeight = CGFloat(cardHeight)
-        revealNotes = UpdateNoticeButton(value["reveal_notes"])
-        if let notes = value["notes"] as? [String: Any], let hide = UpdateNoticeButton(notes["hide"]) {
+        if let notes = value["notes"] as? [String: Any] {
             let groups = (notes["groups"] as? [[String: Any]] ?? []).map { group in
                 UpdateNoticeNoteGroup(displayVersion: group.string("display_version"),
                     items: (group["items"] as? [[String: Any]] ?? []).map { item in
@@ -149,7 +142,7 @@ struct UpdateNoticePresentation: Equatable {
                             pullNumber: pull?["number"] as? Int, pullURL: pull?["url"] as? String)
                     })
             }
-            self.notes = UpdateNoticeNotes(heading: notes.string("heading"), hide: hide,
+            self.notes = UpdateNoticeNotes(heading: notes.string("heading"),
                 stacked: notes.bool("stacked"), intro: notes["intro"] as? String,
                 empty: notes["empty"] as? String, groups: groups)
         } else {
@@ -231,7 +224,6 @@ final class UpdateNoticeModel {
     private(set) var tickInterval: TimeInterval?
     var showChangelog = true
     var changed: () -> Void = {}
-    var persistShowChangelog: (Bool) -> Void = { _ in }
     var event: (String, [String: Any]) -> Void = { name, fields in
         var row = fields; row["event"] = name; Metrics.write(row)
     }
@@ -301,9 +293,6 @@ final class UpdateNoticeModel {
             }
             visible = false; simulating = false; tickInterval = nil
             event("update-notice-dismissed", [:])
-        case .showNotes, .hideNotes:
-            showChangelog = action == .showNotes
-            persistShowChangelog(showChangelog)
         case .install, .check:
             if checkedPresentation != nil {
                 if action == .check { checkAgain() }
@@ -449,24 +438,6 @@ final class UpdateNoticeView: NSView {
         ceil(field.cell?.cellSize(forBounds: NSRect(x: 0, y: 0, width: width, height: 10_000)).height ?? 17)
     }
 
-    private func caption(_ button: UpdateNoticeButton, parent: NSView, rightEdge: CGFloat, y: CGFloat) {
-        let control = NSButton(title: "", target: nil, action: nil)
-        control.isBordered = false
-        control.attributedTitle = NSAttributedString(string: button.label.uppercased(), attributes: [
-            .font: NSFont.systemFont(ofSize: tokens.number("text-xs"), weight: .semibold),
-            .foregroundColor: tokens.color("text-subtle"), .kern: 0.6,
-        ])
-        control.sizeToFit()
-        control.frame = NSRect(x: rightEdge - control.frame.width - 8, y: y,
-                               width: control.frame.width + 8, height: 24)
-        control.setAccessibilityLabel(button.label)
-        let action = button.action
-        let target = UpdateNoticeButtonTarget { [weak self] in self?.onAction(action) }
-        control.target = target; control.action = #selector(UpdateNoticeButtonTarget.fire)
-        targets.append(target)
-        parent.addSubview(control)
-    }
-
     private func sunkenBox(_ frame: NSRect, parent: NSView) -> Surface {
         let box = Surface(frame: frame)
         box.wantsLayer = true
@@ -548,8 +519,7 @@ final class UpdateNoticeView: NSView {
         // Header.
         card.addSubview(UpdateNoticeIconView(frame: NSRect(x: s6, y: s6, width: 36, height: 36),
             icon: p.icon, tone: p.iconTone, tokens: tokens))
-        let revealWidth: CGFloat = p.revealNotes == nil ? 0 : 96
-        let copyX = s6 + 36 + s4, copyWidth = width - copyX - s6 - revealWidth
+        let copyX = s6 + 36 + s4, copyWidth = width - copyX - s6
         let title = label(p.title, size: "text-lg", color: "text", weight: .semibold)
         title.frame = NSRect(x: copyX, y: s6 - 2, width: copyWidth, height: 20)
         title.lineBreakMode = .byTruncatingTail
@@ -558,7 +528,6 @@ final class UpdateNoticeView: NSView {
         description.frame = NSRect(x: copyX, y: s6 + 20, width: copyWidth, height: 17)
         description.lineBreakMode = .byTruncatingTail
         card.addSubview(description)
-        if let reveal = p.revealNotes { caption(reveal, parent: card, rightEdge: width - s6, y: s6 + 6) }
         let headerBottom = s6 + 36 + s5 + 3
 
         // Footer and warning anchored to the bottom.
@@ -617,7 +586,6 @@ final class UpdateNoticeView: NSView {
             let heading = label(notes.heading.uppercased(), size: "text-2xs", color: "text-subtle", weight: .semibold)
             heading.frame = NSRect(x: s5, y: s5, width: 160, height: 16)
             box.addSubview(heading)
-            caption(notes.hide, parent: box, rightEdge: box.frame.width - s5 + 8, y: s5 - 4)
             var innerY = s5 + 16 + s4
             let innerWidth = box.frame.width - s5 * 2
             if let intro = notes.intro {
@@ -883,7 +851,7 @@ final class UpdateNoticeController {
     private func report(_ p: UpdateNoticePresentation, placement: UpdateNoticePlacement) {
         let row: [String: Any] = [
             "visualState": p.visualState, "title": p.title, "description": p.description,
-            "notes": p.notes != nil, "revealNotes": p.revealNotes != nil,
+            "notes": p.notes != nil,
             "primary": p.primary.map { $0.label as Any } ?? NSNull(),
             "dismiss": p.dismiss.map { $0.label as Any } ?? NSNull(),
             "dismissBlocked": p.dismissBlocked, "cardHeight": p.cardHeight, "caret": placement.caret,

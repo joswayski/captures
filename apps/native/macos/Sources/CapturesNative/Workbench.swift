@@ -1969,9 +1969,6 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                 guard let url = URL(string: value) else { return false }
                 return NSWorkspace.shared.open(url)
             }
-            controller.model.persistShowChangelog = { [weak self] show in
-                self?.preferencesController?.setShowUpdateChangelog(show)
-            }
             updateNotice = controller
         }
         updateNotice?.setSuspended(false)
@@ -1988,13 +1985,6 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                     guard case .success(let settings) = result else { return }
                     controller?.model.showChangelog = settings.bool("show_update_changelog", true)
                     controller?.refresh()
-                }
-                controller.model.persistShowChangelog = { [weak store] show in
-                    store?.load { result in
-                        guard case .success(var settings) = result else { return }
-                        settings["show_update_changelog"] = show
-                        store?.save(settings) { _, _ in }
-                    }
                 }
             }
             updateNotice = controller

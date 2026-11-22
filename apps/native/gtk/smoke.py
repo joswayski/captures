@@ -2327,8 +2327,8 @@ def recording(binary, scratch):
 
 
 def notices(binary, scratch):
-    """The update notice on shipping's fixtures over AT-SPI: Hide persists
-    `show_update_changelog` and What's new restores the notes; Update now
+    """The update notice on shipping's fixtures over AT-SPI: the notes have no
+    Hide or What's new toggle (Preferences owns that setting); Update now
     downloads, reaches the restart state and closes (the shared stub never
     installs anything); an error's Close dismisses it."""
     settings = scratch / "notice-settings.json"
@@ -2347,12 +2347,8 @@ def notices(binary, scratch):
         # Pull requests are real buttons inside the note text.
         wait(lambda: find(dialog, "push button", "Open pull request 265"),
              "the pull request button in the notes")
-        press(wait(lambda: find(app, "push button", "Hide"), "Hide")[0])
-        reveal = wait(lambda: find(app, "push button", "What’s new"), "What's new")[0]
-        assert json.loads(settings.read_text())["show_update_changelog"] is False
-        press(reveal)
-        wait(lambda: find(app, "push button", "Hide"), "the notes to return")
-        assert json.loads(settings.read_text())["show_update_changelog"] is True
+        assert not find(app, "push button", "Hide"), "the notes kept a Hide toggle"
+        assert not find(app, "push button", "What’s new"), "the notice kept What's new"
         press(find(app, "push button", "Update now")[0])
         wait(lambda: [n for n, (role, _) in nodes(app) if role == "progress bar"],
              "download progress")

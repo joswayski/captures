@@ -135,7 +135,8 @@ mod tests {
                 .to_string(),
         );
         assert_eq!(present["result"]["title"], "Update available");
-        assert_eq!(present["result"]["reveal_notes"]["label"], "What’s new");
+        assert!(present["result"]["notes"].is_null());
+        assert!(present["result"].get("reveal_notes").is_none());
         assert_eq!(present["result"]["card_height"], 168.0);
         let loading = call(r#"{"operation":"present","status":null}"#);
         assert_eq!(loading["result"]["title"], "Loading update details");

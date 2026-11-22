@@ -332,7 +332,7 @@ pub fn settings_changed(settings: &captures_settings::AppSettings) {
     });
 }
 
-/// Hide the notice (Later/Close). True when one was up.
+/// Hide the notice (Not now/Close). True when one was up.
 pub fn hide() -> bool {
     let hidden = NOTICE
         .with(|n| n.try_borrow_mut().ok().and_then(|mut n| n.take()))
@@ -387,7 +387,6 @@ struct Notice {
     g: Gfx,
     t: Tokens,
     appearance: Option<String>,
-    settings_file: PathBuf,
     tray: TrayRect,
     /// The last usable tray icon rect. A re-placement keeps it when a later
     /// lookup fails, so the caret and position stay put.
@@ -468,7 +467,6 @@ fn open(live: Live) -> Result<()> {
                 g,
                 t,
                 appearance: live.appearance,
-                settings_file: live.settings_file,
                 tray: live.tray,
                 anchor,
                 menu_waits: 0,
@@ -640,8 +638,8 @@ impl Notice {
 
     /// Present the notice for a new height at the tray icon, or at the last
     /// usable icon rect when the lookup fails. It can fail transiently (the
-    /// physical recheck lost the caret and moved the card 8 pt left after
-    /// Hide); the icon has not moved, so neither does the notice.
+    /// physical recheck lost the caret and moved the card 8 pt left after a
+    /// height change); the icon has not moved, so neither does the notice.
     fn replace(&mut self) {
         let height = self.presentation.card_height;
         (self.placement, self.scale) = anchored(tray_rect(self.tray), &mut self.anchor, height);
@@ -819,32 +817,6 @@ fn act(action: Action) {
             let blocked = with_notice(|n| n.presentation.dismiss_blocked).unwrap_or(true);
             if !blocked {
                 hide();
-            }
-        }
-        Action::ShowNotes | Action::HideNotes => {
-            let show = action == Action::ShowNotes;
-            let file = with_notice(|n| {
-                n.view.show_changelog = show;
-                n.refresh(false);
-                n.settings_file.clone()
-            });
-            // Shipping persists the choice. Preferences, when open, saves it
-            // and moves its own What's new switch.
-            let saved = crate::host::with_host(|h| {
-                h.scene.set_show_update_changelog(show);
-                h.need = true;
-            });
-            // The fixture never writes settings.
-            if saved.is_none()
-                && !FIXTURE.get()
-                && let Some(file) = file
-                && let Ok(mut settings) = captures_settings::load(&file)
-                && settings.show_update_changelog != show
-            {
-                settings.show_update_changelog = show;
-                if let Err(error) = captures_settings::save(&file, &settings) {
-                    eprintln!("Could not save the What's new choice: {error}");
-                }
             }
         }
         Action::Install => {
@@ -1177,7 +1149,7 @@ pub fn paint(
     let n = |name: &str| t.n(name);
     let c = |name: &str| t.color(name);
     let (s3, s4, s5, s6) = (n("s-3"), n("s-4"), n("s-5"), n("s-6"));
-    let (sm, xs, xxs) = (n("text-sm"), n("text-xs"), n("text-2xs"));
+    let (sm, xxs) = (n("text-sm"), n("text-2xs"));
     let (snug, tight) = (n("leading-snug"), n("leading-tight"));
     let mut parts: Vec<Part> = Vec::new();
     let mut part = |role: Role, name: &str, r: D2D_RECT_F, action: Option<Action>, enabled| {
@@ -1225,26 +1197,8 @@ pub fn paint(
     let inner = width - 2. * s6;
 
     // ---- measure ----
-    // `.update-notice-header`: 36 px icon, copy, optional What's new.
-    let reveal = match &p.reveal_notes {
-        Some(button) => Some((
-            button,
-            para(
-                g,
-                t,
-                &button.label.to_uppercase(),
-                (xs, "weight-semibold"),
-                Some("tracking-wide"),
-                None,
-                10_000.,
-            )?,
-        )),
-        None => None,
-    };
-    let reveal_size = reveal
-        .as_ref()
-        .map(|(_, text)| (text.width + 2. * s3, text.height + 2. * n("s-2")));
-    let copy_width = inner - 36. - s4 - reveal_size.map_or(0., |(w, _)| w + s4);
+    // `.update-notice-header`: 36 px icon and copy.
+    let copy_width = inner - 36. - s4;
     let title = para(
         g,
         t,
@@ -1264,7 +1218,7 @@ pub fn paint(
         copy_width,
     )?;
     let copy_height = title.height + 2. + description.height;
-    let header_content = copy_height.max(36.).max(reveal_size.map_or(0., |(_, h)| h));
+    let header_content = copy_height.max(36.);
     let header = s6 + header_content + s5;
 
     // `.update-notice-body` blocks at the inner width.
@@ -1278,15 +1232,6 @@ pub fn paint(
                 (xxs, "weight-semibold"),
                 Some("tracking-wide"),
                 Some(tight),
-                10_000.,
-            )?;
-            let hide = para(
-                g,
-                t,
-                &notes.hide.label.to_uppercase(),
-                (xs, "weight-semibold"),
-                Some("tracking-wide"),
-                None,
                 10_000.,
             )?;
             let intro = match &notes.intro {
@@ -1371,7 +1316,7 @@ pub fn paint(
                     empty,
                 });
             }
-            Some((notes, heading, hide, intro, empty, groups))
+            Some((notes, heading, intro, empty, groups))
         }
         None => None,
     };
@@ -1594,18 +1539,6 @@ pub fn paint(
         None,
         true,
     );
-    if let (Some((button, text)), Some((w, h))) = (&reveal, reveal_size) {
-        let r = rect(right - s6 - w, mid - h / 2., right - s6, mid + h / 2.);
-        let key = part(
-            Role::Button,
-            &button.label,
-            r,
-            Some(button.action.clone()),
-            button.enabled,
-        );
-        let color = if hovered(key) { "text" } else { "text-subtle" };
-        gfx::text(dc, text, r.left + s3, r.top + n("s-2"), c(color))?;
-    }
 
     // ---- body ----
     let body_top = y0 + header_h;
@@ -1613,13 +1546,13 @@ pub fn paint(
     let (bx0, bx1) = (left + s6, right - s6);
     let mut scroll_max = 0.;
     let mut notes_view = None;
-    if let Some((notes, heading, hide, intro, empty, groups)) = &notes {
+    if let Some((notes, heading, intro, empty, groups)) = &notes {
         let section = rect(bx0, y, bx1, body_top + body_h - s4);
         gfx::fill_round(dc, section, n("r-lg"), c("surface-sunken"))?;
         gfx::border(dc, section, n("r-lg"), 1., c("border-subtle"))?;
         let ix = bx0 + 1. + s5;
         let mut iy = y + 1. + s5;
-        let row = heading.height.max(hide.height);
+        let row = heading.height;
         gfx::text(
             dc,
             heading,
@@ -1634,21 +1567,6 @@ pub fn paint(
             None,
             true,
         );
-        let hide_r = rect(
-            bx1 - 1. - s5 - hide.width,
-            iy + (row - hide.height) / 2.,
-            bx1 - 1. - s5,
-            iy + (row + hide.height) / 2.,
-        );
-        let key = part(
-            Role::Button,
-            &notes.hide.label,
-            hide_r,
-            Some(notes.hide.action.clone()),
-            notes.hide.enabled,
-        );
-        let color = if hovered(key) { "text" } else { "text-subtle" };
-        gfx::text(dc, hide, hide_r.left, hide_r.top, c(color))?;
         iy += row + s4;
         if let Some(intro) = intro {
             gfx::text(dc, intro, ix, iy, c("text-subtle"))?;

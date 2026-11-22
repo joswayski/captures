@@ -33,21 +33,6 @@ fn text(tokens: &Tokens, value: &str, size: &str, color: &str) -> RichText {
         .color(tokens.color(color))
 }
 
-/// Uppercase caption buttons ("What's new" / "Hide").
-fn caption_button(ui: &mut egui::Ui, tokens: &Tokens, label: &str) -> egui::Response {
-    let response = ui.add(
-        egui::Button::new(text(
-            tokens,
-            &label.to_uppercase(),
-            "text-xs",
-            "text-subtle",
-        ))
-        .frame(false),
-    );
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
-    response
-}
-
 fn paint_icon(ui: &egui::Ui, tokens: &Tokens, area: egui::Rect, icon: Icon, tone: IconTone) {
     let painter = ui.painter();
     let (fill, ink) = match tone {
@@ -214,16 +199,11 @@ pub fn show(
     card_ui.set_clip_rect(card);
     card_ui.style_mut().spacing.item_spacing = egui::vec2(s4, s4);
 
-    // Header: icon, title/description, optional "What's new".
+    // Header: icon, title/description.
     let icon = egui::Rect::from_min_size(card.min + egui::vec2(s6, s6), egui::vec2(36., 36.));
-    let reveal_width = if presentation.reveal_notes.is_some() {
-        96.
-    } else {
-        0.
-    };
     let copy = egui::Rect::from_min_max(
         egui::pos2(icon.right() + s4, card.top() + s6 - 2.),
-        egui::pos2(card.right() - s6 - reveal_width, icon.bottom() + 4.),
+        egui::pos2(card.right() - s6, icon.bottom() + 4.),
     );
     paint_icon(
         card_ui,
@@ -242,22 +222,6 @@ pub fn show(
             "text-subtle",
         ));
     });
-    if let Some(reveal) = &presentation.reveal_notes {
-        let area = egui::Rect::from_min_max(
-            egui::pos2(card.right() - s6 - reveal_width, icon.top()),
-            egui::pos2(card.right() - s6, icon.bottom()),
-        );
-        card_ui.scope_builder(
-            egui::UiBuilder::new()
-                .max_rect(area)
-                .layout(egui::Layout::right_to_left(egui::Align::Center)),
-            |ui| {
-                if caption_button(ui, tokens, &reveal.label).clicked() {
-                    action = Some(reveal.action.clone());
-                }
-            },
-        );
-    }
     let header_bottom = icon.bottom() + s5 + 3.;
 
     // Footer and warning are anchored to the bottom of the card.
@@ -352,22 +316,15 @@ pub fn show(
             sunken_box(tokens).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.set_min_height(body.height() - s5 * 2. - 2.);
-                ui.horizontal(|ui| {
-                    ui.label(
-                        text(
-                            tokens,
-                            &notes.heading.to_uppercase(),
-                            "text-2xs",
-                            "text-subtle",
-                        )
-                        .strong(),
-                    );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if caption_button(ui, tokens, &notes.hide.label).clicked() {
-                            action = Some(notes.hide.action.clone());
-                        }
-                    });
-                });
+                ui.label(
+                    text(
+                        tokens,
+                        &notes.heading.to_uppercase(),
+                        "text-2xs",
+                        "text-subtle",
+                    )
+                    .strong(),
+                );
                 if let Some(intro) = &notes.intro {
                     ui.add(egui::Label::new(text(tokens, intro, "text-sm", "text-subtle")).wrap());
                 }
@@ -676,11 +633,6 @@ impl Host {
                 crate::emit("update-notice-dismiss-blocked", serde_json::json!({}));
             }
             Action::Dismiss => self.hide(),
-            Action::ShowNotes | Action::HideNotes => {
-                let show = action == Action::ShowNotes;
-                self.view.show_changelog = show;
-                preferences.set_show_update_changelog(show);
-            }
             Action::Install | Action::Check => {
                 if self.live {
                     if action == Action::Check {
@@ -955,7 +907,6 @@ impl Host {
                     "groups": notes.groups.iter().map(|g| &g.display_version).collect::<Vec<_>>(),
                     "items": notes.groups.iter().map(|g| g.items.len()).sum::<usize>(),
                 })),
-                "revealNotes": p.reveal_notes.is_some(),
                 "download": p.download.as_ref().map(|d| (&d.detail, d.percent)),
                 "restart": p.restart.as_ref().map(|r| &r.message),
                 "error": p.error.as_ref().map(|e| &e.message),

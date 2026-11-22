@@ -453,7 +453,6 @@ struct Live {
 pub struct UpdateNotice {
     pub window: gtk::ApplicationWindow,
     card: gtk::Box,
-    settings_file: PathBuf,
     /// Driven by `updates.rs` rather than the stub.
     live_source: bool,
     status: RefCell<Option<UpdateStatus>>,
@@ -508,7 +507,6 @@ fn update_notice(
     let notice = Rc::new(UpdateNotice {
         window,
         card,
-        settings_file,
         live_source,
         status: RefCell::new(status),
         view: RefCell::new(ViewState {
@@ -552,16 +550,6 @@ impl UpdateNotice {
                     return;
                 }
                 self.close();
-            }
-            Action::ShowNotes | Action::HideNotes => {
-                let show = action == Action::ShowNotes;
-                self.view.borrow_mut().show_changelog = show;
-                // Shipping persists the choice for the next notice.
-                if let Ok(mut settings) = captures_settings::load(&self.settings_file) {
-                    settings.show_update_changelog = show;
-                    let _ = captures_settings::save(&self.settings_file, &settings);
-                }
-                self.render();
             }
             Action::Install if self.live_source => crate::updates::act_from_notice(),
             Action::Check if self.live_source => crate::updates::act(crate::updates::Step::Check),
@@ -752,13 +740,6 @@ impl UpdateNotice {
             subtitle.upcast_ref()
         ])]);
         card.update_property(&[gtk::accessible::Property::Label(&p.title)]);
-        if let Some(reveal) = &p.reveal_notes {
-            let button = button(&reveal.label.to_uppercase(), &["update-notes-reveal"]);
-            button.update_property(&[gtk::accessible::Property::Label(&reveal.label)]);
-            button.set_valign(gtk::Align::Center);
-            button.connect_clicked(action(reveal.action.clone()));
-            header.append(&button);
-        }
 
         // `.update-notice-body`: notes, progress, restart, error or status.
         let body = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -775,10 +756,6 @@ impl UpdateNotice {
             h2.set_accessible_role(gtk::AccessibleRole::Heading);
             h2.update_property(&[gtk::accessible::Property::Label(&notes.heading)]);
             heading.append(&h2);
-            let hide = button(&notes.hide.label.to_uppercase(), &["update-notes-toggle"]);
-            hide.update_property(&[gtk::accessible::Property::Label(&notes.hide.label)]);
-            hide.connect_clicked(action(notes.hide.action.clone()));
-            heading.append(&hide);
             section.append(&heading);
             if let Some(intro) = &notes.intro {
                 section.append(&description(intro, "update-notes-intro"));

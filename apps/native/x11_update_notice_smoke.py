@@ -156,10 +156,11 @@ def main():
                 app.close()
                 print(f"PASS still {name}: {title!r}, {card}px card, caret {expected_caret}", flush=True)
 
-            # Hide / What's new persist and resize; Update now simulates the
-            # download and restart; Escape is ignored while busy.
+            # The notes have no Hide toggle; Update now simulates the download
+            # and restart; Escape is ignored while busy.
             app = App("flow", "--update-state", "available")
             report = app.report("Update available")
+            assert "revealNotes" not in report, report
             assert report["notes"]["stacked"] and report["notes"]["groups"] == ["2026.08.27.5", "2026.08.27.3"], report
             assert report["footer"] == {"dismiss": "Not now", "primary": "Update now", "enabled": True}, report
             window = app.window()
@@ -170,18 +171,6 @@ def main():
             opened = app.event("update-notice-open-url")
             assert opened == {"kind": "pull_request", "url": "https://github.com/joswayski/captures/pull/265",
                               "opened": False}, opened
-            # The notes box starts under the 64px header; Hide sits at its top right.
-            app.click(window, FRAME_PAD + CARD_WIDTH - 16 - 12 - 14, CARET - 1 + 67 + 12 + 8)
-            assert app.event("update-notice-action")["action"] == "hide_notes"
-            report = app.report()
-            assert report["notes"] is None and report["revealNotes"] and report["cardHeight"] == 168, report
-            app.wait_size(window, window_height(168))
-            app.shot(window, "flow-compact")
-            app.click(window, FRAME_PAD + CARD_WIDTH - 16 - 36, CARET - 1 + 16 + 18)
-            assert app.event("update-notice-action")["action"] == "show_notes"
-            report = app.report()
-            assert report["notes"] is not None and report["cardHeight"] == 434, report
-            app.wait_size(window, window_height(434))
             height = window_height(434)
             app.click(window, FRAME_PAD + CARD_WIDTH - 16 - 52, height - FRAME_PAD - 16 - 16)
             assert app.event("update-notice-action")["action"] == "install"

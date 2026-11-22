@@ -293,16 +293,16 @@ placed by the shared `update_notice::placement` with a caret toward the tray
 icon (caretless tray-corner fallback without one). A newly available version
 opens it once per session, deferred while a capture or recording runs; an
 install started from it reopens it on failure; the tray's Check for Updates
-shows it while an update is available. Later/Close hide it (not while
-downloading or restarting), What's new / Hide persist `show_update_changelog`,
-Update now / Try again / Check again run the same steps as the Updates card,
+shows it while an update is available. Not now/Close hide it (not while
+downloading or restarting); release notes follow the Preferences
+`show_update_changelog` switch, with no toggle on the notice. Update now / Try again / Check again run the same steps as the Updates card,
 View release, pull request numbers and "download from captur.es" open the
 browser, and progress, restart and error states update in place. Its parts are
 exposed through `panel_uia.rs` (heading, status/alert lines, invokable
 buttons). Render it with `--scene update --update
 available|single|closing|manual|downloading|restarting|error|checking|up-to-date
 [--tool fallback] [--select notes-hidden] --screenshot PATH`, or without
-`--screenshot` as a live notice by the notification area until Later/Close
+`--screenshot` as a live notice by the notification area until Not now/Close
 (its buttons reach no worker). Not ported: the
 `ui-pop-in` entrance and the restart exit fade. A Windows 11 recheck at
 8ce4447b found caret, placement, announcement and live-fixture defects, fixed
