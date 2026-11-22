@@ -1099,6 +1099,9 @@ pub unsafe extern "C" fn captures_editor_import_image_v1(
 #[serde(deny_unknown_fields)]
 struct ImportImagesRequest {
     names: Vec<String>,
+    /// The capture each image came from, when it was a prepared drag.
+    #[serde(default)]
+    source_artifact_ids: Vec<Option<String>>,
     selected_id: Option<String>,
     point: Option<Point>,
 }
@@ -1140,15 +1143,17 @@ pub unsafe extern "C" fn captures_editor_import_images_v1(
             }
             total += size;
         }
+        let mut sources = request.source_artifact_ids.into_iter();
         let images = pixels
             .iter()
             .zip(request.names)
             .map(|(pixels, name)| {
+                let source = sources.next().flatten();
                 // SAFETY: the single-image validator checks each row layout before copying.
-                unsafe { copy_import_pixels(pixels) }.map(|pixels| (name, pixels))
+                unsafe { copy_import_pixels(pixels) }.map(|pixels| (name, pixels, source))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let layer_id = session.import_images(images, request.selected_id, request.point)?;
+        let layer_id = session.import_sourced_images(images, request.selected_id, request.point)?;
         session.refresh_layer_thumbnails();
         Ok::<_, String>(json!({"layer_id":layer_id,"snapshot":session.snapshot()}))
     }))

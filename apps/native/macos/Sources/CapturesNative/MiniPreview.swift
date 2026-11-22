@@ -3499,6 +3499,7 @@ final class MiniPreviewActions {
                     else { detail = "The capture file could not be prepared for dragging." }
                     self?.previews?.setStatus("Drag unavailable", detail: detail, for: artifact.id)
                 }
+                if let path { PreparedDrags.record(path: path, artifactID: artifact.id) }
                 completion(path)
             }
         }

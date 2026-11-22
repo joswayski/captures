@@ -1315,6 +1315,24 @@ impl EditorSession {
         selected_id: Option<String>,
         point: Option<Point>,
     ) -> Result<String, String> {
+        self.import_sourced_images(
+            images
+                .into_iter()
+                .map(|(name, pixels)| (name, pixels, None)),
+            selected_id,
+            point,
+        )
+    }
+
+    /// `import_images` where each image may name the capture it came from
+    /// (shipping `prepared_drag_artifact_id`), so its layer keeps that capture
+    /// "In editor" for as long as the layer exists.
+    pub fn import_sourced_images(
+        &mut self,
+        images: impl IntoIterator<Item = (String, RgbaImage, Option<String>)>,
+        selected_id: Option<String>,
+        point: Option<Point>,
+    ) -> Result<String, String> {
         self.require_finished_text_input()?;
         if point.is_some_and(|point| !point.x.is_finite() || !point.y.is_finite()) {
             return Err("Image drop coordinates must be finite.".into());
@@ -1325,7 +1343,7 @@ impl EditorSession {
         let mut assets = self.assets.clone();
         let mut retained = retained_asset_pixels(&assets)?;
         let mut last_id = None;
-        for (name, pixels) in images {
+        for (name, pixels, source_artifact_id) in images {
             let (width, height) = pixels.dimensions();
             validate_import_dimensions(width, height, retained)?;
             retained += u64::from(width) * u64::from(height);
@@ -1361,7 +1379,7 @@ impl EditorSession {
                 src: source.clone(),
                 original_src: OptionalNullable::Null,
                 name,
-                source_artifact_id: None,
+                source_artifact_id,
                 width: bounds.width,
                 height: bounds.height,
                 natural_width: f64::from(width),

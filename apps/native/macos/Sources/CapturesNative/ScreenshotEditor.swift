@@ -2141,16 +2141,24 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     var presentArtifactID: String? {
         window.isVisible || window.isMiniaturized ? state.artifactID : nil
     }
-    /// Called on the main thread whenever `presentArtifactID` changes.
-    var presenceChanged: (String?) -> Void = { _ in }
+    /// Every capture this open window shows (shipping
+    /// `collectEditorSourceArtifactIds`): the opened capture while its image
+    /// layer remains, plus captures dragged in as layers.
+    var presentArtifactIDs: Set<String> {
+        guard window.isVisible || window.isMiniaturized, let artifactID = state.artifactID else { return [] }
+        guard let layers = state.snapshot?.layers else { return [artifactID] }
+        return Set(layers.compactMap(\.sourceArtifactID))
+    }
+    /// Called on the main thread whenever `presentArtifactIDs` changes.
+    var presenceChanged: (Set<String>) -> Void = { _ in }
     /// Called on the main thread after a close finishes with nothing queued
     /// to reopen; the owner releases this controller and builds a new one on
     /// the next open.
     var didClose: () -> Void = {}
-    private var reportedPresence: String?
+    private var reportedPresence: Set<String> = []
 
     private func publishPresence() {
-        let current = presentArtifactID
+        let current = presentArtifactIDs
         guard current != reportedPresence else { return }
         reportedPresence = current
         presenceChanged(current)
@@ -7021,16 +7029,21 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         editorError = nil
         updateControls()
         let decoder = imageDecoder
+        let sourceIDs = sources.map { source -> String? in
+            guard case .file(let url) = source else { return nil }
+            return PreparedDrags.artifactID(for: url)
+        }
         Self.imageDecodeQueue.async {
             let result = Result { () throws -> [EditorDecodedImage] in
                 var images: [EditorDecodedImage] = []
                 var retainedPixels = 0
-                for source in sources {
-                    let image: EditorDecodedImage
+                for (source, sourceID) in zip(sources, sourceIDs) {
+                    var image: EditorDecodedImage
                     switch source {
                     case .file(let url): image = try decoder(url)
                     case .bytes(let data): image = try EditorImageDecoder.decode(data)
                     }
+                    image.sourceArtifactID = sourceID
                     retainedPixels = try EditorImageDecoder.validateDimensions(
                         width: image.width, height: image.height, retainedPixels: retainedPixels)
                     images.append(image)
@@ -7593,6 +7606,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     private func updateControls() {
+        publishPresence()
         let settled = state.snapshot != nil && !state.busy && inlineTextInput == nil
         if !state.busy { commandGraceWork?.cancel(); commandGraceWork = nil; commandGrace = false }
         // Controls stay enabled through a brief edit; `state.beginCommand`
@@ -8086,6 +8100,4 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 extension EditorCropOverlay: TokenRestyling { func restyle(tokens: Tokens) { self.tokens = tokens } }
 extension EditorMakeCopySwitch: TokenRestyling { func restyle(tokens: Tokens) { self.tokens = tokens } }
 extension EditorFilenameBox: TokenRestyling { func restyle(tokens: Tokens) { self.tokens = tokens } }
-
-
 extension EditorLayerCell: TokenRestyling { func restyle(tokens: Tokens) { self.tokens = tokens } }

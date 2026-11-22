@@ -339,6 +339,9 @@ struct NativeEditorLayer: Equatable {
     let rowName: String
     let rowKind: String
     let rowIcon: String
+    /// The capture an image layer shows (the opened capture, or one dragged
+    /// in from a preview or History), for the "In editor" presence.
+    let sourceArtifactID: String?
 
     init?(_ value: [String: Any], annotation: [String: Any]? = nil,
           textShadow: [String: Any]? = nil,
@@ -360,6 +363,7 @@ struct NativeEditorLayer: Equatable {
         width = (value["width"] as? NSNumber)?.doubleValue
         height = kind == .image ? (value["height"] as? NSNumber)?.doubleValue : nil
         blendMode = value["blendMode"] as? String ?? "source-over"
+        sourceArtifactID = kind == .image ? value["sourceArtifactId"] as? String : nil
         self.thumbnail = thumbnail
         self.annotation = annotation.flatMap(NativeAnnotationStyle.init)
         if annotation != nil && self.annotation == nil { return nil }
@@ -804,6 +808,21 @@ struct EditorDecodedImage: Equatable {
     let height: Int
     let bytesPerRow: Int
     let name: String
+    /// The capture this image was dragged from (a prepared drag file).
+    var sourceArtifactID: String?
+}
+
+/// Files handed to OS drags by mini previews and History, by capture
+/// (shipping `prepared_drag_artifact_id`), so a capture dropped into an editor
+/// keeps its "In editor" presence. Main thread only.
+enum PreparedDrags {
+    private static var artifacts: [String: String] = [:]
+    static func record(path: String, artifactID: String) {
+        artifacts[URL(fileURLWithPath: path).resolvingSymlinksInPath().path] = artifactID
+    }
+    static func artifactID(for url: URL) -> String? {
+        artifacts[url.resolvingSymlinksInPath().path]
+    }
 }
 
 struct EditorImportPresentation {
@@ -1176,6 +1195,9 @@ private final class NativeEditorSession {
     func importImages(_ images: [EditorDecodedImage], selectedID: String?, point: CGPoint? = nil) throws
         -> EditorImportPresentation {
         var request: [String: Any] = ["names": images.map(\.name)]
+        if images.contains(where: { $0.sourceArtifactID != nil }) {
+            request["source_artifact_ids"] = images.map { $0.sourceArtifactID ?? NSNull() as Any }
+        }
         if let selectedID { request["selected_id"] = selectedID }
         // A drop sample places the image where the drop guide showed.
         if let point { request["point"] = ["x": Double(point.x), "y": Double(point.y)] }

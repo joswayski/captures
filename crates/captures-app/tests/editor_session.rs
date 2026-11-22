@@ -2978,6 +2978,38 @@ fn image_import_is_atomic_undoable_and_draft_owned() {
 }
 
 #[test]
+fn imported_layers_keep_the_capture_they_were_dragged_from() {
+    let (data, id, _) = setup();
+    let mut editor = open(data.path(), &id).unwrap();
+    let pixels = RgbaImage::from_pixel(2, 2, Rgba([9, 9, 9, 255]));
+    editor
+        .import_sourced_images(
+            [
+                (
+                    "Captures_other.png".into(),
+                    pixels.clone(),
+                    Some("other".into()),
+                ),
+                ("from-disk.png".into(), pixels, None),
+            ],
+            None,
+            None,
+        )
+        .unwrap();
+    let sources = editor
+        .snapshot()
+        .document
+        .elements
+        .iter()
+        .map(|element| match element {
+            Element::Image(image) => image.source_artifact_id.clone(),
+            _ => panic!("only image layers were added"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(sources, [Some(id), Some("other".into()), None]);
+}
+
+#[test]
 fn clipboard_image_batch_is_one_atomic_owned_edit() {
     let (data, id, original) = setup();
     let mut editor = open(data.path(), &id).unwrap();

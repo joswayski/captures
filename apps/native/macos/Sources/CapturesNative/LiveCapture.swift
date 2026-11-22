@@ -1555,6 +1555,7 @@ final class LiveCaptureController: NSObject {
             DispatchQueue.main.async {
                 guard let self, self.historyRoot == root,
                       self.artifacts.contains(where: { $0.id == id }) else { return }
+                if case .success(let path) = result { PreparedDrags.record(path: path, artifactID: id) }
                 completion(result)
             }
         }
@@ -3620,8 +3621,8 @@ final class LiveCaptureController: NSObject {
                             self?.loadHistory(select: artifactID)
                         })
                     // Mini previews show "In editor" while this window shows their capture.
-                    self.screenshotEditor?.presenceChanged = { [weak self] artifactID in
-                        self?.miniPreviews?.setEditorArtifacts(Set(artifactID.map { [$0] } ?? []))
+                    self.screenshotEditor?.presenceChanged = { [weak self] artifactIDs in
+                        self?.miniPreviews?.setEditorArtifacts(artifactIDs)
                     }
                     // A closed editor is released and rebuilt on the next open,
                     // so its window and graphics memory are not kept idle.

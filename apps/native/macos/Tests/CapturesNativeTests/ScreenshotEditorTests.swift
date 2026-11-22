@@ -2853,13 +2853,13 @@ final class ScreenshotEditorTests: XCTestCase {
     func testAsyncQuitDrainsCopyAndQueuedSaveBeforeItsFailureAwareBarrier() throws {
         _ = NSApplication.shared
         for copyFails in [false, true] {
-            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true))
+            let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true, layers: [captureLayer("shot")]))
             worker.deferEncodes = true; worker.deferExportSaves = true
             var writes = 0, historyChanges = 0, replies: [Bool] = []
             let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!,
                 worker: worker, didSaveCopy: { historyChanges += 1 },
                 writeClipboard: { _ in writes += 1; return true })
-            var presence: [String?] = []
+            var presence: [Set<String>] = []
             controller.presenceChanged = { presence.append($0) }
             defer { controller.window.orderOut(nil) }
             controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
@@ -2893,7 +2893,7 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(historyChanges, 1, "accepted Save retains its History callback")
             XCTAssertTrue(controller.window.isVisible)
             XCTAssertEqual(controller.state.artifactID, "shot")
-            XCTAssertEqual(presence, ["shot", nil, "shot"], "failed Quit restores mini-preview presence")
+            XCTAssertEqual(presence, [["shot"], [], ["shot"]], "failed Quit restores mini-preview presence")
             XCTAssertTrue(try copyButton(in: controller.root).isEnabled)
             XCTAssertEqual(worker.closeCount, 0)
 
@@ -2909,7 +2909,7 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(historyChanges, 1, "retry never repeats completed output")
             XCTAssertNil(controller.state.artifactID)
             XCTAssertFalse(controller.window.isVisible)
-            XCTAssertEqual(presence, ["shot", nil, "shot", nil])
+            XCTAssertEqual(presence, [["shot"], [], ["shot"], []])
         }
     }
 
@@ -7233,17 +7233,17 @@ final class ScreenshotEditorTests: XCTestCase {
 
     func testInlineTextCloseFailureRestoresHiddenWindowAndTypedBuffer() throws {
         _ = NSApplication.shared
-        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", layers: [captureLayer("shot")]))
         worker.response = { request in
             guard ["begin_text_input", "update_text_input"].contains(request["operation"] as? String ?? "")
                 else { return nil }
             return self.snapshot(id: "shot",
-                layers: [self.textLayer(id: "fresh", text: request["text"] as? String ?? "")],
+                layers: [self.captureLayer("shot"), self.textLayer(id: "fresh", text: request["text"] as? String ?? "")],
                 activeTextInput: ["input_id": request["input_id"] as! String,
                                   "layer_id": "fresh", "is_new": true])
         }
         let controller = ScreenshotEditorController(tokens: Tokens.variants["dark-mustard"]!, worker: worker)
-        var presence: [String?] = []
+        var presence: [Set<String>] = []
         controller.presenceChanged = { presence.append($0) }
         defer { controller.window.orderOut(nil) }
         controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History")
@@ -7264,11 +7264,11 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertTrue(controller.window.firstResponder === editor)
         XCTAssertEqual(worker.closeCount, 0)
         XCTAssertEqual(controller.state.artifactID, "shot")
-        XCTAssertEqual(presence, ["shot", nil, "shot"], "failed text Finish restores mini-preview presence")
+        XCTAssertEqual(presence, [["shot"], [], ["shot"]], "failed text Finish restores mini-preview presence")
         try render(controller.root, name: "screenshot-editor-close-text-recovered-dark")
         worker.deferRequests = false
         worker.response = { _ in self.snapshot(id: "shot", unsaved: true,
-            layers: [self.textLayer(id: "fresh", text: "recoverable\nΩ🙂")]) }
+            layers: [self.captureLayer("shot"), self.textLayer(id: "fresh", text: "recoverable\nΩ🙂")]) }
         var order: [String] = []
         worker.onAutosave = { order.append("draft") }
         worker.onClose = { order.append("close") }
@@ -7280,7 +7280,7 @@ final class ScreenshotEditorTests: XCTestCase {
             $0["operation"] as? String == "finish_text_input" })
         XCTAssertEqual(finish["commit"] as? Bool, true)
         XCTAssertEqual(order, ["draft", "close"])
-        XCTAssertEqual(presence, ["shot", nil, "shot", nil])
+        XCTAssertEqual(presence, [["shot"], [], ["shot"], []])
     }
 
     func testQuitBarrierLeavesMainQueueResponsiveAndRejectsLateFocusFinish() throws {
@@ -9295,6 +9295,14 @@ final class ScreenshotEditorTests: XCTestCase {
          "visible": visible, "locked": locked, "opacity": opacity]
     }
 
+    /// The opened capture's locked base layer, which carries its source capture.
+    private func captureLayer(_ artifactID: String) -> [String: Any] {
+        ["kind": "image", "id": "capture-background", "name": "Original screenshot", "x": 0.0, "y": 0.0,
+         "visible": true, "locked": true, "opacity": 100.0, "blendMode": "source-over",
+         "source": "background", "src": "draft-asset:original", "sourceArtifactId": artifactID,
+         "width": 640.0, "height": 360.0, "naturalWidth": 640.0, "naturalHeight": 360.0]
+    }
+
     private func shapeLayer(id: String, x: Double, y: Double) -> [String: Any] {
         ["kind": "shape", "id": id, "x": x, "y": y,
          "visible": true, "locked": false, "opacity": 100.0]
@@ -10454,6 +10462,35 @@ extension ScreenshotEditorTests {
 extension ScreenshotEditorTests {
     func testRealPickerBatchIsAtomicAndRetryable() throws {
         try checkRealFileBatch(drop: false)
+    }
+
+    func testDroppedPreviewKeepsItsCaptureInEditorWhileItsLayerExists() throws {
+        _ = NSApplication.shared
+        let fixture = try makeHistoryFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let colorSpace = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
+        let dragged = fixture.root.appendingPathComponent("Captures_other.tiff")
+        let fromDisk = fixture.root.appendingPathComponent("From disk.tiff")
+        for url in [dragged, fromDisk] {
+            try writeTiff(url: url, width: 2, height: 2, bytes: Array(repeating: 90, count: 16),
+                          colorSpace: colorSpace, bitsPerPixel: 32, alpha: .last)
+        }
+        // A mini preview or History card prepared this file for its drag.
+        PreparedDrags.record(path: dragged.path, artifactID: "other")
+        let worker = EditorWorker()
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!, worker: worker)
+        defer { controller.window.orderOut(nil); worker.close(); EditorWorker.flush() }
+        var presence: [Set<String>] = []
+        controller.presenceChanged = { presence.append($0) }
+        controller.present(artifact: artifact(id: fixture.id), historyRoot: fixture.history.path)
+        waitUntil { controller.state.snapshot != nil && !controller.state.busy }
+        XCTAssertEqual(presence.last, [fixture.id])
+        XCTAssertTrue(controller.handleFileDrop(.drop, urls: [dragged, fromDisk], at: .zero))
+        waitUntil { controller.state.snapshot?.layers.count == 3 && !controller.state.busy }
+        XCTAssertEqual(presence.last, [fixture.id, "other"], "the dragged capture is in this editor too")
+        try press("Undo", in: controller.root)
+        waitUntil { controller.state.snapshot?.layers.count == 1 && !controller.state.busy }
+        XCTAssertEqual(presence.last, [fixture.id], "removing its layer releases the capture")
     }
 
     func testRealDropBatchIsAtomicAndRetryable() throws {
