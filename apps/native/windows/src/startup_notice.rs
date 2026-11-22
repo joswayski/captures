@@ -7,6 +7,7 @@
 use std::cell::RefCell;
 use std::time::Duration;
 
+use captures_app::motion::Motion;
 use captures_app::tray_notice::{self, Caret, LogicalRect, Placement};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
@@ -22,6 +23,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
 
 use crate::gfx::{self, Gfx, rect};
+use crate::notice_motion::{self, Curve};
 use crate::panel_uia;
 use crate::tokens::Tokens;
 
@@ -254,7 +256,7 @@ impl Notice {
                 SWP_NOACTIVATE,
             );
         }
-        if let Err(error) = self.render() {
+        if let Err(error) = self.render().and_then(|()| self.arrive()) {
             eprintln!("failed to draw Captures launch notice: {error}");
         }
         unsafe {
@@ -267,6 +269,35 @@ impl Notice {
             );
             SetTimer(Some(self.hwnd), ANNOUNCE_TIMER, ANNOUNCE_DELAY_MS, None);
         }
+    }
+
+    /// Shipping's `startup-arrive` (`-from-below` when the caret points down
+    /// at the taskbar icon), once as the notice shows.
+    fn arrive(&self) -> Result<()> {
+        let (Some(dcomp), Some((_, visual, _))) = (&self.g.dcomp, &self.composition) else {
+            return Ok(());
+        };
+        let motion = if self.placement.caret == Caret::Bottom {
+            Motion::StartupNoticeInFromBelow
+        } else {
+            Motion::StartupNoticeIn
+        };
+        let Some(animation) = motion.resolve(&self.t) else {
+            return Ok(());
+        };
+        let p = self.placement;
+        let s = self.scale as f64;
+        let size = ((p.width * s) as f32, (p.height * s) as f32);
+        let reduced = crate::appearance::reduced_motion();
+        notice_motion::play(
+            dcomp,
+            visual,
+            size,
+            self.scale,
+            Curve::Once(&animation),
+            reduced,
+        )?;
+        unsafe { dcomp.Commit() }
     }
 
     fn render(&mut self) -> Result<()> {

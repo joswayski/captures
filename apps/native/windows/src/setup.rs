@@ -6,11 +6,13 @@
 //! microphone row, so the row only ever shows a status, never an action.
 use std::cell::RefCell;
 use std::sync::mpsc;
+use std::time::Instant;
 
 use captures_app::app_windows;
+use captures_app::motion::{Motion, ONBOARDING_CTA_SPREAD};
 use captures_app::onboarding::{self, Action, Presentation, Session, State};
 use windows::Win32::Foundation::*;
-use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
+use windows::Win32::Graphics::Direct2D::Common::{D2D_RECT_F, D2D1_COLOR_F};
 use windows::Win32::Graphics::Direct2D::*;
 use windows::Win32::Graphics::DirectComposition::*;
 use windows::Win32::Graphics::Gdi::ValidateRect;
@@ -28,6 +30,8 @@ use crate::{Options, appearance};
 const CLASS: PCWSTR = w!("CapturesSetup");
 const WM_DONE: u32 = WM_APP + 51;
 const WM_MOUSELEAVE: u32 = 0x02A3;
+/// Repaints the Start button's pulse.
+const PULSE_TIMER: usize = 1;
 
 type Done = (Action, Session, std::result::Result<State, String>);
 
@@ -66,6 +70,8 @@ pub struct Setup {
     pressed: bool,
     focused: bool,
     tracking: bool,
+    /// When the ready Start button's `onboarding-cta-pulse` began.
+    pulse: Option<Instant>,
     /// Part rects from the last paint, for hit tests and UI Automation.
     rects: Rects,
 }
@@ -106,6 +112,7 @@ impl Setup {
             pressed: false,
             focused: false,
             tracking: false,
+            pulse: None,
             rects: Rects {
                 title: EMPTY,
                 lede: None,
@@ -207,6 +214,26 @@ impl Setup {
             px.0 as f32 / self.size.0.max(1.),
             px.1 as f32 / self.size.1.max(1.),
         );
+        // Shipping pulses the button while setup can finish
+        // (`screenReady && busy === null`); reduced motion rests on its
+        // transparent final frame, so nothing repaints.
+        let pulsing = self.enabled();
+        let was = self.pulse.is_some() && !appearance::reduced_motion();
+        if !pulsing {
+            self.pulse = None;
+        } else if self.pulse.is_none() {
+            self.pulse = Some(Instant::now());
+        }
+        let now = pulsing && !appearance::reduced_motion();
+        if now != was {
+            unsafe {
+                if now {
+                    SetTimer(Some(self.hwnd), PULSE_TIMER, 33, None);
+                } else {
+                    let _ = KillTimer(Some(self.hwnd), PULSE_TIMER);
+                }
+            }
+        }
         let mut rects = self.rects;
         gfx::draw_surface(&surface, px, scale, 0., |dc| {
             rects = self.paint(dc)?;
@@ -429,6 +456,20 @@ impl Setup {
         } else {
             "solid"
         };
+        // `onboarding-cta-pulse`: a `--surface-active` halo flush outside.
+        if let (Some(started), Some(pulse)) = (self.pulse, Motion::OnboardingCtaPulse.resolve(t)) {
+            let ms = started.elapsed().as_secs_f64() * 1000.;
+            let pose = pulse.pose_repeating(ms, appearance::reduced_motion());
+            let spread = (ONBOARDING_CTA_SPREAD * pose.opacity) as f32;
+            if spread > 0.01 {
+                let halo = c("surface-active");
+                let halo = D2D1_COLOR_F {
+                    a: halo.a * pose.opacity as f32,
+                    ..halo
+                };
+                gfx::ring(dc, button, n("r-md"), 0., spread, halo)?;
+            }
+        }
         if self.focused {
             gfx::ring(dc, button, n("r-md"), 0., 2., c("surface-canvas"))?;
             gfx::ring(
@@ -527,6 +568,7 @@ impl Setup {
                 self.t = appearance::tokens(self.options.appearance.as_deref(), &settings);
                 appearance::title_bar(self.hwnd, &self.t);
             }
+            WM_TIMER if wp.0 == PULSE_TIMER => {}
             WM_GETMINMAXINFO => unsafe {
                 let spec = app_windows::SETUP;
                 let (x, y) = crate::host::window_size(self.hwnd, spec.min_width, spec.min_height);
@@ -697,7 +739,8 @@ pub fn open(options: &Options) -> Result<()> {
 
 /// `--scene setup --screenshot`: the checked state of `options`' settings,
 /// `--select checking` before the first check, `--select error` with a
-/// failed finish and `--select focus` with the button focused.
+/// failed finish, `--select focus` with the button focused and `--select
+/// pulse` with the ready button's halo at its widest.
 pub fn render_offscreen(options: &Options, g: Gfx, t: Tokens, size: (f32, f32)) -> Result<Setup> {
     let mut setup = Setup::new(HWND::default(), options, g, t);
     setup.size = size;
@@ -712,6 +755,10 @@ pub fn render_offscreen(options: &Options, g: Gfx, t: Tokens, size: (f32, f32)) 
     }
     setup.focused = select == Some("focus");
     setup.hover = select == Some("hover");
+    if select == Some("pulse") && setup.enabled() {
+        // The halo at its widest, halfway through the 2.6 s loop.
+        setup.pulse = Instant::now().checked_sub(std::time::Duration::from_millis(1300));
+    }
     Ok(setup)
 }
 

@@ -219,7 +219,8 @@ announces name flips such as Pause/Resume. Hide shows shipping's
 "Recording controls hidden" notice centered where the controls were, with
 the New Capture keys as chips: topmost, never activated, click-through
 (layered + transparent), excluded from captures, closed after 6.2 s or when
-the controls return (drawn at rest; the fade lifecycle is not ported). By the
+the controls return, with shipping's 6 s fade-in, hold and fade-out (still under
+reduced motion). By the
 owner's decision the controls never take keyboard focus, so a click never
 pulls typing away from the recorded app; unlike shipping's Windows webview
 they have no Tab order (UI Automation still invokes every button). A take interrupted by a
@@ -326,8 +327,10 @@ notification-area icon through the shared `tray_notice` placement, retrying
 while the icon has no rect and then falling back above the taskbar without a
 caret. Close or a tray left-click hides it early. `--scene capture --tool
 startup-notice [--select fallback|hover]` renders it offscreen (compared with
-the Tauri harness; not yet physically checked). Not ported: setup's calm
-pulse and the notice's arrive motion.
+the Tauri harness; not yet physically checked). It arrives with shipping's
+`startup-arrive` (`-from-below` toward a taskbar icon), and setup's ready
+Start capturing button pulses its `--surface-active` halo (`--scene setup
+--select pulse` renders its peak); both are still under reduced motion.
 
 Setup, Send Feedback and the launch notice share one UI Automation provider
 (`src/panel_uia.rs`) built from each window's parts in shipping's DOM order and
@@ -410,8 +413,9 @@ buttons). Render it with `--scene update --update
 available|single|closing|manual|downloading|restarting|error|checking|up-to-date
 [--tool fallback] [--select notes-hidden] --screenshot PATH`, or without
 `--screenshot` as a live notice by the notification area until Not now/Close
-(its buttons reach no worker). Not ported: the
-`ui-pop-in` entrance and the restart exit fade. A Windows 11 recheck at
+(its buttons reach no worker). It pops in with shipping's `ui-pop-in` and,
+once restarting, fades up and out after 3 s (a failed restart puts it back);
+under reduced motion both are a single step. A Windows 11 recheck at
 8ce4447b found caret, placement, announcement and live-fixture defects, fixed
 since and not yet rechecked; a real installed update is still untested.
 

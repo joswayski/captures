@@ -38,6 +38,8 @@ mod keys;
 #[cfg(windows)]
 mod live;
 #[cfg(windows)]
+mod notice_motion;
+#[cfg(windows)]
 mod panel_uia;
 #[cfg(windows)]
 mod previews;

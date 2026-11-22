@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use captures_app::capture_flow::{self, CaptureFlow};
+use captures_app::motion::Motion;
 use captures_app::recording_hud::{self as hud, Control};
 use captures_capture::DisplayDescriptor;
 use captures_recording::{
@@ -1222,6 +1223,17 @@ impl HiddenNotice {
                 gfx::draw_surface(&surface, px, (scale, scale), 0., |dc| {
                     controls::paint_hidden_notice(dc, g, tokens, copy)
                 })?;
+                // Shipping's 6 s `recording-controls-hidden-lifecycle`.
+                if let Some(life) = Motion::RecordingControlsHiddenLifecycle.resolve(tokens) {
+                    crate::notice_motion::play(
+                        &dcomp,
+                        &visual,
+                        (px.0 as f32, px.1 as f32),
+                        scale,
+                        crate::notice_motion::Curve::Lifecycle(&life, life.duration_ms),
+                        crate::appearance::reduced_motion(),
+                    )?;
+                }
                 dcomp.Commit()?;
                 Ok(Self {
                     hwnd,

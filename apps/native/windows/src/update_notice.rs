@@ -17,7 +17,7 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use captures_app::motion::CubicBezier;
+use captures_app::motion::{CubicBezier, Motion};
 use captures_app::tray_notice::{self, Caret, LogicalRect, Placement};
 use captures_app::update_notice::{
     self as notice, Action, Icon, IconTone, Presentation, UpdateStatus, ViewState,
@@ -41,6 +41,7 @@ use windows::core::*;
 use windows_numerics::Vector2;
 
 use crate::gfx::{self, Gfx, Text, rect};
+use crate::notice_motion::{self, Curve};
 use crate::panel_uia::{self, Role};
 use crate::startup_notice::TrayRect;
 use crate::tokens::Tokens;
@@ -653,8 +654,11 @@ impl Notice {
 
     /// Place and show the notice without activating it, then announce it.
     fn present(&mut self) {
-        self.shown = true;
+        let first = !std::mem::replace(&mut self.shown, true);
         self.place();
+        if first {
+            self.play(Motion::UpdateNoticeIn);
+        }
         unsafe {
             let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
             // After the tray menu (or another window) has handed focus back,
@@ -724,8 +728,46 @@ impl Notice {
     }
 
     fn render_logged(&mut self) {
+        // The restart state starts shipping's `update-restart-exit` (a 3 s
+        // hold, then a fade up and out); a failed restart drops the state and
+        // the animation with it, as `:has(.update-restarting)`.
+        let restarting = self.presentation.restart.is_some();
+        let changed = restarting != self.restart_at.is_some();
         if let Err(error) = self.render() {
             eprintln!("failed to draw the Captures update notice: {error}");
+        }
+        if changed && restarting {
+            self.play(Motion::UpdateNoticeRestartExit);
+        } else if changed
+            && let (Some(dcomp), Some((_, visual))) = (&self.g.dcomp, &self.composition)
+            && let Err(error) = notice_motion::rest(dcomp, visual)
+        {
+            eprintln!("failed to animate the Captures update notice: {error}");
+        }
+    }
+
+    /// Play a shipping notice motion on the window's visual.
+    fn play(&self, motion: Motion) {
+        let (Some(dcomp), Some((_, visual)), Some(animation)) =
+            (&self.g.dcomp, &self.composition, motion.resolve(&self.t))
+        else {
+            return;
+        };
+        let p = self.placement;
+        let s = self.scale as f64;
+        let size = ((p.width * s) as f32, (p.height * s) as f32);
+        let reduced = crate::appearance::reduced_motion();
+        let played = notice_motion::play(
+            dcomp,
+            visual,
+            size,
+            self.scale,
+            Curve::Once(&animation),
+            reduced,
+        )
+        .and_then(|()| unsafe { dcomp.Commit() });
+        if let Err(error) = played {
+            eprintln!("failed to animate the Captures update notice: {error}");
         }
     }
 
