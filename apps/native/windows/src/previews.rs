@@ -31,7 +31,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use captures_app::motion::{Animation, Motion, Transition, Tween};
 use captures_app::preview::{self, CollapsedCardPose, PreviewStack};
 use captures_app::preview_chrome;
-use captures_app::preview_motion::{self, DustParticle, ExitKind, StackExits, StackFan};
+use captures_app::preview_motion::{self, DragSway, DustParticle, ExitKind, StackExits, StackFan};
 use captures_history::HistoryEntry;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::*;
@@ -91,6 +91,10 @@ pub enum Hit {
     /// `.thumbnail-collapsed-hit-target`: the pile's one button, which
     /// expands it.
     Expand,
+    /// `.thumbnail-overflow-cue-older` / `-newer`: the chevrons at the
+    /// window's top and bottom edge of a stack taller than its window.
+    CueUp,
+    CueDown,
 }
 
 impl Hit {
@@ -102,7 +106,7 @@ impl Hit {
             | Self::Copy(i)
             | Self::Save(i)
             | Self::Card(i) => Some(i),
-            Self::ClearAll | Self::Minimize | Self::Expand => None,
+            Self::ClearAll | Self::Minimize | Self::Expand | Self::CueUp | Self::CueDown => None,
         }
     }
 }
@@ -160,6 +164,20 @@ pub struct Stack {
     exits: StackExits,
     /// A Delete's dust chips, by card id.
     dust: HashMap<String, Dust>,
+    /// How far an expanded stack taller than its window is scrolled away
+    /// from its newest card (0 keeps the newest in view, as shipping's
+    /// `scrollThumbnailStackToNewest`), in DIPs.
+    scroll: f32,
+    /// A cue's eased scroll: where it started and when (ms).
+    scroll_from: Option<(f32, f64)>,
+    /// When each overflow cue appeared (`thumbnail-overflow-cue-in`).
+    cues_shown: (Option<f64>, Option<f64>),
+    /// The pile's shared gravity: -1 peeks down at the top of the work
+    /// area, 1 peeks up at the bottom, between them for a carried pile.
+    pub gravity: f64,
+    /// The carried pile's rear-card lean (`DragSway`), while it is carried
+    /// and until it settles after.
+    pub sway: Option<DragSway>,
 }
 
 /// A dissolving card's chips: how each moves, and their filtered pixels,
@@ -175,6 +193,17 @@ const DUST_CHIP_PAD: f32 = 8.;
 const DUST_CHIP_GUTTER: f32 = 16.;
 /// `.thumbnail-dust { filter: blur(2px) }`.
 const DUST_CHIP_BLUR: f32 = 2.;
+
+/// `THUMBNAIL_STACK_SCROLL_DURATION_MS`: a cue's one-slot ease-out scroll.
+const SCROLL_MS: f64 = 380.;
+/// Chromium's wheel step: 100 DIPs per notch.
+const WHEEL_STEP: f32 = 100.;
+/// `.thumbnail-overflow-cue`: 46 × 22, 6 DIPs from the window edge.
+const CUE_W: f32 = 46.;
+const CUE_H: f32 = 22.;
+const CUE_INSET: f32 = 6.;
+/// `thumbnail-overflow-cue-in`: `var(--dur-3) var(--ease-out)`.
+const CUE_IN_MS: f64 = 200.;
 
 /// `thumbnail-arrive`, the Close exit (`thumbnail-dismiss`) and the Delete
 /// fallback for a card without an image.
@@ -283,6 +312,11 @@ impl Stack {
             arrivals: HashMap::new(),
             exits: StackExits::default(),
             dust: HashMap::new(),
+            scroll: 0.,
+            scroll_from: None,
+            cues_shown: (None, None),
+            gravity: if placement.is_top() { -1. } else { 1. },
+            sway: None,
         }
     }
 
@@ -315,7 +349,144 @@ impl Stack {
                 .values()
                 .any(|start| m.arrive.running(now - start, self.reduced))
         });
-        pile || arriving || !self.exits.is_empty()
+        let scrolling = self
+            .scroll_from
+            .is_some_and(|(_, start)| !self.reduced && now - start < SCROLL_MS);
+        let cues = [self.cues_shown.0, self.cues_shown.1]
+            .into_iter()
+            .flatten()
+            .any(|start| !self.reduced && now - start < CUE_IN_MS);
+        pile || arriving || !self.exits.is_empty() || scrolling || cues || self.sway.is_some()
+    }
+
+    /// The largest [`Self::scroll`]: how much of the content the window
+    /// cannot show.
+    fn max_scroll(&self) -> f32 {
+        if self.collapsed() {
+            0.
+        } else {
+            (self.content_height() - self.height).max(0.)
+        }
+    }
+
+    /// The scroll now, part way through a cue's eased scroll.
+    fn scroll_now(&self) -> f32 {
+        let target = self.scroll.clamp(0., self.max_scroll());
+        match self.scroll_from {
+            Some((from, start)) if !self.reduced => {
+                let t = ((now_ms() - start) / SCROLL_MS).clamp(0., 1.);
+                // `easeOutCubic`
+                let eased = 1. - (1. - t).powi(3);
+                from + (target - from) * eased as f32
+            }
+            _ => target,
+        }
+    }
+
+    /// Shipping's `scrollTop`: 0 shows the top of the content.
+    fn scroll_top(&self) -> f32 {
+        if self.top {
+            self.scroll_now()
+        } else {
+            self.max_scroll() - self.scroll_now()
+        }
+    }
+
+    /// Scroll to shipping `scrollTop` `top`, eased like a cue or at once
+    /// like the wheel.
+    fn scroll_to(&mut self, top: f32, eased: bool) {
+        let max = self.max_scroll();
+        let top = top.clamp(0., max);
+        let from = self.scroll_now();
+        self.scroll = if self.top { top } else { max - top };
+        self.scroll_from =
+            (eased && !self.reduced && from != self.scroll).then(|| (from, now_ms()));
+        // Cards moved under a resting pointer; the next sample finds them.
+        self.hovered = None;
+        self.hot = None;
+    }
+
+    /// An overflow cue: one card slot up (`-1`) or down (`1`), eased.
+    fn scroll_slots(&mut self, slots: i32) {
+        let top = preview::stack_scroll_target(
+            f64::from(self.scroll_top()),
+            f64::from(self.content_height()),
+            f64::from(self.height),
+            slots,
+        );
+        self.scroll_to(top as f32, true);
+    }
+
+    /// The wheel over the stack, `delta` DIPs down.
+    pub fn wheel(&mut self, delta: f32) -> bool {
+        if self.collapsed() || self.progress() > 0. || self.max_scroll() <= 0. {
+            return false;
+        }
+        let before = self.scroll_top();
+        self.scroll_to(before + delta, false);
+        self.scroll_top() != before
+    }
+
+    /// Which edges hide cards; none while the pile is out or Clear all runs.
+    fn overflow(&self) -> preview::StackOverflow {
+        if self.collapsed() || self.progress() > 0. || self.stack.ids().is_empty() {
+            return preview::StackOverflow::default();
+        }
+        preview::stack_overflow(
+            f64::from(self.scroll_top()),
+            f64::from(self.content_height()),
+            f64::from(self.height),
+        )
+    }
+
+    /// Note when each cue appears, for its pop-in; true when one changed.
+    fn sync_cues(&mut self) -> bool {
+        let overflow = self.overflow();
+        // Fixtures (no card motion) show them already in.
+        let now = now_ms()
+            - if self.card_motion.is_none() {
+                CUE_IN_MS
+            } else {
+                0.
+            };
+        let before = self.cues_shown;
+        let track = |shown: bool, since: Option<f64>| match (shown, since) {
+            (true, None) => Some(now),
+            (true, since) => since,
+            (false, _) => None,
+        };
+        self.cues_shown = (
+            track(overflow.above, self.cues_shown.0),
+            track(overflow.below, self.cues_shown.1),
+        );
+        before.0.is_some() != self.cues_shown.0.is_some()
+            || before.1.is_some() != self.cues_shown.1.is_some()
+    }
+
+    /// The overflow cues showing now, with their rects.
+    fn cues(&self) -> Vec<(Hit, Rect)> {
+        let overflow = self.overflow();
+        let cx = PAD + CARD_W / 2.;
+        let mut cues = Vec::new();
+        if overflow.above {
+            cues.push((
+                Hit::CueUp,
+                rect(
+                    cx - CUE_W / 2.,
+                    CUE_INSET,
+                    cx + CUE_W / 2.,
+                    CUE_INSET + CUE_H,
+                ),
+            ));
+        }
+        if overflow.below {
+            let bottom = self.height - CUE_INSET;
+            cues.push((
+                Hit::CueDown,
+                rect(cx - CUE_W / 2., bottom - CUE_H, cx + CUE_W / 2., bottom),
+            ));
+        }
+        cues
     }
 
     /// The card at display `index` is playing its exit.
@@ -431,6 +602,11 @@ impl Stack {
         let from = self.progress();
         self.stack.set_collapsed(collapsed);
         self.fly = (from, now_ms());
+        // The list flies back out to its newest card.
+        if !collapsed {
+            self.scroll = 0.;
+        }
+        self.scroll_from = None;
         self.hovered = None;
         self.hot = None;
         self.pile_hovered = false;
@@ -481,6 +657,9 @@ impl Stack {
             error: None,
         });
         self.exits.sync(self.stack.ids());
+        // A new capture brings the newest card back into view.
+        self.scroll = 0.;
+        self.scroll_from = None;
     }
 
     fn remove(&mut self, index: usize) {
@@ -510,12 +689,13 @@ impl Stack {
         }
     }
 
-    /// Content offset that keeps the anchored end visible.
+    /// Content offset: the anchored end (the newest card) in view, less the
+    /// scroll toward older cards.
     fn offset(&self) -> f32 {
         if self.top {
-            0.
+            -self.scroll_now()
         } else {
-            self.height - self.content_height()
+            self.height - self.content_height() + self.scroll_now()
         }
     }
 
@@ -565,12 +745,13 @@ impl Stack {
     }
 
     fn clear_rect(&self) -> Rect {
-        // 8 DIPs from the nearest card, inside the control gutter.
+        // 8 DIPs from the nearest card, inside the control gutter; the
+        // toolbar stays at the window's edge while the cards scroll.
         let y = if self.top {
             GUTTER - 8. - CONTROL
         } else {
-            self.content_height() - GUTTER + 8.
-        } + self.offset();
+            self.height - GUTTER + 8.
+        };
         let x = if self.right {
             PAD + CARD_W - CONTROL
         } else {
@@ -653,6 +834,9 @@ impl Stack {
         if self.collapsed() {
             return self.front_rect().filter(|r| inside(r)).map(|_| Hit::Expand);
         }
+        if let Some((hit, _)) = self.cues().into_iter().find(|(_, r)| inside(r)) {
+            return Some(hit);
+        }
         if self.toolbar() {
             if inside(&self.clear_rect()) {
                 return Some(Hit::ClearAll);
@@ -701,8 +885,15 @@ impl Stack {
             return (self.pile_hovered, self.hot) != before;
         }
         self.pile_hovered = false;
-        // Hover follows the card under the pointer, then targets its controls.
-        let card = at.and_then(|(x, y)| {
+        // Hover follows the card under the pointer, then targets its
+        // controls; the toolbar and cues float above scrolled cards.
+        let over_stack_control = at.and_then(|(x, y)| self.hit(x, y)).is_some_and(|hit| {
+            matches!(
+                hit,
+                Hit::ClearAll | Hit::Minimize | Hit::CueUp | Hit::CueDown
+            )
+        });
+        let card = at.filter(|_| !over_stack_control).and_then(|(x, y)| {
             (0..self.cards.len()).find(|&i| {
                 !self.exiting(i)
                     && self
@@ -728,6 +919,8 @@ impl Stack {
             Hit::ClearAll => 1,
             Hit::Minimize => 2,
             Hit::Expand => 3,
+            Hit::CueUp => 4,
+            Hit::CueDown => 5,
             Hit::Card(i) => base(i),
             Hit::Close(i) => base(i) + 1,
             Hit::Delete(i) => base(i) + 2,
@@ -742,6 +935,8 @@ impl Stack {
             1 => return Some(Hit::ClearAll),
             2 => return Some(Hit::Minimize),
             3 => return Some(Hit::Expand),
+            4 => return Some(Hit::CueUp),
+            5 => return Some(Hit::CueDown),
             _ => {}
         }
         let i = (key / 100).checked_sub(1)? as usize;
@@ -844,10 +1039,24 @@ impl Stack {
                 self.minimize_rect(),
             ));
         }
+        for (hit, r) in self.cues() {
+            let label = preview::overflow_cue_label(hit == Hit::CueUp, self.top);
+            items.push(Item::new(Self::uia_key(hit), Role::Button, label, r));
+        }
         items
     }
 
+    /// The stack inside its window's bounds, as the window clips it (the
+    /// offscreen renderer has no window).
     pub fn paint(&self, dc: &ID2D1DeviceContext, g: &Gfx, t: &Tokens) -> Result<()> {
+        let window = rect(0., 0., preview::THUMBNAIL_WIDTH as f32, self.height);
+        unsafe { dc.PushAxisAlignedClip(&window, D2D1_ANTIALIAS_MODE_ALIASED) };
+        let result = self.paint_stack(dc, g, t);
+        unsafe { dc.PopAxisAlignedClip() };
+        result
+    }
+
+    fn paint_stack(&self, dc: &ID2D1DeviceContext, g: &Gfx, t: &Tokens) -> Result<()> {
         if self.collapsed() || self.progress() > 0. {
             return self.paint_pile(dc, g, t);
         }
@@ -895,6 +1104,98 @@ impl Stack {
                 )?;
             }
         }
+        self.paint_cues(dc, g, t)
+    }
+
+    /// `.thumbnail-overflow-cue`: a glass tab flush with its window edge,
+    /// rounded away from it, popping in (`thumbnail-overflow-cue-in`), a
+    /// little larger while hovered and smaller while pressed. The backdrop
+    /// blur is drawn as the solid glass, like the toolbar.
+    fn paint_cues(&self, dc: &ID2D1DeviceContext, g: &Gfx, t: &Tokens) -> Result<()> {
+        let now = now_ms();
+        let ease = captures_app::motion::CubicBezier::new(0.16, 1., 0.3, 1.)
+            .unwrap_or(captures_app::motion::CubicBezier::LINEAR);
+        for (hit, r) in self.cues() {
+            let up = hit == Hit::CueUp;
+            let since = if up {
+                self.cues_shown.0
+            } else {
+                self.cues_shown.1
+            };
+            let t_in = match since {
+                Some(start) if !self.reduced => ((now - start) / CUE_IN_MS).clamp(0., 1.),
+                _ => 1.,
+            };
+            let arrive = ease.ease(t_in) as f32;
+            let hot = self.hot == Some(hit);
+            let scale = (0.86 + 0.14 * arrive)
+                * if hot && self.pressed == Some(hit) {
+                    0.95
+                } else if hot {
+                    1.05
+                } else {
+                    1.
+                };
+            let mut base = Matrix3x2::identity();
+            unsafe { dc.GetTransform(&mut base) };
+            let (cx, cy) = ((r.left + r.right) / 2., (r.top + r.bottom) / 2.);
+            let posed = Matrix3x2 {
+                M11: scale,
+                M12: 0.,
+                M21: 0.,
+                M22: scale,
+                M31: cx - scale * cx,
+                M32: cy - scale * cy,
+            } * base;
+            unsafe { dc.SetTransform(&posed) };
+            let result = faded(dc, arrive, || {
+                let radius = t.n("r-lg");
+                // `--glass-shadow`'s 44 px blur bands visibly through the
+                // stepped `gfx::shadow` on a tab this small; the main
+                // actions' shadow reads the same without the rings.
+                gfx::shadow(dc, r, radius, t.shadow("shadow-md"))?;
+                // Square on the window edge: draw the rounded shape past it
+                // and clip it there, then close the flat side's border.
+                let grown = if up {
+                    rect(r.left, r.top - radius, r.right, r.bottom)
+                } else {
+                    rect(r.left, r.top, r.right, r.bottom + radius)
+                };
+                unsafe { dc.PushAxisAlignedClip(&r, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE) };
+                let fill = if hot {
+                    "glass-raised-solid"
+                } else {
+                    "glass-strong-solid"
+                };
+                let drawn = gfx::fill_round(dc, grown, radius, t.color(fill))
+                    .and_then(|()| gfx::border(dc, grown, radius, 1., t.color("glass-border")));
+                unsafe { dc.PopAxisAlignedClip() };
+                drawn?;
+                let edge = if up {
+                    rect(r.left, r.top, r.right, r.top + 1.)
+                } else {
+                    rect(r.left, r.bottom - 1., r.right, r.bottom)
+                };
+                gfx::fill(dc, edge, t.color("glass-border"))?;
+                // A 16-unit chevron at 16 px, stroke 2.
+                let icon = if up {
+                    "preview-overflow-up"
+                } else {
+                    "preview-overflow-down"
+                };
+                gfx::icon(
+                    dc,
+                    &g.factory,
+                    icon,
+                    &[],
+                    (cx - 8., cy - 8., 24.),
+                    2. * 1.5,
+                    t.color("glass-text"),
+                )
+            });
+            unsafe { dc.SetTransform(&base) };
+            result?;
+        }
         Ok(())
     }
 
@@ -911,17 +1212,23 @@ impl Stack {
         let instant = self.instant();
         let fan_tween = self.motion.map(|(_, fan)| fan);
         let top = self.top;
-        let gravity = if top { -1. } else { 1. };
-        let content = lerp(
-            preview::stack_height(count),
-            preview::collapsed_frame_height(count),
-            progress,
-        );
-        let offset = if top {
+        let gravity = self.gravity;
+        // From the list where it was scrolled to the pile at rest.
+        let pile = if top {
             0.
         } else {
-            f64::from(self.height) - content
+            f64::from(self.height) - preview::collapsed_frame_height(count)
         };
+        let scrolled = f64::from(self.scroll).clamp(
+            0.,
+            (preview::stack_height(count) - f64::from(self.height)).max(0.),
+        );
+        let list = if top {
+            -scrolled
+        } else {
+            f64::from(self.height) - preview::stack_height(count) + scrolled
+        };
+        let offset = lerp(list, pile, progress);
         let front = preview::collapsed_padding(count);
         let half = (f64::from(CARD_W) / 2., f64::from(CARD_H) / 2.);
         let local = rect(-CARD_W / 2., -CARD_H / 2., CARD_W / 2., CARD_H / 2.);
@@ -938,7 +1245,14 @@ impl Stack {
                 Some(tween) => self.fan.progress(id, depth, now, tween, instant).0,
                 None => f64::from(u8::from(self.fan.open())),
             };
-            let pose = mix(rest, fanned, fan);
+            // A carried pile stays fanned and its rear cards lean with the
+            // carry (`thumbnail-stack-drag-sway`).
+            let pose = match &self.sway {
+                Some(sway) => {
+                    preview::collapsed_card_sway_pose(id, depth, gravity, top, sway.offset())
+                }
+                None => mix(rest, fanned, fan),
+            };
             let cx = f64::from(PAD) + half.0 + pose.dx * progress;
             let cy = offset + lerp(expanded + half.1, front + half.1 + pose.dy, progress);
             let (sin, cos) = ((pose.rotation_deg * progress) as f32)
@@ -1423,14 +1737,24 @@ fn glow(dc: &ID2D1DeviceContext, t: &Tokens, card: Rect, amount: f32) -> Result<
 /// pair, a saved 1600×1000 capture on the clipboard above an unsaved
 /// 1200×900 one, both showing `image`; `hovered` hovers the first.
 pub fn fixture(g: &Gfx, image: &image::RgbaImage, select: Option<&str>) -> Stack {
-    let mut stack = Stack::new(captures_settings::MiniPreviewPlacement::BottomLeft);
-    let pile = matches!(select, Some("pile" | "pile-hover"));
+    use captures_settings::MiniPreviewPlacement as P;
+    let placement = if select == Some("pile-top") {
+        P::TopLeft
+    } else {
+        P::BottomLeft
+    };
+    let mut stack = Stack::new(placement);
+    let pile = matches!(select, Some("pile" | "pile-hover" | "pile-top"));
+    let overflow = select == Some("overflow");
     let mut cards = vec![
         ("first", (1600, 1000, 842_000), true),
         ("second", (1200, 900, 432_000), false),
     ];
-    if pile {
+    if pile || overflow {
         cards.insert(0, ("zeroth", (1920, 1080, 1_204_000), false));
+    }
+    if overflow {
+        cards.insert(0, ("older", (1280, 800, 610_000), false));
     }
     for (id, (w, h, size), saved) in cards {
         let entry = serde_json::from_value(serde_json::json!({
@@ -1463,11 +1787,18 @@ pub fn fixture(g: &Gfx, image: &image::RgbaImage, select: Option<&str>) -> Stack
                 Some("Could not save: the Captures folder is not writable".into());
             stack.pointer(Some((150., 90.)));
         }
-        Some("pile") | None => {}
+        // Four cards in a 560 DIP window, scrolled one slot from the newest:
+        // both cues show.
+        Some("overflow") => {
+            stack.height = 560.;
+            stack.scroll = preview::THUMBNAIL_CARD_SLOT as f32;
+        }
+        Some("pile" | "pile-top") | None => {}
         Some(_) => {
             stack.pointer(Some((150., 90.)));
         }
     }
+    stack.sync_cues();
     stack
 }
 
@@ -1725,7 +2056,32 @@ struct Previews {
     monitor: windows::Win32::Graphics::Gdi::HMONITOR,
     /// Hidden while New Capture or a countdown is open.
     suppressed: bool,
+    /// The stack's display, for carrying the pile on it.
+    bounds: Option<preview::ThumbnailMonitorBounds>,
+    /// Where the pile was carried this session, and the corner it now
+    /// opens toward; forgotten once the stack empties (shipping's
+    /// session-only dragged origin).
+    dragged: Option<(
+        preview::ThumbnailStackOrigin,
+        captures_settings::MiniPreviewPlacement,
+    )>,
+    /// A press on the pile: where in the window (DIPs) and on the screen
+    /// (px), and whether it moved far enough to carry instead of expand.
+    carry: Option<Carry>,
 }
+
+#[derive(Clone, Copy)]
+struct Carry {
+    press: (f64, f64),
+    screen: POINT,
+    carrying: bool,
+    /// The last pointer sample (px) and its time, for the lean.
+    last: (POINT, f64),
+}
+
+/// Shipping `THUMBNAIL_STACK_DRAG_THRESHOLD_PX`: past it a press on the pile
+/// carries it instead of expanding.
+const CARRY_THRESHOLD: f64 = 8.;
 
 thread_local! {
     static PREVIEWS: RefCell<Option<Previews>> = const { RefCell::new(None) };
@@ -1886,6 +2242,9 @@ impl Previews {
             passthrough: false,
             monitor: Default::default(),
             suppressed: false,
+            bounds: None,
+            dragged: None,
+            carry: None,
         })
     }
 
@@ -1898,10 +2257,13 @@ impl Previews {
     /// Move the stack to the display under the pointer, where the capture
     /// was taken.
     fn place_on_pointer_monitor(&mut self) -> Result<()> {
-        unsafe {
-            let mut cursor = POINT::default();
-            let _ = GetCursorPos(&mut cursor);
-            self.monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
+        // A carried pile stays where it was put for the session.
+        if self.dragged.is_none() || self.monitor.is_invalid() {
+            unsafe {
+                let mut cursor = POINT::default();
+                let _ = GetCursorPos(&mut cursor);
+                self.monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
+            }
         }
         self.place()
     }
@@ -1930,18 +2292,30 @@ impl Previews {
                 full_height: (full.bottom - full.top) as u32,
                 scale_factor: scale,
             };
-            let placement = captures_settings::load(&self.options.settings_file)
-                .unwrap_or_default()
-                .mini_preview_placement;
+            // A carried pile opens toward the corner it was carried to.
+            let placement = match self.dragged {
+                Some((_, placement)) => placement,
+                None => {
+                    captures_settings::load(&self.options.settings_file)
+                        .unwrap_or_default()
+                        .mini_preview_placement
+                }
+            };
+            let origin = self.dragged.map(|(origin, _)| origin);
+            let count = self.stack.cards.len();
             let geometry = preview::thumbnail_geometry(
                 bounds,
-                self.stack.cards.len(),
+                count,
                 self.stack.collapsed(),
-                None,
+                origin,
                 placement,
             );
-            self.stack.top = geometry.anchor.is_top();
+            self.bounds = Some(bounds);
+            // The collapsed frame reports a bottom anchor; the pile still
+            // peeks and opens toward its corner.
+            self.stack.top = placement.is_top();
             self.stack.right = placement.is_right();
+            self.stack.gravity = preview::collapsed_stack_gravity(bounds, count, origin, placement);
             self.stack.height = geometry.height as f32;
             self.scale = scale as f32;
             let px = (
@@ -1995,6 +2369,7 @@ impl Previews {
         let Some((_, _, surface)) = &self.target else {
             return Ok(());
         };
+        self.stack.sync_cues();
         let (stack, g, t) = (&self.stack, &self.g, &self.tokens);
         gfx::draw_surface(surface, self.px, (self.scale, self.scale), 0., |dc| {
             stack.paint(dc, g, t)
@@ -2005,6 +2380,8 @@ impl Previews {
     /// The stack changed size: refit, or hide once it is empty.
     fn relayout(&mut self) -> Result<()> {
         if self.stack.cards.is_empty() {
+            // An emptied stack forgets where its pile was carried.
+            self.dragged = None;
             self.sync_visibility();
             return Ok(());
         }
@@ -2013,6 +2390,14 @@ impl Previews {
     }
 
     fn run(&mut self, hit: Hit) {
+        if matches!(hit, Hit::CueUp | Hit::CueDown) {
+            self.stack.reduced = crate::appearance::reduced_motion();
+            self.stack
+                .scroll_slots(if hit == Hit::CueUp { -1 } else { 1 });
+            let _ = self.render();
+            self.animate();
+            return;
+        }
         if matches!(hit, Hit::Minimize | Hit::Expand) {
             self.stack.reduced = crate::appearance::reduced_motion();
             self.stack.set_collapsed(hit == Hit::Minimize);
@@ -2139,7 +2524,9 @@ impl Previews {
             | Hit::Card(_)
             | Hit::ClearAll
             | Hit::Minimize
-            | Hit::Expand => {}
+            | Hit::Expand
+            | Hit::CueUp
+            | Hit::CueDown => {}
         }
         let _ = self.render();
     }
@@ -2203,7 +2590,95 @@ impl Previews {
         }
     }
 
+    /// The pointer moved while the pile is pressed: past the threshold the
+    /// press carries the pile so it stays under the pointer, re-anchoring
+    /// to the nearest corner (`move_collapsed_stack`) while the rear cards
+    /// lean with the carry.
+    fn carry_move(&mut self) {
+        let (Some(mut carry), Some(bounds)) = (self.carry, self.bounds) else {
+            return;
+        };
+        let mut cursor = POINT::default();
+        unsafe {
+            let _ = GetCursorPos(&mut cursor);
+        }
+        let scale = f64::from(self.scale);
+        let travel = f64::from(cursor.x - carry.screen.x)
+            .hypot(f64::from(cursor.y - carry.screen.y))
+            / scale;
+        if !carry.carrying {
+            if travel < CARRY_THRESHOLD {
+                return;
+            }
+            carry.carrying = true;
+            self.stack.reduced = crate::appearance::reduced_motion();
+            self.stack.sway = Some(DragSway::default());
+        }
+        let now = now_ms();
+        let (last, at) = carry.last;
+        if let Some(sway) = self.stack.sway.as_mut() {
+            let dt = if now > at {
+                now - at
+            } else {
+                preview_motion::DRAG_SWAY_DEFAULT_DT_MS
+            };
+            sway.tick(
+                f64::from(cursor.x - last.x) / scale,
+                f64::from(cursor.y - last.y) / scale,
+                dt,
+                self.stack.reduced,
+            );
+        }
+        carry.last = (cursor, now);
+        self.carry = Some(carry);
+        let placement = self.dragged.map_or_else(
+            || {
+                captures_settings::load(&self.options.settings_file)
+                    .unwrap_or_default()
+                    .mini_preview_placement
+            },
+            |(_, placement)| placement,
+        );
+        let (x, y) = (f64::from(cursor.x) / scale, f64::from(cursor.y) / scale);
+        let moved = preview::move_collapsed_stack(
+            bounds,
+            self.stack.cards.len(),
+            x - carry.press.0,
+            y - carry.press.1,
+            placement,
+        );
+        self.dragged = Some(moved);
+        let _ = self.place();
+        let _ = self.render();
+        self.animate();
+    }
+
+    /// The press on the pile ended: a carry keeps the pile where it was
+    /// put (no expand); its lean settles on the frame timer.
+    fn carry_end(&mut self) -> bool {
+        let carried = self.carry.take().is_some_and(|carry| carry.carrying);
+        if carried {
+            self.animate();
+        }
+        carried
+    }
+
     fn motion_tick(&mut self) {
+        // The carried pile's lean eases back when the pointer holds still
+        // or lets go.
+        if let Some(sway) = self.stack.sway.as_mut() {
+            let now = now_ms();
+            let at = self.carry.map_or(now - 16., |carry| carry.last.1);
+            if now - at >= 16. {
+                sway.tick(0., 0., (now - at).min(48.), self.stack.reduced);
+                if let Some(carry) = self.carry.as_mut() {
+                    carry.last.1 = now;
+                }
+            }
+            if self.carry.is_none() && sway.settled() {
+                self.stack.sway = None;
+            }
+        }
         // Finished exits leave and the window shrinks to the smaller stack;
         // the pointer finds its card again in the new order.
         if self.stack.prune_exits() {
@@ -2281,6 +2756,12 @@ impl Previews {
                     };
                     self.tracking = unsafe { TrackMouseEvent(&mut track) }.is_ok();
                 }
+                if self.carry.is_some() {
+                    self.carry_move();
+                    if self.carry.is_some_and(|carry| carry.carrying) {
+                        return Some(LRESULT(0));
+                    }
+                }
                 let (x, y) = point(lp, self.scale);
                 if self.stack.pointer(Some((x, y))) {
                     let _ = self.render();
@@ -2288,6 +2769,25 @@ impl Previews {
                 }
                 if !self.stack.solid(x, y) {
                     self.set_passthrough(true);
+                }
+            }
+            // The wheel scrolls a stack taller than its window, like
+            // shipping's scrolling `<main>`.
+            WM_MOUSEWHEEL => {
+                let notches = f32::from((_wp.0 >> 16) as u16 as i16) / 120.;
+                self.stack.reduced = crate::appearance::reduced_motion();
+                if self.stack.wheel(-notches * WHEEL_STEP) {
+                    self.stack.pointer(self.cursor());
+                    let _ = self.render();
+                    self.animate();
+                }
+            }
+            // Another window took the mouse mid-press (a carry ends where
+            // it is).
+            WM_CAPTURECHANGED => {
+                if self.carry_end() {
+                    self.stack.pressed = None;
+                    let _ = self.render();
                 }
             }
             WM_MOUSELEAVE => {
@@ -2322,15 +2822,34 @@ impl Previews {
             WM_LBUTTONDOWN => {
                 let (x, y) = point(lp, self.scale);
                 self.stack.pressed = self.stack.hit(x, y);
+                if self.stack.pressed == Some(Hit::Expand) {
+                    let mut screen = POINT::default();
+                    unsafe {
+                        let _ = GetCursorPos(&mut screen);
+                    }
+                    self.carry = Some(Carry {
+                        press: (f64::from(x), f64::from(y)),
+                        screen,
+                        carrying: false,
+                        last: (screen, now_ms()),
+                    });
+                }
                 unsafe { SetCapture(self.hwnd) };
                 let _ = self.render();
             }
             WM_LBUTTONUP => {
                 let (x, y) = point(lp, self.scale);
+                // Clear the carry before releasing capture, whose
+                // WM_CAPTURECHANGED would otherwise end it too.
+                let carried = self.carry_end();
                 let _ = unsafe { ReleaseCapture() };
                 let pressed = self.stack.pressed.take();
                 let hit = self.stack.hit(x, y);
-                if pressed.is_some() && pressed == hit {
+                if carried {
+                    // A carry is not a click: the pile stays collapsed.
+                    self.stack.pointer(Some((x, y)));
+                    let _ = self.render();
+                } else if pressed.is_some() && pressed == hit {
                     self.run(hit.unwrap_or(Hit::ClearAll));
                 } else {
                     let _ = self.render();
@@ -2440,6 +2959,51 @@ mod tests {
         }
         stack.height = stack.content_height();
         stack
+    }
+
+    #[test]
+    fn a_stack_taller_than_its_window_scrolls_by_wheel_and_cues() {
+        use captures_settings::MiniPreviewPlacement as P;
+        // Four cards (768 DIPs of content) in a 560 DIP window: 208 to scroll.
+        let mut s = stack(P::BottomLeft, &[false, false, false, false]);
+        s.height = 560.;
+        s.reduced = true;
+        let cue = |s: &Stack| -> Vec<(Hit, f32, String)> {
+            s.uia_items()
+                .into_iter()
+                .filter(|i| i.key == 4 || i.key == 5)
+                .map(|i| (Stack::uia_hit(i.key).unwrap(), i.rect.top, i.name))
+                .collect()
+        };
+        // Newest in view at the bottom: only the upper cue, for older cards.
+        assert_eq!(s.card_rect(3).map(|r| r.bottom), Some(560. - GUTTER));
+        assert_eq!(
+            cue(&s),
+            [(Hit::CueUp, 6., "Show older captures".to_owned())]
+        );
+        assert_eq!(s.hit(170., 10.), Some(Hit::CueUp));
+        // Already at the newest end: wheeling down does nothing.
+        assert!(!s.wheel(100.));
+        // One notch up scrolls 100 DIPs; both cues show and the toolbar
+        // stays at the window's bottom edge.
+        assert!(s.wheel(-100.));
+        assert_eq!(s.card_rect(3).map(|r| r.bottom), Some(560. - GUTTER + 100.));
+        assert_eq!(cue(&s).len(), 2);
+        assert_eq!(s.clear_rect().top, 560. - GUTTER + 8.);
+        // The cue moves one 176 DIP slot, clamped at the oldest card.
+        s.scroll_slots(-1);
+        assert_eq!(s.card_rect(0).map(|r| r.top), Some(PAD));
+        assert_eq!(
+            cue(&s),
+            [(
+                Hit::CueDown,
+                560. - 6. - 22.,
+                "Show newer captures".to_owned()
+            )]
+        );
+        // A collapsed pile never scrolls.
+        s.stack.set_collapsed(true);
+        assert!(!s.wheel(-100.) && cue(&s).is_empty());
     }
 
     #[test]

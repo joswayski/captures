@@ -223,11 +223,23 @@ Expand fly the cards between the list and the pile, and hovering fans it
 with the per-card stagger, on the shared `preview_stack_fly` /
 `preview_stack_fan` tweens (instant under Windows' reduced motion); the frame
 keeps its expanded height until a collapse lands. The pose is drawn as its
-flattened affine (no keystone or rear-card blur), and the pile cannot be
-carried yet.
-`--tool previews --select pile|pile-hover` renders it (compared with the
-Tauri harness; not yet physically checked). Cards arrive and leave with the
-shared preview motion; file drags, keyboard focus and tooltips are not ported. `--scene capture --screenshot PATH`
+flattened affine (no keystone or rear-card blur). Top placements peek down,
+bottom ones up. Past 8 DIPs a press on the pile carries it instead of
+expanding: the pile follows the pointer on its display, re-anchors to the
+nearest corner through the shared `move_collapsed_stack` (expanding toward
+it) and its rear cards lean with the shared `DragSway`; the carried spot
+lasts until the stack empties. A stack taller than its window keeps the
+newest card in view and scrolls with the wheel (100 DIPs a notch) or
+shipping's overflow cues, glass chevron tabs at the window edges that ease
+one card slot (380 ms, instant under reduced motion) and are named "Show
+older captures" / "Show newer captures"; a new capture or Expand returns to
+the newest card.
+`--tool previews --select pile|pile-hover|pile-top|overflow` renders it
+(compared with the Tauri harness). Scrolling, the cues, Minimize and Expand
+were checked live through UI Automation with History's Restore on Windows 11
+at 150%; the carry and the wheel are unit- and render-checked only. Cards
+arrive and leave with the shared preview motion; file drags, keyboard focus
+and tooltips are not ported. `--scene capture --screenshot PATH`
 renders the bar offscreen (`--tool display` for Full screen, `--tool window`
 for Window, `--select x` for a sample selection or hovered window, `--select
 desktop` for the hovered display, `--select picked` for a picked window with
