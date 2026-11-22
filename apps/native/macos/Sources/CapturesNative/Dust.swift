@@ -15,7 +15,9 @@ struct DustFixture: Decodable {
 
 enum NativeError: Error { case noMetal, renderFailed }
 
-// One instance per preview surface, no global/unbounded image cache.
+// No global/unbounded image cache. Mini previews make one per Delete: a
+// long-lived context kept its Metal heap and intermediates dirty for about a
+// second after the atlas render, on top of the dissolve's own drawing.
 // Compare atlas=false with the original per-chip filtering path on identical input.
 final class DustTextures {
     let context: CIContext
@@ -64,6 +66,7 @@ final class DustTextures {
         let extent = CGRect(x: 0, y: 0, width: CGFloat(columns) * cellW,
             height: CGFloat((particles.count + columns - 1) / columns) * cellH)
         var packed = CIImage(color: .clear).cropped(to: extent)
+        var row = CIImage.empty()
         var rects: [CGRect] = []
         var chips: [Chip] = []
         for (index, p) in particles.enumerated() {
@@ -87,7 +90,15 @@ final class DustTextures {
                 width: rasterBounds.width, height: rasterBounds.height)
             let moved = image.cropped(to: slice).transformed(by:
                 CGAffineTransform(translationX: tile.minX - rasterBounds.minX, y: tile.minY - rasterBounds.minY))
-            packed = moved.composited(over: packed)
+            // Close each atlas row as its own row-sized intermediate. One chain
+            // of every chip made Core Image cut it into 15-input programs that
+            // each wrote a full-atlas intermediate (13 of 15 MB at 2x, all live
+            // in one render). The chips do not overlap, so the pixels match.
+            row = moved.composited(over: row)
+            if index % columns == columns - 1 || index == particles.count - 1 {
+                packed = row.insertingIntermediate(cache: false).composited(over: packed)
+                row = CIImage.empty()
+            }
             rects.append(tile)
         }
         guard atlas else { return chips }

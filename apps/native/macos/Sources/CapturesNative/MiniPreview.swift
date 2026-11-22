@@ -1834,7 +1834,7 @@ final class MiniPreviewView: NSView {
     /// settle, or nil when nothing plays (reduced motion, a hidden panel, a
     /// compact pile, or an unknown card).
     func playExit(for id: String, kind: MiniPreviewExitKind, delay: Double = 0,
-                  textures: DustTextures? = nil, preserveAppearance: Bool = false) -> PreviewMotionTables.Exit? {
+                  preserveAppearance: Bool = false) -> PreviewMotionTables.Exit? {
         guard let card = cards[id], !card.isExiting, !stackCollapsed, window?.isVisible == true,
               !NativeMotion.reduceMotion else { return nil }
         let tables = PreviewMotionTables.shared
@@ -1867,17 +1867,19 @@ final class MiniPreviewView: NSView {
             return PreviewMotionTables.Exit(hold: delay + tables.dismiss.hold,
                                             settleDelay: delay + tables.dismiss.settleDelay)
         case .dust:
-            if let textures, playDust(on: card, textures: textures) { return tables.dust }
+            if playDust(on: card) { return tables.dust }
             NativeMotion.play("preview_delete_fallback", on: card, tokens: tokens, holdEnd: true,
                               key: "preview-exit")
             return tables.fallback
         }
     }
 
-    private func playDust(on card: MiniPreviewCardView, textures: DustTextures) -> Bool {
+    private func playDust(on card: MiniPreviewCardView) -> Bool {
         let scale = window?.backingScaleFactor ?? 2
         let pad = PreviewMotionTables.shared.dustPad
-        guard pad > 0, let source = card.dustSource(scale: scale) else { return false }
+        // A Core Image context for this dissolve only (see `DustTextures`).
+        guard pad > 0, let source = card.dustSource(scale: scale),
+              let textures = try? DustTextures() else { return false }
         let seed = UInt32(truncatingIfNeeded: card.artifactID.unicodeScalars.reduce(5381) { ($0 &* 33) &+ Int($1.value) })
         let particles = PreviewMotionTables.dustParticles(card: card.bounds.size,
             image: NSSize(width: source.width, height: source.height), origin: card.deleteOrigin, seed: seed)
@@ -2722,8 +2724,6 @@ final class MiniPreviewController {
     private var arrivals: [String: CFTimeInterval] = [:]
     /// Captures whose last clipboard copy failed ("Clipboard unavailable").
     private var copyFailures: Set<String> = []
-    /// One dust renderer per preview surface, made on the first Delete.
-    private lazy var dustTextures: DustTextures? = try? DustTextures()
     /// Saved cards whose Delete dissolved before their export moves to the
     /// Trash (shipping's order); a failed Trash puts them back in their slot.
     private var trashing: [String: (resource: MiniPreviewResource, index: Int, generation: Int?,
@@ -3099,8 +3099,7 @@ final class MiniPreviewController {
         cardGenerations[artifactID] = nil
         arrivals[artifactID] = nil; copyFailures.remove(artifactID)
         if let exit, let view = panel?.previewView,
-           let played = view.playExit(for: artifactID, kind: exit,
-                                      textures: exit == .dust ? dustTextures : nil) {
+           let played = view.playExit(for: artifactID, kind: exit) {
             // Fewer than two live cards: the stack toolbar leaves with the card.
             if liveBefore >= 2 && stack.ids.count < 2 { view.playToolbar("preview_toolbar_exit", holdEnd: true) }
             view.settleSurvivors(into: artifactID, after: played.settleDelay)
