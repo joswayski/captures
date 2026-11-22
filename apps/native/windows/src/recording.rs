@@ -30,10 +30,12 @@ mod menu;
 mod output;
 mod preview;
 mod timeline;
+mod tips;
 mod worker;
 use output::Output;
 use preview::Preview;
 use timeline::Timeline;
+use tips::Tips;
 use worker::{Job, Outcome, Presented, Worker};
 pub(crate) use worker::{tool_paths, toolchain};
 
@@ -253,7 +255,9 @@ const TIMELINE: usize = 6;
 const OUTPUT: usize = 7;
 const CONTROL_START: usize = 8;
 const MENU: usize = CONTROL_START + TARGETS.len();
-const COUNT: usize = MENU + 1;
+/// Tooltips, above everything else (`tips.rs`).
+const TOOLTIP: usize = MENU + 1;
+const COUNT: usize = TOOLTIP + 1;
 
 struct Layer {
     visual: IDCompositionVisual3,
@@ -291,6 +295,7 @@ pub struct Recording {
     pub focus: Option<Target>,
     focus_visible: bool,
     hover: Option<Target>,
+    tips: Tips,
     pressed: Option<Target>,
     dragging: bool,
     tracking: bool,
@@ -392,6 +397,7 @@ impl Recording {
             focus: None,
             focus_visible: false,
             hover: None,
+            tips: Tips::default(),
             pressed: None,
             dragging: false,
             tracking: false,
@@ -707,6 +713,8 @@ impl Recording {
             self.layout_preview();
         }
         self.dirty.fill(true);
+        // Anchors moved with the layout or the page scroll.
+        self.place_tips();
         Ok(())
     }
 
@@ -1218,7 +1226,7 @@ impl Recording {
                     "text-subtle",
                     false,
                 )?;
-                let folder = format!("Saving to {}", self.directory.display());
+                let folder = format!("Saving to {}", self.directory_label());
                 text(
                     Style::MonoTiny,
                     &folder,
@@ -1260,6 +1268,7 @@ impl Recording {
             TIMELINE => self.draw_timeline(dc)?,
             OUTPUT => self.draw_output(dc)?,
             MENU => self.draw_output_menu(dc)?,
+            TOOLTIP => self.draw_tips(dc)?,
             _ => {
                 let target = TARGETS[index - CONTROL_START];
                 if matches!(target, Target::CompareHide | Target::CompareSplit) {
@@ -1428,6 +1437,9 @@ impl Recording {
     }
 
     fn opacity(&self, index: usize) -> f32 {
+        if index == TOOLTIP {
+            return f32::from(self.tips_visible());
+        }
         if index == MENU {
             return f32::from(self.menu.is_some());
         }
@@ -1591,6 +1603,10 @@ impl Recording {
     }
 
     pub fn service(&mut self) -> (bool, Vec<Event>) {
+        // A fade runs, or Play's label flipped under its tooltip.
+        if self.tips_animating() || (self.dirty[slot(Target::Play)] && self.tips_visible()) {
+            self.dirty[TOOLTIP] = true;
+        }
         if self.dirty.iter().any(|&d| d)
             && let Err(error) = self.frame()
         {
@@ -1762,6 +1778,7 @@ impl Recording {
             WM_FRAME => self.take_preview_frame(),
             WM_TIMER if wp.0 == OUTPUT_TIMER => self.apply_output_due(),
             WM_TIMER if wp.0 == COMPARE_TIMER => self.compare_due(),
+            WM_TIMER if wp.0 == tips::TIP_TIMER => self.tip_due(),
             WM_WAKE => {}
             WM_SIZE if wp.0 != SIZE_MINIMIZED as usize => {
                 self.width = (lp.0 as u32 & 0xffff) as f32 / self.scale;
@@ -1787,6 +1804,16 @@ impl Recording {
                     (lp.0 as u16 as i16) as f32 / self.scale,
                     ((lp.0 >> 16) as u16 as i16) as f32 / self.scale,
                 );
+                if msg == WM_MOUSEMOVE {
+                    // No tooltip while a drag owns the pointer.
+                    let dragging = self.timeline.drag.is_some()
+                        || self.timeline.scrubbing
+                        || self.crop_drag.is_some()
+                        || self.compare.dragging;
+                    self.hover_tip(if dragging { None } else { self.tip_at(x, y) });
+                } else if msg != WM_LBUTTONUP {
+                    self.dismiss_tip();
+                }
                 if self.output_pointer(msg, x, y)
                     || self.crop_pointer(msg, x, y)
                     || self.compare_pointer(msg, x, y)
@@ -1876,6 +1903,7 @@ impl Recording {
                 self.pressed = None;
             }
             WM_MOUSELEAVE => {
+                self.hover_tip(None);
                 self.tracking = false;
                 self.dirty[TIMELINE] = true;
                 self.preview.hovered = false;
@@ -1957,6 +1985,7 @@ impl Recording {
                 }
             }
             WM_KEYDOWN => {
+                self.dismiss_tip();
                 let key = VIRTUAL_KEY(wp.0 as u16);
                 let down = |key: VIRTUAL_KEY| unsafe { GetKeyState(i32::from(key.0)) < 0 };
                 let modifiers = (down(VK_CONTROL), down(VK_MENU), down(VK_SHIFT));
@@ -2108,6 +2137,14 @@ pub fn render_offscreen(
         window.apply_outcome(thumbnails);
     }
     window.layout()?;
+    // `--select tip-play` and the like: that tooltip at rest.
+    if let Some(name) = options
+        .select
+        .as_deref()
+        .and_then(|s| s.strip_prefix("tip-"))
+    {
+        window.settle_tip(name);
+    }
     Ok(window)
 }
 

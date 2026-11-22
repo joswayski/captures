@@ -1,8 +1,9 @@
 //! The host's shared glass tooltip: shipping `.recording-tooltip >
 //! [role="tooltip"]` (`styles/primitives.css`). A `--glass-strong` pill with
 //! a `--glass-border` hairline, `--r-sm` corners, 5 × 8 px padding and
-//! `--text-xs` medium copy, at most 180 px wide, centered under its anchor (or
-//! right-aligned to it). It fades in while sliding 3 px down over `--dur-1`
+//! `--text-xs` medium copy, at most 180 px wide (longer copy wraps), centered
+//! under its anchor (or right-aligned to it). It fades in while sliding 3 px
+//! down over `--dur-1`
 //! `--ease-standard` and fades back out the same way
 //! ([`Transition::Tooltip`]); under Windows' reduced motion it appears and
 //! leaves at once.
@@ -11,9 +12,10 @@
 //! [`Fade::set`] with the control under the pointer, draws every entry of
 //! [`Fade::frames`] with [`paint`], and keeps repainting while
 //! [`Fade::animating`]. [`Fade::settled`] is the resting state for offscreen
-//! renders. The recording controls (`hud.rs`) and the capture bar
-//! (`capture.rs`) use it; mini preview cards (`previews.rs`) keep its fade
-//! with their own timings ([`Fade::timed`]) and draw their own chip.
+//! renders. The recording controls (`hud.rs`), the capture bar
+//! (`capture.rs`) and the recording editor (`recording/tips.rs`) use it;
+//! mini preview cards (`previews.rs`) keep its fade with their own timings
+//! ([`Fade::timed`]) and draw their own chip.
 
 use captures_app::motion::{Transition, Tween};
 use captures_app::recording_hud as hud;
@@ -177,10 +179,20 @@ pub fn paint(
         return Ok(());
     }
     let pad = (hud::TOOLTIP_PADDING_X as f32, hud::TOOLTIP_PADDING_Y as f32);
-    let text = g.text_sized(t, label, t.n("text-xs"), "weight-medium", None)?;
+    let mut text = g.text_sized(t, label, t.n("text-xs"), "weight-medium", None)?;
     let inner = hud::TOOLTIP_MAX_WIDTH as f32 - pad.0 * 2. - 2.;
     if text.width > inner {
-        g.ellipsis(&text, inner)?;
+        // `width: max-content; max-width: 180px` wraps a longer label (a
+        // path breaks anywhere rather than overflowing the box).
+        unsafe {
+            text.layout.SetWordWrapping(
+                windows::Win32::Graphics::DirectWrite::DWRITE_WORD_WRAPPING_WRAP,
+            )?;
+            text.layout.SetMaxWidth(inner)?;
+            let mut metrics = Default::default();
+            text.layout.GetMetrics(&mut metrics)?;
+            (text.width, text.height) = (metrics.width, metrics.height);
+        }
     }
     let frame = frame(
         anchor,

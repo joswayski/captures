@@ -790,6 +790,59 @@ mod tests {
     }
 
     #[test]
+    fn tooltips_wait_the_hover_delay_and_follow_tauris_titles() {
+        use super::super::tips::Tip;
+        let (mut w, profile) = fixture();
+        (w.width, w.height) = (1280., 840.);
+        w.layout().unwrap();
+        let center = |r: Rect| (r.x + r.w / 2., r.y + r.h / 2.);
+        let (sx, sy) = center(w.target_rect(Target::Save));
+        let (tx, ty) = center(w.visible_target_rect(Target::TrimStart));
+        assert_eq!(w.tip_at(sx, sy), Some(Tip::Save));
+        assert_eq!(w.tip_at(tx, ty), Some(Tip::TrimStart));
+        // Hovering waits for the delay; the timer shows it.
+        w.hover_tip(w.tip_at(sx, sy));
+        assert!(!w.tips_visible());
+        w.tip_due();
+        assert!(w.tips_visible());
+        // Another anchor while one shows switches without a new delay.
+        w.hover_tip(w.tip_at(tx, ty));
+        let shown: Vec<_> = w
+            .tips
+            .fade
+            .frames(&w.t, 1e12)
+            .into_iter()
+            .map(|f| f.0)
+            .collect();
+        assert_eq!(shown, [Tip::TrimStart]);
+        // A press hides it until the pointer leaves that anchor.
+        w.dismiss_tip();
+        w.hover_tip(Some(Tip::TrimStart));
+        w.tip_due();
+        assert!(w.tips.fade.frames(&w.t, 1e12).is_empty());
+        w.hover_tip(None);
+        w.hover_tip(Some(Tip::TrimStart));
+        w.tip_due();
+        assert_eq!(w.tips.fade.frames(&w.t, 1e12), vec![(Tip::TrimStart, 1.)]);
+
+        assert_eq!(w.tip_label(Tip::Play), "Play (Space)");
+        w.preview.playing = true;
+        assert_eq!(w.tip_label(Tip::Play), "Pause (Space)");
+        assert_eq!(w.tip_label(Tip::Save), "Save (Command/Ctrl+S)");
+        assert_eq!(
+            w.tip_label(Tip::Copy),
+            "Save as a new file and leave the original untouched"
+        );
+        // The canonical source folder reads without its verbatim prefix.
+        w.directory = PathBuf::from(r"\\?\S:\Videos\Captures");
+        assert_eq!(w.tip_label(Tip::Destination), r"S:\Videos\Captures");
+        w.directory = PathBuf::from(r"\\?\UNC\nas\share\clips");
+        assert_eq!(w.tip_label(Tip::Destination), r"\\nas\share\clips");
+        drop(w);
+        std::fs::remove_dir_all(profile).unwrap();
+    }
+
+    #[test]
     fn timeline_keeps_source_time_and_only_accepts_the_latest_preview() {
         let (mut w, profile) = fixture();
         (w.width, w.height) = (640., 480.);
