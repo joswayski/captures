@@ -48,9 +48,34 @@ final class NativeLoginItemService: LoginItemServicing {
     }
 }
 
+/// Shipping `.custom-theme-color-swatch`: a rounded tile of the colour inside
+/// a 2 pt field-coloured ring and a control border, opening Captures' picker.
 final class ClosureColorWell: PickerColorWell {
     var change: ((NSColor) -> Void)?
     @objc func selectedColor() { change?(color) }
+
+    override func resetCursorRects() {
+        if isEnabled { addCursorRect(bounds, cursor: .pointingHand) }
+    }
+
+    private var radius: CGFloat { pickerTokens?.number("r-sm") ?? 7 }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let tokens = pickerTokens else { super.draw(dirtyRect); return }
+        let outline = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
+            xRadius: radius - 0.5, yRadius: radius - 0.5)
+        tokens.color("surface-field").setFill(); outline.fill()
+        color.setFill()
+        NSBezierPath(roundedRect: bounds.insetBy(dx: 3, dy: 3),
+            xRadius: radius - 3, yRadius: radius - 3).fill()
+        // The open picker reads like the shipping swatch's focus.
+        tokens.color(isActive ? "theme-accent" : "control-border").setStroke()
+        outline.lineWidth = 1; outline.stroke()
+    }
+
+    override func drawFocusRingMask() {
+        NSBezierPath(roundedRect: bounds, xRadius: radius, yRadius: radius).fill()
+    }
 }
 
 final class ShortcutRecorderButton: NSButton {
@@ -2146,12 +2171,18 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         well.color = NSColor(hex: value) ?? .white
         well.pickerTokens = tokens // Theme colors stay opaque: no opacity slider.
         well.setAccessibilityLabel("\(label) color picker")
-        let field = NSTextField(string: value.uppercased())
-        field.frame = NSRect(x: frame.minX + 36 + tokens.number("s-3"), y: frame.minY,
-            width: frame.width - 36 - tokens.number("s-3"), height: frame.height)
+        // Shipping `.custom-theme-color-control input`: s-3 side padding with
+        // the value vertically centred, not pinned to the field's top edge.
+        let field = NSTextField(frame: NSRect(x: frame.minX + 36 + tokens.number("s-3"), y: frame.minY,
+            width: frame.width - 36 - tokens.number("s-3"), height: frame.height))
+        let cell = TokenNumberFieldCell(textCell: value.uppercased())
+        cell.isEditable = true; cell.isScrollable = true
+        cell.leadingInset = tokens.number("s-3"); cell.trailingInset = tokens.number("s-3")
+        field.cell = cell
         field.identifier = NSUserInterfaceItemIdentifier("custom.\(key)")
         field.setAccessibilityLabel("\(label) hex value")
         styleField(field); field.font = .capturesMono(ofSize: tokens.number("text-xs"), weight: .regular)
+        field.layer?.cornerRadius = tokens.number("r-sm")
         field.delegate = self; parent.addSubview(field)
         well.change = { [weak self, weak field] color in
             guard let self, let field, let normalized = color.rgbHex else { return }
@@ -2453,6 +2484,9 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         field.isBordered = false; field.drawsBackground = true; field.backgroundColor = tokens.color("surface-field")
         field.textColor = tokens.color("text"); field.font = .capturesMono(ofSize: tokens.number("text-sm"), weight: .regular)
         field.wantsLayer = true; field.layer?.cornerRadius = tokens.number("r-md"); field.layer?.borderWidth = 1; field.layer?.borderColor = tokens.color("control-border").cgColor
+        // An inset `TokenNumberFieldCell` paints its background only behind
+        // the text line; the layer fills the rest of the rounded field.
+        field.layer?.backgroundColor = tokens.color("surface-field").cgColor
     }
 }
 

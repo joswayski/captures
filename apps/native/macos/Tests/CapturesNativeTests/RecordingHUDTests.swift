@@ -230,9 +230,19 @@ final class RecordingHUDTests: XCTestCase {
         let hud = RecordingHUDView(frame: NSRect(x: 0, y: 0, width: 430, height: 102), tokens: tokens)
         hud.setPaused(true, elapsedMilliseconds: 3_725_000)
         let fields = hud.subviews.compactMap { $0 as? NSTextField }
-        XCTAssertTrue(fields.contains { $0.stringValue == "1:02:05" })
         let status = try XCTUnwrap(fields.first { $0.stringValue == "PAUSED" })
         XCTAssertEqual(status.accessibilityLabel(), "Paused")
+        // Shipping `--text-lg` at every length: a ticking timer must not grow
+        // out of its slot into the status label under it.
+        for milliseconds: UInt64 in [1_000, 94_000, 3_725_000] {
+            hud.setPaused(true, elapsedMilliseconds: milliseconds)
+            let text = formatRecordingTime(milliseconds: milliseconds)
+            let timer = try XCTUnwrap(fields.first { $0.stringValue == text })
+            XCTAssertEqual(timer.font?.pointSize, 15, text)
+            XCTAssertLessThanOrEqual(timer.attributedStringValue.size().width, timer.frame.width, text)
+            XCTAssertLessThanOrEqual(timer.frame.minY + timer.font!.ascender - timer.font!.descender,
+                status.frame.minY + 1, text)
+        }
         let buttons = hud.subviews.compactMap { $0 as? CaptureButton }
         let delete = try XCTUnwrap(buttons.first { $0.accessibilityLabel() == "Delete recording" })
         XCTAssertNil(delete.toolTip)

@@ -568,8 +568,8 @@ final class RecordingHUDView: NSView {
         let running = resumedAt.map { UInt64(max(0, Date().timeIntervalSince($0)) * 1_000) } ?? 0
         let text = formatRecordingTime(milliseconds: elapsedMilliseconds + running)
         guard timerLabel.stringValue != text else { return }
-        // h:mm:ss must fit the fixed status column beside Stop.
-        timerLabel.font = .capturesMonoDigits(ofSize: text.count > 5 ? 17 : 22, weight: .semibold)
+        // The 15 pt `--text-lg` set in init fits h:mm:ss too; resizing here
+        // pushed the timer into the status label below it.
         timerLabel.stringValue = text
     }
 

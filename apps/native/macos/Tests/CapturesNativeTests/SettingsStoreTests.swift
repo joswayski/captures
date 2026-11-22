@@ -137,6 +137,59 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertNil(PreferencesController.normalizeHex("#12"))
     }
 
+    /// Shipping `.custom-theme-color-control`: a token-drawn swatch beside a
+    /// padded field whose hex value sits on the field's vertical centre.
+    func testCustomThemeColorControlsCentreTheirValueBesideTokenSwatches() throws {
+        _ = NSApplication.shared
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("settings.json")
+        let bridge = SettingsBridge()
+        for appearance in ["dark", "light"] {
+            var settings = try XCTUnwrap(bridge.request(["operation": "load", "path": file.path])["settings"] as? [String: Any])
+            settings["appearance"] = appearance
+            settings["theme"] = "custom"
+            settings["custom_theme"] = ["accent": "#32D3FF", "signal": "#FF4FC3"]
+            _ = try bridge.request(["operation": "save", "path": file.path, "settings": settings])
+            let store = try SettingsStore(path: file.path, debounceInterval: 60)
+            let frame = NSRect(x: 0, y: 0, width: 1000, height: 700)
+            let window = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            let root = Surface(frame: frame)
+            window.contentView = root
+            let tokens = try XCTUnwrap(Tokens.variants["\(appearance)-mustard"])
+            let controller = PreferencesController(root: root, store: store, tokens: { tokens },
+                appearanceChanged: { _, _, _ in }, showHistory: {})
+            defer { withExtendedLifetime(controller) {} }
+            var fields: [NSTextField] = []
+            let deadline = Date().addingTimeInterval(3)
+            while fields.count < 2 && Date() < deadline {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+                fields = KeyViewLoop.candidates(in: root).compactMap { $0 as? NSTextField }
+                    .filter { $0.identifier?.rawValue.hasPrefix("custom.") == true }
+            }
+            XCTAssertEqual(fields.count, 2)
+            for field in fields {
+                let well = try XCTUnwrap(field.superview?.subviews.first { $0 is ClosureColorWell } as? ClosureColorWell)
+                XCTAssertNotNil(well.pickerTokens, "the swatch is drawn with tokens, not the stock well")
+                let cell = try XCTUnwrap(field.cell as? TokenNumberFieldCell)
+                let text = cell.drawingRect(forBounds: field.bounds)
+                XCTAssertEqual(text.minX, tokens.number("s-3"), accuracy: 0.5)
+                XCTAssertEqual(text.midY, field.bounds.midY, accuracy: 1.5)
+            }
+            guard let output = ProcessInfo.processInfo.environment["CAPTURES_TEST_ARTIFACTS"],
+                  let editor = fields.first?.superview?.superview else { continue }
+            window.display()
+            let bitmap = try XCTUnwrap(editor.bitmapImageRepForCachingDisplay(in: editor.bounds))
+            editor.cacheDisplay(in: editor.bounds, to: bitmap)
+            let url = URL(fileURLWithPath: output).appendingPathComponent("custom-theme-editor-\(appearance).png")
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: url)
+        }
+    }
+
     func testCustomColorEscapeDiscardsDraftButEnterCommitsAndFindStaysOpen() throws {
         _ = NSApplication.shared
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
