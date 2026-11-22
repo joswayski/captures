@@ -314,7 +314,10 @@ the card's look like shipping's transitions: the image's blur and dim over
 0.18 s and its zoom over 0.22 s, the controls fading in over 0.16 s with the
 top row sliding down 3 DIPs, and the size chip fading over 0.15 s, each
 reversing from where it is (instant under reduced motion; unit-tested, the
-settled states rendered). `--scene capture --screenshot PATH`
+settled states rendered). The hovered pile sparkles like shipping's: two
+layers of accent and white dots from the shared `preview_motion` tables rise
+and flash on their 1.8 s and 2.2 s loops, stopping while it is carried or
+under reduced motion (`--select pile-sparkle`). `--scene capture --screenshot PATH`
 renders the bar offscreen (`--tool display` for Full screen, `--tool window`
 for Window, `--select x` for a sample selection or hovered window, `--select
 desktop` for the hovered display, `--select picked` for a picked window with

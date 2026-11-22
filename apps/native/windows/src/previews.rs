@@ -168,6 +168,8 @@ pub struct Stack {
     pub pressed: Option<Hit>,
     /// The pointer is over the collapsed pile, which fans it.
     pub pile_hovered: bool,
+    /// Since when the hovered pile's sparkles have run.
+    sparkle_since: Option<f64>,
     /// Shipping's `preview_stack_fly` and `preview_stack_fan` tweens; `None`
     /// (offscreen fixtures) lands every change at once.
     pub motion: Option<(Tween, Tween)>,
@@ -302,6 +304,9 @@ pub struct CardMotion {
     /// `thumbnail-capture-highlight`: the accent outline a new card holds for
     /// 1 s, then fades over 3.5 s.
     highlight: Animation,
+    /// `thumbnail-stack-sparkle` for the hovered pile's two dot layers
+    /// (1.8 s, and 2.2 s after 0.5 s), looping.
+    sparkles: [Animation; 2],
 }
 
 impl CardMotion {
@@ -311,6 +316,10 @@ impl CardMotion {
             dismiss: Motion::PreviewDismiss.resolve(tokens)?,
             fallback: Motion::PreviewDeleteFallback.resolve(tokens)?,
             highlight: Motion::PreviewCaptureHighlight.resolve(tokens)?,
+            sparkles: [
+                Motion::PreviewPileSparkle.resolve(tokens)?,
+                Motion::PreviewPileSparkleLate.resolve(tokens)?,
+            ],
         })
     }
 }
@@ -395,6 +404,7 @@ impl Stack {
             hot: None,
             pressed: None,
             pile_hovered: false,
+            sparkle_since: None,
             motion: None,
             reduced: false,
             fly: (0., 0.),
@@ -671,6 +681,7 @@ impl Stack {
             .flatten()
             .any(|start| !self.reduced && now - start < CUE_IN_MS);
         let easing = self.rejects.values().any(|start| now - start < REJECT_MS)
+            || self.sparkling()
             || (!self.instant() && self.hover_fades.values().any(|fade| fade.running(now)));
         pile || arriving
             || !self.exits.is_empty()
@@ -1209,10 +1220,12 @@ impl Stack {
             self.pile_hovered = self.hot == Some(Hit::Expand);
             if self.pile_hovered != before.0 {
                 self.set_fan(self.pile_hovered);
+                self.sparkle_since = self.pile_hovered.then(now_ms);
             }
             return (self.pile_hovered, self.hot) != before;
         }
         self.pile_hovered = false;
+        self.sparkle_since = None;
         // Hover follows the card under the pointer, then targets its
         // controls; the toolbar and cues float above scrolled cards.
         let over_stack_control = at.and_then(|(x, y)| self.hit(x, y)).is_some_and(|hit| {
@@ -1387,6 +1400,7 @@ impl Stack {
     fn paint_stack(&self, dc: &ID2D1DeviceContext, g: &Gfx, t: &Tokens) -> Result<()> {
         if self.collapsed() || self.progress() > 0. {
             self.paint_pile(dc, g, t)?;
+            self.paint_sparkles(dc, t)?;
             return self.paint_focus(dc, t);
         }
         for index in 0..self.cards.len() {
@@ -1436,6 +1450,92 @@ impl Stack {
         self.paint_cues(dc, g, t)?;
         self.paint_focus(dc, t)?;
         self.paint_tips(dc, g, t)
+    }
+
+    /// The sparkles run: the pile is hovered, at rest and not being carried
+    /// (`:not(.thumbnail-stack-dragging)`), with motion allowed.
+    fn sparkling(&self) -> bool {
+        self.sparkle_since.is_some()
+            && self.card_motion.is_some()
+            && !self.reduced
+            && self.sway.is_none()
+            && self.collapsed()
+            && self.progress() >= 1.
+    }
+
+    /// `.thumbnail-collapsed-hit-target::before/::after` on the hovered pile:
+    /// two layers of accent and white dots over and past the pile
+    /// (`preview_motion::sparkle_layer`), each rising 28 DIPs, swelling 6 %
+    /// and flashing to 0.9 opacity on its own loop.
+    fn paint_sparkles(&self, dc: &ID2D1DeviceContext, t: &Tokens) -> Result<()> {
+        let (true, Some(m), Some(since), Some(front)) = (
+            self.sparkling(),
+            &self.card_motion,
+            self.sparkle_since,
+            self.front_rect(),
+        ) else {
+            return Ok(());
+        };
+        let layer = preview_motion::sparkle_layer(
+            (
+                front.left.into(),
+                front.top.into(),
+                (front.right - front.left).into(),
+                (front.bottom - front.top).into(),
+            ),
+            self.top,
+        );
+        let (cx, cy) = (layer.0 + layer.2 / 2., layer.1 + layer.3 / 2.);
+        let accent = t.color("theme-accent");
+        let elapsed = now_ms() - since;
+        let mut base = Matrix3x2::identity();
+        unsafe { dc.GetTransform(&mut base) };
+        for (animation, dots) in [
+            (m.sparkles[0], &preview_motion::SPARKLES_EARLY[..]),
+            (m.sparkles[1], &preview_motion::SPARKLES_LATE[..]),
+        ] {
+            // `infinite`: the delay runs once, then the loop repeats.
+            if elapsed < animation.delay_ms || animation.duration_ms <= 0. {
+                continue;
+            }
+            let looped =
+                animation.delay_ms + (elapsed - animation.delay_ms) % animation.duration_ms;
+            let pose = animation.pose_at(looped, false);
+            if pose.opacity <= 0. {
+                continue;
+            }
+            // Scale about the layer's centre, then rise.
+            let s = pose.scale as f32;
+            let posed = Matrix3x2 {
+                M11: s,
+                M12: 0.,
+                M21: 0.,
+                M22: s,
+                M31: (cx - f64::from(s) * cx) as f32,
+                M32: (cy + pose.translate_y - f64::from(s) * cy) as f32,
+            } * base;
+            unsafe { dc.SetTransform(&posed) };
+            let result = faded(dc, pose.opacity as f32, || {
+                for dot in dots {
+                    let (x, y) = preview_motion::sparkle_center(dot, layer);
+                    let color = if dot.accent {
+                        accent
+                    } else {
+                        D2D1_COLOR_F {
+                            r: 1.,
+                            g: 1.,
+                            b: 1.,
+                            a: 1.,
+                        }
+                    };
+                    sparkle_dot(dc, (x as f32, y as f32), dot, color)?;
+                }
+                Ok(())
+            });
+            unsafe { dc.SetTransform(&base) };
+            result?;
+        }
+        Ok(())
     }
 
     /// `.thumbnail-overflow-cue`: a glass tab flush with its window edge,
@@ -2161,7 +2261,10 @@ pub fn fixture(g: &Gfx, image: &image::RgbaImage, select: Option<&str>) -> Stack
         P::BottomLeft
     };
     let mut stack = Stack::new(placement);
-    let pile = matches!(select, Some("pile" | "pile-hover" | "pile-top"));
+    let pile = matches!(
+        select,
+        Some("pile" | "pile-hover" | "pile-top" | "pile-sparkle")
+    );
     let overflow = select == Some("overflow");
     let mut cards = vec![
         ("first", (1600, 1000, 842_000), true),
@@ -2195,6 +2298,13 @@ pub fn fixture(g: &Gfx, image: &image::RgbaImage, select: Option<&str>) -> Stack
         Some("pile-hover") => {
             let front = stack.front_rect().expect("front card");
             stack.pointer(Some((front.left + 40., front.top + 40.)));
+        }
+        // The hovered pile 1.2 s into its sparkles: both layers showing.
+        Some("pile-sparkle") => {
+            stack.card_motion = CardMotion::resolve(&Tokens::variant("dark", "mustard"));
+            let front = stack.front_rect().expect("front card");
+            stack.pointer(Some((front.left + 40., front.top + 40.)));
+            stack.sparkle_since = Some(now_ms() - 1_200.);
         }
         // A hovered saved recording above an unsaved card whose Save failed.
         Some("recording") => {
@@ -2305,6 +2415,63 @@ fn paint_tip(
             t.color("glass-text"),
         )
     })
+}
+
+/// One sparkle dot: `radial-gradient(circle, color 0 core, transparent
+/// fade)`, solid to its core radius, then fading out by its fade radius.
+fn sparkle_dot(
+    dc: &ID2D1DeviceContext,
+    (x, y): (f32, f32),
+    dot: &preview_motion::SparkleDot,
+    color: D2D1_COLOR_F,
+) -> Result<()> {
+    let (core, fade) = (dot.core as f32, dot.fade as f32);
+    let solid = D2D1_COLOR_F {
+        a: color.a * dot.alpha as f32,
+        ..color
+    };
+    let clear = D2D1_COLOR_F { a: 0., ..solid };
+    let target: &ID2D1RenderTarget = dc;
+    unsafe {
+        let stops = target.CreateGradientStopCollection(
+            &[
+                D2D1_GRADIENT_STOP {
+                    position: 0.,
+                    color: solid,
+                },
+                D2D1_GRADIENT_STOP {
+                    position: core / fade,
+                    color: solid,
+                },
+                D2D1_GRADIENT_STOP {
+                    position: 1.,
+                    color: clear,
+                },
+            ],
+            D2D1_GAMMA_2_2,
+            D2D1_EXTEND_MODE_CLAMP,
+        )?;
+        let center = windows_numerics::Vector2 { X: x, Y: y };
+        let brush = dc.CreateRadialGradientBrush(
+            &D2D1_RADIAL_GRADIENT_BRUSH_PROPERTIES {
+                center,
+                gradientOriginOffset: windows_numerics::Vector2 { X: 0., Y: 0. },
+                radiusX: fade,
+                radiusY: fade,
+            },
+            None,
+            &stops,
+        )?;
+        dc.FillEllipse(
+            &D2D1_ELLIPSE {
+                point: center,
+                radiusX: fade,
+                radiusY: fade,
+            },
+            &brush,
+        );
+    }
+    Ok(())
 }
 
 /// Run `paint` masked to outside the rounded `r`, so a hollow card's shadow
@@ -4065,6 +4232,32 @@ mod tests {
         // Settled out, it is forgotten.
         s.sync_hover(1_400.);
         assert!(s.hover_fades.is_empty());
+    }
+
+    #[test]
+    fn the_hovered_pile_sparkles_until_left_carried_or_reduced() {
+        use captures_settings::MiniPreviewPlacement as P;
+        let mut s = stack(P::BottomLeft, &[true, false]);
+        s.card_motion = CardMotion::resolve(&Tokens::variant("light", "mustard"));
+        s.stack.set_collapsed(true);
+        let front = s.front_rect().unwrap();
+        s.pointer(Some((front.left + 40., front.top + 40.)));
+        assert!(s.sparkling() && s.animating(), "hovered pile sparkles");
+        s.reduced = true;
+        assert!(!s.sparkling(), "reduced motion");
+        s.reduced = false;
+        s.sway = Some(DragSway::default());
+        assert!(!s.sparkling(), "carried");
+        s.sway = None;
+        s.pointer(None);
+        assert!(!s.sparkling() && s.sparkle_since.is_none(), "left");
+        // Both loops sit inside the layer that reaches past the pile.
+        let layer =
+            preview_motion::sparkle_layer((front.left.into(), front.top.into(), 284., 160.), false);
+        assert_eq!(
+            layer.1,
+            f64::from(front.top) - preview_motion::SPARKLE_REACH
+        );
     }
 
     #[test]
