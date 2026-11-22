@@ -68,6 +68,10 @@ private final class EditorInspectorDivider: NSView {
     private var lastX: CGFloat = 0
     private var dragging = false
     override var acceptsFirstResponder: Bool { true }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        toolTip = "Drag to resize · Double-click to reset"
+    }
     override func becomeFirstResponder() -> Bool {
         let accepted = super.becomeFirstResponder()
         needsDisplay = true; return accepted
@@ -3163,6 +3167,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                                   size: tokens.number("text-sm"), muted: true, parent: geometryContent)
         // Shipping `.screenshot-property-actions button.primary.cta-pulse`.
         applyCropButton.primary = true
+        applyCropButton.toolTip = "Apply crop (Return)"
         applyCropHalo.surround(applyCropButton)
         geometryContent.addSubview(applyCropHalo, positioned: .below, relativeTo: applyCropButton)
         publishCropControls()
@@ -3317,9 +3322,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         undoButton = headerIcon("undo", label: EditorChrome.text("header", "undo")) {
             [weak self] in self?.undoDocument()
         }
+        undoButton.toolTip = "\(EditorChrome.text("header", "undo")) (⌘Z)"
         redoButton = headerIcon("redo", label: EditorChrome.text("header", "redo")) {
             [weak self] in self?.redoDocument()
         }
+        redoButton.toolTip = "\(EditorChrome.text("header", "redo")) (⇧⌘Z or ⌘Y)"
 
         zoomGroup.layer?.cornerRadius = tokens.number("r-lg")
         zoomGroup.layer?.borderWidth = 1
@@ -3333,7 +3340,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         zoomOutButton = headerIcon("minus", label: EditorChrome.text("header", "zoom_out"), parent: zoomGroup) {
             [weak self] in self?.scaleViewport(by: 1 / 1.25)
         }
-        zoomOutButton.toolTip = EditorChrome.text("header", "zoom_out")
+        zoomOutButton.toolTip = "\(EditorChrome.text("header", "zoom_out")) (⌘−)"
         zoomSlider.isContinuous = true
         zoomSlider.controlSize = .small
         if let cell = zoomSlider.cell as? TokenSliderCell {
@@ -3345,7 +3352,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         zoomInButton = headerIcon("plus", label: EditorChrome.text("header", "zoom_in"), parent: zoomGroup) {
             [weak self] in self?.scaleViewport(by: 1.25)
         }
-        zoomInButton.toolTip = EditorChrome.text("header", "zoom_in")
+        zoomInButton.toolTip = "\(EditorChrome.text("header", "zoom_in")) (⌘+)"
         for control in [fitButton!, zoomOutButton!, zoomInButton!] {
             control.cornerRadius = 0; control.iconSide = 14
         }
@@ -6313,6 +6320,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             scaleViewport(by: 1 / 1.25)
         } else if command && (key == "0" || event.keyCode == 82) {
             setViewportZoom(100)
+        } else if command && key.lowercased() == "s"
+                    && event.modifierFlags.isDisjoint(with: [.shift, .option]) {
+            // Shipping saves from anywhere, fields included; a repeat would
+            // start a second save once the first finished.
+            if !event.isARepeat, exportSaveButton?.isEnabled == true { exportSaveButton?.performClick(nil) }
         } else {
             // Field editors retain typing and deletion. Document shortcuts use
             // the same accepted-command and enabled-state gates as the buttons.
@@ -6325,6 +6337,13 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 selectCanvasLayer(nil)
                 return true
             }
+            // Enter confirms a drawn crop, as Escape cancels it.
+            if (event.keyCode == 36 || event.keyCode == 76), !command, cropSelection != nil,
+               !(responder is NSButton) || toolRailButtons.contains(where: { $0.button === responder }),
+               let apply = applyCropButton, apply.isEnabled, !apply.isHidden {
+                apply.performClick(nil)
+                return true
+            }
             if !command && !event.modifierFlags.contains(.option)
                 && activateToolShortcut(key.lowercased()) { return true }
             let button: CaptureButton?
@@ -6332,6 +6351,14 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 // Undo/Redo buttons hide at or below 1040pt, like shipping; the keys still work.
                 cancelDrawing(); cancelViewportPan()
                 if event.modifierFlags.contains(.shift) { redoDocument() } else { undoDocument() }
+                return true
+            } else if command && !event.modifierFlags.contains(.shift) && key.lowercased() == "y" {
+                cancelDrawing(); cancelViewportPan()
+                redoDocument()
+                return true
+            } else if command && event.modifierFlags.contains(.shift) && key.lowercased() == "c" {
+                // Shipping: ⇧⌘C copies the edited image; ⌘C copies the layer.
+                if !event.isARepeat, copyImageButton?.isEnabled == true { copyImageButton?.performClick(nil) }
                 return true
             } else if command && key.lowercased() == "d" {
                 button = duplicateButton

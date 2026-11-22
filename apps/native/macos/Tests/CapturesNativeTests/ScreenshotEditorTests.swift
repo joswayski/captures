@@ -2152,6 +2152,45 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertTrue(controller.state.snapshot?.canUndo == true)
     }
 
+    func testShippingDocumentKeysSaveCopyImageRedoAndApplyCrop() throws {
+        _ = NSApplication.shared
+        let worker = FakeEditorWorker(snapshot: snapshot(id: "shot", unsaved: true, canRedo: true))
+        var writes: [Data] = []
+        let controller = ScreenshotEditorController(tokens: Tokens.variants["light-mustard"]!,
+            worker: worker, writeClipboard: { writes.append($0); return true })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: artifact(id: "shot"), historyRoot: "/native/History",
+                           outputDirectory: "/exports")
+        let window = controller.window
+        // ⇧⌘C copies the edited image (the Copy image button), not the layer.
+        XCTAssertTrue(window.performKeyEquivalent(with: try keyEvent(window: window, keyCode: 8,
+            characters: "C", modifiers: [.command, .shift])))
+        XCTAssertEqual(writes.count, 1)
+        XCTAssertTrue(worker.requests.isEmpty)
+        // ⌘Y redoes, like ⇧⌘Z.
+        XCTAssertTrue(window.performKeyEquivalent(with: try keyEvent(window: window, keyCode: 16,
+            characters: "y", modifiers: .command)))
+        XCTAssertEqual(worker.requests.map { $0["operation"] as? String }, ["redo"])
+        // Return applies a dragged crop, as Escape clears it.
+        let sections = try segmented("Editor section", in: controller.root)
+        sections.selectedSegment = 0; _ = sections.sendAction(sections.action, to: sections.target)
+        let image = controller.presentedImageRect
+        controller.cropOverlay.begin(at: NSPoint(x: image.minX + image.width * 0.75, y: image.minY + image.height * 0.8))
+        controller.cropOverlay.end(at: NSPoint(x: image.minX + image.width * 0.25, y: image.minY + image.height * 0.3))
+        XCTAssertNotNil(controller.cropSelection)
+        XCTAssertEqual(try button("Apply crop", in: controller.root).toolTip, "Apply crop (Return)")
+        window.makeFirstResponder(nil)
+        window.sendEvent(try keyEvent(window: window, keyCode: 36, characters: "\r"))
+        XCTAssertEqual(worker.requests.last?["operation"] as? String, "crop")
+        XCTAssertEqual(worker.requests.last?["rect"] as? [String: Double],
+                       ["x": 160, "y": 108, "width": 320, "height": 180])
+        // ⌘S saves from anywhere, a focused field included.
+        XCTAssertTrue(window.makeFirstResponder(try field("Saved filename", in: controller.root)))
+        XCTAssertTrue(window.performKeyEquivalent(with: try keyEvent(window: window, keyCode: 1,
+            characters: "s", modifiers: .command)))
+        XCTAssertEqual(worker.exportSaves.count, 1)
+    }
+
     func testCropFieldsViewportCancellationAndMinimumRenderedStates() throws {
         _ = NSApplication.shared
         for appearance in ["light", "dark"] {

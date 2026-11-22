@@ -1048,6 +1048,77 @@ final class RecordingEditorTests: XCTestCase {
         }
     }
 
+    func testEditorKeysSaveToggleSeekAndTrimLikeShipping() throws {
+        _ = NSApplication.shared
+        let path = "/Exports/original.mp4"
+        let worker = FakeRecordingEditorWorker(presentation: try presentation(position: 100,
+            originalSavePath: path))
+        worker.deferPlayback = true
+        let controller = RecordingEditorController(tokens: Tokens.variants["light-mustard"]!,
+                                                   worker: worker, confirmDiscard: { false })
+        defer { controller.window.orderOut(nil) }
+        controller.present(artifact: recordingArtifact(savedPath: path), historyRoot: "/History",
+                           outputDirectory: "/Exports")
+        func key(_ characters: String, _ code: UInt16, _ modifiers: NSEvent.ModifierFlags = [],
+                 repeating: Bool = false) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers,
+                timestamp: 0, windowNumber: controller.window.windowNumber, context: nil,
+                characters: characters, charactersIgnoringModifiers: characters,
+                isARepeat: repeating, keyCode: code))
+        }
+        func lastSeek() -> UInt64? { (worker.requests.last?["position_ms"] as? NSNumber)?.uint64Value }
+        let timeline = try playhead(in: controller.root)
+        controller.window.makeFirstResponder(nil)
+
+        // ⌘S presses Save, even from a field.
+        XCTAssertTrue(controller.window.makeFirstResponder(try field("Trim start milliseconds", in: controller.root)))
+        XCTAssertTrue(controller.window.performKeyEquivalent(with: try key("s", 1, .command)))
+        XCTAssertEqual(worker.replaceCalls, 1)
+        controller.window.makeFirstResponder(nil)
+
+        // Space plays through the Play button, and a held key does not toggle again.
+        controller.window.makeFirstResponder(nil)
+        controller.window.sendEvent(try key(" ", 49))
+        XCTAssertEqual(worker.playbackStarts.count, 1)
+        controller.window.sendEvent(try key(" ", 49, repeating: true))
+        XCTAssertEqual(try button("Pause", in: controller.root).toolTip, "Pause (Space)")
+        try button("Pause", in: controller.root).performClick(nil)
+        worker.completePlayback(.success(.cancelled))
+
+        // Shift+→ steps 1 s, ← one 33 ms frame (asymmetric so each is distinct).
+        worker.requestResult = .success(try presentation(position: 1_100, revision: 1))
+        controller.window.sendEvent(try key("\u{f703}", 124, .shift))
+        XCTAssertEqual(lastSeek(), 1_100)
+        worker.requestResult = .success(try presentation(position: 1_067, revision: 2))
+        controller.window.sendEvent(try key("\u{f702}", 123))
+        XCTAssertEqual(lastSeek(), 1_067)
+
+        // I and O move the trim edges to the playhead; Home/End seek to them.
+        worker.requestResult = .success(try presentation(end: 1_067, position: 1_067, revision: 3))
+        controller.window.sendEvent(try key("o", 31))
+        XCTAssertEqual(timeline.endMilliseconds, 1_067)
+        XCTAssertEqual(try field("Trim end milliseconds", in: controller.root).stringValue, "1067")
+        worker.requestResult = .success(try presentation(end: 1_067, position: 400, revision: 4))
+        timeline.scrub(to: 400)
+        worker.requestResult = .success(try presentation(start: 400, end: 1_067, position: 400, revision: 5))
+        controller.window.sendEvent(try key("i", 34))
+        XCTAssertEqual(timeline.startMilliseconds, 400)
+        XCTAssertEqual(timeline.endMilliseconds, 1_067)
+        worker.requestResult = .success(try presentation(start: 400, end: 1_067, position: 1_067, revision: 6))
+        controller.window.sendEvent(try key("\u{f72b}", 119))
+        XCTAssertEqual(lastSeek(), 1_067, "End seeks to the trim end, not the clip end")
+
+        // A focused field keeps its own keys; only ⌘S still applies there.
+        let requests = worker.requests.count
+        let trimStart = try field("Trim start milliseconds", in: controller.root)
+        XCTAssertTrue(controller.window.makeFirstResponder(trimStart))
+        controller.window.sendEvent(try key("\u{f702}", 123))
+        controller.window.sendEvent(try key("o", 31))
+        XCTAssertEqual(worker.requests.count, requests)
+        XCTAssertEqual(timeline.endMilliseconds, 1_067)
+
+    }
+
     func testSeekPreservesRequestedTargetAtIdleAndAfterTransientPlayback() throws {
         _ = NSApplication.shared
         let worker = FakeRecordingEditorWorker(presentation: try presentation(position: 100))

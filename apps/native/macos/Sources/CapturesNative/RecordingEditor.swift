@@ -13,6 +13,8 @@ final class RecordingTrimHandle: NSView {
         setAccessibilityRole(.slider); setAccessibilityOrientation(.horizontal)
         setAccessibilityLabel(edge == .start ? "Recording trim start handle"
                                              : "Recording trim end handle")
+        toolTip = edge == .start ? "Trim start · I sets it at the playhead"
+                                 : "Trim end · O sets it at the playhead"
         updateAccessibility()
     }
 
@@ -283,6 +285,14 @@ final class RecordingTrimTimeline: NSView {
             ? maximum : current + step) : max(minimum, current > step ? current - step : 0)
         if next == current { onTrimPreview?(next) }
         else { stage(edge: edge, milliseconds: next) }
+    }
+
+    /// Shipping's I/O keys: the edge moves to the playhead, kept one
+    /// millisecond inside the other edge.
+    func stageAtPlayhead(edge: NativeRecordingTimelineEdge) {
+        guard editingEnabled, let playhead = playheadMilliseconds else { return }
+        endDrag()
+        stage(edge: edge, milliseconds: playhead)
     }
 
     private func stage(edge: NativeRecordingTimelineEdge, milliseconds: UInt64) {
@@ -876,6 +886,21 @@ func formatRecordingFileSizeDelta(estimatedBytes: UInt64?, originalBytes: UInt64
     return percent < 0 ? "−\(magnitude)%" : "+\(magnitude)%"
 }
 
+/// Routes editor-wide keys before AppKit hands them to the focused view.
+private final class RecordingEditorWindow: NSWindow {
+    var editorKey: ((NSEvent) -> Bool)?
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if editorKey?(event) == true { return true }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .keyDown, editorKey?(event) == true { return }
+        super.sendEvent(event)
+    }
+}
+
 final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDelegate {
     let window: NSWindow
     let root = Surface()
@@ -939,6 +964,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     /// anything changes (shipping's `alreadySaved`).
     private var savedFingerprint: String?
     private var playbackState = RecordingPlaybackState.idle
+    private var previewHovered = false
     private var playbackCancel: NativeRecordingEditorCancel?
     private var playbackPositionMilliseconds: UInt64?
     private var playbackReachedEOF = false
@@ -1111,10 +1137,12 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         trimTimeline = RecordingTrimTimeline(tokens: tokens)
         cropOverlay = RecordingCropOverlay(tokens: tokens)
         compareView = CompressionCompareView(tokens: tokens)
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 960, height: 760),
+        let editorWindow = RecordingEditorWindow(contentRect: NSRect(x: 0, y: 0, width: 960, height: 760),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
                           backing: .buffered, defer: false)
+        window = editorWindow
         super.init()
+        editorWindow.editorKey = { [weak self] in self?.handleEditorKey($0) ?? false }
         window.isReleasedWhenClosed = false
         window.title = EditorWindowTitle.recording
         window.minSize = NSSize(width: 760, height: 540)
@@ -1469,6 +1497,11 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         playbackButton.iconOnly = true; playbackButton.icon = .shipping("resume")
         playbackButton.iconSide = tokens.number("s-8"); playbackButton.iconStrokeWidth = 2
         playbackButton.setAccessibilityLabel("Play recording preview")
+        // Shipping's `<video onClick>` toggles playback; the overlay button
+        // fades while playing and returns while the pointer is over the media.
+        preview.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(previewClicked)))
+        previewViewport.addTrackingArea(NSTrackingArea(rect: .zero,
+            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self))
         playbackLoop.tokens = tokens
         playbackLoop.target = self; playbackLoop.action = #selector(playbackLoopChanged)
         playbackLoop.setAccessibilityLabel("Loop recording preview")
@@ -2669,6 +2702,72 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         }
     }
 
+    /// Shipping `recordingEditorKeyCommand`: ⌘S saves anywhere; Space, I/O,
+    /// Home/End and ←/→ (Shift: 1 s) apply unless a field, menu, slider,
+    /// handle or other button keeps its own keys. Play and Save go through
+    /// their buttons, so a key never does what its button refuses.
+    func handleEditorKey(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown, presentation != nil, window.attachedSheet == nil else { return false }
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
+        if flags.contains(.command) || flags.contains(.control) {
+            guard key == "s", !flags.contains(.option), !flags.contains(.shift) else { return false }
+            if !event.isARepeat, saveButton?.isEnabled == true { saveButton?.performClick(nil) }
+            return true
+        }
+        let responder = window.firstResponder
+        let ownsKeys = responder is NSText
+            || (responder is NSControl && responder !== playbackButton)
+            || responder is RecordingTrimHandle || responder is RecordingCropHandle
+            || responder is RecordingCropOverlay
+        guard !ownsKeys, !flags.contains(.option) else { return false }
+        let playhead = trimTimeline.playheadMilliseconds ?? 0
+        let duration = trimTimeline.durationMilliseconds
+        switch event.keyCode {
+        case 49:
+            if !event.isARepeat, let button = playbackButton, button.isEnabled, !button.isHidden {
+                button.performClick(nil)
+            }
+        case 115, 119:
+            guard trimTimeline.seekEnabled, duration > 0 else { return true }
+            let edge = event.keyCode == 115 ? trimTimeline.startMilliseconds : trimTimeline.endMilliseconds
+            seek(to: min(edge, duration - 1))
+        case 123, 124:
+            guard trimTimeline.seekEnabled, duration > 0 else { return true }
+            let step: UInt64 = flags.contains(.shift) ? 1_000 : 33
+            let next = event.keyCode == 123 ? (playhead > step ? playhead - step : 0)
+                : min(duration - 1, playhead + step)
+            seek(to: next)
+        default:
+            guard key == "i" || key == "o" else { return false }
+            trimTimeline.stageAtPlayhead(edge: key == "i" ? .start : .end)
+        }
+        return true
+    }
+
+    @objc private func previewClicked() {
+        guard !cropAdjustmentActive, compareView.isHidden, let button = playbackButton,
+              button.isEnabled, !button.isHidden else { return }
+        button.performClick(nil)
+    }
+
+    @objc func mouseEntered(with event: NSEvent) { previewHovered = true; updatePlaybackButtonFade() }
+    @objc func mouseExited(with event: NSEvent) { previewHovered = false; updatePlaybackButtonFade() }
+
+    /// `.recording-preview-overlay-play.playing { opacity: 0 }`, shown again on
+    /// media hover, over `var(--dur-2) var(--ease-standard)`.
+    private func updatePlaybackButtonFade() {
+        guard let button = playbackButton else { return }
+        let target: CGFloat = playbackState == .playing && !previewHovered ? 0 : 1
+        guard button.alphaValue != target else { return }
+        let points = tokens.easing("ease-standard").map { Float($0) }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = NativeMotion.reduceMotion ? 0 : Double(tokens.number("dur-2")) / 1000
+            context.timingFunction = CAMediaTimingFunction(controlPoints: points[0], points[1], points[2], points[3])
+            button.animator().alphaValue = target
+        }
+    }
+
     private func togglePlayback() {
         if resumeAfterSeek { pausePlayback(); updateControls(); return }
         switch playbackState {
@@ -3842,14 +3941,14 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             playbackButton?.title = "Play"
             playbackButton?.icon = .shipping("resume")
             playbackButton?.setAccessibilityLabel("Play recording preview")
-            playbackButton?.toolTip = stagedDiffers ? "Updating the edited preview…" : "Play"
+            playbackButton?.toolTip = stagedDiffers ? "Updating the edited preview…" : "Play (Space)"
             playbackButton?.isEnabled = available && valid && !stagedDiffers
                 && !cropAdjustmentActive
         case (.playing, _), (_, true):
             playbackButton?.title = "Pause"
             playbackButton?.icon = .shipping("pause")
             playbackButton?.setAccessibilityLabel("Pause recording preview")
-            playbackButton?.toolTip = "Pause the preview."
+            playbackButton?.toolTip = "Pause (Space)"
             playbackButton?.isEnabled = true
         case (.pausing, false):
             playbackButton?.title = "Pausing…"
@@ -3858,6 +3957,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             playbackButton?.isEnabled = false
         }
         playbackButton?.isHidden = cropAdjustmentActive || preview.image == nil
+        updatePlaybackButtonFade()
         changeButton?.isEnabled = available
         let copy = savingCopy
         saveButton?.isEnabled = available && valid && !stagedDiffers && !alreadySaved
@@ -3865,8 +3965,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         // The accessible name says what Save does now.
         saveButton?.setAccessibilityLabel(copy ? "Save new copy" : "Replace original")
         saveButton?.toolTip = copy
-            ? "Save as a new file and leave the original untouched."
-            : "Save the edits to \(destinationPath) under the original History item."
+            ? "Save as a new file and leave the original untouched. (⌘S)"
+            : "Save the edits to \(destinationPath) under the original History item. (⌘S)"
         saveAsNewSwitch.state = copy ? .on : .off
         saveAsNewSwitch.isEnabled = available && eligibleOriginalPath != nil
         saveAsNewRow.toolTip = eligibleOriginalPath == nil
