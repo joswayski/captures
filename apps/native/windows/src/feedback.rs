@@ -22,7 +22,7 @@ use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
-use windows_numerics::Matrix3x2;
+use windows_numerics::{Matrix3x2, Vector2};
 
 use crate::gfx::{self, Gfx, Style, Text, rect};
 use crate::panel_uia::{self, Act, Item, Role};
@@ -33,8 +33,10 @@ use crate::{Options, appearance};
 const CLASS: PCWSTR = w!("CapturesFeedback");
 const WM_DONE: u32 = WM_APP + 61;
 const WM_MOUSELEAVE: u32 = 0x02A3;
-/// `.feedback-message { min-height: 148px }`
+/// `.feedback-message { min-height: 148px }`; `resize: vertical` grows it.
 const MESSAGE_HEIGHT: f32 = 148.;
+/// The textarea's resize grip square in its bottom-right corner.
+const GRIP: f32 = 14.;
 /// `.feedback-meta > div { grid-template-columns: 112px … }`
 const META_LABEL: f32 = 112.;
 
@@ -170,6 +172,12 @@ pub struct Feedback {
     tracking: bool,
     scroll: f32,
     message_scroll: f32,
+    /// The message box's height, dragged taller by its resize grip.
+    message_height: f32,
+    /// A grip drag: the pointer's page y and the height when it began.
+    resizing: Option<(f32, f32)>,
+    /// The pointer is over the grip.
+    grip_hover: bool,
     /// Keep the message caret in view at the next layout.
     follow: bool,
     reveal: Option<Target>,
@@ -268,6 +276,9 @@ impl Feedback {
             tracking: false,
             scroll: 0.,
             message_scroll: 0.,
+            message_height: MESSAGE_HEIGHT,
+            resizing: None,
+            grip_hover: false,
             follow: false,
             reveal: None,
             high_surrogate: None,
@@ -610,7 +621,7 @@ impl Feedback {
         let message_text = g.text(t, Style::SetupLede, &display, message_w)?;
         let placeholder = copy::CATEGORIES[self.category].placeholder;
         let message_placeholder = g.text(t, Style::SetupLede, placeholder, message_w)?;
-        let message_box = rect(x, cy, x + inner, cy + MESSAGE_HEIGHT);
+        let message_box = rect(x, cy, x + inner, cy + self.message_height);
         cy = message_box.bottom + n("s-5");
         dividers.push((x, x + inner, cy));
         cy += 1. + n("s-5");
@@ -679,7 +690,7 @@ impl Feedback {
         let height = y + footer_h + n("s-11");
 
         // Keep the message caret in its box.
-        let view = MESSAGE_HEIGHT - 2. - 2. * n("s-4");
+        let view = self.message_height - 2. - 2. * n("s-4");
         if std::mem::take(&mut self.follow) {
             let (_, top, line) = caret_point(
                 &message_text,
@@ -759,6 +770,21 @@ impl Feedback {
         ORDER
             .into_iter()
             .find(|&target| contains(&Self::rect_of(lay, target), x, y))
+    }
+
+    /// The message box's resize grip, in page coordinates.
+    fn grip(lay: &Lay) -> D2D_RECT_F {
+        let r = lay.message_box;
+        rect(r.right - GRIP, r.bottom - GRIP, r.right, r.bottom)
+    }
+
+    /// The client point is on the grip.
+    fn on_grip(&self, x: f32, y: f32) -> bool {
+        !self.sending()
+            && self
+                .lay
+                .as_ref()
+                .is_some_and(|lay| contains(&Self::grip(lay), x, y + self.scroll))
     }
 
     /// The message position under a client point.
@@ -1215,6 +1241,31 @@ impl Feedback {
         let drawn = self.paint_message(dc, lay);
         unsafe { dc.PopAxisAlignedClip() };
         drawn?;
+        // The textarea's resize grip: two diagonal strokes, like Chromium's.
+        let g = Self::grip(lay);
+        let ink = c(if self.resizing.is_some() || self.grip_hover {
+            "text-muted"
+        } else {
+            "text-faint"
+        });
+        let grip_brush = gfx::brush(dc, ink)?;
+        for inset in [3.5f32, 7.5] {
+            unsafe {
+                dc.DrawLine(
+                    Vector2 {
+                        X: g.right - 3.,
+                        Y: g.top + inset,
+                    },
+                    Vector2 {
+                        X: g.left + inset,
+                        Y: g.bottom - 3.,
+                    },
+                    &grip_brush,
+                    1.,
+                    None,
+                );
+            }
+        }
 
         let (label, ly) = (&lay.contact_label.0, lay.contact_label.1);
         let line = label.height.max(lay.badge.height + 2.);
@@ -1503,6 +1554,29 @@ impl Feedback {
     }
 
     fn pointer(&mut self, msg: u32, x: f32, y: f32) {
+        // The grip drags the box taller (never under its minimum); the page
+        // grows and scrolls with it.
+        if let Some((from, height)) = self.resizing {
+            if msg == WM_LBUTTONUP {
+                self.resizing = None;
+                unsafe {
+                    let _ = ReleaseCapture();
+                }
+            } else if msg == WM_MOUSEMOVE {
+                self.message_height = (height + y + self.scroll - from).max(MESSAGE_HEIGHT);
+            }
+            return;
+        }
+        if msg == WM_MOUSEMOVE {
+            self.grip_hover = self.on_grip(x, y);
+        }
+        if matches!(msg, WM_LBUTTONDOWN | WM_LBUTTONDBLCLK) && self.on_grip(x, y) {
+            self.resizing = Some((y + self.scroll, self.message_height));
+            unsafe {
+                SetCapture(self.hwnd);
+            }
+            return;
+        }
         let hit = self.hit(x, y);
         if msg == WM_MOUSEMOVE {
             self.hover = hit;
@@ -1587,7 +1661,7 @@ impl Feedback {
         if self.hit(x, y) == Some(Target::Message)
             && let Some(lay) = &self.lay
         {
-            let view = MESSAGE_HEIGHT - 2. - 2. * self.t.n("s-4");
+            let view = self.message_height - 2. - 2. * self.t.n("s-4");
             let max = (lay.message_text.height - view).max(0.);
             let next = (self.message_scroll - delta).clamp(0., max);
             if next != self.message_scroll {
@@ -1630,11 +1704,14 @@ impl Feedback {
                     ((lp.0 >> 16) as u16 as i16) as f32 / self.scale,
                 );
                 let before = (self.hover, self.focus, self.dragging.is_some());
+                let grip = self.grip_hover;
                 self.pointer(msg, x, y);
                 // A plain move over nothing changes nothing worth painting.
                 if msg == WM_MOUSEMOVE
                     && before == (self.hover, self.focus, false)
                     && self.dragging.is_none()
+                    && self.resizing.is_none()
+                    && grip == self.grip_hover
                 {
                     return Some(LRESULT(0));
                 }
@@ -1642,13 +1719,16 @@ impl Feedback {
             WM_MOUSELEAVE => {
                 self.tracking = false;
                 self.hover = None;
+                self.grip_hover = false;
             }
             WM_CAPTURECHANGED => {
                 self.pressed = None;
                 self.dragging = None;
+                self.resizing = None;
             }
             WM_SETCURSOR if (lp.0 & 0xffff) as u32 == HTCLIENT => unsafe {
                 let cursor = match self.hover {
+                    _ if self.resizing.is_some() || self.grip_hover => IDC_SIZENS,
                     Some(Target::Message | Target::Contact) if !self.sending() => IDC_IBEAM,
                     Some(Target::Category(_)) => IDC_HAND,
                     Some(Target::Send) if self.can_send() => IDC_HAND,
