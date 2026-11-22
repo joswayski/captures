@@ -11,7 +11,7 @@ use captures_media::CancelToken;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-const ROOTS: [(&str, &str); 3] = [
+pub(crate) const ROOTS: [(&str, &str); 3] = [
     ("capture-history", "history"),
     ("screenshot-editor-drafts", "editor-drafts"),
     ("recording-recovery", "recording-recovery"),

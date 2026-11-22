@@ -5,7 +5,7 @@
 - Captures is a work-in-progress, cross-platform screen capture utility. Keep public wording broad enough to cover screenshots, GIFs, and video.
 - Clearly separate current features from roadmap ideas. Do not present tentative work as shipped or promise release dates unless the repository already commits to them.
 - Treat dated Preview builds as experimental. Do not publish a stable release until the maintainer explicitly starts that channel.
-- Tauri is the public app: `release.yml` automatically builds and promotes validated Tauri Previews on main pushes. Public release selection requires the Tauri runtime marker (with legacy Tauri history recognized separately); never infer the runtime from the presence of native tooling. Native remains separate, opt-in development until the maintainer accepts parity. Match Tauri behavior and visuals, without adding unrequested controls such as Share.
+- Native (AppKit, Win32, GTK4) is the public app since November 2026, approved by the maintainer after over-the-air updates (including Tauri to native) passed on macOS and Windows: `release.yml` builds and promotes validated native Previews on main pushes. Public release selection requires a runtime marker (`captures-native.json`, or `captures-tauri.json` and legacy Tauri history); never infer the runtime from tooling, and unmarked October 2026 native archives stay excluded. Keep matching the Tauri app's behavior and visuals (`apps/desktop` stays as the reference), without adding unrequested controls such as Share. A Tauri-only change no longer reaches users: implement every desktop fix or feature in the native hosts (AppKit, Win32, GTK4), and fix native regressions forward rather than switching back.
 
 ## Repository map
 
@@ -118,13 +118,13 @@ Push and deploy:
 - Infrastructure or secrets the change needs go to `joswayski/infrastructure`
   first, following that repository's guidance.
 - Desktop apps: `release.yml` (Captures Preview) runs on main pushes, skips builds
-  without unpublished Tauri/shared desktop changes, and publishes dated Tauri
+  without unpublished native/shared desktop changes, and publishes dated native
   Previews after its quality, signing and complete-package gates. It pins the triggering
   commit; the newest pending request replaces older pending requests. Manual
   dispatch remains for rebuilds and channel refreshes. Successful releases advance
-  public downloads and updater metadata automatically. Native workbenches and
-  unsigned packages remain separate; never promote native without explicit parity
-  approval (see `docs/releases.md`).
+  public downloads and updater metadata automatically. The egui/wgpu workbench and
+  unsigned packages never ship; prove updater changes on the native staging feed
+  first (see `docs/releases.md`).
 - Watch it land. `SHA` is your pushed commit:
   - its runs: `gh run list --repo joswayski/captures --commit "$SHA"`, then
     `gh run watch <id> --repo joswayski/captures --exit-status`;

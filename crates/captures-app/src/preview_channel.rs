@@ -193,7 +193,22 @@ fn prepare_profile(
     match fs::symlink_metadata(destination) {
         Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
             validate_profile(destination)?;
-            return Ok(false);
+            if !previous_app_used_since_import(settings, data, destination) {
+                return Ok(false);
+            }
+            // The Tauri app ran after this import (native, then back to
+            // Tauri, then native again). Keep that copy beside the new one
+            // and import the newer Tauri data.
+            require_stopped()?;
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|e| e.to_string())?
+                .as_secs();
+            fs::rename(
+                destination,
+                parent.join(format!("profile-superseded-{stamp}")),
+            )
+            .map_err(|e| e.to_string())?;
         }
         Ok(_) => return Err("Native Preview profile is not a real directory".into()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -254,6 +269,35 @@ fn prepare_profile(
         eprintln!("Could not enable launch at login; retry in Preferences: {error}");
     }
     Ok(settings_source == settings || data_source == data)
+}
+
+/// Whether the previous app's settings or data changed after `profile` was
+/// imported. Only that app writes them, so a change means it ran since.
+fn previous_app_used_since_import(settings: &Path, data: &Path, profile: &Path) -> bool {
+    fn newest(path: &Path) -> Option<std::time::SystemTime> {
+        let metadata = fs::symlink_metadata(path).ok()?;
+        let mut latest = metadata.modified().ok();
+        if metadata.is_dir() {
+            for entry in fs::read_dir(path).ok()?.flatten() {
+                latest = latest.max(newest(&entry.path()));
+            }
+        }
+        latest
+    }
+    let Some(imported) = fs::metadata(profile.join("import-receipt.json"))
+        .and_then(|metadata| metadata.modified())
+        .ok()
+    else {
+        return false;
+    };
+    std::iter::once(settings.to_owned())
+        .chain(
+            crate::profile_import::ROOTS
+                .iter()
+                .map(|(root, _)| data.join(root)),
+        )
+        .filter_map(|path| newest(&path))
+        .any(|modified| modified > imported)
 }
 
 fn validate_profile(root: &Path) -> Result<(), String> {
@@ -393,6 +437,44 @@ mod tests {
                 .unwrap()
                 .launch_at_login
         );
+
+        // Back on Tauri after that import: its newer data is imported again,
+        // and the earlier native profile is kept beside the new one.
+        let returned = captures_settings::AppSettings {
+            output_directory: temp.path().join("later").to_string_lossy().into_owned(),
+            ..original
+        };
+        File::options()
+            .write(true)
+            .open(profile.join("import-receipt.json"))
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(60))
+            .unwrap();
+        captures_settings::write_atomic(&settings, &returned).unwrap();
+        assert!(prepare_profile(&settings, &data, &profile, || Ok(())).unwrap());
+        assert_eq!(
+            captures_settings::load(&profile.join("settings.json"))
+                .unwrap()
+                .output_directory,
+            returned.output_directory
+        );
+        let kept: Vec<_> = fs::read_dir(temp.path())
+            .unwrap()
+            .flatten()
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("profile-superseded-")
+            })
+            .collect();
+        assert_eq!(kept.len(), 1);
+        assert!(
+            !captures_settings::load(&kept[0].path().join("settings.json"))
+                .unwrap()
+                .launch_at_login
+        );
+        assert!(!prepare_profile(&settings, &data, &profile, || panic!("not importing")).unwrap());
     }
 
     #[test]

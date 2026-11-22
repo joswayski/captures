@@ -1,28 +1,37 @@
 # Captures releases
 
-## Public channel automatically tracks Tauri
+## Public channel automatically tracks native
 
-Tauri is the public application. Main pushes with unpublished Tauri/shared desktop
-changes automatically build and promote a Preview after all platform, signing,
-notarization and complete-package checks pass. Native remains separate development;
-it is never selected just because native tooling is present in the source tree.
-This remains the experimental Preview channel, not a stable-channel launch.
+Native (AppKit, Win32, GTK4) is the public application since November 2026. The
+maintainer approved the switch after staging over-the-air updates passed on his
+Mac and Windows PC, both native to native (1501 → 1502) and Tauri to native
+(Tauri 1505 → native 1506). Main pushes with unpublished native/shared desktop
+changes build and promote a Preview after all platform, signing, notarization and
+complete-package checks pass. The egui/wgpu workbench never ships. This remains
+the experimental Preview channel, not a stable-channel launch.
+
+`release.yml` builds each target with `native-preview-build.mjs build`, signs the
+version- and target-bound updater artifacts with `collect`, and writes
+`latest.json` with `manifest` (including the `linux-x86_64-deb` entry that
+existing Tauri `.deb` installs select). Installed Tauri Previews update to native
+once through their normal updater, using the same identity and signing key; the
+native app then imports the Tauri profile read-only into its own profile.
 
 Public downloads, `npm run install:preview`, and both updater endpoints use the
-highest published Tauri CalVer selected by `scripts/preview-release.mjs`. There is
-no fixed-version pin. New releases carry a `captures-tauri.json` runtime marker,
-uploaded only after the Tauri-only packaging job passes validation. The marker is
-included in `SHA256SUMS`. Historical releases through `v2026.10.11.4` are recognized
-as Tauri; later unmarked releases (including the native `v2026.10.18.1`) are excluded.
+highest published CalVer that `scripts/preview-release.mjs` accepts: releases
+carrying the `captures-native.json` runtime marker, uploaded only after the native
+packaging job passes validation, plus Tauri releases (`captures-tauri.json`, and
+history through `v2026.10.11.4`). Markers are included in `SHA256SUMS`. Unmarked
+releases, including the withdrawn October native `v2026.10.18.1`, are excluded.
 The release baseline, public changelog and website publishing status use the same
-runtime filter. A native release cannot consume the next Tauri change batch.
+filter. Old October native installs read the public feed and can now update to
+the current native release.
 
-Returning from an installed native Preview to Tauri requires quitting Captures
-and replacing the installed app manually; the original Tauri profile remains
-separate from native-only captures and edits. Do not delete either profile or
-assume a reverse migration exists. Old native archives still query the public
-feed and may offer a newer version, but their version/target-bound signatures
-reject Tauri artifacts. They cannot receive native repairs from this channel.
+Updating cannot return to Tauri. To go back, quit Captures and install a Tauri
+build from the archive manually; the original Tauri profile remains separate from
+native-only captures and edits. Do not delete either profile or assume a reverse
+migration exists. Rebuilding (`target_sha`) a commit from before the switch is
+unsupported, because the workflow now packages native.
 
 To refresh the public installers and updater metadata without rebuilding apps:
 
@@ -30,12 +39,11 @@ To refresh the public installers and updater metadata without rebuilding apps:
 gh workflow run release.yml --repo joswayski/captures --ref main -f channel_only=true
 ```
 
-All four installer aliases and `latest.json` are copied from the newest validated
-Tauri release. Verify the public feed and installer digests after this job, not
-merely the workflow dispatch. For a broken Tauri release, fix or revert on main
-and publish a higher version; an older version will not downgrade installed apps.
-Adding the Tauri marker to a native archive is not a supported promotion path.
-Native promotion requires a separate maintainer decision on parity and migration.
+All four installer aliases and `latest.json` are copied from the newest public
+release. Verify the public feed and installer digests after this job, not merely
+the workflow dispatch. For a broken release, fix or revert on main and publish a
+higher version; an older version will not downgrade installed apps. Prove
+updater changes on the native staging feed (below) before they reach main.
 
 ## Native Preview packaging and recovery
 
@@ -136,7 +144,10 @@ Without bases or patches, clients download the full archive.
 The installed native profile lives under the platform-local `Captures Native Preview`
 data directory, in `profile`. First launch copies previous settings, retained History
 and screenshot drafts, preserving the old source and exports; subsequent launches
-validate the marker and reuse that copy. Do not launch another old or native app
+validate the marker and reuse that copy. If the previous app's settings or data
+changed after the import (someone returned to Tauri and later updated to native
+again), the next launch renames the stale copy to `profile-superseded-<unix time>`
+beside it, kept rather than deleted, and imports again. Do not launch another old or native app
 during this first import. The process check is a best-effort guard, not a lock
 honored by old Tauri versions. Development workbenches remain separate.
 

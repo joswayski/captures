@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       channel_only:
-        description: Refresh public downloads from the newest Tauri Preview without rebuilding
+        description: Refresh public downloads from the newest public Preview without rebuilding
         required: false
         type: boolean
         default: false
@@ -15,8 +15,8 @@ on:
         required: false
         type: string
 
-# Main pushes build and promote Tauri Previews when unpublished desktop changes
-# exist. Native development and unsigned workbenches never enter this channel.
+# Main pushes build and promote native Previews when unpublished desktop changes
+# exist. The egui/wgpu workbench and unsigned packages never enter this channel.
 # Omitting queue uses GitHub's default single pending slot.
 concurrency:
   group: captures-preview-main
@@ -437,7 +437,11 @@ jobs:
             xdg-utils \
             xz-utils \
             yasm \
-            zlib1g-dev
+            zlib1g-dev \
+            libgtk-4-dev \
+            libxkbcommon-dev \
+            libx11-dev \
+            libxi-dev
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -445,6 +449,8 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: 1.94.0
+      # The Win32 and GTK hosts are their own workspaces pinned to 1.95.
+      - run: rustup toolchain install 1.95.0 --profile minimal
       - uses: msys2/setup-msys2@v2
         if: runner.os == 'Windows'
         with:
@@ -535,29 +541,18 @@ jobs:
             exit 1
           fi
           echo "APPLE_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
-      # The public app is always Tauri, even when native build tooling exists.
-      - name: Build and bundle the public Tauri Preview
-        uses: tauri-apps/tauri-action@v1
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        with:
-          args: >-
-            --target ${{ matrix.target }}
-            --bundles ${{ matrix.bundles }}
-            --config src-tauri/tauri.release.conf.json
-          projectPath: apps/desktop
-          releaseBody: ${{ needs.prepare.outputs.release_notes }}
-          releaseDraft: true
-          releaseId: ${{ needs.prepare.outputs.release_id }}
-          retryAttempts: 5
-          tagName: ${{ needs.prepare.outputs.tag }}
-          uploadUpdaterJson: true
-          updaterJsonPreferNsis: true
+      # The public app is native (AppKit, Win32, GTK4) since November 2026.
+      # The Tauri CLI only bundles installers; existing Tauri installs update
+      # to it through the same identity, signing key and latest.json format.
+      # Rebuilding a commit from before the switch is unsupported.
+      - name: Build and bundle the public native Preview
+        shell: bash
+        run: >-
+          node scripts/native-preview-build.mjs build
+          "${{ matrix.target }}"
+          "${{ needs.prepare.outputs.app_version }}"
       - name: Notarize, staple, and validate the macOS release
         if: runner.os == 'macOS'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
         shell: bash
         run: |
           set -euo pipefail
@@ -594,11 +589,6 @@ jobs:
             --verbose=2 \
             "$dmg"
           xcrun stapler validate "$dmg"
-
-          node "$GITHUB_WORKSPACE/release-tools/scripts/github-release-assets.mjs" \
-            upload \
-            "$RELEASE_ID" \
-            "$dmg"
       - name: Validate the packaged media sidecars and notices
         if: runner.os == 'macOS'
         shell: bash
@@ -628,6 +618,21 @@ jobs:
           upload
           "$RELEASE_ID"
           target/ffmpeg-dist/*
+      - name: Sign and upload the native installers and updater artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/native-preview-build.mjs collect \
+            "${{ matrix.target }}" \
+            "${{ needs.prepare.outputs.app_version }}" \
+            native-assets
+          node "$GITHUB_WORKSPACE/release-tools/scripts/github-release-assets.mjs" \
+            upload \
+            "$RELEASE_ID" \
+            native-assets/*
 
   validate_draft:
     name: Validate staged release
@@ -652,15 +657,15 @@ jobs:
         run: |
           set -euo pipefail
           node scripts/github-release-assets.mjs download "$RELEASE_ID" release-assets
-          # Only this Tauri-only job may identify a release as public-channel
-          # eligible. Missing Tauri manifests fail validation, never fall back.
-          printf '{"runtime":"tauri","version":"%s"}\n' "$APP_VERSION" > release-assets/captures-tauri.json
-          # GitHub draft releases report tag_name as untagged-* even when the
-          # CalVer git tag already exists. Pass that tag explicitly so latest.json
-          # keeps publishable download URLs before checksums are frozen.
-          node scripts/github-release-assets.mjs rewrite-updater-urls "$RELEASE_ID" release-assets/latest.json "$TAG"
+          # The manifest binds each signed artifact to this version and target,
+          # with public download URLs for the CalVer tag (not the draft's
+          # untagged-* URLs), and keeps the linux-x86_64-deb entry that
+          # existing Tauri .deb installs select.
+          node scripts/native-preview-build.mjs manifest release-assets "$APP_VERSION"
+          # Only this job may identify a release as public-channel eligible.
+          printf '{"runtime":"native","version":"%s"}\n' "$APP_VERSION" > release-assets/captures-native.json
           node scripts/release-assets.mjs release-assets "$APP_VERSION"
-          node scripts/github-release-assets.mjs upload "$RELEASE_ID" release-assets/SHA256SUMS release-assets/latest.json release-assets/captures-tauri.json
+          node scripts/github-release-assets.mjs upload "$RELEASE_ID" release-assets/SHA256SUMS release-assets/latest.json release-assets/captures-native.json
       - name: Confirm the release remains a draft
         env:
           GH_TOKEN: ${{ github.token }}
@@ -716,7 +721,7 @@ jobs:
           fi
 
   channel:
-    name: Update public Tauri Preview
+    name: Update public Preview
     needs: publish
     if: ${{ always() && !cancelled() && github.ref == 'refs/heads/main' && (needs.publish.result == 'success' || inputs.channel_only) }}
     runs-on: ubuntu-24.04
@@ -730,7 +735,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - name: Publish the newest Tauri Preview on the permanent download page
+      - name: Publish the newest public Preview on the permanent download page
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -815,7 +820,7 @@ jobs:
             echo "> [!WARNING]"
             echo "> Captures Preview is functional, but experimental. Expect bugs and incomplete features; macOS is the primary development target, while Windows and Linux may be less polished."
             echo
-            echo "These downloads track the newest validated Tauri Preview automatically. Native development builds remain separate and are never public-channel updates."
+            echo "These downloads track the newest validated Preview automatically."
             echo
             echo "- [macOS 13+ — Apple silicon (.dmg)]($(asset_url "$macos_asset"))"
             echo "- [Windows 11 — x64 installer (.exe)]($(asset_url "$windows_asset"))"
