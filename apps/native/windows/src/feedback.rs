@@ -808,6 +808,41 @@ impl Feedback {
         self.edited(Target::Message, change);
     }
 
+    /// Home/End in the message move to the start or end of the caret's
+    /// visual line, like a `<textarea>` (Ctrl+Home/End still go to the ends).
+    fn line_edge(&mut self, end: bool, shift: bool) {
+        let Some(lay) = &self.lay else { return };
+        if self.message.composing() {
+            return;
+        }
+        let text = &lay.message_text;
+        let units = self.message.display();
+        let caret = self.message.display_caret();
+        let (_, y, line) = caret_point(
+            text,
+            &units,
+            caret,
+            self.t.n("text-md") * self.t.n("leading-normal"),
+        );
+        let mid = y + line / 2.;
+        let mut position = if mid > text.height {
+            // The empty line after a final line break.
+            units.len()
+        } else if end {
+            hit_point(text, f32::MAX / 4., mid)
+        } else {
+            hit_point(text, -1., mid)
+        };
+        // Past a hard break the hit lands on the next line; stay before it.
+        if end && position > caret && units.get(position - 1) == Some(&u16::from(b'\n')) {
+            position -= 1;
+        }
+        let change = self
+            .message
+            .move_to(self.message.text_position(position), shift);
+        self.edited(Target::Message, change);
+    }
+
     // ------------------------------------------------------ automation ----
 
     /// The automation key of a target.
@@ -1399,6 +1434,9 @@ impl Feedback {
         }
         if self.sending() {
             return;
+        }
+        if focus == Target::Message && !ctrl && (key == VK_HOME || key == VK_END) {
+            return self.line_edge(key == VK_END, shift);
         }
         let edit = match key {
             VK_LEFT => Some(Key::Left),

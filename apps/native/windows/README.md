@@ -195,7 +195,7 @@ the shared `captures-feedback` client on a worker; other launches are a fixture
 whose Send stays off. Tab moves through the categories, fields and Send.
 `--scene feedback [--select typed|live|sent|error|idea]` renders it offscreen
 (compared with the Tauri harness; Wine's DirectWrite stubs caret hit-testing,
-so caret placement needs a real PC). Not ported: the textarea resize grip and line-based Home/End.
+so caret placement needs a real PC). Home/End in the message move along the visual line (Ctrl+Home/End to the ends). Not ported: the textarea resize grip.
 
 Crash diagnostics: the resident app starts the shared
 `captures_app::crash::Session` (session marker, panic hook and the hidden

@@ -456,7 +456,7 @@ pub const NOTICE_SIZE: (f32, f32) = (
 
 /// `.recording-controls-hidden-notice`: the accent capture tile, the title
 /// and the sentence with one `<kbd>` chip per shortcut key, wrapped like the
-/// shipping flex row. Drawn at rest (the 6 s fade lifecycle is not ported).
+/// shipping flex row. The 6 s fade lifecycle plays on its visual (`recorder.rs`).
 pub fn paint_hidden_notice(
     dc: &ID2D1DeviceContext,
     g: &Gfx,
