@@ -27,8 +27,11 @@
 //! Close, Delete, Edit and Clear all show shipping's preview tooltips on the
 //! host's shared `tooltip::Fade`.
 //!
-//! Not ported yet: keyboard focus, the capture highlight and the
-//! editor-presence pill.
+//! Clicks never activate the window (shipping's `focusable(false)`), but
+//! assistive tech can focus a button over UI Automation; Tab walks the
+//! buttons, Enter and Space press one and Escape collapses the stack (GTK).
+//!
+//! Not ported yet: the capture highlight and the editor-presence pill.
 
 use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;
@@ -51,7 +54,8 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Accessibility::{UiaReturnRawElementProvider, UiaRootObjectId};
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    ReleaseCapture, SetCapture, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
+    GetKeyState, ReleaseCapture, SetCapture, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
+    VIRTUAL_KEY, VK_ESCAPE, VK_RETURN, VK_SHIFT, VK_SPACE, VK_TAB,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
@@ -198,6 +202,9 @@ pub struct Stack {
     /// The card corner tooltips (Close, Delete, Edit: 120 ms `ease`) and the
     /// toolbar's Clear all tooltip (`--dur-1` `--ease-out`).
     pub tips: [Tip<Hit>; 2],
+    /// The control with keyboard focus (`:focus-visible`), while the window
+    /// has it.
+    pub focus: Option<Hit>,
 }
 
 /// A dissolving card's chips: how each moves, and their filtered pixels,
@@ -366,16 +373,120 @@ impl Stack {
                 Tip::timed(Transition::PreviewIconTooltip),
                 Tip::timed(Transition::PreviewStackTooltip),
             ],
+            focus: None,
         }
+    }
+
+    /// The card shows its controls: hovered, or holding keyboard focus
+    /// (`.thumbnail-card:focus-within`).
+    fn shows_controls(&self, index: usize) -> bool {
+        self.hovered == Some(index) || self.focus.and_then(Hit::card) == Some(index)
+    }
+
+    /// The buttons keyboard focus visits, in automation (DOM) order.
+    fn focus_order(&self) -> Vec<Hit> {
+        self.uia_items()
+            .into_iter()
+            .filter(|item| matches!(item.role, Role::Button) && item.enabled)
+            .filter_map(|item| Self::uia_hit(item.key))
+            .collect()
+    }
+
+    /// Tab (or Shift+Tab) to the next (previous) button, wrapping.
+    fn move_focus(&mut self, back: bool) {
+        let order = self.focus_order();
+        if order.is_empty() {
+            self.focus = None;
+            return;
+        }
+        let at = self
+            .focus
+            .and_then(|hit| order.iter().position(|h| *h == hit));
+        let next = match (at, back) {
+            (None, false) => 0,
+            (None, true) => order.len() - 1,
+            (Some(i), false) => (i + 1) % order.len(),
+            (Some(i), true) => (i + order.len() - 1) % order.len(),
+        };
+        self.focus = Some(order[next]);
+    }
+
+    /// Focus on a control that left (its card closed, the stack collapsed)
+    /// moves to the first one there is.
+    fn sync_focus(&mut self) {
+        if let Some(hit) = self.focus {
+            let order = self.focus_order();
+            if !order.contains(&hit) {
+                self.focus = order.first().copied();
+            }
+        }
+    }
+
+    /// Where a control is drawn.
+    fn control_rect(&self, hit: Hit) -> Option<Rect> {
+        match hit {
+            Hit::ClearAll => Some(self.clear_rect()),
+            Hit::Minimize => Some(self.minimize_rect()),
+            Hit::Expand => self.front_rect(),
+            Hit::CueUp | Hit::CueDown => self
+                .cues()
+                .into_iter()
+                .find(|(h, _)| *h == hit)
+                .map(|(_, r)| r),
+            Hit::Card(i) => self.card_rect(i),
+            _ => {
+                let i = hit.card()?;
+                let card = self.card_rect(i)?;
+                self.top_controls(i, card)
+                    .into_iter()
+                    .chain(self.main_actions(i, card))
+                    .find(|(h, _)| *h == hit)
+                    .map(|(_, r)| r)
+            }
+        }
+    }
+
+    /// `:focus-visible`: card controls take a 2 px ring of 70 % accent
+    /// (`box-shadow: 0 0 0 2px`); toolbar controls, the pile and the cues a
+    /// 2 px accent outline 2 px out.
+    fn paint_focus(&self, dc: &ID2D1DeviceContext, t: &Tokens) -> Result<()> {
+        // Nothing holds still mid-fly.
+        let progress = self.progress();
+        if progress > 0. && progress < 1. {
+            return Ok(());
+        }
+        let Some((hit, r)) = self
+            .focus
+            .and_then(|hit| Some((hit, self.control_rect(hit)?)))
+        else {
+            return Ok(());
+        };
+        let mut accent = t.color("theme-accent");
+        let (radius, from, to) = match hit {
+            Hit::Expand => (t.n("thumbnail-card-radius"), 2., 4.),
+            Hit::ClearAll | Hit::Minimize | Hit::CueUp | Hit::CueDown => (t.n("r-md"), 2., 4.),
+            _ => {
+                accent.a *= 0.7;
+                (t.n("r-md"), 0., 2.)
+            }
+        };
+        gfx::ring(dc, r, radius, from, to, accent)
     }
 
     /// The tooltip the control under the pointer shows (`data-tooltip`):
     /// Close, Delete or Edit on a card showing its controls, or Clear all.
-    /// Copy, Save file and Minimize carry their own text.
+    /// Copy, Save file and Minimize carry their own text. Keyboard focus
+    /// shows one too (`:focus-visible::after`) when the pointer names none.
     fn tip_targets(&self) -> [Option<Hit>; 2] {
-        match self.hot {
+        let tipped = |hit: &Hit| {
+            matches!(
+                hit,
+                Hit::Close(_) | Hit::Delete(_) | Hit::Edit(_) | Hit::ClearAll
+            )
+        };
+        match self.hot.filter(tipped).or(self.focus.filter(tipped)) {
             Some(hit @ (Hit::Close(i) | Hit::Delete(i) | Hit::Edit(i)))
-                if self.hovered == Some(i) && !self.exiting(i) =>
+                if self.shows_controls(i) && !self.exiting(i) =>
             {
                 [Some(hit), None]
             }
@@ -1191,7 +1302,8 @@ impl Stack {
 
     fn paint_stack(&self, dc: &ID2D1DeviceContext, g: &Gfx, t: &Tokens) -> Result<()> {
         if self.collapsed() || self.progress() > 0. {
-            return self.paint_pile(dc, g, t);
+            self.paint_pile(dc, g, t)?;
+            return self.paint_focus(dc, t);
         }
         for index in 0..self.cards.len() {
             if let Some(card) = self.card_rect(index) {
@@ -1238,6 +1350,7 @@ impl Stack {
             }
         }
         self.paint_cues(dc, g, t)?;
+        self.paint_focus(dc, t)?;
         self.paint_tips(dc, g, t)
     }
 
@@ -1605,9 +1718,9 @@ impl Stack {
         // A leaving card keeps the dimmed hover look it had when it went; a
         // dissolving one also keeps its controls while they fade.
         // A shaking card shows its image undimmed (`.thumbnail-drop-rejected img`).
-        let hovered = (self.hovered == Some(index) && !self.rejects.contains_key(&card.entry.id))
+        let hovered = (self.shows_controls(index) && !self.rejects.contains_key(&card.entry.id))
             || self.exiting(index);
-        let controls = self.hovered == Some(index) || self.dust.contains_key(&card.entry.id);
+        let controls = self.shows_controls(index) || self.dust.contains_key(&card.entry.id);
         let radius = t.n("thumbnail-card-radius");
         // `--thumbnail-card-shadow` and the 1 px white ring.
         faded(dc, fade.frame, || {
@@ -1961,6 +2074,17 @@ pub fn fixture(g: &Gfx, image: &image::RgbaImage, select: Option<&str>) -> Stack
             };
             stack.pointer(Some((at.left + 4., at.top + 4.)));
             stack.tips = stack.tip_targets().map(Tip::settled);
+        }
+        // Keyboard focus on the first card's Edit, with no pointer: the card
+        // shows its controls, the focus ring and Edit's tooltip.
+        Some("focus") => {
+            stack.focus = Some(Hit::Edit(0));
+            stack.tips = stack.tip_targets().map(Tip::settled);
+        }
+        // Keyboard focus on the pile's Expand.
+        Some("pile-focus") => {
+            stack.stack.set_collapsed(true);
+            stack.focus = Some(Hit::Expand);
         }
         // The hovered card's file is being dragged out: its image hides.
         Some("file-drag") => {
@@ -2423,22 +2547,52 @@ pub fn uia_snapshot() -> Option<panel_uia::Snapshot> {
             scale: previews.scale,
             size: (CARD_W + 2. * PAD, previews.stack.height),
             name: "Captures Previews",
-            focusable: false,
-            items: previews.stack.uia_items(),
+            // Clicks never take focus (shipping's `focusable(false)` window);
+            // assistive tech can still move keyboard focus here.
+            focusable: true,
+            items: {
+                let focused = previews.stack.focus.map(Stack::uia_key);
+                let mut items = previews.stack.uia_items();
+                for item in &mut items {
+                    item.focused = Some(item.key) == focused;
+                }
+                items
+            },
         })
     })
 }
 
-/// Invoke a card button or Clear all through the click path.
+/// Invoke a card button or Clear all through the click path, or move
+/// keyboard focus to one.
 pub fn uia_act(key: u32, act: panel_uia::Act) -> Option<()> {
-    PREVIEWS.with(|p| {
+    let hwnd = PREVIEWS.with(|p| {
         let mut p = p.try_borrow_mut().ok()?;
         let previews = p.as_mut()?;
-        if let (Some(hit), panel_uia::Act::Invoke) = (Stack::uia_hit(key), act) {
-            previews.run(hit);
+        let Some(hit) = Stack::uia_hit(key) else {
+            return Some(None);
+        };
+        Some(match act {
+            panel_uia::Act::Invoke => {
+                previews.run(hit);
+                None
+            }
+            panel_uia::Act::Focus => {
+                previews.stack.focus = Some(hit);
+                let _ = previews.render();
+                previews.animate();
+                Some(previews.hwnd)
+            }
+            _ => None,
+        })
+    })?;
+    // Outside the borrow: activating sends WM_SETFOCUS here.
+    if let Some(hwnd) = hwnd {
+        unsafe {
+            let _ = SetForegroundWindow(hwnd);
+            let _ = windows::Win32::UI::Input::KeyboardAndMouse::SetFocus(Some(hwnd));
         }
-        Some(())
-    })
+    }
+    Some(())
 }
 
 /// Hide the stack while capture UI is open, unless shipping's Include mini
@@ -2640,6 +2794,7 @@ impl Previews {
             return Ok(());
         };
         self.stack.sync_cues();
+        self.stack.sync_focus();
         self.stack.sync_tips(&self.tokens, crate::tooltip::now_ms());
         let (stack, g, t) = (&self.stack, &self.g, &self.tokens);
         gfx::draw_surface(surface, self.px, (self.scale, self.scale), 0., |dc| {
@@ -3238,6 +3393,39 @@ impl Previews {
                     let _ = self.render();
                 }
             }
+            // Keyboard focus only arrives through assistive tech (clicks never
+            // activate this window): Tab walks the buttons, Enter and Space
+            // press the focused one, and Escape collapses an expanded stack
+            // (GTK).
+            WM_KEYDOWN => {
+                let key = VIRTUAL_KEY(_wp.0 as u16);
+                if key == VK_TAB {
+                    let back = unsafe { GetKeyState(i32::from(VK_SHIFT.0)) } < 0;
+                    self.stack.move_focus(back);
+                    let _ = self.render();
+                    self.animate();
+                } else if key == VK_RETURN || key == VK_SPACE {
+                    if let Some(hit) = self.stack.focus {
+                        self.run(hit);
+                    }
+                } else if key == VK_ESCAPE && !self.stack.collapsed() {
+                    self.run(Hit::Minimize);
+                } else {
+                    return None;
+                }
+            }
+            WM_SETFOCUS => {
+                if self.stack.focus.is_none() {
+                    self.stack.move_focus(false);
+                }
+                let _ = self.render();
+                self.animate();
+            }
+            WM_KILLFOCUS => {
+                self.stack.focus = None;
+                let _ = self.render();
+                self.animate();
+            }
             WM_APP_PREVIEW_DONE => self.finish(),
             WM_TIMER if _wp.0 == MOTION_TIMER => self.motion_tick(),
             WM_TIMER if _wp.0 == POLL_TIMER => self.poll(),
@@ -3669,6 +3857,51 @@ mod tests {
         assert_eq!((label, above), ("Delete", true));
         assert_eq!(anchor, controls[1].1);
         assert!(!stack(P::TopRight, &[true]).tip(Hit::Close(0)).unwrap().2);
+    }
+
+    #[test]
+    fn keyboard_focus_walks_the_buttons_and_follows_a_collapse() {
+        use captures_settings::MiniPreviewPlacement as P;
+        let mut s = stack(P::BottomLeft, &[true, false]);
+        // DOM order: the saved card's five buttons, the unsaved card's four
+        // (Delete alone in its corner), then the toolbar.
+        let order = s.focus_order();
+        assert_eq!(
+            order,
+            [
+                Hit::Close(0),
+                Hit::Delete(0),
+                Hit::Edit(0),
+                Hit::Copy(0),
+                Hit::Save(0),
+                Hit::Delete(1),
+                Hit::Edit(1),
+                Hit::Copy(1),
+                Hit::Save(1),
+                Hit::ClearAll,
+                Hit::Minimize,
+            ]
+        );
+        s.move_focus(true);
+        assert_eq!(s.focus, Some(Hit::Minimize), "Shift+Tab from nothing");
+        s.move_focus(false);
+        assert_eq!(s.focus, Some(Hit::Close(0)), "Tab wraps");
+        s.move_focus(false);
+        s.move_focus(false);
+        assert_eq!(s.focus, Some(Hit::Edit(0)));
+        // A focused control shows its card's controls and its tooltip
+        // without the pointer (`:focus-within`, `:focus-visible::after`).
+        assert!(s.shows_controls(0) && !s.shows_controls(1));
+        assert_eq!(s.tip_targets(), [Some(Hit::Edit(0)), None]);
+        assert_eq!(
+            s.control_rect(Hit::Edit(0)),
+            Some(s.top_controls(0, s.card_rect(0).unwrap())[2].1)
+        );
+        // Escape's collapse leaves the pile's Expand as the one button.
+        s.stack.set_collapsed(true);
+        s.sync_focus();
+        assert_eq!(s.focus, Some(Hit::Expand));
+        assert_eq!(s.tip_targets(), [None, None]);
     }
 
     #[test]

@@ -284,8 +284,18 @@ render-checked only (not physically dragged). Close, Delete, Edit and Clear
 all show shipping's preview tooltips (a glass chip 6 DIPs above the control
 in bottom stacks, below it in top ones, fading in 120 ms, Clear all over
 `--dur-1`) on the host's shared `tooltip::Fade` (`--select
-tooltip|clear-tip`; unit- and render-checked). Cards arrive and leave with
-the shared preview motion; keyboard focus is not ported. `--scene capture --screenshot PATH`
+tooltip|clear-tip`; unit- and render-checked). Clicks never take focus
+(shipping's window was `focusable(false)`), but the buttons are keyboard
+focusable for assistive tech: UI Automation SetFocus (Narrator) activates the
+stack with that button focused, Tab and Shift+Tab walk the buttons in
+automation order, Enter or Space presses one, and Escape collapses an
+expanded stack as on GTK. The focused control shows shipping's
+`:focus-visible` ring (70 % accent on card controls, a 2 px accent outline
+2 px out on the toolbar, cues and pile), its card shows its controls and its
+tooltip shows (`--select focus|pile-focus`; unit- and render-checked, and
+UIA reports the buttons focusable; SetFocus and keys were not exercised live
+because they take focus from the desktop's user). Cards arrive and leave with
+the shared preview motion. `--scene capture --screenshot PATH`
 renders the bar offscreen (`--tool display` for Full screen, `--tool window`
 for Window, `--select x` for a sample selection or hovered window, `--select
 desktop` for the hovered display, `--select picked` for a picked window with
