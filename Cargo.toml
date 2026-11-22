@@ -1,7 +1,6 @@
 [workspace]
 members = [
     "apps/api",
-    "apps/desktop/src-tauri",
     "crates/captures-app",
     "crates/captures-account",
     "crates/captures-capture",
@@ -9,7 +8,6 @@ members = [
     "crates/captures-history",
     "crates/captures-image",
     "crates/captures-media",
-    "crates/captures-macos-window",
     "crates/captures-recording",
     "crates/captures-recording-xcap",
     "crates/captures-recording-macos",

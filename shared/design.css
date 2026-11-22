@@ -115,6 +115,8 @@
   --glass-text-muted: rgba(246, 246, 248, 0.64);
   --glass-text-subtle: rgba(246, 246, 248, 0.42);
   --glass-shadow: 0 16px 44px rgba(0, 0, 0, 0.44), 0 2px 8px rgba(0, 0, 0, 0.3);
+  /* Mini preview cards and their stack toolbar. */
+  --thumbnail-card-shadow: 0 6px 14px rgba(0, 0, 0, 0.38), 0 2px 5px rgba(0, 0, 0, 0.26);
   /* Silhouette for compact HUD tooltips so the caret and pill share one shadow. */
   --tooltip-shadow: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.32));
   --tooltip-shadow-compact: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.24));

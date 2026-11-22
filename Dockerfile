@@ -11,7 +11,7 @@ WORKDIR /app
 
 COPY package.json package-lock.json ./
 COPY apps/web/package.json apps/web/
-COPY apps/desktop/package.json apps/desktop/
+COPY apps/native/bundle/package.json apps/native/bundle/
 
 RUN npm ci
 

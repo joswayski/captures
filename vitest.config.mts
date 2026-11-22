@@ -13,7 +13,6 @@ export default defineConfig({
         },
       },
       "apps/web/vitest.config.ts",
-      "apps/desktop/ui/vite.config.ts",
     ],
   },
 });

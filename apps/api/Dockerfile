@@ -3,8 +3,6 @@ FROM rust:1.94-bookworm AS build
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY apps/api apps/api
-# Cargo resolves all workspace manifests even when building only the API.
-COPY apps/desktop/src-tauri apps/desktop/src-tauri
 COPY crates crates
 RUN cargo build --locked --release -p captures-api
 

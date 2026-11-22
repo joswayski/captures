@@ -90,17 +90,18 @@ export const SIDE_BY_SIDE = {
 export const STAGING_FEED =
   "https://github.com/joswayski/captures/releases/download/native-staging/latest.json";
 
+// Installer inputs (icons, notices, plists, DMG art, sidecars) and the base
+// bundler configuration live here; `build` overlays the release specifics.
+export const BUNDLE = "apps/native/bundle";
+
 export function bundleConfiguration(target, version, root = ROOT, sideBySide = false) {
   updaterArtifactName(target, version);
-  const recording = JSON.parse(
-    readFileSync(join(root, "apps/desktop/src-tauri/tauri.recording.conf.json"), "utf8"),
-  );
+  const base = JSON.parse(readFileSync(join(root, BUNDLE, "tauri.conf.json"), "utf8"));
   const configuration = {
     version,
-    build: { beforeBuildCommand: null, beforeBundleCommand: null, frontendDist: null },
     bundle: {
-      ...recording.bundle,
-      externalBin: [...recording.bundle.externalBin, "binaries/native_preview_update_helper"],
+      externalBin: [...base.bundle.externalBin, "binaries/native_preview_update_helper"],
+      resources: { ...base.bundle.resources },
       windows: { webviewInstallMode: { type: "skip" } },
     },
   };
@@ -116,7 +117,7 @@ export function bundleConfiguration(target, version, root = ROOT, sideBySide = f
     configuration.bundle.macOS = {
       infoPlist: join(root, "target/native-preview/Info.plist"),
       // Drag-to-Applications window. The icon centers match the slots drawn in
-      // apps/desktop/src-tauri/dmg/background.svg. The 32 pt over the picture's
+      // apps/native/bundle/dmg/background.svg. The 32 pt over the picture's
       // 400 pt height is Finder's title bar.
       dmg: {
         background: join(root, "target/native-preview/dmg-background.tiff"),
@@ -141,9 +142,7 @@ export function build(target, version, unsigned = false, sideBySide = false, sta
   sideBySide ||= staging;
   const specification = TARGETS[target];
   updaterArtifactName(target, version);
-  const shipping = JSON.parse(
-    readFileSync(join(ROOT, "apps/desktop/src-tauri/tauri.conf.json"), "utf8"),
-  );
+  const shipping = JSON.parse(readFileSync(join(ROOT, BUNDLE, "tauri.conf.json"), "utf8"));
   const publicKey = Buffer.from(shipping.plugins.updater.pubkey, "base64").toString("utf8");
   if (!publicKey.startsWith("untrusted comment:") || publicKey.trim().split("\n").length !== 2)
     throw new Error("Invalid shipping updater public key");
@@ -180,7 +179,7 @@ export function build(target, version, unsigned = false, sideBySide = false, sta
     ],
     { env },
   );
-  const binaries = join(ROOT, "apps/desktop/src-tauri/binaries");
+  const binaries = join(ROOT, BUNDLE, "binaries");
   mkdirSync(binaries, { recursive: true });
   const helper = join(binaries, `native_preview_update_helper-${target}${exe}`);
   copyFileSync(join(release, `native_preview_update_helper${exe}`), helper);
@@ -200,15 +199,15 @@ export function build(target, version, unsigned = false, sideBySide = false, sta
     run("python3", [
       "-c",
       "import plistlib,sys; p=plistlib.load(open(sys.argv[1],'rb')); p['CapturesNativeLive']=True; plistlib.dump(p,open(sys.argv[2],'wb'))",
-      "apps/desktop/src-tauri/Info.plist",
+      `${BUNDLE}/Info.plist`,
       "target/native-preview/Info.plist",
     ]);
     // One TIFF with 1x and 2x pictures at exactly 72 and 144 DPI, so Finder
     // shows a sharp 660x400 pt background on Retina displays.
     run("tiffutil", [
       "-cathidpicheck",
-      "apps/desktop/src-tauri/dmg/background.png",
-      "apps/desktop/src-tauri/dmg/background@2x.png",
+      `${BUNDLE}/dmg/background.png`,
+      `${BUNDLE}/dmg/background@2x.png`,
       "-out",
       "target/native-preview/dmg-background.tiff",
     ]);
@@ -230,8 +229,8 @@ export function build(target, version, unsigned = false, sideBySide = false, sta
   const configuration = bundleConfiguration(target, version, ROOT, sideBySide);
   if (unsigned || (sideBySide && !staging)) configuration.bundle.createUpdaterArtifacts = false;
   writeFileSync(config, `${JSON.stringify(configuration, null, 2)}\n`);
-  // The existing CLI is ONLY a build-time installer bundler. No Tauri app build,
-  // frontend assets, application shim or WebView runtime enters the executable.
+  // The Tauri CLI is ONLY a build-time installer bundler (DMG, NSIS, AppImage,
+  // deb). No Tauri code, frontend or WebView runtime enters the executable.
   run(
     process.execPath,
     [
@@ -245,7 +244,7 @@ export function build(target, version, unsigned = false, sideBySide = false, sta
       "--config",
       config,
     ],
-    { cwd: join(ROOT, "apps/desktop"), env },
+    { cwd: join(ROOT, BUNDLE), env },
   );
 }
 
@@ -328,25 +327,6 @@ export function manifest(directory, version, repository, tag, notes = "") {
   return { version, notes, platforms };
 }
 
-/**
- * Tauri config overlay for a "Tauri base" staging build: the public Tauri app
- * with the side-by-side identity whose updater reads only the staging feed.
- * Installing one and letting it update proves the Tauri→native cutover update
- * (native-staging.yml `tauri_base`) without touching the public channel.
- */
-export function tauriStagingConfiguration(version, root = ROOT) {
-  const release = JSON.parse(
-    readFileSync(join(root, "apps/desktop/src-tauri/tauri.recording.conf.json"), "utf8"),
-  );
-  return {
-    ...release,
-    ...SIDE_BY_SIDE,
-    version,
-    bundle: { ...release.bundle, fileAssociations: [] },
-    plugins: { updater: { endpoints: [STAGING_FEED] } },
-  };
-}
-
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
   const [operation, target, version, output] = process.argv.slice(2);
   if (operation === "build") {
@@ -362,13 +342,7 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
       flags.includes("--staging"),
     );
   } else if (operation === "collect") collect(target, version, resolve(output));
-  else if (operation === "tauri-staging-config") {
-    // target is VERSION and version is OUTPUT for this operation.
-    writeFileSync(
-      resolve(version),
-      `${JSON.stringify(tauriStagingConfiguration(target), null, 2)}\n`,
-    );
-  } else if (operation === "manifest") {
+  else if (operation === "manifest") {
     const directory = resolve(target);
     writeFileSync(
       join(directory, "latest.json"),
@@ -376,6 +350,6 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
     );
   } else
     throw new Error(
-      "usage: native-preview-build.mjs build TARGET VERSION [--unsigned] [--side-by-side | --staging] | collect TARGET VERSION OUTPUT | tauri-staging-config VERSION OUTPUT | manifest DIRECTORY VERSION",
+      "usage: native-preview-build.mjs build TARGET VERSION [--unsigned] [--side-by-side | --staging] | collect TARGET VERSION OUTPUT | manifest DIRECTORY VERSION",
     );
 }

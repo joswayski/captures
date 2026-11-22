@@ -16,25 +16,14 @@ const INSTALLER_NAMES = Object.entries(PREVIEW_CHANNEL_ASSET_NAMES)
   .filter(([platform]) => platform !== "updater")
   .map(([, name]) => name);
 
-test("published builds keep a signed in-app updater and a public installer page", () => {
-  const config = JSON.parse(read("apps/desktop/src-tauri/tauri.conf.json"));
+test("published builds keep a signed in-app updater", () => {
+  const config = JSON.parse(read("apps/native/bundle/tauri.conf.json"));
   assert.equal(config.bundle.createUpdaterArtifacts, true);
   assert.equal(typeof config.plugins.updater.pubkey, "string");
   assert.ok(
     config.plugins.updater.pubkey.length > 80,
-    "installed copies cannot verify a later Preview without the updater public key",
+    "installed copies cannot verify a later release without the updater public key",
   );
-  assert.deepEqual(config.plugins.updater.endpoints, [
-    "https://captur.es/api/updates/preview",
-    "https://github.com/joswayski/captures/releases/download/preview/latest.json",
-  ]);
-
-  const updates = read("apps/desktop/src-tauri/src/updates.rs");
-  assert.match(updates, /const DOWNLOAD_PAGE_URL: &str = "https:\/\/captur\.es\/#download";/u);
-
-  const preferences = read("apps/desktop/ui/src/App.tsx");
-  assert.match(preferences, /source="preferences"/u);
-  assert.match(preferences, /open_update_download_page/u);
 });
 
 test("README, website, and Preview channel share stable installer names", () => {

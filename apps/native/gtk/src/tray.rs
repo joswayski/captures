@@ -226,10 +226,9 @@ pub fn start(settings: &captures_settings::AppSettings) -> Option<Tray> {
         return None;
     }
     let built = (|| {
-        let image =
-            image::load_from_memory(include_bytes!("../../../desktop/src-tauri/icons/32x32.png"))
-                .map_err(|error| format!("Could not decode tray icon: {error}"))?
-                .into_rgba8();
+        let image = image::load_from_memory(include_bytes!("../../bundle/icons/32x32.png"))
+            .map_err(|error| format!("Could not decode tray icon: {error}"))?
+            .into_rgba8();
         let (width, height) = image.dimensions();
         let icon = Icon::from_rgba(image.into_raw(), width, height)
             .map_err(|error| format!("Could not create tray icon: {error}"))?;

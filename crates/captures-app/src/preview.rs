@@ -1495,9 +1495,6 @@ mod tests {
         let pose = stack_pose_depth(2.0);
         assert!((collapsed_media_blur(2, false) - pose * 1.15).abs() < 1e-12);
         assert!((collapsed_media_blur(2, true) - pose * 0.75).abs() < 1e-12);
-        let css = include_str!("../../../apps/desktop/ui/src/styles/mini-preview.css");
-        assert!(css.contains("filter: blur(calc(var(--thumbnail-stack-pose, 0) * 1.15px));"));
-        assert!(css.contains("filter: blur(calc(var(--thumbnail-stack-pose, 0) * 0.75px));"));
     }
 
     fn bounds(

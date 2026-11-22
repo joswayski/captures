@@ -11,7 +11,7 @@ function read(path) {
 }
 
 test("installed copies register Open With for editor-compatible media, not as the default app", () => {
-  const config = JSON.parse(read("apps/desktop/src-tauri/tauri.conf.json"));
+  const config = JSON.parse(read("apps/native/bundle/tauri.conf.json"));
   const associations = config.bundle.fileAssociations;
   assert.ok(Array.isArray(associations), "fileAssociations must be set");
 
@@ -31,7 +31,7 @@ test("installed copies register Open With for editor-compatible media, not as th
   assert.equal(config.bundle.linux.deb.desktopTemplate, "./linux/captures.desktop");
   assert.equal(config.bundle.linux.rpm.desktopTemplate, "./linux/captures.desktop");
 
-  const desktop = read("apps/desktop/src-tauri/linux/captures.desktop");
+  const desktop = read("apps/native/bundle/linux/captures.desktop");
   assert.match(desktop, /^Exec=\{\{exec\}\} %U$/mu);
   assert.match(desktop, /^MimeType=\{\{mime_type\}\}$/mu);
 });

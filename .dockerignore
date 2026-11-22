@@ -6,9 +6,8 @@ node_modules
 **/.output
 **/.wrangler
 target
-apps/desktop/src-tauri
-apps/desktop/ui
-apps/desktop/assets
+apps/native
+!apps/native/bundle/package.json
 docs
 !docs/images
 !docs/images/**

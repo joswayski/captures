@@ -8,17 +8,13 @@ import {
   bundleConfiguration,
   manifest,
   nativeHostBuild,
-  STAGING_FEED,
   TARGETS,
-  tauriStagingConfiguration,
   updaterArtifactName,
 } from "./native-preview-build.mjs";
 
 test("native packages preserve media and installed identity without a frontend or WebView installer", () => {
   const windows = bundleConfiguration("x86_64-pc-windows-msvc", "2026.10.1101");
   assert.equal(windows.version, "2026.10.1101");
-  assert.equal(windows.build.frontendDist, null);
-  assert.equal(windows.build.beforeBuildCommand, null);
   assert.deepEqual(windows.bundle.windows.webviewInstallMode, { type: "skip" });
   assert.deepEqual(windows.bundle.externalBin, [
     "binaries/ffmpeg",
@@ -44,16 +40,6 @@ test("side-by-side test installers never share the installed app's identity or a
   assert.equal(test.identifier, "io.github.joswayski.captures.nativetest");
   assert.equal(test.mainBinaryName, "captures-native-test");
   assert.deepEqual(test.bundle.fileAssociations, []);
-});
-
-test("Tauri staging bases update only from the staging feed under the test identity", () => {
-  const base = tauriStagingConfiguration("2026.11.1499");
-  assert.equal(base.version, "2026.11.1499");
-  assert.equal(base.identifier, "io.github.joswayski.captures.nativetest");
-  assert.equal(base.mainBinaryName, "captures-native-test");
-  assert.deepEqual(base.plugins.updater.endpoints, [STAGING_FEED]);
-  assert.deepEqual(base.bundle.fileAssociations, []);
-  assert.ok(base.bundle.externalBin.length > 0);
 });
 
 test("Windows and Linux package the Win32 and GTK hosts, never the wgpu workbench", () => {

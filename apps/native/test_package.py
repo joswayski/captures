@@ -18,7 +18,7 @@ import package
 
 class DevelopmentPackageTests(unittest.TestCase):
     def test_formats_match_shipping_without_claiming_defaults(self):
-        shipping = json.loads((package.ROOT / "apps/desktop/src-tauri/tauri.conf.json").read_text())
+        shipping = json.loads((package.ROOT / "apps/native/bundle/tauri.conf.json").read_text())
         expected = {(tuple(item["ext"]), item["mimeType"]) for item in shipping["bundle"]["fileAssociations"]}
         self.assertEqual({(ext, mime) for _, ext, mime, _ in package.FORMATS}, expected)
         info = package.mac_info()
@@ -82,10 +82,10 @@ class DevelopmentPackageTests(unittest.TestCase):
                 "target/ffmpeg-dist/ffmpeg-9.8.7-BUILD_CONFIG.txt": b"exact configuration",
                 "target/ffmpeg-dist/ffmpeg-9.8.7-COPYING.LGPLv2.1": b"LGPL license",
                 "target/ffmpeg-dist/ffmpeg-9.8.7-NOTICE.md": b"FFmpeg notice",
-                "apps/desktop/src-tauri/openh264/LICENSE": b"OpenH264 license",
-                "apps/desktop/src-tauri/openh264/NOTICE.md": b"OpenH264 notice",
-                "apps/desktop/src-tauri/Info.plist": plistlib.dumps({}),
-                "apps/desktop/src-tauri/icons/icon.icns": b"icon",
+                "apps/native/bundle/openh264/LICENSE": b"OpenH264 license",
+                "apps/native/bundle/openh264/NOTICE.md": b"OpenH264 notice",
+                "apps/native/bundle/Info.plist": plistlib.dumps({}),
+                "apps/native/bundle/icons/icon.icns": b"icon",
                 "apps/native/TESTING.md": b"development testing guide",
                 "LICENSE": b"Captures license",
                 "TRADEMARKS.md": b"Captures trademarks",
@@ -106,7 +106,7 @@ class DevelopmentPackageTests(unittest.TestCase):
             )
             with patch.object(package, "ROOT", root):
                 for platform, target, ffmpeg, ffprobe in targets:
-                    tools = root / "apps/desktop/src-tauri/binaries"
+                    tools = root / "apps/native/bundle/binaries"
                     tools.mkdir(exist_ok=True)
                     for name in (ffmpeg, ffprobe):
                         (tools / name).write_bytes(name.encode())
@@ -122,13 +122,13 @@ class DevelopmentPackageTests(unittest.TestCase):
                     for name, data in inputs.items():
                         if name.startswith("target/ffmpeg-dist/"):
                             self.assertEqual((licenses / "ffmpeg" / Path(name).name).read_bytes(), data)
-                        elif name.startswith("apps/desktop/src-tauri/openh264/"):
+                        elif name.startswith("apps/native/bundle/openh264/"):
                             self.assertEqual((licenses / "openh264" / Path(name).name).read_bytes(), data)
                 output = root / "invalid-package"
                 with self.assertRaisesRegex(ValueError, "does not match"):
                     package.stage("linux", binary, output, media_target="aarch64-apple-darwin")
                 self.assertFalse(output.exists())
-                for missing in ("apps/desktop/src-tauri/binaries/ffprobe-x86_64-unknown-linux-gnu",
+                for missing in ("apps/native/bundle/binaries/ffprobe-x86_64-unknown-linux-gnu",
                                 "target/ffmpeg-dist/ffmpeg-9.8.7.tar.xz"):
                     path = root / missing
                     data = path.read_bytes()

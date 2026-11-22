@@ -20,7 +20,7 @@ function lock({ desktopVersion = "1.0.0", webVersion = "1.0.0", sharedVersion = 
   return {
     lockfileVersion: 3,
     packages: {
-      "apps/desktop": {
+      "apps/native/bundle": {
         dependencies: { desktop: "*", shared: "*" },
         devDependencies: { builder: "*" },
       },
@@ -35,8 +35,7 @@ function lock({ desktopVersion = "1.0.0", webVersion = "1.0.0", sharedVersion = 
 
 test("classifies installed-app paths without treating website, API, docs, or tests as releases", () => {
   for (const path of [
-    "apps/desktop/ui/src/App.tsx",
-    "apps/desktop/src-tauri/src/lib.rs",
+    "apps/native/bundle/tauri.conf.json",
     "crates/captures-video/src/lib.rs",
     "shared/design.css",
     ".cargo/config.toml",
@@ -55,7 +54,7 @@ test("classifies installed-app paths without treating website, API, docs, or tes
     "scripts/native-preview-build.mjs",
     "apps/web/src/pages/Home.tsx",
     "apps/web/src/server/api.ts",
-    "apps/desktop/ui/src/App.test.tsx",
+    "scripts/native-tokens.test.mjs",
     "README.md",
     "docs/images/preferences.jpg",
     ".github/workflows/release.yml",
@@ -65,9 +64,9 @@ test("classifies installed-app paths without treating website, API, docs, or tes
   }
 });
 
-test("tracks only the package-lock dependency graph reachable from the desktop workspace", () => {
+test("tracks only the package-lock dependency graph reachable from the bundler workspace", () => {
   assert.deepEqual(Object.keys(desktopLockSnapshot(lock()).packages), [
-    "apps/desktop",
+    "apps/native/bundle",
     "node_modules/builder",
     "node_modules/desktop",
     "node_modules/shared",
@@ -75,6 +74,8 @@ test("tracks only the package-lock dependency graph reachable from the desktop w
   assert.equal(desktopLockChanged(lock(), lock({ webVersion: "2.0.0" })), false);
   assert.equal(desktopLockChanged(lock(), lock({ desktopVersion: "2.0.0" })), true);
   assert.equal(desktopLockChanged(lock(), lock({ sharedVersion: "2.0.0" })), true);
+  const legacy = { lockfileVersion: 3, packages: { "apps/web": {} } };
+  assert.equal(desktopLockChanged(legacy, lock()), true);
 });
 
 test("ignores API-only lock changes but releases desktop and shared changes", () => {
@@ -89,7 +90,7 @@ test("ignores API-only lock changes but releases desktop and shared changes", ()
   assert.equal(desktopReleaseImpact(["shared/themes.ts"], null, null).shouldRelease, true);
   assert.equal(
     desktopReleaseImpact(
-      ["apps/desktop/package.json", "package-lock.json"],
+      ["apps/native/bundle/package.json", "package-lock.json"],
       lock(),
       lock({ desktopVersion: "2.0.0" }),
     ).shouldRelease,
@@ -116,13 +117,13 @@ test("release notes omit skipped website commits from the next desktop update", 
   runGit("commit", "-m", "Update the hosted API (#10)");
   const webHead = runGit("rev-parse", "HEAD");
 
-  mkdirSync(join(directory, "apps/desktop/ui/src"), { recursive: true });
-  writeFileSync(join(directory, "apps/desktop/ui/src/App.tsx"), "export const App = true;\n");
-  runGit("add", "apps/desktop/ui/src/App.tsx");
+  mkdirSync(join(directory, "apps/native/gtk/src"), { recursive: true });
+  writeFileSync(join(directory, "apps/native/gtk/src/app.rs"), "export const App = true;\n");
+  runGit("add", "apps/native/gtk/src/app.rs");
   runGit("commit", "-m", "Fix desktop capture (#11)");
 
-  writeFileSync(join(directory, "apps/desktop/ui/src/App.tsx"), "export const App = 'updated';\n");
-  runGit("add", "apps/desktop/ui/src/App.tsx");
+  writeFileSync(join(directory, "apps/native/gtk/src/app.rs"), "export const App = 'updated';\n");
+  runGit("add", "apps/native/gtk/src/app.rs");
   runGit(
     "commit",
     "--author",
@@ -148,13 +149,13 @@ test("release notes omit skipped website commits from the next desktop update", 
     );
     assert.doesNotMatch(notes, /Bump vitest|#12/u);
 
-    rmSync(join(directory, "apps/desktop/ui/src/App.tsx"));
-    runGit("add", "apps/desktop/ui/src/App.tsx");
+    rmSync(join(directory, "apps/native/gtk/src/app.rs"));
+    runGit("add", "apps/native/gtk/src/app.rs");
     runGit("commit", "-m", "Remove obsolete desktop code (#13)");
     const deletedHead = runGit("rev-parse", "HEAD");
     assert.deepEqual(releaseImpactBetween(dependencyHead, deletedHead), {
       shouldRelease: true,
-      paths: ["apps/desktop/ui/src/App.tsx"],
+      paths: ["apps/native/gtk/src/app.rs"],
     });
   } finally {
     process.chdir(originalDirectory);
@@ -266,14 +267,14 @@ test("batches unpublished desktop changes, fixes, and notes across docs-only pus
     runGit("init");
     runGit("config", "user.name", "Captures Test");
     runGit("config", "user.email", "captures@example.com");
-    mkdirSync(join(directory, "apps/desktop"), { recursive: true });
-    const first = commit("apps/desktop/app.txt", "Change 1 (#1)");
+    mkdirSync(join(directory, "apps/native"), { recursive: true });
+    const first = commit("apps/native/app.txt", "Change 1 (#1)");
     runGit("tag", "v2026.09.05.1");
     const releases = [published("v2026.09.05.1")];
-    commit("apps/desktop/app.txt", "Change 2 (#2)");
+    commit("apps/native/app.txt", "Change 2 (#2)");
     runGit("tag", "v2026.09.05.2");
     releases.push({ ...published("v2026.09.05.2"), draft: true });
-    commit("apps/desktop/app.txt", "Fix 3 (#3)");
+    commit("apps/native/app.txt", "Fix 3 (#3)");
     runGit("tag", "v2026.09.05.3"); // Orphan tag from an interrupted stage.
     runGit("tag", "v2026.10.18.1"); // Published native release must not consume Tauri changes.
     releases.push({ ...published("v2026.10.18.1"), assets: [] });
@@ -297,7 +298,7 @@ test("batches unpublished desktop changes, fixes, and notes across docs-only pus
 
     // A new push cannot alter the pinned batch. After publication it belongs
     // exclusively to the next batch, and repeated/docs-only runs are skipped.
-    const next = commit("apps/desktop/app.txt", "Change 5 (#5)");
+    const next = commit("apps/native/app.txt", "Change 5 (#5)");
     runGit("tag", "v2026.10.18.2", batch);
     releases.push(published("v2026.10.18.2"));
     assert.equal(previousPreviewTag(batch, releases), "v2026.10.18.2");

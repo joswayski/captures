@@ -71,9 +71,9 @@ function fakeGithub() {
 function builtTree(suffix = "aarch64-apple-darwin") {
   const root = mkdtempSync(join(tmpdir(), "captures-sidecars-"));
   const files = {
-    [`apps/desktop/src-tauri/binaries/ffmpeg-${suffix}`]: "ffmpeg binary",
-    [`apps/desktop/src-tauri/binaries/ffprobe-${suffix}`]: "ffprobe binary",
-    "apps/desktop/src-tauri/ffmpeg/COPYING.LGPLv2.1": "license",
+    [`apps/native/bundle/binaries/ffmpeg-${suffix}`]: "ffmpeg binary",
+    [`apps/native/bundle/binaries/ffprobe-${suffix}`]: "ffprobe binary",
+    "apps/native/bundle/ffmpeg/COPYING.LGPLv2.1": "license",
     "target/ffmpeg-build/ffmpeg-8.1.2.tar.xz": "source",
     "target/ffmpeg-build/ffmpeg-8.1.2.tar.xz.asc": "signature",
     "target/ffmpeg-dist/ffmpeg-8.1.2-NOTICE.md": "notice",
@@ -84,7 +84,7 @@ function builtTree(suffix = "aarch64-apple-darwin") {
     mkdirSync(dirname(join(root, path)), { recursive: true });
     writeFileSync(join(root, path), content);
   }
-  chmodSync(join(root, `apps/desktop/src-tauri/binaries/ffmpeg-${suffix}`), 0o755);
+  chmodSync(join(root, `apps/native/bundle/binaries/ffmpeg-${suffix}`), 0o755);
   return { root, files };
 }
 
@@ -140,9 +140,7 @@ test("a saved build restores into a clean checkout, executable, without build le
     assert.equal(readFileSync(join(clean, path), "utf8"), content);
   }
   if (process.platform !== "win32") {
-    const mode = statSync(
-      join(clean, "apps/desktop/src-tauri/binaries/ffmpeg-aarch64-apple-darwin"),
-    );
+    const mode = statSync(join(clean, "apps/native/bundle/binaries/ffmpeg-aarch64-apple-darwin"));
     assert.equal(mode.mode & 0o111, 0o111);
   }
   assert.throws(() => statSync(join(clean, "target/media-sidecar-store")), /ENOENT/u);
@@ -203,7 +201,7 @@ test("a checkout without both binaries is never stored", async () => {
   const github = fakeGithub();
   const store = await ensureStore();
   const { root } = tree();
-  rmSync(join(root, "apps/desktop/src-tauri/binaries/ffprobe-aarch64-apple-darwin"));
+  rmSync(join(root, "apps/native/bundle/binaries/ffprobe-aarch64-apple-darwin"));
   await assert.rejects(saveSidecars(store, MAC, root), /no ffprobe sidecar/u);
   assert.equal(github.uploads, 0);
 });

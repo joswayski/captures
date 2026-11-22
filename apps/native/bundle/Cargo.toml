@@ -1,0 +1,15 @@
+# Never built. The Tauri CLI, used here only as the installer bundler
+# (scripts/native-preview-build.mjs), requires a Cargo package next to
+# tauri.conf.json to name the main binary; the release copies the native host
+# executable to target/<triple>/release/captures before bundling.
+[package]
+name = "captures"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "captures"
+path = "src/main.rs"
+
+[workspace]

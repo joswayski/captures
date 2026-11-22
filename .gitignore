@@ -1,7 +1,7 @@
 /target/
 .amp/portals/
-apps/desktop/src-tauri/binaries/
-apps/desktop/src-tauri/ffmpeg/COPYING.LGPLv2.1
+apps/native/bundle/binaries/
+apps/native/bundle/ffmpeg/COPYING.LGPLv2.1
 /node_modules/
 **/node_modules/
 **/dist/
@@ -15,6 +15,3 @@ apps/desktop/src-tauri/ffmpeg/COPYING.LGPLv2.1
 **/*.tsbuildinfo
 **/.DS_Store
 *.log
-
-# Local-only sample media for the dev preview harness
-apps/desktop/ui/public/dev-sample.mp4

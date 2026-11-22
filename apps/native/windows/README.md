@@ -243,7 +243,7 @@ cannot render Preferences (no DirectComposition) or open the tray menu.
 
 Recordings need FFmpeg and FFprobe. `CAPTURES_FFMPEG` and `CAPTURES_FFPROBE`
 override discovery; otherwise the host looks beside its executable, in Tauri's
-`apps/desktop/src-tauri/binaries` (`*-<arch>-pc-windows-msvc.exe`), then on PATH
+`apps/native/bundle/binaries` (`*-<arch>-pc-windows-msvc.exe`), then on PATH
 as `ffmpeg.exe` and `ffprobe.exe`. No tools are downloaded by the host.
 
 `node scripts/native-preview-build.mjs build x86_64-pc-windows-msvc VERSION

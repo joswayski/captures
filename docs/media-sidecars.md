@@ -25,9 +25,9 @@ Build and validate the sidecars with:
 npm run prepare:media
 ```
 
-The command writes target-triple-suffixed executables under `apps/desktop/src-tauri/binaries`, which is ignored by Git, and prepares the matching source archive, detached upstream signature, exact build configuration, LGPL license, and notice under `target/ffmpeg-dist`.
+The command writes target-triple-suffixed executables under `apps/native/bundle/binaries`, which is ignored by Git, and prepares the matching source archive, detached upstream signature, exact build configuration, LGPL license, and notice under `target/ffmpeg-dist`.
 
-Tauri bundles the target platform's executables plus the FFmpeg and OpenH264
+The installer bundler packs the target platform's executables plus the FFmpeg and OpenH264
 notices into every desktop package. CI builds and validates the matching
 sidecars on macOS, Windows, and Linux, including the required encoders and
 filters. Official releases attach the corresponding source and compliance files
@@ -36,7 +36,7 @@ once, and the final release gate rejects missing or GPL/nonfree configurations.
 When changing the pinned FFmpeg release or configuration:
 
 1. Update the version, source SHA-256, and flags in `scripts/build-ffmpeg-sidecars.sh`.
-2. Keep `apps/desktop/src-tauri/ffmpeg/BUILD_CONFIG.txt` and `NOTICE.md` exact and current.
+2. Keep `apps/native/bundle/ffmpeg/BUILD_CONFIG.txt` and `NOTICE.md` exact and current.
 3. Run `CAPTURES_REBUILD_FFMPEG=1 npm run prepare:media` on each supported operating system and architecture.
 4. Run the repository validation gates and inspect the packaged application.
 5. Confirm the draft release includes the matching source archive, signature, build configuration, LGPL license, and notice before publishing.

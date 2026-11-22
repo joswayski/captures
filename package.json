@@ -3,19 +3,16 @@
   "private": true,
   "version": "0.1.0",
   "workspaces": [
-    "apps/desktop",
+    "apps/native/bundle",
     "apps/web"
   ],
   "scripts": {
-    "dev": "npm run tauri:dev --workspace @captures/desktop",
     "dev:web": "npm run dev --workspace @captures/web",
-    "build": "node scripts/build.mjs",
-    "build:signed": "node scripts/build-signed-local.mjs",
     "prepare:media": "bash scripts/build-ffmpeg-sidecars.sh",
     "install:latest": "node scripts/install-latest-release.mjs",
     "build:web": "npm run build --workspace @captures/web",
     "start:web": "npm run start --workspace @captures/web",
-    "check": "npm run lint && npm run check:python && npm run fmt:check && npm run test:release-version && npm run check --workspace @captures/desktop && npm test --workspace @captures/web && npm run build:web",
+    "check": "npm run lint && npm run check:python && npm run fmt:check && npm run test:release-version && npm test --workspace @captures/web && npm run build:web",
     "check:python": "uvx --from ruff==0.16.10 ruff check apps/native crates/captures-image/tests && npm run test:python",
     "test:python": "uv run --no-project python -m unittest discover -s apps/native -p test_*.py",
     "lint": "oxlint --deny-warnings",

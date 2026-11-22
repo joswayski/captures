@@ -36,11 +36,11 @@ runs:
       id: cache
       uses: actions/cache/restore@v4
       with:
-        key: ffmpeg-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.digest }}-${{ hashFiles('scripts/build-ffmpeg-sidecars.sh', 'scripts/validate-ffmpeg-sidecars.mjs', 'apps/desktop/src-tauri/ffmpeg/BUILD_CONFIG.txt', 'apps/desktop/src-tauri/ffmpeg/NOTICE.md', 'rust-toolchain.toml') }}
+        key: ffmpeg-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.digest }}-${{ hashFiles('scripts/build-ffmpeg-sidecars.sh', 'scripts/validate-ffmpeg-sidecars.mjs', 'apps/native/bundle/ffmpeg/BUILD_CONFIG.txt', 'apps/native/bundle/ffmpeg/NOTICE.md', 'rust-toolchain.toml') }}
         path: |
-          apps/desktop/src-tauri/binaries/ffmpeg-*
-          apps/desktop/src-tauri/binaries/ffprobe-*
-          apps/desktop/src-tauri/ffmpeg/COPYING.LGPLv2.1
+          apps/native/bundle/binaries/ffmpeg-*
+          apps/native/bundle/binaries/ffprobe-*
+          apps/native/bundle/ffmpeg/COPYING.LGPLv2.1
           target/ffmpeg-build/*.tar.xz
           target/ffmpeg-build/*.tar.xz.asc
           target/ffmpeg-dist
@@ -86,9 +86,9 @@ runs:
       with:
         key: ${{ steps.cache.outputs.cache-primary-key }}
         path: |
-          apps/desktop/src-tauri/binaries/ffmpeg-*
-          apps/desktop/src-tauri/binaries/ffprobe-*
-          apps/desktop/src-tauri/ffmpeg/COPYING.LGPLv2.1
+          apps/native/bundle/binaries/ffmpeg-*
+          apps/native/bundle/binaries/ffprobe-*
+          apps/native/bundle/ffmpeg/COPYING.LGPLv2.1
           target/ffmpeg-build/*.tar.xz
           target/ffmpeg-build/*.tar.xz.asc
           target/ffmpeg-dist

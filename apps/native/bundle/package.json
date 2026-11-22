@@ -1,0 +1,9 @@
+{
+  "name": "@captures/bundle",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Installer bundler for the native apps (DMG, NSIS, AppImage, deb); no Tauri code ships.",
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.0"
+  }
+}

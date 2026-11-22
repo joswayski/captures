@@ -4227,9 +4227,8 @@ mod tests {
             .join("../..")
             .canonicalize()
             .expect("repository root");
-        let ffmpeg = repository.join("apps/desktop/src-tauri/binaries/ffmpeg-aarch64-apple-darwin");
-        let ffprobe =
-            repository.join("apps/desktop/src-tauri/binaries/ffprobe-aarch64-apple-darwin");
+        let ffmpeg = repository.join("apps/native/bundle/binaries/ffmpeg-aarch64-apple-darwin");
+        let ffprobe = repository.join("apps/native/bundle/binaries/ffprobe-aarch64-apple-darwin");
         (MediaToolchain::new(ffmpeg.clone(), ffprobe), ffmpeg)
     }
 
@@ -4519,14 +4518,14 @@ mod tests {
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| {
                 repository
-                    .join("apps/desktop/src-tauri/binaries")
+                    .join("apps/native/bundle/binaries")
                     .join(format!("ffmpeg-{target}"))
             });
         let ffprobe = std::env::var_os("CAPTURES_TEST_FFPROBE")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| {
                 repository
-                    .join("apps/desktop/src-tauri/binaries")
+                    .join("apps/native/bundle/binaries")
                     .join(format!("ffprobe-{target}"))
             });
         if !ffmpeg.is_file() || !ffprobe.is_file() {

@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 import { isPublicPreview } from "../shared/preview-runtime.ts";
 
 const ZERO_SHA = /^0{40}$/u;
-const DESKTOP_ROOTS = [".cargo/", "apps/desktop/", "apps/native/", "crates/", "shared/"];
+const DESKTOP_ROOTS = [".cargo/", "apps/native/", "crates/", "shared/"];
 const DESKTOP_EXACT_PATHS = new Set(["Cargo.lock", "Cargo.toml"]);
 const TEST_ONLY_PATH = /(?:^|\/)[^/]+\.test\.(?:[cm]?[jt]sx?)$/u;
 
@@ -44,14 +44,19 @@ function resolvePackage(packages, from, dependency) {
   }
 }
 
-/** The package-lock subset that can affect the desktop bundle and its build. */
+const BUNDLE_WORKSPACE = "apps/native/bundle";
+
+/**
+ * The package-lock subset that can affect the desktop installers: the
+ * installer bundler workspace and everything it resolves. Null when the lock
+ * predates that workspace, so comparing with an older lock counts as a change.
+ */
 export function desktopLockSnapshot(lock) {
   const packages = lock?.packages;
-  if (!packages || !packages["apps/desktop"]) {
-    throw new Error("package-lock.json is missing the apps/desktop workspace");
-  }
+  if (!packages) throw new Error("package-lock.json has no packages");
+  if (!packages[BUNDLE_WORKSPACE]) return null;
 
-  const queue = ["apps/desktop"];
+  const queue = [BUNDLE_WORKSPACE];
   const visited = new Set();
   while (queue.length > 0) {
     const location = queue.shift();

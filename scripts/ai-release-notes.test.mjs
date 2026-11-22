@@ -30,7 +30,7 @@ function fixture(native = true) {
     return git("rev-parse", "HEAD");
   };
   const base = commit(
-    native ? { "scripts/native-preview-build.mjs": "// native" } : { "README.md": "Tauri" },
+    native ? { "scripts/native-preview-build.mjs": "// native" } : { "README.md": "Captures" },
     "Base",
   );
   return { cwd, git, commit, base };
@@ -51,10 +51,10 @@ const highlight = (commit) => ({
 });
 
 test.each([true, false])(
-  "summarizes Tauri even with native tooling (%s), including merge changes",
+  "summarizes native app changes (%s), including merge changes",
   async (native) => {
     const f = fixture(native);
-    const path = "apps/desktop/ui/src/App.tsx";
+    const path = "apps/native/gtk/src/app.rs";
     f.commit(
       { "apps/web/src/page.tsx": "WEB-ONLY", "crates/core/tests/secret.rs": "TEST-SECRET" },
       "Improve the site",
@@ -101,7 +101,7 @@ test.each([true, false])(
     assert.equal(request.generationConfig.responseMimeType, "application/json");
     assert.equal(request.systemInstruction.parts.length, 1);
     const source = JSON.parse(request.contents[0].parts[0].text);
-    assert.equal(source.runtime, "Tauri");
+    assert.equal(source.runtime, "native");
     assert.deepEqual(
       source.commits.map(({ commit }) => commit),
       [after],

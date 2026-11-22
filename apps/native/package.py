@@ -63,7 +63,7 @@ def mac_info():
         ],
     }
     # Same purpose strings as shipping; no shipping identity/association changes.
-    shipping = plistlib.loads((ROOT / "apps/desktop/src-tauri/Info.plist").read_bytes())
+    shipping = plistlib.loads((ROOT / "apps/native/bundle/Info.plist").read_bytes())
     info.update({key: value for key, value in shipping.items() if key.endswith("UsageDescription")})
     return info
 
@@ -127,7 +127,7 @@ def stage(platform, binary, output, resources=None, media_target=None):
         if media_target not in MEDIA_TARGETS[platform]:
             raise ValueError(f"Media target {media_target} does not match {platform}")
         suffix = ".exe" if platform == "windows" else ""
-        media_tools = [ROOT / "apps/desktop/src-tauri/binaries" / f"{name}-{media_target}{suffix}"
+        media_tools = [ROOT / "apps/native/bundle/binaries" / f"{name}-{media_target}{suffix}"
                        for name in ("ffmpeg", "ffprobe")]
         # Reuse the builder's pin and complete corresponding-source payload,
         # rather than copying arbitrary system FFmpeg builds or only notices.
@@ -136,7 +136,7 @@ def stage(platform, binary, output, resources=None, media_target=None):
         dist = ROOT / "target/ffmpeg-dist"
         media_sources = [dist / f"ffmpeg-{version}{ending}" for ending in (
             ".tar.xz", ".tar.xz.asc", "-BUILD_CONFIG.txt", "-COPYING.LGPLv2.1", "-NOTICE.md")]
-        media_sources += [ROOT / "apps/desktop/src-tauri/openh264" / name
+        media_sources += [ROOT / "apps/native/bundle/openh264" / name
                           for name in ("LICENSE", "NOTICE.md")]
         for source in media_tools + media_sources:
             if not source.is_file():
@@ -160,7 +160,7 @@ def stage(platform, binary, output, resources=None, media_target=None):
         destination = launcher / "Contents/Resources"
         destination.mkdir()
         shutil.copytree(resources, destination / "CapturesNative_CapturesNative.bundle")
-        shutil.copy2(ROOT / "apps/desktop/src-tauri/icons/icon.icns", destination / "Captures.icns")
+        shutil.copy2(ROOT / "apps/native/bundle/icons/icon.icns", destination / "Captures.icns")
         (launcher / "Contents/Info.plist").write_bytes(plistlib.dumps(mac_info()))
     elif platform == "windows":
         launcher.write_text(registry[0], encoding="utf-16", newline="")

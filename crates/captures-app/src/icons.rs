@@ -593,34 +593,7 @@ mod tests {
     }
 
     #[test]
-    fn preview_paths_match_shipping_svg_sources() {
-        let app = include_str!("../../../apps/desktop/ui/src/App.tsx");
-        for (name, component) in [
-            ("external-link", "ExternalPreferenceIcon"),
-            ("warning", "WarningIcon"),
-            ("capture", "CaptureIcon"),
-            ("close", "CloseIcon"),
-            ("trash", "TrashIcon"),
-            ("edit", "EditIcon"),
-            ("save", "SaveIcon"),
-            ("check", "CheckIcon"),
-            ("history", "HistoryIcon"),
-            ("preview-stack", "PreviewStackIcon"),
-            ("preview-overflow-up", "ThumbnailOverflowChevron"),
-            ("preview-overflow-down", "ThumbnailOverflowChevron"),
-        ] {
-            let body = app.split_once(&format!("function {component}(")).unwrap().1;
-            let body = body.split_once("\n}").unwrap().0;
-            for path in paths(name).unwrap() {
-                assert!(body.contains(&format!("\"{path}\"")), "{component}: {path}");
-            }
-        }
-    }
-
-    #[test]
-    fn editor_disclosure_matches_shipping_path_and_rotated_expansion() {
-        let editor = include_str!("../../../apps/desktop/ui/src/ScreenshotEditor.tsx");
-        assert!(editor.contains(paths("editor-chevron-down").unwrap()[0]));
+    fn editor_disclosure_expands_by_rotation() {
         let down = polylines("editor-chevron-down").unwrap();
         let up = polylines("editor-chevron-up").unwrap();
         let rotated: Vec<_> = down[0]

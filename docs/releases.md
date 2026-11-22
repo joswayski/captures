@@ -106,12 +106,11 @@ FFmpeg notices, checksums and a draft before publication. Native artifacts use
 version/target-bound filenames in their signed Minisign trusted comments; the
 compiled helper authenticates the collected bytes before upload. `latest.json`
 keeps the existing Tauri-compatible platform keys and public signing key, so
-the earlier native rollout could update installed Tauri apps. That promotion
-is now blocked by the public runtime filter and Tauri-only release workflow.
-The manifest retains a separately signed `linux-x86_64-deb` artifact for existing
-Tauri Debian installs: their updater cannot install an AppImage fallback. Once on
-native, Debian installs use the manual package update path.
-Historical rebuilds through `release.yml` also build Tauri, never native.
+installed Tauri apps keep updating to native even though the Tauri source is
+gone from the repository. The manifest retains a separately signed
+`linux-x86_64-deb` artifact for existing Tauri Debian installs: their updater
+cannot install an AppImage fallback. Once on native, Debian installs use the
+manual package update path.
 
 Native per-file update patches have release tooling that no workflow runs yet.
 Wire it in only when native publication resumes, with Win32 and GTK packages
@@ -189,15 +188,6 @@ Delete old `native-staging-*` releases when no longer needed. Staging builds
 still import the installed profile on first launch into the shared `Captures
 Native Preview` profile directory.
 
-To prove the Tauri-to-native cutover, dispatch with `tauri_base` checked and a
-version below the next native staging build. It builds the Tauri app under the
-same test identity with `CAPTURES_SIDE_BY_SIDE`, which gives it its own
-`captures-native-test` profile and `CapturesNativeTest` login item (never
-enrolled at launch) and points its updater at the staging feed. Its installers
-go to a `native-staging-tauri-<version>` prerelease without changing the feed.
-Install that base, publish a higher native staging build, and update from the
-Tauri app.
-
 ### Startup recovery companion
 
 Installed hosts start a copied `native_preview_update_helper --watch-startup`
@@ -257,7 +247,7 @@ remain unavailable. Automated checks must not be reported as physical acceptance
 ## Release queue
 
 `.github/workflows/release.yml` runs on every push to `main`, including merges.
-Its inexpensive scope check compares with the last published dated Tauri release and
+Its inexpensive scope check compares with the last published dated release and
 skips app builds when there are no unpublished desktop changes. Native-app-only and website/API-only
 pushes do not rebuild an already-published desktop; a later push can still collect
 desktop changes left unpublished by a failed or superseded request.
@@ -268,12 +258,12 @@ the dispatch commit, or an explicitly supplied `target_sha` on main's history.
 One request runs at a time and a newer pending request replaces the older pending
 request. Channel-only dispatches share this lock and skip all app builds.
 
-Tauri builds run the frontend and Rust quality gates while the macOS
+Releases run the Rust quality gates while the macOS
 Apple Silicon, Windows x64, and Linux x64 packages build in parallel, so the
 checks add no time to a release. The Rust checks run on GitHub-hosted runners
 and restore the same cache as CI's Rust checks. A release is published only when
 every job succeeds: **Publish release** needs the checks and the validated draft. Notes compare with the nearest published
-dated Tauri release in the requested commit's history, ignoring native releases,
+dated release in the requested commit's history, ignoring unmarked archives,
 drafts and orphan tags. Successful publication advances the public channel.
 
 PR and release packaging reuse an exact-key cache of unsigned FFmpeg/ffprobe
@@ -341,15 +331,11 @@ override `gemini-4-neon` and `medium`. Generation uses structured JSON output,
 It sends filtered source diffs and commit messages to Google, never capture
 files or installed-app data. There is no AI request from the desktop app.
 
-Evidence uses the exact previous-Tauri-release-to-target first-parent range. Only
-Tauri and shared source paths supply evidence; native-app source, website, tests,
-dependency bots and secret-looking paths are excluded. Native-only code inside
-shared crates is also excluded: `captures-settings-ffi` and `captures-app` except
-the `preview.rs` and `preview_drag.rs` modules used by Tauri. The commit-based
-fallback excludes the same native-only paths without changing build triggers.
-The prompt requires behavior reachable in Tauri, not migration or parity progress;
-shared-code changes alone do not establish that a feature is exposed. Review these
-boundaries when Tauri adopts more native modules or the native app ships.
+Evidence uses the exact previous-release-to-target first-parent range. Only
+native-host (`apps/native`), `crates` and `shared` source paths supply evidence;
+the wgpu workbench, website, tests, dependency bots and secret-looking paths are
+excluded. The prompt requires behavior reachable in the AppKit, Win32 and GTK
+hosts; shared-code changes alone do not establish that a feature is exposed.
 Path filtering is not
 a secret-content scanner. Requests are capped at 400,000 serialized characters
 by shortening diffs and marking truncation, without dropping commit metadata.
@@ -433,12 +419,6 @@ that any staged draft was cleaned up before retrying. Normal pushes never
 cancel the active release.
 
 ## Install the latest release
-
-Use a local signed macOS build when iterating on first-run setup. See
-[DEVELOPMENT.md](../DEVELOPMENT.md#packaging) for `npm run build:signed`. That
-command signs with the Developer ID identity, notarizes and staples a DMG, and
-installs it with Gatekeeper quarantine. It does not publish a release or build
-the Windows and Linux installers.
 
 Use the CI-produced release when you need the published multi-platform
 installer set, updater channel, or `SHA256SUMS` completion marker:

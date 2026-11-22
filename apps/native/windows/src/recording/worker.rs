@@ -134,7 +134,7 @@ pub(crate) fn toolchain() -> MediaToolchain {
 /// that take the paths.
 pub(crate) fn tool_paths() -> (PathBuf, PathBuf) {
     let target = format!("{}-pc-windows-msvc", std::env::consts::ARCH);
-    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../desktop/src-tauri/binaries");
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../bundle/binaries");
     let executable = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(Path::to_owned));

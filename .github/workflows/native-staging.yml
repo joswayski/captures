@@ -13,11 +13,6 @@ on:
         description: App version, e.g. 2026.11.1401 (2026.11.14.1); must increase for each staging build
         required: true
         type: string
-      tauri_base:
-        description: Build the Tauri app under the test identity, reading the staging feed, to prove the Tauri→native update. Not published to the feed; use a version lower than the feed's.
-        required: false
-        type: boolean
-        default: false
 
 concurrency:
   group: captures-native-staging
@@ -168,19 +163,7 @@ jobs:
           fi
           echo "APPLE_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
       - name: Build the signed staging package
-        if: ${{ !inputs.tauri_base }}
         run: node scripts/native-preview-build.mjs build "${{ matrix.target }}" "$VERSION" --staging
-      - name: Build the signed Tauri staging base
-        if: ${{ inputs.tauri_base }}
-        env:
-          CAPTURES_RELEASE_CHANNEL: preview
-          # Own profile and login item; see SIDE_BY_SIDE_BUILD in models.rs.
-          CAPTURES_SIDE_BY_SIDE: "1"
-        run: |
-          node scripts/native-preview-build.mjs tauri-staging-config "$VERSION" apps/desktop/src-tauri/tauri.staging.conf.json
-          cd apps/desktop
-          node ../../node_modules/@tauri-apps/cli/tauri.js build --ci --target "${{ matrix.target }}" \
-            --bundles "${{ matrix.bundles }}" --config src-tauri/tauri.staging.conf.json
       - name: Notarize, staple, and validate the macOS DMG
         if: runner.os == 'macOS'
         shell: bash
@@ -201,16 +184,7 @@ jobs:
           spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
           xcrun stapler validate "$dmg"
       - name: Sign the version-bound updater artifacts
-        if: ${{ !inputs.tauri_base }}
         run: node scripts/native-preview-build.mjs collect "${{ matrix.target }}" "$VERSION" staging-assets
-      - name: Collect the Tauri base installers
-        if: ${{ inputs.tauri_base }}
-        run: |
-          mkdir -p staging-assets
-          find "target/${{ matrix.target }}/release/bundle" -maxdepth 2 -type f \
-            \( -name '*.dmg' -o -name '*-setup.exe' -o -name '*.AppImage' -o -name '*.deb' \) \
-            -exec cp {} staging-assets/ \;
-          ls -l staging-assets
       - uses: actions/upload-artifact@v4
         with:
           name: staging-${{ matrix.target }}
@@ -237,19 +211,7 @@ jobs:
           pattern: staging-*
           path: staging-assets
           merge-multiple: true
-      - name: Publish the Tauri base installers (not the feed)
-        if: ${{ inputs.tauri_base }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          tag="native-staging-tauri-$VERSION"
-          gh release create "$tag" --prerelease --target "$GITHUB_SHA" \
-            --title "Tauri staging base $VERSION (test builds, not the public app)" \
-            --notes "Tauri app under the Captures Native Test identity; updates only from the native staging feed." \
-            staging-assets/*
-          echo "Published $tag; the staging feed is unchanged." >> "$GITHUB_STEP_SUMMARY"
       - name: Publish the build and point the staging feed at it
-        if: ${{ !inputs.tauri_base }}
         shell: bash
         run: |
           set -euo pipefail

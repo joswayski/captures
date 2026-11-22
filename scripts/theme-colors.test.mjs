@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { readdir, readFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { readFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import { test } from "vitest";
 import { fileURLToPath } from "node:url";
 
@@ -9,19 +9,8 @@ const sharedCssPath = resolve(root, "shared/themes.css");
 const sharedTsPath = resolve(root, "shared/themes.ts");
 const designCssPath = resolve(root, "shared/design.css");
 const appearanceTsPath = resolve(root, "shared/appearance.ts");
-const desktopEntryCssPath = resolve(root, "apps/desktop/ui/src/styles.css");
-const desktopStylesDir = resolve(root, "apps/desktop/ui/src/styles");
 const webCssPath = resolve(root, "apps/web/src/index.css");
 const rustModelsPath = resolve(root, "crates/captures-settings/src/lib.rs");
-
-async function readDesktopCss() {
-  const entry = await readFile(desktopEntryCssPath, "utf8");
-  const files = (await readdir(desktopStylesDir)).filter((name) => name.endsWith(".css")).sort();
-  const modules = await Promise.all(
-    files.map((name) => readFile(join(desktopStylesDir, name), "utf8")),
-  );
-  return [entry, ...modules].join("\n");
-}
 
 test("every declared color theme has a shared CSS palette and backend value", async () => {
   const [sharedCss, sharedTs, rustModels] = await Promise.all([
@@ -104,96 +93,14 @@ test("light and dark declare the same semantic surface tokens", async () => {
   }
 });
 
-test("desktop and web surfaces consume the shared theme source", async () => {
-  const [entryCss, webCss] = await Promise.all([
-    readFile(desktopEntryCssPath, "utf8"),
-    readFile(webCssPath, "utf8"),
-  ]);
-
-  assert.match(entryCss, /@import "\.\.\/\.\.\/\.\.\/\.\.\/shared\/themes\.css";/u);
-  assert.match(entryCss, /@import "\.\.\/\.\.\/\.\.\/\.\.\/shared\/design\.css";/u);
+test("the website consumes the shared theme source", async () => {
+  const webCss = await readFile(webCssPath, "utf8");
   assert.match(webCss, /@import "\.\.\/\.\.\/\.\.\/shared\/themes\.css";/u);
 });
 
-test("first-run setup follows the shared appearance tokens", async () => {
-  const desktopCss = await readDesktopCss();
-  const onboarding = desktopCss.match(/\.onboarding-shell\s*\{([\s\S]*?)\n\}/u)?.[1];
-  assert.ok(onboarding, "missing .onboarding-shell rule");
-  // The old design hardcoded a light island inside an otherwise dark app.
-  assert.doesNotMatch(onboarding, /#[0-9a-f]{3,6}/iu);
-  assert.match(onboarding, /background:\s*var\(--surface-canvas\)/u);
-  assert.match(desktopCss, /\.onboarding-actions\s*\{[^}]*justify-content:\s*flex-end/u);
-});
-
-test("preferences keeps presets compact and gives Custom a full-spectrum treatment", async () => {
-  const desktopCss = await readDesktopCss();
-
-  assert.match(desktopCss, /\.theme-options\s*\{[^}]*grid-template-columns:\s*repeat\(5,/u);
-  assert.match(
-    desktopCss,
-    /\.theme-option-custom \.theme-option-preview\s*\{[^}]*linear-gradient/u,
-  );
-  assert.match(desktopCss, /\.custom-theme-editor::before\s*\{[^}]*linear-gradient/u);
-});
-
-test("mini-preview stack controls use opaque glass tokens and contained shadows", async () => {
-  const [designCss, desktopCss] = await Promise.all([
-    readFile(designCssPath, "utf8"),
-    readDesktopCss(),
-  ]);
-  assert.match(designCss, /--glass-strong-solid:\s*rgb\(15, 15, 18\)/u);
-  assert.match(designCss, /--glass-raised-solid:\s*rgb\(38, 38, 45\)/u);
-  assert.match(
-    desktopCss,
-    /html\[data-preview-harness-view="thumbnail"\] #root\s*\{[^}]*width:\s*340px/u,
-  );
-
-  const stackControl = desktopCss.match(/\.thumbnail-stack-control\s*\{([\s\S]*?)\n\}/u)?.[1];
-  assert.ok(stackControl, "missing .thumbnail-stack-control rule");
-  assert.match(stackControl, /background:\s*var\(--glass-strong-solid\)/u);
-  assert.match(stackControl, /width:\s*28px/u);
-  assert.doesNotMatch(stackControl, /rgb\(/u);
-  assert.doesNotMatch(stackControl, /var\(--glass-shadow\)/u);
-  assert.match(desktopCss, /--thumbnail-card-shadow:\s*0 6px 14px[\s\S]*?0 2px 5px/u);
-  assert.match(
-    desktopCss,
-    /\.thumbnail-stack-control:hover[\s\S]*?background:\s*var\(--glass-raised-solid\)/u,
-  );
-  assert.match(
-    desktopCss,
-    /\.thumbnail-stack-control:hover[\s\S]*?border-color:\s*var\(--glass-border-strong\)/u,
-  );
-  assert.match(desktopCss, /\.thumbnail-stack-minimize:hover[\s\S]*?width:\s*92px/u);
-  assert.match(
-    desktopCss,
-    /\.thumbnail-stack-minimize:hover\s+\.thumbnail-stack-minimize-label[\s\S]*?opacity:\s*1/u,
-  );
-  assert.match(desktopCss, /\.thumbnail-stack-compact > \.thumbnail-card[\s\S]*?translate3d/u);
-  assert.match(desktopCss, /\.thumbnail-stack-compact > \.thumbnail-card[\s\S]*?-13px/u);
-  const stackToolbar = desktopCss.match(/\.thumbnail-stack-toolbar\s*\{([\s\S]*?)\n\}/u)?.[1];
-  assert.ok(stackToolbar, "missing .thumbnail-stack-toolbar rule");
-  assert.match(stackToolbar, /bottom:\s*16px/u);
-  assert.match(stackToolbar, /left:\s*28px/u);
-  assert.doesNotMatch(stackToolbar, /\btop:/u);
-  assert.doesNotMatch(stackToolbar, /\bright:/u);
-  assert.match(desktopCss, /\.thumbnail-stack-control\s*\{[\s\S]*?border-radius:\s*var\(--r-md\)/u);
-  assert.match(
-    desktopCss,
-    /\.thumbnail-stack-control\s*\{[\s\S]*?box-shadow:\s*var\(--thumbnail-card-shadow\)/u,
-  );
-  const stackClear = desktopCss.match(/\.thumbnail-stack-clear\s*\{([\s\S]*?)\n\}/u)?.[1];
-  assert.ok(stackClear, "missing .thumbnail-stack-clear rule");
-  assert.match(stackClear, /flex:\s*0 0 28px/u);
-  assert.doesNotMatch(stackClear, /background:/u);
-  assert.doesNotMatch(stackClear, /color:/u);
-  assert.doesNotMatch(stackClear, /rgb\(/u);
-  assert.doesNotMatch(stackClear, /var\(--theme-signal/u);
-});
-
 test("preset accent and signal values are not duplicated outside the shared palette", async () => {
-  const [sharedCss, desktopCss, webCss] = await Promise.all([
+  const [sharedCss, webCss] = await Promise.all([
     readFile(sharedCssPath, "utf8"),
-    readDesktopCss(),
     readFile(webCssPath, "utf8"),
   ]);
   const themedValues = [
@@ -201,7 +108,7 @@ test("preset accent and signal values are not duplicated outside the shared pale
       /--theme-(?:accent(?:-hover|-strong|-readable|-text|-text-strong)?|signal(?:-hover|-strong|-deep|-text|-text-strong)?):\s*(#[0-9a-f]{6})/giu,
     ),
   ].map((match) => match[1].toLowerCase());
-  const consumers = `${desktopCss}\n${webCss}`.toLowerCase();
+  const consumers = webCss.toLowerCase();
 
   for (const value of new Set(themedValues)) {
     assert.equal(

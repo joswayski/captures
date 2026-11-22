@@ -38,9 +38,9 @@ const STORE_BODY =
 
 // The files prepare-media caches; a test keeps this equal to the action's list.
 export const SIDECAR_PATTERNS = [
-  "apps/desktop/src-tauri/binaries/ffmpeg-*",
-  "apps/desktop/src-tauri/binaries/ffprobe-*",
-  "apps/desktop/src-tauri/ffmpeg/COPYING.LGPLv2.1",
+  "apps/native/bundle/binaries/ffmpeg-*",
+  "apps/native/bundle/binaries/ffprobe-*",
+  "apps/native/bundle/ffmpeg/COPYING.LGPLv2.1",
   "target/ffmpeg-build/*.tar.xz",
   "target/ffmpeg-build/*.tar.xz.asc",
   "target/ffmpeg-dist",

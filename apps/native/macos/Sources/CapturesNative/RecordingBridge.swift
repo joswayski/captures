@@ -426,7 +426,7 @@ struct NativeMediaTools {
                 executable?.deletingLastPathComponent().appendingPathComponent(binary),
                 executable?.deletingLastPathComponent().appendingPathComponent("binaries/\(binary)"),
                 URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-                    .appendingPathComponent("../../../../desktop/src-tauri/binaries/\(binary)")
+                    .appendingPathComponent("../../../../native/bundle/binaries/\(binary)")
                     .standardizedFileURL,
             ].compactMap { $0 }
             if let candidate = bundled.first(where: {

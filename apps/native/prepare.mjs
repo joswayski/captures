@@ -2,10 +2,7 @@
 import { readFile, mkdir, writeFile, copyFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  buildThumbnailDustParticles,
-  thumbnailDustVisualAt,
-} from "../desktop/ui/src/lib/thumbnailExit.ts";
+import { buildThumbnailDustParticles, thumbnailDustVisualAt } from "./thumbnail-dust.ts";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const defaultOutput = resolve(root, "apps/native/macos/Sources/CapturesNative/Resources");
@@ -166,12 +163,6 @@ export function dropShadow(value) {
 
 // Component-scoped shadow custom properties the native cards also paint.
 // Read from the shipping rule so the value cannot drift from the CSS.
-export function componentShadows(css) {
-  const card = /\.thumbnail-stack\s*\{[^}]*?--thumbnail-card-shadow:\s*([^;]+);/.exec(css);
-  if (!card) throw new Error("Missing --thumbnail-card-shadow");
-  return { "thumbnail-card-shadow": boxShadow(card[1].replace(/\s+/g, " ").trim()) };
-}
-
 export function particleFixture() {
   let seed = 739;
   const particles = buildThumbnailDustParticles(284, 160, {
@@ -206,10 +197,6 @@ export function particleFixture() {
 export async function prepare(destination, testDestination) {
   const design = await readFile(resolve(root, "shared/design.css"), "utf8");
   const palette = await readFile(resolve(root, "shared/themes.css"), "utf8");
-  const preview = await readFile(
-    resolve(root, "apps/desktop/ui/src/styles/mini-preview.css"),
-    "utf8",
-  );
   const variants = {};
   for (const appearance of ["light", "dark"]) {
     for (const theme of themes) {
@@ -234,16 +221,13 @@ export async function prepare(destination, testDestination) {
             key.startsWith("ease-") ? [[key, easing(value)]] : [],
           ),
         ),
-        shadows: {
-          ...Object.fromEntries(
-            Object.entries(raw).flatMap(([key, value]) => {
-              if (!/(^|-)shadow(-|$)/.test(key)) return [];
-              const shadow = boxShadow(value) ?? dropShadow(value);
-              return shadow ? [[key, shadow]] : [];
-            }),
-          ),
-          ...componentShadows(preview),
-        },
+        shadows: Object.fromEntries(
+          Object.entries(raw).flatMap(([key, value]) => {
+            if (!/(^|-)shadow(-|$)/.test(key)) return [];
+            const shadow = boxShadow(value) ?? dropShadow(value);
+            return shadow ? [[key, shadow]] : [];
+          }),
+        ),
         raw,
       };
     }
@@ -260,9 +244,12 @@ export async function prepare(destination, testDestination) {
     await writeFile(resolve(testDestination, "poses.json"), JSON.stringify(fixture));
   }
   // Existing product asset; do not introduce an independent icon design.
-  await copyFile(resolve(root, "apps/desktop/assets/icon.svg"), resolve(destination, "icon.svg"));
   await copyFile(
-    resolve(root, "apps/desktop/src-tauri/icons/icon.png"),
+    resolve(root, "apps/native/bundle/icons/icon.svg"),
+    resolve(destination, "icon.svg"),
+  );
+  await copyFile(
+    resolve(root, "apps/native/bundle/icons/icon.png"),
     resolve(destination, "tray-source.png"),
   );
   const liberationNotice = await readFile(

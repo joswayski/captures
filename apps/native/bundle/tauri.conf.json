@@ -1,0 +1,97 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Captures",
+  "version": "0.1.0",
+  "identifier": "io.github.joswayski.captures",
+  "build": {},
+  "app": {
+    "windows": []
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "createUpdaterArtifacts": true,
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "category": "Utility",
+    "shortDescription": "A lightweight screen capture utility",
+    "longDescription": "Capture screenshots, videos, and GIFs with a quick, lightweight workflow.",
+    "externalBin": ["binaries/ffmpeg", "binaries/ffprobe"],
+    "resources": {
+      "ffmpeg": "notices/ffmpeg",
+      "openh264": "notices/openh264"
+    },
+    "fileAssociations": [
+      {
+        "ext": ["png"],
+        "mimeType": "image/png",
+        "name": "PNG image",
+        "description": "PNG image",
+        "role": "Editor",
+        "rank": "Alternate"
+      },
+      {
+        "ext": ["jpg", "jpeg"],
+        "mimeType": "image/jpeg",
+        "name": "JPEG image",
+        "description": "JPEG image",
+        "role": "Editor",
+        "rank": "Alternate"
+      },
+      {
+        "ext": ["webp"],
+        "mimeType": "image/webp",
+        "name": "WebP image",
+        "description": "WebP image",
+        "role": "Editor",
+        "rank": "Alternate"
+      },
+      {
+        "ext": ["gif"],
+        "mimeType": "image/gif",
+        "name": "GIF",
+        "description": "GIF",
+        "role": "Editor",
+        "rank": "Alternate"
+      },
+      {
+        "ext": ["mp4"],
+        "mimeType": "video/mp4",
+        "name": "MPEG-4 video",
+        "description": "MPEG-4 video",
+        "role": "Editor",
+        "rank": "Alternate"
+      },
+      {
+        "ext": ["webm"],
+        "mimeType": "video/webm",
+        "name": "WebM video",
+        "description": "WebM video",
+        "role": "Editor",
+        "rank": "Alternate"
+      }
+    ],
+    "linux": {
+      "deb": {
+        "desktopTemplate": "./linux/captures.desktop"
+      },
+      "rpm": {
+        "desktopTemplate": "./linux/captures.desktop"
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "13.0",
+      "entitlements": "./Entitlements.plist"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQwNjI5NTdGQTcwNjZDMkYKUldRdmJBYW5mNVZpUUVDR2NUWStpaWxOMDBWNjhBc1FxWmRXM2pyVGZvRFoxaVdPODZCWWdFYlUK"
+    }
+  }
+}

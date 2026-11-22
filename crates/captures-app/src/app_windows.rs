@@ -199,39 +199,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn specs_match_the_shipping_window_builders() {
-        let lib = include_str!("../../../apps/desktop/src-tauri/src/lib.rs");
-        let compact = lib.split_whitespace().collect::<String>();
-        for (spec, width, height, min_width, min_height) in [
-            (HISTORY, "1_020.0", "720.0", "640.0", "440.0"),
-            (PREFERENCES, "880.0", "660.0", "560.0", "440.0"),
+    fn specs_keep_the_shipping_window_sizes() {
+        for (spec, size, min_size) in [
+            (HISTORY, [1_020., 720.], [640., 440.]),
+            (PREFERENCES, [880., 660.], [560., 440.]),
+            (SETUP, [620., 560.], [480., 440.]),
         ] {
-            let builder = format!(
-                ".title(\"{}\").inner_size({width},{height}).min_inner_size({min_width},{min_height})",
-                spec.title
-            )
-            .split_whitespace()
-            .collect::<String>();
-            assert!(compact.contains(&builder), "{builder}");
+            assert_eq!(spec.size(), size, "{}", spec.title);
+            assert_eq!(spec.min_size(), min_size, "{}", spec.title);
         }
-        assert!(lib.contains("const ONBOARDING_WINDOW_WIDTH: f64 = 620.0;"));
-        assert!(lib.contains("const ONBOARDING_WINDOW_HEIGHT: f64 = 560.0;"));
-        assert!(compact.contains(
-            ".title(\"Captures\").inner_size(ONBOARDING_WINDOW_WIDTH,ONBOARDING_WINDOW_HEIGHT).min_inner_size(480.0,440.0)"
-        ));
-        assert_eq!(SETUP.size(), [620., 560.]);
-        assert_eq!(SETUP.min_size(), [480., 440.]);
-        let screenshot = include_str!("../../../apps/desktop/src-tauri/src/screenshot_editor.rs");
-        assert!(screenshot.contains(&format!(".title(\"{SCREENSHOT_EDITOR_TITLE}\")")));
-        let recording = include_str!("../../../apps/desktop/src-tauri/src/recording.rs");
-        assert!(recording.contains(&format!(".title(\"{RECORDING_EDITOR_TITLE}\")")));
     }
 
     #[test]
     fn breakpoints_match_the_shipping_media_queries() {
-        let css = include_str!("../../../apps/desktop/ui/src/styles/windows.css");
-        assert!(css.contains("@media (max-width: 720px)"));
-        assert!(css.contains("@media (max-height: 600px)"));
         // Default History is wide; its minimum and Preferences' are compact.
         assert!(!compact(HISTORY.width) && compact(HISTORY.min_width));
         assert!(!compact(PREFERENCES.width) && compact(PREFERENCES.min_width));
@@ -250,8 +230,6 @@ mod tests {
     fn reactivation_follows_shipping_priority() {
         use AppWindow::*;
         use PrimaryWindow::App;
-        let lib = include_str!("../../../apps/desktop/src-tauri/src/lib.rs");
-        assert!(lib.contains("fn primary_app_window_priority(label: &str) -> Option<u8>"));
         assert_eq!(
             reactivation::<u8>(false, true, &[App(History)]),
             Reactivation::ShowSetup
@@ -308,8 +286,6 @@ mod tests {
     #[test]
     fn interactive_launch_matches_shipping() {
         use InteractiveLaunch::*;
-        let lib = include_str!("../../../apps/desktop/src-tauri/src/lib.rs");
-        assert!(lib.contains("fn interactive_launch_action("));
         // (onboarding complete, quiet, opening files, restore Preferences)
         assert_eq!(interactive_launch(false, false, false, false), Some(Setup));
         assert_eq!(interactive_launch(false, true, false, true), Some(Setup));

@@ -139,7 +139,7 @@ pub(crate) fn toolchain() -> MediaToolchain {
 /// else the system's `ffmpeg` and `ffprobe` on PATH.
 pub fn media_tools() -> (PathBuf, PathBuf) {
     let target = format!("{}-unknown-linux-gnu", std::env::consts::ARCH);
-    let sidecars = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../desktop/src-tauri/binaries");
+    let sidecars = Path::new(env!("CARGO_MANIFEST_DIR")).join("../bundle/binaries");
     let executable = std::env::current_exe()
         .ok()
         .and_then(|path| path.parent().map(Path::to_owned));

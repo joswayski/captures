@@ -14,7 +14,7 @@ pub fn locate() -> MediaToolchain {
             _ => "unknown-linux-gnu",
         }
     );
-    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../desktop/src-tauri/binaries");
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../bundle/binaries");
     let tool = |name, variable| {
         locate_tool(
             name,

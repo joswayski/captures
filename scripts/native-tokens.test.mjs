@@ -10,7 +10,6 @@ import {
   easing,
   boxShadow,
   dropShadow,
-  componentShadows,
   themes,
   particleFixture,
   parseArguments,
@@ -81,7 +80,6 @@ test("native tokens carry box-shadow layers, including the preview card shadow",
   assert.equal(dropShadow("#ffffff"), null);
   assert.throws(() => dropShadow("drop-shadow(0 2px 6px 1px #ffffff)"), /Unsupported/);
   assert.throws(() => dropShadow("drop-shadow(0 2px -6px #ffffff)"), /Invalid/);
-  assert.throws(() => componentShadows(".other { --x: 1; }"), /Missing/);
   const temporary = await mkdtemp(join(tmpdir(), "captures-native-"));
   t.onTestFinished(() => rm(temporary, { recursive: true, force: true }));
   await prepare(temporary);
@@ -143,7 +141,7 @@ test("prepare writes portable app resources without an implicit test oracle", as
   ]);
   assert.deepEqual(
     await readFile(join(output, "tray-source.png")),
-    await readFile(new URL("../apps/desktop/src-tauri/icons/icon.png", import.meta.url)),
+    await readFile(new URL("../apps/native/bundle/icons/icon.png", import.meta.url)),
   );
   assert.equal(
     await readFile(join(output, "EDITOR-FONT-LICENSE.txt"), "utf8"),
