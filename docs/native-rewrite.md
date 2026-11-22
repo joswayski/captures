@@ -959,9 +959,16 @@ infinite, a 0 → 5 px accent `box-shadow` at 22 % and back) is a ring visual
 under Apply crop, drawn once at its 50 % frame, whose opacity a repeating
 DirectComposition animation (smoothstep halves) raises and lowers. Nothing
 in the process ticks or redraws for it; only the compositor animates, as
-it does for the CSS animation. Deviation: the spread stays at 5 px and only
-the alpha moves. Windows: cross-compiled only, Wine render of the ring at
-its peak (temporary, removed hook). macOS, Linux: unchanged.
+it does for the CSS animation. November 2026: the ring now grows as well as
+fading. It is drawn as a 22 % accent plate 5 px larger than the opaque button,
+under it, and a repeating DirectComposition scale transform shrinks the plate
+to the button's size and back on the same smoothstep halves, so the visible
+ring goes 0 → 5 px → 0 with its alpha. Its corners follow the button's
+`r-md`, which the first version drew as `r-sm`. With reduced motion no ring
+shows, matching shipping's global 0.01 ms single run, which ends on the
+transparent 0 % keyframe. Windows: offscreen render of the peak frame in
+light and dark (temporary, removed hook). The live animation has not been
+watched. macOS, Linux: unchanged.
 
 Hardware pass 16 verified crop dragging/dashes/apply/undo, field commits,
 Properties scroll, rename selection and reorder, compositor pulse idle,

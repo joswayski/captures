@@ -342,7 +342,8 @@ enum Kind {
     PropsThumb,
     /// The Layers drop line while a row is dragged.
     DropLine,
-    /// Apply crop's `screenshot-cta-pulse` ring, faded on the compositor.
+    /// Apply crop's `screenshot-cta-pulse` ring, grown and faded on the
+    /// compositor.
     Pulse,
     Ctl(Target, Layer),
 }
@@ -3229,6 +3230,11 @@ impl Editor {
         self.place_props_thumb();
         match self.prop_rect(Prop::CropAction(true)) {
             Some(apply) => {
+                // The scale animation depends on the button's size.
+                let size = (self.nodes[self.pulse].rect.w, self.nodes[self.pulse].rect.h);
+                if size != (apply.w, apply.h) && self.visuals[self.pulse].is_some() {
+                    self.pulse_fresh = true;
+                }
                 self.set_rect(self.pulse, apply);
                 self.set_visible(self.pulse, has_props);
             }
@@ -3960,13 +3966,18 @@ impl Editor {
             Kind::Caret => gfx::fill(dc, all, self.caret_fill())?,
             Kind::FieldCaret => gfx::fill(dc, all, c("text"))?,
             Kind::DropLine => self.draw_drop_line(dc, w)?,
-            // `box-shadow: 0 0 0 5px rgba(accent, 0.22)` at the 50% keyframe.
-            Kind::Pulse => gfx::ring(
+            // `box-shadow: 0 0 0 5px rgba(accent, 0.22)` at the 50% keyframe,
+            // as a plate under the opaque button: scaling it down to the
+            // button's size shrinks the visible ring to nothing.
+            Kind::Pulse => gfx::fill_round(
                 dc,
-                all,
-                t.n("r-sm"),
-                0.,
-                PULSE_SPREAD,
+                rect(
+                    -PULSE_SPREAD,
+                    -PULSE_SPREAD,
+                    w + PULSE_SPREAD,
+                    h + PULSE_SPREAD,
+                ),
+                t.n("r-md") + PULSE_SPREAD,
                 t.color_alpha("theme-accent", 0.22),
             )?,
             Kind::Menu => self.draw_menu(dc, (w, h))?,
@@ -5447,22 +5458,52 @@ impl Editor {
         Ok(())
     }
 
-    /// `screenshot-cta-pulse 2.4s ease-in-out infinite`: the ring's opacity
-    /// rises and falls on the compositor, set once on its visual (no timer,
-    /// no redraw). The spread stays at 5 px; only the alpha moves.
+    /// `screenshot-cta-pulse 2.4s ease-in-out infinite`: the ring grows from
+    /// nothing to 5 px as its alpha rises to 22 %, then shrinks and fades,
+    /// set once on its visual (no timer, no redraw). The plate scales from
+    /// the button's size to its 5 px outset about the button's centre.
+    /// Reduced motion shows no ring, as shipping's 0.01 ms single run ends
+    /// on the transparent 0 % keyframe.
     fn pulse_crop(&mut self, dcomp: &IDCompositionDesktopDevice) -> Result<()> {
         let Some(visual) = self.visuals[self.pulse].clone() else {
             return Ok(());
         };
+        if self.reduced_motion {
+            unsafe {
+                visual.SetOpacity2(0.)?;
+                let flat: &IDCompositionVisual = &visual;
+                flat.SetTransform(None::<&IDCompositionTransform>)?;
+            }
+            return Ok(());
+        }
         let half = f64::from(PULSE_SECONDS) / 2.;
         // Smoothstep halves: 3u² − 2u³ up, then its mirror down.
         let (q, c) = (3. / (half * half), -2. / (half * half * half));
+        // `from` at rest, 1 at the 50 % keyframe.
+        let wave = |from: f32| -> Result<IDCompositionAnimation> {
+            let d = 1. - from;
+            unsafe {
+                let animation = dcomp.CreateAnimation()?;
+                animation.AddCubic(0., from, 0., d * q as f32, d * c as f32)?;
+                animation.AddCubic(half, 1., 0., -d * q as f32, -d * c as f32)?;
+                animation.AddRepeat(2. * half, 2. * half)?;
+                Ok(animation)
+            }
+        };
+        let n = &self.nodes[self.pulse];
+        let s = self.scale;
+        let (w, h) = (n.rect.w.max(1.), n.rect.h.max(1.));
+        let bleed = (n.bleed * s).round();
         unsafe {
-            let animation = dcomp.CreateAnimation()?;
-            animation.AddCubic(0., 0., 0., q as f32, c as f32)?;
-            animation.AddCubic(half, 1., 0., -q as f32, -c as f32)?;
-            animation.AddRepeat(2. * half, 2. * half)?;
-            visual.SetOpacity(&animation)?;
+            visual.SetOpacity(&wave(0.)?)?;
+            let scale = dcomp.CreateScaleTransform()?;
+            scale.SetCenterX2(bleed + w * s / 2.)?;
+            scale.SetCenterY2(bleed + h * s / 2.)?;
+            scale.SetScaleX(&wave(w / (w + 2. * PULSE_SPREAD))?)?;
+            scale.SetScaleY(&wave(h / (h + 2. * PULSE_SPREAD))?)?;
+            // IDCompositionVisual's 2D overload, not Visual3's 4×4 one.
+            let flat: &IDCompositionVisual = &visual;
+            flat.SetTransform(&scale)?;
         }
         Ok(())
     }
@@ -5578,7 +5619,12 @@ impl Editor {
                 }
             }
             WM_SETTINGCHANGE => {
-                self.reduced_motion = appearance::reduced_motion();
+                let reduced = appearance::reduced_motion();
+                if reduced != self.reduced_motion {
+                    self.reduced_motion = reduced;
+                    self.pulse_fresh = true;
+                    self.need = true;
+                }
                 self.retheme();
             }
             WM_KILLFOCUS => {
