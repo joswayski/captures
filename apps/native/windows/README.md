@@ -187,6 +187,11 @@ on the display under the pointer, hidden while New Capture is open. Cards show
 the size chip and Copied to clipboard; hover blurs and dims the image under
 Close and Delete (Delete alone dismisses an unsaved capture; a saved file goes
 to the Recycle Bin), Edit, Copy and Save file / Show in Folder, plus Clear all.
+A stopped recording joins too, as on GTK (the Tauri app showed no recording
+cards): its card has no Edit or Copy, Save file writes the video and Show in
+Folder reveals it, and automation names it "Recording preview". A failed
+action shows its error on the card (shipping's `.thumbnail-message`) until
+the next action.
 History's Restore brings a screenshot back as a card and reads "✓ Restored"
 for 2.5 s. UI Automation lists every card's buttons (Invoke, whether or not
 the card is hovered), its size line and clipboard status, and Clear all

@@ -1,10 +1,12 @@
-//! Floating mini previews (`?view=thumbnail`): each saved screenshot joins
-//! one topmost, non-activating stack window in the configured corner of the
-//! display under the pointer. Cards follow `styles/mini-preview.css`: the
-//! cover image with its size chip and the clipboard confirmation, and on
-//! hover a blurred, dimmed image under Close and Delete, Edit, and Copy and
-//! Save file (Show in Folder once saved). Membership, geometry and copy come
-//! from `captures_app::preview` and `preview_chrome`.
+//! Floating mini previews (`?view=thumbnail`): each saved screenshot or
+//! recording joins one topmost, non-activating stack window in the
+//! configured corner of the display under the pointer. Cards follow
+//! `styles/mini-preview.css`: the cover image with its size chip and the
+//! clipboard confirmation, and on hover a blurred, dimmed image under Close
+//! and Delete, Edit, and Copy and Save file (Show in Folder once saved). A
+//! recording's card, like GTK's, has no Edit or Copy and saves its video. A
+//! failed action shows `.thumbnail-message`. Membership, geometry and copy
+//! come from `captures_app::preview` and `preview_chrome`.
 //!
 //! UI Automation lists each card as shipping's `<article>` with its buttons
 //! (Invoke), size line and clipboard status, then Clear all previews
@@ -114,6 +116,16 @@ pub struct Card {
     busy: bool,
     /// Save finished: the primary action reads Saved until the pointer leaves.
     saved: bool,
+    /// The last action's failure (shipping `.thumbnail-message`), cleared
+    /// when the next action starts.
+    error: Option<String>,
+}
+
+impl Card {
+    /// A recording's card offers no Edit or Copy, and saves the video (GTK).
+    fn recording(&self) -> bool {
+        self.entry.kind.is_recording()
+    }
 }
 
 /// The stack's state and drawing, independent of its window so the
@@ -446,6 +458,7 @@ impl Stack {
             clipboard: false,
             busy: false,
             saved: false,
+            error: None,
         });
         self.exits.sync(self.stack.ids());
     }
@@ -568,6 +581,9 @@ impl Stack {
         for (i, hit) in order.into_iter().enumerate() {
             controls.push((hit, at(start + i as f32 * (CONTROL + gap))));
         }
+        if self.cards[index].recording() {
+            return controls;
+        }
         let edit = if self.right {
             card.left + 8.
         } else {
@@ -581,7 +597,8 @@ impl Stack {
     /// accent Save file / Show in Folder, centred.
     fn main_actions(&self, index: usize, card: Rect) -> Vec<(Hit, Rect)> {
         let mut hits = Vec::new();
-        if !self.cards[index].clipboard {
+        let shown = &self.cards[index];
+        if !shown.clipboard && !shown.recording() {
             hits.push(Hit::Copy(index));
         }
         hits.push(Hit::Save(index));
@@ -749,7 +766,12 @@ impl Stack {
                 continue;
             };
             let group = Self::uia_key(Hit::Card(index));
-            items.push(Item::new(group, Role::Group, "Screenshot preview", r));
+            let name = if card.recording() {
+                "Recording preview"
+            } else {
+                "Screenshot preview"
+            };
+            items.push(Item::new(group, Role::Group, name, r));
             let mut child = |hit: Hit, role: Role, name: &str, rect: Rect| {
                 let mut item = Item::new(Self::uia_key(hit), role, name, rect);
                 item.parent = Some(group);
@@ -781,6 +803,11 @@ impl Stack {
                 let mut status = Item::new(group + 7, Role::Status, "Copied to clipboard", bar);
                 status.parent = Some(group);
                 items.push(status);
+            }
+            if let Some(error) = &card.error {
+                let mut message = Item::new(group + 8, Role::Text, error.clone(), bar);
+                message.parent = Some(group);
+                items.push(message);
             }
         }
         if self.toolbar() {
@@ -1147,7 +1174,8 @@ impl Stack {
             gfx::ring(dc, r, radius, 0., 1., white(0.08))
         })?;
         faded(dc, fade.chrome, || {
-            self.paint_chrome(dc, g, t, index, r, (hovered, controls))
+            self.paint_chrome(dc, g, t, index, r, (hovered, controls))?;
+            paint_message(dc, g, t, card.error.as_deref(), r)
         })
     }
 
@@ -1323,6 +1351,34 @@ impl Stack {
     }
 }
 
+/// `.thumbnail-message`: the last action's error on one ellipsized line over
+/// the bottom bar, in the signal text colour.
+fn paint_message(
+    dc: &ID2D1DeviceContext,
+    g: &Gfx,
+    t: &Tokens,
+    error: Option<&str>,
+    r: Rect,
+) -> Result<()> {
+    let Some(error) = error else {
+        return Ok(());
+    };
+    let (pad_x, pad_y) = (t.n("s-4"), t.n("s-2"));
+    let text = g.text_sized(t, error, t.n("text-2xs"), "weight-regular", None)?;
+    let width = r.right - r.left - 16. - 2. * pad_x;
+    g.ellipsis(&text, width)?;
+    let h = text.height + 2. * pad_y;
+    let bar = rect(r.left + 8., r.bottom - 8. - h, r.right - 8., r.bottom - 8.);
+    gfx::fill_round(dc, bar, t.n("r-xs"), t.color("glass-strong"))?;
+    gfx::text(
+        dc,
+        &text,
+        bar.left + pad_x,
+        bar.top + pad_y,
+        t.color("theme-signal-text"),
+    )
+}
+
 /// The hovered pile's accent glow behind each card, eased in with its fan
 /// (the hovered `.thumbnail-stack-minimized > .thumbnail-card` box-shadow
 /// `0 0 0 1px` accent at 0.55 and `0 0 22px` accent at 0.28, after the
@@ -1382,6 +1438,14 @@ pub fn fixture(g: &Gfx, image: &image::RgbaImage, select: Option<&str>) -> Stack
         Some("pile-hover") => {
             let front = stack.front_rect().expect("front card");
             stack.pointer(Some((front.left + 40., front.top + 40.)));
+        }
+        // A hovered saved recording above an unsaved card whose Save failed.
+        Some("recording") => {
+            stack.cards[0].entry.kind = captures_history::ArtifactKind::Video;
+            stack.cards[0].clipboard = false;
+            stack.cards[1].error =
+                Some("Could not save: the Captures folder is not writable".into());
+            stack.pointer(Some((150., 90.)));
         }
         Some("pile") | None => {}
         Some(_) => {
@@ -1817,6 +1881,9 @@ impl Previews {
             return;
         }
         let (id, saved_path) = (card.entry.id.clone(), card.entry.saved_path.clone());
+        let recording = card.recording();
+        // Each action starts without the last one's message (`setError("")`).
+        self.stack.cards[index].error = None;
         match hit {
             Hit::Close(_) => {
                 self.stack.leave(&id, ExitKind::Dismiss, 0., true);
@@ -1847,12 +1914,13 @@ impl Previews {
                     post(hwnd);
                 });
             }
-            Hit::Edit(_) => {
+            // Recordings have no Edit or Copy control.
+            Hit::Edit(_) if !recording => {
                 if let Err(error) = crate::editor::open(&self.options, &id) {
-                    eprintln!("couldn't open the editor: {error}");
+                    self.stack.cards[index].error = Some(error.message());
                 }
             }
-            Hit::Copy(_) => {
+            Hit::Copy(_) if !recording => {
                 let path = self
                     .root
                     .join(&id)
@@ -1862,12 +1930,12 @@ impl Previews {
                         self.set_clipboard(&id);
                         self.stack.hot = None;
                     }
-                    Err(error) => eprintln!("Could not copy the screenshot: {error}"),
+                    Err(error) => self.stack.cards[index].error = Some(error),
                 }
             }
             Hit::Save(_) if saved_path.is_some() => {
                 if let Err(error) = crate::history::reveal(saved_path.as_deref().unwrap_or("")) {
-                    eprintln!("Could not show the file: {error}");
+                    self.stack.cards[index].error = Some(error);
                 }
             }
             Hit::Save(_) => {
@@ -1876,13 +1944,25 @@ impl Previews {
                 self.stack.cards[index].busy = true;
                 let (root, sender) = (self.root.clone(), self.sender.clone());
                 let hwnd = self.hwnd.0 as isize;
-                std::thread::spawn(move || {
-                    let result = captures_app::execute(captures_app::Request::SaveScreenshot {
+                let directory = PathBuf::from(settings.output_directory);
+                // A recording saves its video, a screenshot its image in
+                // the chosen format.
+                let request = if recording {
+                    captures_app::Request::SaveRecording {
                         root,
                         id: id.clone(),
-                        directory: PathBuf::from(settings.output_directory),
+                        directory,
+                    }
+                } else {
+                    captures_app::Request::SaveScreenshot {
+                        root,
+                        id: id.clone(),
+                        directory,
                         format: settings.screenshot_format,
-                    });
+                    }
+                };
+                std::thread::spawn(move || {
+                    let result = captures_app::execute(request);
                     let result = match result {
                         Ok(captures_app::Response::Saved { path, .. }) => {
                             Ok(path.to_string_lossy().into_owned())
@@ -1894,7 +1974,12 @@ impl Previews {
                     post(hwnd);
                 });
             }
-            Hit::Card(_) | Hit::ClearAll | Hit::Minimize | Hit::Expand => {}
+            Hit::Edit(_)
+            | Hit::Copy(_)
+            | Hit::Card(_)
+            | Hit::ClearAll
+            | Hit::Minimize
+            | Hit::Expand => {}
         }
         let _ = self.render();
     }
@@ -1989,7 +2074,7 @@ impl Previews {
                                 card.entry.saved_path = Some(path);
                                 card.saved = true;
                             }
-                            Err(error) => eprintln!("Could not save the screenshot: {error}"),
+                            Err(error) => card.error = Some(error),
                         }
                     }
                     crate::history::with_history(|h| h.reload());
@@ -2000,7 +2085,7 @@ impl Previews {
                         (Some(_), Ok(())) => self.stack.leave(&id, ExitKind::Dust, 0., true),
                         (Some(index), Err(error)) => {
                             self.stack.cards[index].busy = false;
-                            eprintln!("Could not delete the file: {error}");
+                            self.stack.cards[index].error = Some(error);
                         }
                         (None, _) => {}
                     }
@@ -2190,10 +2275,35 @@ mod tests {
                 clipboard: false,
                 busy: false,
                 saved: false,
+                error: None,
             });
         }
         stack.height = stack.content_height();
         stack
+    }
+
+    #[test]
+    fn a_recording_card_offers_no_edit_or_copy_and_shows_its_error() {
+        use captures_settings::MiniPreviewPlacement as P;
+        let mut s = stack(P::BottomLeft, &[false]);
+        s.cards[0].entry.kind = captures_history::ArtifactKind::Video;
+        s.cards[0].error = Some("disk full".into());
+        let card = s.card_rect(0).unwrap();
+        assert!(s.pointer(Some((card.left + 30., card.top + 30.))));
+        // Edit's corner is the card itself; the only main action is Save.
+        assert_eq!(s.hit(card.right - 20., card.top + 20.), Some(Hit::Card(0)));
+        let items = s.uia_items();
+        let names: Vec<&str> = items.iter().map(|i| i.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "Recording preview",
+                "Delete",
+                "Save file",
+                "842 KB",
+                "disk full"
+            ]
+        );
     }
 
     fn fixture_entry() -> HistoryEntry {
