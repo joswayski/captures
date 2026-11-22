@@ -3436,6 +3436,18 @@ pub fn ids() -> Vec<String> {
     })
 }
 
+/// Close the stack's window and keep its captures, for reopening its cards
+/// on a new renderer (`live` after a lost device).
+pub fn close() {
+    let previews = PREVIEWS.with(|p| p.try_borrow_mut().ok()?.take());
+    if let Some(previews) = previews {
+        unsafe {
+            let _ = UiaReturnRawElementProvider(previews.hwnd, WPARAM(0), LPARAM(0), None);
+            let _ = DestroyWindow(previews.hwnd);
+        }
+    }
+}
+
 /// History Restore: bring a screenshot back as a card.
 pub fn restore(options: &crate::Options, entry: &HistoryEntry) {
     let root = options
@@ -3578,10 +3590,7 @@ pub fn settings_changed(settings: &captures_settings::AppSettings) {
 impl Previews {
     fn new(options: &crate::Options, settings: &captures_settings::AppSettings) -> Result<Self> {
         let tokens = crate::appearance::tokens(options.appearance.as_deref(), settings);
-        let g = match crate::host::with_host(|h| h.g.clone()) {
-            Some(g) => g,
-            None => Gfx::new(&tokens, true)?,
-        };
+        let g = Gfx::shared(&tokens)?;
         let hwnd = unsafe { window()? };
         unsafe { SetTimer(Some(hwnd), PRESENCE_TIMER, PRESENCE_INTERVAL_MS, None) };
         let (sender, results) = channel();

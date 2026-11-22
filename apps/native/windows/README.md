@@ -505,6 +505,14 @@ executable under `wine` with `--test-threads=1`, an Xvfb `DISPLAY`, and
 installer (`7z x`). In a 4 GB orb, run clippy with `-j1` and not alongside other
 builds. These shims are test-only; never package them.
 
+Every window draws on one Direct3D/DirectComposition device per UI thread
+(`Gfx::shared`): a device per window kept about 54 NVIDIA driver threads and
+its memory after each window closed. When that device is removed or reset,
+the resident app closes Preferences, History, the mini previews and editors
+(editors keep their drafts) and reopens them on a new one once no capture or
+recording runs. Development builds simulate it with a thread message:
+`WM_APP + 20` with `wParam` `0x1057`.
+
 Each scene node (`src/scene.rs`) owns one composition surface. Hover and
 toggle transitions animate visual opacity and offsets on the compositor, and
 scrolling moves the card column's visual, so a frame redraws only nodes whose

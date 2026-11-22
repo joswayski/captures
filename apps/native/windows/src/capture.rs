@@ -3296,10 +3296,7 @@ impl Capture {
     fn show(&mut self, session: WindowSession, displays: Vec<DisplayDescriptor>) -> Result<()> {
         let display = session.display().clone();
         let displays_switched = matches!(self.phase, Phase::Selecting(..));
-        let g = match crate::host::with_host(|h| h.g.clone()) {
-            Some(g) => g,
-            None => Gfx::new(&self.tokens, true)?,
-        };
+        let g = Gfx::shared(&self.tokens)?;
         let dcomp = g.dcomp.clone().ok_or_else(Error::empty)?;
         unsafe {
             let hwnd = popup(&display, w!("CapturesNewCapture"), w!("New Capture"))?;
@@ -3494,10 +3491,7 @@ impl Capture {
     /// Open the countdown scrim over the selected display.
     fn count(&self, seconds: u8, choice: Choice, session: Box<WindowSession>) -> Result<Counting> {
         let display = session.display().clone();
-        let g = match crate::host::with_host(|h| h.g.clone()) {
-            Some(g) => g,
-            None => Gfx::new(&self.tokens, true)?,
-        };
+        let g = Gfx::shared(&self.tokens)?;
         let hwnd = unsafe {
             popup(
                 &display,

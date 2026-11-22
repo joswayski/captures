@@ -283,10 +283,7 @@ impl Recorder {
             settings,
             tokens,
         } = handoff;
-        let g = match crate::host::with_host(|h| h.g.clone()) {
-            Some(g) => g,
-            None => Gfx::new(&tokens, true)?,
-        };
+        let g = Gfx::shared(&tokens)?;
         let dcomp = g.dcomp.clone().ok_or_else(Error::empty)?;
         let (hwnd, scale, px) = unsafe { controls_window(&display)? };
         let (target_c, visual, surface) = unsafe {

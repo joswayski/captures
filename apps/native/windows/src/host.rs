@@ -134,7 +134,7 @@ impl Host {
     fn new(hwnd: HWND, options: &Options) -> Result<Self> {
         let settings = captures_settings::load(&options.settings_file).unwrap_or_default();
         let tokens = appearance::tokens(options.appearance.as_deref(), &settings);
-        let g = Gfx::new(&tokens, true)?;
+        let g = Gfx::shared(&tokens)?;
         let platform = captures_app::shortcuts::ShortcutPlatform::Windows;
         let detail = match &options.history_root {
             Some(_) => preferences::LOGIN_ITEM_CHECKING,
@@ -1464,6 +1464,7 @@ pub fn run(options: Options, resident: Option<captures_app::instance::Instance>)
                     crate::editor::wait_for_workers();
                     return Ok(());
                 }
+                crate::live::thread_message(&msg);
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }

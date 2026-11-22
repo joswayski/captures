@@ -192,7 +192,7 @@ fn with_notice<R>(f: impl FnOnce(&mut Notice) -> R) -> Option<R> {
 }
 
 fn open(t: Tokens, root: PathBuf, settings_file: PathBuf, id: String, state: State) -> Result<()> {
-    let g = Gfx::new(&t, true)?;
+    let g = Gfx::shared(&t)?;
     unsafe {
         let instance = windows::Win32::System::LibraryLoader::GetModuleHandleW(None)?;
         RegisterClassW(&WNDCLASSW {

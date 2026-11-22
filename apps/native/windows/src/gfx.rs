@@ -2,7 +2,8 @@
 //! DirectComposition desktop device, and DirectWrite on the system font
 //! collection (Captures' `--font-sans` resolves to Segoe UI Variable Text on
 //! Windows 11 and Segoe UI before it).
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::*;
@@ -396,6 +397,10 @@ pub struct Text {
 
 #[derive(Clone)]
 pub struct Gfx {
+    /// The device under `dc` and `dcomp`, for [`Gfx::lost`].
+    d3d: ID3D11Device,
+    /// The development hook marked this device lost (`lose_shared`).
+    simulated_loss: Rc<Cell<bool>>,
     pub dc: ID2D1DeviceContext,
     pub factory: ID2D1Factory1,
     pub dcomp: Option<IDCompositionDesktopDevice>,
@@ -417,6 +422,39 @@ const MONO_FAMILIES: [&str; 4] = ["Cascadia Mono", "Segoe UI Mono", "Consolas", 
 
 thread_local! {
     static UI_FONTS: RefCell<Option<Option<IDWriteFontCollection>>> = const { RefCell::new(None) };
+    /// This thread's composition renderer, created once (see [`Gfx::shared`]).
+    static SHARED: RefCell<Option<Gfx>> = const { RefCell::new(None) };
+    /// [`Gfx::shared`] replaced a lost device that open windows may still
+    /// draw with, until [`renderer_recovered`].
+    static REPLACED_LOST: Cell<bool> = const { Cell::new(false) };
+}
+
+/// The shared device was removed or reset (driver update, GPU reset, a
+/// remote session), so windows created on it no longer draw.
+pub fn renderer_lost() -> bool {
+    REPLACED_LOST.get() || SHARED.with(|s| s.borrow().as_ref().is_some_and(Gfx::lost))
+}
+
+/// Open windows were closed after [`renderer_lost`]: drop a lost device so
+/// the next [`Gfx::shared`] starts a new one.
+pub fn renderer_recovered() {
+    REPLACED_LOST.set(false);
+    SHARED.with(|s| {
+        let mut s = s.borrow_mut();
+        if s.as_ref().is_some_and(Gfx::lost) {
+            *s = None;
+        }
+    });
+}
+
+/// Development test hook: treat the shared device as lost, as a GPU reset
+/// would, without disturbing the real device.
+pub fn lose_shared() {
+    SHARED.with(|s| {
+        if let Some(g) = s.borrow().as_ref() {
+            g.simulated_loss.set(true);
+        }
+    });
 }
 
 fn ui_font_collection(dwrite: &IDWriteFactory) -> Option<IDWriteFontCollection> {
@@ -448,6 +486,34 @@ fn load_ui_fonts(dwrite: &IDWriteFactory) -> Result<IDWriteFontCollection> {
 }
 
 impl Gfx {
+    /// The UI thread's one composition renderer, shared by every window.
+    /// A D3D device whose composition surfaces were ever committed keeps
+    /// about 54 driver threads and their memory after its last reference is
+    /// released (measured on NVIDIA), so a device per window grew the
+    /// resident app by ~70 MB private and ~170 MB GPU memory per capture.
+    /// Text formats depend only on token numbers, which every theme and
+    /// appearance shares, so the first window's `tokens` serve them all.
+    /// A lost device is replaced here; [`renderer_lost`] stays true so the
+    /// resident app reopens the windows still on the old one.
+    pub fn shared(tokens: &Tokens) -> Result<Self> {
+        SHARED.with(|shared| {
+            if let Some(g) = shared.borrow().as_ref() {
+                if !g.lost() {
+                    return Ok(g.clone());
+                }
+                REPLACED_LOST.set(true);
+            }
+            let g = Self::new(tokens, true)?;
+            *shared.borrow_mut() = Some(g.clone());
+            Ok(g)
+        })
+    }
+
+    /// The device was removed or reset and must be recreated.
+    pub fn lost(&self) -> bool {
+        self.simulated_loss.get() || unsafe { self.d3d.GetDeviceRemovedReason() }.is_err()
+    }
+
     /// `composition` is false for the offscreen `--screenshot` renderer.
     pub fn new(tokens: &Tokens, composition: bool) -> Result<Self> {
         unsafe {
@@ -560,6 +626,8 @@ impl Gfx {
                 formats.push((style, format));
             }
             Ok(Self {
+                d3d,
+                simulated_loss: Rc::default(),
                 dc,
                 factory,
                 dcomp,
@@ -1558,5 +1626,34 @@ impl IDWriteTextRenderer_Impl for Outliner_Impl {
         _: Ref<IUnknown>,
     ) -> Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn windows_share_one_device_until_it_is_lost() {
+        let tokens = crate::appearance::tokens(Some("light"), &Default::default());
+        let first = Gfx::shared(&tokens).unwrap();
+        let dark = crate::appearance::tokens(Some("dark"), &Default::default());
+        let again = Gfx::shared(&dark).unwrap();
+        assert_eq!(first.d3d, again.d3d, "every window draws on one device");
+        assert!(!renderer_lost());
+
+        lose_shared();
+        assert!(renderer_lost());
+        let replaced = Gfx::shared(&tokens).unwrap();
+        assert_ne!(first.d3d, replaced.d3d, "a lost device is replaced");
+        // Windows still on the old device must reopen before this clears.
+        assert!(renderer_lost());
+        renderer_recovered();
+        assert!(!renderer_lost());
+        assert_eq!(Gfx::shared(&tokens).unwrap().d3d, replaced.d3d);
+        // Release the device before the test thread exits: a composition
+        // device released by a thread-local destructor blocks the exit.
+        drop((first, again, replaced));
+        SHARED.with(|s| s.borrow_mut().take());
     }
 }

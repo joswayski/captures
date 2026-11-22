@@ -6527,12 +6527,7 @@ pub fn open(options: &Options, artifact_id: &str) -> Result<()> {
     let entry = find_entry(&root, artifact_id).map_err(|e| Error::new(E_FAIL, e))?;
     let settings = captures_settings::load(&options.settings_file).unwrap_or_default();
     let tokens = appearance::tokens(options.appearance.as_deref(), &settings);
-    let g = match crate::host::with_host(|h| h.g.clone())
-        .or_else(|| crate::history::with_history(|h| h.g.clone()))
-    {
-        Some(g) => g,
-        None => Gfx::new(&tokens, true)?,
-    };
+    let g = Gfx::shared(&tokens)?;
     unsafe {
         let instance = windows::Win32::System::LibraryLoader::GetModuleHandleW(None)?;
         let hwnd = CreateWindowExW(

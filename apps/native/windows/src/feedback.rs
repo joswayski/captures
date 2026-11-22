@@ -1701,7 +1701,7 @@ pub fn open(options: &Options) -> Result<()> {
     }
     let settings = captures_settings::load(&options.settings_file).unwrap_or_default();
     let tokens = appearance::tokens(options.appearance.as_deref(), &settings);
-    let g = Gfx::new(&tokens, true)?;
+    let g = Gfx::shared(&tokens)?;
     unsafe {
         let instance = windows::Win32::System::LibraryLoader::GetModuleHandleW(None)?;
         let hwnd = CreateWindowExW(

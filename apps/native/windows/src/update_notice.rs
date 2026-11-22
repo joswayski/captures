@@ -431,7 +431,7 @@ impl Drop for Notice {
 fn open(live: Live) -> Result<()> {
     let settings = captures_settings::load(&live.settings_file).unwrap_or_default();
     let t = crate::appearance::tokens(live.appearance.as_deref(), &settings);
-    let g = Gfx::new(&t, true)?;
+    let g = Gfx::shared(&t)?;
     let view = ViewState {
         show_changelog: settings.show_update_changelog,
         ..ViewState::default()

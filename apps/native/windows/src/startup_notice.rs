@@ -147,7 +147,7 @@ thread_local! {
 }
 
 fn open(t: Tokens, keys: Vec<String>, visible_for: Duration, tray: TrayRect) -> Result<()> {
-    let g = Gfx::new(&t, true)?;
+    let g = Gfx::shared(&t)?;
     TRAY.with(|c| c.set(Some(tray)));
     unsafe {
         let instance = windows::Win32::System::LibraryLoader::GetModuleHandleW(None)?;

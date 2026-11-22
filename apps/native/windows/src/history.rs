@@ -3897,10 +3897,7 @@ pub fn open(options: &Options, size: Option<(u32, u32)>) -> Result<()> {
     }
     let settings = captures_settings::load(&options.settings_file).unwrap_or_default();
     let tokens = appearance::tokens(options.appearance.as_deref(), &settings);
-    let g = match crate::host::with_host(|h| h.g.clone()) {
-        Some(g) => g,
-        None => Gfx::new(&tokens, true)?,
-    };
+    let g = Gfx::shared(&tokens)?;
     unsafe {
         let instance = windows::Win32::System::LibraryLoader::GetModuleHandleW(None)?;
         let spec = captures_app::app_windows::HISTORY;

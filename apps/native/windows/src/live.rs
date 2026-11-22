@@ -23,9 +23,10 @@ use captures_history::HistoryEntry;
 use windows::Win32::Foundation::{HWND, LPARAM, RECT, WPARAM};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, EnumThreadWindows, GetClassNameW, HWND_MESSAGE, MB_ICONERROR, MB_OK,
-    MessageBoxW, PostQuitMessage, PostThreadMessageW, SW_SHOWNORMAL, SendMessageW,
-    SetForegroundWindow, ShowWindow, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_SETTINGCHANGE,
+    CreateWindowExW, EnumThreadWindows, GetClassNameW, HWND_MESSAGE, MB_ICONERROR, MB_OK, MSG,
+    MessageBoxW, PostMessageW, PostQuitMessage, PostThreadMessageW, SW_SHOWNORMAL, SendMessageW,
+    SetForegroundWindow, ShowWindow, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE,
+    WM_SETTINGCHANGE,
 };
 use windows::core::{BOOL, HSTRING, w};
 
@@ -67,6 +68,25 @@ struct Resident {
     thread: u32,
     /// A message-only window that owns the clipboard for auto-copy.
     clipboard: Option<HWND>,
+    /// Windows closed after the renderer's device was lost, reopened once
+    /// they are gone, and whether History was among them.
+    recovery: Option<(RestartIntent, bool)>,
+}
+
+/// `WM_APP_LIVE`'s `wParam` for the development test hook that treats the
+/// shared renderer's device as lost (`gfx::lose_shared`).
+pub const LOSE_RENDERER: usize = 0x10_57;
+
+/// A thread message to the UI thread. Development builds act on the test
+/// hook; installed builds ignore it.
+pub fn thread_message(msg: &MSG) {
+    if msg.hwnd.is_invalid()
+        && msg.message == WM_APP_LIVE
+        && msg.wParam.0 == LOSE_RENDERER
+        && captures_app::preview_channel::version().is_none()
+    {
+        crate::gfx::lose_shared();
+    }
 }
 
 /// Shipping's automatic update check interval.
@@ -201,7 +221,7 @@ pub fn start(options: &Options, instance: Instance) {
         let tokens = crate::appearance::tokens(options.appearance.as_deref(), &settings);
         Health {
             acknowledgement,
-            renderer: crate::gfx::Gfx::new(&tokens, true).is_ok(),
+            renderer: crate::gfx::Gfx::shared(&tokens).is_ok(),
             tools,
         }
     });
@@ -237,6 +257,7 @@ pub fn start(options: &Options, instance: Instance) {
                 )
             }
             .ok(),
+            recovery: None,
         })
     });
     sync_shortcuts(&settings);
@@ -351,6 +372,7 @@ pub fn service() {
     let Some(options) = RESIDENT.with(|r| r.borrow().as_ref().map(|r| r.options.clone())) else {
         return;
     };
+    recover_renderer(&options);
     // Preferences saves in this process; any message wakes the loop after it.
     let changed = RESIDENT.with(|r| {
         let mut r = r.borrow_mut();
@@ -550,6 +572,78 @@ fn opened(options: &Options) {
     });
 }
 
+/// The previews, editors and Preferences that are open, for an update
+/// restart or a renderer recovery.
+fn open_windows() -> RestartIntent {
+    RestartIntent {
+        restore_preferences: crate::host::with_host(|h| h.hwnd).is_some(),
+        preview_artifact_ids: crate::previews::ids(),
+        capture_windows: crate::editor::ids()
+            .into_iter()
+            .map(|artifact_id| RestartCaptureWindow::ScreenshotEditor {
+                artifact_id,
+                source_artifact_id: None,
+            })
+            .chain(
+                crate::recording::ids()
+                    .into_iter()
+                    .map(|artifact_id| RestartCaptureWindow::RecordingEditor { artifact_id }),
+            )
+            .collect(),
+    }
+}
+
+/// The shared renderer's device was removed or reset, so every window on it
+/// stopped drawing. Close the windows an update restart reopens, plus
+/// History (editors keep their drafts as on Quit), then reopen them on a new
+/// device once they are gone. A running capture or recording finishes on
+/// the old device first; notices, Send Feedback and setup are left as they
+/// are and use the new device when they next open.
+fn recover_renderer(options: &Options) {
+    let closing = || {
+        crate::host::exists()
+            || crate::history::exists()
+            || crate::editor::exists()
+            || crate::recording::exists()
+    };
+    if RESIDENT.with(|r| r.borrow().as_ref().is_some_and(|r| r.recovery.is_some())) {
+        if closing() {
+            return;
+        }
+        if let Some((intent, history)) = RESIDENT.with(|r| r.borrow_mut().as_mut()?.recovery.take())
+        {
+            restore(options, &intent);
+            if history && let Err(error) = crate::history::open(options, None) {
+                eprintln!("couldn't reopen Capture History: {error}");
+            }
+        }
+        return;
+    }
+    if !crate::gfx::renderer_lost() || crate::capture::active() || crate::recorder::active() {
+        return;
+    }
+    let intent = open_windows();
+    let history = crate::history::with_history(|h| h.hwnd);
+    let open: Vec<HWND> = crate::host::with_host(|h| h.hwnd)
+        .into_iter()
+        .chain(history)
+        .chain(crate::editor::windows())
+        .chain(crate::recording::windows())
+        .collect();
+    crate::previews::close();
+    crate::gfx::renderer_recovered();
+    RESIDENT.with(|r| {
+        if let Some(r) = r.borrow_mut().as_mut() {
+            r.recovery = Some((intent, history.is_some()));
+        }
+    });
+    for hwnd in open {
+        unsafe {
+            let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
+        }
+    }
+}
+
 /// An update restart: the previews, editors and Preferences that were open.
 fn restore(options: &Options, restart: &RestartIntent) {
     let root = options
@@ -711,22 +805,7 @@ fn install_update() {
         }
         return show_error(message);
     }
-    let restart = RestartIntent {
-        restore_preferences: crate::host::with_host(|h| h.hwnd).is_some(),
-        preview_artifact_ids: crate::previews::ids(),
-        capture_windows: crate::editor::ids()
-            .into_iter()
-            .map(|artifact_id| RestartCaptureWindow::ScreenshotEditor {
-                artifact_id,
-                source_artifact_id: None,
-            })
-            .chain(
-                crate::recording::ids()
-                    .into_iter()
-                    .map(|artifact_id| RestartCaptureWindow::RecordingEditor { artifact_id }),
-            )
-            .collect(),
-    };
+    let restart = open_windows();
     let result = RESIDENT.with(|r| {
         let mut r = r.borrow_mut();
         let r = r.as_mut().ok_or("Captures is closing")?;
