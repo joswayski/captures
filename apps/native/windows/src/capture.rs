@@ -641,6 +641,10 @@ pub struct Menu {
     /// moved it there so its `:focus-visible` ring draws.
     focus: Option<Hit>,
     focus_visible: bool,
+    /// The bar's top-left once dragged by its blank glass (shipping
+    /// `panelPosition`), and the pointer's offset into it while dragging.
+    panel_at: Option<(f32, f32)>,
+    panel_drag: Option<(f32, f32)>,
 }
 
 /// The chip's frame with its title and hint lines.
@@ -732,6 +736,8 @@ impl Menu {
             tooltip_target: None,
             focus: None,
             focus_visible: false,
+            panel_at: None,
+            panel_drag: None,
         }
     }
 
@@ -1570,8 +1576,9 @@ impl Menu {
         }
         let ph = 1. + 56. + options_h + 28. + 1.;
         let (w, h) = self.size;
-        let left = ((w - pw) / 2.).round();
-        let top = (h - 26. - ph).round();
+        let (left, top) = self
+            .panel_at
+            .unwrap_or((((w - pw) / 2.).round(), (h - 26. - ph).round()));
         let panel = rect(left, top, left + pw, top + ph);
         let cy = top + 1. + 28.;
         let mut x = left + 1. + PAD;
@@ -2547,6 +2554,17 @@ impl Menu {
     /// Pointer motion; true when the menu needs a repaint.
     fn moved(&mut self, x: f32, y: f32) -> bool {
         self.pointer = (x, y);
+        // Shipping `movePanel`: kept 8 px inside the display.
+        if let (Some((dx, dy)), Some(layout)) = (self.panel_drag, self.layout.as_ref()) {
+            let p = layout.panel;
+            let (w, h) = self.size;
+            let max = (
+                (w - (p.right - p.left) - 8.).max(8.),
+                (h - (p.bottom - p.top) - 8.).max(8.),
+            );
+            self.panel_at = Some(((x - dx).clamp(8., max.0), (y - dy).clamp(8., max.1)));
+            return true;
+        }
         if self.drag.is_some() {
             self.apply_drag();
             return true;
@@ -2605,6 +2623,20 @@ impl Menu {
         {
             self.open = None;
             closed = true;
+        }
+        // Shipping `beginPanelDrag`: the bar's blank glass drags it.
+        if let Some(layout) = self.layout.as_ref().filter(|_| !self.direct)
+            && self.pressed.is_none()
+            && contains(&layout.panel, x, y)
+            && !layout
+                .listbox
+                .as_ref()
+                .is_some_and(|b| contains(&b.rect, x, y))
+        {
+            let panel = layout.panel;
+            self.panel_drag = Some((x - panel.left, y - panel.top));
+            self.panel_at = Some((panel.left, panel.top));
+            return true;
         }
         if closed && self.pressed.is_none() && self.over_panel(x, y) {
             return true;
@@ -2687,6 +2719,9 @@ impl Menu {
 
     /// Release; returns the action to run.
     fn released(&mut self, x: f32, y: f32) -> Option<Hit> {
+        if self.panel_drag.take().is_some() {
+            return None;
+        }
         if let Some(drag) = self.drag {
             self.pointer = (x, y);
             self.apply_drag();
@@ -3592,7 +3627,10 @@ impl Capture {
             WM_LBUTTONUP => {
                 let (x, y) = point(lp, overlay.scale);
                 let _ = unsafe { ReleaseCapture() };
-                let outside = overlay.menu.pressed.is_none() && !overlay.menu.over_panel(x, y);
+                // Releasing a dragged bar off the panel does not pick a window.
+                let outside = overlay.menu.pressed.is_none()
+                    && overlay.menu.panel_drag.is_none()
+                    && !overlay.menu.over_panel(x, y);
                 action = if overlay.menu.target == Target::Window && outside {
                     overlay.menu.pick()
                 } else {
@@ -4129,6 +4167,38 @@ mod tests {
         m.focus_step(false);
         assert_eq!(m.hovered, Some(Some(0)));
         assert_eq!(m.focus_key(true), Some(Hit::Pick(0)));
+    }
+
+    #[test]
+    fn the_bars_blank_glass_drags_it_within_the_display() {
+        let mut m = menu(Target::Window, false);
+        m.windows = vec![(rect(0., 0., 100., 100.), "Notes".into())];
+        lay_out(&mut m);
+        let p = m.layout.as_ref().unwrap().panel;
+        let (pw, ph) = (p.right - p.left, p.bottom - p.top);
+        // A button does not drag; the glass left of the note does.
+        let close = m.layout.as_ref().unwrap().close;
+        m.pressed(close.left + 4., close.top + 4.);
+        assert_eq!(m.panel_drag, None);
+        m.released(close.left + 4., close.top + 4.);
+        let grip = (p.left + 6., p.bottom - 6.);
+        assert!(m.pressed(grip.0, grip.1));
+        m.moved(grip.0 - 100., grip.1 - 200.);
+        lay_out(&mut m);
+        let moved = m.layout.as_ref().unwrap().panel;
+        assert_eq!((moved.left, moved.top), (p.left - 100., p.top - 200.));
+        // Dragged past the corner it stops 8 px inside, and the release is
+        // not a window pick or a control action.
+        m.moved(-500., 2000.);
+        assert_eq!(m.panel_at, Some((8., 800. - ph - 8.)));
+        assert_eq!(m.released(-500., 2000.), None);
+        assert_eq!((m.picked, m.panel_drag), (None, None));
+        // It stays put, top-anchored, when Record grows the bar.
+        m.mode = MenuMode::Recording;
+        lay_out(&mut m);
+        let grown = m.layout.as_ref().unwrap().panel;
+        assert_eq!((grown.left, grown.top), (8., 800. - ph - 8.));
+        assert!(grown.right - grown.left >= pw);
     }
 
     #[test]

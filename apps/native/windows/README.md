@@ -225,7 +225,10 @@ and friends), not exercised live. The note's "These controls won't show…"
 and, with Auto-capture on, its auto-capture copy are shipping's Preferences
 links (external icon, `--glass-hover` when lit); following one closes the bar
 and opens Preferences, which cannot yet scroll to and highlight the row as
-shipping does. Confirming hands the capture flow
+shipping does. Like shipping's `beginPanelDrag`, the bar's blank glass drags
+it, kept 8 px inside the display, until the bar closes (unit-tested, not
+dragged physically; the cursor stays the arrow, as on the recording controls,
+since Windows has no stock grab cursor). Confirming hands the capture flow
 to the shared recording worker, which verifies FFmpeg, prepares the session,
 then shows the "RECORDING STARTS IN" countdown (Esc cancels the take) and starts.
 The controls (`hud.rs`, shipping `.recording-hud` at 430×102) float centered
