@@ -12,23 +12,19 @@ function AccountPage() {
         ← Captures
       </a>
       <p className="text-sm text-ink-soft">Optional account</p>
-      <h1 className="mt-2 text-3xl font-medium tracking-tight text-ink">Your Captures account</h1>
+      <h1 className="mt-2 text-3xl font-medium tracking-tight text-ink">Captures accounts</h1>
       <p className="mt-4 text-sm leading-relaxed text-ink-muted">
-        Screenshots, GIFs, and recordings work without an account. Accounts are planned for future
-        cloud features; uploads and sharing are not available yet.
+        Screenshots, GIFs, and recordings work completely offline with no account required.
       </p>
       <section
         aria-label="Account status"
         className="mt-8 rounded-xl border border-border bg-surface p-6"
       >
-        <h2 className="font-medium text-ink">Accounts aren’t available right now</h2>
+        <h2 className="font-medium text-ink">Not available yet</h2>
         <p role="status" className="mt-3 text-sm leading-relaxed text-ink-muted">
-          Sign-in and account creation are not available. You can still use Captures without an
-          account.
+          Accounts are planned for future cloud uploads and link sharing, and aren’t open for
+          sign-in yet.
         </p>
-        <a href="/" className="inline-chip mt-6 px-3 py-2">
-          Back to Captures
-        </a>
       </section>
     </main>
   );

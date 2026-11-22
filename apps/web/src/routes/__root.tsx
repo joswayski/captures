@@ -11,10 +11,20 @@ export const Route = createRootRoute({
       {
         name: "description",
         content:
-          "Captures — a work-in-progress, cross-platform screen capture utility by Jose Valerio.",
+          "Fast, lightweight screenshots, screen recordings, and GIFs with built-in editing for macOS, Windows, and Linux.",
       },
+      { property: "og:site_name", content: "Captures" },
+      { property: "og:type", content: "website" },
+      { property: "og:url", content: "https://captur.es" },
+      { property: "og:title", content: "Captures" },
+      {
+        property: "og:description",
+        content:
+          "Fast, lightweight screenshots, screen recordings, and GIFs with built-in editing for macOS, Windows, and Linux.",
+      },
+      { name: "twitter:card", content: "summary" },
       { name: "theme-color", content: "#101014" },
-      { title: "Captures" },
+      { title: "Captures — Screenshots, video, and GIFs for macOS, Windows, and Linux" },
     ],
     links: [
       { rel: "icon", type: "image/png", href: "/favicon.png" },
@@ -45,12 +55,10 @@ function NotFound() {
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-xl flex-col justify-center px-6">
       <p className="text-sm text-ink-muted">404</p>
-      <h1 className="mt-2 text-2xl font-medium tracking-tight text-ink">Page not found.</h1>
-      <p className="mt-3 text-sm leading-relaxed text-ink-muted">
-        The requested page does not exist.
-      </p>
+      <h1 className="mt-2 text-2xl font-medium tracking-tight text-ink">Page not found</h1>
+      <p className="mt-3 text-sm leading-relaxed text-ink-muted">This page doesn’t exist.</p>
       <a href="/" className="mt-6 font-semibold text-ink underline-offset-4 hover:underline">
-        Return to Captures
+        Back to Captures
       </a>
     </main>
   );
