@@ -258,9 +258,10 @@ the dispatch commit, or an explicitly supplied `target_sha` on main's history.
 One request runs at a time and a newer pending request replaces the older pending
 request. Channel-only dispatches share this lock and skip all app builds.
 
-Releases run the Rust quality gates while the macOS
-Apple Silicon, Windows x64, and Linux x64 packages build in parallel, so the
-checks add no time to a release. The Rust checks run on GitHub-hosted runners
+Staging waits for the frontend checks (about a minute), so a failure there
+stops the release before any packaging. The Rust quality gates then run while
+the macOS Apple Silicon, Windows x64, and Linux x64 packages build in parallel,
+so they add no time to a release. The Rust checks run on GitHub-hosted runners
 and restore the same cache as CI's Rust checks. A release is published only when
 every job succeeds: **Publish release** needs the checks and the validated draft. Notes compare with the nearest published
 dated release in the requested commit's history, ignoring unmarked archives,
@@ -364,7 +365,7 @@ endpoints, the signing public key, stable installer filenames, or that download
 page URL are removed.
 
 Creating the draft early is only a private staging step, and packaging starts
-before the frontend and Rust checks finish. The **Publish release** job runs
+before the Rust checks finish. The **Publish release** job runs
 only after those checks and **Validate staged release** succeed and `SHA256SUMS` is
 present; that marker means every required macOS, Windows, and Linux artifact was
 downloaded and validated together. Publishing does not resend the release's

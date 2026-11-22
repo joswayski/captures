@@ -209,7 +209,7 @@ jobs:
   # is public until `publish`, which needs the checks and the validated draft.
   prepare:
     name: Stage release
-    needs: [queue, version]
+    needs: [queue, version, frontend]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
