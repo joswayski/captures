@@ -2,16 +2,19 @@
 //! UI Automation for Preferences: the window, the section navigation (Invoke
 //! buttons that also report the section in view through SelectionItem, like
 //! shipping `aria-current`), the header, and each settings card as a group of
-//! its controls: switches (Toggle), the Interface theme and accent choices (radio buttons
-//! with SelectionItem inside a Selection group), the read-only capture folder
-//! (Value) and Choose… (Invoke), and the Find bar (a search landmark with an
+//! its controls: switches (Toggle), the Interface theme, accent and Mini
+//! preview position choices (radio buttons with SelectionItem inside a
+//! Selection group), the capture folder (an Edit with Value and Text) and
+//! Choose… (Invoke), and the Find bar (a search landmark with an
 //! Edit that has Value and Text patterns, a live match count and Invoke
 //! buttons), and the custom color editor (a group with Reset colors, color
 //! wells as buttons with a read-only Value, and hex Edits with Value and
 //! Text). Names come from the shipping titles and
 //! `aria-label`s; descriptions are help text. Providers are node ids that read
 //! live scene state on the UI thread.
-use captures_app::preferences::{self, APPEARANCE_MODES, SECTIONS, THEMES};
+use captures_app::preferences::{
+    self, APPEARANCE_MODES, MINI_PREVIEW_PLACEMENTS, SECTIONS, THEMES,
+};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::ClientToScreen;
 use windows::Win32::System::Com::*;
@@ -44,9 +47,12 @@ pub enum Id {
     /// Accent color: the chip group and its chips.
     Accents,
     Accent(usize),
-    /// Save captures to: the read-only folder and Choose….
+    /// Save captures to: the folder input and Choose….
     Folder,
     Choose,
+    /// Mini preview position (`role="radiogroup"`) and its corners.
+    Placements,
+    Placement(usize),
     /// A utility row's Open: Windows keyboard settings or Send feedback.
     Open(Utility),
     /// Updates: the build identity text, the disabled Check Now and the
@@ -133,6 +139,7 @@ pub(crate) fn field_id(id: Id) -> Option<FieldId> {
     match id {
         Id::FindPart(FindPart::Input) => Some(FieldId::Find),
         Id::Hex(i) => Some(FieldId::Hex(i)),
+        Id::Folder => Some(FieldId::Folder),
         _ => None,
     }
 }
@@ -148,6 +155,7 @@ fn field_uia(field: FieldId) -> Id {
     match field {
         FieldId::Find => Id::FindPart(FindPart::Input),
         FieldId::Hex(i) => Id::Hex(i),
+        FieldId::Folder => Id::Folder,
     }
 }
 
@@ -164,7 +172,9 @@ fn target(id: Id) -> Option<Target> {
         Id::Switch(row) => Some(Target::Row(row)),
         Id::Mode(i) => Some(Target::Mode(i)),
         Id::Accent(i) => Some(Target::Theme(i)),
+        Id::Folder => Some(Target::Folder),
         Id::Choose => Some(Target::Choose),
+        Id::Placement(i) => Some(Target::Placement(i)),
         Id::Open(which) => Some(Target::Open(which)),
         Id::Shortcut(i) => Some(Target::Shortcut(i)),
         Id::Select(key) => Some(Target::Select(key)),
@@ -185,7 +195,9 @@ fn id_of(target: Target) -> Id {
         Target::Row(row) => Id::Switch(row),
         Target::Mode(i) => Id::Mode(i),
         Target::Theme(i) => Id::Accent(i),
+        Target::Folder => Id::Folder,
         Target::Choose => Id::Choose,
+        Target::Placement(i) => Id::Placement(i),
         Target::Open(which) => Id::Open(which),
         Target::Shortcut(i) => Id::Shortcut(i),
         Target::Select(key) => Id::Select(key),
@@ -232,6 +244,7 @@ fn children(id: Id, live: Live) -> Vec<Id> {
                 Item::Mode => vec![Id::Modes],
                 Item::Accent => vec![Id::Accents],
                 Item::Folder => vec![Id::Folder, Id::Choose],
+                Item::Placement => vec![Id::Placements],
                 Item::Utility(which) => vec![Id::Open(which)],
                 Item::Updates => vec![Id::UpdateVersion, Id::UpdateAction, Id::UpdateStatus],
                 Item::CustomTheme if live.custom => vec![Id::CustomEditor],
@@ -250,6 +263,9 @@ fn children(id: Id, live: Live) -> Vec<Id> {
         },
         Id::Modes => (0..APPEARANCE_MODES.len()).map(Id::Mode).collect(),
         Id::Accents => (0..THEMES.len()).map(Id::Accent).collect(),
+        Id::Placements => (0..MINI_PREVIEW_PLACEMENTS.len())
+            .map(Id::Placement)
+            .collect(),
         _ => Vec::new(),
     }
 }
@@ -261,6 +277,8 @@ fn parent(id: Id) -> Option<Id> {
         Id::NavItem(_) => Id::Nav,
         Id::Mode(_) => Id::Modes,
         Id::Accent(_) => Id::Accents,
+        Id::Placement(_) => Id::Placements,
+        Id::Placements => Id::Card(card_of(Item::Placement)?),
         Id::Switch(row) => Id::Card(card_of(Item::Switch(row))?),
         Id::Modes => Id::Card(card_of(Item::Mode)?),
         Id::Accents => Id::Card(card_of(Item::Accent)?),
@@ -298,6 +316,7 @@ fn rect(host: &Host, id: Id) -> Rect {
         Id::Modes => scene.mode_rect(),
         Id::Accents => scene.accent_rect(),
         Id::Folder => scene.field_rect(),
+        Id::Placements => scene.placement_rect(),
         Id::UpdateVersion => scene.update_copy_rect(),
         Id::UpdateAction => scene.target_rect(Target::UpdateAction),
         Id::UpdateStatus => scene.update_rects().1,
@@ -326,6 +345,8 @@ fn name(host: &Host, id: Id) -> String {
         Id::Accent(i) => preferences::theme_accessibility_label(&THEMES[i]),
         Id::Folder => preferences::row("output_directory").title.into(),
         Id::Choose => "Choose…".into(),
+        Id::Placements => preferences::MINI_PREVIEW_POSITION_LABEL.into(),
+        Id::Placement(i) => MINI_PREVIEW_PLACEMENTS[i].1.into(),
         // Shipping repeats "Open"; the row title tells the two apart.
         Id::Open(which) => format!("{} {}", which.copy().2, which.copy().0),
         Id::UpdateVersion | Id::UpdateAction | Id::UpdateStatus
@@ -379,6 +400,9 @@ fn help(host: &Host, id: Id) -> String {
         Id::Switch(row) => host.scene.rows[row].detail.clone(),
         Id::Modes => preferences::row("appearance").description.into(),
         Id::Accents => preferences::row("theme").description.into(),
+        Id::Placements => preferences::row("mini_preview_placement")
+            .description
+            .into(),
         Id::Open(which) => which.copy().1.into(),
         Id::UpdateVersion if let Some(card) = &host.scene.update => card.channel.into(),
         Id::UpdateAction | Id::UpdateStatus if host.scene.update.is_some() => String::new(),
@@ -394,9 +418,9 @@ fn help(host: &Host, id: Id) -> String {
 fn control_type(id: Id) -> UIA_CONTROLTYPE_ID {
     match id {
         Id::Root => UIA_WindowControlTypeId,
-        Id::Nav | Id::Card(_) | Id::Modes | Id::Accents => UIA_GroupControlTypeId,
+        Id::Nav | Id::Card(_) | Id::Modes | Id::Accents | Id::Placements => UIA_GroupControlTypeId,
         Id::Title | Id::Subtitle | Id::UpdateVersion | Id::UpdateStatus => UIA_TextControlTypeId,
-        Id::Mode(_) | Id::Accent(_) => UIA_RadioButtonControlTypeId,
+        Id::Mode(_) | Id::Accent(_) | Id::Placement(_) => UIA_RadioButtonControlTypeId,
         Id::Folder => UIA_EditControlTypeId,
         Id::Select(_) => UIA_ComboBoxControlTypeId,
         Id::Option(..) => UIA_ListItemControlTypeId,
@@ -446,6 +470,8 @@ fn runtime_id(id: Id) -> [i32; 3] {
         Id::ResetColors => (27, 0),
         Id::Well(i) => (28, i),
         Id::Hex(i) => (29, i),
+        Id::Placements => (30, 0),
+        Id::Placement(i) => (31, i),
     };
     [UiaAppendRuntimeId as i32, kind, index as i32]
 }
@@ -455,6 +481,7 @@ fn selected(host: &Host, id: Id) -> bool {
         Id::NavItem(i) => host.scene.active == i,
         Id::Mode(i) => host.scene.mode_index() == i,
         Id::Accent(i) => host.scene.theme_index() == i,
+        Id::Placement(i) => host.scene.placement_index() == i,
         Id::Option(key, i) => host.scene.select_index(key) == i,
         _ => false,
     }
@@ -568,12 +595,11 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
             .contains(&pattern),
             Id::Option(..) => pattern == UIA_SelectionItemPatternId,
             Id::Switch(_) => pattern == UIA_TogglePatternId,
-            Id::Modes | Id::Accents => pattern == UIA_SelectionPatternId,
-            Id::Mode(_) | Id::Accent(_) => pattern == UIA_SelectionItemPatternId,
-            Id::Folder => pattern == UIA_ValuePatternId,
+            Id::Modes | Id::Accents | Id::Placements => pattern == UIA_SelectionPatternId,
+            Id::Mode(_) | Id::Accent(_) | Id::Placement(_) => pattern == UIA_SelectionItemPatternId,
             Id::ResetColors => pattern == UIA_InvokePatternId,
             Id::Well(_) => pattern == UIA_InvokePatternId || pattern == UIA_ValuePatternId,
-            Id::FindPart(FindPart::Input) | Id::Hex(_) => {
+            Id::FindPart(FindPart::Input) | Id::Hex(_) | Id::Folder => {
                 [UIA_ValuePatternId, UIA_TextPatternId, UIA_TextPattern2Id].contains(&pattern)
             }
             Id::FindPart(_) => pattern == UIA_InvokePatternId,
@@ -599,10 +625,11 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
                     .get(i)
                     .is_some_and(|(_, disabled)| !disabled),
                 Id::FindPart(part) => scene.find_enabled(part),
+                Id::Placements | Id::Placement(_) => scene.placement_enabled(),
                 _ => true,
             };
             let value = match id {
-                Id::Folder => Some(scene.settings().output_directory.clone()),
+                Id::Folder => Some(scene.field_value(FieldId::Folder)),
                 Id::FindPart(FindPart::Input) => Some(scene.find_query()),
                 Id::Hex(i) => Some(scene.field_value(FieldId::Hex(i))),
                 Id::Well(i) => Some(scene.custom_value(i).to_owned()),
@@ -849,6 +876,7 @@ impl ISelectionProvider_Impl for Node_Impl {
                 Id::Select(key) => Id::Option(key, host.scene.select_index(key)),
                 Id::Nav => Id::NavItem(host.scene.active),
                 Id::Modes => Id::Mode(host.scene.mode_index()),
+                Id::Placements => Id::Placement(host.scene.placement_index()),
                 _ => Id::Accent(host.scene.theme_index()),
             })
         })?;
@@ -903,7 +931,7 @@ impl IValueProvider_Impl for Node_Impl {
     fn SetValue(&self, value: &PCWSTR) -> Result<()> {
         let id = self.id;
         let Some(field) = field_id(id) else {
-            // Read-only: Choose… changes the folder, the picker a color.
+            // Read-only: the color picker changes a color.
             return Err(HRESULT(UIA_E_ELEMENTNOTENABLED as _).into());
         };
         let text = unsafe { value.to_string() }.unwrap_or_default();
@@ -932,7 +960,8 @@ impl IValueProvider_Impl for Node_Impl {
                 Id::FindPart(FindPart::Input) => scene.find_query(),
                 Id::Hex(i) => scene.field_value(FieldId::Hex(i)),
                 Id::Well(i) => scene.custom_value(i).to_owned(),
-                _ => scene.settings().output_directory.clone(),
+                Id::Folder => scene.field_value(FieldId::Folder),
+                _ => String::new(),
             }))
         })
     }

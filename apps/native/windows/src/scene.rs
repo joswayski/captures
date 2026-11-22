@@ -14,8 +14,8 @@ use captures_app::controls::select;
 use captures_app::motion::CubicBezier;
 use captures_app::preferences::{
     self, APPEARANCE_MODES, COUNTDOWN_SECONDS, GIF_FPS, GIF_MAX_WIDTHS, GIF_PALETTE_COLORS,
-    RECORDING_FORMATS, RECORDING_FPS, RECORDING_TOGGLES, RESOLUTIONS, SECTIONS, SHORTCUT_ROWS,
-    THEMES,
+    MINI_PREVIEW_PLACEMENTS, RECORDING_FORMATS, RECORDING_FPS, RECORDING_TOGGLES, RESOLUTIONS,
+    SCREENSHOT_FORMATS, SECTIONS, SHORTCUT_ROWS, THEMES,
 };
 use captures_app::shortcuts::{
     ShortcutKeyEvent, ShortcutPlatform, ShortcutRecording, record_shortcut, shortcut_display_tokens,
@@ -132,6 +132,8 @@ pub enum Item {
     Accent,
     /// Save captures to: the folder field and Choose….
     Folder,
+    /// Mini preview position: shipping `MiniPreviewPlacementPicker`.
+    Placement,
     /// A `.settings-utility-row`: copy and an Open button.
     Utility(Utility),
     /// The `.shortcut-list` of recorders, in `SHORTCUT_ROWS` order.
@@ -179,9 +181,11 @@ impl Utility {
 const RECORDING_GRID: &[SelectKey] = &[SelectKey::Fps, SelectKey::Resolution];
 const GIF_GRID: &[SelectKey] = &[SelectKey::GifFps, SelectKey::GifWidth, SelectKey::GifColors];
 
-/// The Recording card's `CustomSelect`s.
+/// The Capture, Recording and GIF cards' `CustomSelect`s.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SelectKey {
+    ScreenshotFormat,
+    ScreenshotCountdown,
     Format,
     Fps,
     Resolution,
@@ -193,7 +197,9 @@ pub enum SelectKey {
 }
 
 /// Every select, in card order.
-pub const SELECTS: [SelectKey; 8] = [
+pub const SELECTS: [SelectKey; 10] = [
+    SelectKey::ScreenshotFormat,
+    SelectKey::ScreenshotCountdown,
     SelectKey::Format,
     SelectKey::Fps,
     SelectKey::Resolution,
@@ -212,6 +218,8 @@ impl SelectKey {
     /// The persisted path, which keys the row copy.
     pub fn setting(self) -> &'static str {
         match self {
+            Self::ScreenshotFormat => "screenshot_format",
+            Self::ScreenshotCountdown => "screenshot_countdown_seconds",
             Self::Format => "recording.video_format",
             Self::Fps => "recording.video_fps",
             Self::Resolution => "recording.video_max_resolution",
@@ -240,7 +248,13 @@ pub const CARDS: [(usize, &[Item]); 8] = [
             Item::Switch(1),
             Item::Switch(2),
             Item::Switch(3),
+            Item::Placement,
             Item::Switch(4),
+            Item::Switch(5),
+            Item::Switch(6),
+            Item::Switch(7),
+            Item::Select(SelectKey::ScreenshotFormat),
+            Item::Select(SelectKey::ScreenshotCountdown),
         ],
     ),
     (3, &[Item::Utility(Utility::Keyboard), Item::Shortcuts]),
@@ -251,23 +265,32 @@ pub const CARDS: [(usize, &[Item]); 8] = [
             Item::SelectGrid(RECORDING_GRID),
             Item::Select(SelectKey::Countdown),
             Item::Select(SelectKey::Microphone),
-            Item::Switch(5),
-            Item::Switch(6),
-            Item::Switch(7),
             Item::Switch(8),
             Item::Switch(9),
+            Item::Switch(10),
+            Item::Switch(11),
+            Item::Switch(12),
         ],
     ),
     (5, &[Item::SelectGrid(GIF_GRID)]),
-    (6, &[Item::Updates, Item::Switch(10)]),
+    (6, &[Item::Updates, Item::Switch(13)]),
     (7, &[Item::Utility(Utility::Feedback)]),
 ];
-pub const FLAGS: [&str; 4] = [
+/// The Capture card's switches, in shipping order (`Item::Switch(1..=7)`).
+pub const FLAGS: [&str; 7] = [
     "auto_copy_to_clipboard",
     "auto_start_on_selection",
+    "show_mini_previews",
+    "include_mini_previews_in_captures",
+    "include_recording_controls_in_captures",
     "freeze_screen",
     "show_cursor_in_screenshots",
 ];
+/// `.mini-preview-placement-screen`: 108×72, 1 px border, 7 px padding,
+/// 22 px corners.
+const PLACEMENT_SCREEN: (f32, f32) = (108., 72.);
+const PLACEMENT_INSET: f32 = 8.;
+const PLACEMENT_CORNER: f32 = 22.;
 
 #[derive(Clone, Copy, Default, PartialEq, Debug)]
 pub struct Rect {
@@ -304,6 +327,8 @@ pub enum Ring {
     /// A field's focused or open state: an accent border inside, then
     /// `--focus-ring-tight` outside.
     Field(f32),
+    /// `outline: 2px solid var(--theme-accent); outline-offset: 2px`.
+    Outline(f32),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -316,8 +341,12 @@ pub enum Target {
     Mode(usize),
     /// An accent chip, in `THEMES` order.
     Theme(usize),
+    /// Save captures to: the folder input.
+    Folder,
     /// Save captures to: Choose….
     Choose,
+    /// A Mini preview position corner, in `MINI_PREVIEW_PLACEMENTS` order.
+    Placement(usize),
     /// A utility row's Open.
     Open(Utility),
     /// A shortcut recorder, in `SHORTCUT_ROWS` order.
@@ -346,15 +375,23 @@ pub enum FieldId {
     Find,
     /// A custom color's hex input, Accent then Recording signal.
     Hex(usize),
+    /// Save captures to (`#output-directory`).
+    Folder,
 }
 
-pub const FIELDS: [FieldId; 3] = [FieldId::Find, FieldId::Hex(0), FieldId::Hex(1)];
+pub const FIELDS: [FieldId; 4] = [
+    FieldId::Find,
+    FieldId::Hex(0),
+    FieldId::Hex(1),
+    FieldId::Folder,
+];
 
 impl FieldId {
     pub fn target(self) -> Target {
         match self {
             Self::Find => Target::Find(FindPart::Input),
             Self::Hex(i) => Target::Hex(i),
+            Self::Folder => Target::Folder,
         }
     }
 }
@@ -415,8 +452,16 @@ pub enum Kind {
         index: usize,
         active: bool,
     },
-    /// The read-only `.directory-input input`.
+    /// The `.directory-input input` box; its text is a `FieldText` child.
     Field,
+    /// `.directory-input input:hover` border.
+    FieldHover,
+    /// `.mini-preview-placement-screen`.
+    PlacementScreen,
+    /// A `.mini-preview-placement-corner`: resting, hovered or `.active`.
+    PlacementCorner(usize),
+    /// The picker's `small` placement name, right-aligned under the screen.
+    PlacementLabel,
     /// `.directory-input button`, resting or hovered.
     Choose {
         lit: bool,
@@ -601,6 +646,8 @@ pub enum Action {
     ChooseFolder,
     /// Open Windows keyboard settings.
     KeyboardSettings,
+    /// About › Send feedback: open the Feedback window, like the tray.
+    Feedback,
     /// Show the system color picker for a custom color, outside the host
     /// borrow.
     PickColor(usize),
@@ -811,8 +858,8 @@ struct Texts {
     segments: Vec<Text>,
     chips: Vec<Text>,
     check: Option<Text>,
-    path: Option<Text>,
     choose: Option<Text>,
+    placement: Option<Text>,
     /// Utility row actions, by `Utility::index`.
     open: [Option<Text>; 2],
     update_action: Option<Text>,
@@ -888,7 +935,18 @@ pub struct Scene {
     chips: Vec<ChipNodes>,
     folder_copy: usize,
     field: usize,
+    /// The folder input's hover border, text and caret.
+    field_parts: [usize; 3],
+    /// `#output-directory`: a draft while focused, else the saved folder.
+    folder_field: TextField,
     choose: Layered,
+    /// Mini preview position: copy, the picker group, its screen, the four
+    /// corners and the placement name.
+    placement_copy: usize,
+    placement: usize,
+    placement_screen: usize,
+    corners: [usize; 4],
+    placement_label: usize,
     /// Utility rows' copy and Open, by `Utility::index`.
     utility_copy: [usize; 2],
     open_buttons: [Layered; 2],
@@ -959,13 +1017,13 @@ impl Scene {
             enabled: false,
         }];
         for (index, key) in FLAGS.iter().enumerate() {
-            let row = preferences::row(key);
+            let (detail, enabled) = flag_detail(&settings, index);
             rows.push(RowState {
                 key: RowKey::Flag(index),
-                title: row.title,
-                detail: row.description.into(),
+                title: preferences::row(key).title,
+                detail,
                 on: flag_value(&settings, index),
-                enabled: true,
+                enabled,
             });
         }
         for (index, key) in RECORDING_TOGGLES.iter().enumerate() {
@@ -1037,7 +1095,14 @@ impl Scene {
             chips: Vec::new(),
             folder_copy: 0,
             field: 0,
+            field_parts: [0; 3],
+            folder_field: TextField::new(Style::Mono, ""),
             choose: none,
+            placement_copy: 0,
+            placement: 0,
+            placement_screen: 0,
+            corners: [0; 4],
+            placement_label: 0,
             utility_copy: [0; 2],
             open_buttons: [none; 2],
             update_copy: 0,
@@ -1105,6 +1170,8 @@ impl Scene {
             field.editor.max_len = Some(HEX_MAX);
             field.editor.set_text(&value);
         }
+        let folder = scene.settings.output_directory.clone();
+        scene.folder_field.editor.set_text(&folder);
         scene.build();
         scene
     }
@@ -1134,7 +1201,7 @@ impl Scene {
     fn ring(&mut self, parent: usize, shape: Ring, target: Target) -> usize {
         let bleed = match shape {
             Ring::Tight(_) | Ring::Field(_) => 2.,
-            Ring::Full(_) => 4.,
+            Ring::Full(_) | Ring::Outline(_) => 4.,
         };
         self.add(Some(parent), Kind::Ring { shape, target }, bleed)
     }
@@ -1248,12 +1315,34 @@ impl Scene {
                     }
                     Item::Folder => {
                         self.folder_copy = copy;
-                        self.field = self.add(Some(node), Kind::Field, 0.);
+                        let radius = self.t.n("r-md");
+                        let field = self.add(Some(node), Kind::Field, 0.);
+                        let hover = self.add(Some(field), Kind::FieldHover, 0.);
+                        let text = self.add(Some(field), Kind::FieldText(FieldId::Folder), 0.);
+                        let caret = self.add(Some(field), Kind::Caret, 0.);
+                        self.nodes[caret].visible = false;
+                        self.ring(field, Ring::Field(radius), Target::Folder);
+                        self.field = field;
+                        self.field_parts = [hover, text, caret];
                         let base = self.add(Some(node), Kind::Choose { lit: false }, 2.);
                         let lit = self.add(Some(base), Kind::Choose { lit: true }, 2.);
-                        let radius = self.t.n("r-md");
                         let ring = self.ring(base, Ring::Full(radius), Target::Choose);
                         self.choose = Layered { base, lit, ring };
+                    }
+                    Item::Placement => {
+                        self.placement_copy = copy;
+                        let group = self.add(Some(node), Kind::Group, 0.);
+                        self.nodes[group].group_opacity = true;
+                        let screen = self.add(Some(group), Kind::PlacementScreen, 4.);
+                        let radius = self.t.n("r-sm");
+                        for index in 0..MINI_PREVIEW_PLACEMENTS.len() {
+                            let corner = self.add(Some(screen), Kind::PlacementCorner(index), 0.);
+                            self.ring(corner, Ring::Outline(radius), Target::Placement(index));
+                            self.corners[index] = corner;
+                        }
+                        self.placement_label = self.add(Some(group), Kind::PlacementLabel, 0.);
+                        self.placement = group;
+                        self.placement_screen = screen;
                     }
                     Item::Utility(which) => {
                         self.utility_copy[which.index()] = copy;
@@ -1426,6 +1515,8 @@ impl Scene {
             self.nodes[nodes.switch].opacity = if state.enabled { 1. } else { 0.4 };
             self.nodes[nodes.copy].opacity = if state.enabled { 1. } else { 0.55 };
         }
+        // `.mini-preview-placement.is-disabled`.
+        self.nodes[self.placement].opacity = if self.placement_enabled() { 1. } else { 0.55 };
         for node in &mut self.nodes {
             node.props = true;
         }
@@ -1450,6 +1541,7 @@ impl Scene {
                 active: true,
             } => (on(index == self.theme_index()), "dur-2"),
             Kind::Choose { lit: true } => (on(self.hover == Some(Target::Choose)), "dur-2"),
+            Kind::FieldHover => (on(self.hover == Some(Target::Folder)), "dur-2"),
             Kind::Open { which, lit: true } => {
                 (on(self.hover == Some(Target::Open(which))), "dur-2")
             }
@@ -1506,11 +1598,25 @@ impl Scene {
             Target::Select(key) if self.open.is_some_and(|(open, _)| open == key) => true,
             Target::Shortcut(index) if self.recording == Some(index) => true,
             // `.preferences-find-input:focus`, not only `:focus-visible`.
-            Target::Find(FindPart::Input) | Target::Hex(_) | Target::Well(_) => {
+            Target::Find(FindPart::Input) | Target::Hex(_) | Target::Well(_) | Target::Folder => {
                 self.focus == Some(target)
             }
             _ => self.focus_visible && self.focus == Some(target),
         }
+    }
+
+    /// Mini preview position follows Show mini previews.
+    pub fn placement_enabled(&self) -> bool {
+        self.settings.show_mini_previews
+    }
+
+    /// The selected Mini preview position corner.
+    pub fn placement_index(&self) -> usize {
+        let id = serde_json::to_value(self.settings.mini_preview_placement).unwrap_or_default();
+        MINI_PREVIEW_PLACEMENTS
+            .iter()
+            .position(|(placement, _)| id.as_str() == Some(*placement))
+            .unwrap_or(2)
     }
 
     /// The selected Interface theme segment.
@@ -1852,7 +1958,32 @@ impl Scene {
                 let detail = if state.detail.is_empty() {
                     None
                 } else {
-                    Some(g.text(&self.t, Style::RowDescription, &state.detail, copy_w)?)
+                    let text = g.text(&self.t, Style::RowDescription, &state.detail, copy_w)?;
+                    // The recording-controls row's `<strong>will</strong>`.
+                    if let Some((start, length)) = self.emphasis(row) {
+                        use windows::Win32::Graphics::DirectWrite::{
+                            DWRITE_FONT_AXIS_TAG_WEIGHT, DWRITE_FONT_AXIS_VALUE,
+                            DWRITE_FONT_WEIGHT_BOLD, DWRITE_TEXT_RANGE, IDWriteTextLayout4,
+                        };
+                        use windows::core::Interface;
+                        let range = DWRITE_TEXT_RANGE {
+                            startPosition: start,
+                            length,
+                        };
+                        // Variable faces take their weight from the axis the
+                        // format set, so bold the range on that axis too.
+                        unsafe {
+                            text.layout.SetFontWeight(DWRITE_FONT_WEIGHT_BOLD, range)?;
+                            if let Ok(layout) = text.layout.cast::<IDWriteTextLayout4>() {
+                                let bold = DWRITE_FONT_AXIS_VALUE {
+                                    axisTag: DWRITE_FONT_AXIS_TAG_WEIGHT,
+                                    value: 700.,
+                                };
+                                layout.SetFontAxisValues(&[bold], range)?;
+                            }
+                        }
+                    }
+                    Some(text)
                 };
                 // `.check-row small` adds 3 px to the span's 3 px grid gap.
                 let copy_h = title.height + detail.as_ref().map_or(0., |d| 6. + d.height);
@@ -2008,15 +2139,86 @@ impl Scene {
                 let choose = g.text(&self.t, Style::Control, "Choose…", 1e4)?;
                 let button_w = (choose.width + 2. * s5 + 2.).ceil();
                 let field_y = y + copy_h + s4;
-                self.nodes[self.field].rect = Rect::new(x, field_y, width - s4 - button_w, h_lg);
+                let field = Rect::new(x, field_y, width - s4 - button_w, h_lg);
+                self.nodes[self.field].rect = field;
+                // `padding: var(--s-4) var(--s-5)` inside the 1 px border.
+                let inset = 1. + s5;
+                let text = Rect::new(inset, 0., (field.w - 2. * inset).max(1.), h_lg);
+                let [hover, text_node, _] = self.field_parts;
+                self.nodes[text_node].rect = text;
+                self.nodes[hover].rect = field.at_origin();
+                for &child in &self.children[self.field] {
+                    if matches!(self.nodes[child].kind, Kind::Ring { .. }) {
+                        self.nodes[child].rect = field.at_origin();
+                    }
+                }
+                self.folder_field.relayout(g, &self.t, text.w)?;
                 let button = Rect::new(x + width - button_w, field_y, button_w, h_lg);
                 self.nodes[self.choose.base].rect = button;
                 self.nodes[self.choose.lit].rect = button.at_origin();
                 self.nodes[self.choose.ring].rect = button.at_origin();
                 self.texts.choose = Some(choose);
-                self.texts.path =
-                    Some(g.text(&self.t, Style::Mono, &self.settings.output_directory, 1e4)?);
                 Ok(copy_h + s4 + h_lg)
+            }
+            Item::Placement => {
+                // `.setting-row-inline` with the picker: the screen, then the
+                // placement name `--s-2` below, right-aligned.
+                let name = MINI_PREVIEW_PLACEMENTS[self.placement_index()].1;
+                let label = g.text(&self.t, Style::RowDescription, name, 1e4)?;
+                let (screen_w, screen_h) = PLACEMENT_SCREEN;
+                let control_h = screen_h + s2 + label.height;
+                let control_w = screen_w.max(label.width.ceil()).max(SELECT_MIN);
+                let copy_w = if self.compact {
+                    width
+                } else {
+                    (width - control_w - s6).max(40.)
+                };
+                let row = preferences::row("mini_preview_placement");
+                let title = g.text(&self.t, Style::RowTitle, row.title, copy_w)?;
+                let detail = g.text(
+                    &self.t,
+                    Style::RowDescription,
+                    row.description,
+                    copy_w.min(measure),
+                )?;
+                let copy_h = title.height + 3. + detail.height;
+                self.texts.copies.push(CopyText {
+                    item,
+                    title,
+                    detail: Some(detail),
+                    gap: 3.,
+                });
+                let (copy, control, content_h) =
+                    self.inline_row((x, y, width), copy_h, (control_w, control_h));
+                self.nodes[self.placement_copy].rect = copy;
+                self.nodes[self.placement].rect = control;
+                let screen = Rect::new(control.w - screen_w, 0., screen_w, screen_h);
+                self.nodes[self.placement_screen].rect = screen;
+                let far = (
+                    screen_w - PLACEMENT_INSET - PLACEMENT_CORNER,
+                    screen_h - PLACEMENT_INSET - PLACEMENT_CORNER,
+                );
+                for (index, &corner) in self.corners.iter().enumerate() {
+                    let cx = if index % 2 == 0 {
+                        PLACEMENT_INSET
+                    } else {
+                        far.0
+                    };
+                    let cy = if index < 2 { PLACEMENT_INSET } else { far.1 };
+                    let r = Rect::new(cx, cy, PLACEMENT_CORNER, PLACEMENT_CORNER);
+                    self.nodes[corner].rect = r;
+                    for &child in &self.children[corner] {
+                        self.nodes[child].rect = r.at_origin();
+                    }
+                }
+                self.nodes[self.placement_label].rect = Rect::new(
+                    control.w - label.width.ceil(),
+                    screen_h + s2,
+                    label.width.ceil(),
+                    label.height,
+                );
+                self.texts.placement = Some(label);
+                Ok(content_h)
             }
             Item::Utility(which) => {
                 // `.settings-utility-row`: copy, then the `auto` action.
@@ -2538,6 +2740,10 @@ impl Scene {
             {
                 self.nodes[self.row_nodes[row].track_off].dirty = true;
             }
+            // `.mini-preview-placement-corner:hover` borders the corner.
+            if let Target::Placement(index) = target {
+                self.nodes[self.corners[index]].dirty = true;
+            }
         }
         self.refresh(true);
     }
@@ -2575,6 +2781,10 @@ impl Scene {
         {
             self.commit_hex(i);
         }
+        // The folder input drops its draft on blur.
+        if old == Some(Target::Folder) && focus != old {
+            self.reset_folder_text();
+        }
         self.sync_caret();
         if let Some(target) = focus
             && focus != old
@@ -2610,7 +2820,12 @@ impl Scene {
                     // Radio groups are one Tab stop, at the selection.
                     Item::Mode => list.push(Target::Mode(self.mode_index())),
                     Item::Accent => list.push(Target::Theme(self.theme_index())),
-                    Item::Folder => list.push(Target::Choose),
+                    Item::Folder => list.extend([Target::Folder, Target::Choose]),
+                    // Shipping's corners are plain buttons: each is a Tab stop.
+                    Item::Placement if self.placement_enabled() => {
+                        list.extend((0..MINI_PREVIEW_PLACEMENTS.len()).map(Target::Placement));
+                    }
+                    Item::Placement => {}
                     Item::Utility(which) => list.push(Target::Open(which)),
                     // A disabled button is not a Tab stop.
                     Item::Updates if self.update_enabled() => list.push(Target::UpdateAction),
@@ -2714,10 +2929,13 @@ impl Scene {
             Target::Row(row) => self.toggle(row),
             Target::Mode(index) => self.select_mode(index),
             Target::Theme(index) => self.select_theme(index),
-            Target::Choose => Some(Action::ChooseFolder),
+            Target::Choose => {
+                self.reset_folder_text();
+                Some(Action::ChooseFolder)
+            }
+            Target::Placement(index) => self.select_placement(index),
             Target::Open(Utility::Keyboard) => Some(Action::KeyboardSettings),
-            // The Send Feedback window is not part of this host yet.
-            Target::Open(Utility::Feedback) => None,
+            Target::Open(Utility::Feedback) => Some(Action::Feedback),
             Target::Shortcut(index) => {
                 self.start_recording(index);
                 None
@@ -2734,7 +2952,7 @@ impl Scene {
                 self.choose(key, index);
                 None
             }
-            Target::Find(FindPart::Input) | Target::Hex(_) => None,
+            Target::Find(FindPart::Input) | Target::Hex(_) | Target::Folder => None,
             Target::ResetColors => {
                 let defaults: captures_settings::CustomThemeSettings =
                     serde_json::from_value(serde_json::json!({})).ok()?;
@@ -2787,6 +3005,8 @@ impl Scene {
             };
             self.set_row(row, on);
         }
+        self.sync_flags();
+        self.reset_folder_text();
         self.relayout = true;
         self.refresh(true);
     }
@@ -2921,8 +3141,49 @@ impl Scene {
         }
         self.settings.output_directory = path;
         self.save();
+        self.reset_folder_text();
         self.events.push(Event::Folder);
         true
+    }
+
+    /// The folder input changed (shipping `onChange`): a non-blank path saves
+    /// as typed; a blank one stays a draft, since it would save as the
+    /// default folder and refill the field mid-retype.
+    fn folder_typed(&mut self) {
+        let draft = String::from_utf16_lossy(self.folder_field.editor.units());
+        if draft.trim().is_empty() || draft == self.settings.output_directory {
+            return;
+        }
+        self.settings.output_directory = draft;
+        self.save();
+    }
+
+    /// Show the saved folder in the input (shipping clears its draft on
+    /// blur and on Choose…).
+    fn reset_folder_text(&mut self) {
+        let value = self.settings.output_directory.clone();
+        if self.folder_field.editor.set_text(&value).text {
+            self.relayout = true;
+            self.events.push(Event::FieldText(FieldId::Folder));
+        }
+    }
+
+    /// Choose a Mini preview position corner.
+    fn select_placement(&mut self, index: usize) -> Option<Action> {
+        if !self.placement_enabled() || index == self.placement_index() {
+            return None;
+        }
+        let id = MINI_PREVIEW_PLACEMENTS[index].0;
+        self.settings.mini_preview_placement =
+            serde_json::from_value(serde_json::json!(id)).ok()?;
+        self.save();
+        for corner in self.corners {
+            self.nodes[corner].dirty = true;
+        }
+        // The placement name below the screen changes width.
+        self.relayout = true;
+        self.events.push(Event::Selected(Target::Placement(index)));
+        None
     }
 
     fn toggle(&mut self, row: usize) -> Option<Action> {
@@ -2940,6 +3201,7 @@ impl Scene {
                 self.set_row(row, on);
                 set_flag(&mut self.settings, flag, on);
                 self.save();
+                self.sync_flags();
                 None
             }
             RowKey::Recording(toggle) => {
@@ -2991,6 +3253,45 @@ impl Scene {
         }
     }
 
+    /// Bring the Capture rows that depend on other settings up to date: the
+    /// mini preview rows follow Show mini previews, and the two "in
+    /// screenshots and recordings" descriptions follow their switches.
+    fn sync_flags(&mut self) {
+        for row in 0..self.rows.len() {
+            if let RowKey::Flag(flag) = self.rows[row].key {
+                let (detail, enabled) = flag_detail(&self.settings, flag);
+                self.set_enabled(row, enabled);
+                self.relayout |= self.set_detail(row, detail);
+            }
+        }
+        let enabled = self.placement_enabled();
+        if !enabled && matches!(self.focus, Some(Target::Placement(_))) {
+            self.set_focus(None, false);
+        }
+        let group = self.placement;
+        self.nodes[group].opacity = if enabled { 1. } else { 0.55 };
+        self.nodes[group].props = true;
+        for corner in self.corners {
+            self.nodes[corner].dirty = true;
+        }
+    }
+
+    /// The `<strong>` range of a row's description, in UTF-16 units.
+    fn emphasis(&self, row: usize) -> Option<(u32, u32)> {
+        let RowKey::Flag(flag) = self.rows[row].key else {
+            return None;
+        };
+        if FLAGS[flag] != "include_recording_controls_in_captures" {
+            return None;
+        }
+        let copy = preferences::recording_controls_description(
+            captures_recording_platform::platform_can_exclude_recording_controls(),
+            self.settings.include_recording_controls_in_captures,
+        );
+        let units = |s: &str| s.encode_utf16().count() as u32;
+        (!copy.emphasis.is_empty()).then(|| (units(copy.lead), units(copy.emphasis)))
+    }
+
     /// Replace a row's description; true when the layout must be rebuilt.
     pub fn set_detail(&mut self, row: usize, detail: String) -> bool {
         if self.rows[row].detail == detail {
@@ -3007,6 +3308,17 @@ impl Scene {
     pub fn select_options(&self, key: SelectKey) -> Vec<(String, bool)> {
         let plain = |labels: Vec<String>| labels.into_iter().map(|l| (l, false)).collect();
         match key {
+            SelectKey::ScreenshotFormat => plain(
+                SCREENSHOT_FORMATS
+                    .iter()
+                    .map(|(_, l)| (*l).into())
+                    .collect(),
+            ),
+            SelectKey::ScreenshotCountdown | SelectKey::Countdown => plain(
+                COUNTDOWN_SECONDS
+                    .map(preferences::countdown_label)
+                    .collect(),
+            ),
             SelectKey::Format => {
                 plain(RECORDING_FORMATS.iter().map(|(_, l)| (*l).into()).collect())
             }
@@ -3017,11 +3329,6 @@ impl Scene {
                     .collect(),
             ),
             SelectKey::Resolution => plain(RESOLUTIONS.iter().map(|(_, l)| (*l).into()).collect()),
-            SelectKey::Countdown => plain(
-                COUNTDOWN_SECONDS
-                    .map(preferences::countdown_label)
-                    .collect(),
-            ),
             SelectKey::Microphone => self
                 .microphone_entries()
                 .into_iter()
@@ -3066,6 +3373,14 @@ impl Scene {
                 .unwrap_or(0)
         };
         match key {
+            SelectKey::ScreenshotFormat => id(
+                serde_json::to_value(self.settings.screenshot_format).unwrap_or_default(),
+                &SCREENSHOT_FORMATS.map(|(id, _)| id),
+            ),
+            SelectKey::ScreenshotCountdown => COUNTDOWN_SECONDS
+                .clone()
+                .position(|seconds| seconds == self.settings.screenshot_countdown_seconds)
+                .unwrap_or(0),
             SelectKey::Format => id(
                 serde_json::to_value(recording.video_format).unwrap_or_default(),
                 &RECORDING_FORMATS.map(|(id, _)| id),
@@ -3132,6 +3447,17 @@ impl Scene {
         }
         let recording = &mut self.settings.recording;
         match key {
+            SelectKey::ScreenshotFormat => {
+                if let Ok(format) =
+                    serde_json::from_value(serde_json::json!(SCREENSHOT_FORMATS[index].0))
+                {
+                    self.settings.screenshot_format = format;
+                }
+            }
+            SelectKey::ScreenshotCountdown => {
+                self.settings.screenshot_countdown_seconds =
+                    COUNTDOWN_SECONDS.clone().nth(index).unwrap_or(0);
+            }
             SelectKey::Format => {
                 if let Ok(format) =
                     serde_json::from_value(serde_json::json!(RECORDING_FORMATS[index].0))
@@ -3568,6 +3894,7 @@ impl Scene {
         match id {
             FieldId::Find => self.find.open,
             FieldId::Hex(_) => self.custom_shown(),
+            FieldId::Folder => true,
         }
     }
 
@@ -3575,6 +3902,7 @@ impl Scene {
         match id {
             FieldId::Find => &self.find.field,
             FieldId::Hex(i) => &self.hex_fields[i],
+            FieldId::Folder => &self.folder_field,
         }
     }
 
@@ -3583,6 +3911,7 @@ impl Scene {
         match id {
             FieldId::Find => (self.find_nodes.text, self.find_nodes.caret),
             FieldId::Hex(i) => (self.custom.texts[i], self.custom.carets[i]),
+            FieldId::Folder => (self.field_parts[1], self.field_parts[2]),
         }
     }
 
@@ -3697,6 +4026,11 @@ impl Scene {
                 vec![format!("{}{}{names}", r.title, r.description)]
             }
             Item::Folder => vec![format!("{}Choose…", row("output_directory").title)],
+            Item::Placement => {
+                let r = row("mini_preview_placement");
+                let name = MINI_PREVIEW_PLACEMENTS[self.placement_index()].1;
+                vec![format!("{}{}{name}", r.title, r.description)]
+            }
             Item::Utility(which) => {
                 let (title, body, action) = which.copy();
                 vec![format!("{title}{body}{action}")]
@@ -3972,6 +4306,7 @@ impl Scene {
         let field = match id {
             FieldId::Find => &mut self.find.field,
             FieldId::Hex(i) => &mut self.hex_fields[i],
+            FieldId::Folder => &mut self.folder_field,
         };
         let change = edit(&mut field.editor);
         if !change.any() {
@@ -3990,6 +4325,9 @@ impl Scene {
                 self.find.index = 0;
                 self.find.scrolled = None;
                 self.find_refresh();
+            }
+            if id == FieldId::Folder {
+                self.folder_typed();
             }
             self.events.push(Event::FieldText(id));
         }
@@ -4041,6 +4379,9 @@ impl Scene {
             // Like a DOM blur, a hex input commits when the window deactivates.
             if !focused && let Some(Target::Hex(i)) = self.focus {
                 self.commit_hex(i);
+            }
+            if !focused && self.focus == Some(Target::Folder) {
+                self.reset_folder_text();
             }
             self.sync_caret();
         }
@@ -4134,7 +4475,9 @@ impl Scene {
             Target::Row(row) => self.row_nodes[row].switch,
             Target::Mode(i) => self.segments[i],
             Target::Theme(i) => self.chips[i].group,
+            Target::Folder => self.field,
             Target::Choose => self.choose.base,
+            Target::Placement(i) => self.corners[i],
             Target::Open(which) => self.open_buttons[which.index()].base,
             Target::Shortcut(i) => self.shortcuts[i].recorder,
             Target::Select(key) => self.selects[key.index()].trigger,
@@ -4313,6 +4656,11 @@ impl Scene {
         self.absolute(self.field)
     }
 
+    /// The Mini preview position screen (`role="radiogroup"`).
+    pub fn placement_rect(&self) -> Rect {
+        self.absolute(self.placement_screen)
+    }
+
     pub fn viewport(&self) -> Rect {
         self.viewport_rect()
     }
@@ -4373,10 +4721,16 @@ impl Scene {
             .map(Target::Mode)
             .chain((0..THEMES.len()).map(Target::Theme))
             .chain([
+                Target::Folder,
                 Target::Choose,
                 Target::Open(Utility::Keyboard),
                 Target::Open(Utility::Feedback),
             ])
+            .chain(
+                (0..MINI_PREVIEW_PLACEMENTS.len())
+                    .map(Target::Placement)
+                    .filter(|_| self.placement_enabled()),
+            )
             .chain((0..SHORTCUT_ROWS.len()).map(Target::Shortcut))
             .chain(SELECTS.map(Target::Select));
         let custom = [
@@ -4563,16 +4917,32 @@ impl Scene {
                 let radius = t.n("r-md");
                 gfx::fill_round(dc, all, radius, c("surface-field"))?;
                 gfx::border(dc, all, radius, 1., c("control-border"))?;
-                if let Some(path) = &self.texts.path {
-                    let pad = t.n("s-5") + 1.;
-                    unsafe {
-                        dc.PushAxisAlignedClip(
-                            &rect(pad, 0., w - pad, h),
-                            windows::Win32::Graphics::Direct2D::D2D1_ANTIALIAS_MODE_ALIASED,
-                        );
-                    }
-                    gfx::text(dc, path, pad, (h - path.height) / 2., c("text"))?;
-                    unsafe { dc.PopAxisAlignedClip() };
+            }
+            Kind::PlacementScreen => {
+                let radius = t.n("r-md");
+                gfx::shadow(dc, all, radius, t.shadow("shadow-xs"))?;
+                gfx::fill_round(dc, all, radius, c("surface-sunken"))?;
+                gfx::border(dc, all, radius, 1., c("border-subtle"))?;
+            }
+            Kind::PlacementCorner(index) => {
+                let radius = t.n("r-sm");
+                if index == self.placement_index() {
+                    gfx::fill_round(dc, all, radius, c("theme-accent"))?;
+                } else {
+                    let hovered =
+                        self.placement_enabled() && self.hover == Some(Target::Placement(index));
+                    let edge = if hovered {
+                        "theme-accent"
+                    } else {
+                        "border-strong"
+                    };
+                    gfx::fill_round(dc, all, radius, c("surface-raised"))?;
+                    gfx::border(dc, all, radius, 1., c(edge))?;
+                }
+            }
+            Kind::PlacementLabel => {
+                if let Some(label) = &self.texts.placement {
+                    gfx::text(dc, label, 0., 0., c("text-subtle"))?;
                 }
             }
             Kind::Choose { lit } | Kind::Open { lit, .. } | Kind::Reset { lit } => {
@@ -4757,6 +5127,10 @@ impl Scene {
                 gfx::ring(dc, all, radius, 0., 2., c("surface-canvas"))?;
                 gfx::ring(dc, all, radius, 2., 4., accent_ring)?;
             }
+            Kind::Ring {
+                shape: Ring::Outline(radius),
+                ..
+            } => gfx::ring(dc, all, radius, 2., 4., c("theme-accent"))?,
             Kind::Scrollbar => gfx::fill_round(dc, all, w / 2., c("border-strong"))?,
             Kind::SaveStatus => {
                 // `.preferences-save-error`: no border, tinted pill.
@@ -4778,7 +5152,7 @@ impl Scene {
                 gfx::fill_round(dc, all, radius, c("surface-field"))?;
                 gfx::border(dc, all, radius, 1., c("control-border"))?;
             }
-            Kind::FindFieldHover => {
+            Kind::FindFieldHover | Kind::FieldHover => {
                 let radius = t.n("r-md");
                 gfx::border(dc, all, radius, 1., c("surface-field"))?;
                 gfx::border(dc, all, radius, 1., c("border-strong"))?;
@@ -5326,6 +5700,9 @@ fn flag_value(settings: &captures_settings::AppSettings, flag: usize) -> bool {
     match FLAGS[flag] {
         "auto_copy_to_clipboard" => settings.auto_copy_to_clipboard,
         "auto_start_on_selection" => settings.auto_start_on_selection,
+        "show_mini_previews" => settings.show_mini_previews,
+        "include_mini_previews_in_captures" => settings.include_mini_previews_in_captures,
+        "include_recording_controls_in_captures" => settings.include_recording_controls_in_captures,
         "freeze_screen" => settings.freeze_screen,
         "show_cursor_in_screenshots" => settings.show_cursor_in_screenshots,
         key => unreachable!("unknown switch {key}"),
@@ -5336,8 +5713,103 @@ fn set_flag(settings: &mut captures_settings::AppSettings, flag: usize, on: bool
     match FLAGS[flag] {
         "auto_copy_to_clipboard" => settings.auto_copy_to_clipboard = on,
         "auto_start_on_selection" => settings.auto_start_on_selection = on,
+        "show_mini_previews" => settings.show_mini_previews = on,
+        "include_mini_previews_in_captures" => settings.include_mini_previews_in_captures = on,
+        "include_recording_controls_in_captures" => {
+            settings.include_recording_controls_in_captures = on;
+        }
         "freeze_screen" => settings.freeze_screen = on,
         "show_cursor_in_screenshots" => settings.show_cursor_in_screenshots = on,
         key => unreachable!("unknown switch {key}"),
+    }
+}
+
+/// A Capture switch's description and whether it can change: the mini
+/// preview and recording-controls rows follow the settings they depend on.
+fn flag_detail(settings: &captures_settings::AppSettings, flag: usize) -> (String, bool) {
+    let can_exclude = captures_recording_platform::platform_can_exclude_recording_controls();
+    match FLAGS[flag] {
+        "include_mini_previews_in_captures" => (
+            preferences::mini_previews_in_captures_description(
+                settings.show_mini_previews,
+                settings.include_mini_previews_in_captures,
+            )
+            .into(),
+            settings.show_mini_previews,
+        ),
+        "include_recording_controls_in_captures" => (
+            preferences::recording_controls_description(
+                can_exclude,
+                settings.include_recording_controls_in_captures,
+            )
+            .text(),
+            can_exclude,
+        ),
+        key => (preferences::row(key).description.into(), true),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capture_card_has_every_shipping_row_in_order() {
+        let (_, items) = CARDS[2];
+        let keys: Vec<&str> = items
+            .iter()
+            .map(|item| match *item {
+                Item::Folder => "output_directory",
+                Item::Switch(row) => FLAGS[row - 1],
+                Item::Placement => "mini_preview_placement",
+                Item::Select(key) => key.setting(),
+                other => panic!("unexpected {other:?}"),
+            })
+            .collect();
+        // Tauri `App.tsx`'s Capture card at 79419ab4^.
+        assert_eq!(
+            keys,
+            [
+                "output_directory",
+                "auto_copy_to_clipboard",
+                "auto_start_on_selection",
+                "show_mini_previews",
+                "mini_preview_placement",
+                "include_mini_previews_in_captures",
+                "include_recording_controls_in_captures",
+                "freeze_screen",
+                "show_cursor_in_screenshots",
+                "screenshot_format",
+                "screenshot_countdown_seconds",
+            ]
+        );
+        // The Recording card's switches follow the Capture ones.
+        assert!(CARDS[4].1.contains(&Item::Switch(FLAGS.len() + 1)));
+    }
+
+    #[test]
+    fn mini_preview_rows_follow_show_mini_previews() {
+        let flag = |key| FLAGS.iter().position(|k| *k == key).unwrap();
+        let include = flag("include_mini_previews_in_captures");
+        let mut settings = captures_settings::AppSettings {
+            show_mini_previews: false,
+            include_mini_previews_in_captures: true,
+            ..Default::default()
+        };
+        let (detail, enabled) = flag_detail(&settings, include);
+        assert!(!enabled);
+        assert!(detail.contains("are off"));
+        settings.show_mini_previews = true;
+        let (detail, enabled) = flag_detail(&settings, include);
+        assert!(enabled);
+        assert!(detail.contains("will show"));
+        let controls = flag("include_recording_controls_in_captures");
+        settings.include_recording_controls_in_captures = false;
+        let (detail, enabled) = flag_detail(&settings, controls);
+        assert!(enabled, "Windows can keep the controls out of captures");
+        assert_eq!(
+            detail,
+            "Recording controls won’t show in screenshots or recordings."
+        );
     }
 }

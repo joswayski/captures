@@ -5,7 +5,9 @@ DirectComposition, Direct2D, DirectWrite (system Segoe UI Variable) and UI
 Automation, with Captures' own token-drawn controls. See
 [native-rewrite.md](../../../docs/native-rewrite.md#host-direction) for the
 direction and the gates it must pass. It has Preferences (every shipping
-card with the Custom accent's color editor, the narrow layout below 720 px,
+card with the Custom accent's color editor, the Capture card's mini preview,
+screenshot format and countdown rows, an editable Save captures to field that
+keeps a blank draft unsaved like Tauri, the narrow layout below 720 px,
 Find on a reusable text field, `src/textfield.rs`, and page copy you can
 select and copy like Tauri's: drag, double-click a word, triple-click a
 paragraph, Ctrl+C; a click on a switch row's copy still toggles it), Capture History
@@ -120,7 +122,8 @@ press skips the tray menu's 200 ms fade wait. A physical Windows 11 check
 recorder's release and Quit; key press to bar took about 380 ms in a release
 build (260 ms without Freeze screen). The Win+Shift+S hook ignores injected
 input and the installed Captures held Print Screen, so those two takeovers
-still need a real keyboard check. The tray's Send Feedback opens shipping's form (`src/feedback.rs`, 640 × 700,
+still need a real keyboard check. The tray's Send Feedback and Preferences'
+About › Send feedback › Open open shipping's form (`src/feedback.rs`, 640 × 700,
 minimum 460 × 460): the automatically included app and system details, the
 Bug/Idea/Other categories with their placeholders, a multi-line message, the
 optional contact and Send with its sent and error notes, using the shared

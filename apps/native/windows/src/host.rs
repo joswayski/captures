@@ -95,6 +95,8 @@ pub struct Host {
     pick_color: Option<usize>,
     /// Capture History… was activated; the loop opens it.
     open_history: bool,
+    /// About › Send feedback was activated; the loop opens Feedback.
+    open_feedback: bool,
     /// The Updates card's button was activated; the resident app runs it.
     pub update_step: Option<crate::updates::Step>,
     /// Check for Updates: scroll to the Updates card after the next layout.
@@ -225,6 +227,7 @@ impl Host {
                 pick_folder: false,
                 pick_color: None,
                 open_history: false,
+                open_feedback: false,
                 update_step: None,
                 jump_updates: false,
                 woken: false,
@@ -621,6 +624,7 @@ impl Host {
             Some(Action::ChooseFolder) => self.pick_folder = true,
             Some(Action::PickColor(i)) => self.pick_color = Some(i),
             Some(Action::OpenHistory) => self.open_history = true,
+            Some(Action::Feedback) => self.open_feedback = true,
             Some(Action::Update(step)) => self.update_step = Some(step),
             Some(Action::KeyboardSettings) => {
                 let platform = crate::scene::PLATFORM;
@@ -1453,6 +1457,7 @@ pub fn run(options: Options, resident: Option<captures_app::instance::Instance>)
                     h.pick_folder,
                     h.pick_color,
                     std::mem::take(&mut h.open_history),
+                    std::mem::take(&mut h.open_feedback),
                 )
             });
             crate::live::service();
@@ -1515,13 +1520,18 @@ pub fn run(options: Options, resident: Option<captures_app::instance::Instance>)
                     crate::recording_uia::raise(hwnd, &events);
                 }
             }
-            if let Some((hwnd, again_p, events, pick_folder, pick_color, open_history)) = state {
+            if let Some((hwnd, again_p, events, pick_folder, pick_color, open_history, feedback)) =
+                state
+            {
                 again |= again_p;
                 if !events.is_empty() {
                     crate::uia::raise(&events);
                 }
                 if open_history && let Err(error) = crate::history::open(&options, None) {
                     eprintln!("couldn't open Capture History: {error}");
+                }
+                if feedback && let Err(error) = crate::feedback::open(&options) {
+                    eprintln!("couldn't open Send Feedback: {error}");
                 }
                 if pick_folder {
                     Host::choose_folder(hwnd);
