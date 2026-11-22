@@ -82,7 +82,9 @@ pub use compare::Part as ComparePart;
 pub use export::Ex;
 pub use layer_menu::Act;
 pub use menu::MenuKind;
-pub use props::{CUSTOM, Check, Field, Num, Prop, Range, bounds as range_bounds, range_text};
+pub use props::{
+    CUSTOM, Check, Field, Note, Num, Prop, Range, Row, bounds as range_bounds, range_text,
+};
 
 /// `.screenshot-editor { min-width: 860px; min-height: 600px }`; GTK's default.
 pub const SIZE: (f32, f32) = (1280., 840.);
@@ -2128,7 +2130,13 @@ impl Editor {
                 && !s.starts_with("export")
                 && !matches!(
                     s.as_str(),
-                    "layer-menu" | "rotate" | "trim" | "expand" | "expand-armed"
+                    "layer-menu"
+                        | "rotate"
+                        | "trim"
+                        | "expand"
+                        | "expand-armed"
+                        | "erase"
+                        | "restore"
                 )
         }) {
             if self.layer_count() > 0
@@ -6828,6 +6836,16 @@ pub fn render_offscreen(
     editor.export.compare_sent = editor.compare_visible();
     editor.receive_estimate(estimate, after);
     editor.start_tool(options);
+    // `--tool b --select erase|restore`: the Eraser in that brush mode.
+    let brush = match select {
+        Some("erase") => Some(captures_app::editor_image_background::BrushMode::Erase),
+        Some("restore") => Some(captures_app::editor_image_background::BrushMode::Restore),
+        _ => None,
+    };
+    if let Some(mode) = brush {
+        editor.eraser.mode = props::EraserMode::Brush(mode);
+        editor.props_changed();
+    }
     editor.layout(w, h)?;
     // `--select drop`: files dragged in with the default guide;
     // `drop-stack`: the pointer over the middle of the image.
@@ -7680,6 +7698,63 @@ mod tests {
                 .try_iter()
                 .any(|job| matches!(job, Job::Apply(Request::TrimCanvas)))
         );
+        drop(e);
+        let _ = std::fs::remove_dir_all(data);
+        unsafe { CoUninitialize() };
+    }
+    /// Shipping's Eraser section: the help paragraphs around Wand's controls,
+    /// and Erase and Restore's brush preview above Size, which takes no focus.
+    #[test]
+    fn eraser_rows_show_help_and_the_brush_preview() {
+        use windows::Win32::System::Com::*;
+        unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok().unwrap() };
+        let data = std::env::temp_dir().join(format!("captures-brush-{}", std::process::id()));
+        let capture = captures_app::persist_screenshot(
+            &data.join("history"),
+            &RgbaImage::from_pixel(640, 360, Rgba([20, 50, 80, 255])),
+            CaptureMode::Region,
+        )
+        .unwrap();
+        let options = crate::parse(
+            [
+                "test".into(),
+                "--profile".into(),
+                data.to_string_lossy().into_owned(),
+                "--scene".into(),
+                "editor".into(),
+                "--artifact".into(),
+                capture.entry.id,
+                "--tool".into(),
+                "b".into(),
+            ]
+            .into_iter(),
+        )
+        .unwrap();
+        let tokens = crate::appearance::tokens(Some("light"), &Default::default());
+        let mut e = render_offscreen(
+            &options,
+            Gfx::new(&tokens, false).unwrap(),
+            tokens,
+            (1280., 840.),
+        )
+        .unwrap();
+        let rows = e.prop_rows_shown();
+        assert_eq!(rows.first(), Some(&Row::Note(Note::Intro)));
+        assert_eq!(rows.last(), Some(&Row::Note(Note::Hint)));
+        assert!(!rows.contains(&Row::BrushPreview));
+        let order = e.prop_order();
+        e.activate(Target::Prop(Prop::Mode(1)));
+        e.prepare().unwrap();
+        let rows = e.prop_rows_shown();
+        let preview = rows.iter().position(|r| *r == Row::BrushPreview).unwrap();
+        assert_eq!(rows[preview + 1], Row::Range(Range::BrushSize));
+        assert!(e.row_client_rect(Row::BrushPreview).h >= 88.);
+        assert_eq!(
+            e.note_text(Note::Hint),
+            captures_app::editor_chrome::eraser::ERASE_HINT
+        );
+        // The preview is not a control: the order only swaps Wand's controls.
+        assert_eq!(e.prop_order().len(), order.len());
         drop(e);
         let _ = std::fs::remove_dir_all(data);
         unsafe { CoUninitialize() };

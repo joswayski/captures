@@ -21,7 +21,8 @@ use windows::Win32::UI::Accessibility::*;
 use windows::core::*;
 
 use crate::editor::{
-    CUSTOM, Check, ComparePart, Editor, Event, Ex, Field, MenuKind, Num, Prop, Target, with_editor,
+    CUSTOM, Check, ComparePart, Editor, Event, Ex, Field, MenuKind, Note, Num, Prop, Row, Target,
+    with_editor,
 };
 use crate::scene::Rect;
 
@@ -70,6 +71,10 @@ pub enum Id {
     Compare,
     /// The open Background color card (`role="dialog"`).
     BgMenu,
+    /// A section's help paragraph (`<p>`) in Tool properties.
+    Note(Note),
+    /// `.screenshot-draw-preview-brush` (`role="img" aria-label="Brush preview"`).
+    BrushPreview,
     /// The open Text style menu (`role="menu"` of `menuitemradio`) or Font
     /// list (`listbox` of options), and its rows.
     Menu,
@@ -212,15 +217,23 @@ fn children(e: &Editor, id: Id) -> Vec<Id> {
         ],
         Id::Properties => {
             let mut list = Vec::new();
-            for prop in e.prop_order() {
-                let id = match prop {
-                    Prop::Shape(_) => Id::ShapePicker,
-                    Prop::Mode(_) => Id::ModeGroup,
-                    Prop::Swatch(field, _) => Id::ColorField(field),
-                    prop => c(Target::Prop(prop)),
-                };
-                if !list.contains(&id) {
-                    list.push(id);
+            for row in e.prop_rows_shown() {
+                match row {
+                    Row::Note(note) => list.push(Id::Note(note)),
+                    Row::BrushPreview => list.push(Id::BrushPreview),
+                    row => {
+                        for prop in row.props() {
+                            let id = match prop {
+                                Prop::Shape(_) => Id::ShapePicker,
+                                Prop::Mode(_) => Id::ModeGroup,
+                                Prop::Swatch(field, _) => Id::ColorField(field),
+                                prop => c(Target::Prop(prop)),
+                            };
+                            if !list.contains(&id) {
+                                list.push(id);
+                            }
+                        }
+                    }
                 }
             }
             list
@@ -264,6 +277,7 @@ fn parent(e: &Editor, id: Id) -> Option<Id> {
         Id::LayersTitle | Id::Control(Target::AddLayer) | Id::List => Id::Layers,
         Id::Row(_) => Id::List,
         Id::ShapePicker | Id::ColorField(_) | Id::ModeGroup => Id::Properties,
+        Id::Note(_) | Id::BrushPreview => Id::Properties,
         Id::InlineText | Id::Control(Target::Expand) => Id::Canvas,
         Id::Rename => Id::Row(e.renaming()?),
         Id::MenuItem(_) => Id::Menu,
@@ -316,6 +330,8 @@ fn rect(e: &Editor, id: Id) -> Rect {
         Id::BgMenu => e.bg_menu_rect(),
         Id::Menu => e.menu_rect().unwrap_or_default(),
         Id::MenuItem(i) => e.menu_item_rect(i),
+        Id::Note(note) => e.row_client_rect(Row::Note(note)),
+        Id::BrushPreview => e.row_client_rect(Row::BrushPreview),
     }
 }
 
@@ -337,6 +353,8 @@ fn name(e: &Editor, id: Id) -> String {
         Id::ModeGroup => "Eraser mode".into(),
         Id::ColorField(field) => e.field_label(field),
         Id::Location => "Save location".into(),
+        Id::Note(note) => e.note_text(note),
+        Id::BrushPreview => editor_chrome::draw_preview::BRUSH_LABEL.into(),
         Id::Notice => e.notice_text().map(|(text, _)| text).unwrap_or_default(),
         Id::Hint => e.hint_text(),
         Id::Control(target) => e.name(target),
@@ -421,9 +439,10 @@ fn control_type(e: &Editor, id: Id) -> UIA_CONTROLTYPE_ID {
         Id::Control(Target::Prop(Prop::Range(_))) => UIA_SliderControlTypeId,
         Id::Control(Target::Compare(ComparePart::Range)) => UIA_SliderControlTypeId,
         Id::Control(_) => UIA_ButtonControlTypeId,
-        Id::BannerText | Id::LayersTitle | Id::Location | Id::Notice | Id::Hint => {
+        Id::BannerText | Id::LayersTitle | Id::Location | Id::Notice | Id::Hint | Id::Note(_) => {
             UIA_TextControlTypeId
         }
+        Id::BrushPreview => UIA_ImageControlTypeId,
     }
 }
 
@@ -507,6 +526,8 @@ fn runtime_id(id: Id) -> [i32; 4] {
         }
         Id::LayerCard => (25, 0),
         Id::Compare => (26, 0),
+        Id::Note(note) => (27, note as i32),
+        Id::BrushPreview => (28, 0),
     };
     // A distinct second part keeps these apart from Preferences' and
     // History's ids; the host provider's prefix keeps windows apart.

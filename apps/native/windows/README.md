@@ -122,7 +122,7 @@ dragged over the canvas: the default guide, or the pointer over the image;
 or `export-maximum` with that size or quality (`export-compress` shows the before/after comparison,
 `export-compare-hidden` the same with it hidden), `export-menu` with the Save
 quality list open, `layer-menu` with the bottom layer's ⋯ card open, `rotate` with an in-memory image layer
-selected and its rotate handle showing, `trim` with that layer over a hidden background and Trim edges hovered, `expand` with it hanging past the canvas and its Expand canvas action, `expand-armed` with the action hovered), and
+selected and its rotate handle showing, `trim` with that layer over a hidden background and Trim edges hovered, `expand` with it hanging past the canvas and its Expand canvas action, `expand-armed` with the action hovered; with `--tool b`, `erase` or `restore` picks that Eraser brush mode), and
 `--crop X,Y,W,H` with that crop staged. On other platforms the binary is a stub, so `cargo check` and
 `clippy` still run; cross-check with `--target x86_64-pc-windows-gnu`.
 

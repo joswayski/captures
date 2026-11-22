@@ -477,7 +477,7 @@ which shows not-allowed off an image. Trim edges is a working button
 (`TrimCanvas`, enabled by the session's `can_trim`), and the restored-draft
 banner's text ellipsizes before Dismiss. Missing in this slice: the brush
 preview tile, Trim's hover preview, the canvas W/H fields and Background
-color (both since ported, below), the zoom preset select, layer thumbnails, rename and reorder, the eraser paragraphs as UI Automation text, shadow X/Y offsets, the line and arrow Curve
+color (all since ported, below), the zoom preset select, layer thumbnails, rename and reorder, the eraser paragraphs as UI Automation text (since ported, below), shadow X/Y offsets, the line and arrow Curve
 control, and the text (style picker, size, format), image and crop
 sections; outlined labels draw without their outline while open.
 Windows: cross-compiled only; Wine renders of Rectangle, Arrow, Freehand
@@ -1001,6 +1001,20 @@ a layer inside the canvas shows none; a live window driven through UIA (and
 the file dialog by window messages) added an image layer, set Layer X to
 -100, found the button under the canvas and invoked it: the canvas grew from
 1440 to 1540 and the button went away. A real pointer hover is unverified.
+
+Windows Eraser brush preview and property help in UI Automation: Erase and
+Restore now show shipping's `BrushPreview` above Size, an 88 px card with
+the 8 px canvas checkerboard and the `border-subtle` rim, and the dab from
+the shared `draw_preview::brush` in `--solid`, opaque to the softness stop
+and clear at its rim, fitted from the `0 0 160 72` view box; Size and
+Softness redraw it. Tool properties in UI Automation now lists every help
+paragraph (the eraser intro and hint, the image proportional note, the crop
+hint, the curve help and the rotation snap note) as Text in DOM order
+between the controls, and the brush preview as an Image named
+`Brush preview` (shipping's `role="img"`). Windows: `--tool b --select
+erase` renders the card in light and dark; a test checks the rows, the
+order and that the preview takes no focus; a live window under UIA listed
+the Wand, Erase and Restore sections with their paragraphs and the image.
 
 Hardware pass 16 verified crop dragging/dashes/apply/undo, field commits,
 Properties scroll, rename selection and reorder, compositor pulse idle,

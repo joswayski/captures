@@ -629,6 +629,8 @@ pub enum Row {
     Picker,
     /// The Eraser mode buttons.
     Modes,
+    /// `.screenshot-draw-preview-brush` above Erase and Restore's Size.
+    BrushPreview,
     Note(Note),
     Check(Check),
     Color(Field),
@@ -653,6 +655,29 @@ pub enum Row {
     Straighten,
     /// The border between two `.screenshot-property-section`s.
     Rule,
+}
+
+impl Row {
+    /// The row's controls in DOM order.
+    pub fn props(self) -> Vec<Prop> {
+        match self {
+            Row::Picker => (0..SHAPE_TOOLS.len()).map(Prop::Shape).collect(),
+            Row::Modes => (0..MODES.len()).map(Prop::Mode).collect(),
+            Row::Note(_) | Row::BrushPreview | Row::Rule => Vec::new(),
+            Row::Check(check) => vec![Prop::Check(check)],
+            Row::Color(field) => (0..=CUSTOM).map(|i| Prop::Swatch(field, i)).collect(),
+            Row::Range(range) => vec![Prop::Range(range)],
+            Row::StylePicker => vec![Prop::StyleTrigger],
+            Row::Textarea => vec![Prop::Textarea],
+            Row::FontSize => vec![Prop::Font, Prop::Number(Num::TextSize)],
+            Row::Number(num) => vec![Prop::Number(num)],
+            Row::Formats => (0..FORMATS).map(Prop::Format).collect(),
+            Row::Pairs(nums) => nums.iter().map(|&n| Prop::Number(n)).collect(),
+            Row::Aspect => vec![Prop::Aspect],
+            Row::CropActions => vec![Prop::CropAction(false), Prop::CropAction(true)],
+            Row::Straighten => vec![Prop::Straighten],
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -761,7 +786,11 @@ impl Editor {
             if self.eraser.mode == EraserMode::Wand {
                 rows.extend([Row::Range(Range::Tolerance), Row::Check(Check::Contiguous)]);
             } else {
-                rows.extend([Row::Range(Range::BrushSize), Row::Range(Range::Softness)]);
+                rows.extend([
+                    Row::BrushPreview,
+                    Row::Range(Range::BrushSize),
+                    Row::Range(Range::Softness),
+                ]);
             }
             rows.push(Row::Note(Note::Hint));
             return rows;
@@ -891,6 +920,7 @@ impl Editor {
             let h = match row {
                 Row::Picker => 2. * PICKER_H + self.t.n("s-2"),
                 Row::Modes => MODE_H,
+                Row::BrushPreview => captures_app::editor_chrome::draw_preview::HEIGHT as f32,
                 Row::Note(note) => self.note_layout(note, rw).map_or(16., |t| t.height.ceil()),
                 Row::Range(range) if !marks(range).is_empty() => {
                     CAPTION_H + self.t.n("s-3") + SLIDER_H + MARKS_H
@@ -1555,11 +1585,17 @@ impl Editor {
             Section::Eraser => match change {
                 Change::Check(Check::Contiguous, on) => self.eraser.contiguous = on,
                 Change::Range(Range::Tolerance, value) => self.eraser.tolerance = value,
+                // Both redraw the brush preview in the body.
                 Change::Range(Range::BrushSize, value) => {
                     self.eraser.size = value;
+                    self.nodes[self.props_body].dirty = true;
                     self.overlay_changed();
                 }
-                Change::Range(Range::Softness, value) => self.eraser.softness = value,
+                Change::Range(Range::Softness, value) => {
+                    self.eraser.softness = value;
+                    self.nodes[self.props_body].dirty = true;
+                    self.need = true;
+                }
                 _ => return,
             },
             Section::Text(id) => {
@@ -1845,6 +1881,9 @@ impl Editor {
             if laid.row == Row::Rule {
                 let y = laid.rect.y;
                 gfx::fill(dc, rect(0., y, w, y + 1.), t.color("border-subtle"))?;
+            }
+            if laid.row == Row::BrushPreview {
+                self.draw_brush_preview(dc, laid.rect)?;
             }
             if let Row::Note(note) = laid.row {
                 let text = self.note_layout(note, laid.rect.w)?;
@@ -2206,28 +2245,24 @@ impl Editor {
 
     /// The shown controls in DOM (and Tab) order.
     pub fn prop_order(&self) -> Vec<Prop> {
-        let mut list = Vec::new();
-        for laid in &self.props {
-            match laid.row {
-                Row::Picker => list.extend((0..SHAPE_TOOLS.len()).map(Prop::Shape)),
-                Row::Modes => list.extend((0..MODES.len()).map(Prop::Mode)),
-                Row::Note(_) => {}
-                Row::Check(check) => list.push(Prop::Check(check)),
-                Row::Color(field) => list.extend((0..=CUSTOM).map(|i| Prop::Swatch(field, i))),
-                Row::Range(range) => list.push(Prop::Range(range)),
-                Row::StylePicker => list.push(Prop::StyleTrigger),
-                Row::Textarea => list.push(Prop::Textarea),
-                Row::FontSize => list.extend([Prop::Font, Prop::Number(Num::TextSize)]),
-                Row::Number(num) => list.push(Prop::Number(num)),
-                Row::Formats => list.extend((0..FORMATS).map(Prop::Format)),
-                Row::Pairs(nums) => list.extend(nums.iter().map(|&n| Prop::Number(n))),
-                Row::Aspect => list.push(Prop::Aspect),
-                Row::CropActions => list.extend([Prop::CropAction(false), Prop::CropAction(true)]),
-                Row::Straighten => list.push(Prop::Straighten),
-                Row::Rule => {}
-            }
-        }
-        list
+        self.props
+            .iter()
+            .flat_map(|laid| laid.row.props())
+            .collect()
+    }
+
+    /// The shown Properties rows, in DOM order.
+    pub fn prop_rows_shown(&self) -> Vec<Row> {
+        self.props.iter().map(|laid| laid.row).collect()
+    }
+
+    /// A shown row's rect in client DIPs.
+    pub fn row_client_rect(&self, row: Row) -> Rect {
+        let Some(r) = self.laid(row) else {
+            return Rect::default();
+        };
+        let body = self.absolute(self.props_body);
+        Rect::new(body.x + r.x, body.y + r.y, r.w, r.h)
     }
 }
 
