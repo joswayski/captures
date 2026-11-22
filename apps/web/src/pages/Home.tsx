@@ -84,7 +84,7 @@ export default function Home({
   }, []);
 
   return (
-    <div className="flex min-h-dvh flex-col">
+    <div className="flex min-h-dvh flex-col overflow-x-clip">
       <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col px-6 py-16 sm:py-24">
         <section>
           <div className="flex items-center gap-3">

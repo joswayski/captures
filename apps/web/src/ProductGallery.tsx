@@ -1,4 +1,4 @@
-import { useCallback, useId, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type MouseEvent } from "react";
 
 import captureSelection from "../../../docs/images/capture-selection.jpg";
 import collapsedMiniPreviews from "../../../docs/images/collapsed-mini-previews.jpg";
@@ -6,16 +6,7 @@ import preferences from "../../../docs/images/preferences.jpg";
 import screenshotEditor from "../../../docs/images/screenshot-editor.jpg";
 import videoEditor from "../../../docs/images/video-editor.jpg";
 import ProductLightbox from "./ProductLightbox";
-import {
-  clampGalleryIndex,
-  galleryAllowsLightboxOpen,
-  galleryAllowsSlideGesture,
-  galleryFrameGesture,
-  galleryHasNext,
-  galleryHasPrevious,
-} from "./productLightboxModel";
-import { PRODUCT_SHOTS, galleryFrameAspectRatio, type ProductShot } from "./productShots";
-import { useImageZoom } from "./useImageZoom";
+import { PRODUCT_SHOTS, type ProductShot } from "./productShots";
 
 const SHOT_SRC = {
   "capture-selection.jpg": captureSelection,
@@ -25,268 +16,129 @@ const SHOT_SRC = {
   "video-editor.jpg": videoEditor,
 } as const satisfies Record<ProductShot["file"], string>;
 
-const FRAME_ASPECT = galleryFrameAspectRatio();
-
+/**
+ * App Store-style strip: every still keeps its own shape at one shared height,
+ * the next one peeks in from the edge, and native scroll snapping handles
+ * swipes, trackpads, and keyboard scrolling. Clicking a shot opens the lightbox.
+ */
 export default function ProductGallery() {
   const headingId = useId();
-  const captionId = useId();
-  const hintId = useId();
-  const frameRef = useRef<HTMLDivElement>(null);
-  const imageRef = useRef<HTMLImageElement>(null);
-  const swipeStart = useRef<{ x: number; y: number } | null>(null);
-  const stagePointers = useRef(0);
-  const [index, setIndex] = useState(0);
-  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const trackRef = useRef<HTMLDivElement>(null);
+  const [atStart, setAtStart] = useState(true);
+  const [atEnd, setAtEnd] = useState(false);
+  const [openIndex, setOpenIndex] = useState<number | null>(null);
   const [openedByPointer, setOpenedByPointer] = useState(false);
-  const suppressClick = useRef(false);
-  const shot = PRODUCT_SHOTS[index] ?? PRODUCT_SHOTS[0];
-  const lastIndex = PRODUCT_SHOTS.length - 1;
-  const canPrevious = galleryHasPrevious(index);
-  const canNext = galleryHasNext(index, PRODUCT_SHOTS.length);
-  const src = SHOT_SRC[shot.file];
-  const imageZoom = useImageZoom({
-    active: !lightboxOpen,
-    resetKey: shot.file,
-    viewportRef: frameRef,
-    imageRef,
-    wheel: "modified",
-  });
 
-  const goTo = useCallback((nextIndex: number) => {
-    setIndex(clampGalleryIndex(nextIndex, PRODUCT_SHOTS.length));
+  const updateEdges = useCallback(() => {
+    const track = trackRef.current;
+    if (!track) return;
+    setAtStart(track.scrollLeft <= 2);
+    setAtEnd(track.scrollLeft + track.clientWidth >= track.scrollWidth - 2);
   }, []);
 
-  const previous = useCallback(() => goTo(index - 1), [goTo, index]);
-  const next = useCallback(() => goTo(index + 1), [goTo, index]);
-  const closeLightbox = useCallback(() => setLightboxOpen(false), []);
-  const openLightbox = useCallback((fromPointer: boolean) => {
-    setOpenedByPointer(fromPointer);
-    setLightboxOpen(true);
-  }, []);
+  useEffect(() => {
+    updateEdges();
+    window.addEventListener("resize", updateEdges);
+    return () => window.removeEventListener("resize", updateEdges);
+  }, [updateEdges]);
 
-  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    if (lightboxOpen) return;
-    if (event.key === "ArrowLeft") {
-      if (!canPrevious) return;
-      event.preventDefault();
-      previous();
-    } else if (event.key === "ArrowRight") {
-      if (!canNext) return;
-      event.preventDefault();
-      next();
-    } else if (event.key === "Home") {
-      event.preventDefault();
-      goTo(0);
-    } else if (event.key === "End") {
-      event.preventDefault();
-      goTo(lastIndex);
-    } else if (event.key === "Enter") {
-      event.preventDefault();
-      openLightbox(false);
-    }
+  function step(direction: 1 | -1) {
+    const track = trackRef.current;
+    if (!track) return;
+    const slides = [...track.children] as HTMLElement[];
+    const start = slides[0]?.offsetLeft ?? 0;
+    const current = track.scrollLeft + start;
+    // First slide whose left edge is past (or before) the snapped one.
+    const target =
+      direction === 1
+        ? slides.find((slide) => slide.offsetLeft > current + 2)
+        : [...slides].reverse().find((slide) => slide.offsetLeft < current - 2);
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    track.scrollTo({
+      left: target ? target.offsetLeft - start : direction === 1 ? track.scrollWidth : 0,
+      behavior: reduceMotion ? "auto" : "smooth",
+    });
   }
 
-  function handleFramePointerDown(event: PointerEvent<HTMLDivElement>) {
-    imageZoom.onPointerDown(event);
+  function open(index: number, event: MouseEvent) {
+    setOpenedByPointer(event.detail > 0);
+    setOpenIndex(index);
   }
 
-  function handleFramePointerMove(event: PointerEvent<HTMLDivElement>) {
-    imageZoom.onPointerMove(event);
-  }
-
-  function handleFramePointerUp(event: PointerEvent<HTMLDivElement>) {
-    const release = imageZoom.onPointerUp(event);
-    if (!release) return;
-    if (!galleryAllowsLightboxOpen(release.scale, release.pinched)) {
-      suppressClick.current = true;
-    }
-  }
-
-  function handleFramePointerCancel() {
-    imageZoom.onPointerCancel();
-  }
-
-  function handleStagePointerDown(event: PointerEvent<HTMLDivElement>) {
-    if (event.pointerType === "mouse" && event.button !== 0) return;
-    stagePointers.current += 1;
-    if (stagePointers.current === 1) {
-      swipeStart.current = { x: event.clientX, y: event.clientY };
-    } else {
-      swipeStart.current = null;
-    }
-  }
-
-  function handleStagePointerUp(event: PointerEvent<HTMLDivElement>) {
-    stagePointers.current = Math.max(0, stagePointers.current - 1);
-    const start = swipeStart.current;
-    swipeStart.current = null;
-    if (stagePointers.current > 0 || start === null || suppressClick.current) return;
-    if (!galleryAllowsSlideGesture(imageZoom.zoom.scale)) return;
-    const action = galleryFrameGesture(event.clientX - start.x, event.clientY - start.y);
-    if (action === "previous") {
-      suppressClick.current = true;
-      previous();
-    } else if (action === "next") {
-      suppressClick.current = true;
-      next();
-    } else if (action === "ignore") {
-      suppressClick.current = true;
-    }
-  }
-
-  function handleStagePointerCancel() {
-    stagePointers.current = 0;
-    swipeStart.current = null;
-  }
-
-  function handleFrameClick() {
-    if (suppressClick.current) {
-      suppressClick.current = false;
-      return;
-    }
-    if (imageZoom.zoomed) return;
-    openLightbox(true);
-  }
-
-  const frameClass = imageZoom.zoomed ? "product-gallery-frame is-zoomed" : "product-gallery-frame";
-  const imageClass = imageZoom.settling
-    ? "product-gallery-image is-settling"
-    : "product-gallery-image";
+  const openShot = openIndex === null ? PRODUCT_SHOTS[0] : PRODUCT_SHOTS[openIndex];
 
   return (
-    <section aria-labelledby={headingId} className="mt-14 border-t border-border pt-10">
-      <h2
-        id={headingId}
-        className="text-[0.6875rem] font-medium uppercase tracking-[0.14em] text-accent-readable"
-      >
-        A look at Captures
-      </h2>
-
-      <div
-        className="product-gallery mt-6"
-        role="region"
-        aria-roledescription="carousel"
-        aria-label="Product screenshots"
-        aria-describedby={`${captionId} ${hintId}`}
-        tabIndex={0}
-        onKeyDown={handleKeyDown}
-      >
-        <div
-          className="product-gallery-stage"
-          onPointerDown={handleStagePointerDown}
-          onPointerUp={handleStagePointerUp}
-          onPointerCancel={handleStagePointerCancel}
+    <section aria-labelledby={headingId} className="mt-16">
+      <div className="flex items-center justify-between gap-4">
+        <h2
+          id={headingId}
+          className="text-[0.6875rem] font-medium uppercase tracking-[0.14em] text-accent-readable"
         >
-          <div
-            ref={frameRef}
-            className={frameClass}
-            style={{ aspectRatio: `1 / ${FRAME_ASPECT}` }}
-            aria-haspopup="dialog"
-            aria-expanded={lightboxOpen}
-            onPointerDown={handleFramePointerDown}
-            onPointerMove={handleFramePointerMove}
-            onPointerUp={handleFramePointerUp}
-            onPointerCancel={handleFramePointerCancel}
-            onClick={handleFrameClick}
+          A look at Captures
+        </h2>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            className="gallery-arrow"
+            aria-label="Previous screenshot"
+            disabled={atStart}
+            onClick={() => step(-1)}
           >
-            {PRODUCT_SHOTS.map((item, itemIndex) => {
-              const active = itemIndex === index;
-              return (
-                <img
-                  key={item.id}
-                  ref={active ? imageRef : undefined}
-                  className={active ? imageClass : "product-gallery-image is-inactive"}
-                  src={SHOT_SRC[item.file]}
-                  alt={active ? item.alt : ""}
-                  width={item.width}
-                  height={item.height}
-                  decoding="async"
-                  fetchPriority={active ? "high" : "low"}
-                  draggable={false}
-                  aria-hidden={active ? undefined : true}
-                  style={
-                    active
-                      ? {
-                          transform: `translate(${imageZoom.zoom.x}px, ${imageZoom.zoom.y}px) scale(${imageZoom.zoom.scale})`,
-                        }
-                      : undefined
-                  }
-                />
-              );
-            })}
-          </div>
-
-          <div className="product-gallery-copy">
-            <div className="product-gallery-captions">
-              {PRODUCT_SHOTS.map((item) => {
-                const active = item.id === shot.id;
-                return (
-                  <p
-                    key={item.id}
-                    id={active ? captionId : undefined}
-                    className="product-gallery-caption"
-                    aria-hidden={active ? undefined : "true"}
-                  >
-                    <span className="font-medium text-ink">{item.title}</span>
-                    <span className="text-ink-soft"> · </span>
-                    {item.description}
-                  </p>
-                );
-              })}
-            </div>
-            <p className="product-gallery-index" aria-hidden="true">
-              {index + 1}/{PRODUCT_SHOTS.length}
-            </p>
-          </div>
-        </div>
-        <p id={hintId} className="sr-only">
-          Pinch or use a trackpad pinch to zoom this screenshot. Swipe or use Previous and Next to
-          change shots. Tap to open a larger view.
-        </p>
-        <p className="sr-only" aria-live="polite">
-          Screenshot {index + 1} of {PRODUCT_SHOTS.length}: {shot.title}
-        </p>
-
-        <div className="gallery-nav-row">
-          <div className="gallery-nav-slot">
-            {canPrevious ? (
-              <button type="button" className="gallery-nav" onClick={previous}>
-                <ChevronIcon direction="left" />
-                Previous
-              </button>
-            ) : null}
-          </div>
-          <div className="flex items-center gap-1.5" role="group" aria-label="Choose screenshot">
-            {PRODUCT_SHOTS.map((item, itemIndex) => {
-              const selected = itemIndex === index;
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  className="gallery-dot"
-                  aria-label={item.title}
-                  aria-current={selected ? "true" : undefined}
-                  onClick={() => goTo(itemIndex)}
-                />
-              );
-            })}
-          </div>
-          <div className="gallery-nav-slot gallery-nav-slot-end">
-            {canNext ? (
-              <button type="button" className="gallery-nav" onClick={next}>
-                Next
-                <ChevronIcon direction="right" />
-              </button>
-            ) : null}
-          </div>
+            <ChevronIcon direction="left" />
+          </button>
+          <button
+            type="button"
+            className="gallery-arrow"
+            aria-label="Next screenshot"
+            disabled={atEnd}
+            onClick={() => step(1)}
+          >
+            <ChevronIcon direction="right" />
+          </button>
         </div>
       </div>
 
+      <div
+        ref={trackRef}
+        className="product-gallery-track"
+        role="region"
+        aria-roledescription="carousel"
+        aria-label="Product screenshots"
+        tabIndex={0}
+        onScroll={updateEdges}
+      >
+        {PRODUCT_SHOTS.map((shot, index) => (
+          <figure key={shot.id} className="product-gallery-slide">
+            <button
+              type="button"
+              className="product-gallery-shot"
+              aria-haspopup="dialog"
+              aria-label={`Open larger view: ${shot.title}`}
+              onClick={(event) => open(index, event)}
+            >
+              <img
+                src={SHOT_SRC[shot.file]}
+                alt={shot.alt}
+                width={shot.width}
+                height={shot.height}
+                decoding="async"
+                loading={index < 2 ? "eager" : "lazy"}
+                draggable={false}
+              />
+            </button>
+            <figcaption className="product-gallery-caption">
+              <span className="block font-medium text-ink">{shot.title}</span>
+              {shot.description}
+            </figcaption>
+          </figure>
+        ))}
+      </div>
+
       <ProductLightbox
-        open={lightboxOpen}
-        src={src}
-        shot={shot}
-        onClose={closeLightbox}
+        open={openIndex !== null}
+        src={SHOT_SRC[openShot.file]}
+        shot={openShot}
+        onClose={() => setOpenIndex(null)}
         suppressFocusRing={openedByPointer}
       />
     </section>
@@ -297,8 +149,8 @@ function ChevronIcon({ direction }: { direction: "left" | "right" }) {
   return (
     <svg
       viewBox="0 0 16 16"
-      width="12"
-      height="12"
+      width="14"
+      height="14"
       fill="none"
       stroke="currentColor"
       strokeWidth="1.8"

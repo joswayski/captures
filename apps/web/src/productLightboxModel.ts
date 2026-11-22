@@ -3,7 +3,6 @@ export const MAX_SCALE = 4;
 export const ZOOMED_SCALE = 1.05;
 export const DOUBLE_TAP_SCALE = 2.5;
 export const ZOOM_BUTTON_FACTOR = 1.4;
-export const SWIPE_THRESHOLD_PX = 48;
 export const TAP_SLOP_PX = 12;
 export const DOUBLE_TAP_MS = 320;
 export const CLOSE_SWIPE_PX = 80;
@@ -24,48 +23,6 @@ export function clampScale(scale: number) {
 
 export function isZoomed(scale: number) {
   return scale > ZOOMED_SCALE;
-}
-
-export function galleryFrameGesture(
-  deltaX: number,
-  deltaY: number,
-  swipeThreshold = SWIPE_THRESHOLD_PX,
-  tapSlop = TAP_SLOP_PX,
-): "previous" | "next" | "open" | "ignore" {
-  if (Math.abs(deltaX) >= swipeThreshold && Math.abs(deltaX) >= Math.abs(deltaY)) {
-    return deltaX > 0 ? "previous" : "next";
-  }
-  if (Math.hypot(deltaX, deltaY) <= tapSlop) return "open";
-  return "ignore";
-}
-
-export function galleryAllowsSlideGesture(scale: number) {
-  return !isZoomed(scale);
-}
-
-export function clampGalleryIndex(index: number, count: number) {
-  if (count <= 0) return 0;
-  return Math.min(Math.max(index, 0), count - 1);
-}
-
-export function galleryHasPrevious(index: number) {
-  return index > 0;
-}
-
-export function galleryHasNext(index: number, count: number) {
-  return count > 0 && index < count - 1;
-}
-
-export function galleryAllowsLightboxOpen(scale: number, pinched: boolean) {
-  return !pinched && !isZoomed(scale);
-}
-
-export function shouldPreventGalleryTouchScroll(touchCount: number, scale: number) {
-  return touchCount >= 2 || isZoomed(scale);
-}
-
-export function shouldZoomFromWheel(ctrlKey: boolean, metaKey: boolean) {
-  return ctrlKey || metaKey;
 }
 
 export function clearRestoredDialogFocus(openedByPointer: boolean) {
