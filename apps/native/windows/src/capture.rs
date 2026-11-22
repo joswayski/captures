@@ -3916,17 +3916,15 @@ unsafe fn popup(
     }
 }
 
-/// Straight RGBA as an opaque premultiplied BGRA Direct2D bitmap.
+/// Straight RGBA as an opaque Direct2D bitmap. The pixels upload as they
+/// are, with alpha ignored: swizzling a 4K frame to BGRA first took about
+/// 50 ms of every frozen New Capture before its overlay could show.
 pub fn bitmap(g: &Gfx, image: &image::RgbaImage) -> Result<ID2D1Bitmap1> {
     let (w, h) = image.dimensions();
-    let bgra: Vec<u8> = image
-        .pixels()
-        .flat_map(|p| [p[2], p[1], p[0], 255])
-        .collect();
     let props = D2D1_BITMAP_PROPERTIES1 {
         pixelFormat: D2D1_PIXEL_FORMAT {
-            format: DXGI_FORMAT_B8G8R8A8_UNORM,
-            alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+            format: DXGI_FORMAT_R8G8B8A8_UNORM,
+            alphaMode: D2D1_ALPHA_MODE_IGNORE,
         },
         dpiX: 96.,
         dpiY: 96.,
@@ -3939,7 +3937,7 @@ pub fn bitmap(g: &Gfx, image: &image::RgbaImage) -> Result<ID2D1Bitmap1> {
                 width: w,
                 height: h,
             },
-            Some(bgra.as_ptr().cast()),
+            Some(image.as_raw().as_ptr().cast()),
             w * 4,
             &props,
         )
