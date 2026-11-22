@@ -14,6 +14,8 @@ mod countdown;
 #[cfg(windows)]
 mod dialog;
 #[cfg(windows)]
+mod drag;
+#[cfg(windows)]
 mod editor;
 #[cfg(windows)]
 mod editor_uia;

@@ -10,7 +10,11 @@ Find on a reusable text field, `src/textfield.rs`, and page copy you can
 select and copy like Tauri's: drag, double-click a word, triple-click a
 paragraph, Ctrl+C; a click on a switch row's copy still toggles it), Capture History
 (`--scene history`) and a first screenshot editor slice, opened by History's
-Edit or `--scene editor --artifact ID` (`src/editor.rs`).
+Edit or thumbnail or `--scene editor --artifact ID` (`src/editor.rs`). Dragging a
+History thumbnail carries the capture's file into another app like shipping's
+`tauri-plugin-drag`: an OLE `DoDragDrop` of the shell data object (`CF_HDROP`),
+copy only, with the 284 × 160 preview as the drag image (`src/drag.rs`, shared
+with mini previews; the file comes from the shared `PreparePreviewDrag` export).
 
 Recordings open from History's Edit or `--scene recording --artifact ID`.
 The first slice (`src/recording.rs`) contains the header, dropped-frame warning

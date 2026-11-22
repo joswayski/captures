@@ -139,6 +139,12 @@ pub fn start(options: &Options, instance: Instance) {
         }
     };
     let tray_missing = tray.is_none();
+    // Drag exports from the last session are disposable (`crate::drag`).
+    let root = options
+        .history_root
+        .clone()
+        .unwrap_or_else(captures_app::default_history_root);
+    std::thread::spawn(move || crate::drag::clear_previous_exports(&root));
     // An installed Preview checks for updates at launch and every five
     // minutes after, as shipping; development builds make no request.
     // `ReleaseInfo` keeps `Renderer::Wgpu` (see docs/native-rewrite.md).

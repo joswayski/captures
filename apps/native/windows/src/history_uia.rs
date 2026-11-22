@@ -3,8 +3,8 @@
 //! Preferences, the `h1` and lede, Cancel and Delete all, the "Filter
 //! captures" group of pressed-state buttons (Toggle), the page error
 //! (`role="alert"`), the empty state, and the "Recent captures" region of
-//! `article` cards. Each card has its open button (disabled: only Edit opens
-//! the editor in this host so far), "File missing", the trash button, the
+//! `article` cards. Each card has its open button (Invoke opens the editor,
+//! like a click), "File missing", the trash button, the
 //! date and details, the dropped-frame warning, its two actions and its
 //! error. Every card is in the tree, virtualised or not; cards outside the
 //! viewport report IsOffscreen. The interrupted-recordings section has its
@@ -82,6 +82,7 @@ fn target(id: Id) -> Option<Target> {
         Id::Cancel => Target::Cancel,
         Id::DeleteAll => Target::DeleteAll,
         Id::Filter(i) => Target::Filter(i),
+        Id::Open(serial) => Target::Open(serial),
         Id::Delete(serial) => Target::Delete(serial),
         Id::Action(serial, i) => Target::Action(serial, i),
         Id::Recover(serial) => Target::Recover(serial),
@@ -96,6 +97,7 @@ fn id_of(target: Target) -> Id {
         Target::Cancel => Id::Cancel,
         Target::DeleteAll => Id::DeleteAll,
         Target::Filter(i) => Id::Filter(i),
+        Target::Open(serial) => Id::Open(serial),
         Target::Delete(serial) => Id::Delete(serial),
         Target::Action(serial, i) => Id::Action(serial, i),
         Target::Recover(serial) => Id::Recover(serial),
@@ -461,11 +463,7 @@ impl IRawElementProviderSimple_Impl for Node_Impl {
     fn GetPropertyValue(&self, property: UIA_PROPERTY_ID) -> Result<VARIANT> {
         let id = self.id;
         with(|h| {
-            let enabled = match id {
-                // The thumbnail button isn't wired to the editor yet; Edit is.
-                Id::Open(_) => false,
-                _ => target(id).is_none_or(|t| h.enabled(t)),
-            };
+            let enabled = target(id).is_none_or(|t| h.enabled(t));
             let focusable = target(id).is_some();
             let focused = target(id).is_some_and(|t| h.focus == Some(t));
             Ok(match property {

@@ -63,6 +63,8 @@ pub const FILTERED_BODY: &str = "Choose All to see your other captures.";
 const WM_APP_DONE: u32 = WM_APP + 11;
 const WM_APP_THUMB: u32 = WM_APP + 12;
 pub(crate) const WM_APP_WAKE: u32 = WM_APP + 13;
+/// Run the prepared file drag, outside the window's borrow (see `crate::drag`).
+const WM_APP_DRAG: u32 = WM_APP + 14;
 const WM_MOUSELEAVE: u32 = 0x02A3;
 const TIMER_MOTION: usize = 1;
 /// The nearest two-step delete deadline.
@@ -130,6 +132,9 @@ pub enum Target {
     Cancel,
     DeleteAll,
     Filter(usize),
+    /// A card's thumbnail (`.history-image-open`): click opens the editor,
+    /// a drag carries the capture's file out.
+    Open(u32),
     /// A card's trash button.
     Delete(u32),
     /// A card's action button, by index into `Card::actions`.
@@ -143,7 +148,9 @@ pub enum Target {
 impl Target {
     pub fn serial(self) -> Option<u32> {
         match self {
-            Target::Delete(serial) | Target::Action(serial, _) => Some(serial),
+            Target::Open(serial) | Target::Delete(serial) | Target::Action(serial, _) => {
+                Some(serial)
+            }
             _ => None,
         }
     }
@@ -301,6 +308,8 @@ enum Done {
     /// A recovery finished: its draft serial and any warning.
     Recovered(u32, std::result::Result<Option<String>, String>),
     Discarded(u32, std::result::Result<(), String>),
+    /// A thumbnail drag's file and image are ready.
+    DragReady(u32, std::result::Result<crate::drag::Payload, String>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -518,6 +527,14 @@ pub struct History {
     pub focus: Option<Target>,
     focus_visible: bool,
     pressed: Option<Target>,
+    /// Where a press on a thumbnail went down (screen pixels), until the
+    /// pointer moves far enough to drag it or the button comes up.
+    drag_press: Option<(u32, POINT)>,
+    /// The card whose file drag is being prepared or carried; its buttons
+    /// wait, like shipping's `busy = "dragging"`.
+    pub dragging: Option<u32>,
+    /// A prepared drag for the window procedure to run outside the borrow.
+    drag_ready: Option<crate::drag::Payload>,
     pointer: Option<(f32, f32)>,
     tracking: bool,
     nodes: Vec<Node>,
@@ -609,6 +626,9 @@ impl History {
             focus: None,
             focus_visible: false,
             pressed: None,
+            drag_press: None,
+            dragging: None,
+            drag_ready: None,
             pointer: None,
             tracking: false,
             nodes: Vec::new(),
@@ -956,7 +976,7 @@ impl History {
             Target::Back => true,
             Target::Cancel => self.has_entries() && self.confirm_all.is_some(),
             Target::DeleteAll | Target::Filter(_) => self.has_entries(),
-            Target::Delete(serial) => self.shown_index(serial).is_some(),
+            Target::Open(serial) | Target::Delete(serial) => self.shown_index(serial).is_some(),
             Target::Action(serial, i) => self
                 .shown_index(serial)
                 .is_some_and(|_| i < self.item(serial).map_or(0, |it| it.card.actions.len())),
@@ -971,13 +991,27 @@ impl History {
             Target::Back => true,
             Target::Cancel | Target::DeleteAll => !self.deleting_all,
             Target::Filter(i) => self.filter_enabled(i),
-            Target::Delete(serial) => self.item(serial).is_some_and(|item| item.busy.is_none()),
-            Target::Action(serial, i) => self.item(serial).is_some_and(|item| {
-                item.card
-                    .actions
-                    .get(i)
-                    .is_some_and(|&action| item.action_enabled(action))
-            }),
+            // Shipping disables the thumbnail while busy and for a missing
+            // recording.
+            Target::Open(serial) => {
+                self.dragging != Some(serial)
+                    && self
+                        .item(serial)
+                        .is_some_and(|item| item.busy.is_none() && !item.card.missing)
+            }
+            Target::Delete(serial) => {
+                self.dragging != Some(serial)
+                    && self.item(serial).is_some_and(|item| item.busy.is_none())
+            }
+            Target::Action(serial, i) => {
+                self.dragging != Some(serial)
+                    && self.item(serial).is_some_and(|item| {
+                        item.card
+                            .actions
+                            .get(i)
+                            .is_some_and(|&action| item.action_enabled(action))
+                    })
+            }
             // Every row waits while one recovers or discards, and a take in
             // progress holds the recovery lease.
             Target::Recover(_) | Target::Discard(_) => {
@@ -995,6 +1029,11 @@ impl History {
             Target::DeleteAll if self.confirm_all.is_some() => copy.delete_all_confirm_label.into(),
             Target::DeleteAll => copy.delete_all_label.into(),
             Target::Filter(i) => FILTERS[i].label().into(),
+            Target::Open(serial) => self
+                .item(serial)
+                .and_then(|item| item.card.open_label)
+                .unwrap_or_default()
+                .into(),
             Target::Delete(serial) => self
                 .item(serial)
                 .map_or_else(String::new, |item| item.delete_label().into()),
@@ -1055,6 +1094,8 @@ impl History {
                     self.refilter();
                 }
             }
+            // Shipping `openCapture`: the screenshot or recording editor.
+            Target::Open(serial) => self.run_action(serial, CardAction::Edit),
             Target::Delete(serial) => self.delete_step(serial),
             Target::Action(serial, i) => {
                 let Some(action) = self
@@ -1235,6 +1276,50 @@ impl History {
         });
     }
 
+    /// Shipping `beginFileDrag`: the press on a thumbnail moved far enough.
+    /// The file is prepared on a worker; the drag starts if the button is
+    /// still down when it is ready (`Done::DragReady`).
+    fn begin_drag(&mut self, serial: u32) {
+        let Some(id) = self.item(serial).map(|item| item.entry.id.clone()) else {
+            return;
+        };
+        self.drag_press = None;
+        self.pressed = None;
+        unsafe {
+            let _ = ReleaseCapture();
+        }
+        self.dragging = Some(serial);
+        if let Some(item) = self.item_mut(serial) {
+            item.error = None;
+        }
+        self.restyle(serial);
+        self.refresh(true);
+        self.need = true;
+        let (root, sender, hwnd) = (self.root.clone(), self.sender.clone(), self.hwnd.0 as isize);
+        std::thread::spawn(move || {
+            let _ = sender.send(Done::DragReady(serial, crate::drag::prepare(&root, &id)));
+            post(hwnd, WM_APP_DONE);
+        });
+    }
+
+    /// The drag ended or failed; History keeps the capture either way.
+    pub(crate) fn end_drag(&mut self, serial: u32, error: Option<String>) {
+        if self.dragging == Some(serial) {
+            self.dragging = None;
+        }
+        if let Some(error) = error
+            && let Some(item) = self.item_mut(serial)
+        {
+            item.error = Some(format!("Couldn’t drag capture: {error}"));
+            self.relayout = true;
+            self.events.push(Event::Structure);
+            self.events.push(Event::Alert(Some(serial)));
+        }
+        self.restyle(serial);
+        self.refresh(true);
+        self.need = true;
+    }
+
     fn finish(&mut self, done: Done) {
         match done {
             Done::Loaded(Ok(entries)) => {
@@ -1296,6 +1381,20 @@ impl History {
             }
             Done::Recovered(serial, result) => self.recovery_done(serial, result),
             Done::Discarded(serial, result) => self.recovery_done(serial, result.map(|()| None)),
+            Done::DragReady(serial, result) => {
+                // Shipping drops a drag released before its file was ready.
+                if self.dragging != Some(serial) {
+                    return;
+                }
+                match result {
+                    Ok(payload) if crate::drag::button_down() => {
+                        self.drag_ready = Some(payload);
+                        post(self.hwnd.0 as isize, WM_APP_DRAG);
+                    }
+                    Ok(_) => self.end_drag(serial, None),
+                    Err(error) => self.end_drag(serial, Some(error)),
+                }
+            }
             Done::Deleted(serial, Err(error))
             | Done::Saved(serial, Err(error))
             | Done::Shown(serial, Err(error)) => {
@@ -1798,6 +1897,11 @@ impl History {
         )
     }
 
+    /// The card-relative `.history-image-wrap` (the thumbnail button).
+    fn card_image(card: Rect) -> Rect {
+        Rect::new(1., 1., card.w - 2., history_view::CARD_IMAGE_HEIGHT as f32)
+    }
+
     /// Card-relative rects of the trash button and the two actions.
     pub fn card_parts(&self, k: usize) -> (Rect, [Rect; 2]) {
         let t = &self.t;
@@ -1826,7 +1930,7 @@ impl History {
             Target::Recover(_) | Target::Discard(_) => {
                 self.recovery_rect(target).unwrap_or_default()
             }
-            Target::Delete(serial) | Target::Action(serial, _) => {
+            Target::Open(serial) | Target::Delete(serial) | Target::Action(serial, _) => {
                 let Some(k) = self.shown_index(serial) else {
                     return Rect::default();
                 };
@@ -1834,6 +1938,7 @@ impl History {
                 let (delete, actions) = self.card_parts(k);
                 let part = match target {
                     Target::Action(_, i) => actions[i.min(1)],
+                    Target::Open(_) => Self::card_image(card),
                     _ => delete,
                 };
                 Rect::new(card.x + part.x, card.y + part.y, part.w, part.h)
@@ -2297,6 +2402,9 @@ impl History {
                     return (Some(Target::Action(serial, i)), Some(serial));
                 }
             }
+            if Self::card_image(card).contains(lx, ly) {
+                return (Some(Target::Open(serial)), Some(serial));
+            }
             return (None, Some(serial));
         }
         (None, None)
@@ -2313,6 +2421,8 @@ impl History {
         if recovery(hover) || recovery(self.hover) {
             self.nodes[self.recovery_node].dirty = true;
         }
+        self.dirty_image(hover);
+        self.dirty_image(self.hover);
         self.hover = hover;
         if card != self.hover_card {
             let old = std::mem::replace(&mut self.hover_card, card);
@@ -2322,6 +2432,15 @@ impl History {
         }
         self.refresh(true);
         self.need = true;
+    }
+
+    /// Redraw a thumbnail whose hover fill or focus ring may change.
+    fn dirty_image(&mut self, target: Option<Target>) {
+        if let Some(Target::Open(serial)) = target
+            && let Some(slot) = self.slots.iter().find(|s| s.serial == Some(serial))
+        {
+            self.nodes[slot.image].dirty = true;
+        }
     }
 
     /// Animate a card toward its hovered or resting height.
@@ -2357,6 +2476,7 @@ impl History {
         }
         for &i in &self.shown {
             let item = &self.items[i];
+            list.push(Target::Open(item.serial));
             list.push(Target::Delete(item.serial));
             list.extend((0..item.card.actions.len()).map(|a| Target::Action(item.serial, a)));
         }
@@ -2369,6 +2489,8 @@ impl History {
             return;
         }
         let changed = focus != self.focus;
+        self.dirty_image(focus);
+        self.dirty_image(self.focus);
         self.focus = focus;
         self.focus_visible = visible;
         self.nodes[self.recovery_node].dirty = true;
@@ -2415,6 +2537,7 @@ impl History {
         let serial = self.items[self.shown[next]].serial;
         let same = match focus {
             Target::Action(_, i) => Target::Action(serial, i),
+            Target::Open(_) => Target::Open(serial),
             _ => Target::Delete(serial),
         };
         let target = [same, Target::Delete(serial)]
@@ -2845,8 +2968,23 @@ impl History {
         let c = |name: &str| t.color(name);
         let area = rect(0., 0., w, h - 1.);
         let wrap = rounded_top(&g.factory, area, t.n("r-xl") - 1.)?;
+        // `.history-image-open:not(:disabled):hover`: the sunken fill mixed
+        // 12% toward the accent.
+        let open = Target::Open(item.serial);
+        let fill = if self.hover == Some(open) && self.enabled(open) {
+            let (a, b) = (c("surface-sunken"), c("theme-accent"));
+            let mix = |x: f32, y: f32| x * 0.88 + y * 0.12;
+            D2D1_COLOR_F {
+                r: mix(a.r, b.r),
+                g: mix(a.g, b.g),
+                b: mix(a.b, b.b),
+                a: mix(a.a, b.a),
+            }
+        } else {
+            c("surface-sunken")
+        };
         unsafe {
-            dc.FillGeometry(&wrap, &gfx::brush(dc, c("surface-sunken"))?, None);
+            dc.FillGeometry(&wrap, &gfx::brush(dc, fill)?, None);
         }
         let thumb = self
             .thumbs
@@ -2868,6 +3006,19 @@ impl History {
             gfx::fill_round(dc, r, t.n("r-md"), c("surface-raised"))?;
             gfx::border(dc, r, t.n("r-md"), 1., c("border"))?;
             gfx::text(dc, &label, x + 1. + px, y + 1. + py, c("text-muted"))?;
+        }
+        // `.history-image-open:focus-visible`: `inset var(--focus-ring)`.
+        if self.focus_visible && self.focus == Some(open) {
+            let radius = t.n("r-xl") - 1.;
+            gfx::ring(dc, area, radius, -2., 0., c("surface-canvas"))?;
+            gfx::ring(
+                dc,
+                area,
+                radius,
+                -4.,
+                -2.,
+                t.color_alpha("theme-accent", 0.55),
+            )?;
         }
         Ok(())
     }
@@ -3307,6 +3458,7 @@ impl History {
             }
             WM_KILLFOCUS => {
                 self.pressed = None;
+                self.drag_press = None;
                 return None;
             }
             WM_MOUSEMOVE => {
@@ -3323,6 +3475,15 @@ impl History {
                     self.tracking = true;
                 }
                 self.set_pointer(Some((x, y)));
+                if let Some((serial, press)) = self.drag_press {
+                    let mut now = POINT::default();
+                    unsafe {
+                        let _ = GetCursorPos(&mut now);
+                    }
+                    if crate::drag::beyond_threshold(press, now) {
+                        self.begin_drag(serial);
+                    }
+                }
             }
             WM_MOUSELEAVE => {
                 self.tracking = false;
@@ -3332,12 +3493,29 @@ impl History {
                 unsafe { SetCapture(self.hwnd) };
                 let (hit, _) = self.hit(x, y);
                 self.pressed = hit.filter(|&t| self.enabled(t));
+                // A press on a thumbnail may become a file drag.
+                self.drag_press = match self.pressed {
+                    Some(Target::Open(serial)) => {
+                        let mut press = POINT::default();
+                        unsafe {
+                            let _ = GetCursorPos(&mut press);
+                        }
+                        Some((serial, press))
+                    }
+                    _ => None,
+                };
                 // A click focuses the button without showing the ring.
                 self.set_focus(self.pressed, false);
             }
             WM_LBUTTONUP => {
                 unsafe {
                     let _ = ReleaseCapture();
+                }
+                self.drag_press = None;
+                // Released before the file was ready: no drag, no click.
+                if let Some(serial) = self.dragging {
+                    self.drag_ready = None;
+                    self.end_drag(serial, None);
                 }
                 let (hit, _) = self.hit(x, y);
                 if let Some(pressed) = self.pressed.take()
@@ -3365,6 +3543,12 @@ impl History {
                 let vk = VIRTUAL_KEY(wp.0 as u16);
                 let page = self.h * 0.875;
                 match vk {
+                    // Shipping's `cancelOnEscape` while a drag is prepared.
+                    VK_ESCAPE if self.dragging.is_some() && self.drag_ready.is_none() => {
+                        if let Some(serial) = self.dragging {
+                            self.end_drag(serial, None);
+                        }
+                    }
                     VK_TAB => self.focus_step(!shift),
                     VK_SPACE | VK_RETURN => {
                         if let Some(focus) = self.focus {
@@ -3661,6 +3845,23 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             WM_ERASEBKGND => return LRESULT(1),
             WM_PAINT => {
                 let _ = windows::Win32::Graphics::Gdi::ValidateRect(Some(hwnd), None);
+                return LRESULT(0);
+            }
+            // The OLE drag loop dispatches this window's messages, so it runs
+            // without the borrow. History keeps the capture whatever the
+            // drop did (shipping retains History entries for every outcome).
+            WM_APP_DRAG => {
+                let ready = with_history(|h| h.drag_ready.take().zip(h.dragging)).flatten();
+                if let Some((payload, serial)) = ready {
+                    let error = if crate::drag::button_down() {
+                        crate::drag::run(&payload)
+                            .err()
+                            .map(|e| e.message().to_string())
+                    } else {
+                        None
+                    };
+                    with_history(|h| h.end_drag(serial, error));
+                }
                 return LRESULT(0);
             }
             WM_DPICHANGED => {
