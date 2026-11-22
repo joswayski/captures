@@ -355,7 +355,7 @@ blur as it collapses, hold and fade when a Close or Delete leaves one card,
 and leave with the first streak of Clear all, taking no pointer while they
 move and showing or hiding at once under reduced motion (`--select
 toolbar-in|toolbar-out`). Hovered or focused, Minimize grows inward into
-shipping's 92 DIP "Show less" pill (width over 240 ms, the icon trading
+shipping's 92 DIP "Collapse" pill (width over 240 ms, the icon trading
 places with the label over 180 ms, both `--ease-out`), keeps it while the
 stack collapses and shows its icon while the toolbar enters or leaves
 otherwise (`--select show-less`). While a screenshot editor shows a card's

@@ -1469,7 +1469,7 @@ impl MiniPreviews {
         self.release_empty_stack();
     }
 
-    /// Show less / expand, with the shipping fly and toolbar motion.
+    /// Collapse / expand, with the shipping fly and toolbar motion.
     fn toggle_collapsed(&mut self, reduced_motion: bool) {
         use captures_app::preview_motion::ToolbarCause;
         let collapse = !self.stack.is_collapsed();
@@ -8278,7 +8278,7 @@ impl Live {
                         captures_app::preview::THUMBNAIL_CARD_HEIGHT as f32,
                     );
                     let toward_pile = if collapsing { progress } else { 1. - progress };
-                    // Show less lands on the resting pile. Expand starts from
+                    // Collapse lands on the resting pile. Expand starts from
                     // the pose each card had when it began (shipping's
                     // `--thumbnail-stack-expand-from` and `-expand-blur-from`),
                     // usually the fanned pile under the pointer.

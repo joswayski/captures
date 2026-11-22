@@ -440,6 +440,9 @@ final class MiniPreviewTests: XCTestCase {
         for top in [false, true] {
             let panel = fixturePanel(ids: ids, images: images, collapsed: true, topAnchor: top)
             defer { panel.close() }
+            // Showing the panel builds its layer tree, which used to reset the
+            // poses applied while the pile was built offscreen.
+            panel.orderFrontRegardless(); panel.displayIfNeeded()
             let view = panel.previewView
             XCTAssertEqual(view.pileGravity, top ? -1 : 1, "corner piles sit at full gravity")
             let front = try XCTUnwrap(view.card(for: "newest"))
@@ -2097,9 +2100,9 @@ final class MiniPreviewTests: XCTestCase {
             XCTAssertEqual(clear.accessibilityLabel(), "Clear all previews")
             XCTAssertNil(clear.toolTip)
             XCTAssertEqual(clear.tooltipText, "Clear all")
-            XCTAssertEqual(minimize.accessibilityLabel(), "Minimize previews")
+            XCTAssertEqual(minimize.accessibilityLabel(), "Collapse previews")
             XCTAssertNil(minimize.toolTip)
-            XCTAssertNil(minimize.tooltipText, "Show less swaps in a label instead of a tip")
+            XCTAssertNil(minimize.tooltipText, "Collapse swaps in a label instead of a tip")
             let rest = minimize.frame
             XCTAssertEqual(rest.width, 28)
             XCTAssertFalse(minimize.showsHoverLabel)
@@ -2110,8 +2113,8 @@ final class MiniPreviewTests: XCTestCase {
             XCTAssertTrue(minimize.showsHoverLabel)
             XCTAssertEqual(minimize.frame.width, 92)
             XCTAssertEqual(right ? minimize.frame.maxX : minimize.frame.minX,
-                           right ? rest.maxX : rest.minX, "Show less grows away from the screen edge")
-            XCTAssertFalse(minimize.frame.intersects(clear.frame), "Show less covered Clear all")
+                           right ? rest.maxX : rest.minX, "Collapse grows away from the screen edge")
+            XCTAssertFalse(minimize.frame.intersects(clear.frame), "Collapse covered Clear all")
             try write(render(panel), name: "mini-preview-show-less-\(right ? "right" : "left").png")
             minimize.mouseExited(with: event)
             XCTAssertFalse(minimize.showsHoverLabel)

@@ -114,7 +114,7 @@ final class MiniPreviewButton: NSButton {
     /// transitions hold the icon. Nil restores ordinary hover/focus.
     var hoverLabelOverride: Bool? { didSet { applyHoverShape() } }
     var showsHoverLabel: Bool { hoverLabel != nil && (hoverLabelOverride ?? (hovered || focused)) }
-    /// Show less morph: 0 is the 28 pt stack icon, 1 the hover pill. The width
+    /// Collapse morph: 0 is the 28 pt stack icon, 1 the hover pill. The width
     /// follows the 240 ms morph, the icon/label crossfade the 180 ms swap.
     private(set) var morphWidth: Double = 0
     private(set) var morphSwap: Double = 0
@@ -525,7 +525,7 @@ final class MiniPreviewButton: NSButton {
         needsDisplay = true
     }
 
-    /// The morphing Show less control: the stack icon slides toward the pile
+    /// The morphing Collapse control: the stack icon slides toward the pile
     /// edge and fades as the label arrives from it (`--thumbnail-minimize-slide`).
     private func drawMorph(_ label: String) {
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
@@ -776,6 +776,9 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     private(set) var artifactID: String
     var hasVisibleLabels: Bool { !sizeLabel.isHidden || !status.isHidden }
     override var isFlipped: Bool { true }
+
+    /// Keeps the collapsed pile's pose: see `MiniPreviewCardLayer`.
+    override func makeBackingLayer() -> CALayer { MiniPreviewCardLayer() }
 
     init(frame: NSRect, artifactID: String, image: NSImage, tokens: Tokens,
          width: Int, height: Int, sizeBytes: UInt64 = 0, saved: Bool, rightAnchor: Bool,
@@ -1538,6 +1541,19 @@ struct MiniPreviewResource {
     var generation = 0
 }
 
+/// AppKit pushes a layer-backed view's (identity) affine transform onto its
+/// layer whenever it syncs layer geometry: on every frame change in a visible
+/// window and when a window first builds its layer tree. That wiped the pile
+/// pose from a freshly collapsed stack, so its rear cards sat flat until the
+/// first hover re-applied it. Cards never rotate as views, so the push is
+/// dropped; the pile, flight and exit motion set `transform` themselves.
+private final class MiniPreviewCardLayer: CALayer {
+    override func setAffineTransform(_ m: CGAffineTransform) {
+        guard !m.isIdentity else { return }
+        super.setAffineTransform(m)
+    }
+}
+
 private final class MiniPreviewDocumentView: NSView {
     override var isFlipped: Bool { true }
 }
@@ -1898,7 +1914,7 @@ final class MiniPreviewView: NSView {
             let outerX = rightAnchor ? bounds.width - padding - 28 : padding
             let step = 28 + tokens.number("s-1")
             let adjacentX = rightAnchor ? outerX - step : outerX + step
-            // Clear all stays on the outside edge so the Show less pill never covers it.
+            // Clear all stays on the outside edge so the Collapse pill never covers it.
             let clear = MiniPreviewButton("Clear all previews", kind: .clear,
                 frame: NSRect(x: outerX, y: controlY, width: 28, height: 28), tokens: tokens,
                 action: clearAll)
@@ -1906,13 +1922,13 @@ final class MiniPreviewView: NSView {
             clear.tooltipChanged = { [weak self] owner, visible in
                 self?.setTooltip(for: owner, visible: visible)
             }
-            // Show less swaps its icon for a label instead of carrying a tip.
-            let collapse = MiniPreviewButton("Minimize previews", kind: .collapse,
+            // Collapse swaps its icon for a label instead of carrying a tip.
+            let collapse = MiniPreviewButton("Collapse previews", kind: .collapse,
                 frame: NSRect(x: adjacentX, y: controlY, width: 28, height: 28), tokens: tokens) {
                 setCollapsed(true)
             }
             collapse.growsFromTrailingEdge = rightAnchor
-            collapse.hoverLabel = "Show less"
+            collapse.hoverLabel = "Collapse"
             clear.boxShadowToken = "thumbnail-card-shadow"; collapse.boxShadowToken = "thumbnail-card-shadow"
             addSubview(collapse); addSubview(clear)
             collapseButton = collapse; clearButton = clear
@@ -2113,7 +2129,7 @@ final class MiniPreviewView: NSView {
         }
     }
 
-    /// Play a stack toolbar motion on Clear all and Show less. The controls
+    /// Play a stack toolbar motion on Clear all and Collapse. The controls
     /// ignore clicks while it plays, as shipping does; `holdEnd` keeps a
     /// leaving toolbar on its last keyframe until the stack rebuilds, and an
     /// entering one unlocks afterwards.
@@ -2159,13 +2175,23 @@ final class MiniPreviewView: NSView {
     /// starts from the pile's live blur.
     func cardMediaBlurs() -> [String: Double] { cards.mapValues(\.currentDepthBlur) }
 
+    /// Each card's pile pose on screen (fanned while hovered), carried across
+    /// a rebuild so expand starts from the pile's live pose.
+    func cardTransforms() -> [String: CATransform3D] {
+        cards.compactMapValues { card in card.layer.map { $0.presentation()?.transform ?? $0.transform } }
+    }
+
     /// Shipping `thumbnail-card-expand` / minimize run: cards fly between the
     /// list and the pile with the compact look (chrome hidden, depth shade
     /// easing) over the shipping 0.52 s. Collapsing flies from the laid-out
-    /// frames to `screenFrames`; expanding flies from them. Returns seconds.
+    /// frames to the `screenFrames` slots, each rear card easing into its rest
+    /// pose on a pile with `pileGravity` so the rebuilt pile takes over without
+    /// a jump; expanding flies from them, easing out of `transforms` (the
+    /// pile's live poses). Returns seconds.
     @discardableResult
     func playFly(_ screenFrames: [String: NSRect], collapsing: Bool, depths: [String: Int],
-                 blurs: [String: Double] = [:]) -> Double {
+                 blurs: [String: Double] = [:], pileGravity: Double? = nil,
+                 transforms: [String: CATransform3D] = [:]) -> Double {
         let fly = NativeMotion.transition("preview_stack_fly", tokens: tokens)
         guard let window, window.isVisible, fly.duration > 0 else { return 0 }
         overflowCues.forEach { $0.isHidden = true }
@@ -2174,8 +2200,23 @@ final class MiniPreviewView: NSView {
             guard let screen = screenFrames[id], let superview = card.superview else { continue }
             let local = superview.convert(window.convertFromScreen(screen), from: nil)
             let laid = card.frame
-            let pile = NSRect(origin: local.origin, size: laid.size)
-            card.setCompact(true, depth: depths[id] ?? 0)
+            var pile = NSRect(origin: local.origin, size: laid.size)
+            let depth = depths[id] ?? 0
+            if collapsing, let layer = card.layer {
+                // The rebuilt pile's `pileOrigin` and `applyPilePoses`.
+                var target = CATransform3DIdentity
+                if let pose = pilePose(for: id, depth: depth, hovered: false, gravity: pileGravity),
+                   let projection = pileProjection(for: id, depth: depth, hovered: false, gravity: pileGravity) {
+                    pile.origin.x += CGFloat(pose.dx); pile.origin.y += CGFloat(pose.slot_dy)
+                    target = Self.pileTransform(projection: projection, size: laid.size,
+                                                anchorPoint: layer.anchorPoint, flipped: superview.isFlipped)
+                }
+                animateFlyTransform(layer, to: target, from: layer.presentation()?.transform ?? layer.transform,
+                                    fly: fly)
+            } else if let layer = card.layer, let start = transforms[id] {
+                animateFlyTransform(layer, to: CATransform3DIdentity, from: start, fly: fly)
+            }
+            card.setCompact(true, depth: depth)
             card.setDepthShade(visible: !collapsing, animated: false)
             // The rest blur rides the flight in while collapsing. Expanding
             // clears the blur each card had on screen (shipping
@@ -2210,6 +2251,18 @@ final class MiniPreviewView: NSView {
             }
         }
         return fly.duration
+    }
+
+    private func animateFlyTransform(_ layer: CALayer, to target: CATransform3D, from start: CATransform3D,
+                                     fly: (duration: Double, timing: CAMediaTimingFunction)) {
+        layer.transform = target
+        guard !CATransform3DEqualToTransform(start, target) else { return }
+        let animation = CABasicAnimation(keyPath: "transform")
+        animation.fromValue = NSValue(caTransform3D: start)
+        animation.toValue = NSValue(caTransform3D: target)
+        animation.duration = fly.duration
+        animation.timingFunction = fly.timing
+        layer.add(animation, forKey: "pile-fly-transform")
     }
 
     /// Resume a new card's capture highlight on this (possibly rebuilt) stack.
@@ -2635,11 +2688,12 @@ final class MiniPreviewView: NSView {
     }
 
     /// Shipping rear-card pile pose (`captures_preview_pile_pose_v1`).
-    func pilePose(for id: String, depth: Int, hovered: Bool) -> CapturesPreviewPilePose? {
+    func pilePose(for id: String, depth: Int, hovered: Bool,
+                  gravity: Double? = nil) -> CapturesPreviewPilePose? {
         guard depth > 0 else { return nil }
         var pose = CapturesPreviewPilePose()
         let ok = id.withCString {
-            captures_preview_pile_pose_v1($0, depth, hovered, pileGravity, anchoredAtTop, &pose)
+            captures_preview_pile_pose_v1($0, depth, hovered, gravity ?? pileGravity, anchoredAtTop, &pose)
         }
         return ok ? pose : nil
     }
@@ -2652,12 +2706,13 @@ final class MiniPreviewView: NSView {
     }
 
     /// Shipping rear-card 3D pose (`captures_preview_pile_projection_v1`).
-    func pileProjection(for id: String, depth: Int, hovered: Bool) -> [Double]? {
+    func pileProjection(for id: String, depth: Int, hovered: Bool, gravity: Double? = nil) -> [Double]? {
         guard depth > 0 else { return nil }
         var matrix = [Double](repeating: 0, count: 9)
         let ok = id.withCString { name in
             matrix.withUnsafeMutableBufferPointer {
-                captures_preview_pile_projection_v1(name, depth, hovered, pileGravity, anchoredAtTop, $0.baseAddress)
+                captures_preview_pile_projection_v1(name, depth, hovered, gravity ?? pileGravity, anchoredAtTop,
+                                                    $0.baseAddress)
             }
         }
         return ok ? matrix : nil
@@ -3273,7 +3328,7 @@ final class MiniPreviewController {
         if let hold { scheduleRebuild(after: hold) } else { finishView() }
     }
 
-    /// Show less and expand. The cards fly between the list and the pile
+    /// Collapse and expand. The cards fly between the list and the pile
     /// (shipping `thumbnail-card-expand` and the minimize run) while the stack
     /// toolbar leaves or enters; collapsing rebuilds once the pile is reached.
     func setCollapsed(_ collapsed: Bool) {
@@ -3282,17 +3337,18 @@ final class MiniPreviewController {
         settleTransitions()
         let before = panel?.isVisible == true ? panel?.previewView.cardScreenFrames() ?? [:] : [:]
         let blurs = panel?.isVisible == true ? panel?.previewView.cardMediaBlurs() ?? [:] : [:]
+        let transforms = panel?.isVisible == true ? panel?.previewView.cardTransforms() ?? [:] : [:]
         stack.setCollapsed(collapsed)
         let depths = cardDepths()
         if collapsed, let view = panel?.previewView, let pile = pileScreenFrames(),
-           view.playFly(pile, collapsing: true, depths: depths) > 0 {
+           view.playFly(pile, collapsing: true, depths: depths, pileGravity: pileGravity()) > 0 {
             view.playToolbar("preview_toolbar_out", holdEnd: true)
             scheduleRebuild(after: NativeMotion.transition("preview_stack_fly", tokens: tokens).duration)
             return
         }
         makePanel(); updateVisibility()
         if !collapsed, !before.isEmpty, let view = panel?.previewView,
-           view.playFly(before, collapsing: false, depths: depths, blurs: blurs) > 0 {
+           view.playFly(before, collapsing: false, depths: depths, blurs: blurs, transforms: transforms) > 0 {
             view.playToolbar("preview_toolbar_in", holdEnd: false)
         }
         // Expanding leaves the pointer over a card it never hovered.
@@ -3302,6 +3358,13 @@ final class MiniPreviewController {
     private func cardDepths() -> [String: Int] {
         let count = stack.ids.count
         return Dictionary(uniqueKeysWithValues: stack.ids.enumerated().map { ($1, count - 1 - $0) })
+    }
+
+    /// The collapsed pile's gravity, as `makePanel` gives the rebuilt pile.
+    private func pileGravity() -> Double? {
+        guard let screen = targetScreen(), let monitor = Self.monitor(for: screen) else { return nil }
+        return NativePreviewLayout.gravity(monitor: monitor, count: stack.ids.count,
+                                           origin: stackOrigin, placement: stackPlacement)
     }
 
     /// Where each card sits in the collapsed pile, in screen coordinates.

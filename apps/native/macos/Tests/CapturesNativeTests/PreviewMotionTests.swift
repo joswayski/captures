@@ -5,7 +5,7 @@ import CCapturesSettings
 @testable import CapturesNative
 
 /// Preview stack motion from `captures_app::preview_motion`: exits holding
-/// their slots, survivors settling, the list ↔ pile flight, the Show less
+/// their slots, survivors settling, the list ↔ pile flight, the Collapse
 /// morph, micro-motion and the card warnings.
 final class PreviewMotionTests: XCTestCase {
     private let tokens = Tokens.variants["dark-mustard"]!
@@ -211,6 +211,11 @@ final class PreviewMotionTests: XCTestCase {
             modifierFlags: [], timestamp: 1, windowNumber: list.window?.windowNumber ?? 0, context: nil,
             eventNumber: 0, clickCount: 0, pressure: 0))
         controller.setCollapsed(true)
+        // Where the flight lands: model frames and poses are set when it starts.
+        let landing = list.cardScreenFrames()
+        let landingPoses = Dictionary(uniqueKeysWithValues: ["older", "newer"].compactMap { id in
+            list.card(for: id)?.layer.map { (id, $0.transform) }
+        })
         minimize.mouseExited(with: event)
         RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         XCTAssertEqual(minimize.frame.width, 92, "collapse keeps the label after the pointer leaves")
@@ -218,9 +223,32 @@ final class PreviewMotionTests: XCTestCase {
         XCTAssertTrue(controller.isTransitioning, "cards fly to the pile before the rebuild")
         XCTAssertEqual(list.visibleCardLabelCount, 0, "flying cards are compact")
         try waitUntil { !controller.isTransitioning && controller.previewView !== list }
+        let pile = try XCTUnwrap(controller.previewView)
+        pile.window?.displayIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        let rested = pile.cardScreenFrames()
+        for id in ["older", "newer"] {
+            let flown = try XCTUnwrap(landing[id]), rest = try XCTUnwrap(rested[id])
+            XCTAssertEqual(flown.minX, rest.minX, accuracy: 0.01, "\(id) lands where the pile rests")
+            XCTAssertEqual(flown.minY, rest.minY, accuracy: 0.01, "\(id) lands where the pile rests")
+            let flownPose = try XCTUnwrap(landingPoses[id]), restPose = try XCTUnwrap(pile.card(for: id)?.layer?.transform)
+            for (a, b) in [(flownPose.m11, restPose.m11), (flownPose.m22, restPose.m22),
+                           (flownPose.m24, restPose.m24), (flownPose.m41, restPose.m41),
+                           (flownPose.m42, restPose.m42)] {
+                XCTAssertEqual(a, b, accuracy: 1e-6, "\(id) lands in the pile's pose")
+            }
+        }
+        XCTAssertFalse(CATransform3DIsIdentity(try XCTUnwrap(pile.card(for: "older")?.layer?.transform)),
+                       "the shown pile keeps its rear card's rest pose")
+        let pilePose = try XCTUnwrap(pile.card(for: "older")?.layer?.transform)
 
         controller.setCollapsed(false)
         let expanded = try XCTUnwrap(controller.previewView)
+        let unpose = try XCTUnwrap(expanded.card(for: "older")?.layer?.animation(forKey: "pile-fly-transform")
+            as? CABasicAnimation)
+        XCTAssertTrue(CATransform3DEqualToTransform(try XCTUnwrap((unpose.fromValue as? NSValue)?.caTransform3DValue),
+                                                    pilePose), "expand eases out of the pile's pose")
+        XCTAssertTrue(CATransform3DIsIdentity(try XCTUnwrap(expanded.card(for: "older")?.layer?.transform)))
         let entering = try XCTUnwrap(expanded.stackToolbarButtons.first { $0.kind == .collapse })
         entering.mouseEntered(with: event)
         RunLoop.current.run(until: Date().addingTimeInterval(0.1))

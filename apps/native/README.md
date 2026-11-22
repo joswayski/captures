@@ -1234,9 +1234,9 @@ brightness, blur, media scale, opacity and arrival pose through its stagger and
 composing the streak underneath that appearance. It does not force idle cards
 into the dimmed hover look. Individual Close/Delete keep their existing treatment.
 This is screenshot-stack behavior; recording-ready notices are separate surfaces.
-Show less and expand fly the
+Collapse and expand fly the
 cards between the list and the compact pile, and the stack toolbar enters, leaves
-and clears with its shipping keyframes; the Show less pill morphs over 240 ms.
+and clears with its shipping keyframes; the Collapse pill morphs over 240 ms.
 New cards fade an accent capture highlight, main-action glyphs pop when they
 change, the clipboard chip arrives with its bounce and a hovered pile sparkles.
 Reduce Motion skips every exit, flight, highlight and sparkle. The Close streak
@@ -1258,7 +1258,7 @@ and macOS CI do not establish physical Windows/macOS or Wayland preview acceptan
 
 Stacks start expanded, with newest cards nearest the configured top/bottom edge.
 Overflow scrolls without dropping captures; chevron cues at the stack edges
-scroll one card at a time. Show less parks a compact pile with
+scroll one card at a time. Collapse parks a compact pile with
 the newest card in front; clicking it expands the stack. Incoming captures and
 capture cancellation preserve the parked state. Collapsed piles drag within
 their capture display and fan on hover, respecting reduced motion. Rear cards take

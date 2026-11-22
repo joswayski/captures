@@ -1661,7 +1661,7 @@ pub fn show_stack_controls(
             28. + gap
         };
     let y = ui.max_rect().center().y - 14.;
-    // Clear all stays at the outside edge so the Show less pill grows inward
+    // Clear all stays at the outside edge so the Collapse pill grows inward
     // and never covers it.
     let clear = egui::Rect::from_min_size(egui::pos2(outer_x, y), size);
     let clear_response = stack_button(ui, tokens, clear, "clear-all", STACK_CLEAR_ALL_LABEL, true);
@@ -1846,7 +1846,7 @@ fn eased_value(
 }
 
 /// Shipping `.thumbnail-stack-control`: solid glass square, raised on hover
-/// (the expanded Show less pill keeps the resting glass instead).
+/// (the expanded Collapse pill keeps the resting glass instead).
 fn stack_button(
     ui: &mut egui::Ui,
     tokens: &Tokens,
@@ -3776,13 +3776,13 @@ mod tests {
                 let mut output = ctx.end_pass();
                 let texts = painted_texts(&output);
                 assert_eq!(
-                    texts.iter().any(|text| text == "Show less"),
+                    texts.iter().any(|text| text == "Collapse"),
                     frame == 2,
                     "frame {frame}: {texts:?}"
                 );
                 if frame == 2 {
                     label_rect = output.shapes.iter().find_map(|shape| match &shape.shape {
-                        egui::Shape::Text(text) if text.galley.text() == "Show less" => {
+                        egui::Shape::Text(text) if text.galley.text() == "Collapse" => {
                             Some(text.galley.rect.translate(text.pos.to_vec2()))
                         }
                         _ => None,
@@ -3845,7 +3845,7 @@ mod tests {
                 assert_eq!(
                     painted_texts(&output)
                         .iter()
-                        .any(|text| text == "Show less"),
+                        .any(|text| text == "Collapse"),
                     forced
                 );
             }
@@ -3866,7 +3866,7 @@ mod tests {
                     .shapes
                     .iter()
                     .find_map(|shape| match &shape.shape {
-                        egui::Shape::Text(text) if text.galley.text() == "Show less" => {
+                        egui::Shape::Text(text) if text.galley.text() == "Collapse" => {
                             Some(text.fallback_color.a())
                         }
                         _ => None,

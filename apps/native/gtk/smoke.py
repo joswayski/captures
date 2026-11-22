@@ -1095,12 +1095,12 @@ def previews(binary, scratch):
         assert chip == ["Copied to clipboard"], f"copy reported {chip}"
         # Minimize folds the stack into the pile: one expand button, the
         # rear card out of the tree; the button brings the list back.
-        press(find(stack, "push button", "Minimize previews")[0])
+        press(find(stack, "push button", "Collapse previews")[0])
         expand = wait(lambda: find(stack, "push button", "Expand 2 previews"), "the pile")[0]
         wait(lambda: len(find(stack, "image", "Screenshot preview")) == 1,
              "the rear card to leave the tree")
         press(expand)
-        wait(lambda: find(stack, "push button", "Minimize previews")
+        wait(lambda: find(stack, "push button", "Collapse previews")
              and len(find(stack, "image", "Screenshot preview")) == 2, "the pile to expand")
         print("previews: minimize to the pile and expand over AT-SPI")
         press(find(app, "push button", "Close")[0])

@@ -21,7 +21,7 @@
 //! a closing card's image stretches under the streak's stepped horizontal
 //! blur, and Clear all keeps each card's own look. Clear all and Minimize
 //! enter, dissolve and leave with the shared `StackToolbar` motions, and
-//! Minimize grows into "Show less" while hovered or focused.
+//! Minimize grows into "Collapse" while hovered or focused.
 //!
 //! Dragging an expanded card's image drags its file out (`crate::drag`);
 //! an accepted drop elsewhere dismisses the card and a drop back on the
@@ -236,7 +236,7 @@ pub struct Stack {
     /// control's eases resolve against; `None` (offscreen fixtures) lands
     /// them at once.
     pub motion_tokens: Option<Tokens>,
-    /// Minimize growing into "Show less" while hovered or focused.
+    /// Minimize growing into "Collapse" while hovered or focused.
     minimize: Morph,
     /// The card whose Edit just opened its editor: its pill reads "In
     /// editor" until the pointer and focus leave it
@@ -276,7 +276,7 @@ impl HoverFade {
     }
 }
 
-/// Minimize's "Show less" morph easing toward `open` since `at`, from where
+/// Minimize's "Collapse" morph easing toward `open` since `at`, from where
 /// it was then: its width (`--thumbnail-minimize-morph`, 240 ms) and the
 /// icon-to-label swap (`--thumbnail-minimize-swap`, 180 ms), both
 /// `--ease-out`.
@@ -629,7 +629,7 @@ impl Stack {
         }
     }
 
-    /// Grow Minimize into "Show less" while it is hovered or focused and the
+    /// Grow Minimize into "Collapse" while it is hovered or focused and the
     /// toolbar is idle, or shrink it back, from where it is now.
     pub fn sync_minimize(&mut self, now: f64) {
         let open = self.toolbar()
@@ -656,8 +656,8 @@ impl Stack {
         }
     }
 
-    /// Minimize's width and icon-to-label swap now (0 the icon, 1 "Show
-    /// less"). Shipping keeps "Show less" while the stack collapses and the
+    /// Minimize's width and icon-to-label swap now (0 the icon, 1
+    /// "Collapse"). Shipping keeps "Collapse" while the stack collapses and the
     /// icon while the toolbar enters or leaves otherwise.
     fn minimize_look(&self) -> [f32; 2] {
         let now = now_ms();
@@ -1364,7 +1364,7 @@ impl Stack {
     }
 
     /// Minimize sits beside Clear all, `gap: var(--s-1)`; the right anchor's
-    /// `row-reverse` puts it inside Clear all. As "Show less" it grows
+    /// `row-reverse` puts it inside Clear all. As "Collapse" it grows
     /// inward, away from Clear all, to 92 DIPs.
     fn minimize_rect(&self) -> Rect {
         let clear = self.clear_rect();
@@ -1757,7 +1757,7 @@ impl Stack {
         hit: Hit,
         r: Rect,
     ) -> Result<()> {
-        // Minimize's hover is the "Show less" morph, on the resting glass.
+        // Minimize's hover is the "Collapse" morph, on the resting glass.
         let hot = self.hot == Some(hit) && hit == Hit::ClearAll;
         gfx::shadow(dc, r, t.n("r-md"), t.shadow("thumbnail-card-shadow"))?;
         let fill = if hot {
@@ -1813,7 +1813,7 @@ impl Stack {
             if swap <= 0. {
                 return Ok(());
             }
-            // ... as "Show less" fades in from 4 DIPs the other way.
+            // ... as "Collapse" fades in from 4 DIPs the other way.
             let label = g.text_sized(
                 t,
                 preview::STACK_MINIMIZE_HOVER_LABEL,
@@ -2905,7 +2905,7 @@ pub fn fixture(g: &Gfx, image: &image::RgbaImage, select: Option<&str>) -> Stack
                 stack.pointer(Some((pill.left + 20., pill.top + 10.)));
             }
         }
-        // The pointer on Minimize, which reads "Show less".
+        // The pointer on Minimize, which reads "Collapse".
         Some("show-less") => {
             let at = stack.minimize_rect();
             stack.pointer(Some((at.left + 4., at.top + 4.)));
@@ -4845,7 +4845,7 @@ mod tests {
             .iter()
             .map(|i| i.name.as_str())
             .collect();
-        assert_eq!(toolbar, ["Clear all previews", "Minimize previews"]);
+        assert_eq!(toolbar, ["Clear all previews", "Collapse previews"]);
         // Keys round-trip to the click targets.
         for hit in [Hit::ClearAll, Hit::Close(0), Hit::Save(1), Hit::Edit(3)] {
             assert_eq!(Stack::uia_hit(Stack::uia_key(hit)), Some(hit));

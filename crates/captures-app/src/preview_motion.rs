@@ -439,7 +439,7 @@ impl StackExits {
     }
 }
 
-/// Why the stack toolbar (Clear all, Show less) appears or leaves.
+/// Why the stack toolbar (Clear all, Collapse) appears or leaves.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ToolbarCause {
     /// The pile expanded: [`Motion::PreviewToolbarIn`].
@@ -514,7 +514,7 @@ impl StackToolbar {
         self.shown && !self.running(tokens, now_ms, reduced)
     }
 
-    /// Shipping keeps Show less fully expanded while collapsing, and forces
+    /// Shipping keeps Collapse fully expanded while collapsing, and forces
     /// the resting icon during enter/exit/Clear. Neither accepts hover morphs.
     pub fn minimize_override(
         &self,
@@ -762,7 +762,7 @@ impl DragSway {
     }
 }
 
-/// Show less morph progress (0 = the 28 pt stack icon, 1 = the pill) for the
+/// Collapse morph progress (0 = the 28 pt stack icon, 1 = the pill) for the
 /// width tween and the icon/label crossfade tween.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MinimizeMorph {

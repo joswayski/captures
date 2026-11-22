@@ -951,11 +951,11 @@ pub fn card_metadata(size_bytes: u64) -> String {
 pub const THUMBNAIL_CARD_SLOT: f64 = THUMBNAIL_CARD_HEIGHT + THUMBNAIL_GAP;
 
 /// Shipping stack toolbar copy. Clear all is an icon button with a tooltip;
-/// Minimize swaps its icon for the "Show less" label on hover/focus.
+/// Minimize swaps its icon for the "Collapse" label on hover/focus.
 pub const STACK_CLEAR_ALL_TOOLTIP: &str = "Clear all";
 pub const STACK_CLEAR_ALL_LABEL: &str = "Clear all previews";
-pub const STACK_MINIMIZE_LABEL: &str = "Minimize previews";
-pub const STACK_MINIMIZE_HOVER_LABEL: &str = "Show less";
+pub const STACK_MINIMIZE_LABEL: &str = "Collapse previews";
+pub const STACK_MINIMIZE_HOVER_LABEL: &str = "Collapse";
 /// Width of the hovered Minimize pill (`.thumbnail-stack-minimize:hover`).
 pub const STACK_MINIMIZE_HOVER_WIDTH: f64 = 92.0;
 

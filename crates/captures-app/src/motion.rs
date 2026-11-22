@@ -760,7 +760,7 @@ pub enum Transition {
     /// `.thumbnail-editor-control`: Edit ↔ "In editor" width, padding and
     /// colour morph over `0.28s cubic-bezier(0.2, 0.8, 0.2, 1)`.
     PreviewEditorMorph,
-    /// `.thumbnail-stack-minimize`: the stack icon ↔ "Show less" pill width
+    /// `.thumbnail-stack-minimize`: the stack icon ↔ "Collapse" pill width
     /// over `var(--thumbnail-minimize-morph)` (240 ms) `var(--ease-out)`.
     PreviewMinimizeMorph,
     /// `.thumbnail-stack-minimize svg` / `-label`: the icon and label

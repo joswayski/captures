@@ -151,7 +151,7 @@ pub const ROWS: [Row; 27] = [
     Row {
         key: "mini_preview_placement",
         title: "Mini preview position",
-        description: "Choose a screen corner. Show less stays on that edge, and the stack opens away from it. You can still drag the collapsed pile during a session.",
+        description: "Choose a screen corner. Collapsed previews stay on that edge, and the stack opens away from it. You can still drag the collapsed pile during a session.",
     },
     Row {
         key: "include_mini_previews_in_captures",
