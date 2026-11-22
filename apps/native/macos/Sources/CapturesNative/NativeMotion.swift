@@ -360,6 +360,74 @@ enum NativeMotion {
     }
 }
 
+extension NativeMotion {
+    private static let fadeKey = "native-fade"
+    private static let slideKey = "native-fade-slide"
+    private static let fadeTokenKey = "native-fade-token"
+
+    /// A CSS `opacity` (and optional `translateY`) transition on hover chrome
+    /// whose `pointer-events` switch at once: `isHidden` (hit testing,
+    /// accessibility) changes now, and a view fading out keeps drawing its
+    /// last frame until the fade ends. `hiddenOffsetY` is the CSS nudge, in
+    /// points down, the view rests at while hidden. Reversals start from the
+    /// presented value; nothing animates under reduced motion or offscreen.
+    static func setHidden(_ hidden: Bool, fading view: NSView, fade: String,
+                          slide: (name: String, hiddenOffsetY: CGFloat)? = nil, tokens: Tokens,
+                          reduced: Bool = NativeMotion.reduceMotion) {
+        guard view.isHidden != hidden else { return }
+        let inFlight = view.layer?.animation(forKey: fadeKey) != nil
+        let presented = view.layer?.presentation()
+        let fromOpacity = inFlight ? presented?.opacity ?? (hidden ? 1 : 0) : (hidden ? 1 : 0)
+        let fromY = inFlight && view.layer?.animation(forKey: slideKey) != nil
+            ? CGFloat(presented?.transform.m42 ?? 0) : nil
+        view.isHidden = hidden
+        guard let layer = view.layer else { return }
+        let token = UUID().uuidString
+        layer.setValue(token, forKey: fadeTokenKey)
+        layer.removeAnimation(forKey: fadeKey); layer.removeAnimation(forKey: slideKey)
+        let spec = transition(fade, tokens: tokens, reduced: reduced)
+        guard spec.duration > 0, view.window?.isVisible == true else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        CATransaction.setCompletionBlock { [weak view] in
+            guard let view, let layer = view.layer,
+                  layer.value(forKey: fadeTokenKey) as? String == token else { return }
+            layer.removeAnimation(forKey: fadeKey); layer.removeAnimation(forKey: slideKey)
+            // AppKit hid the layer with the view; the fade held it on screen.
+            if view.isHidden { layer.isHidden = true }
+        }
+        if hidden { layer.isHidden = false }
+        let opacity = CABasicAnimation(keyPath: "opacity")
+        opacity.fromValue = fromOpacity
+        opacity.toValue = hidden ? 0 : 1
+        opacity.duration = spec.duration
+        opacity.timingFunction = spec.timing
+        opacity.fillMode = .forwards
+        opacity.isRemovedOnCompletion = false
+        layer.add(opacity, forKey: fadeKey)
+        if let slide {
+            let slideSpec = transition(slide.name, tokens: tokens, reduced: reduced)
+            let down: CGFloat = view.superview?.isFlipped == true ? 1 : -1
+            let rest = slide.hiddenOffsetY * down
+            let move = CABasicAnimation(keyPath: "transform.translation.y")
+            move.isAdditive = true
+            move.fromValue = fromY ?? (hidden ? 0 : rest)
+            move.toValue = hidden ? rest : 0
+            move.duration = slideSpec.duration
+            move.timingFunction = slideSpec.timing
+            move.fillMode = .forwards
+            move.isRemovedOnCompletion = false
+            layer.add(move, forKey: slideKey)
+        }
+        CATransaction.commit()
+    }
+
+    /// Whether `setHidden(_:fading:…)` is still easing `view`, for tests.
+    static func isFading(_ view: NSView) -> Bool {
+        view.layer?.animation(forKey: fadeKey) != nil
+    }
+}
+
 /// A self-drawn boolean `transition`, such as a segment label easing to its
 /// hovered or selected colour: eased 0…1 progress toward the latest target.
 /// It redraws its view on a display-rate timer only while it runs, and the

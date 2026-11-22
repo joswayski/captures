@@ -890,7 +890,9 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         warningLabel.frame = NSRect(x: sizeLabel.frame.maxX + tokens.number("s-3"), y: sizeLabel.frame.minY,
                                     width: min(width, max(0, bounds.width - sizeLabel.frame.maxX - 16)),
                                     height: sizeLabel.frame.height)
-        warningLabel.isHidden = warning == nil || sizeLabel.isHidden || isExiting
+        let hidden = warning == nil || sizeLabel.isHidden || isExiting
+        // An unchanged state leaves a running metadata fade alone.
+        if warningLabel.isHidden != hidden { warningLabel.isHidden = hidden }
     }
 
     /// Clear all retains the presented media, including a partial hover/arrival.
@@ -1100,7 +1102,7 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         CATransaction.begin(); CATransaction.setDisableActions(true)
         editorRing.opacity = target
         CATransaction.commit()
-        if compact { editButton?.isHidden = true } else { setChromeVisible(chromeVisible) }
+        if compact { editButton?.isHidden = true } else { setChromeVisible(chromeVisible, animated: animated) }
     }
 
     /// `html:not(.thumbnail-native-tracking) .thumbnail-card:hover img`: blur,
@@ -1282,15 +1284,30 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         addSubview(button); actionButtons.append(button); return button
     }
 
-    private func setChromeVisible(_ visible: Bool) {
+    private func setChromeVisible(_ visible: Bool, animated: Bool = true) {
         guard !compact, !isExiting else { return }
         chromeVisible = visible
-        actionButtons.forEach { if $0 !== editButton { $0.isHidden = !visible } }
-        if clipboardCurrent { copyButton?.isHidden = true }
-        closeButton?.isHidden = !visible || !saved
+        let reduced = !animated || NativeMotion.reduceMotion
+        // Shipping fades the chrome (and nudges the action rows into place)
+        // while its buttons stop taking clicks at once.
+        let mainActionsHeight = 64 + tokens.number("s-3")
+        for button in actionButtons where button !== editButton {
+            let hidden = !visible || (button === copyButton && clipboardCurrent)
+                || (button === closeButton && !saved)
+            let main = button === copyButton || button === saveButton
+            NativeMotion.setHidden(hidden, fading: button, fade: "preview_chrome_fade",
+                                   slide: ("preview_chrome_slide", main ? mainActionsHeight * 0.03 : -3),
+                                   tokens: tokens, reduced: reduced)
+        }
         // An open, leaving or lingering editor keeps the control pinned.
-        editButton?.isHidden = !visible && !editorPinned
-        sizeLabel.isHidden = visible
+        if let editButton {
+            NativeMotion.setHidden(!visible && !editorPinned, fading: editButton,
+                                   fade: "preview_chrome_fade", tokens: tokens, reduced: reduced)
+        }
+        NativeMotion.setHidden(visible, fading: sizeLabel, fade: "preview_meta_fade",
+                               tokens: tokens, reduced: reduced)
+        NativeMotion.setHidden(visible || warningLabel.stringValue.isEmpty, fading: warningLabel,
+                               fade: "preview_meta_fade", tokens: tokens, reduced: reduced)
         setMediaHovered(visible)
         updateWarning()
     }

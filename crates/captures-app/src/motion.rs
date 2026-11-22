@@ -737,6 +737,17 @@ pub enum Transition {
     PreviewEditorHover,
     /// `.icon-button::after`: card icon tooltips fade and nudge over `0.12s ease`.
     PreviewIconTooltip,
+    /// `.thumbnail-top-actions`, `.thumbnail-main-actions` and
+    /// `.thumbnail-editor-control`: hover chrome `opacity` over `0.16s ease`.
+    /// Hit testing follows at once (`pointer-events` does not transition).
+    PreviewChromeFade,
+    /// `.thumbnail-top-actions` (`translateY(-3px)` → 0) and
+    /// `.thumbnail-main-actions` (`-47%` → `-50%`): the hover chrome's nudge,
+    /// `transform` over `0.18s ease`.
+    PreviewChromeSlide,
+    /// `.thumbnail-meta`: the size label and warning `opacity` over
+    /// `0.15s ease` as hover chrome covers them.
+    PreviewMetaFade,
     /// `.thumbnail-stack-control[data-tooltip]::after`: the stack toolbar tip
     /// over `var(--dur-1) var(--ease-out)`.
     PreviewStackTooltip,
@@ -794,7 +805,7 @@ const LINEAR: Easing = Easing::Bezier([0., 0., 1., 1.]);
 const STANDARD_MOTION: Easing = Easing::Bezier([0.4, 0., 0.2, 1.]);
 
 impl Transition {
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 26] = [
         Self::SegmentedIndicator,
         Self::HistoryCardHover,
         Self::SegmentLabel,
@@ -805,6 +816,9 @@ impl Transition {
         Self::PreviewMainAction,
         Self::PreviewEditorHover,
         Self::PreviewIconTooltip,
+        Self::PreviewChromeFade,
+        Self::PreviewChromeSlide,
+        Self::PreviewMetaFade,
         Self::PreviewStackTooltip,
         Self::PreviewEditorRing,
         Self::PreviewEditorRingLeave,
@@ -832,6 +846,9 @@ impl Transition {
             Self::PreviewMainAction => "preview_main_action",
             Self::PreviewEditorHover => "preview_editor_hover",
             Self::PreviewIconTooltip => "preview_icon_tooltip",
+            Self::PreviewChromeFade => "preview_chrome_fade",
+            Self::PreviewChromeSlide => "preview_chrome_slide",
+            Self::PreviewMetaFade => "preview_meta_fade",
             Self::PreviewStackTooltip => "preview_stack_tooltip",
             Self::PreviewEditorRing => "preview_editor_ring",
             Self::PreviewEditorRingLeave => "preview_editor_ring_leave",
@@ -863,6 +880,9 @@ impl Transition {
             Self::PreviewMediaScale | Self::PreviewEditorRing => (Timing::Millis(220.), CSS_EASE),
             Self::PreviewIconHover | Self::PreviewMainAction => (Timing::Millis(140.), CSS_EASE),
             Self::PreviewIconTooltip => (Timing::Millis(120.), CSS_EASE),
+            Self::PreviewChromeFade => (Timing::Millis(160.), CSS_EASE),
+            Self::PreviewChromeSlide => (Timing::Millis(180.), CSS_EASE),
+            Self::PreviewMetaFade => (Timing::Millis(150.), CSS_EASE),
             Self::PreviewStackTooltip => token("dur-1", "ease-out"),
             Self::PreviewEditorRingLeave => (Timing::Millis(550.), Easing::Token("ease-standard")),
             Self::PreviewEditorMorph => (Timing::Millis(280.), Easing::Bezier([0.2, 0.8, 0.2, 1.])),

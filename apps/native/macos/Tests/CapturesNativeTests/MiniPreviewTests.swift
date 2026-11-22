@@ -173,6 +173,7 @@ final class MiniPreviewTests: XCTestCase {
         assertColor(delete.chromeBackground, tokens.color("theme-signal"))
         assertColor(delete.chromeForeground, .white)
         XCTAssertEqual(delete.frame, restingFrame, "hover must not move the hit target")
+        try waitUntil { !NativeMotion.isFading(delete) }
         let lifted = try XCTUnwrap(renderPresentation(panel))
         let anchor = delete.convert(delete.bounds, to: panel.previewView)
         // The resting top border is now inside the lifted, scaled face.
@@ -195,6 +196,59 @@ final class MiniPreviewTests: XCTestCase {
         delete.isEnabled = false
         delete.mouseEntered(with: hover)
         XCTAssertEqual(delete.iconHover, 0)
+    }
+
+    func testHoverChromeFadesWhileItsClicksSwitchAtOnce() throws {
+        _ = NSApplication.shared
+        let preference = NativeMotion.motionPreference
+        defer { NativeMotion.motionPreference = preference }
+        for reduced in [false, true] {
+            NativeMotion.motionPreference = { reduced }
+            let panel = fixturePanel(ids: ["card"], images: ["card": solidImage(.white)])
+            defer { panel.close() }
+            panel.orderFrontRegardless()
+            let card = try XCTUnwrap(panel.previewView.card(for: "card"))
+            let controls = card.subviews.compactMap { $0 as? MiniPreviewButton }
+            let copy = try XCTUnwrap(controls.first { $0.kind == .copy })
+            let delete = try XCTUnwrap(controls.first { $0.kind == .trash })
+            let edit = try XCTUnwrap(controls.first { $0.kind == .edit })
+            let size = try XCTUnwrap(card.subviews.compactMap { $0 as? NSTextField }
+                .first { $0.stringValue == card.metadataText })
+            let event = try hoverEvent(for: panel)
+            card.mouseEntered(with: event)
+            XCTAssertFalse(copy.isHidden); XCTAssertTrue(size.isHidden)
+            XCTAssertEqual(NativeMotion.isFading(copy), !reduced, "reduced motion shows chrome at once")
+            if !reduced {
+                func animation(_ view: NSView, _ key: String) throws -> CABasicAnimation {
+                    try XCTUnwrap(view.layer?.animation(forKey: key) as? CABasicAnimation)
+                }
+                // `opacity 0.16s ease` on the actions, `0.15s ease` on the metadata.
+                XCTAssertEqual(try animation(copy, "native-fade").duration, 0.16, accuracy: 0.0001)
+                XCTAssertEqual(try animation(edit, "native-fade").duration, 0.16, accuracy: 0.0001)
+                XCTAssertEqual(try animation(size, "native-fade").duration, 0.15, accuracy: 0.0001)
+                XCTAssertEqual(try animation(size, "native-fade").toValue as? Float, 0)
+                // The top row drops 3 px into place; the main actions rise 3 %
+                // of their block (`-47%` → `-50%`), both over `0.18s ease`.
+                let slide = try animation(copy, "native-fade-slide")
+                XCTAssertEqual(slide.duration, 0.18, accuracy: 0.0001)
+                XCTAssertEqual(slide.fromValue as? CGFloat ?? 0, (64 + tokens.number("s-3")) * 0.03, accuracy: 0.001)
+                XCTAssertEqual(try animation(delete, "native-fade-slide").fromValue as? CGFloat, -3)
+                XCTAssertNil(edit.layer?.animation(forKey: "native-fade-slide"), "the Edit control only fades")
+            }
+            card.mouseExited(with: event)
+            XCTAssertTrue(copy.isHidden && delete.isHidden, "hidden chrome stops taking clicks at once")
+            XCTAssertFalse(size.isHidden)
+            XCTAssertEqual(copy.layer?.isHidden, reduced, "a fading control keeps drawing until it is gone")
+            guard !reduced else { continue }
+            XCTAssertEqual((copy.layer?.animation(forKey: "native-fade") as? CABasicAnimation)?.toValue as? Float, 0)
+            let deadline = Date().addingTimeInterval(2)
+            while NativeMotion.isFading(copy), Date() < deadline {
+                RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+            }
+            XCTAssertFalse(NativeMotion.isFading(copy))
+            XCTAssertEqual(copy.layer?.isHidden, true, "the faded control's layer hides with it")
+            XCTAssertEqual(copy.layer?.opacity, 1, "the model opacity is left at rest")
+        }
     }
 
     func testHoverChromeMirrorsAndSaveUpdatesWithoutMovingCenterActions() throws {
@@ -2259,6 +2313,7 @@ final class MiniPreviewTests: XCTestCase {
             try waitUntil { edit.iconHover == 1 }
             XCTAssertEqual(edit.editorLabel, "Show in editor")
             XCTAssertEqual(edit.frame, pillFrame, "hover keeps the pill's hit target fixed")
+            try waitUntil { !NativeMotion.isFading(edit) }
             let lifted = try XCTUnwrap(renderPresentation(panel))
             let anchor = edit.convert(edit.bounds, to: view)
             let top = try XCTUnwrap(pixelColor(in: lifted, of: panel, x: anchor.midX, y: anchor.minY)?.usingColorSpace(.sRGB))
