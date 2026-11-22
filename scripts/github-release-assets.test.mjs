@@ -92,3 +92,38 @@ test("the sparse helper checkout can load without the rest of the repository", a
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("release assets are read past the first page of 100", async () => {
+  const { releaseAssets } = await import(pathToFileURL(helperPath).href);
+  const all = Array.from({ length: 150 }, (_, index) => ({ id: index, name: `asset-${index}` }));
+  const requested = [];
+  const saved = {
+    fetch: globalThis.fetch,
+    repository: process.env.GITHUB_REPOSITORY,
+    token: process.env.GH_TOKEN,
+  };
+  process.env.GITHUB_REPOSITORY = "owner/name";
+  process.env.GH_TOKEN = "token";
+  globalThis.fetch = async (url) => {
+    requested.push(String(url));
+    const page = Number(new URL(url).searchParams.get("page") ?? "1");
+    return new Response(JSON.stringify(all.slice((page - 1) * 100, page * 100)), { status: 200 });
+  };
+  try {
+    const assets = await releaseAssets(7);
+    assert.deepEqual(
+      assets.map((asset) => asset.name),
+      all.map((asset) => asset.name),
+    );
+    assert.equal(requested.length, 2);
+  } finally {
+    globalThis.fetch = saved.fetch;
+    for (const [key, value] of [
+      ["GITHUB_REPOSITORY", saved.repository],
+      ["GH_TOKEN", saved.token],
+    ]) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});

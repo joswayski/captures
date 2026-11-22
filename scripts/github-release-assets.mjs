@@ -47,8 +47,16 @@ async function release(releaseId) {
 }
 
 export async function releaseAssets(releaseId) {
-  const response = await githubRequest(apiUrl(`releases/${releaseId}/assets?per_page=100`));
-  return response.json();
+  // A release with patch updates from many earlier builds has more than one
+  // page of assets; the first page alone dropped the FFmpeg source archive.
+  const assets = [];
+  for (let page = 1; ; page += 1) {
+    const batch = await (
+      await githubRequest(apiUrl(`releases/${releaseId}/assets?per_page=100&page=${page}`))
+    ).json();
+    assets.push(...batch);
+    if (batch.length < 100) return assets;
+  }
 }
 
 export async function deleteAsset(assetId) {
