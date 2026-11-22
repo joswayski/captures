@@ -736,6 +736,28 @@ fn launch_and_confirm(
         }
         #[cfg(not(windows))]
         return Err(Error::Target);
+    } else if let InstallTarget::Mac { app } = &request.installation {
+        // Launch through LaunchServices, never as this helper's child. macOS
+        // attributes a child's Screen Recording access to its responsible
+        // process, here this temp-copied helper with its own code identity,
+        // so a directly spawned Captures got only the wallpaper and its own
+        // windows from every capture until the user reopened it. `-W` keeps
+        // `open` alive while the new app runs, so exiting still means it died.
+        Some(
+            Command::new("/usr/bin/open")
+                .arg("-n")
+                .arg("-W")
+                .arg("-a")
+                .arg(app)
+                .arg("--args")
+                .arg("--live")
+                .arg("--native-update-ready-file")
+                .arg(&ready)
+                .arg("--native-update-ready-token")
+                .arg(&token)
+                .stdin(Stdio::null())
+                .spawn()?,
+        )
     } else {
         Some(
             Command::new(executable)
