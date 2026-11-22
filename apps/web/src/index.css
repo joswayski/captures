@@ -118,6 +118,53 @@
     @apply outline-2 outline-offset-2 outline-accent;
   }
 
+  /* Questions or feedback: one bordered card, one row per channel. */
+  .contact-list {
+    @apply m-0 list-none overflow-hidden rounded-lg border border-border bg-surface p-0;
+  }
+
+  .contact-list li + li {
+    @apply border-t border-border;
+  }
+
+  .contact-row {
+    font: inherit;
+    @apply flex min-h-[42px] w-full cursor-pointer items-center gap-2.5 border-0 bg-transparent px-3 py-2 text-left text-[0.8125rem] leading-snug text-ink no-underline transition-colors duration-200 ease-out;
+  }
+
+  .contact-row:hover,
+  .contact-row:active {
+    @apply bg-accent-soft;
+  }
+
+  .contact-row:focus-visible {
+    @apply rounded-lg outline-2 -outline-offset-2 outline-accent;
+  }
+
+  .contact-action {
+    @apply shrink-0 font-medium;
+  }
+
+  .contact-detail {
+    @apply ml-auto min-w-0 truncate text-ink-soft;
+  }
+
+  .contact-trailing {
+    @apply h-[13px] w-[13px] shrink-0 text-ink-soft transition-colors duration-200 ease-out;
+  }
+
+  .contact-row:hover .contact-trailing {
+    @apply text-ink;
+  }
+
+  .contact-row[data-copied] :is(.contact-detail, .contact-trailing) {
+    @apply text-accent-readable;
+  }
+
+  .contact-feedback {
+    @apply block px-3 pb-2 text-xs break-all text-ink-soft;
+  }
+
   /* Match the desktop app mark: dark tile, light glyph. Blue is only an accent. */
   .brand-mark {
     @apply grid h-8 w-8 shrink-0 place-items-center rounded-md;

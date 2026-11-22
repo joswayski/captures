@@ -235,47 +235,45 @@ function linuxAlternativeLabel(download: PreviewDownload) {
 }
 
 function FeedbackList({ appMenu }: { appMenu?: "menu bar" | "tray" }) {
+  // One row per channel: what you do on the left, where it goes on the right.
   return (
-    <div className="mt-10">
-      <h2 className="text-xs text-ink-soft">Questions or feedback?</h2>
-      <ul className="mt-3 space-y-3 text-sm leading-relaxed text-ink-muted">
-        {appMenu ? (
-          <li>
-            Choose <span className="font-medium text-ink">Send Feedback…</span> from the Captures{" "}
-            {appMenu} icon
-          </li>
-        ) : null}
+    <section className="mt-10 max-w-sm" aria-labelledby="feedback-heading">
+      <h2 id="feedback-heading" className="text-xs text-ink-soft">
+        Questions or feedback?
+      </h2>
+      <ul className="contact-list mt-3">
         <li>
-          Tell me on{" "}
-          <a
-            href={X_URL}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-chip"
-            aria-label="@josevalerio on X"
-          >
-            <XIcon className="h-3 w-3" />
-            @josevalerio
-            <ExternalLinkIcon className="h-3 w-3 opacity-60" />
+          <a className="contact-row" href={CAPER_INVITE_URL} target="_blank" rel="noreferrer">
+            <HashIcon className="h-[15px] w-[15px] shrink-0" />
+            <span className="contact-action">Post in #feedback</span>
+            <span className="contact-detail">caper.chat</span>
+            <ExternalLinkIcon className="contact-trailing" />
           </a>
         </li>
         <li>
-          Share it in the{" "}
-          <a href={CAPER_INVITE_URL} target="_blank" rel="noreferrer" className="inline-chip">
-            #feedback channel on caper.chat
-            <ExternalLinkIcon className="h-3 w-3 opacity-60" />
+          <a className="contact-row" href={X_URL} target="_blank" rel="noreferrer">
+            <XIcon className="h-[15px] w-[15px] shrink-0" />
+            <span className="contact-action">Message me on X</span>
+            <span className="contact-detail">@josevalerio</span>
+            <ExternalLinkIcon className="contact-trailing" />
           </a>
         </li>
         <li>
-          Email me at <CopyEmailButton email={CONTACT_EMAIL} />
+          <CopyEmailRow email={CONTACT_EMAIL} />
         </li>
       </ul>
-    </div>
+      {appMenu ? (
+        <p className="mt-3 text-xs leading-relaxed text-ink-soft">
+          Or choose <span className="text-ink-muted">Send Feedback…</span> from the Captures{" "}
+          {appMenu} icon.
+        </p>
+      ) : null}
+    </section>
   );
 }
 
-function CopyEmailButton({ email }: { email: string }) {
-  const [copied, setCopied] = useState(false);
+function CopyEmailRow({ email }: { email: string }) {
+  const [status, setStatus] = useState<"idle" | "copied" | "failed">("idle");
   const resetTimer = useRef<number | null>(null);
 
   useEffect(() => {
@@ -287,42 +285,40 @@ function CopyEmailButton({ email }: { email: string }) {
   async function handleCopy() {
     try {
       await navigator.clipboard.writeText(email);
+      setStatus("copied");
     } catch {
-      // Fallback for older browsers or denied clipboard permission.
-      const textarea = document.createElement("textarea");
-      textarea.value = email;
-      textarea.setAttribute("readonly", "");
-      textarea.style.position = "fixed";
-      textarea.style.opacity = "0";
-      document.body.appendChild(textarea);
-      textarea.select();
-      document.execCommand("copy");
-      document.body.removeChild(textarea);
+      setStatus("failed");
     }
-
-    setCopied(true);
     if (resetTimer.current !== null) window.clearTimeout(resetTimer.current);
-    resetTimer.current = window.setTimeout(() => setCopied(false), 1_800);
+    resetTimer.current = window.setTimeout(() => setStatus("idle"), 2_500);
   }
 
   return (
-    <button
-      type="button"
-      className="group/email inline-flex max-w-full translate-y-px cursor-pointer flex-col items-start rounded border border-border bg-surface px-2 py-1 text-left no-underline transition-colors duration-200 ease-out hover:border-accent/30 hover:bg-accent-soft focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-      onClick={handleCopy}
-      aria-label={copied ? `Copied ${email}` : `Copy email ${email}`}
-    >
-      <span className="inline-flex min-w-0 items-center gap-1.5 text-[0.8125rem] font-medium leading-none text-ink transition-colors duration-200 ease-out group-hover/email:text-accent-readable">
-        <MailIcon className="h-3 w-3 shrink-0" />
-        <span className="break-all">{email}</span>
-      </span>
-      <span
-        role="status"
-        className="mt-1 text-[0.625rem] font-normal leading-none text-ink-soft transition-colors duration-200 ease-out group-hover/email:text-accent-readable/70"
+    <>
+      <button
+        type="button"
+        className="contact-row"
+        data-copied={status === "copied" ? "" : undefined}
+        onClick={() => void handleCopy()}
+        title="Copy email address"
       >
-        {copied ? "copied!" : "click to copy"}
+        <MailIcon className="h-[15px] w-[15px] shrink-0" />
+        <span className="contact-action">Email me</span>
+        <span className="contact-detail">{status === "copied" ? "Copied" : email}</span>
+        {status === "copied" ? (
+          <CheckIcon className="contact-trailing" />
+        ) : (
+          <CopyIcon className="contact-trailing" />
+        )}
+      </button>
+      <span className={status === "failed" ? "contact-feedback" : "sr-only"} role="status">
+        {status === "copied"
+          ? "Email address copied to clipboard."
+          : status === "failed"
+            ? `Couldn’t copy. Email ${email}`
+            : ""}
       </span>
-    </button>
+    </>
   );
 }
 
@@ -463,6 +459,58 @@ function MailIcon({ className }: { className?: string }) {
     >
       <rect x="3" y="5" width="18" height="14" rx="2" />
       <path d="m4 7 8 6 8-6" />
+    </svg>
+  );
+}
+
+function HashIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className={className}
+    >
+      <path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18" />
+    </svg>
+  );
+}
+
+function CopyIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className={className}
+    >
+      <rect x="8" y="8" width="14" height="14" rx="2" />
+      <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+    </svg>
+  );
+}
+
+function CheckIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className={className}
+    >
+      <path d="M20 6 9 17l-5-5" />
     </svg>
   );
 }
