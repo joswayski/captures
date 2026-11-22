@@ -3744,8 +3744,11 @@ final class MiniPreviewChipLabel: NSTextField {
 /// which still draw for hidden layers on macOS. Nothing samples the desktop,
 /// so the panel's capture exclusion is unaffected.
 enum MiniPreviewBackdrop {
-    /// Unmanaged colour, as browsers filter encoded sRGB values.
-    private static let context = CIContext(options: [.workingColorSpace: NSNull(), .outputColorSpace: NSNull()])
+    /// Unmanaged colour, as browsers filter encoded sRGB values. Each card
+    /// renders its few backdrops once and caches them, so the context keeps
+    /// no intermediates between renders (see Dust's per-Delete context).
+    private static let context = CIContext(options: [.workingColorSpace: NSNull(), .outputColorSpace: NSNull(),
+                                                     .cacheIntermediates: false])
 
     static func render(image: NSImage, mediaFrame: NSRect, cardSize: NSSize, radius: CGFloat,
                        hovered: Bool, scale: CGFloat) -> NSImage? {
