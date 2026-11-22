@@ -98,6 +98,12 @@ impl Presented {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KeyOwner {
+    Field,
+    Button,
+}
+
 enum Job {
     Apply(RecordingEditorRequestV2),
     Play(u64, CancelToken),
@@ -314,6 +320,10 @@ struct State {
     /// behind; applied after `LIVE_APPLY_DELAY_MS` of quiet.
     trim: Cell<(f64, f64)>,
     playhead: Cell<u64>,
+    /// The newest seek not yet reflected by the worker.
+    sought: Cell<Option<u64>>,
+    /// The trim of the newest apply not yet reflected by the worker.
+    applying: Cell<Option<(u64, Option<u64>)>>,
     drag: Cell<Option<(TimelineTrimEdge, TimelineTrimDrag)>>,
     pending_apply: RefCell<Option<glib::SourceId>>,
     playing: RefCell<Option<CancelToken>>,
@@ -519,7 +529,11 @@ pub fn build(app: &gtk::Application, tokens: Rc<Tokens>, options: Options) -> Re
     play.set_child(Some(&play_icon));
     play.set_halign(gtk::Align::Center);
     play.set_valign(gtk::Align::Center);
-    play.update_property(&[gtk::accessible::Property::Label("Play preview")]);
+    play.set_tooltip_text(Some("Play (Space)"));
+    play.update_property(&[
+        gtk::accessible::Property::Label("Play preview"),
+        gtk::accessible::Property::KeyShortcuts("Space"),
+    ]);
     let compare = {
         let state_cell = state_cell.clone();
         Compare::new(move || {
@@ -617,7 +631,16 @@ pub fn build(app: &gtk::Application, tokens: Rc<Tokens>, options: Options) -> Re
         );
         handle.set_focusable(true);
         handle.set_can_target(false);
-        handle.update_property(&[gtk::accessible::Property::Label(name)]);
+        let (key, tooltip) = if name == "Trim start" {
+            ("I", "Trim start · I sets it at the playhead")
+        } else {
+            ("O", "Trim end · O sets it at the playhead")
+        };
+        handle.set_tooltip_text(Some(tooltip));
+        handle.update_property(&[
+            gtk::accessible::Property::Label(name),
+            gtk::accessible::Property::KeyShortcuts(key),
+        ]);
         track_overlay.add_overlay(&handle);
         handle
     });
@@ -719,6 +742,8 @@ pub fn build(app: &gtk::Application, tokens: Rc<Tokens>, options: Options) -> Re
     show_in_folder.set_size_request(140, -1);
     actions.append(&show_in_folder);
     let (save, _, _) = icon_button("save", "Save", &["ui-btn", "primary", "editor-save"]);
+    save.set_tooltip_text(Some("Save (Ctrl+S)"));
+    save.update_property(&[gtk::accessible::Property::KeyShortcuts("Control+S")]);
     save.set_size_request(100, -1);
     save.set_sensitive(false);
     actions.append(&save);
@@ -806,6 +831,8 @@ pub fn build(app: &gtk::Application, tokens: Rc<Tokens>, options: Options) -> Re
         filmstrip: RefCell::default(),
         trim: Cell::new((0., 1.)),
         playhead: Cell::new(0),
+        sought: Cell::default(),
+        applying: Cell::default(),
         drag: Cell::new(None),
         pending_apply: RefCell::default(),
         playing: RefCell::default(),
@@ -1227,34 +1254,38 @@ impl State {
             ))
         });
 
-        // Keyboard trim: arrows move the focused handle by 100 ms (1 s with Shift).
+        // Keyboard trim, as shipping `timelineKeyboardDelta`: arrows move the
+        // focused handle by 1 ms (10 ms in a recording of a minute or more),
+        // Page Up/Down by a second, and the playhead follows the handle.
         for (index, handle) in w.handles.iter().enumerate() {
             let keys = gtk::EventControllerKey::new();
             keys.set_propagation_phase(gtk::PropagationPhase::Capture);
             let weak = Rc::downgrade(self);
-            keys.connect_key_pressed(move |_, key, _, modifiers| {
+            keys.connect_key_pressed(move |_, key, _, _| {
                 let Some(state) = weak.upgrade() else {
                     return glib::Propagation::Proceed;
                 };
-                let step = if modifiers.contains(gdk::ModifierType::SHIFT_MASK) {
-                    1_000.
-                } else {
-                    100.
-                };
+                let duration = state.duration() as f64;
+                let step = if duration < 60_000. { 1. } else { 10. };
                 let delta = match key {
-                    gdk::Key::Left => -step,
-                    gdk::Key::Right => step,
+                    gdk::Key::Left | gdk::Key::Down | gdk::Key::KP_Left | gdk::Key::KP_Down => {
+                        -step
+                    }
+                    gdk::Key::Right | gdk::Key::Up | gdk::Key::KP_Right | gdk::Key::KP_Up => step,
+                    gdk::Key::Page_Down | gdk::Key::KP_Page_Down => -1_000.,
+                    gdk::Key::Page_Up | gdk::Key::KP_Page_Up => 1_000.,
                     _ => return glib::Propagation::Proceed,
                 };
                 let (start, end) = state.trim.get();
-                let duration = state.duration() as f64;
-                state.trim.set(if index == 0 {
-                    (((start + delta).clamp(0., end - 1.)), end)
+                let next = if index == 0 {
+                    ((start + delta).clamp(0., end - 1.), end)
                 } else {
                     (start, (end + delta).clamp(start + 1., duration))
-                });
+                };
+                state.trim.set(next);
                 state.trim_changed();
                 state.schedule_apply();
+                state.seek_to(if index == 0 { next.0 } else { next.1 });
                 glib::Propagation::Stop
             });
             handle.add_controller(keys);
@@ -1277,26 +1308,95 @@ impl State {
             });
         }
 
+        // Editor-wide keys (shipping `recordingEditorKeyCommand`). Captured
+        // before the focused widget, so fields keep only Ctrl+S.
         let keys = gtk::EventControllerKey::new();
+        keys.set_propagation_phase(gtk::PropagationPhase::Capture);
         let weak = Rc::downgrade(self);
-        keys.connect_key_pressed(move |_, key, _, _| {
-            let Some(state) = weak.upgrade() else {
-                return glib::Propagation::Proceed;
-            };
-            let typing = state.w.filename.has_focus()
-                || state
-                    .w
-                    .preview
-                    .root()
-                    .and_then(|root| root.focus())
-                    .is_some_and(|focus| focus.is::<gtk::Text>());
-            if key == gdk::Key::space && !typing {
-                state.toggle_play();
-                return glib::Propagation::Stop;
-            }
-            glib::Propagation::Proceed
+        keys.connect_key_pressed(move |_, key, _, modifiers| match weak.upgrade() {
+            Some(state) if state.key(key, modifiers) => glib::Propagation::Stop,
+            _ => glib::Propagation::Proceed,
         });
         window.add_controller(keys);
+    }
+
+    /// What the focused widget does with keys itself: `Field` for text,
+    /// sliders, lists and menus (they own letters, arrows, Home and End),
+    /// `Button` for other controls (they own Space).
+    fn focus_owner(&self) -> Option<KeyOwner> {
+        let mut widget = self.w.preview.root().and_then(|root| root.focus());
+        let mut owner = None;
+        while let Some(current) = widget {
+            if current.is::<gtk::Text>()
+                || current.is::<gtk::TextView>()
+                || current.is::<gtk::Entry>()
+                || current.is::<gtk::SpinButton>()
+                || current.is::<gtk::Range>()
+                || current.is::<gtk::ListBox>()
+                || current.is::<gtk::ListView>()
+                || current.is::<gtk::Popover>()
+                || current.accessible_role() == gtk::AccessibleRole::ComboBox
+            {
+                return Some(KeyOwner::Field);
+            }
+            if owner.is_none() && current.is_focusable() && !current.is::<gtk::Window>() {
+                owner = Some(KeyOwner::Button);
+            }
+            widget = current.parent();
+        }
+        owner
+    }
+
+    /// Ctrl+S saves (also from a field), Space plays, Home/End seek to the
+    /// trim edges, I/O trim at the playhead and ←/→ step the playhead 33 ms
+    /// (1 s with Shift). Play and Save go through their buttons, so a key
+    /// never does what its button currently refuses.
+    fn key(self: &Rc<Self>, key: gdk::Key, modifiers: gdk::ModifierType) -> bool {
+        let control = modifiers.contains(gdk::ModifierType::CONTROL_MASK);
+        let shift = modifiers.contains(gdk::ModifierType::SHIFT_MASK);
+        let alt = modifiers.contains(gdk::ModifierType::ALT_MASK);
+        let name = key.to_lower();
+        if control {
+            if name == gdk::Key::s && !alt && !shift {
+                if self.w.save.is_sensitive() {
+                    self.w.save.emit_clicked();
+                }
+                return true;
+            }
+            return false;
+        }
+        let owner = self.focus_owner();
+        if alt || owner == Some(KeyOwner::Field) || self.presented.borrow().is_none() {
+            return false;
+        }
+        let (start, end) = self.trim.get();
+        let duration = self.duration() as f64;
+        let playhead = self.playhead.get() as f64;
+        match name {
+            gdk::Key::space if owner.is_none() => {
+                if self.w.play.is_visible() && self.w.play.is_sensitive() {
+                    self.w.play.emit_clicked();
+                }
+            }
+            gdk::Key::Home | gdk::Key::KP_Home => self.seek_to(start),
+            gdk::Key::End | gdk::Key::KP_End => self.seek_to(end),
+            gdk::Key::i | gdk::Key::o => {
+                self.trim.set(if name == gdk::Key::i {
+                    (playhead.clamp(0., end - 1.), end)
+                } else {
+                    (start, playhead.clamp(start + 1., duration))
+                });
+                self.trim_changed();
+                self.schedule_apply();
+            }
+            gdk::Key::Left | gdk::Key::Right | gdk::Key::KP_Left | gdk::Key::KP_Right => {
+                let step = if shift { 1_000. } else { 33. };
+                let left = matches!(name, gdk::Key::Left | gdk::Key::KP_Left);
+                self.seek_to(playhead + if left { -step } else { step });
+            }
+            _ => return false,
+        }
+        true
     }
 
     fn duration(&self) -> u64 {
@@ -1335,6 +1435,7 @@ impl State {
             Outcome::Presented(Ok(presented)) => self.accept(*presented),
             Outcome::Presented(Err(error)) => {
                 self.busy.set(false);
+                self.applying.set(None);
                 self.notify(&error, true);
             }
             Outcome::SourceFrame(revision, frame) => {
@@ -1446,13 +1547,25 @@ impl State {
             self.fit_preview();
         }
         let revision = presented.revision;
-        if self.drag.get().is_none() && self.pending_apply.borrow().is_none() {
+        // Results queued before the newest trim apply still carry the old
+        // trim; keep the staged one until that apply lands.
+        let applying = self.applying.get();
+        let landed = applying
+            .is_none_or(|trim| trim == (presented.edit.trim_start_ms, presented.trim_end_opt()));
+        if landed {
+            self.applying.set(None);
+        }
+        if self.drag.get().is_none() && self.pending_apply.borrow().is_none() && landed {
             self.trim.set((
                 presented.edit.trim_start_ms as f64,
                 presented.trim_end() as f64,
             ));
         }
-        if self.playing.borrow().is_none() {
+        // Key repeats send seeks faster than the worker answers; until the
+        // newest one lands, an older position must not pull the playhead back.
+        let sought = self.sought.get();
+        if self.playing.borrow().is_none() && sought.is_none_or(|t| t == presented.position_ms) {
+            self.sought.set(None);
             self.playhead.set(presented.position_ms);
         }
         *self.presented.borrow_mut() = Some(presented);
@@ -1690,6 +1803,7 @@ impl State {
         if (from as f64) < start || (from as f64) >= end - 1. {
             from = start as u64;
         }
+        self.sought.set(None);
         let cancel = CancelToken::default();
         *self.playing.borrow_mut() = Some(cancel.clone());
         self.set_playing_ui(true);
@@ -1706,7 +1820,11 @@ impl State {
         } else {
             "Play preview"
         };
-        self.w.play.set_tooltip_text(Some(name));
+        self.w.play.set_tooltip_text(Some(if playing {
+            "Pause (Space)"
+        } else {
+            "Play (Space)"
+        }));
         // Playback hides the comparison, as shipping's `!previewPlaying`.
         self.refresh_compare();
         self.sync_crop_handles();
@@ -1817,13 +1935,20 @@ impl State {
         ) else {
             return;
         };
+        self.seek_to(time);
+    }
+
+    /// Stop playback and move the playhead (clamped to the recording).
+    fn seek_to(&self, time: f64) {
+        let time = time.clamp(0., self.duration() as f64).round() as u64;
         if let Some(cancel) = self.playing.borrow_mut().take() {
             cancel.cancel();
         }
-        self.playhead.set(time as u64);
+        self.playhead.set(time);
+        self.sought.set(Some(time));
         self.w.track.queue_draw();
         let _ = self.jobs.send(Job::Apply(RecordingEditorRequestV2::Seek {
-            position_ms: time as u64,
+            position_ms: time,
         }));
     }
 
@@ -1873,6 +1998,9 @@ impl State {
                 state.cancel_estimate();
                 state.busy.set(true);
                 state.update_footer();
+                state
+                    .applying
+                    .set(Some((edit.trim_start_ms, edit.trim_end_ms)));
                 let _ = state
                     .jobs
                     .send(Job::Apply(RecordingEditorRequestV2::UpdatePreview {
@@ -1978,6 +2106,13 @@ impl State {
             w.save_as_new.activate_toggle_quietly(true);
         }
         w.save_as_new.set_sensitive(!requires_copy);
+        if let Some(row) = w.save_as_new.parent() {
+            row.set_tooltip_text(Some(if requires_copy {
+                "Changing formats always creates a new file"
+            } else {
+                "Save as a new file and leave the original untouched"
+            }));
+        }
         w.change_folder.set_sensitive(!self.saving.get());
         // Shipping keeps Cancel and Show in Folder's space as hidden
         // placeholders so the actions never shift.

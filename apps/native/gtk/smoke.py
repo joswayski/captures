@@ -250,7 +250,7 @@ EVDEV = dict(zip("qwertyuiopasdfghjklzxcvbnm", [16, 17, 18, 19, 20, 21, 22, 23, 
              31, 32, 33, 34, 35, 36, 37, 38, 44, 45, 46, 47, 48, 49, 50], strict=True))
 EVDEV.update(dict(zip("1234567890", range(2, 12), strict=True)))
 EVDEV.update({"escape": 1, "return": 28, "tab": 15, "space": 57, "right": 106, "left": 105,
-              "f3": 61, " ": 57, "-": 12, ".": 52, "/": 53})
+              "home": 102, "end": 107, "prior": 104, "f3": 61, " ": 57, "-": 12, ".": 52, "/": 53})
 SHIFTED = {"@": "2", "_": "-"}
 
 
@@ -2294,11 +2294,18 @@ def recording(binary, scratch):
         end = find(editor, "slider", "Trim end")[0]
         wait(lambda: Atspi.Value.get_maximum_value(end) == 4000, "the 4 s duration")
         assert Atspi.Value.get_current_value(end) == 4000, "Trim end is not at the end"
-        # Focus starts on Play; Tab reaches Trim start, Shift+Right moves it 1 s.
+        # Focus starts on Play; Tab reaches Trim start, Page Up moves it 1 s
+        # and Right 1 ms (shipping `timelineKeyboardDelta`).
         # Without a window manager, keys go to the window under the pointer.
         DESKTOP.point_into(DESKTOP.window("Captures Editor"), 300, 20)
-        DESKTOP.key("Tab", "shift+Right")
-        wait(lambda: Atspi.Value.get_current_value(start) == 1000, "Trim start at 1 s")
+        DESKTOP.key("Tab", "Prior", "Right")
+        wait(lambda: Atspi.Value.get_current_value(start) == 1001, "Trim start at 1.001 s")
+        # Editor-wide keys from Play: End seeks to the trim end, Left steps
+        # back 33 ms and O trims the end there.
+        DESKTOP.key("shift+Tab", "End", "Left", "o")
+        wait(lambda: Atspi.Value.get_current_value(end) == 3967, "Trim end at 3.967 s")
+        DESKTOP.key("Tab", "Tab", "End")
+        wait(lambda: Atspi.Value.get_current_value(end) == 4000, "Trim end back at 4 s")
         play = find(editor, "push button", "Play preview")[0]
         press(play)
         wait(lambda: play.get_name() == "Pause preview", "playback to start")
