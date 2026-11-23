@@ -245,6 +245,10 @@ final class NativeRegionSession {
         } catch { captures_region_free_v1(handle); throw error }
     }
 
+    /// Display composites are opaque, so the image skips the alpha byte. An
+    /// opaque sRGB image in the selectors' sRGB windows lets Core Animation show
+    /// the session's pixels directly; with straight alpha it kept a premultiplied
+    /// copy and a converted surface, 60 MB on a Retina display.
     func image() throws -> CGImage? {
         var pixels = CapturesRegionPixels()
         guard captures_region_pixels_v1(handle, &pixels) else { return nil }
@@ -256,7 +260,7 @@ final class NativeRegionSession {
             }) else { retained.release(); throw AppBridgeError.invalidResponse }
         guard let image = CGImage(width: Int(pixels.width), height: Int(pixels.height),
             bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: pixels.bytes_per_row,
-            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
+            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),
             provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
         else { throw AppBridgeError.invalidResponse }
         return image
@@ -315,6 +319,7 @@ final class NativeWindowSession {
         } catch { captures_window_free_v1(handle); throw error }
     }
 
+    /// Opaque like `NativeRegionSession.image()`, for the same reason.
     func image() throws -> CGImage? {
         var pixels = CapturesWindowPixels()
         guard captures_window_pixels_v1(handle, &pixels) else { return nil }
@@ -327,7 +332,7 @@ final class NativeWindowSession {
         guard let image = CGImage(width: Int(pixels.width), height: Int(pixels.height),
             bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: pixels.bytes_per_row,
             space: CGColorSpace(name: CGColorSpace.sRGB)!,
-            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
+            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),
             provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
         else { throw AppBridgeError.invalidResponse }
         return image
