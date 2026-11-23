@@ -1407,13 +1407,15 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertEqual(estimateText, "4.6 KB")
         let dirty = controller.dirty
         let requests = worker.requests.count
-        let acceptedImage = image.image
+        let pixelWidth = { image.image?.cgImage(forProposedRect: nil, context: nil, hints: nil)?.width }
+        XCTAssertLessThan(try XCTUnwrap(pixelWidth()), 1_200,
+                          "Fit holds the frame at the size it is displayed")
         actual.performClick(nil)
         XCTAssertFalse(fit.selected); XCTAssertTrue(actual.selected)
         XCTAssertEqual(image.frame.size, NSSize(width: 1_200, height: 800),
                        "100% is one decoded image pixel per logical point")
         XCTAssertTrue(scroll.hasHorizontalScroller); XCTAssertTrue(scroll.hasVerticalScroller)
-        XCTAssertTrue(image.image === acceptedImage)
+        XCTAssertEqual(pixelWidth(), 1_200, "100% shows the full decoded frame")
         XCTAssertEqual(controller.dirty, dirty); XCTAssertEqual(worker.requests.count, requests)
         XCTAssertEqual(estimateLabel.stringValue, estimateText,
                        "display scale leaves the accepted estimate intact")

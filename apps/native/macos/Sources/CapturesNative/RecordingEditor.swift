@@ -1040,6 +1040,9 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private var cropAdjustmentActive = false
     private var cropAdjustmentPriorImage: NSImage?
     private var previewActualSize = false
+    /// The decoded frame `preview` presents, at full resolution.
+    private var previewSource: NSImage?
+    private var previewDisplayPixels = CGSize.zero
     private var playbackStopActions: [() -> Void] = []
     private var resumeAfterSeek = false
     private var closeAfterPlayback = false
@@ -2281,14 +2284,49 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
 
     private func setPreviewImage(_ image: NSImage?) {
+        previewSource = image
         preview.image = image
+        previewDisplayPixels = .zero
         refreshPreviewLayout(resetScroll: false)
+    }
+
+    /// In Fit, the image view shows the frame downsampled to the pixels it
+    /// covers, so Core Animation keeps a copy that size instead of a full
+    /// 2224×1832 frame (13 MB). Actual size and playback show the decoded
+    /// frame itself; playback frames are not resampled on the main thread.
+    private func updatePreviewDisplayImage() {
+        let showSource = { [self] in
+            if preview.image !== previewSource { preview.image = previewSource }
+            previewDisplayPixels = .zero
+        }
+        guard let source = previewSource, !previewActualSize, playbackState != .playing,
+              source.size.width > 0, source.size.height > 0,
+              let image = source.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        else { return showSource() }
+        let scale = window.backingScaleFactor
+        let fit = min(preview.bounds.width / source.size.width, preview.bounds.height / source.size.height)
+        let pixels = CGSize(width: (source.size.width * fit * scale).rounded(),
+                            height: (source.size.height * fit * scale).rounded())
+        guard pixels.width >= 1, pixels.height >= 1,
+              pixels.width < CGFloat(image.width), pixels.height < CGFloat(image.height)
+        else { return showSource() }
+        guard pixels != previewDisplayPixels else { return }
+        guard let context = CGContext(data: nil, width: Int(pixels.width), height: Int(pixels.height),
+                                      bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: image.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return showSource() }
+        context.interpolationQuality = .high
+        context.draw(image, in: CGRect(origin: .zero, size: pixels))
+        guard let scaled = context.makeImage() else { return showSource() }
+        preview.image = NSImage(cgImage: scaled, size: source.size)
+        previewDisplayPixels = pixels
     }
 
     private func refreshPreviewLayout(resetScroll: Bool) {
         let viewport = previewScroll.contentSize
         guard viewport.width > 0, viewport.height > 0 else { return }
-        let imageSize = preview.image?.size ?? .zero
+        let imageSize = previewSource?.size ?? .zero
         let actualSize = previewActualSize && imageSize.width > 0 && imageSize.height > 0
         let margin: CGFloat = actualSize && cropAdjustmentActive ? 12 : 0
         let canvasSize = actualSize
@@ -2317,6 +2355,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         }
         lastPreviewImageRect = imageRect
         layoutOverlayPlay(imageRect: imageRect)
+        updatePreviewDisplayImage()
     }
 
     private func publish(_ value: RecordingEditorPresentation, initialize: Bool = false,
@@ -2982,6 +3021,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                       self.playbackCancel === cancel else { return }
                 self.playbackCancel = nil; self.playbackLoopControl = nil
                 self.playbackState = .idle
+                self.updatePreviewDisplayImage()
                 switch result {
                 case .success(.eof), .success(.empty):
                     self.playbackReachedEOF = true
@@ -3662,7 +3702,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
               let source = sourceDimensions(snapshot) else { return }
         window.makeFirstResponder(nil)
         guard !hasPendingCropInput else { return }
-        cropAdjustmentPriorImage = preview.image
+        cropAdjustmentPriorImage = previewSource
         if let cached = sourceFrameCache,
            cached.positionMilliseconds == snapshot.positionMilliseconds,
            cached.image.width == Int(source.width), cached.image.height == Int(source.height) {
