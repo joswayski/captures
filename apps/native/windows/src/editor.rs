@@ -880,19 +880,36 @@ fn post(hwnd: isize, msg: u32) {
 fn convert(src: &RgbaImage, (x, y, w, h): (u32, u32, u32, u32)) -> Vec<u8> {
     let width = src.width() as usize;
     let raw = src.as_raw();
-    let mut out = Vec::with_capacity(w as usize * h as usize * 4);
-    for row in y as usize..(y + h) as usize {
-        let start = (row * width + x as usize) * 4;
-        out.extend(
-            raw[start..start + w as usize * 4]
-                .chunks_exact(4)
-                .flat_map(|s| {
-                    let a = u32::from(s[3]);
-                    let pm = |c: u8| ((u32::from(c) * a + 127) / 255) as u8;
-                    [pm(s[2]), pm(s[1]), pm(s[0]), s[3]]
-                }),
-        );
+    let row_bytes = w as usize * 4;
+    let mut out = vec![0; row_bytes * h as usize];
+    let rows = |first: usize, out: &mut [u8]| {
+        for (i, dst) in out.chunks_exact_mut(row_bytes).enumerate() {
+            let start = ((y as usize + first + i) * width + x as usize) * 4;
+            for (d, s) in dst
+                .chunks_exact_mut(4)
+                .zip(raw[start..start + row_bytes].chunks_exact(4))
+            {
+                let a = u32::from(s[3]);
+                let pm = |c: u8| ((u32::from(c) * a + 127) / 255) as u8;
+                d.copy_from_slice(&[pm(s[2]), pm(s[1]), pm(s[0]), s[3]]);
+            }
+        }
+    };
+    // A whole 4K frame took 25-39 ms on one thread, before the editor's
+    // first image could show; small damage stays on this one.
+    let bands = std::thread::available_parallelism().map_or(1, |n| n.get().min(8));
+    if out.len() < 4 << 20 || bands == 1 {
+        if !out.is_empty() {
+            rows(0, &mut out);
+        }
+        return out;
     }
+    let band_rows = (h as usize).div_ceil(bands);
+    std::thread::scope(|scope| {
+        for (band, out) in out.chunks_mut(band_rows * row_bytes).enumerate() {
+            scope.spawn(move || rows(band * band_rows, out));
+        }
+    });
     out
 }
 
@@ -7004,6 +7021,24 @@ mod tests {
     use super::*;
     use captures_app::editor_image_background::BrushMode;
     use image::Rgba;
+
+    #[test]
+    fn large_damage_converts_to_premultiplied_bgra_across_threads() {
+        // Over the 4 MiB threshold, so it splits into row bands, offset from
+        // the origin so each band must find its own source rows.
+        let image = RgbaImage::from_fn(1100, 1000, |x, y| {
+            Rgba([x as u8, y as u8, (x ^ y) as u8, (x * 7 + y * 3) as u8])
+        });
+        let (x, y, w, h) = (3, 5, 1090, 990);
+        let got = convert(&image, (x, y, w, h));
+        assert_eq!(got.len(), (w * h * 4) as usize);
+        for (i, px) in got.chunks_exact(4).enumerate() {
+            let (px_x, px_y) = (x + i as u32 % w, y + i as u32 / w);
+            let [r, g, b, a] = image.get_pixel(px_x, px_y).0;
+            let pm = |c: u8| ((u32::from(c) * u32::from(a) + 127) / 255) as u8;
+            assert_eq!(px, [pm(b), pm(g), pm(r), a], "pixel ({px_x}, {px_y})");
+        }
+    }
 
     #[test]
     fn footer_keeps_status_and_actions_readable_across_the_compact_breakpoint() {
