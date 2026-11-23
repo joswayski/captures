@@ -28,6 +28,9 @@ private final class CapturesMediaWriter {
     private var lastTimestamp = CMTime.invalid
     private var firstFrameUptime: TimeInterval?
     private var latestVideoBuffer: CVPixelBuffer?
+    /// Whether `latestVideoBuffer` is ScreenCaptureKit's own surface rather
+    /// than a copy in the writer's pool.
+    private var latestVideoBufferIsCaptureSurface = false
     private var latestVideoTimestamp = CMTime.invalid
     private var latestVideoGeneration: UInt64 = 0
     private var appendedVideoGeneration: UInt64 = 0
@@ -41,6 +44,10 @@ private final class CapturesMediaWriter {
     private(set) var failure: String?
 
     private static let clickRippleDuration: TimeInterval = 0.62
+    /// ScreenCaptureKit delivers 4:2:0 video-range YCbCr, which the H.264
+    /// encoder takes as is. BGRA made every frame a 4-byte-per-pixel copy
+    /// plus a conversion inside VideoToolbox.
+    static let videoPixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
 
     init?(
         path: String,
@@ -96,7 +103,7 @@ private final class CapturesMediaWriter {
         videoInput.expectsMediaDataInRealTime = true
         videoDrainInterval = .milliseconds(max(8, 1_000 / max(1, framesPerSecond)))
         let pixelBufferAttributes: [String: Any] = [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferPixelFormatTypeKey as String: Self.videoPixelFormat,
             kCVPixelBufferWidthKey as String: width,
             kCVPixelBufferHeightKey as String: height,
             kCVPixelBufferIOSurfacePropertiesKey as String: [:] as [String: Any],
@@ -235,6 +242,13 @@ private final class CapturesMediaWriter {
                 waitUntilReady: false
             )
         } else if shouldAppendHeartbeat(at: timestamp) {
+            // The screen has been still for a while. Repeat a copy instead of
+            // holding a ScreenCaptureKit surface for as long as it stays still.
+            if latestVideoBufferIsCaptureSurface, let surface = latestVideoBuffer {
+                guard let copied = copyVideoBuffer(surface) else { return }
+                latestVideoBuffer = copied
+                latestVideoBufferIsCaptureSurface = false
+            }
             appended = appendLatestVideoFrame(
                 preferredTimestamp: timestamp,
                 generation: nil,
@@ -265,9 +279,7 @@ private final class CapturesMediaWriter {
         uptime: TimeInterval = 0
     ) -> CVPixelBuffer? {
         guard
-            CVPixelBufferGetPixelFormatType(source) == kCVPixelFormatType_32BGRA,
-            CVPixelBufferGetWidth(source) == outputWidth,
-            CVPixelBufferGetHeight(source) == outputHeight
+            isExpectedVideoBuffer(source)
         else {
             failure = "ScreenCaptureKit delivered an unexpected video frame format"
             return nil
@@ -290,7 +302,7 @@ private final class CapturesMediaWriter {
                     nil,
                     outputWidth,
                     outputHeight,
-                    kCVPixelFormatType_32BGRA,
+                    Self.videoPixelFormat,
                     attributes as CFDictionary,
                     &destination
                 ) == kCVReturnSuccess
@@ -311,45 +323,63 @@ private final class CapturesMediaWriter {
             return nil
         }
         defer { CVPixelBufferUnlockBaseAddress(destination, []) }
-        guard
-            let sourceBase = CVPixelBufferGetBaseAddress(source),
-            let destinationBase = CVPixelBufferGetBaseAddress(destination)
-        else {
-            failure = "A recording video frame did not expose pixel data"
+        guard CVPixelBufferGetPlaneCount(destination) == 2 else {
+            failure = "Apple's H.264 writer allocated an unexpected video frame"
             return nil
         }
 
-        let sourceBytesPerRow = CVPixelBufferGetBytesPerRow(source)
-        let destinationBytesPerRow = CVPixelBufferGetBytesPerRow(destination)
-        let bytesPerRow = min(outputWidth * 4, sourceBytesPerRow, destinationBytesPerRow)
-        for row in 0..<outputHeight {
-            memcpy(
-                destinationBase.advanced(by: row * destinationBytesPerRow),
-                sourceBase.advanced(by: row * sourceBytesPerRow),
-                bytesPerRow
+        // Luma plane, then the interleaved half-size chroma plane.
+        var planes: [(base: UnsafeMutableRawPointer, bytesPerRow: Int)] = []
+        for plane in 0..<2 {
+            guard
+                let sourceBase = CVPixelBufferGetBaseAddressOfPlane(source, plane),
+                let destinationBase = CVPixelBufferGetBaseAddressOfPlane(destination, plane)
+            else {
+                failure = "A recording video frame did not expose pixel data"
+                return nil
+            }
+            let sourceBytesPerRow = CVPixelBufferGetBytesPerRowOfPlane(source, plane)
+            let destinationBytesPerRow = CVPixelBufferGetBytesPerRowOfPlane(destination, plane)
+            let bytesPerRow = min(
+                CVPixelBufferGetWidthOfPlane(destination, plane) * (plane == 0 ? 1 : 2),
+                sourceBytesPerRow,
+                destinationBytesPerRow
             )
+            for row in 0..<CVPixelBufferGetHeightOfPlane(destination, plane) {
+                memcpy(
+                    destinationBase.advanced(by: row * destinationBytesPerRow),
+                    sourceBase.advanced(by: row * sourceBytesPerRow),
+                    bytesPerRow
+                )
+            }
+            planes.append((destinationBase, destinationBytesPerRow))
         }
+        CVBufferPropagateAttachments(source, destination)
         if !ripples.isEmpty {
-            drawClickRipples(
-                ripples,
-                into: destinationBase,
-                bytesPerRow: destinationBytesPerRow,
-                uptime: uptime
-            )
+            drawClickRipples(ripples, luma: planes[0], chroma: planes[1], uptime: uptime)
         }
         return destination
     }
 
+    private func isExpectedVideoBuffer(_ buffer: CVPixelBuffer) -> Bool {
+        CVPixelBufferGetPixelFormatType(buffer) == Self.videoPixelFormat
+            && CVPixelBufferGetWidth(buffer) == outputWidth
+            && CVPixelBufferGetHeight(buffer) == outputHeight
+    }
+
     private func drawClickRipples(
         _ ripples: [CapturesClickRipple],
-        into baseAddress: UnsafeMutableRawPointer,
-        bytesPerRow: Int,
+        luma: (base: UnsafeMutableRawPointer, bytesPerRow: Int),
+        chroma: (base: UnsafeMutableRawPointer, bytesPerRow: Int),
         uptime: TimeInterval
     ) {
         guard sourceFrame.width > 0, sourceFrame.height > 0 else { return }
         let scaleX = Double(outputWidth) / sourceFrame.width
         let scaleY = Double(outputHeight) / sourceFrame.height
         let visualScale = max(0.5, sqrt(scaleX * scaleY))
+        // Lavender #A997FF in BT.709 video-range YCbCr, the matrix the
+        // capture stream is configured with.
+        let rippleY = 155.4, rippleCb = 171.9, rippleCr = 131.7
 
         for ripple in ripples {
             let elapsed = uptime - ripple.startedAt
@@ -376,44 +406,54 @@ private final class CapturesMediaWriter {
             let fade = pow(1 - progress, 0.62)
             let centerFade = max(0, 1 - progress / 0.24)
             let antialiasWidth = max(1, 0.8 * visualScale)
+            let centerRadius = 9 * visualScale
+
+            func alpha(_ x: Int, _ y: Int) -> Double {
+                let distance = hypot((Double(x) + 0.5) - centerX, (Double(y) + 0.5) - centerY)
+                let distanceFromRing = abs(distance - radius)
+                let ringCoverage = min(
+                    1,
+                    max(0, (thickness / 2 + antialiasWidth - distanceFromRing)
+                        / antialiasWidth)
+                )
+                let haloCoverage = max(
+                    0,
+                    1 - distanceFromRing / (thickness / 2 + haloWidth)
+                )
+                let centerCoverage = centerFade * max(
+                    0,
+                    1 - distance / max(1, centerRadius)
+                )
+                return min(
+                    0.96,
+                    ringCoverage * 0.92 * fade
+                        + haloCoverage * 0.24 * fade
+                        + centerCoverage * 0.28
+                )
+            }
+            func blend(_ value: UInt8, _ target: Double, _ alpha: Double) -> UInt8 {
+                UInt8(min(255, (Double(value) * (1 - alpha) + target * alpha).rounded()))
+            }
 
             for y in minimumY...maximumY {
-                let deltaY = (Double(y) + 0.5) - centerY
-                let row = baseAddress
-                    .advanced(by: y * bytesPerRow)
+                let row = luma.base.advanced(by: y * luma.bytesPerRow)
                     .assumingMemoryBound(to: UInt8.self)
                 for x in minimumX...maximumX {
-                    let deltaX = (Double(x) + 0.5) - centerX
-                    let distance = hypot(deltaX, deltaY)
-                    let distanceFromRing = abs(distance - radius)
-                    let ringCoverage = min(
-                        1,
-                        max(0, (thickness / 2 + antialiasWidth - distanceFromRing)
-                            / antialiasWidth)
-                    )
-                    let haloCoverage = max(
-                        0,
-                        1 - distanceFromRing / (thickness / 2 + haloWidth)
-                    )
-                    let centerRadius = 9 * visualScale
-                    let centerCoverage = centerFade * max(
-                        0,
-                        1 - distance / max(1, centerRadius)
-                    )
-                    let alpha = min(
-                        0.96,
-                        ringCoverage * 0.92 * fade
-                            + haloCoverage * 0.24 * fade
-                            + centerCoverage * 0.28
-                    )
-                    guard alpha > 0.002 else { continue }
-
-                    let pixel = row.advanced(by: x * 4)
-                    let inverse = 1 - alpha
-                    // kCVPixelFormatType_32BGRA: lavender #A997FF.
-                    pixel[0] = UInt8(min(255, Double(pixel[0]) * inverse + 255 * alpha))
-                    pixel[1] = UInt8(min(255, Double(pixel[1]) * inverse + 151 * alpha))
-                    pixel[2] = UInt8(min(255, Double(pixel[2]) * inverse + 169 * alpha))
+                    let a = alpha(x, y)
+                    guard a > 0.002 else { continue }
+                    row[x] = blend(row[x], rippleY, a)
+                }
+            }
+            // Each chroma sample covers a 2×2 block of luma pixels.
+            for chromaY in (minimumY / 2)...(maximumY / 2) {
+                let row = chroma.base.advanced(by: chromaY * chroma.bytesPerRow)
+                    .assumingMemoryBound(to: UInt8.self)
+                for chromaX in (minimumX / 2)...(maximumX / 2) {
+                    let x = chromaX * 2, y = chromaY * 2
+                    let a = (alpha(x, y) + alpha(x + 1, y) + alpha(x, y + 1) + alpha(x + 1, y + 1)) / 4
+                    guard a > 0.002 else { continue }
+                    row[chromaX * 2] = blend(row[chromaX * 2], rippleCb, a)
+                    row[chromaX * 2 + 1] = blend(row[chromaX * 2 + 1], rippleCr, a)
                 }
             }
         }
@@ -456,15 +496,24 @@ private final class CapturesMediaWriter {
                 }
                 latestVideoGeneration &+= 1
             }
-            // ScreenCaptureKit owns a small pool of IOSurfaces. Passing those
-            // surfaces directly to AVAssetWriter lets the encoder retain the
-            // entire capture pool, after which ScreenCaptureKit can no longer
-            // deliver changing frames. Copy into the writer's pool immediately
-            // so the capture surface is released when this callback returns.
-            guard let copiedBuffer = copyVideoBuffer(imageBuffer) else {
+            guard isExpectedVideoBuffer(imageBuffer) else {
+                failure = "ScreenCaptureKit delivered an unexpected video frame format"
                 return false
             }
-            latestVideoBuffer = copiedBuffer
+            // ScreenCaptureKit owns a small pool of surfaces, so the writer
+            // encodes them in place but holds only the newest one: a newer
+            // frame releases it, and a still screen swaps it for a copy at
+            // the first heartbeat. Holding surfaces for heartbeats once let
+            // the encoder and writer exhaust the pool and freeze recordings.
+            // The BGRA frames recordings used to encode left the H.264 colour
+            // description unspecified. Keep it that way: the YCbCr surface's
+            // BT.709 tags would otherwise be written into the stream.
+            for key in [kCVImageBufferColorPrimariesKey, kCVImageBufferTransferFunctionKey,
+                        kCVImageBufferYCbCrMatrixKey] {
+                CVBufferRemoveAttachment(imageBuffer, key)
+            }
+            latestVideoBuffer = imageBuffer
+            latestVideoBufferIsCaptureSurface = true
             latestVideoTimestamp = timestamp
             startVideoDrainIfNeeded()
 
