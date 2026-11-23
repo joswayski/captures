@@ -945,6 +945,8 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         document = Surface(frame: NSRect(x: 0, y: 0, width: scroll.bounds.width, height: 400))
         scroll.documentView = document; root.addSubview(scroll)
         scroll.contentView.postsBoundsChangedNotifications = true
+        // Every restyle rebuilds the shell; drop the previous scroll view's observer.
+        if let scrollObserver { NotificationCenter.default.removeObserver(scrollObserver) }
         scrollObserver = NotificationCenter.default.addObserver(
             forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: .main
         ) { [weak self] _ in self?.updateActiveSection() }

@@ -3037,6 +3037,8 @@ final class MiniPreviewController {
             let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
                 self?.refreshClipboardOwner()
             }
+            // The chip may lag a copy elsewhere slightly; let macOS coalesce the wakeup.
+            timer.tolerance = 0.5
             RunLoop.main.add(timer, forMode: .common); clipboardTimer = timer
         } else {
             clipboardTimer?.invalidate(); clipboardTimer = nil

@@ -404,12 +404,21 @@ final class OpenImageTests: XCTestCase {
             editor.performClose(nil)
             try waitUntil { !editor.isVisible }
             controller.openImages([source.path])
-            try waitUntil { !controller.externalOpenPending && editor.isVisible }
+            // A closed editor is released, so reopening builds a new window.
+            func reopenedWindow() -> NSWindow? {
+                NSApp.windows.first { $0 !== editor && $0.title == EditorWindowTitle.recording && $0.isVisible }
+            }
+            try waitUntil { !controller.externalOpenPending && reopenedWindow() != nil }
+            let reopenedEditor = try XCTUnwrap(reopenedWindow())
+            defer { reopenedEditor.orderOut(nil) }
+            XCTAssertNil(descendants(controls).compactMap { $0 as? NSImageView }
+                .first { $0.accessibilityLabel() == "Decoded recording frame" }?.image,
+                "a closed editor must not keep its last decoded frame")
             let reopened = try XCTUnwrap(NativeRecordingInfo.request([
                 "operation": "history", "root": history.path])["recordings"] as? [[String: Any]])
             XCTAssertEqual((reopened.first?["entry"] as? [String: Any])?["id"] as? String, id)
             XCTAssertEqual(try Data(contentsOf: source), original, "opening and refocusing must not rewrite source")
-            editor.performClose(nil)
+            reopenedEditor.performClose(nil)
         }
     }
 

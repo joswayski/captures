@@ -1314,6 +1314,10 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
 
     var activeArtifactID: String? { window.isVisible ? artifactID : nil }
     var presentArtifactID: String? { window.isVisible || window.isMiniaturized ? artifactID : nil }
+    /// Closed with no session or open in flight, so the owner may release it.
+    var isClosedAndIdle: Bool {
+        artifactID == nil && !busy && !window.isVisible && !window.isMiniaturized
+    }
 
     func prepareForTermination() -> Bool {
         trimTimeline.endDrag()
@@ -4212,6 +4216,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         terminateAfterPlayback = false; switchAfterPlayback = nil
         trimTimeline.setPlaybackPosition(nil); trimTimeline.setAcceptedPosition(nil)
         trimTimeline.clearThumbnails()
+        // The last frame may wrap a Rust frame buffer; don't keep it while closed.
+        setPreviewImage(nil)
         worker.close()
     }
 

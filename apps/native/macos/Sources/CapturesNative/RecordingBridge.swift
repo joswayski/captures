@@ -450,6 +450,24 @@ struct NativeMediaTools {
         try verifyTool(ffprobe, name: "FFprobe")
     }
 
+    /// Pairs that already passed `verify` in this process.
+    private static let verifiedLock = NSLock()
+    private static var verified = Set<[String]>()
+
+    /// `verify`, but a pair that already passed is not launched again, so each
+    /// recording start skips two `-version` launches. Update health uses `verify`.
+    func verifyOnce() throws {
+        let pair = [ffmpeg, ffprobe]
+        Self.verifiedLock.lock()
+        let known = Self.verified.contains(pair)
+        Self.verifiedLock.unlock()
+        if known { return }
+        try verify()
+        Self.verifiedLock.lock()
+        Self.verified.insert(pair)
+        Self.verifiedLock.unlock()
+    }
+
     private func verifyTool(_ path: String, name: String) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: path)

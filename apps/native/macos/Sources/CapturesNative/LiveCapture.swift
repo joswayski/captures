@@ -2045,7 +2045,7 @@ final class LiveCaptureController: NSObject {
                 .appendingPathComponent("recording-recovery").path
             run({
                 let tools = try NativeMediaTools.locate()
-                try tools.verify()
+                try tools.verifyOnce()
                 return try NativeRecordingSession.prepare(recoveryRoot: recoveryRoot,
                     options: options, display: display.descriptor)
             }) { [weak self] result in
@@ -3613,6 +3613,14 @@ final class LiveCaptureController: NSObject {
                         self.recordingEditor?.didClose = { [weak self] artifactID in
                             self?.recordingEditorClosed(artifactID)
                             self?.editorClosed()
+                            // As the screenshot editor: release the closed window and
+                            // its view tree once AppKit finishes the close, unless
+                            // something reopened it meanwhile.
+                            DispatchQueue.main.async { [weak self] in
+                                guard let self, self.recordingEditor?.isClosedAndIdle == true
+                                else { return }
+                                self.recordingEditor = nil
+                            }
                         }
                     }
                     self.recordingEditor?.present(artifact: artifact,
