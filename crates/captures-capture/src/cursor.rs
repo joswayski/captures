@@ -97,18 +97,49 @@ pub struct PointerCursor {
     pub image: Option<CursorImage>,
 }
 
-/// The frozen desktop with the sampled cursor drawn where the capture will put
+/// The frozen frame's original pixels under the cursor drawn into it, so
+/// copies taken from the frame put them back before compositing the cursor
+/// for their own crop.
+#[derive(Clone, Debug)]
+pub struct CursorPatch {
+    x: u32,
+    y: u32,
+    pixels: RgbaImage,
+}
+
+impl CursorPatch {
+    /// Restores the original pixels in `image`, a copy of the frame taken at
+    /// `(crop_x, crop_y)`.
+    pub fn restore(&self, image: &mut RgbaImage, crop_x: u32, crop_y: u32) {
+        for (x, y, pixel) in self.pixels.enumerate_pixels() {
+            let (Some(target_x), Some(target_y)) = (
+                (self.x + x).checked_sub(crop_x),
+                (self.y + y).checked_sub(crop_y),
+            ) else {
+                continue;
+            };
+            if target_x < image.width() && target_y < image.height() {
+                image.put_pixel(target_x, target_y, *pixel);
+            }
+        }
+    }
+}
+
+/// Draws the sampled cursor into the frozen frame where the capture will put
 /// it, separately from the live selection pointer, so the selector shows
-/// whether a selection includes it. `None` when the cursor is not on this
-/// display. Never alter the capture source: final crops composite independently
-/// so a cursor outside the crop cannot leave fragments or be blended twice.
-pub fn frozen_capture_preview(
-    image: &RgbaImage,
+/// whether a selection includes it. Drawing in place instead of into a copy
+/// saves a whole frame (29 MB at 3456x2234). Returns the pixels it covered;
+/// crops must restore them and composite the cursor themselves, so a cursor
+/// outside the crop cannot leave fragments or be blended twice. `None`, with
+/// the frame unchanged, when the cursor is not on this display.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+pub fn draw_frozen_capture_cursor(
+    image: &mut RgbaImage,
     display: &DisplayDescriptor,
     cursor: &PointerCursor,
-) -> Option<RgbaImage> {
+) -> Option<CursorPatch> {
     let pointer_scale = screenshot_pointer_scale(display.scale_factor);
-    map_pointer_to_buffer(
+    let (x, y) = map_pointer_to_buffer(
         display.x,
         display.y,
         display.width,
@@ -118,9 +149,35 @@ pub fn frozen_capture_preview(
         cursor.position,
         pointer_scale,
     )?;
-    let mut preview = image.clone();
-    overlay_pointer_cursor(&mut preview, display, cursor, pointer_scale);
-    Some(preview)
+    // A box around the hotspot that holds every pixel `draw_cursor` can touch:
+    // the scaled native cursor, or the synthetic arrow (at most 21x27 at 2x).
+    let scale = (f64::from(image.width()) / f64::from(display.width.max(1)))
+        .max(f64::from(image.height()) / f64::from(display.height.max(1)))
+        / pointer_scale.max(1.0);
+    let extent = cursor.image.as_ref().map_or(64, |cursor| {
+        let size = cursor
+            .logical_width
+            .max(cursor.logical_height)
+            .max(cursor.hot_spot_x)
+            .max(cursor.hot_spot_y);
+        ((size * scale).ceil() as i64 + 2).max(64)
+    });
+    let clamp = |value: i64, limit: u32| value.clamp(0, i64::from(limit)) as u32;
+    let (left, top) = (
+        clamp(i64::from(x) - extent, image.width()),
+        clamp(i64::from(y) - extent, image.height()),
+    );
+    let (right, bottom) = (
+        clamp(i64::from(x) + extent + 1, image.width()),
+        clamp(i64::from(y) + extent + 1, image.height()),
+    );
+    let pixels = image::imageops::crop_imm(image, left, top, right - left, bottom - top).to_image();
+    overlay_pointer_cursor(image, display, cursor, pointer_scale);
+    Some(CursorPatch {
+        x: left,
+        y: top,
+        pixels,
+    })
 }
 
 /// Snapshot before changing the host's cursor or opening a selector so the

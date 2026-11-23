@@ -6,16 +6,16 @@ use crate::{
     selection::Point,
 };
 use captures_capture::{
-    CaptureError, CaptureMode, CaptureResult, DisplayDescriptor, DisplayFrame, LogicalRect,
-    PointerCursor, WindowDescriptor, WindowSelectionTargets, XcapBackend,
-    classify_windows_for_display, frozen_capture_preview, overlay_pointer_cursor,
+    CaptureError, CaptureMode, CaptureResult, CursorPatch, DisplayDescriptor, DisplayFrame,
+    LogicalRect, PointerCursor, WindowDescriptor, WindowSelectionTargets, XcapBackend,
+    classify_windows_for_display, draw_frozen_capture_cursor, overlay_pointer_cursor,
     overlay_pointer_cursor_in_crop, overlay_pointer_cursor_on_window, pointer_cursor,
     refine_window_chrome_from_snapshot, resolve_window_capture, screenshot_pointer_scale,
     window_display_crop_is_safe, window_physical_rect,
 };
 use image::RgbaImage;
 use serde::{Deserialize, Serialize};
-use std::{path::Path, sync::OnceLock};
+use std::path::Path;
 
 pub use captures_capture::macos_window_corner_radius_for_major_version;
 
@@ -77,7 +77,8 @@ pub struct WindowSession {
     frozen: Option<DisplayFrame>,
     cursor: Option<PointerCursor>,
     include_cursor: bool,
-    preview: OnceLock<Option<RgbaImage>>,
+    /// Original pixels under the cursor drawn into `frozen`.
+    patch: Option<CursorPatch>,
     targets: WindowSelectionTargets,
     // Keep non-pickable windows too: exclusion from the picker is not evidence
     // that their pixels cannot occlude another application's window.
@@ -132,11 +133,23 @@ impl WindowSession {
             frozen,
             cursor,
             include_cursor,
-            preview: OnceLock::new(),
+            patch: None,
             targets,
             stack,
             fallback_corner_radius,
-        })
+        }
+        .with_frozen_cursor())
+    }
+
+    /// Draws the included cursor into the frozen frame for the selector, after
+    /// window chrome was refined from the untouched pixels.
+    fn with_frozen_cursor(mut self) -> Self {
+        if let (Some(frame), Some(cursor), true) =
+            (&mut self.frozen, &self.cursor, self.include_cursor)
+        {
+            self.patch = draw_frozen_capture_cursor(&mut frame.image, &self.display, cursor);
+        }
+        self
     }
 
     /// A session on `display` with no windows and no snapshot, for host tests
@@ -151,7 +164,7 @@ impl WindowSession {
             frozen: None,
             cursor: None,
             include_cursor: false,
-            preview: OnceLock::new(),
+            patch: None,
             targets,
             stack: Vec::new(),
             fallback_corner_radius: 0.,
@@ -187,23 +200,11 @@ impl WindowSession {
         )
     }
 
-    /// Borrowed RGBA8; retain the session until every provider/worker is finished.
-    pub fn frozen_image(&self) -> Option<&RgbaImage> {
-        self.frozen.as_ref().map(|frame| &frame.image)
-    }
-
-    /// Selector pixels: the frozen frame with its cursor when enabled. The raw
-    /// frame remains untouched for capture; only that preview needs a copy,
-    /// made once and valid until this session is dropped.
+    /// Selector pixels: the frozen frame with its cursor when enabled, as
+    /// borrowed RGBA8. Retain the session until every provider/worker is
+    /// finished.
     pub fn frozen_preview(&self) -> Option<&RgbaImage> {
-        let image = self.frozen_image()?;
-        let preview = self.preview.get_or_init(|| {
-            self.cursor
-                .as_ref()
-                .filter(|_| self.include_cursor)
-                .and_then(|cursor| frozen_capture_preview(image, &self.display, cursor))
-        });
-        Some(preview.as_ref().unwrap_or(image))
+        self.frozen.as_ref().map(|frame| &frame.image)
     }
 
     /// After hiding/settling the selector/countdown. Frozen safe crops preserve
@@ -244,6 +245,7 @@ impl WindowSession {
             let image = if let Some(frame) = frozen {
                 crate::region::crop(
                     frame,
+                    self.patch.as_ref(),
                     *rect,
                     self.cursor.as_ref().filter(|_| self.include_cursor),
                 )?
@@ -251,13 +253,17 @@ impl WindowSession {
                 let cursor = self.include_cursor.then(|| source.cursor()).flatten();
                 let frame = source.display(&self.display.id)?;
                 validate_display(&self.display, &frame.descriptor)?;
-                crate::region::crop(&frame, *rect, cursor.as_ref())?
+                crate::region::crop(&frame, None, *rect, cursor.as_ref())?
             };
             return Ok((image, CaptureMode::Region));
         }
         let Target::Window { id } = target else {
             let (mut image, cursor) = if let Some(frame) = frozen {
-                (frame.image.clone(), self.cursor.clone())
+                let mut image = frame.image.clone();
+                if let Some(patch) = &self.patch {
+                    patch.restore(&mut image, 0, 0);
+                }
+                (image, self.cursor.clone())
             } else {
                 let cursor = self.include_cursor.then(|| source.cursor()).flatten();
                 let frame = source.display(&self.display.id)?;
@@ -282,7 +288,7 @@ impl WindowSession {
         let image = if let Some(frame) = frozen {
             resolve_window_capture(
                 window_display_crop_is_safe(selected, &self.stack),
-                || self.crop(frame, selected, self.cursor.as_ref()),
+                || self.crop(frame, self.patch.as_ref(), selected, self.cursor.as_ref()),
                 || self.native(source, selected, self.cursor.as_ref()),
             )?
         } else {
@@ -299,7 +305,7 @@ impl WindowSession {
                 match source.display(&self.display.id) {
                     Ok(frame) => {
                         validate_display(&self.display, &frame.descriptor)?;
-                        self.crop(&frame, current, cursor.as_ref())
+                        self.crop(&frame, None, current, cursor.as_ref())
                     }
                     Err(_) => None, // A native window surface can still succeed.
                 }
@@ -318,14 +324,19 @@ impl WindowSession {
         Ok((image, CaptureMode::Window))
     }
 
+    /// `patch` holds the original pixels under a cursor drawn into `frame`.
     fn crop(
         &self,
         frame: &DisplayFrame,
+        patch: Option<&CursorPatch>,
         window: &WindowDescriptor,
         cursor: Option<&PointerCursor>,
     ) -> Option<RgbaImage> {
         let physical = window_physical_rect(&frame.descriptor, &frame.image, window)?;
         let mut image = frame.crop(physical)?;
+        if let Some(patch) = patch {
+            patch.restore(&mut image, physical.x, physical.y);
+        }
         #[cfg(target_os = "macos")]
         captures_capture::mask_macos_window_corners(
             &mut image,
@@ -451,7 +462,7 @@ mod tests {
             frozen: freeze.then(|| frame(11)),
             cursor: Some(cursor((-4, 37))),
             include_cursor: false,
-            preview: OnceLock::new(),
+            patch: None,
             targets: WindowSelectionTargets {
                 windows: vec![window()],
                 shell_chrome: vec![],
@@ -532,6 +543,7 @@ mod tests {
                 for include_cursor in [false, true] {
                     let mut session = session(freeze);
                     session.include_cursor = include_cursor;
+                    let session = session.with_frozen_cursor();
                     assert_eq!(
                         session
                             .frozen_preview()
@@ -569,8 +581,16 @@ mod tests {
                     if frozen {
                         assert!(source.calls.borrow().is_empty());
                     }
-                    if let Some(frozen) = session.frozen_image() {
-                        assert_eq!(frozen.get_pixel(26, 27).0, [26, 27, 11, 255]);
+                    // Capturing leaves the selector's frame as it was.
+                    if let Some(frozen) = session.frozen_preview() {
+                        assert_eq!(
+                            frozen.get_pixel(26, 27).0,
+                            if include_cursor {
+                                [233, 17, 201, 255]
+                            } else {
+                                [26, 27, 11, 255]
+                            }
+                        );
                     }
                 }
             }
@@ -594,6 +614,7 @@ mod tests {
                 for include_cursor in [false, true] {
                     let mut session = session(freeze);
                     session.include_cursor = include_cursor;
+                    let session = session.with_frozen_cursor();
                     let source = Fake::default();
                     let (image, mode) = session.image(&target, countdown, &source).unwrap();
                     let frozen = freeze && !countdown;
@@ -629,8 +650,15 @@ mod tests {
                             &["display"][..]
                         }
                     );
-                    if let Some(frame) = session.frozen_image() {
-                        assert_eq!(frame.get_pixel(26, 27).0, [26, 27, 11, 255]);
+                    if let Some(frame) = session.frozen_preview() {
+                        assert_eq!(
+                            frame.get_pixel(26, 27).0,
+                            if include_cursor {
+                                [233, 17, 201, 255]
+                            } else {
+                                [26, 27, 11, 255]
+                            }
+                        );
                     }
                 }
             }
@@ -809,6 +837,7 @@ mod tests {
         for freeze in [false, true] {
             let mut session = session(freeze);
             session.include_cursor = true;
+            let mut session = session.with_frozen_cursor();
             session.targets.windows[0].corner_radius = Some(12.);
             let mut source = Fake::default();
             let occluder = WindowDescriptor {
@@ -850,7 +879,7 @@ mod tests {
         assert_eq!(image.get_pixel(20, 20).0, [40, 40, 11, 255]);
         // The shared borrowed preview remains unmasked and cursor-free.
         assert_eq!(
-            session.frozen_image().unwrap().get_pixel(20, 20).0,
+            session.frozen_preview().unwrap().get_pixel(20, 20).0,
             [20, 20, 11, 255]
         );
     }

@@ -2,12 +2,12 @@
 //! nothing is persisted until confirmation wins the shared cancellation gate.
 use crate::{Artifact, Error, capture_flow, persist_screenshot};
 use captures_capture::{
-    CaptureError, CaptureMode, DisplayDescriptor, DisplayFrame, LogicalRect, PointerCursor,
-    XcapBackend, frozen_capture_preview, overlay_pointer_cursor_in_crop, pointer_cursor,
-    screenshot_pointer_scale,
+    CaptureError, CaptureMode, CursorPatch, DisplayDescriptor, DisplayFrame, LogicalRect,
+    PointerCursor, XcapBackend, draw_frozen_capture_cursor, overlay_pointer_cursor_in_crop,
+    pointer_cursor, screenshot_pointer_scale,
 };
 use image::RgbaImage;
-use std::{path::Path, sync::OnceLock};
+use std::path::Path;
 
 pub struct RegionSession {
     generation: u64,
@@ -15,7 +15,8 @@ pub struct RegionSession {
     frozen: Option<DisplayFrame>,
     cursor: Option<PointerCursor>,
     include_cursor: bool,
-    preview: OnceLock<Option<RgbaImage>>,
+    /// Original pixels under the cursor drawn into `frozen`.
+    patch: Option<CursorPatch>,
 }
 
 impl RegionSession {
@@ -52,32 +53,31 @@ impl RegionSession {
             frozen,
             cursor,
             include_cursor,
-            preview: OnceLock::new(),
-        })
+            patch: None,
+        }
+        .with_frozen_cursor())
+    }
+
+    /// Draws the included cursor into the frozen frame for the selector.
+    fn with_frozen_cursor(mut self) -> Self {
+        if let (Some(frame), Some(cursor), true) =
+            (&mut self.frozen, &self.cursor, self.include_cursor)
+        {
+            self.patch = draw_frozen_capture_cursor(&mut frame.image, &self.display, cursor);
+        }
+        self
     }
 
     pub fn display(&self) -> &DisplayDescriptor {
         &self.display
     }
 
-    /// Borrowed, straight-alpha RGBA8 in row-major order. Valid until this session
-    /// is dropped; the host must retain the session while any image provider reads.
-    pub fn frozen_image(&self) -> Option<&RgbaImage> {
-        self.frozen.as_ref().map(|f| &f.image)
-    }
-
-    /// Selector pixels: the frozen frame with its cursor when enabled. The raw
-    /// frame remains untouched for capture; only that preview needs a copy,
-    /// made once and valid until this session is dropped.
+    /// Selector pixels: the frozen frame with its cursor when enabled, as
+    /// borrowed, straight-alpha RGBA8 in row-major order. Valid until this
+    /// session is dropped; the host must retain the session while any image
+    /// provider reads.
     pub fn frozen_preview(&self) -> Option<&RgbaImage> {
-        let image = self.frozen_image()?;
-        let preview = self.preview.get_or_init(|| {
-            self.cursor
-                .as_ref()
-                .filter(|_| self.include_cursor)
-                .and_then(|cursor| frozen_capture_preview(image, &self.display, cursor))
-        });
-        Some(preview.as_ref().unwrap_or(image))
+        self.frozen.as_ref().map(|frame| &frame.image)
     }
 
     /// Off-main-thread final capture. Like shipping Captures, a nonzero countdown
@@ -119,6 +119,7 @@ impl RegionSession {
         if let Some(frozen) = self.frozen.as_ref().filter(|_| !after_countdown) {
             return crop(
                 frozen,
+                self.patch.as_ref(),
                 rect,
                 self.cursor.as_ref().filter(|_| self.include_cursor),
             );
@@ -127,6 +128,7 @@ impl RegionSession {
         validate_display(&self.display, &fresh.descriptor)?;
         crop(
             &fresh,
+            None,
             rect,
             cursor.as_ref().filter(|_| self.include_cursor),
         )
@@ -176,8 +178,10 @@ pub(super) fn validate_rect(display: &DisplayDescriptor, rect: LogicalRect) -> R
     Ok(())
 }
 
+/// `patch` holds the original pixels under a cursor drawn into `frame`.
 pub(super) fn crop(
     frame: &DisplayFrame,
+    patch: Option<&CursorPatch>,
     rect: LogicalRect,
     cursor: Option<&PointerCursor>,
 ) -> Result<RgbaImage, Error> {
@@ -187,6 +191,9 @@ pub(super) fn crop(
         .overlay_to_buffer_scale(frame.image.width(), frame.image.height());
     let physical = rect.to_physical(scale, frame.image.width(), frame.image.height());
     let mut image = frame.crop(physical).ok_or(Error::InvalidRegion)?;
+    if let Some(patch) = patch {
+        patch.restore(&mut image, physical.x, physical.y);
+    }
     if let Some(cursor) = cursor {
         overlay_pointer_cursor_in_crop(
             &mut image,
@@ -248,8 +255,9 @@ mod tests {
                         frozen: freeze.then(frame),
                         cursor: Some(frozen_pointer.clone()),
                         include_cursor,
-                        preview: OnceLock::new(),
-                    };
+                        patch: None,
+                    }
+                    .with_frozen_cursor();
                     assert_eq!(
                         session
                             .frozen_preview()
@@ -283,9 +291,14 @@ mod tests {
                                 [8, 18, 17, 255]
                             }
                         );
+                        // Cropping leaves the selector's frame as it was.
                         assert_eq!(
-                            session.frozen_image().unwrap().get_pixel(8, 6).0,
-                            [8, 18, 17, 255]
+                            session.frozen_preview().unwrap().get_pixel(8, 6).0,
+                            if include_cursor {
+                                [211, 19, 79, 255]
+                            } else {
+                                [8, 18, 17, 255]
+                            }
                         );
                     } else {
                         assert_eq!(fresh_calls, 1);
@@ -297,6 +310,62 @@ mod tests {
         }
     }
     #[test]
+    fn frozen_cursor_outside_a_crop_leaves_no_fragment() {
+        let session = RegionSession {
+            generation: 0,
+            display: frame().descriptor,
+            frozen: Some(frame()),
+            // Hotspot at buffer (8, 6); the 3x3 logical cursor covers 8..14.
+            cursor: Some(PointerCursor {
+                position: (-16, 10),
+                image: Some(captures_capture::CursorImage {
+                    pixels: RgbaImage::from_pixel(6, 6, image::Rgba([211, 19, 79, 255])),
+                    and_mask: None,
+                    logical_width: 3.,
+                    logical_height: 3.,
+                    hot_spot_x: 0.,
+                    hot_spot_y: 0.,
+                }),
+            }),
+            include_cursor: true,
+            patch: None,
+        }
+        .with_frozen_cursor();
+        let preview = session.frozen_preview().unwrap();
+        assert_eq!(preview.get_pixel(13, 11).0, [211, 19, 79, 255]);
+        let crop_at = |x| {
+            let rect = LogicalRect {
+                x,
+                y: 3.,
+                width: 4.,
+                height: 3.,
+            };
+            session.image(rect, false, || unreachable!()).unwrap()
+        };
+        // Starting one buffer pixel right of the hotspot: original pixels only.
+        let outside = crop_at(4.5);
+        assert_eq!(
+            outside,
+            crop(
+                &frame(),
+                None,
+                LogicalRect {
+                    x: 4.5,
+                    y: 3.,
+                    width: 4.,
+                    height: 3.
+                },
+                None
+            )
+            .unwrap()
+        );
+        // Including the hotspot: the cursor is drawn once, at its crop position.
+        let inside = crop_at(4.);
+        assert_eq!(inside.get_pixel(0, 0).0, [211, 19, 79, 255]);
+        assert_eq!(inside.get_pixel(5, 5).0, [211, 19, 79, 255]);
+        assert_eq!(inside.get_pixel(6, 5).0, frame().image.get_pixel(14, 11).0);
+    }
+    #[test]
     fn fresh_cursor_is_drawn_at_its_new_crop_local_position() {
         let session = RegionSession {
             generation: 0,
@@ -304,7 +373,7 @@ mod tests {
             frozen: Some(frame()),
             cursor: None,
             include_cursor: true,
-            preview: OnceLock::new(),
+            patch: None,
         };
         let pixels = session
             .image(
@@ -351,7 +420,7 @@ mod tests {
             frozen: None,
             cursor: None,
             include_cursor: false,
-            preview: OnceLock::new(),
+            patch: None,
         };
         let rect = LogicalRect {
             x: 4.,
@@ -383,7 +452,7 @@ mod tests {
             width: 7.5,
             height: 4.5,
         };
-        let pixels = crop(&source, region, None).unwrap();
+        let pixels = crop(&source, None, region, None).unwrap();
         // Independent edge rounding: [6.5,4.5]→[7,5], [21.5,13.5]→[22,14].
         assert_eq!(pixels.dimensions(), (15, 9));
         assert_eq!(pixels.get_pixel(0, 0).0, [7, 15, 17, 255]);
@@ -430,13 +499,14 @@ mod tests {
             },
         ] {
             assert!(matches!(
-                crop(&source, rect, None),
+                crop(&source, None, rect, None),
                 Err(Error::InvalidRegion)
             ));
         }
         assert!(
             crop(
                 &source,
+                None,
                 LogicalRect {
                     x: 18.,
                     y: 10.,

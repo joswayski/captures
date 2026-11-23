@@ -22,7 +22,7 @@ mod x11;
 
 pub use backend::XcapBackend;
 pub use cursor::{
-    CursorImage, PointerCursor, frozen_capture_preview, overlay_pointer_cursor,
+    CursorImage, CursorPatch, PointerCursor, draw_frozen_capture_cursor, overlay_pointer_cursor,
     overlay_pointer_cursor_in_crop, overlay_pointer_cursor_on_window, pointer_cursor,
     pointer_position, screenshot_pointer_scale,
 };
