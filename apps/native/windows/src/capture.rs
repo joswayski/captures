@@ -2172,38 +2172,22 @@ impl Menu {
         if let Some((r, label, enabled)) = &layout.primary {
             let opacity = if *enabled { 1. } else { 0.4 };
             let is_hovered = *enabled && hovered(Hit::Primary);
-            let lift = if is_hovered { -1. } else { 0. };
-            let r = rect(r.left, r.top + lift, r.right, r.bottom + lift);
+            let r = *r;
             let pill = (r.bottom - r.top) / 2.;
-            if is_hovered {
-                let accent = t.color("theme-accent");
-                let shadows = [
-                    Shadow {
-                        x: 0.,
-                        y: 8.,
-                        blur: 24.,
-                        spread: 0.,
-                        color: [accent.r, accent.g, accent.b, 0.3 * opacity],
-                    },
-                    Shadow {
-                        x: 0.,
-                        y: 6.,
-                        blur: 18.,
-                        spread: 0.,
-                        color: [0., 0., 0., 0.38 * opacity],
-                    },
-                ];
-                gfx::shadow(dc, r, pill, &shadows)?;
+            let shadow_name = if is_hovered {
+                "shadow-btn-primary-hover"
             } else {
-                let shadow = [Shadow {
-                    x: 0.,
-                    y: 5.,
-                    blur: 16.,
-                    spread: 0.,
-                    color: [0., 0., 0., 0.36 * opacity],
-                }];
-                gfx::shadow(dc, r, pill, &shadow)?;
-            }
+                "shadow-btn-primary"
+            };
+            let shadows: Vec<Shadow> = t
+                .shadow(shadow_name)
+                .iter()
+                .map(|s| Shadow {
+                    color: [s.color[0], s.color[1], s.color[2], s.color[3] * opacity],
+                    ..*s
+                })
+                .collect();
+            gfx::shadow(dc, r, pill, &shadows)?;
             let fill = if is_hovered {
                 "theme-accent-hover"
             } else {
@@ -2220,7 +2204,7 @@ impl Menu {
                     r: 0.,
                     g: 0.,
                     b: 0.,
-                    a: 0.24 * opacity,
+                    a: 0.14 * opacity,
                 },
             )?;
             let ink = t.color_alpha("theme-accent-ink", opacity);
@@ -2554,13 +2538,28 @@ impl Menu {
         if inner.right > inner.left && inner.bottom > inner.top {
             gfx::border(dc, inner, 0.5, 1., t.color("selection-hairline-inner"))?;
         }
-        let size = format!(
-            "{} × {}",
-            (r.right - r.left).round() as i64,
-            (r.bottom - r.top).round() as i64
-        );
+        let bw = r.right - r.left;
+        let bh = r.bottom - r.top;
+        if bw >= 24. && bh >= 24. {
+            let arm = (bw.min(bh) * 0.25).min(11.);
+            let t2 = 2.;
+            let (l, top, right, bot) = (r.left - 1.5, r.top - 1.5, r.right + 1.5, r.bottom + 1.5);
+            for b in [
+                rect(l, top, l + arm, top + t2),
+                rect(l, top, l + t2, top + arm),
+                rect(right - arm, top, right, top + t2),
+                rect(right - t2, top, right, top + arm),
+                rect(l, bot - t2, l + arm, bot),
+                rect(l, bot - arm, l + t2, bot),
+                rect(right - arm, bot - t2, right, bot),
+                rect(right - t2, bot - arm, right, bot),
+            ] {
+                gfx::fill_round(dc, b, 1., accent)?;
+            }
+        }
+        let size = format!("{} × {}", bw.round() as i64, bh.round() as i64);
         let text = g.text_sized(t, &size, t.n("text-xs"), "weight-semibold", None)?;
-        let (w, h) = (text.width + 16., text.height + 8.);
+        let (w, h) = (text.width + 18., text.height + 8.);
         let x = ((r.left + r.right - w) / 2.).round();
         let y = if r.top < 30. {
             r.top + 1.5 + 6.
@@ -2568,9 +2567,11 @@ impl Menu {
             r.top + 1.5 - 30.
         };
         let label = rect(x, y, x + w, y + h);
-        gfx::shadow(dc, label, 6., t.shadow("shadow-sm"))?;
-        gfx::fill_round(dc, label, 6., accent)?;
-        gfx::text(dc, &text, x + 8., y + 4., t.color("theme-accent-ink"))?;
+        let pill = h / 2.;
+        gfx::shadow(dc, label, pill, t.shadow("shadow-sm"))?;
+        gfx::fill_round(dc, label, pill, t.color("glass-strong"))?;
+        gfx::border(dc, label, pill, 1., t.color("glass-border"))?;
+        gfx::text(dc, &text, x + 9., y + 4., t.color("glass-text"))?;
         // The direct selector's `.selection-box` has no handles.
         if self.direct {
             return Ok(());

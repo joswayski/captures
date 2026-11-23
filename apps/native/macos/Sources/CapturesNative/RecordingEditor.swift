@@ -1801,7 +1801,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         }
         showInFolderButton.icon = .shipping("folder")
         saveButton = button("Save", parent: footer) { [weak self] in self?.saveOrReplace() }
-        saveButton.primary = true
+        saveButton.solid = true
         saveButton.icon = .shipping("save")
         installKeyViewLoop()
     }

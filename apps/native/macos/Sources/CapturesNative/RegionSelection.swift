@@ -241,9 +241,12 @@ final class RegionSelectionView: NSView {
         setGuidanceCopy(feedback: false)
         guidance.setPresent(true)
         dimensions.font = .capturesMonoDigits(ofSize: tokens.number("text-xs"), weight: .semibold)
-        dimensions.textColor = tokens.color("theme-accent-ink"); dimensions.alignment = .center
-        dimensions.wantsLayer = true; dimensions.layer?.backgroundColor = tokens.color("theme-accent").cgColor
-        dimensions.layer?.cornerRadius = tokens.number("r-sm"); addSubview(dimensions)
+        dimensions.textColor = tokens.color("glass-text"); dimensions.alignment = .center
+        dimensions.wantsLayer = true
+        dimensions.layer?.backgroundColor = tokens.color("glass-strong").cgColor
+        dimensions.layer?.borderWidth = 1
+        dimensions.layer?.borderColor = tokens.color("glass-border").cgColor
+        dimensions.layer?.cornerRadius = tokens.number("h-xs") / 2; addSubview(dimensions)
         setAccessibilityRole(.group); setAccessibilityLabel("Capture region selector")
         update()
     }
@@ -355,18 +358,21 @@ final class RegionSelectionView: NSView {
 /// or reallocated as the selection grows.
 final class MarqueeLayers {
     private let lines = (0..<3).map { _ in CAShapeLayer() }
+    private let corners = CAShapeLayer()
     private static let specs: [(inset: CGFloat, width: CGFloat, color: String, extra: CGFloat)] = [
         (-0.5, 1.0, "selection-hairline-outer", 0.5),
         (0.75, 1.5, "theme-accent", -0.75),
         (2.0, 1.0, "selection-hairline-inner", -2.0)]
 
     init(in host: CALayer) {
-        for line in lines {
+        for line in lines + [corners] {
             line.fillColor = nil
             line.actions = ["path": NSNull(), "strokeColor": NSNull(), "lineWidth": NSNull(),
                 "bounds": NSNull(), "position": NSNull(), "hidden": NSNull()]
             host.addSublayer(line)
         }
+        corners.lineCap = .round
+        corners.lineJoin = .round
     }
 
     func update(_ rect: NSRect?, radius: CGFloat, tokens: Tokens, in bounds: NSRect) {
@@ -379,6 +385,28 @@ final class MarqueeLayers {
             line.path = CGPath(roundedRect: box, cornerWidth: corner, cornerHeight: corner, transform: nil)
             line.lineWidth = spec.width; line.strokeColor = tokens.color(spec.color).cgColor
         }
+        corners.frame = bounds
+        guard let rect, rect.width >= 24, rect.height >= 24 else { corners.isHidden = true; return }
+        corners.isHidden = false
+        let arm = min(11, min(rect.width, rect.height) * 0.25)
+        let box = rect.insetBy(dx: -1.25, dy: -1.25)
+        let ticks = CGMutablePath()
+        // Top-left, top-right, bottom-left, bottom-right optical viewfinder brackets.
+        ticks.move(to: CGPoint(x: box.minX, y: box.minY + arm))
+        ticks.addLine(to: CGPoint(x: box.minX, y: box.minY))
+        ticks.addLine(to: CGPoint(x: box.minX + arm, y: box.minY))
+        ticks.move(to: CGPoint(x: box.maxX - arm, y: box.minY))
+        ticks.addLine(to: CGPoint(x: box.maxX, y: box.minY))
+        ticks.addLine(to: CGPoint(x: box.maxX, y: box.minY + arm))
+        ticks.move(to: CGPoint(x: box.minX, y: box.maxY - arm))
+        ticks.addLine(to: CGPoint(x: box.minX, y: box.maxY))
+        ticks.addLine(to: CGPoint(x: box.minX + arm, y: box.maxY))
+        ticks.move(to: CGPoint(x: box.maxX - arm, y: box.maxY))
+        ticks.addLine(to: CGPoint(x: box.maxX, y: box.maxY))
+        ticks.addLine(to: CGPoint(x: box.maxX, y: box.maxY - arm))
+        corners.path = ticks
+        corners.lineWidth = 2.0
+        corners.strokeColor = tokens.color("theme-accent").cgColor
     }
 }
 

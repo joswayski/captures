@@ -25,7 +25,7 @@ test("native tokens preserve light overrides, palette overrides and fixed media 
       ...declarations(palette, appearance, theme),
     });
   assert.equal(tokens("light", "cobalt")["surface-raised"], "#ffffff");
-  assert.equal(tokens("dark", "cobalt")["surface-raised"], "#1b1c1f");
+  assert.equal(tokens("dark", "cobalt")["surface-raised"], "#141417");
   assert.equal(tokens("light", "cobalt")["theme-accent"], "#2563eb");
   assert.equal(tokens("dark", "mustard")["theme-accent"], "#ffb800");
   for (const theme of themes) {
@@ -86,8 +86,8 @@ test("native tokens carry box-shadow layers, including the preview card shadow",
   const tokens = JSON.parse(await readFile(join(temporary, "tokens.json"), "utf8"));
   for (const variant of Object.values(tokens)) {
     assert.deepEqual(variant.shadows["thumbnail-card-shadow"], [
-      { x: 0, y: 6, blur: 14, spread: 0, color: [0, 0, 0, 0.38] },
-      { x: 0, y: 2, blur: 5, spread: 0, color: [0, 0, 0, 0.26] },
+      { x: 0, y: 8, blur: 20, spread: 0, color: [0, 0, 0, 0.42] },
+      { x: 0, y: 2, blur: 6, spread: 0, color: [0, 0, 0, 0.24] },
     ]);
     assert.equal(variant.shadows["glass-shadow"].length, 2);
     assert.deepEqual(variant.shadows["tooltip-shadow"], [
@@ -100,7 +100,7 @@ test("native tokens carry box-shadow layers, including the preview card shadow",
     assert.equal(variant.numbers["startup-notice-height"], 54);
   }
   assert.deepEqual(tokens["dark-cobalt"].shadows["shadow-sm"], [
-    { x: 0, y: 2, blur: 6, spread: 0, color: [0, 0, 0, 0.32] },
+    { x: 0, y: 1, blur: 3, spread: 0, color: [0, 0, 0, 0.22] },
   ]);
   assert.equal(tokens["light-cobalt"].shadows["shadow-sm"].length, 2);
 });

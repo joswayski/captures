@@ -13,6 +13,9 @@ window.captures {
   color: var(--text);
   font-family: var(--font-sans);
 }
+.captures .preferences-body {
+  background: var(--surface-canvas);
+}
 .captures label {
   all: unset;
 }
@@ -108,33 +111,28 @@ window.captures.countdown-window {
   border-radius: var(--r-md);
   color: var(--text);
   background-color: var(--control);
-  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.1), rgba(0, 0, 0, 0.08));
+  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.04), rgba(0, 0, 0, 0.02));
   box-shadow:
     inset 0 1px 0 var(--control-highlight),
-    inset 0 -1px 0 var(--control-edge-bottom),
     var(--shadow-btn);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
   transition:
     background-color var(--dur-2) var(--ease-standard),
     border-color var(--dur-2) var(--ease-standard),
-    box-shadow var(--dur-2) var(--ease-standard),
-    transform var(--dur-2) var(--ease-standard);
+    box-shadow var(--dur-2) var(--ease-standard);
 }
 .captures button.preferences-history-button:hover {
   border-color: var(--border-strong);
   background-color: var(--control-hover);
   box-shadow:
     inset 0 1px 0 var(--control-highlight-hover),
-    inset 0 -1px 0 var(--control-edge-bottom),
     var(--shadow-btn-hover);
-  transform: translateY(-1px);
 }
 .captures button.preferences-history-button:active {
   box-shadow:
-    inset 0 1px 0 rgba(0, 0, 0, 0.08),
+    inset 0 1px 0 rgba(0, 0, 0, 0.06),
     var(--shadow-xs);
-  transform: translateY(0);
 }
 .captures button.preferences-history-button:focus-visible {
   box-shadow: 0 0 0 3px var(--focus);
@@ -157,7 +155,6 @@ window.captures.countdown-window {
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-xl);
   background: var(--surface-raised);
-  box-shadow: var(--shadow-sm);
 }
 .captures .card-title {
   font-size: var(--text-lg);
@@ -499,10 +496,9 @@ window.captures.countdown-window {
   border-radius: var(--r-md);
   color: var(--text);
   background-color: var(--control);
-  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.1), rgba(0, 0, 0, 0.08));
+  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.04), rgba(0, 0, 0, 0.02));
   box-shadow:
     inset 0 1px 0 var(--control-highlight),
-    inset 0 -1px 0 var(--control-edge-bottom),
     var(--shadow-btn);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
@@ -511,23 +507,19 @@ window.captures.countdown-window {
     background-color var(--dur-2) var(--ease-standard),
     border-color var(--dur-2) var(--ease-standard),
     color var(--dur-2) var(--ease-standard),
-    box-shadow var(--dur-2) var(--ease-standard),
-    transform var(--dur-2) var(--ease-standard);
+    box-shadow var(--dur-2) var(--ease-standard);
 }
 .captures button.ui-btn:hover:not(:disabled) {
   border-color: var(--border-strong);
   background-color: var(--control-hover);
   box-shadow:
     inset 0 1px 0 var(--control-highlight-hover),
-    inset 0 -1px 0 var(--control-edge-bottom),
     var(--shadow-btn-hover);
-  transform: translateY(-1px);
 }
 .captures button.ui-btn:active:not(:disabled) {
   box-shadow:
-    inset 0 1px 0 rgba(0, 0, 0, 0.08),
+    inset 0 1px 0 rgba(0, 0, 0, 0.06),
     var(--shadow-xs);
-  transform: translateY(0);
 }
 .captures button.ui-btn:focus-visible {
   box-shadow: var(--focus-ring);
@@ -536,32 +528,27 @@ window.captures.countdown-window {
   opacity: 0.45;
 }
 .captures button.ui-btn.primary {
-  border-color: rgba(0, 0, 0, 0.24);
+  border-color: rgba(0, 0, 0, 0.14);
   color: var(--theme-accent-ink);
   background-color: var(--theme-accent);
-  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.2), rgba(0, 0, 0, 0.09));
+  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.06), rgba(0, 0, 0, 0.03));
   box-shadow:
     inset 0 1px 0 var(--primary-highlight),
-    inset 0 -1px 0 var(--primary-edge-bottom),
     var(--shadow-btn-primary);
   font-weight: var(--weight-semibold);
 }
 .captures button.ui-btn.primary:hover:not(:disabled) {
-  border-color: rgba(0, 0, 0, 0.24);
+  border-color: rgba(0, 0, 0, 0.14);
   background-color: var(--theme-accent-hover);
-  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.28), rgba(0, 0, 0, 0.05));
+  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.09), rgba(0, 0, 0, 0.02));
   box-shadow:
     inset 0 1px 0 var(--primary-highlight-hover),
-    inset 0 -1px 0 var(--primary-edge-bottom),
-    0 6px 20px alpha(var(--theme-accent), 0.28),
     var(--shadow-btn-primary-hover);
-  transform: translateY(-1px);
 }
 .captures button.ui-btn.primary:active:not(:disabled) {
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    inset 0 1px 0 rgba(0, 0, 0, 0.08),
     var(--shadow-xs);
-  transform: translateY(0);
 }
 .captures button.ui-btn.ghost {
   border-color: transparent;
@@ -574,7 +561,6 @@ window.captures.countdown-window {
   color: var(--text);
   background: var(--surface-hover);
   box-shadow: none;
-  transform: none;
 }
 /* Destructive actions stay quiet until hovered or awaiting confirmation. */
 .captures button.ui-btn.danger {
@@ -588,26 +574,22 @@ window.captures.countdown-window {
   color: var(--danger-text);
   background: var(--danger-surface);
   box-shadow: none;
-  transform: none;
 }
 .captures button.ui-btn.danger.confirm {
-  border-color: rgba(0, 0, 0, 0.24);
+  border-color: rgba(0, 0, 0, 0.14);
   color: #ffffff;
   background-color: var(--theme-signal-strong);
-  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.16), rgba(0, 0, 0, 0.1));
+  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.06), rgba(0, 0, 0, 0.03));
   box-shadow:
     inset 0 1px 0 var(--primary-highlight),
-    inset 0 -1px 0 var(--primary-edge-bottom),
     var(--shadow-btn);
 }
 .captures button.ui-btn.danger.confirm:hover:not(:disabled) {
-  border-color: rgba(0, 0, 0, 0.24);
+  border-color: rgba(0, 0, 0, 0.14);
   background-color: var(--theme-signal-deep);
   box-shadow:
     inset 0 1px 0 var(--primary-highlight-hover),
-    inset 0 -1px 0 var(--primary-edge-bottom),
     var(--shadow-btn-hover);
-  transform: translateY(-1px);
 }
 .captures button.ui-btn.danger:focus-visible,
 .captures button.ui-btn.ghost:focus-visible,
@@ -753,16 +735,13 @@ window.captures.countdown-window {
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-xl);
   background: var(--surface-raised);
-  box-shadow: var(--shadow-sm);
   transition:
     border-color var(--dur-3) var(--ease-standard),
-    transform var(--dur-3) var(--ease-standard),
     box-shadow var(--dur-3) var(--ease-standard);
 }
 .captures .history-card:hover {
   border-color: var(--border-strong);
-  box-shadow: var(--shadow-md);
-  transform: translateY(-2px);
+  box-shadow: var(--shadow-sm);
 }
 .captures .history-image-wrap {
   min-height: 168px;
@@ -844,6 +823,22 @@ window.captures.countdown-window {
 }
 .captures .history-actions button.ui-btn {
   padding: 0 var(--s-4);
+}
+.captures .history-actions button.ui-btn.primary {
+  border-color: rgba(0, 0, 0, 0.1);
+  color: var(--solid-ink);
+  background-color: var(--solid);
+  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.04), rgba(0, 0, 0, 0.02));
+  box-shadow:
+    inset 0 1px 0 var(--control-highlight),
+    var(--shadow-btn-primary);
+}
+.captures .history-actions button.ui-btn.primary:hover:not(:disabled) {
+  border-color: rgba(0, 0, 0, 0.12);
+  background-color: var(--solid-hover);
+  box-shadow:
+    inset 0 1px 0 var(--control-highlight-hover),
+    var(--shadow-btn-primary-hover);
 }
 .captures .history-card-error {
   margin-top: var(--s-3);
@@ -1580,6 +1575,20 @@ popover.captures-menu .choice-description {
 }
 .captures button.ui-btn.editor-save {
   padding: 0 var(--s-6);
+  border-color: rgba(0, 0, 0, 0.1);
+  color: var(--solid-ink);
+  background-color: var(--solid);
+  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.04), rgba(0, 0, 0, 0.02));
+  box-shadow:
+    inset 0 1px 0 var(--control-highlight),
+    var(--shadow-btn-primary);
+}
+.captures button.ui-btn.editor-save:hover:not(:disabled) {
+  border-color: rgba(0, 0, 0, 0.12);
+  background-color: var(--solid-hover);
+  box-shadow:
+    inset 0 1px 0 var(--control-highlight-hover),
+    var(--shadow-btn-primary-hover);
 }
 
 /* ------------------------------------------------- recording editor ---- */
@@ -1611,7 +1620,6 @@ popover.captures-menu .choice-description {
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-xl);
   background: var(--surface-raised);
-  box-shadow: var(--shadow-sm);
 }
 .captures .recording-preview-toolbar {
   min-height: 45px;
@@ -2136,14 +2144,13 @@ window.captures.preview-stack-window {
 .captures button.preview-main-button {
   all: unset;
   min-height: 30px;
-  border: 1px solid var(--glass-border-strong);
+  border: 1px solid var(--glass-border);
   border-radius: var(--r-md);
   color: var(--glass-text);
   background-color: var(--glass-strong);
-  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.1), rgba(0, 0, 0, 0.08));
+  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.04), rgba(0, 0, 0, 0.02));
   box-shadow:
     inset 0 1px 0 var(--control-highlight),
-    inset 0 -1px 0 var(--control-edge-bottom),
     var(--shadow-btn);
   font-size: var(--text-xs);
   font-weight: var(--weight-semibold);
@@ -2153,27 +2160,23 @@ window.captures.preview-stack-window {
   background-color: var(--glass-raised);
   box-shadow:
     inset 0 1px 0 var(--control-highlight-hover),
-    inset 0 -1px 0 var(--control-edge-bottom),
     var(--shadow-btn-hover);
 }
 .captures button.preview-main-button.primary {
-  border-color: rgba(0, 0, 0, 0.24);
+  border-color: rgba(0, 0, 0, 0.14);
   color: var(--theme-accent-ink);
   background-color: var(--theme-accent);
-  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.2), rgba(0, 0, 0, 0.09));
+  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.06), rgba(0, 0, 0, 0.03));
   box-shadow:
     inset 0 1px 0 var(--primary-highlight),
-    inset 0 -1px 0 var(--primary-edge-bottom),
     var(--shadow-btn-primary);
 }
 .captures button.preview-main-button.primary:hover {
-  border-color: rgba(0, 0, 0, 0.24);
+  border-color: rgba(0, 0, 0, 0.14);
   background-color: var(--theme-accent-hover);
-  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.28), rgba(0, 0, 0, 0.05));
+  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.09), rgba(0, 0, 0, 0.02));
   box-shadow:
     inset 0 1px 0 var(--primary-highlight-hover),
-    inset 0 -1px 0 var(--primary-edge-bottom),
-    0 6px 20px alpha(var(--theme-accent), 0.28),
     var(--shadow-btn-primary-hover);
 }
 
@@ -3838,37 +3841,31 @@ popover.captures-menu.glass button.choice-option.active {
   min-height: var(--h-xl);
   margin-left: var(--s-2);
   padding: 0 var(--s-6);
-  border: 1px solid rgba(0, 0, 0, 0.24);
+  border: 1px solid rgba(0, 0, 0, 0.14);
   border-radius: var(--r-pill);
   color: var(--theme-accent-ink);
   background-color: var(--theme-accent);
-  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.2), rgba(0, 0, 0, 0.09));
+  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.06), rgba(0, 0, 0, 0.03));
   box-shadow:
     inset 0 1px 0 var(--primary-highlight),
-    inset 0 -1px 0 var(--primary-edge-bottom),
     var(--shadow-btn-primary);
   font-size: var(--text-md);
   font-weight: var(--weight-semibold);
   transition:
     background-color var(--dur-2) var(--ease-standard),
-    box-shadow var(--dur-2) var(--ease-standard),
-    transform var(--dur-2) var(--ease-standard);
+    box-shadow var(--dur-2) var(--ease-standard);
 }
 .captures button.capture-bar-primary:hover:not(:disabled) {
   background-color: var(--theme-accent-hover);
-  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.28), rgba(0, 0, 0, 0.05));
+  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.09), rgba(0, 0, 0, 0.02));
   box-shadow:
     inset 0 1px 0 var(--primary-highlight-hover),
-    inset 0 -1px 0 var(--primary-edge-bottom),
-    0 8px 24px alpha(var(--theme-accent), 0.3),
     var(--shadow-btn-primary-hover);
-  transform: translateY(-1px);
 }
 .captures button.capture-bar-primary:active:not(:disabled) {
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    inset 0 1px 0 rgba(0, 0, 0, 0.08),
     var(--shadow-xs);
-  transform: translateY(0);
 }
 .captures button.capture-bar-primary:disabled {
   opacity: 0.4;

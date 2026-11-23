@@ -2971,13 +2971,9 @@ impl History {
                     if !lit {
                         gfx::shadow(dc, all, r_md, t.shadow("shadow-btn-primary"))?;
                     }
-                    let bg = if lit {
-                        "theme-accent-hover"
-                    } else {
-                        "theme-accent"
-                    };
+                    let bg = if lit { "solid-hover" } else { "solid" };
                     gfx::fill_round(dc, all, r_md, c(bg))?;
-                    gfx::tactile_finish(dc, &g.factory, (all, r_md), t, true, lit, 1.)?;
+                    gfx::tactile_finish(dc, &g.factory, (all, r_md), t, false, lit, 1.)?;
                     gfx::border(
                         dc,
                         all,
@@ -2987,10 +2983,10 @@ impl History {
                             r: 0.,
                             g: 0.,
                             b: 0.,
-                            a: 0.24,
+                            a: 0.1,
                         },
                     )?;
-                    c("theme-accent-ink")
+                    c("solid-ink")
                 } else {
                     if !lit {
                         gfx::shadow(dc, all, r_md, t.shadow("shadow-btn"))?;

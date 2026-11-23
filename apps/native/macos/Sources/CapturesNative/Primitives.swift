@@ -39,9 +39,9 @@ func drawFocusRing(_ tokens: Tokens, in rect: NSRect, radius: CGFloat) {
     ring.stroke()
 }
 
-/// Tactile 3D camera-key finish matching the marketing site's `.download-button`
-/// and `.source-button`: vertical matte sheen, curved top specular highlight
-/// (`inset 0 1px 0`), and subtle bottom inner lip (`inset 0 -1px 0`).
+/// Aperture optical anodized finish: whisper-thin ambient top sheen and a
+/// crisp 1 pt top specular hairline (`--control-highlight` / `--primary-highlight`),
+/// avoiding heavy 3D plastic gradients or chunky bottom bevel lips.
 func drawTactileSurface(in path: NSBezierPath, radius: CGFloat, tokens: Tokens,
                         primary: Bool, hovered: Bool, pressed: Bool, isFlipped: Bool,
                         alpha: CGFloat = 1) {
@@ -54,20 +54,20 @@ func drawTactileSurface(in path: NSBezierPath, radius: CGFloat, tokens: Tokens,
     let topAlpha: CGFloat
     let bottomAlpha: CGFloat
     if pressed {
-        topAlpha = primary ? 0.05 : 0.03
-        bottomAlpha = primary ? 0.14 : (dark ? 0.12 : 0.08)
+        topAlpha = 0.04
+        bottomAlpha = 0.04
     } else if primary {
-        topAlpha = hovered ? 0.28 : 0.20
-        bottomAlpha = hovered ? 0.05 : 0.09
+        topAlpha = hovered ? 0.08 : 0.05
+        bottomAlpha = 0.03
     } else {
-        topAlpha = hovered ? (dark ? 0.16 : 0.08) : (dark ? 0.10 : 0.05)
-        bottomAlpha = hovered ? (dark ? 0.06 : 0.04) : (dark ? 0.09 : 0.06)
+        topAlpha = hovered ? (dark ? 0.06 : 0.03) : (dark ? 0.035 : 0.015)
+        bottomAlpha = dark ? 0.02 : 0.015
     }
     let start = (pressed ? NSColor.black : NSColor.white).withAlphaComponent(topAlpha * alpha)
     let end = NSColor.black.withAlphaComponent(bottomAlpha * alpha)
     NSGradient(starting: start, ending: end)?.draw(in: rect, angle: angle)
 
-    // Curved top specular rim (`inset 0 1px 0`) hugging the rounded corners.
+    // Crisp top specular hairline hugging the rounded corners.
     if !pressed {
         let topName = primary
             ? (hovered ? "primary-highlight-hover" : "primary-highlight")
@@ -76,23 +76,14 @@ func drawTactileSurface(in path: NSBezierPath, radius: CGFloat, tokens: Tokens,
         let topRim = NSBezierPath(roundedRect: rect.offsetBy(dx: 0, dy: dy),
                                   xRadius: radius, yRadius: radius)
         tokens.color(topName).faded(alpha).setStroke()
-        topRim.lineWidth = primary ? 1.35 : 1.15
+        topRim.lineWidth = 1
         topRim.stroke()
     }
-
-    // Subtle bottom inner bevel (`inset 0 -1px 0`) for physical keycap depth.
-    let bottomName = primary ? "primary-edge-bottom" : "control-edge-bottom"
-    let bottomDy: CGFloat = isFlipped ? -1 : 1
-    let bottomRim = NSBezierPath(roundedRect: rect.offsetBy(dx: 0, dy: bottomDy),
-                                 xRadius: radius, yRadius: radius)
-    tokens.color(bottomName).faded(alpha).setStroke()
-    bottomRim.lineWidth = 1
-    bottomRim.stroke()
     NSGraphicsContext.restoreGraphicsState()
 }
 
-/// Apply homepage-style 3D outer shadow, primary accent hover glow, and subtle
-/// `-1 pt` hover lift (presentation-held so hit targets and tooltips stay fixed).
+/// Apply Aperture optical shadow elevation without jumpy hover lift or noisy
+/// colored glow halos; only a subtle 0.5 pt press feedback on mouse-down.
 func applyTactileElevation(on view: NSView, tokens: Tokens, radius: CGFloat,
                            raised: Bool, primary: Bool, hovered: Bool, pressed: Bool,
                            enabled: Bool, inset: CGFloat = 1) {
@@ -109,23 +100,17 @@ func applyTactileElevation(on view: NSView, tokens: Tokens, radius: CGFloat,
     if pressed {
         shadows = tokens.shadow("shadow-xs")
     } else if primary {
-        var layers = tokens.shadow(hovered ? "shadow-btn-primary-hover" : "shadow-btn-primary")
-        if hovered, let accent = tokens.colors["theme-accent"], accent.count >= 3 {
-            layers.insert(BoxShadowLayer(x: 0, y: 6, blur: 20, spread: 0,
-                                         color: [accent[0], accent[1], accent[2], 0.30]), at: 0)
-        }
-        shadows = layers
+        shadows = tokens.shadow(hovered ? "shadow-btn-primary-hover" : "shadow-btn-primary")
     } else {
         shadows = tokens.shadow(hovered ? "shadow-btn-hover" : "shadow-btn")
     }
     BoxShadowLayers.install(shadows, on: layer, bounds: view.bounds.insetBy(dx: inset, dy: inset),
                             radius: radius)
 
-    if NativeMotion.reduceMotion || (!hovered && !pressed) {
+    if NativeMotion.reduceMotion || !pressed {
         layer.removeAnimation(forKey: liftKey)
     } else {
-        let dy: Double = pressed ? 0.5 : -1.0
-        let pose = MotionKeyframes.Frame(offset: 0, opacity: 1, translateY: dy, scale: 1)
+        let pose = MotionKeyframes.Frame(offset: 0, opacity: 1, translateY: 0.5, scale: 1)
         let down: CGFloat = view.superview?.isFlipped == true ? 1 : -1
         let hold = CABasicAnimation(keyPath: "transform")
         hold.fromValue = NSValue(caTransform3D: NativeMotion.transform(pose, layer: layer, down: down))

@@ -1392,7 +1392,7 @@ impl Recording {
                             local,
                             t.n("r-md"),
                             t.color(if primary {
-                                "theme-accent"
+                                if active { "solid-hover" } else { "solid" }
                             } else if active {
                                 "surface-hover"
                             } else {
@@ -1422,7 +1422,7 @@ impl Recording {
                     let total = measured.width + if icon.is_some() { 21. } else { 0. };
                     let x = (r.w - total) / 2.;
                     let color = if primary {
-                        "theme-accent-ink"
+                        "solid-ink"
                     } else if ghost && active {
                         "text"
                     } else {

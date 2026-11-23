@@ -50,20 +50,20 @@
 }
 
 /*
- * Marketing-site surfaces match the desktop app's matte camera graphite
- * palette while inheriting Kodak Gold (--theme-accent) and FunSaver Red
- * (--theme-signal) directly from shared/themes.css.
+ * Marketing-site surfaces match the desktop app's Aperture obsidian palette
+ * while inheriting accent (--theme-accent) and signal (--theme-signal)
+ * directly from shared/themes.css.
  */
 :root {
-  --theme-web-canvas: #131416;
-  --theme-web-surface: #1b1c1f;
-  --theme-web-control: #232529;
-  --theme-web-control-hover: #2b2d32;
-  --theme-web-border: rgba(255, 255, 255, 0.11);
-  --theme-web-border-strong: rgba(255, 255, 255, 0.18);
-  --theme-web-ink: #f4f4f5;
-  --theme-web-ink-muted: #b5b8c0;
-  --theme-web-ink-soft: #878b94;
+  --theme-web-canvas: #0c0c0e;
+  --theme-web-surface: #141417;
+  --theme-web-control: #1c1c21;
+  --theme-web-control-hover: #25252b;
+  --theme-web-border: rgba(255, 255, 255, 0.085);
+  --theme-web-border-strong: rgba(255, 255, 255, 0.16);
+  --theme-web-ink: #f5f5f7;
+  --theme-web-ink-muted: #b0b0ba;
+  --theme-web-ink-soft: #82828e;
 }
 
 @theme {
@@ -95,9 +95,9 @@
   body {
     @apply m-0 min-h-dvh bg-canvas font-sans text-ink antialiased;
     background-image: radial-gradient(
-      ellipse 72% 40% at 50% -18%,
-      rgba(var(--theme-accent-rgb), 0.085),
-      transparent 62%
+      ellipse 70% 38% at 50% -18%,
+      rgba(var(--theme-accent-rgb), 0.065),
+      transparent 60%
     );
   }
 
@@ -122,29 +122,27 @@
 
   .download-button {
     @apply inline-flex w-full max-w-full items-center justify-center gap-2.5 rounded-full bg-accent px-5 py-3 text-sm font-semibold text-accent-ink no-underline duration-200 ease-out sm:w-auto;
-    background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.16), rgba(0, 0, 0, 0.05));
-    border: 1px solid rgba(0, 0, 0, 0.16);
+    background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.06), rgba(0, 0, 0, 0.03));
+    border: 1px solid rgba(0, 0, 0, 0.14);
     box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.36),
-      0 6px 18px rgba(0, 0, 0, 0.34),
-      0 1px 2px rgba(0, 0, 0, 0.24);
-    transition-property: color, background-color, box-shadow, transform;
+      inset 0 1px 0 rgba(255, 255, 255, 0.22),
+      0 2px 8px rgba(0, 0, 0, 0.28),
+      0 1px 2px rgba(0, 0, 0, 0.2);
+    transition-property: color, background-color, box-shadow;
   }
 
   .download-button:hover {
     background-color: var(--theme-accent-hover);
     box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.44),
-      0 10px 26px rgba(var(--theme-accent-rgb), 0.22),
-      0 6px 18px rgba(0, 0, 0, 0.36);
-    transform: translateY(-1px);
+      inset 0 1px 0 rgba(255, 255, 255, 0.3),
+      0 4px 14px rgba(0, 0, 0, 0.34),
+      0 1px 3px rgba(0, 0, 0, 0.24);
   }
 
   .download-button:active {
     box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.24),
-      0 2px 8px rgba(0, 0, 0, 0.32);
-    transform: translateY(0);
+      inset 0 1px 0 rgba(0, 0, 0, 0.08),
+      0 1px 2px rgba(0, 0, 0, 0.24);
   }
 
   .download-button:focus-visible {
@@ -155,25 +153,20 @@
     .download-button {
       transition-property: color, background-color, box-shadow;
     }
-
-    .download-button:hover,
-    .download-button:active {
-      transform: none;
-    }
   }
 
   .source-button {
     @apply inline-flex w-full max-w-full items-center justify-center gap-2.5 rounded-full border border-border-strong px-5 py-3 text-sm font-medium text-ink no-underline transition-colors duration-200 ease-out sm:w-auto;
     background-color: var(--theme-web-control);
-    background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.06), rgba(0, 0, 0, 0.04));
+    background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.04), rgba(0, 0, 0, 0.02));
     box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.12),
-      0 1px 3px rgba(0, 0, 0, 0.3);
+      inset 0 1px 0 rgba(255, 255, 255, 0.11),
+      0 1px 2px rgba(0, 0, 0, 0.26);
   }
 
   .source-button:hover {
     background-color: var(--theme-web-control-hover);
-    border-color: rgba(255, 255, 255, 0.24);
+    border-color: rgba(255, 255, 255, 0.22);
   }
 
   .source-button:focus-visible {

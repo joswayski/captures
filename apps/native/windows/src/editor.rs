@@ -5076,13 +5076,9 @@ impl Editor {
                 if !lit {
                     gfx::shadow(dc, all, r_md, t.shadow("shadow-btn-primary"))?;
                 }
-                let bg = if lit {
-                    "theme-accent-hover"
-                } else {
-                    "theme-accent"
-                };
+                let bg = if lit { "solid-hover" } else { "solid" };
                 gfx::fill_round(dc, all, r_md, c(bg))?;
-                gfx::tactile_finish(dc, &g.factory, (all, r_md), t, true, lit, 1.)?;
+                gfx::tactile_finish(dc, &g.factory, (all, r_md), t, false, lit, 1.)?;
                 gfx::border(
                     dc,
                     all,
@@ -5092,12 +5088,12 @@ impl Editor {
                         r: 0.,
                         g: 0.,
                         b: 0.,
-                        a: 0.24,
+                        a: 0.1,
                     },
                 )?;
                 let text = g.text(t, Style::Strong, "Save", 1e4)?;
                 let x = (w - 15. - s3 - text.width) / 2.;
-                let ink = c("theme-accent-ink");
+                let ink = c("solid-ink");
                 gfx::icon(
                     dc,
                     &g.factory,

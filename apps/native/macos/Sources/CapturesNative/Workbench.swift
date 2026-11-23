@@ -324,7 +324,7 @@ final class CaptureButton: NSButton, TokenRestyling {
                     drawTactileSurface(in: path, radius: radius, tokens: tokens,
                                        primary: true, hovered: hovered, pressed: activePress,
                                        isFlipped: isFlipped)
-                    NSColor.black.withAlphaComponent(0.22).setStroke()
+                    NSColor.black.withAlphaComponent(0.12).setStroke()
                     path.lineWidth = 1; path.stroke()
                 } else {
                     tokens.color("border-subtle").setStroke()
@@ -342,7 +342,7 @@ final class CaptureButton: NSButton, TokenRestyling {
             drawTactileSurface(in: path, radius: radius, tokens: tokens,
                                primary: true, hovered: hovered, pressed: activePress,
                                isFlipped: isFlipped)
-            NSColor.black.withAlphaComponent(0.24).setStroke()
+            NSColor.black.withAlphaComponent(0.14).setStroke()
             path.lineWidth = 1; path.stroke()
         } else if solid {
             let alpha: CGFloat = isEnabled ? 1 : 0.4
@@ -353,7 +353,7 @@ final class CaptureButton: NSButton, TokenRestyling {
                 drawTactileSurface(in: path, radius: radius, tokens: tokens,
                                    primary: false, hovered: hovered, pressed: activePress,
                                    isFlipped: isFlipped)
-                NSColor.black.withAlphaComponent(0.2).setStroke()
+                NSColor.black.withAlphaComponent(0.1).setStroke()
                 path.lineWidth = 1; path.stroke()
             }
         } else {
@@ -376,7 +376,7 @@ final class CaptureButton: NSButton, TokenRestyling {
             }
             if !fadedPrimary {
                 let borderColor = signal && isEnabled ? tokens.color("theme-signal")
-                    : primary && isEnabled ? NSColor.black.withAlphaComponent(0.24)
+                    : primary && isEnabled ? NSColor.black.withAlphaComponent(0.14)
                     : selected && isEnabled ? tokens.color("theme-accent")
                     : tokens.color(glass ? (hovered ? "glass-border-strong" : "glass-border")
                                          : (hovered ? "border-strong" : "control-border"))

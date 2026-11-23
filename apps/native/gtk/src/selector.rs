@@ -1965,10 +1965,34 @@ impl Overlay {
                 &[t.rgba("selection-hairline-inner"); 4],
             );
         }
+        if rect.width() >= 24. && rect.height() >= 24. {
+            let arm = (rect.width().min(rect.height()) * 0.25).min(11.);
+            let thick = 2.;
+            let (l, top) = (rect.x() - 1.5, rect.y() - 1.5);
+            let (right, bot) = (
+                rect.x() + rect.width() + 1.5,
+                rect.y() + rect.height() + 1.5,
+            );
+            let accent = t.rgba("theme-accent");
+            for b in [
+                graphene::Rect::new(l, top, arm, thick),
+                graphene::Rect::new(l, top, thick, arm),
+                graphene::Rect::new(right - arm, top, arm, thick),
+                graphene::Rect::new(right - thick, top, thick, arm),
+                graphene::Rect::new(l, bot - thick, arm, thick),
+                graphene::Rect::new(l, bot - arm, thick, arm),
+                graphene::Rect::new(right - arm, bot - thick, arm, thick),
+                graphene::Rect::new(right - thick, bot - arm, thick, arm),
+            ] {
+                snapshot.push_rounded_clip(&gsk::RoundedRect::from_rect(b, 1.));
+                snapshot.append_color(&accent, &b);
+                snapshot.pop();
+            }
+        }
         let text = format!("{} × {}", rect.width().round(), rect.height().round());
         let layout = self.layout(&text, t.number("text-xs"), pango::Weight::Semibold);
         let (text_w, text_h) = layout.pixel_size();
-        let padding = (t.number("s-4"), t.number("s-2"));
+        let padding = (t.number("s-4") + 1., t.number("s-2"));
         let size = (
             text_w as f32 + 2. * padding.0,
             text_h as f32 + 2. * padding.1,
@@ -1986,15 +2010,17 @@ impl Overlay {
             rect.x() + 1.5
         };
         let badge = graphene::Rect::new(left, top, size.0, size.1);
-        snapshot.push_rounded_clip(&gsk::RoundedRect::from_rect(badge, t.number("r-sm")));
-        snapshot.append_color(&t.rgba("theme-accent"), &badge);
+        let pill = gsk::RoundedRect::from_rect(badge, size.1 / 2.);
+        snapshot.push_rounded_clip(&pill);
+        snapshot.append_color(&t.rgba("glass-strong"), &badge);
         snapshot.pop();
+        snapshot.append_border(&pill, &[1.; 4], &[t.rgba("glass-border"); 4]);
         snapshot.save();
         snapshot.translate(&graphene::Point::new(
             badge.x() + padding.0,
             badge.y() + padding.1,
         ));
-        snapshot.append_layout(&layout, &t.rgba("theme-accent-ink"));
+        snapshot.append_layout(&layout, &t.rgba("glass-text"));
         snapshot.restore();
         if menu {
             // `.handle`: accent dots with a 2 px ink ring and a soft shadow,

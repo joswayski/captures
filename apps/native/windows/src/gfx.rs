@@ -920,9 +920,9 @@ pub fn border(
     ring(dc, r, radius, -width, 0., color)
 }
 
-/// Tactile 3D camera-key finish matching the marketing site's `.download-button`
-/// and `.source-button`: vertical matte sheen, curved top specular highlight
-/// (`inset 0 1px 0`), and subtle bottom inner lip (`inset 0 -1px 0`).
+/// Aperture optical anodized finish: whisper-thin ambient top sheen and a
+/// crisp 1 DIP top specular hairline (`--control-highlight` / `--primary-highlight`),
+/// avoiding heavy 3D plastic gradients or chunky bottom bevel lips.
 pub fn tactile_finish(
     dc: &ID2D1DeviceContext,
     factory: &ID2D1Factory1,
@@ -937,15 +937,15 @@ pub fn tactile_finish(
     }
     let dark = t.color("text").r > 0.5;
     let (top_alpha, bottom_alpha) = match (primary, hovered) {
-        (true, true) => (0.28, 0.05),
-        (true, false) => (0.20, 0.09),
+        (true, true) => (0.08, 0.03),
+        (true, false) => (0.05, 0.03),
         (false, true) => (
-            if dark { 0.16 } else { 0.08 },
-            if dark { 0.06 } else { 0.04 },
+            if dark { 0.06 } else { 0.03 },
+            if dark { 0.02 } else { 0.015 },
         ),
         (false, false) => (
-            if dark { 0.10 } else { 0.05 },
-            if dark { 0.09 } else { 0.06 },
+            if dark { 0.035 } else { 0.015 },
+            if dark { 0.02 } else { 0.015 },
         ),
     };
     let stops = [
@@ -974,14 +974,6 @@ pub fn tactile_finish(
             (true, false) => "primary-highlight",
             (false, true) => "control-highlight-hover",
             (false, false) => "control-highlight",
-        },
-        opacity,
-    );
-    let bottom_color = t.color_alpha(
-        if primary {
-            "primary-edge-bottom"
-        } else {
-            "control-edge-bottom"
         },
         opacity,
     );
@@ -1019,19 +1011,7 @@ pub fn tactile_finish(
             )?;
             dc.FillRoundedRectangle(&rounded(r, radius), &sheen);
             let top_rect = rect(r.left, r.top + 1., r.right, r.bottom + 1.);
-            dc.DrawRoundedRectangle(
-                &rounded(top_rect, radius),
-                &brush(dc, top_color)?,
-                if primary { 1.35 } else { 1.15 },
-                None,
-            );
-            let bottom_rect = rect(r.left, r.top - 1., r.right, r.bottom - 1.);
-            dc.DrawRoundedRectangle(
-                &rounded(bottom_rect, radius),
-                &brush(dc, bottom_color)?,
-                1.,
-                None,
-            );
+            dc.DrawRoundedRectangle(&rounded(top_rect, radius), &brush(dc, top_color)?, 1., None);
             Ok(())
         })();
         dc.PopLayer();

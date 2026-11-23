@@ -4106,7 +4106,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         saveAsNewSwitch.target = self; saveAsNewSwitch.action = #selector(saveAsNewChanged)
         exportBar.addSubview(saveAsNewSwitch)
         exportSaveButton = button("Save", frame: .zero, parent: exportBar) { [weak self] in self?.saveExport() }
-        exportSaveButton.primary = true
+        exportSaveButton.solid = true
         exportSaveButton.icon = .shipping("save")
         for action in [copyImageButton!, showInFolderButton!, exportSaveButton!] {
             action.textSize = tokens.number("text-sm"); action.iconSide = 14

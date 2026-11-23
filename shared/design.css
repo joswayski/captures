@@ -59,16 +59,16 @@
   --s-11: 48px;
   --s-12: 64px;
 
-  /* Radii — slightly softer geometric hierarchy */
+  /* Radii — crisp Apple geometric hierarchy */
   --r-xs: 5px;
   --r-sm: 7px;
-  --r-md: 9px;
+  --r-md: 8px;
   --r-lg: 11px;
-  --r-xl: 15px;
-  --r-2xl: 18px;
-  --r-3xl: 24px;
+  --r-xl: 13px;
+  --r-2xl: 16px;
+  --r-3xl: 22px;
   --r-pill: 999px;
-  --thumbnail-card-radius: 13px;
+  --thumbnail-card-radius: 14px;
 
   /* Control heights */
   --h-xs: 24px;
@@ -99,24 +99,24 @@
   /* Fade-out dissolve for chrome that should vanish in place. */
   --blur-dissolve: 8px;
 
-  /* Media chrome — fixed matte camera graphite, appearance-independent */
-  --glass: rgba(22, 23, 26, 0.86);
-  --glass-strong: rgba(18, 19, 22, 0.94);
-  --glass-raised: rgba(38, 40, 46, 0.95);
+  /* Media chrome — smoked optical camera glass, appearance-independent */
+  --glass: rgba(18, 18, 22, 0.82);
+  --glass-strong: rgba(14, 14, 18, 0.92);
+  --glass-raised: rgba(30, 30, 36, 0.94);
   /* Opaque siblings for hit-tested chrome over grab-source cards. Same RGB as
      strong/raised, without alpha, so WebKit cannot punch through the fill. */
-  --glass-strong-solid: rgb(18, 19, 22);
-  --glass-raised-solid: rgb(38, 40, 46);
+  --glass-strong-solid: rgb(14, 14, 18);
+  --glass-raised-solid: rgb(30, 30, 36);
   --glass-hover: rgba(255, 255, 255, 0.09);
   --glass-active: rgba(255, 255, 255, 0.15);
-  --glass-border: rgba(255, 255, 255, 0.13);
-  --glass-border-strong: rgba(255, 255, 255, 0.22);
-  --glass-text: #f4f4f5;
-  --glass-text-muted: rgba(244, 244, 245, 0.66);
-  --glass-text-subtle: rgba(244, 244, 245, 0.44);
-  --glass-shadow: 0 16px 44px rgba(0, 0, 0, 0.46), 0 2px 8px rgba(0, 0, 0, 0.3);
+  --glass-border: rgba(255, 255, 255, 0.12);
+  --glass-border-strong: rgba(255, 255, 255, 0.2);
+  --glass-text: #f5f5f7;
+  --glass-text-muted: rgba(245, 245, 247, 0.66);
+  --glass-text-subtle: rgba(245, 245, 247, 0.44);
+  --glass-shadow: 0 20px 52px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
   /* Mini preview cards and their stack toolbar. */
-  --thumbnail-card-shadow: 0 6px 14px rgba(0, 0, 0, 0.38), 0 2px 5px rgba(0, 0, 0, 0.26);
+  --thumbnail-card-shadow: 0 8px 20px rgba(0, 0, 0, 0.42), 0 2px 6px rgba(0, 0, 0, 0.24);
   /* Silhouette for compact HUD tooltips so the caret and pill share one shadow. */
   --tooltip-shadow: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.32));
   --tooltip-shadow-compact: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.24));
@@ -125,26 +125,26 @@
   --tray-caret-size: 8px;
   --startup-notice-width: 296px;
   --startup-notice-height: 54px;
-  --glass-blur: blur(24px) saturate(1.4);
-  --glass-veil: rgba(16, 17, 20, 0.38);
-  --glass-veil-soft: rgba(16, 17, 20, 0.18);
-  --glass-veil-heavy: rgba(16, 17, 20, 0.72);
-  --glass-countdown-scrim: rgba(8, 9, 11, 0.52);
+  --glass-blur: blur(28px) saturate(1.55);
+  --glass-veil: rgba(10, 10, 14, 0.4);
+  --glass-veil-soft: rgba(10, 10, 14, 0.2);
+  --glass-veil-heavy: rgba(10, 10, 14, 0.72);
+  --glass-countdown-scrim: rgba(6, 6, 9, 0.54);
   /* Capture overlay dims and the region marquee's hairlines. */
-  --capture-shade: rgba(8, 9, 11, 0.22);
-  --capture-shade-window: rgba(8, 10, 14, 0.42);
+  --capture-shade: rgba(6, 6, 9, 0.24);
+  --capture-shade-window: rgba(6, 8, 12, 0.42);
   --selection-hairline-outer: rgba(0, 0, 0, 0.48);
-  --selection-hairline-inner: rgba(255, 255, 255, 0.28);
+  --selection-hairline-inner: rgba(255, 255, 255, 0.26);
   --countdown-label-min: 14px;
   --countdown-label-max: 20px;
   --countdown-number-min: 150px;
   --countdown-number-max: 340px;
 
   /* Status hues. Accent/signal come from the selected color theme. */
-  --positive: #22c57e;
+  --positive: #30d158;
   --positive-ink: #ffffff;
-  --caution: #c48418;
-  --info: #3b74e0;
+  --caution: #e5930e;
+  --info: #0a84ff;
 }
 
 /* ---------------------------------------------------------------- dark ---- */
@@ -153,31 +153,31 @@
 [data-appearance="dark"] {
   color-scheme: dark;
 
-  --n-1: #0d0e10;
-  --n-2: #131416;
-  --n-3: #1b1c1f;
-  --n-4: #232529;
-  --n-5: #2b2d32;
-  --n-6: #35383f;
-  --n-7: #434750;
-  --n-8: #565b66;
-  --n-9: #757982;
-  --n-10: #9ea2aa;
-  --n-11: #c4c7ce;
-  --n-12: #f4f4f5;
+  --n-1: #08080a;
+  --n-2: #0c0c0e;
+  --n-3: #141417;
+  --n-4: #1c1c21;
+  --n-5: #25252b;
+  --n-6: #303038;
+  --n-7: #3f3f49;
+  --n-8: #555562;
+  --n-9: #6e6e7a;
+  --n-10: #9898a2;
+  --n-11: #c6c6cf;
+  --n-12: #f5f5f7;
 
   --surface-canvas: var(--n-2);
   --surface-raised: var(--n-3);
-  --surface-overlay: #202226;
-  --surface-sunken: var(--n-1);
-  --surface-field: #101113;
+  --surface-overlay: #19191e;
+  --surface-sunken: #111114;
+  --surface-field: #0a0a0c;
   --surface-hover: rgba(255, 255, 255, 0.055);
   --surface-active: rgba(255, 255, 255, 0.1);
   --surface-selected: rgba(var(--theme-accent-rgb), 0.14);
 
-  --border-subtle: rgba(255, 255, 255, 0.07);
-  --border: rgba(255, 255, 255, 0.11);
-  --border-strong: rgba(255, 255, 255, 0.19);
+  --border-subtle: rgba(255, 255, 255, 0.065);
+  --border: rgba(255, 255, 255, 0.1);
+  --border-strong: rgba(255, 255, 255, 0.17);
 
   --text: var(--n-12);
   --text-muted: var(--n-11);
@@ -186,42 +186,42 @@
 
   --control: var(--n-4);
   --control-hover: var(--n-5);
-  --control-border: rgba(255, 255, 255, 0.14);
-  --control-highlight: rgba(255, 255, 255, 0.2);
-  --control-highlight-hover: rgba(255, 255, 255, 0.28);
-  --control-edge-bottom: rgba(0, 0, 0, 0.32);
-  --primary-highlight: rgba(255, 255, 255, 0.44);
-  --primary-highlight-hover: rgba(255, 255, 255, 0.56);
-  --primary-edge-bottom: rgba(0, 0, 0, 0.24);
+  --control-border: rgba(255, 255, 255, 0.1);
+  --control-highlight: rgba(255, 255, 255, 0.11);
+  --control-highlight-hover: rgba(255, 255, 255, 0.16);
+  --control-edge-bottom: rgba(0, 0, 0, 0.12);
+  --primary-highlight: rgba(255, 255, 255, 0.22);
+  --primary-highlight-hover: rgba(255, 255, 255, 0.3);
+  --primary-edge-bottom: rgba(0, 0, 0, 0.1);
 
-  /* High-contrast neutral fill, used for the one confirming action on a surface
-     that should not compete with the themed capture action. */
+  /* High-contrast monochrome fill for calm Apple-grade window actions
+     (History Edit, Editor Save) so accent stays reserved for optical chrome. */
   --solid: var(--n-12);
   --solid-hover: #ffffff;
-  --solid-ink: var(--n-1);
+  --solid-ink: var(--n-2);
 
-  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.36);
-  --shadow-btn: 0 2px 6px rgba(0, 0, 0, 0.38), 0 1px 2px rgba(0, 0, 0, 0.28);
-  --shadow-btn-hover: 0 5px 14px rgba(0, 0, 0, 0.46), 0 2px 4px rgba(0, 0, 0, 0.3);
-  --shadow-btn-primary: 0 5px 16px rgba(0, 0, 0, 0.38), 0 1px 3px rgba(0, 0, 0, 0.28);
-  --shadow-btn-primary-hover: 0 8px 22px rgba(0, 0, 0, 0.44), 0 2px 6px rgba(0, 0, 0, 0.32);
-  --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.32);
-  --shadow-md: 0 8px 20px rgba(0, 0, 0, 0.38);
-  --shadow-lg: 0 18px 44px rgba(0, 0, 0, 0.46);
-  --shadow-xl: 0 28px 70px rgba(0, 0, 0, 0.55);
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.24);
+  --shadow-btn: 0 1px 2px rgba(0, 0, 0, 0.26);
+  --shadow-btn-hover: 0 3px 10px rgba(0, 0, 0, 0.32), 0 1px 2px rgba(0, 0, 0, 0.22);
+  --shadow-btn-primary: 0 2px 8px rgba(0, 0, 0, 0.28), 0 1px 2px rgba(0, 0, 0, 0.2);
+  --shadow-btn-primary-hover: 0 4px 14px rgba(0, 0, 0, 0.34), 0 1px 3px rgba(0, 0, 0, 0.24);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.22);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.34);
+  --shadow-lg: 0 18px 48px rgba(0, 0, 0, 0.44);
+  --shadow-xl: 0 28px 72px rgba(0, 0, 0, 0.54);
 
-  --positive-surface: rgba(34, 197, 126, 0.16);
-  --positive-text: #72e5b2;
-  --caution-surface: rgba(224, 168, 62, 0.15);
-  --caution-text: #e6bd6c;
-  --info-surface: rgba(59, 116, 224, 0.16);
-  --info-text: #8fb2f5;
+  --positive-surface: rgba(48, 209, 88, 0.14);
+  --positive-text: #5ee27f;
+  --caution-surface: rgba(229, 147, 14, 0.15);
+  --caution-text: #f3c169;
+  --info-surface: rgba(10, 132, 255, 0.16);
+  --info-text: #74b8ff;
   --danger-surface: var(--theme-signal-surface);
   --danger-text: var(--theme-signal-text);
   --danger-border: rgba(var(--theme-signal-rgb), 0.34);
 
-  --canvas-checker-a: #101113;
-  --canvas-checker-b: #16181b;
+  --canvas-checker-a: #0a0a0c;
+  --canvas-checker-b: #101014;
 }
 
 /* --------------------------------------------------------------- light ---- */
@@ -229,31 +229,31 @@
 [data-appearance="light"] {
   color-scheme: light;
 
-  --n-1: #fafafb;
-  --n-2: #f2f3f5;
-  --n-3: #eaecf0;
-  --n-4: #e2e5ea;
-  --n-5: #d8dce2;
-  --n-6: #ccd1d9;
-  --n-7: #b9c0ca;
-  --n-8: #9ca3af;
-  --n-9: #717784;
-  --n-10: #555a65;
-  --n-11: #373b44;
-  --n-12: #141517;
+  --n-1: #fbfbfc;
+  --n-2: #f5f5f7;
+  --n-3: #ececef;
+  --n-4: #e4e4e8;
+  --n-5: #d8d8de;
+  --n-6: #cbcdd4;
+  --n-7: #b7b9c2;
+  --n-8: #8e8e98;
+  --n-9: #6e6e78;
+  --n-10: #52525c;
+  --n-11: #2c2c32;
+  --n-12: #111113;
 
   --surface-canvas: var(--n-2);
   --surface-raised: #ffffff;
   --surface-overlay: #ffffff;
   --surface-sunken: var(--n-3);
   --surface-field: #ffffff;
-  --surface-hover: rgba(20, 21, 23, 0.045);
-  --surface-active: rgba(20, 21, 23, 0.085);
+  --surface-hover: rgba(17, 17, 19, 0.045);
+  --surface-active: rgba(17, 17, 19, 0.08);
   --surface-selected: rgba(var(--theme-accent-rgb), 0.13);
 
-  --border-subtle: rgba(20, 21, 23, 0.075);
-  --border: rgba(20, 21, 23, 0.12);
-  --border-strong: rgba(20, 21, 23, 0.2);
+  --border-subtle: rgba(17, 17, 19, 0.065);
+  --border: rgba(17, 17, 19, 0.1);
+  --border-strong: rgba(17, 17, 19, 0.18);
 
   --text: var(--n-12);
   --text-muted: var(--n-10);
@@ -261,39 +261,39 @@
   --text-faint: var(--n-8);
 
   --control: #ffffff;
-  --control-hover: #f7f8fa;
-  --control-border: rgba(20, 21, 23, 0.15);
-  --control-highlight: rgba(255, 255, 255, 0.96);
+  --control-hover: #f8f8fa;
+  --control-border: rgba(17, 17, 19, 0.11);
+  --control-highlight: rgba(255, 255, 255, 0.9);
   --control-highlight-hover: #ffffff;
-  --control-edge-bottom: rgba(20, 21, 23, 0.1);
-  --primary-highlight: rgba(255, 255, 255, 0.54);
-  --primary-highlight-hover: rgba(255, 255, 255, 0.68);
-  --primary-edge-bottom: rgba(0, 0, 0, 0.2);
+  --control-edge-bottom: rgba(17, 17, 19, 0.05);
+  --primary-highlight: rgba(255, 255, 255, 0.24);
+  --primary-highlight-hover: rgba(255, 255, 255, 0.34);
+  --primary-edge-bottom: rgba(0, 0, 0, 0.1);
 
   --solid: var(--n-12);
-  --solid-hover: #2b2d32;
+  --solid-hover: #26262b;
   --solid-ink: #ffffff;
 
-  --shadow-xs: 0 1px 2px rgba(20, 21, 23, 0.06);
-  --shadow-btn: 0 2px 5px rgba(20, 21, 23, 0.11), 0 1px 2px rgba(20, 21, 23, 0.07);
-  --shadow-btn-hover: 0 5px 14px rgba(20, 21, 23, 0.15), 0 2px 4px rgba(20, 21, 23, 0.09);
-  --shadow-btn-primary: 0 5px 14px rgba(20, 21, 23, 0.16), 0 1px 3px rgba(20, 21, 23, 0.12);
-  --shadow-btn-primary-hover: 0 8px 20px rgba(20, 21, 23, 0.2), 0 2px 5px rgba(20, 21, 23, 0.14);
-  --shadow-sm: 0 1px 3px rgba(20, 21, 23, 0.08), 0 1px 2px rgba(20, 21, 23, 0.04);
-  --shadow-md: 0 6px 18px rgba(20, 21, 23, 0.09), 0 1px 3px rgba(20, 21, 23, 0.06);
-  --shadow-lg: 0 16px 40px rgba(20, 21, 23, 0.12), 0 2px 6px rgba(20, 21, 23, 0.06);
-  --shadow-xl: 0 28px 64px rgba(20, 21, 23, 0.16), 0 4px 10px rgba(20, 21, 23, 0.07);
+  --shadow-xs: 0 1px 2px rgba(17, 17, 19, 0.05);
+  --shadow-btn: 0 1px 2px rgba(17, 17, 19, 0.07);
+  --shadow-btn-hover: 0 3px 10px rgba(17, 17, 19, 0.1), 0 1px 2px rgba(17, 17, 19, 0.06);
+  --shadow-btn-primary: 0 2px 8px rgba(17, 17, 19, 0.12), 0 1px 2px rgba(17, 17, 19, 0.08);
+  --shadow-btn-primary-hover: 0 4px 14px rgba(17, 17, 19, 0.16), 0 1px 3px rgba(17, 17, 19, 0.1);
+  --shadow-sm: 0 1px 2px rgba(17, 17, 19, 0.05), 0 1px 3px rgba(17, 17, 19, 0.03);
+  --shadow-md: 0 6px 20px rgba(17, 17, 19, 0.08), 0 1px 3px rgba(17, 17, 19, 0.05);
+  --shadow-lg: 0 18px 44px rgba(17, 17, 19, 0.11), 0 2px 6px rgba(17, 17, 19, 0.05);
+  --shadow-xl: 0 28px 68px rgba(17, 17, 19, 0.15), 0 4px 10px rgba(17, 17, 19, 0.06);
 
-  --positive-surface: rgba(34, 197, 126, 0.12);
-  --positive-text: #157d50;
-  --caution-surface: rgba(196, 132, 24, 0.12);
-  --caution-text: #8a5a0f;
-  --info-surface: rgba(59, 116, 224, 0.1);
-  --info-text: #2b57ac;
+  --positive-surface: rgba(48, 209, 88, 0.12);
+  --positive-text: #15803d;
+  --caution-surface: rgba(229, 147, 14, 0.12);
+  --caution-text: #9a5b08;
+  --info-surface: rgba(10, 132, 255, 0.1);
+  --info-text: #0066cc;
   --danger-surface: rgba(var(--theme-signal-rgb), 0.1);
   --danger-text: var(--theme-signal-strong);
   --danger-border: rgba(var(--theme-signal-rgb), 0.3);
 
-  --canvas-checker-a: #e8eaee;
-  --canvas-checker-b: #f5f6f8;
+  --canvas-checker-a: #ececef;
+  --canvas-checker-b: #f7f7f9;
 }

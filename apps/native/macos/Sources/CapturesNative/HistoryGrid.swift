@@ -302,24 +302,24 @@ final class HistoryButton: NSButton {
         let fill: NSColor?, border: NSColor?, text: NSColor
         switch (style, active) {
         case (.primary, false):
-            fill = tokens.color("theme-accent")
-            border = NSColor.black.withAlphaComponent(0.24)
-            text = tokens.color("theme-accent-ink")
+            fill = tokens.color("solid")
+            border = NSColor.black.withAlphaComponent(0.1)
+            text = tokens.color("solid-ink")
         case (.primary, true):
-            fill = tokens.color("theme-accent-hover")
-            border = NSColor.black.withAlphaComponent(0.24)
-            text = tokens.color("theme-accent-ink")
+            fill = tokens.color("solid-hover")
+            border = NSColor.black.withAlphaComponent(0.12)
+            text = tokens.color("solid-ink")
         case (.secondary, false): fill = tokens.color("control"); border = tokens.color("control-border"); text = tokens.color("text")
         case (.secondary, true): fill = tokens.color("control-hover"); border = tokens.color("border-strong"); text = tokens.color("text")
         case (.danger, false): fill = nil; border = nil; text = tokens.color("text-subtle")
         case (.danger, true): fill = tokens.color("danger-surface"); border = tokens.color("danger-border"); text = tokens.color("danger-text")
         case (.confirm, false), (.confirmOverlay, false):
             fill = tokens.color("theme-signal-strong")
-            border = NSColor.black.withAlphaComponent(0.24)
+            border = NSColor.black.withAlphaComponent(0.14)
             text = tokens.color("theme-signal-ink")
         case (.confirm, true), (.confirmOverlay, true):
             fill = tokens.color("theme-signal-deep")
-            border = NSColor.black.withAlphaComponent(0.24)
+            border = NSColor.black.withAlphaComponent(0.14)
             text = tokens.color("theme-signal-ink")
         case (.ghost, false): fill = nil; border = nil; text = tokens.color("text-muted")
         case (.ghost, true): fill = tokens.color("surface-hover"); border = tokens.color("border-subtle"); text = tokens.color("text")
@@ -330,7 +330,7 @@ final class HistoryButton: NSButton {
             border = tokens.color("border-subtle"); text = tokens.color("text")
         case (.overlay, true):
             fill = tokens.color("theme-signal")
-            border = NSColor.black.withAlphaComponent(0.24)
+            border = NSColor.black.withAlphaComponent(0.14)
             text = .white
         }
         let alpha: CGFloat = isEnabled ? 1 : 0.45
@@ -339,7 +339,7 @@ final class HistoryButton: NSButton {
         if let fill {
             fill.withAlphaComponent(fill.alphaComponent * alpha).setFill(); path.fill()
             if isRaisedStyle && isEnabled {
-                let strongTone = style == .primary || style == .confirm || style == .confirmOverlay
+                let strongTone = style == .confirm || style == .confirmOverlay
                     || (style == .overlay && active)
                 drawTactileSurface(in: path, radius: radius, tokens: tokens,
                                    primary: strongTone, hovered: hovered, pressed: activePress,

@@ -1770,11 +1770,13 @@ final class UnifiedCaptureSelectionView: NSView {
             label.shadow = shadow
             addSubview(label)
         }
-        selectionLabel.font = .capturesUI(ofSize: tokens.number("text-xs"), weight: .semibold)
+        selectionLabel.font = .capturesMonoDigits(ofSize: tokens.number("text-xs"), weight: .semibold)
         selectionLabel.textColor = tokens.color("glass-text")
         selectionLabel.alignment = .center; selectionLabel.wantsLayer = true
         selectionLabel.layer?.backgroundColor = tokens.color("glass-strong").cgColor
-        selectionLabel.layer?.cornerRadius = tokens.number("r-sm")
+        selectionLabel.layer?.borderWidth = 1
+        selectionLabel.layer?.borderColor = tokens.color("glass-border").cgColor
+        selectionLabel.layer?.cornerRadius = tokens.number("h-xs") / 2
         addSubview(selectionLabel)
         controls.switchTarget = { [weak self] target in self?.setTarget(target) }
         controls.switchMode = { [weak self] mode in self?.setMode(mode) }

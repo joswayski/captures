@@ -364,6 +364,7 @@ pub fn build(
 
     // `.preferences-body`: header over the scrolling cards.
     let body = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    body.add_css_class("preferences-body");
     body.set_hexpand(true);
     // `.preferences-header`: title and autosave note, then the History action
     // and the save status.
