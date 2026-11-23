@@ -362,8 +362,19 @@ final class FeedbackController: NSObject, NSTextViewDelegate, NSTextFieldDelegat
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    /// Closed with nothing to lose (no draft, no send in flight): the owner
+    /// may release the window, as it does Preferences.
+    var didClose: () -> Void = {}
+
     func dismiss() {
         window.orderOut(nil)
+        // A typed draft stays for the next open; otherwise free the window
+        // once AppKit finishes hiding it.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.window.isVisible, !self.sending,
+                  self.message.string.isEmpty, self.contact.stringValue.isEmpty else { return }
+            self.didClose()
+        }
     }
 
     /// Adds only visible text to the editable draft. Diagnostics are never a

@@ -2462,6 +2462,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private func showFeedback() {
         if feedbackController == nil {
             feedbackController = FeedbackController(tokens: tokens, live: options.live)
+            feedbackController?.didClose = { [weak self] in self?.feedbackController = nil }
         }
         feedbackController?.restyle(tokens)
         if let preview = crashDiagnostics?.preview {
