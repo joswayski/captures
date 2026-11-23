@@ -3483,6 +3483,15 @@ pub fn show(
         let g = previews.g.clone();
         previews.stack.reduced = crate::appearance::reduced_motion();
         previews.stack.push(&g, entry.clone(), image.as_ref());
+        // Follows editors only while a card shows; `sync_presence` stops it.
+        unsafe {
+            SetTimer(
+                Some(previews.hwnd),
+                PRESENCE_TIMER,
+                PRESENCE_INTERVAL_MS,
+                None,
+            )
+        };
         if clipboard {
             previews.set_clipboard(&entry.id);
         }
@@ -3592,7 +3601,6 @@ impl Previews {
         let tokens = crate::appearance::tokens(options.appearance.as_deref(), settings);
         let g = Gfx::shared(&tokens)?;
         let hwnd = unsafe { window()? };
-        unsafe { SetTimer(Some(hwnd), PRESENCE_TIMER, PRESENCE_INTERVAL_MS, None) };
         let (sender, results) = channel();
         Ok(Self {
             hwnd,
@@ -3770,6 +3778,8 @@ impl Previews {
         if self.stack.cards.is_empty() {
             // An emptied stack forgets where its pile was carried.
             self.dragged = None;
+            // Nothing is left to click through to: stop the pointer poll.
+            self.set_passthrough(false);
             self.sync_visibility();
             return Ok(());
         }
@@ -3979,6 +3989,11 @@ impl Previews {
     /// shrinks, then lingers as the Edit icon, when it closes.
     fn sync_presence(&mut self) {
         if self.stack.cards.is_empty() {
+            // The hidden stack would otherwise wake the app 4 times a second
+            // for the rest of the session; the next card restarts it.
+            unsafe {
+                let _ = KillTimer(Some(self.hwnd), PRESENCE_TIMER);
+            }
             return;
         }
         self.stack.reduced = crate::appearance::reduced_motion();

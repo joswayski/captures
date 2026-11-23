@@ -9,6 +9,9 @@ use super::*;
 use crate::tooltip::{self, Align, Fade};
 
 pub(super) const TIP_TIMER: usize = 44;
+/// Wakes the host loop at display rate while a tooltip fades, since a fade
+/// out after the pointer leaves has no input left to carry it.
+pub(super) const FADE_TIMER: usize = 45;
 
 /// Room a tooltip needs beside its anchor: the gap, its 3 px slide, a box
 /// of up to four wrapped lines (a long destination path) and spare.
@@ -38,6 +41,8 @@ pub(super) struct Tips {
     pending: Option<Tip>,
     /// Pressed or typed over: stays hidden until the pointer leaves it.
     suppressed: Option<Tip>,
+    /// `FADE_TIMER` runs.
+    fading: bool,
 }
 
 impl Recording {
@@ -242,6 +247,21 @@ impl Recording {
     /// Keep painting while a tooltip fades.
     pub(super) fn tips_animating(&self) -> bool {
         self.tips.fade.animating(&self.t, tooltip::now_ms())
+    }
+
+    /// Keep `FADE_TIMER` running exactly while a fade runs.
+    pub(super) fn sync_fade_timer(&mut self, animating: bool) {
+        if animating == self.tips.fading || self.hwnd.is_invalid() {
+            return;
+        }
+        self.tips.fading = animating;
+        unsafe {
+            if animating {
+                SetTimer(Some(self.hwnd), FADE_TIMER, 16, None);
+            } else {
+                let _ = KillTimer(Some(self.hwnd), FADE_TIMER);
+            }
+        }
     }
 
     /// Draw the tooltips in the surface's coordinates.

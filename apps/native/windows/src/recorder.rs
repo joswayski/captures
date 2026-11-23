@@ -423,6 +423,8 @@ impl Recorder {
             return;
         }
         self.shown = true;
+        // The clock repaints only while the controls show (`hide` stops it).
+        unsafe { SetTimer(Some(self.hwnd), FRAME_TIMER, 50, None) };
         self.close_notice();
         crate::live::recording_hidden(false);
         self.refresh();
@@ -467,6 +469,9 @@ impl Recorder {
         self.hud.pressed = None;
         self.hud.tooltip.clear();
         unsafe {
+            // Hidden controls have no clock to repaint; don't wake the host
+            // 20 times a second for the rest of the take.
+            let _ = KillTimer(Some(self.hwnd), FRAME_TIMER);
             // NVIDIA Instant Replay treats an excluded HWND as protected
             // content even while hidden, as the shipping host notes.
             let _ = SetWindowDisplayAffinity(self.hwnd, WDA_NONE);

@@ -1647,9 +1647,11 @@ impl Recording {
 
     pub fn service(&mut self) -> (bool, Vec<Event>) {
         // A fade runs, or Play's label flipped under its tooltip.
-        if self.tips_animating() || (self.dirty[slot(Target::Play)] && self.tips_visible()) {
+        let fading = self.tips_animating();
+        if fading || (self.dirty[slot(Target::Play)] && self.tips_visible()) {
             self.dirty[TOOLTIP] = true;
         }
+        self.sync_fade_timer(fading);
         if self.dirty.iter().any(|&d| d)
             && let Err(error) = self.frame()
         {
@@ -1822,6 +1824,8 @@ impl Recording {
             WM_TIMER if wp.0 == OUTPUT_TIMER => self.apply_output_due(),
             WM_TIMER if wp.0 == COMPARE_TIMER => self.compare_due(),
             WM_TIMER if wp.0 == tips::TIP_TIMER => self.tip_due(),
+            // Its message alone wakes the loop, which services the fade.
+            WM_TIMER if wp.0 == tips::FADE_TIMER => {}
             WM_WAKE => {}
             WM_SIZE if wp.0 != SIZE_MINIMIZED as usize => {
                 self.width = (lp.0 as u32 & 0xffff) as f32 / self.scale;
