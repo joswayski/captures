@@ -1574,6 +1574,7 @@ pub fn run(options: Options, resident: Option<captures_app::instance::Instance>)
                 // Returns for posted, input and sent messages alike; the
                 // drain above dispatches them and `need` is checked again.
                 // An unused device times the wait out to be released.
+                crate::previews::close_if_empty();
                 let timeout = crate::gfx::release_idle();
                 let _ =
                     MsgWaitForMultipleObjectsEx(None, timeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE);

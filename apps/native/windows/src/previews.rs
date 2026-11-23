@@ -3448,6 +3448,24 @@ pub fn close() {
     }
 }
 
+/// Close the stack's window once its last card has gone and nothing moves,
+/// so it stops holding the shared renderer and the idle tray can release
+/// the device (with the stack holding it, one saved capture kept it, ~70 MB
+/// private and ~65 wakeups/s, for the rest of the session). An emptied stack
+/// already forgets its collapse and carried position; the next card opens a
+/// new window, as the first one did.
+pub fn close_if_empty() {
+    let empty = PREVIEWS.with(|p| {
+        p.try_borrow().ok().is_some_and(|p| {
+            p.as_ref()
+                .is_some_and(|p| p.stack.cards.is_empty() && !p.moving() && p.dragging.is_none())
+        })
+    });
+    if empty && !crate::capture::active() && !crate::recorder::active() {
+        close();
+    }
+}
+
 /// History Restore: bring a screenshot back as a card.
 pub fn restore(options: &crate::Options, entry: &HistoryEntry) {
     let root = options
