@@ -503,7 +503,6 @@ final class CaptureButton: NSButton, TokenRestyling {
         case .shipping(let name):
             ShippingIcons.stroke(name, in: rect, width: iconStrokeWidth)
         case .stopSquare:
-            tokens.color(isEnabled ? "theme-signal" : "glass-text-subtle").setFill()
             NSBezierPath(roundedRect: NSRect(x: rect.midX - 5.5, y: rect.midY - 5.5, width: 11, height: 11),
                          xRadius: 2, yRadius: 2).fill()
         case .editorSelect: ShippingIcons.stroke("select", in: rect, width: 1.75)
