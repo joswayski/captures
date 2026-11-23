@@ -528,6 +528,7 @@ impl Recording {
         self.cancel_compare();
         self.saved = None;
         self.saved_fingerprint = None;
+        self.edited_during_save = true;
         self.timeline.resume |= self.preview.playing;
         self.stop_preview();
         // Invalidate any older decode immediately, even during the debounce.
@@ -546,7 +547,10 @@ impl Recording {
                 );
             }
         }
-        self.notify("", false);
+        // A running save keeps its progress line.
+        if !self.saving {
+            self.notify("", false);
+        }
         self.events.push(if target.is_volume() {
             Event::Range(target)
         } else if target.is_check() {
@@ -653,6 +657,7 @@ impl Recording {
                     // Keep the accepted limit, but no longer call it saved:
                     // Save reports the invalid draft instead (shipping).
                     self.saved_fingerprint = None;
+                    self.edited_during_save = true;
                     self.cancel_compare();
                     self.refresh_footer();
                 }

@@ -1,5 +1,11 @@
 //! The recording session belongs to one worker. The HWND stays alive until
 //! Closed, including cancellation and replacement's history compensation.
+//!
+//! Save as new file exports on its own thread from a second session holding
+//! the edit accepted when Save was clicked, so previews, playback and
+//! comparisons keep using this one. Replace original stays on the worker: it
+//! rebases this session, and Windows cannot rename the History directory
+//! while one of its decoders holds the source open.
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, atomic::AtomicBool};
@@ -85,7 +91,13 @@ pub(super) struct PreviewRequest {
 }
 
 pub(super) enum Job {
-    Save(RecordingSaveRequest, bool, CancelToken),
+    Save {
+        request: RecordingSaveRequest,
+        /// The accepted edit when Save was clicked, for a new-file export.
+        edit: EditSpec,
+        copy: bool,
+        cancel: CancelToken,
+    },
     Preview,
     Compare(u64, CancelToken),
     Thumbnails(CancelToken),
@@ -121,6 +133,68 @@ pub(super) enum Outcome {
     Revealed(Result<(), String>),
     PlaybackEnded(u64, Result<(), String>),
     Closed,
+}
+
+fn post(out: &Sender<Outcome>, hwnd: isize, outcome: Outcome) -> bool {
+    let sent = out.send(outcome).is_ok();
+    if hwnd != 0 {
+        unsafe {
+            let _ = PostMessageW(
+                Some(HWND(hwnd as *mut _)),
+                super::WM_OUTCOME,
+                WPARAM(0),
+                LPARAM(0),
+            );
+        }
+    }
+    sent
+}
+
+/// Save as new file from its own session over the same History recording,
+/// holding the edit and export accepted when Save was clicked.
+fn save_copy(
+    history_root: PathBuf,
+    artifact_id: String,
+    request: RecordingSaveRequest,
+    edit: EditSpec,
+    cancel: &CancelToken,
+    progress: impl FnMut(ExportProgress),
+) -> Result<(PathBuf, Option<String>), String> {
+    let cancelled = || {
+        cancel
+            .is_cancelled()
+            .then(|| captures_media::MediaToolError::Cancelled.to_string())
+    };
+    let mut session = RecordingEditorSession::open(
+        RecordingEditorOpenRequest {
+            history_root,
+            artifact_id,
+        },
+        toolchain(),
+    )?;
+    if let Some(error) = cancelled() {
+        return Err(error);
+    }
+    session.execute_v2(RecordingEditorRequestV2::UpdatePreview {
+        edit,
+        export: request.export.clone(),
+    })?;
+    if let Some(error) = cancelled() {
+        return Err(error);
+    }
+    Ok(match session.save_new(request, cancel, progress)? {
+        SavedRecording::Saved { path, .. } => (path, None),
+        SavedRecording::SavedWithoutHistory { path, warning } => (path, Some(warning)),
+    })
+}
+
+fn saved(result: Result<(PathBuf, Option<String>, Option<Presented>), String>) -> Outcome {
+    Outcome::Saved(result.map(|(path, warning, replaced)| Saved {
+        size: path.metadata().map_or(0, |m| m.len()),
+        path,
+        warning,
+        replaced,
+    }))
 }
 
 /// Explicit overrides, then packaged/repository Tauri sidecars, then PATH.
@@ -200,26 +274,14 @@ impl Worker {
         let thread = std::thread::Builder::new()
             .name("captures-recording-editor".into())
             .spawn(move || {
-                let send = |outcome| {
-                    let sent = out.send(outcome).is_ok();
-                    if hwnd != 0 {
-                        unsafe {
-                            let _ = PostMessageW(
-                                Some(HWND(hwnd as *mut _)),
-                                super::WM_OUTCOME,
-                                WPARAM(0),
-                                LPARAM(0),
-                            );
-                        }
-                    }
-                    sent
-                };
+                let send = |outcome| post(&out, hwnd, outcome);
                 let mut output = Values::new(2, 2, &settings);
                 let mut source_frame = None;
+                let mut copying: Option<JoinHandle<()>> = None;
                 let mut session = match RecordingEditorSession::open(
                     RecordingEditorOpenRequest {
-                        history_root: root,
-                        artifact_id: id,
+                        history_root: root.clone(),
+                        artifact_id: id.clone(),
                     },
                     toolchain(),
                 )
@@ -384,59 +446,94 @@ impl Worker {
                                 },
                             )
                         }
-                        Job::Save(request, copy, cancel) => {
+                        Job::Save {
+                            request,
+                            edit,
+                            copy,
+                            cancel,
+                        } => {
                             let Some(session) = session.as_mut() else {
                                 continue;
                             };
-                            let progress = |progress| {
-                                send(Outcome::Progress(progress));
-                            };
-                            let saved = if copy {
-                                session.save_new(request, &cancel, progress).map(
-                                    |saved| match saved {
-                                        SavedRecording::Saved { path, .. } => (path, None, None),
-                                        SavedRecording::SavedWithoutHistory { path, warning } => {
-                                            (path, Some(warning), None)
-                                        }
-                                    },
-                                )
+                            // The editor allows one save at a time; its outcome
+                            // may arrive just before the thread exits.
+                            if let Some(previous) = copying.take() {
+                                let _ = previous.join();
+                            }
+                            if copy {
+                                if session.requires_reopen() {
+                                    send(saved(Err("Recording replacement is indeterminate; \
+                                         close and reopen this editor."
+                                        .into())));
+                                    continue;
+                                }
+                                let (root, id, out) = (root.clone(), id.clone(), out.clone());
+                                let spawned = std::thread::Builder::new()
+                                    .name("captures-recording-save".into())
+                                    .spawn(move || {
+                                        let result =
+                                            save_copy(root, id, request, edit, &cancel, |p| {
+                                                post(&out, hwnd, Outcome::Progress(p));
+                                            });
+                                        post(
+                                            &out,
+                                            hwnd,
+                                            saved(
+                                                result.map(|(path, warning)| (path, warning, None)),
+                                            ),
+                                        );
+                                    });
+                                match spawned {
+                                    Ok(thread) => {
+                                        copying = Some(thread);
+                                        continue;
+                                    }
+                                    Err(error) => saved(Err(error.to_string())),
+                                }
                             } else {
-                                session
-                                    .replace_original_at(&request.destination, &cancel, progress)
-                                    .map(|ReplacedRecording::Replaced { path, .. }| {
-                                        source_frame = None;
-                                        let snapshot = session.snapshot_v2();
-                                        output = Values::new(
-                                            snapshot.editor.source.width,
-                                            snapshot.editor.source.height,
-                                            &settings,
-                                        );
-                                        output.format = ui::initial_output_format(
-                                            &snapshot.editor.source.mime_type,
-                                            captures_settings::VideoFormat::Mp4,
-                                        );
-                                        if snapshot.editor.source.mime_type == "image/gif" {
-                                            output.mode = ui::QualityMode::Compress;
-                                        }
-                                        (
-                                            path,
-                                            None,
-                                            Some(Presented::of(session, &directory, &output)),
+                                let progress = |progress| {
+                                    send(Outcome::Progress(progress));
+                                };
+                                saved(
+                                    session
+                                        .replace_original_at(
+                                            &request.destination,
+                                            &cancel,
+                                            progress,
                                         )
-                                    })
-                                    .map_err(|error| error.message)
-                            };
-                            Outcome::Saved(saved.map(|(path, warning, replaced)| Saved {
-                                size: path.metadata().map_or(0, |m| m.len()),
-                                path,
-                                warning,
-                                replaced,
-                            }))
+                                        .map(|ReplacedRecording::Replaced { path, .. }| {
+                                            source_frame = None;
+                                            let snapshot = session.snapshot_v2();
+                                            output = Values::new(
+                                                snapshot.editor.source.width,
+                                                snapshot.editor.source.height,
+                                                &settings,
+                                            );
+                                            output.format = ui::initial_output_format(
+                                                &snapshot.editor.source.mime_type,
+                                                captures_settings::VideoFormat::Mp4,
+                                            );
+                                            if snapshot.editor.source.mime_type == "image/gif" {
+                                                output.mode = ui::QualityMode::Compress;
+                                            }
+                                            (
+                                                path,
+                                                None,
+                                                Some(Presented::of(session, &directory, &output)),
+                                            )
+                                        })
+                                        .map_err(|error| error.message),
+                                )
+                            }
                         }
                     };
                     if !send(outcome) {
                         break;
                     }
+                }
+                // Closing cancelled the export; let it finish History cleanup.
+                if let Some(thread) = copying.take() {
+                    let _ = thread.join();
                 }
                 send(Outcome::Closed);
             })?;
@@ -490,7 +587,8 @@ impl Drop for Worker {
     fn drop(&mut self) {
         self.close();
         // Normally Closed already arrived. Unexpected native teardown must
-        // not terminate an export halfway through its history compensation.
+        // not terminate an export halfway through its history compensation;
+        // the worker joins a new-file export's thread before it exits.
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }

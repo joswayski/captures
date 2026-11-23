@@ -304,6 +304,11 @@ pub struct Recording {
     pub error: bool,
     loading: bool,
     pub saving: bool,
+    /// The running save replaces the original, so the session rebases when
+    /// it finishes and is busy until then.
+    replacing: bool,
+    /// Trim, crop, output or audio changed since Save was clicked.
+    edited_during_save: bool,
     progress: u16,
     saved: Option<PathBuf>,
     saved_fingerprint: Option<(PathBuf, bool)>,
@@ -406,6 +411,8 @@ impl Recording {
             error: false,
             loading: true,
             saving: false,
+            replacing: false,
+            edited_during_save: false,
             progress: 0,
             saved: None,
             saved_fingerprint: None,
@@ -518,7 +525,7 @@ impl Recording {
         if target == Target::Cancel {
             return self.saving;
         }
-        if self.saving || self.loading || self.presented.is_none() {
+        if self.loading || self.presented.is_none() || !self.usable_while_saving(target) {
             return false;
         }
         match target {
@@ -552,6 +559,25 @@ impl Recording {
                     && !self.format_requires_copy()
             }
             _ => true,
+        }
+    }
+
+    /// As in Tauri, a save disables only its own row: the filename, folder,
+    /// format, copy switch and a second Save. A new-file save exports from
+    /// its own session, so editing, playback and comparison carry on. Replace
+    /// original holds the session and then rebases it onto the saved file,
+    /// which already contains these edits and starts over from defaults, so
+    /// an edit made meanwhile could not apply; only viewing stays available.
+    fn usable_while_saving(&self, target: Target) -> bool {
+        if !self.saving {
+            return true;
+        }
+        match target {
+            Target::Filename | Target::Change | Target::Format | Target::Copy | Target::Save => {
+                false
+            }
+            Target::Fit | Target::Actual | Target::Loop => true,
+            _ => !self.replacing,
         }
     }
 
@@ -898,14 +924,21 @@ impl Recording {
                     destination: self.destination(),
                     export: presented.export.clone(),
                 };
-                self.cancel_compare();
-                self.stop_preview();
-                if self
-                    .worker
-                    .jobs
-                    .send(Job::Save(request, self.make_copy, cancel.clone()))
-                    .is_err()
-                {
+                let job = Job::Save {
+                    request,
+                    edit: presented.edit.clone(),
+                    copy: self.make_copy,
+                    cancel: cancel.clone(),
+                };
+                if !self.make_copy {
+                    // Replacement needs the session, and Windows cannot
+                    // publish it while a decoder holds the source open.
+                    self.cancel_compare();
+                    self.stop_preview();
+                    self.timeline.resume = false;
+                    self.close_output_menu();
+                }
+                if self.worker.jobs.send(job).is_err() {
                     self.notify(
                         "The recording session closed. Reopen the editor to save.",
                         true,
@@ -914,6 +947,8 @@ impl Recording {
                 }
                 self.worker.cancel = Some(cancel);
                 self.saving = true;
+                self.replacing = !self.make_copy;
+                self.edited_during_save = false;
                 self.progress = 0;
                 self.notify("Preparing…", false);
                 self.refresh_footer();
@@ -993,7 +1028,7 @@ impl Recording {
                     self.reset_output();
                     self.timeline.resume = false;
                     self.notify(&error, true);
-                } else if self.saved.is_none() {
+                } else if self.saved.is_none() && !self.saving {
                     self.notify("", false);
                 }
                 if crop_was_shown != self.crop_shown() {
@@ -1031,9 +1066,14 @@ impl Recording {
             Outcome::Saved(result) => {
                 self.worker.cancel.take();
                 self.saving = false;
+                let replacing = std::mem::take(&mut self.replacing);
                 match result {
                     Ok(saved) => {
-                        self.saved_fingerprint = Some((saved.path.clone(), self.make_copy));
+                        // Edits made during a new-file save stay, and this
+                        // file does not contain them: Save stays available.
+                        if !self.edited_during_save {
+                            self.saved_fingerprint = Some((saved.path.clone(), self.make_copy));
+                        }
                         self.saved = Some(saved.path);
                         if let Some(p) = saved.replaced {
                             self.source_directory = PathBuf::from(&p.defaults.directory);
@@ -1083,14 +1123,17 @@ impl Recording {
                     };
                     self.set_focus(Some(target), self.focus_visible);
                 }
-                if self.source_is_gif()
-                    && !self.closing
-                    && !self.hwnd.is_invalid()
-                    && !self.compare_visible()
-                {
-                    self.start_preview();
+                // A new-file save left playback and comparison running.
+                if replacing {
+                    if self.source_is_gif()
+                        && !self.closing
+                        && !self.hwnd.is_invalid()
+                        && !self.compare_visible()
+                    {
+                        self.start_preview();
+                    }
+                    self.schedule_compare();
                 }
-                self.schedule_compare();
             }
             Outcome::Revealed(result) => {
                 if let Err(error) = result {

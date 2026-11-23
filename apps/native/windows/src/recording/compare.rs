@@ -56,7 +56,7 @@ impl Recording {
             self.preview.playing && !self.source_is_gif(),
             self.compare.dismissed,
         ) && !self.closing
-            && !self.saving
+            && !self.replacing
     }
 
     pub(super) fn cancel_compare(&mut self) {

@@ -1531,4 +1531,135 @@ mod tests {
         drop(w);
         std::fs::remove_dir_all(profile).unwrap();
     }
+
+    #[test]
+    fn saving_disables_only_the_export_row_and_keeps_edits_made_meanwhile() {
+        use captures_media::{ExportProgress, ExportStage};
+        let (mut w, profile) = fixture();
+        let accept = |w: &mut Recording| {
+            let mut p = w.presented.take().unwrap();
+            p.output = w.output.values.clone();
+            (p.edit, p.export) = p.output.specs(p.width, p.height, p.edit, p.export);
+            p.edit.trim_start_ms = w.timeline.start;
+            p.edit.trim_end_ms = Some(w.timeline.end);
+            p.revision += 1;
+            w.apply_outcome(Outcome::Preview(w.timeline.generation, Box::new(p), None));
+        };
+        let row = [
+            Target::Filename,
+            Target::Change,
+            Target::Format,
+            Target::Copy,
+            Target::Save,
+        ];
+        let editing = [
+            Target::TrimStart,
+            Target::TrimEnd,
+            Target::Play,
+            Target::Crop,
+            Target::Resolution,
+            Target::QualityMode,
+        ];
+        w.layout().unwrap();
+        assert!(w.make_copy, "the fixture has no original to replace");
+        w.activate(Target::Play);
+        assert!(w.preview.playing);
+
+        // Save as new file: only its row greys; playback keeps running.
+        w.activate(Target::Save);
+        assert!(w.saving && w.status == "Preparing…");
+        assert!(w.preview.playing, "a new-file save leaves playback running");
+        assert!(w.enabled(Target::Cancel));
+        for t in row {
+            assert!(!w.enabled(t), "{t:?} is part of the export row");
+            assert_eq!(w.opacity(slot(t)), 0.5, "{t:?} greys");
+        }
+        for t in editing.into_iter().chain([Target::Loop, Target::Fit]) {
+            assert!(w.enabled(t), "{t:?} stays usable during a new-file save");
+        }
+        w.activate(Target::Play);
+        assert!(!w.preview.playing);
+
+        // An edit during the export previews at once and keeps the progress.
+        w.apply_outcome(Outcome::Progress(ExportProgress {
+            stage: ExportStage::Encoding,
+            completed_per_mille: 400,
+            attempt: 1,
+            message: None,
+        }));
+        let progress = w.status.clone();
+        w.set_trim(Target::TrimStart, 1200.);
+        assert!(w.timeline.pending);
+        accept(&mut w);
+        assert_eq!(w.presented.as_ref().unwrap().edit.trim_start_ms, 1200);
+        assert_eq!(w.status, progress, "previews keep the save's progress line");
+        assert_eq!(w.progress, 400);
+
+        // The finished file lacks that edit: it stays, and Save offers it.
+        let copy = profile.join("Recording-edited.mp4");
+        w.apply_outcome(Outcome::Saved(Ok(worker::Saved {
+            path: copy.clone(),
+            size: 1_000,
+            warning: None,
+            replaced: None,
+        })));
+        assert!(!w.saving && w.saved.as_ref() == Some(&copy));
+        assert_eq!(w.timeline.start, 1200);
+        assert_eq!(w.presented.as_ref().unwrap().edit.trim_start_ms, 1200);
+        assert!(
+            w.enabled(Target::Save),
+            "the edit made meanwhile is unsaved"
+        );
+
+        // Saving again with nothing changed meanwhile marks it saved.
+        w.activate(Target::Save);
+        assert!(w.saving);
+        w.apply_outcome(Outcome::Saved(Ok(worker::Saved {
+            path: w.destination(),
+            size: 1_000,
+            warning: None,
+            replaced: None,
+        })));
+        assert!(!w.enabled(Target::Save));
+
+        // Replace original holds the session and rebases it onto the saved
+        // file, which starts over from defaults: editing waits, viewing stays.
+        w.presented.as_mut().unwrap().original = Some(profile.join("Recording.mp4"));
+        w.make_copy = false;
+        w.set_value("Recording");
+        w.activate(Target::Play);
+        assert!(w.enabled(Target::Save));
+        w.activate(Target::Save);
+        assert!(w.saving && !w.preview.playing);
+        for t in row.into_iter().chain(editing) {
+            assert!(!w.enabled(t), "{t:?} waits for the replacement");
+        }
+        for t in [Target::Cancel, Target::Loop, Target::Fit, Target::Actual] {
+            assert!(w.enabled(t), "{t:?} stays usable while replacing");
+        }
+        // The worker rebases onto the saved file: full length, no edits.
+        let mut rebased = w.presented.take().unwrap();
+        assert_eq!(rebased.edit.trim_start_ms, 1200);
+        rebased.edit = captures_media::EditSpec::default();
+        rebased.duration_ms = 4800;
+        rebased.position_ms = 0;
+        rebased.revision += 1;
+        w.apply_outcome(Outcome::Saved(Ok(worker::Saved {
+            path: profile.join("Recording.mp4"),
+            size: 1_000,
+            warning: None,
+            replaced: Some(rebased),
+        })));
+        assert!(!w.saving);
+        assert_eq!((w.timeline.start, w.timeline.end), (0, 4800));
+        for t in editing {
+            assert!(w.enabled(t), "{t:?} returns after the rebase");
+        }
+        assert!(
+            !w.enabled(Target::Save),
+            "the rebased file is the saved state"
+        );
+        drop(w);
+        std::fs::remove_dir_all(profile).unwrap();
+    }
 }

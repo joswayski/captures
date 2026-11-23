@@ -89,6 +89,7 @@ impl Recording {
         }
         self.saved = None;
         self.saved_fingerprint = None;
+        self.edited_during_save = true;
         // The export end is exclusive; accept a preview inside the trim
         // without changing that boundary or comparison's frame identity.
         self.seek_timeline(if target == Target::TrimEnd {
@@ -224,7 +225,7 @@ impl Recording {
             && self.crop_drag.is_none()
             && !self.timeline.scrubbing
             && !self.closing
-            && !self.saving
+            && !self.replacing
         {
             self.timeline.resume = false;
             self.start_preview();
