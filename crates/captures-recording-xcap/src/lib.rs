@@ -17,6 +17,8 @@ mod transform;
 mod segment;
 #[cfg(target_os = "windows")]
 mod windows_wgc;
+#[cfg(target_os = "linux")]
+mod x11_recorder;
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 pub use audio::microphone_devices;

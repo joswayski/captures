@@ -247,7 +247,9 @@ fn capture_monitor(monitor: &Monitor) -> CaptureResult<DisplayFrame> {
         descriptor.height,
     )?;
     #[cfg(target_os = "linux")]
-    let image = monitor.id().ok().and_then(crate::x11::capture_output);
+    let image = monitor.id().ok().and_then(|output| {
+        crate::x11::X11OutputGrabber::connect().and_then(|grabber| grabber.grab(output))
+    });
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     let image = None;
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]

@@ -20,7 +20,7 @@ use parking_lot::Mutex;
 use thiserror::Error;
 use xcap::Frame;
 #[cfg(not(target_os = "windows"))]
-use xcap::{Monitor, VideoRecorder};
+use xcap::Monitor;
 
 use crate::{
     audio::AudioSegment,
@@ -29,12 +29,12 @@ use crate::{
     transform::{FrameRect, FrameTransform},
 };
 
-/// Display recording frames: this crate's WGC reader on Windows, xcap's
-/// recorder elsewhere.
+/// Display recording frames: this crate's WGC reader on Windows, its paced
+/// X11 reader (or xcap's recorder) on Linux.
 #[cfg(target_os = "windows")]
 type DirectRecorder = crate::windows_wgc::WgcRecorder;
 #[cfg(not(target_os = "windows"))]
-type DirectRecorder = VideoRecorder;
+type DirectRecorder = crate::x11_recorder::LinuxRecorder;
 
 const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(3);
 const CONTROL_POLL_INTERVAL: Duration = Duration::from_millis(10);
@@ -179,13 +179,12 @@ impl XcapRecordingSegment {
         #[cfg(not(target_os = "windows"))]
         let source = source_rect(options, display)?;
         #[cfg(not(target_os = "windows"))]
-        let (recorder, receiver) = monitor
-            .video_recorder()
-            .map_err(|error| XcapRecordingError::Capture(error.to_string()))?;
-        #[cfg(not(target_os = "windows"))]
-        recorder
-            .start()
-            .map_err(|error| XcapRecordingError::Capture(error.to_string()))?;
+        let (recorder, receiver) = crate::x11_recorder::LinuxRecorder::start(
+            &monitor,
+            &display.id,
+            options.frames_per_second,
+        )
+        .map_err(|error| XcapRecordingError::Capture(error.to_string()))?;
         let first = match receiver.recv_timeout(FIRST_FRAME_TIMEOUT) {
             Ok(frame) => frame,
             Err(_) => {

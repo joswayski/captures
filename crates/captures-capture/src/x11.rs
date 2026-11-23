@@ -291,65 +291,81 @@ impl MonitorRecord {
     }
 }
 
-/// One RandR output's pixels, byte-identical to xcap 0.9.8's X11
-/// `Monitor::capture_image`. xcap opens three connections per grab and
-/// converts each pixel through a function pointer with bounds checks
-/// (about 14 ms at 1080p and 54 ms at 4K under Xvfb); this reads the same
-/// `GetMonitors` rectangle and `GetImage` over one connection and converts
-/// the reply in place. `None` leaves the grab to xcap: on sessions xcap
-/// treats as Wayland, for formats other than 32 bits per pixel, and on any
-/// error.
-pub(crate) fn capture_output(output: u32) -> Option<RgbaImage> {
-    let wayland = std::env::var_os("XDG_SESSION_TYPE").is_some_and(|session| session == "wayland")
-        || std::env::var_os("WAYLAND_DISPLAY")
-            .is_some_and(|display| display.to_string_lossy().to_lowercase().contains("wayland"));
-    if wayland {
-        return None;
-    }
-    let (conn, screen) = x11rb::connect(None).ok()?;
-    let root = conn.setup().roots.get(screen)?.root;
-    let monitor = conn
-        .randr_get_monitors(root, true)
-        .ok()?
-        .reply()
-        .ok()?
-        .monitors
-        .into_iter()
-        .find(|monitor| monitor.outputs.contains(&output))?;
-    let reply = conn
-        .get_image(
-            ImageFormat::Z_PIXMAP,
-            root,
-            monitor.x,
-            monitor.y,
-            monitor.width,
-            monitor.height,
-            u32::MAX,
-        )
-        .ok()?
-        .reply()
-        .ok()?;
-    let setup = conn.setup();
-    let bits_per_pixel = setup
-        .pixmap_formats
-        .iter()
-        .find(|format| format.depth == reply.depth)?
-        .bits_per_pixel;
-    if !matches!(reply.depth, 24 | 32) || bits_per_pixel != 32 {
-        return None;
-    }
-    let mut pixels = reply.data;
-    // xcap reads the byte order from the bitmap bit order; keep it so the
-    // pixels stay identical on every server.
-    if setup.bitmap_format_bit_order == ImageOrder::LSB_FIRST {
-        for pixel in pixels.chunks_exact_mut(4) {
-            pixel.swap(0, 2);
-            pixel[3] = 255;
+/// Grabs RandR outputs' pixels byte-identical to xcap 0.9.8's X11
+/// `Monitor::capture_image`, over one connection kept for every grab. xcap
+/// opens three connections per grab and converts each pixel through a
+/// function pointer with bounds checks (about 14 ms at 1080p and 54 ms at
+/// 4K under Xvfb); this reads the same `GetMonitors` rectangle and
+/// `GetImage` and converts the reply in place.
+pub struct X11OutputGrabber {
+    conn: RustConnection,
+    root: Window,
+}
+
+impl X11OutputGrabber {
+    /// `None` on sessions xcap treats as Wayland (where xcap grabs through
+    /// Wayland instead) or without an X server; callers then use xcap.
+    pub fn connect() -> Option<Self> {
+        let wayland = std::env::var_os("XDG_SESSION_TYPE")
+            .is_some_and(|session| session == "wayland")
+            || std::env::var_os("WAYLAND_DISPLAY").is_some_and(|display| {
+                display.to_string_lossy().to_lowercase().contains("wayland")
+            });
+        if wayland {
+            return None;
         }
-    } else {
-        for pixel in pixels.chunks_exact_mut(4) {
-            pixel[3] = 255;
-        }
+        let (conn, screen) = x11rb::connect(None).ok()?;
+        let root = conn.setup().roots.get(screen)?.root;
+        Some(Self { conn, root })
     }
-    RgbaImage::from_raw(monitor.width.into(), monitor.height.into(), pixels)
+
+    /// The output xcap identifies by `output` (its `Monitor::id`), or `None`
+    /// for formats other than 32 bits per pixel and on any error.
+    pub fn grab(&self, output: u32) -> Option<RgbaImage> {
+        let conn = &self.conn;
+        let monitor = conn
+            .randr_get_monitors(self.root, true)
+            .ok()?
+            .reply()
+            .ok()?
+            .monitors
+            .into_iter()
+            .find(|monitor| monitor.outputs.contains(&output))?;
+        let reply = conn
+            .get_image(
+                ImageFormat::Z_PIXMAP,
+                self.root,
+                monitor.x,
+                monitor.y,
+                monitor.width,
+                monitor.height,
+                u32::MAX,
+            )
+            .ok()?
+            .reply()
+            .ok()?;
+        let setup = conn.setup();
+        let bits_per_pixel = setup
+            .pixmap_formats
+            .iter()
+            .find(|format| format.depth == reply.depth)?
+            .bits_per_pixel;
+        if !matches!(reply.depth, 24 | 32) || bits_per_pixel != 32 {
+            return None;
+        }
+        let mut pixels = reply.data;
+        // xcap reads the byte order from the bitmap bit order; keep it so the
+        // pixels stay identical on every server.
+        if setup.bitmap_format_bit_order == ImageOrder::LSB_FIRST {
+            for pixel in pixels.chunks_exact_mut(4) {
+                pixel.swap(0, 2);
+                pixel[3] = 255;
+            }
+        } else {
+            for pixel in pixels.chunks_exact_mut(4) {
+                pixel[3] = 255;
+            }
+        }
+        RgbaImage::from_raw(monitor.width.into(), monitor.height.into(), pixels)
+    }
 }
