@@ -68,8 +68,7 @@ pub fn save_new_export(
         ..options
     };
     let output = captures_image::encode_export(image, options).map_err(Error::Image)?;
-    let history_png = captures_history::encode_png(image)?;
-    let preview_png = captures_history::encode_thumbnail_png(image)?;
+    let (history_png, preview_png) = captures_history::encode_png_and_thumbnail(image)?;
 
     fs::create_dir_all(parent)?;
     let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
@@ -154,8 +153,7 @@ pub fn save_original_export(
         ..options
     };
     let output = captures_image::encode_export(image, options).map_err(Error::Image)?;
-    let history_png = captures_history::encode_png(image)?;
-    let preview_png = captures_history::encode_thumbnail_png(image)?;
+    let (history_png, preview_png) = captures_history::encode_png_and_thumbnail(image)?;
 
     let parent = destination.parent().expect("validated destination parent");
     let mut temporary = tempfile::NamedTempFile::new_in(parent)?;

@@ -400,8 +400,7 @@ fn open_image(root: &Path, path: &Path, open_artifact_ids: &[String]) -> Result<
             Error::Image(error)
         }
     })?;
-    let png = captures_history::encode_png(&pixels)?;
-    let preview = captures_history::encode_thumbnail_png(&pixels)?;
+    let (png, preview) = captures_history::encode_png_and_thumbnail(&pixels)?;
     if let Some(entry) = previous.as_ref() {
         // Shipping reloads a closed source and drops its autosaved draft, but
         // only after the new pixels decode: a bad source keeps the draft.
@@ -579,8 +578,7 @@ pub fn persist_screenshot(
     image: &RgbaImage,
     mode: CaptureMode,
 ) -> Result<Artifact, Error> {
-    let png = captures_history::encode_png(image)?;
-    let preview = captures_history::encode_thumbnail_png(image)?;
+    let (png, preview) = captures_history::encode_png_and_thumbnail(image)?;
     let entry = HistoryEntry {
         id: uuid::Uuid::new_v4().to_string(),
         kind: ArtifactKind::Screenshot,
