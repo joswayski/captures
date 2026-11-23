@@ -2114,6 +2114,18 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             completion?(false)
             return
         }
+        // A capture this window already shows, opened or dragged in as a
+        // layer, is "In editor": "Show in editor" reveals the window instead
+        // of reopening the editor on that capture alone.
+        if state.snapshot != nil,
+           state.artifactID == artifact.id || presentArtifactIDs.contains(artifact.id) {
+            // "Show in editor" also brings back a minimized editor.
+            if window.isMiniaturized { window.deminiaturize(nil) }
+            window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+            publishPresence()
+            completion?(true)
+            return
+        }
         if state.artifactID != artifact.id, !liveQueue.isEmpty || inlineTextInput != nil {
             showError("Finish text input before opening another capture.")
             window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
@@ -2122,14 +2134,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
         // Edits in the capture being replaced autosave first, as on close.
         if state.artifactID != artifact.id { flushDraft() }
-        if state.artifactID == artifact.id, state.snapshot != nil {
-            // "Show in editor" also brings back a minimized editor.
-            if window.isMiniaturized { window.deminiaturize(nil) }
-            window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
-            publishPresence()
-            completion?(true)
-            return
-        }
         cancelPendingImport()
         inlineTextInput = nil; hideInlineTextEditor(); closeAfterTextInput = false
         let generation = state.beginOpen(artifactID: artifact.id)

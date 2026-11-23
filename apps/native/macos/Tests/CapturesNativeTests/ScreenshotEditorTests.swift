@@ -10519,6 +10519,14 @@ extension ScreenshotEditorTests {
         XCTAssertTrue(controller.handleFileDrop(.drop, urls: [dragged, fromDisk], at: .zero))
         waitUntil { controller.state.snapshot?.layers.count == 3 && !controller.state.busy }
         XCTAssertEqual(presence.last, [fixture.id, "other"], "the dragged capture is in this editor too")
+        // Its card's "Show in editor" reveals this editor; reopening on the
+        // dragged capture alone would take the other card out of the editor.
+        var revealed: Bool?
+        controller.present(artifact: artifact(id: "other"), historyRoot: fixture.history.path) { revealed = $0 }
+        XCTAssertEqual(revealed, true)
+        XCTAssertEqual(controller.state.artifactID, fixture.id)
+        XCTAssertEqual(controller.state.snapshot?.layers.count, 3)
+        XCTAssertEqual(presence.last, [fixture.id, "other"], "both cards stay in the editor")
         try press("Undo", in: controller.root)
         waitUntil { controller.state.snapshot?.layers.count == 1 && !controller.state.busy }
         XCTAssertEqual(presence.last, [fixture.id], "removing its layer releases the capture")
