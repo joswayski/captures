@@ -1859,7 +1859,7 @@ impl Editor {
         }
     }
 
-    /// The custom-color dialog's answer.
+    /// A custom color from the picker.
     pub fn set_color(&mut self, field: Field, hex: String) {
         if field == Field::Canvas {
             return self.set_background(Some(hex));
@@ -1867,13 +1867,13 @@ impl Editor {
         self.apply(Change::Color(field, hex));
     }
 
-    /// `#rrggbb` the custom-color dialog starts from.
+    /// The color the custom-color picker starts from, with its opacity.
     pub fn color_seed(&self, field: Field) -> String {
         if field == Field::Canvas {
-            return colors::custom_seed(&self.swatch_value());
+            return self.swatch_value();
         }
         self.values()
-            .map(|v| colors::custom_seed(v.color(field)))
+            .map(|v| v.color(field).to_owned())
             .unwrap_or_else(|| "#000000".into())
     }
 

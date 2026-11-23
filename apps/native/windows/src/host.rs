@@ -741,24 +741,26 @@ impl Host {
         }
     }
 
-    /// Show the system color picker for custom color `i` (Chromium's
-    /// `input[type="color"]` on Windows); called with the host released.
+    /// Show Captures' color picker for custom color `i`, without opacity
+    /// (theme colors stay opaque); called with the host released.
     fn choose_color(hwnd: HWND, i: usize) {
-        let Some(current) = with_host(|h| {
+        let Some((current, tokens)) = with_host(|h| {
             h.pick_color = None;
-            h.scene.custom_value(i).to_owned()
+            (h.scene.custom_value(i).to_owned(), h.scene.t.clone())
         }) else {
             return;
         };
-        match crate::dialog::pick_color(hwnd, &current) {
-            Ok(Some(hex)) => {
-                with_host(|h| {
-                    h.scene.set_custom_color(i, hex);
-                    h.need = true;
-                });
-            }
-            Ok(None) => {}
-            Err(error) => eprintln!("color picker failed: {error}"),
+        let label = captures_app::preferences::CUSTOM_THEME.fields[i].1;
+        let picked = crate::color_picker::pick(hwnd, &tokens, label, &current, false, |hex| {
+            with_host(|h| {
+                h.scene.set_custom_color(i, hex);
+                h.need = true;
+                // The picker's loop dispatches the wake: re-theme while open.
+                h.wake();
+            });
+        });
+        if let Err(error) = picked {
+            eprintln!("color picker failed: {error}");
         }
     }
 

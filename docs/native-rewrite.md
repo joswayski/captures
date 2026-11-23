@@ -322,8 +322,8 @@ The sixth Windows slice ports the Custom accent's color editor. Selecting
 Custom shows shipping's `.custom-theme-editor` under the accent grid, with
 no rule above it. It has the heading, Reset colors, and two fields (Accent,
 Recording signal), each with a color well and a hex input. The wells open
-the system color dialog (`ChooseColorW`), which is what Chromium shows for
-`input[type="color"]` on Windows. The hex inputs reuse the token-drawn text
+Captures' own color picker (`color_picker.rs`, see the custom color picker
+section), without its opacity track. The hex inputs reuse the token-drawn text
 field (uppercase, `maxLength` 7) and commit like `commitHexValue`: on blur,
 Enter or window deactivation, a valid value is normalized with the shared
 `captures_settings::theme::normalize_hex_color` and saved. Anything else,
@@ -336,7 +336,7 @@ color picker" buttons with a read-only Value, and "Accent hex value" Edits
 with Value and Text. The editor is one Find target. Deviation: the
 rainbow wash is drawn without its 32 px blur, mixed into the canvas.
 Windows: cross-compiled only; Wine renders at 880×760 match the Tauri
-harness. The color dialog, typing, Narrator and live re-theme need a real
+harness. The color picker, typing, Narrator and live re-theme need a real
 Windows run. macOS, Linux: unchanged.
 
 The seventh Windows slice adds shipping's narrow Preferences layout
@@ -444,7 +444,7 @@ like GTK and AppKit; edits to a selection are layer edits, and slider drags
 are `Request::Live` edits (one undo step, the latest waiting behind the one
 in flight). Swatches, the active ring and the custom tile follow
 `editor_chrome::colors` (`grid`, `swatch_active`, `custom_seed`); the custom
-tile opens the system color dialog. Each control is its own retained node,
+tile opens Captures' color picker. Each control is its own retained node,
 so hover and focus are compositor fades and a value change redraws only
 its control; the section body scrolls under the sticky heading by moving
 its visual. UI Automation: check boxes with Toggle, sliders with RangeValue
@@ -715,7 +715,7 @@ transparent checks, `Background color: #… / transparent`, ExpandCollapse)
 opens shipping's `CanvasBackgroundPicker` card, 248 px, below the trigger or
 above it when there is more room, clamped into the window. It holds Solid
 background and the compact `Canvas background` swatch field with the custom
-tile (the system colour dialog, as elsewhere). Changes commit through
+tile (Captures' color picker, as elsewhere). Changes commit through
 `Request::SetBackground`, one undo step; turning Solid back on restores
 `lastSolid` (initially `#f7f7f5`). The card closes on a press outside it and
 its trigger, and on Escape, which returns focus to the trigger when it was
@@ -1396,7 +1396,7 @@ style picker (preset samples), the text content, Font and Size, Bold, Italic
 and alignment, Text color, Text background and Drop shadow; images get
 Width/Height (aspect kept) and X/Y, disabled when locked. Controls are real
 widgets: `ColorField` swatches are pressed buttons with the custom tile
-opening GTK's color chooser, `NumberInput` is a GtkSpinButton with token
+opening Captures' color picker, `NumberInput` is a GtkSpinButton with token
 steppers, selects are combo-box triggers over radio-item popovers. Each
 change goes to the worker as `Layer` or `EditText`; sliders, typing and
 number fields use `Live` so a drag is one undo step, and while the worker is
@@ -4026,7 +4026,7 @@ Physical trackpad/mouse behavior still requires platform acceptance.
 Both hosts connect canvas fill/transparency through the shipping
 `CanvasBackgroundPicker` card: a Solid background toggle and the compact
 `ColorField` row (eight swatches from `captures_app::editor_chrome::colors` plus a
-custom tile; wgpu opens an inline picker, AppKit the system color panel). Each toggle,
+custom tile; wgpu opens an inline picker, AppKit Captures' color picker). Each toggle,
 swatch or custom change submits one `set_background` worker transaction at once, as
 shipping commits each change; an unchanged color adds no undo step. Changes made
 while the worker is busy coalesce to the latest one. Turning Solid back on restores
@@ -7732,6 +7732,38 @@ shared components only after representative screens meet parity and resource
 gates. If one scene needs platform rendering, isolate that component rather than
 forcing all screens into the same renderer. Record toolchain, dependency/license,
 binary size and accessibility cost with the performance decision.
+
+### Custom color picker — macOS, GTK and Win32
+
+Every native host opens one token-drawn picker from the editor's custom
+color tile and the Preferences theme wells instead of the system color UI
+(macOS Colors panel, GTK's color chooser, `ChooseColorW`): a hue/saturation
+wheel drawn at the current brightness (red at 3 o'clock, hue turning
+counterclockwise, white at the center), a brightness track and, where the
+color keeps alpha, an opacity track over a checkerboard, on a
+`--surface-overlay` card with `--shadow-lg`. Tab moves between channels,
+arrows step them by 1%, Escape/Return or a press outside close it. Opacity
+is stored as `#rrggbbaa`, which the shared renderer reads, for stroke, fill,
+text, text plate and canvas background colors; shadow colors (own Opacity
+field) and the theme accent/signal stay `#rrggbb`, so their picker has no
+opacity track. The color math, wheel mapping and layout are shared in
+`captures_app::editor_chrome::colors::picker`.
+
+- macOS (`EditorPickers.swift`, `PickerColorWell`): a child panel with
+  VoiceOver sliders per channel; `NSColorPanel` is never built. Built and
+  tested on macOS 26.6.2 (EditorPickersTests, ScreenshotEditorTests); a
+  real click on Preferences' Accent well opened the card.
+- GTK (`editor/color_picker.rs`): a popover; channel values are the
+  group's accessible description. Unit-tested; X11 (Xvfb) click on the
+  Accent well saved a picked color. Wayland not run.
+- Win32 (`color_picker.rs`): an owned popup with its own message loop near
+  the pointer, reporting after each drag, held arrow key or close (one undo
+  step per gesture); the window name carries the channel values for
+  Narrator. `--select color-picker|color-picker-opaque` renders it over
+  Preferences. Cross-compiled, clippy-clean and unit-tested under Wine;
+  its pixels were rendered through Direct2D under Wine and inspected. Wine
+  has no DirectComposition, so the live popup, pointer and keyboard input,
+  placement and Narrator need a real Windows run.
 
 ## Measurement protocol
 

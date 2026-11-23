@@ -435,7 +435,21 @@ pub fn render(options: &Options, path: &std::path::Path) -> Result<()> {
             scene.prepare(&g)?;
         }
         let g = g.clone();
-        Box::new(move |dc| scene.paint(dc, &g, 1.))
+        // `--select color-picker` draws the custom-color picker (with
+        // opacity) over the page; `color-picker-opaque` the theme colors' one.
+        let picker = match options.select.as_deref() {
+            Some("color-picker") => Some(crate::color_picker::Picker::new("#bfff8080", true)),
+            Some("color-picker-opaque") => Some(crate::color_picker::Picker::new("#32d3ff", false)),
+            _ => None,
+        };
+        let t = scene.t.clone();
+        Box::new(move |dc| {
+            scene.paint(dc, &g, 1.)?;
+            match &picker {
+                Some(picker) => picker.paint(dc, &t, (260., 200.), 1.),
+                None => Ok(()),
+            }
+        })
     };
     unsafe {
         let props = |options| D2D1_BITMAP_PROPERTIES1 {

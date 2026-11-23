@@ -6708,16 +6708,26 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             _ => {}
         }
         let handled = with_editor(hwnd, |e| e.handle(msg, wp, lp));
-        // The custom color dialog is modal: ask with the window released.
-        if let Some(Some((field, seed))) =
-            with_editor(hwnd, |e| e.pick_color.take().map(|f| (f, e.color_seed(f))))
-        {
-            match crate::dialog::pick_color(hwnd, &seed) {
-                Ok(Some(hex)) => {
+        // The custom color picker runs its own loop: ask with the window
+        // released. Shadow colors have their own Opacity, so no opacity track.
+        if let Some(Some((field, seed, tokens))) = with_editor(hwnd, |e| {
+            e.pick_color
+                .take()
+                .map(|f| (f, e.color_seed(f), e.t.clone()))
+        }) {
+            let alpha = field != Field::Shadow;
+            let picked = crate::color_picker::pick(
+                hwnd,
+                &tokens,
+                editor_chrome::colors::CUSTOM_COLOR,
+                &seed,
+                alpha,
+                |hex| {
                     with_editor(hwnd, |e| e.set_color(field, hex));
-                }
-                Ok(None) => {}
-                Err(error) => eprintln!("color picker failed: {error}"),
+                },
+            );
+            if let Err(error) = picked {
+                eprintln!("color picker failed: {error}");
             }
         }
         // So is the Add images picker.
