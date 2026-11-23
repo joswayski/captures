@@ -46,6 +46,11 @@ impl Frame {
         let mut bgra = Vec::with_capacity(image.as_raw().len());
         for pixel in image.pixels() {
             let [r, g, b, a] = pixel.0;
+            // Decoded video is opaque, and premultiplying by 255 is a no-op.
+            if a == u8::MAX {
+                bgra.extend([b, g, r, a]);
+                continue;
+            }
             let premultiply = |c: u8| ((u16::from(c) * u16::from(a) + 127) / 255) as u8;
             bgra.extend([premultiply(b), premultiply(g), premultiply(r), a]);
         }
