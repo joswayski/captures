@@ -14,7 +14,7 @@ use captures_capture::{DisplayDescriptor, WindowDescriptor, XcapBackend};
 use captures_recording::{
     CaptureRect, PortalRegionSelection, RecordingOptions, RecordingSegmentInfo, RecordingTarget,
 };
-use captures_video::{H264Mp4Error, H264Mp4Writer};
+use captures_video::{H264Mp4Error, H264Mp4Info, H264Mp4Writer};
 use image::RgbaImage;
 use parking_lot::Mutex;
 use thiserror::Error;
@@ -81,9 +81,48 @@ struct WorkerOutcome {
 struct EncoderContext {
     transform: FrameTransform,
     frame_rate: u16,
-    writer: H264Mp4Writer,
+    writer: VideoWriter,
     started_at: Instant,
     pointer_overlay: Option<PointerOverlay>,
+}
+
+/// The software openh264 writer, or on Linux the system FFmpeg's VA-API
+/// encoder when it handles this size: openh264 at 4K costs several cores.
+enum VideoWriter {
+    Software(Box<H264Mp4Writer>),
+    #[cfg(target_os = "linux")]
+    Hardware(captures_video::FfmpegH264Writer),
+}
+
+impl VideoWriter {
+    fn create(path: &Path, width: u32, height: u32, frame_rate: u16) -> XcapRecordingResult<Self> {
+        let bitrate = recording_bitrate(width, height, frame_rate);
+        #[cfg(target_os = "linux")]
+        if let Some(writer) =
+            captures_video::FfmpegH264Writer::vaapi(path, width, height, frame_rate, bitrate)
+        {
+            return Ok(Self::Hardware(writer));
+        }
+        Ok(Self::Software(Box::new(H264Mp4Writer::create(
+            path, width, height, frame_rate, bitrate,
+        )?)))
+    }
+
+    fn encode_rgb(&mut self, rgb: &[u8], timestamp_ms: u64) -> Result<bool, H264Mp4Error> {
+        match self {
+            Self::Software(writer) => writer.encode_rgb(rgb, timestamp_ms),
+            #[cfg(target_os = "linux")]
+            Self::Hardware(writer) => writer.encode_rgb(rgb, timestamp_ms),
+        }
+    }
+
+    fn finish(self, end_timestamp_ms: u64) -> Result<H264Mp4Info, H264Mp4Error> {
+        match self {
+            Self::Software(writer) => writer.finish(end_timestamp_ms),
+            #[cfg(target_os = "linux")]
+            Self::Hardware(writer) => writer.finish(end_timestamp_ms),
+        }
+    }
 }
 
 enum CaptureRecorder {
@@ -407,21 +446,15 @@ impl XcapRecordingSegment {
             transform,
         } = input;
         let (width, height) = transform.dimensions();
-        let bitrate = recording_bitrate(width, height, options.frames_per_second);
-        let writer = match H264Mp4Writer::create(
-            output_path,
-            width,
-            height,
-            options.frames_per_second,
-            bitrate,
-        ) {
-            Ok(writer) => writer,
-            Err(error) => {
-                drop(receiver);
-                let _ = recorder.stop();
-                return Err(error.into());
-            }
-        };
+        let writer =
+            match VideoWriter::create(output_path, width, height, options.frames_per_second) {
+                Ok(writer) => writer,
+                Err(error) => {
+                    drop(receiver);
+                    let _ = recorder.stop();
+                    return Err(error);
+                }
+            };
         let output_path = output_path.to_path_buf();
         let stop_requested = Arc::new(AtomicBool::new(false));
         let warning = Arc::new(Mutex::new(None));
@@ -782,7 +815,7 @@ fn record_frames(
 }
 
 fn encode_frame(
-    writer: &mut H264Mp4Writer,
+    writer: &mut VideoWriter,
     rgb: &mut [u8],
     elapsed_ms: u64,
     overlay: &mut Option<PointerOverlay>,

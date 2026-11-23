@@ -19,6 +19,11 @@ use openh264::{
 };
 use thiserror::Error;
 
+#[cfg(target_os = "linux")]
+mod vaapi;
+#[cfg(target_os = "linux")]
+pub use vaapi::FfmpegH264Writer;
+
 const MP4_TIMESCALE: u32 = 90_000;
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -829,7 +829,7 @@ Installed packages register **Open With** for PNG, JPEG, WebP, GIF, MP4, and Web
 ## Platform architecture
 
 - macOS recording uses ScreenCaptureKit and VideoToolbox.
-- Windows and Linux recording use `xcap` and OpenH264.
+- Windows and Linux recording use `xcap` and OpenH264. On Linux, when the system `ffmpeg` on PATH encodes a test clip with `h264_vaapi` on a `/dev/dri/renderD*` node at the recording size, recording pipes frames to it instead; the bundled LGPL FFmpeg is built without VA-API so it never needs libva at runtime.
 - Bundled FFmpeg sidecars handle media synchronization, editing, and GIF conversion.
 
 ## Feedback API
