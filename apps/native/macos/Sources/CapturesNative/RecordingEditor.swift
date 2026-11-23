@@ -184,6 +184,46 @@ final class RecordingTrimTimeline: NSView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override var isFlipped: Bool { true }
+
+    /// Hand Core Animation a bitmap of `draw(_:)` as the layer's contents, as
+    /// History cards do. Redrawing a drawn backing store (the editor does as
+    /// soon as the recording loads) held about 90 MB of owned graphics memory
+    /// for the next two seconds.
+    override var wantsUpdateLayer: Bool { true }
+    override func updateLayer() {
+        guard let layer else { return }
+        let scale = window?.backingScaleFactor ?? layer.contentsScale
+        let pixels = CGSize(width: bounds.width * scale, height: bounds.height * scale)
+        let width = Int(pixels.width.rounded(.up)), height = Int(pixels.height.rounded(.up))
+        guard width > 0, height > 0,
+              let space = window?.colorSpace?.cgColorSpace ?? CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: space, bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
+                                          | CGBitmapInfo.byteOrder32Little.rawValue)
+        else { layer.contents = nil; return }
+        context.scaleBy(x: scale, y: scale)
+        context.translateBy(x: 0, y: bounds.height); context.scaleBy(x: 1, y: -1)
+        // AppKit clips draw(_:) to the bounds, which trims strokes that straddle the edge.
+        context.clip(to: bounds)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+        draw(bounds)
+        NSGraphicsContext.restoreGraphicsState()
+        // Like a backing store: 1:1 pixels, any rounded-up fraction cropped
+        // rather than the bitmap rescaled (contentsRect is unit coordinates
+        // from the image's top-left).
+        layer.contentsScale = scale
+        layer.contentsGravity = .resize
+        layer.contentsRect = CGRect(x: 0, y: (CGFloat(height) - pixels.height) / CGFloat(height),
+                                    width: pixels.width / CGFloat(width), height: pixels.height / CGFloat(height))
+        layer.contents = context.makeImage()
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        needsDisplay = true
+    }
+
     private var trackRect: NSRect {
         NSRect(x: 10, y: 3, width: max(1, bounds.width - 20), height: max(1, bounds.height - 6))
     }
