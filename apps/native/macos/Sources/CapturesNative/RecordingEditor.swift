@@ -930,6 +930,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     /// One active decode and one latest target, never a pointer-event backlog.
     private var seekingPosition: UInt64?
     private var pendingSeek: UInt64?
+    /// A seek made while a long operation owned the worker.
+    private var deferredSeek: UInt64?
     private var trimPreviewRequest: [String: Any]?
     private var pendingTrimPreview: [String: Any]?
     private var pickerOpen = false
@@ -2574,11 +2576,31 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         busy && (!estimating || !afterEstimate.isEmpty)
     }
 
+    /// A long operation that leaves staged edits alone: thumbnails, the
+    /// comparison, the crop source frame, or Save as a new copy (which saves
+    /// the accepted edit). Editing stays live, as in shipping, and staged
+    /// edits apply once the worker is free (`scheduleLiveApply`). A
+    /// replacement rebases the session and would discard them, so it holds
+    /// edits like a preview update past its grace.
+    private var stagingOpenDuringOperation: Bool { activeCancel != nil && !replacing }
+
+    /// Save or Replace is running: shipping greys only the export row.
+    private var exporting: Bool {
+        activeCancel != nil && activeCancel !== thumbnailCancel
+            && activeCancel !== sourceFrameCancel && activeCancel !== comparisonCancel
+    }
+
+    /// Loop and the preview speaker only change local playback settings.
+    private var localPreviewToggles: Bool {
+        (!operationBlocking || requestGrace || stagingOpenDuringOperation) && !requiresReopen
+            && playbackState != .pausing
+    }
+
     private func resetLiveWork() {
         applyWork?.cancel(); applyWork = nil; applyWorkKey = nil; applyFailedKey = nil
         estimateWork?.cancel(); estimateWork = nil; estimateWorkKey = nil
         estimateAttempt = nil; estimateCancel = nil; afterEstimate.removeAll()
-        seekingPosition = nil; pendingSeek = nil
+        seekingPosition = nil; pendingSeek = nil; deferredSeek = nil
         trimPreviewRequest = nil; pendingTrimPreview = nil
         resumeAfterSeek = false
         editingText = false; savedFingerprint = nil
@@ -2690,6 +2712,14 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                     self.seek(to: latest)
                 }
             }
+            return
+        }
+        if busy, !stagedDiffers {
+            // Another operation owns the worker (an edit's preview,
+            // thumbnails, the comparison or an export): the latest position
+            // decodes once it is free (`updateControls`).
+            deferredSeek = position
+            trimTimeline.setAcceptedPosition(position)
             return
         }
         guard !busy, !stagedDiffers else {
@@ -2842,7 +2872,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     }
 
     @objc private func playbackLoopChanged() {
-        guard presentation != nil, !operationBlocking, !pickerOpen, playbackState != .pausing else {
+        guard presentation != nil, localPreviewToggles, !pickerOpen else {
             playbackLoop.state = playbackLoopEnabled ? .on : .off
             return
         }
@@ -2855,8 +2885,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     /// audio stream opens with playback, so a change while playing resumes
     /// from the same frame with the new setting.
     private func togglePlaybackSound() {
-        guard presentation != nil, !operationBlocking, !pickerOpen,
-              playbackState != .pausing else { return }
+        guard presentation != nil, localPreviewToggles, !pickerOpen else { return }
         playbackSoundEnabled.toggle()
         playbackAudioEnabled = nil
         if playbackState == .playing {
@@ -3145,7 +3174,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             self.busy = false; self.activeCancel = nil; self.comparisonCancel = nil
             // Failures stay in the comparison frame, never the save status.
             guard !cancel.isCancelled else {
-                self.comparisonFailure = "Comparison cancelled."
+                // An edit made meanwhile cancels it to encode the new settings.
+                self.comparisonFailure = self.stagedDiffers ? nil : "Comparison cancelled."
                 self.updateControls(); return
             }
             guard let accepted = self.presentation?.snapshot,
@@ -3885,14 +3915,20 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         }
         // A background estimate never holds edits: they supersede it.
         let blocked = operationBlocking && !requestGrace
-        let available = presentation != nil && !blocked && !pickerOpen
-            && !requiresReopen && playbackState == .idle
+        let session = presentation != nil && !pickerOpen && !requiresReopen && playbackState == .idle
+        // `available`: actions that need the worker (Play, Save, seeking).
+        // `editable`: staging edits, which apply once the worker is free.
+        // `exportEditable`: shipping's export row, which only an export greys.
+        let available = session && !blocked
+        let editable = session && (!blocked || stagingOpenDuringOperation)
+        let exportEditable = editable && !exporting
         let validMaximum = !maximumSizeEnabled || maximumSizeBytes != nil
         let valid = pendingCropInputValid && stagedEdit != nil && stagedExport != nil
             && validMaximum
         let gif = format.indexOfSelectedItem == 1
-        [trimStart, trimEnd, format, filenameField].forEach { $0.isEnabled = available }
-        resetTrimButton?.isEnabled = available
+        [trimStart, trimEnd].forEach { $0.isEnabled = editable }
+        [format, filenameField].forEach { $0.isEnabled = exportEditable }
+        resetTrimButton?.isEnabled = editable
         // Save quality: mode, Compress preset or Maximum limit, then Est. size.
         let mode = selectedQualityModeValue
         if let index = qualityMode.itemArray.firstIndex(where: {
@@ -3905,32 +3941,32 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             $0.representedObject as? String == "preserve" }) {
             preserveItem.isHidden = (gif || webmSelected) && mode != "preserve"
         }
-        qualityMode.isEnabled = available
+        qualityMode.isEnabled = editable
         qualityModeHelp.stringValue = qualityMode.selectedItem?.toolTip ?? ""
         quality.isHidden = mode != "compress"; qualityLabel.isHidden = quality.isHidden
-        quality.isEnabled = available && mode == "compress"
+        quality.isEnabled = editable && mode == "compress"
         for view in [maximumSizeLabel, maximumSizeWarning] as [NSView] {
             view.isHidden = !maximumSizeEnabled
         }
         maximumSizeValue.isHidden = !maximumSizeEnabled
         maximumSizeUnits.isHidden = !maximumSizeEnabled
         maximumSizeInvalid.isHidden = !maximumSizeEnabled || validMaximum
-        maximumSizeValue.isEnabled = available && maximumSizeEnabled
-        maximumSizeUnits.isEnabled = available && maximumSizeEnabled
+        maximumSizeValue.isEnabled = editable && maximumSizeEnabled
+        maximumSizeUnits.isEnabled = editable && maximumSizeEnabled
         gifPanel.isHidden = !gif
-        gifFrameRate.isEnabled = available && gif
-        gifMaximumWidthControl.isEnabled = available && gif
-        cropEnabled.isEnabled = available
-        cropLock.isEnabled = available && stagedCrop != nil
+        gifFrameRate.isEnabled = editable && gif
+        gifMaximumWidthControl.isEnabled = editable && gif
+        cropEnabled.isEnabled = editable
+        cropLock.isEnabled = editable && stagedCrop != nil
         [cropX, cropY, cropWidth, cropHeight].forEach {
-            $0.isEnabled = available && stagedCrop != nil
+            $0.isEnabled = editable && stagedCrop != nil
         }
-        outputMode.isEnabled = available
+        outputMode.isEnabled = editable
         for view in [outputWidth, outputHeight, outputWidthLabel, outputHeightLabel] {
             view.isHidden = !customOutput
         }
-        outputWidth.isEnabled = available && customOutput
-        outputHeight.isEnabled = available && customOutput
+        outputWidth.isEnabled = editable && customOutput
+        outputHeight.isEnabled = editable && customOutput
         let hasSystem = presentation?.snapshot.hasSystemAudio == true
         let hasMicrophone = presentation?.snapshot.hasMicrophoneAudio == true
         let hasAudio = hasSystem || hasMicrophone
@@ -3953,26 +3989,37 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         soundButton.title = playbackSoundEnabled ? "Mute" : "Unmute"
         soundButton.setAccessibilityLabel(playbackSoundEnabled ? "Mute preview" : "Unmute preview")
         soundButton.toolTip = playbackSoundEnabled ? "Mute preview" : "Unmute preview"
-        soundButton.isEnabled = audible && presentation != nil && !blocked && !pickerOpen
-            && !requiresReopen && playbackState != .pausing
-        systemVolume.isEnabled = available && !gif && systemAudio.state == .on
-        microphoneVolume.isEnabled = available && !gif && microphoneAudio.state == .on
+        soundButton.isEnabled = audible && presentation != nil && localPreviewToggles && !pickerOpen
+        systemVolume.isEnabled = editable && !gif && systemAudio.state == .on
+        microphoneVolume.isEnabled = editable && !gif && microphoneAudio.state == .on
         systemVolumeSlider.isEnabled = systemVolume.isEnabled
         microphoneVolumeSlider.isEnabled = microphoneVolume.isEnabled
-        systemAudio.isEnabled = available && !gif
-        microphoneAudio.isEnabled = available && !gif
-        monoOutput.isEnabled = available && !gif
+        systemAudio.isEnabled = editable && !gif
+        microphoneAudio.isEnabled = editable && !gif
+        monoOutput.isEnabled = editable && !gif
         let trimPending = trimPreviewRequest != nil || pendingTrimPreview != nil
-        trimTimeline.setEditingEnabled((available || trimPending || playbackState == .playing)
+        trimTimeline.setEditingEnabled((editable || trimPending || playbackState == .playing)
             && valid && !pickerOpen && !requiresReopen)
         let seekPending = seekingPosition != nil || pendingSeek != nil
         let playbackSeek = playbackState == .playing || resumeAfterSeek
-        trimTimeline.seekEnabled = (available || seekPending || playbackSeek) && valid && !stagedDiffers && !trimPending
+        trimTimeline.seekEnabled = (available || stagingOpenDuringOperation || seekPending || playbackSeek) && valid && !stagedDiffers && !trimPending
             && !cropAdjustmentActive && !pickerOpen && !requiresReopen
             && (playbackState == .idle || playbackSeek)
         let trimPosition = ((pendingTrimPreview ?? trimPreviewRequest)?["position_ms"] as? NSNumber)?.uint64Value
-        if let requested = trimPosition ?? pendingSeek ?? seekingPosition {
+        if let requested = trimPosition ?? pendingSeek ?? seekingPosition ?? deferredSeek {
             trimTimeline.setAcceptedPosition(requested)
+        }
+        if !busy, let target = deferredSeek, playbackState == .idle {
+            deferredSeek = nil
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.busy, self.playbackState == .idle else { return }
+                guard !self.stagedDiffers else {
+                    // An edit made meanwhile applies first; its preview wins.
+                    self.trimTimeline.setAcceptedPosition(self.presentation?.snapshot.positionMilliseconds)
+                    return
+                }
+                self.seek(to: target)
+            }
         }
         thumbnailRetryButton?.isHidden = !thumbnailRetryAvailable
         thumbnailRetryButton?.isEnabled = available && thumbnailRetryAvailable
@@ -3989,12 +4036,10 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         previewActualButton?.needsDisplay = true
         previewFitButton?.isEnabled = preview.image != nil
         previewActualButton?.isEnabled = preview.image != nil
-        cropOverlay.interceptsPendingInput = cropAdjustmentActive && available
+        cropOverlay.interceptsPendingInput = cropAdjustmentActive && editable
             && hasPendingCropInput
-        cropOverlay.setEditingEnabled(cropAdjustmentActive && available && !hasPendingCropInput)
-        playbackLoop.isEnabled = presentation != nil && !blocked && !pickerOpen
-            && !requiresReopen
-            && playbackState != .pausing
+        cropOverlay.setEditingEnabled(cropAdjustmentActive && editable && !hasPendingCropInput)
+        playbackLoop.isEnabled = presentation != nil && localPreviewToggles && !pickerOpen
         switch (playbackState, resumeAfterSeek) {
         case (.idle, false):
             playbackButton?.title = "Play"
@@ -4017,7 +4062,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         }
         playbackButton?.isHidden = cropAdjustmentActive || preview.image == nil
         updatePlaybackButtonFade()
-        changeButton?.isEnabled = available
+        changeButton?.isEnabled = exportEditable
         let copy = savingCopy
         saveButton?.isEnabled = available && valid && !stagedDiffers && !alreadySaved
             && (copy ? !filenameField.stringValue.isEmpty : !cropAdjustmentActive)
@@ -4027,7 +4072,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             ? "Save as a new file and leave the original untouched. (⌘S)"
             : "Save the edits to \(destinationPath) under the original History item. (⌘S)"
         saveAsNewSwitch.state = copy ? .on : .off
-        saveAsNewSwitch.isEnabled = available && eligibleOriginalPath != nil
+        saveAsNewSwitch.isEnabled = exportEditable && eligibleOriginalPath != nil
         saveAsNewRow.toolTip = eligibleOriginalPath == nil
             ? (originalPath == nil ? "No saved original file is available."
                 : "Changing formats always creates a new file")

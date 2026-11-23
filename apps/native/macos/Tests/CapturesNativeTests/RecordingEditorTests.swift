@@ -1942,8 +1942,15 @@ final class RecordingEditorTests: XCTestCase {
         worker.deferThumbnails = true
         retry.performClick(nil)
         XCTAssertEqual(timeline.thumbnailStateDescription, "Loading source thumbnails…")
-        XCTAssertFalse(loop.isEnabled,
-                       "Loop cannot change while another operation owns the serialized worker")
+        // Like shipping, thumbnails grey nothing: Loop only changes local
+        // playback, and staged edits apply once the worker is free.
+        XCTAssertTrue(loop.isEnabled)
+        XCTAssertTrue(try field("Trim start milliseconds", in: controller.root).isEnabled)
+        XCTAssertTrue(try playhead(in: controller.root).isEnabled)
+        let seeksBefore = worker.requests.filter { $0["operation"] as? String == "seek" }.count
+        timeline.onSeek?(700)
+        XCTAssertEqual(worker.requests.filter { $0["operation"] as? String == "seek" }.count, seeksBefore,
+                       "a seek waits for the worker")
         XCTAssertFalse(controller.windowShouldClose(controller.window),
                        "accepted thumbnail generation uses the existing busy close gate")
         let cancel = try button("Cancel thumbnails", in: controller.root)
@@ -1951,6 +1958,9 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(worker.observedThumbnailCancel).isCancelled)
         XCTAssertEqual(timeline.thumbnailStateDescription, "Cancelling source thumbnails…")
         worker.completeThumbnails(.failure(AppBridgeError.backend("operation cancelled")))
+        pump(until: { worker.requests.last?["operation"] as? String == "seek" })
+        XCTAssertEqual(worker.requests.last?["position_ms"] as? UInt64, 700,
+                       "the seek made during thumbnails runs once they finish")
         XCTAssertEqual(timeline.thumbnailStateDescription, "Source thumbnails cancelled")
         XCTAssertFalse(retry.isHiddenOrHasHiddenAncestor)
         XCTAssertTrue(loop.isEnabled)
@@ -4341,8 +4351,11 @@ final class RecordingEditorTests: XCTestCase {
 
             worker.deferSave = true
             try button("Save new copy", in: controller.root).performClick(nil)
-            XCTAssertFalse(systemVolume.isEnabled)
-            XCTAssertFalse(try checkbox("System audio", in: controller.root).isEnabled)
+            // Like shipping, an export greys only its export row.
+            XCTAssertTrue(systemVolume.isEnabled)
+            XCTAssertTrue(try checkbox("System audio", in: controller.root).isEnabled)
+            XCTAssertFalse(try field("Saved filename", in: controller.root).isEnabled)
+            XCTAssertFalse(try button("Change…", in: controller.root).isEnabled)
             XCTAssertFalse(controller.windowShouldClose(controller.window))
             XCTAssertFalse(controller.prepareForTermination())
             let cancel = try button("Cancel export", in: controller.root)
