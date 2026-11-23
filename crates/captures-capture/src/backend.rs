@@ -246,10 +246,17 @@ fn capture_monitor(monitor: &Monitor) -> CaptureResult<DisplayFrame> {
         descriptor.width,
         descriptor.height,
     )?;
+    #[cfg(target_os = "linux")]
+    let image = monitor.id().ok().and_then(crate::x11::capture_output);
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    let image = None;
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    let image = monitor
-        .capture_image()
-        .map_err(|error| CaptureError::Backend(error.to_string()))?;
+    let image = match image {
+        Some(image) => image,
+        None => monitor
+            .capture_image()
+            .map_err(|error| CaptureError::Backend(error.to_string()))?,
+    };
     Ok(DisplayFrame { descriptor, image })
 }
 
