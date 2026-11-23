@@ -529,11 +529,10 @@ impl Host {
         if self.instance.borrow().is_none() {
             return;
         }
-        let entries =
-            captures_history::load(&self.history_root, chrono::Utc::now()).unwrap_or_default();
-        let Some(entry) = entries
-            .into_iter()
-            .find(|entry| entry.id == id && entry.kind.is_recording())
+        let Some(entry) = captures_history::load_entry(&self.history_root, id, chrono::Utc::now())
+            .ok()
+            .flatten()
+            .filter(|entry| entry.kind.is_recording())
         else {
             return;
         };

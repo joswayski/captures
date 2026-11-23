@@ -295,44 +295,62 @@ pub fn load(root: &Path, now: DateTime<Utc>) -> Result<Vec<HistoryEntry>, Error>
         if !path.is_dir() || name.starts_with('.') {
             continue;
         }
-        let parsed = fs::read(path.join(HISTORY_METADATA_FILE))
-            .ok()
-            .and_then(|b| serde_json::from_slice::<HistoryEntry>(&b).ok());
-        let Some(entry) = parsed else {
-            let _ = fs::remove_dir_all(path);
-            continue;
-        };
-        let created = DateTime::parse_from_rfc3339(&entry.created_at)
-            .ok()
-            .map(|v| v.with_timezone(&Utc));
-        let Some(created) = created else {
-            let _ = fs::remove_dir_all(path);
-            continue;
-        };
-        if entry.id != name || Uuid::parse_str(&entry.id).is_err() || created < cutoff {
-            let _ = fs::remove_dir_all(path);
-            continue;
-        }
-        let valid = path.join(HISTORY_PREVIEW_FILE).is_file()
-            && match entry.kind {
-                ArtifactKind::Screenshot => {
-                    entry.mode.is_some() && path.join(HISTORY_IMAGE_FILE).is_file()
-                }
-                _ => {
-                    entry.mime_type.is_some()
-                        && entry.duration_ms.is_some()
-                        && entry.target.is_some()
-                        && (find_recording_media(&path).is_some() || entry.saved_path.is_some())
-                }
-            };
-        if valid {
-            history.push((created, entry));
-        } else {
-            let _ = fs::remove_dir_all(path);
+        match valid_entry(&path, &name, cutoff) {
+            Some(valid) => history.push(valid),
+            None => {
+                let _ = fs::remove_dir_all(path);
+            }
         }
     }
     history.sort_by(|a, b| b.0.cmp(&a.0));
     Ok(history.into_iter().map(|(_, e)| e).collect())
+}
+
+/// One entry as `load` would list it, without reading the rest of History.
+/// `None` when it is missing, expired or invalid; unlike `load`, this never
+/// deletes anything (the next full load cleans up).
+pub fn load_entry(
+    root: &Path,
+    id: &str,
+    now: DateTime<Utc>,
+) -> Result<Option<HistoryEntry>, Error> {
+    let path = entry_directory(root, id)?;
+    if !path.is_dir() {
+        return Ok(None);
+    }
+    let cutoff = now - Duration::days(HISTORY_RETENTION_DAYS);
+    Ok(valid_entry(&path, id, cutoff).map(|(_, entry)| entry))
+}
+
+/// The entry stored in directory `path` (named `name`), with its creation
+/// time, when it is complete, matches its directory and is within retention.
+fn valid_entry(
+    path: &Path,
+    name: &str,
+    cutoff: DateTime<Utc>,
+) -> Option<(DateTime<Utc>, HistoryEntry)> {
+    let entry = fs::read(path.join(HISTORY_METADATA_FILE))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<HistoryEntry>(&b).ok())?;
+    let created = DateTime::parse_from_rfc3339(&entry.created_at)
+        .ok()?
+        .with_timezone(&Utc);
+    if entry.id != name || Uuid::parse_str(&entry.id).is_err() || created < cutoff {
+        return None;
+    }
+    let valid = path.join(HISTORY_PREVIEW_FILE).is_file()
+        && match entry.kind {
+            ArtifactKind::Screenshot => {
+                entry.mode.is_some() && path.join(HISTORY_IMAGE_FILE).is_file()
+            }
+            _ => {
+                entry.mime_type.is_some()
+                    && entry.duration_ms.is_some()
+                    && entry.target.is_some()
+                    && (find_recording_media(path).is_some() || entry.saved_path.is_some())
+            }
+        };
+    valid.then_some((created, entry))
 }
 
 pub fn read_images(root: &Path, id: &str) -> Result<(Vec<u8>, Vec<u8>), Error> {
@@ -561,6 +579,42 @@ mod tests {
         assert!(!root.path().join(&expired.id).exists());
         assert!(!root.path().join(&entry.id).exists());
         assert_eq!(fs::read(permanent).unwrap(), b"keep");
+    }
+
+    #[test]
+    fn load_entry_matches_load_for_one_entry_without_deleting() {
+        let root = tempdir().unwrap();
+        let now = Utc.with_ymd_and_hms(2026, 7, 19, 12, 0, 0).unwrap();
+        let kept = screenshot(
+            &Uuid::new_v4().to_string(),
+            (now - Duration::days(2)).to_rfc3339(),
+        );
+        let expired = screenshot(
+            &Uuid::new_v4().to_string(),
+            (now - Duration::days(31)).to_rfc3339(),
+        );
+        let incomplete = screenshot(&Uuid::new_v4().to_string(), now.to_rfc3339());
+        for entry in [&kept, &expired, &incomplete] {
+            save_capture(root.path(), entry, b"full", b"preview").unwrap();
+        }
+        fs::remove_file(root.path().join(&incomplete.id).join(HISTORY_IMAGE_FILE)).unwrap();
+
+        let found = load_entry(root.path(), &kept.id, now).unwrap().unwrap();
+        assert_eq!(found.id, kept.id);
+        assert!(load_entry(root.path(), &expired.id, now).unwrap().is_none());
+        assert!(
+            load_entry(root.path(), &incomplete.id, now)
+                .unwrap()
+                .is_none()
+        );
+        let absent = Uuid::new_v4().to_string();
+        assert!(load_entry(root.path(), &absent, now).unwrap().is_none());
+        assert!(load_entry(root.path(), "not-a-history-id", now).is_err());
+        // Only a full load prunes.
+        assert!(root.path().join(&expired.id).exists());
+        assert!(root.path().join(&incomplete.id).exists());
+        let listed = load(root.path(), now).unwrap();
+        assert_eq!(listed.iter().map(|e| &e.id).collect::<Vec<_>>(), [&kept.id]);
     }
 
     #[test]

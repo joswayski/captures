@@ -25,9 +25,9 @@ pub fn clear_previous_exports(root: &Path) -> Result<(), Error> {
 /// Resolve the exact persisted artifact, not an image shown by the current card.
 /// A unique directory prevents simultaneous drags from replacing one another's bytes.
 pub fn prepare(root: &Path, id: &str) -> Result<PathBuf, Error> {
-    let entry = captures_history::load(root, chrono::Utc::now())?
-        .into_iter()
-        .find(|entry| entry.id == id)
+    let entry = captures_history::load_entry(root, id, chrono::Utc::now())
+        .ok()
+        .flatten()
         .ok_or(Error::Missing)?;
     if let Some(path) = entry
         .saved_path

@@ -158,14 +158,13 @@ pub fn show(options: &Options, id: &str) {
         .history_root
         .clone()
         .unwrap_or_else(captures_app::default_history_root);
-    let Ok(entries) = captures_history::load(&root, chrono::Utc::now()) else {
-        return;
-    };
-    let Some(entry) = entries.into_iter().find(|e| {
-        e.id == id
-            && e.kind.is_recording()
-            && e.recording_media_path(&root).is_some_and(|p| p.is_file())
-    }) else {
+    let Some(entry) = captures_history::load_entry(&root, id, chrono::Utc::now())
+        .ok()
+        .flatten()
+        .filter(|e| {
+            e.kind.is_recording() && e.recording_media_path(&root).is_some_and(|p| p.is_file())
+        })
+    else {
         return;
     };
     hide();

@@ -6537,10 +6537,11 @@ fn find_entry(
     root: &std::path::Path,
     id: &str,
 ) -> std::result::Result<captures_history::HistoryEntry, String> {
-    captures_history::load(root, chrono::Utc::now())
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .find(|entry| entry.id == id && !entry.kind.is_recording())
+    // Only this entry's metadata, not every History entry, on the UI thread.
+    captures_history::load_entry(root, id, chrono::Utc::now())
+        .ok()
+        .flatten()
+        .filter(|entry| !entry.kind.is_recording())
         .ok_or_else(|| format!("No screenshot {id} in Capture History"))
 }
 

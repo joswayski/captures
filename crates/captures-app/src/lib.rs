@@ -826,9 +826,10 @@ fn save_screenshot(
 }
 
 fn save_recording(root: &Path, id: &str, directory: &Path) -> Result<Response, Error> {
-    let entry = captures_history::load(root, Utc::now())?
-        .into_iter()
-        .find(|entry| entry.id == id && entry.kind.is_recording())
+    let entry = captures_history::load_entry(root, id, Utc::now())
+        .ok()
+        .flatten()
+        .filter(|entry| entry.kind.is_recording())
         .ok_or(Error::Missing)?;
     let item = artifact(root, entry)?;
     if let Some(path) = item
