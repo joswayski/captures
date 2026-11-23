@@ -6589,8 +6589,16 @@ final class ScreenshotEditorTests: XCTestCase {
             XCTAssertEqual(rgba(try canvasPreviewImage(in: controller.root), x: 260, y: 165), [255, 59, 92, 255])
             XCTAssertFalse(controller.state.snapshot!.unsavedChanges)
             try render(controller.root, name: "screenshot-editor-resize-active-\(appearance)")
+            let releasedOutline = try XCTUnwrap(overlay.displayedOutline)
             overlay.end(at: release)
+            // Until the committed render lands, the canvas keeps the resized
+            // frame and outline; restoring the old pixels first made the shape
+            // snap back to its previous size for a moment.
+            XCTAssertTrue(controller.state.busy)
+            XCTAssertEqual(rgba(try canvasPreviewImage(in: controller.root), x: 260, y: 165), [255, 59, 92, 255])
+            XCTAssertEqual(overlay.displayedOutline, releasedOutline)
             waitUntil { !controller.state.busy && controller.state.snapshot?.unsavedChanges == true }
+            XCTAssertNil(overlay.heldOutline, "the committed selection replaces the held outline")
             let resized = try request(["operation": "snapshot"], using: live)
             XCTAssertEqual(resized.snapshot.layers.first?.id, id)
             XCTAssertEqual(rgba(resized.image, x: 260, y: 165), [255, 59, 92, 255])
@@ -6633,6 +6641,7 @@ final class ScreenshotEditorTests: XCTestCase {
             failingWorker.failureMessage = "Resize failed; original pixels and selection remain recoverable."
             surface.begin(at: start); surface.end(at: CGPoint(x: start.x + 20, y: start.y + 20))
             XCTAssertFalse(failure.state.busy); XCTAssertEqual(surface.selectedLayerID, id)
+            XCTAssertNil(surface.heldOutline, "a failed resize shows the original outline again")
             XCTAssertEqual(failure.state.snapshot, resized.snapshot)
             try render(failure.root, name: "screenshot-editor-resize-error-minimum-\(appearance)")
         }

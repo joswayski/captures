@@ -50,6 +50,9 @@ impl Editor {
 
     /// The grip for the selection as shown, in document points.
     pub(super) fn rotate_grip(&self) -> Option<RotationHandle> {
+        if self.held_outline.is_some() {
+            return None;
+        }
         let element = self.rotate_layer()?;
         let outline = self.selection_outline()?;
         let (width, height) = self.document_size()?;

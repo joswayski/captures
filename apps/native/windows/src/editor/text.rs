@@ -1027,7 +1027,8 @@ impl Editor {
 
     /// Grip centres in well DIPs: corners and edge midpoints.
     pub(super) fn grips(&self) -> Vec<(f32, f32)> {
-        if self.grip_layer().is_none() {
+        // A released transform's held outline shows without grips until it lands.
+        if self.grip_layer().is_none() || self.held_outline.is_some() {
             return Vec::new();
         }
         let Some(outline) = self.selection_outline() else {

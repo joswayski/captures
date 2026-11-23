@@ -687,7 +687,8 @@ final class EditorDrawOverlay: EditorViewportGestureView {
         let points = penPoints
         var backgroundPoints = brushPoints
         let arrowLength = hypot(point.x - startPoint.x, point.y - startPoint.y)
-        cancelGesture()
+        // End after the commit so its preview frame stays until the render lands.
+        defer { cancelGesture() }
         if shape == .wand {
             guard arrowLength < 3, bounds.contains(point), presentedImageRect.contains(point) else { return }
             onWand?(start)
@@ -919,7 +920,11 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
     var selectedOnly = false {
         didSet { if selectedOnly != oldValue { cancelGesture(); layoutExpandButton() } }
     }
-    var selectedOutline: [CGPoint]? { didSet { needsDisplay = true } }
+    var selectedOutline: [CGPoint]? { didSet { releaseHeldOutline() } }
+    /// A released transform's outline and angle, shown until the committed
+    /// selection replaces them so the frame doesn't snap back while it renders.
+    private(set) var heldOutline: [CGPoint]?
+    private var heldRotation: Double?
     var selectedLayerID: String? { didSet { if selectedLayerID != oldValue { cancelGesture() }; needsDisplay = true } }
     var documentJSON: String? { didSet { if documentJSON != oldValue { cancelGesture() } } }
     var textBoundsJSON: String? { didSet { if textBoundsJSON != oldValue { cancelGesture() } } }
@@ -1009,8 +1014,16 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
             return outlineForLayer?(id) ?? selectedOutline
         }
         return resizePreview?.outline ?? movePreview?.outline ?? rotationPreview?.outline
-            ?? (startPoint == nil ? selectedOutline : transientOutline)
+            ?? (startPoint == nil ? heldOutline ?? selectedOutline : transientOutline)
     }
+
+    /// Keep the active transform's outline after release; the editor calls
+    /// this when it accepts the commit.
+    func holdOutline() {
+        guard startPoint != nil else { return }
+        heldOutline = displayedOutline; heldRotation = rotationPreview?.radians
+    }
+    func releaseHeldOutline() { heldOutline = nil; heldRotation = nil; needsDisplay = true }
 
     var resizeHandlePoints: [CGPoint] {
         guard resizeEnabled, let outline = displayedOutline, outline.count == 4 else { return [] }
@@ -1208,12 +1221,16 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
             onPreviewCancel?()
         }
     }
+    /// Commits run before the gesture ends: the editor keeps the last preview
+    /// frame and outline on screen until the committed render replaces them.
+    /// Ending first restored the old pixels, so a released shape snapped back
+    /// to its previous size or place for a moment.
     func end(at point: CGPoint, snap: Bool? = nil) {
         guard let start = startPoint else { return }
         if let id = curveLayerID, let handle = curveHandle {
             let distance = hypot(point.x - start.x, point.y - start.y)
             let current = canvasPoint(for: point)
-            cancelGesture()
+            defer { cancelGesture() }
             if distance >= 3 {
                 onCurve?(id, ["kind": "move", "handle": handle as [String: Any],
                               "point": ["x": Double(current.x), "y": Double(current.y)]])
@@ -1223,7 +1240,7 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
         if let id = rotatingLayerID {
             drag(to: point, snap: snap, previewPixels: false)
             let angle = rotationPreview?.radians
-            cancelGesture()
+            defer { cancelGesture() }
             if let angle, angle != rotationStartRadians { onRotate?(id, angle) }
             return
         }
@@ -1233,7 +1250,7 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
             let current = canvasPoint(for: point)
             let scale = presentedImageRect.width / canvasSize.width
             let lockAspect = lockResizeAspect
-            cancelGesture()
+            defer { cancelGesture() }
             if distance >= 3 {
                 onResize?(id, Self.resizeHandleNames[handle], current, scale, lockAspect)
             }
@@ -1242,9 +1259,13 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
         let hit = hitLayerID
         let distance = hypot(point.x - start.x, point.y - start.y)
         let scale = presentedImageRect.width / canvasSize.width
-        cancelGesture()
-        if distance >= 3, let hit { onMove?(hit, (point.x - start.x) / scale, (point.y - start.y) / scale, scale) }
-        else { onSelect?(hit) }
+        if distance >= 3, let hit {
+            defer { cancelGesture() }
+            onMove?(hit, (point.x - start.x) / scale, (point.y - start.y) / scale, scale)
+        } else {
+            cancelGesture()
+            onSelect?(hit)
+        }
     }
     func cancelGesture() {
         let active = startPoint != nil
@@ -1322,7 +1343,7 @@ final class EditorSelectionOverlay: EditorViewportGestureView {
         if rotationEnabled, startPoint == nil || rotatingLayerID != nil,
            let geometry = NativeEditorRotationHandle(outline: outline,
                radians: activeTextLayerID != nil ? atan2(outline[1].y - outline[0].y, outline[1].x - outline[0].x)
-                   : rotationPreview?.radians ?? selectedRotation, displayScale: scale, canvas: canvasSize) {
+                   : rotationPreview?.radians ?? heldRotation ?? selectedRotation, displayScale: scale, canvas: canvasSize) {
             let map: (CGPoint) -> CGPoint = { CGPoint(x: image.minX + $0.x * scale, y: image.minY + $0.y * scale) }
             let connector = NSBezierPath(); connector.move(to: map(geometry.anchor)); connector.line(to: map(geometry.handle))
             connector.lineWidth = 2; connector.stroke()
@@ -5691,9 +5712,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     /// Drop the comparison's After side; it and Est. size re-encode on their
     /// own schedules once the change is accepted.
-    private func invalidateOutput() {
+    /// `keepCanvas` leaves a held drawing or transform preview on the canvas
+    /// until the committed render replaces it.
+    private func invalidateOutput(keepCanvas: Bool = false) {
         comparisonOutput = nil
-        preview.image = editedImage
+        if !keepCanvas { preview.image = editedImage }
         if let editedImage { viewportCanvasSize = editedImage.size; updateViewportGeometry() }
         publishComparison()
     }
@@ -7509,11 +7532,13 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         commandGraceWork?.cancel(); commandGraceWork = grace
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.busyControlsDelay, execute: grace)
         let clipboardChange = layerPasteboard.changeCount
-        // Keep showing the drawn preview until the rendered result replaces it;
-        // reverting first made a just-placed arrow blink out for a frame.
+        // Keep showing the drawn preview (and a released transform's outline)
+        // until the rendered result replaces it; reverting first made a
+        // just-placed arrow blink out and a resized shape snap back.
         let heldPreview = drawOverlay.pixelPreviewVisible || selectionOverlay.pixelPreviewVisible
+        selectionOverlay.holdOutline()
         cancelDrawingPreview(restoreImage: false)
-        if !preserveOutputAndStatus { invalidateOutput() }
+        if !preserveOutputAndStatus { invalidateOutput(keepCanvas: heldPreview) }
         preferredLayerID = preferredSelection
         if !preserveOutputAndStatus { editorError = nil }
         updateControls()
@@ -7523,6 +7548,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             switch result {
             case .success(let presentation):
                 guard self.state.complete(presentation.snapshot, generation: generation) else { return }
+                self.selectionOverlay.releaseHeldOutline()
                 // History clears selection only after an accepted response, before
                 // publish can retain a surviving ID or choose a deletion fallback.
                 if clearSelectionOnSuccess { self.selectedLayerID = nil }
@@ -7551,6 +7577,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                 guard self.state.fail(generation: generation) else { return }
                 self.preferredLayerID = nil
                 if heldPreview { self.preview.image = self.editedImage }
+                self.selectionOverlay.releaseHeldOutline()
                 // A rejected live edit ends its burst; queued edits built on it drop too.
                 self.liveQueue.removeAll()
                 self.showError("Editor action failed: \(error.localizedDescription)")

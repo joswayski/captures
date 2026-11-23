@@ -749,6 +749,9 @@ pub struct Editor {
     preview_timer: bool,
     /// The resized layer's outline from the latest preview.
     preview_outline: Option<[Point; 4]>,
+    /// A released move, resize or rotate's outline, kept until the committed
+    /// result replaces it so the selection doesn't snap back meanwhile.
+    held_outline: Option<(String, [Point; 4])>,
     /// Shipping's alignment snap guides from the latest move or grip preview.
     guides: Vec<AlignmentGuide>,
     autosave: DraftAutosave,
@@ -1413,6 +1416,7 @@ impl Editor {
             preview_ready: None,
             preview_timer: false,
             preview_outline: None,
+            held_outline: None,
             guides: Vec::new(),
             autosave: DraftAutosave::default(),
             w: SIZE.0,
@@ -2424,6 +2428,7 @@ impl Editor {
         match outcome {
             Outcome::Presented(mut presented) => {
                 self.busy = false;
+                self.held_outline = None;
                 let first = self.presented.is_none();
                 if self.defaults.is_none() {
                     self.defaults = Some(props::Defaults {
@@ -2598,6 +2603,9 @@ impl Editor {
             Outcome::Imported(..) => unreachable!("mapped to Presented above"),
             Outcome::Failed(error) => {
                 self.busy = false;
+                if self.held_outline.take().is_some() {
+                    self.overlay_changed();
+                }
                 self.select_after = None;
                 self.set_notice(Some((error, true)));
                 if let Some(next) = self.pending.take() {
@@ -2835,8 +2843,22 @@ impl Editor {
 
     fn finish(&mut self) {
         let rotation = self.rotate_request();
+        // The outline on screen at release, a pending move's offset included.
+        let shown = self.selection_outline().map(|outline| {
+            let (dx, dy) = self.move_offset();
+            outline.map(|p| Point {
+                x: p.x + dx,
+                y: p.y + dy,
+            })
+        });
         let Some(gesture) = self.gesture.take() else {
             return;
+        };
+        let transformed = match &gesture {
+            Gesture::Resize { id, .. } | Gesture::Move { id, .. } | Gesture::Rotate { id, .. } => {
+                Some(id.clone())
+            }
+            _ => None,
         };
         self.guides.clear();
         let scale = self.zoom_percent().unwrap_or(100.) / 100.;
@@ -2917,6 +2939,9 @@ impl Editor {
             },
         };
         if let Some(request) = request {
+            self.held_outline = transformed
+                .filter(|id| self.selected.as_ref() == Some(id))
+                .zip(shown);
             self.notice = None;
             self.submit(request);
         }
@@ -4379,6 +4404,12 @@ impl Editor {
             return Some(outline);
         }
         let id = self.selected.as_ref()?;
+        if self.gesture.is_none()
+            && let Some((held, outline)) = &self.held_outline
+            && held == id
+        {
+            return Some(*outline);
+        }
         self.presented.as_ref()?.outlines.get(id).copied()
     }
 
@@ -7667,7 +7698,23 @@ mod tests {
             },
         );
         e.handle(WM_MOUSEMOVE, WPARAM(0), quarter);
+        // The worker's preview of the turned layer, then release.
+        let turned = outline.map(|p| Point {
+            x: centre.x - (p.y - centre.y),
+            y: centre.y + (p.x - centre.x),
+        });
+        e.receive(Outcome::Preview(Ok((
+            None,
+            BTreeMap::from([(id.clone(), turned)]),
+            Vec::new(),
+        ))));
+        assert_eq!(e.selection_outline(), Some(turned));
         e.handle(WM_LBUTTONUP, WPARAM(0), quarter);
+        // Until the commit lands, the released outline stays (without grips)
+        // instead of snapping back to the old angle.
+        assert!(e.gesture.is_none());
+        assert_eq!(e.selection_outline(), Some(turned));
+        assert!(e.rotate_grip().is_none() && e.grips().is_empty());
         let rotations: Vec<f64> = inbox
             .try_iter()
             .filter_map(|job| match job {
@@ -7683,6 +7730,10 @@ mod tests {
             (rotations[0] - std::f64::consts::FRAC_PI_2).abs() < 0.02,
             "{rotations:?}"
         );
+        // A failed commit shows the layer as it still is.
+        e.receive(Outcome::Failed("rotate failed".into()));
+        assert_eq!(e.selection_outline(), Some(outline));
+        assert!(e.rotate_grip().is_some());
         // The locked background shows none.
         let background = e.layer(1).unwrap().id.clone();
         e.set_selected(Some(background));
