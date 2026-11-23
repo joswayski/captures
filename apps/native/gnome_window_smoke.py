@@ -355,7 +355,7 @@ def run(args, output, root, env, bus, spawn, backend, results):
                                            "auto_copy_to_clipboard": False, "screenshot_countdown_seconds": 1,
                                            "region_shortcut": "Ctrl+Shift+F7", "window_shortcut": "Ctrl+Shift+F8",
                                            "display_shortcut": "Ctrl+Shift+F9",
-                                           "show_cursor_in_screenshots": False,
+                                           "recording": {"show_cursor": False},
                                            "output_directory": str(profile / "exports")}))
             with (output / f"native-{appearance}.log").open("w") as log:
                 app = spawn([str(args.binary), "--live", "--open-history", "--open-preferences",

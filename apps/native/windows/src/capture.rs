@@ -3099,7 +3099,7 @@ fn prepare(
     from_menu: bool,
     wake: &std::sync::Arc<dyn Fn() + Send + Sync>,
 ) -> Receiver<Prepared> {
-    let (freeze, include_cursor) = (settings.freeze_screen, settings.show_cursor_in_screenshots);
+    let (freeze, include_cursor) = (settings.freeze_screen, settings.recording.show_cursor);
     let (sender, prepared) = channel();
     let wake = wake.clone();
     std::thread::spawn(move || {
@@ -3409,7 +3409,7 @@ impl Capture {
             let scale = GetDpiForWindow(hwnd).max(96) as f32 / 96.;
             let px = (display.width, display.height);
             let frozen = match session.frozen_preview() {
-                Some(image) => Some(bitmap(&g, &image)?),
+                Some(image) => Some(bitmap(&g, image)?),
                 None => None,
             };
             let target = dcomp.CreateTargetForHwnd(hwnd, true)?;
@@ -3641,7 +3641,7 @@ impl Capture {
     /// Capture `choice` off the UI thread once closed windows have settled.
     fn spawn_capture(&mut self, choice: Choice, session: Box<WindowSession>, after: bool) {
         let (generation, root) = (self.flow.generation(), self.root.clone());
-        let include_cursor = self.settings.show_cursor_in_screenshots;
+        let include_cursor = self.settings.recording.show_cursor;
         let (sender, results) = channel();
         let wake = self.wake.clone();
         std::thread::spawn(move || {

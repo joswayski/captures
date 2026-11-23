@@ -556,8 +556,10 @@ double captures_preview_label_reveal_delay_ms_v1(size_t depth);
 typedef struct CapturesRegionSession CapturesRegionSession;
 CapturesRegionSession *captures_region_prepare_v1(const char *display_id,
     uint64_t generation, bool freeze, bool include_cursor, char **output);
-/* Borrowed straight-alpha RGBA8/sRGB, top-to-bottom, tight rows. Keep the session
- * alive for every image-provider/worker borrow, including asynchronous draws.
+/* Borrowed selector preview: the frozen frame with its cursor when include_cursor
+ * is set (capture crops the untouched frame). Straight-alpha RGBA8/sRGB,
+ * top-to-bottom, tight rows. Keep the session alive for every image-provider/
+ * worker borrow, including asynchronous draws.
  * Never mutate/free data. False (nulls or live-desktop mode) leaves output intact.
  * Non-null output must point to writable, aligned CapturesRegionPixels storage. */
 typedef struct {

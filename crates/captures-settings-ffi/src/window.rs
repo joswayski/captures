@@ -64,7 +64,8 @@ pub unsafe extern "C" fn captures_window_prepare_v1(
     handle
 }
 
-/// Borrow immutable RGBA8 without copying. False leaves output unchanged.
+/// Borrow the immutable selector preview, as captures_region_pixels_v1. False
+/// leaves output unchanged.
 ///
 /// # Safety
 /// Non-null session is a live handle, retained for every draw/worker borrowing
@@ -79,7 +80,7 @@ pub unsafe extern "C" fn captures_window_pixels_v1(
         return false;
     }
     // SAFETY: caller retains the immutable handle until all borrows finish.
-    let Some(image) = (unsafe { &*session }).frozen_image() else {
+    let Some(image) = (unsafe { &*session }).frozen_preview() else {
         return false;
     };
     let pixels = RegionPixels {

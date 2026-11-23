@@ -2689,7 +2689,7 @@ final class MiniPreviewTests: XCTestCase {
 
     private func preferences() throws -> CapturePreferences {
         try CapturePreferences(["auto_copy_to_clipboard": false,
-            "show_cursor_in_screenshots": false, "freeze_screen": true,
+            "recording": ["show_cursor": false], "freeze_screen": true,
             "auto_start_on_selection": false, "show_mini_previews": true,
             "mini_preview_placement": "bottom_right",
             "include_mini_previews_in_captures": false,

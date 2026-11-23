@@ -318,7 +318,7 @@ def main():
                 "display_shortcut": "Ctrl+Shift+F9",
                 "launch_at_login": False,
                 "auto_copy_to_clipboard": False, "auto_start_on_selection": auto_start,
-                "freeze_screen": freeze, "show_cursor_in_screenshots": False,
+                "freeze_screen": freeze, "recording": {"show_cursor": False},
                 "screenshot_countdown_seconds": countdown,
             }))
             background(0)
@@ -637,7 +637,7 @@ def failure_dialog(output, binary, spawn, run, windows, wait, settled, crop_rgb,
             "display_shortcut": "Ctrl+Shift+F9",
             "launch_at_login": False, "auto_copy_to_clipboard": False,
             "auto_start_on_selection": auto_start, "freeze_screen": True,
-            "show_cursor_in_screenshots": False, "screenshot_countdown_seconds": 0,
+            "recording": {"show_cursor": False}, "screenshot_countdown_seconds": 0,
         }))
         background(0)
         app = spawn(prefix, [str(binary), "--live", "--open-history", "--history-root", str(history),
@@ -726,7 +726,7 @@ def recapture(output, binary, spawn, run, windows, wait, settled, crop_rgb, scre
         "display_shortcut": "Ctrl+Shift+F9",
         "launch_at_login": False, "auto_copy_to_clipboard": False,
         "auto_start_on_selection": False, "freeze_screen": False,
-        "show_cursor_in_screenshots": False, "screenshot_countdown_seconds": 2,
+        "recording": {"show_cursor": False}, "screenshot_countdown_seconds": 2,
     }))
     background(0)
     app = spawn(prefix, [str(binary), "--live", "--open-history", "--history-root", str(history),

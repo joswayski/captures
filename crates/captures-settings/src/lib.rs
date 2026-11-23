@@ -69,8 +69,6 @@ pub struct AppSettings {
     pub screenshot_countdown_seconds: u8,
     #[serde(default = "default_true")]
     pub freeze_screen: bool,
-    #[serde(default = "default_true")]
-    pub show_cursor_in_screenshots: bool,
     #[serde(default)]
     pub screenshot_format: ScreenshotFormat,
     #[serde(default = "default_true")]
@@ -199,6 +197,9 @@ pub struct RecordingSettings {
     pub gif_max_colors: u16,
     #[serde(default = "default_countdown_seconds")]
     pub countdown_seconds: u8,
+    /// Shows the cursor in screenshots as well as recordings. It stays under
+    /// `recording` because installed apps already store it here; see
+    /// `fold_legacy_screenshot_cursor` for the former screenshot-only switch.
     #[serde(default = "default_true")]
     pub show_cursor: bool,
     #[serde(default)]
@@ -262,7 +263,6 @@ impl Default for AppSettings {
             onboarding_completed: false,
             screenshot_countdown_seconds: 0,
             freeze_screen: true,
-            show_cursor_in_screenshots: true,
             screenshot_format: ScreenshotFormat::default(),
             show_update_changelog: true,
             recording: RecordingSettings::default(),
@@ -405,6 +405,7 @@ pub fn load(path: &Path) -> Result<AppSettings, SettingsError> {
             supported: CURRENT_SETTINGS_SCHEMA_VERSION,
         });
     }
+    fold_legacy_screenshot_cursor(&mut value);
     let mut settings: AppSettings = serde_json::from_value(value.take())?;
     migrate_legacy_output_directory(&mut settings);
     if migrate_settings(&mut settings) {
@@ -412,13 +413,43 @@ pub fn load(path: &Path) -> Result<AppSettings, SettingsError> {
     }
     Ok(settings)
 }
+/// Screenshots and recordings once had separate cursor switches. One switch
+/// now covers both, so turning either old switch off keeps the cursor out.
+/// Settings written since then lack the old key, which makes this a no-op;
+/// older apps reading them see their screenshot default (on).
+fn fold_legacy_screenshot_cursor(value: &mut serde_json::Value) {
+    let Some(settings) = value.as_object_mut() else {
+        return;
+    };
+    if settings.remove("show_cursor_in_screenshots") != Some(serde_json::Value::Bool(false)) {
+        return;
+    }
+    match settings.get_mut("recording") {
+        Some(serde_json::Value::Object(recording)) => {
+            recording.insert("show_cursor".into(), false.into());
+        }
+        // Serde reports any other malformed value; without one the
+        // defaults apply.
+        Some(_) => {}
+        None => {
+            settings.insert(
+                "recording".into(),
+                serde_json::json!({ "show_cursor": false }),
+            );
+        }
+    }
+}
 /// Shipping desktop compatibility loader: malformed or unreadable files fall
 /// back to defaults, and a failed migration write does not discard the loaded
 /// settings.
 pub fn load_shipping(path: &Path) -> AppSettings {
-    let mut settings = fs::read_to_string(path)
+    let mut settings = fs::read(path)
         .ok()
-        .and_then(|contents| serde_json::from_str(&contents).ok())
+        .and_then(|contents| serde_json::from_slice(&contents).ok())
+        .and_then(|mut value| {
+            fold_legacy_screenshot_cursor(&mut value);
+            serde_json::from_value(value).ok()
+        })
         .unwrap_or_default();
     migrate_legacy_output_directory(&mut settings);
     if migrate_settings(&mut settings)
@@ -690,6 +721,47 @@ mod tests {
             assert_eq!(saved.launch_at_login, enabled);
             assert_eq!(load(&path).unwrap().launch_at_login, enabled);
         }
+    }
+
+    #[test]
+    fn one_cursor_switch_keeps_either_former_switch_off() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        let current = serde_json::to_value(AppSettings::default()).unwrap();
+        assert!(current.get("show_cursor_in_screenshots").is_none());
+        let with = |screenshots: bool, recording: Option<bool>| {
+            let mut legacy = current.clone();
+            legacy["show_cursor_in_screenshots"] = screenshots.into();
+            match recording {
+                Some(on) => legacy["recording"]["show_cursor"] = on.into(),
+                None => {
+                    legacy.as_object_mut().unwrap().remove("recording");
+                }
+            }
+            fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+        };
+        for (screenshots, recording, expected) in [
+            (true, Some(true), true),
+            (false, Some(true), false),
+            (true, Some(false), false),
+            (false, None, false),
+            (true, None, true),
+        ] {
+            with(screenshots, recording);
+            assert_eq!(load(&path).unwrap().recording.show_cursor, expected);
+            assert_eq!(load_shipping(&path).recording.show_cursor, expected);
+        }
+        // Saving drops the former key, so turning the one switch back on sticks.
+        with(false, Some(true));
+        let mut settings = load(&path).unwrap();
+        settings.recording.show_cursor = true;
+        save(&path, &settings).unwrap();
+        assert!(
+            !fs::read_to_string(&path)
+                .unwrap()
+                .contains("show_cursor_in_screenshots")
+        );
+        assert!(load(&path).unwrap().recording.show_cursor);
     }
 
     #[test]

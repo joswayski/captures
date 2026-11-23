@@ -15,7 +15,7 @@ use captures_capture::{
 };
 use image::RgbaImage;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::{path::Path, sync::OnceLock};
 
 pub use captures_capture::macos_window_corner_radius_for_major_version;
 
@@ -77,6 +77,7 @@ pub struct WindowSession {
     frozen: Option<DisplayFrame>,
     cursor: Option<PointerCursor>,
     include_cursor: bool,
+    preview: OnceLock<Option<RgbaImage>>,
     targets: WindowSelectionTargets,
     // Keep non-pickable windows too: exclusion from the picker is not evidence
     // that their pixels cannot occlude another application's window.
@@ -131,6 +132,7 @@ impl WindowSession {
             frozen,
             cursor,
             include_cursor,
+            preview: OnceLock::new(),
             targets,
             stack,
             fallback_corner_radius,
@@ -149,6 +151,7 @@ impl WindowSession {
             frozen: None,
             cursor: None,
             include_cursor: false,
+            preview: OnceLock::new(),
             targets,
             stack: Vec::new(),
             fallback_corner_radius: 0.,
@@ -189,17 +192,18 @@ impl WindowSession {
         self.frozen.as_ref().map(|frame| &frame.image)
     }
 
-    /// Selector pixels, including the frozen Windows cursor when enabled. The
-    /// raw frame remains untouched for capture; only that preview needs a copy.
-    pub fn frozen_preview(&self) -> Option<std::borrow::Cow<'_, RgbaImage>> {
-        self.frozen_image().map(|image| {
-            frozen_capture_preview(
-                image,
-                &self.display,
-                self.cursor.as_ref(),
-                self.include_cursor,
-            )
-        })
+    /// Selector pixels: the frozen frame with its cursor when enabled. The raw
+    /// frame remains untouched for capture; only that preview needs a copy,
+    /// made once and valid until this session is dropped.
+    pub fn frozen_preview(&self) -> Option<&RgbaImage> {
+        let image = self.frozen_image()?;
+        let preview = self.preview.get_or_init(|| {
+            self.cursor
+                .as_ref()
+                .filter(|_| self.include_cursor)
+                .and_then(|cursor| frozen_capture_preview(image, &self.display, cursor))
+        });
+        Some(preview.as_ref().unwrap_or(image))
     }
 
     /// After hiding/settling the selector/countdown. Frozen safe crops preserve
@@ -447,6 +451,7 @@ mod tests {
             frozen: freeze.then(|| frame(11)),
             cursor: Some(cursor((-4, 37))),
             include_cursor: false,
+            preview: OnceLock::new(),
             targets: WindowSelectionTargets {
                 windows: vec![window()],
                 shell_chrome: vec![],
@@ -531,7 +536,7 @@ mod tests {
                         session
                             .frozen_preview()
                             .map(|preview| preview.get_pixel(26, 27).0),
-                        freeze.then_some(if include_cursor && cfg!(target_os = "windows") {
+                        freeze.then_some(if include_cursor {
                             [233, 17, 201, 255]
                         } else {
                             [26, 27, 11, 255]

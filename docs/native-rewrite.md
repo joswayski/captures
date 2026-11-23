@@ -2575,6 +2575,22 @@ unchanged C ABI, and X11/Wayland preview behavior is unchanged.
 | X11 | Existing cursor-free preview retained; region/window pixel regressions pass in the Linux orb; physical acceptance open |
 | Wayland | Portal acquisition unchanged; no direct frozen-selector cursor acquisition or invented X11 fallback |
 
+Every frozen selector now draws the sampled cursor, not only Windows: a frozen
+macOS or X11 screen showed none, so whether a screenshot included the cursor
+looked random. The session draws it once into a preview copy that AppKit borrows
+through the existing pixels C ABI; final crops still composite onto the clean
+frame. The same change folds the screenshot cursor switch into
+`recording.show_cursor`, shown in Preferences as "Show cursor in screenshots and
+recordings"; loading an older profile keeps the cursor off if either former
+switch was off. The capture menu's Show cursor still overrides one recording.
+
+| Platform | Frozen cursor preview, all hosts |
+| --- | --- |
+| AppKit/macOS | Preview connected through the pixels C ABI; Swift tests and physical check not run in the Linux orb |
+| Windows | Unchanged preview path; not built in the Linux orb |
+| X11 | Preview connected; shared region/window pixel regressions pass in the Linux orb; physical acceptance open |
+| Wayland | Unchanged: no frozen-selector cursor sample |
+
 The private Wayland video/recording fixtures now have an isolated PipeWire 1.0.5
 daemon option. Its node/link completion guard excludes parameter-enumeration
 results from pending sync work without dropping parameters or typed errors.

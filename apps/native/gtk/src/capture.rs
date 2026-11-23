@@ -188,7 +188,7 @@ impl Host {
             // when the profile had no other visible windows to hide.
             glib::timeout_future(SETTLE).await;
             let root = owner.history_root.clone();
-            let include_cursor = settings.show_cursor_in_screenshots;
+            let include_cursor = settings.recording.show_cursor;
             let result = gio::spawn_blocking(move || {
                 capture(root, generation, portal, mode, include_cursor)
             })

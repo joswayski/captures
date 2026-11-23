@@ -7,7 +7,7 @@ use captures_capture::{
     screenshot_pointer_scale,
 };
 use image::RgbaImage;
-use std::path::Path;
+use std::{path::Path, sync::OnceLock};
 
 pub struct RegionSession {
     generation: u64,
@@ -15,6 +15,7 @@ pub struct RegionSession {
     frozen: Option<DisplayFrame>,
     cursor: Option<PointerCursor>,
     include_cursor: bool,
+    preview: OnceLock<Option<RgbaImage>>,
 }
 
 impl RegionSession {
@@ -51,6 +52,7 @@ impl RegionSession {
             frozen,
             cursor,
             include_cursor,
+            preview: OnceLock::new(),
         })
     }
 
@@ -64,17 +66,18 @@ impl RegionSession {
         self.frozen.as_ref().map(|f| &f.image)
     }
 
-    /// Selector pixels, including the frozen Windows cursor when enabled. The
-    /// raw frame remains untouched for capture; only that preview needs a copy.
-    pub fn frozen_preview(&self) -> Option<std::borrow::Cow<'_, RgbaImage>> {
-        self.frozen_image().map(|image| {
-            frozen_capture_preview(
-                image,
-                &self.display,
-                self.cursor.as_ref(),
-                self.include_cursor,
-            )
-        })
+    /// Selector pixels: the frozen frame with its cursor when enabled. The raw
+    /// frame remains untouched for capture; only that preview needs a copy,
+    /// made once and valid until this session is dropped.
+    pub fn frozen_preview(&self) -> Option<&RgbaImage> {
+        let image = self.frozen_image()?;
+        let preview = self.preview.get_or_init(|| {
+            self.cursor
+                .as_ref()
+                .filter(|_| self.include_cursor)
+                .and_then(|cursor| frozen_capture_preview(image, &self.display, cursor))
+        });
+        Some(preview.as_ref().unwrap_or(image))
     }
 
     /// Off-main-thread final capture. Like shipping Captures, a nonzero countdown
@@ -245,12 +248,13 @@ mod tests {
                         frozen: freeze.then(frame),
                         cursor: Some(frozen_pointer.clone()),
                         include_cursor,
+                        preview: OnceLock::new(),
                     };
                     assert_eq!(
                         session
                             .frozen_preview()
                             .map(|preview| preview.get_pixel(8, 6).0),
-                        freeze.then_some(if include_cursor && cfg!(target_os = "windows") {
+                        freeze.then_some(if include_cursor {
                             [211, 19, 79, 255]
                         } else {
                             [8, 18, 17, 255]
@@ -300,6 +304,7 @@ mod tests {
             frozen: Some(frame()),
             cursor: None,
             include_cursor: true,
+            preview: OnceLock::new(),
         };
         let pixels = session
             .image(
@@ -346,6 +351,7 @@ mod tests {
             frozen: None,
             cursor: None,
             include_cursor: false,
+            preview: OnceLock::new(),
         };
         let rect = LogicalRect {
             x: 4.,

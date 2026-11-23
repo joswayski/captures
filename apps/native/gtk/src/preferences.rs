@@ -1472,7 +1472,7 @@ fn capture_card(prefs: &Rc<Prefs>, window: &gtk::ApplicationWindow) -> gtk::Box 
     });
 
     setting_switch(prefs, &card, "freeze_screen", "");
-    setting_switch(prefs, &card, "show_cursor_in_screenshots", "");
+    setting_switch(prefs, &card, "recording.show_cursor", "");
     select_row(
         prefs,
         &card,
@@ -1820,7 +1820,6 @@ fn recording_card(prefs: &Rc<Prefs>) -> gtk::Box {
         let path: &'static str = match key {
             "capture_system_audio" => "recording.capture_system_audio",
             "mono_audio" => "recording.mono_audio",
-            "show_cursor" => "recording.show_cursor",
             "highlight_clicks" => "recording.highlight_clicks",
             _ => "recording.open_editor_after_recording",
         };

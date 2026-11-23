@@ -77,8 +77,10 @@ pub unsafe extern "C" fn captures_region_prepare_v1(
     session
 }
 
-/// Borrow frozen straight-alpha RGBA8/sRGB, top-to-bottom rows; no copy/allocation.
-/// False leaves output unchanged for null handles/output or a non-frozen session.
+/// Borrow the frozen selector preview (with its cursor when enabled) as
+/// straight-alpha RGBA8/sRGB, top-to-bottom rows. The session copies the frame
+/// once to draw its cursor; capture still crops the untouched frame. False leaves
+/// output unchanged for null handles/output or a non-frozen session.
 ///
 /// # Safety
 /// Non-null `session` must be a live handle from prepare, not freed concurrently.
@@ -93,7 +95,7 @@ pub unsafe extern "C" fn captures_region_pixels_v1(
         return false;
     }
     // SAFETY: caller retains the immutable handle for the duration of this read.
-    let Some(image) = (unsafe { &*session }).frozen_image() else {
+    let Some(image) = (unsafe { &*session }).frozen_preview() else {
         return false;
     };
     let pixels = RegionPixels {

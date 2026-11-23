@@ -63,7 +63,7 @@ Native apps for macOS (AppKit), Windows (Win32), and Linux (GTK4):
 ## Features
 
 - **Flexible capture:** Regions (with aspect-ratio presets or `Shift` for a square), windows, or full displays. Screenshot or record from the same menu, with optional countdowns and auto-start.
-- **Freeze screen:** Freeze the desktop while choosing a region or window so hover states, tooltips, and menus stay put (toggleable in Preferences), with optional cursor capture preserving the active system cursor shape.
+- **Freeze screen:** Freeze the desktop while choosing a region or window so hover states, tooltips, and menus stay put (toggleable in Preferences). One switch shows the cursor in screenshots and recordings, keeping the active system cursor shape; the frozen screen shows where it will appear.
 - **Screen recording & GIFs:** Record H.264 MP4 with desktop audio and microphone, pause/resume/restart/mute mid-recording, take screenshots while recording, keep the capture region highlighted, and export as MP4 or GIF (WebM export is not supported).
 - **Built-in screenshot editor:** Annotate with bold or regular text labels, arrows, shapes, freehand drawings, drop shadows, rotation, crop, canvas expansion, eraser, clipboard image paste (`Cmd`/`Ctrl`+`V`), and PNG/JPEG/WebP export with live before/after compression previews. Unsaved edits restore if you reopen.
 - **Built-in recording editor:** Trim, crop, resize, adjust audio, estimate output file size, and compare compression quality before saving.

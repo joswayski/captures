@@ -1590,10 +1590,10 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
             emphasis: PreferencesPolicy.dynamicDescription("include_recording_controls_in_captures",
                 include: settings.bool("include_recording_controls_in_captures"), canExclude: true),
             y: y, card: card)
-        for key in ["freeze_screen", "show_cursor_in_screenshots"] {
+        for path in [["freeze_screen"], ["recording", "show_cursor"]] {
             y = divider(y, card)
-            let copy = PreferencesPolicy.row(key)
-            y = switchRow([key], title: copy.title, detail: copy.detail, y: y, card: card)
+            let copy = PreferencesPolicy.row(path.joined(separator: "."))
+            y = switchRow(path, title: copy.title, detail: copy.detail, y: y, card: card)
         }
         y = divider(y, card)
         y = selectRow("screenshot_format", y: y, card: card)

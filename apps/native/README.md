@@ -1117,13 +1117,14 @@ Timers stop and Escape is released after completion/cancellation (the Windows
 low-level capture hook stays installed but disarmed). Interactive permission,
 focus, mixed-DPI, compositor, and screen-reader acceptance still needs real OS tests.
 
-Cursor inclusion follows `show_cursor_in_screenshots`: the shared Rust engine
-samples the pointer after countdown/window hiding and composites it before
-history, copy, and export. This preserves shipping behavior: macOS/Windows system
-pixels and hotspot, a synthetic arrow on X11, and no overlay when the pointer
-is outside the selected display or unavailable. Windows frozen selectors also
-show the original cursor when enabled, without modifying the source used for
-final capture. macOS/X11 frozen previews remain cursor-free. Wayland-only cursor
+Cursor inclusion follows `recording.show_cursor`, the one Preferences switch for
+screenshots and recordings: the shared Rust engine samples the pointer after
+countdown/window hiding and composites it before history, copy, and export. This
+preserves shipping behavior: macOS/Windows system pixels and hotspot, X11 XFixes
+pixels or a synthetic arrow, and no overlay when the pointer is outside the
+selected display or unavailable. Frozen selectors on every host show the cursor
+sampled when the screen froze, so a selection shows whether the capture includes
+it; the source used for final capture stays unmodified. Wayland-only cursor
 acquisition remains unsupported; physical cursor/DPI acceptance remains open.
 
 Both native hosts offer **Capture region** on the selected display.

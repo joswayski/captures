@@ -2963,7 +2963,7 @@ impl Live {
             self.capture_failed("The selected display is no longer available for capture.".into());
             return;
         };
-        let include_cursor = settings.show_cursor_in_screenshots;
+        let include_cursor = settings.recording.show_cursor;
         let job = match kind {
             Recapture::Display => {
                 // The selector stays declared while this frame is taken; the
@@ -3235,7 +3235,7 @@ impl Live {
             .recording
             .open_editor_after_recording
             .then(|| PathBuf::from(&settings.output_directory));
-        self.include_cursor = settings.show_cursor_in_screenshots;
+        self.include_cursor = settings.recording.show_cursor;
         self.new_capture_shortcut = settings.new_capture_shortcut.clone();
         self.recording_screenshot_settings = matches!(
             request,
@@ -3604,7 +3604,7 @@ impl Live {
         self.portal_screenshot = Some(PortalScreenshot {
             flow,
             mode,
-            include_cursor: settings.show_cursor_in_screenshots,
+            include_cursor: settings.recording.show_cursor,
             hidden,
             restore_root: self.root_shown
                 || frame.winit_window().and_then(|window| window.is_visible()) == Some(true),
@@ -5699,7 +5699,7 @@ impl Live {
                             .as_ref()
                             .expect("recording screenshot retains settings");
                         let (freeze, include_cursor) =
-                            (settings.freeze_screen, settings.show_cursor_in_screenshots);
+                            (settings.freeze_screen, settings.recording.show_cursor);
                         self.recording_screenshot_phase = Some(RecordingScreenshotPhase::Preparing);
                         self.pending += 1;
                         let _ = self.tx.send(match kind {
@@ -6951,7 +6951,7 @@ impl Live {
             return Err(error);
         }
         self.auto_copy_on_capture = settings.auto_copy_to_clipboard;
-        self.include_cursor = settings.show_cursor_in_screenshots;
+        self.include_cursor = settings.recording.show_cursor;
         self.status = match shot.kind {
             RecordingSelectorKind::Region => "Preparing region screenshot… Press Escape to cancel.",
             RecordingSelectorKind::Window => "Preparing window screenshot… Press Escape to cancel.",
@@ -7088,7 +7088,7 @@ impl Live {
             display_id,
             target,
             countdown_seconds,
-            include_cursor: settings.show_cursor_in_screenshots,
+            include_cursor: settings.recording.show_cursor,
             keeps_controls: settings.include_recording_controls_in_captures,
         });
         self.recording_screenshot_phase = Some(RecordingScreenshotPhase::DisplayHidingControls);

@@ -90,7 +90,7 @@ impl MenuFrame {
         }
     }
 
-    fn frozen_preview(&self) -> Option<std::borrow::Cow<'_, image::RgbaImage>> {
+    fn frozen_preview(&self) -> Option<&image::RgbaImage> {
         match self {
             MenuFrame::Window(session) => session.frozen_preview(),
             MenuFrame::Region(session) => session.frozen_preview(),
@@ -437,8 +437,7 @@ impl Host {
         }
         let started = Instant::now();
         let host = Rc::downgrade(self);
-        let (freeze, include_cursor) =
-            (settings.freeze_screen, settings.show_cursor_in_screenshots);
+        let (freeze, include_cursor) = (settings.freeze_screen, settings.recording.show_cursor);
         glib::spawn_future_local(async move {
             if !hidden.is_empty() {
                 glib::timeout_future(SETTLE).await;
@@ -577,15 +576,15 @@ fn overlay(
 ) {
     let (texture, display) = match &source {
         Source::Region(session) => (
-            session.frozen_preview().map(|image| texture(&image)),
+            session.frozen_preview().map(texture),
             Some(session.display().clone()),
         ),
         Source::Window(session) => (
-            session.frozen_preview().map(|image| texture(&image)),
+            session.frozen_preview().map(texture),
             Some(session.display().clone()),
         ),
         Source::Menu { region, .. } => (
-            region.frozen_preview().map(|image| texture(&image)),
+            region.frozen_preview().map(texture),
             Some(region.display().clone()),
         ),
         Source::Portal(still) => (Some(texture(still)), None),
@@ -1437,7 +1436,7 @@ impl Overlay {
         let old = self.clone();
         glib::spawn_future_local(async move {
             let portal = old.portal;
-            let include_cursor = old.settings.show_cursor_in_screenshots;
+            let include_cursor = old.settings.recording.show_cursor;
             let result = gio::spawn_blocking(move || {
                 prepare(kind, display, generation, portal, true, include_cursor)
             })
@@ -2131,7 +2130,7 @@ impl Overlay {
             crate::countdown::wait(&host, generation, seconds, display.as_ref()).await;
             glib::timeout_future(SETTLE).await;
             let after_countdown = seconds > 0;
-            let include_cursor = overlay.settings.show_cursor_in_screenshots;
+            let include_cursor = overlay.settings.recording.show_cursor;
             let result = gio::spawn_blocking(move || match (source, choice) {
                 (Source::Region(session), Choice::Region(rect)) => {
                     match session.capture(&root, rect, after_countdown) {
@@ -2174,7 +2173,7 @@ impl Overlay {
                         captures_app::persist_capture_still(
                             &root,
                             generation,
-                            &still,
+                            still,
                             CaptureMode::Display,
                         )
                         .map_err(|error| error.to_string())

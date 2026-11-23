@@ -117,7 +117,7 @@ final class RecordingDisplayScreenshotTests: XCTestCase {
 
     func testRecapturedSelectionsFreezeWithoutCountdown() throws {
         let preferences = try CapturePreferences(["auto_copy_to_clipboard": false,
-            "show_cursor_in_screenshots": true, "output_directory": "/tmp",
+            "recording": ["show_cursor": true], "output_directory": "/tmp",
             "screenshot_format": "png", "freeze_screen": false, "auto_start_on_selection": false,
             "show_mini_previews": true, "mini_preview_placement": "bottom_left",
             "include_mini_previews_in_captures": false, "screenshot_countdown_seconds": 3])

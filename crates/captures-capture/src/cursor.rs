@@ -97,26 +97,30 @@ pub struct PointerCursor {
     pub image: Option<CursorImage>,
 }
 
-/// Windows selectors show the sampled cursor in the frozen desktop, separately
-/// from the live selection pointer. Other platforms retain their cursor-free
-/// preview. Never alter the capture source: final crops composite independently
+/// The frozen desktop with the sampled cursor drawn where the capture will put
+/// it, separately from the live selection pointer, so the selector shows
+/// whether a selection includes it. `None` when the cursor is not on this
+/// display. Never alter the capture source: final crops composite independently
 /// so a cursor outside the crop cannot leave fragments or be blended twice.
-pub fn frozen_capture_preview<'a>(
-    image: &'a RgbaImage,
+pub fn frozen_capture_preview(
+    image: &RgbaImage,
     display: &DisplayDescriptor,
-    cursor: Option<&PointerCursor>,
-    include_cursor: bool,
-) -> std::borrow::Cow<'a, RgbaImage> {
-    if cfg!(target_os = "windows")
-        && include_cursor
-        && let Some(cursor) = cursor
-    {
-        let mut preview = image.clone();
-        overlay_pointer_cursor(&mut preview, display, cursor, 1.0);
-        std::borrow::Cow::Owned(preview)
-    } else {
-        std::borrow::Cow::Borrowed(image)
-    }
+    cursor: &PointerCursor,
+) -> Option<RgbaImage> {
+    let pointer_scale = screenshot_pointer_scale(display.scale_factor);
+    map_pointer_to_buffer(
+        display.x,
+        display.y,
+        display.width,
+        display.height,
+        image.width(),
+        image.height(),
+        cursor.position,
+        pointer_scale,
+    )?;
+    let mut preview = image.clone();
+    overlay_pointer_cursor(&mut preview, display, cursor, pointer_scale);
+    Some(preview)
 }
 
 /// Snapshot before changing the host's cursor or opening a selector so the

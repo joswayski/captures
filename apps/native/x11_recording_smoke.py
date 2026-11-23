@@ -362,10 +362,9 @@ pcm.!pulse {
             "auto_copy_to_clipboard": bool(args.display_screenshot_only),
             "auto_start_on_selection": False,
             "freeze_screen": True,
-            # The window screenshot compares every pixel; keep the pointer out.
-            "show_cursor_in_screenshots": not args.display_screenshot_only,
             "screenshot_countdown_seconds": 2 if args.screenshot_only
                 else 1 if args.display_screenshot_only else 0,
+            # Screenshots compare every pixel; keep the pointer out.
             "recording": {"video_fps": 15, "countdown_seconds": 3, "show_cursor": False,
                           "video_shortcut": "Ctrl+Alt+R", "window_shortcut": "Ctrl+Alt+W",
                           "display_shortcut": "Ctrl+Alt+D",

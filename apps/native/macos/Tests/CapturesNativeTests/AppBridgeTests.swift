@@ -4,7 +4,7 @@ import XCTest
 final class AppBridgeTests: XCTestCase {
     func testCapturePreferencesRespectCopyOffAndExportChoice() throws {
         let off = try CapturePreferences(["auto_copy_to_clipboard": false,
-            "show_cursor_in_screenshots": true, "freeze_screen": false, "auto_start_on_selection": true,
+            "recording": ["show_cursor": true], "freeze_screen": false, "auto_start_on_selection": true,
             "show_mini_previews": false, "mini_preview_placement": "top_left",
             "include_mini_previews_in_captures": true,
             "output_directory": "/exports/custom", "screenshot_format": "webp", "screenshot_countdown_seconds": 0])
@@ -17,7 +17,7 @@ final class AppBridgeTests: XCTestCase {
         XCTAssertEqual(off.miniPreviewSettings,
             MiniPreviewSettings(enabled: false, placement: "top_left", includeInCaptures: true))
         let on = try CapturePreferences(["auto_copy_to_clipboard": true,
-            "show_cursor_in_screenshots": false, "freeze_screen": true, "auto_start_on_selection": false,
+            "recording": ["show_cursor": false], "freeze_screen": true, "auto_start_on_selection": false,
             "show_mini_previews": true, "mini_preview_placement": "bottom_right",
             "include_mini_previews_in_captures": false,
             "output_directory": "/exports/jpeg", "screenshot_format": "jpeg", "screenshot_countdown_seconds": 7])
@@ -29,12 +29,12 @@ final class AppBridgeTests: XCTestCase {
         XCTAssertEqual(on.countdown, 7)
         XCTAssertThrowsError(try CapturePreferences([:]))
         XCTAssertThrowsError(try CapturePreferences(["auto_copy_to_clipboard": false,
-            "show_cursor_in_screenshots": false, "freeze_screen": true, "auto_start_on_selection": false,
+            "recording": ["show_cursor": false], "freeze_screen": true, "auto_start_on_selection": false,
             "show_mini_previews": true, "mini_preview_placement": "bottom_right",
             "include_mini_previews_in_captures": false,
             "output_directory": "/exports", "screenshot_format": "gif", "screenshot_countdown_seconds": 0]))
         XCTAssertThrowsError(try CapturePreferences(["auto_copy_to_clipboard": false,
-            "show_cursor_in_screenshots": false, "freeze_screen": true, "auto_start_on_selection": false,
+            "recording": ["show_cursor": false], "freeze_screen": true, "auto_start_on_selection": false,
             "show_mini_previews": true, "mini_preview_placement": "bottom_right",
             "include_mini_previews_in_captures": false,
             "output_directory": "/exports", "screenshot_format": "png", "screenshot_countdown_seconds": 11]))

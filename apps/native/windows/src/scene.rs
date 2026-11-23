@@ -286,11 +286,10 @@ pub const CARDS: [(usize, &[Item]); 8] = [
             Item::Switch(9),
             Item::Switch(10),
             Item::Switch(11),
-            Item::Switch(12),
         ],
     ),
     (5, &[Item::SelectGrid(GIF_GRID)]),
-    (6, &[Item::Updates, Item::Switch(13)]),
+    (6, &[Item::Updates, Item::Switch(12)]),
     (7, &[Item::Utility(Utility::Feedback)]),
 ];
 /// The Capture card's switches, in shipping order (`Item::Switch(1..=7)`).
@@ -301,7 +300,7 @@ pub const FLAGS: [&str; 7] = [
     "include_mini_previews_in_captures",
     "include_recording_controls_in_captures",
     "freeze_screen",
-    "show_cursor_in_screenshots",
+    "recording.show_cursor",
 ];
 /// `.mini-preview-placement-screen`: 108×72, 1 px border, 7 px padding,
 /// 22 px corners.
@@ -5750,7 +5749,6 @@ fn recording_value(settings: &captures_settings::AppSettings, toggle: usize) -> 
     match RECORDING_TOGGLES[toggle] {
         "capture_system_audio" => recording.capture_system_audio,
         "mono_audio" => recording.mono_audio,
-        "show_cursor" => recording.show_cursor,
         "highlight_clicks" => recording.highlight_clicks,
         "open_editor_after_recording" => recording.open_editor_after_recording,
         key => unreachable!("unknown switch {key}"),
@@ -5762,7 +5760,6 @@ fn set_recording(settings: &mut captures_settings::AppSettings, toggle: usize, o
     match RECORDING_TOGGLES[toggle] {
         "capture_system_audio" => recording.capture_system_audio = on,
         "mono_audio" => recording.mono_audio = on,
-        "show_cursor" => recording.show_cursor = on,
         "highlight_clicks" => recording.highlight_clicks = on,
         "open_editor_after_recording" => recording.open_editor_after_recording = on,
         key => unreachable!("unknown switch {key}"),
@@ -5777,7 +5774,7 @@ fn flag_value(settings: &captures_settings::AppSettings, flag: usize) -> bool {
         "include_mini_previews_in_captures" => settings.include_mini_previews_in_captures,
         "include_recording_controls_in_captures" => settings.include_recording_controls_in_captures,
         "freeze_screen" => settings.freeze_screen,
-        "show_cursor_in_screenshots" => settings.show_cursor_in_screenshots,
+        "recording.show_cursor" => settings.recording.show_cursor,
         key => unreachable!("unknown switch {key}"),
     }
 }
@@ -5792,7 +5789,7 @@ fn set_flag(settings: &mut captures_settings::AppSettings, flag: usize, on: bool
             settings.include_recording_controls_in_captures = on;
         }
         "freeze_screen" => settings.freeze_screen = on,
-        "show_cursor_in_screenshots" => settings.show_cursor_in_screenshots = on,
+        "recording.show_cursor" => settings.recording.show_cursor = on,
         key => unreachable!("unknown switch {key}"),
     }
 }
@@ -5851,7 +5848,7 @@ mod tests {
                 "include_mini_previews_in_captures",
                 "include_recording_controls_in_captures",
                 "freeze_screen",
-                "show_cursor_in_screenshots",
+                "recording.show_cursor",
                 "screenshot_format",
                 "screenshot_countdown_seconds",
             ]

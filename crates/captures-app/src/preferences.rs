@@ -117,7 +117,7 @@ pub struct Row {
 
 /// Static setting rows by persisted key (`recording.` prefixes nested keys).
 /// Rows whose description depends on state have their own functions below.
-pub const ROWS: [Row; 27] = [
+pub const ROWS: [Row; 26] = [
     Row {
         key: "appearance",
         title: "Interface theme",
@@ -169,9 +169,9 @@ pub const ROWS: [Row; 27] = [
         description: "Holds hover states, tooltips, menus, and motion still while you choose a region or window. Turn this off to select from the live desktop.",
     },
     Row {
-        key: "show_cursor_in_screenshots",
-        title: "Show cursor in screenshots",
-        description: "Includes the pointer in still captures. Freeze screen only holds the desktop still; it does not add the cursor by itself.",
+        key: "recording.show_cursor",
+        title: "Show cursor in screenshots and recordings",
+        description: "With Freeze screen on, screenshots keep the cursor where the frozen screen shows it.",
     },
     Row {
         key: "screenshot_format",
@@ -219,11 +219,6 @@ pub const ROWS: [Row; 27] = [
         description: "",
     },
     Row {
-        key: "recording.show_cursor",
-        title: "Show cursor in recordings",
-        description: "",
-    },
-    Row {
         key: "recording.highlight_clicks",
         title: "Show clicks in recordings",
         description: "",
@@ -264,10 +259,9 @@ pub fn row(key: &str) -> Row {
 }
 
 /// Order of the Recording card's toggles after the microphone select.
-pub const RECORDING_TOGGLES: [&str; 5] = [
+pub const RECORDING_TOGGLES: [&str; 4] = [
     "capture_system_audio",
     "mono_audio",
-    "show_cursor",
     "highlight_clicks",
     "open_editor_after_recording",
 ];

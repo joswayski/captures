@@ -2118,10 +2118,10 @@ impl Preferences {
                 )),
                 can_exclude,
             );
-            for key in ["freeze_screen", "show_cursor_in_screenshots"] {
+            for path in [&["freeze_screen"][..], &["recording", "show_cursor"]] {
                 Self::divider(ui, t);
-                let copy = preferences::row(key);
-                this.toggle(ui, t, &[key], copy.title, copy.description, true);
+                let copy = preferences::row(&path.join("."));
+                this.toggle(ui, t, path, copy.title, copy.description, true);
             }
             Self::divider(ui, t);
             this.combo(
@@ -4214,7 +4214,7 @@ mod tests {
         );
         frame(&mut prefs, vec![egui::Event::Text("cursor".into())]);
         assert!(
-            frame(&mut prefs, vec![]).contains(&"1 of 2".into()),
+            frame(&mut prefs, vec![]).contains(&"1 of 1".into()),
             "Reopen selects the whole query for replacement"
         );
         frame(&mut prefs, vec![egui::Event::Text("zz".into())]);

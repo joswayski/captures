@@ -551,7 +551,7 @@ def main():
                 "region_shortcut": "Ctrl+Shift+F7", "window_shortcut": "Ctrl+Shift+F8",
                 "display_shortcut": "Ctrl+Shift+F9", "launch_at_login": False,
                 "auto_copy_to_clipboard": False, "auto_start_on_selection": False,
-                "freeze_screen": True, "show_cursor_in_screenshots": False,
+                "freeze_screen": True, "recording": {"show_cursor": False},
                 "screenshot_countdown_seconds": 1 if args.lifecycle else 0,
                 "show_mini_previews": enabled,
                 "include_mini_previews_in_captures": include, "mini_preview_placement": placement,

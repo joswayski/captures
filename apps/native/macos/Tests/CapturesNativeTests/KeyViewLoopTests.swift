@@ -110,8 +110,9 @@ final class KeyViewLoopTests: XCTestCase {
         controller.showFind()
         XCTAssertEqual(editor.selectedRange(), NSRange(location: 0, length: 11),
                        "Find selects the whole query even while it is already open")
-        editor.insertText("cursor", replacementRange: editor.selectedRange())
-        XCTAssertEqual(reopened.stringValue, "cursor", "Typing replaces the selected query")
+        // Freeze screen's row and the cursor row's detail.
+        editor.insertText("freeze", replacementRange: editor.selectedRange())
+        XCTAssertEqual(reopened.stringValue, "freeze", "Typing replaces the selected query")
         XCTAssertEqual(countLabel(), "1 of 2")
         controller.stepFind(1)
         controller.restyle()
