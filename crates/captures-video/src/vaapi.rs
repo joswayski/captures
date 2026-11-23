@@ -8,8 +8,11 @@ use std::{
     fs,
     io::{Read, Write},
     path::{Path, PathBuf},
-    process::{Child, ChildStdin, Command, Stdio},
-    sync::Mutex,
+    process::{Child, Command, Stdio},
+    sync::{
+        Mutex,
+        mpsc::{self, Receiver, SyncSender},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -18,19 +21,32 @@ use crate::{H264Mp4Error, H264Mp4Info, rgb_to_i420};
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// A frame for the pipe-writer thread: a new I420 frame written `n` times,
+/// or `n` more copies of the last one.
+enum PipeWrite {
+    Frame(Vec<u8>, u64),
+    Repeat(u64),
+}
+
 /// An H.264 MP4 encoded by an FFmpeg child process. Frames are placed on the
 /// constant frame-rate grid by timestamp: a late frame fills the slots it
 /// missed and `finish` holds the last frame until the end timestamp, so the
 /// track lasts as long as the recording, like the software writer's.
+///
+/// A 4K I420 frame is 12.4 MB, and writing it blocks until FFmpeg has read
+/// it, so a writer thread does the writes while the next frame converts.
 pub struct FfmpegH264Writer {
     child: Child,
-    stdin: Option<ChildStdin>,
+    frames_tx: Option<SyncSender<PipeWrite>>,
+    /// Written frames come back here for reuse; at most three exist.
+    recycled: Receiver<Vec<u8>>,
+    writer: Option<thread::JoinHandle<std::io::Result<()>>>,
     stderr: Option<thread::JoinHandle<String>>,
     output_path: PathBuf,
     width: usize,
     frame_rate: u16,
-    /// Contiguous I420 planes for the newest frame.
-    yuv: Vec<u8>,
+    /// Bytes in one contiguous I420 frame.
+    frame_len: usize,
     frames: u64,
 }
 
@@ -47,6 +63,7 @@ impl FfmpegH264Writer {
         let device = vaapi_device(width, height, frame_rate)?;
         Self::create(
             Path::new("ffmpeg"),
+            &vaapi_env(),
             &vaapi_device_args(&device),
             &vaapi_encoder_args(bitrate_bps, frame_rate),
             output_path,
@@ -57,8 +74,10 @@ impl FfmpegH264Writer {
         .ok()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn create(
         ffmpeg: &Path,
+        env: &[(&str, &str)],
         device_args: &[String],
         encoder_args: &[String],
         output_path: &Path,
@@ -76,6 +95,7 @@ impl FfmpegH264Writer {
             fs::create_dir_all(parent)?;
         }
         let mut child = Command::new(ffmpeg)
+            .envs(env.iter().copied())
             .args(["-hide_banner", "-nostdin", "-loglevel", "error"])
             .args(device_args)
             .args(["-f", "rawvideo", "-pix_fmt", "yuv420p"])
@@ -95,7 +115,39 @@ impl FfmpegH264Writer {
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()?;
-        let stdin = child.stdin.take();
+        let mut stdin = child.stdin.take().ok_or(H264Mp4Error::EmptyRecording)?;
+        let (frames_tx, frames_rx) = mpsc::sync_channel::<PipeWrite>(1);
+        let (recycle_tx, recycled) = mpsc::channel();
+        let writer = thread::Builder::new()
+            .name("captures-ffmpeg-pipe".to_owned())
+            .spawn(move || {
+                let mut last: Option<Vec<u8>> = None;
+                for write in frames_rx {
+                    let repeats = match write {
+                        PipeWrite::Frame(frame, repeats) => {
+                            if let Some(old) = last.replace(frame) {
+                                let _ = recycle_tx.send(old);
+                            }
+                            repeats
+                        }
+                        PipeWrite::Repeat(repeats) => repeats,
+                    };
+                    if let Some(frame) = &last {
+                        for _ in 0..repeats {
+                            stdin.write_all(frame)?;
+                        }
+                    }
+                }
+                Ok(())
+            });
+        let writer = match writer {
+            Ok(writer) => writer,
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error.into());
+            }
+        };
         let stderr = child.stderr.take().map(|mut stderr| {
             thread::spawn(move || {
                 let mut text = String::new();
@@ -106,18 +158,20 @@ impl FfmpegH264Writer {
         let pixels = width as usize * height as usize;
         Ok(Self {
             child,
-            stdin,
+            frames_tx: Some(frames_tx),
+            recycled,
+            writer: Some(writer),
             stderr,
             output_path: output_path.to_path_buf(),
             width: width as usize,
             frame_rate,
-            yuv: vec![0; pixels + pixels / 2],
+            frame_len: pixels + pixels / 2,
             frames: 0,
         })
     }
 
     pub fn encode_rgb(&mut self, rgb: &[u8], timestamp_ms: u64) -> Result<bool, H264Mp4Error> {
-        let pixels = self.yuv.len() / 3 * 2;
+        let pixels = self.frame_len / 3 * 2;
         if rgb.len() != pixels * 3 {
             return Err(H264Mp4Error::InvalidFrame);
         }
@@ -125,12 +179,15 @@ impl FfmpegH264Writer {
         if slot < self.frames {
             return Ok(false);
         }
-        let (y, chroma) = self.yuv.split_at_mut(pixels);
+        let mut frame = self
+            .recycled
+            .try_recv()
+            .unwrap_or_else(|_| vec![0; self.frame_len]);
+        let (y, chroma) = frame.split_at_mut(pixels);
         let (u, v) = chroma.split_at_mut(pixels / 4);
         rgb_to_i420(rgb, self.width, y, u, v);
-        for _ in self.frames..=slot {
-            self.write_frame()?;
-        }
+        self.send(PipeWrite::Frame(frame, slot + 1 - self.frames))?;
+        self.frames = slot + 1;
         Ok(true)
     }
 
@@ -139,22 +196,11 @@ impl FfmpegH264Writer {
             return Err(H264Mp4Error::EmptyRecording);
         }
         let end = self.slot(end_timestamp_ms);
-        while self.frames < end {
-            self.write_frame()?;
+        if end > self.frames {
+            self.send(PipeWrite::Repeat(end - self.frames))?;
+            self.frames = end;
         }
-        drop(self.stdin.take());
-        let status = self.child.wait()?;
-        let stderr = self
-            .stderr
-            .take()
-            .and_then(|reader| reader.join().ok())
-            .unwrap_or_default();
-        if !status.success() {
-            return Err(H264Mp4Error::Encoder(format!(
-                "FFmpeg exited with {status}: {}",
-                stderr.trim()
-            )));
-        }
+        self.close()?;
         Ok(H264Mp4Info {
             duration_ms: end_timestamp_ms.max(1),
             encoded_frames: self.frames,
@@ -170,36 +216,70 @@ impl FfmpegH264Writer {
             .unwrap_or(u64::MAX)
     }
 
-    fn write_frame(&mut self) -> Result<(), H264Mp4Error> {
-        let stdin = self.stdin.as_mut().ok_or(H264Mp4Error::EmptyRecording)?;
-        if let Err(error) = stdin.write_all(&self.yuv) {
-            drop(self.stdin.take());
-            let _ = self.child.wait();
-            let stderr = self
-                .stderr
-                .take()
-                .and_then(|reader| reader.join().ok())
-                .unwrap_or_default();
-            return Err(H264Mp4Error::Encoder(format!(
+    fn send(&mut self, write: PipeWrite) -> Result<(), H264Mp4Error> {
+        if self
+            .frames_tx
+            .as_ref()
+            .is_some_and(|frames| frames.send(write).is_ok())
+        {
+            return Ok(());
+        }
+        // The writer stopped: report why.
+        self.close()?;
+        Err(H264Mp4Error::Encoder(
+            "FFmpeg stopped reading frames".into(),
+        ))
+    }
+
+    /// Ends the input, then waits for the writer and FFmpeg.
+    fn close(&mut self) -> Result<(), H264Mp4Error> {
+        drop(self.frames_tx.take());
+        let written = self.writer.take().map(thread::JoinHandle::join);
+        let status = self.child.wait()?;
+        let stderr = self
+            .stderr
+            .take()
+            .and_then(|reader| reader.join().ok())
+            .unwrap_or_default();
+        match written {
+            Some(Ok(Err(error))) => Err(H264Mp4Error::Encoder(format!(
                 "FFmpeg stopped reading frames ({error}): {}",
                 stderr.trim()
-            )));
+            ))),
+            Some(Err(_)) => Err(H264Mp4Error::Encoder("FFmpeg pipe writer panicked".into())),
+            _ if !status.success() => Err(H264Mp4Error::Encoder(format!(
+                "FFmpeg exited with {status}: {}",
+                stderr.trim()
+            ))),
+            _ => Ok(()),
         }
-        self.frames += 1;
-        Ok(())
     }
 }
 
 impl Drop for FfmpegH264Writer {
     fn drop(&mut self) {
-        if self.stdin.is_some() {
-            // Abandoned before `finish`: discard the partial file.
-            drop(self.stdin.take());
+        if let Some(writer) = self.writer.take() {
+            // Abandoned before `finish`: kill FFmpeg first so a blocked
+            // write fails, then discard the partial file.
+            drop(self.frames_tx.take());
             let _ = self.child.kill();
+            let _ = writer.join();
             let _ = self.child.wait();
             let _ = fs::remove_file(&self.output_path);
         }
     }
+}
+
+/// WSL exposes the GPU through Mesa's d3d12 drivers, which VA-API only
+/// initializes when both are named; elsewhere libva picks the driver.
+fn vaapi_env() -> Vec<(&'static str, &'static str)> {
+    if !Path::new("/dev/dxg").exists() {
+        return Vec::new();
+    }
+    [("LIBVA_DRIVER_NAME", "d3d12"), ("GALLIUM_DRIVER", "d3d12")]
+        .into_iter()
+        .filter(|(name, _)| std::env::var_os(name).is_none())
+        .collect()
 }
 
 fn vaapi_device_args(device: &Path) -> Vec<String> {
@@ -255,6 +335,7 @@ fn vaapi_device(width: u32, height: u32, frame_rate: u16) -> Option<PathBuf> {
 
 fn probe_vaapi(device: &Path, width: u32, height: u32, frame_rate: u16) -> bool {
     let Ok(mut child) = Command::new("ffmpeg")
+        .envs(vaapi_env())
         .args(["-hide_banner", "-nostdin", "-loglevel", "error"])
         .args(vaapi_device_args(device))
         .args(["-f", "lavfi", "-i"])
@@ -311,6 +392,7 @@ mod tests {
         let encoder = ["-c:v", "libx264", "-preset", "ultrafast", "-bf", "0"].map(String::from);
         let mut writer = FfmpegH264Writer::create(
             std::path::Path::new("ffmpeg"),
+            &[],
             &[],
             &encoder,
             &path,
