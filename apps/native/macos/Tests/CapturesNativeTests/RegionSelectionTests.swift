@@ -232,9 +232,9 @@ final class RegionSelectionTests: XCTestCase {
             let py = Int(y * CGFloat(bitmap.pixelsHigh) / view.bounds.height)
             return try XCTUnwrap(bitmap.colorAt(x: px, y: py)).alphaComponent
         }
-        XCTAssertEqual(try alpha(50, 300), 0.2, accuracy: 0.03, "the lighter shipping region shade")
+        XCTAssertEqual(try alpha(50, 300), 0.24, accuracy: 0.03, "the Aperture region shade")
         XCTAssertEqual(try alpha(250, 170), 0, accuracy: 0.01, "the selection stays clear")
-        XCTAssertEqual(try alpha(104, 77.5), 0.2, accuracy: 0.03, "no corner handle outside the box")
+        XCTAssertGreaterThan(try alpha(104, 77.5), 0.5, "Aperture viewfinder bracket outside the marquee corner")
         XCTAssertEqual(try alpha(103, 83), 0, accuracy: 0.05, "no corner handle inside the box")
         XCTAssertEqual(try alpha(99.5, 170), 1 - 0.8 * 0.55, accuracy: 0.05, "dark outer hairline over the shade")
         XCTAssertGreaterThan(try alpha(100.75, 170), 0.95, "1.5 pt accent border")
