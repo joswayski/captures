@@ -296,7 +296,12 @@ final class ShortcutEditingTests: XCTestCase {
                     XCTAssertGreaterThanOrEqual(label.frame.width, inkWidth, "full header copy at \(width)")
                 }
                 XCTAssertLessThanOrEqual(history.frame.maxX + tokens.number("s-4"), pill.frame.minX)
-                XCTAssertEqual(pill.frame.maxX, root.bounds.width - tokens.number("s-8"))
+                let scroll = try XCTUnwrap(root.subviews.compactMap { $0 as? NSScrollView }.first)
+                let s8 = tokens.number("s-8")
+                let cardWidth = min(720 - s8 * 2, scroll.contentSize.width - s8 * 2)
+                let cardX = max(s8, floor((scroll.contentSize.width - cardWidth) / 2))
+                let expectedRight = min(root.bounds.width - s8, scroll.frame.minX + cardX + cardWidth)
+                XCTAssertEqual(pill.frame.maxX, expectedRight, accuracy: 0.5)
                 XCTAssertLessThanOrEqual(pill.frame.width, 360)
                 XCTAssertLessThan(status.frame.width, status.intrinsicContentSize.width)
                 XCTAssertEqual(status.lineBreakMode, .byTruncatingTail)
