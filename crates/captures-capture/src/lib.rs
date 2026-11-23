@@ -41,5 +41,7 @@ pub use window::{
     window_is_capturable, window_physical_rect, window_pick_role,
     windows_window_is_capture_overlay,
 };
+#[cfg(target_os = "windows")]
+pub use windows_grab::share_device;
 #[cfg(target_os = "linux")]
 pub use x11::X11OutputGrabber;

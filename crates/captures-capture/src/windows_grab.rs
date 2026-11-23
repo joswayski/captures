@@ -10,14 +10,36 @@
 //! in xcap, but on a Direct3D device made for the grab and released after
 //! it. xcap kept every grab on one device for the life of the process, which
 //! held the last window-sized surface (33-42 MB at 4K) and the device.
+//! While the app has a live device of its own it lends it ([`share_device`]):
+//! a second device took 18-33 ms to create next to it.
+
+use std::sync::{Mutex, PoisonError};
 
 use image::RgbaImage;
+use windows::Win32::Graphics::Direct3D11::ID3D11Device;
 use windows::Win32::Graphics::Gdi::{
     BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CreateCompatibleDC, CreateDIBSection,
     DIB_RGB_COLORS, DeleteDC, DeleteObject, GdiFlush, GetDC, ReleaseDC, SRCCOPY, SelectObject,
 };
 
 use crate::{CaptureError, CaptureResult};
+
+struct Lent(ID3D11Device);
+// SAFETY: a Direct3D 11 device is free-threaded, and the lender turned on
+// its immediate context's multithread protection (see `share_device`).
+unsafe impl Send for Lent {}
+
+static LENT: Mutex<Option<Lent>> = Mutex::new(None);
+
+/// Window grabs use `device` instead of creating their own, until it is
+/// taken back with `None`. The caller must have turned on its immediate
+/// context's multithread protection (`ID3D11Multithread`): a grab copies and
+/// maps on it from a capture worker. A grab leaves the context's pipeline
+/// state alone and closes its capture session and frame pool before
+/// flushing, so the device keeps none of its surfaces.
+pub fn share_device(device: Option<ID3D11Device>) {
+    *LENT.lock().unwrap_or_else(PoisonError::into_inner) = device.map(Lent);
+}
 
 /// The desktop at physical rect `(x, y, width, height)`, without the cursor.
 pub(crate) fn capture_display(x: i32, y: i32, width: u32, height: u32) -> CaptureResult<RgbaImage> {
@@ -146,22 +168,33 @@ fn wgc_window(
     let item: GraphicsCaptureItem = unsafe {
         factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()?.CreateForWindow(hwnd)?
     };
-    let (mut device, mut context) = (None, None);
-    unsafe {
-        D3D11CreateDevice(
-            None,
-            D3D_DRIVER_TYPE_HARDWARE,
-            HMODULE::default(),
-            D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-            None,
-            D3D11_SDK_VERSION,
-            Some(&mut device),
-            None,
-            Some(&mut context),
-        )?;
-    }
-    let (Some(device), Some(context)) = (device, context) else {
-        return Err(Error::empty());
+    let lent = LENT
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .as_ref()
+        .map(|lent| lent.0.clone())
+        .filter(|device| unsafe { device.GetDeviceRemovedReason() }.is_ok());
+    let (device, context) = if let Some(device) = &lent {
+        (device.clone(), unsafe { device.GetImmediateContext()? })
+    } else {
+        let (mut device, mut context) = (None, None);
+        unsafe {
+            D3D11CreateDevice(
+                None,
+                D3D_DRIVER_TYPE_HARDWARE,
+                HMODULE::default(),
+                D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                None,
+                D3D11_SDK_VERSION,
+                Some(&mut device),
+                None,
+                Some(&mut context),
+            )?;
+        }
+        let (Some(device), Some(context)) = (device, context) else {
+            return Err(Error::empty());
+        };
+        (device, context)
     };
     let winrt: IDirect3DDevice =
         unsafe { CreateDirect3D11DeviceFromDXGIDevice(&device.cast::<IDXGIDevice>()?)?.cast()? };
@@ -254,7 +287,10 @@ fn wgc_window(
     let _ = pool.Close();
     let _ = winrt.Close();
     unsafe {
-        context.ClearState();
+        // The lender's renderer keeps its own pipeline state on a lent device.
+        if lent.is_none() {
+            context.ClearState();
+        }
         context.Flush();
     }
     image

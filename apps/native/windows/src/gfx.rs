@@ -451,7 +451,7 @@ pub fn renderer_recovered() {
         let mut s = s.borrow_mut();
         if s.as_ref().is_some_and(Gfx::lost) {
             *s = None;
-            RENDERER_ALIVE.store(false, Ordering::Release);
+            set_alive(None);
         }
     });
 }
@@ -477,6 +477,20 @@ unsafe impl Send for SendDevice {}
 static PREWARM: Mutex<Option<(Receiver<Result<SendDevice>>, Instant)>> = Mutex::new(None);
 /// The UI thread holds a shared renderer, for [`prewarm`] on other threads.
 static RENDERER_ALIVE: AtomicBool = AtomicBool::new(false);
+
+/// The UI thread's shared renderer changed. Window grabs on the capture
+/// worker borrow its device (`captures_capture::share_device`) rather than
+/// create a second one, which took 18-33 ms next to it; they copy and map
+/// on its immediate context, so that context takes Direct3D's lock.
+fn set_alive(g: Option<&Gfx>) {
+    let lent = g.and_then(|g| unsafe {
+        let multithread = g.d3d.cast::<ID3D11Multithread>().ok()?;
+        let _ = multithread.SetMultithreadProtected(true);
+        Some(g.d3d.clone())
+    });
+    captures_capture::share_device(lent);
+    RENDERER_ALIVE.store(g.is_some(), Ordering::Release);
+}
 
 /// A capture or a window is about to need the shared device: start creating
 /// it on a worker so its ~115 ms overlaps the work before the first frame.
@@ -508,13 +522,12 @@ static WARP_PREWARM: Mutex<Option<(Receiver<Result<SendDevice>>, Instant)>> = Mu
 /// its creation is serialized with any other device's (a WARP device made
 /// alongside it waited for it), so create only a WARP device now, in a few
 /// milliseconds, for the overlay to draw on; the overlay starts the hardware
-/// one with [`prewarm`] once it is on screen.
+/// one with [`prewarm`] once it is on screen. A tray row's hardware device,
+/// started when the icon was pressed, is used only once it is ready; until
+/// then the WARP one at worst finishes with it.
 pub fn prewarm_overlay() {
     if RENDERER_ALIVE.load(Ordering::Acquire)
-        || PREWARM
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .is_some()
+        || prewarmed_ready() == Some(true)
         || WARP.with(|w| w.borrow().is_some())
     {
         return;
@@ -532,6 +545,23 @@ pub fn prewarm_overlay() {
     if spawned.is_ok() {
         *pending = Some((receiver, Instant::now()));
     }
+}
+
+/// Whether the device [`prewarm`] is creating is ready; `None` when none is.
+fn prewarmed_ready() -> Option<bool> {
+    let mut pending = PREWARM.lock().unwrap_or_else(PoisonError::into_inner);
+    let (receiver, _) = pending.as_mut()?;
+    Some(match receiver.try_recv() {
+        Err(TryRecvError::Empty) => false,
+        Err(TryRecvError::Disconnected) => true,
+        // Put it back for `take_prewarmed`.
+        Ok(device) => {
+            let (sender, again) = channel();
+            let _ = sender.send(device);
+            *receiver = again;
+            true
+        }
+    })
 }
 
 fn take_prewarmed() -> Option<ID3D11Device> {
@@ -606,7 +636,7 @@ pub fn release_idle() -> u32 {
     if let Some(g) = SHARED.with(|s| s.borrow_mut().take()) {
         g.flush();
     }
-    RENDERER_ALIVE.store(false, Ordering::Release);
+    set_alive(None);
     UNUSED_SINCE.set(None);
     INFINITE
 }
@@ -672,7 +702,7 @@ impl Gfx {
             }
             let g = Self::create(tokens, true, take_prewarmed())?;
             *shared.borrow_mut() = Some(g.clone());
-            RENDERER_ALIVE.store(true, Ordering::Release);
+            set_alive(Some(&g));
             Ok(g)
         })
     }
@@ -688,8 +718,11 @@ impl Gfx {
         let warp = WARP_PREWARM
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .take()
-            .and_then(|(receiver, _)| receiver.recv().ok()?.ok());
+            .take();
+        if prewarmed_ready() == Some(true) {
+            return Self::shared(tokens);
+        }
+        let warp = warp.and_then(|(receiver, _)| receiver.recv().ok()?.ok());
         if let Some(d3d) = warp
             && let Ok(g) = Self::create(tokens, true, Some(d3d.0))
         {
@@ -730,7 +763,7 @@ impl Gfx {
         drop(pending);
         let g = Self::create(tokens, true, device).ok()?;
         SHARED.with(|s| *s.borrow_mut() = Some(g.clone()));
-        RENDERER_ALIVE.store(true, Ordering::Release);
+        set_alive(Some(&g));
         Some(g)
     }
 
