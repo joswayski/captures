@@ -1980,8 +1980,13 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                       let placement = settings["mini_preview_placement"] as? String,
                       let include = settings["include_mini_previews_in_captures"] as? Bool
                 else { return }
-                self?.miniPreviews?.updateSettings(MiniPreviewSettings(enabled: enabled,
-                    placement: placement, includeInCaptures: include))
+                // Every Preferences edit lands here (twice: on change and after
+                // saving). Rebuilding the panel for unrelated settings made
+                // presented mini previews jump, so only rebuild on a real change.
+                let next = MiniPreviewSettings(enabled: enabled, placement: placement,
+                    includeInCaptures: include)
+                guard let previews = self?.miniPreviews, previews.settings != next else { return }
+                previews.updateSettings(next)
             }, settingsPersisted: { [weak self] settings in
                 self?.updateCaptureShortcuts(settings: settings)
                 self?.options.nativeUpdateChecks?.setShowChangelog(settings.bool("show_update_changelog", true))

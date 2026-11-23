@@ -2875,7 +2875,7 @@ final class MiniPreviewController {
     private let screenProvider: () -> [NSScreen]
     private var panel: MiniPreviewPanel?
     private var resources: [String: MiniPreviewResource] = [:]
-    private var settings = MiniPreviewSettings(enabled: false, placement: "bottom_right",
+    private(set) var settings = MiniPreviewSettings(enabled: false, placement: "bottom_right",
                                                includeInCaptures: false)
     private var screenID: String?
     private(set) var stackOrigin: CapturesPreviewOrigin?
