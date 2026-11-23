@@ -20,13 +20,14 @@ use captures_app::tray_notice;
 use captures_app::updater::checks::{CheckStatus, CheckWorker};
 use captures_app::updater::{HealthAcknowledgement, RestartCaptureWindow, RestartIntent};
 use captures_history::HistoryEntry;
-use windows::Win32::Foundation::{HWND, LPARAM, RECT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, EnumThreadWindows, GetClassNameW, HWND_MESSAGE, MB_ICONERROR, MB_OK, MSG,
-    MessageBoxW, PostMessageW, PostQuitMessage, PostThreadMessageW, SW_SHOWNORMAL, SendMessageW,
-    SetForegroundWindow, ShowWindow, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE,
-    WM_SETTINGCHANGE,
+    CreateWindowExW, DestroyWindow, EnumThreadWindows, GetClassNameW, HWND_MESSAGE, MB_ICONERROR,
+    MB_OK, MSG, MessageBoxW, PostMessageW, PostQuitMessage, PostThreadMessageW, RegisterClassW,
+    SW_SHOWNORMAL, SendMessageW, SetForegroundWindow, ShowWindow, WINDOW_EX_STYLE, WINDOW_STYLE,
+    WM_APP, WM_CLOSE, WM_SETTINGCHANGE, WNDCLASSW,
 };
 use windows::core::{BOOL, HSTRING, w};
 
@@ -107,6 +108,8 @@ thread_local! {
     /// the GTK and wgpu hosts. Kept outside `RESIDENT` so Feedback can read
     /// it from any window borrow.
     static CRASH: RefCell<Option<Arc<captures_app::crash::Session>>> = const { RefCell::new(None) };
+    /// The PNG behind this app's clipboard formats while it owns the clipboard.
+    static CLIPBOARD_PNG: RefCell<Option<Vec<u8>>> = const { RefCell::new(None) };
 }
 
 /// The live app's crash diagnostics, for Send Feedback's review card.
@@ -241,9 +244,16 @@ pub fn start(options: &Options, instance: Instance) {
             settings_modified: modified(options),
             thread,
             clipboard: unsafe {
+                let instance = GetModuleHandleW(None).ok().map(Into::into);
+                RegisterClassW(&WNDCLASSW {
+                    lpfnWndProc: Some(clipboard_proc),
+                    hInstance: instance.unwrap_or_default(),
+                    lpszClassName: w!("CapturesClipboard"),
+                    ..Default::default()
+                });
                 CreateWindowExW(
                     WINDOW_EX_STYLE(0),
-                    w!("STATIC"),
+                    w!("CapturesClipboard"),
                     None,
                     WINDOW_STYLE(0),
                     0,
@@ -252,7 +262,7 @@ pub fn start(options: &Options, instance: Instance) {
                     0,
                     Some(HWND_MESSAGE),
                     None,
-                    None,
+                    instance,
                     None,
                 )
             }
@@ -310,6 +320,11 @@ pub fn stop() {
         && let Err(error) = session.clean_exit()
     {
         eprintln!("{error}");
+    }
+    // Destroying the clipboard owner renders its pending formats
+    // (`WM_RENDERALLFORMATS`), so a copied capture still pastes after exit.
+    if let Some(owner) = RESIDENT.with(|r| r.borrow().as_ref().and_then(|r| r.clipboard)) {
+        let _ = unsafe { DestroyWindow(owner) };
     }
     RESIDENT.with(|r| r.borrow_mut().take());
 }
@@ -1090,17 +1105,110 @@ fn captured(options: &Options, artifact: captures_app::Artifact) {
 }
 
 /// Put a PNG on the clipboard as PNG and `CF_DIB`, owned by the resident
-/// app's clipboard window.
+/// app's clipboard window. Both are rendered when an app asks for them
+/// (`WM_RENDERFORMAT`): clipboard data set up front stays allocated in this
+/// process until another app takes the clipboard, which for a 4K capture
+/// was a 32 MB DIB plus the PNG, and decoding the DIB took about 50 ms on
+/// the UI thread before the mini preview showed.
 pub fn copy_png(path: &std::path::Path) -> std::result::Result<(), String> {
+    use windows::Win32::System::DataExchange::{
+        CloseClipboard, EmptyClipboard, IsClipboardFormatAvailable, OpenClipboard,
+        RegisterClipboardFormatW, SetClipboardData,
+    };
     let owner = RESIDENT
         .with(|r| r.borrow().as_ref().and_then(|r| r.clipboard))
         .ok_or("The clipboard is unavailable")?;
     let png = std::fs::read(path).map_err(|e| e.to_string())?;
-    let image = image::load_from_memory(&png)
+    image::ImageReader::new(std::io::Cursor::new(&png))
+        .with_guessed_format()
         .map_err(|e| e.to_string())?
-        .into_rgba8();
-    crate::editor::set_clipboard(owner, &png, &crate::editor::dib(&image))
-        .map_err(|e| e.message().to_string())
+        .into_dimensions()
+        .map_err(|e| e.to_string())?;
+    unsafe {
+        OpenClipboard(Some(owner)).map_err(|e| e.message().to_string())?;
+        let png_format = RegisterClipboardFormatW(w!("PNG"));
+        let result = EmptyClipboard().map(|()| {
+            CLIPBOARD_PNG.with(|p| *p.borrow_mut() = Some(png));
+            // A delayed format returns a NULL handle even when it is
+            // offered, which windows-rs reports as an error, so check that
+            // both formats are on the clipboard instead.
+            let _ = SetClipboardData(png_format, None);
+            let _ = SetClipboardData(CF_DIB, None);
+            IsClipboardFormatAvailable(png_format).is_ok()
+                && IsClipboardFormatAvailable(CF_DIB).is_ok()
+        });
+        let _ = CloseClipboard();
+        match result {
+            Ok(true) => Ok(()),
+            Ok(false) => Err("The clipboard did not take the screenshot".into()),
+            Err(e) => Err(e.message().to_string()),
+        }
+    }
+}
+
+/// `CF_DIB`, which the `windows` crate leaves to `Win32_System_Ole`.
+const CF_DIB: u32 = 8;
+
+/// One delayed format from the PNG `copy_png` offered. The clipboard is
+/// open, by the app asking or by `WM_RENDERALLFORMATS`.
+fn render_clipboard(format: u32) {
+    use windows::Win32::Foundation::{GlobalFree, HANDLE};
+    use windows::Win32::System::DataExchange::{RegisterClipboardFormatW, SetClipboardData};
+    use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
+    let bytes = CLIPBOARD_PNG.with(|p| {
+        let png = p.borrow();
+        let png = png.as_ref()?;
+        if format == CF_DIB {
+            let image = image::load_from_memory(png).ok()?.into_rgba8();
+            Some(crate::editor::dib(&image))
+        } else if format == unsafe { RegisterClipboardFormatW(w!("PNG")) } {
+            Some(png.clone())
+        } else {
+            None
+        }
+    });
+    let Some(bytes) = bytes else {
+        return;
+    };
+    unsafe {
+        let Ok(memory) = GlobalAlloc(GMEM_MOVEABLE, bytes.len()) else {
+            return;
+        };
+        let target = GlobalLock(memory).cast::<u8>();
+        if target.is_null() {
+            let _ = GlobalFree(Some(memory));
+            return;
+        }
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), target, bytes.len());
+        let _ = GlobalUnlock(memory);
+        if SetClipboardData(format, Some(HANDLE(memory.0))).is_err() {
+            let _ = GlobalFree(Some(memory));
+        }
+    }
+}
+
+unsafe extern "system" fn clipboard_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    use windows::Win32::System::DataExchange::{
+        CloseClipboard, GetClipboardOwner, OpenClipboard, RegisterClipboardFormatW,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        DefWindowProcW, WM_DESTROYCLIPBOARD, WM_RENDERALLFORMATS, WM_RENDERFORMAT,
+    };
+    match msg {
+        WM_RENDERFORMAT => render_clipboard(wp.0 as u32),
+        WM_RENDERALLFORMATS => unsafe {
+            if OpenClipboard(Some(hwnd)).is_ok() {
+                if GetClipboardOwner().ok() == Some(hwnd) {
+                    render_clipboard(RegisterClipboardFormatW(w!("PNG")));
+                    render_clipboard(CF_DIB);
+                }
+                let _ = CloseClipboard();
+            }
+        },
+        WM_DESTROYCLIPBOARD => CLIPBOARD_PNG.with(|p| *p.borrow_mut() = None),
+        _ => return unsafe { DefWindowProcW(hwnd, msg, wp, lp) },
+    }
+    LRESULT(0)
 }
 
 /// Capture failures use a system message box until the native error surface
