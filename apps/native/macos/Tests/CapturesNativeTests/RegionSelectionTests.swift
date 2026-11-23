@@ -234,7 +234,9 @@ final class RegionSelectionTests: XCTestCase {
         }
         XCTAssertEqual(try alpha(50, 300), 0.24, accuracy: 0.03, "the Aperture region shade")
         XCTAssertEqual(try alpha(250, 170), 0, accuracy: 0.01, "the selection stays clear")
-        XCTAssertGreaterThan(try alpha(104, 77.5), 0.5, "Aperture viewfinder bracket outside the marquee corner")
+        // The 2 pt bracket strokes y 77.75–79.75; its centre line is a fully
+        // covered pixel at 1x and 2x (77.5 is only a quarter of a 1x pixel).
+        XCTAssertGreaterThan(try alpha(104, 78.75), 0.5, "Aperture viewfinder bracket outside the marquee corner")
         XCTAssertEqual(try alpha(103, 83), 0, accuracy: 0.05, "no corner handle inside the box")
         XCTAssertEqual(try alpha(99.5, 170), 1 - 0.8 * 0.55, accuracy: 0.05, "dark outer hairline over the shade")
         XCTAssertGreaterThan(try alpha(100.75, 170), 0.95, "1.5 pt accent border")
