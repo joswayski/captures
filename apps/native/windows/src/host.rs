@@ -137,7 +137,7 @@ impl Host {
         let g = Gfx::shared(&tokens)?;
         let platform = captures_app::shortcuts::ShortcutPlatform::Windows;
         let detail = match &options.history_root {
-            Some(_) => preferences::LOGIN_ITEM_CHECKING,
+            Some(_) => preferences::LOGIN_ITEM_DETAIL,
             None => preferences::login_item_unavailable(platform),
         };
         let mut scene = Scene::new(tokens, options.settings_file.clone(), detail.into());

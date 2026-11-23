@@ -602,7 +602,6 @@ pub const FEEDBACK_ACTION: &str = "Open";
 
 pub const LOGIN_ITEM_TITLE: &str = "Start Captures on login";
 pub const LOGIN_ITEM_DETAIL: &str = "Start in the background when you sign in to your computer.";
-pub const LOGIN_ITEM_CHECKING: &str = "Checking…";
 pub const LOGIN_ITEM_RETRY: &str = "Retry";
 
 pub fn login_item_error(error: &str) -> String {

@@ -1999,7 +1999,7 @@ fn about_card(prefs: &Rc<Prefs>) -> gtk::Box {
 /// General: Start Captures on login, queried and changed off the UI thread.
 fn login_item_row(prefs: &Rc<Prefs>, history_root: Option<PathBuf>) -> gtk::Box {
     let (detail, available) = match &history_root {
-        Some(_) => (preferences::LOGIN_ITEM_CHECKING, true),
+        Some(_) => (preferences::LOGIN_ITEM_DETAIL, true),
         None => (preferences::login_item_unavailable(PLATFORM), false),
     };
     let tokens = prefs.tokens.borrow().clone();

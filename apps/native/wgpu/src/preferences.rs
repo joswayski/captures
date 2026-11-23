@@ -2762,8 +2762,6 @@ impl Preferences {
                 preferences::login_item_error(error)
             } else if this.login_root.is_none() {
                 preferences::login_item_unavailable(shortcut_platform()).to_owned()
-            } else if this.login_pending {
-                preferences::LOGIN_ITEM_CHECKING.to_owned()
             } else {
                 preferences::LOGIN_ITEM_DETAIL.to_owned()
             };

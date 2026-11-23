@@ -2118,8 +2118,9 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
                 identifier: "login-item") { [weak self] in self?.toggleLoginItem() }
             return finish(card, y)
         }
-        let detail = loginItemPending ? PreferencesPolicy.text("login_item.checking")
-            : PreferencesPolicy.text("login_item.detail")
+        // The OS answers in milliseconds: keep the row's copy and switch steady
+        // while it does, instead of flashing a pending label (layout shift).
+        let detail = PreferencesPolicy.text("login_item.detail")
         let layout = inlineRow(title, detail: detail, control: NSSize(width: 32, height: 19), y: y, card: card,
             switchHint: true)
         let isOn = loginItemEnabled == true
@@ -2127,10 +2128,8 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         if let settled = loginItemEnabled { switchStates["login-item"] = settled }
         let button = PreferenceSwitchButton(frame: layout.row, tokens: tokens, label: title, detail: detail,
             isOn: isOn, previousOn: previousOn) { [weak self] in self?.toggleLoginItem() }
-        button.title = loginItemPending ? PreferencesPolicy.text("login_item.checking")
-            : loginItemEnabled == true ? "On" : "Off"
+        button.title = isOn ? "On" : "Off"
         button.identifier = NSUserInterfaceItemIdentifier("login-item")
-        button.isEnabled = !loginItemPending
         card.addSubview(button)
         return finish(card, layout.row.maxY)
     }

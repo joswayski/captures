@@ -407,7 +407,7 @@ pub fn render(options: &Options, path: &std::path::Path) -> Result<()> {
     } else {
         let platform = captures_app::shortcuts::ShortcutPlatform::Windows;
         let detail = match &options.history_root {
-            Some(_) => captures_app::preferences::LOGIN_ITEM_CHECKING,
+            Some(_) => captures_app::preferences::LOGIN_ITEM_DETAIL,
             None => captures_app::preferences::login_item_unavailable(platform),
         };
         let mut scene = Scene::new(tokens, options.settings_file.clone(), detail.into());

@@ -130,7 +130,6 @@ fn copy(platform: ShortcutPlatform) -> Value {
         "login_item": {
             "title": preferences::LOGIN_ITEM_TITLE,
             "detail": preferences::LOGIN_ITEM_DETAIL,
-            "checking": preferences::LOGIN_ITEM_CHECKING,
             "retry": preferences::LOGIN_ITEM_RETRY,
             "error_template": preferences::login_item_error("{error}"),
             "unavailable": preferences::login_item_unavailable(platform),
