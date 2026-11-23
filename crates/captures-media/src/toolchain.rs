@@ -901,14 +901,17 @@ impl MediaToolchain {
         cancel: &CancelToken,
     ) -> Result<(), MediaToolError> {
         let temporary = temporary_output_path(destination, "gif");
-        let filter = gif_filter(frames_per_second, max_width, max_colors);
-        let mut command = media_command(&self.ffmpeg);
-        command
-            .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
-            .arg(input)
-            .args(["-filter_complex", &filter, "-loop", "0"])
-            .arg(&temporary);
-        let result = run_command(&mut command, cancel, "FFmpeg")
+        let frames = gif_filter(frames_per_second, max_width);
+        let result = self
+            .encode_gif(
+                &|command: &mut Command| {
+                    command.arg("-i").arg(input);
+                },
+                &frames,
+                max_colors,
+                &temporary,
+                cancel,
+            )
             .and_then(|()| commit_temporary(&temporary, destination));
         if result.is_err() {
             let _ = fs::remove_file(temporary);
@@ -2031,22 +2034,73 @@ impl MediaToolchain {
         attempt: &VideoAttempt,
         cancel: &CancelToken,
     ) -> Result<(), MediaToolError> {
+        // The trim limits what is read, so the palette sees only kept frames
+        // and FFmpeg stops decoding at the trim's end.
+        let trimmed = |command: &mut Command| {
+            if edit.trim_start_ms > 0 {
+                command.args(["-ss", &seconds(edit.trim_start_ms)]);
+            }
+            if let Some(trim_end_ms) = edit.trim_end_ms {
+                command.args([
+                    "-t",
+                    &seconds(trim_end_ms.saturating_sub(edit.trim_start_ms)),
+                ]);
+            }
+            command.arg("-i").arg(input);
+        };
+        let frames = gif_export_filter(edit, attempt);
+        self.encode_gif(&trimmed, &frames, attempt.gif_colors, output, cancel)
+    }
+
+    /// A GIF takes two FFmpeg runs. `palettegen` emits its palette only when
+    /// its input ends, so in one graph `paletteuse` queues every scaled frame
+    /// until then (about 850 MB for 30 s at 800 px wide, growing with length).
+    /// Decoding twice keeps memory flat, with the same output bytes.
+    /// Full-frame statistics keep scene colors represented in the global
+    /// palette; diff statistics can spend it on compression noise in large
+    /// frames and omit a later scene color entirely.
+    fn encode_gif(
+        &self,
+        input: &dyn Fn(&mut Command),
+        frames: &str,
+        max_colors: u16,
+        output: &Path,
+        cancel: &CancelToken,
+    ) -> Result<(), MediaToolError> {
+        let palette = temporary_output_path(output, "palette").with_extension("png");
         let mut command = media_command(&self.ffmpeg);
         command.args(["-hide_banner", "-loglevel", "error", "-y"]);
-        if edit.trim_start_ms > 0 {
-            command.args(["-ss", &seconds(edit.trim_start_ms)]);
-        }
-        command.arg("-i").arg(input);
-        if let Some(trim_end_ms) = edit.trim_end_ms {
-            command.args([
-                "-to",
-                &seconds(trim_end_ms.saturating_sub(edit.trim_start_ms)),
-            ]);
-        }
-        let filter = gif_export_filter(edit, attempt);
-        command.args(["-filter_complex", &filter, "-loop", "0"]);
-        command.arg(output);
-        run_command(&mut command, cancel, "FFmpeg")
+        input(&mut command);
+        command
+            .args([
+                "-vf",
+                &format!("{frames},palettegen=max_colors={max_colors}:stats_mode=full"),
+                "-frames:v",
+                "1",
+                "-update",
+                "1",
+            ])
+            .arg(&palette);
+        let result = run_command(&mut command, cancel, "FFmpeg").and_then(|()| {
+            let mut command = media_command(&self.ffmpeg);
+            command.args(["-hide_banner", "-loglevel", "error", "-y"]);
+            input(&mut command);
+            command
+                .arg("-i")
+                .arg(&palette)
+                .args([
+                    "-filter_complex",
+                    &format!(
+                        "[0:v]{frames}[frames];[frames][1:v]paletteuse=dither=sierra2_4a:diff_mode=rectangle"
+                    ),
+                    "-loop",
+                    "0",
+                ])
+                .arg(output);
+            run_command(&mut command, cancel, "FFmpeg")
+        });
+        let _ = fs::remove_file(palette);
+        result
     }
 }
 
@@ -2672,18 +2726,12 @@ fn single_audio_filter(index: usize, volume: f32, mono: bool) -> String {
     )
 }
 
-// Full-frame statistics keep scene colors represented in the global palette.
-// Diff statistics can spend the palette on compression noise in large frames
-// and omit a later scene color entirely.
 fn gif_export_filter(edit: &EditSpec, attempt: &VideoAttempt) -> String {
     let crop = edit.crop.map_or_else(String::new, |crop| {
         format!("crop={}:{}:{}:{},", crop.width, crop.height, crop.x, crop.y)
     });
     let scale = gif_scale_filter(edit, attempt);
-    format!(
-        "{crop}fps={},scale={scale},split[s0][s1];[s0]palettegen=max_colors={}:stats_mode=full[p];[s1][p]paletteuse=dither=sierra2_4a:diff_mode=rectangle",
-        attempt.frames_per_second, attempt.gif_colors
-    )
+    format!("{crop}fps={},scale={scale}", attempt.frames_per_second)
 }
 
 fn gif_scale_filter(edit: &EditSpec, attempt: &VideoAttempt) -> String {
@@ -2697,10 +2745,8 @@ fn gif_scale_filter(edit: &EditSpec, attempt: &VideoAttempt) -> String {
     }
 }
 
-fn gif_filter(frames_per_second: u16, max_width: u32, max_colors: u16) -> String {
-    format!(
-        "fps={frames_per_second},scale='min({max_width},iw)':-2:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors={max_colors}:stats_mode=full[p];[s1][p]paletteuse=dither=sierra2_4a:diff_mode=rectangle"
-    )
+fn gif_filter(frames_per_second: u16, max_width: u32) -> String {
+    format!("fps={frames_per_second},scale='min({max_width},iw)':-2:flags=lanczos")
 }
 
 fn read_capped(mut reader: impl Read, max: usize) -> io::Result<Vec<u8>> {
@@ -3881,8 +3927,10 @@ mod tests {
             escape_concat_path(std::path::Path::new("a'b.mp4")),
             "a'\\''b.mp4"
         );
-        let gif = gif_filter(15, 800, 256);
-        assert!(gif.contains("palettegen=max_colors=256:stats_mode=full"));
+        assert_eq!(
+            gif_filter(15, 800),
+            "fps=15,scale='min(800,iw)':-2:flags=lanczos"
+        );
     }
 
     #[test]
@@ -4044,7 +4092,6 @@ mod tests {
             },
         );
         assert!(filter.starts_with("crop=640:360:10:20,fps=12"));
-        assert!(filter.contains("palettegen=max_colors=128"));
     }
 
     #[test]
