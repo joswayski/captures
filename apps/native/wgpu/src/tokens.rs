@@ -171,7 +171,7 @@ mod tests {
             ] {
                 assert!(!tokens.shadow(shadow).is_empty(), "{shadow}");
             }
-            assert_eq!(tokens.shadow("thumbnail-card-shadow")[0].blur, 14.);
+            assert_eq!(tokens.shadow("thumbnail-card-shadow")[0].blur, 20.);
         }
         for theme in crate::options::THEMES {
             assert_eq!(
