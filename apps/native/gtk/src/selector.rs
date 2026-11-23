@@ -549,12 +549,27 @@ fn prepare(
     }
 }
 
+/// The still in Cairo's native premultiplied BGRA. GSK's Cairo renderer
+/// downloads a texture into that format on every frame it draws, so a
+/// straight RGBA still cost a 33 MB conversion per drag frame at 4K; this
+/// converts once. GTK's own rounding, so pixels are unchanged.
 fn texture(image: &image::RgbaImage) -> gdk::Texture {
+    let mut pixels = image.as_raw().clone();
+    for pixel in pixels.chunks_exact_mut(4) {
+        let alpha = u32::from(pixel[3]);
+        pixel.swap(0, 2);
+        if alpha < 255 {
+            for channel in &mut pixel[..3] {
+                let t = u32::from(*channel) * alpha + 0x80;
+                *channel = (((t >> 8) + t) >> 8) as u8;
+            }
+        }
+    }
     gdk::MemoryTexture::new(
         image.width() as i32,
         image.height() as i32,
-        gdk::MemoryFormat::R8g8b8a8,
-        &glib::Bytes::from(image.as_raw().as_slice()),
+        gdk::MemoryFormat::B8g8r8a8Premultiplied,
+        &glib::Bytes::from_owned(pixels),
         image.width() as usize * 4,
     )
     .upcast()
@@ -1843,7 +1858,20 @@ impl Overlay {
                 {
                     Some(rect) => {
                         let rect = to_widget(rect);
-                        shade_around(snapshot, &surface, &rect, &shade);
+                        match &self.texture {
+                            // Over a frozen still, keep the shade one constant
+                            // node and redraw the still inside the selection:
+                            // a drag then changes only that clip, so GSK
+                            // repaints the old and new selection instead of
+                            // the four full-width strips around it.
+                            Some(texture) => {
+                                snapshot.append_color(&shade, &surface);
+                                snapshot.push_clip(&rect);
+                                snapshot.append_texture(texture, &surface);
+                                snapshot.pop();
+                            }
+                            None => shade_around(snapshot, &surface, &rect, &shade),
+                        }
                         self.marquee(snapshot, &t, &rect, menu);
                     }
                     None => snapshot.append_color(&shade, &surface),
