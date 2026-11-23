@@ -191,8 +191,15 @@ fn ensure_ole() -> Result<()> {
 
 /// The shell's data object for the file, as Explorer offers it.
 fn data_object(path: &Path) -> Result<IDataObject> {
+    // `PreparePreviewDrag` returns `fs::canonicalize`'s verbatim `\\?\` form,
+    // which the shell's parser rejects (a null PIDL); hand it the plain path.
+    let path = path.to_string_lossy();
+    let path = match path.strip_prefix(r"\\?\UNC\") {
+        Some(share) => format!(r"\\{share}"),
+        None => path.strip_prefix(r"\\?\").unwrap_or(&path).to_owned(),
+    };
     unsafe {
-        let pidl = ILCreateFromPathW(&HSTRING::from(path.as_os_str()));
+        let pidl = ILCreateFromPathW(&HSTRING::from(path));
         if pidl.is_null() {
             return Err(Error::new(E_INVALIDARG, "the file can't be dragged"));
         }
@@ -302,7 +309,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("Captures_test.png");
         std::fs::write(&file, b"png").unwrap();
-        let data = data_object(&file).unwrap();
+        // Prepared drags hand over the canonical (verbatim `\\?\`) path.
+        let data = data_object(&std::fs::canonicalize(&file).unwrap()).unwrap();
         let format = FORMATETC {
             cfFormat: CF_HDROP.0,
             ptd: std::ptr::null_mut(),
