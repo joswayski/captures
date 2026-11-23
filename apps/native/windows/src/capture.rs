@@ -3420,7 +3420,7 @@ impl Capture {
     fn show(&mut self, session: WindowSession, displays: Vec<DisplayDescriptor>) -> Result<()> {
         let display = session.display().clone();
         let displays_switched = matches!(self.phase, Phase::Selecting(..));
-        let g = Gfx::shared(&self.tokens)?;
+        let g = Gfx::overlay(&self.tokens)?;
         let dcomp = g.dcomp.clone().ok_or_else(Error::empty)?;
         unsafe {
             let hwnd = popup(&display, w!("CapturesNewCapture"), w!("New Capture"))?;
@@ -3494,6 +3494,12 @@ impl Capture {
             let _ = ShowWindow(hwnd, SW_SHOW);
             let _ = SetForegroundWindow(hwnd);
             let _ = SetFocus(Some(hwnd));
+            // An overlay on a cold capture's WARP device moves to the
+            // hardware one once it is ready.
+            if overlay.g.on_warp() {
+                crate::gfx::prewarm();
+                SetTimer(Some(hwnd), HARDWARE_TIMER, 16, None);
+            }
             // Dropping the previous display's overlay closes it.
             self.phase = Phase::Selecting(Box::new(overlay), Box::new(session));
         }
@@ -3715,6 +3721,10 @@ impl Capture {
         };
         if overlay.hwnd != hwnd {
             return None;
+        }
+        overlay.move_to_hardware(session, &self.tokens);
+        if msg == WM_TIMER && wp.0 == HARDWARE_TIMER {
+            return Some(LRESULT(0));
         }
         let point = |lp: LPARAM, scale: f32| {
             (
@@ -3946,6 +3956,51 @@ pub fn uia_act(key: u32, act: crate::panel_uia::Act) -> Option<()> {
 }
 
 impl Overlay {
+    /// A cold capture's overlay drew its first frames on WARP; move it to
+    /// the hardware device once that is ready. The window's one topmost
+    /// target stays the WARP one until its device commits the release, so
+    /// the hardware frame sits beneath it first and no frame shows neither.
+    fn move_to_hardware(&mut self, session: &WindowSession, t: &Tokens) {
+        if !self.g.on_warp() {
+            return;
+        }
+        let Some(g) = Gfx::hardware_ready(t) else {
+            return;
+        };
+        let parts = (|| -> Result<_> {
+            unsafe {
+                let dcomp = g.dcomp.clone().ok_or_else(Error::empty)?;
+                let frozen = match session.frozen_preview() {
+                    Some(image) => Some(bitmap(&g, image)?),
+                    None => None,
+                };
+                let target = dcomp.CreateTargetForHwnd(self.hwnd, false)?;
+                let visual = dcomp.CreateVisual()?;
+                let surface = g.surface(self.px.0, self.px.1)?;
+                visual.SetContent(&surface)?;
+                target.SetRoot(&visual)?;
+                Ok((dcomp, frozen, target, visual, surface))
+            }
+        })();
+        let Ok((dcomp, frozen, target, visual, surface)) = parts else {
+            return;
+        };
+        let warp = std::mem::replace(&mut self.g, g);
+        self.frozen = frozen;
+        self._target = target;
+        self._visual = visual;
+        self.surface = surface;
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), HARDWARE_TIMER);
+            if self.render(t).is_ok() {
+                let _ = dcomp.WaitForCommitCompletion();
+            }
+            if let Some(warp) = &warp.dcomp {
+                let _ = warp.Commit();
+            }
+        }
+    }
+
     fn render(&mut self, t: &Tokens) -> Result<()> {
         let Self {
             menu,
@@ -3975,6 +4030,8 @@ impl Overlay {
 
 /// The overlay's motion frame timer.
 const FRAME_TIMER: usize = 1;
+/// Polls for the hardware device while the overlay draws on WARP.
+const HARDWARE_TIMER: usize = 2;
 
 extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     use crate::panel_uia::{self, Window};

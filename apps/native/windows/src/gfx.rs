@@ -5,7 +5,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, channel};
+use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -429,6 +429,9 @@ thread_local! {
     static UI_FONTS: RefCell<Option<Option<IDWriteFontCollection>>> = const { RefCell::new(None) };
     /// This thread's composition renderer, created once (see [`Gfx::shared`]).
     static SHARED: RefCell<Option<Gfx>> = const { RefCell::new(None) };
+    /// A cold capture's WARP renderer (see [`Gfx::overlay`]), dropped once
+    /// its overlay lets go of it.
+    static WARP: RefCell<Option<Gfx>> = const { RefCell::new(None) };
     /// [`Gfx::shared`] replaced a lost device that open windows may still
     /// draw with, until [`renderer_recovered`].
     static REPLACED_LOST: Cell<bool> = const { Cell::new(false) };
@@ -457,8 +460,9 @@ pub fn renderer_recovered() {
 /// While any D3D11 device exists, one NVIDIA driver thread wakes ~66 times a
 /// second (15/s without a device, 83/s with a bare one, measured; device
 /// flags, a held DXGI adapter, D3D12 and leaving out composition change
-/// nothing), so an idle tray releases it. Recreating it costs ~115 ms, which
-/// [`prewarm`] overlaps with the capture's ~60 ms screen grab.
+/// nothing), so an idle tray releases it. Recreating it costs ~115 ms, more
+/// than the capture's ~60 ms screen grab, so a capture's first overlay draws
+/// on WARP ([`prewarm_overlay`]) and moves to it once it is ready.
 const IDLE_RELEASE: Duration = Duration::from_secs(60);
 
 /// A D3D11 device is free-threaded (it is never created single-threaded
@@ -488,7 +492,42 @@ pub fn prewarm() {
     let spawned = std::thread::Builder::new()
         .name("captures-gfx-prewarm".into())
         .spawn(move || {
-            let _ = sender.send(unsafe { create_d3d() }.map(SendDevice));
+            let _ = sender.send(unsafe { create_d3d(HARDWARE_FIRST) }.map(SendDevice));
+        });
+    if spawned.is_ok() {
+        *pending = Some((receiver, Instant::now()));
+    }
+}
+
+/// A WARP device a worker is creating for a cold capture's overlay, and when
+/// it started (see [`prewarm_overlay`]).
+static WARP_PREWARM: Mutex<Option<(Receiver<Result<SendDevice>>, Instant)>> = Mutex::new(None);
+
+/// A capture shortcut or tray row: its overlay follows a ~60 ms screen grab.
+/// When an idle tray released the device, a hardware one takes ~110 ms and
+/// its creation is serialized with any other device's (a WARP device made
+/// alongside it waited for it), so create only a WARP device now, in a few
+/// milliseconds, for the overlay to draw on; the overlay starts the hardware
+/// one with [`prewarm`] once it is on screen.
+pub fn prewarm_overlay() {
+    if RENDERER_ALIVE.load(Ordering::Acquire)
+        || PREWARM
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some()
+        || WARP.with(|w| w.borrow().is_some())
+    {
+        return;
+    }
+    let mut pending = WARP_PREWARM.lock().unwrap_or_else(PoisonError::into_inner);
+    if pending.is_some() {
+        return;
+    }
+    let (sender, receiver) = channel();
+    let spawned = std::thread::Builder::new()
+        .name("captures-gfx-prewarm".into())
+        .spawn(move || {
+            let _ = sender.send(unsafe { create_d3d(&[D3D_DRIVER_TYPE_WARP]) }.map(SendDevice));
         });
     if spawned.is_ok() {
         *pending = Some((receiver, Instant::now()));
@@ -511,12 +550,28 @@ pub fn release_idle() -> u32 {
     thread_local! {
         static UNUSED_SINCE: Cell<Option<Instant>> = const { Cell::new(None) };
     }
+    WARP.with(|w| {
+        let mut w = w.borrow_mut();
+        if w.as_ref()
+            .is_some_and(|g| Rc::strong_count(&g.simulated_loss) == 1)
+            && let Some(g) = w.take()
+        {
+            g.flush();
+        }
+    });
     let now = Instant::now();
     let prewarmed = PREWARM
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .as_ref()
-        .map(|(_, started)| *started);
+        .map(|(_, started)| *started)
+        .or_else(|| {
+            WARP_PREWARM
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .as_ref()
+                .map(|(_, started)| *started)
+        });
     let since = SHARED.with(|s| match s.borrow().as_ref() {
         // Windows hold clones; only this cache holding it means unused.
         Some(g) if Rc::strong_count(&g.simulated_loss) > 1 => {
@@ -541,6 +596,10 @@ pub fn release_idle() -> u32 {
         return u32::try_from((IDLE_RELEASE - idle).as_millis()).map_or(INFINITE - 1, |ms| ms + 1);
     }
     PREWARM
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take();
+    WARP_PREWARM
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .take();
@@ -618,6 +677,63 @@ impl Gfx {
         })
     }
 
+    /// The capture selector's renderer: the shared one, or after an idle
+    /// release the WARP device [`prewarm_overlay`] made alongside the grab,
+    /// until [`Gfx::hardware_ready`] has the hardware one.
+    pub fn overlay(tokens: &Tokens) -> Result<Self> {
+        let shared = SHARED.with(|s| s.borrow().as_ref().filter(|g| !g.lost()).cloned());
+        if let Some(g) = shared.or_else(|| WARP.with(|w| w.borrow().clone())) {
+            return Ok(g);
+        }
+        let warp = WARP_PREWARM
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+            .and_then(|(receiver, _)| receiver.recv().ok()?.ok());
+        if let Some(d3d) = warp
+            && let Ok(g) = Self::create(tokens, true, Some(d3d.0))
+        {
+            WARP.with(|w| *w.borrow_mut() = Some(g.clone()));
+            return Ok(g);
+        }
+        Self::shared(tokens)
+    }
+
+    /// This is a cold capture's WARP renderer ([`Gfx::overlay`]).
+    pub fn on_warp(&self) -> bool {
+        WARP.with(|w| {
+            w.borrow()
+                .as_ref()
+                .is_some_and(|w| Rc::ptr_eq(&w.simulated_loss, &self.simulated_loss))
+        })
+    }
+
+    /// The shared hardware renderer for an overlay on WARP to move to, once
+    /// the device [`prewarm`] is creating is ready; `None` until then. WARP
+    /// drew a 4K selection drag on the CPU at ~30 times the hardware cost.
+    pub fn hardware_ready(tokens: &Tokens) -> Option<Self> {
+        if let Some(g) = SHARED.with(|s| s.borrow().as_ref().filter(|g| !g.lost()).cloned()) {
+            return Some(g);
+        }
+        let mut pending = PREWARM.lock().unwrap_or_else(PoisonError::into_inner);
+        let device = match pending.as_ref().map(|(receiver, _)| receiver.try_recv()) {
+            None => {
+                drop(pending);
+                prewarm();
+                return None;
+            }
+            Some(Err(TryRecvError::Empty)) => return None,
+            Some(Err(TryRecvError::Disconnected)) => None,
+            Some(Ok(device)) => device.ok().map(|device| device.0),
+        };
+        pending.take();
+        drop(pending);
+        let g = Self::create(tokens, true, device).ok()?;
+        SHARED.with(|s| *s.borrow_mut() = Some(g.clone()));
+        RENDERER_ALIVE.store(true, Ordering::Release);
+        Some(g)
+    }
+
     /// Free what closed windows left on the device: their composition
     /// objects are released only by the device's next commit, and Direct3D
     /// destroys released resources lazily until a flush. Dropping the last
@@ -654,7 +770,7 @@ impl Gfx {
         unsafe {
             let d3d = match d3d {
                 Some(d3d) => d3d,
-                None => create_d3d()?,
+                None => create_d3d(HARDWARE_FIRST)?,
             };
             let dxgi: IDXGIDevice = d3d.cast()?;
             let factory: ID2D1Factory1 =
@@ -939,10 +1055,12 @@ impl Gfx {
     }
 }
 
-unsafe fn create_d3d() -> Result<ID3D11Device> {
-    // Hardware first; WARP keeps headless CI runners and RDP sessions working.
+/// Hardware first; WARP keeps headless CI runners and RDP sessions working.
+const HARDWARE_FIRST: &[D3D_DRIVER_TYPE] = &[D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP];
+
+unsafe fn create_d3d(drivers: &[D3D_DRIVER_TYPE]) -> Result<ID3D11Device> {
     let mut last = Error::empty();
-    for driver in [D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP] {
+    for &driver in drivers {
         let mut device = None;
         let result = unsafe {
             D3D11CreateDevice(
