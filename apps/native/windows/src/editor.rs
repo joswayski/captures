@@ -4077,12 +4077,12 @@ impl Editor {
             }
             Kind::Header => self.draw_header(dc, (w, h))?,
             Kind::Rail => {
-                gfx::fill(dc, all, c("surface-raised"))?;
+                gfx::fill(dc, all, c("surface-canvas"))?;
                 gfx::fill(dc, rect(w - 1., 0., w, h), c("border-subtle"))?;
             }
             Kind::Well => {
                 let light = t.appearance == "light";
-                gfx::fill(dc, all, c(if light { "n-5" } else { "surface-sunken" }))?;
+                gfx::fill(dc, all, c(if light { "n-5" } else { "n-1" }))?;
             }
             Kind::Page => self.draw_page(dc, (w, h))?,
             Kind::Overlay => self.draw_overlay(dc)?,
@@ -4666,7 +4666,7 @@ impl Editor {
         let r_md = t.n("r-md");
         let lit = layer == Layer::Lit;
         let radius = match target {
-            Target::Tool(_) => t.n("r-lg"),
+            Target::Tool(_) | Target::Undo | Target::Redo | Target::Save => h / 2.,
             Target::Fit | Target::ZoomOut | Target::ZoomIn | Target::Slider => 0.,
             Target::Layer(_) => t.n("r-lg"),
             Target::Eye(_) | Target::Lock(_) | Target::More(_) => t.n("r-sm"),

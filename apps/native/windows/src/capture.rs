@@ -2104,13 +2104,15 @@ impl Menu {
             return Ok(());
         }
         // `.recording-selector-panel`
-        gfx::shadow(dc, layout.panel, 18., t.shadow("glass-shadow"))?;
-        gfx::fill_round(dc, layout.panel, 18., t.color("glass-strong"))?;
-        gfx::border(dc, layout.panel, 18., 1., t.color("glass-border"))?;
+        let panel_r = t.n("r-3xl");
+        gfx::shadow(dc, layout.panel, panel_r, t.shadow("glass-shadow"))?;
+        gfx::fill_round(dc, layout.panel, panel_r, t.color("glass-strong"))?;
+        gfx::border(dc, layout.panel, panel_r, 1., t.color("glass-border"))?;
         let hovered = |hit| self.hover == Some(hit);
         // `.capture-selector-close`
+        let close_r = (layout.close.bottom - layout.close.top) / 2.;
         if hovered(Hit::Close) {
-            gfx::fill_round(dc, layout.close, 8., t.color("glass-hover"))?;
+            gfx::fill_round(dc, layout.close, close_r, t.color("glass-hover"))?;
         }
         let c = &layout.close;
         let close_color = if hovered(Hit::Close) {
@@ -2132,21 +2134,22 @@ impl Menu {
             gfx::fill_round(
                 dc,
                 r,
-                10.,
+                (r.bottom - r.top) / 2.,
                 D2D1_COLOR_F {
                     r: 0.,
                     g: 0.,
                     b: 0.,
-                    a: 0.32,
+                    a: 0.36,
                 },
             )?;
         }
         gfx::fill(dc, layout.divider, t.color("glass-border"))?;
         for s in &layout.segments {
+            let seg_r = (s.rect.bottom - s.rect.top) / 2.;
             if s.active {
-                gfx::shadow(dc, s.rect, 6., t.shadow("shadow-sm"))?;
-                gfx::fill_round(dc, s.rect, 6., t.color("glass-raised"))?;
-                gfx::border(dc, s.rect, 6., 1., t.color("glass-border"))?;
+                gfx::shadow(dc, s.rect, seg_r, t.shadow("shadow-sm"))?;
+                gfx::fill_round(dc, s.rect, seg_r, t.color("glass-raised"))?;
+                gfx::border(dc, s.rect, seg_r, 1., t.color("glass-border"))?;
             }
             let base = if s.active || (s.enabled && hovered(s.hit)) {
                 glass_text
@@ -2322,17 +2325,25 @@ impl Menu {
         let accent = t.color("theme-accent");
         let tight = t.color_alpha("theme-accent", 0.55);
         match hit {
-            Hit::Close => gfx::ring(dc, layout.close, 8., 2., 4., accent),
+            Hit::Close => gfx::ring(
+                dc,
+                layout.close,
+                (layout.close.bottom - layout.close.top) / 2.,
+                2.,
+                4.,
+                accent,
+            ),
             Hit::Primary => match &layout.primary {
-                Some((r, _, true)) => gfx::ring(dc, *r, 10., 2., 4., accent),
+                Some((r, _, true)) => gfx::ring(dc, *r, (r.bottom - r.top) / 2., 2., 4., accent),
                 _ => Ok(()),
             },
             Hit::Screenshot | Hit::Record | Hit::Target(_) => {
                 let Some(s) = layout.segments.iter().find(|s| s.hit == hit && s.enabled) else {
                     return Ok(());
                 };
-                gfx::ring(dc, s.rect, 6., 0., 2., tight)?;
-                gfx::ring(dc, s.rect, 6., 2., 4., accent)
+                let r = (s.rect.bottom - s.rect.top) / 2.;
+                gfx::ring(dc, s.rect, r, 0., 2., tight)?;
+                gfx::ring(dc, s.rect, r, 2., 4., accent)
             }
             Hit::Select(_) | Hit::Toggle(_) => {
                 let Some(f) = layout.fields().find(|f| f.hit == hit && f.enabled) else {
@@ -2340,7 +2351,7 @@ impl Menu {
                 };
                 let c = f.control;
                 if matches!(hit, Hit::Select(_)) {
-                    return gfx::ring(dc, c, 8., 0., 2., tight);
+                    return gfx::ring(dc, c, (c.bottom - c.top) / 2., 0., 2., tight);
                 }
                 let cy = (c.top + c.bottom) / 2.;
                 let switch = rect(c.left, cy - 9., c.left + 30., cy + 9.);
@@ -2382,7 +2393,13 @@ impl Menu {
                 // `.recording-selector-panel .custom-select-trigger`
                 Hit::Select(field) => {
                     let open = self.open.is_some_and(|(o, _)| o == field);
-                    gfx::fill_round(dc, c, 8., shade(0.3 * fade))?;
+                    let sel_r = (c.bottom - c.top) / 2.;
+                    gfx::fill_round(
+                        dc,
+                        c,
+                        sel_r,
+                        shade((if hovered { 0.38 } else { 0.34 }) * fade),
+                    )?;
                     let focused = self.focus_visible && self.focus == Some(f.hit);
                     let edge = if open || focused {
                         accent
@@ -2391,7 +2408,7 @@ impl Menu {
                     } else {
                         t.color("glass-border")
                     };
-                    gfx::border(dc, c, 8., 1., alpha(edge, fade))?;
+                    gfx::border(dc, c, sel_r, 1., alpha(edge, fade))?;
                     let ink = alpha(t.color("glass-text"), fade);
                     gfx::text(dc, &f.value, c.left + 8., cy - f.value.height / 2., ink)?;
                     // The chevron turns over while open.

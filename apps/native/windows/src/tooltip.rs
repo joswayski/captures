@@ -202,7 +202,7 @@ pub fn paint(
         progress,
     );
     let opacity = progress.clamp(0., 1.);
-    let radius = t.n("r-sm");
+    let radius = (frame.bottom - frame.top) / 2.;
     gfx::fill_round(dc, frame, radius, t.color_alpha("glass-strong", opacity))?;
     gfx::border(
         dc,

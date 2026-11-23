@@ -1006,11 +1006,14 @@ struct Toolbar {
 
 impl Toolbar {
     fn new() -> Toolbar {
-        let root = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         root.add_css_class("history-toolbar");
         root.update_property(&[gtk::accessible::Property::Label(
             history_view::copy().filter_group_label,
         )]);
+        let group = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+        group.add_css_class("history-filter-group");
+        group.set_halign(gtk::Align::Start);
         let buttons = Filter::ALL
             .into_iter()
             .map(|filter| {
@@ -1022,10 +1025,11 @@ impl Toolbar {
                 count.add_css_class("count");
                 content.append(&count);
                 button.set_child(Some(&content));
-                root.append(&button);
+                group.append(&button);
                 (button, count)
             })
             .collect();
+        root.append(&group);
         Toolbar { root, buttons }
     }
 }

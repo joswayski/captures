@@ -550,7 +550,7 @@ final class PreferenceSegmentButton: PreferenceHoverButton {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        let radius = tokens.number("r-sm")
+        let radius = bounds.height / 2
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: radius, yRadius: radius)
         if active && paintsActiveFill {
             tokens.color("surface-raised").setFill(); path.fill()
@@ -572,7 +572,7 @@ final class PreferenceSegmentButton: PreferenceHoverButton {
     }
 }
 
-/// One shipping `.theme-option` accent chip: swatch, name and a check.
+/// One shipping `.theme-option` accent chip: circular swatch, name and a check.
 final class ThemeChipButton: PreferenceHoverButton {
     private let tokens: Tokens
     private let chipLabel: String
@@ -590,21 +590,18 @@ final class ThemeChipButton: PreferenceHoverButton {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     override func draw(_ dirtyRect: NSRect) {
-        let radius = tokens.number("r-md")
+        let radius = bounds.height / 2
         let chip = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: radius, yRadius: radius)
         if active {
-            tokens.color("surface-raised").setFill(); chip.fill()
-            drawTactileSurface(in: chip, radius: radius, tokens: tokens,
-                               primary: false, hovered: hovered, pressed: cell?.isHighlighted == true,
-                               isFlipped: isFlipped)
-            tokens.color(hovered ? "border-strong" : "border").setStroke(); chip.lineWidth = 1; chip.stroke()
+            tokens.color("surface-selected").setFill(); chip.fill()
+            tokens.color("theme-accent").withAlphaComponent(0.35).setStroke(); chip.lineWidth = 1; chip.stroke()
         } else if hovered {
             tokens.color("surface-hover").setFill(); chip.fill()
             tokens.color("border-subtle").setStroke(); chip.lineWidth = 1; chip.stroke()
         }
         let gap = tokens.number("s-3")
         let square = NSRect(x: gap, y: (bounds.height - 18) / 2, width: 18, height: 18)
-        let swatchRadius = tokens.number("r-sm")
+        let swatchRadius = square.width / 2
         let shape = NSBezierPath(roundedRect: square, xRadius: swatchRadius, yRadius: swatchRadius)
         NSGraphicsContext.saveGraphicsState()
         shape.addClip()
@@ -978,12 +975,15 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     }
 
     /// Shipping `.preferences-header-actions`: History, then the save status
-    /// at the trailing edge.
+    /// at the trailing edge of the centered 720 pt column.
     private func layoutHeaderActions() {
         let gap = tokens.number("s-4")
+        let columnLeft = scroll.frame.minX + cardX
+        headerTitle.frame.origin.x = columnLeft
+        headerSubtitle.frame.origin.x = columnLeft
         let copyWidth = ceil(max(headerTitle.intrinsicContentSize.width,
             headerSubtitle.intrinsicContentSize.width))
-        var x = root.bounds.width - tokens.number("s-8")
+        var x = min(root.bounds.width - tokens.number("s-8"), columnLeft + cardWidth)
         if !statusPill.isHidden {
             // Bound the whole capsule, reserving History and the header copy.
             let available = x - (historyButton?.frame.width ?? 0) - gap
@@ -997,6 +997,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
             x = statusPill.frame.minX - gap
         }
         if let historyButton {
+            historyButton.cornerRadius = historyButton.frame.height / 2
             historyButton.frame.origin.x = x - historyButton.frame.width
             let width = min(copyWidth, max(0, historyButton.frame.minX
                 - tokens.number("s-6") - headerTitle.frame.minX))
@@ -1103,6 +1104,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     // MARK: Card and row layout
 
     private var cardWidth: CGFloat { min(720 - tokens.number("s-8") * 2, scroll.contentSize.width - tokens.number("s-8") * 2) }
+    private var cardX: CGFloat { max(tokens.number("s-8"), floor((scroll.contentSize.width - cardWidth) / 2)) }
     private var contentWidth: CGFloat { cardWidth - tokens.number("s-6") * 2 }
     private var inset: CGFloat { tokens.number("s-6") }
 
@@ -1111,15 +1113,11 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         let section = PreferencesPolicy.sections.first(where: { $0.id == id })
         let title = section?.title ?? id
         let description = detail ?? section?.detail ?? ""
-        let card = Surface(frame: NSRect(x: tokens.number("s-8"), y: y, width: cardWidth, height: 200))
+        let card = Surface(frame: NSRect(x: cardX, y: y, width: cardWidth, height: 200))
         card.identifier = NSUserInterfaceItemIdentifier("preferences-card.\(id)")
         card.wantsLayer = true; card.layer?.cornerRadius = tokens.number("r-xl")
         card.layer?.backgroundColor = tokens.color("surface-raised").cgColor
         card.layer?.borderWidth = 1; card.layer?.borderColor = tokens.color("border-subtle").cgColor
-        card.layer?.shadowColor = NSColor.black.cgColor
-        card.layer?.shadowOpacity = dark ? 0.32 : 0.08
-        card.layer?.shadowRadius = dark ? 3 : 1.5
-        card.layer?.shadowOffset = NSSize(width: 0, height: dark ? -2 : -1)
         document.addSubview(card); sectionViews[id] = card
         let detailWidth = min(contentWidth, descriptionWidth)
         let detailHeight = textHeight(description, size: tokens.number("text-sm"), width: detailWidth)
@@ -1413,7 +1411,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
             widths = widths.map { _ in max(share, widths.max() ?? share) }
         }
         let track = Surface(frame: layout.control)
-        track.wantsLayer = true; track.layer?.cornerRadius = tokens.number("r-lg")
+        track.wantsLayer = true; track.layer?.cornerRadius = layout.control.height / 2
         track.layer?.backgroundColor = tokens.color("surface-sunken").cgColor
         track.layer?.borderWidth = 1; track.layer?.borderColor = tokens.color("border-subtle").cgColor
         track.setAccessibilityRole(.radioGroup); track.setAccessibilityLabel(appearance.title)
@@ -1421,7 +1419,7 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         let selected = settings.string("appearance", "system")
         let indicator = Surface(frame: .zero)
         indicator.wantsLayer = true
-        indicator.layer?.cornerRadius = tokens.number("r-sm")
+        indicator.layer?.cornerRadius = segmentHeight / 2
         indicator.layer?.backgroundColor = tokens.color("surface-raised").cgColor
         indicator.layer?.borderWidth = 1
         indicator.layer?.borderColor = tokens.color("border-subtle").cgColor

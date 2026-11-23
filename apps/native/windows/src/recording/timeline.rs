@@ -236,7 +236,6 @@ impl Recording {
         let r = self.rects[TIMELINE];
         let t = &self.t;
         let local = gfx::rect(0., 0., r.w, r.h);
-        gfx::shadow(dc, local, t.n("r-xl"), t.shadow("shadow-sm"))?;
         gfx::fill_round(dc, local, t.n("r-xl"), t.color("surface-raised"))?;
         gfx::border(dc, local, t.n("r-xl"), 1., t.color("border-subtle"))?;
         let duration = self.presented.as_ref().map_or(1, |p| p.duration_ms.max(1));

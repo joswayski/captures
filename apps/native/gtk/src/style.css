@@ -99,16 +99,19 @@ window.captures.countdown-window {
 }
 .captures .preferences-header {
   min-height: 38px;
-  padding: var(--s-6) var(--s-8);
+  padding: var(--s-6) 0;
   border-bottom: 1px solid var(--border-subtle);
   background: var(--surface-canvas);
+}
+.captures .preferences-header-inner {
+  padding: 0 var(--s-8);
 }
 .captures button.preferences-history-button {
   all: unset;
   min-height: var(--h-md);
   padding: 0 var(--s-5);
   border: 1px solid var(--control-border);
-  border-radius: var(--r-md);
+  border-radius: var(--r-pill);
   color: var(--text);
   background-color: var(--control);
   background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.04), rgba(0, 0, 0, 0.02));
@@ -210,14 +213,14 @@ window.captures.countdown-window {
 .captures .ui-segmented {
   padding: 3px;
   border: 1px solid var(--border-subtle);
-  border-radius: var(--r-lg);
+  border-radius: var(--r-pill);
   background: var(--surface-sunken);
 }
 .captures .ui-segmented button.segment {
   all: unset;
   min-height: var(--h-sm);
   padding: 0 var(--s-5);
-  border-radius: var(--r-sm);
+  border-radius: var(--r-pill);
   color: var(--text-subtle);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
@@ -241,9 +244,9 @@ window.captures.countdown-window {
 .captures button.theme-option {
   all: unset;
   min-height: 32px;
-  padding: 0 var(--s-3);
+  padding: 0 var(--s-4) 0 var(--s-3);
   border: 1px solid transparent;
-  border-radius: var(--r-md);
+  border-radius: var(--r-pill);
   color: var(--text-muted);
   transition:
     border-color var(--dur-2) var(--ease-standard),
@@ -257,10 +260,9 @@ window.captures.countdown-window {
   box-shadow: var(--focus-ring);
 }
 .captures button.theme-option.active {
-  border-color: var(--border);
+  border-color: alpha(var(--theme-accent), 0.35);
   color: var(--text);
-  background: var(--surface-raised);
-  box-shadow: var(--shadow-xs);
+  background: var(--surface-selected);
 }
 .captures .theme-option-name {
   font-size: var(--text-sm);
@@ -437,10 +439,10 @@ window.captures.countdown-window {
 /* `kbd` (`styles/base.css`). */
 .captures .kbd {
   min-width: 10px;
-  padding: 2px 5px;
+  padding: 2px 6px;
   border: 1px solid var(--border);
   border-bottom-width: 2px;
-  border-radius: var(--r-xs);
+  border-radius: var(--r-sm);
   color: var(--text-muted);
   background: var(--surface-raised);
   font-size: var(--text-2xs);
@@ -614,8 +616,8 @@ window.captures.countdown-window {
   padding-top: var(--s-9);
 }
 .captures .history-title {
-  margin: var(--s-3) 0;
-  font-size: var(--text-3xl);
+  margin: var(--s-2) 0;
+  font-size: var(--text-2xl);
   font-weight: var(--weight-semibold);
   letter-spacing: var(--title-tracking);
 }
@@ -625,9 +627,15 @@ window.captures.countdown-window {
   line-height: var(--lh-snug-md);
 }
 .captures .history-toolbar {
-  margin-top: var(--s-6);
+  margin-top: var(--s-5);
   padding-bottom: var(--s-5);
   border-bottom: 1px solid var(--border-subtle);
+}
+.captures .history-filter-group {
+  padding: 3px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-pill);
+  background: var(--surface-sunken);
 }
 .captures button.history-filter {
   all: unset;
@@ -652,7 +660,7 @@ window.captures.countdown-window {
   background: var(--surface-hover);
 }
 .captures button.history-filter.active {
-  border-color: var(--border);
+  border-color: var(--border-subtle);
   color: var(--text);
   background: var(--surface-raised);
   box-shadow: var(--shadow-xs);
@@ -761,17 +769,16 @@ window.captures.countdown-window {
 .captures .history-image-missing captures-thumbnail {
   opacity: 0.3;
 }
-/* `.history-image-wrap > .history-delete`: a raised chip over the thumbnail
-   (the Thumbnail frosts the image under it). */
+/* `.history-image-wrap > .history-delete`: circular smoked-glass pill over the thumbnail. */
 .captures button.history-delete {
   all: unset;
   min-width: calc(var(--h-md) - 2px);
   min-height: calc(var(--h-md) - 2px);
   margin: var(--s-3);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-md);
-  color: var(--text);
-  background: var(--history-delete-surface);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-pill);
+  color: var(--glass-text);
+  background: var(--glass-strong);
   box-shadow: var(--shadow-sm);
   transition:
     color var(--dur-2) var(--ease-standard),
@@ -779,6 +786,7 @@ window.captures.countdown-window {
     background-color var(--dur-2) var(--ease-standard);
 }
 .captures button.history-delete.confirm {
+  border-color: transparent;
   color: #ffffff;
   background: var(--theme-signal-strong);
 }
@@ -1042,7 +1050,7 @@ popover.layer-menu button.layer-menu-action.danger .layer-menu-icon {
   all: unset;
   min-width: 30px;
   min-height: 30px;
-  border-radius: var(--r-md);
+  border-radius: var(--r-pill);
   color: var(--text-muted);
 }
 .captures button.editor-icon-button:hover {
@@ -1111,7 +1119,7 @@ popover.layer-menu button.layer-menu-action.danger .layer-menu-icon {
   min-width: 28px;
   min-height: 28px;
   border: 1px solid transparent;
-  border-radius: var(--r-md);
+  border-radius: var(--r-pill);
   color: var(--text-muted);
 }
 .captures button.editor-layers-add:hover {
@@ -1142,14 +1150,14 @@ popover.layer-menu button.layer-menu-action.danger .layer-menu-icon {
   min-width: 43px;
   padding: var(--s-4) var(--s-3);
   border-right: 1px solid var(--border-subtle);
-  background: var(--surface-raised);
+  background: var(--surface-canvas);
 }
 .captures button.editor-rail-button {
   all: unset;
   min-width: 36px;
   min-height: 36px;
   border: 1px solid transparent;
-  border-radius: var(--r-lg);
+  border-radius: var(--r-pill);
   color: var(--text-muted);
   transition:
     color var(--dur-2) var(--ease-standard),
@@ -1576,6 +1584,7 @@ popover.captures-menu .choice-description {
 .captures button.ui-btn.editor-save {
   padding: 0 var(--s-6);
   border-color: rgba(0, 0, 0, 0.1);
+  border-radius: var(--r-pill);
   color: var(--solid-ink);
   background-color: var(--solid);
   background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.04), rgba(0, 0, 0, 0.02));
@@ -1600,12 +1609,12 @@ popover.captures-menu .choice-description {
   font-size: var(--text-md);
 }
 .captures .recording-editor-body {
-  padding: var(--s-8) var(--s-8) var(--s-6);
+  padding: var(--s-6) var(--s-8) var(--s-6);
 }
 .captures .recording-editor-title {
-  margin-bottom: var(--s-6);
-  font-size: var(--text-2xl);
-  font-weight: var(--weight-bold);
+  margin-bottom: var(--s-5);
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
   letter-spacing: var(--recording-title-tracking);
 }
 .captures .recording-editor-warning {
@@ -1636,7 +1645,7 @@ popover.captures-menu .choice-description {
   min-height: 26px;
   padding: 0 var(--s-4);
   border: 1px solid transparent;
-  border-radius: var(--r-md);
+  border-radius: var(--r-pill);
   color: var(--text-subtle);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
@@ -1660,14 +1669,14 @@ popover.captures-menu .choice-description {
   min-width: 124px;
   padding: 3px;
   border: 1px solid var(--border-subtle);
-  border-radius: var(--r-lg);
+  border-radius: var(--r-pill);
   background: var(--surface-sunken);
 }
 .captures button.recording-segment {
   all: unset;
   min-height: var(--h-sm);
   padding: 0 var(--s-5);
-  border-radius: var(--r-sm);
+  border-radius: var(--r-pill);
   color: var(--text-subtle);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
@@ -1799,7 +1808,6 @@ popover.captures-menu .choice-description {
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-xl);
   background: var(--surface-raised);
-  box-shadow: var(--shadow-sm);
 }
 .captures .editor-card-title {
   margin-bottom: var(--s-5);
@@ -3640,10 +3648,12 @@ window.captures.capture-surface {
 /* `.recording-selector-panel`: one floating glass command bar. */
 .captures .capture-bar {
   border: 1px solid var(--glass-border);
-  border-radius: var(--r-2xl);
+  border-radius: var(--r-3xl);
   color: var(--glass-text);
   background: var(--glass-strong);
-  box-shadow: var(--glass-shadow);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    var(--glass-shadow);
 }
 /* `.recording-panel-top`. */
 .captures .capture-bar-top {
@@ -3688,7 +3698,7 @@ window.captures.capture-surface {
   all: unset;
   min-width: 32px;
   min-height: 32px;
-  border-radius: var(--r-md);
+  border-radius: var(--r-pill);
   color: var(--glass-text-subtle);
   transition:
     color var(--dur-2) var(--ease-standard),
@@ -3702,14 +3712,14 @@ window.captures.capture-surface {
 .captures .capture-switch {
   padding: 3px;
   border: 1px solid transparent;
-  border-radius: var(--r-lg);
-  background: rgba(0, 0, 0, 0.32);
+  border-radius: var(--r-pill);
+  background: rgba(0, 0, 0, 0.36);
 }
 .captures .capture-switch button.capture-segment {
   all: unset;
   min-height: var(--h-sm);
   padding: 0 var(--s-5);
-  border-radius: var(--r-sm);
+  border-radius: var(--r-pill);
   color: var(--glass-text-muted);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
@@ -3789,12 +3799,13 @@ window.captures.capture-surface {
 .captures .capture-bar button.select-trigger {
   min-height: 34px;
   border-color: var(--glass-border);
+  border-radius: var(--r-pill);
   color: var(--glass-text);
-  background: rgba(0, 0, 0, 0.3);
+  background: rgba(0, 0, 0, 0.34);
 }
 .captures .capture-bar button.select-trigger:hover {
   border-color: var(--glass-border-strong);
-  background: rgba(0, 0, 0, 0.3);
+  background: rgba(0, 0, 0, 0.38);
 }
 /* `.custom-select-listbox` (`ui-pop-in`). A popover is its own surface,
    so it fades as a whole while its list rises and settles. */
@@ -3954,8 +3965,9 @@ window.captures.recording-controls-window {
   margin: 6px;
   padding: var(--s-3) var(--s-4) var(--s-4);
   border: 1px solid var(--glass-border);
-  border-radius: var(--r-2xl);
+  border-radius: var(--r-3xl);
   background: var(--glass-strong);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
 }
 .captures .recording-hud-privacy,
 .captures .recording-hud-status {
@@ -4001,9 +4013,9 @@ window.captures.recording-controls-window {
   animation: recording-hud-pulse 1.6s ease-in-out infinite;
 }
 .captures .recording-hud-tooltip {
-  padding: 5px 8px;
+  padding: 5px 10px;
   border: 1px solid var(--glass-border);
-  border-radius: var(--r-sm);
+  border-radius: var(--r-pill);
   color: var(--glass-text);
   background: var(--glass-strong);
   font-size: var(--text-xs);
@@ -4026,7 +4038,7 @@ window.captures.recording-controls-window {
   min-height: 32px;
   padding: 0;
   border: 1px solid transparent;
-  border-radius: var(--r-md);
+  border-radius: var(--r-pill);
   color: var(--glass-text-muted);
   transition:
     color var(--dur-2),
@@ -4049,22 +4061,25 @@ window.captures.recording-controls-window {
 }
 .captures .recording-hud-actions button.recording-stop {
   min-width: 34px;
-  border-color: alpha(var(--theme-signal), 0.4);
-  background: alpha(var(--theme-signal), 0.14);
+  border-color: rgba(0, 0, 0, 0.14);
+  background: var(--theme-signal);
 }
 .captures .recording-stop-square {
   min-width: 11px;
   min-height: 11px;
   border-radius: 2px;
-  background: var(--theme-signal);
+  background: var(--theme-signal-ink);
 }
-.captures .recording-hud-actions button.recording-stop:hover,
+.captures .recording-hud-actions button.recording-stop:hover {
+  background: var(--theme-signal-strong);
+  color: var(--theme-signal-ink);
+}
 .captures .recording-hud-actions button.recording-discard:hover {
   background: var(--theme-signal);
   color: var(--glass-text);
 }
 .captures .recording-stop:hover .recording-stop-square {
-  background: var(--glass-text);
+  background: var(--theme-signal-ink);
 }
 .captures .recording-hud-error {
   margin: 0 10px 4px;

@@ -166,7 +166,7 @@ fn segmented_indicator(buttons: &[&gtk::ToggleButton], tokens: &Rc<Tokens>) -> S
         draw_slide.shown.set(Some(rect));
         let [x, y, width, height] = rect;
         let bounds = graphene::Rect::new(x, y, width, height);
-        let thumb = gsk::RoundedRect::from_rect(bounds, tokens.number("r-sm"));
+        let thumb = gsk::RoundedRect::from_rect(bounds, height / 2.);
         for (dx, dy, blur, spread, color) in tokens.shadow("shadow-sm") {
             snapshot.append_outset_shadow(&thumb, &color, dx, dy, spread, blur);
         }

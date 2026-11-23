@@ -2277,8 +2277,9 @@ impl State {
 
     fn draw_preview(&self, snapshot: &gtk::Snapshot, width: f32, height: f32) {
         let t = self.tokens.get();
+        let light = t.rgba("text").red() < 0.5;
         snapshot.append_color(
-            &t.rgba("surface-sunken"),
+            &t.rgba(if light { "surface-sunken" } else { "n-1" }),
             &graphene::Rect::new(0., 0., width, height),
         );
         let crop_view = self.crop_view();

@@ -738,10 +738,10 @@ impl History {
         self.back = self.layered(content, Ctl::Back, 0.);
         self.cancel = self.layered(content, Ctl::Cancel, 0.);
         self.delete_all = self.layered(content, Ctl::DeleteAll, 0.);
+        self.rule = self.add(Some(content), Kind::Rule, 0.);
         self.filters = (0..FILTERS.len())
             .map(|i| self.layered(content, Ctl::Filter(i), 2.))
             .collect();
-        self.rule = self.add(Some(content), Kind::Rule, 0.);
         self.error_node = self.add(Some(content), Kind::Error, 0.);
         // Room for `--shadow-sm` and the buttons' focus rings.
         self.recovery_node = self.add(Some(content), Kind::Recovery, 8.);
@@ -1715,9 +1715,10 @@ impl History {
         self.texts.cancel = Some(cancel);
         self.texts.delete_all = Some(delete_label);
 
-        // `.history-toolbar`: pills with counts, then a 12 px pad and rule.
+        // `.history-toolbar`: pills with counts in a unified segmented track, then pad and rule.
         let mut filters = Vec::new();
-        let mut x = shell_x;
+        let track_pad = 3.;
+        let mut x = shell_x + track_pad;
         if actions {
             y += s6;
         }
@@ -1725,12 +1726,12 @@ impl History {
             let label = g.text(&t, Style::Button, filter.label(), 1e4)?;
             let count = g.text(&t, Style::Button, &self.count(*filter).to_string(), 1e4)?;
             let w = 2. + 2. * n("s-4") + label.width + s3 + count.width;
-            self.l.filters[i] = Rect::new(x, y, w, n("h-sm"));
-            x += w + n("s-2");
+            self.l.filters[i] = Rect::new(x, y + track_pad, w, n("h-sm"));
+            x += w + if i + 1 < FILTERS.len() { 2. } else { 0. };
             filters.push((label, count));
         }
         self.texts.filters = filters;
-        self.l.toolbar = Rect::new(shell_x, y, shell_w, n("h-sm") + s5 + 1.);
+        self.l.toolbar = Rect::new(shell_x, y, shell_w, n("h-sm") + 2. * track_pad + s5 + 1.);
         if actions {
             y += self.l.toolbar.h;
         }
@@ -2680,7 +2681,16 @@ impl History {
                     gfx::text(dc, lede, 0., self.l.title_h + s3, c("text-subtle"))?;
                 }
             }
-            Kind::Rule => gfx::fill(dc, all, c("border-subtle"))?,
+            Kind::Rule => {
+                if let Some(last) = self.l.filters.last() {
+                    let track_w = (last.x + last.w - self.l.toolbar.x + 3.).max(0.);
+                    let track_h = t.n("h-sm") + 6.;
+                    let track = rect(0., 0., track_w, track_h);
+                    gfx::fill_round(dc, track, track_h / 2., c("surface-sunken"))?;
+                    gfx::border(dc, track, track_h / 2., 1., c("border-subtle"))?;
+                }
+                gfx::fill(dc, rect(0., h - 1., w, h), c("border-subtle"))?;
+            }
             Kind::Error => {
                 gfx::fill_round(dc, all, r_md, c("danger-surface"))?;
                 if let Some(text) = &self.texts.error {
@@ -2931,21 +2941,19 @@ impl History {
                 let Some(item) = self.slots[slot].serial.and_then(|s| self.item(s)) else {
                     return Ok(());
                 };
+                let pill = h / 2.;
                 let ink = if lit {
-                    gfx::fill_round(dc, all, r_md, c("theme-signal"))?;
+                    gfx::fill_round(dc, all, pill, c("theme-signal"))?;
                     white
                 } else {
-                    gfx::shadow(dc, all, r_md, t.shadow("shadow-sm"))?;
+                    gfx::shadow(dc, all, pill, t.shadow("shadow-sm"))?;
                     if item.confirm.is_some() {
-                        gfx::fill_round(dc, all, r_md, c("theme-signal-strong"))?;
-                    } else {
-                        gfx::fill_round(dc, all, r_md, t.color_alpha("surface-raised", 0.88))?;
-                    }
-                    gfx::border(dc, all, r_md, 1., c("border-subtle"))?;
-                    if item.confirm.is_some() {
+                        gfx::fill_round(dc, all, pill, c("theme-signal-strong"))?;
                         white
                     } else {
-                        c("text")
+                        gfx::fill_round(dc, all, pill, c("glass-strong"))?;
+                        gfx::border(dc, all, pill, 1., c("glass-border"))?;
+                        c("glass-text")
                     }
                 };
                 let inset = (w - DELETE_ICON) / 2.;
@@ -3045,7 +3053,6 @@ impl History {
         let all = rect(0., 0., w, h);
         let radius = t.n("r-xl");
         let (s3, s5) = (t.n("s-3"), t.n("s-5"));
-        gfx::shadow(dc, all, radius, t.shadow("shadow-sm"))?;
         gfx::fill_round(dc, all, radius, c("surface-raised"))?;
         gfx::border(dc, all, radius, 1., c("border-subtle"))?;
         let x = 1. + s5;
@@ -3283,11 +3290,7 @@ impl History {
             (self.back.base, l.back, true),
             (self.cancel.base, l.cancel, confirming),
             (self.delete_all.base, l.delete_all, actions),
-            (
-                self.rule,
-                Rect::new(l.toolbar.x, l.toolbar.y + l.toolbar.h - 1., l.toolbar.w, 1.),
-                actions,
-            ),
+            (self.rule, l.toolbar, actions),
             (self.error_node, l.error, self.error.is_some()),
             (self.empty, l.empty, self.texts.empty.is_some()),
             (

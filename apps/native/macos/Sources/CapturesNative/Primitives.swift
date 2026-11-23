@@ -499,7 +499,7 @@ final class ClosurePopUpButton: NSPopUpButton {
 
     override func draw(_ dirtyRect: NSRect) {
         guard let tokens else { return }
-        let radius = tokens.number("r-md")
+        let radius = selectStyle == .glass ? bounds.height / 2 : tokens.number("r-md")
         let alpha: CGFloat = isEnabled ? 1 : 0.5
         let focused = window?.firstResponder === self || isListboxOpen
         let hovered = isEnabled && pointerInside
@@ -510,7 +510,7 @@ final class ClosurePopUpButton: NSPopUpButton {
             border = tokens.color(focused ? "theme-accent" : hovered ? "border-strong" : "control-border")
             ink = tokens.color("text"); glyph = tokens.color("text-subtle")
         case .glass:
-            fill = NSColor.black.withAlphaComponent(0.3)
+            fill = NSColor.black.withAlphaComponent(hovered ? 0.38 : 0.34)
             border = tokens.color(focused ? "theme-accent" : hovered ? "glass-border-strong" : "glass-border")
             ink = tokens.color("glass-text"); glyph = tokens.color("glass-text-subtle")
         case .inline:

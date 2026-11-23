@@ -323,18 +323,18 @@ final class HistoryButton: NSButton {
             text = tokens.color("theme-signal-ink")
         case (.ghost, false): fill = nil; border = nil; text = tokens.color("text-muted")
         case (.ghost, true): fill = tokens.color("surface-hover"); border = tokens.color("border-subtle"); text = tokens.color("text")
-        // Shipping's `.history-image-wrap > .history-delete`: a raised chip that
-        // reads over any thumbnail, signal red on hover.
+        // Aperture `.history-image-wrap > .history-delete`: circular smoked-glass pill
+        // over any thumbnail, shifting to signal red on hover.
         case (.overlay, false):
-            fill = tokens.color("surface-raised").withAlphaComponent(0.88)
-            border = tokens.color("border-subtle"); text = tokens.color("text")
+            fill = tokens.color("glass-strong")
+            border = tokens.color("glass-border"); text = tokens.color("glass-text")
         case (.overlay, true):
             fill = tokens.color("theme-signal")
             border = NSColor.black.withAlphaComponent(0.14)
             text = .white
         }
         let alpha: CGFloat = isEnabled ? 1 : 0.45
-        let radius = tokens.number("r-md")
+        let radius = (style == .overlay || style == .confirmOverlay) ? bounds.height / 2 : tokens.number("r-md")
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: radius, yRadius: radius)
         if let fill {
             fill.withAlphaComponent(fill.alphaComponent * alpha).setFill(); path.fill()

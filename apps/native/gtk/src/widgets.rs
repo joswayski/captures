@@ -456,7 +456,8 @@ impl Thumbnail {
                 baked
             }
         };
-        let radius = graphene::Size::new(8., 8.);
+        let r = bounds.width().min(bounds.height()) / 2.;
+        let radius = graphene::Size::new(r, r);
         snapshot.push_rounded_clip(&gtk::gsk::RoundedRect::new(
             bounds, radius, radius, radius, radius,
         ));

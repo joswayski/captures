@@ -154,7 +154,7 @@ final class RecordingHUDTests: XCTestCase {
         hud.setMicrophone(muted: false, available: true)
         let buttons = hud.subviews.compactMap { $0 as? CaptureButton }
         XCTAssertTrue(buttons.allSatisfy { $0.hudControl && $0.frame.height == 34 })
-        XCTAssertEqual(hud.card.layer?.cornerRadius, tokens.number("r-2xl"))
+        XCTAssertEqual(hud.card.layer?.cornerRadius, tokens.number("r-3xl"))
         XCTAssertEqual(hud.card.frame, NSRect(x: 6, y: 6, width: 418, height: 70), "shipping's inset card")
         let microphone = try XCTUnwrap(buttons.first { $0.accessibilityLabel() == "Mute microphone" })
 
@@ -166,8 +166,8 @@ final class RecordingHUDTests: XCTestCase {
             return try XCTUnwrap(bitmap.colorAt(x: Int(x * scale), y: Int(y * scale))?
                 .usingColorSpace(.deviceRGB))
         }
-        let x = microphone.frame.minX + 5
-        let y = microphone.frame.minY + 5
+        let x = microphone.frame.minX + 8
+        let y = microphone.frame.minY + 8
         let bare = try background(microphone.frame.minX - 1, y)
         let idle = try background(x, y)
         XCTAssertEqual(idle.redComponent, bare.redComponent, accuracy: 0.01,
@@ -191,7 +191,7 @@ final class RecordingHUDTests: XCTestCase {
             "a disabled button must not paint selected or hover chrome")
         hud.setLifecycleActionsEnabled(true)
         let stop = try XCTUnwrap(buttons.first { $0.accessibilityLabel() == "Stop recording" })
-        let stopColor = try background(stop.frame.minX + 5, stop.frame.minY + 5)
+        let stopColor = try background(stop.frame.minX + 8, stop.frame.minY + 8)
         XCTAssertGreaterThan(stopColor.redComponent, stopColor.greenComponent,
             "Stop retains its signal surface without a hover")
     }

@@ -225,8 +225,9 @@ impl Hud {
     /// `pulse` is the `recording-pulse` phase, 0–1 (0 at rest).
     pub fn paint(&self, dc: &ID2D1DeviceContext, g: &Gfx, t: &Tokens, pulse: f32) -> Result<()> {
         let view = self.view();
-        gfx::fill_round(dc, CARD, 18., t.color("glass-strong"))?;
-        gfx::border(dc, CARD, 18., 1., t.color("glass-border"))?;
+        let card_r = t.n("r-3xl");
+        gfx::fill_round(dc, CARD, card_r, t.color("glass-strong"))?;
+        gfx::border(dc, CARD, card_r, 1., t.color("glass-border"))?;
         // `.recording-hud-privacy`: "These controls **won’t** show in recordings".
         let note = capture_menu::visibility_note(MenuMode::Recording, true, self.excluded);
         let lead = g.text(t, Style::Tiny, note.lead.trim_end(), 10_000.)?;
@@ -323,6 +324,8 @@ impl Hud {
             }
         }
         let signal = t.color("theme-signal");
+        let signal_hover = t.color("theme-signal-strong");
+        let signal_ink = t.color("theme-signal-ink");
         let white = D2D1_COLOR_F {
             r: 1.,
             g: 1.,
@@ -335,28 +338,36 @@ impl Hud {
                 && self.hover == Some(control)
                 && self.pressed.is_none_or(|p| p == control);
             let fade = if state.enabled { 1. } else { 0.32 };
+            let r_btn = (r.bottom - r.top) / 2.;
             if control == Control::Stop {
-                // `.recording-stop`: a signal-tinted square button.
-                if hovered {
-                    gfx::fill_round(dc, r, 8., alpha(signal, fade))?;
-                } else {
-                    gfx::fill_round(dc, r, 8., alpha(signal, 0.14 * fade))?;
-                    gfx::border(dc, r, 8., 1., alpha(signal, 0.4 * fade))?;
-                }
+                // `.recording-stop`: solid optical signal pill with a white stop square.
+                let fill = if hovered { signal_hover } else { signal };
+                gfx::fill_round(dc, r, r_btn, alpha(fill, fade))?;
+                gfx::border(
+                    dc,
+                    r,
+                    r_btn,
+                    1.,
+                    D2D1_COLOR_F {
+                        r: 0.,
+                        g: 0.,
+                        b: 0.,
+                        a: 0.14 * fade,
+                    },
+                )?;
                 let (sx, sy) = ((r.left + r.right) / 2., (r.top + r.bottom) / 2.);
                 let square = rect(sx - 5.5, sy - 5.5, sx + 5.5, sy + 5.5);
-                let ink = if hovered { white } else { signal };
-                gfx::fill_round(dc, square, 2., alpha(ink, fade))?;
+                gfx::fill_round(dc, square, 2., alpha(signal_ink, fade))?;
                 continue;
             }
             let destructive = control == Control::Delete && hovered;
             if destructive {
-                gfx::fill_round(dc, r, 8., signal)?;
+                gfx::fill_round(dc, r, r_btn, signal)?;
             } else if hovered {
-                gfx::fill_round(dc, r, 8., t.color("glass-hover"))?;
+                gfx::fill_round(dc, r, r_btn, t.color("glass-hover"))?;
             }
             if state.selected {
-                gfx::border(dc, r, 8., 1., t.color_alpha("theme-accent", 0.3 * fade))?;
+                gfx::border(dc, r, r_btn, 1., t.color_alpha("theme-accent", 0.3 * fade))?;
             }
             let color = if destructive {
                 white

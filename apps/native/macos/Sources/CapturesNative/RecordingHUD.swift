@@ -207,6 +207,7 @@ final class RecordingHUDView: NSView {
             let button = CaptureButton("", frame: NSRect(x: x, y: 30, width: 34, height: 34),
                 tokens: tokens, glass: true) {}
             button.icon = icon
+            button.circular = true
             return button
         }
         // Shipping `.recording-hud-actions`: 34 pt buttons (Stop 36) at a
@@ -222,14 +223,14 @@ final class RecordingHUDView: NSView {
         hideButton = button(.shipping("hide-controls"), x: 381)
         tooltipView = RecordingHUDTooltipView(tokens: tokens)
         super.init(frame: frame)
-        // Shipping `.recording-hud`: a 418 × 70 card 6 pt inside the 430 × 102
-        // window (r-2xl, 6/8/8 padding); the rest of the window stays clear
+        // Shipping `.recording-hud`: a 418 × 70 capsule 6 pt inside the 430 × 102
+        // window (r-3xl, 6/8/8 padding); the rest of the window stays clear
         // for tooltips and the error line.
         wantsLayer = true
         card.frame = NSRect(x: 6, y: 6, width: frame.width - 12, height: 70)
         card.wantsLayer = true
         card.layer?.backgroundColor = tokens.color(RecordingHUDColorToken.glassStrong.rawValue).cgColor
-        card.layer?.cornerRadius = tokens.number("r-2xl")
+        card.layer?.cornerRadius = tokens.number("r-3xl")
         card.layer?.borderWidth = 1
         card.layer?.borderColor = tokens.color(RecordingHUDColorToken.glassBorder.rawValue).cgColor
         card.layer?.shadowColor = NSColor.black.cgColor; card.layer?.shadowOpacity = 0.44

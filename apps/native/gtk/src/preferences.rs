@@ -369,10 +369,12 @@ pub fn build(
     // `.preferences-header`: title and autosave note, then the History action
     // and the save status.
     // Find opens as a second row (`.preferences-find { grid-column: 1 / -1 }`).
-    let header = gtk::Box::new(gtk::Orientation::Vertical, tokens.number("s-6") as i32);
+    let header = gtk::Box::new(gtk::Orientation::Vertical, 0);
     header.add_css_class("preferences-header");
+    let header_inner = gtk::Box::new(gtk::Orientation::Vertical, tokens.number("s-6") as i32);
+    header_inner.add_css_class("preferences-header-inner");
     let top = gtk::Box::new(gtk::Orientation::Horizontal, tokens.number("s-6") as i32);
-    header.append(&top);
+    header_inner.append(&top);
     let heading = gtk::Box::new(gtk::Orientation::Vertical, 0);
     heading.set_hexpand(true);
     heading.set_valign(gtk::Align::Center);
@@ -388,6 +390,7 @@ pub fn build(
     actions.append(&history);
     actions.append(&prefs.status);
     top.append(&actions);
+    header.append(&MaxWidth::centered(&header_inner, 720));
     body.append(&header);
 
     let sections = gtk::Box::new(gtk::Orientation::Vertical, tokens.number("s-6") as i32);
@@ -395,12 +398,12 @@ pub fn build(
     let scroller = gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
         .vexpand(true)
-        .child(&MaxWidth::new(&sections, 720))
+        .child(&MaxWidth::centered(&sections, 720))
         .build();
     body.append(&scroller);
     root.append(&body);
     let find = find::build(&window, &sections, &scroller, tokens.number("s-3") as i32);
-    header.append(&find.bar);
+    header_inner.append(&find.bar);
 
     let margin = tokens.number("s-6");
     let general = card(&tokens, 0, None);
@@ -1084,9 +1087,9 @@ fn theme_swatch(prefs: &Rc<Prefs>, id: &'static str) -> SnapshotArea {
     let weak = Rc::downgrade(prefs);
     let swatch = SnapshotArea::new(move |snapshot, w, h| {
         let Some(prefs) = weak.upgrade() else { return };
-        let radius = prefs.tokens.borrow().number("r-sm") as f64;
         let cr = snapshot.append_cairo(&graphene::Rect::new(0., 0., w, h));
         let (w, h) = (f64::from(w), f64::from(h));
+        let radius = w.min(h) / 2.;
         rounded(&cr, 0., 0., w, h, radius);
         cr.clip();
         if id == "custom" {

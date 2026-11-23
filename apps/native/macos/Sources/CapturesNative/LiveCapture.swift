@@ -341,6 +341,7 @@ final class LiveCaptureController: NSObject {
     /// Shipping filtered-empty copy, shown in the grid area (not the shared
     /// status line, which display and save messages also write).
     private var filteredEmptyLabel: NSTextField!
+    private var filterTrack: Surface!
     private var toolbarDivider: Surface!
     private var deleteAllButton: HistoryButton!
     private var deleteAllCancelButton: HistoryButton!
@@ -757,9 +758,9 @@ final class LiveCaptureController: NSObject {
                 self?.showPreferenceSetting(nil)
             }
         root.addSubview(backToPreferencesButton)
-        headingLabel = title(copy.title, frame: NSRect(x: 28, y: 40, width: 420, height: 36),
-                             size: tokens.number("text-3xl"), weight: .semibold)
-        let lede = title(copy.lede, frame: NSRect(x: 28, y: 80, width: 600, height: 20),
+        headingLabel = title(copy.title, frame: NSRect(x: 28, y: 40, width: 420, height: 32),
+                             size: tokens.number("text-2xl"), weight: .semibold)
+        let lede = title(copy.lede, frame: NSRect(x: 28, y: 76, width: 600, height: 20),
                          size: tokens.number("text-md"))
         lede.textColor = tokens.color("text-subtle")
         ledeLabel = lede
@@ -781,6 +782,13 @@ final class LiveCaptureController: NSObject {
         status = title("Loading capture history…", frame: .zero, size: tokens.number("text-sm"), muted: true)
         status.isHidden = true
 
+        filterTrack = Surface(frame: .zero)
+        filterTrack.wantsLayer = true
+        filterTrack.layer?.backgroundColor = tokens.color("surface-sunken").cgColor
+        filterTrack.layer?.borderColor = tokens.color("border-subtle").cgColor
+        filterTrack.layer?.borderWidth = 1
+        filterTrack.setAccessibilityElement(false)
+        root.addSubview(filterTrack)
         for filter in CaptureHistoryFilter.allCases {
             let control = HistoryFilterPill(label: filter.title, tokens: tokens) { [weak self] in
                 guard let self else { return }
@@ -901,14 +909,20 @@ final class LiveCaptureController: NSObject {
         guard let historyScroll, let grid else { return }
         let width = root.bounds.width - 48
         let showToolbar = historyLoaded && !artifacts.isEmpty
-        var x: CGFloat = 24
-        for (_, pill) in historyFilterButtons {
+        let pillHeight = tokens.number("h-sm")
+        let trackPad: CGFloat = 3
+        let trackHeight = pillHeight + trackPad * 2
+        var x: CGFloat = 24 + trackPad
+        for (index, (_, pill)) in historyFilterButtons.enumerated() {
             pill.isHidden = !showToolbar
-            pill.frame = NSRect(x: x, y: contentTop, width: pill.preferredWidth, height: tokens.number("h-sm"))
-            x += pill.preferredWidth + tokens.number("s-2")
+            pill.frame = NSRect(x: x, y: contentTop + trackPad, width: pill.preferredWidth, height: pillHeight)
+            x += pill.preferredWidth + (index + 1 < historyFilterButtons.count ? 2 : 0)
         }
+        filterTrack.isHidden = !showToolbar
+        filterTrack.frame = NSRect(x: 24, y: contentTop, width: max(0, x - 24 + trackPad), height: trackHeight)
+        filterTrack.layer?.cornerRadius = trackHeight / 2
         toolbarDivider.isHidden = !showToolbar
-        toolbarDivider.frame = NSRect(x: 24, y: contentTop + tokens.number("h-sm") + tokens.number("s-5"),
+        toolbarDivider.frame = NSRect(x: 24, y: contentTop + trackHeight + tokens.number("s-5"),
                                       width: width, height: 1)
         var y: CGFloat = showToolbar ? toolbarDivider.frame.maxY + tokens.number("s-6") : contentTop
         statusBackground.isHidden = !statusAlert

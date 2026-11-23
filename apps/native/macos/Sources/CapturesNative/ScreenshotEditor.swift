@@ -3484,12 +3484,12 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         railTip.isHidden = true
     }
 
-    /// A 34pt quiet header icon button with its accessible name.
+    /// A 34pt quiet circular header icon button with its accessible name.
     private func headerIcon(_ name: String, label: String, parent: NSView? = nil,
                             action: @escaping () -> Void) -> CaptureButton {
         let control = button("", frame: NSRect(x: 0, y: 0, width: 34, height: 34),
                              parent: parent ?? headerBar, action: action)
-        control.quiet = true; control.icon = .shipping(name)
+        control.quiet = true; control.circular = true; control.icon = .shipping(name)
         control.setAccessibilityLabel(label)
         return control
     }
@@ -4107,6 +4107,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         exportBar.addSubview(saveAsNewSwitch)
         exportSaveButton = button("Save", frame: .zero, parent: exportBar) { [weak self] in self?.saveExport() }
         exportSaveButton.solid = true
+        exportSaveButton.cornerRadius = 16
         exportSaveButton.icon = .shipping("save")
         for action in [copyImageButton!, showInFolderButton!, exportSaveButton!] {
             action.textSize = tokens.number("text-sm"); action.iconSide = 14
@@ -8032,8 +8033,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         dropGuideView.glassFill = tokens.color("glass-strong")
         dropGuideView.glassText = tokens.color("glass-text")
         drawOverlay.needsDisplay = true
-        // `--editor-canvas`: `--surface-sunken`, or the deeper `--n-5` well in light mode.
-        let well = tokens.color(dark ? "surface-sunken" : "n-5").cgColor
+        // `--editor-canvas`: deep obsidian cinema well in dark mode, cooler `--n-5` well in light mode.
+        let well = tokens.color(dark ? "n-1" : "n-5").cgColor
         viewportInput.layer?.backgroundColor = well
         viewportInput.superview?.layer?.backgroundColor = well
         canvasSurface.layer?.backgroundColor = tokens.color("border").cgColor
@@ -8051,7 +8052,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let border = tokens.color("border-subtle").cgColor
         inspectorDivider.borderColor = tokens.color("border-subtle")
         headerBar.layer?.backgroundColor = raised
-        railPanel.layer?.backgroundColor = raised
+        railPanel.layer?.backgroundColor = tokens.color("surface-canvas").cgColor
         headerRule.layer?.backgroundColor = border
         railRule.layer?.backgroundColor = border
         for group in [canvasToolbar, zoomGroup] {

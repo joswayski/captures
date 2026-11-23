@@ -198,8 +198,8 @@ final class CaptureButton: NSButton, TokenRestyling {
 
     private var effectiveRadius: CGFloat {
         let editorTool = icon?.isEditorTool == true
-        return circular ? min(bounds.width, bounds.height) / 2 - 1
-            : cornerRadius ?? tokens.number(editorTool ? "r-lg" : hudControl ? "r-sm" : "r-md")
+        return (circular || editorTool) ? min(bounds.width, bounds.height) / 2 - 1
+            : cornerRadius ?? tokens.number(hudControl ? "r-sm" : "r-md")
     }
 
     private func refreshElevation() {
@@ -297,12 +297,14 @@ final class CaptureButton: NSButton, TokenRestyling {
         let activePress = pressed || cell?.isHighlighted == true
         if hudControl {
             let fill: String? = !isEnabled ? nil
-                : signal ? (hovered || activePress ? "theme-signal" : "theme-signal-surface")
+                : signal ? (hovered || activePress ? "theme-signal-strong" : "theme-signal")
                 : activePress || selected ? "glass-active" : hovered ? "glass-hover" : nil
             if let fill { tokens.color(fill).setFill(); path.fill() }
-            if isEnabled && (signal || selected) {
-                tokens.color(signal ? "theme-signal" : "theme-accent")
-                    .withAlphaComponent(signal ? 0.45 : 0.35).setStroke()
+            if isEnabled && signal {
+                NSColor.black.withAlphaComponent(0.14).setStroke()
+                path.lineWidth = 1; path.stroke()
+            } else if isEnabled && selected {
+                tokens.color("theme-accent").withAlphaComponent(0.35).setStroke()
                 path.lineWidth = 1; path.stroke()
             } else if isEnabled && hovered {
                 tokens.color("glass-border").setStroke()
@@ -398,7 +400,7 @@ final class CaptureButton: NSButton, TokenRestyling {
         }
         if hudControl {
             foreground = tokens.color(!isEnabled ? "glass-text-subtle"
-                : signal && !hovered && cell?.isHighlighted != true ? "theme-signal"
+                : signal ? "theme-signal-ink"
                 : selected ? "theme-accent"
                 : hovered || cell?.isHighlighted == true ? "glass-text" : "glass-text-muted")
         } else if editorTool && isEnabled && !selected {

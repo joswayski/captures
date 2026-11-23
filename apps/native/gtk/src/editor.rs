@@ -4191,9 +4191,9 @@ impl State {
     fn draw(&self, snapshot: &gtk::Snapshot, width: f32, height: f32) {
         let t = self.tokens.get();
         let light = t.rgba("text").red() < 0.5;
-        // `--editor-canvas`: a deeper well in light mode.
+        // `--editor-canvas`: deep obsidian cinema well in dark mode, cooler well in light.
         snapshot.append_color(
-            &t.rgba(if light { "n-5" } else { "surface-sunken" }),
+            &t.rgba(if light { "n-5" } else { "n-1" }),
             &graphene::Rect::new(0., 0., width, height),
         );
         let (Some(rect), Some(texture)) = (self.image_rect(), self.texture.borrow().clone()) else {

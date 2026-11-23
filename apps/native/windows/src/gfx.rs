@@ -277,7 +277,7 @@ fn spec(style: Style) -> Spec {
             false,
         ),
         Style::Heading => spec(
-            "text-3xl",
+            "text-2xl",
             "weight-semibold",
             Some("tracking-tighter"),
             Some("leading-tight"),
@@ -368,7 +368,7 @@ fn spec(style: Style) -> Spec {
             ..spec("text-md", "weight-semibold", None, None, false)
         },
         Style::RecordingTitle => spec(
-            "text-2xl",
+            "text-xl",
             "weight-semibold",
             Some("tracking-tighter"),
             Some("leading-tight"),

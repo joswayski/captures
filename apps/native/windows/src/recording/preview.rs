@@ -297,7 +297,6 @@ impl Recording {
         let r = self.rects[PREVIEW];
         let all = gfx::rect(0., 0., r.w, r.h);
         let t = &self.t;
-        gfx::shadow(dc, all, t.n("r-xl"), t.shadow("shadow-sm"))?;
         gfx::fill_round(dc, all, t.n("r-xl"), t.color("surface-raised"))?;
         // The viewport and oversized media share the panel's rounded edge;
         // a rectangular stage fill must not paint over its bottom corners.
@@ -347,8 +346,9 @@ impl Recording {
             track.x + track.w - r.x,
             track.y + track.h - r.y,
         );
-        gfx::fill_round(dc, track, t.n("r-lg"), t.color("surface-sunken"))?;
-        gfx::border(dc, track, t.n("r-lg"), 1., t.color("border-subtle"))?;
+        let track_r = (track.bottom - track.top) / 2.;
+        gfx::fill_round(dc, track, track_r, t.color("surface-sunken"))?;
+        gfx::border(dc, track, track_r, 1., t.color("border-subtle"))?;
         let view = self.preview_view();
         let clip = gfx::rect(
             view.x - r.x,
@@ -356,7 +356,12 @@ impl Recording {
             view.x + view.w - r.x,
             view.y + view.h - r.y,
         );
-        gfx::fill(dc, clip, t.color("surface-sunken"))?;
+        let stage_bg = if t.appearance == "light" {
+            "surface-sunken"
+        } else {
+            "n-1"
+        };
+        gfx::fill(dc, clip, t.color(stage_bg))?;
         gfx::fill(
             dc,
             gfx::rect(1., 45., r.w - 1., 46.),
@@ -449,11 +454,12 @@ impl Recording {
                 t.color("theme-accent-ink"),
             )?;
         } else if matches!(target, Target::Fit | Target::Actual) {
-            // A segment of the size track: the active one is the raised thumb.
+            // A segment of the size track: the active one is the raised pill thumb.
+            let seg_r = r.h / 2.;
             if self.toggled(target) == Some(true) {
-                gfx::shadow(dc, all, t.n("r-sm"), t.shadow("shadow-xs"))?;
-                gfx::fill_round(dc, all, t.n("r-sm"), t.color("surface-raised"))?;
-                gfx::border(dc, all, t.n("r-sm"), 1., t.color("border-subtle"))?;
+                gfx::shadow(dc, all, seg_r, t.shadow("shadow-xs"))?;
+                gfx::fill_round(dc, all, seg_r, t.color("surface-raised"))?;
+                gfx::border(dc, all, seg_r, 1., t.color("border-subtle"))?;
             }
             let text = self.g.text(t, Style::Control, target.label(), r.w)?;
             let color = t.color(if self.toggled(target) == Some(true) || hovered {

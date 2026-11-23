@@ -16,8 +16,8 @@ class GlassTooltipView: NSView {
 
         /// `.recording-tooltip > [role="tooltip"]`: xs medium text in an `--r-sm`
         /// pill with a glass border.
-        static let recordingHUD = Style(fontToken: "text-xs", radiusToken: "r-sm",
-                                        inset: NSSize(width: 9, height: 6),
+        static let recordingHUD = Style(fontToken: "text-xs", radiusToken: "r-lg",
+                                        inset: NSSize(width: 10, height: 6),
                                         bordered: true, shadowed: false)
         /// `.icon-button::after`: 2xs medium text, `padding: 4px 7px`, `--r-xs`,
         /// `--shadow-sm` and no border.

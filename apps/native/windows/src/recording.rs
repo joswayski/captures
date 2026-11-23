@@ -441,8 +441,8 @@ impl Recording {
             (self.width - width) / 2.,
             self.t.n("s-8") - self.page_scroll,
             width,
-            // Shipping's header is only the `--text-2xl` h1 at `--leading-tight`.
-            self.t.n("text-2xl") * self.t.n("leading-tight"),
+            // Aperture header uses `--text-xl` h1 at `--leading-tight`.
+            self.t.n("text-xl") * self.t.n("leading-tight"),
         )
     }
 

@@ -853,7 +853,7 @@ final class CaptureControlsView: NSView {
         }
         wantsLayer = true
         layer?.backgroundColor = tokens.color("glass-strong").cgColor
-        layer?.cornerRadius = tokens.number("r-2xl")
+        layer?.cornerRadius = tokens.number("r-3xl")
         layer?.borderWidth = 1; layer?.borderColor = tokens.color("glass-border").cgColor
         layer?.shadowColor = NSColor.black.cgColor; layer?.shadowOpacity = 0.44
         layer?.shadowRadius = 22; layer?.shadowOffset = NSSize(width: 0, height: -8)
@@ -864,9 +864,9 @@ final class CaptureControlsView: NSView {
         // Every top-row control is centered on the 36 pt switches (y 10…46).
         close.frame = NSRect(x: 8, y: 12, width: 32, height: 32)
         close.icon = .shipping("close"); close.iconOnly = true; close.iconSide = 15
-        // Shipping `.capture-selector-close`: a borderless ghost that only
+        // Shipping `.capture-selector-close`: a borderless circular ghost that only
         // fills with `--glass-hover` under the pointer.
-        close.hudControl = true; close.cornerRadius = tokens.number("r-md")
+        close.hudControl = true; close.circular = true
         close.setAccessibilityLabel("Close capture controls")
         // Shipping `.capture-action-switch` / `.recording-target-switch`: a
         // 36 pt track (1 pt border, 3 pt padding) of 28 pt segments sized to
@@ -880,6 +880,7 @@ final class CaptureControlsView: NSView {
         }
         func segment(_ button: CaptureButton, x: CGFloat) {
             button.frame = NSRect(x: x, y: 14, width: segmentWidth(button.title), height: 28)
+            button.cornerRadius = 14
             button.textSize = tokens.number("text-sm"); button.iconSide = 15
         }
         let modeTrackX: CGFloat = 48
@@ -921,8 +922,8 @@ final class CaptureControlsView: NSView {
         targetTrack.frame = NSRect(x: targetTrackX, y: 10, width: x + 4 - targetTrackX, height: 36)
         for track in [modeTrack, targetTrack] {
             track.wantsLayer = true
-            track.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.32).cgColor
-            track.layer?.cornerRadius = tokens.number("r-lg")
+            track.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.36).cgColor
+            track.layer?.cornerRadius = 18
             addSubview(track, positioned: .below, relativeTo: nil)
         }
         // Shipping's `role="group"` switches, "Capture type" and "Capture target".
@@ -983,13 +984,13 @@ final class CaptureControlsView: NSView {
             (modeIndicator, screenshot), (targetIndicator, targetButtons[.region]),
         ]
         for (indicator, below) in indicators {
-            // Shipping `.on-media .capture-segmented-indicator`: raised glass,
-            // `--shadow-sm` and an inset `--glass-border` ring at `--r-sm`.
+            // Aperture `.on-media .capture-segmented-indicator`: raised glass pill,
+            // `--shadow-sm` and an inset `--glass-border` ring.
             indicator.wantsLayer = true
             indicator.layer?.backgroundColor = tokens.color("glass-raised").cgColor
             indicator.layer?.borderColor = tokens.color("glass-border").cgColor
             indicator.layer?.borderWidth = 1
-            indicator.layer?.cornerRadius = tokens.number("r-sm")
+            indicator.layer?.cornerRadius = 14
             indicator.layer?.shadowColor = NSColor.black.cgColor
             indicator.layer?.shadowOpacity = 0.32; indicator.layer?.shadowRadius = 3
             indicator.layer?.shadowOffset = NSSize(width: 0, height: -2)

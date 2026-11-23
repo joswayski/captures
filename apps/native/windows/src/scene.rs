@@ -1768,6 +1768,7 @@ impl Scene {
             (n("s-1"), n("s-2"), n("s-5"), n("s-6"), n("s-8"), n("s-12"));
         self.content_w = viewport_w.max(0.);
         let card_w = (self.content_w.min(SECTIONS_MAX) - 2. * s8).max(80.);
+        let card_x = ((self.content_w - card_w) / 2.).floor().max(s8);
         let inner_w = card_w - 2. * (s6 + 1.);
         // `max-width: 52ch` of card and `.setting-copy` descriptions.
         let measure = 52. * g.ch(t, Style::CardDescription)?;
@@ -1793,7 +1794,7 @@ impl Scene {
             let mut cy = inset + title.height + s2 + description.height;
             let header = Rect::new(inset, inset, inner_w, cy - inset);
             let text = format!("{}{}", section.title, card_description(*index));
-            self.place_find_target(target, (s8, y), header, false, text);
+            self.place_find_target(target, (card_x, y), header, false, text);
             target += 1;
             let mut separators = Vec::new();
             for (position, &item) in items.iter().enumerate() {
@@ -1811,9 +1812,9 @@ impl Scene {
                     } else {
                         (Rect::default(), String::new())
                     };
-                    self.place_find_target(target, (s8, y), b, false, text);
+                    self.place_find_target(target, (card_x, y), b, false, text);
                     target += 1;
-                    self.item_rects.push((item, b.offset(s8, y)));
+                    self.item_rects.push((item, b.offset(card_x, y)));
                     continue;
                 }
                 cy += s5;
@@ -1839,10 +1840,10 @@ impl Scene {
                 };
                 let check = matches!(item, Item::Switch(_));
                 for (b, text) in boxes.into_iter().zip(self.find_texts(item)) {
-                    self.place_find_target(target, (s8, y), b, check, text);
+                    self.place_find_target(target, (card_x, y), b, check, text);
                     target += 1;
                 }
-                let rect = Rect::new(s8 + inset, y + top, inner_w, pad + h);
+                let rect = Rect::new(card_x + inset, y + top, inner_w, pad + h);
                 self.item_rects.push((item, rect));
                 if item == Item::Accent {
                     let columns = if self.compact {
@@ -1857,7 +1858,7 @@ impl Scene {
                 cy = body + h;
             }
             let card_h = cy + inset;
-            self.card_rects.push(Rect::new(s8, y, card_w, card_h));
+            self.card_rects.push(Rect::new(card_x, y, card_w, card_h));
             self.separators.push(separators);
             self.texts.card_titles.push(title);
             self.texts.card_descriptions.push(description);
@@ -3071,8 +3072,10 @@ impl Scene {
         let (s3, s4, s5, s8) = (n("s-3"), n("s-4"), n("s-5"), n("s-8"));
         let (h_sm, h_md) = (n("h-sm"), n("h-md"));
         let body_w = self.nodes[self.header].rect.w;
+        let card_w = (body_w.min(SECTIONS_MAX) - 2. * s8).max(80.);
+        let card_x = ((body_w - card_w) / 2.).floor().max(s8);
         let (row_y, row) = self.header_row;
-        let mut right = body_w - s8;
+        let mut right = (card_x + card_w).min(body_w - s8);
         let node = self.save_node;
         let shown = self.save_shown();
         if shown {
@@ -4739,7 +4742,11 @@ impl Scene {
             sub.map_or(0., |t| t.height),
             title.map_or(0., |t| t.width),
         );
-        let x = self.nav_w() + self.t.n("s-8");
+        let s8 = self.t.n("s-8");
+        let body_w = self.nodes[self.header].rect.w;
+        let card_w = (body_w.min(SECTIONS_MAX) - 2. * s8).max(80.);
+        let card_x = ((body_w - card_w) / 2.).floor().max(s8);
+        let x = self.nav_w() + card_x;
         if subtitle {
             Rect::new(x, self.title_y + th + 2., sw, sh)
         } else {
@@ -4880,7 +4887,7 @@ impl Scene {
                 self.draw_spots(dc, node)?;
             }
             Kind::History { lit } => {
-                let radius = t.n("r-md");
+                let radius = h / 2.;
                 let (bg, edge) = if lit {
                     ("control-hover", "border-strong")
                 } else {
@@ -4898,7 +4905,6 @@ impl Scene {
             Kind::Viewport => gfx::fill(dc, all, c("surface-canvas"))?,
             Kind::Card(card) => {
                 let radius = t.n("r-xl");
-                gfx::shadow(dc, all, radius, t.shadow("shadow-sm"))?;
                 gfx::fill_round(dc, all, radius, c("surface-raised"))?;
                 gfx::border(dc, all, radius, 1., c("border-subtle"))?;
                 let inset = t.n("s-6") + 1.;
@@ -4929,12 +4935,12 @@ impl Scene {
             }
             Kind::KnobOn => gfx::fill_round(dc, all, w / 2., c("theme-accent-ink"))?,
             Kind::SegTrack => {
-                let radius = t.n("r-lg");
+                let radius = h / 2.;
                 gfx::fill_round(dc, all, radius, c("surface-sunken"))?;
                 gfx::border(dc, all, radius, 1., c("border-subtle"))?;
             }
             Kind::SegThumb => {
-                let radius = t.n("r-sm");
+                let radius = h / 2.;
                 gfx::shadow(dc, all, radius, t.shadow("shadow-xs"))?;
                 gfx::fill_round(dc, all, radius, c("surface-raised"))?;
                 gfx::border(dc, all, radius, 1., c("border-subtle"))?;
@@ -4945,13 +4951,12 @@ impl Scene {
                 let color = if lit { "text" } else { "text-subtle" };
                 gfx::text(dc, label, x, y, c(color))?;
             }
-            Kind::ChipHover(_) => gfx::fill_round(dc, all, t.n("r-md"), c("surface-hover"))?,
+            Kind::ChipHover(_) => gfx::fill_round(dc, all, h / 2., c("surface-hover"))?,
             Kind::Chip { index, active } => {
-                let radius = t.n("r-md");
+                let radius = h / 2.;
                 if active {
-                    gfx::shadow(dc, all, radius, t.shadow("shadow-xs"))?;
-                    gfx::fill_round(dc, all, radius, c("surface-raised"))?;
-                    gfx::border(dc, all, radius, 1., c("border"))?;
+                    gfx::fill_round(dc, all, radius, c("surface-selected"))?;
+                    gfx::border(dc, all, radius, 1., t.color_alpha("theme-accent", 0.35))?;
                 }
                 // 1 px border, `0 var(--s-3)` padding, `18px 1fr 10px` columns.
                 let s3 = t.n("s-3");
@@ -4960,7 +4965,7 @@ impl Scene {
                 let theme = &THEMES[index];
                 let colors = (theme.id != "custom").then(|| t.swatch(theme.id));
                 let tile = rect(left, top, left + SWATCH, top + SWATCH);
-                gfx::swatch(dc, &g.factory, tile, t.n("r-sm"), colors)?;
+                gfx::swatch(dc, &g.factory, tile, SWATCH / 2., colors)?;
                 let label = &self.texts.chips[index];
                 let name_x = left + SWATCH + s3;
                 let check_x = w - 1. - s3 - 10.;
@@ -5325,7 +5330,11 @@ impl Scene {
         let spots = match self.nodes[node].kind {
             Kind::HeaderBg => {
                 let (title, sub) = (self.texts.title.as_ref(), self.texts.subtitle.as_ref());
-                let (x, y) = (t.n("s-8"), self.title_y);
+                let s8 = t.n("s-8");
+                let body_w = self.nodes[self.header].rect.w;
+                let card_w = (body_w.min(SECTIONS_MAX) - 2. * s8).max(80.);
+                let x = ((body_w - card_w) / 2.).floor().max(s8);
+                let y = self.title_y;
                 vec![
                     spot(title, x, y, "text"),
                     spot(sub, x, y + height(title) + 2., "text-subtle"),

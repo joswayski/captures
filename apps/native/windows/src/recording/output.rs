@@ -1103,7 +1103,6 @@ impl Recording {
         for (r, title) in &self.output.cards {
             let (x, y) = (r.x - base.x, r.y - base.y);
             let b = gfx::rect(x, y, x + r.w, y + r.h);
-            gfx::shadow(dc, b, t.n("r-xl"), t.shadow("shadow-sm"))?;
             gfx::fill_round(dc, b, t.n("r-xl"), t.color("surface-raised"))?;
             gfx::border(dc, b, t.n("r-xl"), 1., t.color("border-subtle"))?;
             self.draw_text(

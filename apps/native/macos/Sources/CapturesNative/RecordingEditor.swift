@@ -1452,7 +1452,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         footer.layer?.backgroundColor = tokens.color("surface-raised").cgColor
         footerDivider.layer?.backgroundColor = tokens.color("border-subtle").cgColor
         droppedFramesBand.layer?.backgroundColor = tokens.color("caution-surface").cgColor
-        previewViewport.layer?.backgroundColor = tokens.color("surface-sunken").cgColor
+        let darkStage = tokens.color("text").brightnessComponent > 0.5
+        previewViewport.layer?.backgroundColor = tokens.color(darkStage ? "n-1" : "surface-sunken").cgColor
         previewToolbar.layer?.backgroundColor = tokens.color("surface-raised").cgColor
         previewDivider.layer?.backgroundColor = tokens.color("border-subtle").cgColor
         previewSizeTrack.layer?.backgroundColor = tokens.color("surface-sunken").cgColor
@@ -1475,7 +1476,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         footer.addSubview(footerDivider)
         root.addSubview(footer)
 
-        style(titleLabel, size: "text-2xl", color: "text", weight: .semibold, parent: page)
+        style(titleLabel, size: "text-xl", color: "text", weight: .semibold, parent: page)
         titleLabel.setAccessibilityLabel("Recording editor title")
         droppedFramesBand.wantsLayer = true
         droppedFramesBand.layer?.backgroundColor = tokens.color("caution-surface").cgColor
@@ -1485,13 +1486,14 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         style(droppedFramesLabel, size: "text-sm", color: "caution-text", parent: droppedFramesBand)
         droppedFramesLabel.setAccessibilityLabel("Dropped frames warning")
 
-        // `.recording-editor-preview`: toolbar, sunken viewport and caption.
+        // `.recording-editor-preview`: toolbar, cinema viewport and caption.
         card(previewPanel, parent: page)
         previewPanel.layer?.masksToBounds = true
         // The viewport's rounded top edge tucks under a square toolbar band,
         // leaving only its lower corners rounded.
         previewViewport.wantsLayer = true
-        previewViewport.layer?.backgroundColor = tokens.color("surface-sunken").cgColor
+        let darkAppearance = tokens.color("text").brightnessComponent > 0.5
+        previewViewport.layer?.backgroundColor = tokens.color(darkAppearance ? "n-1" : "surface-sunken").cgColor
         previewViewport.layer?.cornerRadius = tokens.number("r-xl")
         previewPanel.addSubview(previewViewport)
         previewToolbar.wantsLayer = true
@@ -1505,7 +1507,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         previewSizeTrack.layer?.backgroundColor = tokens.color("surface-sunken").cgColor
         previewSizeTrack.layer?.borderColor = tokens.color("border-subtle").cgColor
         previewSizeTrack.layer?.borderWidth = 1
-        previewSizeTrack.layer?.cornerRadius = tokens.number("r-lg")
+        previewSizeTrack.layer?.cornerRadius = (tokens.number("h-sm") + 6) / 2
         previewPanel.addSubview(previewSizeTrack)
         previewFitButton = button("Fit", parent: previewSizeTrack) { [weak self] in
             self?.setPreviewActualSize(false)
@@ -1513,6 +1515,8 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
         previewActualButton = button("100%", parent: previewSizeTrack) { [weak self] in
             self?.setPreviewActualSize(true)
         }
+        previewFitButton.cornerRadius = tokens.number("h-sm") / 2
+        previewActualButton.cornerRadius = tokens.number("h-sm") / 2
         previewFitButton.toolTip = "Fit the decoded frame within the preview."
         previewActualButton.toolTip = "One decoded image pixel per screen point. Scroll to see overflow; playback may use a reduced-size frame."
         previewScroll.drawsBackground = false; previewScroll.borderType = .noBorder
