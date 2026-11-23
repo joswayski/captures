@@ -1078,6 +1078,8 @@ fn open_capture(
     let Some(thread) = RESIDENT.with(|r| r.borrow().as_ref().map(|r| r.thread)) else {
         return;
     };
+    // An idle tray released the device; recreate it alongside the grab.
+    crate::gfx::prewarm();
     // Shipping hides the mini previews before the snapshot, and closes the
     // Recording ready notice.
     crate::previews::set_suppressed(true);

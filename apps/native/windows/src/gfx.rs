@@ -4,6 +4,10 @@
 //! Windows 11 and Segoe UI before it).
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, channel};
+use std::sync::{Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::*;
@@ -14,6 +18,7 @@ use windows::Win32::Graphics::DirectComposition::*;
 use windows::Win32::Graphics::DirectWrite::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Dxgi::*;
+use windows::Win32::System::Threading::INFINITE;
 use windows::core::*;
 use windows_numerics::{Matrix3x2, Vector2};
 
@@ -443,8 +448,108 @@ pub fn renderer_recovered() {
         let mut s = s.borrow_mut();
         if s.as_ref().is_some_and(Gfx::lost) {
             *s = None;
+            RENDERER_ALIVE.store(false, Ordering::Release);
         }
     });
+}
+
+/// How long the resident app keeps the shared device once no window uses it.
+/// While any D3D11 device exists, one NVIDIA driver thread wakes ~66 times a
+/// second (15/s without a device, 83/s with a bare one, measured; device
+/// flags, a held DXGI adapter, D3D12 and leaving out composition change
+/// nothing), so an idle tray releases it. Recreating it costs ~115 ms, which
+/// [`prewarm`] overlaps with the capture's ~60 ms screen grab.
+const IDLE_RELEASE: Duration = Duration::from_secs(60);
+
+/// A D3D11 device is free-threaded (it is never created single-threaded
+/// here), so a worker can create it for the UI thread.
+struct SendDevice(ID3D11Device);
+// SAFETY: see above; the worker never touches the immediate context.
+unsafe impl Send for SendDevice {}
+
+/// A device a worker is creating for the next [`Gfx::shared`], and when it
+/// started. Any thread may start one: the tray's handlers run on whichever
+/// thread delivers the event.
+static PREWARM: Mutex<Option<(Receiver<Result<SendDevice>>, Instant)>> = Mutex::new(None);
+/// The UI thread holds a shared renderer, for [`prewarm`] on other threads.
+static RENDERER_ALIVE: AtomicBool = AtomicBool::new(false);
+
+/// A capture or a window is about to need the shared device: start creating
+/// it on a worker so its ~115 ms overlaps the work before the first frame.
+pub fn prewarm() {
+    if RENDERER_ALIVE.load(Ordering::Acquire) {
+        return;
+    }
+    let mut pending = PREWARM.lock().unwrap_or_else(PoisonError::into_inner);
+    if pending.is_some() {
+        return;
+    }
+    let (sender, receiver) = channel();
+    let spawned = std::thread::Builder::new()
+        .name("captures-gfx-prewarm".into())
+        .spawn(move || {
+            let _ = sender.send(unsafe { create_d3d() }.map(SendDevice));
+        });
+    if spawned.is_ok() {
+        *pending = Some((receiver, Instant::now()));
+    }
+}
+
+fn take_prewarmed() -> Option<ID3D11Device> {
+    let (receiver, _) = PREWARM
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take()?;
+    receiver.recv().ok()?.ok().map(|device| device.0)
+}
+
+/// Once no window uses the shared device, free what closed windows left on
+/// it at once, and release it (or an unused prewarmed one) after
+/// [`IDLE_RELEASE`]. Returns how long the host loop may wait before calling
+/// again.
+pub fn release_idle() -> u32 {
+    thread_local! {
+        static UNUSED_SINCE: Cell<Option<Instant>> = const { Cell::new(None) };
+    }
+    let now = Instant::now();
+    let prewarmed = PREWARM
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .as_ref()
+        .map(|(_, started)| *started);
+    let since = SHARED.with(|s| match s.borrow().as_ref() {
+        // Windows hold clones; only this cache holding it means unused.
+        Some(g) if Rc::strong_count(&g.simulated_loss) > 1 => {
+            UNUSED_SINCE.set(None);
+            None
+        }
+        Some(g) => Some(UNUSED_SINCE.get().unwrap_or_else(|| {
+            g.flush();
+            UNUSED_SINCE.set(Some(now));
+            now
+        })),
+        None => {
+            UNUSED_SINCE.set(None);
+            prewarmed
+        }
+    });
+    let Some(since) = since else {
+        return INFINITE;
+    };
+    let idle = now.saturating_duration_since(since);
+    if idle < IDLE_RELEASE {
+        return u32::try_from((IDLE_RELEASE - idle).as_millis()).map_or(INFINITE - 1, |ms| ms + 1);
+    }
+    PREWARM
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take();
+    if let Some(g) = SHARED.with(|s| s.borrow_mut().take()) {
+        g.flush();
+    }
+    RENDERER_ALIVE.store(false, Ordering::Release);
+    UNUSED_SINCE.set(None);
+    INFINITE
 }
 
 /// Development test hook: treat the shared device as lost, as a GPU reset
@@ -506,10 +611,33 @@ impl Gfx {
                 }
                 REPLACED_LOST.set(true);
             }
-            let g = Self::new(tokens, true)?;
+            let g = Self::create(tokens, true, take_prewarmed())?;
             *shared.borrow_mut() = Some(g.clone());
+            RENDERER_ALIVE.store(true, Ordering::Release);
             Ok(g)
         })
+    }
+
+    /// Free what closed windows left on the device: their composition
+    /// objects are released only by the device's next commit, and Direct3D
+    /// destroys released resources lazily until a flush. Dropping the last
+    /// renderer after this lets the driver free the device itself (without
+    /// it, the device outlived the cache and kept waking). Direct2D's own
+    /// caches stay until then: clearing them (`ClearResources`, `Trim`)
+    /// freed ~95 MB private and ~64 MB GPU a minute early but made each
+    /// following capture's overlay ~10 ms slower.
+    fn flush(&self) {
+        unsafe {
+            if let Some(dcomp) = &self.dcomp {
+                let _ = dcomp.Commit();
+                let _ = dcomp.WaitForCommitCompletion();
+            }
+            self.dc.SetTarget(None);
+            if let Ok(context) = self.d3d.GetImmediateContext() {
+                context.ClearState();
+                context.Flush();
+            }
+        }
     }
 
     /// The device was removed or reset and must be recreated.
@@ -519,8 +647,15 @@ impl Gfx {
 
     /// `composition` is false for the offscreen `--screenshot` renderer.
     pub fn new(tokens: &Tokens, composition: bool) -> Result<Self> {
+        Self::create(tokens, composition, None)
+    }
+
+    fn create(tokens: &Tokens, composition: bool, d3d: Option<ID3D11Device>) -> Result<Self> {
         unsafe {
-            let d3d = create_d3d()?;
+            let d3d = match d3d {
+                Some(d3d) => d3d,
+                None => create_d3d()?,
+            };
             let dxgi: IDXGIDevice = d3d.cast()?;
             let factory: ID2D1Factory1 =
                 D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;

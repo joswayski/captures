@@ -245,6 +245,16 @@ impl Tray {
             }
         }));
         TrayIconEvent::set_event_handler(Some(move |event: TrayIconEvent| {
+            // Every row opens a window: create the device while the menu is up.
+            if matches!(
+                event,
+                TrayIconEvent::Click {
+                    button_state: MouseButtonState::Down,
+                    ..
+                }
+            ) {
+                crate::gfx::prewarm();
+            }
             if matches!(
                 event,
                 TrayIconEvent::Click {
