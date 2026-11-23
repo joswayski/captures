@@ -5074,15 +5074,15 @@ impl Editor {
             }
             Target::Save => {
                 if !lit {
-                    gfx::shadow(dc, all, r_md, t.shadow("shadow-btn-primary"))?;
+                    gfx::shadow(dc, all, radius, t.shadow("shadow-btn-primary"))?;
                 }
                 let bg = if lit { "solid-hover" } else { "solid" };
-                gfx::fill_round(dc, all, r_md, c(bg))?;
-                gfx::tactile_finish(dc, &g.factory, (all, r_md), t, false, lit, 1.)?;
+                gfx::fill_round(dc, all, radius, c(bg))?;
+                gfx::tactile_finish(dc, &g.factory, (all, radius), t, false, lit, 1.)?;
                 gfx::border(
                     dc,
                     all,
-                    r_md,
+                    radius,
                     1.,
                     D2D1_COLOR_F {
                         r: 0.,

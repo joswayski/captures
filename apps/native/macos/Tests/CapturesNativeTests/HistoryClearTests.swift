@@ -398,9 +398,9 @@ final class HistoryClearTests: XCTestCase {
             }
             XCTAssertLessThanOrEqual(grid.visibleCards.map(\.frame.maxX).max() ?? 0, grid.bounds.width + 0.5)
             // Shipping History is only the header, filters and grid: the
-            // filters follow the header by the `.history-shell` gap.
+            // filters sit 3 pt inside the segmented filterTrack below the header gap.
             let headerBottom = max(lede.frame.maxY, try control("Delete all").frame.maxY)
-            XCTAssertEqual(try control("All 2").frame.minY, headerBottom + tokens.number("s-6"),
+            XCTAssertEqual(try control("All 2").frame.minY, headerBottom + tokens.number("s-6") + 3,
                            accuracy: 0.5, "filters at \(width)")
         }
         // Capture, display and permission actions remain outside History.

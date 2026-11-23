@@ -114,6 +114,7 @@ final class LoginItemTests: XCTestCase {
             .failure(SettingsStoreError.backend("profile collision")), .success(true)])
         let (root, controller) = try preferencesFixture(service: service)
         waitForTitle("Off", in: root)
+        drainMainQueue()
         XCTAssertEqual(service.calls.count, 1); XCTAssertNil(service.calls[0])
         let off = try XCTUnwrap(find(root, identifier: "login-item") as? NSButton)
         XCTAssertEqual(off.title, "Off")
