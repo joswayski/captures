@@ -188,20 +188,27 @@ impl XcapBackend {
             return Err(CaptureError::Unsupported);
         }
 
-        let window = Window::all()
-            .map_err(|error| CaptureError::Backend(error.to_string()))?
-            .into_iter()
-            .find(|candidate| {
-                candidate
-                    .id()
-                    .map(|value| value.to_string() == id)
-                    .unwrap_or(false)
-            })
-            .ok_or(CaptureError::TargetUnavailable)?;
+        #[cfg(target_os = "windows")]
+        {
+            crate::windows_grab::capture_window(id)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let window = Window::all()
+                .map_err(|error| CaptureError::Backend(error.to_string()))?
+                .into_iter()
+                .find(|candidate| {
+                    candidate
+                        .id()
+                        .map(|value| value.to_string() == id)
+                        .unwrap_or(false)
+                })
+                .ok_or(CaptureError::TargetUnavailable)?;
 
-        window
-            .capture_image()
-            .map_err(|error| CaptureError::Backend(error.to_string()))
+            window
+                .capture_image()
+                .map_err(|error| CaptureError::Backend(error.to_string()))
+        }
     }
 
     fn find_monitor(id: &str) -> CaptureResult<Monitor> {
