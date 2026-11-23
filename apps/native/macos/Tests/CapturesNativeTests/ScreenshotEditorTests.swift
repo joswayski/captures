@@ -8543,7 +8543,10 @@ final class ScreenshotEditorTests: XCTestCase {
         let busy = try XCTUnwrap(controller.layerContextMenu(row: 0))
         XCTAssertEqual(busy.items.filter { !$0.isSeparatorItem && $0.isEnabled }.map(\.title),
                        ["Paste layer"], "external images can queue; immediate layer edits stay disabled")
-        XCTAssertFalse(mergeDown.isEnabled)
+        // The open popover keeps its buttons through a quick edit instead of
+        // flashing grey, and greys them once the edit runs long.
+        XCTAssertTrue(mergeDown.isEnabled)
+        waitUntil(timeout: ScreenshotEditorController.busyControlsDelay + 2) { !mergeDown.isEnabled }
         let count = worker.requests.count
         busy.performActionForItem(at: 0)
         XCTAssertEqual(worker.requests.count, count)

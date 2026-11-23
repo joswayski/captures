@@ -4805,7 +4805,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     }
 
     private func chooseRailTool(_ key: String) {
-        guard state.snapshot != nil, !state.busy || inlineTextInput != nil,
+        // The rail's enabled state (`updateToolRail`): an enabled button acts.
+        guard state.snapshot != nil, !controlsBusy || inlineTextInput != nil,
               !draining, !importLoading, window.attachedSheet == nil else { return }
         if key == "shapes" {
             let open = shapeFlyout?.isHidden == false
