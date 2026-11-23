@@ -3843,9 +3843,7 @@ mod tests {
             let mut output = ctx.end_pass();
             if let Some(forced) = minimize_override {
                 assert_eq!(
-                    painted_texts(&output)
-                        .iter()
-                        .any(|text| text == "Collapse"),
+                    painted_texts(&output).iter().any(|text| text == "Collapse"),
                     forced
                 );
             }
