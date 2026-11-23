@@ -26,7 +26,7 @@ use core_graphics::window::{
 use screencapturekit::{
     audio_devices::AudioInputDevice,
     cg::CGRect,
-    cm::{CMSampleBuffer, CMSampleBufferExt, CMSampleBufferSCExt, SCFrameStatus},
+    cm::{CMSampleBuffer, CMSampleBufferExt, CMSampleBufferSCExt, CMTime, SCFrameStatus},
     dispatch_queue::{DispatchQoS, DispatchQueue},
     shareable_content::{SCDisplay, SCRunningApplication, SCShareableContent, SCWindow},
     stream::{
@@ -101,7 +101,7 @@ impl NativeRecordingSegment {
             .with_capture_resolution_type(SCCaptureResolutionType::Best)
             .with_pixel_format(PixelFormat::YCbCr_420v)
             .with_color_matrix("ITU_R_709_2")
-            .with_fps(u32::from(options.frames_per_second))
+            .with_minimum_frame_interval(&minimum_frame_interval(options.frames_per_second))
             .with_queue_depth(8)
             .with_shows_cursor(shows_cursor)
             .with_shows_mouse_clicks(shows_native_mouse_clicks)
@@ -355,6 +355,16 @@ impl NativeRecordingSegment {
 enum VideoFrameKind {
     Content,
     Idle,
+}
+
+/// With a minimum interval of exactly 1/60 s, ScreenCaptureKit delivered
+/// about 58 frames a second on a 120 Hz display, even when the screen changed
+/// on every refresh: a frame ready a little under the interval after the last
+/// one waited a whole refresh. Two thirds of a millisecond less gives
+/// 59.8-60.2 frames a second at 60 fps and 29.9-30.1 at 30 fps.
+fn minimum_frame_interval(frames_per_second: u16) -> CMTime {
+    let micros = 1_000_000 / i64::from(frames_per_second.max(1));
+    CMTime::new((micros - 667).max(1), 1_000_000)
 }
 
 fn sample_video_frame_kind(sample: &CMSampleBuffer) -> Option<VideoFrameKind> {
