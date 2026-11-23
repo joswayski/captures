@@ -2030,14 +2030,13 @@ final class MiniPreviewView: NSView {
     private func playDust(on card: MiniPreviewCardView) -> Bool {
         let scale = window?.backingScaleFactor ?? 2
         let pad = PreviewMotionTables.shared.dustPad
-        // A Core Image context for this dissolve only (see `DustTextures`).
         guard pad > 0, let source = card.dustSource(scale: scale),
               let textures = try? DustTextures() else { return false }
         let seed = UInt32(truncatingIfNeeded: card.artifactID.unicodeScalars.reduce(5381) { ($0 &* 33) &+ Int($1.value) })
         let particles = PreviewMotionTables.dustParticles(card: card.bounds.size,
             image: NSSize(width: source.width, height: source.height), origin: card.deleteOrigin, seed: seed)
         guard !particles.isEmpty,
-              let chips = try? textures.prepare(source: source, particles: particles, scale: scale, atlas: true),
+              let chips = try? textures.prepare(source: source, particles: particles, scale: scale, reference: false),
               chips.count == particles.count else { return false }
         let overlay = PreviewMotionOverlay(frame: card.frame.insetBy(dx: -pad, dy: -pad))
         card.superview?.addSubview(overlay, positioned: .above, relativeTo: card)

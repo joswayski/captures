@@ -2673,7 +2673,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
 
     private func previews() {
         do {
-            let view = try PreviewView(frame: NSRect(x: 320, y: 80, width: 524, height: 550), atlas: !options.referenceChips)
+            let view = try PreviewView(frame: NSRect(x: 320, y: 80, width: 524, height: 550), reference: options.referenceChips)
             content.addSubview(view)
             preview = view
             for (index, name) in ["Cold dissolve", "Warm dissolve", "Reset"].enumerated() {

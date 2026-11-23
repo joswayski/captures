@@ -1,3 +1,4 @@
+import Accelerate
 import AppKit
 import CoreImage
 import Metal
@@ -15,21 +16,25 @@ struct DustFixture: Decodable {
 
 enum NativeError: Error { case noMetal, renderFailed }
 
-// No global/unbounded image cache. Mini previews make one per Delete: a
-// long-lived context kept its Metal heap and intermediates dirty for about a
-// second after the atlas render, on top of the dissolve's own drawing.
-// Compare atlas=false with the original per-chip filtering path on identical input.
+// Builds the pre-filtered chips a Delete dissolves into: each chip is a
+// padded slice of the card, blurred and darkened. The shipping chips are
+// filtered on the CPU with vImage. Core Image's first render in a process
+// costs about 66 MB (a 4x4 render took the footprint from 6 to 72 MB, with
+// the Metal or the software renderer), which was most of Delete's peak.
+// `reference: true` renders each chip through Core Image, the original
+// filtering the vImage chips are compared with.
 final class DustTextures {
-    let context: CIContext
     let deviceName: String
+    private let device: MTLDevice
+    private lazy var context = CIContext(mtlDevice: device, options: [
+        .workingColorSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
+        .cacheIntermediates: false,
+    ])
 
     init() throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw NativeError.noMetal }
+        self.device = device
         deviceName = device.name
-        context = CIContext(mtlDevice: device, options: [
-            .workingColorSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
-            .cacheIntermediates: false,
-        ])
     }
 
     func render(_ image: CIImage, rect: CGRect) throws -> CGImage {
@@ -54,74 +59,103 @@ final class DustTextures {
     }
 
     func prepare(source: CGImage, particles: [ThumbnailDustParticle], scale: CGFloat,
-                 atlas: Bool) throws -> [Chip] {
-        let image = CIImage(cgImage: source)
+                 reference: Bool) throws -> [Chip] {
         let pad: CGFloat = 8
-        let columns = Int(ceil(sqrt(Double(particles.count))))
-        guard columns > 0 else { return [] }
-        // 16pt extra gutter keeps neighboring blur kernels outside each chip's
-        // 8pt visible fringe. Filter slices, never the intact source image.
-        let cellW = ceil((particles.map(\.width).max()! + 2 * pad + 16) * scale)
-        let cellH = ceil((particles.map(\.height).max()! + 2 * pad + 16) * scale)
-        let extent = CGRect(x: 0, y: 0, width: CGFloat(columns) * cellW,
-            height: CGFloat((particles.count + columns - 1) / columns) * cellH)
-        var packed = CIImage(color: .clear).cropped(to: extent)
-        var row = CIImage.empty()
-        var rects: [CGRect] = []
-        var chips: [Chip] = []
-        for (index, p) in particles.enumerated() {
-            let slice = CGRect(x: p.sourceLeft * scale,
-                y: (160 - p.sourceTop - p.height) * scale,
+        // Slices in Core Image's coordinates (origin bottom-left), padded by
+        // the chip's 8pt fringe and read at integral pixel bounds.
+        let slices = particles.map { p -> (slice: CGRect, bounds: CGRect, size: CGSize) in
+            let slice = CGRect(x: p.sourceLeft * scale, y: (160 - p.sourceTop - p.height) * scale,
                 width: p.width * scale, height: p.height * scale)
-            let padded = slice.insetBy(dx: -pad * scale, dy: -pad * scale)
-            if !atlas {
-                let clear = CIImage(color: .clear).cropped(to: padded)
-                let filtered = filter(image.cropped(to: slice).composited(over: clear), scale: scale)
-                chips.append(Chip(image: try render(filtered, rect: padded.integral),
-                    size: CGSize(width: p.width + 2 * pad, height: p.height + 2 * pad)))
-                continue
-            }
-            // Preserve the source's fractional sampling phase. Translating the
-            // fractional padded origin to an integer atlas slot resamples edges.
-            // createCGImage reads integral pixel bounds on the reference path.
-            let rasterBounds = padded.integral
-            let tile = CGRect(x: CGFloat(index % columns) * cellW + 8 * scale,
-                y: CGFloat(index / columns) * cellH + 8 * scale,
-                width: rasterBounds.width, height: rasterBounds.height)
-            let moved = image.cropped(to: slice).transformed(by:
-                CGAffineTransform(translationX: tile.minX - rasterBounds.minX, y: tile.minY - rasterBounds.minY))
-            // Close each atlas row as its own row-sized intermediate. One chain
-            // of every chip made Core Image cut it into 15-input programs that
-            // each wrote a full-atlas intermediate (13 of 15 MB at 2x, all live
-            // in one render). The chips do not overlap, so the pixels match.
-            row = moved.composited(over: row)
-            if index % columns == columns - 1 || index == particles.count - 1 {
-                packed = row.insertingIntermediate(cache: false).composited(over: packed)
-                row = CIImage.empty()
-            }
-            rects.append(tile)
+            return (slice, slice.insetBy(dx: -pad * scale, dy: -pad * scale).integral,
+                    CGSize(width: p.width + 2 * pad, height: p.height + 2 * pad))
         }
-        guard atlas else { return chips }
-        // One filtered atlas, read back one row of cells at a time: about 14
-        // readbacks instead of 198 createCGImage calls. Reading the whole atlas
-        // at once kept every intermediate of the full-atlas render live
-        // together, about 60 MB more at the Delete peak. The gutters keep each
-        // row's blur inside its own cells, so the pixels match.
-        let filtered = filter(packed, scale: scale)
-        var band: (row: Int, texture: CGImage)?
-        return try zip(rects, particles).enumerated().map { index, pair in
-            let (rect, particle) = pair
-            let row = index / columns
-            let bounds = CGRect(x: 0, y: CGFloat(row) * cellH, width: extent.width, height: cellH)
-            if band?.row != row { band = (row, try render(filtered, rect: bounds)) }
-            // Crop in integer CGImage pixels (top-left origin) after the row's
-            // filter render. CALayer.contentsRect changes interpretation under
-            // flipped ancestors; a full-image chip works in either hierarchy.
-            let pixels = CGRect(x: rect.minX, y: bounds.maxY - rect.maxY,
-                width: rect.width, height: rect.height)
-            guard let image = band?.texture.cropping(to: pixels) else { throw NativeError.renderFailed }
-            return Chip(image: image,
-                size: CGSize(width: particle.width + 2 * pad, height: particle.height + 2 * pad))
+        if reference {
+            let image = CIImage(cgImage: source)
+            return try slices.map { slice, bounds, size in
+                let clear = CIImage(color: .clear).cropped(to: bounds)
+                let filtered = filter(image.cropped(to: slice).composited(over: clear), scale: scale)
+                return Chip(image: try render(filtered, rect: bounds), size: size)
+            }
+        }
+
+        let width = source.width, height = source.height
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        let space = CGColorSpace(name: CGColorSpace.sRGB)!
+        let info = CGImageAlphaInfo.premultipliedLast.rawValue
+        try pixels.withUnsafeMutableBytes { buffer in
+            guard let context = CGContext(data: buffer.baseAddress, width: width, height: height,
+                bitsPerComponent: 8, bytesPerRow: width * 4, space: space, bitmapInfo: info)
+            else { throw NativeError.renderFailed }
+            context.draw(source, in: CGRect(x: 0, y: 0, width: width, height: height))
+        }
+        // `CIGaussianBlur`'s radius is its standard deviation.
+        let sigma = Float(2 * scale)
+        let reach = Int((3 * sigma).rounded(.up))
+        // Two one-dimensional integer passes; vImageSepConvolve needs macOS 14.
+        let weights = (-reach...reach).map { exp(-Float($0 * $0) / (2 * sigma * sigma)) }
+        let total = weights.reduce(0, +)
+        let divisor: Int32 = 1 << 14
+        var kernel = weights.map { Int16((Float(divisor) * $0 / total).rounded()) }
+        kernel[reach] += Int16(divisor - kernel.reduce(Int32(0)) { $0 + Int32($1) })
+        let clear: [UInt8] = [0, 0, 0, 0]
+
+        return try slices.map { slice, bounds, size in
+            let chipWidth = Int(bounds.width), chipHeight = Int(bounds.height)
+            var chip = [UInt8](repeating: 0, count: chipWidth * chipHeight * 4)
+            // Core Image's crop to a fractional rect keeps the part of each
+            // edge pixel inside it, so edge pixels are scaled by that part.
+            // Chip rows run top-down, as in a CGImage.
+            let covered = { (low: CGFloat, high: CGFloat) in
+                max(0, min(high, 1) - max(low, 0)) }
+            for row in 0..<chipHeight {
+                let y = bounds.maxY - CGFloat(row) - 1
+                let rowCoverage = covered(slice.minY - y, slice.maxY - y)
+                let sourceRow = height - 1 - Int(y)
+                guard rowCoverage > 0, sourceRow >= 0, sourceRow < height else { continue }
+                for column in 0..<chipWidth {
+                    let x = bounds.minX + CGFloat(column)
+                    let coverage = rowCoverage * covered(slice.minX - x, slice.maxX - x)
+                    let sourceColumn = Int(x)
+                    guard coverage > 0, sourceColumn >= 0, sourceColumn < width else { continue }
+                    let from = (sourceRow * width + sourceColumn) * 4, to = (row * chipWidth + column) * 4
+                    for channel in 0..<4 {
+                        chip[to + channel] = UInt8((CGFloat(pixels[from + channel]) * coverage).rounded())
+                    }
+                }
+            }
+            var across = [UInt8](repeating: 0, count: chip.count)
+            var blurred = [UInt8](repeating: 0, count: chip.count)
+            let error = chip.withUnsafeMutableBytes { input in
+                across.withUnsafeMutableBytes { middle in
+                    blurred.withUnsafeMutableBytes { output in
+                        let buffer = { (bytes: UnsafeMutableRawBufferPointer) in
+                            vImage_Buffer(data: bytes.baseAddress, height: vImagePixelCount(chipHeight),
+                                          width: vImagePixelCount(chipWidth), rowBytes: chipWidth * 4)
+                        }
+                        var source = buffer(input), between = buffer(middle), destination = buffer(output)
+                        let flags = vImage_Flags(kvImageBackgroundColorFill)
+                        let first = vImageConvolve_ARGB8888(&source, &between, nil, 0, 0, kernel,
+                            1, UInt32(kernel.count), divisor, clear, flags)
+                        guard first == kvImageNoError else { return first }
+                        return vImageConvolve_ARGB8888(&between, &destination, nil, 0, 0, kernel,
+                            UInt32(kernel.count), 1, divisor, clear, flags)
+                    }
+                }
+            }
+            guard error == kvImageNoError else { throw NativeError.renderFailed }
+            // `CIColorMatrix` halves red, green and blue and keeps alpha.
+            for index in stride(from: 0, to: blurred.count, by: 4) {
+                blurred[index] = UInt8((Int(blurred[index]) + 1) / 2)
+                blurred[index + 1] = UInt8((Int(blurred[index + 1]) + 1) / 2)
+                blurred[index + 2] = UInt8((Int(blurred[index + 2]) + 1) / 2)
+            }
+            guard let provider = CGDataProvider(data: Data(blurred) as CFData),
+                  let image = CGImage(width: chipWidth, height: chipHeight, bitsPerComponent: 8,
+                      bitsPerPixel: 32, bytesPerRow: chipWidth * 4, space: space,
+                      bitmapInfo: CGBitmapInfo(rawValue: info), provider: provider, decode: nil,
+                      shouldInterpolate: false, intent: .defaultIntent)
+            else { throw NativeError.renderFailed }
+            return Chip(image: image, size: size)
         }
     }
 }
@@ -134,15 +168,15 @@ final class PreviewView: NSView {
     private let maskLayer = CAShapeLayer()
     private let fixture: DustFixture
     private let textures: DustTextures
-    private let atlas: Bool
+    private let reference: Bool
     private var source: CGImage?
     private var cache: [DustTextures.Chip]?
     private var cachedScale: CGFloat = 0
     private var running = false
     private var generation = 0
 
-    init(frame: NSRect, atlas: Bool) throws {
-        self.atlas = atlas
+    init(frame: NSRect, reference: Bool) throws {
+        self.reference = reference
         fixture = try DustFixture.load()
         textures = try DustTextures()
         super.init(frame: frame)
@@ -240,14 +274,14 @@ final class PreviewView: NSView {
         do {
             if !cacheHit {
                 cache = try textures.prepare(source: source, particles: fixture.particles,
-                    scale: cachedScale, atlas: atlas)
+                    scale: cachedScale, reference: reference)
             }
         } catch {
             Metrics.emit("effect-error", milliseconds: 0, detail: String(describing: error))
             return
         }
         Metrics.emit("texture-preparation", milliseconds: (CACurrentMediaTime() - preparation) * 1000,
-            detail: "\(atlas ? "atlas" : "per-chip"), cacheHit=\(cacheHit), \(textures.deviceName)")
+            detail: "\(reference ? "Core Image" : "vImage"), cacheHit=\(cacheHit), \(textures.deviceName)")
         let construction = CACurrentMediaTime()
         CATransaction.begin()
         CATransaction.setDisableActions(true)

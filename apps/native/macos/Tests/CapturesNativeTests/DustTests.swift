@@ -36,26 +36,26 @@ final class DustTests: XCTestCase {
         XCTAssertEqual(snapped, CGRect(x: 0, y: -20, width: 568, height: 360))
     }
 
-    func testAtlasPreservesIsolatedChipPixelsAtBothScales() throws {
-        try checkAtlas(flippedParent: false)
+    func testVImageChipsMatchCoreImageAtBothScales() throws {
+        try checkChips(flippedParent: false)
     }
 
-    func testAtlasPreservesChipPixelsUnderFlippedPreviewParent() throws {
-        try checkAtlas(flippedParent: true)
+    func testVImageChipsMatchCoreImageUnderFlippedPreviewParent() throws {
+        try checkChips(flippedParent: true)
     }
 
-    private func checkAtlas(flippedParent: Bool) throws {
+    private func checkChips(flippedParent: Bool) throws {
         let textures: DustTextures
         do { textures = try DustTextures() }
-        catch NativeError.noMetal { throw XCTSkip("A Metal device is required for the atlas pixel gate") }
+        catch NativeError.noMetal { throw XCTSkip("A Metal device is required for the Core Image reference chips") }
         let particles = try DustFixture.load().particles
         for scale in [CGFloat(1), CGFloat(2)] {
             let source = PreviewView.fixtureImage(scale: scale)
-            let reference = try textures.prepare(source: source, particles: particles, scale: scale, atlas: false)
-            let atlas = try textures.prepare(source: source, particles: particles, scale: scale, atlas: true)
-            XCTAssertEqual(atlas.count, reference.count)
+            let reference = try textures.prepare(source: source, particles: particles, scale: scale, reference: true)
+            let chips = try textures.prepare(source: source, particles: particles, scale: scale, reference: false)
+            XCTAssertEqual(chips.count, reference.count)
             var totalError = 0, channelCount = 0, largeErrors = 0, nonzero = 0
-            for (index, pair) in zip(atlas, reference).enumerated() {
+            for (index, pair) in zip(chips, reference).enumerated() {
                 let (a, b) = pair
                 var prefix: URL?
                 if [0, 42, 100, 197].contains(index),
@@ -64,7 +64,7 @@ final class DustTests: XCTestCase {
                         .appendingPathComponent("chip-\(index)-\(Int(scale))x-flipped-\(flippedParent)")
                 }
                 let actual = try pixels(a, scale: scale, flippedParent: flippedParent,
-                    artifact: prefix?.appendingPathExtension("atlas.png"))
+                    artifact: prefix?.appendingPathExtension("vimage.png"))
                 let expected = try pixels(b, scale: scale, flippedParent: flippedParent,
                     artifact: prefix?.appendingPathExtension("reference.png"))
                 XCTAssertEqual(actual.count, expected.count)
@@ -77,7 +77,7 @@ final class DustTests: XCTestCase {
                     channelCount += 1
                 }
             }
-            print("Atlas parity \(scale)x, flipped parent=\(flippedParent): mean error=\(Double(totalError) / Double(channelCount)), large-error fraction=\(Double(largeErrors) / Double(channelCount))")
+            print("Chip parity \(scale)x, flipped parent=\(flippedParent): mean error=\(Double(totalError) / Double(channelCount)), large-error fraction=\(Double(largeErrors) / Double(channelCount))")
             XCTAssertGreaterThan(nonzero, 1000, "Blank fixtures cannot pass parity")
             XCTAssertLessThanOrEqual(Double(totalError) / Double(channelCount), 2)
             XCTAssertLessThanOrEqual(Double(largeErrors) / Double(channelCount), 0.01)
