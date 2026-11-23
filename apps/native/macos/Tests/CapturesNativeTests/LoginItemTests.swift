@@ -246,9 +246,12 @@ final class LoginItemTests: XCTestCase {
         let freeze = try XCTUnwrap(find(root, identifier: "setting.freeze_screen") as? PreferenceSwitchButton)
         XCTAssertFalse(freeze.isOn)
         XCTAssertGreaterThan(freeze.frame.width, freeze.switchRect.width * 10, "the row, not just the knob")
+        let appearanceCard = try XCTUnwrap(find(root, identifier: "preferences-card.appearance"))
         freeze.performClick(nil)
         let toggled = try XCTUnwrap(find(root, identifier: "setting.freeze_screen") as? PreferenceSwitchButton)
         XCTAssertTrue(toggled.isOn)
+        XCTAssertTrue(find(root, identifier: "preferences-card.appearance") === appearanceCard,
+                      "a switch rebuilds only its own card")
 
         // Mini preview corners follow the Show mini previews switch.
         let corner = try XCTUnwrap(find(root, identifier: "mini-preview-placement.top_right") as? NSButton)

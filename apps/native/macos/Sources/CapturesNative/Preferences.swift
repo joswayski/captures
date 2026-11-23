@@ -1042,24 +1042,58 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
 
     /// Replace only Updates: a network result must not interrupt a shortcut
     /// recorder or text control in another card.
-    func refreshUpdateChecks() {
-        guard let old = sectionViews["updates"] else { return }
+    func refreshUpdateChecks() { refreshCard("updates") }
+
+    /// Cards in page order, for rebuilding one in place.
+    private static let cardOrder = ["general", "appearance", "capture", "shortcuts", "recording", "gif",
+                                    "updates", "about"]
+
+    private func buildCard(_ id: String, _ y: CGFloat) -> CGFloat {
+        switch id {
+        case "general": return generalCard(y)
+        case "appearance": return appearanceCard(y)
+        case "capture": return captureCard(y)
+        case "shortcuts": return shortcutsCard(y)
+        case "recording": return recordingCard(y)
+        case "gif": return gifCard(y)
+        case "updates": return updatesCard(y)
+        default: return aboutCard(y)
+        }
+    }
+
+    /// Rebuild one card where it is and move the cards below it, instead of
+    /// tearing down the whole window for a change only that card shows.
+    private func refreshCard(_ id: String) {
+        guard let old = sectionViews[id] else { return }
         let frame = old.frame
+        let focused = (root.window?.firstResponder as? NSView).flatMap {
+            $0.isDescendant(of: old) ? $0.identifier : nil
+        }
         let index = searchable.firstIndex { $0.0.isDescendant(of: old) } ?? searchable.count
         searchable.removeAll { $0.0.isDescendant(of: old) }
         old.removeFromSuperview()
         let count = searchable.count
-        _ = updatesCard(frame.minY)
+        _ = buildCard(id, frame.minY)
         let replacement = Array(searchable[count...])
         searchable.removeSubrange(count...)
         searchable.insert(contentsOf: replacement, at: index)
-        let delta = (sectionViews["updates"]?.frame.height ?? frame.height) - frame.height
-        sectionViews["about"]?.frame.origin.y += delta
-        document.frame.size.height += delta
+        let delta = (sectionViews[id]?.frame.height ?? frame.height) - frame.height
+        if delta != 0, let position = Self.cardOrder.firstIndex(of: id) {
+            for later in Self.cardOrder[(position + 1)...] { sectionViews[later]?.frame.origin.y += delta }
+            document.frame.size.height += delta
+        }
         let maxY = max(0, document.frame.height - scroll.contentSize.height)
         scroll.contentView.scroll(to: NSPoint(x: 0, y: min(scroll.contentView.bounds.minY, maxY)))
         scroll.reflectScrolledClipView(scroll.contentView)
         updateFind(); updateActiveSection(); installKeyViewLoop()
+        // A keyboard toggle keeps focus on the rebuilt control.
+        if let focused, let card = sectionViews[id] {
+            func find(_ view: NSView) -> NSView? {
+                if view.identifier == focused, view.acceptsFirstResponder { return view }
+                return view.subviews.lazy.compactMap(find).first
+            }
+            if let view = find(card) { root.window?.makeFirstResponder(view) }
+        }
     }
 
     func revealUpdates() {
@@ -1270,11 +1304,12 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         switchStates[key] = isOn
         let layout = inlineRow(title, detail: detail, emphasis: emphasis, control: NSSize(width: 32, height: 19),
             y: y, card: card, enabled: enabled, switchHint: true, highlight: path.count == 1 ? path[0] : nil)
+        let section = card.identifier?.rawValue.replacingOccurrences(of: "preferences-card.", with: "")
         let button = PreferenceSwitchButton(frame: layout.row, tokens: tokens, label: title, detail: detail,
                                             isOn: isOn, previousOn: previousOn) {
             [weak self] in
             guard let self else { return }
-            self.setBool(!self.boolSetting(path), path: path)
+            self.setBool(!self.boolSetting(path), path: path, card: section)
         }
         button.identifier = NSUserInterfaceItemIdentifier(key)
         button.isEnabled = enabled
@@ -1287,14 +1322,21 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         return settings.bool(path[0])
     }
 
-    private func setBool(_ value: Bool, path: [String]) {
+    /// A switch changes only what its own card shows (no switch is an
+    /// appearance setting), so only that card is rebuilt.
+    private func setBool(_ value: Bool, path: [String], card: String?) {
         if path.count == 2 {
             var nested = settings[path[0]] as? [String: Any] ?? [:]
             nested[path[1]] = value; settings[path[0]] = nested
         } else {
             settings[path[0]] = value
         }
-        changed(rerender: true)
+        if let card, sectionViews[card] != nil {
+            changed(rerender: false)
+            refreshCard(card)
+        } else {
+            changed(rerender: true)
+        }
     }
 
     /// A shipping `CustomSelect` for `key` (`recording.` prefixes nested keys).
