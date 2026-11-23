@@ -1197,6 +1197,8 @@ final class ScreenshotEditorTests: XCTestCase {
         let plan = try XCTUnwrap(worker.exportSaves.last?["plan"] as? [String: Any])
         XCTAssertEqual(plan["kind"] as? String, "new_file")
         let filename = try field("Saved filename", in: controller.root)
+        // The missing original's warning already gives the footer its row.
+        let footerHeight = try XCTUnwrap(try field("Export status", in: controller.root).superview).frame.height
         filename.stringValue = "bad/name"
         controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: filename))
         XCTAssertFalse(try button("Save", in: controller.root).isEnabled)
@@ -1215,9 +1217,9 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertLessThanOrEqual(needed, status.bounds.height + 0.5, "the filename error is not truncated")
         XCTAssertGreaterThanOrEqual(status.frame.minY, 1)
         XCTAssertLessThanOrEqual(status.frame.maxY, try copyButton(in: controller.root).frame.minY)
-        XCTAssertEqual(bar.frame.height, 77)
+        XCTAssertEqual(bar.frame.height, footerHeight, "the error does not move the canvas")
         // Selecting the error keeps its colour inside the label's frame.
-        XCTAssertTrue(controller.window.makeFirstResponder(status))
+        status.selectText(nil)
         let editor = try XCTUnwrap(status.currentEditor() as? NSTextView)
         XCTAssertEqual(editor.textStorage?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor,
                        Tokens.variants["light-mustard"]!.color("danger-text"))
