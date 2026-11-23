@@ -811,6 +811,38 @@ pub struct ViewState {
     pub action_error: Option<String>,
     #[serde(default)]
     pub installing: bool,
+    /// The height the card keeps while one update proceeds; see
+    /// [`ViewState::follow`].
+    #[serde(default)]
+    pub held_height: f64,
+}
+
+impl ViewState {
+    /// Track a status change. From Available through Downloading,
+    /// Restarting or an install error the card keeps its tallest height so
+    /// far, so the notice does not jump as each step finishes; any other
+    /// change (a new check, a verified update offered again) sizes itself.
+    pub fn follow(&mut self, previous: Option<&UpdateStatus>, next: &UpdateStatus) {
+        use UpdateStatus as S;
+        let proceeding = matches!(
+            next,
+            S::Downloading { .. } | S::Restarting { .. } | S::Error { .. }
+        ) && matches!(
+            previous,
+            Some(
+                S::Available { .. }
+                    | S::Downloading { .. }
+                    | S::Restarting { .. }
+                    | S::Error { .. }
+            )
+        );
+        self.held_height = if proceeding {
+            self.held_height
+                .max(card_height(previous, self.show_changelog))
+        } else {
+            0.0
+        };
+    }
 }
 
 fn default_true() -> bool {
@@ -1137,7 +1169,7 @@ pub fn present(status: Option<&UpdateStatus>, view: &ViewState) -> Presentation 
             _ => None,
         },
         card_width: CARD_WIDTH,
-        card_height: card_height(status, view.show_changelog),
+        card_height: card_height(status, view.show_changelog).max(view.held_height),
     }
 }
 
@@ -1861,6 +1893,25 @@ mod tests {
     }
 
     #[test]
+    fn one_update_keeps_its_card_height_until_a_new_check() {
+        let available = fixture("available").unwrap();
+        let tall = present(Some(&available), &view(true)).card_height;
+        let mut view = view(true);
+        let mut previous = available;
+        for name in ["downloading", "restarting"] {
+            let next = fixture(name).unwrap();
+            view.follow(Some(&previous), &next);
+            let p = present(Some(&next), &view);
+            assert_eq!(p.card_height, tall, "{name}");
+            assert!(p.card_height > card_height(Some(&next), true));
+            previous = next;
+        }
+        let checking = fixture("checking").unwrap();
+        view.follow(Some(&previous), &checking);
+        assert_eq!(present(Some(&checking), &view).card_height, 224.0);
+    }
+
+    #[test]
     fn downloading_and_restarting_block_dismissal_and_hide_the_footer() {
         let p = present(fixture("downloading").as_ref(), &view(true));
         assert_eq!(p.title, "Updating Captures");
@@ -1933,9 +1984,8 @@ mod tests {
         let p = present(
             Some(&status),
             &ViewState {
-                show_changelog: true,
                 action_error: Some("Could not start".into()),
-                installing: false,
+                ..view(true)
             },
         );
         assert_eq!(p.visual_state, "error");
@@ -1951,9 +2001,8 @@ mod tests {
         let p = present(
             Some(&status),
             &ViewState {
-                show_changelog: true,
-                action_error: None,
                 installing: true,
+                ..view(true)
             },
         );
         let footer = p.footer.unwrap();

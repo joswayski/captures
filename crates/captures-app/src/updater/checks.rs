@@ -708,6 +708,10 @@ impl CheckWorker {
         }
         // Development descriptions name raw versions without a release page.
         p.version_link = None;
+        // A staged update's two-line warning, in place of the status line.
+        let staged_height = notice::card_height(None, false) - notice::STATUS_HEIGHT
+            + notice::WARNING_HEIGHT
+            + 16.0;
         if self.preview {
             p.title = match self.status {
                 CheckStatus::Checking => "Checking for updates",
@@ -729,10 +733,7 @@ impl CheckWorker {
             // a second line saying the same thing was redundant.
             p.status_message = None;
             if p.close_warning.is_some() && matches!(self.status, CheckStatus::Staged { .. }) {
-                // Room for the two-line warning in place of the status line.
-                p.card_height = notice::card_height(None, false) - notice::STATUS_HEIGHT
-                    + notice::WARNING_HEIGHT
-                    + 16.0;
+                p.card_height = staged_height;
             }
             if let Some(error) = &mut p.error {
                 error.fallback_prefix = "Try again, or ".into();
@@ -749,6 +750,39 @@ impl CheckWorker {
                     action: Action::OpenDownloadPage,
                 });
             }
+        }
+        // Every step of one update shares the tallest of its Available,
+        // progress and Restart and install cards, so the notice does not jump
+        // as one replaces another (an error may still grow it).
+        if let CheckStatus::Available { release }
+        | CheckStatus::Downloading { release, .. }
+        | CheckStatus::Verifying { release }
+        | CheckStatus::Cancelling { release }
+        | CheckStatus::Staged { release, .. }
+        | CheckStatus::DownloadError { release, .. } = &self.status
+        {
+            let available = UpdateStatus::Available {
+                current_version: self.current_version.clone(),
+                current_display_version: self.current_version.clone(),
+                version: release.version.clone(),
+                display_version: super::display_version(&release.version),
+                notes: release.notes.clone(),
+                changelog: release.changelog.clone(),
+                installable: false,
+                manual_download_url: None,
+                download_size: Some(release.size),
+                will_close_open_captures: false,
+            };
+            let staged = if self.preview && self.install_request_enabled {
+                staged_height
+            } else {
+                0.0
+            };
+            p.card_height = p
+                .card_height
+                .max(notice::card_height(Some(&available), show_changelog))
+                .max(notice::card_height(None, false))
+                .max(staged);
         }
         Some(p)
     }
@@ -1201,6 +1235,34 @@ mod tests {
             (card.action, card.step),
             ("Check Now", Some(CardStep::Check))
         );
+        // The notice keeps one height from Download to Restart and install.
+        worker.enable_install_request();
+        for show_changelog in [true, false] {
+            let heights: Vec<f64> = [
+                CheckStatus::Available {
+                    release: release.clone(),
+                },
+                CheckStatus::Downloading {
+                    release: release.clone(),
+                    downloaded: 1,
+                    total: 2,
+                },
+                CheckStatus::Verifying {
+                    release: release.clone(),
+                },
+                CheckStatus::Staged {
+                    release: release.clone(),
+                    sha256: String::new(),
+                },
+            ]
+            .into_iter()
+            .map(|status| {
+                worker.status = status;
+                worker.notice(show_changelog).unwrap().card_height
+            })
+            .collect();
+            assert!(heights.iter().all(|h| *h == heights[0]), "{heights:?}");
+        }
         worker.status = CheckStatus::Available {
             release: release.clone(),
         };
@@ -1329,6 +1391,7 @@ mod tests {
             worker.presentation().acquisition.unwrap().action,
             Action::DownloadVerify
         );
+        let available_height = worker.notice(true).unwrap().card_height;
         assert_eq!(
             std::fs::read_dir(scratch.path()).unwrap().count(),
             1,
@@ -1345,6 +1408,8 @@ mod tests {
             worker.presentation().acquisition.unwrap().label,
             "Retry download"
         );
+        // The error keeps the card at least as tall as the update it failed.
+        assert!(worker.notice(true).unwrap().card_height >= available_height);
         assert_eq!(
             std::fs::read_dir(scratch.path()).unwrap().count(),
             1,
@@ -1360,6 +1425,7 @@ mod tests {
             "retain verified package, not original download"
         );
         let notice = worker.notice(true).unwrap();
+        assert_eq!(notice.card_height, available_height, "no jump when staged");
         assert_eq!(notice.title, "Development package verified");
         assert!(notice.restart.is_none() && notice.close_warning.is_none());
         assert!(

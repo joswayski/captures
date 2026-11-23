@@ -842,6 +842,9 @@ impl UpdateNotice {
             return;
         };
         let interval = notice::stub_tick_interval_ms(&next);
+        self.view
+            .borrow_mut()
+            .follow(self.status.borrow().as_ref(), &next);
         *self.status.borrow_mut() = Some(next);
         self.render();
         if let Some(interval) = interval {
@@ -876,6 +879,9 @@ impl UpdateNotice {
         if unchanged {
             return;
         }
+        self.view
+            .borrow_mut()
+            .follow(self.status.borrow().as_ref(), &status);
         *self.status.borrow_mut() = Some(status);
         self.view.borrow_mut().installing = installing;
         self.render();
@@ -1156,7 +1162,7 @@ impl UpdateNotice {
             status.set_accessible_role(gtk::AccessibleRole::Status);
             body.append(&status);
         }
-        let compact = p.notes.is_none();
+        let compact = p.notes.is_none() && p.download.is_none() && p.restart.is_none();
         let mut rows: Vec<gtk::Widget> = vec![header.upcast()];
         // `.update-notice-compact .update-notice-body:empty { display: none }`.
         if body.first_child().is_some() {
@@ -1204,8 +1210,9 @@ impl UpdateNotice {
             rows.push(row.upcast());
         }
         // Shipping's four grid rows: compact cards share the spare height
-        // between every row track (empty ones last); with notes, the body
-        // takes it all.
+        // between every row track (empty ones last); with notes or
+        // progress, the body takes it all, so the header stays put while an
+        // update's card holds its Available height (`ViewState::follow`).
         while compact && rows.len() < 4 {
             rows.push(gtk::Box::new(gtk::Orientation::Vertical, 0).upcast());
         }

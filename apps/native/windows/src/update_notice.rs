@@ -282,6 +282,7 @@ pub fn sync(live: Live) {
             let changed = n.status != live.status;
             if changed {
                 n.view.action_error = None;
+                n.view.follow(Some(&n.status), &live.status);
             }
             if blocked.is_some() {
                 n.view.action_error = blocked;
@@ -1629,22 +1630,25 @@ pub fn paint(
 
     // ---- rows ----
     // Shipping's four grid rows: compact cards share the spare height
-    // between every track (empty ones too); with notes, the body takes it.
+    // between every track (empty ones too); with notes or progress, the body
+    // takes it, so the header stays put while an update's card holds its
+    // Available height (`ViewState::follow`).
     let content = bottom - top;
-    let (header_h, body_h, warning_h, footer_h) = if notes.is_some() {
-        let body = (content - header - warning_natural - footer_natural).max(0.);
-        (header, body, warning_natural, footer_natural)
-    } else {
-        let used = header + body_natural + warning_natural + footer_natural;
-        let extra = (content - used).max(0.) / 4.;
-        let grow = |h: f32, present: bool| if present { h + extra } else { h };
-        (
-            header + extra,
-            grow(body_natural, has_body),
-            grow(warning_natural, warning.is_some()),
-            grow(footer_natural, p.footer.is_some()),
-        )
-    };
+    let (header_h, body_h, warning_h, footer_h) =
+        if notes.is_some() || download.is_some() || restart.is_some() {
+            let body = (content - header - warning_natural - footer_natural).max(0.);
+            (header, body, warning_natural, footer_natural)
+        } else {
+            let used = header + body_natural + warning_natural + footer_natural;
+            let extra = (content - used).max(0.) / 4.;
+            let grow = |h: f32, present: bool| if present { h + extra } else { h };
+            (
+                header + extra,
+                grow(body_natural, has_body),
+                grow(warning_natural, warning.is_some()),
+                grow(footer_natural, p.footer.is_some()),
+            )
+        };
 
     // ---- header ----
     let y0 = top;
