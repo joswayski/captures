@@ -31,11 +31,6 @@ enum ChromeRequest {
         viewport: [f64; 4],
         canvas: [f64; 4],
     },
-    DrawToolPreview {
-        tool: String,
-        stroke_width: f64,
-        stroke_enabled: bool,
-    },
     BrushPreview {
         size: f64,
         softness: f64,
@@ -301,20 +296,6 @@ fn handle(request: ChromeRequest) -> Result<Value, String> {
                 rect(canvas)?
             ))
         }
-        ChromeRequest::DrawToolPreview {
-            tool,
-            stroke_width,
-            stroke_enabled,
-        } => {
-            if !stroke_width.is_finite() {
-                return Err("invalid stroke width".into());
-            }
-            json!(chrome::draw_preview::stroke(
-                &tool,
-                stroke_width,
-                stroke_enabled
-            ))
-        }
         ChromeRequest::BrushPreview { size, softness } => {
             if !size.is_finite() || !softness.is_finite() {
                 return Err("invalid brush".into());
@@ -381,7 +362,6 @@ fn handle(request: ChromeRequest) -> Result<Value, String> {
 /// `{"operation":"copy"}`, `header_layout {width}`, `shapes_tooltip {current}`,
 /// `tool_label {key}`, `zoom_label {percent}`,
 /// `canvas_offscreen {viewport:[x,y,w,h], canvas:[x,y,w,h]}`,
-/// `draw_tool_preview {tool, stroke_width, stroke_enabled}`,
 /// `brush_preview {size, softness}`,
 /// `wand_loupe_position {cursor:[x,y], viewport:[w,h]}`,
 /// `text_default_shadow {font_size}` (the untouched new-text shadow) or
@@ -508,13 +488,6 @@ mod tests {
         assert_eq!(result["wand_loupe"]["size"], 84.);
         assert_eq!(result["wand_loupe"]["extent"], 11);
         assert_eq!(result["draw_preview"]["height"], 88.);
-        let stroke = call(
-            json!({"operation": "draw_tool_preview", "tool": "rectangle",
-            "stroke_width": 8., "stroke_enabled": true}),
-        );
-        assert_eq!(stroke["result"]["label"], "Stroke preview");
-        assert_eq!(stroke["result"]["shapes"][0]["kind"], "rounded_rect");
-        assert_eq!(stroke["result"]["shapes"][0]["radius"], 6.);
         let shadow = call(json!({"operation": "text_default_shadow", "font_size": 50.}));
         assert_eq!(shadow["result"]["blur"], 9.35);
         assert_eq!(shadow["result"]["offsetY"], 4.);

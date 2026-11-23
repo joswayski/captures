@@ -431,10 +431,9 @@ char *captures_icon_polylines_v1(const char *name);
  * {width} -> {show_history, zoom_slider_width, zoom_preset_width} (the
  * shipping 1040px rule); "shapes_tooltip" {current}; "tool_label" {key};
  * "zoom_label" {percent}; "canvas_offscreen" {viewport:[x,y,w,h],
- * canvas:[x,y,w,h]} -> whether Recenter should show; "draw_tool_preview"
- * {tool, stroke_width, stroke_enabled} / "brush_preview" {size, softness} ->
- * the Properties stroke/brush sample {label, stroke_width, shapes, brush} in a
- * 160x72 view box; "wand_loupe_position" {cursor:[x,y], viewport:[w,h]} ->
+ * canvas:[x,y,w,h]} -> whether Recenter should show; "brush_preview"
+ * {size, softness} -> the Erase/Restore brush sample {label, stroke_width,
+ * shapes, brush} in a 160x72 view box; "wand_loupe_position" {cursor:[x,y], viewport:[w,h]} ->
  * the wand loupe's top-left {x,y}. "copy" also carries trim, wand_loupe and
  * draw_preview paint metrics. Standard owned {ok,result}/{ok,error}
  * envelope; free with captures_settings_free_v1. */

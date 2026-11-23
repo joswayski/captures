@@ -5522,9 +5522,9 @@ final class ScreenshotEditorTests: XCTestCase {
         controller.root.layoutSubtreeIfNeeded()
         try showDraw(in: controller.root)
 
-        // Shipping order under the heading: the grouped-shape picker, the tool
-        // preview, Stroke, Stroke color, Size, Opacity, Filled shape, Fill color
-        // and Drop shadow, each label above its control.
+        // Shipping order under the heading: the grouped-shape picker, Stroke,
+        // Stroke color, Size, Opacity, Filled shape, Fill color and Drop
+        // shadow, each label above its control.
         let toggles = descendants(in: controller.root).compactMap { $0 as? NSButton }
         let stroke = try XCTUnwrap(toggles.first { $0.accessibilityLabel() == "New drawing stroke" })
         let fill = try XCTUnwrap(toggles.first { $0.accessibilityLabel() == "New drawing fill" })
@@ -5533,7 +5533,7 @@ final class ScreenshotEditorTests: XCTestCase {
         stroke.state = .on; _ = stroke.sendAction(stroke.action, to: stroke.target)
         fill.state = .on; _ = fill.sendAction(fill.action, to: fill.target)
         let picker = try XCTUnwrap(controller.shapePicker)
-        let order: [NSView] = [picker, controller.drawToolPreview, stroke,
+        let order: [NSView] = [picker, stroke,
                                try swatchRow("Stroke color", in: controller.root),
                                try rangeSlider("New drawing stroke width", in: controller.root),
                                try rangeSlider("New drawing opacity", in: controller.root), fill,
@@ -10895,40 +10895,33 @@ extension ScreenshotEditorTests {
         XCTAssertTrue(controller.wandLoupeView.isHidden, "only the Wand shows a loupe")
     }
 
-    func testDrawToolPreviewFollowsTheToolAndItsDefaults() throws {
+    func testOnlyEraseAndRestoreShowABrushPreview() throws {
         _ = NSApplication.shared
         let worker = FakeEditorWorker(snapshot: snapshot(id: "shot"))
         let controller = fittedController(worker)
         defer { controller.window.orderOut(nil) }
         let preview = controller.drawToolPreview
-        controller.selectDrawTool(.rectangle)
-        XCTAssertFalse(preview.isHiddenOrHasHiddenAncestor)
-        XCTAssertEqual(preview.sample?.label, "Stroke preview")
-        XCTAssertEqual(preview.accessibilityLabel(), "Stroke preview")
-        guard case .roundedRect(_, radius: let corner)? = preview.sample?.shapes.first else {
-            return XCTFail("the rectangle sample is a rounded rect")
+        // Shipping removed the drawing tools' sample artwork (#1076): the
+        // controls start right under the shape picker.
+        for shape in [EditorDrawOverlay.Shape.rectangle, .ellipse, .line, .triangle, .diamond, .star,
+                      .arrow, .pen, .text, .wand] {
+            controller.selectDrawTool(shape)
+            XCTAssertTrue(preview.isHiddenOrHasHiddenAncestor, "\(shape) shows no sample")
         }
-        XCTAssertEqual(corner, 6)
-        XCTAssertEqual(preview.sample?.strokeWidth, 0, "the fixture's closed shapes start without a stroke")
-        XCTAssertNotNil(preview.sampleFill)
-        // Shipping puts the grouped-shape picker above the card and the rows below it.
+        controller.selectDrawTool(.arrow)
+        try render(controller.root, name: "screenshot-editor-draw-arrow-no-sample")
+        controller.selectDrawTool(.rectangle)
         let picker = try XCTUnwrap(controller.shapePicker)
-        XCTAssertFalse(picker.isHiddenOrHasHiddenAncestor)
-        XCTAssertLessThanOrEqual(picker.frame.maxY, preview.frame.minY)
         let opacity = try rangeSlider("New drawing opacity", in: controller.root)
-        XCTAssertGreaterThanOrEqual(opacity.frame.minY, preview.frame.maxY)
-        try render(controller.root, name: "screenshot-editor-draw-preview-rectangle")
-
-        controller.selectDrawTool(.line)
-        XCTAssertEqual(Double(preview.sample?.strokeWidth ?? 0), 3.36, accuracy: 0.001)
-        XCTAssertNil(preview.sampleFill, "open strokes take no fill")
-        try slide("New drawing opacity", to: 40, in: controller.root)
-        XCTAssertEqual(Double(preview.sampleOpacity), 0.4, accuracy: 0.001)
+        XCTAssertLessThan(opacity.frame.minY - picker.frame.maxY, EditorDrawToolPreviewView.height,
+                          "no preview slot between the picker and the rows")
+        try render(controller.root, name: "screenshot-editor-draw-rectangle-no-sample")
 
         controller.selectDrawTool(.erase)
         XCTAssertFalse(preview.isHiddenOrHasHiddenAncestor)
         XCTAssertEqual(preview.sample?.label, "Brush preview")
-        XCTAssertEqual(Double(preview.sample?.brush?.radius ?? 0), 8 + 24.0 / 116 * 22, accuracy: 0.001)
+        XCTAssertEqual(preview.accessibilityLabel(), "Brush preview")
+        XCTAssertEqual(Double(preview.sample?.brush.radius ?? 0), 8 + 24.0 / 116 * 22, accuracy: 0.001)
         let brushSize = try rangeSlider("Brush size", in: controller.root)
         brushSize.slider.doubleValue = 120
         _ = brushSize.slider.sendAction(brushSize.slider.action, to: brushSize.slider.target)
@@ -10936,15 +10929,12 @@ extension ScreenshotEditorTests {
         brushSoftness.slider.doubleValue = 0
         _ = brushSoftness.slider.sendAction(brushSoftness.slider.action, to: brushSoftness.slider.target)
         XCTAssertEqual(brushSize.readout.stringValue, "120 px")
-        XCTAssertEqual(Double(preview.sample?.brush?.radius ?? 0), 30, accuracy: 0.001)
-        XCTAssertEqual(Double(preview.sample?.brush?.hardStop ?? 0), 0.72, accuracy: 0.001)
+        XCTAssertEqual(Double(preview.sample?.brush.radius ?? 0), 30, accuracy: 0.001)
+        XCTAssertEqual(Double(preview.sample?.brush.hardStop ?? 0), 0.72, accuracy: 0.001)
+        XCTAssertGreaterThanOrEqual(brushSize.frame.minY, preview.frame.maxY, "brush sliders sit below the dab")
         try render(controller.root, name: "screenshot-editor-draw-preview-brush")
-
-        controller.selectDrawTool(.wand)
-        XCTAssertTrue(preview.isHiddenOrHasHiddenAncestor, "the Wand has no stroke preview")
-        let tolerance = try rangeSlider("Color tolerance", in: controller.root)
-        XCTAssertLessThan(tolerance.frame.minY, preview.frame.minY + preview.frame.height,
-                          "Wand rows keep their place without the card")
+        controller.selectDrawTool(.restore)
+        XCTAssertFalse(preview.isHiddenOrHasHiddenAncestor)
     }
 
     func testGroupedShapePickerSwitchesShapesLikeShipping() throws {

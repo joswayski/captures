@@ -1675,7 +1675,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     private var wandLoupeInFlight = false
     private var wandLoupeQueued: (canvas: CGPoint, cursor: CGPoint)?
     private var wandLoupeGeneration = 0
-    /// Shipping `DrawToolPreview` above the drawing and brush defaults.
+    /// Shipping `BrushPreview` above the Erase/Restore brush sliders.
     lazy var drawToolPreview = EditorDrawToolPreviewView(tokens: tokens)
     /// Base y of each draw control below the preview slot, before the preview
     /// pushes them down.
@@ -4856,9 +4856,10 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         drawHelper.stringValue = wand
             ? EditorInspectorCopy.eraser(wandContiguous.state == .on ? "wand_contiguous_hint" : "wand_everywhere_hint")
             : EditorInspectorCopy.eraser(shape == .erase ? "erase_hint" : "restore_hint")
-        // Shipping shows `DrawToolPreview` for drawing tools and brushes; the
-        // brush sliders move down below it.
-        drawToolPreview.isHidden = !(creatingDrawing || brush)
+        // Shipping previews only the Erase/Restore brush; drawing tools show no
+        // sample artwork (removed from shipping in #1076). The brush sliders
+        // move down below it.
+        drawToolPreview.isHidden = !brush
         let shift = brush ? drawPreviewShift : 0
         for view in drawToolPreview.superview?.subviews ?? [] {
             guard let base = drawControlBaseY[ObjectIdentifier(view)] else { continue }
@@ -4900,7 +4901,6 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             picker.current = shape.rawValue
             picker.frame.origin = NSPoint(x: 0, y: y); y = picker.frame.maxY + gap
         }
-        if drawing { drawToolPreview.frame.origin.y = y; y = drawToolPreview.frame.maxY + gap }
         createTextControls.forEach { $0.isHidden = !text }
         if text, createTextControls.count == 4 {
             createTextControls[0].frame.origin.y = y
@@ -4950,28 +4950,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         if inlineTextInput == nil { focusActiveCanvas() }
     }
 
-    /// Shipping `DrawToolPreview`: the new stroke/shape with its colour, fill
-    /// and opacity, or the Erase/Restore brush dab.
+    /// Shipping `BrushPreview`: the Erase/Restore brush dab.
     private func refreshDrawToolPreview() {
-        let shape = drawShape
         guard !drawToolPreview.isHidden else { return }
-        if shape.isBackgroundBrush {
-            let size = brushSize?.value ?? 28
-            let softness = brushSoftness?.value ?? 18
-            drawToolPreview.update(NativeDrawToolPreview.brush(size: size, softness: softness),
-                                   stroke: .white, fill: nil, opacity: 1)
-            return
-        }
-        let closed = [.rectangle, .ellipse, .triangle, .diamond, .star].contains(shape)
-        let width = min(40, max(2, drawingStrokeWidth?.value ?? 8))
-        let opacity = min(100, max(0, drawingOpacity?.value ?? 100))
-        let tool = shape == .pen ? "pen" : shape.rawValue
-        drawToolPreview.update(
-            NativeDrawToolPreview.stroke(tool: tool, strokeWidth: width,
-                                         strokeEnabled: !closed || drawingStroke.state == .on),
-            stroke: drawingStrokeColor.flatMap({ NSColor(hex: $0.selectedHex) }) ?? tokens.color("text"),
-            fill: closed && drawingFill.state == .on ? drawingFillColor.flatMap({ NSColor(hex: $0.selectedHex) }) : nil,
-            opacity: CGFloat(opacity / 100))
+        drawToolPreview.update(NativeDrawToolPreview.brush(size: brushSize?.value ?? 28,
+                                                           softness: brushSoftness?.value ?? 18))
     }
 
     /// Shipping Trim edges preview: shown while the enabled button is hovered

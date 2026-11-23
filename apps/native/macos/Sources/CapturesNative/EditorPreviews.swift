@@ -4,7 +4,7 @@ import QuartzCore
 
 /// Shipping screenshot-editor previews (`ScreenshotEditor.tsx`,
 /// `styles/editor-image.css`) for AppKit: the Trim edges hover preview, the
-/// Wand colour loupe, the Properties `DrawToolPreview` and the Apply crop
+/// Wand colour loupe, the Erase/Restore `BrushPreview` and the Apply crop
 /// `cta-pulse`. Geometry, copy and motion come from captures-app through
 /// snapshots (`can_trim`, `trim_preview`), `captures_editor_chrome_v1`,
 /// `captures_editor_wand_loupe_v1` and the motion catalog, shared with wgpu.
@@ -224,15 +224,9 @@ struct NativeWandLoupe: Equatable {
     }
 }
 
-/// Shipping `DrawToolPreview` geometry (`editor_chrome::draw_preview`) in the
-/// SVG's 160 × 72 view box.
+/// Shipping `BrushPreview` geometry (`editor_chrome::draw_preview::brush`) in
+/// the SVG's 160 × 72 view box. Drawing tools show no sample (shipping #1076).
 struct NativeDrawToolPreview: Equatable {
-    enum Shape: Equatable {
-        case roundedRect(CGRect, radius: CGFloat)
-        case ellipse(CGRect)
-        case path([CGPoint], closed: Bool)
-    }
-
     struct Brush: Equatable {
         let center: CGPoint
         let radius: CGFloat
@@ -241,45 +235,14 @@ struct NativeDrawToolPreview: Equatable {
     }
 
     let label: String
-    let strokeWidth: CGFloat
-    let shapes: [Shape]
-    let brush: Brush?
+    let brush: Brush
 
     init?(_ value: [String: Any]) {
-        guard let label = value["label"] as? String, let strokeWidth = previewNumber(value["stroke_width"]),
-              let rawShapes = value["shapes"] as? [[String: Any]] else { return nil }
-        var shapes: [Shape] = []
-        for raw in rawShapes {
-            switch raw["kind"] as? String ?? "" {
-            case "rounded_rect":
-                guard let rect = previewRect(raw["rect"]), let radius = previewNumber(raw["radius"]) else { return nil }
-                shapes.append(.roundedRect(rect, radius: radius))
-            case "ellipse":
-                guard let rect = previewRect(raw["rect"]) else { return nil }
-                shapes.append(.ellipse(rect))
-            case "path":
-                guard let rawPoints = raw["points"] as? [Any], let closed = raw["closed"] as? Bool else { return nil }
-                let points = rawPoints.compactMap { previewPoint($0) }
-                guard points.count == rawPoints.count else { return nil }
-                shapes.append(.path(points, closed: closed))
-            default:
-                return nil
-            }
-        }
-        var brush: Brush?
-        if let raw = value["brush"] as? [String: Any] {
-            guard let center = previewPoint(raw["center"]), let radius = previewNumber(raw["radius"]),
-                  let hardStop = previewNumber(raw["hard_stop"]) else { return nil }
-            brush = Brush(center: center, radius: radius, hardStop: hardStop)
-        }
-        self.label = label; self.strokeWidth = strokeWidth; self.shapes = shapes; self.brush = brush
-    }
-
-    /// Stroke sample for a drawing tool key (`rectangle` … `star`, else pen).
-    static func stroke(tool: String, strokeWidth: Double, strokeEnabled: Bool) -> NativeDrawToolPreview? {
-        (EditorChrome.request(["operation": "draw_tool_preview", "tool": tool,
-                               "stroke_width": strokeWidth, "stroke_enabled": strokeEnabled])
-            as? [String: Any]).flatMap { NativeDrawToolPreview($0) }
+        guard let label = value["label"] as? String, let raw = value["brush"] as? [String: Any],
+              let center = previewPoint(raw["center"]), let radius = previewNumber(raw["radius"]),
+              let hardStop = previewNumber(raw["hard_stop"]) else { return nil }
+        self.label = label
+        brush = Brush(center: center, radius: radius, hardStop: hardStop)
     }
 
     /// Erase/Restore brush dab.
@@ -843,16 +806,12 @@ final class EditorWandLoupeView: NSView {
     }
 }
 
-/// Shipping `.screenshot-draw-preview`: an 88 pt checkerboard card sampling
-/// the new stroke/shape or eraser brush with the current colour, fill and
-/// opacity.
+/// Shipping `.screenshot-draw-preview-brush`: an 88 pt checkerboard card
+/// showing the Erase/Restore brush dab.
 final class EditorDrawToolPreviewView: NSView {
     override var isFlipped: Bool { true }
     private var tokens: Tokens { didSet { needsDisplay = true } }
     private(set) var sample: NativeDrawToolPreview?
-    private(set) var sampleStroke = NSColor.black
-    private(set) var sampleFill: NSColor?
-    private(set) var sampleOpacity: CGFloat = 1
     static var height: CGFloat { NativeEditorPreviewPaint.drawPreview("height", 88) }
 
     init(tokens: Tokens) {
@@ -864,9 +823,8 @@ final class EditorDrawToolPreviewView: NSView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func update(_ value: NativeDrawToolPreview?, stroke: NSColor, fill: NSColor?, opacity: CGFloat) {
-        sample = value; sampleStroke = stroke; sampleFill = fill
-        sampleOpacity = min(max(opacity, 0), 1)
+    func update(_ value: NativeDrawToolPreview?) {
+        sample = value
         setAccessibilityLabel(value?.label)
         needsDisplay = true
     }
@@ -886,59 +844,21 @@ final class EditorDrawToolPreviewView: NSView {
                 NSRect(x: CGFloat(column) * square, y: CGFloat(row) * square, width: square, height: square).fill()
             }
         }
-        if let sample, let context = NSGraphicsContext.current?.cgContext {
+        if let brush = sample?.brush, let context = NSGraphicsContext.current?.cgContext,
+           let space = CGColorSpace(name: CGColorSpace.sRGB) {
             let inner = bounds.insetBy(dx: 1, dy: 1)
             let scale = min(inner.width / 160, inner.height / 72)
-            let left = inner.minX + (inner.width - 160 * scale) / 2
-            let top = inner.minY + (inner.height - 72 * scale) / 2
-            func placePoint(_ point: CGPoint) -> CGPoint {
-                CGPoint(x: left + point.x * scale, y: top + point.y * scale)
+            let center = CGPoint(x: inner.minX + (inner.width - 160 * scale) / 2 + brush.center.x * scale,
+                                 y: inner.minY + (inner.height - 72 * scale) / 2 + brush.center.y * scale)
+            // Radial gradient in `--solid`: opaque to the hard stop, clear at the rim.
+            let solid = tokens.color("solid")
+            let colors = [solid.withAlphaComponent(1).cgColor, solid.withAlphaComponent(1).cgColor,
+                          solid.withAlphaComponent(0).cgColor] as CFArray
+            if let gradient = CGGradient(colorsSpace: space, colors: colors,
+                                         locations: [0, min(max(brush.hardStop, 0), 1), 1]) {
+                context.drawRadialGradient(gradient, startCenter: center, startRadius: 0, endCenter: center,
+                                           endRadius: brush.radius * scale, options: [])
             }
-            func placeRect(_ rect: CGRect) -> CGRect {
-                CGRect(origin: placePoint(rect.origin),
-                       size: CGSize(width: rect.width * scale, height: rect.height * scale))
-            }
-            // Shipping sets the SVG group's opacity: composite once.
-            context.setAlpha(sampleOpacity)
-            context.beginTransparencyLayer(auxiliaryInfo: nil)
-            let stroking = sample.strokeWidth > 0
-            for shape in sample.shapes {
-                let path: NSBezierPath
-                var fillable = true
-                switch shape {
-                case .roundedRect(let rect, radius: let corner):
-                    path = NSBezierPath(roundedRect: placeRect(rect), xRadius: corner * scale,
-                                        yRadius: corner * scale)
-                case .ellipse(let rect):
-                    path = NSBezierPath(ovalIn: placeRect(rect))
-                case .path(let points, closed: let closed):
-                    path = NSBezierPath()
-                    guard let first = points.first else { continue }
-                    path.move(to: placePoint(first))
-                    points.dropFirst().forEach { path.line(to: placePoint($0)) }
-                    if closed { path.close() }
-                    fillable = closed
-                }
-                if fillable, let sampleFill { sampleFill.setFill(); path.fill() }
-                if stroking {
-                    path.lineWidth = sample.strokeWidth * scale
-                    path.lineCapStyle = .round; path.lineJoinStyle = .round
-                    sampleStroke.setStroke(); path.stroke()
-                }
-            }
-            if let brush = sample.brush, let space = CGColorSpace(name: CGColorSpace.sRGB) {
-                // Radial gradient in `--solid`: opaque to the hard stop, clear at the rim.
-                let solid = tokens.color("solid")
-                let colors = [solid.withAlphaComponent(1).cgColor, solid.withAlphaComponent(1).cgColor,
-                              solid.withAlphaComponent(0).cgColor] as CFArray
-                if let gradient = CGGradient(colorsSpace: space, colors: colors,
-                                             locations: [0, min(max(brush.hardStop, 0), 1), 1]) {
-                    let center = placePoint(brush.center)
-                    context.drawRadialGradient(gradient, startCenter: center, startRadius: 0, endCenter: center,
-                                               endRadius: brush.radius * scale, options: [])
-                }
-            }
-            context.endTransparencyLayer()
         }
         NSGraphicsContext.restoreGraphicsState()
         card.lineWidth = 1
