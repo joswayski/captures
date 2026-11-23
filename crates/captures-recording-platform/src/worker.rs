@@ -178,7 +178,7 @@ impl Worker {
                 let event = match command {
                     Command::VerifyToolchain { generation } => Event::ToolchainVerified {
                         generation,
-                        result: tools.verify().map_err(|error| {
+                        result: tools.verify_once().map_err(|error| {
                             format!("Native recording requires FFmpeg and ffprobe (bundled, explicit overrides or PATH): {error}")
                         }),
                     },

@@ -477,6 +477,21 @@ impl MediaToolchain {
         verify_tool(&self.ffprobe, "ffprobe")
     }
 
+    /// `verify`, but a pair that already passed in this process is not
+    /// launched again. For checks that run before every recording; update
+    /// health and imports use `verify`, which always runs the tools.
+    pub fn verify_once(&self) -> Result<(), MediaToolError> {
+        static VERIFIED: Mutex<Vec<(PathBuf, PathBuf)>> = Mutex::new(Vec::new());
+        let pair = (self.ffmpeg.clone(), self.ffprobe.clone());
+        let verified = || VERIFIED.lock().unwrap_or_else(|e| e.into_inner());
+        if verified().contains(&pair) {
+            return Ok(());
+        }
+        self.verify()?;
+        verified().push(pair);
+        Ok(())
+    }
+
     pub fn probe(&self, input: &Path) -> Result<ProbeResult, MediaToolError> {
         let output = media_command(&self.ffprobe)
             .args([
