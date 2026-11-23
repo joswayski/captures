@@ -18,7 +18,9 @@ use captures_video::{H264Mp4Error, H264Mp4Writer};
 use image::RgbaImage;
 use parking_lot::Mutex;
 use thiserror::Error;
-use xcap::{Frame, Monitor, VideoRecorder};
+use xcap::Frame;
+#[cfg(not(target_os = "windows"))]
+use xcap::{Monitor, VideoRecorder};
 
 use crate::{
     audio::AudioSegment,
@@ -26,6 +28,13 @@ use crate::{
     pointer::{PointerSource, pointer_features_available},
     transform::{FrameRect, FrameTransform},
 };
+
+/// Display recording frames: this crate's WGC reader on Windows, xcap's
+/// recorder elsewhere.
+#[cfg(target_os = "windows")]
+type DirectRecorder = crate::windows_wgc::WgcRecorder;
+#[cfg(not(target_os = "windows"))]
+type DirectRecorder = VideoRecorder;
 
 const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(3);
 const CONTROL_POLL_INTERVAL: Duration = Duration::from_millis(10);
@@ -78,7 +87,7 @@ struct EncoderContext {
 }
 
 enum CaptureRecorder {
-    Direct(VideoRecorder),
+    Direct(DirectRecorder),
     /// The source and its dropped-frame count before encoding began. Frames
     /// discarded while the user selected a Region are not dropped frames.
     #[cfg(target_os = "linux")]
@@ -160,11 +169,20 @@ impl XcapRecordingSegment {
             fs::create_dir_all(parent)?;
         }
 
-        let monitor = find_monitor(&display.id)?;
+        #[cfg(target_os = "windows")]
         let source = source_rect(options, display)?;
+        #[cfg(target_os = "windows")]
+        let (recorder, receiver) =
+            crate::windows_wgc::WgcRecorder::start(&display.id, options.frames_per_second)?;
+        #[cfg(not(target_os = "windows"))]
+        let monitor = find_monitor(&display.id)?;
+        #[cfg(not(target_os = "windows"))]
+        let source = source_rect(options, display)?;
+        #[cfg(not(target_os = "windows"))]
         let (recorder, receiver) = monitor
             .video_recorder()
             .map_err(|error| XcapRecordingError::Capture(error.to_string()))?;
+        #[cfg(not(target_os = "windows"))]
         recorder
             .start()
             .map_err(|error| XcapRecordingError::Capture(error.to_string()))?;
@@ -658,8 +676,12 @@ fn receive_frames(
                     // X11 poller deliver as fast as the display allows, so there
                     // the encoder just uses the newest frame each tick; its own
                     // late ticks are counted in `record_frames`.
-                    if latest_frame.lock().replace(image).is_some() && source_matches_frame_rate {
-                        dropped_frames.fetch_add(1, Ordering::Relaxed);
+                    let replaced = latest_frame.lock().replace(image);
+                    if let Some(old) = replaced {
+                        if source_matches_frame_rate {
+                            dropped_frames.fetch_add(1, Ordering::Relaxed);
+                        }
+                        recycle(old);
                     }
                 }
                 Err(error) => set_warning_once(warning, error.to_string()),
@@ -699,6 +721,7 @@ fn record_frames(
         .ok_or(XcapRecordingError::FirstFrameUnavailable)?;
     let mut last_rgb = Vec::new();
     transform.rgb_into(&first_image, &mut last_rgb);
+    recycle(first_image);
     let mut skipped_frames = 0_u64;
     let pointer_source = pointer_overlay.as_ref().map(|_| PointerSource::new());
     encode_frame(
@@ -718,8 +741,12 @@ fn record_frames(
             continue;
         }
 
-        if let Some(image) = latest_frame.lock().take() {
+        // Take the frame and release the lock before converting it, so the
+        // receiver can store the next frame meanwhile.
+        let image = latest_frame.lock().take();
+        if let Some(image) = image {
             transform.rgb_into(&image, &mut last_rgb);
+            recycle(image);
         }
         let elapsed_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
         encode_frame(
@@ -843,6 +870,7 @@ fn portal_source_rect(
     }
 }
 
+#[cfg(not(target_os = "windows"))]
 fn find_monitor(display_id: &str) -> XcapRecordingResult<Monitor> {
     Monitor::all()
         .map_err(|error| XcapRecordingError::Capture(error.to_string()))?
@@ -896,6 +924,14 @@ fn window_rect(
         width: window.width,
         height: window.height,
     })
+}
+
+/// Hands pixels the encoder no longer needs back to the Windows reader.
+fn recycle(image: RgbaImage) {
+    #[cfg(target_os = "windows")]
+    crate::windows_wgc::recycle(image.into_raw());
+    #[cfg(not(target_os = "windows"))]
+    drop(image);
 }
 
 fn frame_image(frame: Frame) -> XcapRecordingResult<RgbaImage> {

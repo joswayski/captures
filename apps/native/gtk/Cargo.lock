@@ -673,6 +673,7 @@ dependencies = [
  "pipewire",
  "thiserror 2.0.21",
  "uuid",
+ "windows 0.62.2",
  "windows-sys 0.61.2",
  "x11rb",
  "xcap",
