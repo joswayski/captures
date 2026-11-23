@@ -2464,6 +2464,7 @@ final class RecordingEditorTests: XCTestCase {
         let edit = try XCTUnwrap(worker.requests.last?["edit"] as? [String: Any])
         let sentCrop = try XCTUnwrap(edit["crop"] as? [String: Any])
         XCTAssertEqual((sentCrop["width"] as? NSNumber)?.intValue, 239)
+        pump(until: { !width.isEnabled }) // A decode greys controls only past its grace.
         XCTAssertFalse(east.accessibilityPerformDecrement(), "pending decode controls cannot act")
         XCTAssertEqual(width.stringValue, "239")
         worker.completeRequest(.failure(AppBridgeError.backend("injected crop apply failure")))
@@ -2694,6 +2695,9 @@ final class RecordingEditorTests: XCTestCase {
         XCTAssertEqual(worker.requests.count, 1, "only one decode owns the session")
         XCTAssertEqual(start.stringValue, "800")
         XCTAssertTrue(timeline.editingEnabled && timeline.trimming)
+        // A quick decode keeps the fields as they are instead of flashing the editor grey.
+        XCTAssertTrue(start.isEnabled)
+        pump(until: { !start.isEnabled })
         XCTAssertFalse(start.isEnabled || position.isEnabled)
         XCTAssertFalse(try button("Save new copy", in: controller.root).isEnabled)
         worker.completeRequest(.success(try presentation(position: 0, revision: 1)))
@@ -2775,6 +2779,8 @@ final class RecordingEditorTests: XCTestCase {
         timeline.mouseDown(with: try pointer(.leftMouseDown, 0.2))
         XCTAssertEqual(worker.requests.map { $0["position_ms"] as? UInt64 }, [400])
         XCTAssertTrue(timeline.seekEnabled, "track stays live while decoding")
+        pump(until: { !timeline.editingEnabled }) // A decode greys controls only past its grace.
+        XCTAssertTrue(timeline.seekEnabled)
         XCTAssertFalse(timeline.editingEnabled, "trim edits wait for decoding")
         XCTAssertFalse(try button("Save new copy", in: controller.root).isEnabled)
         XCTAssertFalse(controller.comparisonApplies, "a comparison cannot interrupt the held scrub")

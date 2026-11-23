@@ -918,7 +918,15 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
     private var presentation: RecordingEditorPresentation?
     private var savedEdit: Data?
     private var savedExport: Data?
-    private var busy = false
+    private var busy = false {
+        didSet { if !busy { requestGraceWork?.cancel(); requestGraceWork = nil; requestGrace = false } }
+    }
+    /// A preview update or seek that lands within the screenshot editor's
+    /// `busyControlsDelay` keeps the controls as they were; greying the whole
+    /// editor for one request flashed it on every edit. `guard !busy` still
+    /// refuses anything started meanwhile.
+    private var requestGrace = false
+    private var requestGraceWork: DispatchWorkItem?
     /// One active decode and one latest target, never a pointer-event backlog.
     private var seekingPosition: UInt64?
     private var pendingSeek: UInt64?
@@ -2722,6 +2730,14 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
                          settled: ((Bool) -> Void)? = nil) {
         guard !busy else { return }
         let current = generation; busy = true
+        requestGrace = true
+        let grace = DispatchWorkItem { [weak self] in
+            guard let self, self.busy, self.generation == current else { return }
+            self.requestGrace = false; self.requestGraceWork = nil; self.updateControls()
+        }
+        requestGraceWork = grace
+        DispatchQueue.main.asyncAfter(deadline: .now() + ScreenshotEditorController.busyControlsDelay,
+                                      execute: grace)
         updateControls()
         worker.request(object) { [weak self] result in
             guard let self, self.generation == current else { return }
@@ -3868,7 +3884,7 @@ final class RecordingEditorController: NSObject, NSWindowDelegate, NSTextFieldDe
             invalidateComparison()
         }
         // A background estimate never holds edits: they supersede it.
-        let blocked = operationBlocking
+        let blocked = operationBlocking && !requestGrace
         let available = presentation != nil && !blocked && !pickerOpen
             && !requiresReopen && playbackState == .idle
         let validMaximum = !maximumSizeEnabled || maximumSizeBytes != nil

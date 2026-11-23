@@ -279,6 +279,18 @@ enum LayerDrag {
 
 /// A layer drop target: the row id and which side of it.
 type DropTarget = (String, LayerPlacement);
+/// What a layer row shows: id, name, kind, icon, visible, locked,
+/// thumbnail image and whether its name is being edited.
+type LayerRowKey = (
+    String,
+    String,
+    &'static str,
+    &'static str,
+    bool,
+    bool,
+    Option<usize>,
+    bool,
+);
 /// Set after construction, once the editor state can be captured.
 type PresetHandler = Rc<RefCell<Option<Box<dyn Fn(String)>>>>;
 
@@ -307,6 +319,9 @@ struct State {
     options: Cell<ExportOptions>,
     notice: RefCell<Option<(String, bool)>>,
     busy: Cell<bool>,
+    /// A Save is running. Only the export bar waits for it (shipping
+    /// `busy === "saving"`); edits in flight leave the bar as it is.
+    saving: Cell<bool>,
     canvas: SnapshotArea,
     /// The Text tool's inline field over the canvas.
     text_overlay: gtk::Overlay,
@@ -340,6 +355,9 @@ struct State {
     pending_select: RefCell<Option<String>>,
     /// Uploaded row thumbnails by layer id, keyed by the image they show.
     thumbnails: RefCell<std::collections::HashMap<String, (usize, gdk::Texture)>>,
+    /// The layer rows shown, each with what it was built from and its ⋯
+    /// button, so an edit replaces only the rows it changed.
+    layer_rows: RefCell<Vec<(LayerRowKey, gtk::ListBoxRow, gtk::Button)>>,
     /// The Compress before/after comparison over the canvas.
     compare: Rc<compare::Compare>,
     /// Whether the last canvas frame suppressed it (a gesture or inline text).
@@ -1067,6 +1085,7 @@ pub fn build(
         }),
         notice: RefCell::default(),
         busy: Cell::new(true),
+        saving: Cell::default(),
         canvas: canvas.clone(),
         text_overlay,
         text_field,
@@ -1099,6 +1118,7 @@ pub fn build(
         layer_menu: RefCell::default(),
         pending_select: RefCell::default(),
         thumbnails: RefCell::default(),
+        layer_rows: RefCell::default(),
         compare,
         compare_suppressed: Cell::default(),
         zoom_syncing: Cell::default(),
@@ -2003,6 +2023,7 @@ impl State {
             }
             Outcome::Saved(result) => {
                 self.busy.set(false);
+                self.saving.set(false);
                 match result {
                     Ok((plan, saved)) => {
                         let text = editor_export::saved_notice(&plan, &saved);
@@ -2038,12 +2059,40 @@ impl State {
         }
     }
 
+    /// Bring the layer rows up to date. Rows whose layer did not change stay
+    /// (with their hover, focus and pressed state); only changed rows are
+    /// rebuilt, and all of them only when the layer order changes.
     fn rebuild_layers(self: &Rc<Self>) {
         let list = &self.widgets.layers;
-        while let Some(row) = list.first_child() {
-            list.remove(&row);
-        }
         let presented = self.presented.borrow();
+        let mut rows = self.layer_rows.borrow_mut();
+        let keys: Vec<LayerRowKey> = presented.as_ref().map_or_else(Vec::new, |presented| {
+            let renaming = self.renaming.borrow();
+            presented
+                .layers
+                .iter()
+                .map(|layer| {
+                    (
+                        layer.id.clone(),
+                        layer.name.clone(),
+                        layer.kind,
+                        layer.icon,
+                        layer.visible,
+                        layer.locked,
+                        layer.thumbnail.as_ref().map(|t| Arc::as_ptr(t) as usize),
+                        renaming.as_deref() == Some(layer.id.as_str()),
+                    )
+                })
+                .collect()
+        });
+        let same_order =
+            rows.len() == keys.len() && rows.iter().zip(&keys).all(|(row, key)| row.0.0 == key.0);
+        if !same_order {
+            while let Some(row) = list.first_child() {
+                list.remove(&row);
+            }
+            rows.clear();
+        }
         let Some(presented) = presented.as_ref() else {
             return;
         };
@@ -2052,7 +2101,18 @@ impl State {
             .retain(|id, _| presented.layers.iter().any(|layer| layer.id == *id));
         let selected = self.selected.borrow().clone();
         let renaming = self.renaming.borrow().clone();
-        for layer in &presented.layers {
+        for (index, (layer, key)) in presented.layers.iter().zip(keys).enumerate() {
+            if let Some((shown, _, more)) = rows.get(index)
+                && *shown == key
+            {
+                let open = self
+                    .layer_menu
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|menu| menu.id == layer.id);
+                set_class(more, "active", open);
+                continue;
+            }
             let row = gtk::ListBoxRow::new();
             row.set_widget_name(&layer.id);
             row.add_css_class("editor-layer-row");
@@ -2195,10 +2255,25 @@ impl State {
                 "{} · {}",
                 layer.name, layer.kind
             ))]);
-            list.append(&row);
-            if selected.as_deref() == Some(layer.id.as_str()) {
-                list.select_row(Some(&row));
+            match rows.get_mut(index) {
+                Some(slot) => {
+                    list.remove(&slot.1);
+                    list.insert(&row, index as i32);
+                    *slot = (key, row, more);
+                }
+                None => {
+                    list.append(&row);
+                    rows.push((key, row, more));
+                }
             }
+        }
+        let row = rows
+            .iter()
+            .find(|(key, _, _)| selected.as_deref() == Some(key.0.as_str()));
+        match row {
+            Some((_, row, _)) if !row.is_selected() => list.select_row(Some(row)),
+            Some(_) => {}
+            None => list.unselect_all(),
         }
     }
 
@@ -2552,8 +2627,8 @@ impl State {
             presented.document.background.is_none(),
             self.estimate.get().pending,
         );
-        w.export.set_sensitive(!self.busy.get());
-        w.change_folder.set_sensitive(!self.busy.get());
+        w.export.set_sensitive(!self.saving.get());
+        w.change_folder.set_sensitive(!self.saving.get());
         self.schedule_estimate(&presented.pixels);
         let compresses = self.options.get().quality != ExportQuality::Preserve;
         w.export
@@ -2578,7 +2653,7 @@ impl State {
         set_class(&w.notice, "success", !error && !text.is_empty());
         show_status(&w.notice, &w.hint);
         w.save
-            .set_sensitive(view.plan.is_some() && view.error.is_none() && !self.busy.get());
+            .set_sensitive(view.plan.is_some() && view.error.is_none() && !self.saving.get());
         w.copy.set_sensitive(self.texture.borrow().is_some());
         if w.save_as_new.is_on() != view.saving_copy {
             w.save_as_new.activate_toggle_quietly(view.saving_copy);
@@ -2756,6 +2831,9 @@ impl State {
             .as_ref()
             .and_then(|target| target.plan(self.options.get().format).ok());
         let Some(plan) = plan else { return };
+        if self.saving.replace(true) {
+            return;
+        }
         self.busy.set(true);
         *self.notice.borrow_mut() = Some(("Saving…".into(), false));
         self.update_export();

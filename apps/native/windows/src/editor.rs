@@ -657,7 +657,12 @@ pub struct Editor {
     /// Change…'s folder picker, opened once the window is released.
     pick_folder: bool,
     pub notice: Option<(String, bool)>,
+    /// An edit is with the worker; live edits queue behind it. It greys
+    /// nothing: like shipping, only Save's export bar waits (`saving`).
     busy: bool,
+    /// A Save is with the worker (shipping `busy === "saving"`): only the
+    /// export bar's save inputs are disabled, and another Save is refused.
+    saving: bool,
     pub banner: bool,
     /// Shipping `preferredSidebarWidth`: window-local, never in the document.
     sidebar_pref: Option<f32>,
@@ -1357,6 +1362,7 @@ impl Editor {
             },
             notice: None,
             busy: true,
+            saving: false,
             banner: false,
             sidebar_pref: None,
             divider_drag: None,
@@ -1737,7 +1743,9 @@ impl Editor {
         let percent = self.zoom_percent().unwrap_or(100.);
         match target {
             Target::Undo => p.is_some_and(|p| p.can_undo),
-            Target::Trim => p.is_some_and(|p| p.can_trim) && !self.busy,
+            // Edits and saves queue on the worker in order (a repeated trim is
+            // a no-op), so neither greys anything outside Save's export bar.
+            Target::Trim => p.is_some_and(|p| p.can_trim),
             Target::Redo => p.is_some_and(|p| p.can_redo),
             Target::ZoomOut => p.is_some() && percent > ZOOM_MIN + 0.05,
             Target::ZoomIn => p.is_some() && percent < ZOOM_MAX - 0.05,
@@ -1749,12 +1757,12 @@ impl Editor {
             Target::Save => {
                 self.export_view()
                     .is_some_and(|v| v.plan.is_some() && v.error.is_none())
-                    && !self.busy
+                    && !self.saving
             }
-            Target::SaveAsNew => self.exists(target) && !self.busy,
+            Target::SaveAsNew => self.exists(target) && !self.saving,
             Target::Copy => self.image.is_some(),
             Target::Change | Target::Prop(Prop::Filename | Prop::Export(export::Ex::Format)) => {
-                self.presented.is_some() && !self.busy
+                self.presented.is_some() && !self.saving
             }
             Target::Prop(Prop::Step(num, up)) => {
                 self.exists(target) && !self.step_disabled(num, up)
@@ -2240,6 +2248,10 @@ impl Editor {
             }
             Target::Trim => {
                 self.notice = None;
+                // Trims what is on screen, after the newest queued live edit.
+                if let Some(next) = self.pending.take() {
+                    self.submit(next);
+                }
                 self.submit(Request::TrimCanvas);
             }
             Target::Background => self.set_bg_menu(!self.bg_open),
@@ -2329,7 +2341,12 @@ impl Editor {
         else {
             return;
         };
-        self.busy = true;
+        // Save doesn't wait out an edit in flight; the worker takes it after
+        // every accepted edit, so send the newest queued live edit first.
+        if let Some(next) = self.pending.take() {
+            self.submit(next);
+        }
+        self.saving = true;
         self.set_notice(Some(("Saving…".into(), false)));
         let _ = self.jobs.send(Job::Save {
             plan,
@@ -2581,7 +2598,7 @@ impl Editor {
                 return;
             }
             Outcome::Saved(result) => {
-                self.busy = false;
+                self.saving = false;
                 match result {
                     Ok((plan, saved)) => {
                         let text = editor_export::saved_notice(&plan, &saved);
@@ -7264,6 +7281,8 @@ mod tests {
         e.key(VK_UP, false, true);
         e.key(VK_LEFT, false, false);
         assert!(sent(&inbox).is_empty());
+        // An edit in flight greys nothing; only a Save disables the bar.
+        assert!(e.busy && e.enabled(Target::Change) && e.enabled(Target::Prop(Prop::Filename)));
         let queued = e.pending.take().into_iter().collect::<Vec<_>>();
         assert_eq!(nudge(&queued), (format!("nudge:{id}"), -1., -10.));
         e.busy = false;

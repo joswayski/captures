@@ -387,9 +387,11 @@ final class ScreenshotEditorTests: XCTestCase {
             try render(controller.root, name: "screenshot-editor-tool-rail-minimum-\(appearance)")
             worker.deferEncodes = true
             try copyButton(in: controller.root).performClick(nil)
-            XCTAssertTrue(rail.allSatisfy { !$0.isEnabled })
+            XCTAssertTrue(controller.state.busy)
+            // Shipping's Copy greys nothing; disabling the editor for it flashed the window.
+            XCTAssertTrue(rail.allSatisfy(\.isEnabled))
             rail[5].performClick(nil)
-            XCTAssertEqual(controller.drawOverlay.shape, .arrow)
+            XCTAssertEqual(controller.drawOverlay.shape, .pen)
             worker.completePendingEncode()
             XCTAssertTrue(rail.allSatisfy(\.isEnabled))
             worker.failEncode = true
@@ -493,10 +495,10 @@ final class ScreenshotEditorTests: XCTestCase {
         worker.deferEncodes = true
         try copyButton(in: controller.root).performClick(nil)
         XCTAssertTrue(controller.state.busy)
+        // Tool keys follow the tool rail, which Copy leaves enabled.
         XCTAssertTrue(controller.window.performKeyEquivalent(with: pen))
-        XCTAssertEqual(controller.drawOverlay.shape, .rectangle)
+        XCTAssertEqual(controller.drawOverlay.shape, .pen)
         worker.completePendingEncode()
-        XCTAssertTrue(controller.window.performKeyEquivalent(with: pen))
         XCTAssertEqual(controller.drawOverlay.shape, .pen)
         XCTAssertTrue(worker.requests.isEmpty && worker.saves.isEmpty)
         XCTAssertEqual(worker.encodes.count, 1)
@@ -1469,7 +1471,10 @@ final class ScreenshotEditorTests: XCTestCase {
             try showDraw(in: controller.root)
             copy.performClick(nil)
             XCTAssertTrue(controller.state.busy)
-            XCTAssertFalse(copy.isEnabled); XCTAssertTrue(save.isEnabled)
+            // Shipping keeps Copy enabled while it runs; a repeat click is ignored.
+            XCTAssertTrue(copy.isEnabled); XCTAssertTrue(save.isEnabled)
+            copy.performClick(nil)
+            XCTAssertEqual(worker.encodes.count, 1)
             save.performClick(nil)
             XCTAssertTrue(worker.exportSaves.isEmpty)
             try render(controller.root, name: "screenshot-editor-export-bar-pending-\(appearance)")
@@ -2820,13 +2825,16 @@ final class ScreenshotEditorTests: XCTestCase {
                                    outputDirectory: "/exports")
                 let copy = try copyButton(in: controller.root)
                 let save = try button("Save", in: controller.root)
+                let freehand = try XCTUnwrap(descendants(in: controller.root).compactMap { $0 as? CaptureButton }
+                    .first { $0.accessibilityLabel() == "Freehand (P)" })
+                let filename = try field("Saved filename", in: controller.root)
                 copy.performClick(nil)
                 XCTAssertTrue(controller.state.busy)
-                XCTAssertFalse(copy.isEnabled)
+                // Shipping's Copy greys nothing, so the editor doesn't flash.
+                XCTAssertTrue(copy.isEnabled && freehand.isEnabled && filename.isEnabled)
                 XCTAssertTrue(save.isEnabled); XCTAssertEqual(save.title, "Save")
                 save.performClick(nil); save.performClick(nil)
                 XCTAssertTrue(worker.exportSaves.isEmpty, "Save waits for Copy, not the other way around")
-                let filename = try field("Saved filename", in: controller.root)
                 filename.stringValue = "latest-request"
                 controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification,
                                                               object: filename))
@@ -2838,13 +2846,17 @@ final class ScreenshotEditorTests: XCTestCase {
                 XCTAssertTrue(controller.state.busy)
                 XCTAssertEqual(save.title, "Saving…"); XCTAssertFalse(save.isEnabled)
                 XCTAssertFalse(copy.isEnabled)
+                // Save greys the export bar at once and the editor only once it runs long.
+                XCTAssertFalse(filename.isEnabled); XCTAssertTrue(freehand.isEnabled)
                 copy.performClick(nil); save.performClick(nil)
                 XCTAssertEqual(worker.encodes.count, 1, "Copy cannot queue during Save")
                 XCTAssertEqual(worker.exportSaves.count, 1)
                 try render(controller.root, name: "screenshot-editor-queued-save-\(failure)-\(appearance)")
+                waitUntil(timeout: ScreenshotEditorController.busyControlsDelay + 2) { !freehand.isEnabled }
                 worker.completePendingExportSave()
                 XCTAssertFalse(controller.state.busy)
                 XCTAssertEqual(save.title, "Save"); XCTAssertTrue(copy.isEnabled)
+                XCTAssertTrue(freehand.isEnabled && filename.isEnabled)
             }
         }
     }

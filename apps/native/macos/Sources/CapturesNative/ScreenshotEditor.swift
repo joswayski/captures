@@ -1955,12 +1955,14 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
     /// Document edits that finish within this keep the controls and canvas
     /// overlays as they were. Like shipping, a quick edit (placing an arrow)
     /// doesn't grey the editor; disabling everything for one render flashed
-    /// the whole window. Export work still greys at once.
+    /// the whole window.
     static let busyControlsDelay: TimeInterval = 0.3
     private var commandGrace = false
     private var commandGraceWork: DispatchWorkItem?
-    /// `state.busy` as the controls and canvas overlays show it.
-    private var controlsBusy: Bool { state.busy && !commandGrace }
+    /// `state.busy` as the editing controls and canvas overlays show it. Like
+    /// shipping, Copy never greys them, and a quick Save greys only the export
+    /// bar. `state.beginCommand` still refuses anything started meanwhile.
+    private var controlsBusy: Bool { state.busy && !commandGrace && !copyInFlight }
     static let closeDelay: TimeInterval = 0.4
     private let exportBarRule = Surface()
     private(set) var lastSavedPath: String?
@@ -4522,7 +4524,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         let id = layerMenuID ?? selectedLayerID
         let index = id.flatMap { id in snapshot?.layers.firstIndex { $0.id == id } }
         let layer = index.flatMap { snapshot?.layers[$0] }
-        let ready = layerActionsReady
+        let ready = layerActionsShown
         layerBlendMode.isEnabled = ready && layer != nil
         layerOpacity.isEnabled = snapshot != nil && inlineTextInput == nil && layer != nil
         for control in [rotateLeftButton, rotateRightButton, flipHorizontalButton, flipVerticalButton] {
@@ -5587,6 +5589,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         if let error = exportOptionsError ?? bar.error { showExportError(error); return }
         guard let plan = bar.plan, let options = outputOptions(),
               let generation = state.beginCommand() else { return }
+        beginCommandGrace(generation)
         let overwrittenID = bar.planOverwrites ? bar.planArtifactID : nil
         let request: [String: Any] = [
             "history_root": historyRoot, "plan": plan, "options": options, "mode": captureMode,
@@ -5727,7 +5730,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     private func updateOutputOptionControls() {
         guard outputFormat != nil, outputQuality != nil else { return }
-        let ready = state.snapshot != nil && !state.busy && !draining
+        let ready = state.snapshot != nil && !controlsBusy && !saveInFlight && !draining
         let compress = outputQuality.indexOfSelectedItem == 1
         let maximum = outputQuality.indexOfSelectedItem == 2
         outputMaximumSize.isEnabled = ready && maximum
@@ -6529,7 +6532,8 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
         // Native controls retain letter navigation; these keys belong to the canvas.
         guard !(window.firstResponder is NSControl) else { return false }
-        guard !state.busy || inlineTextInput != nil, !importLoading else { return true }
+        // The tool rail's enabled state (`updateToolRail`).
+        guard !controlsBusy || inlineTextInput != nil, !importLoading else { return true }
         activateTool(section: tool.section, shape: tool.shape)
         return true
     }
@@ -6593,7 +6597,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         }
         zoomPreset.selectItem(at: values.firstIndex(of: current) ?? 0)
         fitButton?.selected = current == 0; fitButton?.needsDisplay = true
-        publishZoomLimits(ready: state.snapshot != nil && !state.busy && inlineTextInput == nil && !draining)
+        publishZoomLimits(ready: state.snapshot != nil && !controlsBusy && inlineTextInput == nil && !draining)
     }
 
     /// The zoom shown to the user: Fit resolves to the fitted image's scale.
@@ -7208,8 +7212,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                      message: message)
     }
 
-    private var layerActionsReady: Bool {
-        state.snapshot != nil && !state.busy && !importLoading
+    private var layerActionsReady: Bool { !state.busy && layerActionsShown }
+
+    /// Layer actions as their buttons show them (`controlsBusy`).
+    private var layerActionsShown: Bool {
+        state.snapshot != nil && !controlsBusy && !importLoading
             && inlineTextInput == nil && window.attachedSheet == nil && !draining
     }
 
@@ -7528,13 +7535,7 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             return
         }
         guard let generation = state.beginCommand() else { return }
-        commandGrace = true
-        let grace = DispatchWorkItem { [weak self] in
-            guard let self, self.state.busy, self.state.generation == generation else { return }
-            self.commandGrace = false; self.commandGraceWork = nil; self.updateControls()
-        }
-        commandGraceWork?.cancel(); commandGraceWork = grace
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.busyControlsDelay, execute: grace)
+        beginCommandGrace(generation)
         let clipboardChange = layerPasteboard.changeCount
         // Keep showing the drawn preview (and a released transform's outline)
         // until the rendered result replaces it; reverting first made a
@@ -7680,6 +7681,17 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
             && terminationCompletion == nil && !window.isVisible && !window.isMiniaturized
     }
 
+    /// Keep the controls as they are for `busyControlsDelay` of a just-begun command.
+    private func beginCommandGrace(_ generation: Int) {
+        commandGrace = true
+        let grace = DispatchWorkItem { [weak self] in
+            guard let self, self.state.busy, self.state.generation == generation else { return }
+            self.commandGrace = false; self.commandGraceWork = nil; self.updateControls()
+        }
+        commandGraceWork?.cancel(); commandGraceWork = grace
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.busyControlsDelay, execute: grace)
+    }
+
     private func updateControls() {
         publishPresence()
         let settled = state.snapshot != nil && !state.busy && inlineTextInput == nil
@@ -7710,16 +7722,18 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         addImagesButton?.isEnabled = acceptsImageImports
         addLayerButton?.isEnabled = acceptsImageImports
         sectionControl?.isEnabled = ready
-        outputFormat?.isEnabled = ready; outputQuality?.isEnabled = ready
+        // Shipping `disabled={busy === "saving"}`: Save greys the export bar only.
+        let exportControlsReady = ready && !saveInFlight
+        outputFormat?.isEnabled = exportControlsReady; outputQuality?.isEnabled = exportControlsReady
         exportDisclosure?.isEnabled = state.snapshot != nil && !draining
-        copyImageButton?.isEnabled = ready
-        outputFilename.isEnabled = ready
-        changeOutputDirectoryButton?.isEnabled = ready
-        showInFolderButton?.isEnabled = ready
-        saveAsNewSwitch.isEnabled = ready
+        copyImageButton?.isEnabled = exportControlsReady
+        outputFilename.isEnabled = exportControlsReady
+        changeOutputDirectoryButton?.isEnabled = exportControlsReady
+        showInFolderButton?.isEnabled = exportControlsReady
+        saveAsNewSwitch.isEnabled = exportControlsReady
         let exportReady = exportBarState.map { $0.plan != nil && $0.error == nil } == true
             && exportOptionsError == nil
-        exportSaveButton?.isEnabled = (ready || copyInFlight) && exportReady && !draining
+        exportSaveButton?.isEnabled = exportControlsReady && exportReady
         exportSaveButton?.title = saveInFlight ? "Saving…" : "Save"
         fitButton?.isEnabled = ready
         publishZoomLimits(ready: ready)
