@@ -102,15 +102,24 @@ final class DustTextures {
             rects.append(tile)
         }
         guard atlas else { return chips }
-        // One GPU evaluation/readback instead of 198 createCGImage calls.
-        let texture = try render(filter(packed, scale: scale), rect: extent)
-        return try zip(rects, particles).map { rect, particle in
-            // Crop in integer CGImage pixels (top-left origin) after the single
+        // One filtered atlas, read back one row of cells at a time: about 14
+        // readbacks instead of 198 createCGImage calls. Reading the whole atlas
+        // at once kept every intermediate of the full-atlas render live
+        // together, about 60 MB more at the Delete peak. The gutters keep each
+        // row's blur inside its own cells, so the pixels match.
+        let filtered = filter(packed, scale: scale)
+        var band: (row: Int, texture: CGImage)?
+        return try zip(rects, particles).enumerated().map { index, pair in
+            let (rect, particle) = pair
+            let row = index / columns
+            let bounds = CGRect(x: 0, y: CGFloat(row) * cellH, width: extent.width, height: cellH)
+            if band?.row != row { band = (row, try render(filtered, rect: bounds)) }
+            // Crop in integer CGImage pixels (top-left origin) after the row's
             // filter render. CALayer.contentsRect changes interpretation under
             // flipped ancestors; a full-image chip works in either hierarchy.
-            let pixels = CGRect(x: rect.minX, y: extent.maxY - rect.maxY,
+            let pixels = CGRect(x: rect.minX, y: bounds.maxY - rect.maxY,
                 width: rect.width, height: rect.height)
-            guard let image = texture.cropping(to: pixels) else { throw NativeError.renderFailed }
+            guard let image = band?.texture.cropping(to: pixels) else { throw NativeError.renderFailed }
             return Chip(image: image,
                 size: CGSize(width: particle.width + 2 * pad, height: particle.height + 2 * pad))
         }
