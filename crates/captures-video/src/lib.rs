@@ -15,7 +15,7 @@ use openh264::{
         BitRate, Complexity, Encoder, EncoderConfig, FrameRate, FrameType, IntraFramePeriod,
         Profile, QpRange, RateControlMode, UsageType, VuiConfig,
     },
-    formats::{RgbSliceU8, YUVBuffer},
+    formats::YUVSlices,
 };
 use thiserror::Error;
 
@@ -62,7 +62,8 @@ pub struct H264Mp4Writer {
     height: u32,
     frame_rate: u16,
     encoder: Encoder,
-    yuv: YUVBuffer,
+    /// I420 planes, reused for every frame.
+    yuv: [Vec<u8>; 3],
     writer: Option<Mp4Writer<File>>,
     pending: Option<PendingSample>,
     encoded_frames: u64,
@@ -121,7 +122,8 @@ impl H264Mp4Writer {
             .vui(VuiConfig::bt601());
         let encoder = Encoder::with_api_config(openh264::OpenH264API::from_source(), config)
             .map_err(|error| H264Mp4Error::Encoder(error.to_string()))?;
-        let yuv = YUVBuffer::new(width as usize, height as usize);
+        let pixels = width as usize * height as usize;
+        let yuv = [vec![0; pixels], vec![0; pixels / 4], vec![0; pixels / 4]];
 
         Ok(Self {
             output_path: output_path.to_path_buf(),
@@ -151,13 +153,13 @@ impl H264Mp4Writer {
             return Err(H264Mp4Error::InvalidFrame);
         }
 
-        self.yuv.read_rgb8(RgbSliceU8::new(
-            rgb,
-            (self.width as usize, self.height as usize),
-        ));
+        let (width, height) = (self.width as usize, self.height as usize);
+        let [y, u, v] = &mut self.yuv;
+        rgb_to_i420(rgb, width, y, u, v);
+        let yuv = YUVSlices::new((y, u, v), (width, height), (width, width / 2, width / 2));
         let bitstream = self
             .encoder
-            .encode_at(&self.yuv, Timestamp::from_millis(timestamp_ms))
+            .encode_at(&yuv, Timestamp::from_millis(timestamp_ms))
             .map_err(|error| H264Mp4Error::Encoder(error.to_string()))?;
         let frame_type = bitstream.frame_type();
         if matches!(frame_type, FrameType::Skip | FrameType::Invalid) {
@@ -295,6 +297,74 @@ fn create_mp4_writer(
     Ok(writer)
 }
 
+/// BT.601 limited-range I420 from packed RGB with even dimensions,
+/// byte-identical to openh264 0.9.7's `YUVBuffer::read_rgb8` (its scalar
+/// `write_yuv_scalar`), in row-pair bands across up to four threads. That
+/// conversion took about 17 ms per 4K frame, more than half the encode.
+fn rgb_to_i420(rgb: &[u8], width: usize, y: &mut [u8], u: &mut [u8], v: &mut [u8]) {
+    let pairs = y.len() / width.max(1) / 2;
+    let threads = std::thread::available_parallelism().map_or(1, |threads| threads.get().min(4));
+    i420_bands(rgb, width, threads.min(pairs / 32).max(1), y, u, v);
+}
+
+fn i420_bands(rgb: &[u8], width: usize, bands: usize, y: &mut [u8], u: &mut [u8], v: &mut [u8]) {
+    let pairs = y.len() / width.max(1) / 2;
+    let per_band = pairs.div_ceil(bands).max(1);
+    let half = width / 2;
+    std::thread::scope(|scope| {
+        let mut work = rgb
+            .chunks(per_band * width * 6)
+            .zip(y.chunks_mut(per_band * width * 2))
+            .zip(u.chunks_mut(per_band * half))
+            .zip(v.chunks_mut(per_band * half));
+        let first = work.next();
+        for (((rgb, y), u), v) in work {
+            scope.spawn(move || i420_rows(rgb, width, y, u, v));
+        }
+        if let Some((((rgb, y), u), v)) = first {
+            i420_rows(rgb, width, y, u, v);
+        }
+    });
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn i420_rows(rgb: &[u8], width: usize, y: &mut [u8], u: &mut [u8], v: &mut [u8]) {
+    for (pixel, luma) in rgb.chunks_exact(3).zip(y.iter_mut()) {
+        let (r, g, b) = (
+            u32::from(pixel[0]),
+            u32::from(pixel[1]),
+            u32::from(pixel[2]),
+        );
+        *luma = (((66 * r + 129 * g + 25 * b) >> 8) + 16) as u8;
+    }
+    let half = width / 2;
+    for ((pair, u), v) in rgb
+        .chunks_exact(width * 6)
+        .zip(u.chunks_exact_mut(half))
+        .zip(v.chunks_exact_mut(half))
+    {
+        let (top, bottom) = pair.split_at(width * 3);
+        for (((top, bottom), u), v) in top
+            .chunks_exact(6)
+            .zip(bottom.chunks_exact(6))
+            .zip(u.iter_mut())
+            .zip(v.iter_mut())
+        {
+            let average = |channel: usize| {
+                (i32::from(top[channel])
+                    + i32::from(top[channel + 3])
+                    + i32::from(bottom[channel])
+                    + i32::from(bottom[channel + 3])
+                    + 2)
+                    / 4
+            };
+            let (r, g, b) = (average(0), average(1), average(2));
+            *u = (((-38 * r + 112 * b - 74 * g) >> 8) + 128) as u8;
+            *v = (((112 * r - 18 * b - 94 * g) >> 8) + 128) as u8;
+        }
+    }
+}
+
 fn strip_annex_b_start_code(nal: &[u8]) -> Result<&[u8], H264Mp4Error> {
     let mut zeroes = 0;
     for (index, byte) in nal.iter().copied().enumerate() {
@@ -330,6 +400,28 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{H264Mp4Writer, strip_annex_b_start_code};
+
+    #[test]
+    fn i420_matches_openh264_for_every_band_split() {
+        use openh264::formats::{RgbSliceU8, YUVBuffer, YUVSource};
+
+        // Asymmetric size, an odd number of row pairs and full-range,
+        // position-dependent values (negative chroma sums included).
+        let (width, height) = (38, 26);
+        let rgb: Vec<u8> = (0..width * height * 3)
+            .map(|index| (index * 97 % 251 + index / 7 % 5) as u8)
+            .collect();
+        let mut expected = YUVBuffer::new(width, height);
+        expected.read_rgb8(RgbSliceU8::new(&rgb, (width, height)));
+        for bands in [1, 2, 4, 13] {
+            let pixels = width * height;
+            let (mut y, mut u, mut v) = (vec![0; pixels], vec![0; pixels / 4], vec![0; pixels / 4]);
+            super::i420_bands(&rgb, width, bands, &mut y, &mut u, &mut v);
+            assert_eq!(y, expected.y(), "Y with {bands} bands");
+            assert_eq!(u, expected.u(), "U with {bands} bands");
+            assert_eq!(v, expected.v(), "V with {bands} bands");
+        }
+    }
 
     #[test]
     fn strips_three_and_four_byte_annex_b_prefixes() {
