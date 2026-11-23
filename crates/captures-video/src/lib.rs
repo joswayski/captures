@@ -217,7 +217,7 @@ impl H264Mp4Writer {
 
         let start_ticks = milliseconds_to_ticks(timestamp_ms);
         if let Some(pending) = self.pending.take() {
-            let duration = sample_duration(pending.start_ticks, start_ticks, self.frame_rate);
+            let duration = sample_duration(pending.start_ticks, start_ticks, 1);
             self.write_pending(pending, duration)?;
         }
         self.pending = Some(PendingSample {
@@ -235,7 +235,11 @@ impl H264Mp4Writer {
             return Err(H264Mp4Error::EmptyRecording);
         };
         let end_ticks = milliseconds_to_ticks(end_timestamp_ms);
-        let duration = sample_duration(pending.start_ticks, end_ticks, self.frame_rate);
+        let duration = sample_duration(
+            pending.start_ticks,
+            end_ticks,
+            u64::from(MP4_TIMESCALE) / u64::from(self.frame_rate),
+        );
         self.write_pending(pending, duration)?;
         let mut writer = self.writer.take().ok_or(H264Mp4Error::EmptyRecording)?;
         writer
@@ -392,8 +396,12 @@ fn milliseconds_to_ticks(milliseconds: u64) -> u64 {
     milliseconds.saturating_mul(u64::from(MP4_TIMESCALE)) / 1_000
 }
 
-fn sample_duration(start_ticks: u64, end_ticks: u64, frame_rate: u16) -> u32 {
-    let minimum = u64::from(MP4_TIMESCALE) / u64::from(frame_rate);
+/// A sample lasts until the next one starts, so the track keeps the
+/// recording's real timing. Only the last frame gets a one-frame minimum: a
+/// minimum between frames stretched the 16 ms gaps that millisecond
+/// timestamps give a 60 FPS recording to 16.7 ms, so the video ran 1.3%
+/// longer than its audio.
+fn sample_duration(start_ticks: u64, end_ticks: u64, minimum: u64) -> u32 {
     u32::try_from(end_ticks.saturating_sub(start_ticks).max(minimum)).unwrap_or(u32::MAX)
 }
 
@@ -467,6 +475,27 @@ mod tests {
         assert_eq!(track.media_type().expect("media type"), MediaType::H264);
         assert_eq!((track.width(), track.height()), (64, 64));
         assert!(track.sample_count() > 0);
+    }
+
+    #[test]
+    fn a_60_fps_track_lasts_as_long_as_the_recording() {
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("timing.mp4");
+        let mut writer = H264Mp4Writer::create(&path, 64, 64, 60, 500_000).expect("writer starts");
+        // One frame per 60 FPS tick, stamped in whole milliseconds as the
+        // recorder does: gaps of 17, 16, 17, 17, 16, 17 ms...
+        for frame_index in 0..60_u64 {
+            let rgb = vec![u8::try_from(frame_index * 4).unwrap_or(u8::MAX); 64 * 64 * 3];
+            writer
+                .encode_rgb(&rgb, (frame_index * 1_000 + 30) / 60)
+                .expect("frame encodes");
+        }
+        writer.finish(1_000).expect("writer finishes");
+        let file = File::open(path).expect("recording opens");
+        let size = file.metadata().expect("recording metadata").len();
+        let reader = Mp4Reader::read_header(file, size).expect("MP4 header parses");
+        let track = reader.tracks().values().next().expect("video track");
+        assert_eq!(track.duration().as_millis(), 1_000);
     }
 
     #[test]
