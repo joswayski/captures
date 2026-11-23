@@ -73,9 +73,17 @@ pub enum XcapRecordingError {
 
 pub type XcapRecordingResult<T> = Result<T, XcapRecordingError>;
 
-struct WorkerOutcome {
-    duration_ms: u64,
-    dropped_frames: u64,
+pub(crate) struct WorkerOutcome {
+    pub(crate) duration_ms: u64,
+    pub(crate) dropped_frames: u64,
+}
+
+/// The CPU-fed writer everywhere; the GPU encoder on Windows when the machine
+/// has one.
+enum VideoEncoder {
+    Software(Box<VideoWriter>),
+    #[cfg(target_os = "windows")]
+    Hardware(Box<crate::windows_hw::HardwareEncoder>),
 }
 
 struct EncoderContext {
@@ -173,6 +181,8 @@ struct RecordingInput {
     receiver: Receiver<Frame>,
     first_image: RgbaImage,
     transform: FrameTransform,
+    #[cfg(target_os = "windows")]
+    hardware: Option<crate::windows_hw::HardwareEncoder>,
 }
 
 pub struct XcapRecordingSegment {
@@ -295,6 +305,17 @@ impl XcapRecordingSegment {
                 options.highlight_clicks,
             )
         });
+        #[cfg(target_os = "windows")]
+        let hardware = crate::windows_hw::HardwareEncoder::create(
+            &recorder,
+            &first_image,
+            frame_rect,
+            (width, height),
+            options.frames_per_second,
+            recording_bitrate(width, height, options.frames_per_second),
+            output_path,
+            pointer_overlay.is_some(),
+        );
         Self::encode(
             options,
             output_path,
@@ -303,6 +324,8 @@ impl XcapRecordingSegment {
                 receiver,
                 first_image,
                 transform,
+                #[cfg(target_os = "windows")]
+                hardware,
             },
             pointer_overlay,
         )
@@ -444,21 +467,33 @@ impl XcapRecordingSegment {
             receiver,
             first_image,
             transform,
+            #[cfg(target_os = "windows")]
+            hardware,
         } = input;
         let (width, height) = transform.dimensions();
-        let writer =
-            match VideoWriter::create(output_path, width, height, options.frames_per_second) {
-                Ok(writer) => writer,
-                Err(error) => {
-                    drop(receiver);
-                    let _ = recorder.stop();
-                    return Err(error);
+        #[cfg(target_os = "windows")]
+        let hardware = hardware.map(|encoder| VideoEncoder::Hardware(Box::new(encoder)));
+        #[cfg(not(target_os = "windows"))]
+        let hardware = None;
+        let encoder = match hardware {
+            Some(encoder) => encoder,
+            None => {
+                match VideoWriter::create(output_path, width, height, options.frames_per_second) {
+                    Ok(writer) => VideoEncoder::Software(Box::new(writer)),
+                    Err(error) => {
+                        drop(receiver);
+                        let _ = recorder.stop();
+                        return Err(error);
+                    }
                 }
-            };
+            }
+        };
+        // The hardware encoder already holds the first frame on the GPU.
+        let first_image = matches!(encoder, VideoEncoder::Software(_)).then_some(first_image);
         let output_path = output_path.to_path_buf();
         let stop_requested = Arc::new(AtomicBool::new(false));
         let warning = Arc::new(Mutex::new(None));
-        let latest_frame = Arc::new(Mutex::new(Some(first_image)));
+        let latest_frame = Arc::new(Mutex::new(first_image));
         let dropped_frames = Arc::new(AtomicU64::new(0));
         let stop_on_disconnect = recorder.is_portal();
         // The portal stream is negotiated at no more than the recording rate.
@@ -497,19 +532,27 @@ impl XcapRecordingSegment {
             let dropped_frames = dropped_frames.clone();
             match thread::Builder::new()
                 .name("captures-xcap-encoder".to_owned())
-                .spawn(move || {
-                    record_frames(
+                .spawn(move || match encoder {
+                    VideoEncoder::Software(writer) => record_frames(
                         &latest_frame,
                         EncoderContext {
                             transform,
                             frame_rate,
-                            writer,
+                            writer: *writer,
                             started_at: video_started_at,
                             pointer_overlay,
                         },
                         &dropped_frames,
                         &encoder_stop,
-                    )
+                    ),
+                    #[cfg(target_os = "windows")]
+                    VideoEncoder::Hardware(encoder) => crate::windows_hw::record_frames(
+                        *encoder,
+                        frame_rate,
+                        video_started_at,
+                        pointer_overlay,
+                        &encoder_stop,
+                    ),
                 }) {
                 Ok(worker) => worker,
                 Err(error) => {

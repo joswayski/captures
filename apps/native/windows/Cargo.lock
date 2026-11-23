@@ -590,6 +590,7 @@ dependencies = [
  "hound",
  "image",
  "libspa",
+ "mp4",
  "parking_lot",
  "pipewire",
  "thiserror 2.0.21",

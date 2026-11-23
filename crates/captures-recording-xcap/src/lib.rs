@@ -16,6 +16,8 @@ mod transform;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 mod segment;
 #[cfg(target_os = "windows")]
+mod windows_hw;
+#[cfg(target_os = "windows")]
 mod windows_wgc;
 #[cfg(target_os = "linux")]
 mod x11_recorder;

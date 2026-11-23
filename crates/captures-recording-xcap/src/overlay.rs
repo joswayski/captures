@@ -260,6 +260,25 @@ pub struct OverlayPatch {
 }
 
 impl OverlayPatch {
+    /// The rectangle of pixels this frame's overlay covered, as
+    /// `(left, top, right, bottom)` with exclusive right and bottom, in a
+    /// frame `width` pixels wide.
+    #[cfg(target_os = "windows")]
+    pub fn bounds(&self, width: u32) -> Option<(u32, u32, u32, u32)> {
+        let width = width.max(1) as usize;
+        let mut pixels = self.pixels.keys().map(|index| index / 3);
+        let first = pixels.next()?;
+        let (mut left, mut right) = (first % width, first % width);
+        let (top, mut bottom) = (first / width, first / width);
+        for pixel in pixels {
+            left = left.min(pixel % width);
+            right = right.max(pixel % width);
+            // Keys are in order, so rows only grow.
+            bottom = pixel / width;
+        }
+        Some((left as u32, top as u32, right as u32 + 1, bottom as u32 + 1))
+    }
+
     pub fn restore(self, rgb: &mut [u8]) {
         for (index, pixel) in self.pixels {
             if let Some(destination) = rgb.get_mut(index..index.saturating_add(3)) {
