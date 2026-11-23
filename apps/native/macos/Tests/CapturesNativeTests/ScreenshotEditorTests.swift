@@ -1201,6 +1201,28 @@ final class ScreenshotEditorTests: XCTestCase {
         XCTAssertTrue(labels(in: controller.root).contains(
             "Enter a filename without folders or reserved characters."))
         XCTAssertEqual(worker.exportSaves.count, 1)
+        // The narrow footer shows the whole error above Copy image and Save,
+        // without growing.
+        let status = try field("Export status", in: controller.root)
+        let bar = try XCTUnwrap(status.superview)
+        // The label insets its text 2 pt per side; its line cap must not hide lines.
+        let needed = ceil(status.attributedStringValue.boundingRect(with: NSSize(width: status.bounds.width - 4,
+            height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin]).height)
+        XCTAssertGreaterThan(needed, 16, "the error wraps at this width")
+        XCTAssertNotEqual(status.maximumNumberOfLines, 1)
+        XCTAssertLessThanOrEqual(needed, status.bounds.height + 0.5, "the filename error is not truncated")
+        XCTAssertGreaterThanOrEqual(status.frame.minY, 1)
+        XCTAssertLessThanOrEqual(status.frame.maxY, try copyButton(in: controller.root).frame.minY)
+        XCTAssertEqual(bar.frame.height, 77)
+        // Selecting the error keeps its colour inside the label's frame.
+        XCTAssertTrue(controller.window.makeFirstResponder(status))
+        let editor = try XCTUnwrap(status.currentEditor() as? NSTextView)
+        XCTAssertEqual(editor.textStorage?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor,
+                       Tokens.variants["light-mustard"]!.color("danger-text"))
+        XCTAssertTrue(status.clipsToBounds)
+        editor.selectAll(nil)
+        try render(controller.root, name: "screenshot-editor-filename-error-selected-light")
+        controller.window.makeFirstResponder(filename)
         try render(controller.root, name: "screenshot-editor-missing-original-minimum-light")
     }
 

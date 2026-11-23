@@ -2738,25 +2738,31 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
 
     /// One 11 pt status line at shipping's 1.35 line height.
     private static let exportStatusLine: CGFloat = 15
+    /// A narrow footer's two-line failure: tighter lines fit the 32 pt
+    /// between the footer's top edge and Copy image and Save.
+    private static let exportCompactStatusLine: CGFloat = 13
 
-    private func exportStatusParagraph(alignment: NSTextAlignment) -> NSParagraphStyle {
+    private func exportStatusParagraph(alignment: NSTextAlignment,
+                                       line: CGFloat = ScreenshotEditorController.exportStatusLine)
+        -> NSParagraphStyle {
         let style = NSMutableParagraphStyle()
-        style.minimumLineHeight = Self.exportStatusLine; style.maximumLineHeight = Self.exportStatusLine
+        style.minimumLineHeight = line; style.maximumLineHeight = line
         style.alignment = alignment; style.lineBreakMode = .byWordWrapping
         return style
     }
 
     private func exportStatusTextHeight(_ text: String, width: CGFloat, weight: NSFont.Weight,
-                                        maximumLines: Int) -> CGFloat {
-        guard !text.isEmpty, width > 0 else { return Self.exportStatusLine }
+                                        maximumLines: Int,
+                                        line: CGFloat = ScreenshotEditorController.exportStatusLine) -> CGFloat {
+        guard !text.isEmpty, width > 0 else { return line }
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.capturesUI(ofSize: tokens.number("text-xs"), weight: weight),
-            .paragraphStyle: exportStatusParagraph(alignment: .left),
+            .paragraphStyle: exportStatusParagraph(alignment: .left, line: line),
         ]
         let bounds = (text as NSString).boundingRect(with: NSSize(width: width, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin], attributes: attributes)
-        let lines = max(1, min(maximumLines, Int((bounds.height / Self.exportStatusLine).rounded(.up))))
-        return CGFloat(lines) * Self.exportStatusLine
+        let lines = max(1, min(maximumLines, Int((bounds.height / line).rounded(.up))))
+        return CGFloat(lines) * line
     }
 
     /// The save row's height and its status block: the notice line (17 pt;
@@ -2876,21 +2882,34 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         // `.screenshot-export-status`: the notice over the hint, centred in a
         // 36 pt column right-aligned before the actions, or a left-aligned
         // full-width row below the field row at 1040 pt and narrower.
-        // Narrower, the notice is one truncated line (its tooltip keeps the
-        // full text) over Copy image and Save, and a warning gets its own
-        // left-aligned row below the field row.
+        // Narrower, the notice sits over Copy image and Save: one line, or two
+        // tighter lines for a failure, truncated past that (its tooltip keeps
+        // the full text). A warning gets its own left-aligned row below the
+        // field row.
         let hintAlignment: NSTextAlignment = row.wide ? .right : .left
-        // The text's own paragraph style decides its alignment, so restyle it
-        // when the row switches between the wide column and the full-width row.
-        for (label, alignment) in [(exportStatus, NSTextAlignment.right), (exportHint, hintAlignment)]
-            where label.alignment != alignment {
-            label.alignment = alignment
+        let slotX = exportFilenameBox.frame.maxX + gap
+        let slotWidth = max(0, width - inset - slotX)
+        // The label draws its text 2 pt in from each side.
+        let compactHeight = !row.wide && exportStatusIsError
+            ? exportStatusTextHeight(exportStatus.stringValue, width: slotWidth - 4, weight: .medium,
+                                     maximumLines: 2, line: Self.exportCompactStatusLine)
+            : 0
+        let wraps = compactHeight > Self.exportCompactStatusLine
+        // The text's own paragraph style decides its alignment and line height,
+        // so restyle it when the row switches between the wide column and the
+        // full-width row, or a narrow failure starts or stops wrapping.
+        let statusStyle = exportStatusParagraph(alignment: .right,
+                                                line: wraps ? Self.exportCompactStatusLine : Self.exportStatusLine)
+        for (label, style) in [(exportStatus, statusStyle), (exportHint, exportStatusParagraph(alignment: hintAlignment))] {
+            label.alignment = style.alignment
             let text = NSMutableAttributedString(attributedString: label.attributedStringValue)
-            text.addAttribute(.paragraphStyle, value: exportStatusParagraph(alignment: alignment),
-                              range: NSRange(location: 0, length: text.length))
+            guard text.length > 0,
+                  text.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle != style
+            else { continue }
+            text.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: text.length))
             label.attributedStringValue = text
         }
-        exportStatus.maximumNumberOfLines = row.wide ? 0 : 1
+        exportStatus.maximumNumberOfLines = row.wide ? 0 : wraps ? 2 : 1
         if row.wide {
             let statusX = copyImageButton.frame.maxX + gap
             let content = metrics.notice + (exportHint.isHidden ? 0 : 2 + metrics.hint)
@@ -2899,10 +2918,16 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
                                         height: metrics.notice - 2)
             exportHint.frame = NSRect(x: statusX, y: statusTop + metrics.notice + 2, width: row.status,
                                       height: metrics.hint)
+        } else if wraps {
+            // Centred between the footer's top edge (or the open settings
+            // panel) and the buttons.
+            exportStatus.frame = NSRect(x: slotX, y: (top - padding + controlY - compactHeight) / 2,
+                                        width: slotWidth, height: compactHeight)
         } else {
-            let slotX = exportFilenameBox.frame.maxX + gap
-            exportStatus.frame = NSRect(x: slotX, y: headingY + 2, width: max(0, width - inset - slotX),
+            exportStatus.frame = NSRect(x: slotX, y: headingY + 2, width: slotWidth,
                                         height: Self.exportStatusLine + 1)
+        }
+        if !row.wide {
             exportHint.frame = NSRect(x: inset, y: top + 60 + padding + 2, width: row.status,
                                       height: metrics.hint)
         }
@@ -4040,7 +4065,11 @@ final class ScreenshotEditorController: NSObject, NSWindowDelegate, NSTableViewD
         exportStatus.setAccessibilityLabel("Export status")
         exportHint.setAccessibilityLabel("Export hint")
         for label in [exportStatus, exportHint] {
-            label.isSelectable = true
+            // Shipping's status text is selectable. Selecting swaps in the
+            // field editor: keep the label's colour and line height, and clip
+            // it to the label so it cannot wrap over the buttons.
+            label.isSelectable = true; label.allowsEditingTextAttributes = true
+            label.clipsToBounds = true
             label.maximumNumberOfLines = 0
             exportBar.addSubview(label)
         }
