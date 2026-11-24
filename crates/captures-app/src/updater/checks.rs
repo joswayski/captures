@@ -235,6 +235,9 @@ pub struct CheckWorker {
     generation: u64,
     staging_enabled: bool,
     install_request_enabled: bool,
+    /// A refresh replaced a Staged update with a newer Available one; the
+    /// worker still holds the verified package for a Restart already chosen.
+    superseded_stage: bool,
     preview: bool,
     automatic_check: bool,
     jobs: mpsc::Sender<Job>,
@@ -338,9 +341,10 @@ impl CheckWorker {
                         {
                             continue;
                         }
-                        // A package staged for the older release would install
-                        // it and then prompt for this one again.
-                        staged.take();
+                        // Keep a package staged for the older release until a
+                        // download replaces it: a Restart chosen just before
+                        // this result reached the UI still installs it rather
+                        // than failing.
                         let release = update.info().clone();
                         pending = Some(update);
                         if cancelled.is_cancelled()
@@ -355,6 +359,8 @@ impl CheckWorker {
                         if pending.is_none() || staging_directory.is_none() {
                             continue;
                         }
+                        // A package a refresh superseded is never installed now.
+                        staged.take();
                         // An offer can sit open for hours while releases land.
                         // Download what the feed offers now, not what it offered
                         // then, or the restart lands on an already old version.
@@ -447,6 +453,7 @@ impl CheckWorker {
             generation: 0,
             staging_enabled,
             install_request_enabled: false,
+            superseded_stage: false,
             preview,
             automatic_check: false,
             jobs,
@@ -466,7 +473,8 @@ impl CheckWorker {
     pub fn launch_preview_install(&mut self, restart: super::RestartIntent) -> Result<(), Error> {
         if !self.preview
             || !self.install_request_enabled
-            || !matches!(self.status, CheckStatus::Staged { .. })
+            || !(matches!(self.status, CheckStatus::Staged { .. })
+                || self.superseded_stage && matches!(self.status, CheckStatus::Available { .. }))
         {
             return Err(Error::Installation("a verified update is not available"));
         }
@@ -480,6 +488,7 @@ impl CheckWorker {
             .ok_or(Error::Installation(
                 "verified update package is no longer available",
             ))?;
+        self.superseded_stage = false;
         if let Err(error) = package.launch(restart) {
             if let CheckStatus::Staged { release, .. } = &self.status {
                 self.status = CheckStatus::DownloadError {
@@ -510,6 +519,8 @@ impl CheckWorker {
         self.operation_cancel = Some(token.clone());
         let accepted = self.jobs.send(Job::Check(token)).is_ok();
         if accepted {
+            // A check or download drops any superseded package.
+            self.superseded_stage = false;
             self.generation += 1;
         }
         accepted
@@ -553,6 +564,8 @@ impl CheckWorker {
         self.operation_cancel = Some(token.clone());
         let accepted = self.jobs.send(Job::Download(token)).is_ok();
         if accepted {
+            // A check or download drops any superseded package.
+            self.superseded_stage = false;
             self.generation += 1;
             self.status = CheckStatus::Downloading {
                 total: release.size,
@@ -615,6 +628,7 @@ impl CheckWorker {
                     ) {
                         continue;
                     }
+                    self.superseded_stage |= matches!(self.status, CheckStatus::Staged { .. });
                     self.status = CheckStatus::Available { release };
                 }
                 Event::Retarget(next) => {
@@ -1630,6 +1644,7 @@ mod tests {
             .concat()
             .into_iter()
             .chain([(200, body.clone())])
+            .chain(release("2026.10.80"))
             .collect(),
         );
         let client = UpdateClient::new(
@@ -1673,6 +1688,24 @@ mod tests {
         wait_idle(&mut worker);
         assert!(matches!(worker.status(), CheckStatus::Staged { .. }));
         assert_eq!(offered(&worker), "2026.10.70");
+        let staged_entries = std::fs::read_dir(scratch.path()).unwrap().count();
+        assert!(staged_entries > 0);
+
+        // A newer release behind a verified one: offer it, but keep the
+        // verified package, which a Restart already chosen still installs.
+        assert!(worker.check_automatically());
+        while offered(&worker) != "2026.10.80" {
+            assert!(Instant::now() < deadline, "staged refresh never landed");
+            thread::sleep(Duration::from_millis(1));
+            worker.poll();
+        }
+        assert!(matches!(worker.status(), CheckStatus::Available { .. }));
+        assert!(worker.superseded_stage);
+        assert_eq!(
+            std::fs::read_dir(scratch.path()).unwrap().count(),
+            staged_entries,
+            "the superseded package stays until a download replaces it"
+        );
         worker.shutdown();
         assert_eq!(
             server.join().unwrap(),
@@ -1686,6 +1719,8 @@ mod tests {
                 "/native.json",
                 "/native.json.minisig",
                 "/artifact",
+                "/native.json",
+                "/native.json.minisig",
             ]
         );
     }
