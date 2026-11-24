@@ -8,6 +8,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -516,7 +517,8 @@ export function manifest(directory, version, repository, tag, notes = "") {
   return { version, notes, platforms };
 }
 
-if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
+// Real paths: import.meta.url has symlinks resolved, process.argv[1] does not.
+if (process.argv[1] && pathToFileURL(realpathSync(process.argv[1])).href === import.meta.url) {
   const [operation, target, version, output] = process.argv.slice(2);
   if (operation === "build") {
     const flags = process.argv.slice(5);

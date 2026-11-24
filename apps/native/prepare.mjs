@@ -1,4 +1,5 @@
 // Build-time only. The native binary loads JSON/images, never CSS or JavaScript.
+import { realpathSync } from "node:fs";
 import { readFile, mkdir, writeFile, copyFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -294,7 +295,9 @@ export async function prepare(destination, testDestination) {
   );
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// Node resolves symlinks in import.meta.url (macOS /tmp is /private/tmp), so
+// compare real paths or a checkout reached through a symlink silently skips.
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const { destination, testDestination } = parseArguments(process.argv.slice(2));
   await prepare(destination, testDestination);
 }

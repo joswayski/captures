@@ -22,6 +22,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -219,7 +220,8 @@ export function generate(target, version, directory, staging) {
   }
 }
 
-if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
+// Real paths: import.meta.url has symlinks resolved, process.argv[1] does not.
+if (process.argv[1] && pathToFileURL(realpathSync(process.argv[1])).href === import.meta.url) {
   const [operation, target, version, directory, ...flags] = process.argv.slice(2);
   if (
     operation !== "generate" ||
