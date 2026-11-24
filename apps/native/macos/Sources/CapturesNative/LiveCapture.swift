@@ -2104,13 +2104,14 @@ final class LiveCaptureController: NSObject {
     /// A selector's frozen frame is grabbed only once every window Captures
     /// ordered out for it (mini previews, a closing menu) has left the
     /// screen, and at most `limit` seconds after the request, the fixed
-    /// settle time this replaces.
+    /// settle time this replaces. A `limit` of 0 (frozen pixels) skips the wait.
     private func afterCaptureWindowsLeave(limit: TimeInterval = 0.3, _ body: @escaping () -> Void) {
         let started = CACurrentMediaTime()
         func check() {
             let waited = CACurrentMediaTime() - started
             guard waited < limit, Self.captureWindowsLeaving() else {
-                Metrics.emit("capture-windows-left", milliseconds: waited * 1000, detail: waited < limit ? "left" : "limit")
+                Metrics.emit("capture-windows-left", milliseconds: waited * 1000,
+                             detail: limit == 0 ? "frozen" : waited < limit ? "left" : "limit")
                 body(); return
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.008, execute: check)
@@ -2268,7 +2269,10 @@ final class LiveCaptureController: NSObject {
             // A recaptured selection has no countdown and keeps its frozen
             // pixels (`capturePreferences` holds its `recapturing()` copy).
             let afterCountdown = (capturePreferences ?? preferences).countdown > 0
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            // Frozen selector pixels don't depend on what is on screen now, so
+            // only a fresh grab waits for the countdown and selector to leave.
+            let fresh = afterCountdown || (unifiedSession == nil && windowSession == nil && regionSession == nil)
+            afterCaptureWindowsLeave(limit: fresh ? 0.3 : 0) { [weak self] in
                 guard let self, self.flowGeneration == generation else { return }
                 self.run({ [transport, historyRoot, regionSession, regionRect, windowSession, windowTarget,
                             unifiedSession, unifiedTarget] in
@@ -2694,7 +2698,8 @@ final class LiveCaptureController: NSObject {
             recordingScreenshotCountdownPanel = nil
             status.stringValue = "Capturing screenshot while recording…"
             let afterCountdown = preferences.countdown > 0
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            // As in `tickCountdown`: frozen pixels need no settle time.
+            afterCaptureWindowsLeave(limit: afterCountdown ? 0.3 : 0) { [weak self] in
                 guard let self, self.recordingScreenshotGeneration == generation else { return }
                 let root = self.historyRoot
                 self.run({
@@ -2866,7 +2871,7 @@ final class LiveCaptureController: NSObject {
             status.stringValue = "Capturing screenshot while recording…"
             let preferences = shot.preferences
             let displayID = shot.display.id
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            afterCaptureWindowsLeave { [weak self] in
                 guard let self, self.recordingScreenshotGeneration == generation else { return }
                 self.run({ [transport, historyRoot] in
                     let result = try transport.request(["operation": "capture_display",
