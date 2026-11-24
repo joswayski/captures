@@ -9,9 +9,10 @@ def register(name):
     ok = user.RegisterHotKey(None, 1, MODS, VK)
     print(f"{name}: RegisterHotKey ok={bool(ok)} last_error={ctypes.get_last_error()}", flush=True)
 if len(sys.argv) > 1:
-    register(sys.argv[1]); sys.exit()
-holder = subprocess.Popen([sys.executable, "-c",
-    "import sys; sys.argv=['x','holder']; exec(open(r'%s').read()); import time; time.sleep(5)" % __file__])
+    register(sys.argv[1])
+    if sys.argv[1] == "holder": time.sleep(5)
+    sys.exit()
+holder = subprocess.Popen([sys.executable, __file__, "holder"])
 time.sleep(2)
 subprocess.run([sys.executable, __file__, "captures"])
 holder.wait()
