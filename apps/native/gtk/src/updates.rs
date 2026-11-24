@@ -1462,7 +1462,9 @@ mod tests {
         assert_eq!((check.action, check.step), ("Check Now", Some(Step::Check)));
         assert_eq!(
             check.error.as_deref(),
-            Some("Could not fetch the update: error sending request: client error (Connect): tcp connect error: Connection refused (os error 111)")
+            Some(
+                "Could not fetch the update: error sending request: client error (Connect): tcp connect error: Connection refused (os error 111)"
+            )
         );
         let install = live(
             &CheckStatus::DownloadError {
