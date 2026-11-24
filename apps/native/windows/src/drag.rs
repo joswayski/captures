@@ -164,7 +164,14 @@ pub fn run(payload: &Payload) -> Result<Outcome> {
     }
     let source: IDropSource = DropSource.into();
     let mut effect = DROPEFFECT_NONE;
+    // The host loop waits until the drop, and OLE's loop drops its
+    // thread-message wakes, so a capture shortcut pressed mid-drag would
+    // wait too. OLE's loop does dispatch timers: keep the app serviced.
+    let timer = unsafe { SetTimer(None, 0, SERVICE_DURING_DRAG_MS, Some(service_during_drag)) };
     let hr = unsafe { DoDragDrop(&data, &source, DROPEFFECT_COPY, &mut effect) };
+    unsafe {
+        let _ = KillTimer(None, timer);
+    }
     if hr.is_err() {
         return Err(hr.into());
     }
@@ -176,8 +183,20 @@ pub fn run(payload: &Payload) -> Result<Outcome> {
     })
 }
 
+const SERVICE_DURING_DRAG_MS: u32 = 20;
+
 thread_local! {
     static OLE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static SERVICING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Shortcuts, tray items and the capture flow they start, as the host loop
+/// runs them. A modal loop inside (an error dialog) cannot reenter it.
+unsafe extern "system" fn service_during_drag(_: HWND, _: u32, _: usize, _: u32) {
+    if !SERVICING.replace(true) {
+        crate::live::service();
+        SERVICING.set(false);
+    }
 }
 
 /// `DoDragDrop` needs OLE on this (STA) thread; COM alone is not enough.

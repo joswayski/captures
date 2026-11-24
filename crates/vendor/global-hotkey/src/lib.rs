@@ -160,4 +160,26 @@ impl GlobalHotKeyManager {
         self.platform_impl.unregister_all(hotkeys)?;
         Ok(())
     }
+
+    /// X11 only: while `watch` (and until a key it read is released), also
+    /// read registered hot keys from the key map, for when another client
+    /// grabs the keyboard and the hot key grabs cannot fire. No-op elsewhere.
+    pub fn watch_keyboard(&self, watch: bool) {
+        #[cfg(any(
+            target_os = "linux",
+            target_os = "dragonfly",
+            target_os = "freebsd",
+            target_os = "openbsd",
+            target_os = "netbsd"
+        ))]
+        self.platform_impl.watch_keyboard(watch);
+        #[cfg(not(any(
+            target_os = "linux",
+            target_os = "dragonfly",
+            target_os = "freebsd",
+            target_os = "openbsd",
+            target_os = "netbsd"
+        )))]
+        let _ = watch;
+    }
 }

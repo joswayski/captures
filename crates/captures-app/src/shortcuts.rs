@@ -388,6 +388,8 @@ pub fn native_key_event(id: u32, pressed: bool) {
 pub trait Registration {
     fn register(&self, key: HotKey) -> Result<(), String>;
     fn unregister(&self, key: HotKey) -> Result<(), String>;
+    /// See [`CaptureShortcuts::watch_keyboard`].
+    fn watch_keyboard(&self, _watch: bool) {}
     fn register_all(&self, keys: &[HotKey]) -> Result<(), String> {
         let mut result = Ok(());
         for key in keys {
@@ -433,6 +435,11 @@ impl Registration for GlobalHotKeyManager {
         }
         GlobalHotKeyManager::unregister_all(self, &keys).map_err(|error| error.to_string())
     }
+    // Only the vendored global-hotkey has it; every Linux build patches it in.
+    #[cfg(target_os = "linux")]
+    fn watch_keyboard(&self, watch: bool) {
+        GlobalHotKeyManager::watch_keyboard(self, watch);
+    }
 }
 
 impl Registration for Rc<GlobalHotKeyManager> {
@@ -447,6 +454,9 @@ impl Registration for Rc<GlobalHotKeyManager> {
     }
     fn unregister_all(&self, keys: &[HotKey]) -> Result<(), String> {
         Registration::unregister_all(self.as_ref(), keys)
+    }
+    fn watch_keyboard(&self, watch: bool) {
+        Registration::watch_keyboard(self.as_ref(), watch);
     }
 }
 
@@ -771,6 +781,20 @@ impl CaptureShortcuts {
             (self.dispatcher.wake)();
         }
         Ok(())
+    }
+
+    /// While a file drag out of Captures runs. On X11 a GTK 4.6/4.8 drag
+    /// grabs the whole keyboard, so the shortcut grabs cannot fire; the
+    /// registered chords are then also read from the key map. Other
+    /// backends deliver shortcuts during drags already.
+    pub fn watch_keyboard(&self, watch: bool) {
+        #[cfg(not(target_os = "linux"))]
+        let Backend::Direct(manager) = &self.backend;
+        #[cfg(target_os = "linux")]
+        let Backend::Direct(manager) = &self.backend else {
+            return; // The portal delivers shortcuts itself.
+        };
+        manager.watch_keyboard(watch);
     }
 
     /// Disable while editing shortcuts or while the host is preparing capture.

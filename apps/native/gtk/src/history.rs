@@ -1423,6 +1423,7 @@ impl CardView {
         // preview), not a generic file icon.
         let weak_card = Rc::downgrade(self);
         drag.connect_drag_begin(move |source, _| {
+            crate::live::file_drag(true);
             let Some(card) = weak_card.upgrade() else {
                 return;
             };
@@ -1441,6 +1442,7 @@ impl CardView {
             let (x, y) = grab.get();
             source.set_icon(icon.as_ref(), (x * scale) as i32, (y * scale) as i32);
         });
+        drag.connect_drag_end(|_, _, _| crate::live::file_drag(false));
         self.open.add_controller(drag);
     }
 

@@ -255,6 +255,16 @@ pub(crate) fn route_shortcuts_to_selector(generation: Option<u64>) {
     });
 }
 
+/// A file drag out of a mini preview or History started or ended, so capture
+/// shortcuts keep working while it holds the X11 keyboard.
+pub(crate) fn file_drag(active: bool) {
+    SHORTCUTS.with(|cell| {
+        if let Some(shortcuts) = cell.borrow().as_ref() {
+            shortcuts.watch_keyboard(active);
+        }
+    });
+}
+
 /// A hidden HUD retains New Capture as its restoration chord.
 pub(crate) fn recording_hidden(hidden: bool) {
     SHORTCUTS.with(|cell| {

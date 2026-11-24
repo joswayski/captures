@@ -24,6 +24,7 @@ enum ThreadMessage {
     RegisterHotKeys(Vec<HotKey>, Sender<crate::Result<()>>),
     UnRegisterHotKey(HotKey, Sender<crate::Result<()>>),
     UnRegisterHotKeys(Vec<HotKey>, Sender<crate::Result<()>>),
+    WatchKeyboard(bool),
     DropThread,
 }
 
@@ -107,6 +108,10 @@ impl GlobalHotKeyManager {
         }
 
         Ok(())
+    }
+
+    pub fn watch_keyboard(&self, watch: bool) {
+        self.send(ThreadMessage::WatchKeyboard(watch));
     }
 }
 
@@ -197,6 +202,7 @@ fn register_hotkey(
                 id: hotkey.id(),
                 mods,
                 pressed: false,
+                polled: false,
             };
             entry.push(state);
             Ok(())
@@ -245,7 +251,55 @@ fn unregister_hotkey(
 struct HotKeyState {
     id: u32,
     pressed: bool,
+    /// Pressed as read from the key map, so its release may never arrive as
+    /// an event: keep reading the key map until it is released.
+    polled: bool,
     mods: ModMask,
+}
+
+/// While another client actively grabs the keyboard (GTK 4.6 and 4.8 do for
+/// a drag), our passive grabs never fire. The key map and the pointer's
+/// modifier state still report the keys, whoever owns them.
+fn poll_keyboard(
+    conn: &RustConnection,
+    root: Window,
+    full_mask: KeyButMask,
+    hotkeys: &mut BTreeMap<Keycode, Vec<HotKeyState>>,
+) -> Result<(), String> {
+    let keys = conn
+        .query_keymap()
+        .map_err(|err| err.to_string())?
+        .reply()
+        .map_err(|err| err.to_string())?
+        .keys;
+    let mods = conn
+        .query_pointer(root)
+        .map_err(|err| err.to_string())?
+        .reply()
+        .map_err(|err| err.to_string())?
+        .mask;
+    let mods = ModMask::from((mods & full_mask).bits());
+    for (keycode, entry) in hotkeys.iter_mut() {
+        let down = keys[usize::from(*keycode) / 8] & (1 << (keycode % 8)) != 0;
+        for state in entry {
+            if down && mods == state.mods && !state.pressed {
+                GlobalHotKeyEvent::send(GlobalHotKeyEvent {
+                    id: state.id,
+                    state: crate::HotKeyState::Pressed,
+                });
+                state.pressed = true;
+                state.polled = true;
+            } else if !down && state.pressed {
+                GlobalHotKeyEvent::send(GlobalHotKeyEvent {
+                    id: state.id,
+                    state: crate::HotKeyState::Released,
+                });
+                state.pressed = false;
+                state.polled = false;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn events_processor(thread_rx: Receiver<ThreadMessage>, wake: Wake) -> Result<(), String> {
@@ -331,6 +385,7 @@ fn events_processor(thread_rx: Receiver<ThreadMessage>, wake: Wake) -> Result<()
                             state: crate::HotKeyState::Released,
                         });
                         state.pressed = false;
+                        state.polled = false;
                     }
                 }
             }
@@ -338,6 +393,7 @@ fn events_processor(thread_rx: Receiver<ThreadMessage>, wake: Wake) -> Result<()
         _ => {}
     };
 
+    let mut watching = false;
     loop {
         // Commands first. One queued before `wake` was published above is
         // read here; later ones arrive with a wake event.
@@ -365,10 +421,21 @@ fn events_processor(thread_rx: Receiver<ThreadMessage>, wake: Wake) -> Result<()
                     }
                     let _ = tx.send(Ok(()));
                 }
+                ThreadMessage::WatchKeyboard(watch) => watching = watch,
                 ThreadMessage::DropThread => {
                     return Ok(());
                 }
             }
+        }
+
+        if watching || hotkeys.values().flatten().any(|state| state.polled) {
+            // Events first, so a grab's own press and release win.
+            while let Ok(Some(event)) = conn.poll_for_event() {
+                key_event(event, &mut hotkeys);
+            }
+            poll_keyboard(&conn, root, full_mask, &mut hotkeys)?;
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            continue;
         }
 
         // Sleep until a key or wake event arrives, instead of polling the

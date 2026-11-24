@@ -914,6 +914,7 @@ impl State {
         });
         let (weak, weak_card) = (Rc::downgrade(self), Rc::downgrade(&card));
         drag.connect_drag_begin(move |source, _| {
+            crate::live::file_drag(true);
             let (Some(state), Some(card)) = (weak.upgrade(), weak_card.upgrade()) else {
                 return;
             };
@@ -931,6 +932,7 @@ impl State {
         });
         let (weak, weak_card) = (Rc::downgrade(self), Rc::downgrade(&card));
         drag.connect_drag_end(move |_, _, _| {
+            crate::live::file_drag(false);
             let accepted = !cancelled.replace(false);
             let (Some(state), Some(card)) = (weak.upgrade(), weak_card.upgrade()) else {
                 return;
