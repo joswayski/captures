@@ -1945,8 +1945,11 @@ impl EditorSession {
             .as_mut()
             .ok_or("Text requires explicit font bytes.")?;
         *element = prepare_text_edit(element, true, &mut fonts.renderer, &fonts.assets.families)?;
-        let frame =
-            render_text_input_frame(&document, &layer_id, &self.assets, self.fonts.as_mut())?;
+        // Only the edited layer changed, and the preview hides it; every other
+        // mutation waits for this input to finish. So the pixels from
+        // `begin_text_input` still apply: reuse them instead of recompositing
+        // the whole canvas on every keystroke, and refresh only the geometry.
+        let frame = prepare_geometry(&document, self.frame.pixels.clone(), self.fonts.as_mut())?;
 
         self.text_input
             .as_mut()

@@ -12,7 +12,7 @@ use std::{
 
 use captures_capture::CaptureMode;
 use captures_history::{ArtifactKind, HistoryEntry};
-use captures_image::{ExportFormat, ExportOptions, ExportSize};
+use captures_image::{ExportFormat, ExportOptions, ExportQuality, ExportSize};
 use chrono::Utc;
 use image::RgbaImage;
 use serde::{Deserialize, Serialize};
@@ -46,6 +46,64 @@ pub enum SavedExport {
     },
 }
 
+struct Encoded {
+    output: Vec<u8>,
+    history_png: Vec<u8>,
+    preview_png: Vec<u8>,
+}
+
+/// Encode the export plus History's lossless PNG and thumbnail.
+///
+/// A PNG Preserve export is byte-for-byte History's PNG (the same fast, Sub
+/// filter encode), so the default Save encodes the frame once instead of
+/// twice. Other exports encode alongside the History pair.
+fn encode_outputs(image: &RgbaImage, options: ExportOptions) -> Result<Encoded, Error> {
+    if options.format == ExportFormat::Png && options.quality == ExportQuality::Preserve {
+        let (history_png, preview_png) = std::thread::scope(|scope| {
+            let thumbnail = scope.spawn(|| captures_history::encode_thumbnail_png(image));
+            // This PNG is the export too, so its failure is an export error,
+            // reported as `captures_image::encode_export` reports it.
+            let png = captures_history::encode_png(image).map_err(|error| {
+                Error::Image(match error {
+                    captures_history::Error::Image(message) => message,
+                    other => other.to_string(),
+                })
+            });
+            let thumbnail = thumbnail
+                .join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+            Ok::<_, Error>((png?, thumbnail?))
+        })?;
+        let fits = options
+            .max_size_bytes
+            .is_none_or(|maximum| u64::try_from(history_png.len()).unwrap_or(u64::MAX) <= maximum);
+        let output = if fits {
+            history_png.clone()
+        } else {
+            captures_image::encode_export(image, options).map_err(Error::Image)?
+        };
+        return Ok(Encoded {
+            output,
+            history_png,
+            preview_png,
+        });
+    }
+    std::thread::scope(|scope| {
+        let output = scope.spawn(|| captures_image::encode_export(image, options));
+        let history = captures_history::encode_png_and_thumbnail(image);
+        let output = output
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+            .map_err(Error::Image)?;
+        let (history_png, preview_png) = history?;
+        Ok(Encoded {
+            output,
+            history_png,
+            preview_png,
+        })
+    })
+}
+
 /// Encode edited pixels and publish a new copy without overwriting any file.
 ///
 /// Encoding and file-write failures publish neither the destination nor a
@@ -67,8 +125,11 @@ pub fn save_new_export(
         size: ExportSize::Original,
         ..options
     };
-    let output = captures_image::encode_export(image, options).map_err(Error::Image)?;
-    let (history_png, preview_png) = captures_history::encode_png_and_thumbnail(image)?;
+    let Encoded {
+        output,
+        history_png,
+        preview_png,
+    } = encode_outputs(image, options)?;
 
     fs::create_dir_all(parent)?;
     let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
@@ -152,8 +213,11 @@ pub fn save_original_export(
         size: ExportSize::Original,
         ..options
     };
-    let output = captures_image::encode_export(image, options).map_err(Error::Image)?;
-    let (history_png, preview_png) = captures_history::encode_png_and_thumbnail(image)?;
+    let Encoded {
+        output,
+        history_png,
+        preview_png,
+    } = encode_outputs(image, options)?;
 
     let parent = destination.parent().expect("validated destination parent");
     let mut temporary = tempfile::NamedTempFile::new_in(parent)?;

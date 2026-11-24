@@ -956,11 +956,31 @@ fn stroke_path(
     );
 }
 
+/// Whether every RGBA pixel in `row` is opaque, where premultiplied and
+/// straight bytes are identical.
+fn opaque_row(row: &[u8]) -> bool {
+    row.chunks_exact(4).all(|pixel| pixel[3] == 255)
+}
+
 fn image_pixmap(pixels: &RgbaImage) -> Option<Pixmap> {
     let mut bitmap = Pixmap::new(pixels.width(), pixels.height())?;
-    for (destination, source) in bitmap.pixels_mut().iter_mut().zip(pixels.pixels()) {
-        *destination =
-            tiny_skia::ColorU8::from_rgba(source[0], source[1], source[2], source[3]).premultiply();
+    let stride = pixels.width() as usize * 4;
+    // Screenshots are mostly opaque: copy those rows as bytes and premultiply
+    // only rows that carry partial alpha.
+    for (destination, source) in bitmap
+        .data_mut()
+        .chunks_exact_mut(stride)
+        .zip(pixels.as_raw().chunks_exact(stride))
+    {
+        if opaque_row(source) {
+            destination.copy_from_slice(source);
+            continue;
+        }
+        for (destination, source) in destination.chunks_exact_mut(4).zip(source.chunks_exact(4)) {
+            let color = tiny_skia::ColorU8::from_rgba(source[0], source[1], source[2], source[3])
+                .premultiply();
+            destination.copy_from_slice(&[color.red(), color.green(), color.blue(), color.alpha()]);
+        }
     }
     Some(bitmap)
 }
@@ -1363,17 +1383,34 @@ fn composite_normal(output: &mut RgbaImage, canvas: &Pixmap) {
     // cutoff. Smaller renders keep the existing path without this allocation.
     let backdrop = (canvas.pixels().len() > 256 * 256)
         .then(|| BackdropCompositor::new(*output.get_pixel(0, 0), channels));
-    for (source, rendered) in output.pixels_mut().zip(canvas.pixels()) {
-        match rendered.alpha() {
-            0 => {}
-            255 => *source = Rgba([rendered.red(), rendered.green(), rendered.blue(), 255]),
-            _ => {
-                if let Some(backdrop) = &backdrop
-                    && *source == backdrop.background
-                {
-                    *source = backdrop.pixel(*rendered);
-                } else {
-                    source.blend(&demultiply_cached(*rendered, channels));
+    let width = canvas.width() as usize;
+    let stride = width * 4;
+    let mut output_rows = output.chunks_exact_mut(stride);
+    for (rendered_row, rendered_bytes) in canvas
+        .pixels()
+        .chunks_exact(width)
+        .zip(canvas.data().chunks_exact(stride))
+    {
+        let output_row = output_rows.next().expect("canvas matches output size");
+        // A fully opaque rendered row (an opaque screenshot under annotations)
+        // replaces the output row; its premultiplied bytes are already straight.
+        if opaque_row(rendered_bytes) {
+            output_row.copy_from_slice(rendered_bytes);
+            continue;
+        }
+        for (source, rendered) in output_row.chunks_exact_mut(4).zip(rendered_row) {
+            let source: &mut Rgba<u8> = Rgba::from_slice_mut(source);
+            match rendered.alpha() {
+                0 => {}
+                255 => *source = Rgba([rendered.red(), rendered.green(), rendered.blue(), 255]),
+                _ => {
+                    if let Some(backdrop) = &backdrop
+                        && *source == backdrop.background
+                    {
+                        *source = backdrop.pixel(*rendered);
+                    } else {
+                        source.blend(&demultiply_cached(*rendered, channels));
+                    }
                 }
             }
         }
@@ -2177,11 +2214,14 @@ mod tests {
                 pixel[3] = 255;
             }
         }
+        // The editor's usual document: an opaque screenshot under annotations.
+        let annotated_layers = [opaque_bitmap_layers.clone(), vector_layers.clone()].concat();
         for (name, layers) in [
             ("empty", Vec::new()),
             ("vectors", vector_layers),
             ("bitmap", bitmap_layers),
             ("opaque-bitmap", opaque_bitmap_layers),
+            ("opaque-bitmap+vectors", annotated_layers),
         ] {
             let prepare = || Document {
                 source: Arc::new(RgbaImage::from_pixel(

@@ -963,6 +963,8 @@ impl MediaToolchain {
     /// Extract an unedited preview, holding the last decoded frame through the
     /// source's trailing presentation interval. Callers validate `at_ms` against
     /// the source duration. Literal encoded comparison seeks use `extract_frame`.
+    /// Like `extract_preview_frame`, the PNG is decoded once and deleted, so it
+    /// uses the fast `PREVIEW_PNG_COMPRESSION_LEVEL`; the pixels are the same.
     pub fn extract_source_frame(
         &self,
         input: &Path,
@@ -970,7 +972,8 @@ impl MediaToolchain {
         destination: &Path,
         cancel: &CancelToken,
     ) -> Result<(), MediaToolError> {
-        self.extract_still(input, at_ms, destination, None, None, cancel)
+        let level = Some(PREVIEW_PNG_COMPRESSION_LEVEL);
+        self.extract_still(input, at_ms, destination, None, level, cancel)
     }
 
     fn extract_still(

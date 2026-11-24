@@ -166,7 +166,13 @@ fn render_inner(
     }
     captures_image::render_with_shadows_owned(
         captures_image::Document {
-            source: Arc::new(RgbaImage::from_pixel(width, height, background)),
+            // A transparent background (the default) is a zeroed allocation,
+            // which skips filling every pixel before the layers cover it.
+            source: Arc::new(if background.0 == [0; 4] {
+                RgbaImage::new(width, height)
+            } else {
+                RgbaImage::from_pixel(width, height, background)
+            }),
             crop: None,
             layers,
         },
