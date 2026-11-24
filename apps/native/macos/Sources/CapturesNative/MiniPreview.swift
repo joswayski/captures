@@ -1506,7 +1506,7 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         setFileDragging(true)
         let item = NSDraggingItem(pasteboardWriter: NSURL(fileURLWithPath: path))
         item.setDraggingFrame(mediaClip.frame, contents: imageView.image)
-        beginDraggingSession(with: [item], event: event, source: self)
+        HotKeysDuringDrags.began(beginDraggingSession(with: [item], event: event, source: self))
     }
 
     override func mouseUp(with event: NSEvent) {
@@ -1529,6 +1529,7 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
 
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint,
                          operation: NSDragOperation) {
+        HotKeysDuringDrags.ended(session)
         finishDrag(at: screenPoint, operation: operation)
     }
 

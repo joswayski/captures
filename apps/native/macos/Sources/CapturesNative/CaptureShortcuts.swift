@@ -1,6 +1,48 @@
-import Foundation
+import AppKit
+import Carbon
 import Darwin
 import CCapturesSettings
+
+/// AppKit's file-drag loop keeps the main run loop, its timers and the main
+/// queue running, but fetches only the events it handles, so a capture
+/// shortcut (a Carbon hot key) pressed mid-drag waits in the queue until the
+/// drop. While a drag out of Captures runs, hand those hot key events to
+/// their handler so the shortcut can capture the drag in progress.
+enum HotKeysDuringDrags {
+    private static let sessions = NSHashTable<NSDraggingSession>.weakObjects()
+    private static var timer: Timer?
+    private static var types = [
+        EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed)),
+        EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyReleased)),
+    ]
+
+    static func began(_ session: NSDraggingSession) {
+        precondition(Thread.isMainThread)
+        sessions.add(session)
+        guard timer == nil else { return }
+        let timer = Timer(timeInterval: 0.02, repeats: true) { _ in deliver() }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+    }
+
+    static func ended(_ session: NSDraggingSession) {
+        sessions.remove(session)
+        deliver()
+    }
+
+    private static func deliver() {
+        let queue = GetMainEventQueue()
+        // Never pulls new events or runs the run loop; only takes queued hot keys.
+        while let event = AcquireFirstMatchingEventInQueue(queue, types.count, &types,
+                                                           OptionBits(kEventQueueOptionsNone)) {
+            RemoveEventFromQueue(queue, event)
+            SendEventToEventTarget(event, GetEventDispatcherTarget())
+            ReleaseEvent(event)
+        }
+        // Weak, so a session AppKit never ended cannot keep the timer alive.
+        if sessions.allObjects.isEmpty { timer?.invalidate(); timer = nil }
+    }
+}
 
 /// Shipping `captures_macos_window::disable_symbolic_hotkeys`. Screenshot.app
 /// keeps listening after `com.apple.symbolichotkeys` is written (shared Rust

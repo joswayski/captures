@@ -515,7 +515,7 @@ final class HistoryThumbnailView: NSView, NSDraggingSource {
               image.size.width > 0, image.size.height > 0 else { return }
         dragStarted = true
         let item = Self.draggingItem(path: path, image: image, frame: bounds)
-        beginDraggingSession(with: [item], event: event, source: self)
+        HotKeysDuringDrags.began(beginDraggingSession(with: [item], event: event, source: self))
     }
 
     override func viewDidMoveToWindow() {
@@ -537,7 +537,10 @@ final class HistoryThumbnailView: NSView, NSDraggingSource {
     func sourceOperationMask(for context: NSDraggingContext) -> NSDragOperation { .copy }
 
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint,
-                         operation: NSDragOperation) { cancelPress() }
+                         operation: NSDragOperation) {
+        HotKeysDuringDrags.ended(session)
+        cancelPress()
+    }
 
     static func draggingItem(path: String, image: NSImage, frame: NSRect) -> NSDraggingItem {
         let item = NSDraggingItem(pasteboardWriter: NSURL(fileURLWithPath: path))
