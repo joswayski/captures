@@ -465,7 +465,14 @@ macOS, Windows, Debian, and AppImage installers plus the `latest.json` updater
 manifest for the newest validated public CalVer version. That manifest includes
 the `changelog` through that version, excluding unmarked historical archives.
 Installed apps ask `https://captur.es/api/updates/preview` for that
-manifest about every five minutes (and again shortly after launch). The website
+manifest about every five minutes (and again shortly after launch). While an
+update is offered or downloaded but not installed, those checks only look for a
+newer release, and the notice and Preferences switch to it in place; Download
+rechecks the manifest first. A notice left open while releases land therefore
+never installs a release that is already superseded. An update restart reopens
+Preferences only if it was on screen when the user chose Restart (macOS: on the
+current Space and not fully covered; Windows: not minimized and not on another
+virtual desktop; GTK: not minimized). The website
 caches GitHub's `latest.json` for one minute and serves it unchanged; installed
 apps still fall back to the GitHub download URL if captur.es is unreachable.
 Platform download URLs in `latest.json` are rewritten from GitHub API asset

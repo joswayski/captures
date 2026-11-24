@@ -728,8 +728,14 @@ impl Source {
 
     fn check_automatically(&mut self) -> bool {
         match self {
+            // The worker also refreshes an Available or Staged offer.
             Self::Preview(worker) => worker.check_automatically(),
-            Self::Fake(fake) => fake.check(),
+            Self::Fake(fake) => {
+                matches!(
+                    fake.status,
+                    CheckStatus::Idle | CheckStatus::UpToDate | CheckStatus::Error { .. }
+                ) && fake.check()
+            }
         }
     }
 
@@ -866,11 +872,7 @@ pub fn start(host: &Rc<Host>) {
                 return false;
             };
             resident.source.poll();
-            if matches!(
-                resident.source.status(),
-                CheckStatus::Idle | CheckStatus::UpToDate | CheckStatus::Error { .. }
-            ) && resident.source.check_automatically()
-            {
+            if resident.source.check_automatically() {
                 resident.manual = false;
             }
             true
@@ -1160,7 +1162,17 @@ fn install() -> bool {
         return false;
     }
     let restart = RestartIntent {
-        restore_preferences: host.preferences.borrow().is_some(),
+        // Reopen Preferences in front only when the user can see it now, not
+        // when it sits minimized (where the compositor reports that).
+        restore_preferences: host.preferences.borrow().as_ref().is_some_and(|window| {
+            window.is_visible()
+                && !window
+                    .surface()
+                    .and_downcast::<gtk::gdk::Toplevel>()
+                    .is_some_and(|toplevel| {
+                        toplevel.state().contains(gtk::gdk::ToplevelState::MINIMIZED)
+                    })
+        }),
         preview_artifact_ids: host
             .previews
             .borrow()

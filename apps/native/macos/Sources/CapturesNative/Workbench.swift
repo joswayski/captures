@@ -771,6 +771,14 @@ struct StartupDecision: Equatable {
     let activatesApplication: Bool
 }
 
+/// Whether the user can see `window` now: an update restart reopens
+/// Preferences (in front) only then. `isVisible` alone also counts a window
+/// left behind other apps or on another Space, so every later update kept
+/// bringing back a Preferences window the user had long stopped looking at.
+func isOnScreen(_ window: NSWindow) -> Bool {
+    window.isVisible && window.isOnActiveSpace && window.occlusionState.contains(.visible)
+}
+
 func startupDecision(options: Options) -> StartupDecision {
     let hiddenLive = options.live && options.scene == "idle"
     return StartupDecision(scene: options.live ? "live" : options.scene,
@@ -1309,7 +1317,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             let finished: (Bool) -> Void = { [weak self] accepted in
                 guard let self, self.terminationPending else { return }
                 let restart: [String: Any] = [
-                    "restore_preferences": self.appWindows.window(.preferences)?.isVisible == true,
+                    "restore_preferences": self.appWindows.window(.preferences).map(isOnScreen) == true,
                     "preview_artifact_ids": self.miniPreviews?.restartArtifactIDs ?? [],
                     "capture_windows": self.liveController?.resolveUpdateWindows(updateWindows) ?? updateWindows,
                 ]

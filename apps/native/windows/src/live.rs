@@ -718,12 +718,8 @@ fn service_updates() {
         let now = Instant::now();
         if now >= r.next_update_check {
             r.next_update_check = now + UPDATE_INTERVAL;
-            if matches!(
-                worker.status(),
-                CheckStatus::Idle | CheckStatus::UpToDate | CheckStatus::Error { .. }
-            ) {
-                worker.check_automatically();
-            }
+            // Also refreshes an Available or Staged offer to the newest release.
+            worker.check_automatically();
         }
         match step {
             Some(crate::updates::Step::Check) => {
@@ -820,7 +816,13 @@ fn install_update() {
         }
         return show_error(message);
     }
-    let restart = open_windows();
+    let mut restart = open_windows();
+    // The update reopens Preferences in front only when the user can see it
+    // now, not when it sits minimized or on another virtual desktop.
+    restart.restore_preferences = crate::host::with_host(|h| h.hwnd).is_some_and(|hwnd| unsafe {
+        use windows::Win32::UI::WindowsAndMessaging::{IsIconic, IsWindowVisible};
+        IsWindowVisible(hwnd).as_bool() && !IsIconic(hwnd).as_bool() && !crate::capture::cloaked(hwnd)
+    });
     let result = RESIDENT.with(|r| {
         let mut r = r.borrow_mut();
         let r = r.as_mut().ok_or("Captures is closing")?;

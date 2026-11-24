@@ -811,14 +811,7 @@ impl Preferences {
                 let now = Instant::now();
                 if now >= self.next_preview_check {
                     self.next_preview_check = now + Duration::from_secs(300);
-                    if matches!(
-                        checker.status(),
-                        captures_app::updater::checks::CheckStatus::Idle
-                            | captures_app::updater::checks::CheckStatus::UpToDate
-                            | captures_app::updater::checks::CheckStatus::Error { .. }
-                    ) {
-                        checker.check_automatically();
-                    }
+                    checker.check_automatically();
                 }
                 ctx.request_repaint_after(self.next_preview_check.saturating_duration_since(now));
             }

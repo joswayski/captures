@@ -150,12 +150,18 @@ pub struct TrayItem {
 enum Job {
     Check(CancelToken),
     Download(CancelToken),
+    /// Rechecks behind an Available or Staged update without showing a check.
+    Refresh(CancelToken),
     TakePreview(mpsc::Sender<Option<super::preview::Download>>),
     Shutdown,
 }
 
 enum Event {
     Finished(CheckStatus),
+    /// A newer release replaced the one an Available or Staged update offered.
+    Refreshed(ReleaseInfo),
+    /// The download started on a newer release than the one it was asked for.
+    Retarget(ReleaseInfo),
     Progress(u64, u64),
     Verifying,
 }
@@ -320,9 +326,69 @@ impl CheckWorker {
                             },
                         }
                     }
+                    Job::Refresh(token) => {
+                        // Only a newer release changes anything; failures and
+                        // the same release keep the offer the user is reading.
+                        let Ok(Some(update)) = client.check(&token) else {
+                            continue;
+                        };
+                        if pending
+                            .as_ref()
+                            .is_some_and(|known| known.info().version == update.info().version)
+                        {
+                            continue;
+                        }
+                        // A package staged for the older release would install
+                        // it and then prompt for this one again.
+                        staged.take();
+                        let release = update.info().clone();
+                        pending = Some(update);
+                        if cancelled.is_cancelled()
+                            || finished.send(Event::Refreshed(release)).is_err()
+                        {
+                            break;
+                        }
+                        wake();
+                        continue;
+                    }
                     Job::Download(token) => {
-                        let Some(update) = &pending else { continue };
-                        let Some(directory) = &staging_directory else {
+                        if pending.is_none() || staging_directory.is_none() {
+                            continue;
+                        }
+                        // An offer can sit open for hours while releases land.
+                        // Download what the feed offers now, not what it offered
+                        // then, or the restart lands on an already old version.
+                        match client.check(&token) {
+                            Ok(Some(latest)) => {
+                                if pending.as_ref().is_some_and(|known| {
+                                    known.info().version != latest.info().version
+                                }) {
+                                    let release = latest.info().clone();
+                                    pending = Some(latest);
+                                    if !cancelled.is_cancelled() && !token.is_cancelled() {
+                                        let _ = finished.send(Event::Retarget(release));
+                                        wake();
+                                    }
+                                }
+                            }
+                            Ok(None) => {
+                                pending = None;
+                                if cancelled.is_cancelled()
+                                    || finished
+                                        .send(Event::Finished(CheckStatus::UpToDate))
+                                        .is_err()
+                                {
+                                    break;
+                                }
+                                wake();
+                                continue;
+                            }
+                            // A failed or cancelled recheck leaves the known
+                            // release to the download, which reports its own
+                            // failure or cancellation as before.
+                            Err(_) => {}
+                        }
+                        let (Some(update), Some(directory)) = (&pending, &staging_directory) else {
                             continue;
                         };
                         let release = update.info().clone();
@@ -450,7 +516,20 @@ impl CheckWorker {
     }
 
     /// Background checks only raise a notice when an update is available.
+    /// Behind an Available or Staged update they look for a newer release
+    /// instead, so an offer left open while releases land stays current;
+    /// they leave downloads and failed downloads alone.
     pub fn check_automatically(&mut self) -> bool {
+        self.poll();
+        match self.status {
+            CheckStatus::Idle | CheckStatus::UpToDate | CheckStatus::Error { .. } => {}
+            CheckStatus::Available { .. } | CheckStatus::Staged { .. } => {
+                return !self.cancel.is_cancelled()
+                    && self.thread.is_some()
+                    && self.jobs.send(Job::Refresh(CancelToken::default())).is_ok();
+            }
+            _ => return false,
+        }
         let accepted = self.check();
         if accepted {
             self.automatic_check = true;
@@ -527,6 +606,29 @@ impl CheckWorker {
                 Event::Finished(status) => {
                     self.status = status;
                     self.operation_cancel = None;
+                }
+                // A Download or Check sent after this refresh owns the status.
+                Event::Refreshed(release) => {
+                    if !matches!(
+                        self.status,
+                        CheckStatus::Available { .. } | CheckStatus::Staged { .. }
+                    ) {
+                        continue;
+                    }
+                    self.status = CheckStatus::Available { release };
+                }
+                Event::Retarget(next) => {
+                    let CheckStatus::Downloading {
+                        release,
+                        downloaded,
+                        total,
+                    } = &mut self.status
+                    else {
+                        continue;
+                    };
+                    *total = next.size;
+                    *downloaded = 0;
+                    *release = next;
                 }
                 Event::Progress(downloaded, total) => {
                     let CheckStatus::Downloading {
@@ -1365,10 +1467,17 @@ mod tests {
         let server = serve(
             listener,
             vec![
+                // Check, then each download rechecks before it fetches.
+                (200, bytes.clone()),
+                (200, signature.clone()),
                 (200, bytes.clone()),
                 (200, signature.clone()),
                 (200, corrupt),
+                (200, bytes.clone()),
+                (200, signature.clone()),
                 (200, body.clone()),
+                (200, bytes.clone()),
+                (200, signature.clone()),
                 (200, bytes),
                 (200, signature),
                 (200, body),
@@ -1475,11 +1584,108 @@ mod tests {
             [
                 "/native.json",
                 "/native.json.minisig",
-                "/artifact",
+                "/native.json",
+                "/native.json.minisig",
                 "/artifact",
                 "/native.json",
                 "/native.json.minisig",
+                "/artifact",
+                "/native.json",
+                "/native.json.minisig",
+                "/native.json",
+                "/native.json.minisig",
                 "/artifact"
+            ]
+        );
+    }
+
+    #[test]
+    fn an_offer_left_open_follows_newer_releases_and_downloads_the_newest() {
+        use sha2::{Digest, Sha256};
+        let scratch = tempfile::tempdir().unwrap();
+        let body = super::super::staging::tests::package_fixture(Target::LinuxX64, "valid");
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let pair = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
+        let release = |version: &str| {
+            let mut value = manifest(&format!("{base}/artifact"));
+            value["version"] = serde_json::json!(version);
+            value["notes"] = serde_json::json!(format!("Notes for {version}"));
+            let artifact = &mut value["artifacts"][Target::LinuxX64.as_str()];
+            artifact["size"] = serde_json::json!(body.len());
+            artifact["sha256"] = serde_json::json!(format!("{:x}", Sha256::digest(&body)));
+            let bytes = serde_json::to_vec(&value).unwrap();
+            let signature =
+                minisign::sign(None, &pair.sk, std::io::Cursor::new(&bytes), None, None).unwrap();
+            [(200, bytes), (200, signature.into_string().into_bytes())]
+        };
+        let server = serve(
+            listener,
+            [
+                release("2026.10.50"),
+                release("2026.10.50"),
+                release("2026.10.60"),
+                release("2026.10.70"),
+            ]
+            .concat()
+            .into_iter()
+            .chain([(200, body.clone())])
+            .collect(),
+        );
+        let client = UpdateClient::new(
+            &format!("{base}/native.json"),
+            &pair.pk.to_box().unwrap().to_string(),
+            Renderer::Wgpu,
+            Target::LinuxX64,
+            "2026.9.99",
+        )
+        .unwrap();
+        let mut worker =
+            CheckWorker::new(client, Arc::new(|| {}), Some(scratch.path().to_owned())).unwrap();
+        let offered = |worker: &CheckWorker| match worker.status() {
+            CheckStatus::Available { release } | CheckStatus::Staged { release, .. } => {
+                release.version.clone()
+            }
+            other => panic!("no offer: {other:?}"),
+        };
+        assert!(worker.check_automatically());
+        wait_idle(&mut worker);
+        assert_eq!(offered(&worker), "2026.10.50");
+        let generation = worker.generation();
+
+        // Background checks behind the open offer: the same release changes
+        // nothing, a newer one replaces it without a visible check.
+        assert!(worker.check_automatically());
+        assert!(!worker.checking(), "a refresh never shows Checking");
+        assert!(worker.check_automatically());
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while offered(&worker) != "2026.10.60" {
+            assert!(Instant::now() < deadline, "refresh never landed");
+            thread::sleep(Duration::from_millis(1));
+            worker.poll();
+        }
+        assert_eq!(worker.generation(), generation, "a refresh does not reveal");
+        let notice = serde_json::to_string(&worker.notice(true).unwrap()).unwrap();
+        assert!(notice.contains("Notes for 2026.10.60"), "{notice}");
+
+        // Another release lands before Download: Download takes it, not 10.60.
+        assert!(worker.download());
+        wait_idle(&mut worker);
+        assert!(matches!(worker.status(), CheckStatus::Staged { .. }));
+        assert_eq!(offered(&worker), "2026.10.70");
+        worker.shutdown();
+        assert_eq!(
+            server.join().unwrap(),
+            [
+                "/native.json",
+                "/native.json.minisig",
+                "/native.json",
+                "/native.json.minisig",
+                "/native.json",
+                "/native.json.minisig",
+                "/native.json",
+                "/native.json.minisig",
+                "/artifact",
             ]
         );
     }
@@ -1492,7 +1698,16 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let (key, bytes, signature) = signed_package(&base, &body);
-        let server = serve(listener, vec![(200, bytes), (200, signature), (200, body)]);
+        let server = serve(
+            listener,
+            vec![
+                (200, bytes.clone()),
+                (200, signature.clone()),
+                (200, bytes),
+                (200, signature),
+                (200, body),
+            ],
+        );
         let client = UpdateClient::new(
             &format!("{base}/native.json"),
             &key,
@@ -1515,7 +1730,13 @@ mod tests {
         assert_eq!(std::fs::read_dir(scratch.path()).unwrap().count(), 0);
         assert_eq!(
             server.join().unwrap(),
-            ["/native.json", "/native.json.minisig", "/artifact"]
+            [
+                "/native.json",
+                "/native.json.minisig",
+                "/native.json",
+                "/native.json.minisig",
+                "/artifact"
+            ]
         );
     }
 
@@ -1530,9 +1751,15 @@ mod tests {
             let (key, bytes, signature) = signed_package(&base, &body);
             let (release, gate) = mpsc::channel();
             let server = thread::spawn(move || {
+                // The check, then the download's recheck.
                 let mut paths = serve(
                     listener.try_clone().unwrap(),
-                    vec![(200, bytes), (200, signature)],
+                    vec![
+                        (200, bytes.clone()),
+                        (200, signature.clone()),
+                        (200, bytes.clone()),
+                        (200, signature.clone()),
+                    ],
                 )
                 .join()
                 .unwrap();
@@ -1561,7 +1788,11 @@ mod tests {
                 drop(stream);
                 paths.push("/artifact".into());
                 if !shutdown {
-                    paths.extend(serve(listener, vec![(200, body)]).join().unwrap());
+                    paths.extend(
+                        serve(listener, vec![(200, bytes), (200, signature), (200, body)])
+                            .join()
+                            .unwrap(),
+                    );
                 }
                 paths
             });
@@ -1632,16 +1863,16 @@ mod tests {
                 worker.shutdown();
             }
             assert_eq!(std::fs::read_dir(scratch.path()).unwrap().count(), 0);
-            let expected = if shutdown {
-                vec!["/native.json", "/native.json.minisig", "/artifact"]
-            } else {
-                vec![
-                    "/native.json",
-                    "/native.json.minisig",
-                    "/artifact",
-                    "/artifact",
-                ]
-            };
+            let mut expected = vec![
+                "/native.json",
+                "/native.json.minisig",
+                "/native.json",
+                "/native.json.minisig",
+                "/artifact",
+            ];
+            if !shutdown {
+                expected.extend(["/native.json", "/native.json.minisig", "/artifact"]);
+            }
             assert_eq!(server.join().unwrap(), expected);
         }
     }

@@ -103,9 +103,11 @@ final class UpdateCheckModel {
     func startPreviewChecks() {
         guard previewTimer == nil else { return }
         check(quietly: true)
+        // The worker decides what a quiet check does: behind an available or
+        // verified update it only looks for a newer release, so an offer left
+        // open while releases land does not install an old one.
         let timer = Timer(timeInterval: 300, repeats: true) { [weak self] _ in
-            guard let self, self.acquisition == nil else { return }
-            self.check(quietly: true)
+            self?.check(quietly: true)
         }
         previewTimer = timer
         RunLoop.main.add(timer, forMode: .common)

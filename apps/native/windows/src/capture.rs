@@ -3245,7 +3245,8 @@ pub fn shell_menus_open() -> bool {
     })
 }
 
-fn cloaked(hwnd: HWND) -> bool {
+/// On another virtual desktop, or otherwise hidden by DWM while "visible".
+pub(crate) fn cloaked(hwnd: HWND) -> bool {
     use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
     let mut cloaked = 0u32;
     unsafe {
