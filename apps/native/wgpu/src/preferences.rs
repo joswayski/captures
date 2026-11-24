@@ -3189,7 +3189,7 @@ mod tests {
         }
         assert_eq!(
             prefs.update_checks.as_ref().unwrap().presentation().status,
-            "Native update service returned HTTP 503."
+            "Could not fetch the update: HTTP 503"
         );
         assert!(prefs.update_checks.as_ref().unwrap().presentation().enabled);
         assert!(!root.path().join("settings.json").exists());

@@ -181,7 +181,7 @@ pub fn card(
             card.heading = "Update failed".into();
             card.action = "Try again";
             card.step = Some(Step::Download);
-            card.error = Some(format!("Could not install the update: {message}"));
+            card.error = Some(captures_app::updater::install_failure_message(message));
         }
     }
     card
@@ -236,7 +236,7 @@ pub fn fixture(name: &str) -> Option<Card> {
         ),
         "check-failed" => (
             CheckStatus::Error {
-                message: "Could not reach the native update service.".into(),
+                message: "Could not fetch the update: error sending request: client error (Connect): tcp connect error: Connection refused (os error 111)".into(),
             },
             false,
             true,
@@ -349,7 +349,7 @@ pub fn notice_status(
         CheckStatus::DownloadError { message, .. } => UpdateStatus::Error {
             current_version,
             current_display_version,
-            message: format!("Could not install the update: {message}"),
+            message: captures_app::updater::install_failure_message(message),
             retry_install: true,
         },
         CheckStatus::Error { message } if flags.manual => UpdateStatus::Error {
@@ -572,7 +572,7 @@ pub fn live_fixture(name: &str) -> Option<(UpdateStatus, bool)> {
         ),
         "check-failed" => (
             CheckStatus::Error {
-                message: "Could not reach the native update service.".into(),
+                message: "Could not fetch the update: error sending request: client error (Connect): tcp connect error: Connection refused (os error 111)".into(),
             },
             NoticeFlags {
                 manual: true,
@@ -1454,7 +1454,7 @@ mod tests {
     fn failures_use_shipping_headings_and_actions() {
         let check = live(
             &CheckStatus::Error {
-                message: "Could not reach the native update service.".into(),
+                message: "Could not fetch the update: error sending request: client error (Connect): tcp connect error: Connection refused (os error 111)".into(),
             },
             false,
         );
@@ -1462,7 +1462,7 @@ mod tests {
         assert_eq!((check.action, check.step), ("Check Now", Some(Step::Check)));
         assert_eq!(
             check.error.as_deref(),
-            Some("Could not reach the native update service.")
+            Some("Could not fetch the update: error sending request: client error (Connect): tcp connect error: Connection refused (os error 111)")
         );
         let install = live(
             &CheckStatus::DownloadError {

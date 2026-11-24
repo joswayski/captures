@@ -568,7 +568,7 @@ def update_card(binary, scratch):
         "failed": ("Try again", True, ["Update failed"], False,
                    "Could not install the update: Native update signature verification failed."),
         "check-failed": ("Check Now", True, ["Couldn’t check for updates"], False,
-                         "Could not reach the native update service."),
+                         "Could not fetch the update: error sending request: client error (Connect): tcp connect error: Connection refused (os error 111)"),
     }
     for fixture, (action, enabled, status, progress, alert) in cases.items():
         process = launch(binary, "--settings-file", str(settings), "--size", "880x660",

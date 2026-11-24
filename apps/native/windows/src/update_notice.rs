@@ -148,7 +148,7 @@ pub fn status(
         CheckStatus::DownloadError { message, .. } => UpdateStatus::Error {
             current_version,
             current_display_version,
-            message: format!("Could not install the update: {message}"),
+            message: captures_app::updater::install_failure_message(message),
             retry_install: true,
         },
     }

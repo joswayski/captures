@@ -261,7 +261,7 @@ impl Client {
     }
 
     pub fn check(&self, cancel: &CancelToken) -> Result<Option<Pending>, Error> {
-        let mut last_error = Error::Network;
+        let mut last_error = Error::Network(None);
         for endpoint in &self.endpoints {
             let bytes = match fetch_metadata(&self.http, endpoint, MAX_MANIFEST_BYTES, cancel) {
                 Ok(bytes) => bytes,
@@ -438,7 +438,7 @@ impl Pending {
         progress: &mut impl FnMut(u64, u64),
     ) -> Result<Vec<u8>, Error> {
         check_cancel(cancel)?;
-        let mut response = successful(self.http.get(url).send().map_err(|_| Error::Network)?)?;
+        let mut response = successful(self.http.get(url).send()?)?;
         if response.content_length().is_some_and(|size| size > limit) {
             return Err(Error::Size);
         }

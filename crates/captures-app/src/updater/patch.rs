@@ -192,13 +192,7 @@ impl Candidate {
         }
         progress(0, self.size);
         check_cancel(cancel)?;
-        let response = successful(
-            update
-                .client
-                .get(self.url.clone())
-                .send()
-                .map_err(|_| Error::Network)?,
-        )?;
+        let response = successful(update.client.get(self.url.clone()).send()?)?;
         if response.content_length().is_some_and(|n| n != self.size) {
             return Err(Error::Size);
         }

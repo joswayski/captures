@@ -1077,7 +1077,7 @@ impl CheckWorker {
                 card.heading = "Update failed".into();
                 card.action = "Try again";
                 card.step = Some(CardStep::Download);
-                card.error = Some(format!("Could not install the update: {message}"));
+                card.error = Some(super::install_failure_message(message));
             }
         }
         if self.thread.is_none() {
@@ -2168,7 +2168,7 @@ mod tests {
         let (mut worker, observed) = worker(&format!("{base}/native.json"), &key, "2026.9.99");
         for message in [
             "Native update signature verification failed.",
-            "Native update service returned HTTP 503.",
+            "Could not fetch the update: HTTP 503",
         ] {
             assert!(worker.check());
             observed.recv_timeout(Duration::from_secs(5)).unwrap();

@@ -122,13 +122,42 @@ impl Target {
     }
 }
 
+/// How every request failure ([`Error::Network`], [`Error::Http`]) begins.
+const FETCH_FAILED: &str = "Could not fetch the update";
+
+/// The message a failed install shows: a request failure already says what
+/// went wrong, so only other failures get the "Could not install" prefix.
+pub fn install_failure_message(message: &str) -> String {
+    if message.starts_with(FETCH_FAILED) {
+        message.to_owned()
+    } else {
+        format!("Could not install the update: {message}")
+    }
+}
+
+impl From<reqwest::Error> for Error {
+    fn from(error: reqwest::Error) -> Self {
+        let error = error.without_url();
+        let mut detail = error.to_string();
+        let mut source = std::error::Error::source(&error);
+        while let Some(cause) = source {
+            detail.push_str(": ");
+            detail.push_str(&cause.to_string());
+            source = cause.source();
+        }
+        Self::Network(Some(detail))
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("Invalid native update configuration: {0}")]
     Configuration(&'static str),
-    #[error("Could not reach the native update service.")]
-    Network,
-    #[error("Native update service returned HTTP {0}.")]
+    /// The request failed before a response arrived, with the transport's
+    /// error chain when one is available.
+    #[error("{FETCH_FAILED}{}", .0.as_deref().map(|detail| format!(": {detail}")).unwrap_or_else(|| ".".into()))]
+    Network(Option<String>),
+    #[error("{FETCH_FAILED}: HTTP {0}")]
     Http(u16),
     #[error("Native update metadata exceeds its size limit.")]
     MetadataTooLarge,
@@ -457,11 +486,7 @@ impl PendingUpdate {
         // Also resets byte progress and total after an unsuccessful patch.
         progress(0, self.info.size);
         check_cancel(cancel)?;
-        let response = self
-            .client
-            .get(self.url.clone())
-            .send()
-            .map_err(|_| Error::Network)?;
+        let response = self.client.get(self.url.clone()).send()?;
         let response = successful(response)?;
         if response
             .content_length()
@@ -563,7 +588,7 @@ fn http_client(redirect: Policy) -> Result<Client, Error> {
         .redirect(redirect)
         .user_agent(concat!("Captures-Native/", env!("CARGO_PKG_VERSION")))
         .build()
-        .map_err(|_| Error::Network)
+        .map_err(Error::from)
 }
 
 fn is_loopback(url: &Url) -> bool {
@@ -646,7 +671,7 @@ fn fetch_metadata(
     cancel: &CancelToken,
 ) -> Result<Vec<u8>, Error> {
     check_cancel(cancel)?;
-    let response = successful(client.get(url.clone()).send().map_err(|_| Error::Network)?)?;
+    let response = successful(client.get(url.clone()).send()?)?;
     if response
         .content_length()
         .is_some_and(|length| length > limit)
@@ -1243,5 +1268,43 @@ mod tests {
             });
             assert_eq!(server.join().unwrap(), ["/native.json"]);
         }
+    }
+
+    #[test]
+    fn unreachable_update_service_reports_the_underlying_error() {
+        // Bind then drop a listener so the port refuses connections.
+        let endpoint = {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            format!("http://{}/native.json", listener.local_addr().unwrap())
+        };
+        let (key, _, _) = signed(&manifest("https://example.invalid/artifact"));
+        let message = UpdateClient::new(
+            &endpoint,
+            &key,
+            Renderer::Wgpu,
+            Target::LinuxX64,
+            "2026.9.99",
+        )
+        .unwrap()
+        .check(&CancelToken::default())
+        .err()
+        .unwrap()
+        .to_string();
+        assert!(
+            message.starts_with("Could not fetch the update: error sending request")
+                && !message.contains(&endpoint),
+            "{message}"
+        );
+        // A fetch failure already says what went wrong; other install
+        // failures keep their prefix.
+        assert_eq!(install_failure_message(&message), message);
+        assert_eq!(
+            Error::Http(503).to_string(),
+            "Could not fetch the update: HTTP 503"
+        );
+        assert_eq!(
+            install_failure_message("bad signature"),
+            "Could not install the update: bad signature"
+        );
     }
 }
