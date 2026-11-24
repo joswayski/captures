@@ -1170,7 +1170,9 @@ fn install() -> bool {
                     .surface()
                     .and_downcast::<gtk::gdk::Toplevel>()
                     .is_some_and(|toplevel| {
-                        toplevel.state().contains(gtk::gdk::ToplevelState::MINIMIZED)
+                        toplevel
+                            .state()
+                            .contains(gtk::gdk::ToplevelState::MINIMIZED)
                     })
         }),
         preview_artifact_ids: host

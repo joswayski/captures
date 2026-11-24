@@ -821,7 +821,9 @@ fn install_update() {
     // now, not when it sits minimized or on another virtual desktop.
     restart.restore_preferences = crate::host::with_host(|h| h.hwnd).is_some_and(|hwnd| unsafe {
         use windows::Win32::UI::WindowsAndMessaging::{IsIconic, IsWindowVisible};
-        IsWindowVisible(hwnd).as_bool() && !IsIconic(hwnd).as_bool() && !crate::capture::cloaked(hwnd)
+        IsWindowVisible(hwnd).as_bool()
+            && !IsIconic(hwnd).as_bool()
+            && !crate::capture::cloaked(hwnd)
     });
     let result = RESIDENT.with(|r| {
         let mut r = r.borrow_mut();
