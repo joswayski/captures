@@ -63,9 +63,11 @@ struct Card {
     edit: Option<EditControl>,
     hovered: Cell<bool>,
     focused: Cell<bool>,
-    /// Shipping's stale-pointer hover lock: a card that appears under a
-    /// resting pointer stays at rest until the pointer really moves.
+    /// Shipping's stale-pointer hover lock: a card that appears, or settles
+    /// after a Close or Delete, under a resting pointer stays at rest until
+    /// the pointer really moves.
     lock_origin: Cell<Option<(f64, f64)>>,
+    hover_unlocked: Cell<bool>,
     /// Playing its exit: the look stays as it was when the exit began.
     exiting: Cell<bool>,
 }
@@ -479,6 +481,13 @@ impl State {
             .find(|card| card.entry.id == id)
             .cloned();
         self.cards.borrow_mut().retain(|card| card.entry.id != id);
+        // Older cards settle under the pointer that pressed Close or Delete.
+        for card in self.cards.borrow().iter() {
+            card.hover_unlocked.set(false);
+            card.lock_origin.set(None);
+            card.hovered.set(false);
+            card.refresh();
+        }
         let playing = card.zip(kind).is_some_and(|(card, kind)| {
             card.exiting.set(true);
             card.image.set_dimmed(true);
@@ -823,6 +832,7 @@ impl State {
             hovered: Cell::new(false),
             focused: Cell::new(false),
             lock_origin: Cell::new(None),
+            hover_unlocked: Cell::new(false),
             exiting: Cell::new(false),
         });
         card.refresh();
@@ -830,11 +840,9 @@ impl State {
 
         let motion = gtk::EventControllerMotion::new();
         let weak = Rc::downgrade(&card);
-        let unlocked = Rc::new(Cell::new(false));
-        let seen = unlocked.clone();
         motion.connect_enter(move |_, x, y| {
             let Some(card) = weak.upgrade() else { return };
-            if seen.get() {
+            if card.hover_unlocked.get() {
                 card.hovered.set(true);
                 card.refresh();
             } else {
@@ -844,7 +852,7 @@ impl State {
         let weak = Rc::downgrade(&card);
         motion.connect_motion(move |_, x, y| {
             let Some(card) = weak.upgrade() else { return };
-            if unlocked.get() {
+            if card.hover_unlocked.get() {
                 if !card.hovered.get() {
                     card.hovered.set(true);
                     card.refresh();
@@ -854,7 +862,7 @@ impl State {
             let (ox, oy) = card.lock_origin.get().unwrap_or((x, y));
             card.lock_origin.set(Some((ox, oy)));
             if (x - ox).hypot(y - oy) > captures_app::preview_chrome::CARD_HOVER_LOCK_SLOP {
-                unlocked.set(true);
+                card.hover_unlocked.set(true);
                 card.hovered.set(true);
                 card.refresh();
             }

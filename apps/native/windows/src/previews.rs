@@ -49,7 +49,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 
 use captures_app::motion::{Animation, Motion, Pose, Transition, Tween};
 use captures_app::preview::{self, CollapsedCardPose, PreviewStack};
-use captures_app::preview_chrome::{self, EditorPhase, EditorPresence};
+use captures_app::preview_chrome::{self, CardHoverLock, EditorPhase, EditorPresence};
 use captures_app::preview_motion::{
     self, DragSway, DustParticle, ExitKind, StackExits, StackFan, StackToolbar, ToolbarCause,
 };
@@ -179,6 +179,9 @@ pub struct Stack {
     /// and the controls in view when it is taller.
     pub height: f32,
     pub hovered: Option<usize>,
+    /// Holds card hover off after a Close or Delete settles older cards
+    /// under the resting pointer, until it really moves or leaves.
+    hover_lock: CardHoverLock,
     pub hot: Option<Hit>,
     pub pressed: Option<Hit>,
     /// The pointer is over the collapsed pile, which fans it.
@@ -525,6 +528,7 @@ impl Stack {
             right: placement.is_right(),
             height: 0.,
             hovered: None,
+            hover_lock: CardHoverLock::default(),
             hot: None,
             pressed: None,
             pile_hovered: false,
@@ -1113,6 +1117,8 @@ impl Stack {
         let Some(index) = self.cards.iter().position(|c| c.entry.id == id) else {
             return;
         };
+        // Older cards settle under the pointer that pressed Close or Delete.
+        self.hover_lock.lock();
         let progress = self.progress();
         let playing = !self.reduced
             && self.card_motion.is_some()
@@ -1203,6 +1209,9 @@ impl Stack {
         self.hovered = None;
         self.hot = None;
         self.pressed = None;
+        // The window shrinks under a resting pointer: its window-relative
+        // position jumps without moving.
+        self.hover_lock.resample_origin();
         true
     }
 
@@ -1508,6 +1517,9 @@ impl Stack {
     /// Pointer at `(x, y)` DIPs, or `None` when it left; true when the look
     /// changed.
     pub fn pointer(&mut self, at: Option<(f32, f32)>) -> bool {
+        let locked = self
+            .hover_lock
+            .pointer(at.map(|(x, y)| (f64::from(x), f64::from(y))));
         if self.collapsed() {
             let before = (self.pile_hovered, self.hot);
             self.hovered = None;
@@ -1529,14 +1541,16 @@ impl Stack {
                 Hit::ClearAll | Hit::Minimize | Hit::CueUp | Hit::CueDown
             )
         });
-        let card = at.filter(|_| !over_stack_control).and_then(|(x, y)| {
-            (0..self.cards.len()).find(|&i| {
-                !self.exiting(i)
-                    && self
-                        .card_rect(i)
-                        .is_some_and(|r| x >= r.left && x < r.right && y >= r.top && y < r.bottom)
-            })
-        });
+        let card = at
+            .filter(|_| !over_stack_control && !locked)
+            .and_then(|(x, y)| {
+                (0..self.cards.len()).find(|&i| {
+                    !self.exiting(i)
+                        && self.card_rect(i).is_some_and(|r| {
+                            x >= r.left && x < r.right && y >= r.top && y < r.bottom
+                        })
+                })
+            });
         let before = (self.hovered, self.hot);
         if self.hovered != card {
             if let Some(old) = self.hovered.and_then(|i| self.cards.get_mut(i)) {
@@ -4619,6 +4633,29 @@ mod tests {
             s.hit(compact.left + 4., compact.top + 4.),
             Some(Hit::Card(0))
         );
+    }
+
+    #[test]
+    fn a_card_settling_under_the_resting_pointer_waits_for_it_to_move() {
+        use captures_settings::MiniPreviewPlacement as P;
+        for placement in [P::BottomRight, P::TopLeft] {
+            let mut s = stack(placement, &[false, true, false]);
+            let pressed = s.card_rect(2).unwrap();
+            let at = (pressed.left + 40., pressed.top + 40.);
+            assert!(s.pointer(Some(at)));
+            assert_eq!(s.hovered, Some(2));
+            s.leave("a2", ExitKind::Dismiss, 0., true);
+            s.height = s.content_height();
+            // The older card now under the same resting point stays at rest.
+            let under = s.card_rect(1).unwrap();
+            let at = (under.left + 40., under.top + 40.);
+            s.pointer(Some(at));
+            assert_eq!(s.hovered, None);
+            s.pointer(Some((at.0 + 2., at.1 + 2.)));
+            assert_eq!(s.hovered, None, "sub-slop jitter keeps hover idle");
+            assert!(s.pointer(Some((at.0, at.1 + 5.))));
+            assert_eq!(s.hovered, Some(1));
+        }
     }
 
     #[test]

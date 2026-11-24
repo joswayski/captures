@@ -3321,6 +3321,9 @@ final class MiniPreviewController {
             // Fewer than two live cards: the stack toolbar leaves with the card.
             if liveBefore >= 2 && stack.ids.count < 2 { view.playToolbar("preview_toolbar_exit", holdEnd: true) }
             view.settleSurvivors(into: artifactID, after: played.settleDelay)
+            // Older cards settle under the resting pointer that pressed Close
+            // or Delete; they wait for it to move before showing hover.
+            view.lockCardHover()
             if stack.ids.isEmpty { screenID = nil; stackOrigin = nil }
             exitDeadlines[artifactID] = CACurrentMediaTime() + played.hold
             scheduleRebuild(after: played.hold)
@@ -3537,6 +3540,9 @@ final class MiniPreviewController {
         if let view = previous?.previewView {
             next.previewView.continueFeedback(from: view)
             next.previewView.continueScroll(from: view)
+            // The rebuilt cards keep a stale-pointer lock, sampled afresh in
+            // the new panel's coordinates.
+            if view.isCardHoverLocked { next.previewView.lockCardHover() }
         }
         previous?.close()
         next.sharingType = settings.includeInCaptures ? .readOnly : .none
