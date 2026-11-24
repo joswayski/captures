@@ -6411,8 +6411,18 @@ unless reduced motion is enabled. Native completion resets consumed pointer
 state; X11 cancellation, disappearing targets and missing Finished have bounded
 cleanup. See `apps/native/wgpu/vendor/README.md` for provenance/update obligations.
 
-Like Tauri, both hosts conceal the source media while its native file drag is
-active, leaving a transparent media area with the card's chrome and shadow.
+November 2026: the native hosts (AppKit, Win32, GTK4) replace the hollow card
+with a drag wake (`captures_app::preview_wake`, shared through the settings ABI
+for AppKit). The whole card, chrome and shadow included, leaves its slot; the
+slot keeps a breathing hairline imprint with an accent glow, and a tapered
+ribbon of light with motes runs from it to the drag image in a click-through
+overlay over the stack's display. An accepted external drop snaps the ribbon
+away with a bloom at the landing and removes the card; a cancel, refusal or
+self-drop draws it back into the slot as the card re-forms. Reduced motion
+holds the ribbon still and ends at once. GTK draws the full ribbon only on
+composited X11 (Wayland gives clients no pointer during a drag); elsewhere it
+shows the slot imprint. Earlier, like Tauri, both hosts concealed only the
+source media, leaving the card's chrome and shadow.
 AppKit retains concealment across stack rebuilds and restores the current survivor
 when the original source completes. A new card generation, even at the same ID
 and path, cannot inherit the old source's concealment or completion. The private-X11 drag probe checks composited

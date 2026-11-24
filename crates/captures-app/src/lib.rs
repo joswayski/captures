@@ -35,6 +35,7 @@ pub mod preview_channel;
 pub mod preview_chrome;
 pub mod preview_drag;
 pub mod preview_motion;
+pub mod preview_wake;
 pub mod profile_import;
 pub mod recording_editor;
 pub mod recording_editor_ui;

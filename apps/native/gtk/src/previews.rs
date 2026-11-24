@@ -12,6 +12,7 @@ use std::time::Duration;
 use captures_app::preview::{self, PreviewDropLanding, PreviewStack};
 use captures_app::preview_chrome::{self, EditorPresence};
 use captures_app::preview_motion::ExitKind;
+use captures_app::preview_wake::WakeEnd;
 use captures_history::HistoryEntry;
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib, graphene};
@@ -22,6 +23,8 @@ use crate::widgets::{Icon, Thumbnail, icon_button};
 
 mod pile;
 use pile::{Pile, PileCard};
+mod wake;
+pub use wake::FIXTURES as WAKE_FIXTURES;
 #[cfg(feature = "layer-shell")]
 pub(crate) mod layer_shell;
 #[cfg(feature = "x11")]
@@ -401,6 +404,11 @@ impl Previews {
     /// Shipping's `thumbnail-editor-active` ring follows the editor windows.
     pub fn sync_editing(&self) {
         self.state.sync_editing();
+    }
+
+    /// Render the newest card's drag wake ([`WAKE_FIXTURES`]) to a PNG.
+    pub fn render_wake(&self, path: PathBuf, phase: &str, light: bool, done: Box<dyn FnOnce()>) {
+        wake::render_fixture(&self.state, path, phase, light, done);
     }
 }
 
@@ -896,9 +904,9 @@ impl State {
         });
         card.root.add_controller(focus);
 
-        // File drag out, as History's cards. The card's image hides under a
-        // still copy of it (`thumbnail-file-dragging`); an accepted copy
-        // elsewhere dismisses the card, a drop back on the stack shakes it.
+        // File drag out, as History's cards. The card leaves its slot for a
+        // drag wake (`wake.rs`); an accepted copy elsewhere dismisses the
+        // card, a drop back on the stack shakes it as it re-forms.
         let drag = gtk::DragSource::new();
         drag.set_actions(gdk::DragAction::COPY);
         let path = media_path(&self.history_root, &card.entry);
@@ -912,8 +920,9 @@ impl State {
                 &glib::Bytes::from_owned(format!("{uri}\r\n").into_bytes()),
             ))
         });
-        let (weak, weak_card) = (Rc::downgrade(self), Rc::downgrade(&card));
-        drag.connect_drag_begin(move |source, _| {
+        let current = Rc::new(RefCell::new(None::<Rc<wake::Wake>>));
+        let (weak, weak_card, began) = (Rc::downgrade(self), Rc::downgrade(&card), current.clone());
+        drag.connect_drag_begin(move |source, drag| {
             let (Some(state), Some(card)) = (weak.upgrade(), weak_card.upgrade()) else {
                 return;
             };
@@ -921,7 +930,15 @@ impl State {
             let still = gtk::WidgetPaintable::new(Some(&card.image)).current_image();
             let (x, y) = grab.get();
             source.set_icon(Some(&still), x as i32, y as i32);
-            card.root.add_css_class("file-dragging");
+            if let Some(previous) = began.take() {
+                previous.stop();
+            }
+            // The still is drawn at the image's size around the hotspot.
+            let icon = (
+                f64::from(card.image.width()),
+                f64::from(card.image.height()),
+            );
+            *began.borrow_mut() = wake::Wake::begin(&state, &card.entry.id, (x, y), icon, drag);
         });
         let cancelled = Rc::new(Cell::new(false));
         let flag = cancelled.clone();
@@ -935,15 +952,28 @@ impl State {
             let (Some(state), Some(card)) = (weak.upgrade(), weak_card.upgrade()) else {
                 return;
             };
-            card.root.remove_css_class("file-dragging");
             let landing = if state.self_drop.replace(false) {
                 PreviewDropLanding::PreviewStack
             } else {
                 PreviewDropLanding::External
             };
-            match preview::preview_drag_outcome(accepted, landing) {
+            let outcome = preview::preview_drag_outcome(accepted, landing);
+            let dropped = outcome == preview::PreviewDragOutcome::Dismiss;
+            let wake = current.borrow().clone();
+            if let Some(wake) = &wake {
+                wake.end(if dropped {
+                    WakeEnd::Dropped
+                } else {
+                    WakeEnd::Returned
+                });
+            }
+            match outcome {
                 preview::PreviewDragOutcome::Reject => state.pile.reject(&card.entry.id),
-                preview::PreviewDragOutcome::Dismiss => state.leave(&card.entry.id, None),
+                // The wake keeps the card hidden while it gives up its slot
+                // (an unseen exit, so the cards behind settle into it).
+                preview::PreviewDragOutcome::Dismiss => {
+                    state.leave(&card.entry.id, wake.is_some().then_some(ExitKind::Dismiss))
+                }
                 preview::PreviewDragOutcome::Retain => {}
             }
         });

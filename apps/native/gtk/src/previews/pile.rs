@@ -15,6 +15,7 @@ use gtk::prelude::*;
 use gtk::subclass::prelude::*;
 use gtk::{glib, graphene, gsk};
 
+use super::wake::{self, Palette, WakePose};
 use crate::tokens::Tokens;
 use crate::widgets::{Icon, Streak, Thumbnail, streak_step};
 
@@ -89,6 +90,12 @@ mod imp {
         pub max_scroll: Cell<f64>,
         /// `.thumbnail-overflow-cue-older` and `-newer`.
         pub cues: RefCell<Vec<gtk::Button>>,
+        /// File drags' wakes by card id: the card's pose and its imprint.
+        pub wakes: RefCell<HashMap<String, WakePose>>,
+        /// Each card's slot top-left at the latest layout, without a
+        /// reject shake or exit slide.
+        pub slots: RefCell<HashMap<String, (f32, f32)>>,
+        pub wake_palette: Cell<Option<Palette>>,
     }
 
     #[glib::object_subclass]
@@ -144,6 +151,18 @@ mod imp {
         /// it, outside its clip.
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
             let obj = self.obj();
+            // An emptied slot's imprint, under every card.
+            if let Some(palette) = self.wake_palette.get() {
+                let slots = self.slots.borrow();
+                for (id, pose) in self.wakes.borrow().iter() {
+                    if pose.slot_opacity > 0.001
+                        && let Some(&(x, y)) = slots.get(id)
+                    {
+                        let rect = graphene::Rect::new(x, y, WIDTH, HEIGHT);
+                        wake::snapshot_slot(snapshot, &rect, pose.slot_opacity, &palette);
+                    }
+                }
+            }
             let mut child = obj.first_child();
             while let Some(widget) = child {
                 if self.controls.borrow().as_ref() == Some(&widget) {
@@ -309,6 +328,7 @@ impl Pile {
             reject_x: [1, 2, 3, 4]
                 .map(|n| f64::from(tokens.number(&format!("thumbnail-drop-reject-x-{n}")))),
         }));
+        imp.wake_palette.set(Some(Palette::new(tokens)));
         controls.set_parent(&pile);
         *imp.controls.borrow_mut() = Some(controls.clone().upcast());
 
@@ -379,6 +399,38 @@ impl Pile {
         });
         pile.add_controller(hover);
         pile
+    }
+
+    /// Show `id` as its file drag's wake has it now. Ignored once the card
+    /// has left the pile.
+    pub fn set_wake(&self, id: &str, pose: WakePose) {
+        let imp = self.imp();
+        if !imp.cards.borrow().iter().any(|card| card.id == id) {
+            return;
+        }
+        if imp.wakes.borrow_mut().insert(id.to_owned(), pose) != Some(pose) {
+            self.queue_allocate();
+            self.queue_draw();
+        }
+    }
+
+    /// `id`'s wake is over: the card is itself again.
+    pub fn clear_wake(&self, id: &str) {
+        if self.imp().wakes.borrow_mut().remove(id).is_some() {
+            self.queue_allocate();
+            self.queue_draw();
+        }
+    }
+
+    /// `id`'s slot in pile coordinates at the latest layout.
+    pub fn wake_slot(&self, id: &str) -> Option<graphene::Rect> {
+        let slots = self.imp().slots.borrow();
+        let &(x, y) = slots.get(id)?;
+        Some(graphene::Rect::new(x, y, WIDTH, HEIGHT))
+    }
+
+    pub fn wake_palette(&self) -> Palette {
+        self.imp().wake_palette.get().expect("wake palette")
     }
 
     pub fn connect_expand(&self, expand: impl Fn() + 'static) {
@@ -686,6 +738,8 @@ impl Pile {
             keep
         });
         imp.dust.borrow_mut().retain(|id, _| display.contains(id));
+        imp.wakes.borrow_mut().retain(|id, _| display.contains(id));
+        imp.slots.borrow_mut().retain(|id, _| display.contains(id));
         imp.origins
             .borrow_mut()
             .retain(|id, _| display.contains(id));
@@ -732,6 +786,8 @@ impl Pile {
         imp.arrivals.borrow_mut().remove(id);
         imp.rejects.borrow_mut().remove(id);
         imp.dust.borrow_mut().remove(id);
+        imp.wakes.borrow_mut().remove(id);
+        imp.slots.borrow_mut().remove(id);
         imp.exits.borrow_mut().release(id, false);
         let live = self.live_ids();
         imp.exits.borrow_mut().sync(&live);
@@ -1238,6 +1294,8 @@ impl Pile {
         let exits = imp.exits.borrow();
         let rejects = imp.rejects.borrow();
         let mut origins = imp.origins.borrow_mut();
+        let wakes = imp.wakes.borrow();
+        let mut slots = imp.slots.borrow_mut();
         let mirror = if imp.right_anchor.get() { -1. } else { 1. };
         let fan = imp.fan.borrow();
         let arrivals = imp.arrivals.borrow();
@@ -1359,6 +1417,18 @@ impl Pile {
                     }
                 }
                 None => {}
+            }
+            slots.insert(
+                card.id.clone(),
+                (
+                    (centre_x - half.0) as f32,
+                    (centre_y + shift - half.1) as f32,
+                ),
+            );
+            // A dragged card's whole shell leaves its slot.
+            if let Some(pose) = wakes.get(&card.id) {
+                opacity *= pose.card_opacity;
+                scale = (scale.0 * pose.card_scale, scale.1 * pose.card_scale);
             }
             let centre_x = centre_x + slide;
             let centre_y = centre_y + shift;

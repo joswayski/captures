@@ -19,7 +19,9 @@ frame and exit, for parity comparisons. `--scene history --history-root DIR`
 opens Capture History, and `--scene editor --artifact ID --history-root DIR`
 opens the screenshot editor on one History entry, `--scene recording
 --artifact ID` opens the recording editor on a video or GIF, and `--scene preview`
-restores the two newest entries (`--count N` for more, or `--artifact ID`) as floating previews,
+restores the two newest entries (`--count N` for more, or `--artifact ID`) as floating previews
+(with `--screenshot`, `--wake carried|returning|dropped` renders the newest
+card's file-drag wake on a 1280 × 800 desktop instead),
 `--scene feedback` opens Send Feedback (a fixture whose Send stays off unless
 `--feedback-endpoint URL` is given; loopback HTTP is allowed for tests, and
 `https://captur.es/api/feedback` sends real feedback), and
@@ -198,6 +200,18 @@ builds the pinned 1.3.0 into a private prefix and prints its pkg-config
 directory, so `PKG_CONFIG_PATH=$(apps/native/gtk/build_layer_shell.sh) cargo
 +1.95.0 build --manifest-path apps/native/gtk/Cargo.toml --features
 layer-shell`, then run with `LD_LIBRARY_PATH` set to that prefix's `lib`.
+Dragging a card's file out of the stack leaves the shared drag wake
+(`captures_app::preview_wake`, drawn in `src/previews/wake.rs`): the whole
+card fades and shrinks out of its slot and the emptied slot breathes a glowing
+imprint. A drop another app accepts closes the wake and the card stays hidden
+while it leaves the stack; a cancelled drag, or a drop back on the stack (which
+also shakes), draws the wake back in while the card re-forms. With a compositor on X11, a
+click-through, override-redirect window over the stack's monitor also draws
+a ribbon of light with motes from the slot to the drag image, following the
+root pointer, and the bloom at an accepted drop. Without a compositor (a
+transparent window would paint black) and on Wayland (no pointer position
+during a drag, and no overlay placement on GNOME) there is no ribbon; the
+card leaving, the imprint and the end animation still show.
 Updates run only in a build with `CAPTURES_NATIVE_PREVIEW_VERSION` and
 `CAPTURES_NATIVE_PREVIEW_PUBLIC_KEY` set; development builds never make an
 update request and keep "Updates unavailable". In such a build the resident

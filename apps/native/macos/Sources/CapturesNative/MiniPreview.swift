@@ -772,6 +772,9 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     private(set) var dropRejectedAt: CFTimeInterval?
     var preparedDragPath: String?
     var dragEnded: ((NSPoint, NSDragOperation) -> Void)?
+    /// A file drag began; the offset runs from the pointer to the drag
+    /// image's centre in screen points.
+    var dragBegan: ((NSPoint) -> Void)?
     var isOutboundFileDragEnabled: Bool { !compact && preparedDragPath != nil }
     private(set) var artifactID: String
     var hasVisibleLabels: Bool { !sizeLabel.isHidden || !status.isHidden }
@@ -1507,17 +1510,24 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
         let item = NSDraggingItem(pasteboardWriter: NSURL(fileURLWithPath: path))
         item.setDraggingFrame(mediaClip.frame, contents: imageView.image)
         beginDraggingSession(with: [item], event: event, source: self)
+        if let window {
+            let center = window.convertPoint(toScreen: convert(NSPoint(x: mediaClip.frame.midX,
+                                                                       y: mediaClip.frame.midY), to: nil))
+            let pointer = window.convertPoint(toScreen: event.locationInWindow)
+            dragBegan?(NSPoint(x: center.x - pointer.x, y: center.y - pointer.y))
+        }
     }
 
     override func mouseUp(with event: NSEvent) {
         press = nil
     }
 
-    /// Shipping `.thumbnail-file-dragging` conceals the source beneath the ghost.
+    /// The whole card leaves its slot while its file is dragged out; the
+    /// controller's drag wake (`MiniPreviewDragWake`) fades it out and back.
+    /// Leaving it painted under the drag image would also recapture it.
     func setFileDragging(_ active: Bool) {
         fileDragStarted = active
-        mediaClip.isHidden = active
-        layer?.backgroundColor = active ? NSColor.clear.cgColor : tokens.color("glass-strong").cgColor
+        alphaValue = active ? 0 : 1
     }
 
     func draggingSession(_ session: NSDraggingSession,
@@ -2561,6 +2571,12 @@ final class MiniPreviewView: NSView {
         }
     }
 
+    func setDragBegan(_ callback: @escaping (String, NSPoint) -> Void) {
+        for (id, card) in cards {
+            card.dragBegan = { offset in callback(id, offset) }
+        }
+    }
+
     func setFileDragging(_ active: Bool, for artifactID: String) { cards[artifactID]?.setFileDragging(active) }
 
     func continueFileDrags(from previous: MiniPreviewView) {
@@ -2921,6 +2937,8 @@ final class MiniPreviewController {
     private var cardGenerations: [String: Int] = [:]
     private var busyActions: [String: Int] = [:]
     private var preparedDrags: [String: (imagePath: String, previewPath: String, path: String)] = [:]
+    /// The glow a card's file drag leaves behind, until it finishes playing.
+    private var dragWake: MiniPreviewDragWake?
     private var visibilityPendingArtifactID: String?
     private var nextDecodeToken = 0
     /// The capture this app last copied, valid until the pasteboard changes.
@@ -3457,8 +3475,30 @@ final class MiniPreviewController {
         return frames
     }
 
+    /// A card's file drag began: its shell leaves the slot for the wake.
+    private func beginDragWake(_ artifactID: String, tipOffset: NSPoint) {
+        dragWake?.finish()
+        guard let card = panel?.previewView.card(for: artifactID) else { return }
+        let generation = cardGenerations[artifactID]
+        let wake = MiniPreviewDragWake(artifactID: artifactID, card: card, tipOffset: tipOffset, tokens: tokens,
+            includeInCaptures: settings.includeInCaptures) { [weak self] in
+                guard let self, self.cardGenerations[artifactID] == generation else { return nil }
+                return self.panel?.previewView.card(for: artifactID)
+            }
+        wake?.finished = { [weak self, weak wake] in
+            if let self, self.dragWake === wake { self.dragWake = nil }
+        }
+        dragWake = wake
+    }
+
+    private func endDragWake(_ artifactID: String, dropped: Bool) {
+        guard let wake = dragWake, wake.artifactID == artifactID else { return }
+        wake.end(dropped: dropped)
+    }
+
     func close() {
         precondition(Thread.isMainThread)
+        dragWake?.finish()
         viewTransition?.cancel(); viewTransition = nil
         _ = policy.stopWaiting(); visibilityPendingArtifactID = nil; screenID = nil
         stackOrigin = nil
@@ -3552,16 +3592,24 @@ final class MiniPreviewController {
                   prepared.previewPath == artifact.previewPath else { continue }
             next.previewView.setPreparedDragPath(prepared.path, for: id)
         }
+        next.previewView.setDragBegan { [weak self] id, offset in self?.beginDragWake(id, tipOffset: offset) }
         next.previewView.setDragEnded { [weak self] id, point, operation in
-            guard let self, let source = sourceArtifacts[id], self.contains(source),
-                  self.cardGenerations[id] == sourceGenerations[id] else { return }
+            guard let self else { return }
+            guard let source = sourceArtifacts[id], self.contains(source),
+                  self.cardGenerations[id] == sourceGenerations[id] else {
+                self.endDragWake(id, dropped: false); return
+            }
             self.panel?.previewView.setFileDragging(false, for: id)
             if self.panel?.frame.contains(point) == true {
+                self.endDragWake(id, dropped: false)
                 self.panel?.previewView.rejectDrop(for: id)
             } else if operation.contains(.copy) && !NSApp.windows.contains(where: {
-                $0 !== self.panel && $0.isVisible && $0.frame.contains(point)
+                $0 !== self.panel && $0 !== self.dragWake?.window && $0.isVisible && $0.frame.contains(point)
             }) {
+                self.endDragWake(id, dropped: true)
                 self.dismiss(id, exit: nil)
+            } else {
+                self.endDragWake(id, dropped: false)
             }
         }
         panel = next

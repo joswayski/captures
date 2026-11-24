@@ -409,6 +409,48 @@ typedef struct {
 } CapturesDragSway;
 bool captures_preview_drag_sway_tick_v1(CapturesDragSway *sway, double dx, double dy,
     double dt_ms, bool reduced_motion);
+/* The wake a card leaves while its file is dragged out (captures_app::preview_wake):
+ * overlay points, y down. new starts it with the card in slot and the drag
+ * image centred on the tip; pointer moves the tip; end (dropped: another app
+ * took the file, else the card returns) counts once; frame computes the
+ * frame at now_ms and returns false once the wake has finished. ribbon and
+ * mote read the last frame by index; ribbon copies up to capacity outline
+ * points as x, y pairs (2 x capacity doubles) and reports the full count.
+ * Calls on one handle must never overlap; free exactly once. */
+typedef struct { double x, y, width, height, radius; } CapturesPreviewWakeRect;
+typedef struct { double x, y, radius, opacity; } CapturesPreviewWakeMote;
+typedef struct {
+    CapturesPreviewWakeRect slot;
+    double slot_opacity, card_opacity, card_scale;
+    size_t ribbon_count, mote_count;
+    bool has_bloom;
+    CapturesPreviewWakeMote bloom;
+    double bounds_x, bounds_y, bounds_width, bounds_height;
+} CapturesPreviewWakeFrame;
+typedef struct {
+    bool accent;
+    double from_x, from_y, to_x, to_y;
+    double stop_offsets[3], stop_opacities[3];
+    size_t point_count;
+} CapturesPreviewWakeRibbon;
+typedef struct {
+    double slot_line_width, slot_line_opacity, slot_shade_opacity, slot_glow_blur,
+        slot_glow_opacity, mote_halo_scale, mote_halo_opacity;
+} CapturesPreviewWakeStyle;
+typedef struct CapturesPreviewWake CapturesPreviewWake;
+CapturesPreviewWakeStyle captures_preview_wake_style_v1(void);
+CapturesPreviewWake *captures_preview_wake_new_v1(CapturesPreviewWakeRect slot, double tip_x,
+    double tip_y, double now_ms, bool reduced_motion);
+void captures_preview_wake_free_v1(CapturesPreviewWake *handle);
+void captures_preview_wake_set_slot_v1(CapturesPreviewWake *handle, CapturesPreviewWakeRect slot);
+void captures_preview_wake_pointer_v1(CapturesPreviewWake *handle, double tip_x, double tip_y);
+void captures_preview_wake_end_v1(CapturesPreviewWake *handle, bool dropped, double now_ms);
+bool captures_preview_wake_frame_v1(CapturesPreviewWake *handle, double now_ms,
+    CapturesPreviewWakeFrame *output);
+bool captures_preview_wake_ribbon_v1(const CapturesPreviewWake *handle, size_t index,
+    CapturesPreviewWakeRibbon *output, double *points, size_t capacity);
+bool captures_preview_wake_mote_v1(const CapturesPreviewWake *handle, size_t index,
+    CapturesPreviewWakeMote *output);
 /* Shipping hover-fan stagger: milliseconds a pile card at depth waits before
  * its fan transition (transform, shade and glow; media blur when media). */
 double captures_preview_fan_delay_ms_v1(size_t depth, bool media);

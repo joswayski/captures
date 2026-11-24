@@ -40,6 +40,7 @@ const USAGE: &str = "captures-gtk [--scene preferences|history|editor|recording|
   [--update-live available|closing|manual|downloading|verifying|installing|failed|check-failed] [--update-script available|retry]\n\
   [--settings-file PATH] [--history-root PATH] [--size WxH] [--feedback-endpoint URL]\n\
   [--screenshot OUT.png] [--find QUERY] [--count N] [--exercise] [--quit-after SECONDS]\n\
+  [--wake carried|returning|dropped] (with --scene preview and --screenshot)\n\
   [--open-media PATH]... [-- FILE...]\n\
   --live [--captures-autostart] [--capture display|region|window|new|record-display|record-region|record-window] [--history-root PATH] [--settings-file PATH] [--open-media PATH]... [-- FILE...]\n\
   --live --native-update-ready-file ABSOLUTE_PATH --native-update-ready-token UUID_V4 (update relaunches only)\n\
@@ -95,6 +96,8 @@ struct Options {
     size: Option<(i32, i32)>,
     /// How many of the newest entries `--scene preview` restores.
     count: usize,
+    /// `--wake NAME`: `--scene preview` renders the newest card's drag wake.
+    wake: Option<String>,
     exercise: bool,
     quit_after: Option<Duration>,
     /// Open With: files to import into History and edit.
@@ -141,6 +144,7 @@ fn parse_args(args: impl Iterator<Item = String>, preview: bool) -> Result<Optio
         feedback_endpoint: None,
         size: None,
         count: 2,
+        wake: None,
         exercise: false,
         quit_after: None,
         open: Vec::new(),
@@ -257,6 +261,13 @@ fn parse_args(args: impl Iterator<Item = String>, preview: bool) -> Result<Optio
             // Everything after `--` is a local path (Open With).
             "--" => options.open.extend(args.by_ref().map(PathBuf::from)),
             "--count" => options.count = value()?.parse().map_err(|_| "bad --count")?,
+            "--wake" => {
+                let name = value()?;
+                if !previews::WAKE_FIXTURES.contains(&name.as_str()) {
+                    return Err(format!("unknown wake {name}"));
+                }
+                options.wake = Some(name);
+            }
             "--exercise" => options.exercise = true,
             "--quit-after" => {
                 let seconds: f64 = value()?.parse().map_err(|_| "bad --quit-after")?;
@@ -308,6 +319,9 @@ fn parse_args(args: impl Iterator<Item = String>, preview: bool) -> Result<Optio
             "--scene {} needs --artifact ID",
             options.scene.name()
         ));
+    }
+    if options.wake.is_some() && (options.scene != Scene::Preview || options.screenshot.is_none()) {
+        return Err("--wake renders --scene preview with --screenshot only".into());
     }
     if options.update_card.is_some() && (options.live || options.scene != Scene::Preferences) {
         return Err("--update-card renders the Preferences fixture only".into());
@@ -1246,6 +1260,7 @@ fn main() -> glib::ExitCode {
             window.set_default_size(w, h);
         }
         let scene = options.scene;
+        let light = appearance == "light";
         let ready = move || {
             emit(
                 "ready",
@@ -1281,7 +1296,15 @@ fn main() -> glib::ExitCode {
         }
         if let Some(path) = options.screenshot {
             let window = window.clone();
+            let wake = options.wake.clone();
+            let host = host.clone();
             glib::timeout_add_local_once(Duration::from_millis(1500), move || {
+                let previews = host.previews.borrow().clone();
+                if let (Some(wake), Some(previews)) = (wake, previews) {
+                    let app = window.application().expect("app");
+                    previews.render_wake(path, &wake, light, Box::new(move || app.quit()));
+                    return;
+                }
                 if let Err(error) = screenshot(&window, &path) {
                     eprintln!("screenshot failed: {error}");
                 }

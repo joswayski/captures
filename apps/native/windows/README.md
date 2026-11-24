@@ -320,14 +320,23 @@ one card slot (380 ms, instant under reduced motion) and are named "Show
 older captures" / "Show newer captures"; a new capture or Expand returns to
 the newest card. Dragging an expanded card's image past the system drag
 threshold drags its file into other apps through the shared `drag.rs` (the
-shared `PreparePreviewDrag` export, a copy with the 284 × 160 drag image);
-the card goes hollow while it runs (`.thumbnail-file-dragging`). An accepted
-drop outside Captures dismisses the card, a drop back on the stack shakes it
-(`thumbnail-drop-reject`, skipped under reduced motion), and any other end,
-including a drop on another Captures window, keeps it; a failed export shows
-on the card.
+shared `PreparePreviewDrag` export, a copy with the 284 × 160 drag image).
+While it runs the card leaves a drag wake (the shared `preview_wake`,
+`src/previews/wake.rs`): its whole shell fades and shrinks out of its slot,
+the empty slot breathes as a glowing imprint, and a tapered ribbon of light
+with motes runs from it to the drag image anywhere on the display, drawn in
+a click-through, disabled overlay over the stack's display that hit tests
+and drop targets never find, hidden with the stack under capture UI. An
+accepted drop outside Captures dismisses the card (hidden while it leaves)
+as the ribbon snaps away with a bloom at the landing; a drop back on the
+stack shakes it (`thumbnail-drop-reject`, skipped under reduced motion), and
+that or any other end, including a cancel or a drop on another Captures
+window, draws the ribbon back as the card re-forms; a failed export shows on
+the card. Under reduced motion the wake holds still and ends at once.
 `--tool previews --select pile|pile-hover|pile-top|overflow|file-drag`
-renders it (compared with the Tauri harness). Scrolling, the cues, Minimize
+renders it (`file-drag` 420 ms into a drag up and right of the stack, with
+the wake and drag image; compared with the Tauri harness except the wake,
+which shipping lacks). Scrolling, the cues, Minimize
 and Expand were checked live through UI Automation with History's Restore on
 Windows 11 at 150%; the carry, the wheel and file drags are unit- and
 render-checked only (not physically dragged). Close, Delete, Edit and Clear

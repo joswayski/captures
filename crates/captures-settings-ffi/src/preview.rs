@@ -4,6 +4,7 @@ use captures_app::preview::{
 };
 use captures_app::preview_chrome::{self, CardHoverLock, EditorPhase, EditorPresence};
 use captures_app::preview_motion;
+use captures_app::preview_wake::{DragWake, WakeEnd, WakeFrame, WakeInk, WakeMote, WakeRect};
 use captures_app::tray_notice::LogicalRect;
 use captures_settings::MiniPreviewPlacement;
 use std::ffi::{CStr, CString, c_char};
@@ -1199,6 +1200,311 @@ pub extern "C" fn captures_preview_label_reveal_delay_ms_v1(depth: usize) -> f64
     preview_motion::label_reveal_delay_ms(depth)
 }
 
+/// A drag wake's rounded rectangle in overlay points, y down.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CapturesPreviewWakeRect {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    pub radius: f64,
+}
+
+/// A mote, or an accepted drop's bloom (see `preview_wake::WakeMote`).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CapturesPreviewWakeMote {
+    pub x: f64,
+    pub y: f64,
+    pub radius: f64,
+    pub opacity: f64,
+}
+
+/// One frame of a drag wake (see `preview_wake::WakeFrame`); ribbons and
+/// motes are read by index with `captures_preview_wake_ribbon_v1` and
+/// `captures_preview_wake_mote_v1`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CapturesPreviewWakeFrame {
+    pub slot: CapturesPreviewWakeRect,
+    pub slot_opacity: f64,
+    pub card_opacity: f64,
+    pub card_scale: f64,
+    pub ribbon_count: usize,
+    pub mote_count: usize,
+    pub has_bloom: bool,
+    pub bloom: CapturesPreviewWakeMote,
+    pub bounds_x: f64,
+    pub bounds_y: f64,
+    pub bounds_width: f64,
+    pub bounds_height: f64,
+}
+
+/// A ribbon pass's ink and gradient; its outline is copied separately.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CapturesPreviewWakeRibbon {
+    /// The theme accent, else the glass palette's light text colour.
+    pub accent: bool,
+    pub from_x: f64,
+    pub from_y: f64,
+    pub to_x: f64,
+    pub to_y: f64,
+    pub stop_offsets: [f64; 3],
+    pub stop_opacities: [f64; 3],
+    pub point_count: usize,
+}
+
+/// The slot and mote drawing constants (see `preview_wake`).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CapturesPreviewWakeStyle {
+    pub slot_line_width: f64,
+    pub slot_line_opacity: f64,
+    pub slot_shade_opacity: f64,
+    pub slot_glow_blur: f64,
+    pub slot_glow_opacity: f64,
+    pub mote_halo_scale: f64,
+    pub mote_halo_opacity: f64,
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn captures_preview_wake_style_v1() -> CapturesPreviewWakeStyle {
+    use captures_app::preview_wake as w;
+    CapturesPreviewWakeStyle {
+        slot_line_width: w::SLOT_LINE_WIDTH,
+        slot_line_opacity: w::SLOT_LINE_OPACITY,
+        slot_shade_opacity: w::SLOT_SHADE_OPACITY,
+        slot_glow_blur: w::SLOT_GLOW_BLUR,
+        slot_glow_opacity: w::SLOT_GLOW_OPACITY,
+        mote_halo_scale: w::MOTE_HALO_SCALE,
+        mote_halo_opacity: w::MOTE_HALO_OPACITY,
+    }
+}
+
+/// Opaque, single-owner drag wake with its latest frame. Calls on one
+/// handle must never overlap.
+pub struct CapturesPreviewWake {
+    wake: DragWake,
+    frame: Option<WakeFrame>,
+}
+
+fn wake_rect(r: CapturesPreviewWakeRect) -> WakeRect {
+    WakeRect {
+        x: r.x,
+        y: r.y,
+        width: r.width,
+        height: r.height,
+        radius: r.radius,
+    }
+}
+
+fn wake_mote(m: &WakeMote) -> CapturesPreviewWakeMote {
+    CapturesPreviewWakeMote {
+        x: m.x,
+        y: m.y,
+        radius: m.radius,
+        opacity: m.opacity,
+    }
+}
+
+/// Start a wake with the card in `slot` and the drag image centred on the tip.
+#[unsafe(no_mangle)]
+pub extern "C" fn captures_preview_wake_new_v1(
+    slot: CapturesPreviewWakeRect,
+    tip_x: f64,
+    tip_y: f64,
+    now_ms: f64,
+    reduced_motion: bool,
+) -> *mut CapturesPreviewWake {
+    Box::into_raw(Box::new(CapturesPreviewWake {
+        wake: DragWake::new(wake_rect(slot), (tip_x, tip_y), now_ms, reduced_motion),
+        frame: None,
+    }))
+}
+
+/// # Safety
+/// A non-null handle must be live, uniquely owned and freed exactly once.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_preview_wake_free_v1(handle: *mut CapturesPreviewWake) {
+    if !handle.is_null() {
+        // SAFETY: The caller transfers the Box allocated by new, once.
+        drop(unsafe { Box::from_raw(handle) });
+    }
+}
+
+/// # Safety
+/// Handle is live and exclusive, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_preview_wake_set_slot_v1(
+    handle: *mut CapturesPreviewWake,
+    slot: CapturesPreviewWakeRect,
+) {
+    // SAFETY: Caller guarantees null or exclusive live storage.
+    if let Some(handle) = unsafe { handle.as_mut() } {
+        handle.wake.set_slot(wake_rect(slot));
+    }
+}
+
+/// The drag image's centre moved.
+/// # Safety
+/// Handle is live and exclusive, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_preview_wake_pointer_v1(
+    handle: *mut CapturesPreviewWake,
+    tip_x: f64,
+    tip_y: f64,
+) {
+    // SAFETY: Caller guarantees null or exclusive live storage.
+    if let Some(handle) = unsafe { handle.as_mut() } {
+        handle.wake.pointer((tip_x, tip_y));
+    }
+}
+
+/// The drag ended: `dropped` when another app took the file, else the card
+/// returns. Only the first end counts.
+/// # Safety
+/// Handle is live and exclusive, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_preview_wake_end_v1(
+    handle: *mut CapturesPreviewWake,
+    dropped: bool,
+    now_ms: f64,
+) {
+    // SAFETY: Caller guarantees null or exclusive live storage.
+    if let Some(handle) = unsafe { handle.as_mut() } {
+        let end = if dropped {
+            WakeEnd::Dropped
+        } else {
+            WakeEnd::Returned
+        };
+        handle.wake.end(end, now_ms);
+    }
+}
+
+/// Compute the frame at `now_ms`. False once the wake has finished (or for
+/// null input), leaving `output` unchanged.
+/// # Safety
+/// Handle is live and exclusive, or null; output is writable or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_preview_wake_frame_v1(
+    handle: *mut CapturesPreviewWake,
+    now_ms: f64,
+    output: *mut CapturesPreviewWakeFrame,
+) -> bool {
+    // SAFETY: Caller guarantees null or exclusive live storage.
+    let Some(handle) = (unsafe { handle.as_mut() }) else {
+        return false;
+    };
+    if output.is_null() {
+        return false;
+    }
+    handle.frame = handle.wake.frame(now_ms);
+    let Some(frame) = &handle.frame else {
+        return false;
+    };
+    let (bounds_x, bounds_y, bounds_width, bounds_height) = frame.bounds;
+    let slot = frame.slot;
+    // SAFETY: Validated writable output.
+    unsafe {
+        output.write(CapturesPreviewWakeFrame {
+            slot: CapturesPreviewWakeRect {
+                x: slot.x,
+                y: slot.y,
+                width: slot.width,
+                height: slot.height,
+                radius: slot.radius,
+            },
+            slot_opacity: frame.slot_opacity,
+            card_opacity: frame.card_opacity,
+            card_scale: frame.card_scale,
+            ribbon_count: frame.ribbons.len(),
+            mote_count: frame.motes.len(),
+            has_bloom: frame.bloom.is_some(),
+            bloom: frame.bloom.as_ref().map(wake_mote).unwrap_or_default(),
+            bounds_x,
+            bounds_y,
+            bounds_width,
+            bounds_height,
+        });
+    }
+    true
+}
+
+/// Ribbon `index` of the last frame. Copies up to `capacity` outline points
+/// as x, y pairs into `points` (2 × capacity doubles); `point_count` is the
+/// full count. False for an index out of range or null input.
+/// # Safety
+/// Handle is live or null; output is writable or null; points is null or
+/// writable for 2 × capacity doubles.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_preview_wake_ribbon_v1(
+    handle: *const CapturesPreviewWake,
+    index: usize,
+    output: *mut CapturesPreviewWakeRibbon,
+    points: *mut f64,
+    capacity: usize,
+) -> bool {
+    // SAFETY: Caller guarantees null or live storage.
+    let Some(handle) = (unsafe { handle.as_ref() }) else {
+        return false;
+    };
+    let Some(ribbon) = handle.frame.as_ref().and_then(|f| f.ribbons.get(index)) else {
+        return false;
+    };
+    if output.is_null() {
+        return false;
+    }
+    if !points.is_null() {
+        for (i, &(x, y)) in ribbon.outline.iter().take(capacity).enumerate() {
+            // SAFETY: Caller guarantees 2 × capacity writable doubles.
+            unsafe {
+                points.add(2 * i).write(x);
+                points.add(2 * i + 1).write(y);
+            }
+        }
+    }
+    // SAFETY: Validated writable output.
+    unsafe {
+        output.write(CapturesPreviewWakeRibbon {
+            accent: ribbon.ink == WakeInk::Accent,
+            from_x: ribbon.from.0,
+            from_y: ribbon.from.1,
+            to_x: ribbon.to.0,
+            to_y: ribbon.to.1,
+            stop_offsets: ribbon.stops.map(|s| s.0),
+            stop_opacities: ribbon.stops.map(|s| s.1),
+            point_count: ribbon.outline.len(),
+        });
+    }
+    true
+}
+
+/// Mote `index` of the last frame. False when out of range or null.
+/// # Safety
+/// Handle is live or null; output is writable or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn captures_preview_wake_mote_v1(
+    handle: *const CapturesPreviewWake,
+    index: usize,
+    output: *mut CapturesPreviewWakeMote,
+) -> bool {
+    // SAFETY: Caller guarantees null or live storage.
+    let Some(handle) = (unsafe { handle.as_ref() }) else {
+        return false;
+    };
+    let Some(mote) = handle.frame.as_ref().and_then(|f| f.motes.get(index)) else {
+        return false;
+    };
+    if output.is_null() {
+        return false;
+    }
+    // SAFETY: Validated writable output.
+    unsafe { output.write(wake_mote(mote)) };
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1887,5 +2193,61 @@ mod tests {
             assert!(!captures_preview_visible_v1(null(), 1, true, true));
             assert!(!captures_preview_begin_v1(null_mut(), &mut second));
         }
+    }
+
+    #[test]
+    fn a_drag_wake_round_trips_through_the_abi_until_it_finishes() {
+        let slot = CapturesPreviewWakeRect {
+            x: 100.,
+            y: 400.,
+            width: 240.,
+            height: 135.,
+            radius: 14.,
+        };
+        let mut direct = DragWake::new(wake_rect(slot), (220., 467.5), 0., false);
+        let handle = captures_preview_wake_new_v1(slot, 220., 467.5, 0., false);
+        let mut frame = CapturesPreviewWakeFrame::default();
+        unsafe {
+            captures_preview_wake_pointer_v1(handle, -20., 150.);
+            direct.pointer((-20., 150.));
+            assert!(captures_preview_wake_frame_v1(handle, 400., &mut frame));
+            let expected = direct.frame(400.).unwrap();
+            assert_eq!(frame.card_opacity, expected.card_opacity);
+            assert_eq!(frame.ribbon_count, expected.ribbons.len());
+            assert_eq!(frame.mote_count, expected.motes.len());
+            // A short buffer gets the first points and the full count.
+            let core = frame.ribbon_count - 1;
+            let mut ribbon = CapturesPreviewWakeRibbon::default();
+            let mut points = [0.; 8];
+            assert!(captures_preview_wake_ribbon_v1(
+                handle,
+                core,
+                &mut ribbon,
+                points.as_mut_ptr(),
+                4
+            ));
+            let outline = &expected.ribbons[core].outline;
+            assert_eq!(ribbon.point_count, outline.len());
+            assert_eq!((points[6], points[7]), outline[3]);
+            assert!(!ribbon.accent);
+            assert_eq!((ribbon.to_x, ribbon.to_y), (-20., 150.));
+            assert!(!captures_preview_wake_ribbon_v1(
+                handle,
+                frame.ribbon_count,
+                &mut ribbon,
+                null_mut(),
+                0
+            ));
+            let mut mote = CapturesPreviewWakeMote::default();
+            assert!(captures_preview_wake_mote_v1(handle, 0, &mut mote));
+            assert_eq!(mote.x, expected.motes[0].x);
+            captures_preview_wake_end_v1(handle, true, 500.);
+            assert!(captures_preview_wake_frame_v1(handle, 520., &mut frame));
+            assert!(frame.has_bloom && frame.card_opacity == 0.);
+            assert!(!captures_preview_wake_frame_v1(handle, 5_000., &mut frame));
+            captures_preview_wake_free_v1(handle);
+            assert!(!captures_preview_wake_frame_v1(null_mut(), 0., &mut frame));
+        }
+        assert!(captures_preview_wake_style_v1().slot_glow_blur > 0.);
     }
 }

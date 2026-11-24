@@ -25,7 +25,10 @@
 //!
 //! Dragging an expanded card's image drags its file out (`crate::drag`);
 //! an accepted drop elsewhere dismisses the card and a drop back on the
-//! stack shakes it (shipping `finishFileDrag`).
+//! stack shakes it (shipping `finishFileDrag`). While it runs the card
+//! leaves its slot for the shared drag wake ([`wake`]): a glowing imprint
+//! in the slot and a ribbon of light to the drag image, which snaps away
+//! with the dropped card or draws back as the card re-forms.
 //!
 //! Close, Delete, Edit and Clear all show shipping's preview tooltips on the
 //! host's shared `tooltip::Fade`.
@@ -53,13 +56,15 @@ use captures_app::preview_chrome::{self, CardHoverLock, EditorPhase, EditorPrese
 use captures_app::preview_motion::{
     self, DragSway, DustParticle, ExitKind, StackExits, StackFan, StackToolbar, ToolbarCause,
 };
+use captures_app::preview_wake::{DragWake, WakeEnd, WakeFrame};
 use captures_history::HistoryEntry;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::*;
 use windows::Win32::Graphics::Direct2D::*;
 use windows::Win32::Graphics::DirectComposition::*;
 use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint, ValidateRect,
+    GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint, MonitorFromWindow,
+    ValidateRect,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Accessibility::{UiaReturnRawElementProvider, UiaRootObjectId};
@@ -71,6 +76,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::*;
 use windows_numerics::Matrix3x2;
+
+mod wake;
 
 use crate::gfx::{self, Gfx, rect};
 use crate::panel_uia::{self, Item, Role};
@@ -153,9 +160,10 @@ pub struct Card {
     /// The last action's failure (shipping `.thumbnail-message`), cleared
     /// when the next action starts.
     error: Option<String>,
-    /// A file drag of this card is running (`.thumbnail-file-dragging`): its
-    /// image hides so the drag image never recaptures it.
-    dragging: bool,
+    /// The drag wake's (opacity, scale) for the whole card while its file
+    /// is dragged out and the wake plays: it leaves its slot and re-forms,
+    /// or stays hidden through the exit of an accepted drop.
+    away: Option<(f32, f32)>,
     /// Whether an editor shows this capture, and how its Edit control and
     /// ring follow (`.thumbnail-editor-active`, `-leaving`, `-lingering`).
     presence: EditorPresence,
@@ -248,6 +256,10 @@ pub struct Stack {
     /// The "In editor" pill's width, as wide as its wider label
     /// (`preview_chrome::editor_pill_width`).
     pub pill_width: f32,
+    /// `--select file-drag`: a drag wake frame in stack coordinates, the
+    /// drag image's centre and the dragged card, painted over the stack by
+    /// [`Self::paint_fixture_drag`] as the overlay and drag image would be.
+    fixture_drag: Option<(WakeFrame, (f64, f64), usize)>,
 }
 
 /// A card's hover look easing toward `on` since `at`, from where each
@@ -559,6 +571,7 @@ impl Stack {
             minimize: Morph::default(),
             just_opened: None,
             pill_width: preview_chrome::EDITOR_PILL_MAX_WIDTH as f32,
+            fixture_drag: None,
         }
     }
 
@@ -903,6 +916,21 @@ impl Stack {
         if !self.reduced && self.card_motion.is_some() {
             self.rejects.insert(id.to_owned(), now_ms());
         }
+    }
+
+    /// Show the card `id` as its drag wake leaves it: the wake `frame`'s
+    /// opacity and scale while it plays. Once it has finished (`None`), a
+    /// card an accepted drop took stays hidden through its exit, and a
+    /// returned one is whole again.
+    fn follow_wake(&mut self, id: &str, frame: Option<&WakeFrame>, end: Option<WakeEnd>) {
+        let Some(card) = self.cards.iter_mut().find(|c| c.entry.id == id) else {
+            return;
+        };
+        card.away = match (frame, end) {
+            (Some(frame), _) => Some((frame.card_opacity as f32, frame.card_scale as f32)),
+            (None, Some(WakeEnd::Dropped)) => Some((0., card.away.map_or(1., |(_, s)| s))),
+            (None, _) => None,
+        };
     }
 
     /// Forget finished shakes; true while one still runs.
@@ -1290,7 +1318,7 @@ impl Stack {
             busy: false,
             saved: false,
             error: None,
-            dragging: false,
+            away: None,
             presence: EditorPresence::default(),
         });
         self.exits.sync(self.stack.ids());
@@ -1704,6 +1732,31 @@ impl Stack {
         let result = self.paint_stack(dc, g, t);
         unsafe { dc.PopAxisAlignedClip() };
         result
+    }
+
+    /// `--select file-drag`'s wake over the whole display, then the system
+    /// drag image above it: the card's capture filling 284 × 160 pixels
+    /// (drawn at 1 DIP a pixel) from the pointer at its top-left corner.
+    pub fn paint_fixture_drag(&self, dc: &ID2D1DeviceContext, t: &Tokens) -> Result<()> {
+        let Some((frame, (x, y), index)) = &self.fixture_drag else {
+            return Ok(());
+        };
+        wake::paint(dc, t, frame)?;
+        let (w, h) = (
+            crate::drag::ICON_WIDTH as f32 / 2.,
+            crate::drag::ICON_HEIGHT as f32 / 2.,
+        );
+        let (x, y) = (*x as f32, *y as f32);
+        match &self.cards[*index].image {
+            Some(image) => cover(
+                dc,
+                image,
+                (rect(x - w, y - h, x + w, y + h), 0.),
+                (0., 0.),
+                (1., 0.),
+            ),
+            None => Ok(()),
+        }
     }
 
     fn paint_stack(&self, dc: &ID2D1DeviceContext, g: &Gfx, t: &Tokens) -> Result<()> {
@@ -2174,6 +2227,12 @@ impl Stack {
             let x = [1, 2, 3, 4].map(|n| t.n(&format!("thumbnail-drop-reject-x-{n}")));
             dx += f64::from(reject_offset(x, now - start));
         }
+        // The whole shell (image, chrome, controls, shadow and ring) leaves
+        // its slot for a file drag's wake and re-forms there.
+        if let Some((away, shrink)) = self.cards[index].away {
+            opacity *= f64::from(away);
+            scale *= f64::from(shrink);
+        }
         let mut base = Matrix3x2::identity();
         unsafe { dc.GetTransform(&mut base) };
         // Scale about the card's centre, then move it.
@@ -2334,12 +2393,7 @@ impl Stack {
         let radius = t.n("thumbnail-card-radius");
         // `--thumbnail-card-shadow` and the 1 px white ring.
         faded(dc, fade.frame, || {
-            let shadow = || gfx::shadow(dc, r, radius, t.shadow("thumbnail-card-shadow"));
-            if card.dragging {
-                outside(dc, (r, radius), shadow)
-            } else {
-                shadow()
-            }
+            gfx::shadow(dc, r, radius, t.shadow("thumbnail-card-shadow"))
         })?;
         let white = |a: f32| D2D1_COLOR_F {
             r: 1.,
@@ -2348,11 +2402,6 @@ impl Stack {
             a,
         };
         faded(dc, fade.source, || {
-            // A dragged card's media hides and leaves it hollow
-            // (`.thumbnail-file-dragging`; macOS clears its background).
-            if card.dragging {
-                return Ok(());
-            }
             gfx::fill_round(dc, r, radius, t.color("glass-strong-solid"))?;
             if let Some(image) = &card.image {
                 cover(dc, image, (r, radius), (filter, zoom), streak)?;
@@ -2957,11 +3006,35 @@ pub fn fixture(g: &Gfx, image: &image::RgbaImage, select: Option<&str>) -> Stack
             stack.stack.set_collapsed(true);
             stack.focus = Some(Hit::Expand);
         }
-        // The hovered card's file is being dragged out: its image hides.
+        // The hovered card's file 420 ms into a drag up and right of the
+        // stack: the card has left its slot for the wake's imprint, and the
+        // ribbon, still bowed from the carry, runs to the drag image.
         Some("file-drag") => {
             stack.pointer(Some((150., 90.)));
             let hovered = stack.hovered.expect("a hovered card");
-            stack.cards[hovered].dragging = true;
+            let card = stack.card_rect(hovered).expect("card");
+            let slot = captures_app::preview_wake::WakeRect {
+                x: f64::from(card.left),
+                y: f64::from(card.top),
+                width: f64::from(card.right - card.left),
+                height: f64::from(card.bottom - card.top),
+                radius: f64::from(Tokens::variant("dark", "mustard").n("thumbnail-card-radius")),
+            };
+            let from = (slot.x + slot.width / 2., slot.y + slot.height / 2.);
+            let tip = (from.0 + 560., from.1 - 330.);
+            let mut drag = DragWake::new(slot, from, 0., false);
+            for step in 1..=20 {
+                let ms = f64::from(step) * 16.;
+                let p = 1. - (1. - ms / 320.).powi(3);
+                // An arc: out to the right first, then up.
+                let lift = p * p;
+                drag.pointer((lerp(from.0, tip.0, p), lerp(from.1, tip.1, lift)));
+                drag.frame(ms);
+            }
+            let frame = drag.frame(420.).expect("a running wake");
+            let id = stack.cards[hovered].entry.id.clone();
+            stack.follow_wake(&id, Some(&frame), None);
+            stack.fixture_drag = Some((frame, tip, hovered));
         }
         Some("pile" | "pile-top") | None => {}
         Some(_) => {
@@ -3076,8 +3149,8 @@ fn sparkle_dot(
     Ok(())
 }
 
-/// Run `paint` masked to outside the rounded `r`, so a hollow card's shadow
-/// only shows around it, as a CSS `box-shadow` does.
+/// Run `paint` masked to outside the rounded `r`, so a glow only shows
+/// around the card, as a CSS `box-shadow` does.
 fn outside(
     dc: &ID2D1DeviceContext,
     (r, radius): (Rect, f32),
@@ -3421,6 +3494,9 @@ struct Previews {
     dragging: Option<String>,
     /// The prepared file, waiting for the drag loop outside the borrow.
     drag_ready: Option<crate::drag::Payload>,
+    /// The dragged card's wake and its overlay, from the drag's start until
+    /// its end has played.
+    wake: Option<wake::Wake>,
 }
 
 #[derive(Clone, Copy)]
@@ -3669,6 +3745,7 @@ impl Previews {
             drag_press: None,
             dragging: None,
             drag_ready: None,
+            wake: None,
         })
     }
 
@@ -3746,9 +3823,12 @@ impl Previews {
                 (preview::THUMBNAIL_WIDTH * scale).round() as u32,
                 (geometry.height * scale).round() as u32,
             );
+            // Just under a drag wake's overlay, whose slot imprint and
+            // ribbon draw over the stack.
+            let above = self.wake.as_ref().and_then(wake::Wake::hwnd);
             SetWindowPos(
                 self.hwnd,
-                Some(HWND_TOPMOST),
+                Some(above.unwrap_or(HWND_TOPMOST)),
                 (geometry.x * scale).round() as i32,
                 (geometry.y * scale).round() as i32,
                 px.0 as i32,
@@ -3778,14 +3858,22 @@ impl Previews {
 
     fn sync_visibility(&self) {
         let settings = captures_settings::load(&self.options.settings_file).unwrap_or_default();
-        let visible = preview::stack_should_be_visible(
-            self.stack.cards.len(),
-            self.suppressed,
-            settings.show_mini_previews,
-            settings.include_mini_previews_in_captures,
-        );
+        let visible = |cards| {
+            preview::stack_should_be_visible(
+                cards,
+                self.suppressed,
+                settings.show_mini_previews,
+                settings.include_mini_previews_in_captures,
+            )
+        };
         unsafe {
-            let _ = ShowWindow(self.hwnd, if visible { SW_SHOWNOACTIVATE } else { SW_HIDE });
+            let shown = visible(self.stack.cards.len());
+            let _ = ShowWindow(self.hwnd, if shown { SW_SHOWNOACTIVATE } else { SW_HIDE });
+        }
+        // The wake hides with the stack under capture UI, but its bloom
+        // outlives the last card it took.
+        if let Some(wake) = &self.wake {
+            wake.show(visible(1));
         }
     }
 
@@ -4035,9 +4123,10 @@ impl Previews {
         }
     }
 
-    /// The stack's motion or a tooltip fade still runs.
+    /// The stack's motion, a drag wake or a tooltip fade still runs.
     fn moving(&self) -> bool {
-        self.stack.animating()
+        self.wake.is_some()
+            || self.stack.animating()
             || self
                 .stack
                 .tips_animating(&self.tokens, crate::tooltip::now_ms())
@@ -4126,6 +4215,7 @@ impl Previews {
     }
 
     fn motion_tick(&mut self) {
+        self.tick_wake();
         // The carried pile's lean eases back when the pointer holds still
         // or lets go.
         if let Some(sway) = self.stack.sway.as_mut() {
@@ -4216,21 +4306,22 @@ impl Previews {
         self.animate();
     }
 
-    /// The press on a card's image moved past the drag threshold: hide the
-    /// image and export the file off the UI thread (shipping
-    /// `beginFileDrag`).
+    /// The press on a card's image moved past the drag threshold: the card
+    /// leaves its slot for the drag wake while the file exports off the UI
+    /// thread (shipping `beginFileDrag`).
     fn begin_drag(&mut self, id: String) {
         self.drag_press = None;
         self.stack.pressed = None;
         // The OLE drag loop takes the mouse itself.
         let _ = unsafe { ReleaseCapture() };
-        let Some(card) = self.stack.cards.iter_mut().find(|c| c.entry.id == id) else {
+        let Some(index) = self.stack.cards.iter().position(|c| c.entry.id == id) else {
             return;
         };
-        card.dragging = true;
-        card.error = None;
+        self.stack.cards[index].error = None;
         self.dragging = Some(id.clone());
+        self.start_wake(&id);
         let _ = self.render();
+        self.animate();
         let (root, sender, hwnd) = (self.root.clone(), self.sender.clone(), self.hwnd.0 as isize);
         std::thread::spawn(move || {
             let _ = sender.send(Done::DragReady(
@@ -4251,18 +4342,22 @@ impl Previews {
             return;
         };
         self.drag_ready = None;
-        if let Some(card) = self.stack.cards.iter_mut().find(|c| c.entry.id == id) {
-            card.dragging = false;
-            if let Some(Err(error)) = &result {
-                card.error = Some(error.clone());
-            }
+        if let Some(card) = self.stack.cards.iter_mut().find(|c| c.entry.id == id)
+            && let Some(Err(error)) = &result
+        {
+            card.error = Some(error.clone());
         }
         // A card already leaving keeps its exit.
         let live = self.stack.stack.ids().contains(&id);
+        let mut ended = None;
         if let Some(Ok(outcome)) = result.filter(|_| live) {
             self.stack.reduced = crate::appearance::reduced_motion();
             let landing = crate::drag::landing(outcome.point, Some(self.hwnd));
-            match preview::preview_drag_outcome(outcome.accepted, landing) {
+            let decided = preview::preview_drag_outcome(outcome.accepted, landing);
+            ended = Some(decided);
+            match decided {
+                // The card went with the drop: it stays hidden while it
+                // leaves its slot and the survivors settle.
                 preview::PreviewDragOutcome::Dismiss => {
                     self.stack.leave(&id, ExitKind::Dismiss, 0., true);
                     let _ = self.relayout();
@@ -4271,11 +4366,109 @@ impl Previews {
                 preview::PreviewDragOutcome::Retain => {}
             }
         }
+        // The ribbon snaps away to the landing, or draws back as the card
+        // re-forms.
+        if let Some(wake) = self.wake.as_mut().filter(|wake| wake.id == id) {
+            wake.drag.end(wake::end_for(ended), now_ms());
+        }
+        self.tick_wake();
         let at = self.cursor();
         self.stack.pointer(at);
         self.set_passthrough(!at.is_some_and(|(x, y)| self.stack.solid(x, y)));
         let _ = self.render();
         self.animate();
+    }
+
+    /// Open the drag wake for card `id` over the stack's display: its slot
+    /// in display DIPs and the drag image under the pointer. A previous
+    /// drag's wake still playing its end is dropped where it stands.
+    fn start_wake(&mut self, id: &str) {
+        if let Some(old) = self.wake.take() {
+            let end = old.drag.ended();
+            self.stack.follow_wake(&old.id, None, end);
+        }
+        let mut info = MONITORINFO {
+            cbSize: size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        let mut cursor = POINT::default();
+        unsafe {
+            let monitor = MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTONEAREST);
+            let _ = GetMonitorInfoW(monitor, &mut info);
+            let _ = GetCursorPos(&mut cursor);
+        }
+        let space = wake::Space {
+            origin: POINT {
+                x: info.rcMonitor.left,
+                y: info.rcMonitor.top,
+            },
+            scale: f64::from(self.scale),
+        };
+        let Some(slot) = self.wake_slot(space, id) else {
+            return;
+        };
+        let drag = DragWake::new(
+            slot,
+            space.tip(cursor),
+            now_ms(),
+            crate::appearance::reduced_motion(),
+        );
+        self.wake = Some(wake::Wake::new(
+            &self.g,
+            id.to_owned(),
+            info.rcMonitor,
+            space.scale,
+            drag,
+        ));
+        // Draw the first frame before the overlay shows.
+        self.tick_wake();
+        self.sync_visibility();
+    }
+
+    /// Card `id`'s slot in the wake's display DIPs, where it is now.
+    fn wake_slot(
+        &self,
+        space: wake::Space,
+        id: &str,
+    ) -> Option<captures_app::preview_wake::WakeRect> {
+        let index = self.stack.cards.iter().position(|c| c.entry.id == id)?;
+        let card = self.stack.card_rect(index)?;
+        let mut window = RECT::default();
+        unsafe { GetWindowRect(self.hwnd, &mut window) }.ok()?;
+        Some(space.slot(
+            POINT {
+                x: window.left,
+                y: window.top,
+            },
+            card,
+            self.tokens.n("thumbnail-card-radius"),
+        ))
+    }
+
+    /// One frame of the drag wake: follow the pointer while the drag runs
+    /// and the card's slot as the stack moves, draw the overlay, and pose
+    /// the card. The overlay closes once the wake's end has played.
+    fn tick_wake(&mut self) {
+        let Some((space, id)) = self.wake.as_ref().map(|w| (w.space, w.id.clone())) else {
+            return;
+        };
+        let slot = self.wake_slot(space, &id);
+        let Some(wake) = self.wake.as_mut() else {
+            return;
+        };
+        let mut cursor = POINT::default();
+        if wake.drag.ended().is_none() && unsafe { GetCursorPos(&mut cursor) }.is_ok() {
+            wake.drag.pointer(space.tip(cursor));
+        }
+        if let Some(slot) = slot {
+            wake.drag.set_slot(slot);
+        }
+        let frame = wake.tick(&self.g, &self.tokens, now_ms());
+        let end = wake.drag.ended();
+        self.stack.follow_wake(&id, frame.as_ref(), end);
+        if frame.is_none() {
+            self.wake = None;
+        }
     }
 
     fn handle(&mut self, msg: u32, _wp: WPARAM, lp: LPARAM) -> Option<LRESULT> {
@@ -4577,7 +4770,7 @@ mod tests {
                 busy: false,
                 saved: false,
                 error: None,
-                dragging: false,
+                away: None,
                 presence: EditorPresence::default(),
             });
         }
@@ -4998,6 +5191,36 @@ mod tests {
         s.leave("a0", ExitKind::Dust, 0., true);
         assert!(s.stack.ids().is_empty());
         assert!(s.cards.iter().all(|c| c.entry.id != "a0"));
+    }
+
+    #[test]
+    fn a_dragged_card_follows_its_wake_and_stays_gone_after_a_drop() {
+        use captures_app::preview_wake::WakeRect;
+        use captures_settings::MiniPreviewPlacement as P;
+        let mut s = stack(P::BottomLeft, &[true, false]);
+        let slot = WakeRect {
+            width: 240.,
+            height: 135.,
+            ..WakeRect::default()
+        };
+        let away = |s: &Stack| s.cards[1].away;
+        // Carried away: the whole card fades and shrinks out of its slot.
+        let mut drag = DragWake::new(slot, (120., 67.5), 0., false);
+        drag.pointer((600., -300.));
+        let frame = drag.frame(400.).unwrap();
+        s.follow_wake("a1", Some(&frame), None);
+        let (opacity, scale) = away(&s).unwrap();
+        assert!(opacity < 0.01 && scale < 1.);
+        // Returned: whole again once the wake has played.
+        drag.end(WakeEnd::Returned, 500.);
+        assert!(drag.frame(2_000.).is_none());
+        s.follow_wake("a1", None, drag.ended());
+        assert_eq!(away(&s), None);
+        // Dropped elsewhere: still hidden after the wake, through the exit.
+        s.follow_wake("a1", Some(&frame), None);
+        s.follow_wake("a1", None, Some(WakeEnd::Dropped));
+        assert_eq!(away(&s).map(|(opacity, _)| opacity), Some(0.));
+        assert_eq!(s.cards[0].away, None);
     }
 
     #[test]

@@ -823,7 +823,7 @@ final class MiniPreviewTests: XCTestCase {
         }
     }
 
-    func testFileDragConcealsOnlySourceMediaAndRestoresRebuiltSurvivor() throws {
+    func testFileDragConcealsTheWholeSourceCardAndRestoresRebuiltSurvivor() throws {
         _ = NSApplication.shared
         let controller = try presentedController(artifact(id: "source", previewPath: "/source.png"))
         defer { controller.close() }
@@ -842,8 +842,10 @@ final class MiniPreviewTests: XCTestCase {
         source.setFileDragging(true)
         let concealed = try mediaPixel(original)
         XCTAssertNotEqual(concealed, visible, "the capture does not paint under its OS drag ghost")
-        XCTAssertLessThan(concealed.alphaComponent, 0.01, "shipping leaves the source media area transparent")
-        XCTAssertTrue(source.hasVisibleLabels, "concealing media retains its metadata")
+        XCTAssertLessThan(concealed.alphaComponent, 0.01, "the source leaves its slot empty")
+        let chip = source.convert(NSPoint(x: 12, y: source.bounds.height - 12), to: original.previewView)
+        XCTAssertLessThan(try XCTUnwrap(pixelColor(in: render(original), of: original,
+            x: chip.x, y: chip.y)).alphaComponent, 0.01, "its chips and chrome leave with it")
         try write(render(original), name: "mini-preview-file-drag-source-hidden.png")
         controller.setEditorArtifacts(["source"])
         RunLoop.current.run(until: Date().addingTimeInterval(0.3))
@@ -861,6 +863,61 @@ final class MiniPreviewTests: XCTestCase {
         XCTAssertEqual(try mediaPixel(rebuilt), visible, "the original source completion restores its survivor")
         XCTAssertEqual(controller.presentedArtifactIDs, ["source"])
         try write(render(rebuilt), name: "mini-preview-file-drag-source-restored.png")
+    }
+
+    func testFileDragWakeGlowsFromTheEmptySlotToTheDragImageAndReformsTheCard() throws {
+        _ = NSApplication.shared
+        let preference = NativeMotion.motionPreference
+        NativeMotion.motionPreference = { false }
+        defer { NativeMotion.motionPreference = preference }
+        let controller = try presentedController(artifact(id: "source", previewPath: "/source.png"))
+        defer { controller.close() }
+        let card = try XCTUnwrap(controller.previewView?.card(for: "source"))
+        let cardWindow = try XCTUnwrap(card.window)
+        let slot = cardWindow.convertToScreen(card.convert(card.bounds, to: nil))
+        // The drag image's centre, up and to the left of the stack.
+        var pointer = NSPoint(x: slot.midX - 420, y: slot.midY + 260)
+        card.setFileDragging(true)
+        let wake = try XCTUnwrap(MiniPreviewDragWake(artifactID: "source", card: card, tipOffset: .zero,
+            tokens: tokens, includeInCaptures: true, pointer: { pointer }) { card })
+        RunLoop.current.run(until: Date().addingTimeInterval(0.6))
+        XCTAssertEqual(card.alphaValue, 0, accuracy: 0.01, "the whole card leaves its slot")
+        let view = try XCTUnwrap(wake.window.contentView)
+        view.display()
+        let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds)?.retagging(with: .sRGB))
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        let scale = CGFloat(bitmap.pixelsWide) / view.bounds.width
+        let screen = wake.window.frame
+        func alpha(atScreen point: NSPoint) -> CGFloat {
+            var pixel = [Int](repeating: 0, count: bitmap.samplesPerPixel)
+            bitmap.getPixel(&pixel, atX: Int((point.x - screen.minX) * scale),
+                            y: Int((screen.maxY - point.y) * scale))
+            return CGFloat(pixel[3]) / 255
+        }
+        XCTAssertGreaterThan(alpha(atScreen: NSPoint(x: slot.minX + 0.5, y: slot.midY)), 0.2,
+                             "the slot keeps a glowing imprint")
+        let midway = NSPoint(x: (slot.midX + pointer.x) / 2, y: (slot.midY + pointer.y) / 2)
+        XCTAssertGreaterThan(alpha(atScreen: midway), 0.2, "a ribbon runs from the slot to the drag image")
+        XCTAssertLessThan(alpha(atScreen: NSPoint(x: midway.x, y: midway.y + 120)), 0.01,
+                          "the overlay is clear away from the wake")
+        XCTAssertTrue(wake.window.ignoresMouseEvents, "the wake never takes a click or a drop")
+        let crop = NSRect(x: (min(slot.minX, pointer.x) - 80 - screen.minX) * scale,
+                          y: (screen.maxY - max(slot.maxY, pointer.y) - 80) * scale,
+                          width: (abs(slot.midX - pointer.x) + slot.width + 160) * scale,
+                          height: (abs(slot.midY - pointer.y) + slot.height + 160) * scale)
+        if let image = bitmap.cgImage?.cropping(to: crop) {
+            try write(NSBitmapImageRep(cgImage: image), name: "mini-preview-file-drag-wake.png")
+        }
+        // Cancelled: the ribbon draws back and the card re-forms in its slot.
+        var ended = false
+        wake.finished = { ended = true }
+        pointer = NSPoint(x: -20_000, y: -20_000)
+        card.finishDrag(at: pointer, operation: [])
+        wake.end(dropped: false)
+        try waitUntil { ended }
+        XCTAssertEqual(card.alphaValue, 1, accuracy: 0.01)
+        XCTAssertFalse(wake.window.isVisible)
+        XCTAssertEqual(controller.presentedArtifactIDs, ["source"])
     }
 
     func testSelfDropSurvivesSettingsRebuildWithoutReplayingItsShake() throws {

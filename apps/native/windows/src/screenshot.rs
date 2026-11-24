@@ -201,7 +201,10 @@ pub fn render(options: &Options, path: &std::path::Path) -> Result<()> {
                 let mut base = windows_numerics::Matrix3x2::identity();
                 dc.GetTransform(&mut base);
                 dc.SetTransform(&(windows_numerics::Matrix3x2::translation(0., top) * base));
-                let result = stack.paint(dc, &g, &tokens);
+                // `--select file-drag`: the drag wake and drag image above.
+                let result = stack
+                    .paint(dc, &g, &tokens)
+                    .and_then(|()| stack.paint_fixture_drag(dc, &tokens));
                 dc.SetTransform(&base);
                 result
             })

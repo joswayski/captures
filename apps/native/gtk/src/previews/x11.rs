@@ -294,6 +294,15 @@ impl Placer {
         let _ = self.connection.flush();
     }
 
+    /// Restack `surface` above its siblings, such as a drag icon under a
+    /// newer override-redirect overlay.
+    pub fn raise(&self, surface: &X11Surface) {
+        surface.display().sync();
+        let above = ConfigureWindowAux::new().stack_mode(x11rb::protocol::xproto::StackMode::ABOVE);
+        let _ = self.connection.configure_window(xid(surface), &above);
+        let _ = self.connection.flush();
+    }
+
     /// The window manager ignores an override-redirect selector. Give its
     /// controls real keyboard focus after mapping, not only GTK widget focus.
     pub fn focus_selector(&self, surface: &X11Surface) {
