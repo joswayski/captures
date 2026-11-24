@@ -2829,6 +2829,10 @@ final class MiniPreviewPanel: NSPanel {
                    backing: .buffered, defer: false)
         isReleasedWhenClosed = false; isOpaque = false; backgroundColor = .clear
         hasShadow = false; level = .floating
+        // Rebuilds swap panels (after Collapse's flight, exits, Clear all);
+        // AppKit's inferred order-in/out zoom made the settled pile shrink and
+        // spring back. The cards carry all the motion themselves.
+        animationBehavior = .none
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         hidesOnDeactivate = false; isMovable = false; contentView = previewView
         becomesKeyOnlyIfNeeded = true

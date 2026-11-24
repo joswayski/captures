@@ -118,6 +118,7 @@ final class MiniPreviewTests: XCTestCase {
         XCTAssertEqual(panel.canBecomeKey, NSApp.isActive, "Keyboard focus only while Captures is active")
         XCTAssertTrue(panel.becomesKeyOnlyIfNeeded, "Clicks never take keyboard focus"); XCTAssertFalse(panel.canBecomeMain)
         XCTAssertTrue(panel.styleMask.contains(.nonactivatingPanel))
+        XCTAssertEqual(panel.animationBehavior, .none, "Rebuilds swap panels without AppKit's window zoom")
         XCTAssertEqual(panel.previewView.artifactIDs, ["latest"])
         let buttons = panel.previewView.subviewsRecursive.compactMap { $0 as? MiniPreviewButton }
         XCTAssertEqual(buttons.map(\.title), ["Close", "Delete", "Edit", "Copy", "Save file"])
