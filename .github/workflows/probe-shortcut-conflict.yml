@@ -1,0 +1,17 @@
+name: Probe shortcut conflict
+on:
+  push:
+    branches: [probe/shortcut-conflict]
+permissions:
+  contents: read
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sw_vers && probe/mac.sh
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python probe/windows.py
