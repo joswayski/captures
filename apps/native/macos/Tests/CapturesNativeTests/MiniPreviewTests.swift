@@ -853,7 +853,7 @@ final class MiniPreviewTests: XCTestCase {
         let inside = source.convert(NSPoint(x: 4, y: 70), to: original.previewView)
         XCTAssertLessThan(try XCTUnwrap(pixelColor(in: glowing, of: original,
             x: inside.x, y: inside.y)).alphaComponent, 0.01,
-            "the editor glow stays outside the concealed source, like CSS box-shadow")
+            "the source stays concealed, editor ring included, though it was still arriving")
         try write(glowing, name: "mini-preview-file-drag-editor-glow.png")
         controller.setEditorArtifacts([])
         controller.updateSettings(previewSettings())

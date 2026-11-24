@@ -1527,6 +1527,9 @@ final class MiniPreviewCardView: NSView, NSDraggingSource {
     /// Leaving it painted under the drag image would also recapture it.
     func setFileDragging(_ active: Bool) {
         fileDragStarted = active
+        // A card dragged while it still arrives would otherwise stay painted:
+        // the arrival's presentation opacity overrides this model alpha.
+        if active { layer?.removeAnimation(forKey: NativeMotion.animationKey) }
         alphaValue = active ? 0 : 1
     }
 
