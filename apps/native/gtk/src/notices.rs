@@ -1202,6 +1202,12 @@ impl UpdateNotice {
             row.append(&dismiss);
             if let Some(primary) = &footer.primary {
                 let button = button(&primary.label, &["update-primary"]);
+                if let Some(icon) = &primary.trailing_icon {
+                    button.set_child(Some(&crate::widgets::trailing_icon_content(
+                        &primary.label,
+                        icon,
+                    )));
+                }
                 button.set_sensitive(primary.enabled);
                 button.set_valign(gtk::Align::Center);
                 button.connect_clicked(action(primary.action.clone()));

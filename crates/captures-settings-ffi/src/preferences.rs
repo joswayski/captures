@@ -111,6 +111,7 @@ fn copy(platform: ShortcutPlatform) -> Value {
             "system_title": help.system_title,
             "system_body": help.system_body,
             "system_action": help.system_action,
+            "system_action_icon": help.system_action_icon,
             "system_targets": preferences::keyboard_settings_targets(platform)
                 .iter().map(|target| target[0]).collect::<Vec<_>>(),
         },

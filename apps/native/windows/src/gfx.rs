@@ -1662,6 +1662,32 @@ pub fn icon(
     Ok(())
 }
 
+/// A button's trailing shipping icon (`.ui-btn svg`: 15 DIPs, 1.7 units in
+/// the shared 24-unit space) with its left edge at `x`, centred on `mid`.
+/// Icons on shipping's 16-unit grid are scaled up like
+/// `captures_app::icons::polylines` does.
+pub const TRAILING_ICON: f32 = 15.;
+
+pub fn trailing_icon(
+    dc: &ID2D1DeviceContext,
+    factory: &ID2D1Factory1,
+    name: &str,
+    (x, mid): (f32, f32),
+    color: D2D1_COLOR_F,
+) -> Result<()> {
+    let grow = 24. / captures_app::icons::view_box(name);
+    let top = mid - TRAILING_ICON / 2.;
+    icon(
+        dc,
+        factory,
+        name,
+        &[],
+        (x, top, TRAILING_ICON * grow),
+        1.7 / grow,
+        color,
+    )
+}
+
 /// An SVG path `d` at `(x, y)` scaled by `scale`, stroked `width` DIPs wide
 /// with round caps and joins, or filled.
 pub fn path(

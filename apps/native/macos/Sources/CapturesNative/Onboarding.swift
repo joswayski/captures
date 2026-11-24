@@ -65,10 +65,13 @@ struct OnboardingPresentation: Equatable {
     let screenDescription: String
     let screenStatus: OnboardingStatus?
     let screenAction: String?
+    /// A trailing shipping icon for `screenAction` ("external-link" for Open Settings).
+    let screenActionIcon: String?
     let showMicrophone: Bool
     let microphoneDescription: String
     let microphoneStatus: OnboardingStatus?
     let microphoneAction: String?
+    let microphoneActionIcon: String?
     let screenReady: Bool
     let restartRequired: Bool
     let primaryLabel: String
@@ -93,9 +96,11 @@ struct OnboardingPresentation: Equatable {
         self.title = title; self.screenDescription = screenDescription
         self.screenStatus = try OnboardingStatus(value["screen_status"])
         self.screenAction = try optionalText("screen_action")
+        self.screenActionIcon = try optionalText("screen_action_icon")
         self.showMicrophone = showMicrophone; self.microphoneDescription = microphoneDescription
         self.microphoneStatus = try OnboardingStatus(value["microphone_status"])
         self.microphoneAction = try optionalText("microphone_action")
+        self.microphoneActionIcon = try optionalText("microphone_action_icon")
         self.screenReady = screenReady; self.restartRequired = restartRequired
         self.primaryLabel = primaryLabel
         self.waitingForPermission = value["waiting_for_permission"] as? Bool ?? false
@@ -413,13 +418,15 @@ final class OnboardingPermissionRow: NSView {
     }
     required init?(coder: NSCoder) { nil }
 
-    func configure(description: String, status: OnboardingStatus?, action: String?, enabled: Bool) {
+    func configure(description: String, status: OnboardingStatus?, action: String?,
+                   trailingIcon: String? = nil, enabled: Bool) {
         detail.stringValue = description
         self.status.status = status
         button.isHidden = action == nil
         if let action {
             button.title = action; button.setAccessibilityLabel(action)
         }
+        button.trailingIcon = action == nil ? nil : trailingIcon
         button.isEnabled = enabled
         button.needsDisplay = true
         needsLayout = true
@@ -432,6 +439,7 @@ final class OnboardingPermissionRow: NSView {
             : ceil((button.title as NSString).size(withAttributes:
                 [.font: NSFont.capturesUI(ofSize: tokens.number("text-md"), weight: .medium)]).width)
                 + 2 * tokens.number("s-5")
+                + (button.trailingIcon == nil ? 0 : CaptureButton.trailingIconWidth)
         return max(118, buttonWidth, status.isHidden ? 0 : status.intrinsicContentSize.width)
     }
     private func copyWidth(_ width: CGFloat) -> CGFloat {
@@ -636,12 +644,14 @@ final class OnboardingView: NSView {
         screenRow.configure(description: view?.screenDescription ?? strings.checking,
             status: view?.screenStatus,
             action: view?.screenAction.map { busyAction == "request_screen" ? strings.opening : $0 },
+            trailingIcon: busyAction == "request_screen" ? nil : view?.screenActionIcon,
             enabled: !busy)
         microphoneRow.isHidden = view?.showMicrophone != true
         if let view {
             microphoneRow.configure(description: view.microphoneDescription,
                 status: view.microphoneStatus,
                 action: view.microphoneAction.map { busyAction == "request_microphone" ? strings.opening : $0 },
+                trailingIcon: busyAction == "request_microphone" ? nil : view.microphoneActionIcon,
                 enabled: !busy)
         }
         errorLabel.stringValue = controller.error ?? ""

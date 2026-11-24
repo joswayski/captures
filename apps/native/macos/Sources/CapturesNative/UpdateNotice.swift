@@ -62,6 +62,8 @@ struct UpdateNoticeButton: Equatable {
     let label: String
     let enabled: Bool
     let action: UpdateNoticeAction
+    /// A trailing shipping icon ("external-link" when it opens a web page).
+    let trailingIcon: String?
 
     init?(_ value: Any?) {
         guard let value = value as? [String: Any], let label = value["label"] as? String,
@@ -69,6 +71,7 @@ struct UpdateNoticeButton: Equatable {
         self.label = label
         enabled = value["enabled"] as? Bool ?? true
         self.action = action
+        trailingIcon = value["trailing_icon"] as? String
     }
 }
 
@@ -671,8 +674,10 @@ final class UpdateNoticeView: NSView {
             }
             if let primary = p.primary {
                 let size = (primary.label as NSString).size(withAttributes: [.font: NSFont.capturesUI(ofSize: tokens.number("text-md"), weight: .medium)])
-                let buttonWidth = max(104, ceil(size.width) + 32)
+                let iconWidth = primary.trailingIcon == nil ? 0 : CaptureButton.trailingIconWidth
+                let buttonWidth = max(104, ceil(size.width) + 32 + iconWidth)
                 let button = CaptureButton(primary.label, frame: NSRect(x: width - s6 - buttonWidth, y: y, width: buttonWidth, height: hMd), tokens: tokens) { [weak self] in self?.onAction(primary.action) }
+                button.trailingIcon = primary.trailingIcon
                 button.primary = true
                 button.isEnabled = primary.enabled
                 button.keyEquivalent = "\r"

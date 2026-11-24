@@ -1401,12 +1401,13 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
     /// Shipping `.settings-utility-row`: copy and one secondary action.
     @discardableResult
     private func utilityRow(_ title: String, detail: String, action: String, y: CGFloat, card: NSView,
-                            enabled: Bool = true, identifier: String? = nil,
+                            enabled: Bool = true, identifier: String? = nil, trailingIcon: String? = nil,
                             onPress: @escaping () -> Void) -> CGFloat {
-        let width = buttonWidth(action)
+        let width = buttonWidth(action) + (trailingIcon == nil ? 0 : CaptureButton.trailingIconWidth)
         let layout = inlineRow(title, detail: detail, control: NSSize(width: width, height: tokens.number("h-md")),
             y: y, card: card)
         let button = CaptureButton(action, frame: layout.control, tokens: tokens, action: onPress)
+        button.trailingIcon = trailingIcon
         button.isEnabled = enabled
         if let identifier { button.identifier = NSUserInterfaceItemIdentifier(identifier) }
         card.addSubview(button)
@@ -1693,7 +1694,8 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         y = utilityRow(PreferencesPolicy.text("shortcuts.system_title"),
             detail: PreferencesPolicy.text("shortcuts.system_body"),
             action: PreferencesPolicy.text("shortcuts.system_action"), y: y, card: card,
-            enabled: liveCaptureAvailable, identifier: "shortcuts.system-settings") { [weak self] in
+            enabled: liveCaptureAvailable, identifier: "shortcuts.system-settings",
+            trailingIcon: PreferencesPolicy.text("shortcuts.system_action_icon")) { [weak self] in
             self?.openKeyboardSettings()
         }
         if let keyboardSettingsError {

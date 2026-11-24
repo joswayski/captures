@@ -68,7 +68,7 @@ pub const SECTIONS: [Section; 8] = [
 
 pub const TITLE: &str = "Preferences";
 pub const SUBTITLE: &str = "Changes save automatically.";
-pub const HISTORY_ACTION: &str = "Capture History…";
+pub const HISTORY_ACTION: &str = "Capture History";
 pub const LOADING: &str = "Loading preferences…";
 pub const SAVING: &str = "Saving changes…";
 pub const SAVED: &str = "Changes saved";
@@ -509,6 +509,9 @@ pub struct ShortcutHelp {
     pub system_title: &'static str,
     pub system_body: &'static str,
     pub system_action: &'static str,
+    /// `system_action` opens the OS keyboard settings, outside Captures, so
+    /// it carries this trailing shipping icon.
+    pub system_action_icon: &'static str,
 }
 
 /// Shipping `platformShortcutHelp`. Live hosts unbind the overlapping system
@@ -520,18 +523,21 @@ pub fn shortcut_help(platform: ShortcutPlatform) -> ShortcutHelp {
             system_title: "macOS Screenshot shortcuts",
             system_body: "Captures unbinds overlapping Screenshot app keys (⌘⇧3, ⌘⇧4, ⌘⇧5) so they reach this app instead of the system overlay. Restore them in System Settings if you want both.",
             system_action: "Open",
+            system_action_icon: "external-link",
         },
         ShortcutPlatform::Windows => ShortcutHelp {
             intro: "Defaults match Windows screenshot keys: Win+Shift+S region, PrtScn full screen, Alt+PrtScn window, and Win+Alt+R region recording.",
             system_title: "Windows screenshot shortcuts",
             system_body: "Captures unbinds overlapping Snipping Tool keys so Win+Shift+S and Print Screen reach this app instead of the system overlay. Restore them in Windows keyboard settings if you want both.",
             system_action: "Open",
+            system_action_icon: "external-link",
         },
         ShortcutPlatform::Linux => ShortcutHelp {
             intro: "Defaults match GNOME/Ubuntu screenshot keys: PrtScn opens New Capture, Super+Shift+S region, Shift+PrtScn full screen, Alt+PrtScn window, and Ctrl+Shift+Alt+R region recording.",
             system_title: "GNOME screenshot shortcuts",
             system_body: "Captures turns off overlapping GNOME screenshot keys (and KDE Spectacle region capture when those tools are installed) so they reach this app. Restore them in Keyboard settings if you want both.",
             system_action: "Open",
+            system_action_icon: "external-link",
         },
     }
 }

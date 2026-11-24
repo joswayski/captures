@@ -705,6 +705,10 @@ pub struct Button {
     pub label: String,
     pub enabled: bool,
     pub action: Action,
+    /// A trailing shipping icon (`crate::icons`): "external-link" when the
+    /// button opens a page outside Captures.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trailing_icon: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -897,6 +901,7 @@ fn button(label: &str, enabled: bool, action: Action) -> Button {
         label: label.into(),
         enabled,
         action,
+        trailing_icon: None,
     }
 }
 
@@ -1095,15 +1100,15 @@ pub fn present(status: Option<&UpdateStatus>, view: &ViewState) -> Presentation 
                     ..
                 })
             );
-            Some(button(
-                if installable {
-                    "Update now"
-                } else {
-                    "View release"
-                },
-                enabled,
-                Action::Install,
-            ))
+            Some(if installable {
+                button("Update now", enabled, Action::Install)
+            } else {
+                // Opens the release page in the browser.
+                Button {
+                    trailing_icon: Some("external-link".into()),
+                    ..button("View release", enabled, Action::Install)
+                }
+            })
         } else if error.is_some() {
             let retry_install = available
                 || matches!(
@@ -1833,7 +1838,9 @@ mod tests {
         );
         let footer = p.footer.unwrap();
         assert_eq!(footer.dismiss.label, "Not now");
-        assert_eq!(footer.primary.unwrap().label, "Update now");
+        let update_now = footer.primary.unwrap();
+        assert_eq!(update_now.label, "Update now");
+        assert!(update_now.trailing_icon.is_none());
         assert!(p.close_warning.is_none());
         assert!(!p.dismiss_blocked);
         // Card, notes chrome, two bullets, the intro and two version headings.
@@ -1869,10 +1876,10 @@ mod tests {
         assert_eq!(single.card_height, 168.0 + 66.0 + 44.0);
         let manual = present(fixture("manual").as_ref(), &view(true));
         assert_eq!(manual.description, "Version 2026.08.27.5");
-        assert_eq!(
-            manual.footer.unwrap().primary.unwrap().label,
-            "View release"
-        );
+        // It opens the release page, so it carries the trailing link icon.
+        let view_release = manual.footer.unwrap().primary.unwrap();
+        assert_eq!(view_release.label, "View release");
+        assert_eq!(view_release.trailing_icon.as_deref(), Some("external-link"));
     }
 
     #[test]

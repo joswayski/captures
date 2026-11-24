@@ -236,6 +236,10 @@ impl Setup {
         }
         if let Some(action) = presentation.screen_action {
             let button = gtk::Button::with_label(action);
+            if let Some(icon) = presentation.screen_action_icon {
+                button.set_child(Some(&crate::widgets::trailing_icon_content(action, icon)));
+                button.update_property(&[gtk::accessible::Property::Label(action)]);
+            }
             button.add_css_class("ui-btn");
             button.add_css_class("onboarding-permission-button");
             button.set_halign(gtk::Align::End);

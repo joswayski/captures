@@ -800,6 +800,7 @@ impl CheckWorker {
                 label: "Close".into(),
                 enabled: true,
                 action: Action::Dismiss,
+                trailing_icon: None,
             },
             primary: None,
         });
@@ -813,6 +814,7 @@ impl CheckWorker {
                 .into(),
                 enabled: self.thread.is_some(),
                 action: Action::Check,
+                trailing_icon: None,
             })
         });
         p.status_message = match self.status {
@@ -884,10 +886,12 @@ impl CheckWorker {
                 && matches!(self.status, CheckStatus::Available { .. })
                 && let Some(footer) = &mut p.footer
             {
+                // Opens captur.es in the browser: a trailing link icon.
                 footer.primary = Some(Button {
                     label: "Download update".into(),
                     enabled: true,
                     action: Action::OpenDownloadPage,
+                    trailing_icon: Some("external-link".into()),
                 });
             }
         }
@@ -948,6 +952,7 @@ impl CheckWorker {
             label: label.into(),
             enabled,
             action,
+            trailing_icon: None,
         })
     }
 

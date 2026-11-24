@@ -14,7 +14,7 @@ use gtk::{gio, glib};
 
 use crate::preferences::{capped, checked, description, label, measure_ch, role_button};
 use crate::tokens::Tokens;
-use crate::widgets::{MaxWidth, WidthWatch};
+use crate::widgets::{MaxWidth, WidthWatch, icon_button};
 
 /// One client per process, so the cooldown survives a closed form.
 fn client(endpoint: &str) -> Result<Arc<FeedbackClient>, String> {
@@ -248,9 +248,14 @@ pub fn build(
         card.append(&scroller);
         let row = gtk::Box::new(gtk::Orientation::Horizontal, space("s-3"));
         row.add_css_class("feedback-review-actions");
-        let buttons = ["Copy summary", "Add to message", "Dismiss diagnostics"].map(|text| {
-            let button = gtk::Button::with_label(text);
-            button.add_css_class("ui-btn");
+        // Parallel actions, each with its leading shipping icon.
+        let buttons = [
+            ("copy", "Copy summary"),
+            ("plus", "Add to message"),
+            ("close", "Dismiss diagnostics"),
+        ]
+        .map(|(icon, text)| {
+            let (button, _, _) = icon_button(icon, text, &["ui-btn"]);
             row.append(&button);
             button
         });

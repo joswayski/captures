@@ -193,6 +193,15 @@ impl Utility {
             ),
         }
     }
+
+    /// The action's trailing shipping icon: Keyboard leaves Captures for the
+    /// system settings; Feedback opens in Captures.
+    pub fn trailing_icon(self) -> Option<&'static str> {
+        match self {
+            Self::Keyboard => Some(preferences::shortcut_help(PLATFORM).system_action_icon),
+            Self::Feedback => None,
+        }
+    }
 }
 
 const RECORDING_GRID: &[SelectKey] = &[SelectKey::Fps, SelectKey::Resolution];
@@ -2254,7 +2263,12 @@ impl Scene {
                 // `.settings-utility-row`: copy, then the `auto` action.
                 let (title, body, action) = which.copy();
                 let open = g.text(&self.t, Style::Control, action, 1e4)?;
-                let button_w = (open.width + 2. * s5 + 2.).ceil();
+                let icon_w = if which.trailing_icon().is_some() {
+                    s3 + gfx::TRAILING_ICON
+                } else {
+                    0.
+                };
+                let button_w = (open.width + icon_w + 2. * s5 + 2.).ceil();
                 let copy_w = (width - button_w - s6).max(40.);
                 let title = g.text(&self.t, Style::RowTitle, title, copy_w)?;
                 let detail = g.text(&self.t, Style::RowDescription, body, copy_w.min(measure))?;
@@ -5055,9 +5069,19 @@ impl Scene {
                     Kind::Reset { .. } => &self.custom_layout.reset,
                     _ => &self.texts.choose,
                 };
+                let icon = match n.kind {
+                    Kind::Open { which, .. } => which.trailing_icon(),
+                    _ => None,
+                };
                 if let Some(label) = label {
-                    let (x, y) = centered(label, (w - label.width) / 2.);
+                    let s3 = t.n("s-3");
+                    let content = label.width + icon.map_or(0., |_| s3 + gfx::TRAILING_ICON);
+                    let (x, y) = centered(label, (w - content) / 2.);
                     gfx::text(dc, label, x, y, c("text"))?;
+                    if let Some(icon) = icon {
+                        let at = (x + label.width + s3, h / 2.);
+                        gfx::trailing_icon(dc, &g.factory, icon, at, c("text"))?;
+                    }
                 }
             }
             Kind::UpdateAction => {

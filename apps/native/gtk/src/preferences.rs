@@ -1501,6 +1501,10 @@ fn shortcuts_card(prefs: &Rc<Prefs>) -> gtk::Box {
     let intro = format!("{} {}", SECTIONS[3].description, help.intro);
     let card = card(&tokens, 3, Some(&intro));
     let (row, open) = utility_row(help.system_title, help.system_body, help.system_action);
+    open.set_child(Some(&crate::widgets::trailing_icon_content(
+        help.system_action,
+        help.system_action_icon,
+    )));
     open.connect_clicked(|button| {
         if let Err(error) = preferences::open_keyboard_settings(PLATFORM) {
             button.set_tooltip_text(Some(&error));

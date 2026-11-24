@@ -2129,7 +2129,11 @@ pub fn paint(
         if let Some(primary) = &footer.primary {
             // `.primary`: the solid neutral action, at least 104 px.
             let text = label(primary, "weight-semibold")?;
-            let w = (text.width + 2. * s5 + 2.).max(104.);
+            let icon_w = primary
+                .trailing_icon
+                .as_ref()
+                .map_or(0., |_| s3 + gfx::TRAILING_ICON);
+            let w = (text.width + icon_w + 2. * s5 + 2.).max(104.);
             let r = rect(bx1 - w, mid - h / 2., bx1, mid + h / 2.);
             let key = part(
                 Role::Button,
@@ -2144,13 +2148,12 @@ pub fn paint(
                 "solid"
             };
             gfx::fill_round(dc, r, n("r-md"), fade(c(fill), primary.enabled))?;
-            gfx::text(
-                dc,
-                &text,
-                r.left + (w - text.width) / 2.,
-                mid - text.height / 2.,
-                fade(c("solid-ink"), primary.enabled),
-            )?;
+            let ink = fade(c("solid-ink"), primary.enabled);
+            let x = r.left + (w - text.width - icon_w) / 2.;
+            gfx::text(dc, &text, x, mid - text.height / 2., ink)?;
+            if let Some(icon) = &primary.trailing_icon {
+                gfx::trailing_icon(dc, &g.factory, icon, (x + text.width + s3, mid), ink)?;
+            }
         }
     }
     Ok(Painted {

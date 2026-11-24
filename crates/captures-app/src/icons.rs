@@ -227,6 +227,20 @@ pub fn paths(name: &str) -> Option<&'static [&'static str]> {
 /// Every named icon's polylines in 24-unit space (y down).
 pub fn polylines(name: &str) -> Option<Vec<Vec<[f32; 2]>>> {
     let mut lines: Vec<Vec<[f32; 2]>> = paths(name)?.iter().flat_map(|d| flatten(d)).collect();
+    let side = view_box(name);
+    if side < 24. {
+        let scale = 24. / side;
+        for point in lines.iter_mut().flatten() {
+            point[0] *= scale;
+            point[1] *= scale;
+        }
+    }
+    Some(lines)
+}
+
+/// The side of the viewBox a named icon's [`paths`] use: 16 for the shipping
+/// SVGs drawn on a 16-unit grid, otherwise 24.
+pub fn view_box(name: &str) -> f32 {
     if matches!(
         name,
         "external-link"
@@ -235,12 +249,10 @@ pub fn polylines(name: &str) -> Option<Vec<Vec<[f32; 2]>>> {
             | "preview-overflow-down"
             | "setup-check"
     ) {
-        for point in lines.iter_mut().flatten() {
-            point[0] *= 1.5;
-            point[1] *= 1.5;
-        }
+        16.
+    } else {
+        24.
     }
-    Some(lines)
 }
 
 /// Flatten SVG path data to polylines. Curves and arcs become short segments.

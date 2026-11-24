@@ -89,7 +89,7 @@ const MENU: [Row; 15] = [
         Some(Shortcut::RecordDisplay),
     ),
     Row::Separator,
-    Row::Item("history", "Capture History…", Action::History, None),
+    Row::Item("history", "Capture History", Action::History, None),
     Row::Item(
         "output",
         "Open Save Location",

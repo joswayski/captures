@@ -22,7 +22,7 @@ final class StatusItemTests: XCTestCase {
         let menu = target.makeMenu()
         XCTAssertEqual(menu.items.map(\.title), ["New Capture…", "Screenshot Region",
             "Screenshot Window", "Screenshot Display", "Record Region", "Record Window",
-            "Record Display", "", "Capture History…", "Open Save Location", "Preferences",
+            "Record Display", "", "Capture History", "Open Save Location", "Preferences",
             "Send Feedback…", "Check for Updates…", "", "Quit Captures"])
         XCTAssertFalse(menu.items[12].isEnabled, "updates are not connected yet")
         XCTAssertEqual(menu.items[0].keyEquivalent, " ")
@@ -51,7 +51,7 @@ final class StatusItemTests: XCTestCase {
         var menu = target.makeMenu()
         XCTAssertEqual(menu.items.map(\.title), ["Update Available — 3 changes", "", "New Capture…",
             "Screenshot Region", "Screenshot Window", "Screenshot Display", "Record Region",
-            "Record Window", "Record Display", "", "Capture History…", "Open Save Location",
+            "Record Window", "Record Display", "", "Capture History", "Open Save Location",
             "Preferences", "Send Feedback…", "", "Quit Captures"])
         menu.performActionForItem(at: 0)
         XCTAssertEqual(checks, 1)

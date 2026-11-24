@@ -130,6 +130,14 @@ final class CaptureButton: NSButton, TokenRestyling {
     /// Shipping `.screenshot-canvas-bg-trigger`: an 11 pt `--text-subtle`
     /// chevron 6 pt after the label, with 8 pt leading and 6 pt trailing padding.
     var trailingChevron = false { didSet { needsDisplay = true } }
+    /// A trailing shipping icon after the label ("external-link" for
+    /// buttons that leave Captures), in the label's color.
+    var trailingIcon: String? { didSet { needsDisplay = true } }
+    /// `trailingIcon`'s side and its gap after the label (`.ui-btn svg`).
+    static let trailingIconSide: CGFloat = 15
+    static let trailingIconGap: CGFloat = 6
+    /// The width a trailing icon adds to a button sized for its title.
+    static var trailingIconWidth: CGFloat { trailingIconGap + trailingIconSide }
     var cornerRadius: CGFloat? { didSet { refreshElevation(); needsDisplay = true } }
     /// Canvas background chip drawn in place of an icon; `.clear` is transparent.
     var swatch: NSColor? { didSet { needsDisplay = true } }
@@ -425,7 +433,8 @@ final class CaptureButton: NSButton, TokenRestyling {
             : icon?.isShipping == true ? 16 : 14)
         let hasGlyph = icon != nil || swatch != nil
         let iconWidth: CGFloat = !hasGlyph ? 0 : (label.isEmpty ? glyphSide : glyphSide + 6)
-        let chevronWidth: CGFloat = trailingChevron ? 6 + 11 : 0
+        let chevronWidth: CGFloat = trailingChevron ? 6 + 11
+            : trailingIcon != nil ? Self.trailingIconGap + Self.trailingIconSide : 0
         // The trigger's 8/6 pt padding puts its content 1 pt right of center.
         let startX = (bounds.width - size.width - iconWidth - chevronWidth) / 2 + (trailingChevron ? 1 : 0)
         let glyphRect = NSRect(x: startX, y: (bounds.height - glyphSide) / 2,
@@ -441,6 +450,12 @@ final class CaptureButton: NSButton, TokenRestyling {
             tokens.color("text-subtle").faded(isEnabled ? 1 : 0.32).setStroke()
             ShippingIcons.stroke("editor-chevron-down", in: NSRect(x: startX + iconWidth + size.width + 6,
                 y: (bounds.height - 11) / 2, width: 11, height: 11), width: iconStrokeWidth)
+        } else if let trailingIcon {
+            foreground.setStroke()
+            ShippingIcons.stroke(trailingIcon, in: NSRect(
+                x: startX + iconWidth + size.width + Self.trailingIconGap,
+                y: (bounds.height - Self.trailingIconSide) / 2,
+                width: Self.trailingIconSide, height: Self.trailingIconSide), width: 1.7)
         }
         // Shipping `.ui-btn:focus-visible`: AppKit only gives a button first
         // responder through keyboard navigation, so this is focus-visible.
@@ -710,7 +725,7 @@ final class LiveStatusActions: NSObject {
         add("Record Window", action: #selector(recordWindow), shortcut: 5, to: menu)
         add("Record Display", action: #selector(recordDisplay), shortcut: 6, to: menu)
         menu.addItem(.separator())
-        add("Capture History…", action: #selector(showHistory), to: menu)
+        add("Capture History", action: #selector(showHistory), to: menu)
         add("Open Save Location", action: #selector(openOutputFolder), to: menu)
         add("Preferences", action: #selector(showPreferences), to: menu)
         add("Send Feedback…", action: #selector(sendFeedback), to: menu)

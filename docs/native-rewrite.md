@@ -167,7 +167,7 @@ zoom and resize). None of this promotes native to production without the
 owner's approval.
 
 The first GTK4 slice is Preferences: the shipping sidebar (brand mark and
-section list that follows scrolling), header with Capture History…, and the
+section list that follows scrolling), header with Capture History, and the
 General and Capture cards with token-drawn switches (32×19 pill, 13 pt knob
 easing over `--dur-3`, hover border, focus ring, AT-SPI switch role and
 checked state). Whole rows toggle, settings save through `captures-settings`,
@@ -180,7 +180,7 @@ Orca checks wait for the owner's Linux PC. Windows, macOS: unchanged.
 
 The first Windows slice (`apps/native/windows`) is the same Preferences surface
 on Win32 with DirectComposition, Direct2D and DirectWrite (system Segoe UI
-Variable): the sidebar with scroll-follow, the header with Capture History…,
+Variable): the sidebar with scroll-follow, the header with Capture History,
 and the General and Capture cards with token-drawn switches. Every node has
 its own composition surface; hover and active states cross-fade on the
 compositor, the knob slides 13 px as a compositor animation over `--dur-3`,
@@ -304,7 +304,7 @@ Two parity fixes from the third real-hardware pass follow. Alt+Down and
 Alt+Up now open a focused select, as in shipping and in Windows combo boxes.
 They arrive as system keys, and Alt+F4 and the system menu still go to
 DefWindowProc. The header now shows shipping's save status to the right of
-Capture History…: "Couldn’t save changes: …" with ! until the next save
+Capture History: "Couldn’t save changes: …" with ! until the next save
 (November 2026: successful saves no longer show "Changes saved", on every
 host). It is a token-drawn pill on its own
 surface and pops in; History moves by offset. Every failed `captures-settings`
@@ -356,7 +356,7 @@ and Narrator need a real Windows run. macOS, Linux: unchanged.
 
 The eighth Windows slice adds Capture History as a second Win32 window
 (`apps/native/windows/src/history.rs`, 1020×720, min 640×440). Preferences'
-Capture History… opens it, Back to Preferences returns, and
+Capture History opens it, Back to Preferences returns, and
 `--scene history` opens it directly (with `--screenshot` for offscreen
 renders). It follows shipping `CaptureHistory`/`HistoryCard` with the copy,
 card model, dates and grid geometry from `captures_app::history_view`. It
@@ -1673,7 +1673,7 @@ Windows, macOS: unchanged.
 The sixth GTK4 slice finishes the Preferences cards in shipping order, built
 from the shared `captures_app::preferences` copy and option lists. Every
 control writes one setting by its persisted path and saves through
-`captures-settings`, with a save error pill beside Capture History… (the
+`captures-settings`, with a save error pill beside Capture History (the
 Changes saved pill was dropped in November 2026). Appearance has the Interface theme segments
 (pressed state) and the accent chips as one AT-SPI radio group with
 `theme_accessibility_label` names and Cairo-drawn swatches (accent with the
@@ -3291,7 +3291,7 @@ resizable top-level windows that can be open side by side; the old single fixed
 workbench window and the wgpu "Capture History | Preferences" tab strip are gone.
 Opening a window that is already open shows, restores and focuses it; closing one
 leaves the others. Tray/menu-bar items, capture-menu setting links, Preferences'
-**Capture History…** button and empty relaunches route to the matching window;
+**Capture History** button and empty relaunches route to the matching window;
 reopen follows shipping's priority (setup, then an open editor, then History, then
 Preferences, else open Preferences). A visible launch follows shipping's
 `interactive_launch_action` (`captures_app::app_windows::interactive_launch`): setup

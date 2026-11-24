@@ -65,6 +65,9 @@ enum Target {
 
 /// The native hosts' previous-session review buttons (not in Tauri).
 const REVIEW_BUTTONS: [&str; 3] = ["Copy summary", "Add to message", "Dismiss diagnostics"];
+/// The review buttons' leading shipping icons (`.ui-btn svg`, 15 px).
+const REVIEW_ICONS: [&str; 3] = ["copy", "plus", "close"];
+const REVIEW_ICON: f32 = 15.;
 /// GTK's and wgpu's refusal when the summary cannot be added.
 const REVIEW_ADD_ERROR: &str =
     "Wait for the current send to finish, or shorten the message below 8,000 characters.";
@@ -536,7 +539,7 @@ impl Feedback {
                 let (mut bx, bh) = (x, n("h-md"));
                 for label in REVIEW_BUTTONS {
                     let text = g.text(t, Style::Control, label, 1e4)?;
-                    let bw = (text.width + 2. * n("s-5") + 2.).ceil();
+                    let bw = (text.width + REVIEW_ICON + n("s-3") + 2. * n("s-5") + 2.).ceil();
                     if bx > x && bx + bw > x + inner {
                         bx = x;
                         cy += bh + n("s-3");
@@ -1386,10 +1389,25 @@ impl Feedback {
             }
             gfx::fill_round(dc, *r, radius, c(bg))?;
             gfx::border(dc, *r, radius, 1., c(edge))?;
+            let content = REVIEW_ICON + t.n("s-3") + label.width;
+            let left = r.left + (r.right - r.left - content) / 2.;
+            gfx::icon(
+                dc,
+                &self.g.factory,
+                REVIEW_ICONS[i],
+                &[],
+                (
+                    left,
+                    r.top + (r.bottom - r.top - REVIEW_ICON) / 2.,
+                    REVIEW_ICON,
+                ),
+                1.7,
+                c("text"),
+            )?;
             gfx::text(
                 dc,
                 label,
-                r.left + (r.right - r.left - label.width) / 2.,
+                left + REVIEW_ICON + t.n("s-3"),
                 r.top + (r.bottom - r.top - label.height) / 2.,
                 c("text"),
             )?;

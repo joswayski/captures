@@ -817,6 +817,18 @@ pub fn icon_button(icon: &str, label: &str, classes: &[&str]) -> (gtk::Button, I
     (button, glyph, text)
 }
 
+/// A button child with a label and a trailing shipping icon (15 px, like
+/// `icon_button`'s leading one), for buttons that leave Captures.
+pub fn trailing_icon_content(label: &str, icon: &str) -> gtk::Box {
+    let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    content.set_halign(gtk::Align::Center);
+    content.append(&gtk::Label::new(Some(label)));
+    let glyph = Icon::new(icon, 15).with_stroke(1.7);
+    glyph.set_valign(gtk::Align::Center);
+    content.append(&glyph);
+    content
+}
+
 type WidthChanged = Box<dyn Fn(i32)>;
 
 mod watch_imp {

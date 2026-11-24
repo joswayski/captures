@@ -860,7 +860,7 @@ compositor and accessibility acceptance; Wayland remains gated.
 Only `--live` creates the macOS menu-bar item or Windows/Linux tray and registers
 the persisted New Capture and region/window/display shortcuts. The menu uses the
 shipping labels, order and separators: New Capture…, Screenshot
-Region/Window/Display, Record Region/Window/Display, Capture History…, Open Save
+Region/Window/Display, Record Region/Window/Display, Capture History, Open Save
 Location, Preferences, Send Feedback…, a disabled Check for Updates… (signed
 updates are not connected) and Quit Captures. Capture items show the saved
 shortcuts as accelerators where the platform menu displays them (Linux SNI hosts

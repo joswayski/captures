@@ -170,9 +170,12 @@ final class OnboardingTests: XCTestCase {
                     XCTAssertTrue(primary.isEnabled)
                     XCTAssertEqual(view.screenRow.status.status?.label, "Restart required")
                     XCTAssertEqual(view.screenRow.button.title, "Open Settings")
+                    // Leaving for System Settings: a trailing link icon.
+                    XCTAssertEqual(view.screenRow.button.trailingIcon, "external-link")
                     XCTAssertFalse(view.screenRow.button.isHidden)
                     XCTAssertFalse(view.microphoneRow.isHidden)
                     XCTAssertEqual(view.microphoneRow.button.title, "Allow microphone")
+                    XCTAssertNil(view.microphoneRow.button.trailingIcon)
                 case "ready":
                     XCTAssertEqual(primary.title, "Start capturing")
                     XCTAssertTrue(primary.isEnabled)

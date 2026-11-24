@@ -537,7 +537,7 @@ def preferences(binary, scratch):
     process = launch(binary, "--settings-file", str(settings), "--size", "640x660")
     try:
         app = wait(lambda: application(process.pid), "the narrow Preferences window")
-        wait(lambda: find(app, "push button", "Capture History…"), "the narrow page")
+        wait(lambda: find(app, "push button", "Capture History"), "the narrow page")
         time.sleep(0.5)
         assert not find(app, "push button", "Shortcuts"), "the nav stayed in a compact window"
         print("preferences: a compact window hides the section nav")
@@ -2203,19 +2203,19 @@ def tray(binary, scratch):
         labels = [label for _, label, _ in rows]
         assert labels == ["New Capture…", "Screenshot Region", "Screenshot Window",
                           "Screenshot Display", "Record Region", "Record Window",
-                          "Record Display", "-", "Capture History…", "Open Save Location",
+                          "Record Display", "-", "Capture History", "Open Save Location",
                           "Preferences", "Send Feedback…", "Check for Updates…", "-",
                           "Quit Captures"], labels
         enabled = [label for _, label, on in rows if on and label != "-"]
         assert enabled == ["New Capture…", "Screenshot Region", "Screenshot Window",
                            "Screenshot Display", "Record Region", "Record Window", "Record Display",
-                           "Capture History…", "Open Save Location",
+                           "Capture History", "Open Save Location",
                            "Preferences", "Send Feedback…", "Quit Captures"], enabled
         # The quiet launch shows only the launch notice, which leaves by itself.
         wait(lambda: {"event": "startup-notice-closed", "by": "timeout"} in events(),
              "the launch notice to expire", timeout=12)
         assert DESKTOP.visible(process.pid) == [], "the quiet launch left a window open"
-        click("Capture History…")
+        click("Capture History")
         DESKTOP.window("^Capture History$", process.pid)
         if not isinstance(DESKTOP, Wayland):
             click("Screenshot Display")

@@ -145,6 +145,8 @@ pub const FINISHING: &str = "Finishing…";
 pub const REFRESH: &str = "Refresh status";
 pub const START: &str = "Start capturing";
 pub const RESTART: &str = "Restart Captures";
+/// Opens System Settings, outside Captures.
+pub const OPEN_SETTINGS: &str = "Open Settings";
 const MACOS_TITLE: &str = "Required permissions";
 const READY_TITLE: &str = "You’re ready to capture";
 /// Permission recovery reuses the setup cards from a completed workspace.
@@ -230,10 +232,14 @@ pub struct Presentation {
     pub screen_description: &'static str,
     pub screen_status: Option<Status>,
     pub screen_action: Option<&'static str>,
+    /// A trailing shipping icon for `screen_action`: "external-link" when it
+    /// opens System Settings.
+    pub screen_action_icon: Option<&'static str>,
     pub show_microphone: bool,
     pub microphone_description: &'static str,
     pub microphone_status: Option<Status>,
     pub microphone_action: Option<&'static str>,
+    pub microphone_action_icon: Option<&'static str>,
     /// Screen access is usable; finishing setup is allowed.
     pub screen_ready: bool,
     /// The OS applies the grant only after a relaunch; offer Restart instead.
@@ -297,6 +303,12 @@ fn microphone_description(granted: bool, asked: bool) -> &'static str {
     }
 }
 
+/// Opening System Settings leaves Captures, so its button gets a trailing
+/// link icon; actions that ask in place stay plain.
+fn settings_link_icon(action: Option<&str>) -> Option<&'static str> {
+    (action == Some(OPEN_SETTINGS)).then_some("external-link")
+}
+
 impl State {
     pub fn presentation(&self) -> Presentation {
         let screen_ready = !self.screen_recording_required || self.screen_recording_granted;
@@ -328,7 +340,7 @@ impl State {
             let action = if self.screen_recording_can_request {
                 "Allow access"
             } else {
-                "Open Settings"
+                OPEN_SETTINGS
             };
             (status, Some(action))
         };
@@ -336,7 +348,7 @@ impl State {
         let (microphone_status, microphone_action) = if self.microphone_granted {
             (Some(granted("Granted")), None)
         } else if asked && !self.microphone_can_request {
-            (None, Some("Open Settings"))
+            (None, Some(OPEN_SETTINGS))
         } else {
             (None, Some("Allow microphone"))
         };
@@ -350,10 +362,12 @@ impl State {
             ),
             screen_status,
             screen_action,
+            screen_action_icon: settings_link_icon(screen_action),
             show_microphone: self.platform == "macos",
             microphone_description: microphone_description(self.microphone_granted, asked),
             microphone_status,
             microphone_action,
+            microphone_action_icon: settings_link_icon(microphone_action),
             screen_ready,
             restart_required,
             primary_label: if restart_required { RESTART } else { START },
@@ -660,6 +674,8 @@ mod tests {
         assert!(fresh.screen_description.starts_with("This allows Captures"));
         assert_eq!(fresh.screen_status, None);
         assert_eq!(fresh.screen_action, Some("Allow access"));
+        // Asking in place stays plain text.
+        assert_eq!(fresh.screen_action_icon, None);
         assert!(fresh.show_microphone && !fresh.screen_ready && !fresh.restart_required);
         assert_eq!(fresh.microphone_action, Some("Allow microphone"));
         assert_eq!(fresh.primary_label, "Start capturing");
@@ -677,6 +693,8 @@ mod tests {
             })
         );
         assert_eq!(restart.screen_action, Some("Open Settings"));
+        // Leaving for System Settings gets the trailing link icon.
+        assert_eq!(restart.screen_action_icon, Some("external-link"));
         assert!(
             restart
                 .screen_description
@@ -718,6 +736,7 @@ mod tests {
         state.microphone_requested_this_launch = true;
         let asked = state.presentation();
         assert_eq!(asked.microphone_action, Some("Open Settings"));
+        assert_eq!(asked.microphone_action_icon, Some("external-link"));
         assert!(asked.microphone_description.starts_with("Turn Captures on"));
         state.microphone_granted = true;
         let granted = state.presentation();
