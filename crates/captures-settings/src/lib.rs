@@ -73,6 +73,10 @@ pub struct AppSettings {
     pub screenshot_format: ScreenshotFormat,
     #[serde(default = "default_true")]
     pub show_update_changelog: bool,
+    /// Keep new versions from opening the update notice on their own; the
+    /// tray or menu bar and Preferences still offer them.
+    #[serde(default)]
+    pub hide_update_notices: bool,
     #[serde(default)]
     pub recording: RecordingSettings,
 }
@@ -265,6 +269,7 @@ impl Default for AppSettings {
             freeze_screen: true,
             screenshot_format: ScreenshotFormat::default(),
             show_update_changelog: true,
+            hide_update_notices: false,
             recording: RecordingSettings::default(),
         }
     }

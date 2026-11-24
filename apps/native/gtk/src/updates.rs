@@ -431,6 +431,9 @@ enum Wait {
 pub struct Schedule {
     notified: Option<String>,
     wait: Wait,
+    /// Hide update pop-ups: a new version does not open the notice on its
+    /// own; the tray and Preferences still show it.
+    pub quiet: bool,
 }
 
 impl Schedule {
@@ -456,7 +459,7 @@ impl Schedule {
                 if self.notified.as_deref() != Some(version) =>
             {
                 self.notified = Some(version.clone());
-                if self.wait == Wait::None {
+                if self.wait == Wait::None && !self.quiet {
                     self.wait = Wait::Version(version.clone());
                 }
             }
@@ -1041,6 +1044,8 @@ fn sync_notice() {
             resident.source.status(),
             flags,
         );
+        resident.schedule.quiet = captures_settings::load(&host.settings_file)
+            .is_ok_and(|settings| settings.hide_update_notices);
         let plan = resident.schedule.next(
             status.as_ref(),
             notice.is_some(),
@@ -1702,5 +1707,14 @@ mod tests {
         assert_eq!(disposition(available.as_ref(), true), Disposition::Defer);
         assert_eq!(disposition(up_to_date.as_ref(), false), Disposition::Ignore);
         assert_eq!(disposition(None, false), Disposition::Ignore);
+        // Hide update pop-ups: a new version stays in the tray, which still
+        // shows it on request.
+        let mut quiet = Schedule {
+            quiet: true,
+            ..Schedule::default()
+        };
+        assert_eq!(quiet.next(available.as_ref(), false, false), Plan::Ignore);
+        assert!(!quiet.tray(available.as_ref()));
+        assert_eq!(quiet.next(available.as_ref(), false, false), Plan::Show);
     }
 }

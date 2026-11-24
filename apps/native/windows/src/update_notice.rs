@@ -292,7 +292,11 @@ pub fn sync(live: Live) {
             n.refresh(changed);
         });
         panel_uia::raise(panel_uia::Window::Update, before);
-    } else if show && let Err(error) = open(live) {
+    } else if show
+        // Hide update pop-ups: only the tray and Preferences offer the update.
+        && !captures_settings::load(&live.settings_file).is_ok_and(|s| s.hide_update_notices)
+        && let Err(error) = open(live)
+    {
         eprintln!("failed to show the Captures update notice: {error}");
     }
 }

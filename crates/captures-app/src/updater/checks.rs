@@ -675,12 +675,19 @@ impl CheckWorker {
     }
 
     /// Reuse shipping notice layout/notes without presenting an install, stable
-    /// download-page link, close-captures warning or simulated restart.
-    pub fn notice(&self, show_changelog: bool) -> Option<crate::update_notice::Presentation> {
+    /// download-page link or simulated restart. `open_captures` (a capture or
+    /// editor is open) adds the close-captures warning to an update that
+    /// restarts Captures, as shipping's `will_close_open_captures`.
+    pub fn notice(
+        &self,
+        show_changelog: bool,
+        open_captures: bool,
+    ) -> Option<crate::update_notice::Presentation> {
         use crate::update_notice::{self as notice, Action, Button, UpdateStatus, ViewState};
         if self.automatic_check && !matches!(self.status, CheckStatus::Available { .. }) {
             return None;
         }
+        let will_close = open_captures && self.install_request_enabled;
         let current_version = self.current_version.clone();
         let current_display_version = current_version.clone();
         let status = match &self.status {
@@ -703,7 +710,7 @@ impl CheckWorker {
                 installable: false,
                 manual_download_url: None,
                 download_size: Some(release.size),
-                will_close_open_captures: false,
+                will_close_open_captures: will_close,
             },
             CheckStatus::Downloading {
                 release,
@@ -818,9 +825,16 @@ impl CheckWorker {
         if matches!(self.status, CheckStatus::Staged { .. }) {
             p.icon = notice::Icon::Check;
             p.icon_tone = notice::IconTone::Positive;
-            if self.install_request_enabled {
-                p.close_warning = Some(notice::open_captures_warning(true).into());
-            }
+        }
+        // The installed update restarts Captures and reopens what was open;
+        // with nothing open there is nothing to warn about.
+        if will_close
+            && matches!(
+                self.status,
+                CheckStatus::Available { .. } | CheckStatus::Staged { .. }
+            )
+        {
+            p.close_warning = Some(notice::open_captures_warning(true).into());
         }
         // Development descriptions name raw versions without a release page.
         p.version_link = None;
@@ -839,6 +853,16 @@ impl CheckWorker {
             }
             .into();
             p.description = self.presentation().status;
+            // Shipping's `Version … · 12.6 MB`: what Download will fetch.
+            if let CheckStatus::Available { release } = &self.status
+                && release.size > 0
+            {
+                p.description = format!(
+                    "{} · {}",
+                    p.description,
+                    notice::format_update_size(release.size)
+                );
+            }
             p.version_link = match &self.status {
                 CheckStatus::Available { release } | CheckStatus::Staged { release, .. } => {
                     notice::version_link(&super::display_version(&release.version))
@@ -887,7 +911,7 @@ impl CheckWorker {
                 installable: false,
                 manual_download_url: None,
                 download_size: Some(release.size),
-                will_close_open_captures: false,
+                will_close_open_captures: will_close,
             };
             let staged = if self.preview && self.install_request_enabled {
                 staged_height
@@ -1250,17 +1274,17 @@ mod tests {
             let server = serve(listener, [replies.clone(), replies].concat());
             let (mut worker, _) = worker(&endpoint, &key, current);
             assert!(worker.check_automatically());
-            assert!(worker.notice(true).is_none());
+            assert!(worker.notice(true, false).is_none());
             wait_idle(&mut worker);
-            assert_eq!(worker.notice(true).is_some(), expect_notice);
+            assert_eq!(worker.notice(true, false).is_some(), expect_notice);
             assert_eq!(
                 matches!(worker.status(), CheckStatus::Error { .. }),
                 unavailable
             );
             assert!(worker.check());
-            assert!(worker.notice(true).is_some());
+            assert!(worker.notice(true, false).is_some());
             wait_idle(&mut worker);
-            assert!(worker.notice(true).is_some());
+            assert!(worker.notice(true, false).is_some());
             worker.shutdown();
             server.join().unwrap();
         }
@@ -1353,7 +1377,7 @@ mod tests {
         );
         // The notice keeps one height from Download to Restart and install.
         worker.enable_install_request();
-        for show_changelog in [true, false] {
+        for (show_changelog, open_captures) in [(true, false), (false, false), (true, true)] {
             let heights: Vec<f64> = [
                 CheckStatus::Available {
                     release: release.clone(),
@@ -1374,10 +1398,40 @@ mod tests {
             .into_iter()
             .map(|status| {
                 worker.status = status;
-                worker.notice(show_changelog).unwrap().card_height
+                worker
+                    .notice(show_changelog, open_captures)
+                    .unwrap()
+                    .card_height
             })
             .collect();
             assert!(heights.iter().all(|h| *h == heights[0]), "{heights:?}");
+        }
+        worker.status = CheckStatus::Available {
+            release: release.clone(),
+        };
+        // The notice names what Download fetches, and warns about open
+        // captures only when some are open.
+        let notice = worker.notice(true, false).unwrap();
+        assert_eq!(
+            notice.description,
+            "Version 2026.11.13.2 available · 104 MB"
+        );
+        assert_eq!(notice.version_link.unwrap().text, "2026.11.13.2");
+        assert!(notice.close_warning.is_none());
+        assert_eq!(
+            worker.notice(true, true).unwrap().close_warning.as_deref(),
+            Some(
+                "Your open captures will reopen after the update. Unsaved screenshot edits are kept."
+            )
+        );
+        for (open_captures, warned) in [(false, false), (true, true)] {
+            worker.status = CheckStatus::Staged {
+                release: release.clone(),
+                sha256: String::new(),
+            };
+            let staged = worker.notice(true, open_captures).unwrap();
+            assert_eq!(staged.close_warning.is_some(), warned);
+            assert_eq!(staged.description, "Version 2026.11.13.2 verified");
         }
         worker.status = CheckStatus::Available {
             release: release.clone(),
@@ -1449,7 +1503,7 @@ mod tests {
                 worker.presentation().status,
                 format!("Downloading {downloaded} of {total} bytes")
             );
-            let shown = worker.notice(true).unwrap().download.unwrap();
+            let shown = worker.notice(true, false).unwrap().download.unwrap();
             assert_eq!(shown.percent, Some(percent));
             assert!(
                 shown
@@ -1514,7 +1568,7 @@ mod tests {
             worker.presentation().acquisition.unwrap().action,
             Action::DownloadVerify
         );
-        let available_height = worker.notice(true).unwrap().card_height;
+        let available_height = worker.notice(true, false).unwrap().card_height;
         assert_eq!(
             std::fs::read_dir(scratch.path()).unwrap().count(),
             1,
@@ -1532,7 +1586,7 @@ mod tests {
             "Retry download"
         );
         // The error keeps the card at least as tall as the update it failed.
-        assert!(worker.notice(true).unwrap().card_height >= available_height);
+        assert!(worker.notice(true, false).unwrap().card_height >= available_height);
         assert_eq!(
             std::fs::read_dir(scratch.path()).unwrap().count(),
             1,
@@ -1547,7 +1601,7 @@ mod tests {
             2,
             "retain verified package, not original download"
         );
-        let notice = worker.notice(true).unwrap();
+        let notice = worker.notice(true, false).unwrap();
         assert_eq!(notice.card_height, available_height, "no jump when staged");
         assert_eq!(notice.title, "Development package verified");
         assert!(notice.restart.is_none() && notice.close_warning.is_none());
@@ -1565,7 +1619,8 @@ mod tests {
         let install = worker.presentation().acquisition.unwrap();
         assert!(install.enabled);
         assert_eq!(install.action, crate::update_notice::Action::Install);
-        let notice = worker.notice(true).unwrap();
+        assert!(worker.notice(true, false).unwrap().close_warning.is_none());
+        let notice = worker.notice(true, true).unwrap();
         assert_eq!(notice.footer.unwrap().primary.unwrap(), install);
         assert_eq!(
             notice.close_warning.as_deref(),
@@ -1680,7 +1735,7 @@ mod tests {
             worker.poll();
         }
         assert_eq!(worker.generation(), generation, "a refresh does not reveal");
-        let notice = serde_json::to_string(&worker.notice(true).unwrap()).unwrap();
+        let notice = serde_json::to_string(&worker.notice(true, false).unwrap()).unwrap();
         assert!(notice.contains("Notes for 2026.10.60"), "{notice}");
 
         // Another release lands before Download: Download takes it, not 10.60.
@@ -1859,7 +1914,12 @@ mod tests {
             assert!(!worker.check() && !worker.download());
             assert_eq!(worker.generation(), 2);
             assert_eq!(
-                worker.notice(true).unwrap().download.unwrap().percent,
+                worker
+                    .notice(true, false)
+                    .unwrap()
+                    .download
+                    .unwrap()
+                    .percent,
                 Some(expected_percent)
             );
             if shutdown {
@@ -1917,7 +1977,7 @@ mod tests {
         use crate::update_notice::Action;
         let (key, _, _) = signed(&manifest("https://example.invalid/artifact"));
         let (mut worker, _) = worker("http://127.0.0.1:9/native.json", &key, "2026.9.99");
-        assert!(worker.notice(true).is_none());
+        assert!(worker.notice(true, false).is_none());
         worker.status = CheckStatus::Available {
             release: ReleaseInfo {
                 renderer: Renderer::Wgpu,
@@ -1928,7 +1988,7 @@ mod tests {
                 changelog: Vec::new(),
             },
         };
-        let expanded = worker.notice(true).unwrap();
+        let expanded = worker.notice(true, false).unwrap();
         assert_eq!(expanded.title, "Native development update");
         assert_eq!(
             expanded.description,
@@ -1954,7 +2014,7 @@ mod tests {
                 && expanded.download.is_none()
                 && expanded.restart.is_none()
         );
-        let collapsed = worker.notice(false).unwrap();
+        let collapsed = worker.notice(false, false).unwrap();
         assert!(collapsed.notes.is_none());
         for status in [
             CheckStatus::Checking,
@@ -1964,7 +2024,7 @@ mod tests {
             },
         ] {
             worker.status = status;
-            let p = worker.notice(true).unwrap();
+            let p = worker.notice(true, false).unwrap();
             assert!(p.notes.is_none() && p.download.is_none() && p.restart.is_none());
             assert!(!serde_json::to_string(&p).unwrap().contains("captur.es"));
             if worker.checking() {

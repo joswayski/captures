@@ -54,7 +54,7 @@ Native apps for macOS (AppKit), Windows (Win32), and Linux (GTK4):
 | Ubuntu / Debian (x64) | [Captures-Linux-x64.deb](https://github.com/joswayski/captures/releases/download/preview/Captures-Linux-x64.deb) |
 | Other Linux (x64 AppImage) | [Captures-Linux-x64.AppImage](https://github.com/joswayski/captures/releases/download/preview/Captures-Linux-x64.AppImage) |
 
-- **Automatic updates:** Installed apps check for signed updates on launch and every few minutes, or manually from Preferences and the menu bar / tray. If Captures will not open or cannot install an update, reinstall using the links above. Older dated releases live in the [release archive](https://github.com/joswayski/captures/releases).
+- **Automatic updates:** Installed apps check for signed updates on launch and every few minutes, or manually from Preferences and the menu bar / tray. A new version opens an update notice with its download size; turn on **Hide update pop-ups** in Preferences to keep it to the menu bar / tray and Preferences (for example while screen recording). If Captures will not open or cannot install an update, reinstall using the links above. Older dated releases live in the [release archive](https://github.com/joswayski/captures/releases).
 - **Windows:** The installer is not Authenticode-signed yet, so SmartScreen may warn on first install.
 - **AppImage:** Replace your existing copy (normally `~/.local/bin/Captures.AppImage`) and mark it executable (`chmod +x`).
 - **Release notes:** Highlights are generated during the release build from source changes only; the desktop app never sends captures or app data to generate them. The update notice shows only the highlights for your platform.

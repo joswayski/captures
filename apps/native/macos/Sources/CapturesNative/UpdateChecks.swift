@@ -88,6 +88,8 @@ final class UpdateCheckModel {
     private(set) var notice: [String: Any]?
     private(set) var generation = 0
     private(set) var showChangelog = true
+    /// A capture or editor is open, so the notice warns that installing closes it.
+    private(set) var openCaptures = false
     private(set) var busy = false
     var didChange: (() -> Void)?
     var requestInstallation: (() -> Bool)?
@@ -174,7 +176,8 @@ final class UpdateCheckModel {
         busy = true
         var accepted = false
         do {
-            var request: [String: Any] = ["operation": operation, "show_changelog": showChangelog]
+            var request: [String: Any] = ["operation": operation, "show_changelog": showChangelog,
+                                          "open_captures": openCaptures]
             if automatic { request["automatic"] = true }
             let reply = try transport.request(request)
             try apply(reply)
@@ -192,15 +195,26 @@ final class UpdateCheckModel {
 
     func poll() {
         guard !closed, busy else { return }
-        do { try apply(transport.request(["operation": "poll", "show_changelog": showChangelog])) }
-        catch { presentation["status"] = error.localizedDescription; presentation["failed"] = true; didChange?() }
+        refresh()
     }
 
     func setShowChangelog(_ show: Bool) {
         guard !closed, show != showChangelog else { return }
         showChangelog = show
-        do { try apply(transport.request(["operation": "poll", "show_changelog": show])) }
-        catch { presentation["status"] = error.localizedDescription; presentation["failed"] = true; didChange?() }
+        refresh()
+    }
+
+    func setOpenCaptures(_ open: Bool) {
+        guard !closed, open != openCaptures else { return }
+        openCaptures = open
+        refresh()
+    }
+
+    private func refresh() {
+        do {
+            try apply(transport.request(["operation": "poll", "show_changelog": showChangelog,
+                                         "open_captures": openCaptures]))
+        } catch { presentation["status"] = error.localizedDescription; presentation["failed"] = true; didChange?() }
     }
 
     private func apply(_ reply: [String: Any]) throws {

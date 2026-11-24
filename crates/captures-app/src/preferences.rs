@@ -117,7 +117,7 @@ pub struct Row {
 
 /// Static setting rows by persisted key (`recording.` prefixes nested keys).
 /// Rows whose description depends on state have their own functions below.
-pub const ROWS: [Row; 26] = [
+pub const ROWS: [Row; 27] = [
     Row {
         key: "appearance",
         title: "Interface theme",
@@ -247,6 +247,11 @@ pub const ROWS: [Row; 26] = [
         key: "show_update_changelog",
         title: "Show what’s new on update notices",
         description: "Lists every release since the version you have. Turn this off for a compact Update now prompt.",
+    },
+    Row {
+        key: "hide_update_notices",
+        title: "Hide update pop-ups",
+        description: "New versions won’t pop up a notice on their own, so they stay out of screen recordings. Check for Updates and this card still show them.",
     },
 ];
 

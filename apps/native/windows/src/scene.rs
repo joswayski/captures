@@ -289,7 +289,7 @@ pub const CARDS: [(usize, &[Item]); 8] = [
         ],
     ),
     (5, &[Item::SelectGrid(GIF_GRID)]),
-    (6, &[Item::Updates, Item::Switch(12)]),
+    (6, &[Item::Updates, Item::Switch(12), Item::Switch(13)]),
     (7, &[Item::Utility(Utility::Feedback)]),
 ];
 /// The Capture card's switches, in shipping order (`Item::Switch(1..=7)`).
@@ -642,6 +642,8 @@ pub enum RowKey {
     Recording(usize),
     /// Updates: show what's new on update notices.
     Changelog,
+    /// Updates: hide update pop-ups.
+    HideNotices,
 }
 
 pub struct RowState {
@@ -1060,6 +1062,14 @@ impl Scene {
             title: row.title,
             detail: row.description.into(),
             on: settings.show_update_changelog,
+            enabled: true,
+        });
+        let row = preferences::row("hide_update_notices");
+        rows.push(RowState {
+            key: RowKey::HideNotices,
+            title: row.title,
+            detail: row.description.into(),
+            on: settings.hide_update_notices,
             enabled: true,
         });
         let none = Layered {
@@ -3021,6 +3031,7 @@ impl Scene {
                 RowKey::Flag(index) => flag_value(&self.settings, index),
                 RowKey::Recording(index) => recording_value(&self.settings, index),
                 RowKey::Changelog => self.settings.show_update_changelog,
+                RowKey::HideNotices => self.settings.hide_update_notices,
                 _ => continue,
             };
             self.set_row(row, on);
@@ -3235,6 +3246,12 @@ impl Scene {
             RowKey::Changelog => {
                 self.set_row(row, on);
                 self.settings.show_update_changelog = on;
+                self.save();
+                None
+            }
+            RowKey::HideNotices => {
+                self.set_row(row, on);
+                self.settings.hide_update_notices = on;
                 self.save();
                 None
             }

@@ -254,12 +254,14 @@ final class UpdateNoticeModel {
 
     init(transport: UpdateNoticeTransport = UpdateNoticeBridge()) { self.transport = transport }
 
-    func receiveCheck(_ presentation: [String: Any], generation: Int) throws {
+    /// `raise: false` (Hide update pop-ups) keeps a new result off screen
+    /// unless the notice is already open; `reveal` still shows it.
+    func receiveCheck(_ presentation: [String: Any], generation: Int, raise: Bool = true) throws {
         _ = try UpdateNoticePresentation(presentation)
         checkedPresentation = presentation
         // Dismissing while checking also dismisses its eventual result. Only
         // a new explicit Check can reopen the notice.
-        if generation != checkGeneration { visible = true }
+        if generation != checkGeneration, raise { visible = true }
         checkGeneration = generation
         simulating = false; tickInterval = nil
         changed()

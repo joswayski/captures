@@ -1978,6 +1978,7 @@ fn updates_card(prefs: &Rc<Prefs>) -> gtk::Box {
         fallback: fallback.upcast(),
     }));
     setting_switch(prefs, &card, "show_update_changelog", "");
+    setting_switch(prefs, &card, "hide_update_notices", "");
     card
 }
 

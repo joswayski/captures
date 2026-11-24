@@ -1091,6 +1091,9 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
     private var regionSelector: RegionSelectionView?
     private var windowSelector: WindowSelectionView?
     private var updateNotice: UpdateNoticeController?
+    /// Preferences' Hide update pop-ups: new versions never open the notice
+    /// on their own; the menu bar item and Preferences still show them.
+    private var hideUpdateNotices = false
     private var updateNoticeSettings: SettingsStore?
     private var scene: String
     private var appearance: String
@@ -1142,7 +1145,18 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             requestApplicationTermination()
             return true
         }
-        if options.previewChannel { options.nativeUpdateChecks?.startPreviewChecks() }
+        if options.previewChannel {
+            // Read Hide update pop-ups before the first check can raise a notice.
+            let start: ([String: Any]) -> Void = { [weak self] settings in
+                self?.hideUpdateNotices = settings.bool("hide_update_notices")
+                self?.options.nativeUpdateChecks?.startPreviewChecks()
+            }
+            if let store = try? SettingsStore(path: options.settingsFile) {
+                store.load { result in
+                    if case .success(let settings) = result { start(settings) } else { start([:]) }
+                }
+            } else { start([:]) }
+        }
         if let file = options.nativeUpdateReadyFile, let token = options.nativeUpdateReadyToken,
            let acknowledgement = try? UpdateHealthAcknowledgement(file: file, token: token) {
             updateHealth = UpdateHealthCoordinator(acknowledgement: acknowledgement) {
@@ -1907,6 +1921,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             liveController?.editorClosed = { [weak self] in
                 DispatchQueue.main.async { self?.rebuildRenderedLiveWorkspaceIfNeeded() }
             }
+            liveController?.editorsChanged = { [weak self] in self?.refreshLiveUpdateNotice() }
             renderedLiveStyleRevision = liveStyleRevision
             // Built while History is hidden (launch, a style rebuild): tile no
             // cards until it is shown, or their layers stay resident.
@@ -1982,6 +1997,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
                 if changed { self.rebuildRenderedLiveWorkspaceIfNeeded() }
             }, settingsChanged: { [weak self] settings in
                 self?.options.nativeUpdateChecks?.setShowChangelog(settings.bool("show_update_changelog", true))
+                self?.hideUpdateNotices = settings.bool("hide_update_notices")
                 if let include = settings["include_recording_controls_in_captures"] as? Bool {
                     self?.liveController?.recordingControlsInclusionChanged(include: include)
                 }
@@ -1999,6 +2015,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             }, settingsPersisted: { [weak self] settings in
                 self?.updateCaptureShortcuts(settings: settings)
                 self?.options.nativeUpdateChecks?.setShowChangelog(settings.bool("show_update_changelog", true))
+                self?.hideUpdateNotices = settings.bool("hide_update_notices")
             }, shortcutRecordingChanged: { [weak self] _ in
                 self?.updateShortcutState()
             }, showHistory: { [weak self] in self?.showHistory() },
@@ -2103,6 +2120,9 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
         // A capture leaves an open notice on screen, so it can be captured
         // like any window (as on Windows), but holds a new one until it ends.
         if captureBusy, updateNotice?.model.visible != true { return }
+        // Shipping's `will_close_open_captures`: only an open capture or
+        // editor makes the install warning true. Refreshes the notice when it changes.
+        checks.setOpenCaptures(captureBusy || liveController?.snapshotUpdateWindows().isEmpty == false)
         guard let presentation = checks.notice else { return }
         if updateNotice == nil {
             let controller = UpdateNoticeController(tokens: tokens, tray: "none")
@@ -2122,7 +2142,7 @@ final class Workbench: NSObject, NSApplicationDelegate, NSTableViewDataSource, N
             updateNotice = controller
         }
         updateNotice?.setSuspended(false)
-        do { try updateNotice?.model.receiveCheck(presentation, generation: checks.generation) }
+        do { try updateNotice?.model.receiveCheck(presentation, generation: checks.generation, raise: !hideUpdateNotices) }
         catch { Metrics.write(["event": "update-notice-error", "error": error.localizedDescription]) }
     }
 

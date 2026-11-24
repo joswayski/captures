@@ -2096,6 +2096,9 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         y = divider(y, card)
         let rowCopy = PreferencesPolicy.row("show_update_changelog")
         y = switchRow(["show_update_changelog"], title: rowCopy.title, detail: rowCopy.detail, y: y, card: card)
+        y = divider(y, card)
+        let hideCopy = PreferencesPolicy.row("hide_update_notices")
+        y = switchRow(["hide_update_notices"], title: hideCopy.title, detail: hideCopy.detail, y: y, card: card)
         return finish(card, y)
     }
 
@@ -2136,6 +2139,9 @@ final class PreferencesController: NSObject, NSTextFieldDelegate {
         y = divider(y, card)
         let rowCopy = PreferencesPolicy.row("show_update_changelog")
         y = switchRow(["show_update_changelog"], title: rowCopy.title, detail: rowCopy.detail, y: y, card: card)
+        y = divider(y, card)
+        let hideCopy = PreferencesPolicy.row("hide_update_notices")
+        y = switchRow(["hide_update_notices"], title: hideCopy.title, detail: hideCopy.detail, y: y, card: card)
         return finish(card, y)
     }
 

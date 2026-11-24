@@ -3618,6 +3618,7 @@ final class LiveCaptureController: NSObject {
                         self.recordingEditor?.didClose = { [weak self] artifactID in
                             self?.recordingEditorClosed(artifactID)
                             self?.editorClosed()
+                            self?.editorsChanged()
                             // As the screenshot editor: release the closed window and
                             // its view tree once AppKit finishes the close, unless
                             // something reopened it meanwhile.
@@ -3640,6 +3641,7 @@ final class LiveCaptureController: NSObject {
                             finished()
                         }
                     })
+                    DispatchQueue.main.async { [weak self] in self?.editorsChanged() }
                     return
                 }
                 if self.screenshotEditor == nil {
@@ -3654,12 +3656,14 @@ final class LiveCaptureController: NSObject {
                     // Mini previews show "In editor" while this window shows their capture.
                     self.screenshotEditor?.presenceChanged = { [weak self] artifactIDs in
                         self?.miniPreviews?.setEditorArtifacts(artifactIDs)
+                        self?.editorsChanged()
                     }
                     // A closed editor is released and rebuilt on the next open,
                     // so its window and graphics memory are not kept idle.
                     self.screenshotEditor?.didClose = { [weak self] in
                         self?.screenshotEditor = nil
                         self?.editorClosed()
+                        self?.editorsChanged()
                     }
                 }
                 self.screenshotEditor?.present(artifact: artifact, historyRoot: self.historyRoot,
@@ -3888,6 +3892,8 @@ final class LiveCaptureController: NSObject {
         screenshotEditor?.window.isVisible == true || recordingEditor?.window.isVisible == true
     }
     var editorClosed: () -> Void = {}
+    /// An editor window opened or closed (the update notice's open-captures warning).
+    var editorsChanged: () -> Void = {}
 
     /// Shipping re-themes every window on `settings-changed`: open editors
     /// take the new tokens in place, keeping their sessions and edits.
